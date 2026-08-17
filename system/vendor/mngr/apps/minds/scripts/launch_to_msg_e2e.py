@@ -2226,81 +2226,46 @@ def _advance_approval(
     if decision not in ("approve", "deny"):
         raise E2EFailure(f"_advance_approval: decision must be approve|deny, got {decision!r}")
     snap_stage0, snap_stage1, snap_stage2_pre, snap_stage2_post = snap_prefix_pair
-    # The inbox is the /inbox route floated over the current surface (see
-    # find_inbox_frame); the master/detail split lives in that one
-    # document (left list = rows carrying data-request-id, right detail holds
-    # the Approve/Deny form, whose buttons carry the permissions-approve-btn
-    # and permissions-deny-btn ids).
-    # Stage 0 waits for the /inbox frame (it auto-opens on new pending
-    # requests by default, see MindsConfig.get_auto_open_requests_panel).
-    # Stage 1 clicks the inbox card for the slack request to load the detail
-    # fragment. Stage 2 clicks Approve / Deny within the same frame.
+    # The review popup is the SPA's /inbox app-overlay route (see
+    # find_inbox_frame), floated over the surface it was opened from and
+    # showing one pending request at a time with no left list. It opens only
+    # when asked: stage 0 asks, via the in-chat card's "Review & respond"
+    # button; stage 1 waits for the overlay; stage 2 answers it.
     if stage == 0:
-        # Check if the inbox already auto-opened (see find_inbox_frame).
+        # An already-open overlay means the click landed on a previous pass.
         found = find_inbox_frame(ctx)
         if found is not None:
             owner, _ = found
-            logger.info("inbox modal auto-opened; advancing to stage 1")
+            logger.info("review popup already open; advancing to stage 1")
             state["stage"] = 1
             snap_page(owner, snap_stage0)
             return
-        # Wait for the agent to emit its request signal first. Case-fold
-        # because Claude rephrases the message each run (eg "Waiting"
-        # vs "awaiting" vs "wait for").
-        body = (chat.evaluate("document.body.innerText")).lower()
-        # "approval" catches "Waiting for your approval", "awaiting", etc.
-        if not any(
-            s in body
-            for s in (
-                "permission request",
-                "requested read",
-                "approval",
-                "approve",
-            )
-        ):
-            # Not ready yet.
-            return
-        # Auto-open should fire on the SSE-pushed pending-set update; if
-        # it hasn't fired after a couple of polls, hit /inbox/toggle on
-        # the chrome titlebar as a fallback (the inbox icon's aria-label
-        # is "Inbox"; the old `button[title="Requests"]` is gone).
-        for w in all_pages(ctx):
-            try:
-                btn = w.locator('button[aria-label="Inbox"], button[title="Inbox"]')
-                if btn.count() > 0 and btn.first.is_visible():
-                    logger.info("clicking Inbox titlebar trigger")
-                    snap_page(w, snap_stage0)
-                    btn.first.click()
-                    state["stage"] = 1
-                    return
-            except Exception:
-                pass
+        # The in-chat card is rendered by the system_interface app inside the
+        # workspace iframe, and carries this button only while the request is
+        # pending (a resolved request renders as a one-line receipt). Clicking
+        # it posts OPEN_REQUEST_MODAL to the embedder, which floats /inbox.
+        try:
+            trigger = chat.locator("button.permission-request-button")
+            if trigger.count() > 0 and trigger.first.is_visible():
+                logger.info("clicking the in-chat 'Review & respond' button")
+                snap_page(chat, snap_stage0)
+                trigger.first.click()
+                state["stage"] = 1
+                return
+        except Exception:
+            pass
 
-    # Stage 1: click the slack entry in the inbox left list.
+    # Stage 1: the overlay opens straight onto the pending request's detail,
+    # so its presence is the whole of this stage.
     elif stage == 1:
         found = find_inbox_frame(ctx)
         if found is None:
             return
-        owner, panel = found
-        # Prefer the slack-named card; fall back to the first selectable card
-        # if there's only one pending request. ``data-request-id`` is the
-        # card row's only stable hook -- everything else on it is a Tailwind
-        # utility class.
-        for sel in (
-            '[data-request-id]:has-text("slack")',
-            '[data-request-id]:has-text("Slack")',
-            "[data-request-id]",
-        ):
-            try:
-                loc = panel.locator(sel).first
-                if loc.count() > 0 and loc.is_visible():
-                    logger.info("clicking inbox card via {!r}", sel)
-                    snap_page(owner, snap_stage1)
-                    loc.click()
-                    state["stage"] = 2
-                    return
-            except Exception:
-                pass
+        owner, _ = found
+        logger.info("review popup open on the request detail; advancing to stage 2")
+        snap_page(owner, snap_stage1)
+        state["stage"] = 2
+        return
 
     # Stage 2: click Approve or Deny in the inbox detail pane (same /inbox page).
     elif stage == 2:

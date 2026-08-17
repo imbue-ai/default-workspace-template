@@ -73,7 +73,7 @@ import {
   isNonBoundaryUserMessage,
   isPermissionRequestCall,
   isSystemChipUserMessage,
-  parsePermissionResolution,
+  resolutionOf,
 } from "./message-classification";
 
 export type StepStatus = "pending" | "active" | "done";
@@ -132,14 +132,6 @@ export interface SectionView {
   trailing_reply: AssistantMessageEvent[];
 }
 
-/** Detects a `tk`/`ticket` lifecycle invocation at the START of a Bash tool
- *  call's command, so a pure tk call (the enforced shape for `tk start`/`close`,
- *  and the batched literal-id `tk create --step ...` form) is hidden from the
- *  rendered output. A command that merely mentions a tk verb later (e.g.
- *  `git commit -m "tk close ..."`) is NOT misclassified. `super` is the
- *  plugin-bypassing form. */
-const TK_LIFECYCLE_RE = /"command"\s*:\s*"\s*(?:tk|ticket)\s+(?:super\s+)?(?:create|start|close)\b/;
-
 /** A status transition line printed by tk on every state change:
  *  `Updated <id> -> <status>` (see system/vendor/tk/ticket). Global so a batched
  *  command that flips several tickets is read in order. */
@@ -179,10 +171,11 @@ function isStepId(id: string): boolean {
 }
 
 /** True when a tool call is a tk lifecycle command (consumed as a structural
- *  marker, not rendered as work). Restricted to Bash calls whose command
- *  begins with the tk verb (see TK_LIFECYCLE_RE). */
+ *  marker, not rendered as work). The backend's parser decides -- the start-anchored
+ *  pure-invocation rule over the UNTRUNCATED command, identical for every harness --
+ *  and ships `display: "hidden"`; nothing here parses tool input. */
 function isTkLifecycleCall(tc: ToolCall): boolean {
-  return tc.tool_name === "Bash" && TK_LIFECYCLE_RE.test(tc.input_preview);
+  return tc.display === "hidden";
 }
 
 /** True when an assistant message issues a permission request. */
@@ -194,7 +187,9 @@ function hasPermissionRequest(e: AssistantMessageEvent): boolean {
  *  input_preview is not parseable -- e.g. a truncated non-tk command). tk
  *  lifecycle inputs are exempt from input truncation, so they parse cleanly. */
 function tkCommand(tc: ToolCall): string | null {
-  if (tc.tool_name !== "Bash") return null;
+  // claude's `Bash` and pi's `bash` both carry the command under the "command" key;
+  // codex's `exec` is handled via its own tk-input path, not here.
+  if (tc.tool_name !== "Bash" && tc.tool_name !== "bash") return null;
   try {
     const obj = JSON.parse(tc.input_preview) as { command?: unknown };
     return typeof obj.command === "string" ? obj.command : null;
@@ -442,7 +437,7 @@ export function buildSections(
       // section has no user bubble. If no request is open to claim it (e.g. the
       // request scrolled out of the visible transcript), fall through and let it
       // render as an ordinary user message.
-      const resolution = parsePermissionResolution(e.content ?? "");
+      const resolution = resolutionOf(e);
       if (resolution !== null && unresolvedPermissions.length > 0) {
         const resolvedEventId = unresolvedPermissions.shift() as string;
         resolutions.set(resolvedEventId, resolution);
@@ -450,19 +445,23 @@ export function buildSections(
         current = ensureSection(null, `section-after-${e.event_id}`);
         continue;
       }
-      if (isNonBoundaryUserMessage(e.content ?? "", e.is_meta)) {
+      if (isNonBoundaryUserMessage(e)) {
         // Collapsed system chips -- Stop-hook feedback, browser-fleet nudges,
-        // background task-notifications -- fold into the current section as a
-        // chip rather than opening a new turn. (A chip only ever comes from an
-        // explicit detector, never from is_meta, so this check needs no is_meta.)
-        // It goes into the skeleton so it both renders at its chronological spot
-        // and marks the turn end that ends a step's stint (see
-        // collectEjectedProse).
-        if (current !== null && isSystemChipUserMessage(e.content ?? "")) {
+        // background task-notifications, the post-compaction summary -- fold into
+        // the current section as a chip rather than opening a new turn. The
+        // backend's display decision says which is which; nothing is re-derived
+        // here. A chip goes into the skeleton so it both renders at its
+        // chronological spot and marks the turn end that ends a step's stint
+        // (see collectEjectedProse).
+        if (isSystemChipUserMessage(e)) {
+          // The compaction summary can be the FIRST event of a resumed session,
+          // with no section open yet; open a pre-section so it is not dropped
+          // (mirrors the leading-assistant-message case below).
+          if (current === null) current = ensureSection(null, "section-pre");
           current.entries.push({ kind: "chip", event: e });
         }
-        // The other non-boundary messages -- skill expansions, /welcome, and any
-        // is_meta framework injection (image note, resume marker, ...) -- render
+        // The other non-boundary messages -- skill expansions and hidden
+        // framework injections (/welcome, image notes, resume markers) -- render
         // nowhere on the user rail, so they are dropped here.
         continue;
       }

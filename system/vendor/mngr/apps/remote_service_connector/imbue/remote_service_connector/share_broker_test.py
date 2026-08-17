@@ -299,12 +299,23 @@ def test_broker_authorize_requires_verified_email_and_sends_the_mail(monkeypatch
         follow_redirects=False,
     )
 
-    # The check-your-inbox page lives in the hosted accounts bundle.
+    # The check-your-inbox page lives in the hosted accounts bundle; it now
+    # carries the way back -- the /share/authorize path that re-enters this
+    # authorization once the email is verified.
     assert resp.status_code == 303
-    assert resp.headers["location"] == "/check-inbox"
+    location = resp.headers["location"]
+    assert location.startswith("/check-inbox?next=")
+    continue_path = parse_qs(urlsplit(location).query)["next"][0]
+    assert continue_path.startswith("/share/authorize?")
+    continue_query = parse_qs(urlsplit(continue_path).query)
+    assert continue_query["machine_domain"] == [domain]
+    assert continue_query["state"] == ["abc"]
+    # The return path skips the "Continue as ..." interstitial: the visitor
+    # already passed it on the way in.
+    assert continue_query["confirmed"] == ["1"]
     assert len(st_backend.sent_verification_emails) == 1
     # Definitely no handoff token was minted for the unverified visitor.
-    assert "_auth/callback" not in resp.headers["location"]
+    assert "_auth/callback" not in location
 
 
 def _seed_share_owned_by(backend: FakePoolBackend, owner_user_id: str) -> str:

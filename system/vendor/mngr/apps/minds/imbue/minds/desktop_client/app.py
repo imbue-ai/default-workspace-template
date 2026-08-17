@@ -89,7 +89,6 @@ from imbue.minds.desktop_client.responses import make_response
 from imbue.minds.desktop_client.responses import safe_local_redirect_path
 from imbue.minds.desktop_client.session_store import MultiAccountSessionStore
 from imbue.minds.desktop_client.sharing_handler import delete_share_for_host
-from imbue.minds.desktop_client.ssh_key_migration import SshKeyMigrationScheduler
 from imbue.minds.desktop_client.state import DesktopClientState
 from imbue.minds.desktop_client.state import get_state
 from imbue.minds.desktop_client.state import set_state
@@ -113,6 +112,7 @@ from imbue.minds.desktop_client.ui_models import UiProviderEntry
 from imbue.minds.desktop_client.ui_models import UiProvidersMessage
 from imbue.minds.desktop_client.ui_models import UiRequestsMessage
 from imbue.minds.desktop_client.ui_models import UiWorkspaceEntry
+from imbue.minds.desktop_client.ui_models import UiWorkspaceRefreshMessage
 from imbue.minds.desktop_client.ui_models import UiWorkspacesMessage
 from imbue.minds.desktop_client.ui_publisher import UiStatePublisher
 from imbue.minds.desktop_client.webdav import create_webdav_app
@@ -121,6 +121,7 @@ from imbue.minds.desktop_client.workspace_record_store import RECORD_STATE_ACTIV
 from imbue.minds.desktop_client.workspace_record_store import ReplicaRecord
 from imbue.minds.desktop_client.workspace_record_store import WorkspaceRecordStore
 from imbue.minds.desktop_client.workspace_record_store import is_cloud_provider_kind
+from imbue.minds.desktop_client.workspace_recovery import UnattendedRecoveryDispatcher
 from imbue.minds.errors import SyncCryptoError
 from imbue.minds.errors import WorkspaceSyncError
 from imbue.minds.mngr_settings.enablement import list_disabled_provider_names
@@ -1189,16 +1190,16 @@ def _build_requests_payload(
 ) -> dict[str, Any]:
     """Build the content-based requests payload pushed over the chrome SSE.
 
-    The chrome's live request UI (badge, panel refresh, auto-open) must react
-    to any change in the *set* of pending requests, not merely its size. A
-    bare count is a lossy summary: if one request is resolved while another
+    The chrome's live request UI (badge, panel refresh) must react to any
+    change in the *set* of pending requests, not merely its size. A bare
+    count is a lossy summary: if one request is resolved while another
     arrives, the count is unchanged even though the inbox contents are not.
     Keying updates off the count therefore silently drops those transitions.
 
     To make change detection sound, we surface the actual pending request
     ids (in a deterministic order) alongside the count. Consumers diff
-    ``request_ids`` to decide whether to refresh the panel and which ids are
-    newly arrived (for auto-open); the count remains for the badge.
+    ``request_ids`` to decide whether to refresh the panel; the count remains
+    for the badge.
 
     Requests whose host can't be resolved are excluded (see
     :func:`_displayable_pending_requests`) so the badge count and the
@@ -1684,23 +1685,6 @@ def _handle_account_logout(
 # -- Inbox routes --
 
 
-def _handle_requests_auto_open() -> Response:
-    """Toggle the auto-open setting for the inbox modal.
-
-    The route URL and on-disk setting key keep ``requests-panel`` /
-    ``auto_open_requests_panel`` for backward compatibility (see
-    :class:`MindsConfig`); "panel" here now refers to the inbox modal.
-    """
-    if not _is_request_authenticated():
-        return make_response(status_code=403, content='{"error":"Not authenticated"}', media_type="application/json")
-    minds_config: MindsConfig | None = get_state().minds_config
-    if minds_config is not None:
-        body = request.get_json(silent=True, force=True)
-        enabled = body.get("enabled", True) if isinstance(body, dict) else True
-        minds_config.set_auto_open_requests_panel(bool(enabled))
-    return make_response(status_code=200, content='{"ok": true}', media_type="application/json")
-
-
 def _handle_sharing_redirect(
     agent_id: str,
     service_name: str = "",
@@ -1789,7 +1773,7 @@ def _handle_request_event_callback(agent_id_str: str, raw_line: str) -> None:
     After mutating the inbox, fires the resolver's change notification so
     the chrome SSE wakes up and pushes the new ``requests`` payload immediately
     (otherwise it would lag up to 30s for the next poll tick, breaking the
-    inbox modal auto-open and badge UX).
+    inbox badge UX).
 
     ``LATCHKEY_PERMISSION`` events from the JSONL stream are ignored
     here: latchkey 2.9.0 ships a gateway extension that owns the
@@ -1911,14 +1895,10 @@ def _derive_ui_providers_message(app: Flask, backend_resolver: BackendResolverIn
 def _derive_ui_requests_message(
     app: Flask,
     backend_resolver: BackendResolverInterface,
-    minds_config: MindsConfig | None,
 ) -> UiRequestsMessage:
     with app.app_context():
         payload = _build_requests_payload(get_state().request_inbox, backend_resolver)
-        auto_open = minds_config.get_auto_open_requests_panel() if minds_config else True
-        return UiRequestsMessage(
-            count=payload["count"], request_ids=tuple(payload["request_ids"]), auto_open=auto_open
-        )
+        return UiRequestsMessage(count=payload["count"], request_ids=tuple(payload["request_ids"]))
 
 
 def _derive_ui_discovery_health_message(
@@ -1954,7 +1934,6 @@ class _LegacyUiStateDeriver(MutableModel):
     backend_resolver: BackendResolverInterface = Field(frozen=True, description="Discovery resolver")
     session_store: MultiAccountSessionStore | None = Field(frozen=True, description="Account sessions")
     paths: WorkspacePaths | None = Field(frozen=True, description="Workspace data paths")
-    minds_config: MindsConfig | None = Field(frozen=True, description="Per-user config store")
     system_interface_health_tracker: SystemInterfaceHealthTracker | None = Field(
         frozen=True, description="Per-workspace health tracker"
     )
@@ -1972,7 +1951,7 @@ class _LegacyUiStateDeriver(MutableModel):
         return _derive_ui_providers_message(self.flask_app, self.backend_resolver)
 
     def derive_requests(self) -> UiRequestsMessage:
-        return _derive_ui_requests_message(self.flask_app, self.backend_resolver, self.minds_config)
+        return _derive_ui_requests_message(self.flask_app, self.backend_resolver)
 
     def derive_discovery_health(self) -> UiDiscoveryHealthMessage:
         return _derive_ui_discovery_health_message(self.discovery_health_watchdog)
@@ -1987,7 +1966,6 @@ def _create_ui_state_publisher(
     backend_resolver: BackendResolverInterface,
     session_store: MultiAccountSessionStore | None,
     paths: WorkspacePaths | None,
-    minds_config: MindsConfig | None,
     system_interface_health_tracker: SystemInterfaceHealthTracker | None,
     discovery_health_watchdog: DiscoveryHealthWatchdog | None,
 ) -> UiStatePublisher:
@@ -1997,7 +1975,6 @@ def _create_ui_state_publisher(
         backend_resolver=backend_resolver,
         session_store=session_store,
         paths=paths,
-        minds_config=minds_config,
         system_interface_health_tracker=system_interface_health_tracker,
         discovery_health_watchdog=discovery_health_watchdog,
     )
@@ -2051,7 +2028,6 @@ def create_desktop_client(
     discovery_health_watchdog: DiscoveryHealthWatchdog | None = None,
     mngr_caller: MngrCaller | None = None,
     sync_scheduler: WorkspaceSyncScheduler | None = None,
-    ssh_key_migration_scheduler: SshKeyMigrationScheduler | None = None,
 ) -> Flask:
     """Create the bare-origin minds Flask application.
 
@@ -2123,7 +2099,6 @@ def create_desktop_client(
         backend_resolver=backend_resolver,
         session_store=session_store,
         paths=paths,
-        minds_config=minds_config,
         system_interface_health_tracker=system_interface_health_tracker,
         discovery_health_watchdog=discovery_health_watchdog,
     )
@@ -2156,7 +2131,6 @@ def create_desktop_client(
         discovery_health_watchdog=discovery_health_watchdog,
         mngr_caller=mngr_caller,
         sync_scheduler=sync_scheduler,
-        ssh_key_migration_scheduler=ssh_key_migration_scheduler,
         ui_channel_broadcaster=ui_channel_broadcaster,
         ui_publisher=ui_publisher,
     )
@@ -2175,6 +2149,23 @@ def create_desktop_client(
             ui_publisher.publish_health(_ui_health_message(_health_tracker_for_ui, str(agent_id), status))
 
         _health_tracker_for_ui.add_on_change_callback(_publish_ui_health_edge)
+
+        _health_tracker_for_ui.add_on_recovery_callback(_WorkspaceViewRefresher(publisher=ui_publisher))
+        # The tracker fires its on-change callbacks before its stuck-edge ones,
+        # so the band is already showing STUCK by the time this dispatches.
+        if root_concurrency_group is not None:
+            _health_tracker_for_ui.add_on_stuck_edge_callback(
+                UnattendedRecoveryDispatcher(
+                    tracker=_health_tracker_for_ui,
+                    backend_resolver=backend_resolver,
+                    registry=state.workspace_operation_registry,
+                    concurrency_group=root_concurrency_group,
+                    mngr_binary=state.mngr_binary,
+                    mngr_host_dir=state.mngr_host_dir,
+                    mngr_forward_port=state.mngr_forward_port or 0,
+                    mngr_forward_preauth_cookie=state.mngr_forward_preauth_cookie,
+                )
+            )
     if discovery_health_watchdog is not None:
         discovery_health_watchdog.add_on_change_callback(ui_publisher.notify_change)
 
@@ -2227,7 +2218,6 @@ def create_desktop_client(
         "/workspace/<agent_id>/settings",
         "/workspace/<agent_id>/options",
         "/workspace/<agent_id>/backups",
-        "/inbox",
         "/destroying/<agent_id>",
         "/agents/<agent_id>/recovery",
         "/help",
@@ -2294,7 +2284,6 @@ def create_desktop_client(
     app.add_url_rule("/accounts/<user_id>/logout", view_func=_handle_account_logout, methods=["POST"])
 
     # Request inbox action routes
-    app.add_url_rule("/_chrome/requests-auto-open", view_func=_handle_requests_auto_open, methods=["POST"])
     app.add_url_rule("/requests/<request_id>/grant", view_func=_handle_request_grant, methods=["POST"])
     app.add_url_rule("/requests/<request_id>/deny", view_func=_handle_request_deny, methods=["POST"])
 
@@ -2314,6 +2303,29 @@ def create_desktop_client(
     )
 
     return app
+
+
+class _WorkspaceViewRefresher(FrozenModel):
+    """Recovery callback that tells every window to rebuild a recovered machine's view.
+
+    While the machine was down each window went on painting whatever it last
+    served -- an error page, or a half-loaded one -- and recovering does not
+    change the address that view was loaded from, so the dead page would sit
+    there until the user navigated away and back.
+
+    Hung on the recovery rather than on the restart that usually causes it, so
+    it also covers a machine that came back some other way: a cold boot that
+    finished on its own, or the user starting a machine they had stopped.
+    """
+
+    publisher: UiStatePublisher = Field(
+        frozen=True, description="Publishes the refresh frame onto the /ui/ws channel every window is on."
+    )
+
+    model_config = {"arbitrary_types_allowed": True, "frozen": True, "extra": "forbid"}
+
+    def __call__(self, agent_id: AgentId) -> None:
+        self.publisher.publish_one_shot(UiWorkspaceRefreshMessage(agent_id=str(agent_id)))
 
 
 class _MindsApiKeyProvider(FrozenModel):

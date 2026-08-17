@@ -8,21 +8,22 @@ admin-only window override so a fresh tombstone reaps immediately. The
 """
 
 import uuid
+from collections.abc import Callable
 from typing import Final
 
 import httpx
 import pytest
 
-from imbue.minds.cli.paid import admin_key_from_supertokens_secret
 from imbue.minds.deployment_tests.data_types import SharedEnvHandle
 from imbue.minds.deployment_tests.data_types import VerifiedUserHandle
-from imbue.minds.envs.vault_reader import VaultPath
-from imbue.minds.envs.vault_reader import read_vault_kv
+from imbue.minds.deployment_tests.helpers import ci_admin_auth_header
 
 pytestmark = [pytest.mark.release, pytest.mark.minds_services]
 
 _HTTP_TIMEOUT_SECONDS: Final[float] = 60.0
-_CI_SUPERTOKENS_VAULT_PATH: Final[VaultPath] = VaultPath("secrets/minds/ci/supertokens")
+# The reap sweep does real R2 work through the Cloudflare API (list, empty,
+# delete buckets) and can far exceed a normal request on a cold container.
+_SWEEP_TIMEOUT_SECONDS: Final[float] = 300.0
 
 
 def _connector_url(env: SharedEnvHandle) -> str:
@@ -33,26 +34,32 @@ def _auth_header(user: VerifiedUserHandle) -> dict[str, str]:
     return {"Authorization": f"Bearer {user.session_token.get_secret_value()}"}
 
 
-def _admin_header() -> dict[str, str]:
-    admin_key = admin_key_from_supertokens_secret(
-        read_vault_kv(_CI_SUPERTOKENS_VAULT_PATH), str(_CI_SUPERTOKENS_VAULT_PATH)
+def _post_sweep(base: str, *, is_dry_run: bool = False) -> httpx.Response:
+    """POST the admin zero-window reap sweep, following Modal's long-request 303 redirects."""
+    dry_run_param = "dry_run=1&" if is_dry_run else ""
+    return httpx.post(
+        f"{base}/admin/sweep/backup-retention?{dry_run_param}window_seconds=0",
+        headers=ci_admin_auth_header(),
+        timeout=_SWEEP_TIMEOUT_SECONDS,
+        follow_redirects=True,
     )
-    return {"Authorization": f"Bearer {admin_key}"}
 
 
-def test_backup_retention_policy_endpoint_serves_the_window(shared_env: SharedEnvHandle) -> None:
+@pytest.mark.timeout(180)
+def test_backup_retention_policy_endpoint_serves_the_window(shared_env: Callable[[str], SharedEnvHandle]) -> None:
     response = httpx.get(
-        f"{_connector_url(shared_env)}/policies/destroyed-workspace-backups", timeout=_HTTP_TIMEOUT_SECONDS
+        f"{_connector_url(shared_env('default'))}/policies/destroyed-workspace-backups", timeout=_HTTP_TIMEOUT_SECONDS
     )
     response.raise_for_status()
     assert response.json()["retention_seconds"] == 60.0 * 60.0 * 24.0 * 30.0
 
 
+@pytest.mark.timeout(600)
 def test_reap_cycle_deletes_tombstoned_bucket_and_record(
-    shared_env: SharedEnvHandle, verified_user: VerifiedUserHandle
+    shared_env: Callable[[str], SharedEnvHandle], verified_user: VerifiedUserHandle
 ) -> None:
     """Tombstone -> admin trigger (window override) -> bucket + record gone."""
-    base = _connector_url(shared_env)
+    base = _connector_url(shared_env("default"))
     host_id = f"host-{uuid.uuid4().hex}"
     record = {
         "host_id": host_id,
@@ -100,20 +107,12 @@ def test_reap_cycle_deletes_tombstoned_bucket_and_record(
         )
         tombstone.raise_for_status()
 
-        dry = httpx.post(
-            f"{base}/admin/sweep/backup-retention?dry_run=1&window_seconds=0",
-            headers=_admin_header(),
-            timeout=_HTTP_TIMEOUT_SECONDS,
-        )
+        dry = _post_sweep(base, is_dry_run=True)
         dry.raise_for_status()
         dry_hosts = [candidate.get("host_id") for candidate in dry.json()["result"]["candidates"]]
         assert host_id in dry_hosts, dry.text
 
-        reap = httpx.post(
-            f"{base}/admin/sweep/backup-retention?window_seconds=0",
-            headers=_admin_header(),
-            timeout=_HTTP_TIMEOUT_SECONDS,
-        )
+        reap = _post_sweep(base)
         reap.raise_for_status()
         assert reap.json()["result"]["records_reaped"] >= 1, reap.text
 
@@ -136,8 +135,4 @@ def test_reap_cycle_deletes_tombstoned_bucket_and_record(
             headers=_auth_header(verified_user),
             timeout=_HTTP_TIMEOUT_SECONDS,
         )
-        httpx.post(
-            f"{base}/admin/sweep/backup-retention?window_seconds=0",
-            headers=_admin_header(),
-            timeout=_HTTP_TIMEOUT_SECONDS,
-        )
+        _post_sweep(base)

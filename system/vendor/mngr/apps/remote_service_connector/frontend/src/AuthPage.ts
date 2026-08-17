@@ -12,6 +12,7 @@ import {
   signUp,
   type AccountsConfig,
   type Identity,
+  type SignupAttribution,
 } from "./api";
 import {
   BTN_PRIMARY,
@@ -56,12 +57,28 @@ interface PageState {
   error: string;
   notice: string;
   isBusy: boolean;
+  // Whether the create-account tab shows the email/password fields. Google is
+  // the visually dominant signup path, so with Google configured the fields
+  // start collapsed behind a "Use email and password instead" link. Sticky
+  // once revealed (a tab flip doesn't re-hide a form the user asked for).
+  isEmailSignupFormRevealed: boolean;
   turnstileToken: string;
   turnstileWidgetId: string | null;
 }
 
 function navigateTo(path: string): void {
   window.location.assign(path);
+}
+
+// The page's own campaign context, forwarded with signups so the server can
+// attribute the new account even when the marketing cookie is absent (the
+// server extracts the allowlisted params; this just relays the raw values).
+function signupAttribution(state: PageState): SignupAttribution {
+  return {
+    page_query: window.location.search.replace(/^\?/, ""),
+    page_path: window.location.pathname,
+    next: state.next,
+  };
 }
 
 function finishSignin(state: PageState): void {
@@ -71,7 +88,14 @@ function finishSignin(state: PageState): void {
 }
 
 function googleStartHref(state: PageState): string {
-  return `/accounts/oauth/google/start?next=${encodeURIComponent(state.next)}`;
+  // pq/pp carry the page's campaign context through the OAuth round-trip
+  // (the server folds them into attribution only when a NEW account is
+  // created by the exchange).
+  const attribution = signupAttribution(state);
+  return (
+    `/accounts/oauth/google/start?next=${encodeURIComponent(state.next)}` +
+    `&pq=${encodeURIComponent(attribution.page_query)}&pp=${encodeURIComponent(attribution.page_path)}`
+  );
 }
 
 function resetTurnstile(state: PageState): void {
@@ -94,7 +118,9 @@ async function submitCredentials(state: PageState, email: string, password: stri
   m.redraw();
   try {
     const result =
-      state.tab === "signin" ? await signIn(email, password) : await signUp(email, password, state.turnstileToken);
+      state.tab === "signin"
+        ? await signIn(email, password)
+        : await signUp(email, password, state.turnstileToken, signupAttribution(state));
     if (result.status === "OK") {
       finishSignin(state);
       return;
@@ -245,19 +271,39 @@ function CredentialsForm(state: PageState): m.Vnode {
   );
 }
 
-function GoogleButton(state: PageState): m.Vnode | null {
-  if (!state.config?.google_enabled) return null;
-  return m("div", [
+function GoogleButton(state: PageState): m.Vnode {
+  // Google leads on both tabs: it is the visually dominant way to create an
+  // account and the topmost sign-in option.
+  return m(
+    "a",
+    { href: googleStartHref(state), class: BTN_SECONDARY, id: "google-signin-btn" },
+    [GoogleLogo(), "Continue with Google"],
+  );
+}
+
+function OrDivider(): m.Vnode {
+  return m("div", { class: "flex items-center gap-2 my-4 text-tertiary type-helper" }, [
+    m("div", { class: "flex-1 border-t border-subtle" }),
+    "or",
+    m("div", { class: "flex-1 border-t border-subtle" }),
+  ]);
+}
+
+function RevealEmailFormLink(state: PageState): m.Vnode {
+  return m("div", { class: "text-center mt-4" }, [
     m(
-      "a",
-      { href: googleStartHref(state), class: BTN_SECONDARY, id: "google-signin-btn" },
-      [GoogleLogo(), "Continue with Google"],
+      "button",
+      {
+        type: "button",
+        id: "reveal-email-form-btn",
+        class: LINK_CLASS + " type-body",
+        onclick: () => {
+          state.isEmailSignupFormRevealed = true;
+          state.error = "";
+        },
+      },
+      "Use email and password instead",
     ),
-    m("div", { class: "flex items-center gap-2 my-4 text-tertiary type-helper" }, [
-      m("div", { class: "flex-1 border-t border-subtle" }),
-      "or",
-      m("div", { class: "flex-1 border-t border-subtle" }),
-    ]),
   ]);
 }
 
@@ -269,14 +315,21 @@ function FormView(state: PageState): m.Vnode {
         `Sign in or create a Minds account to ${describeNext(state.next)}.`,
       )
     : null;
+  // Sign-in always shows the credentials form (Google on top). Sign-up leads
+  // with Google alone and keeps email/password collapsed behind the reveal
+  // link; without Google configured (some dev tiers) the form is the only
+  // option, so it renders expanded.
+  const isGoogleShown = !!state.config?.google_enabled;
+  const isEmailFormShown = !isGoogleShown || state.tab === "signin" || state.isEmailSignupFormRevealed;
   return CenteredCard(
     m("div", { class: "flex justify-center mb-6 text-primary" }, MindsWordmark()),
     purpose,
     ErrorBanner(state.error),
     SuccessNote(state.notice),
     TabBar(state),
-    GoogleButton(state),
-    CredentialsForm(state),
+    isGoogleShown ? GoogleButton(state) : null,
+    isGoogleShown && isEmailFormShown ? OrDivider() : null,
+    isEmailFormShown ? CredentialsForm(state) : RevealEmailFormLink(state),
   );
 }
 
@@ -391,18 +444,23 @@ function ForgotPasswordView(state: PageState): m.Vnode {
 
 export function AuthPage(): m.Component {
   const params = new URLSearchParams(window.location.search);
+  const errorCode = params.get("error");
   const state: PageState = {
     view: "loading",
     // Create-account is the default everywhere: most signed-out visitors are
     // new users, sign-in is one tab-click away, and returning users with a
     // live session never see the form (they get the continue-as interstitial).
-    tab: "signup",
+    // The one exception is the password_account bounce (a Google attempt on an
+    // email that signs in with a password): its remedy IS the sign-in form,
+    // which the signup tab keeps collapsed behind the reveal link.
+    tab: errorCode === "password_account" ? "signin" : "signup",
     config: null,
     identity: null,
     next: sanitizeNextPath(params.get("next")),
-    error: loginErrorCopy(params.get("error")),
+    error: loginErrorCopy(errorCode),
     notice: "",
     isBusy: false,
+    isEmailSignupFormRevealed: false,
     turnstileToken: "",
     turnstileWidgetId: null,
   };

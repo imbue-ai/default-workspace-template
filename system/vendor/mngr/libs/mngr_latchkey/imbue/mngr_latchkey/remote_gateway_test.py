@@ -13,6 +13,7 @@ from imbue.imbue_common.mutable_model import MutableModel
 from imbue.mngr.interfaces.data_types import CommandResult
 from imbue.mngr.interfaces.host import OuterHostInterface
 from imbue.mngr.primitives import HostId
+from imbue.mngr_latchkey.additional_services import additional_service_registration_entries
 from imbue.mngr_latchkey.core import AGENT_SIDE_LATCHKEY_PORT
 from imbue.mngr_latchkey.core import CONFIG_FILENAME
 from imbue.mngr_latchkey.core import GATEWAY_MAX_BODY_SIZE_BYTES
@@ -115,12 +116,17 @@ class _StubOuter(MutableModel):
     ) -> CommandResult:
         self.recorded.append(_Recorded(command=command, timeout_seconds=timeout_seconds))
         # Only the dedicated $HOME-resolution probe gets the home response; the
-        # container lookup returns the configured name; everything else
-        # (install/gateway/keypair/tunnel scripts) returns the configured result.
+        # container lookup returns the configured name; the owner-exec vm
+        # docker-bridge probe resolves to a bridge address (so the vm daemon
+        # provisioning that provision_remote_gateway now runs succeeds instead of
+        # failing closed); everything else (install/gateway/keypair/tunnel
+        # scripts) returns the configured result.
         if command.strip() == 'echo "$HOME"':
             return CommandResult(stdout=f"{self.home}\n", stderr="", success=True)
         if command.startswith("docker ps"):
             return CommandResult(stdout=f"{self.container_name}\n", stderr="", success=True)
+        if "addr show docker0" in command:
+            return CommandResult(stdout="172.17.0.1\n", stderr="", success=True)
         return self.result
 
     def path_exists(self, path: Path) -> bool:
@@ -779,6 +785,23 @@ def test_ensure_latchkey_gateway_running_hides_builtin_services_in_config(tmp_pa
     # as the desktop gateway, so an agent sees the same set either way.
     config = json.loads(_remote_config_text(outer))
     assert "notion" in config["settings"]["hideBuiltinServices"]
+
+
+def test_ensure_latchkey_gateway_running_registers_custom_services_in_config(tmp_path: Path) -> None:
+    """The VPS gateway is given minds' custom-service registrations.
+
+    ``sync_credentials`` ships a granted custom service's credentials here, but a
+    gateway that does not know the service cannot resolve a request to it, so it
+    would never inject them.
+    """
+    outer = _outer(CommandResult(stdout="", stderr="", success=True))
+    _ensure_latchkey_gateway_running(outer, tmp_path, "shared-password")
+    config = json.loads(_remote_config_text(outer))
+    assert config["registeredServices"] == additional_service_registration_entries()
+    # Pinned concretely too: comparing the two projections alone would still pass
+    # if the bundled catalog degraded to nothing, which is the very failure
+    # (a VPS gateway that knows no custom service) this shipping is meant to rule out.
+    assert config["registeredServices"]["claude-ai"]["baseApiUrl"] == "https://claude.ai/"
 
 
 def test_ensure_latchkey_gateway_running_preserves_existing_remote_config(tmp_path: Path) -> None:

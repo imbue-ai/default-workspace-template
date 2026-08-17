@@ -1,0 +1,1111 @@
+"""Unit tests for the claude shoulder-tap executor and the empty-queue stop-to-composer executor.
+
+Covers the tap's pure verdict lattice over synthetic raw tails + mirror states (including the
+pre-baseline-leaves race and its idle-gap variant), the raw-tail reader, every gate, and the tap
+orchestration (chord delivery, recovery send, status mapping); the stop executor's branch
+dispatch (empty->chord+mark-idle, nonempty/dialog/binding/deadline->base, no-open-turn->noop, the
+under-lock re-check), the bounded-lock capture (a message parked mid-stop rides the returned
+block; a lock held past the wait falls back to the hammer instead of stalling), both-variant
+abort confirmation (and a tool_result quoting the sentinel NOT confirming); and the tap's
+recovery suppression when a stop ran since its baseline. The live chord itself is verified
+manually via tmux, not here (repo convention).
+"""
+
+from __future__ import annotations
+
+import json
+import os
+from collections.abc import Callable
+from contextlib import contextmanager
+from contextlib import nullcontext
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from imbue.concurrency_group.errors import ProcessError
+from imbue.system_interface.harnesses.claude.session_parser import INTERRUPT_SENTINEL_TEXT
+from imbue.system_interface.harnesses.claude.session_parser import MID_TOOL_INTERRUPT_SENTINEL_TEXT
+from imbue.system_interface.harnesses.claude.tap import ClaudeTapStatus
+from imbue.system_interface.harnesses.claude.tap import TapVerdict
+from imbue.system_interface.harnesses.claude.tap import _STOP_MONOTONIC_BY_AGENT
+from imbue.system_interface.harnesses.claude.tap import _record_stop
+from imbue.system_interface.harnesses.claude.tap import compute_tail_facts
+from imbue.system_interface.harnesses.claude.tap import deadline_verdict
+from imbue.system_interface.harnesses.claude.tap import execute_claude_shoulder_tap
+from imbue.system_interface.harnesses.claude.tap import execute_claude_stop_to_composer
+from imbue.system_interface.harnesses.claude.tap import poll_verdict
+from imbue.system_interface.harnesses.claude.tap import read_raw_tail
+
+# --- raw-record builders -------------------------------------------------------------
+
+
+def _user_line(text: str) -> str:
+    return json.dumps({"type": "user", "message": {"role": "user", "content": text}})
+
+
+def _assistant_line(text: str = "sure") -> str:
+    return json.dumps({"type": "assistant", "message": {"role": "assistant", "content": text}})
+
+
+_SENTINEL_LINE = _user_line(INTERRUPT_SENTINEL_TEXT)
+_MID_TOOL_SENTINEL_LINE = _user_line(MID_TOOL_INTERRUPT_SENTINEL_TEXT)
+
+
+def _tool_result_line_quoting(text: str) -> str:
+    """A ``type=="user"`` record carrying only a tool_result block whose OUTPUT quotes ``text``.
+
+    This is the shape an agent grepping its own session JSONL produces; the abort confirmation
+    must not mistake it for a real interrupt sentinel (its text is not extracted as user text)."""
+    return json.dumps(
+        {"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "content": text}]}}
+    )
+
+
+# --- compute_tail_facts --------------------------------------------------------------
+
+
+def test_tail_facts_empty_tail() -> None:
+    facts = compute_tail_facts([])
+    assert facts.has_interrupt_sentinel is False
+    assert facts.has_assistant_answer is False
+
+
+def test_tail_facts_sentinel_only_is_dangling() -> None:
+    facts = compute_tail_facts([_SENTINEL_LINE])
+    assert facts.has_interrupt_sentinel is True
+    assert facts.has_assistant_answer is False
+
+
+def test_tail_facts_sentinel_then_assistant_is_answered() -> None:
+    facts = compute_tail_facts([_SENTINEL_LINE, _assistant_line()])
+    assert facts.has_interrupt_sentinel is True
+    assert facts.has_assistant_answer is True
+
+
+def test_tail_facts_assistant_before_sentinel_stays_dangling() -> None:
+    """An assistant record BEFORE the last sentinel does not count as an answer to it."""
+    facts = compute_tail_facts([_assistant_line(), _SENTINEL_LINE])
+    assert facts.has_interrupt_sentinel is True
+    assert facts.has_assistant_answer is False
+
+
+def test_tail_facts_no_sentinel_with_assistant() -> None:
+    facts = compute_tail_facts([_user_line("hi"), _assistant_line()])
+    assert facts.has_interrupt_sentinel is False
+    assert facts.has_assistant_answer is True
+
+
+def test_tail_facts_mid_tool_variant_is_not_the_tap_sentinel() -> None:
+    """The mid-tool ``for tool use`` variant is the sibling interrupt plan's; not matched here."""
+    facts = compute_tail_facts([_MID_TOOL_SENTINEL_LINE])
+    assert facts.has_interrupt_sentinel is False
+
+
+def test_tail_facts_ignores_non_json_lines() -> None:
+    facts = compute_tail_facts(["not json at all", _SENTINEL_LINE])
+    assert facts.has_interrupt_sentinel is True
+
+
+# --- poll_verdict / deadline_verdict (the lattice) -----------------------------------
+
+
+def _facts(*, sentinel: bool, answer: bool) -> Any:
+    return compute_tail_facts(([_SENTINEL_LINE] if sentinel else []) + ([_assistant_line()] if answer else []))
+
+
+def test_poll_verdict_early_flushed_on_drained_with_answer() -> None:
+    assert (
+        poll_verdict(mirror_is_empty=True, facts=_facts(sentinel=True, answer=True), turn_came_alive=False)
+        == TapVerdict.FLUSHED
+    )
+
+
+def test_poll_verdict_early_flushed_when_turn_came_alive() -> None:
+    """A drained mirror where a turn was seen alive is an early FLUSHED, even before any answer."""
+    assert (
+        poll_verdict(mirror_is_empty=True, facts=_facts(sentinel=True, answer=False), turn_came_alive=True)
+        == TapVerdict.FLUSHED
+    )
+
+
+def test_poll_verdict_waits_when_drained_but_no_answer_and_no_live_turn() -> None:
+    """A drained mirror with a dangling sentinel and no turn seen alive keeps watching."""
+    assert poll_verdict(mirror_is_empty=True, facts=_facts(sentinel=True, answer=False), turn_came_alive=False) is None
+
+
+def test_poll_verdict_waits_when_mirror_not_empty() -> None:
+    assert poll_verdict(mirror_is_empty=False, facts=_facts(sentinel=True, answer=True), turn_came_alive=True) is None
+
+
+def test_deadline_verdict_not_flushed_when_mirror_nonempty() -> None:
+    assert (
+        deadline_verdict(mirror_is_empty=False, facts=_facts(sentinel=False, answer=False), turn_came_alive=False)
+        == TapVerdict.NOT_FLUSHED
+    )
+
+
+def test_deadline_verdict_needs_recovery_when_no_turn_ever_came_alive() -> None:
+    """Drained mirror + a dangling sentinel + no turn ever seen alive = the flush committed the
+    messages but nothing ran to answer them (the cancelled follow-on)."""
+    assert (
+        deadline_verdict(mirror_is_empty=True, facts=_facts(sentinel=True, answer=False), turn_came_alive=False)
+        == TapVerdict.NEEDS_RECOVERY
+    )
+
+
+def test_deadline_verdict_flushed_when_a_turn_came_alive() -> None:
+    """Drained mirror + a dangling sentinel but a turn WAS seen alive in the window = a successful
+    flush (the turn started, maybe already finished), NOT a cancelled follow-on. No recovery."""
+    assert (
+        deadline_verdict(mirror_is_empty=True, facts=_facts(sentinel=True, answer=False), turn_came_alive=True)
+        == TapVerdict.FLUSHED
+    )
+
+
+def test_deadline_verdict_flushed_on_idle_gap_variant() -> None:
+    """Drained mirror with no sentinel (natural flush already happened) = FLUSHED, not failure."""
+    assert (
+        deadline_verdict(mirror_is_empty=True, facts=_facts(sentinel=False, answer=False), turn_came_alive=False)
+        == TapVerdict.FLUSHED
+    )
+
+
+def test_deadline_verdict_flushed_when_sentinel_answered() -> None:
+    assert (
+        deadline_verdict(mirror_is_empty=True, facts=_facts(sentinel=True, answer=True), turn_came_alive=False)
+        == TapVerdict.FLUSHED
+    )
+
+
+# --- read_raw_tail -------------------------------------------------------------------
+
+
+def test_read_raw_tail_returns_only_lines_after_baseline(tmp_path: Path) -> None:
+    session = tmp_path / "s.jsonl"
+    session.write_text("before-baseline\n")
+    baseline = session.stat().st_size
+    with session.open("a") as f:
+        f.write("after-one\nafter-two\n")
+    assert read_raw_tail(session, baseline) == ["after-one", "after-two"]
+
+
+def test_read_raw_tail_drops_trailing_partial_line(tmp_path: Path) -> None:
+    session = tmp_path / "s.jsonl"
+    session.write_text("base\n")
+    baseline = session.stat().st_size
+    with session.open("a") as f:
+        f.write("complete\npartial-no-newline")
+    assert read_raw_tail(session, baseline) == ["complete"]
+
+
+def test_read_raw_tail_empty_when_not_grown(tmp_path: Path) -> None:
+    session = tmp_path / "s.jsonl"
+    session.write_text("base\n")
+    assert read_raw_tail(session, session.stat().st_size) == []
+
+
+# --- orchestration: gates + verdict routing ------------------------------------------
+
+
+class _FakeTapWatcher:
+    """A watcher stand-in whose mirror snapshots and session growth a test scripts."""
+
+    def __init__(
+        self,
+        queue_snapshots: list[list[dict[str, Any]]],
+        session_file: Path | None,
+        on_refresh: Callable[[int], None] | None = None,
+    ) -> None:
+        self._queue_snapshots = queue_snapshots
+        self._session_file = session_file
+        self._on_refresh = on_refresh
+        self.events_calls = 0
+        self.queue_calls = 0
+
+    def get_all_events(self, session_id: str | None = None) -> list[dict[str, Any]]:
+        self.events_calls += 1
+        if self._on_refresh is not None:
+            self._on_refresh(self.events_calls)
+        return []
+
+    def get_queued_messages(self) -> list[dict[str, Any]]:
+        index = min(self.queue_calls, len(self._queue_snapshots) - 1)
+        self.queue_calls += 1
+        return self._queue_snapshots[index]
+
+    def get_latest_main_session_file(self) -> Path | None:
+        return self._session_file
+
+
+_QUEUED = [{"queued_id": "q1", "content": "hi"}]
+
+
+def _make_agent_paths(
+    tmp_path: Path,
+    *,
+    active: bool = True,
+    permissions_waiting: bool = False,
+    bind: bool = True,
+    binding_predates_marker: bool = True,
+) -> tuple[Path, Path]:
+    """Create the state dir (markers) and config dir (keybindings), returning both key paths."""
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(exist_ok=True)
+    config_dir = tmp_path / "config"
+    config_dir.mkdir(exist_ok=True)
+    keybindings_path = config_dir / "keybindings.json"
+    if bind:
+        keybindings_path.write_text(
+            json.dumps({"bindings": [{"context": "Chat", "bindings": {"meta+q": "chat:cancel"}}]})
+        )
+    marker = state_dir / "claude_process_started"
+    marker.write_text("")
+    if bind:
+        # Order the binding and the process marker so the gate reads the intended state.
+        keybindings_mtime = 1000 if binding_predates_marker else 3000
+        os.utime(keybindings_path, (keybindings_mtime, keybindings_mtime))
+        os.utime(marker, (2000, 2000))
+    if active:
+        (state_dir / "active").write_text("")
+    if permissions_waiting:
+        (state_dir / "permissions_waiting").write_text("")
+    return state_dir, keybindings_path
+
+
+def _stepping_now(values: list[float]) -> Callable[[], float]:
+    """A monotonic clock stand-in that returns successive ``values`` (last repeats)."""
+    index = {"i": 0}
+
+    def now() -> float:
+        value = values[min(index["i"], len(values) - 1)]
+        index["i"] += 1
+        return value
+
+    return now
+
+
+def test_execute_nothing_queued_is_a_noop_and_still_provisions_binding(tmp_path: Path) -> None:
+    """An empty mirror short-circuits to nothing_queued; the chord is still provisioned."""
+    state_dir, keybindings_path = _make_agent_paths(tmp_path, bind=False)
+    assert not keybindings_path.exists()
+    presses: list[bool] = []
+    result = execute_claude_shoulder_tap(
+        agent_state_dir=state_dir,
+        keybindings_path=keybindings_path,
+        watcher=_FakeTapWatcher([[]], None),
+        press_chord=lambda: presses.append(True) or True,
+        send_recovery=lambda _text: True,
+        try_message_lock=lambda: nullcontext(True),
+    )
+    assert result.status == ClaudeTapStatus.NOTHING_QUEUED
+    assert presses == []
+    # ensure_chat_cancel_tap_keybinding ran (self-provision) even on the no-op path.
+    assert keybindings_path.exists()
+
+
+def test_execute_no_open_turn_when_active_marker_absent(tmp_path: Path) -> None:
+    state_dir, keybindings_path = _make_agent_paths(tmp_path, active=False)
+    presses: list[bool] = []
+    result = execute_claude_shoulder_tap(
+        agent_state_dir=state_dir,
+        keybindings_path=keybindings_path,
+        watcher=_FakeTapWatcher([_QUEUED], None),
+        press_chord=lambda: presses.append(True) or True,
+        send_recovery=lambda _text: True,
+        try_message_lock=lambda: nullcontext(True),
+    )
+    assert result.status == ClaudeTapStatus.NO_OPEN_TURN
+    assert presses == []
+
+
+def test_execute_permissions_waiting_returns_dialog_status(tmp_path: Path) -> None:
+    state_dir, keybindings_path = _make_agent_paths(tmp_path, permissions_waiting=True)
+    presses: list[bool] = []
+    result = execute_claude_shoulder_tap(
+        agent_state_dir=state_dir,
+        keybindings_path=keybindings_path,
+        watcher=_FakeTapWatcher([_QUEUED], None),
+        press_chord=lambda: presses.append(True) or True,
+        send_recovery=lambda _text: True,
+        try_message_lock=lambda: nullcontext(True),
+    )
+    assert result.status == ClaudeTapStatus.PERMISSIONS_WAITING
+    assert presses == []
+
+
+def test_execute_binding_not_active_when_written_after_launch(tmp_path: Path) -> None:
+    state_dir, keybindings_path = _make_agent_paths(tmp_path, binding_predates_marker=False)
+    presses: list[bool] = []
+    result = execute_claude_shoulder_tap(
+        agent_state_dir=state_dir,
+        keybindings_path=keybindings_path,
+        watcher=_FakeTapWatcher([_QUEUED], None),
+        press_chord=lambda: presses.append(True) or True,
+        send_recovery=lambda _text: True,
+        try_message_lock=lambda: nullcontext(True),
+    )
+    assert result.status == ClaudeTapStatus.BINDING_NOT_ACTIVE
+    assert presses == []
+
+
+def test_execute_flushed_presses_chord_and_returns_tapped(tmp_path: Path) -> None:
+    """All gates pass; the flushed turn produces an answer past the baseline -> tapped."""
+    state_dir, keybindings_path = _make_agent_paths(tmp_path)
+    session = tmp_path / "session.jsonl"
+    session.write_text(_user_line("hello") + "\n")
+
+    def grow_with_answer(events_call: int) -> None:
+        # The first watch-loop refresh (events call #2) is when the flushed turn's answer lands.
+        if events_call == 2:
+            with session.open("a") as f:
+                f.write(_assistant_line() + "\n")
+
+    watcher = _FakeTapWatcher([_QUEUED, []], session, on_refresh=grow_with_answer)
+    presses: list[bool] = []
+    recoveries: list[str] = []
+    result = execute_claude_shoulder_tap(
+        agent_state_dir=state_dir,
+        keybindings_path=keybindings_path,
+        watcher=watcher,
+        press_chord=lambda: presses.append(True) or True,
+        send_recovery=lambda text: recoveries.append(text) or True,
+        try_message_lock=lambda: nullcontext(True),
+    )
+    assert result.status == ClaudeTapStatus.TAPPED
+    assert presses == [True]
+    # FLUSHED needs no recovery message.
+    assert recoveries == []
+
+
+def test_execute_needs_recovery_sends_notification_and_returns_tapped(tmp_path: Path) -> None:
+    """Mirror drains, a dangling sentinel persists, and NO turn is ever seen alive during the watch
+    (the marker is gone before the first poll) -> the flush committed the messages but nothing ran
+    to answer them -> recovery sent, tapped."""
+    state_dir, keybindings_path = _make_agent_paths(tmp_path)
+    session = tmp_path / "session.jsonl"
+    session.write_text(_user_line("hello") + "\n")
+
+    def grow_with_sentinel_no_live_turn(events_call: int) -> None:
+        if events_call == 2:
+            with session.open("a") as f:
+                f.write(_SENTINEL_LINE + "\n")
+            # Clear the marker before the watch's first poll reads it: no turn is ever seen alive.
+            (state_dir / "active").unlink()
+
+    watcher = _FakeTapWatcher([_QUEUED, []], session, on_refresh=grow_with_sentinel_no_live_turn)
+    recoveries: list[str] = []
+    result = execute_claude_shoulder_tap(
+        agent_state_dir=state_dir,
+        keybindings_path=keybindings_path,
+        watcher=watcher,
+        press_chord=lambda: True,
+        send_recovery=lambda text: recoveries.append(text) or True,
+        try_message_lock=lambda: nullcontext(True),
+        now=_stepping_now([0.0, 0.0, 100.0]),
+        sleep=lambda _s: None,
+    )
+    assert result.status == ClaudeTapStatus.TAPPED
+    assert len(recoveries) == 1
+    assert recoveries[0].startswith("<task-notification>")
+
+
+def test_execute_flushed_when_a_turn_is_seen_alive_without_answer(tmp_path: Path) -> None:
+    """A dangling sentinel with no answer, but a turn IS seen alive during the watch = a successful
+    flush (the turn started -- fast or slow), not a cancelled follow-on -> no recovery."""
+    state_dir, keybindings_path = _make_agent_paths(tmp_path)
+    session = tmp_path / "session.jsonl"
+    session.write_text(_user_line("hello") + "\n")
+
+    def grow_with_sentinel(events_call: int) -> None:
+        if events_call == 2:
+            with session.open("a") as f:
+                f.write(_SENTINEL_LINE + "\n")
+        # The ``active`` marker stays: a turn is seen alive (the flush started one).
+
+    watcher = _FakeTapWatcher([_QUEUED, []], session, on_refresh=grow_with_sentinel)
+    recoveries: list[str] = []
+    result = execute_claude_shoulder_tap(
+        agent_state_dir=state_dir,
+        keybindings_path=keybindings_path,
+        watcher=watcher,
+        press_chord=lambda: True,
+        send_recovery=lambda text: recoveries.append(text) or True,
+        try_message_lock=lambda: nullcontext(True),
+        now=_stepping_now([0.0, 0.0, 100.0]),
+        sleep=lambda _s: None,
+    )
+    assert result.status == ClaudeTapStatus.TAPPED
+    # A turn was seen alive, so no cancelled-follow-on nudge is sent.
+    assert recoveries == []
+
+
+def test_execute_not_flushed_when_mirror_never_drains(tmp_path: Path) -> None:
+    state_dir, keybindings_path = _make_agent_paths(tmp_path)
+    session = tmp_path / "session.jsonl"
+    session.write_text(_user_line("hello") + "\n")
+    recoveries: list[str] = []
+    result = execute_claude_shoulder_tap(
+        agent_state_dir=state_dir,
+        keybindings_path=keybindings_path,
+        watcher=_FakeTapWatcher([_QUEUED, _QUEUED], session),
+        press_chord=lambda: True,
+        send_recovery=lambda text: recoveries.append(text) or True,
+        try_message_lock=lambda: nullcontext(True),
+        now=_stepping_now([0.0, 0.0, 100.0]),
+        sleep=lambda _s: None,
+    )
+    assert result.status == ClaudeTapStatus.NOT_FLUSHED
+    # Nothing was resent on a NOT_FLUSHED outcome.
+    assert recoveries == []
+
+
+def test_execute_chord_send_failure_returns_error(tmp_path: Path) -> None:
+    state_dir, keybindings_path = _make_agent_paths(tmp_path)
+    session = tmp_path / "session.jsonl"
+    session.write_text(_user_line("hello") + "\n")
+    result = execute_claude_shoulder_tap(
+        agent_state_dir=state_dir,
+        keybindings_path=keybindings_path,
+        watcher=_FakeTapWatcher([_QUEUED, []], session),
+        press_chord=lambda: False,
+        send_recovery=lambda _text: True,
+        try_message_lock=lambda: nullcontext(True),
+    )
+    assert result.status == ClaudeTapStatus.CHORD_SEND_FAILED
+
+
+def test_execute_recovery_send_failure_returns_error(tmp_path: Path) -> None:
+    state_dir, keybindings_path = _make_agent_paths(tmp_path)
+    session = tmp_path / "session.jsonl"
+    session.write_text(_user_line("hello") + "\n")
+
+    def grow_with_sentinel_and_end_turn(events_call: int) -> None:
+        if events_call == 2:
+            with session.open("a") as f:
+                f.write(_SENTINEL_LINE + "\n")
+            # End the turn (clear the marker) so this reaches the NEEDS_RECOVERY resend.
+            (state_dir / "active").unlink()
+
+    result = execute_claude_shoulder_tap(
+        agent_state_dir=state_dir,
+        keybindings_path=keybindings_path,
+        watcher=_FakeTapWatcher([_QUEUED, []], session, on_refresh=grow_with_sentinel_and_end_turn),
+        press_chord=lambda: True,
+        send_recovery=lambda _text: False,
+        try_message_lock=lambda: nullcontext(True),
+        now=_stepping_now([0.0, 0.0, 100.0]),
+        sleep=lambda _s: None,
+    )
+    assert result.status == ClaudeTapStatus.RECOVERY_SEND_FAILED
+
+
+def test_execute_send_in_flight_when_the_lock_stays_held(tmp_path: Path) -> None:
+    """A send holding ``message.lock`` past the bounded wait refuses the tap with send_in_flight
+    (mirror codex/pi) rather than reading an empty mirror and no-oping the not-yet-parked message
+    away: no mirror read, no chord."""
+    state_dir, keybindings_path = _make_agent_paths(tmp_path)
+    presses: list[bool] = []
+    watcher = _FakeTapWatcher([_QUEUED, []], None)
+    result = execute_claude_shoulder_tap(
+        agent_state_dir=state_dir,
+        keybindings_path=keybindings_path,
+        watcher=watcher,
+        press_chord=lambda: presses.append(True) or True,
+        send_recovery=lambda _text: True,
+        try_message_lock=lambda: nullcontext(False),
+    )
+    assert result.status == ClaudeTapStatus.SEND_IN_FLIGHT
+    assert presses == []
+    # The refresh-first mirror read is skipped entirely when the send owns the lock.
+    assert watcher.events_calls == 0
+
+
+def test_execute_mirror_read_runs_under_the_message_lock(tmp_path: Path) -> None:
+    """The refresh-first mirror read happens INSIDE the bounded message-lock acquire, so a send
+    that durably parks while the tap waits for the lock is in the mirror the tap reads -- it does
+    not short-circuit to nothing_queued on the stale pre-lock (empty) mirror."""
+    state_dir, keybindings_path = _make_agent_paths(tmp_path)
+    lock_record: list[str] = []
+    # The mirror is empty until the under-lock refresh (events call #1) grows it: the message
+    # parks only once the tap holds the lock. A read taken before the lock would see the empty
+    # snapshot and return nothing_queued.
+    snapshots: list[list[dict[str, Any]]] = [[]]
+
+    def park_on_refresh(events_call: int) -> None:
+        if events_call == 1:
+            snapshots[0] = [{"queued_id": "q1", "content": "parked while waiting for the lock"}]
+
+    watcher = _FakeTapWatcher(snapshots, None, on_refresh=park_on_refresh)
+    result = execute_claude_shoulder_tap(
+        agent_state_dir=state_dir,
+        keybindings_path=keybindings_path,
+        watcher=watcher,
+        press_chord=lambda: True,
+        send_recovery=lambda _text: True,
+        try_message_lock=lambda: _recording_try_lock(lock_record),
+    )
+    # The read saw the parked message (no live session file -> no_open_turn), NOT nothing_queued.
+    assert result.status == ClaudeTapStatus.NO_OPEN_TURN
+    # The refresh actually ran inside the lock acquire.
+    assert lock_record == ["enter", "exit"]
+    assert watcher.events_calls == 1
+
+
+# --- stop-to-composer executor: branch dispatch --------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _clear_stop_registry() -> Any:
+    """Isolate the module-level per-agent stop-timestamp registry across tests."""
+    _STOP_MONOTONIC_BY_AGENT.clear()
+    yield
+    _STOP_MONOTONIC_BY_AGENT.clear()
+
+
+@contextmanager
+def _recording_try_lock(record: list[str], held: bool = True) -> Any:
+    """A bounded message-lock stand-in: records enter/exit and yields whether it was held, so a
+    test can assert a capture actually ran inside the acquire."""
+    record.append("enter")
+    try:
+        yield held
+    finally:
+        record.append("exit")
+
+
+class _StopRecorder:
+    """Records the injected side effects of one stop-executor run for a test to assert on."""
+
+    def __init__(self, base_block: str = "<base-block>", press: Callable[[], bool] = lambda: True) -> None:
+        self.base_block = base_block
+        self._press = press
+        self.presses: list[bool] = []
+        self.mark_idle_calls = 0
+        self.settle_calls = 0
+        self.base_calls = 0
+
+    def press_chord(self) -> bool:
+        result = self._press()
+        self.presses.append(result)
+        return result
+
+    def mark_idle(self) -> None:
+        self.mark_idle_calls += 1
+
+    def settle_activity(self) -> None:
+        self.settle_calls += 1
+
+    def restart_drain_to_base(self) -> str:
+        self.base_calls += 1
+        return self.base_block
+
+
+def test_stop_nonempty_mirror_delegates_to_base(tmp_path: Path) -> None:
+    """A NONEMPTY mirror routes to the base restart-drain (which returns the block); no chord."""
+    state_dir, keybindings_path = _make_agent_paths(tmp_path)
+    recorder = _StopRecorder(base_block="edit me before sending")
+    block = execute_claude_stop_to_composer(
+        agent_state_dir=state_dir,
+        keybindings_path=keybindings_path,
+        watcher=_FakeTapWatcher([_QUEUED], None),
+        press_chord=recorder.press_chord,
+        mark_idle=recorder.mark_idle,
+        restart_drain_to_base=recorder.restart_drain_to_base,
+        try_message_lock=lambda: nullcontext(True),
+    )
+    assert block == "edit me before sending"
+    assert recorder.base_calls == 1
+    assert recorder.presses == []
+    assert recorder.mark_idle_calls == 0
+
+
+def test_stop_nonempty_mirror_captures_a_message_parked_after_the_stale_read(tmp_path: Path) -> None:
+    """A message that parks between the pre-lock mirror read and the restart rides the block.
+
+    The nonempty branch refreshes and captures UNDER the bounded message lock, so a send that
+    durably parked while the stop was dispatched (the in-flight-send race) is in the returned
+    block -- the old lock-free delegation captured the stale mirror and lost it to the SIGKILL.
+    """
+    state_dir, keybindings_path = _make_agent_paths(tmp_path)
+    snapshots: list[list[dict[str, Any]]] = [[{"queued_id": "q1", "content": "first message"}]]
+
+    def park_second_message(events_call: int) -> None:
+        # The under-lock refresh is the SECOND get_all_events; the in-flight send's message
+        # lands in the mirror only there (it was still mid-flight at the pre-lock read).
+        if events_call == 2:
+            snapshots[0] = snapshots[0] + [{"queued_id": "q2", "content": "parked mid-stop"}]
+
+    watcher = _FakeTapWatcher(snapshots, None, on_refresh=park_second_message)
+    lock_record: list[str] = []
+    presses: list[bool] = []
+
+    def capture_block_like_restart_drain() -> str:
+        # The real base delegation captures the watcher's CURRENT block (restart_drain reads
+        # the queue after the executor's under-lock refresh); mirror that here so the
+        # assertion sees exactly what would reach the composer.
+        return "\n\n".join(message["content"] for message in watcher.get_queued_messages())
+
+    block = execute_claude_stop_to_composer(
+        agent_state_dir=state_dir,
+        keybindings_path=keybindings_path,
+        watcher=watcher,
+        press_chord=lambda: presses.append(True) or True,
+        mark_idle=lambda: None,
+        restart_drain_to_base=capture_block_like_restart_drain,
+        try_message_lock=lambda: _recording_try_lock(lock_record),
+    )
+    assert block == "first message\n\nparked mid-stop"
+    assert presses == []
+    # The refresh + capture actually ran inside the lock acquire.
+    assert lock_record == ["enter", "exit"]
+
+
+def test_stop_nonempty_mirror_still_restarts_when_the_lock_stays_held(tmp_path: Path) -> None:
+    """Stop must win: a send holding the lock past the bounded wait does not stall the nonempty
+    drain -- it proceeds to the hammer on a fresh best-effort re-capture (the in-flight message
+    dies with the process, never runs)."""
+    state_dir, keybindings_path = _make_agent_paths(tmp_path)
+    recorder = _StopRecorder(base_block="still handed back")
+    watcher = _FakeTapWatcher([_QUEUED], None)
+    block = execute_claude_stop_to_composer(
+        agent_state_dir=state_dir,
+        keybindings_path=keybindings_path,
+        watcher=watcher,
+        press_chord=recorder.press_chord,
+        mark_idle=recorder.mark_idle,
+        restart_drain_to_base=recorder.restart_drain_to_base,
+        try_message_lock=lambda: nullcontext(False),
+    )
+    assert block == "still handed back"
+    assert recorder.base_calls == 1
+    assert recorder.presses == []
+    # The mirror was still refreshed for the best-effort re-capture, even without the lock.
+    assert watcher.events_calls == 2
+
+
+def test_stop_no_open_turn_is_a_noop(tmp_path: Path) -> None:
+    """Empty mirror + no ``active`` marker -> an empty block, no chord, no restart."""
+    state_dir, keybindings_path = _make_agent_paths(tmp_path, active=False)
+    recorder = _StopRecorder()
+    block = execute_claude_stop_to_composer(
+        agent_state_dir=state_dir,
+        keybindings_path=keybindings_path,
+        watcher=_FakeTapWatcher([[]], None),
+        press_chord=recorder.press_chord,
+        mark_idle=recorder.mark_idle,
+        restart_drain_to_base=recorder.restart_drain_to_base,
+        try_message_lock=lambda: nullcontext(True),
+    )
+    assert block == ""
+    assert recorder.presses == []
+    assert recorder.base_calls == 0
+    assert recorder.mark_idle_calls == 0
+
+
+def test_stop_permissions_waiting_delegates_to_base(tmp_path: Path) -> None:
+    """Empty mirror + a permission dialog -> the base (a blocked turn is still a turn); no chord."""
+    state_dir, keybindings_path = _make_agent_paths(tmp_path, permissions_waiting=True)
+    recorder = _StopRecorder()
+    block = execute_claude_stop_to_composer(
+        agent_state_dir=state_dir,
+        keybindings_path=keybindings_path,
+        watcher=_FakeTapWatcher([[]], None),
+        press_chord=recorder.press_chord,
+        mark_idle=recorder.mark_idle,
+        restart_drain_to_base=recorder.restart_drain_to_base,
+        try_message_lock=lambda: nullcontext(True),
+    )
+    assert block == "<base-block>"
+    assert recorder.base_calls == 1
+    assert recorder.presses == []
+
+
+def test_stop_binding_inactive_delegates_to_base(tmp_path: Path) -> None:
+    """Empty mirror + a binding written after this process launched -> the base; no chord."""
+    state_dir, keybindings_path = _make_agent_paths(tmp_path, binding_predates_marker=False)
+    recorder = _StopRecorder()
+    block = execute_claude_stop_to_composer(
+        agent_state_dir=state_dir,
+        keybindings_path=keybindings_path,
+        watcher=_FakeTapWatcher([[]], None),
+        press_chord=recorder.press_chord,
+        mark_idle=recorder.mark_idle,
+        restart_drain_to_base=recorder.restart_drain_to_base,
+        try_message_lock=lambda: nullcontext(True),
+    )
+    assert block == "<base-block>"
+    assert recorder.base_calls == 1
+    assert recorder.presses == []
+
+
+def test_stop_no_live_session_delegates_to_base(tmp_path: Path) -> None:
+    """Empty mirror + open turn but no live session file to observe -> the base; no chord."""
+    state_dir, keybindings_path = _make_agent_paths(tmp_path)
+    recorder = _StopRecorder()
+    block = execute_claude_stop_to_composer(
+        agent_state_dir=state_dir,
+        keybindings_path=keybindings_path,
+        watcher=_FakeTapWatcher([[]], None),
+        press_chord=recorder.press_chord,
+        mark_idle=recorder.mark_idle,
+        restart_drain_to_base=recorder.restart_drain_to_base,
+        try_message_lock=lambda: nullcontext(True),
+    )
+    assert block == "<base-block>"
+    assert recorder.base_calls == 1
+    assert recorder.presses == []
+
+
+def test_stop_under_lock_recheck_delegates_when_mirror_fills(tmp_path: Path) -> None:
+    """A send that parks the mirror while we wait for the lock routes to the base, not the chord.
+
+    The mirror is empty at the pre-lock read but non-empty under the lock (the under-lock
+    re-check reads the second snapshot) -- so the executor delegates rather than chord-flushing
+    the very message the stop promised to hand back.
+    """
+    state_dir, keybindings_path = _make_agent_paths(tmp_path)
+    session = tmp_path / "session.jsonl"
+    session.write_text(_user_line("hello") + "\n")
+    recorder = _StopRecorder()
+    lock_record: list[str] = []
+    block = execute_claude_stop_to_composer(
+        agent_state_dir=state_dir,
+        keybindings_path=keybindings_path,
+        watcher=_FakeTapWatcher([[], _QUEUED], session),
+        press_chord=recorder.press_chord,
+        mark_idle=recorder.mark_idle,
+        restart_drain_to_base=recorder.restart_drain_to_base,
+        try_message_lock=lambda: _recording_try_lock(lock_record),
+    )
+    assert block == "<base-block>"
+    assert recorder.base_calls == 1
+    assert recorder.presses == []
+    # The lock was actually held for the re-check.
+    assert lock_record == ["enter", "exit"]
+
+
+def test_stop_chord_path_falls_back_to_base_when_the_lock_stays_held(tmp_path: Path) -> None:
+    """An empty-mirror stop whose bounded lock acquire expires falls back to the base restart
+    instead of blocking behind the send's turn-confirm -- and delivers no chord, since the chord
+    cannot be ordered against the in-flight send."""
+    state_dir, keybindings_path = _make_agent_paths(tmp_path)
+    session = tmp_path / "session.jsonl"
+    session.write_text(_user_line("hello") + "\n")
+    recorder = _StopRecorder()
+    block = execute_claude_stop_to_composer(
+        agent_state_dir=state_dir,
+        keybindings_path=keybindings_path,
+        watcher=_FakeTapWatcher([[]], session),
+        press_chord=recorder.press_chord,
+        mark_idle=recorder.mark_idle,
+        restart_drain_to_base=recorder.restart_drain_to_base,
+        try_message_lock=lambda: nullcontext(False),
+    )
+    assert block == "<base-block>"
+    assert recorder.base_calls == 1
+    assert recorder.presses == []
+    assert recorder.mark_idle_calls == 0
+
+
+def test_stop_lock_held_past_wait_returns_inflight_send_with_queued_block(tmp_path: Path) -> None:
+    """A send still in flight when stop fires (lock held past the wait) is aborted by the hammer
+    and RETURNED to the composer alongside the queued block, in send order (contract A4/B)."""
+    state_dir, keybindings_path = _make_agent_paths(tmp_path)
+    recorder = _StopRecorder(base_block="already queued")
+    block = execute_claude_stop_to_composer(
+        agent_state_dir=state_dir,
+        keybindings_path=keybindings_path,
+        watcher=_FakeTapWatcher([_QUEUED], None),
+        press_chord=recorder.press_chord,
+        mark_idle=recorder.mark_idle,
+        restart_drain_to_base=recorder.restart_drain_to_base,
+        try_message_lock=lambda: nullcontext(False),
+        get_in_flight_block=lambda: "still sending this",
+    )
+    # Queued first, then the in-flight send -- both returned, nothing lost.
+    assert block == "already queued\nstill sending this"
+    assert recorder.base_calls == 1
+    assert recorder.presses == []
+
+
+def test_stop_lock_acquired_excludes_inflight_send(tmp_path: Path) -> None:
+    """When the lock IS acquired the in-flight send has already resolved (committed or queued) and
+    cleared its own record, so it is NOT re-added to the block -- reconciled per id, a committed
+    message is left Delivered rather than double-returned to the composer."""
+    state_dir, keybindings_path = _make_agent_paths(tmp_path)
+    recorder = _StopRecorder(base_block="already queued")
+    block = execute_claude_stop_to_composer(
+        agent_state_dir=state_dir,
+        keybindings_path=keybindings_path,
+        watcher=_FakeTapWatcher([_QUEUED], None),
+        press_chord=recorder.press_chord,
+        mark_idle=recorder.mark_idle,
+        restart_drain_to_base=recorder.restart_drain_to_base,
+        try_message_lock=lambda: nullcontext(True),
+        # A stale record the send is about to clear; the lock being free means it already resolved.
+        get_in_flight_block=lambda: "must not double-return",
+    )
+    assert block == "already queued"
+    assert recorder.base_calls == 1
+
+
+def test_stop_empty_mirror_chord_path_returns_inflight_when_lock_stays_held(tmp_path: Path) -> None:
+    """An empty-queue stop whose bounded lock acquire expires (a send mid-flight, not yet
+    committed) hammers AND returns that Sending message to the composer -- the branch that used to
+    return '' now conserves the in-flight send (contract A4/B)."""
+    state_dir, keybindings_path = _make_agent_paths(tmp_path)
+    session = tmp_path / "session.jsonl"
+    session.write_text(_user_line("hello") + "\n")
+    # The mirror is empty, so the base block is empty; only the in-flight send returns.
+    recorder = _StopRecorder(base_block="")
+    block = execute_claude_stop_to_composer(
+        agent_state_dir=state_dir,
+        keybindings_path=keybindings_path,
+        watcher=_FakeTapWatcher([[]], session),
+        press_chord=recorder.press_chord,
+        mark_idle=recorder.mark_idle,
+        restart_drain_to_base=recorder.restart_drain_to_base,
+        try_message_lock=lambda: nullcontext(False),
+        get_in_flight_block=lambda: "recover this in-flight send",
+    )
+    assert block == "recover this in-flight send"
+    assert recorder.base_calls == 1
+    assert recorder.presses == []
+    assert recorder.mark_idle_calls == 0
+
+
+@pytest.mark.parametrize("sentinel_line", [_SENTINEL_LINE, _MID_TOOL_SENTINEL_LINE])
+def test_stop_confirmed_marks_idle_and_returns_empty(tmp_path: Path, sentinel_line: str) -> None:
+    """A post-baseline interrupt sentinel (EITHER shape) confirms the abort: mark idle, block ''.
+
+    No restart, no base delegation -- the pure chord interrupt. The sentinel is appended after
+    the baseline (on the under-lock refresh), so the watch sees it as post-baseline evidence.
+    """
+    state_dir, keybindings_path = _make_agent_paths(tmp_path)
+    session = tmp_path / "session.jsonl"
+    session.write_text(_user_line("hello") + "\n")
+
+    def append_sentinel_after_baseline(events_call: int) -> None:
+        # events_call 1 is the refresh-first read (before the baseline); 2 is the under-lock
+        # re-check (after the baseline) -- append there so the sentinel is post-baseline.
+        if events_call == 2:
+            with session.open("a") as f:
+                f.write(sentinel_line + "\n")
+
+    recorder = _StopRecorder()
+    block = execute_claude_stop_to_composer(
+        agent_state_dir=state_dir,
+        keybindings_path=keybindings_path,
+        watcher=_FakeTapWatcher([[], []], session, on_refresh=append_sentinel_after_baseline),
+        press_chord=recorder.press_chord,
+        mark_idle=recorder.mark_idle,
+        settle_activity=recorder.settle_activity,
+        restart_drain_to_base=recorder.restart_drain_to_base,
+        try_message_lock=lambda: nullcontext(True),
+        now=_stepping_now([0.0, 0.0, 1.0]),
+        sleep=lambda _s: None,
+    )
+    assert block == ""
+    assert recorder.presses == [True]
+    # A6: the CONFIRMED chord path settles the activity indicator with one direct broadcast
+    # (settle_activity) as well as clearing the stranded on-disk marker (mark_idle).
+    assert recorder.settle_calls == 1
+    assert recorder.mark_idle_calls == 1
+    assert recorder.base_calls == 0
+
+
+def test_stop_confirmed_still_returns_empty_when_settle_activity_raises(tmp_path: Path) -> None:
+    """A settle failure after a CONFIRMED abort is best-effort: the interrupt already succeeded,
+    so the executor logs, still clears the on-disk marker, and still returns '' -- never a 500."""
+    state_dir, keybindings_path = _make_agent_paths(tmp_path)
+    session = tmp_path / "session.jsonl"
+    session.write_text(_user_line("hello") + "\n")
+
+    def append_sentinel_after_baseline(events_call: int) -> None:
+        if events_call == 2:
+            with session.open("a") as f:
+                f.write(_SENTINEL_LINE + "\n")
+
+    def _raise() -> None:
+        raise ProcessError(("bash", "-c", "..."), stdout="", stderr="activity broadcast failed", returncode=1)
+
+    recorder = _StopRecorder()
+    block = execute_claude_stop_to_composer(
+        agent_state_dir=state_dir,
+        keybindings_path=keybindings_path,
+        watcher=_FakeTapWatcher([[], []], session, on_refresh=append_sentinel_after_baseline),
+        press_chord=recorder.press_chord,
+        mark_idle=recorder.mark_idle,
+        settle_activity=_raise,
+        restart_drain_to_base=recorder.restart_drain_to_base,
+        try_message_lock=lambda: nullcontext(True),
+        now=_stepping_now([0.0, 0.0, 1.0]),
+        sleep=lambda _s: None,
+    )
+    assert block == ""
+    # settle raised, but the on-disk marker is still cleared and the stop still succeeds.
+    assert recorder.mark_idle_calls == 1
+    assert recorder.base_calls == 0
+
+
+def test_stop_confirmed_still_returns_empty_when_mark_idle_raises(tmp_path: Path) -> None:
+    """A marker-cleanup failure after a CONFIRMED abort is best-effort: the interrupt already
+    succeeded, so the executor logs and still returns '' rather than surfacing a 500 (the
+    indicator just recovers later on the idle_prompt hook)."""
+    state_dir, keybindings_path = _make_agent_paths(tmp_path)
+    session = tmp_path / "session.jsonl"
+    session.write_text(_user_line("hello") + "\n")
+
+    def append_sentinel_after_baseline(events_call: int) -> None:
+        if events_call == 2:
+            with session.open("a") as f:
+                f.write(_SENTINEL_LINE + "\n")
+
+    def _raise() -> None:
+        raise ProcessError(("bash", "-c", "..."), stdout="", stderr="activity log append failed", returncode=1)
+
+    recorder = _StopRecorder()
+    block = execute_claude_stop_to_composer(
+        agent_state_dir=state_dir,
+        keybindings_path=keybindings_path,
+        watcher=_FakeTapWatcher([[], []], session, on_refresh=append_sentinel_after_baseline),
+        press_chord=recorder.press_chord,
+        mark_idle=_raise,
+        restart_drain_to_base=recorder.restart_drain_to_base,
+        try_message_lock=lambda: nullcontext(True),
+        now=_stepping_now([0.0, 0.0, 1.0]),
+        sleep=lambda _s: None,
+    )
+    assert block == ""
+    assert recorder.base_calls == 0
+
+
+def test_stop_tool_result_quoting_sentinel_does_not_confirm(tmp_path: Path) -> None:
+    """A tool_result whose OUTPUT quotes the sentinel text must NOT confirm the abort.
+
+    With no genuine sentinel and the marker still present, the watch runs to the deadline and
+    falls back to the base -- never marking idle mid-turn on a false confirm.
+    """
+    state_dir, keybindings_path = _make_agent_paths(tmp_path)
+    session = tmp_path / "session.jsonl"
+    session.write_text(_user_line("hello") + "\n")
+
+    def append_quoting_tool_result(events_call: int) -> None:
+        if events_call == 2:
+            with session.open("a") as f:
+                f.write(_tool_result_line_quoting(INTERRUPT_SENTINEL_TEXT) + "\n")
+
+    recorder = _StopRecorder()
+    block = execute_claude_stop_to_composer(
+        agent_state_dir=state_dir,
+        keybindings_path=keybindings_path,
+        watcher=_FakeTapWatcher([[], []], session, on_refresh=append_quoting_tool_result),
+        press_chord=recorder.press_chord,
+        mark_idle=recorder.mark_idle,
+        restart_drain_to_base=recorder.restart_drain_to_base,
+        try_message_lock=lambda: nullcontext(True),
+        now=_stepping_now([0.0, 0.0, 100.0]),
+        sleep=lambda _s: None,
+    )
+    assert block == "<base-block>"
+    assert recorder.presses == [True]
+    assert recorder.mark_idle_calls == 0
+    assert recorder.base_calls == 1
+
+
+def test_stop_marker_vanish_returns_empty_without_restart(tmp_path: Path) -> None:
+    """The turn ending naturally mid-watch (``active`` gone, no sentinel) is a clean no-op.
+
+    The chord was delivered but the turn's own Stop hook cleared the marker; clear nothing,
+    restart nothing.
+    """
+    state_dir, keybindings_path = _make_agent_paths(tmp_path)
+    session = tmp_path / "session.jsonl"
+    session.write_text(_user_line("hello") + "\n")
+
+    def press_then_end_turn() -> bool:
+        # Simulate the turn ending right after the chord: its Stop hook removes the marker.
+        (state_dir / "active").unlink()
+        return True
+
+    recorder = _StopRecorder(press=press_then_end_turn)
+    block = execute_claude_stop_to_composer(
+        agent_state_dir=state_dir,
+        keybindings_path=keybindings_path,
+        watcher=_FakeTapWatcher([[], []], session),
+        press_chord=recorder.press_chord,
+        mark_idle=recorder.mark_idle,
+        restart_drain_to_base=recorder.restart_drain_to_base,
+        try_message_lock=lambda: nullcontext(True),
+        now=_stepping_now([0.0, 0.0, 1.0]),
+        sleep=lambda _s: None,
+    )
+    assert block == ""
+    assert recorder.presses == [True]
+    assert recorder.mark_idle_calls == 0
+    assert recorder.base_calls == 0
+
+
+def test_stop_chord_send_failure_falls_back_to_base(tmp_path: Path) -> None:
+    """If the chord cannot be delivered, the base restart still interrupts (stop must work)."""
+    state_dir, keybindings_path = _make_agent_paths(tmp_path)
+    session = tmp_path / "session.jsonl"
+    session.write_text(_user_line("hello") + "\n")
+    recorder = _StopRecorder(press=lambda: False)
+    block = execute_claude_stop_to_composer(
+        agent_state_dir=state_dir,
+        keybindings_path=keybindings_path,
+        watcher=_FakeTapWatcher([[], []], session),
+        press_chord=recorder.press_chord,
+        mark_idle=recorder.mark_idle,
+        restart_drain_to_base=recorder.restart_drain_to_base,
+        try_message_lock=lambda: nullcontext(True),
+        now=_stepping_now([0.0, 0.0]),
+        sleep=lambda _s: None,
+    )
+    assert block == "<base-block>"
+    assert recorder.presses == [False]
+    assert recorder.base_calls == 1
+    assert recorder.mark_idle_calls == 0
+
+
+# --- tap recovery suppression when a stop ran during the tap watch --------------------
+
+
+def test_tap_recovery_suppressed_when_a_stop_ran_since_the_baseline(tmp_path: Path) -> None:
+    """The tap's NEEDS_RECOVERY resend is suppressed if a stop interrupt fired mid-watch.
+
+    Same drained-mirror + dangling-sentinel scenario as the recovery test, but a stop is recorded
+    for this agent AFTER the tap's baseline -- so the tap treats the dangling sentinel as the
+    stop's own abort (not its cancelled follow-on) and does NOT resend the recovery nudge.
+    """
+    state_dir, keybindings_path = _make_agent_paths(tmp_path)
+    session = tmp_path / "session.jsonl"
+    session.write_text(_user_line("hello") + "\n")
+    # Record a stop at t=50, then run the tap whose baseline (its first now()) is t=0 -> the stop
+    # falls after the baseline.
+    _record_stop(str(state_dir), now=lambda: 50.0)
+
+    def grow_with_sentinel_and_end_turn(events_call: int) -> None:
+        if events_call == 2:
+            with session.open("a") as f:
+                f.write(_SENTINEL_LINE + "\n")
+            # The stop's own abort ends the turn (marker cleared) -- so this reaches the
+            # NEEDS_RECOVERY branch, where the stop-since-baseline check then suppresses the resend.
+            (state_dir / "active").unlink()
+
+    recoveries: list[str] = []
+    result = execute_claude_shoulder_tap(
+        agent_state_dir=state_dir,
+        keybindings_path=keybindings_path,
+        watcher=_FakeTapWatcher([_QUEUED, []], session, on_refresh=grow_with_sentinel_and_end_turn),
+        press_chord=lambda: True,
+        send_recovery=lambda text: recoveries.append(text) or True,
+        try_message_lock=lambda: nullcontext(True),
+        now=_stepping_now([0.0, 0.0, 100.0]),
+        sleep=lambda _s: None,
+    )
+    assert result.status == ClaudeTapStatus.TAPPED
+    # The recovery nudge was suppressed (a stop ran during the watch).
+    assert recoveries == []

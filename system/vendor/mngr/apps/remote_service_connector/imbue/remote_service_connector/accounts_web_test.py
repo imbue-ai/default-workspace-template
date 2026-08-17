@@ -1,4 +1,4 @@
-"""Tests for the hosted accounts surface (browser auth, device handoff, OAuth)."""
+"""Tests for the hosted accounts surface (browser auth, device handoff, OAuth, attribution)."""
 
 import secrets
 from datetime import datetime
@@ -12,6 +12,7 @@ from urllib.parse import urlencode
 from urllib.parse import urlsplit
 
 import jwt as pyjwt
+import psycopg2
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -25,10 +26,12 @@ import imbue.remote_service_connector.share_broker as share_broker_module
 from imbue.remote_service_connector.accounts_web import _mark_next_confirmed
 from imbue.remote_service_connector.accounts_web import compute_pkce_challenge
 from imbue.remote_service_connector.accounts_web import is_valid_loopback_redirect_uri
+from imbue.remote_service_connector.attribution import ATTRIBUTION_COOKIE_NAME
 from imbue.remote_service_connector.testing import FakeProvider
 from imbue.remote_service_connector.testing import FakeSuperTokensBackend
 from imbue.remote_service_connector.testing import InMemoryDeviceAuthCodeStore
 from imbue.remote_service_connector.testing import _make_accounts_web_test_client
+from imbue.remote_service_connector.testing import encode_attribution_cookie
 
 _TEST_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 _TEST_KEY_PEM = _TEST_KEY.private_bytes(
@@ -727,3 +730,191 @@ def test_oauth_callback_refuses_an_email_registered_with_a_password(monkeypatch:
     assert "password" in resp.headers["location"].replace("+", " ")
     # No browser session was minted for the refused login.
     assert st_backend.last_browser_session is None
+
+
+# ---------------------------------------------------------------------------
+# Marketing attribution (signup capture + the /download redirect)
+# ---------------------------------------------------------------------------
+
+
+def _plant_attribution_cookie(client: TestClient) -> None:
+    client.cookies.set(
+        ATTRIBUTION_COOKIE_NAME,
+        encode_attribution_cookie(
+            {
+                "v": 1,
+                "id": "visitor-1",
+                "first": {"utm_source": "ads", "utm_campaign": "launch", "at": "t1"},
+                "last": {"utm_source": "newsletter", "at": "t2"},
+            }
+        ),
+    )
+
+
+def test_browser_signup_records_attribution_from_cookie_and_page_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The cookie supplies visitor id + first touch; the signup page's own params overwrite last."""
+    client, st_backend, _codes = _make_accounts_web_test_client(monkeypatch)
+    _plant_attribution_cookie(client)
+
+    resp = client.post(
+        "/accounts/api/signup",
+        json={
+            "email": "new@example.com",
+            "password": "pw-123456",
+            "attribution_page_query": "utm_source=signup-link&next=%2Faccounts%2Fauthorize",
+            "attribution_page_path": "/signup",
+            "attribution_next": "/accounts/authorize?redirect_uri=x",
+        },
+    )
+
+    assert resp.json()["status"] == "OK"
+    rows = st_backend.attribution_store.account_rows
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["email"] == "new@example.com"
+    assert row["visitor_id"] == "visitor-1"
+    assert row["first_touch"] == {"utm_source": "ads", "utm_campaign": "launch", "at": "t1"}
+    assert row["last_touch"]["utm_source"] == "signup-link"
+    assert row["last_touch"]["path"] == "/signup"
+    assert row["signup_context"] == "desktop_app"
+    assert row["signup_method"] == "password"
+
+
+def test_browser_signup_without_cookie_or_params_records_an_unattributed_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, st_backend, _codes = _make_accounts_web_test_client(monkeypatch)
+
+    resp = client.post("/accounts/api/signup", json={"email": "plain@example.com", "password": "pw-123456"})
+
+    assert resp.json()["status"] == "OK"
+    rows = st_backend.attribution_store.account_rows
+    assert len(rows) == 1
+    assert rows[0]["visitor_id"] is None
+    assert rows[0]["first_touch"] is None
+    assert rows[0]["last_touch"] is None
+    assert rows[0]["signup_context"] == "web"
+
+
+def test_browser_signin_and_refused_signup_record_no_attribution(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, st_backend, _codes = _make_accounts_web_test_client(monkeypatch)
+    _plant_attribution_cookie(client)
+    signup = client.post("/accounts/api/signup", json={"email": "once@example.com", "password": "pw-123456"})
+    assert signup.json()["status"] == "OK"
+    assert len(st_backend.attribution_store.account_rows) == 1
+
+    # A sign-in of the existing account records nothing new.
+    signin = client.post("/accounts/api/signin", json={"email": "once@example.com", "password": "pw-123456"})
+    assert signin.json()["status"] == "OK"
+    assert len(st_backend.attribution_store.account_rows) == 1
+
+    # A refused signup (Turnstile) records nothing.
+    st_backend.is_turnstile_passing = False
+    refused = client.post("/accounts/api/signup", json={"email": "bot@example.com", "password": "pw-123456"})
+    assert refused.json()["status"] == "TURNSTILE_FAILED"
+    assert len(st_backend.attribution_store.account_rows) == 1
+
+
+def test_browser_signup_succeeds_when_the_attribution_write_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Attribution capture fails open: a storage error must never break account creation."""
+    client, st_backend, _codes = _make_accounts_web_test_client(monkeypatch)
+    st_backend.attribution_store.raise_on_insert = psycopg2.OperationalError("neon is down")
+
+    resp = client.post("/accounts/api/signup", json={"email": "resilient@example.com", "password": "pw-123456"})
+
+    assert resp.json()["status"] == "OK"
+    assert st_backend.attribution_store.account_rows == []
+
+
+def test_oauth_signup_records_attribution_but_returning_signin_does_not(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only the exchange that CREATED the account stamps attribution (context from next, params from pq/pp)."""
+    client, st_backend = _make_oauth_client(monkeypatch)
+    _plant_attribution_cookie(client)
+    start = client.get(
+        "/accounts/oauth/google/start?next=%2Fweb%2Foverview&pq=utm_source%3Dsignup-link&pp=%2Fsignup",
+        follow_redirects=False,
+    )
+    state = parse_qs(urlsplit(start.headers["location"]).query)["state"][0]
+
+    first_login = client.get(f"/share/oauth/google/callback?code=code-1&state={state}", follow_redirects=False)
+
+    assert first_login.status_code == 303
+    rows = st_backend.attribution_store.account_rows
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["email"] == "visitor@example.com"
+    assert row["visitor_id"] == "visitor-1"
+    assert row["first_touch"] == {"utm_source": "ads", "utm_campaign": "launch", "at": "t1"}
+    assert row["last_touch"]["utm_source"] == "signup-link"
+    assert row["last_touch"]["path"] == "/signup"
+    assert row["signup_context"] == "web_chrome"
+    assert row["signup_method"] == "google"
+
+    # The same Google account signing in again records nothing new.
+    state2 = _start_oauth(client, "/manage")
+    returning = client.get(f"/share/oauth/google/callback?code=code-2&state={state2}", follow_redirects=False)
+    assert returning.status_code == 303
+    assert len(st_backend.attribution_store.account_rows) == 1
+
+
+def test_download_redirects_per_platform_and_404s_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, _st, _codes = _make_accounts_web_test_client(monkeypatch)
+
+    mac = client.get("/download?platform=mac-arm64", follow_redirects=False)
+    assert mac.status_code == 302
+    assert mac.headers["location"] == "https://dl.todesktop.com/26032588hqdzk/mac/dmg/arm64"
+
+    # The friendly alias resolves server-side to the same target.
+    alias = client.get("/download?platform=mac", follow_redirects=False)
+    assert alias.headers["location"] == mac.headers["location"]
+
+    source = client.get("/download?platform=source", follow_redirects=False)
+    assert source.status_code == 302
+    assert source.headers["location"] == "https://github.com/imbue-ai/mngr"
+
+    assert client.get("/download?platform=windows", follow_redirects=False).status_code == 404
+    assert client.get("/download", follow_redirects=False).status_code == 404
+
+
+def test_download_records_an_event_tagged_from_the_cookie(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, st_backend, _codes = _make_accounts_web_test_client(monkeypatch)
+    _plant_attribution_cookie(client)
+
+    resp = client.get(
+        "/download?platform=mac", follow_redirects=False, headers={"user-agent": "TestBrowser/1.0 36284"}
+    )
+
+    assert resp.status_code == 302
+    rows = st_backend.attribution_store.download_rows
+    assert len(rows) == 1
+    row = rows[0]
+    # The alias is resolved before recording, so SQL groups by canonical name.
+    assert row["platform"] == "mac-arm64"
+    assert row["visitor_id"] == "visitor-1"
+    assert row["first_touch"] == {"utm_source": "ads", "utm_campaign": "launch", "at": "t1"}
+    assert row["last_touch"] == {"utm_source": "newsletter", "at": "t2"}
+    assert row["user_agent"] == "TestBrowser/1.0 36284"
+
+
+def test_download_without_cookie_tags_the_event_from_its_own_url_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Consent-declined visitors have no cookie; campaign params on the link itself still count."""
+    client, st_backend, _codes = _make_accounts_web_test_client(monkeypatch)
+
+    resp = client.get("/download?platform=mac-arm64&utm_source=launch-email", follow_redirects=False)
+
+    assert resp.status_code == 302
+    rows = st_backend.attribution_store.download_rows
+    assert len(rows) == 1
+    assert rows[0]["visitor_id"] is None
+    assert rows[0]["first_touch"]["utm_source"] == "launch-email"
+    assert rows[0]["first_touch"] == rows[0]["last_touch"]
+
+
+def test_download_still_redirects_when_the_event_write_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, st_backend, _codes = _make_accounts_web_test_client(monkeypatch)
+    st_backend.attribution_store.raise_on_insert = psycopg2.OperationalError("neon is down")
+
+    resp = client.get("/download?platform=mac-arm64", follow_redirects=False)
+
+    assert resp.status_code == 302
+    assert st_backend.attribution_store.download_rows == []

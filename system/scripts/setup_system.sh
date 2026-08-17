@@ -34,7 +34,10 @@ fi
 # CLAUDE_CODE_VERSION in sync with agent_types.claude.version in .mngr/settings.toml.
 : "${TTYD_VERSION:=1.7.7}"
 : "${UV_VERSION:=0.11.7}"
+: "${NODE_VERSION:=22.23.2}"
 : "${CLAUDE_CODE_VERSION:=2.1.207}"
+: "${CODEX_VERSION:=0.147.0}"
+: "${PI_VERSION:=0.83.0}"
 : "${MODAL_VERSION:=1.4.2}"
 : "${GH_VERSION:=2.96.0}"
 : "${CADDY_VERSION:=2.11.4}"
@@ -223,12 +226,52 @@ if [ "${installed_claude_version}" != "${CLAUDE_CODE_VERSION}" ]; then
     exit 1
 fi
 
-# Node.js from trixie main (pinned by the snapshot timestamp like every other
-# apt package; trixie ships the nodejs 20.x line). npm is its own package on
-# Debian, unlike the NodeSource builds that bundled it.
-apt-get update
-apt-get install -y --no-install-recommends nodejs npm
-rm -rf /var/lib/apt/lists/*
+# Node.js as a pinned, sha256-verified nodejs.org release tarball (installed to
+# /usr/local so node/npm/npx land on PATH). NOT the trixie apt nodejs (20.x): the
+# pi CLI ships an `undici` that calls `worker_threads.markAsUncloneable`, which is
+# absent on Node 20 and crashes pi at import -- so we pin Node 22 LTS. Installs like
+# gh/caddy/restic above: fixed version, checksummed download. Keep NODE_VERSION in
+# sync with the Dockerfile ARG.
+node_arch="$(uname -m)"
+case "${node_arch}" in
+    x86_64) node_goarch="x64"; node_sha256="b294a556e639d64338823920e5866c21c02741742d2e1529ee1a225c1ec9252a" ;;
+    aarch64) node_goarch="arm64"; node_sha256="013b59cfd2819703a6f4a14ab891fc46fc2a4e3f5bcd92de3fb4929b43e35b30" ;;
+    *) echo "Unsupported architecture for node: ${node_arch}" >&2; exit 1 ;;
+esac
+curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${node_goarch}.tar.gz" -o /tmp/node.tar.gz
+echo "${node_sha256}  /tmp/node.tar.gz" | sha256sum -c -
+# --strip-components=1 lands bin/node, bin/npm, bin/npx, lib/node_modules under /usr/local.
+tar -xzf /tmp/node.tar.gz -C /usr/local --strip-components=1
+rm /tmp/node.tar.gz
+command -v node npm >/dev/null
+
+# Codex CLI (pinned; npm-installed, needs Node.js above). Keep in sync with
+# agent_types.codex.version in .mngr/settings.toml. Stock upstream build: the
+# custom "codex-in-minds" TUI patch is retired. codex is now driven through its
+# own app-server (JSON-RPC) with a visible `codex --remote` TUI, so the fork's
+# `/model <model> [effort]` workaround (openai/codex#32212) is no longer needed
+# and the vendored binary is left exactly as npm ships it.
+npm install -g "@openai/codex@${CODEX_VERSION}"
+command -v codex >/dev/null
+codex --version
+
+# Pi CLI (pinned; npm-installed, needs Node 22 above -- crashes on Node 20). Keep
+# in sync with agent_types.pi-coding.version in .mngr/settings.toml.
+npm install -g "@earendil-works/pi-coding-agent@${PI_VERSION}"
+command -v pi >/dev/null
+
+# Bake the pi extension packages (subagents, web access) into the image at a
+# NON-home path: the runtime volume shadows the build-time HOME, so ~/.pi cannot
+# be baked directly. `pi install` materialises npm/node_modules plus a
+# settings.json package list under PI_CODING_AGENT_DIR; seed_home_skeleton.sh
+# copies the npm tree into the real ~/.pi/agent at first boot (a ~1s local copy
+# instead of a ~60s networked npm install -- the harness ships with its tools).
+# Keep the pins in sync with seed_home_skeleton.sh.
+: "${PI_SUBAGENTS_VERSION:=0.45.0}"
+: "${PI_WEB_ACCESS_VERSION:=0.19.0}"
+PI_CODING_AGENT_DIR=/opt/pi-extensions pi install "npm:pi-subagents@${PI_SUBAGENTS_VERSION}"
+PI_CODING_AGENT_DIR=/opt/pi-extensions pi install "npm:pi-web-access@${PI_WEB_ACCESS_VERSION}"
+test -d /opt/pi-extensions/npm/node_modules
 
 # apt Post-Invoke capture hook: after EVERY apt/dpkg operation at runtime, the
 # environment record under ~/.mngr/plugin/env-converge re-captures from dpkg's

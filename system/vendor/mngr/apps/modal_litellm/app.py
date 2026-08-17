@@ -44,6 +44,7 @@ from imbue.modal_app_kit.deploy import read_scaledown_window
 from imbue.modal_app_kit.deploy import stamped_secret
 from imbue.modal_app_kit.image import IMAGE_REQUIREMENTS_FILENAME
 from imbue.modal_app_kit.image import pinned_image
+from imbue.modal_app_kit.request_logging import RequestLoggingMiddleware
 from imbue.modal_app_kit.source_mount import shipped_python_source_ignore
 
 _DEPLOY_ENV = read_deploy_env()
@@ -218,6 +219,10 @@ def litellm_app():
 
     from litellm.proxy.proxy_server import app as fastapi_app
 
+    # Outermost middleware: one structured access-log line per request (client
+    # IP, method, path, status, duration -- no query strings or bodies), so
+    # abuse investigations have a per-request record in the Modal function logs.
+    fastapi_app.add_middleware(RequestLoggingMiddleware)
     return fastapi_app
 
 
