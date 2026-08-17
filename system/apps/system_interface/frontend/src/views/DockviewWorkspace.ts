@@ -81,6 +81,7 @@ import { deriveServiceOrigin } from "../origin";
 import {
   addAgentsUpdatedListener,
   addLayoutOpListener,
+  addLayoutSyncListener,
   addMemberLastUsedListener,
   addMemberTitleListener,
   addProjectSyncListener,
@@ -102,6 +103,7 @@ import {
   type AgentsUpdatedListener,
   type AppEntry,
   type LayoutOpEvent,
+  type LayoutSyncEvent,
   type LayoutOpListener,
   type MemberLastUsedListener,
   type MemberTitleListener,
@@ -4392,6 +4394,18 @@ function initializeDockview(parentElement: HTMLElement): void {
     handleProjectSyncEvent(event);
   };
   addProjectSyncListener(_projectSyncListener);
+
+  // ``layout.py load <view>``: an agent switching what this client is looking
+  // at. The server resolved the name to a view id and picked the target client
+  // (an explicit one, else the one that last messaged the requesting agent,
+  // else everyone); here that means ignore loads addressed to someone else,
+  // and treat a load for the mounted view as already done.
+  addLayoutSyncListener((event: LayoutSyncEvent) => {
+    if (event.kind !== "load") return;
+    if (event.targetClientId !== null && event.targetClientId !== getClientId()) return;
+    if (event.layoutSlug === mountedViewId) return;
+    void switchToView(event.layoutSlug);
+  });
 
   // A rename anywhere on the machine -- another client's, an agent's, or the
   // name dropped when an object was destroyed. It names the object rather than

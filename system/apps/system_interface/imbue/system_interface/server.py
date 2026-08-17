@@ -2281,7 +2281,13 @@ def _handle_client_state_message(
         # layout; not worth a log line.
         pass
     if layout_dir is not None:
-        workspace_layouts.set_last_active_slug(layout_dir, active_layout)
+        # A client reports its VIEW id (a project id, or "everything"), so the
+        # projects registry is where last-active belongs. Writing it into the
+        # old named-layout store instead -- which rejects unknown slugs -- left
+        # that store pinned at "desktop" forever while warning on every switch,
+        # and layout ops with no explicit target then resolved to a view no
+        # client was ever on (a guaranteed 412).
+        projects.set_last_active_id(layout_dir, active_layout)
         events_path = client_activity.get_events_path(layout_dir)
         if previous_layout and previous_layout != active_layout:
             client_activity.append_layout_switch_event(
@@ -2553,11 +2559,32 @@ def _layout_op_content_path(layout_dir: Path, slug: str) -> Path:
     return projects.project_content_path(layout_dir, slug)
 
 
+def _default_view_id(layout_dir: Path | None) -> str | None:
+    """The view an op with no explicit ``--layout`` targets.
+
+    The view the connected clients are actually on, when they agree -- with one
+    client (the ordinary workspace) this is simply "the view the user is looking
+    at", which is what an agent means when it names no target. When zero or
+    several distinct views are connected, the projects registry's last-active id
+    breaks the tie: it tracks the most recent view any client reported, so it is
+    the best single answer there is. None only without a registry to fall back
+    on (dev/test with no layout dir and no agreeing client).
+    """
+    distinct_views = {
+        info["active_layout_slug"] for info in get_state().broadcaster.get_connected_client_infos()
+    }
+    if len(distinct_views) == 1:
+        return next(iter(distinct_views))
+    if layout_dir is None:
+        return None
+    return projects.get_last_active_id(layout_dir)
+
+
 def _resolve_requested_layout_slug(
     args_raw: dict[str, Any],
     layout_dir: Path | None,
 ) -> tuple[str | None, Response | None]:
-    """Resolve a layout op's ``args.layout`` (or the last-active default) to a slug.
+    """Resolve a layout op's ``args.layout`` (or the current-view default) to a view id.
 
     Returns ``(slug, None)`` on success and ``(None, error_response)`` when an
     explicitly-named layout is unusable or unknown. With no layout dir
@@ -2585,9 +2612,7 @@ def _resolve_requested_layout_slug(
                 detail=f"Layout {requested!r} not found (known layouts: {known}; known projects: {known_projects})"
             )
             return None, _json_response(error.model_dump(), status_code=404)
-    if layout_dir is None:
-        return None, None
-    return workspace_layouts.get_last_active_slug(layout_dir), None
+    return _default_view_id(layout_dir), None
 
 
 def _layout_broadcast_endpoint() -> Response:
@@ -2753,20 +2778,20 @@ def _layout_broadcast_endpoint() -> Response:
     layout_mutex: LayoutMutex = get_state().layout_mutex
     broadcaster: WebSocketBroadcaster = get_state().broadcaster
     if is_mutating_op(op):
-        # Mutating ops are layout-targeted: they require an explicit target
-        # layout and are delivered only to connected clients that have it
-        # active (those clients apply the mutation and autosave it into the
-        # named layout's file). With no such client the op cannot take
-        # effect anywhere, so fail loudly rather than broadcasting into the
-        # void.
-        requested_layout = args_raw.get("layout")
-        if not isinstance(requested_layout, str) or not requested_layout:
-            error = ErrorResponse(detail=f"Layout op {op!r} requires a target layout (pass --layout)")
-            return _json_response(error.model_dump(), status_code=400)
+        # Mutating ops are view-targeted: they are delivered only to connected
+        # clients that have the target view active (those clients apply the
+        # mutation and autosave it into the view's file). Naming no view means
+        # "the view the user is looking at" -- the resolve below defaults to
+        # the connected client's own view (see ``_default_view_id``) -- and
+        # with no client on the resolved view the op cannot take effect
+        # anywhere, so it fails loudly rather than broadcasting into the void.
         target_layout_slug, layout_error_response = _resolve_requested_layout_slug(args_raw, layout_dir)
         if layout_error_response is not None:
             return layout_error_response
         if target_layout_slug is None or not broadcaster.has_client_on_layout(target_layout_slug):
+            # The name for the miss: what the caller asked for, or what the
+            # default resolved to when they asked for nothing.
+            requested_layout = args_raw.get("layout") or target_layout_slug or "<no view>"
             connected_clients = broadcaster.get_connected_client_infos()
             _loguru_logger.warning(
                 "Layout op {!r} rejected (412): no connected client on layout {!r}; connected clients: {}",

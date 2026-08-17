@@ -2753,3 +2753,75 @@ def test_queued_message_group_renders_with_actions(tmp_path: Path, page: Page) -
         expect(page.locator(".queued-action--interrupt")).to_have_count(0)
 
         page.screenshot(path=str(tmp_path / "queued_group.png"))
+
+
+_LOAD_SWITCHES_VIEW_PORT = 18883
+
+
+@pytest.mark.timeout(180, func_only=False)
+def test_load_op_switches_the_clients_view(tmp_path: Path, page: Page) -> None:
+    """``layout.py load <view>`` switches what the connected client is showing.
+
+    The op resolved and broadcast for as long as views have existed, but no
+    client listened: the CLI reported success while nothing on screen moved.
+    The client now applies a load addressed to it (or to everyone) by running
+    the same ``switchToView`` the rail's own switcher uses, so an agent can
+    put a view in front of the user -- Everything included, which is the view
+    an agent most often wants when it needs the whole machine visible.
+    """
+    primary_agent_id = "primary-services-agent"
+    with _running_e2e_server(tmp_path, _LOAD_SWITCHES_VIEW_PORT, primary_agent_id=primary_agent_id) as (
+        base_url,
+        _agent_info,
+        _session_file,
+    ):
+        page.goto(base_url)
+        expect(page.locator(".dv-default-tab-content", has_text="test-agent").first).to_be_visible(timeout=15000)
+        page.wait_for_function(
+            f"localStorage.getItem('si-active-project-id') === '{DEFAULT_PROJECT_ID}'", timeout=10000
+        )
+
+        # The load names Everything by its display name, exactly as an agent
+        # would type it; the server resolves it even though Everything has no
+        # registry entry. Target every client (no explicit client id), and
+        # retry through the 412 window while client_state registration lands.
+        payload = json.dumps(
+            {"op": "load", "args": {"layout": EVERYTHING_VIEW_NAME}, "agent_id": "agent-e2e"}
+        ).encode()
+        request = urllib.request.Request(
+            f"{base_url}/api/layout/broadcast",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+
+        def _attempt() -> bool:
+            try:
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    return bool(response.status == 200)
+            except urllib.error.HTTPError as e:
+                if e.code == 412:
+                    return False
+                raise
+
+        wait_for(
+            _attempt,
+            timeout=15.0,
+            poll_interval=0.2,
+            error_message="the load op never got past client registration",
+        )
+
+        # The client switched: its stored view id moved to Everything, and the
+        # dock re-mounted (the launcher, since fresh Everything has no content).
+        page.wait_for_function(
+            f"localStorage.getItem('si-active-project-id') === '{EVERYTHING_VIEW_ID}'", timeout=15000
+        )
+        expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=15000)
+
+        # Everything's launcher enumerates the machine, terminals included, but
+        # its fetch races this test's short window -- and the module-wide tmux
+        # mark (see pytestmark) requires every test here to actually reach
+        # tmux. Ask the server directly, which is the same ``tmux ls`` the
+        # launcher's table is built from.
+        with urllib.request.urlopen(f"{base_url}/api/terminals", timeout=5) as response:
+            assert response.status == 200
