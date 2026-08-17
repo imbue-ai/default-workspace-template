@@ -460,7 +460,7 @@ def test_agent_removed_event_removes_agent(agent_manager: AgentManager, broadcas
 
     q.get_nowait()
 
-    agent_manager._handle_observe_event(make_agent_removed_event(agent.id, agent.name))
+    agent_manager._handle_observe_event(make_agent_removed_event(agent.id, agent.name, agent.host.id))
 
     agents = agent_manager.get_agents()
     assert len(agents) == 0
@@ -861,7 +861,7 @@ def test_handle_observe_event_dispatches_agent_removed(
     agent_manager._handle_observe_event(make_agent_state_event(agent))
     assert len(agent_manager.get_agents()) == 1
 
-    agent_manager._handle_observe_event(make_agent_removed_event(agent.id, agent.name))
+    agent_manager._handle_observe_event(make_agent_removed_event(agent.id, agent.name, agent.host.id))
     assert len(agent_manager.get_agents()) == 0
 
 
@@ -1435,7 +1435,7 @@ def test_agent_removed_event_fires_removal_side_effects(agent_manager: AgentMana
     with agent_manager._lock:
         assert str_id in agent_manager._activity_tracked_agents
 
-    agent_manager._handle_observe_event(make_agent_removed_event(agent.id, agent.name))
+    agent_manager._handle_observe_event(make_agent_removed_event(agent.id, agent.name, agent.host.id))
 
     assert agent_manager.get_agent_by_id(str_id) is None
     with agent_manager._lock:
