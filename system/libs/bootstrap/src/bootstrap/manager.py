@@ -53,6 +53,10 @@ INITIAL_CHAT_SIGNAL = STATE_DIR / "initial_chat_created"
 # Basename (under $MNGR_HOST_DIR) of the file holding the initial chat agent's id,
 # read by system_interface's welcome_resend to address the resend by id.
 INITIAL_CHAT_AGENT_ID_FILENAME = "initial_chat_agent_id"
+# The human-readable name the workspace's first chat is created under. mngr
+# canonicalizes it to the true name `Chat-1` and keeps this as the agent's
+# `display_name` label; the New Tab launcher numbers its own chats from here.
+_INITIAL_CHAT_DISPLAY_NAME = "Chat 1"
 
 # Env var names used by the bootstrap's responsibilities.
 _AGENT_ID_ENV_VAR = "MNGR_AGENT_ID"
@@ -144,11 +148,19 @@ def _build_create_chat_command(host_name: str, labels: dict[str, str]) -> list[s
     fast-mode launch settings (see `[create_templates.first]` in
     .mngr/settings.toml). The chat agent belongs to its workspace by virtue of
     sharing the host; it carries no `workspace` label.
+
+    The positional is `NAME@HOST`, so the chat is created as the human-readable
+    "Chat 1" *on* the workspace's host rather than under the host's own name:
+    mngr canonicalizes the name part to the true name `Chat-1` and keeps the
+    typed name as the agent's `display_name` label. Before mngr accepted
+    free-form names the only way to hold a name with a space was the workspace's
+    separate title store, which is why the first chat used to be named after its
+    host (`p6`) and read "Chat 1" only through that store.
     """
     cmd: list[str] = [
         "mngr",
         "create",
-        host_name,
+        f"{_INITIAL_CHAT_DISPLAY_NAME}@{host_name}",
         # `--transfer none` matches what `AgentManager.create_chat_agent`
         # uses for the "New Chat" button (system/apps/system_interface/.../
         # agent_manager.py). Without it, mngr defaults to creating a
@@ -221,10 +233,14 @@ def _persist_initial_chat_agent_id(agent_id: str) -> None:
 def _file_initial_chat_title(agent_id: str) -> None:
     """Name the initial chat "Chat 1" in the workspace's machine-wide title store.
 
-    The mngr-level agent name stays the host's (an mngr name cannot hold the
-    space anyway); "Chat 1" is filed as the display name, exactly as the New
-    Tab launcher files "Chat N" for the chats it creates -- so the first tab
-    reads like every later one and the launcher's numbering continues from it.
+    mngr now carries the typed name itself (the create above labels the agent
+    `display_name=Chat 1`), but nothing lifts that label into the serialized
+    AgentState the way `project` is lifted, and the frontend resolves a chat's
+    name through this store, falling back to the agent's true name (`Chat-1`).
+    So this store is still the frontend's source for the name the tab shows, and
+    it stays until the label is plumbed through -- at which point this whole
+    function goes away. Filing it here also matches the New Tab launcher, which
+    files "Chat N" for the chats it creates and numbers them off this store.
     The store is system_interface's `member_titles.json` under the services
     agent's workspace_layout; its format is repeated here (not imported) to
     keep bootstrap's dependencies minimal, the same trade
@@ -246,7 +262,7 @@ def _file_initial_chat_title(agent_id: str) -> None:
     title_by_ref = stored.get("title_by_ref") if isinstance(stored, dict) else None
     if not isinstance(title_by_ref, dict):
         title_by_ref = {}
-    title_by_ref[f"chat:{agent_id}"] = "Chat 1"
+    title_by_ref[f"chat:{agent_id}"] = _INITIAL_CHAT_DISPLAY_NAME
     try:
         layout_dir.mkdir(parents=True, exist_ok=True)
         titles_path.write_text(json.dumps({"title_by_ref": title_by_ref}, indent=2))

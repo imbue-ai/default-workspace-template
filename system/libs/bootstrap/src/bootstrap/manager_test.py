@@ -10,6 +10,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 import pytest
+from imbue.mngr.api.address_parsers import parse_new_agent_location
 from imbue.mngr.cli.output_helpers import write_json_line
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 
@@ -147,7 +148,9 @@ def test_read_main_agent_labels_returns_empty_when_labels_field_absent(
 
 def test_build_create_chat_command_stacks_first_and_chat_templates() -> None:
     cmd = _build_create_chat_command("my-workspace", {"workspace": "my-workspace"})
-    assert cmd[:3] == ["mngr", "create", "my-workspace"]
+    # `NAME@HOST`: the first chat is created as the human-readable "Chat 1" *on*
+    # the workspace's host, not under the host's own name.
+    assert cmd[:3] == ["mngr", "create", "Chat 1@my-workspace"]
     # The harness rides `--type claude`; the roles ride the template stack. The
     # `first` template owns everything unique to the opening chat (/welcome,
     # the first=true label, fast-mode launch settings), so the argv itself must
@@ -209,6 +212,22 @@ def test_build_create_chat_command_argv_accepted_by_live_cli() -> None:
     label resolution short-circuits without reading host files."""
     argv = _build_create_chat_command("host-1", {"workspace": "ws", "project": "proj"})
     assert_mngr_argv_valid(argv)
+
+
+def test_build_create_chat_command_positional_parses_to_a_named_chat_on_the_host() -> None:
+    """The CLI contract check above is shape-only -- click sees the positional as
+    an opaque string. This runs it through mngr's own address parser, which is
+    what decides that "Chat 1@host-1" is the true name `Chat-1` on `host-1` with
+    the typed name kept as the `display_name` label. A create whose positional
+    mngr rejects leaves a booting workspace with no chat at all, so the semantics
+    are pinned here and not just the token count.
+    """
+    argv = _build_create_chat_command("host-1", {"workspace": "ws"})
+    location = parse_new_agent_location(argv[2])
+
+    assert location.name == "Chat-1"
+    assert location.host_name == "host-1"
+    assert location.display_name == "Chat 1"
 
 
 def test_build_create_chat_command_requests_json_output() -> None:
@@ -282,9 +301,10 @@ def test_persist_initial_chat_agent_id_skips_when_host_dir_unset(
 def test_file_initial_chat_title_names_the_first_chat(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    # The mngr agent keeps its host-derived name; "Chat 1" goes into the
-    # machine-wide title store the launcher's own creates file into, in the
-    # exact shape system_interface's member_titles.py reads back.
+    # The agent now carries "Chat 1" in mngr too (as its display_name label),
+    # but nothing lifts that label into the serialized AgentState, so the
+    # frontend still reads the tab's name out of the machine-wide title store.
+    # Filed in the exact shape system_interface's member_titles.py reads back.
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-services")
 
