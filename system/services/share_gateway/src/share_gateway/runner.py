@@ -3,10 +3,14 @@
 Watches ``data/.secrets/share.env`` (the share materials the minds app injects)
 plus ``data/.state/apps.toml`` (the service registry). While materials are
 present it keeps the stack up: TLS key/CSR/cert via the connector, the
-rendered Caddyfile + frpc.toml, caddy + frpc child processes, and the gateway
-Flask server caddy's forward_auth consults. When the materials disappear
-(unshare) the children stop and the tunnel drops; key, cert, and the cookie
-signing secret stay on disk for a fast re-share.
+rendered Caddyfile, caddy, the gateway Flask server caddy's forward_auth
+consults, and ONE frpc process per relay in the workspace's assignment (the
+multi-relay design tunnels to every relay of the region). The assignment is
+fetched from the connector with the relay token and re-polled, so server-side
+fleet changes converge without touching the workspace; the last good answer is
+cached on disk so restarts work with the connector down. When the materials
+disappear (unshare) the children stop and the tunnels drop; key, cert, and the
+cookie signing secret stay on disk for a fast re-share.
 
 Same watch idiom as the other material-gated services: inotify when available,
 10-second mtime polling as the fallback.
@@ -27,6 +31,8 @@ from werkzeug.serving import BaseWSGIServer
 from werkzeug.serving import make_server
 
 from share_gateway import materials as materials_module
+from share_gateway.assignment import RelayAssignment
+from share_gateway.assignment import load_assignment
 from share_gateway.log import log as _log
 from share_gateway.caddyfile import build_label_to_name
 from share_gateway.caddyfile import read_registered_apps
@@ -116,11 +122,11 @@ def _reload_caddy(caddyfile_text: str) -> bool:
     return True
 
 
-def _reload_frpc() -> bool:
-    """Hot-reload frpc's proxies from its on-disk config via its admin API; False on failure."""
+def _reload_frpc(config_path: Path) -> bool:
+    """Hot-reload one frpc's proxies from its on-disk config via its admin API; False on failure."""
     try:
         result = subprocess.run(
-            ["frpc", "reload", "-c", str(materials_module.FRPC_CONFIG_PATH)],
+            ["frpc", "reload", "-c", str(config_path)],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             timeout=15,
@@ -135,16 +141,21 @@ def _reload_frpc() -> bool:
 
 
 class ShareStack:
-    """The running pieces of one active share: gateway server, caddy, frpc."""
+    """The running pieces of one active share: gateway server, caddy, one frpc per assigned relay."""
 
-    def __init__(self, materials: ShareMaterials, auth_label: str) -> None:
+    def __init__(self, materials: ShareMaterials, auth_label: str, assignment: RelayAssignment) -> None:
         self.materials = materials
         self.auth_label = auth_label
+        self.assignment = assignment
         self.gateway_server: BaseWSGIServer | None = None
         self.caddy_process: subprocess.Popen[bytes] | None = None
-        self.frpc_process: subprocess.Popen[bytes] | None = None
+        self.frpc_process_by_relay_id: dict[str, subprocess.Popen[bytes]] = {}
+        self.frpc_config_text_by_relay_id: dict[str, str] = {}
+        # Admin ports are sticky per relay for the stack's lifetime, so an
+        # assignment change never restarts a surviving relay's frpc.
+        self.admin_port_by_relay_id: dict[str, int] = {}
         self.last_caddyfile_text = ""
-        self.last_frpc_config_text = ""
+        self.last_assignment_fetch = time.monotonic()
         self.last_renewal_check = datetime.now(timezone.utc)
 
     def render_current_caddyfile(self) -> str:
@@ -156,23 +167,58 @@ class ShareStack:
             tls_key_path=materials_module.TLS_KEY_FILE.resolve(),
             https_port=materials_module.CADDY_HTTPS_PORT,
             gateway_port=materials_module.GATEWAY_PORT,
+            chrome_origin=self.materials.chrome_origin,
         )
 
-    def render_current_frpc_config(self) -> str:
+    def admin_port_for(self, relay_id: str) -> int:
+        existing = self.admin_port_by_relay_id.get(relay_id)
+        if existing is not None:
+            return existing
+        used = set(self.admin_port_by_relay_id.values())
+        candidate = materials_module.FRPC_ADMIN_PORT_BASE
+        while candidate in used:
+            candidate += 1
+        self.admin_port_by_relay_id[relay_id] = candidate
+        return candidate
+
+    def render_frpc_config_for(self, relay_id: str) -> str:
+        relay_host, relay_port = self.assignment.endpoint_by_relay_id[relay_id]
         return render_frpc_toml(
-            relay_host=self.materials.relay_host,
-            relay_port=self.materials.relay_port,
+            relay_host=relay_host,
+            relay_port=relay_port,
             relay_token=self.materials.relay_token,
             workspace_domain=self.materials.workspace_domain,
             service_labels=[app.label for app in read_registered_apps(APPS_TOML_PATH)],
             auth_label=self.auth_label,
             local_https_port=materials_module.CADDY_HTTPS_PORT,
-            admin_port=materials_module.FRPC_ADMIN_PORT,
+            admin_port=self.admin_port_for(relay_id),
         )
 
 
+def _start_frpc_for_relay(stack: ShareStack, relay_id: str) -> None:
+    config_text = stack.render_frpc_config_for(relay_id)
+    config_path = materials_module.frpc_config_path(relay_id)
+    config_path.write_text(config_text)
+    stack.frpc_config_text_by_relay_id[relay_id] = config_text
+    stack.frpc_process_by_relay_id[relay_id] = _start_child(
+        ["frpc", "-c", str(config_path)], f"frpc[{relay_id}]"
+    )
+
+
+def _converge_frpc_processes(stack: ShareStack) -> None:
+    """Start frpc for newly assigned relays and stop frpc for relays that left the assignment."""
+    assigned = set(stack.assignment.endpoint_by_relay_id)
+    for removed_relay_id in sorted(set(stack.frpc_process_by_relay_id) - assigned):
+        _stop_child(stack.frpc_process_by_relay_id.pop(removed_relay_id), f"frpc[{removed_relay_id}]")
+        stack.frpc_config_text_by_relay_id.pop(removed_relay_id, None)
+        stack.admin_port_by_relay_id.pop(removed_relay_id, None)
+        _log(f"Relay {removed_relay_id} left the assignment; its tunnel is down")
+    for added_relay_id in sorted(assigned - set(stack.frpc_process_by_relay_id)):
+        _start_frpc_for_relay(stack, added_relay_id)
+
+
 def _start_stack(materials: ShareMaterials) -> ShareStack | None:
-    """Provision (cert) and start (gateway thread, caddy, frpc) one share's stack."""
+    """Provision (cert + relay assignment) and start (gateway thread, caddy, per-relay frpc) one share's stack."""
     try:
         ensure_share_certificate(
             key_path=materials_module.TLS_KEY_FILE,
@@ -185,8 +231,15 @@ def _start_stack(materials: ShareMaterials) -> ShareStack | None:
         _log(f"certificate provisioning failed (will retry on next change/poll): {exc}")
         return None
 
+    assignment = load_assignment(
+        materials.connector_url, materials.relay_token, materials_module.ASSIGNMENT_CACHE_PATH
+    )
+    if assignment is None:
+        _log("no relay assignment available yet (will retry on next change/poll)")
+        return None
+
     auth_label = load_or_create_auth_label(materials_module.AUTH_LABEL_FILE)
-    stack = ShareStack(materials, auth_label)
+    stack = ShareStack(materials, auth_label, assignment)
     signing_secret = load_or_create_signing_secret(materials_module.SIGNING_SECRET_FILE)
     app = build_gateway_app(
         materials=materials,
@@ -208,33 +261,58 @@ def _start_stack(materials: ShareMaterials) -> ShareStack | None:
         ["caddy", "run", "--config", str(materials_module.CADDYFILE_PATH), "--adapter", "caddyfile"], "caddy"
     )
 
-    stack.last_frpc_config_text = stack.render_current_frpc_config()
-    materials_module.FRPC_CONFIG_PATH.write_text(stack.last_frpc_config_text)
-    stack.frpc_process = _start_child(["frpc", "-c", str(materials_module.FRPC_CONFIG_PATH)], "frpc")
-    _log(f"Share stack up for {materials.workspace_domain}")
+    _converge_frpc_processes(stack)
+    _log(
+        f"Share stack up for {materials.workspace_domain} "
+        f"(tunnels: {', '.join(sorted(stack.assignment.endpoint_by_relay_id)) or 'none'})"
+    )
     return stack
 
 
 def _stop_stack(stack: ShareStack | None) -> None:
     if stack is None:
         return
-    _stop_child(stack.frpc_process, "frpc")
+    for relay_id, frpc_process in sorted(stack.frpc_process_by_relay_id.items()):
+        _stop_child(frpc_process, f"frpc[{relay_id}]")
+    stack.frpc_process_by_relay_id.clear()
     _stop_child(stack.caddy_process, "caddy")
     if stack.gateway_server is not None:
         stack.gateway_server.shutdown()
     _log("Share stack stopped")
 
 
+def _restart_dead_frpc_processes(stack: ShareStack) -> None:
+    """Restart any assigned relay's frpc that died -- alone, so surviving tunnels stay up."""
+    for relay_id in sorted(stack.frpc_process_by_relay_id):
+        frpc_process = stack.frpc_process_by_relay_id[relay_id]
+        if frpc_process.poll() is not None:
+            _log(f"frpc[{relay_id}] exited with {frpc_process.returncode}; restarting it")
+            _start_frpc_for_relay(stack, relay_id)
+
+
+def _repoll_assignment(stack: ShareStack) -> None:
+    """Re-fetch the relay assignment on its poll interval and converge the frpc set on changes."""
+    if time.monotonic() - stack.last_assignment_fetch < stack.assignment.poll_seconds:
+        return
+    stack.last_assignment_fetch = time.monotonic()
+    refreshed = load_assignment(
+        stack.materials.connector_url, stack.materials.relay_token, materials_module.ASSIGNMENT_CACHE_PATH
+    )
+    if refreshed is None or refreshed == stack.assignment:
+        return
+    _log(f"Relay assignment changed; converging tunnels to {sorted(refreshed.endpoint_by_relay_id)}")
+    stack.assignment = refreshed
+    _converge_frpc_processes(stack)
+
+
 def _tick_running_stack(stack: ShareStack) -> ShareStack | None:
-    """Periodic upkeep for a running stack: restart dead children, re-render caddy, renew the cert."""
+    """Periodic upkeep for a running stack: restart dead children, re-render configs, renew the cert."""
     if stack.caddy_process is not None and stack.caddy_process.poll() is not None:
         _log(f"caddy exited with {stack.caddy_process.returncode}; restarting the stack")
         _stop_stack(stack)
         return None
-    if stack.frpc_process is not None and stack.frpc_process.poll() is not None:
-        _log(f"frpc exited with {stack.frpc_process.returncode}; restarting the stack")
-        _stop_stack(stack)
-        return None
+    _restart_dead_frpc_processes(stack)
+    _repoll_assignment(stack)
 
     current_caddyfile = stack.render_current_caddyfile()
     if current_caddyfile != stack.last_caddyfile_text:
@@ -243,15 +321,17 @@ def _tick_running_stack(stack: ShareStack) -> ShareStack | None:
             stack.last_caddyfile_text = current_caddyfile
             _log("Reloaded caddy for a service-registry change")
 
-    # A service registered while shared needs its label claimed on the relay
-    # too; hot-reload frpc (admin API) so the new claim lands without dropping
-    # existing viewers' tunnels.
-    current_frpc_config = stack.render_current_frpc_config()
-    if current_frpc_config != stack.last_frpc_config_text:
-        materials_module.FRPC_CONFIG_PATH.write_text(current_frpc_config)
-        if _reload_frpc():
-            stack.last_frpc_config_text = current_frpc_config
-            _log("Reloaded frpc for a service-registry change")
+    # A service registered while shared needs its label claimed on EVERY
+    # relay; hot-reload each frpc (admin API) so the new claim lands without
+    # dropping existing viewers' tunnels.
+    for relay_id in sorted(stack.frpc_process_by_relay_id):
+        current_frpc_config = stack.render_frpc_config_for(relay_id)
+        if current_frpc_config != stack.frpc_config_text_by_relay_id.get(relay_id):
+            config_path = materials_module.frpc_config_path(relay_id)
+            config_path.write_text(current_frpc_config)
+            if _reload_frpc(config_path):
+                stack.frpc_config_text_by_relay_id[relay_id] = current_frpc_config
+                _log(f"Reloaded frpc[{relay_id}] for a service-registry change")
 
     now = datetime.now(timezone.utc)
     if now - stack.last_renewal_check >= _RENEWAL_CHECK_INTERVAL:

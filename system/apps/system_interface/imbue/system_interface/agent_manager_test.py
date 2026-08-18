@@ -1,21 +1,27 @@
 """Tests for the AgentManager."""
 
 import json
+import os
 import queue
 import shutil
 import threading
+import time
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from pathlib import Path
 from typing import Any
 
 import pytest
 from mngr_cli_contract.contract import assert_mngr_argv_valid
+from oom_priority import bands
 from watchdog.events import FileClosedNoWriteEvent
 from watchdog.events import FileModifiedEvent
 from watchdog.events import FileMovedEvent
 from watchdog.events import FileOpenedEvent
 
+from imbue.imbue_common.logging import format_nanosecond_iso_timestamp
+from imbue.imbue_common.model_update import to_update
 from imbue.mngr.api.observe import make_agent_removed_event
 from imbue.mngr.api.observe import make_agent_state_event
 from imbue.mngr.api.observe import make_full_agent_state_event
@@ -29,16 +35,34 @@ from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import HostState
 from imbue.mngr.primitives import ProviderInstanceName
 from imbue.mngr.utils.polling import poll_until
+from imbue.mngr_codex.app_server_client import CodexModel
+from imbue.system_interface import client_activity
+from imbue.system_interface import projects
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.agent_manager import _LogQueueCallback
 from imbue.system_interface.agent_manager import _build_chat_create_command
+from imbue.system_interface.agent_manager import _build_chat_display_label_command
+from imbue.system_interface.agent_manager import _build_chat_rename_command
 from imbue.system_interface.agent_manager import _build_observe_command_argv
-from imbue.system_interface.agent_manager import _build_worktree_create_command
+from imbue.system_interface.agent_manager import _chat_project_label
 from imbue.system_interface.agent_manager import _make_apps_file_handler
+from imbue.system_interface.harnesses.codex.activity import CodexActivityTracker
+from imbue.system_interface.harnesses.codex.model import codex_models_to_options
+from imbue.system_interface.harnesses.codex.model import get_codex_model_options_path
+from imbue.system_interface.harnesses.codex.model import write_codex_model_options
+from imbue.system_interface.harnesses.events import SPECIAL_EVENT_TYPE
+from imbue.system_interface.harnesses.events import SpecialEventKind
+from imbue.system_interface.harnesses.harness_type import HarnessType
+from imbue.system_interface.harnesses.registry import get_model_state_path
+from imbue.system_interface.harnesses.session import FileHarnessSession
 from imbue.system_interface.models import AgentCreationError
+from imbue.system_interface.models import AgentNameConflictError
+from imbue.system_interface.models import AgentRenameError
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.models import AppEntry
+from imbue.system_interface.models import QueuedMessageState
+from imbue.system_interface.oom_prioritizer import ChatOomPrioritizer
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 # Several tests in this module spin up real watchdog FSEvents observers
@@ -49,15 +73,21 @@ from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 pytestmark = pytest.mark.flaky
 
 
-def _seed_agent(manager: AgentManager, agent_id: str) -> None:
+def _seed_agent(
+    manager: AgentManager,
+    agent_id: str,
+    harness: HarnessType = HarnessType.CLAUDE,
+    state: str = "RUNNING",
+) -> None:
     """Insert a placeholder ``AgentStateItem`` directly into the tracked map."""
     with manager._lock:
         manager._agents[agent_id] = AgentStateItem(
             id=agent_id,
             name=f"agent-{agent_id}",
-            state="RUNNING",
+            state=state,
             labels={},
             work_dir=None,
+            harness=harness,
         )
 
 
@@ -116,13 +146,6 @@ def _last_agents_updated(messages: list[dict[str, Any]]) -> dict[str, Any] | Non
     return None
 
 
-def test_generate_random_name(agent_manager: AgentManager) -> None:
-    name = agent_manager.generate_random_name()
-    assert isinstance(name, str)
-    assert len(name) > 0
-    assert "-" in name
-
-
 def test_get_agents_initially_empty(agent_manager: AgentManager) -> None:
     agents = agent_manager.get_agents()
     assert agents == []
@@ -163,6 +186,75 @@ url = "http://localhost:7681"
     assert apps[1].url == "http://localhost:7681"
     # A row written before labels existed reads back with an empty label.
     assert apps[1].label == ""
+
+
+def test_read_apps_reads_the_registered_icon(agent_manager: AgentManager, tmp_path: Path) -> None:
+    icon = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M2 2h12v12H2z"/></svg>'
+    toml_file = tmp_path / "apps.toml"
+    toml_file.write_text(
+        "[[apps]]\n"
+        'name = "web"\n'
+        'url = "http://localhost:8000"\n'
+        'label = "web-x7k9q2w1"\n'
+        f"icon = {json.dumps(icon)}\n"
+        "\n"
+        "[[apps]]\n"
+        'name = "terminal"\n'
+        'url = "http://localhost:7681"\n'
+    )
+
+    agent_manager._read_apps(toml_file)
+
+    apps = agent_manager.get_apps()
+    assert apps[0].icon == icon
+    # An app that registered no icon reads back with an empty one.
+    assert apps[1].icon == ""
+
+
+@pytest.mark.parametrize(
+    "icon",
+    [
+        "<svg><script>alert(1)</script></svg>",
+        '<svg onload="alert(1)"></svg>',
+        "<svg><style>* { display: none }</style></svg>",
+        '<svg><a href="javascript:alert(1)"></a></svg>',
+        "<div>not an svg</div>",
+        "<svg" + " " * 20000 + "></svg>",
+    ],
+)
+def test_read_apps_drops_an_unsafe_icon(agent_manager: AgentManager, tmp_path: Path, icon: str) -> None:
+    """``forward_port.py`` never writes markup like this, but a hand-edited
+    registry must not be able to push it into the client's DOM."""
+    toml_file = tmp_path / "apps.toml"
+    toml_file.write_text(f'[[apps]]\nname = "web"\nurl = "http://localhost:8000"\nicon = {json.dumps(icon)}\n')
+
+    agent_manager._read_apps(toml_file)
+
+    apps = agent_manager.get_apps()
+    # The app itself still registers; only its icon is refused.
+    assert len(apps) == 1
+    assert apps[0].icon == ""
+
+
+def test_read_apps_reads_the_internal_flag(agent_manager: AgentManager, tmp_path: Path) -> None:
+    toml_file = tmp_path / "apps.toml"
+    toml_file.write_text(
+        "[[apps]]\n"
+        'name = "owner-exec"\n'
+        'url = "http://localhost:8793"\n'
+        "internal = true\n"
+        "\n"
+        "[[apps]]\n"
+        'name = "web"\n'
+        'url = "http://localhost:8000"\n'
+    )
+
+    agent_manager._read_apps(toml_file)
+
+    apps = agent_manager.get_apps()
+    assert apps[0].internal is True
+    # A row with no `internal` key -- every ordinary app -- reads back False.
+    assert apps[1].internal is False
 
 
 def test_read_apps_handles_missing_file(agent_manager: AgentManager, tmp_path: Path) -> None:
@@ -221,7 +313,56 @@ def test_get_apps_serialized(agent_manager: AgentManager) -> None:
         ]
 
     serialized = agent_manager.get_apps_serialized()
-    assert serialized == [{"name": "web", "url": "http://localhost:8000", "label": "web-x7k9q2w1"}]
+    assert serialized == [
+        {
+            "name": "web",
+            "url": "http://localhost:8000",
+            "label": "web-x7k9q2w1",
+            "icon": "",
+            "internal": False,
+        }
+    ]
+
+
+def test_get_apps_serialized_carries_the_icon(agent_manager: AgentManager) -> None:
+    """The icon rides alongside name/url/label everywhere the app list is sent,
+    so a client can draw the app's own glyph without a second request."""
+    icon = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M2 2h12v12H2z"/></svg>'
+    with agent_manager._lock:
+        agent_manager._apps = [
+            AppEntry(name="web", url="http://localhost:8000", label="web-x7k9q2w1", icon=icon),
+        ]
+
+    serialized = agent_manager.get_apps_serialized()
+    assert serialized == [
+        {
+            "name": "web",
+            "url": "http://localhost:8000",
+            "label": "web-x7k9q2w1",
+            "icon": icon,
+            "internal": False,
+        }
+    ]
+
+
+def test_get_apps_serialized_carries_internal(agent_manager: AgentManager) -> None:
+    """The frontend's `pickableApps` excludes an internal app everywhere it
+    offers apps to open, so the flag has to reach it over the wire."""
+    with agent_manager._lock:
+        agent_manager._apps = [
+            AppEntry(name="owner-exec", url="http://localhost:8793", internal=True),
+        ]
+
+    serialized = agent_manager.get_apps_serialized()
+    assert serialized == [
+        {
+            "name": "owner-exec",
+            "url": "http://localhost:8793",
+            "label": "",
+            "icon": "",
+            "internal": True,
+        }
+    ]
 
 
 def test_resolve_agent_work_dir_from_own_env(agent_manager: AgentManager) -> None:
@@ -255,62 +396,70 @@ def test_create_chat_agent_broadcasts_proto_created(
     """The proto_agent_created broadcast fires before the creation thread runs."""
     q = broadcaster.register()
 
-    agent_id = agent_manager.create_chat_agent("test-chat")
+    created = agent_manager.create_chat_agent("test-chat")
     agent_manager.stop()
 
-    assert isinstance(agent_id, str)
-    assert len(agent_id) > 0
+    assert isinstance(created.agent_id, str)
+    assert len(created.agent_id) > 0
+    assert created.name == "test-chat"
+    assert created.display_name == "test-chat"
 
     raw = q.get_nowait()
     assert raw is not None
     proto_msg = json.loads(raw)
     assert proto_msg["type"] == "proto_agent_created"
-    assert proto_msg["agent_id"] == agent_id
+    assert proto_msg["agent_id"] == created.agent_id
     assert proto_msg["creation_type"] == "chat"
     assert proto_msg["parent_agent_id"] is None
 
 
-def test_create_worktree_agent_broadcasts_proto_created(
-    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, git_work_dir: Path
+def test_create_codex_agent_broadcasts_proto_created_with_the_chat_creation_type(
+    agent_manager: AgentManager,
+    broadcaster: WebSocketBroadcaster,
+    git_work_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The proto_agent_created broadcast fires before the creation thread runs."""
+    """Both menu entries make a chat, so creation_type is the role -- never the harness."""
+    # Stub the sign-in preflight to always report signed in, so the create does not depend
+    # on a real (possibly signed-out) codex CLI in the test env.
+    agent_manager._auth_gate = lambda check: None
     q = broadcaster.register()
 
     with agent_manager._lock:
-        agent_manager._agents["parent-id"] = AgentStateItem(
-            id="parent-id",
-            name="parent",
+        agent_manager._agents[agent_manager._own_agent_id] = AgentStateItem(
+            id=agent_manager._own_agent_id,
+            name="primary",
             state="RUNNING",
             labels={},
             work_dir=str(git_work_dir),
         )
 
-    agent_id = agent_manager.create_worktree_agent("test-worktree", "parent-id")
+    created = agent_manager.create_chat_agent("test-codex", HarnessType.CODEX)
     agent_manager.stop()
 
-    assert isinstance(agent_id, str)
+    assert isinstance(created.agent_id, str)
 
     raw = q.get_nowait()
     assert raw is not None
     proto_msg = json.loads(raw)
     assert proto_msg["type"] == "proto_agent_created"
-    assert proto_msg["creation_type"] == "worktree"
+    assert proto_msg["creation_type"] == "chat"
     assert proto_msg["parent_agent_id"] is None
 
 
 def test_get_log_queue_for_proto_agent(agent_manager: AgentManager, git_work_dir: Path) -> None:
-    """The log queue is available immediately after create_worktree_agent returns."""
+    """The log queue is available immediately after create_chat_agent returns."""
     with agent_manager._lock:
-        agent_manager._agents["parent-id"] = AgentStateItem(
-            id="parent-id",
-            name="parent",
+        agent_manager._agents[agent_manager._own_agent_id] = AgentStateItem(
+            id=agent_manager._own_agent_id,
+            name="primary",
             state="RUNNING",
             labels={},
             work_dir=str(git_work_dir),
         )
 
-    agent_id = agent_manager.create_worktree_agent("test-worktree", "parent-id")
-    log_q = agent_manager.get_log_queue(agent_id)
+    created = agent_manager.create_chat_agent("test-chat")
+    log_q = agent_manager.get_log_queue(created.agent_id)
     assert log_q is not None
 
     agent_manager.stop()
@@ -452,7 +601,7 @@ def test_agent_removed_event_removes_agent(agent_manager: AgentManager, broadcas
 
     q.get_nowait()
 
-    agent_manager._handle_observe_event(make_agent_removed_event(agent.id, agent.name))
+    agent_manager._handle_observe_event(make_agent_removed_event(agent.id, agent.name, agent.host.id))
 
     agents = agent_manager.get_agents()
     assert len(agents) == 0
@@ -564,9 +713,7 @@ def test_agent_state_event_locates_agent_immediately(agent_manager: AgentManager
     assert str(matches[0].provider_name) == "local"
 
 
-def test_on_apps_changed(
-    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
-) -> None:
+def test_on_apps_changed(agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path) -> None:
     """Application changes are detected and broadcast."""
     q = broadcaster.register()
 
@@ -625,10 +772,19 @@ def test_unknown_observe_event_type_is_ignored(agent_manager: AgentManager) -> N
     assert agent_manager.get_agents() == []
 
 
-def test_create_worktree_raises_for_unknown_agent(agent_manager: AgentManager) -> None:
-    """Creating a worktree for an unknown agent raises."""
+def test_create_chat_raises_when_the_primary_work_dir_is_unknown(agent_manager: AgentManager) -> None:
+    """A chat has nowhere to be created if the primary's work dir cannot be resolved.
+
+    Both the registered agent and the own-work-dir fallback must be absent for the
+    guard to bite, so clear the fallback the fixture provides.
+    """
+    with agent_manager._lock:
+        agent_manager._agents.pop(agent_manager._own_agent_id, None)
+        # Empty is the unset form: it is what the manager starts with when
+        # MNGR_AGENT_WORK_DIR is absent, and the fallback treats it as falsy.
+        agent_manager._own_work_dir = ""
     with pytest.raises(AgentCreationError, match="Cannot determine work directory"):
-        agent_manager.create_worktree_agent("test", "nonexistent")
+        agent_manager.create_chat_agent("test")
 
 
 @pytest.mark.flaky
@@ -761,7 +917,7 @@ def test_run_creation_logs_header_and_completion(agent_manager: AgentManager, tm
     done_event = threading.Event()
 
     def run_and_signal() -> None:
-        agent_manager._run_creation("test-id", "test-agent", cmd, tmp_path, log_q, {})
+        agent_manager._run_creation("test-id", "test-agent", cmd, tmp_path, log_q, {}, HarnessType.CLAUDE)
         done_event.set()
 
     t = threading.Thread(target=run_and_signal, daemon=True)
@@ -855,7 +1011,7 @@ def test_handle_observe_event_dispatches_agent_removed(
     agent_manager._handle_observe_event(make_agent_state_event(agent))
     assert len(agent_manager.get_agents()) == 1
 
-    agent_manager._handle_observe_event(make_agent_removed_event(agent.id, agent.name))
+    agent_manager._handle_observe_event(make_agent_removed_event(agent.id, agent.name, agent.host.id))
     assert len(agent_manager.get_agents()) == 0
 
 
@@ -916,28 +1072,39 @@ def test_build_observe_command_honors_injected_binary(broadcaster: WebSocketBroa
 # only surfacing at runtime. See ``mngr_cli_contract`` for the validator.
 
 
-def test_worktree_create_argv_accepted_by_live_cli() -> None:
-    argv = _build_worktree_create_command(
+def test_chat_create_argv_selects_harness_by_type_and_role_by_template() -> None:
+    """The harness/role split is the contract: `--type` picks the harness, the lone
+    `--template` picks the role.
+
+    The harness rides `--type <harness>` (resolving `[agent_types.<harness>]`
+    directly), and the `chat` role template -- which never sets `type` -- cannot
+    clobber it.
+    """
+    argv = _build_chat_create_command(
         mngr_binary="mngr",
         name="demo",
         agent_id="agent-123",
-        current_branch="main",
-        new_branch="mngr/demo",
-        parent_labels={"project": "proj"},
+        primary_labels={},
+        harness=HarnessType.CLAUDE,
     )
-    assert_mngr_argv_valid(argv)
+    assert argv[argv.index("--type") + 1] == HarnessType.CLAUDE
+    templates = [argv[i + 1] for i, tok in enumerate(argv) if tok == "--template"]
+    assert templates == ["chat"]
 
 
-def test_worktree_create_argv_without_project_label() -> None:
-    argv = _build_worktree_create_command(
+def test_codex_chat_create_argv_accepted_by_live_cli() -> None:
+    """The codex harness reuses the chat role verbatim; only the `--type` differs."""
+    argv = _build_chat_create_command(
         mngr_binary="mngr",
         name="demo",
         agent_id="agent-123",
-        current_branch="main",
-        new_branch="mngr/demo",
-        parent_labels={},
+        primary_labels={"project": "proj"},
+        harness=HarnessType.CODEX,
     )
     assert_mngr_argv_valid(argv)
+    assert argv[argv.index("--type") + 1] == HarnessType.CODEX
+    templates = [argv[i + 1] for i, tok in enumerate(argv) if tok == "--template"]
+    assert templates == ["chat"]
 
 
 def test_chat_create_argv_accepted_by_live_cli() -> None:
@@ -946,7 +1113,7 @@ def test_chat_create_argv_accepted_by_live_cli() -> None:
         name="demo",
         agent_id="agent-123",
         primary_labels={"workspace": "ws", "project": "proj"},
-        is_fast_mode_enabled=True,
+        harness=HarnessType.CLAUDE,
     )
     assert_mngr_argv_valid(argv)
     # The chat carries user_created so the OOM launch wrapper puts it in the
@@ -954,28 +1121,373 @@ def test_chat_create_argv_accepted_by_live_cli() -> None:
     assert "user_created=true" in argv
 
 
-def test_chat_create_argv_carries_the_workspace_fast_mode_setting() -> None:
-    """Chat is the only type that starts fast, so its create must say which way."""
-    enabled_argv = _build_chat_create_command(
+def test_chat_create_argv_carries_no_launch_settings() -> None:
+    """Plain chats launch at the harness defaults: no `-S` overrides at all. Fast
+    mode rides only the `first` create template (see .mngr/settings.toml), never
+    the argv, so every non-first chat starts at standard speed."""
+    argv = _build_chat_create_command(
         mngr_binary="mngr",
         name="demo",
         agent_id="agent-123",
         primary_labels={},
-        is_fast_mode_enabled=True,
+        harness=HarnessType.CLAUDE,
     )
-    disabled_argv = _build_chat_create_command(
+    assert "-S" not in argv
+    assert not any("fastMode" in token for token in argv)
+
+
+def test_chat_create_argv_stacks_extra_role_templates_after_chat() -> None:
+    """The `first` launcher stacks its template via extra_role_templates; the
+    resulting argv must resolve against the live CLI."""
+    argv = _build_chat_create_command(
         mngr_binary="mngr",
         name="demo",
         agent_id="agent-123",
         primary_labels={},
-        is_fast_mode_enabled=False,
+        harness=HarnessType.CODEX,
+        extra_role_templates=("first",),
     )
-    assert "agent_types.claude.settings_overrides.fastMode=true" in enabled_argv
-    assert "agent_types.claude.settings_overrides.fastMode=false" in disabled_argv
-    # Both forms must resolve against the live mngr config model, not just parse
-    # as CLI tokens: an unresolvable -S key path fails the create outright.
-    assert_mngr_argv_valid(enabled_argv)
-    assert_mngr_argv_valid(disabled_argv)
+    assert_mngr_argv_valid(argv)
+    templates = [argv[i + 1] for i, tok in enumerate(argv) if tok == "--template"]
+    assert templates == ["chat", "first"]
+
+
+# --- the chat's originating project (the mngr ``project`` label) ---
+# A chat is an agent, so the project it was created inside rides the label mngr
+# already propagates to the agent's children rather than a parallel list. The
+# label is where a chat starts out filed, not an owner: membership is
+# many-to-many and each view's member list says what that view shows.
+
+
+def test_chat_project_label_prefers_the_project_the_chat_was_created_in() -> None:
+    assert _chat_project_label({"project": "taxes"}, "website-redesign") == "website-redesign"
+
+
+def test_chat_project_label_inherits_the_primary_agents_project_outside_any_project() -> None:
+    assert _chat_project_label({"project": "taxes"}, "") == "taxes"
+
+
+def test_chat_project_label_is_empty_when_nothing_names_a_project() -> None:
+    """A chat filed in no project is fine -- Everything lists every object anyway."""
+    assert _chat_project_label({}, "") == ""
+
+
+def test_chat_create_argv_canonicalizes_the_name_and_labels_the_human_one() -> None:
+    """A chat is created under its true name with the typed name as a label.
+
+    Both are sent explicitly so the create works against any vendored mngr,
+    including one predating free-form names -- and the pair is what newer mngr
+    derives for itself, so its "true name is the canonical form of the display
+    name" rule holds either way.
+    """
+    argv = _build_chat_create_command(
+        "mngr",
+        "Chat 2",
+        "agent-1",
+        {},
+        HarnessType.CLAUDE,
+    )
+
+    assert argv[2] == "Chat-2"
+    labels = [argv[i + 1] for i, arg in enumerate(argv) if arg == "--label"]
+    assert "display_name=Chat 2" in labels
+    assert_mngr_argv_valid(argv)
+
+
+def test_chat_rename_argv_accepted_by_live_cli() -> None:
+    """A rename carries the same name pair a create does: canonical name + typed label.
+
+    The canonical name is what an older vendored mngr accepts, and the typed
+    name rides the same atomic write as the rename so no observer sees the
+    renamed agent without its ``display_name``.
+    """
+    argv = _build_chat_rename_command(mngr_binary="mngr", agent_id="agent-123", name="Planning notes")
+    assert_mngr_argv_valid(argv)
+    assert argv == ["mngr", "rename", "agent-123", "Planning-notes", "--label", "display_name=Planning notes"]
+
+
+def test_chat_display_label_argv_accepted_by_live_cli() -> None:
+    """A display-only rename rewrites the label without renaming anything."""
+    argv = _build_chat_display_label_command(mngr_binary="mngr", agent_id="agent-123", name="Chat 2")
+    assert_mngr_argv_valid(argv)
+    assert argv == ["mngr", "label", "agent-123", "--label", "display_name=Chat 2"]
+
+
+def _tracked_chat(manager: AgentManager, agent_id: str, name: str, display_name: str | None = None) -> None:
+    labels = {} if display_name is None else {"display_name": display_name}
+    with manager._lock:
+        manager._agents[agent_id] = AgentStateItem(id=agent_id, name=name, state="RUNNING", labels=labels, work_dir=None)
+
+
+def test_rename_chat_agent_refuses_a_chat_that_is_still_being_created(
+    broadcaster: WebSocketBroadcaster,
+) -> None:
+    """A create in flight already carries a name; renaming to another would race it.
+
+    Filing the name the chat is *already* being created under is the ordinary
+    case and is a no-op here; anything else is refused rather than silently
+    diverging from whatever the create ends up writing.
+    """
+    manager = AgentManager.build(broadcaster)
+    try:
+        with manager._lock:
+            manager._proto_agents["proto-1"] = {"agent_id": "proto-1", "name": "Chat 2"}
+        manager.rename_chat_agent("proto-1", "Chat 2")
+        with pytest.raises(AgentRenameError):
+            manager.rename_chat_agent("proto-1", "Something else")
+    finally:
+        manager.stop()
+
+
+def test_rename_chat_agent_leaves_mngr_alone_for_an_untracked_id(
+    broadcaster: WebSocketBroadcaster,
+    false_binary: str,
+) -> None:
+    """An id belonging to no agent has no mngr name to diverge from.
+
+    The stand-in binary always exits non-zero, so this returning quietly is the
+    proof that nothing was run: an actual invocation would have raised.
+    """
+    manager = AgentManager.build(broadcaster, mngr_binary=false_binary)
+    try:
+        manager.rename_chat_agent("agent-nowhere", "Scratch")
+    finally:
+        manager.stop()
+
+
+def test_rename_chat_agent_raises_when_mngr_refuses(
+    broadcaster: WebSocketBroadcaster,
+    false_binary: str,
+) -> None:
+    """A non-zero ``mngr rename`` is an error, and the agent keeps its old name.
+
+    The caller (the member-title endpoint) turns this into an error response and
+    records nothing, so the two names cannot drift apart unnoticed.
+    """
+    manager = AgentManager.build(broadcaster, mngr_binary=false_binary)
+    try:
+        _tracked_chat(manager, "agent-7", "Chat-2")
+        with pytest.raises(AgentRenameError):
+            manager.rename_chat_agent("agent-7", "Planning notes")
+        still_named = manager.get_agent_by_id("agent-7")
+        assert still_named is not None
+        assert still_named.name == "Chat-2"
+    finally:
+        manager.stop()
+
+
+def test_rename_chat_agent_rejects_a_name_already_held_by_another_chat(
+    broadcaster: WebSocketBroadcaster,
+    false_binary: str,
+) -> None:
+    """Names collide by canonical form, before mngr is even asked.
+
+    "chat 3" canonicalizes to another agent's true name, so the rename is
+    refused with the conflict error the endpoint answers 409 with -- and the
+    always-failing stand-in binary proves the check fired first.
+    """
+    manager = AgentManager.build(broadcaster, mngr_binary=false_binary)
+    try:
+        _tracked_chat(manager, "agent-7", "Chat-2", display_name="Chat 2")
+        _tracked_chat(manager, "agent-8", "Chat-3", display_name="Chat 3")
+        with pytest.raises(AgentNameConflictError):
+            manager.rename_chat_agent("agent-7", "chat 3")
+    finally:
+        manager.stop()
+
+
+def test_rename_chat_agent_refuses_the_primary_agent(
+    broadcaster: WebSocketBroadcaster,
+    false_binary: str,
+) -> None:
+    """The services agent's name belongs to the minds app, not to a chat tab."""
+    manager = AgentManager.build(broadcaster, mngr_binary=false_binary)
+    try:
+        with manager._lock:
+            manager._agents["agent-1"] = AgentStateItem(
+                id="agent-1", name="system-services", state="RUNNING", labels={"is_primary": "true"}, work_dir=None
+            )
+        with pytest.raises(AgentRenameError):
+            manager.rename_chat_agent("agent-1", "My machine")
+    finally:
+        manager.stop()
+
+
+def test_rename_chat_agent_rejects_a_name_with_no_usable_characters(
+    broadcaster: WebSocketBroadcaster,
+    false_binary: str,
+) -> None:
+    manager = AgentManager.build(broadcaster, mngr_binary=false_binary)
+    try:
+        _tracked_chat(manager, "agent-7", "Chat-2")
+        with pytest.raises(AgentRenameError):
+            manager.rename_chat_agent("agent-7", "!!!")
+    finally:
+        manager.stop()
+
+
+def test_create_chat_agent_mints_the_first_free_numbered_name(
+    agent_manager: AgentManager,
+) -> None:
+    """An empty requested name allocates "Chat N" server-side, filling gaps.
+
+    "Chat 1" is held by a live agent's display label and "Chat 3" by a chosen
+    member title the endpoint passes through, so the mint lands on "Chat 2" --
+    and its canonical form is the agent's name.
+    """
+    _tracked_chat(agent_manager, "agent-1", "Chat-1", display_name="Chat 1")
+    created = agent_manager.create_chat_agent("", extra_taken_names=("Chat 3",))
+    agent_manager.stop()
+
+    assert created.display_name == "Chat 2"
+    assert created.name == "Chat-2"
+
+
+def test_create_chat_agent_counts_in_flight_creates_as_taken(
+    agent_manager: AgentManager,
+) -> None:
+    """Two concurrent creates cannot both mint "Chat 1": an in-flight create's
+    proto entry blocks the slot. The in-flight create is pinned as a proto
+    entry directly, so the test cannot race its background completion."""
+    with agent_manager._lock:
+        agent_manager._proto_agents["proto-1"] = {"agent_id": "proto-1", "name": "Chat 1"}
+    created = agent_manager.create_chat_agent("")
+    agent_manager.stop()
+
+    assert created.display_name == "Chat 2"
+
+
+def test_create_chat_agent_numbers_each_harness_under_its_own_word(
+    agent_manager: AgentManager,
+) -> None:
+    """A codex chat is "Codex 1", not "Chat 2": the fleets number independently."""
+    agent_manager._auth_gate = lambda check: None
+    chat = agent_manager.create_chat_agent("")
+    codex = agent_manager.create_chat_agent("", HarnessType.CODEX)
+    agent_manager.stop()
+
+    assert chat.display_name == "Chat 1"
+    assert codex.display_name == "Codex 1"
+
+
+def test_create_chat_agent_rejects_an_explicit_name_that_collides(
+    agent_manager: AgentManager,
+) -> None:
+    """An explicitly requested name that canonicalizes onto an existing agent's
+    true name is refused up front (the endpoint answers 409), not left for the
+    background mngr create to fail on."""
+    _tracked_chat(agent_manager, "agent-1", "Chat-2", display_name="Chat 2")
+    with pytest.raises(AgentNameConflictError):
+        agent_manager.create_chat_agent("chat 2")
+    agent_manager.stop()
+
+
+def test_create_chat_agent_registers_the_pre_observe_state_under_the_name_pair(
+    broadcaster: WebSocketBroadcaster,
+    git_work_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The AgentStateItem registered before observe relists carries the same
+    canonical name + display_name label the created mngr agent will hold, so
+    the UI renders identically before and after the relist.
+
+    ``true`` stands in for a succeeding ``mngr create``; the log queue's
+    ``done`` sentinel is the deterministic "creation thread finished" signal.
+    """
+    monkeypatch.setenv("MNGR_AGENT_ID", "test-agent-id")
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(git_work_dir))
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    true_binary = shutil.which("true")
+    assert true_binary is not None
+    manager = AgentManager.build(broadcaster, mngr_binary=true_binary)
+    try:
+        created = manager.create_chat_agent("My planning chat")
+        assert created.name == "My-planning-chat"
+
+        log_q = manager.get_log_queue(created.agent_id)
+        assert log_q is not None
+        done_message: dict[str, Any] | None = None
+        deadline = time.monotonic() + 30.0
+        while done_message is None:
+            raw = log_q.get(timeout=max(0.1, deadline - time.monotonic()))
+            message = None if raw is None else json.loads(raw)
+            if message is not None and message.get("done"):
+                done_message = message
+        assert done_message["success"] is True
+
+        agent = manager.get_agent_by_id(created.agent_id)
+        assert agent is not None
+        assert agent.name == "My-planning-chat"
+        assert agent.labels["display_name"] == "My planning chat"
+        assert agent.labels["user_created"] == "true"
+    finally:
+        manager.stop()
+
+
+def test_chat_create_argv_labels_the_project_the_chat_was_created_in() -> None:
+    argv = _build_chat_create_command(
+        mngr_binary="mngr",
+        name="demo",
+        agent_id="agent-123",
+        primary_labels={"workspace": "ws", "project": "taxes"},
+        harness=HarnessType.CLAUDE,
+        project_id="website-redesign",
+    )
+    assert "project=website-redesign" in argv
+    assert "project=taxes" not in argv
+    assert_mngr_argv_valid(argv)
+
+
+def test_chat_create_argv_omits_the_project_label_when_there_is_no_project() -> None:
+    argv = _build_chat_create_command(
+        mngr_binary="mngr",
+        name="demo",
+        agent_id="agent-123",
+        primary_labels={"workspace": "ws"},
+        harness=HarnessType.CLAUDE,
+    )
+    assert not any(token.startswith("project=") for token in argv)
+    assert_mngr_argv_valid(argv)
+
+
+def test_serialized_agents_expose_the_project_label(broadcaster: WebSocketBroadcaster) -> None:
+    """The workspace reads each chat's originating project off the agent payload."""
+    manager = AgentManager.build(broadcaster)
+    try:
+        with manager._lock:
+            for agent_id, labels in (
+                ("filed", {"user_created": "true", "project": "taxes"}),
+                ("unfiled", {"user_created": "true"}),
+            ):
+                manager._agents[agent_id] = AgentStateItem(
+                    id=agent_id, name=agent_id, state="RUNNING", labels=labels, work_dir=None
+                )
+        project_by_id = {agent["id"]: agent["project"] for agent in manager.get_agents_serialized()}
+        assert project_by_id == {"filed": "taxes", "unfiled": None}
+    finally:
+        manager.stop()
+
+
+def test_serialized_agents_expose_the_display_name_label(broadcaster: WebSocketBroadcaster) -> None:
+    """The human-readable name mngr holds rides along; ``name`` stays the true mngr name."""
+    manager = AgentManager.build(broadcaster)
+    try:
+        with manager._lock:
+            for agent_id, name, labels in (
+                ("named", "Chat-1", {"user_created": "true", "display_name": "Chat 1"}),
+                ("unnamed", "brave-otter", {"user_created": "true"}),
+            ):
+                manager._agents[agent_id] = AgentStateItem(
+                    id=agent_id, name=name, state="RUNNING", labels=labels, work_dir=None
+                )
+        by_id = {agent["id"]: agent for agent in manager.get_agents_serialized()}
+        assert by_id["named"]["display_name"] == "Chat 1"
+        assert by_id["unnamed"]["display_name"] is None
+        assert by_id["named"]["name"] == "Chat-1"
+        assert by_id["unnamed"]["name"] == "brave-otter"
+    finally:
+        manager.stop()
 
 
 def test_get_chat_agent_ids_excludes_workers_and_primary(broadcaster: WebSocketBroadcaster) -> None:
@@ -1188,6 +1700,28 @@ def test_ensure_activity_tracking_seeds_idle_state_silently(
         agent_manager.stop()
 
 
+def test_waiting_lifecycle_trusts_the_active_marker(agent_manager: AgentManager, tmp_path: Path) -> None:
+    """The recompute's own wiring: the tracker-declared turn marker is statted and fed to
+    derive, so a WAITING agent with a live `active` marker reads THINKING (the observe
+    stream can miss a short turn; the marker flips promptly) and settles once it clears."""
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1", state="WAITING")
+    agent_manager._ensure_activity_tracking("agent-1")
+    agent_manager.update_session_events(
+        "agent-1", [{"type": "user_message", "timestamp": "2026-07-28T00:00:00Z", "content": "go"}]
+    )
+    assert agent_manager._activity_state_by_agent.get("agent-1") == ActivityState.IDLE
+
+    (state_dir / "active").touch()
+    agent_manager._recompute_activity_state("agent-1", broadcast_on_change=False)
+    assert agent_manager._activity_state_by_agent.get("agent-1") == ActivityState.THINKING
+
+    (state_dir / "active").unlink()
+    agent_manager._recompute_activity_state("agent-1", broadcast_on_change=False)
+    assert agent_manager._activity_state_by_agent.get("agent-1") == ActivityState.IDLE
+
+
 def test_session_events_user_message_drives_thinking(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
@@ -1290,9 +1824,7 @@ def test_update_session_events_no_op_when_not_tracked(agent_manager: AgentManage
     )
     with agent_manager._lock:
         assert "ghost" not in agent_manager._activity_state_by_agent
-        assert "ghost" not in agent_manager._has_unmatched_tool_use_by_agent
-        assert "ghost" not in agent_manager._last_event_type_by_agent
-        assert "ghost" not in agent_manager._last_event_timestamp_by_agent
+        assert "ghost" not in agent_manager._activity_tracker_by_agent
 
 
 def test_reset_activity_state_clears_tool_running(
@@ -1339,9 +1871,7 @@ def test_reset_activity_state_no_op_when_not_tracked(agent_manager: AgentManager
     agent_manager.reset_activity_state("ghost")
     with agent_manager._lock:
         assert "ghost" not in agent_manager._activity_state_by_agent
-        assert "ghost" not in agent_manager._has_unmatched_tool_use_by_agent
-        assert "ghost" not in agent_manager._last_event_type_by_agent
-        assert "ghost" not in agent_manager._last_event_timestamp_by_agent
+        assert "ghost" not in agent_manager._activity_tracker_by_agent
 
 
 def test_stale_transcript_tail_after_restart_shows_idle(agent_manager: AgentManager, tmp_path: Path) -> None:
@@ -1389,6 +1919,29 @@ def test_stale_transcript_tail_after_restart_shows_idle(agent_manager: AgentMana
         assert agent_manager._agents["agent-1"].activity_state == ActivityState.IDLE.value
 
 
+def test_codex_agent_gets_a_transcript_turn_latch_tracker(agent_manager: AgentManager, tmp_path: Path) -> None:
+    """codex builds a transcript-derived tracker like claude/pi, but its dot is a latch on the
+    transcript's real-time turn markers -- NOT the (laggy/unreliable) mngr lifecycle. So a RUNNING
+    lifecycle with no open turn in the transcript reads IDLE, not THINKING. Its ledger stays for the
+    queue; the daemon-less connection attempt here is a graceful no-op."""
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1", harness=HarnessType.CODEX, state="RUNNING")
+    agent_manager._ensure_activity_tracking("agent-1")
+    with agent_manager._lock:
+        assert "agent-1" in agent_manager._activity_tracked_agents
+        assert isinstance(agent_manager._activity_tracker_by_agent.get("agent-1"), CodexActivityTracker)
+    # RUNNING lifecycle but no turn marker observed -> IDLE (the dot follows the transcript, not mngr).
+    assert agent_manager._activity_state_by_agent.get("agent-1") == ActivityState.IDLE
+    # A real-time turn_started marker lights it to THINKING.
+    agent_manager.update_session_events(
+        "agent-1", [{"type": SPECIAL_EVENT_TYPE, "kind": SpecialEventKind.TURN_STARTED.value}]
+    )
+    assert agent_manager._activity_state_by_agent.get("agent-1") == ActivityState.THINKING
+    # No daemon in the test, so the session has no live connection to tap through.
+    assert agent_manager._session_by_agent["agent-1"].is_tap_available(has_queued=True) is False
+
+
 def test_stop_activity_tracking_clears_caches(agent_manager: AgentManager, tmp_path: Path) -> None:
     state_dir = tmp_path / "agents" / "agent-1"
     state_dir.mkdir(parents=True)
@@ -1403,18 +1956,379 @@ def test_stop_activity_tracking_clears_caches(agent_manager: AgentManager, tmp_p
     with agent_manager._lock:
         assert "agent-1" in agent_manager._activity_tracked_agents
         assert "agent-1" in agent_manager._activity_state_by_agent
-        assert "agent-1" in agent_manager._has_unmatched_tool_use_by_agent
-        assert "agent-1" in agent_manager._last_event_type_by_agent
-        assert "agent-1" in agent_manager._last_event_timestamp_by_agent
+        assert "agent-1" in agent_manager._activity_tracker_by_agent
 
     agent_manager._stop_activity_tracking("agent-1")
 
     with agent_manager._lock:
         assert "agent-1" not in agent_manager._activity_tracked_agents
         assert "agent-1" not in agent_manager._activity_state_by_agent
-        assert "agent-1" not in agent_manager._has_unmatched_tool_use_by_agent
-        assert "agent-1" not in agent_manager._last_event_type_by_agent
-        assert "agent-1" not in agent_manager._last_event_timestamp_by_agent
+        assert "agent-1" not in agent_manager._activity_tracker_by_agent
+
+
+def test_update_queued_messages_caches_broadcasts_and_serializes(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A fresh queued snapshot from the watcher is cached, broadcast, and serialized."""
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1")
+    agent_manager._ensure_activity_tracking("agent-1")
+
+    listener = broadcaster.register()
+    try:
+        snapshot = [
+            {"queued_id": "q1", "content": "hello", "timestamp": "2026-08-07T00:00:01.000Z", "is_sending": False}
+        ]
+        agent_manager.update_queued_messages("agent-1", snapshot)
+
+        with agent_manager._lock:
+            assert agent_manager._agents["agent-1"].queued_messages == (
+                QueuedMessageState(queued_id="q1", content="hello", timestamp="2026-08-07T00:00:01.000Z"),
+            )
+        latest = _last_agents_updated(_drain(listener))
+        assert latest is not None
+        agents = latest["agents"]
+        assert isinstance(agents, list)
+        assert agents[0]["queued_messages"] == snapshot
+        assert agent_manager.get_agents_serialized()[0]["queued_messages"] == snapshot
+    finally:
+        agent_manager.stop()
+
+
+def test_shoulder_tap_available_reflects_queue_and_send_in_flight(agent_manager: AgentManager, tmp_path: Path) -> None:
+    """The derived ``shoulder_tap_available`` is true iff something is queued AND no send is in
+    flight (contract Shoulder-tap), recomputed at each serialize from the two authoritative
+    pieces of manager state -- never stored, so it cannot go stale."""
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1")
+    agent_manager._ensure_activity_tracking("agent-1")
+
+    def available() -> bool:
+        return bool(agent_manager.get_agents_serialized()[0]["shoulder_tap_available"])
+
+    # Empty queue -> unavailable (nothing to tap).
+    assert available() is False
+
+    # Something queued, no send in flight -> available.
+    agent_manager.update_queued_messages("agent-1", [{"queued_id": "q1", "content": "hi", "timestamp": "t"}])
+    assert available() is True
+
+    # A send in flight greys it, even with a non-empty queue (the manager consults the
+    # session's Sending state, which the session's own send maintains around delivery).
+    session = agent_manager._session_by_agent["agent-1"]
+    assert isinstance(session, FileHarnessSession)
+    session._sending.record("t1", "mid-flight")
+    assert available() is False
+
+    # Send resolved -> available again.
+    session._sending.resolve("t1")
+    assert available() is True
+
+    agent_manager.stop()
+
+
+def test_update_queued_messages_no_op_when_not_tracked(agent_manager: AgentManager) -> None:
+    """Pushing a queued snapshot for an untracked agent leaves no cache residue."""
+    agent_manager.update_queued_messages("ghost", [{"queued_id": "q", "content": "x", "timestamp": "t"}])
+    with agent_manager._lock:
+        assert "ghost" not in agent_manager._queued_messages_by_agent
+
+
+def test_working_to_idle_drains_the_queue_via_the_registered_handler(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    """A working->IDLE transition invokes the watcher's queue backstop and clears the group."""
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1")
+    agent_manager._ensure_activity_tracking("agent-1")
+
+    idle_calls: list[bool] = []
+
+    def _drain_handler() -> list[dict[str, Any]]:
+        idle_calls.append(True)
+        return []
+
+    agent_manager.register_queue_idle_handler("agent-1", _drain_handler)
+
+    try:
+        # A queued message is showing while the agent is thinking. The transcript goes
+        # THINKING first: a snapshot arriving on an idle agent is swept at arrival by
+        # ``update_queued_messages``'s pre-broadcast recompute, and in production the
+        # enqueue only ever happens mid-turn.
+        agent_manager.update_session_events("agent-1", [{"type": "user_message", "content": "go"}])
+        agent_manager.update_queued_messages("agent-1", [{"queued_id": "q1", "content": "hi", "timestamp": "t"}])
+        with agent_manager._lock:
+            assert agent_manager._activity_state_by_agent["agent-1"] == ActivityState.THINKING
+            assert len(agent_manager._agents["agent-1"].queued_messages) == 1
+
+        # The turn ends (assistant reply, no pending tools) -> IDLE, so the backstop fires.
+        agent_manager.update_session_events(
+            "agent-1",
+            [{"type": "user_message", "content": "go"}, {"type": "assistant_message", "tool_calls": []}],
+        )
+        with agent_manager._lock:
+            assert agent_manager._activity_state_by_agent["agent-1"] == ActivityState.IDLE
+            assert agent_manager._agents["agent-1"].queued_messages == ()
+        assert idle_calls == [True]
+    finally:
+        agent_manager.stop()
+
+
+def test_idle_agent_with_a_stale_queue_is_swept_without_a_transition(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    """The backstop is level-triggered: an already-IDLE agent that shows a queued
+    survivor is swept on the next recompute, even with no working->IDLE edge.
+
+    The survivor is seeded straight into the caches -- the shape of residue that
+    reached the manager with no trigger having run (a snapshot arriving through
+    ``update_queued_messages`` is already swept at arrival by its own pre-broadcast
+    recompute, covered separately)."""
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1")
+    # _ensure_activity_tracking seeds IDLE with no working->IDLE transition.
+    agent_manager._ensure_activity_tracking("agent-1")
+
+    idle_calls: list[bool] = []
+
+    def _drain_handler() -> list[dict[str, Any]]:
+        idle_calls.append(True)
+        return []
+
+    agent_manager.register_queue_idle_handler("agent-1", _drain_handler)
+    try:
+        with agent_manager._lock:
+            assert agent_manager._activity_state_by_agent["agent-1"] == ActivityState.IDLE
+            # A stale queued entry is showing on the idle agent (no turn in flight).
+            stale = (QueuedMessageState(queued_id="q1", content="stale", timestamp="t"),)
+            agent_manager._queued_messages_by_agent["agent-1"] = stale
+            agent_state = agent_manager._agents["agent-1"]
+            agent_manager._agents["agent-1"] = agent_state.model_copy_update(
+                to_update(agent_state.field_ref().queued_messages, stale)
+            )
+
+        # A plain recompute (agent still IDLE, no edge) must sweep it.
+        agent_manager._recompute_activity_state("agent-1", broadcast_on_change=False)
+        with agent_manager._lock:
+            assert agent_manager._agents["agent-1"].queued_messages == ()
+        assert idle_calls == [True]
+    finally:
+        agent_manager.stop()
+
+
+def test_queued_snapshot_arriving_while_idle_is_swept_before_broadcast(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A non-empty queued snapshot arriving while the derived state is IDLE (e.g.
+    the priming replay resurrecting a dead process's dangling enqueues for a
+    stopped agent) triggers the sweep at arrival, and the broadcast carries the
+    drained snapshot -- the phantoms are never rendered."""
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1")
+    agent_manager._ensure_activity_tracking("agent-1")
+
+    idle_calls: list[bool] = []
+
+    def _drain_handler() -> list[dict[str, Any]]:
+        idle_calls.append(True)
+        return []
+
+    agent_manager.register_queue_idle_handler("agent-1", _drain_handler)
+    listener = broadcaster.register()
+    try:
+        agent_manager.update_queued_messages("agent-1", [{"queued_id": "q1", "content": "ghost", "timestamp": "t"}])
+
+        with agent_manager._lock:
+            assert agent_manager._agents["agent-1"].queued_messages == ()
+        assert idle_calls == [True]
+        # The arrival still broadcasts, and no broadcast ever carried the phantom.
+        updates = [m for m in _drain(listener) if m.get("type") == "agents_updated"]
+        assert updates
+        for update in updates:
+            assert update["agents"][0]["queued_messages"] == []
+    finally:
+        agent_manager.stop()
+
+
+def test_stopped_codex_agent_snapshot_is_swept_before_any_broadcast(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A codex agent whose daemon generation died drops any cached queue chips before broadcast.
+
+    codex's queue is EPHEMERAL and lives with its live ledger; an abrupt daemon kill emits no idle
+    sweep, so the dead-lifecycle recompute is what clears the cached chips and settles the dot to
+    IDLE. No broadcast ever contains the phantoms.
+    """
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1", harness=HarnessType.CODEX, state="STOPPED")
+    agent_manager._ensure_activity_tracking("agent-1")
+
+    try:
+        listener = broadcaster.register()
+        # The dead generation's orphan chips arrive from a late snapshot push.
+        agent_manager.update_queued_messages("agent-1", [{"queued_id": "q1", "content": "phantom", "timestamp": "t"}])
+
+        messages = _drain(listener)
+        updates = [message for message in messages if message.get("type") == "agents_updated"]
+        assert updates, "the snapshot arrival still broadcasts (the swept state)"
+        for update in updates:
+            assert update["agents"][0]["queued_messages"] == []
+        assert updates[-1]["agents"][0]["activity_state"] == ActivityState.IDLE.value
+        with agent_manager._lock:
+            assert agent_manager._agents["agent-1"].queued_messages == ()
+    finally:
+        agent_manager.stop()
+
+
+def test_queued_snapshot_arriving_mid_turn_is_kept(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """The same snapshot arriving with seeded mid-turn signals (derive non-IDLE)
+    is kept: the pre-broadcast sweep only drains an idle agent's queue, so a live
+    agent's genuine mirror survives a backend-restart replay."""
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1")
+    agent_manager._ensure_activity_tracking("agent-1")
+
+    idle_calls: list[bool] = []
+
+    def _drain_handler() -> list[dict[str, Any]]:
+        idle_calls.append(True)
+        return []
+
+    agent_manager.register_queue_idle_handler("agent-1", _drain_handler)
+    # Seeded mid-turn signals: a user_message at the tail derives THINKING.
+    agent_manager.update_session_events("agent-1", [{"type": "user_message", "content": "go"}])
+    listener = broadcaster.register()
+    try:
+        snapshot = [{"queued_id": "q1", "content": "parked", "timestamp": "t", "is_sending": False}]
+        agent_manager.update_queued_messages("agent-1", snapshot)
+
+        with agent_manager._lock:
+            assert agent_manager._agents["agent-1"].queued_messages == (
+                QueuedMessageState(queued_id="q1", content="parked", timestamp="t"),
+            )
+        assert idle_calls == []
+        latest = _last_agents_updated(_drain(listener))
+        assert latest is not None
+        agents = latest["agents"]
+        assert isinstance(agents, list)
+        assert agents[0]["queued_messages"] == snapshot
+    finally:
+        agent_manager.stop()
+
+
+def test_unknown_lifecycle_codex_keeps_its_queued_snapshot(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """UNKNOWN is non-evidence (an unreachable provider, not a death): a codex agent's queued snapshot
+    survives it -- the queue clear only fires on a positively-dead state. The dot, now lifecycle-driven
+    like claude, cannot confirm a live turn under UNKNOWN (codex has no ``active`` marker), so it reads
+    IDLE, while the queue is left untouched."""
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1", harness=HarnessType.CODEX, state="UNKNOWN")
+    agent_manager._ensure_activity_tracking("agent-1")
+
+    try:
+        listener = broadcaster.register()
+        snapshot = [{"queued_id": "q1", "content": "still parked", "timestamp": "t", "is_sending": False}]
+        agent_manager.update_queued_messages("agent-1", snapshot)
+
+        latest = _last_agents_updated(_drain(listener))
+        assert latest is not None
+        assert latest["agents"][0]["queued_messages"] == snapshot
+        assert latest["agents"][0]["activity_state"] == ActivityState.IDLE.value
+        with agent_manager._lock:
+            assert len(agent_manager._agents["agent-1"].queued_messages) == 1
+    finally:
+        agent_manager.stop()
+
+
+def test_running_mid_turn_codex_snapshot_passes_through_unchanged(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A codex agent mid-turn (an open turn in the transcript -> THINKING) keeps its queued snapshot:
+    a non-dead agent that is working never triggers the idle stale-queue sweep, so the broadcast
+    carries the chips."""
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1", harness=HarnessType.CODEX, state="RUNNING")
+    agent_manager._ensure_activity_tracking("agent-1")
+
+    try:
+        # Mid-turn = the transcript's latest marker is turn_started -> the dot latches to THINKING.
+        agent_manager.update_session_events(
+            "agent-1", [{"type": SPECIAL_EVENT_TYPE, "kind": SpecialEventKind.TURN_STARTED.value}]
+        )
+        listener = broadcaster.register()
+        snapshot = [{"queued_id": "q1", "content": "queued mid-turn", "timestamp": "t", "is_sending": False}]
+        agent_manager.update_queued_messages("agent-1", snapshot)
+
+        latest = _last_agents_updated(_drain(listener))
+        assert latest is not None
+        assert latest["agents"][0]["queued_messages"] == snapshot
+        assert latest["agents"][0]["activity_state"] == ActivityState.THINKING.value
+        with agent_manager._lock:
+            assert len(agent_manager._agents["agent-1"].queued_messages) == 1
+    finally:
+        agent_manager.stop()
+
+
+def test_stop_activity_tracking_clears_queued_caches(agent_manager: AgentManager, tmp_path: Path) -> None:
+    """Stopping tracking drops the queued snapshot and idle handler alongside activity state."""
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1")
+    agent_manager._ensure_activity_tracking("agent-1")
+    agent_manager.register_queue_idle_handler("agent-1", lambda: [])
+    agent_manager.update_queued_messages("agent-1", [{"queued_id": "q1", "content": "hi", "timestamp": "t"}])
+
+    with agent_manager._lock:
+        assert "agent-1" in agent_manager._queued_messages_by_agent
+        assert "agent-1" in agent_manager._queue_idle_handler_by_agent
+
+    agent_manager._stop_activity_tracking("agent-1")
+
+    with agent_manager._lock:
+        assert "agent-1" not in agent_manager._queued_messages_by_agent
+        assert "agent-1" not in agent_manager._queue_idle_handler_by_agent
+
+
+def test_provider_snapshot_preserves_queued_messages_for_tracked_agent(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A re-listing observe snapshot must not wipe an already-tracked agent's queued group."""
+    test_agent_id = MngrAgentId()
+    str_id = str(test_agent_id)
+
+    state_dir = tmp_path / "agents" / str_id
+    state_dir.mkdir(parents=True)
+
+    agent = _agent_details("snapshot-agent", agent_id=test_agent_id, work_dir=str(tmp_path / "work"))
+    agent_manager._handle_observe_event(make_agent_state_event(agent))
+    agent_manager.update_queued_messages(str_id, [{"queued_id": "q1", "content": "hi", "timestamp": "t"}])
+
+    listener = broadcaster.register()
+    try:
+        agent_manager._handle_observe_event(make_full_agent_state_event([agent]))
+        latest = _last_agents_updated(_drain(listener))
+        assert latest is not None
+        agents = latest["agents"]
+        assert isinstance(agents, list)
+        assert agents[0]["id"] == str_id
+        assert agents[0]["queued_messages"] == [
+            {"queued_id": "q1", "content": "hi", "timestamp": "t", "is_sending": False}
+        ]
+    finally:
+        agent_manager.stop()
 
 
 def test_agent_removed_event_fires_removal_side_effects(agent_manager: AgentManager, tmp_path: Path) -> None:
@@ -1429,7 +2343,7 @@ def test_agent_removed_event_fires_removal_side_effects(agent_manager: AgentMana
     with agent_manager._lock:
         assert str_id in agent_manager._activity_tracked_agents
 
-    agent_manager._handle_observe_event(make_agent_removed_event(agent.id, agent.name))
+    agent_manager._handle_observe_event(make_agent_removed_event(agent.id, agent.name, agent.host.id))
 
     assert agent_manager.get_agent_by_id(str_id) is None
     with agent_manager._lock:
@@ -1554,3 +2468,221 @@ def test_full_snapshot_rebuilds_agent_set_and_broadcasts(
     msg = json.loads(raw)
     assert msg["type"] == "agents_updated"
     assert {a["id"] for a in msg["agents"]} == {str(second.id)}
+
+
+# =============================================================================
+# Offline codex model-chip resolution from the persisted raw model-list sidecar
+# =============================================================================
+
+
+def _codex_model_entry(model: str, effort: str, *, priority: bool = False) -> CodexModel:
+    """A ``model/list`` entry for the sidecar tests (id == model)."""
+    return CodexModel.model_validate(
+        {
+            "id": model,
+            "model": model,
+            "displayName": model.upper(),
+            "supportedReasoningEfforts": [{"reasoningEffort": effort}],
+            "serviceTiers": [{"id": "priority"}] if priority else [],
+        }
+    )
+
+
+def test_codex_model_options_is_none_without_a_cache_or_a_sidecar(agent_manager: AgentManager) -> None:
+    # No in-memory set and no sidecar on disk -> empty (the chip goes logo-only).
+    _seed_agent(agent_manager, "agent-1", harness=HarnessType.CODEX)
+    session = agent_manager._build_session("agent-1", HarnessType.CODEX)
+    assert session.switch_options() == ()
+
+
+def test_codex_model_options_falls_back_to_the_sidecar_when_the_cache_is_empty(
+    agent_manager: AgentManager,
+) -> None:
+    # Post-restart: the in-memory set is empty, so the option set is mapped from the persisted raw
+    # sidecar -- the whole point of the fix (the chip resolves before the daemon reconnects).
+    _seed_agent(agent_manager, "agent-1", harness=HarnessType.CODEX)
+    models = (_codex_model_entry("gpt-5.6-terra", "high", priority=True),)
+    write_codex_model_options(get_codex_model_options_path(agent_manager._get_agent_state_dir("agent-1")), models)
+    session = agent_manager._build_session("agent-1", HarnessType.CODEX)
+    options = session.switch_options()
+    assert [opt.id for opt in options] == ["gpt-5.6-terra"]
+
+
+def test_codex_model_options_in_memory_cache_wins_over_the_sidecar(agent_manager: AgentManager) -> None:
+    # Precedence: a live in-memory set always supersedes the on-disk fallback, so a reconnect's fresh
+    # list is authoritative even when a (stale) sidecar exists.
+    _seed_agent(agent_manager, "agent-1", harness=HarnessType.CODEX)
+    stale = (_codex_model_entry("gpt-old", "high"),)
+    write_codex_model_options(get_codex_model_options_path(agent_manager._get_agent_state_dir("agent-1")), stale)
+    live = codex_models_to_options((_codex_model_entry("gpt-5.6-terra", "high"),))
+    session = agent_manager._build_session("agent-1", HarnessType.CODEX)
+    session.note_offered_options(live)
+    options = session.switch_options()
+    assert [opt.id for opt in options] == ["gpt-5.6-terra"]
+
+
+def test_offline_codex_chip_matches_the_persisted_selection_from_the_sidecar(agent_manager: AgentManager) -> None:
+    # The end-to-end offline path: a valid persisted selection plus the raw sidecar (and no live
+    # daemon / empty in-memory set) resolves the chip to the real model -- not the "unrecognized
+    # model" shrug (matched is None).
+    agent_id = "agent-1"
+    _seed_agent(agent_manager, agent_id, harness=HarnessType.CODEX)
+    state_dir = agent_manager._get_agent_state_dir(agent_id)
+    state_path = get_model_state_path(HarnessType.CODEX, state_dir)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(json.dumps({"model": "gpt-5.6-terra", "effort": "high", "fast": False}))
+    write_codex_model_options(
+        get_codex_model_options_path(state_dir), (_codex_model_entry("gpt-5.6-terra", "high", priority=True),)
+    )
+
+    # Without the sidecar the identity would match nothing (the pre-fix shrug); with it, the chip resolves.
+    agent_manager._session_by_agent[agent_id] = agent_manager._build_session(agent_id, HarnessType.CODEX)
+    assert agent_manager._session_by_agent[agent_id].switch_options() != ()
+    agent_manager._recompute_model_choice(agent_id, broadcast_on_change=False)
+    choice = agent_manager._agents[agent_id].model_choice
+    assert choice is not None
+    assert choice.identity.model_id == "gpt-5.6-terra"
+    assert choice.matched is not None
+    assert choice.matched.id == "gpt-5.6-terra"
+def _capture_prioritizer_writes(manager: AgentManager, pids: dict[str, int]) -> list[tuple[int, int]]:
+    """Swap in an OOM prioritizer that captures its band writes, and return the log.
+
+    Wired to the manager's own ``get_chat_agent_ids`` / ``_read_process_started_at``
+    (the collaborators under test) but to a fake pid resolver and a capturing
+    ``set_adj``, so the manager's real seeding and lifecycle paths are exercised
+    without touching ``/proc``.
+    """
+    writes: list[tuple[int, int]] = []
+    manager._oom_prioritizer = ChatOomPrioritizer(
+        list_chat_agent_ids=manager.get_chat_agent_ids,
+        resolve_pid=lambda cid: pids.get(cid),
+        set_adj=lambda pid, adj: (writes.append((pid, adj)), True)[1],
+        resolve_process_started_at=manager._read_agent_process_started_at,
+    )
+    return writes
+
+
+def _write_client_activity_message(host_dir: Path, agent_id: str, seconds_ago: float) -> None:
+    """Append one message event, stamped ``seconds_ago`` before now, to the activity log.
+
+    Relative to now rather than a fixed date because the band the seeded stamp
+    produces depends on how long ago it was: a pinned date drifts out of the
+    freshness ramp as wall-clock advances, and every chat then reads as equally
+    abandoned.
+    """
+    timestamp = format_nanosecond_iso_timestamp(datetime.now(timezone.utc) - timedelta(seconds=seconds_ago))
+    events_path = client_activity.get_events_path(projects.primary_agent_layout_dir(host_dir, "test-agent-id"))
+    events_path.parent.mkdir(parents=True, exist_ok=True)
+    with events_path.open("a") as event_file:
+        event_file.write(
+            json.dumps(
+                {
+                    "timestamp": timestamp,
+                    "type": "message",
+                    "event_id": f"evt-{agent_id}-{timestamp}",
+                    "source": "client_activity",
+                    "client_id": "client-1",
+                    "device_kind": "desktop",
+                    "layout_slug": "desktop",
+                    "agent_id": agent_id,
+                    "agent_name": agent_id,
+                    "message_text": "hi",
+                    "is_message_truncated": False,
+                }
+            )
+            + "\n"
+        )
+
+
+def test_seeding_recovers_chat_message_recency_from_the_activity_log(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    """A restarted system interface recovers which chats were recently messaged.
+
+    The prioritizer's recency state is in-memory, so on restart it is re-seeded
+    from the durable client-activity log. Without that, every chat would look
+    never-messaged and start aging from its process-start time.
+    """
+    older = _agent_details("older-chat", labels={"user_created": "true"})
+    newer = _agent_details("newer-chat", labels={"user_created": "true"})
+    agent_manager._handle_observe_event(make_full_agent_state_event([older, newer]))
+    writes = _capture_prioritizer_writes(agent_manager, {str(older.id): 10, str(newer.id): 20})
+
+    _write_client_activity_message(tmp_path, str(older.id), seconds_ago=60 * 60)
+    _write_client_activity_message(tmp_path, str(newer.id), seconds_ago=30 * 60)
+    agent_manager._seed_oom_prioritizer()
+    agent_manager._oom_prioritizer.reapply()
+
+    latest = {pid: adj for pid, adj in writes}
+    # The more recently messaged chat outranks the other, which only holds if the
+    # log's timestamps were found, parsed, and ordered.
+    assert latest[20] < latest[10]
+
+
+def _age_process_start_marker(manager: AgentManager, agent_id: str, seconds_ago: float) -> None:
+    """Backdate the agent's ``claude_process_started`` marker, so it reads as idle."""
+    state_dir = manager._get_agent_state_dir(agent_id)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    marker = state_dir / "claude_process_started"
+    marker.touch()
+    old = time.time() - seconds_ago
+    os.utime(marker, (old, old))
+
+
+def test_observe_events_exempt_a_running_chat_from_aging_out(agent_manager: AgentManager) -> None:
+    """A chat mid-turn stays below the worker band however long it has been idle.
+
+    The observe stream is the prioritizer's only view of a chat messaged outside
+    the workspace UI, so this is what keeps such a chat -- e.g. one running a long
+    task another agent kicked off -- from being shed mid-task.
+    """
+    chat = _agent_details("busy-chat", labels={"user_created": "true"}, state=AgentLifecycleState.RUNNING)
+    chat_id = str(chat.id)
+    agent_manager._handle_observe_event(make_full_agent_state_event([chat]))
+    _age_process_start_marker(agent_manager, chat_id, seconds_ago=3 * 24 * 3600)
+    writes = _capture_prioritizer_writes(agent_manager, {chat_id: 10})
+
+    agent_manager._handle_observe_event(make_full_agent_state_event([chat]))
+    assert writes, "a running chat should have been re-tagged from the observe event"
+    assert writes[-1][1] < bands.WORKER_AGENT
+
+    # The turn ends; the chat is no longer exempt, but the turn's end counts as
+    # engagement, so it resumes aging from now rather than from three days ago.
+    stopped = _agent_details(
+        "busy-chat", agent_id=chat.id, labels={"user_created": "true"}, state=AgentLifecycleState.WAITING
+    )
+    agent_manager._handle_observe_event(make_full_agent_state_event([stopped]))
+    assert writes[-1][1] == bands.CHAT_AGENT_BASE
+
+
+def test_session_cache_heals_when_the_real_harness_arrives(agent_manager: AgentManager, tmp_path: Path) -> None:
+    """Tracking can start before observe reports the agent (the create path), caching a
+    DEFAULT-harness session; the first caller that knows the real harness must replace it,
+    or a codex agent would send through mngr's file API forever."""
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    # Tracking starts with no _agents entry -> the claude default guess.
+    agent_manager._ensure_activity_tracking("agent-1")
+    assert agent_manager._session_by_agent["agent-1"].harness is HarnessType.CLAUDE
+    # The observe stream catches up: the agent is codex; re-tracking heals both caches.
+    _seed_agent(agent_manager, "agent-1", harness=HarnessType.CODEX)
+    agent_manager._ensure_activity_tracking("agent-1")
+    assert agent_manager._session_by_agent["agent-1"].harness is HarnessType.CODEX
+    assert isinstance(agent_manager._activity_tracker_by_agent["agent-1"], CodexActivityTracker)
+
+
+def test_stop_activity_tracking_keeps_the_sending_records(agent_manager: AgentManager, tmp_path: Path) -> None:
+    """A transient discovery blip quiesces the session without destroying it: an in-flight
+    Sending record must survive so a stop after the blip still returns the text (A4) --
+    the same lifetime the watcher registry has."""
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1")
+    agent_manager._ensure_activity_tracking("agent-1")
+    session = agent_manager._session_by_agent["agent-1"]
+    assert isinstance(session, FileHarnessSession)
+    session._sending.record("t-inflight", "caught mid-send")
+
+    agent_manager._stop_activity_tracking("agent-1")
+    assert agent_manager._session_by_agent["agent-1"] is session
+    assert session.in_flight_block() == "caught mid-send"

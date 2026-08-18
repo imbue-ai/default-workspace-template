@@ -7,7 +7,9 @@ import m from "mithril";
 import { apiUrl } from "../base-path";
 import { deriveServiceOrigin } from "../origin";
 import { ReconnectBackoff } from "./backoff";
-import { getActiveLayoutSlug, getClientId, getDeviceKind } from "./ClientIdentity";
+import { getActiveProjectId, getClientId, getDeviceKind } from "./ClientIdentity";
+import type { ModelChoice } from "./ModelSettings";
+import { noteBackendArrivals } from "./OutgoingMessages";
 import { parseJsonMessage } from "./ws-json";
 
 export interface AgentState {
@@ -15,12 +17,61 @@ export interface AgentState {
   name: string;
   state: string;
   labels: Record<string, string>;
+  // The mngr ``project`` label, lifted out of ``labels`` by the backend: the
+  // project this chat was created in, which mngr propagates to the agent's own
+  // children. Null when the agent carries no label. Membership is many-to-many
+  // and this label names the chat's *originating* project only -- what a view
+  // shows is its member list, not this -- so it is a starting point for filing
+  // a chat, never an owner.
+  project?: string | null;
+  // The mngr ``display_name`` label, lifted out of ``labels`` by the backend:
+  // the human-readable name mngr holds for this agent, as the user typed it.
+  // Its canonical form (specials dropped, space runs collapsed to dashes) is
+  // the true ``name`` above, which stays the only way to address the agent.
+  // Null when mngr holds no such label, in which case ``name`` is all there is.
+  display_name?: string | null;
   work_dir: string | null;
+  // The agent's harness ("claude", "codex", ...), from the backend. Used only as
+  // a lookup key into the per-harness catalog (GET /api/harnesses): ModelBar picks
+  // the model catalog with it, and the composer guards, fast-mode prompt, and
+  // agent-auth surface all follow the popups/auth declarations the catalog
+  // carries. The frontend never branches on the harness name itself; everything
+  // else is resolved backend-side (tool calls arrive pre-labelled, activity
+  // arrives as an already-derived state).
+  harness?: string;
   // Per-agent chat activity. THINKING/TOOL_RUNNING/IDLE, or null when the
   // system interface has no per-agent activity tracking available (e.g.
   // remote agents whose state directory is not present on this host,
-  // proto-agents, non-Claude agent types).
+  // proto-agents).
   activity_state?: string | null;
+  // The agent's live model/effort/fast selection plus the catalog option it
+  // matched, pushed by the backend beside activity_state. Null when no model
+  // resolution is available. Drives the composer's model bar.
+  model_choice?: ModelChoice | null;
+  // Full snapshot of the messages currently parked in the agent's harness queue,
+  // in enqueue order, pushed by the backend beside activity_state. The chat panel
+  // renders the queued group from this; it is replaced wholesale on each push and
+  // the frontend holds no queued state of its own. Absent/empty when nothing is
+  // queued. Mirrors the backend ``QueuedMessageState`` (models.py) -- keep in step.
+  queued_messages?: QueuedMessage[];
+  // Backend-computed shoulder-tap availability (contract Shoulder-tap): true iff something is
+  // queued AND no send is in flight. This ALONE drives the shoulder-tap button's enabled state
+  // -- the frontend computes nothing about availability and there is no error path. Absent =
+  // treat as unavailable (defensive; the button only renders when the queue is non-empty anyway).
+  shoulder_tap_available?: boolean;
+}
+
+/** One message currently parked in an agent's harness queue (the wire shape of
+ *  the backend ``QueuedMessageState``). The frontend renders these verbatim and
+ *  keys the bubble on ``queued_id``; it never derives or reconciles them. */
+export interface QueuedMessage {
+  queued_id: string;
+  content: string;
+  timestamp: string;
+  // True while the backend is actively re-sending this chip (a codex shoulder-tap's
+  // interrupt+resend): it stays continuously visible but renders "Sending…" rather than as a
+  // plain queued chip, so it never blinks out (contract A1a). Absent/false = a plain queued chip.
+  is_sending?: boolean;
 }
 
 export interface AppEntry {
@@ -31,6 +82,16 @@ export interface AppEntry {
   // rows written before labels existed; ``labelForService`` falls back to the
   // name in that case.
   label: string;
+  // The app's own icon as SVG markup (a single ``<svg>`` element), registered
+  // by the app via ``forward_port.py --icon`` and validated there and again by
+  // the backend before it is sent here. Empty for apps that registered no
+  // icon, which is the common case: callers fall back to the generic app
+  // glyph.
+  icon?: string;
+  // Registered with ``forward_port.py --internal``: has a port to forward but
+  // no page of its own (e.g. owner-exec, a loopback exec server the share
+  // gateway routes through). Consumers offering apps to open must exclude it.
+  internal?: boolean;
 }
 
 // A live tmux terminal session (any tmux session whose name does NOT start
@@ -49,7 +110,7 @@ export interface TerminalSessionInfo {
 export interface ProtoAgent {
   agent_id: string;
   name: string;
-  creation_type: "worktree" | "chat";
+  creation_type: "chat";
   parent_agent_id: string | null;
 }
 
@@ -109,37 +170,120 @@ type WsEvent =
       session_name: string;
     }
   | {
-      // A named layout's content was saved (by any client). Clients with the
-      // layout active (other than the saver) re-apply it; everyone refreshes
-      // their cached layouts list.
-      type: "layout_saved";
-      layout_slug: string;
-      display_name: string;
-      saved_by_client_id: string;
-    }
-  | {
-      // A named layout was deleted; clients with it active switch to the
-      // fallback.
-      type: "layout_deleted";
-      layout_slug: string;
-      fallback_layout_slug: string;
-    }
-  | {
       // An agent asked a client (or all clients, target null) to switch to a
-      // named layout so subsequent layout ops can target it.
+      // view so subsequent layout ops can target it.
       type: "load_layout";
       layout_slug: string;
       display_name: string;
       target_client_id: string | null;
+    }
+  | {
+      // A project's content was saved (by any client). Clients mounted on that
+      // project (other than the saver) on the same device kind re-apply it;
+      // everyone re-lists.
+      type: "project_saved";
+      project_id: string;
+      saved_by_client_id: string;
+      device: string;
+    }
+  | {
+      // A project was deleted; clients mounted on it switch to the fallback.
+      type: "project_deleted";
+      project_id: string;
+      fallback_id: string;
+    }
+  | {
+      // A project's display metadata (name / color / glyph) changed. The
+      // content is untouched, so consumers only re-list.
+      type: "project_updated";
+      project_id: string;
+    }
+  | {
+      // One or more projects' member lists changed (an add, a remove, or a
+      // share). Membership is durable and independent of the layout, so this
+      // reaches clients that do not have any of these projects mounted.
+      type: "project_members_changed";
+      project_ids: string[];
+    }
+  | {
+      // A destroyed object's panel was stripped from these views' saved
+      // content (Everything included -- its id is "everything"). Any client
+      // still showing the panel drops it: the object behind it is gone
+      // machine-wide, and a live dock that kept it would autosave the dead
+      // panel straight back into the file the server just stripped.
+      // ``panel_id`` is null for kinds whose panel ids are minted per open
+      // (browser and app panes); ``ref`` is null when the destroyer knew only
+      // the panel -- each client resolves whichever it has against its own
+      // dock.
+      type: "project_panel_removed";
+      panel_id: string | null;
+      ref: string | null;
+      project_ids: string[];
+    }
+  | {
+      // One object was renamed, machine-wide; ``title`` is null when its name
+      // was cleared (or dropped because the object was destroyed). A name
+      // belongs to the object rather than to a panel, so this reaches clients
+      // showing it in a project this one never opened -- and clients listing it
+      // backgrounded, with no panel at all.
+      type: "member_title_changed";
+      ref: string;
+      title: string | null;
+    }
+  | {
+      // One object was used, machine-wide; ``at_ms`` is the epoch-millisecond
+      // moment the server stamped, or null when the entry was dropped because
+      // the object was destroyed. Recency belongs to the object rather than to
+      // a panel, so this reaches clients offering it in a launcher this one
+      // never opened.
+      type: "member_last_used_changed";
+      ref: string;
+      at_ms: number | null;
     };
 
-/** Layout registry / sync events pushed over the WebSocket. */
-export type LayoutSyncEvent =
-  | { kind: "saved"; layoutSlug: string; displayName: string; savedByClientId: string }
-  | { kind: "deleted"; layoutSlug: string; fallbackLayoutSlug: string }
-  | { kind: "load"; layoutSlug: string; displayName: string; targetClientId: string | null };
+/** Agent-driven view-switch requests pushed over the WebSocket (the ``load``
+ *  layout op). The slug names a view: a project id, or Everything. */
+export type LayoutSyncEvent = { kind: "load"; layoutSlug: string; displayName: string; targetClientId: string | null };
 
 export type LayoutSyncListener = (event: LayoutSyncEvent) => void;
+
+/**
+ * Project registry / sync events pushed over the WebSocket. The mirror of
+ * ``LayoutSyncEvent`` for projects: ``saved`` carries the writer's client id so
+ * the originator can skip its own echo, ``deleted`` carries the id everyone
+ * mounted on it should fall back to, ``updated`` is display metadata only, and
+ * ``members`` names every project whose member list moved -- which any client
+ * has to act on, mounted on those projects or not, since membership is what
+ * the sidebar lists rather than the layout. ``panel_removed`` says a destroyed
+ * object's panel was stripped from the named views' saved content (Everything
+ * included), so a client still showing that panel drops it from its live dock
+ * -- resolving by ``ref`` as well as by ``panelId``, since a browser or app
+ * pane's id is minted per open and differs from client to client.
+ */
+export type ProjectSyncEvent =
+  | { kind: "saved"; projectId: string; savedByClientId: string; device: string }
+  | { kind: "deleted"; projectId: string; fallbackId: string }
+  | { kind: "updated"; projectId: string }
+  | { kind: "members"; projectIds: string[] }
+  | { kind: "panel_removed"; panelId: string | null; ref: string | null; projectIds: string[] };
+
+export type ProjectSyncListener = (event: ProjectSyncEvent) => void;
+
+/**
+ * Notified when one object's machine-wide name changed; ``title`` is null when
+ * the object is unnamed again. Delivered to every client, mounted on a view
+ * showing the object or not, because a name is a fact about the machine rather
+ * than about any one view's layout.
+ */
+export type MemberTitleListener = (ref: string, title: string | null) => void;
+
+/**
+ * Notified when one object's machine-wide recency changed; ``atMs`` is null
+ * when the object was destroyed and its entry dropped. Delivered to every
+ * client, mounted on a view showing the object or not, because recency is a
+ * fact about the machine rather than about any one view's layout.
+ */
+export type MemberLastUsedListener = (ref: string, atMs: number | null) => void;
 
 export type LayoutOpListener = (event: LayoutOpEvent) => void;
 export type AgentsUpdatedListener = (agents: AgentState[]) => void;
@@ -161,10 +305,23 @@ export type TerminalSessionListener = (terminalId: string | null, sessionId: str
 export type AgentActivityListener = (agentId: string, previous: string | null, current: string | null) => void;
 
 let agents: AgentState[] = [];
+// The JSON of the last agents_updated payload, to skip redundant identical pushes.
+let lastAgentsSerialized = "";
 let apps: AppEntry[] = [];
+// Whether an ``apps_updated`` carrying at least one registered service has
+// arrived. Until it has, ``labelForService`` cannot resolve a name to its
+// unguessable origin label -- which is fine locally (the bare name routes
+// through the forwarder) but produces an unroutable ``<name>.<domain>`` origin
+// on a share (only ``<label>.<domain>`` is claimed on the relay), yielding a
+// 403. Callers that build share-critical origins wait via ``whenAppsLoaded``.
+let appsLoaded = false;
+let appsLoadedWaiters: (() => void)[] = [];
 let protoAgents: ProtoAgent[] = [];
 let layoutOpListeners: LayoutOpListener[] = [];
 let layoutSyncListeners: LayoutSyncListener[] = [];
+let projectSyncListeners: ProjectSyncListener[] = [];
+let memberTitleListeners: MemberTitleListener[] = [];
+let memberLastUsedListeners: MemberLastUsedListener[] = [];
 let agentsUpdatedListeners: AgentsUpdatedListener[] = [];
 let terminalSessionListeners: TerminalSessionListener[] = [];
 let agentActivityListeners: AgentActivityListener[] = [];
@@ -246,6 +403,15 @@ function scheduleReconnect(): void {
 function handleEvent(event: WsEvent): void {
   switch (event.type) {
     case "agents_updated": {
+      // The backend can broadcast the same snapshot many times during a turn (transcript
+      // churn), and a redraw on each identical push makes the model bar (its trusted-HTML
+      // logo especially) visibly flicker. Skip a push byte-identical to the last one: an
+      // idempotent update should cause no re-render.
+      const serialized = JSON.stringify(event.agents);
+      if (serialized === lastAgentsSerialized) {
+        break;
+      }
+      lastAgentsSerialized = serialized;
       // Diff against the outgoing snapshot (still in `agents` here) so we can
       // report per-agent activity transitions before replacing it. No separate
       // previous-state bookkeeping is needed -- the prior array is the record.
@@ -262,19 +428,34 @@ function handleEvent(event: WsEvent): void {
             listener(agent.id, previous, current);
           }
         }
+        // Route a newly-queued message through the optimistic-send layer so its
+        // "Sending…" bubble drops the instant it becomes a real queued entry
+        // (no overlap). Deduped by queued_id, so re-pushed snapshots are harmless.
+        const queuedIds = (agent.queued_messages ?? []).map((queued) => queued.queued_id);
+        if (queuedIds.length > 0) {
+          noteBackendArrivals(agent.id, queuedIds);
+        }
       }
       break;
     }
 
     case "apps_updated":
       apps = event.apps;
+      // The first non-empty app list means service labels are now resolvable;
+      // release anyone waiting on ``whenAppsLoaded``.
+      if (!appsLoaded && apps.length > 0) {
+        appsLoaded = true;
+        const waiters = appsLoadedWaiters;
+        appsLoadedWaiters = [];
+        for (const wake of waiters) wake();
+      }
       break;
 
     case "proto_agent_created":
       protoAgents.push({
         agent_id: event.agent_id,
         name: event.name,
-        creation_type: event.creation_type as "worktree" | "chat",
+        creation_type: event.creation_type as "chat",
         parent_agent_id: event.parent_agent_id,
       });
       break;
@@ -300,27 +481,6 @@ function handleEvent(event: WsEvent): void {
       }
       break;
 
-    case "layout_saved":
-      for (const listener of layoutSyncListeners) {
-        listener({
-          kind: "saved",
-          layoutSlug: event.layout_slug,
-          displayName: event.display_name,
-          savedByClientId: event.saved_by_client_id,
-        });
-      }
-      break;
-
-    case "layout_deleted":
-      for (const listener of layoutSyncListeners) {
-        listener({
-          kind: "deleted",
-          layoutSlug: event.layout_slug,
-          fallbackLayoutSlug: event.fallback_layout_slug,
-        });
-      }
-      break;
-
     case "load_layout":
       for (const listener of layoutSyncListeners) {
         listener({
@@ -329,6 +489,62 @@ function handleEvent(event: WsEvent): void {
           displayName: event.display_name,
           targetClientId: event.target_client_id,
         });
+      }
+      break;
+
+    case "project_saved":
+      for (const listener of projectSyncListeners) {
+        listener({
+          kind: "saved",
+          projectId: event.project_id,
+          savedByClientId: event.saved_by_client_id,
+          device: event.device,
+        });
+      }
+      break;
+
+    case "project_deleted":
+      for (const listener of projectSyncListeners) {
+        listener({
+          kind: "deleted",
+          projectId: event.project_id,
+          fallbackId: event.fallback_id,
+        });
+      }
+      break;
+
+    case "project_updated":
+      for (const listener of projectSyncListeners) {
+        listener({ kind: "updated", projectId: event.project_id });
+      }
+      break;
+
+    case "project_members_changed":
+      for (const listener of projectSyncListeners) {
+        listener({ kind: "members", projectIds: event.project_ids });
+      }
+      break;
+
+    case "project_panel_removed":
+      for (const listener of projectSyncListeners) {
+        listener({
+          kind: "panel_removed",
+          panelId: event.panel_id ?? null,
+          ref: event.ref ?? null,
+          projectIds: event.project_ids,
+        });
+      }
+      break;
+
+    case "member_title_changed":
+      for (const listener of memberTitleListeners) {
+        listener(event.ref, event.title);
+      }
+      break;
+
+    case "member_last_used_changed":
+      for (const listener of memberLastUsedListeners) {
+        listener(event.ref, event.at_ms);
       }
       break;
   }
@@ -342,7 +558,7 @@ function handleEvent(event: WsEvent): void {
  * or before an active layout has been chosen -- the next open re-reports.
  */
 export function reportClientState(previousLayoutSlug?: string): void {
-  const activeLayout = getActiveLayoutSlug();
+  const activeLayout = getActiveProjectId();
   if (ws === null || ws.readyState !== WebSocket.OPEN || !activeLayout) {
     console.info(
       `[si-ws] client_state not sent (readyState=${ws === null ? "no-socket" : ws.readyState} layout=${JSON.stringify(activeLayout)})`,
@@ -391,6 +607,20 @@ export function getAgentById(id: string): AgentState | undefined {
   return agents.find((a) => a.id === id);
 }
 
+/** The full snapshot of an agent's currently-queued messages, in enqueue order.
+ *  Empty when nothing is queued (or the agent is unknown). The single source of
+ *  queued state -- the frontend never invents or reconciles it. */
+export function getQueuedMessagesForAgent(agentId: string): QueuedMessage[] {
+  return getAgentById(agentId)?.queued_messages ?? [];
+}
+
+/** Whether the shoulder-tap is available for this agent, per the backend (contract
+ *  Shoulder-tap). This ALONE drives the button's enabled state; the frontend computes
+ *  nothing. Absent -> unavailable. */
+export function getShoulderTapAvailableForAgent(agentId: string): boolean {
+  return getAgentById(agentId)?.shoulder_tap_available === true;
+}
+
 export function removeAgentLocally(agentId: string): void {
   agents = agents.filter((a) => a.id !== agentId);
 }
@@ -408,7 +638,45 @@ export function getApps(): AppEntry[] {
  *  works. */
 export function labelForService(name: string): string {
   const app = apps.find((a) => a.name === name);
-  return app?.label || name;
+  if (app?.label) return app.label;
+  // No label for this name. Two cases: (1) the app list has not loaded yet --
+  // a race the share-critical callers avoid by awaiting ``whenAppsLoaded``, so
+  // warn loudly if it happens anyway; (2) the app list is loaded but this name
+  // is genuinely unregistered (the shell itself, or a legacy row). Either way
+  // the only fallback is the bare name, which routes locally but not on a
+  // share -- so this is a last resort, not a silent default.
+  if (!appsLoaded) {
+    console.warn(
+      `[si] labelForService("${name}") fell back to the bare name because the app list has not loaded yet; ` +
+        "the resulting origin will not route on a shared workspace. Await whenAppsLoaded() before deriving share origins.",
+    );
+  }
+  return name;
+}
+
+/** Whether the workspace's app list (service origin labels) has loaded. */
+export function areAppsLoaded(): boolean {
+  return appsLoaded;
+}
+
+/** Resolve once the app list has loaded so ``labelForService`` can return real
+ *  origin labels, or after ``timeoutMs`` as a fallback so a workspace that
+ *  never reports any app still proceeds (degrading to bare-name origins, which
+ *  route locally). Share-critical URL construction (layout restore) awaits this
+ *  so a restored terminal/service tab never mounts an unroutable bare-name
+ *  origin on a share. */
+export function whenAppsLoaded(timeoutMs = 5000): Promise<void> {
+  if (appsLoaded) return Promise.resolve();
+  return new Promise((resolve) => {
+    let settled = false;
+    const wake = (): void => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+    appsLoadedWaiters.push(wake);
+    setTimeout(wake, timeoutMs);
+  });
 }
 
 export function getProtoAgents(): ProtoAgent[] {
@@ -429,6 +697,30 @@ export function addLayoutSyncListener(listener: LayoutSyncListener): void {
 
 export function removeLayoutSyncListener(listener: LayoutSyncListener): void {
   layoutSyncListeners = layoutSyncListeners.filter((l) => l !== listener);
+}
+
+export function addProjectSyncListener(listener: ProjectSyncListener): void {
+  projectSyncListeners.push(listener);
+}
+
+export function removeProjectSyncListener(listener: ProjectSyncListener): void {
+  projectSyncListeners = projectSyncListeners.filter((l) => l !== listener);
+}
+
+export function addMemberTitleListener(listener: MemberTitleListener): void {
+  memberTitleListeners.push(listener);
+}
+
+export function removeMemberTitleListener(listener: MemberTitleListener): void {
+  memberTitleListeners = memberTitleListeners.filter((l) => l !== listener);
+}
+
+export function addMemberLastUsedListener(listener: MemberLastUsedListener): void {
+  memberLastUsedListeners.push(listener);
+}
+
+export function removeMemberLastUsedListener(listener: MemberLastUsedListener): void {
+  memberLastUsedListeners = memberLastUsedListeners.filter((l) => l !== listener);
 }
 
 export function addAgentsUpdatedListener(listener: AgentsUpdatedListener): void {
@@ -504,4 +796,52 @@ export async function allocateTerminalName(): Promise<string> {
     throw new Error("Terminal allocation returned no session_name");
   }
   return data.session_name;
+}
+
+/** A freshly-created chat agent's identity: its id and its name pair (the
+ *  canonical true name plus the human-readable display name the server minted
+ *  or accepted). */
+export interface CreatedChatAgent {
+  agentId: string;
+  name: string;
+  displayName: string;
+}
+
+/**
+ * Start a chat agent, returning the id it will be known by and its name pair.
+ *
+ * The create returns as soon as the agent has an id: the agent itself is still
+ * starting (it shows up as a proto agent until mngr registers it), which is
+ * what lets a caller open its chat tab immediately. The display name is minted
+ * server-side (the first free "Chat N" / "Codex N" / "Pi N" on the machine), so
+ * two clients creating at once cannot both mint "Chat 1"; its canonical form is
+ * the agent's mngr name and the typed form its ``display_name`` label.
+ * ``projectId`` becomes the agent's ``project`` label -- the project the chat
+ * was started in, which mngr propagates to its children -- and is empty for a
+ * chat started outside any project. Throws with the server's detail on
+ * rejection.
+ */
+export async function createChatAgent(
+  projectId: string,
+  harness: "claude" | "codex" | "pi" = "claude",
+  isFirst: boolean = false,
+): Promise<CreatedChatAgent> {
+  const response = await fetch(apiUrl("/api/agents/create-chat"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ project_id: projectId, harness, first: isFirst }),
+  });
+  if (!response.ok) {
+    const data = (await response.json().catch(() => ({}))) as { detail?: string };
+    throw new Error(data.detail ?? `HTTP ${response.status}`);
+  }
+  const created = (await response.json()) as { agent_id?: string; name?: string; display_name?: string };
+  if (!created.agent_id) {
+    throw new Error("Chat creation returned no agent id");
+  }
+  return {
+    agentId: created.agent_id,
+    name: created.name ?? "",
+    displayName: created.display_name ?? created.name ?? "",
+  };
 }

@@ -19,16 +19,32 @@ jobs:
   check-changelog:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request' && vars.ENFORCE_CHANGELOG == 'true'
+    # Take the base from the event payload, under a NON-reserved name. GitHub
+    # reserves the `GITHUB_` prefix, so a job-level `env: GITHUB_BASE_REF:` is
+    # echoed in the log but never reaches the shell -- the runner's own value
+    # wins, and on a stacked PR that was observed to be `main` rather than the
+    # parent branch. The wrong base is not a smaller answer, it is a different
+    # one: the diff grows to the whole stack and the gate demands entries for
+    # projects the PR never touched.
+    env:
+      CHANGELOG_BASE_REF: ${{ github.event.pull_request.base.ref }}
     steps:
       - uses: actions/checkout@v6
 
       - name: Fetch base branch and deepen HEAD for the changelog diff
         run: |
+          set -euo pipefail
           if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
             git fetch --no-tags --unshallow origin "$(git rev-parse HEAD)"
           fi
-          git fetch --no-tags origin \
-            "+refs/heads/${GITHUB_BASE_REF}:refs/remotes/origin/${GITHUB_BASE_REF}"
+          # Fetch into FETCH_HEAD and place the ref by hand. Passing a
+          # `+src:dst` refspec was observed NOT to create the destination on a
+          # stacked PR -- the step succeeded, `origin/<base>` did not exist, and
+          # the gate quietly diffed against origin/main instead. update-ref
+          # either writes the ref or fails.
+          git fetch --no-tags origin "refs/heads/${CHANGELOG_BASE_REF}"
+          git update-ref "refs/remotes/origin/${CHANGELOG_BASE_REF}" FETCH_HEAD
+          git rev-parse --verify "refs/remotes/origin/${CHANGELOG_BASE_REF}" >/dev/null
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -60,6 +76,14 @@ jobs:
           node-version: '20'
           cache: 'npm'
           cache-dependency-path: system/apps/system_interface/frontend/package-lock.json
+
+      # uv sync silently UPDATES a stale lock rather than failing, so without
+      # this gate a pyproject change merged without `uv lock` passes CI while
+      # shipping a lockfile that breaks every `uv sync --frozen` build path
+      # (build_workspace.sh, install_dependencies.sh). That is exactly how the
+      # original minds-v0.3.16 tag shipped with the mngr CLI broken at import.
+      - name: Check uv.lock matches pyproject
+        run: uv lock --check
 
       - name: Install Python dependencies
         run: uv sync --all-packages

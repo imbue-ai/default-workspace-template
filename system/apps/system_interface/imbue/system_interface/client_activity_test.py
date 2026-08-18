@@ -6,6 +6,7 @@ from imbue.system_interface.client_activity import append_client_connected_event
 from imbue.system_interface.client_activity import append_layout_switch_event
 from imbue.system_interface.client_activity import append_message_event
 from imbue.system_interface.client_activity import find_client_id_for_agent
+from imbue.system_interface.client_activity import last_message_time_by_agent
 from imbue.system_interface.client_activity import read_client_activity_events
 from imbue.system_interface.client_activity import summarize_client_activity
 from imbue.system_interface.client_activity import truncate_message_text
@@ -136,3 +137,19 @@ def test_find_client_id_for_agent_picks_most_recent(tmp_path: Path) -> None:
     assert find_client_id_for_agent(events, "agent-1") == "c2"
     assert find_client_id_for_agent(events, "agent-unknown") is None
     assert find_client_id_for_agent(events, "") is None
+
+
+def test_last_message_time_by_agent_keeps_each_agents_newest(tmp_path: Path) -> None:
+    """Each agent maps to its most recent message, which is what lets the OOM
+    prioritizer recover per-chat recency after a system-interface restart."""
+    events_path = _events_path(tmp_path)
+    for agent_id, text in (("agent-a", "first"), ("agent-b", "only"), ("agent-a", "second")):
+        append_message_event(events_path, "client-1", "desktop", "desktop", agent_id, agent_id, text)
+    events = read_client_activity_events(events_path)
+
+    last_by_agent = last_message_time_by_agent(events)
+
+    assert set(last_by_agent) == {"agent-a", "agent-b"}
+    # The log is chronological, so agent-a's newest entry is its last one.
+    assert last_by_agent["agent-a"] == events[-1]["timestamp"]
+    assert last_by_agent["agent-b"] == events[1]["timestamp"]

@@ -5,27 +5,33 @@ Subcommands:
     list                                List addressable services + agents (open/running flags).
     inspect                             Describe the live dockview state (compact by default; --verbose for YAML tree).
     where <ref-or-service>              Show one panel: its group's tab-mates and the refs in each cardinal direction.
-    context                             Show each browser client's recent messages + current layout.
-    load <layout>                       Switch the requesting client (or --client / all clients) onto a named layout.
+    context                             Show each browser client's recent messages, device kind, and current view.
+    views                               List the views (projects + Everything): members, per-device content, clients on each.
+    load <view>                         Switch the requesting client (or --client / all clients) onto a view.
     open <ref-or-service>               Surface a service (focus-if-open, else tab into / split next to caller's chat).
     focus <ref-or-service>              Activate the named panel within its group.
     split <ref-or-service> [...]        Add a panel relative to another panel; tabs into an existing adjacent group by default.
     close <ref-or-service>              Remove the named panel.
     move <ref-or-service> --relative-to <ref-or-service> [...]  Relocate a panel; iframe DOM is preserved.
-    rename <ref-or-service> <title>     Update the panel's tab title.
+    rename <ref-or-service> <title>     Rename the object machine-wide (the title shows in every view).
     maximize <ref-or-service>           Maximize the panel's group within the dockview.
     restore                             Exit a maximized group.
     replace-url <ref-or-service> <url>  Swap an iframe's src (service:<name>[/<path>] or https://...).
     refresh <ref-or-service>            Reload one iframe; ``service:<name>`` reloads all iframes for that service.
 
-The workspace has multiple *named layouts* (e.g. ``desktop`` / ``mobile``);
-each connected browser client has one active. Every mutating op requires an
-explicit ``--layout <name>`` and only takes effect when a connected client
-has that layout active (the op fails with a clear error otherwise -- use
-``load`` to switch a client onto the layout first). ``inspect`` / ``where``
-/ ``list`` accept an optional ``--layout`` and default to the last active
-layout. ``context`` tells you which client (and layout) recently messaged
-each agent, so you can work out which layout a request refers to.
+The workspace shows one *view* at a time: a project, or ``Everything`` (the
+unfiltered home). Each connected browser client has one active, and that view
+is the arrangement the client saves into. An op with no target goes to the view
+the connected client is looking at, which is what you want nearly always; pass
+``--view <name>`` (a project's name, or ``Everything``; ``--layout`` is the
+same flag under its old name) to address a view no client has in front, and the
+op then takes effect only when a connected client has it active (failing with a
+clear error listing the connected clients otherwise). A view is arranged per
+device -- desktop and mobile clients each save their own arrangement of it,
+sharing the members -- and the read ops accept ``--device`` to pick which
+arrangement to read (default desktop). ``context`` tells you which client (and
+view, and device kind) recently messaged each agent, so you can work out which
+one a request refers to.
 
 Every ref-accepting argument (positional ref, ``--relative-to``) accepts a bare
 service name as shorthand for ``service:<name>``. ``open`` and ``split`` also
@@ -479,18 +485,20 @@ def _emit_structured(data: Any, as_json: bool) -> None:
 # ---------- Inspect helpers (used by wait-stable, diff, where, compact view) ----------
 
 
-def _fetch_layout(layout_name: str | None = None) -> dict[str, Any] | None:
+def _fetch_layout(layout_name: str | None = None, device: str | None = None) -> dict[str, Any] | None:
     """Run ``inspect`` once and return the parsed ``layout`` block, or None on failure.
 
-    ``layout_name`` selects which named layout to inspect; None means the
-    server's last-active layout. Used by ``_wait_stable``, the diff printer,
-    and the ``where`` command. A None return means the inspect HTTP call
-    failed -- callers treat this as "state unknown" rather than "layout is
-    empty".
+    ``layout_name`` selects which view to inspect; None means the view the
+    connected client is on. ``device`` selects which device's arrangement of it
+    (None means desktop). Used by ``_wait_stable``, the diff printer, and the
+    ``where`` command. A None return means the inspect HTTP call failed --
+    callers treat this as "state unknown" rather than "layout is empty".
     """
     inspect_args: dict[str, Any] = {}
     if layout_name:
         inspect_args["layout"] = layout_name
+    if device:
+        inspect_args["device"] = device
     status, body = _post_layout("inspect", inspect_args)
     if status != 200 or not isinstance(body, dict):
         return None
@@ -1035,12 +1043,15 @@ def _neighbors_in_direction(
 # ---------- Subcommand handlers ----------
 
 
-def _layout_query_args(layout_name: str | None) -> dict[str, Any]:
-    return {"layout": layout_name} if layout_name else {}
+def _layout_query_args(layout_name: str | None, device: str | None = None) -> dict[str, str]:
+    query_args: dict[str, str] = {"layout": layout_name} if layout_name else {}
+    if device:
+        query_args["device"] = device
+    return query_args
 
 
 def _cmd_list(args: argparse.Namespace) -> int:
-    status, body = _post_layout("list", _layout_query_args(args.layout))
+    status, body = _post_layout("list", _layout_query_args(args.layout, args.device))
     if status != 200 or not isinstance(body, dict):
         return _report_failure("list", status, body)
     entries = body.get("entries", [])
@@ -1049,7 +1060,7 @@ def _cmd_list(args: argparse.Namespace) -> int:
 
 
 def _cmd_inspect(args: argparse.Namespace) -> int:
-    status, body = _post_layout("inspect", _layout_query_args(args.layout))
+    status, body = _post_layout("inspect", _layout_query_args(args.layout, args.device))
     if status != 200 or not isinstance(body, dict):
         return _report_failure("inspect", status, body)
     layout = body.get("layout", {})
@@ -1071,6 +1082,14 @@ def _cmd_context(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _cmd_views(args: argparse.Namespace) -> int:
+    status, body = _post_layout("views", {})
+    if status != 200 or not isinstance(body, dict):
+        return _report_failure("views", status, body)
+    _emit_structured({"views": body.get("views", []), "last_active_id": body.get("last_active_id")}, args.json)
+    return EXIT_OK
+
+
 def _cmd_load(args: argparse.Namespace) -> int:
     load_args: dict[str, Any] = {"layout": args.layout_name}
     if args.client:
@@ -1079,8 +1098,12 @@ def _cmd_load(args: argparse.Namespace) -> int:
     if status != 200 or not isinstance(body, dict):
         return _report_failure("load", status, body)
     target = body.get("target_client_id")
-    target_text = f"client {target}" if target else "all clients (requesting client unknown)"
-    sys.stderr.write(f"requested load of layout {body.get('layout')!r} on {target_text}\n")
+    target_text = (
+        f"client {target}" if target else "all clients (requesting client unknown)"
+    )
+    sys.stderr.write(
+        f"requested load of layout {body.get('layout')!r} on {target_text}\n"
+    )
     return EXIT_OK
 
 
@@ -1101,7 +1124,7 @@ def _cmd_where(args: argparse.Namespace) -> int:
             "chat ref (e.g. ``chat:<your-name>``) or use ``inspect`` to see all refs\n"
         )
         return EXIT_ERROR
-    layout = _fetch_layout(args.layout)
+    layout = _fetch_layout(args.layout, args.device)
     if layout is None:
         sys.stderr.write("error: inspect failed; could not locate the panel\n")
         return EXIT_ERROR
@@ -1256,7 +1279,9 @@ def _cmd_split(args: argparse.Namespace) -> int:
     # anchor must already be a live panel. (``ref`` may legitimately be a
     # closed agent / not-yet-rendered service the script is about to
     # surface; the frontend handles creation.)
-    if (err := _require_open("split", relative_to, layout_name=args.layout)) is not None:
+    if (
+        err := _require_open("split", relative_to, layout_name=args.layout)
+    ) is not None:
         return err
     payload: dict[str, Any] = {
         "ref": ref,
@@ -1330,7 +1355,9 @@ def _cmd_move(args: argparse.Namespace) -> int:
     _validate_ref(ref)
     relative_to = _normalize_ref(args.relative_to)
     _validate_ref(relative_to)
-    if (err := _require_open("move", ref, relative_to, layout_name=args.layout)) is not None:
+    if (
+        err := _require_open("move", ref, relative_to, layout_name=args.layout)
+    ) is not None:
         return err
     payload: dict[str, Any] = {
         "ref": ref,
@@ -1477,24 +1504,38 @@ def _cmd_refresh(args: argparse.Namespace) -> int:
     )
 
 
-def _add_required_layout_argument(subparser: argparse.ArgumentParser) -> None:
+def _add_mutating_view_argument(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument(
+        "--view",
         "--layout",
-        required=True,
+        dest="layout",
+        metavar="VIEW",
+        default=None,
         help=(
-            "Named layout to mutate (e.g. ``desktop`` / ``mobile``). Required: "
-            "mutating ops only apply on connected clients that have this layout "
-            "active. Use ``context`` to see each client's current layout and "
-            "``load`` to switch a client onto one."
+            "View to mutate: a project's name, or ``Everything``. Defaults to the "
+            "view the connected client is on. Mutating ops only apply on connected "
+            "clients that have the view active; use ``context`` to see each "
+            "client's current view. ``--layout`` is the same flag under its old name."
         ),
     )
 
 
-def _add_optional_layout_argument(subparser: argparse.ArgumentParser) -> None:
+def _add_read_view_argument(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument(
+        "--view",
         "--layout",
+        dest="layout",
+        metavar="VIEW",
         default=None,
-        help="Named layout to read (defaults to the last active layout)",
+        help="View (a project's name, or ``Everything``) to read; defaults to the "
+        "view the connected client is on. ``--layout`` is the same flag under its old name.",
+    )
+    subparser.add_argument(
+        "--device",
+        default=None,
+        choices=("desktop", "mobile"),
+        help="Which device's saved arrangement of the view to read (default desktop). "
+        "Views are arranged per device; membership is shared.",
     )
 
 
@@ -1506,7 +1547,7 @@ def main(argv: list[str] | None = None) -> int:
 
     p_list = subparsers.add_parser("list", help="List addressable services + agents")
     p_list.add_argument("--json", action="store_true", help="Emit JSON instead of YAML")
-    _add_optional_layout_argument(p_list)
+    _add_read_view_argument(p_list)
     p_list.set_defaults(func=_cmd_list)
 
     p_inspect = subparsers.add_parser(
@@ -1520,25 +1561,36 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Emit the full YAML tree (panel_id, URL, etc.) instead of the compact view",
     )
-    _add_optional_layout_argument(p_inspect)
+    _add_read_view_argument(p_inspect)
     p_inspect.set_defaults(func=_cmd_inspect)
 
     p_context = subparsers.add_parser(
         "context",
-        help="Show each browser client's recent messages, device kind, and current layout",
+        help="Show each browser client's recent messages, device kind, and current view",
     )
     p_context.add_argument(
         "--json", action="store_true", help="Emit JSON instead of YAML"
     )
     p_context.set_defaults(func=_cmd_context)
 
+    p_views = subparsers.add_parser(
+        "views",
+        help="List the views on this machine: every project plus Everything, "
+        "with members, per-device content, and which clients are on each",
+    )
+    p_views.add_argument(
+        "--json", action="store_true", help="Emit JSON instead of YAML"
+    )
+    p_views.set_defaults(func=_cmd_views)
+
     p_load = subparsers.add_parser(
         "load",
-        help="Switch a client onto a named layout (so mutating ops can target it)",
+        help="Switch a client onto a view (a project, or ``Everything``)",
     )
     p_load.add_argument(
         "layout_name",
-        help="The named layout to load (e.g. ``mobile``)",
+        metavar="view",
+        help="The view to put in front: a project's name, or ``Everything``",
     )
     p_load.add_argument(
         "--client",
@@ -1566,7 +1618,7 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Also include the full inspect layout under ``full_layout``",
     )
-    _add_optional_layout_argument(p_where)
+    _add_read_view_argument(p_where)
     p_where.set_defaults(func=_cmd_where)
 
     p_open = subparsers.add_parser("open", help="Surface a service in the UI")
@@ -1582,14 +1634,14 @@ def main(argv: list[str] | None = None) -> int:
             "right-side group (the default reuses adjacent groups when present)."
         ),
     )
-    _add_required_layout_argument(p_open)
+    _add_mutating_view_argument(p_open)
     p_open.set_defaults(func=_cmd_open)
 
     p_focus = subparsers.add_parser(
         "focus", help="Activate the named panel within its group"
     )
     p_focus.add_argument("ref", help="Panel ref")
-    _add_required_layout_argument(p_focus)
+    _add_mutating_view_argument(p_focus)
     p_focus.set_defaults(func=_cmd_focus)
 
     p_split = subparsers.add_parser("split", help="Open a new panel as a split")
@@ -1633,12 +1685,12 @@ def main(argv: list[str] | None = None) -> int:
             "Rejected when combined with --direction=within."
         ),
     )
-    _add_required_layout_argument(p_split)
+    _add_mutating_view_argument(p_split)
     p_split.set_defaults(func=_cmd_split)
 
     p_close = subparsers.add_parser("close", help="Remove a panel")
     p_close.add_argument("ref", help="Panel ref")
-    _add_required_layout_argument(p_close)
+    _add_mutating_view_argument(p_close)
     p_close.set_defaults(func=_cmd_close)
 
     p_move = subparsers.add_parser(
@@ -1665,22 +1717,22 @@ def main(argv: list[str] | None = None) -> int:
             "with --direction=within."
         ),
     )
-    _add_required_layout_argument(p_move)
+    _add_mutating_view_argument(p_move)
     p_move.set_defaults(func=_cmd_move)
 
-    p_rename = subparsers.add_parser("rename", help="Update a panel's tab title")
+    p_rename = subparsers.add_parser("rename", help="Rename the object machine-wide")
     p_rename.add_argument("ref", help="Panel ref")
-    p_rename.add_argument("title", help="New tab title")
-    _add_required_layout_argument(p_rename)
+    p_rename.add_argument("title", help="New title, shown in every view")
+    _add_mutating_view_argument(p_rename)
     p_rename.set_defaults(func=_cmd_rename)
 
     p_max = subparsers.add_parser("maximize", help="Maximize a panel's group")
     p_max.add_argument("ref", help="Panel ref")
-    _add_required_layout_argument(p_max)
+    _add_mutating_view_argument(p_max)
     p_max.set_defaults(func=_cmd_maximize)
 
     p_restore = subparsers.add_parser("restore", help="Exit a maximized group")
-    _add_required_layout_argument(p_restore)
+    _add_mutating_view_argument(p_restore)
     p_restore.set_defaults(func=_cmd_restore)
 
     p_replace = subparsers.add_parser("replace-url", help="Swap an iframe's src")
@@ -1689,7 +1741,7 @@ def main(argv: list[str] | None = None) -> int:
         "url",
         help="``service:<name>[/<path>]`` shorthand or a full https:// URL",
     )
-    _add_required_layout_argument(p_replace)
+    _add_mutating_view_argument(p_replace)
     p_replace.set_defaults(func=_cmd_replace_url)
 
     p_refresh = subparsers.add_parser(

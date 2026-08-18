@@ -10,12 +10,11 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 import pytest
+from imbue.mngr.api.address_parsers import parse_new_agent_location
 from imbue.mngr.cli.output_helpers import write_json_line
-from loguru import logger
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 
 from bootstrap.manager import (
-    FAST_MODE_DECISION_FILE,
     INITIAL_CHAT_AGENT_ID_FILENAME,
     TimezoneFetchError,
     _apply_container_timezone,
@@ -30,7 +29,6 @@ from bootstrap.manager import (
     _persist_initial_chat_agent_id,
     _read_host_name,
     _read_main_agent_labels,
-    _read_workspace_fast_mode_enabled,
 )
 
 # --- _configure_git_global ---
@@ -147,33 +145,38 @@ def test_read_main_agent_labels_returns_empty_when_labels_field_absent(
 # --- _build_create_chat_command ---
 
 
-def test_build_create_chat_command_includes_welcome_and_template() -> None:
-    cmd = _build_create_chat_command(
-        "my-workspace", {"workspace": "my-workspace"}, True
-    )
-    assert cmd[:3] == ["mngr", "create", "my-workspace"]
-    assert "--template" in cmd
-    assert cmd[cmd.index("--template") + 1] == "chat"
-    assert "--message" in cmd
-    assert cmd[cmd.index("--message") + 1] == "/welcome"
+def test_build_create_chat_command_stacks_first_and_chat_templates() -> None:
+    cmd = _build_create_chat_command({"workspace": "my-workspace"})
+    # `NAME@HOST`: the first chat is created as the human-readable "Chat 1" *on*
+    # the workspace's host, not under the host's own name.
+    assert cmd[:3] == ["mngr", "create", "Chat-1"]
+    # The harness rides `--type claude`; the roles ride the template stack. The
+    # `first` template owns everything unique to the opening chat (/welcome,
+    # the first=true label, fast-mode launch settings), so the argv itself must
+    # carry none of them.
+    assert cmd[cmd.index("--type") + 1] == "claude"
+    templates = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "--template"]
+    assert templates == ["first", "chat"]
+    assert "--message" not in cmd
+    assert "-S" not in cmd
     assert "--no-connect" in cmd
 
 
-def test_build_create_chat_command_includes_transfer_none() -> None:
-    """`--transfer none` makes mngr skip the per-agent worktree, so the chat
-    agent reuses the services agent's work_dir. Without it, mngr collides
-    with the services agent's existing `mngr/<host>` branch."""
-    cmd = _build_create_chat_command(
-        "my-workspace", {"workspace": "my-workspace"}, True
-    )
-    assert "--transfer" in cmd
-    assert cmd[cmd.index("--transfer") + 1] == "none"
+def test_build_create_chat_command_leaves_transfer_to_the_chat_role() -> None:
+    """The chat role template owns `transfer = none`, so the create must not pass
+    it on the command line -- a CLI value would win over the template and the two
+    could silently drift apart.
+
+    It matters that the value ends up `none`: it makes mngr skip the per-agent
+    worktree so the chat reuses the services agent's work_dir. Without it, mngr
+    collides with the services agent's existing `mngr/<host>` branch.
+    """
+    cmd = _build_create_chat_command({"workspace": "my-workspace"})
+    assert "--transfer" not in cmd
 
 
 def test_build_create_chat_command_carries_no_workspace_label() -> None:
-    cmd = _build_create_chat_command(
-        "my-workspace", {"workspace": "my-workspace"}, True
-    )
+    cmd = _build_create_chat_command({"workspace": "my-workspace"})
     # The chat agent belongs to its workspace by sharing the host; it carries no
     # workspace label (the label was removed from the naming model).
     labels = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "--label"]
@@ -184,27 +187,31 @@ def test_build_create_chat_command_tags_user_created() -> None:
     """The initial chat agent is tagged ``user_created=true`` so the OOM
     agent-tagging hook places it in the protected user-agent band (shed only as a
     last resort)."""
-    cmd = _build_create_chat_command(
-        "my-workspace", {"workspace": "my-workspace"}, True
-    )
+    cmd = _build_create_chat_command({"workspace": "my-workspace"})
     labels = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "--label"]
     assert "user_created=true" in labels
 
 
-def test_build_create_chat_command_passes_project_label_when_present(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    cmd = _build_create_chat_command(
-        "ws", {"workspace": "ws", "project": "my-project"}, True
-    )
+def test_build_create_chat_command_files_the_chat_in_the_starter_project() -> None:
+    """The first chat is filed in the workspace's starter project, never in the
+    services agent's inherited ``project`` label.
+
+    That label is mngr's own -- the repo the agent works on, e.g.
+    ``default-workspace-template`` -- and names no view. Inheriting it left the
+    first chat belonging to no project, so work it started landed in whichever
+    view the user happened to be looking at.
+    """
+    cmd = _build_create_chat_command({"workspace": "ws", "project": "default-workspace-template"})
     labels = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "--label"]
-    assert "project=my-project" in labels
+
+    assert "project=project-1" in labels
+    assert "project=default-workspace-template" not in labels
 
 
-def test_build_create_chat_command_omits_project_label_when_missing() -> None:
-    cmd = _build_create_chat_command("ws", {"workspace": "ws"}, True)
+def test_build_create_chat_command_files_the_chat_even_with_no_inherited_label() -> None:
+    cmd = _build_create_chat_command({"workspace": "ws"})
     labels = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "--label"]
-    assert all(not label.startswith("project=") for label in labels)
+    assert "project=project-1" in labels
 
 
 def test_build_create_chat_command_argv_accepted_by_live_cli() -> None:
@@ -212,92 +219,51 @@ def test_build_create_chat_command_argv_accepted_by_live_cli() -> None:
     a system/vendor/mngr rename of ``create``/its flags fails here at merge time rather
     than only at host boot. A ``workspace`` label is supplied so the builder's
     label resolution short-circuits without reading host files."""
-    argv = _build_create_chat_command(
-        "host-1", {"workspace": "ws", "project": "proj"}, True
-    )
+    argv = _build_create_chat_command({"workspace": "ws", "project": "proj"})
     assert_mngr_argv_valid(argv)
+
+
+def test_build_create_chat_command_positional_is_the_agent_name_not_a_host() -> None:
+    """The CLI contract check above is shape-only -- click sees the positional as
+    an opaque string. This runs it through mngr's own address parser to pin
+    what the positional MEANS: the new agent's name, with no host part. The
+    host is implicit (the bootstrap runs inside it); naming one here asks mngr
+    to look up a host by that name and fails with "Could not find host", which
+    leaves a booting workspace with no chat at all.
+
+    The positional also carries the CANONICAL name, with the human one riding
+    as a label, so any vendored mngr parses it -- including one predating
+    free-form names.
+    """
+    argv = _build_create_chat_command({"workspace": "ws"})
+    location = parse_new_agent_location(argv[2])
+
+    assert location.name == "Chat-1"
+    assert location.host_name is None
+
+
+def test_build_create_chat_command_labels_the_chats_human_readable_name() -> None:
+    """The name the user sees rides as the ``display_name`` label, whose
+    canonical form is the agent name above -- the invariant newer mngr enforces."""
+    cmd = _build_create_chat_command({"workspace": "ws"})
+    labels = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "--label"]
+
+    assert "display_name=Chat 1" in labels
 
 
 def test_build_create_chat_command_requests_json_output() -> None:
     """`--format json` lets the create step read back the new agent's id."""
-    cmd = _build_create_chat_command("ws", {"workspace": "ws"}, True)
+    cmd = _build_create_chat_command({"workspace": "ws"})
     assert "--format" in cmd
     assert cmd[cmd.index("--format") + 1] == "json"
-
-
-def test_build_create_chat_command_carries_the_fast_mode_setting() -> None:
-    """Chat is the only agent type that starts fast, so its create says which way."""
-    enabled = _build_create_chat_command("ws", {"workspace": "ws"}, True)
-    disabled = _build_create_chat_command("ws", {"workspace": "ws"}, False)
-    assert "agent_types.claude.settings_overrides.fastMode=true" in enabled
-    assert "agent_types.claude.settings_overrides.fastMode=false" in disabled
-    # Both forms must resolve against the live mngr config model, not just parse
-    # as CLI tokens: an unresolvable -S key path fails the create outright.
-    assert_mngr_argv_valid(enabled)
-    assert_mngr_argv_valid(disabled)
 
 
 def test_build_create_chat_command_never_pins_claude_config_dir() -> None:
     """Every claude in the workspace must resolve claude's own default
     ~/.claude, so the create argv must not export CLAUDE_CONFIG_DIR (the old
     services-agent-owned shared dir was removed in the ~/.claude cutover)."""
-    cmd = _build_create_chat_command("ws", {"workspace": "ws"}, True)
+    cmd = _build_create_chat_command({"workspace": "ws"})
     assert all("CLAUDE_CONFIG_DIR" not in arg for arg in cmd)
-
-
-# --- _read_workspace_fast_mode_enabled ---
-
-
-def test_fast_mode_defaults_on_when_no_decision_recorded(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """First boot has no decision yet, and the opening conversation should be fast."""
-    monkeypatch.chdir(tmp_path)
-    assert _read_workspace_fast_mode_enabled() is True
-
-
-def test_fast_mode_follows_a_recorded_decision(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """A workspace whose user turned fast mode off gets standard-speed chats."""
-    monkeypatch.chdir(tmp_path)
-    decision_path = tmp_path / "data" / ".state" / "fast_mode_decision.json"
-    decision_path.parent.mkdir(parents=True)
-    decision_path.write_text(
-        json.dumps({"is_decided": True, "is_fast_mode_enabled": False})
-    )
-    assert _read_workspace_fast_mode_enabled() is False
-
-    decision_path.write_text(
-        json.dumps({"is_decided": True, "is_fast_mode_enabled": True})
-    )
-    assert _read_workspace_fast_mode_enabled() is True
-
-
-def test_fast_mode_defaults_on_when_the_decision_is_unreadable(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """A corrupt or wrong-shaped decision must not silently strand new chats -- and
-    must say so, since falling back turns on the setting that costs money."""
-    monkeypatch.chdir(tmp_path)
-    decision_path = tmp_path / "data" / ".state" / "fast_mode_decision.json"
-    decision_path.parent.mkdir(parents=True)
-
-    messages: list[str] = []
-    sink_id = logger.add(lambda message: messages.append(message), level="WARNING")
-    try:
-        decision_path.write_text("{not valid json")
-        assert _read_workspace_fast_mode_enabled() is True
-
-        # Valid JSON the writer would never produce: the value decides nothing,
-        # so this is a format skew rather than a fresh workspace.
-        decision_path.write_text(json.dumps({"is_fast_mode_enabled": "no"}))
-        assert _read_workspace_fast_mode_enabled() is True
-    finally:
-        logger.remove(sink_id)
-
-    assert len(messages) == 2
-    assert all(str(FAST_MODE_DECISION_FILE) in message for message in messages)
 
 
 # --- _parse_created_agent_id ---

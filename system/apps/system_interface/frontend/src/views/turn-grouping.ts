@@ -29,6 +29,16 @@
  * of the step rather than buried in it. The turn's wrap-up reply is simply the
  * final run of ungrouped prose, rendered below the timeline.
  *
+ * A system chip (Stop-hook feedback, a background-task notice, a fleet nudge)
+ * splits a step into *stints*, and that ejection runs per stint. Prose closing a
+ * stint is a delivered reply, and the chip's POSITION is what proves it: a chip
+ * is a user-side line, so it only arrives at a request boundary, which leaves it
+ * two possible spots. Either it follows a tool result -- the stint ends in work
+ * and ejection has nothing to take -- or it follows prose, which can only happen
+ * when that response ended with text and no tool call, i.e. the agent stopped
+ * there. Work it does once woken must not retroactively bury that reply inside
+ * the step that happened to still be open.
+ *
  * A step still open when the next user message arrives carries over: it
  * re-renders at the top of the new turn, while the prior turn's node freezes at
  * its last-known state.
@@ -63,7 +73,7 @@ import {
   isNonBoundaryUserMessage,
   isPermissionRequestCall,
   isSystemChipUserMessage,
-  parsePermissionResolution,
+  resolutionOf,
 } from "./message-classification";
 
 export type StepStatus = "pending" | "active" | "done";
@@ -122,14 +132,6 @@ export interface SectionView {
   trailing_reply: AssistantMessageEvent[];
 }
 
-/** Detects a `tk`/`ticket` lifecycle invocation at the START of a Bash tool
- *  call's command, so a pure tk call (the enforced shape for `tk start`/`close`,
- *  and the batched literal-id `tk create --step ...` form) is hidden from the
- *  rendered output. A command that merely mentions a tk verb later (e.g.
- *  `git commit -m "tk close ..."`) is NOT misclassified. `super` is the
- *  plugin-bypassing form. */
-const TK_LIFECYCLE_RE = /"command"\s*:\s*"\s*(?:tk|ticket)\s+(?:super\s+)?(?:create|start|close)\b/;
-
 /** A status transition line printed by tk on every state change:
  *  `Updated <id> -> <status>` (see system/vendor/tk/ticket). Global so a batched
  *  command that flips several tickets is read in order. */
@@ -169,10 +171,11 @@ function isStepId(id: string): boolean {
 }
 
 /** True when a tool call is a tk lifecycle command (consumed as a structural
- *  marker, not rendered as work). Restricted to Bash calls whose command
- *  begins with the tk verb (see TK_LIFECYCLE_RE). */
+ *  marker, not rendered as work). The backend's parser decides -- the start-anchored
+ *  pure-invocation rule over the UNTRUNCATED command, identical for every harness --
+ *  and ships `display: "hidden"`; nothing here parses tool input. */
 function isTkLifecycleCall(tc: ToolCall): boolean {
-  return tc.tool_name === "Bash" && TK_LIFECYCLE_RE.test(tc.input_preview);
+  return tc.display === "hidden";
 }
 
 /** True when an assistant message issues a permission request. */
@@ -184,7 +187,9 @@ function hasPermissionRequest(e: AssistantMessageEvent): boolean {
  *  input_preview is not parseable -- e.g. a truncated non-tk command). tk
  *  lifecycle inputs are exempt from input truncation, so they parse cleanly. */
 function tkCommand(tc: ToolCall): string | null {
-  if (tc.tool_name !== "Bash") return null;
+  // claude's `Bash` and pi's `bash` both carry the command under the "command" key;
+  // codex's `exec` is handled via its own tk-input path, not here.
+  if (tc.tool_name !== "Bash" && tc.tool_name !== "bash") return null;
   try {
     const obj = JSON.parse(tc.input_preview) as { command?: unknown };
     return typeof obj.command === "string" ? obj.command : null;
@@ -356,6 +361,10 @@ type SectionEntry =
   /** A permission request, lifted out of any open step to render inline as a
    *  visible break (see hasPermissionRequest / the `permission` TimelineItem). */
   | { kind: "permission"; event: AssistantMessageEvent }
+  /** A collapsed system chip. It sits in the skeleton because its POSITION is
+   *  what lets the ejection pass tell a delivered reply from mid-step narration
+   *  (see collectEjectedProse). */
+  | { kind: "chip"; event: UserMessageEvent }
   | { kind: "event"; event: AssistantMessageEvent; step_id: string | null };
 
 interface SectionBuilder {
@@ -364,12 +373,9 @@ interface SectionBuilder {
   /** Step nodes in first-appearance (transcript) order. */
   steps: Map<string, StepNode>;
   step_order: string[];
-  /** Ordered skeleton of step appearances and routed events (see SectionEntry),
-   *  used to assemble timeline items in transcript order. */
+  /** Ordered skeleton of step appearances, chips and routed events (see
+   *  SectionEntry), used to assemble timeline items in transcript order. */
   entries: SectionEntry[];
-  /** Non-boundary user-message chips, with the index into `entries` they
-   *  follow, so they render at their chronological spot. */
-  chips: { event: UserMessageEvent; after: number }[];
   current_step_id: string | null;
 }
 
@@ -380,7 +386,6 @@ function newSection(user_event: UserMessageEvent | null, key: string): SectionBu
     steps: new Map(),
     step_order: [],
     entries: [],
-    chips: [],
     current_step_id: null,
   };
 }
@@ -432,7 +437,7 @@ export function buildSections(
       // section has no user bubble. If no request is open to claim it (e.g. the
       // request scrolled out of the visible transcript), fall through and let it
       // render as an ordinary user message.
-      const resolution = parsePermissionResolution(e.content ?? "");
+      const resolution = resolutionOf(e);
       if (resolution !== null && unresolvedPermissions.length > 0) {
         const resolvedEventId = unresolvedPermissions.shift() as string;
         resolutions.set(resolvedEventId, resolution);
@@ -440,16 +445,23 @@ export function buildSections(
         current = ensureSection(null, `section-after-${e.event_id}`);
         continue;
       }
-      if (isNonBoundaryUserMessage(e.content ?? "", e.is_meta)) {
+      if (isNonBoundaryUserMessage(e)) {
         // Collapsed system chips -- Stop-hook feedback, browser-fleet nudges,
-        // background task-notifications -- fold into the current section as a
-        // chip rather than opening a new turn. (A chip only ever comes from an
-        // explicit detector, never from is_meta, so this check needs no is_meta.)
-        if (current !== null && isSystemChipUserMessage(e.content ?? "")) {
-          current.chips.push({ event: e, after: current.entries.length - 1 });
+        // background task-notifications, the post-compaction summary -- fold into
+        // the current section as a chip rather than opening a new turn. The
+        // backend's display decision says which is which; nothing is re-derived
+        // here. A chip goes into the skeleton so it both renders at its
+        // chronological spot and marks the turn end that ends a step's stint
+        // (see collectEjectedProse).
+        if (isSystemChipUserMessage(e)) {
+          // The compaction summary can be the FIRST event of a resumed session,
+          // with no section open yet; open a pre-section so it is not dropped
+          // (mirrors the leading-assistant-message case below).
+          if (current === null) current = ensureSection(null, "section-pre");
+          current.entries.push({ kind: "chip", event: e });
         }
-        // The other non-boundary messages -- skill expansions, /welcome, and any
-        // is_meta framework injection (image note, resume marker, ...) -- render
+        // The other non-boundary messages -- skill expansions and hidden
+        // framework injections (/welcome, image notes, resume markers) -- render
         // nowhere on the user rail, so they are dropped here.
         continue;
       }
@@ -580,6 +592,56 @@ function openStepsAtEnd(section: SectionBuilder): string[] {
   return section.step_order.filter((id) => section.steps.get(id)!.status === "active");
 }
 
+/** Collect the in-step prose to eject as closing remarks, working stint by
+ *  stint.
+ *
+ *  A *stint* is a run of one step's events uninterrupted by a system chip.
+ *  Prose at the end of a stint is a delivered reply, proven by where the chip
+ *  sits rather than by what kind of chip it is: an injected user-side line only
+ *  arrives at a request boundary, so it either follows a tool result (the stint
+ *  ends in work, and there is nothing to eject) or follows prose, which happens
+ *  only when that response ended with text and no tool call -- the agent
+ *  stopped there. Both halves are visible in any transcript: a text block never
+ *  follows a tool_use inside one response, and an injected line never lands
+ *  directly after a text-only one. That makes the rule independent of WHEN the
+ *  harness delivers a chip, including one it queued while the agent was busy.
+ *
+ *  Without the split, work the agent does after being woken would retroactively
+ *  turn that reply into mid-step narration and bury it inside the collapsed
+ *  step -- the step happened to still be open, so the prose stopped being
+ *  "after the step's last work".
+ *
+ *  The live frontier step's LAST stint is exempt: nothing has ended it, so its
+ *  trailing prose is in-flight narration shown as a caption (see step 3). Its
+ *  earlier stints are not exempt -- a chip ended each of those.
+ */
+function collectEjectedProse(section: SectionBuilder, frontierId: string | null): Set<string> {
+  const stintsByStep = new Map<string, AssistantMessageEvent[][]>();
+  for (const id of section.step_order) stintsByStep.set(id, [[]]);
+  for (const entry of section.entries) {
+    if (entry.kind === "chip") {
+      for (const stints of stintsByStep.values()) stints.push([]);
+    } else if (entry.kind === "event" && entry.step_id !== null) {
+      const stints = stintsByStep.get(entry.step_id);
+      if (stints !== undefined) stints[stints.length - 1].push(entry.event);
+    }
+  }
+
+  const ejected = new Set<string>();
+  for (const [id, stints] of stintsByStep) {
+    for (let s = 0; s < stints.length; s++) {
+      if (id === frontierId && s === stints.length - 1) continue;
+      const stint = stints[s];
+      let lastWorkIdx = -1;
+      for (let i = 0; i < stint.length; i++) if (isWork(stint[i])) lastWorkIdx = i;
+      for (let i = lastWorkIdx + 1; i < stint.length; i++) {
+        if (isProse(stint[i])) ejected.add(stint[i].event_id);
+      }
+    }
+  }
+  return ejected;
+}
+
 /** Finalize a section: eject each step's closing prose, pull out the trailing
  *  reply, attribute narration, join decoration, append the pending roster, and
  *  emit items in transcript order. */
@@ -597,24 +659,16 @@ function finalizeSection(
   // closing remark, since the step has not closed.
   const frontierId = is_tail && !agentIsIdle ? section.current_step_id : null;
 
-  // 1. Ejection: prose spoken inside a step AFTER its last work (so it is NOT
-  //    narration, which is prose *followed* by more work in the same step). It
+  // 1. Ejection: prose spoken inside a step at the end of a stint (so it is NOT
+  //    narration, which is prose *followed* by more work in the same stint). It
   //    is the step's closing remark -- ejected from the step so it renders in
   //    the ungrouped inline stream right after the step node, rather than buried
   //    inside it. (If it is the last thing in the section it becomes the
-  //    trailing reply below; see step 2.) The live frontier step is exempt: it
-  //    has not closed, so its trailing prose is in-flight narration shown as a
-  //    caption under the step (see step 3), not a closing remark.
-  const ejectedIds = new Set<string>();
+  //    trailing reply below; see step 2.)
+  const ejectedIds = collectEjectedProse(section, frontierId);
   for (const id of section.step_order) {
-    if (id === frontierId) continue;
     const node = section.steps.get(id)!;
-    let lastWorkIdx = -1;
-    for (let i = 0; i < node.events.length; i++) if (isWork(node.events[i])) lastWorkIdx = i;
-    for (let i = lastWorkIdx + 1; i < node.events.length; i++) {
-      if (isProse(node.events[i])) ejectedIds.add(node.events[i].event_id);
-    }
-    if (ejectedIds.size > 0) node.events = node.events.filter((ev) => !ejectedIds.has(ev.event_id));
+    node.events = node.events.filter((ev) => !ejectedIds.has(ev.event_id));
   }
 
   // 2. Trailing reply: the final run of ungrouped prose -- prose entries after
@@ -643,7 +697,10 @@ function finalizeSection(
     // Prose the agent just spoke inside the live frontier step is that step's
     // in-flight narration (a caption under the still-spinning step), not the
     // turn's wrap-up reply -- the step has not closed, so there is no reply yet.
-    if (en.step_id !== null && en.step_id === frontierId) continue;
+    // Prose step 1 already ejected is exempt from that: a chip ended the stint
+    // it closed, so it is a delivered reply and belongs below the timeline even
+    // though the step it came from is still the frontier.
+    if (en.step_id !== null && en.step_id === frontierId && !ejectedIds.has(en.event.event_id)) continue;
     trailing_reply.push(en.event);
     trailingIds.add(en.event.event_id);
   }
@@ -692,24 +749,7 @@ function finalizeSection(
     }
   };
 
-  const chipsAfter = new Map<number, UserMessageEvent[]>();
-  for (const c of section.chips) {
-    const arr = chipsAfter.get(c.after) ?? [];
-    arr.push(c.event);
-    chipsAfter.set(c.after, arr);
-  }
-  const emitChips = (afterIdx: number): void => {
-    for (const c of chipsAfter.get(afterIdx) ?? []) {
-      flushUngrouped();
-      items.push({ kind: "chip", event: c });
-    }
-  };
-
-  // A chip that fires before any entry (after === -1) renders at the top.
-  emitChips(-1);
-
-  for (let i = 0; i < section.entries.length; i++) {
-    const entry = section.entries[i];
+  for (const entry of section.entries) {
     if (entry.kind === "step") {
       flushUngrouped();
       if (!emittedSteps.has(entry.id)) {
@@ -726,6 +766,11 @@ function finalizeSection(
         event: entry.event,
         resolution: resolutions.get(entry.event.event_id) ?? null,
       });
+    } else if (entry.kind === "chip") {
+      // Likewise a chip: it ends any in-flight ungrouped run and stands at its
+      // own transcript position.
+      flushUngrouped();
+      items.push({ kind: "chip", event: entry.event });
     } else if (trailingIds.has(entry.event.event_id)) {
       // Trailing reply: rendered below the timeline (see trailing_reply).
     } else if (entry.step_id === null || ejectedIds.has(entry.event.event_id)) {
@@ -733,7 +778,6 @@ function finalizeSection(
       // coalesce into an inline run. In-step events render inside the step node.
       ungrouped.push(entry.event);
     }
-    emitChips(i);
   }
   flushUngrouped();
 

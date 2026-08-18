@@ -3,11 +3,14 @@ import os
 import queue
 import socket
 import threading
+import time
 import traceback
 from collections.abc import Callable
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
+from typing import Final
+from uuid import uuid4
 
 import httpx
 from flask import Flask
@@ -17,17 +20,19 @@ from flask import send_file
 from flask import send_from_directory
 from flask_sock import Sock
 from loguru import logger as _loguru_logger
+from pydantic import Field
 from simple_websocket import ConnectionClosed
 from werkzeug.exceptions import HTTPException
 
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
+from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.mngr.errors import MngrError
 from imbue.mngr.primitives import AgentId
-from imbue.mngr_claude.claude_config import get_managed_settings_path
-from imbue.system_interface import claude_auth_endpoints
 from imbue.system_interface import client_activity
 from imbue.system_interface import latchkey_endpoints
-from imbue.system_interface import workspace_layouts
+from imbue.system_interface import member_last_used
+from imbue.system_interface import member_titles
+from imbue.system_interface import projects
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_discovery import discover_agents
 from imbue.system_interface.agent_discovery import get_host_dir
@@ -42,14 +47,18 @@ from imbue.system_interface.attachments import resolve_upload_path
 from imbue.system_interface.attachments import store_uploaded_file
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
-from imbue.system_interface.fast_mode_policy import FastModeSettingsError
-from imbue.system_interface.fast_mode_policy import get_agent_fast_mode_write_path
-from imbue.system_interface.fast_mode_policy import get_workspace_fast_mode_decision_path
-from imbue.system_interface.fast_mode_policy import read_workspace_fast_mode_decision
-from imbue.system_interface.fast_mode_policy import resolve_agent_fast_mode
-from imbue.system_interface.fast_mode_policy import write_fast_mode_setting
-from imbue.system_interface.fast_mode_policy import write_workspace_fast_mode_decision
 from imbue.system_interface.file_serving import try_serve_file
+from imbue.system_interface.harnesses.claude import auth_endpoints
+from imbue.system_interface.harnesses.claude.tap import TAP_CHORD
+from imbue.system_interface.harnesses.interrupt import restart_drain
+from imbue.system_interface.harnesses.model import ModelIdentity
+from imbue.system_interface.harnesses.model import ModelOption
+from imbue.system_interface.harnesses.registry import HARNESS_SPECS
+from imbue.system_interface.harnesses.registry import build_resolver
+from imbue.system_interface.harnesses.registry import get_catalog
+from imbue.system_interface.harnesses.registry import get_harness_spec
+from imbue.system_interface.harnesses.session import SendOutcome
+from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.layout_ops import LayoutMutex
 from imbue.system_interface.layout_ops import allocate_next_terminal_name
 from imbue.system_interface.layout_ops import allocate_terminal_panel_id
@@ -62,33 +71,31 @@ from imbue.system_interface.layout_ops import is_sessionless_browser_ref
 from imbue.system_interface.layout_ops import layout_inspect
 from imbue.system_interface.layout_ops import layout_list
 from imbue.system_interface.layout_ops import parse_tmux_sessions_output
-from imbue.system_interface.model_settings import MODEL_OPTIONS
-from imbue.system_interface.model_settings import is_valid_model_id
-from imbue.system_interface.model_settings import read_model_from_settings
-from imbue.system_interface.model_settings import supports_fast_mode
 from imbue.system_interface.models import ActivityRequest
 from imbue.system_interface.models import ActivityResponse
 from imbue.system_interface.models import AgentCreationError
 from imbue.system_interface.models import AgentListItem
 from imbue.system_interface.models import AgentListResponse
+from imbue.system_interface.models import AgentNameConflictError
+from imbue.system_interface.models import AgentRenameError
+from imbue.system_interface.models import AgentRestartError
 from imbue.system_interface.models import AttachmentError
 from imbue.system_interface.models import AttachmentUploadResponse
 from imbue.system_interface.models import CreateAgentResponse
 from imbue.system_interface.models import CreateChatRequest
-from imbue.system_interface.models import CreateWorktreeRequest
 from imbue.system_interface.models import DestroyAgentResponse
+from imbue.system_interface.models import DrainToComposerResponse
 from imbue.system_interface.models import ErrorResponse
+from imbue.system_interface.models import FastModePromptAnsweredResponse
 from imbue.system_interface.models import InterruptAgentResponse
-from imbue.system_interface.models import ModelSettingsResponse
-from imbue.system_interface.models import RandomNameResponse
+from imbue.system_interface.models import ModelOptionsResponse
+from imbue.system_interface.models import PoweredByResponse
 from imbue.system_interface.models import SendMessageRequest
 from imbue.system_interface.models import SendMessageResponse
-from imbue.system_interface.models import SetFastModeRequest
-from imbue.system_interface.models import SetModelRequest
-from imbue.system_interface.models import SetWorkspaceFastModeRequest
+from imbue.system_interface.models import SetModelChoiceRequest
+from imbue.system_interface.models import ShoulderTapAtomicResponse
 from imbue.system_interface.models import StartAgentResponse
 from imbue.system_interface.models import TerminalSessionInfo
-from imbue.system_interface.models import WorkspaceFastModeResponse
 from imbue.system_interface.plugins import get_plugin_manager
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
@@ -110,10 +117,52 @@ _DEFAULT_TAIL_COUNT = 50
 # local backend URL from this registry entry.
 _BROWSER_SERVICE_NAME = "browser"
 
+# The name this shell registers itself under. It is an app like any other in
+# the registry, so the deregister endpoint has to refuse it explicitly -- pulling
+# its own row would leave the workspace with no origin to serve the UI from.
+_SHELL_SERVICE_NAME = "system_interface"
+
+# The two member-ref forms whose objects this workspace can stop when a project
+# is deleted: a named tmux session and one browser out of the fleet. Every other
+# ref kind (a supervised app, a chat agent, an ad-hoc URL) has no stop control
+# here and is reported back untouched instead.
+_TERMINAL_REF_PREFIX = "terminal:"
+_SERVICE_REF_PREFIX = "service:"
+_BROWSER_SESSION_REF_PREFIX = f"{_SERVICE_REF_PREFIX}{_BROWSER_SERVICE_NAME}?session="
+
+# ``system/scripts/forward_port.py`` owns the app registry at
+# ``data/.state/apps.toml`` -- its lock file and its atomic replace -- so
+# deregistering an app shells out to the script rather than growing a second
+# writer of the same file here. The script imports tomlkit, a workspace-venv
+# dependency that this app does not declare, so it runs under ``uv run`` from
+# the workspace root, exactly as ``.agents/shared/scripts/serve_isolated_instance.py``
+# invokes it. The root is this package's own location walked back out of
+# ``system/apps/system_interface/imbue/system_interface``.
+_WORKSPACE_ROOT_DIRECTORY = Path(__file__).resolve().parents[5]
+_FORWARD_PORT_SCRIPT = _WORKSPACE_ROOT_DIRECTORY / "system" / "scripts" / "forward_port.py"
+
+# Generous: the registration script runs under ``uv run``, which may have to
+# resolve the workspace environment before the (near-instant) TOML rewrite.
+_FORWARD_PORT_TIMEOUT_SECONDS = 60.0
+
 # How often flask-sock sends a keepalive ping on each WebSocket connection.
 # Pings detect (and tear down) half-dead peers without any asyncio machinery --
 # each connection owns its own thread, so a wedged send only stalls that thread.
 _WS_PING_INTERVAL_SECONDS = 25
+
+# Cap on the `mngr destroy` subprocess. A destroy measured ~16s idle on this
+# class of host (mngr CLI startup + discovery + teardown + inline worktree gc)
+# and degrades under load, so the old 30s cap SIGTERMed real destroys mid-
+# teardown (a partial destroy the user saw as a 500). Every internal mngr
+# cleanup step is itself bounded, so destroy cannot hang indefinitely: a
+# generous cap only converts spurious kills into patience.
+_DESTROY_TIMEOUT_SECONDS = 120.0
+# `mngr label` is a metadata write (data.json merge), fast even on a busy host.
+_LABEL_TIMEOUT_SECONDS = 30.0
+
+# The member-ref prefix that marks an object as an mngr agent. The rest of a
+# chat ref is the agent's id (``chat:<agent-id>``, as every UI surface files it).
+_CHAT_MEMBER_REF_PREFIX = "chat:"
 
 
 class _ReflectClientSubprotocols:
@@ -209,6 +258,41 @@ def _inject_agent_id_meta_tag(html_content: str) -> str:
     return html_content.replace("</head>", f"{meta_tag}\n</head>")
 
 
+def _is_feature_flag_enabled(env_var: str) -> bool:
+    """Whether ``env_var`` is set to a truthy value (``1``/``true``/``yes``/``on``).
+
+    Every feature flag is off by default and read from the environment, so a host can
+    dark-launch a surface and turn it on (see system/supervisord.conf's single
+    ``environment=`` line, or system/scripts/flip_feature_flags.sh) without a rebuild.
+    """
+    return os.environ.get(env_var, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+# The frontend-visible feature flags: env var -> the meta-tag name the frontend reads
+# (see frontend/src/base-path.ts). Each gates only its own new-tab menu items; support
+# for what they create is never gated, so an agent made while a flag was on keeps
+# working with it off.
+_FEATURE_FLAG_META_TAGS: Final[dict[str, str]] = {
+    # The "New Codex agent" / "New Pi agent" launchers. Claude is the workspace default
+    # and is never gated.
+    "FEATURE_FLAG_ENABLE_OTHER_HARNESSES": "system-interface-enable-other-harnesses",
+    # The "New introductory <harness> chat" launchers, which stack the `first` create
+    # template (fast launch where supported, /welcome, the first=true label). Separate
+    # from the flag above: the workspace's real introductory chat is made once at boot
+    # by the bootstrap, so these exist to exercise that flow on demand.
+    "FEATURE_FLAG_ENABLE_INTRODUCTORY_AGENTS_IN_OTHER_HARNESSES": "system-interface-enable-introductory-agents",
+}
+
+
+def _inject_feature_flag_meta_tags(html_content: str) -> str:
+    """Inject every frontend-visible feature flag so the frontend can gate its launchers."""
+    meta_tags = "\n".join(
+        f'<meta name="{tag_name}" content="{str(_is_feature_flag_enabled(env_var)).lower()}">'
+        for env_var, tag_name in _FEATURE_FLAG_META_TAGS.items()
+    )
+    return html_content.replace("</head>", f"{meta_tags}\n</head>")
+
+
 def _index() -> Response:
     index_path = STATIC_DIRECTORY / "index.html"
     if index_path.exists():
@@ -218,6 +302,7 @@ def _index() -> Response:
         html_content = _inject_base_path_meta_tag(html_content, root_path)
         html_content = _inject_hostname_meta_tag(html_content)
         html_content = _inject_agent_id_meta_tag(html_content)
+        html_content = _inject_feature_flag_meta_tags(html_content)
         if config.javascript_plugin_basenames:
             html_content = _inject_plugin_script_tags(html_content, config.javascript_plugin_basenames, root_path)
         return _html_response(html_content)
@@ -403,16 +488,31 @@ def _send_message_endpoint(agent_id: str) -> Response:
         return _agent_not_found_response(agent_id)
 
     send_message_request = SendMessageRequest.model_validate(request.get_json())
-
     agent_manager: AgentManager = get_state().agent_manager
-    success = agent_manager.send_message_to_agent(AgentId(agent_info.id), send_message_request.message)
-    if not success:
-        error = ErrorResponse(detail=f"Failed to send message to agent '{agent_info.name}' (0 successful agents)")
-        return _json_response(error.model_dump(), status_code=500)
+    message_id = send_message_request.message_id or uuid4().hex
 
-    # Record which client (and layout) the message came from, so agents can
-    # attribute requests to a client via ``layout.py context``. Legacy callers
-    # without client metadata (curl, older frontends) are simply not recorded.
+    # The agent's session owns the whole send lifecycle (contract A1/A2): the file session
+    # records the message as *Sending* around mngr's blocking delivery (greying the tap button
+    # for the duration); the codex session hands it to its live ledger, passing ``message_id``
+    # only as the correlation token the committed item echoes back (Fix 2).
+    session = agent_manager.get_or_create_session(agent_info)
+    outcome = session.send(send_message_request.message, message_id)
+    if outcome is SendOutcome.NOT_READY:
+        failure = ErrorResponse(
+            detail=f"Agent '{agent_info.name}' is not ready to receive messages yet (its daemon is starting)."
+        )
+        return _json_response(failure.model_dump(), status_code=503)
+    if outcome is SendOutcome.FAILED:
+        failure = ErrorResponse(detail=f"Failed to send message to agent '{agent_info.name}' (0 successful agents)")
+        return _json_response(failure.model_dump(), status_code=500)
+
+    _record_client_message_activity(agent_info, send_message_request)
+    return _json_response(SendMessageResponse(status="ok").model_dump())
+
+
+def _record_client_message_activity(agent_info: AgentInfo, send_message_request: SendMessageRequest) -> None:
+    """Record which client (and layout) a message came from, so agents can attribute requests to a
+    client via ``layout.py context``. Legacy callers without client metadata are not recorded."""
     events_path = _client_activity_events_path()
     if events_path is not None and send_message_request.client_id:
         client_activity.append_message_event(
@@ -425,141 +525,189 @@ def _send_message_endpoint(agent_id: str) -> Response:
             message_text=send_message_request.message,
         )
 
-    return _json_response(SendMessageResponse(status="ok").model_dump())
+
+def _get_harnesses_endpoint() -> Response:
+    """The static per-harness model catalogs -- the model bar's compile-time half.
+
+    One response covers every harness (each catalog dumped verbatim: options,
+    switch mode, picker mode, powered-by label, shoulder-tap capability); the
+    frontend keys in by an agent's harness.
+
+    Every harness is always included, deliberately: ``FEATURE_FLAG_ENABLE_OTHER_HARNESSES``
+    gates only the "New <harness> agent" launchers in the new-tab menu, not harness support
+    itself. A codex or pi agent that exists some other way (``mngr create``, one made before
+    the flag was turned off) still needs its catalog for the model bar to resolve, so
+    filtering here would strand that agent's chip on an unrecognized model.
+    """
+    catalogs: dict[str, Any] = {}
+    for harness in HARNESS_SPECS:
+        # A parsed catalog (pi) reads data files; a bad/absent one must be
+        # skipped, not 500 the endpoint for every other harness.
+        try:
+            catalog = get_catalog(harness).model_dump()
+        except (OSError, ValueError) as e:
+            logger.warning("Skipping model catalog for harness {}: {}", harness.value, e)
+            continue
+        # The catalog model is the wire shape for the model bar; the popup and
+        # agent-auth declarations live on the HarnessSpec and are merged in here
+        # so one response carries everything the frontend keys by harness.
+        spec = get_harness_spec(harness)
+        catalog["popups"] = [popup.model_dump() for popup in spec.popups]
+        catalog["auth_modal"] = spec.auth_modal
+        catalog["auth_instructions"] = spec.auth_instructions
+        catalogs[harness.value] = catalog
+    return _json_response(catalogs)
 
 
-def _get_model_settings_endpoint(agent_id: str) -> Response:
-    """Return the agent's current model + fast-mode selection for the composer picker.
+def _agent_switch_options(agent_manager: "AgentManager", agent_info: AgentInfo) -> tuple[ModelOption, ...]:
+    """The option set the switch endpoint validates against: per-agent for codex, static otherwise.
 
-    The model comes from the agent's Claude Code ``settings.json`` (what ``/model``
-    writes). Fast mode is resolved separately because it is layered across two
-    settings files (see ``resolve_agent_fast_mode``). ``fast_mode_supported``
-    reflects the current model so the frontend knows whether to surface the toggle.
+    Codex has no static catalog, so its valid model/effort/fast set is per-agent -- the ONE reconciled
+    set (:meth:`AgentManager.get_codex_model_options`) that the picker offered and the chip matches
+    against, seeded on connect and refreshed by each picker-open (D2), falling back to the persisted
+    sidecar while that in-memory set is empty (post-restart). Empty (no set and no sidecar) only until
+    first populated -- a switch then fails validation, which is correct: nothing to switch to until a
+    connect, a picker-open, or a persisted sidecar supplies the account's ``model/list``. Every other
+    harness validates against its static catalog options.
+    """
+    return agent_manager.get_or_create_session(agent_info).switch_options()
+
+
+def _set_model_choice_endpoint(agent_id: str) -> Response:
+    """Apply a model/effort/fast selection by asking the agent's resolver to switch.
+
+    Harness-blind: it validates the request against the agent's option set (the static catalog for
+    claude/pi, the per-agent ``model/list`` set for codex), then hands a concrete identity to the
+    resolver's ``switch`` (which decides how to apply it). Returns 400 for an invalid selection, 404
+    for an unknown agent, 500 when the switch fails. On success it forces one authoritative
+    model-choice broadcast so the frontend reconciles.
     """
     agent_info = _find_agent(agent_id)
     if agent_info is None:
         return _agent_not_found_response(agent_id)
 
-    model = read_model_from_settings(agent_info.claude_config_dir / "settings.json")
-    fast_mode = resolve_agent_fast_mode(
-        claude_settings_path=agent_info.claude_config_dir / "settings.json",
-        managed_settings_path=get_managed_settings_path(agent_info.agent_state_dir),
-    )
-    response = ModelSettingsResponse(
-        model=model,
-        fast_mode=fast_mode,
-        fast_mode_supported=supports_fast_mode(model),
-        options=MODEL_OPTIONS,
-    )
-    return _json_response(response.model_dump())
-
-
-def _set_model_endpoint(agent_id: str) -> Response:
-    """Switch the agent's Claude Code model by sending it a ``/model <id>`` command.
-
-    Delivered through the same interactive-send path as a chat message, so the
-    running session applies the change immediately and Claude Code persists it as
-    the agent's default (its ``settings.json`` ``model`` field). Returns 400 for
-    an unknown model id, 404 for an unknown agent, 500 if the command could not be
-    delivered.
-    """
-    agent_info = _find_agent(agent_id)
-    if agent_info is None:
-        return _agent_not_found_response(agent_id)
-
-    set_model_request = SetModelRequest.model_validate(request.get_json())
-    if not is_valid_model_id(set_model_request.model):
-        error = ErrorResponse(detail=f"Unknown model '{set_model_request.model}'")
-        return _json_response(error.model_dump(), status_code=400)
-
+    req = SetModelChoiceRequest.model_validate(request.get_json())
     agent_manager: AgentManager = get_state().agent_manager
-    success = agent_manager.send_message_to_agent(AgentId(agent_info.id), f"/model {set_model_request.model}")
-    if not success:
-        error = ErrorResponse(detail=f"Failed to switch model for agent '{agent_info.name}' (0 successful agents)")
-        return _json_response(error.model_dump(), status_code=500)
+    options = _agent_switch_options(agent_manager, agent_info)
+    # The picker only ever sends a valid option id, so validation is an exact id lookup.
+    option = next((opt for opt in options if opt.id == req.model_id), None)
+    if option is None:
+        return _json_response(ErrorResponse(detail=f"Unknown model '{req.model_id}'").model_dump(), status_code=400)
 
+    # Flat guards (rather than a branch per axis-presence) so effort is validated
+    # against the model's declared set: required + in-set when the model has efforts,
+    # and absent when it does not.
+    declared_efforts = {choice.level for choice in option.efforts}
+    has_effort_axis = len(option.efforts) > 0
+    if has_effort_axis and req.effort is None:
+        return _json_response(ErrorResponse(detail="This model requires an effort level").model_dump(), 400)
+    if has_effort_axis and req.effort is not None and req.effort not in declared_efforts:
+        return _json_response(
+            ErrorResponse(detail=f"'{req.effort}' is not a valid effort for '{req.model_id}'").model_dump(), 400
+        )
+    if not has_effort_axis and req.effort is not None:
+        return _json_response(ErrorResponse(detail=f"'{req.model_id}' has no effort axis").model_dump(), 400)
+    if req.fast and not option.supports_fast:
+        return _json_response(ErrorResponse(detail=f"'{req.model_id}' does not support fast mode").model_dump(), 400)
+
+    # The live read is harness-neutral (shared reader), so the resolver -- which now owns
+    # only the switch/offer side -- is built inline from agent_info rather than cached.
+    resolver = build_resolver(agent_info)
+
+    identity = ModelIdentity(model_id=req.model_id, effort=req.effort, fast=req.fast)
+    result = resolver.switch(
+        identity, frozenset(req.axes), lambda line: agent_manager.send_message_to_agent(AgentId(agent_info.id), line)
+    )
+    if not result.ok:
+        detail = result.detail or f"Failed to switch model for agent '{agent_info.name}'"
+        return _json_response(ErrorResponse(detail=detail).model_dump(), status_code=500)
+
+    # Force one authoritative broadcast so the optimistic pick reconciles even when
+    # the resolved value is unchanged (see H1 in the model-bar plan).
+    agent_manager.refresh_model_choice(agent_info.id)
     return _json_response(SendMessageResponse(status="ok").model_dump())
 
 
-def _set_fast_mode_endpoint(agent_id: str) -> Response:
-    """Toggle the agent's fast mode by sending it a ``/fast on|off`` command.
+def _get_model_options_endpoint(agent_id: str) -> Response:
+    """The models this agent should OFFER in the picker right now.
 
-    Same interactive-send path as ``_set_model_endpoint``, which changes the running
-    session. Claude Code does not leave a usable record of the result -- it deletes
-    the ``fastMode`` key on ``/fast off`` instead of writing false -- so the change
-    is also written into the agent's own launch settings. That is what the composer's
-    toggle reads back, and what the agent comes back with if it restarts.
+    Recomputed per request (the frontend calls it each time the picker opens). Two shapes:
 
-    Fast mode is an Opus-only capability, so the frontend only surfaces the toggle
-    for Opus; this endpoint does not re-check the model, matching how ``/fast``
-    itself behaves.
+    * a DYNAMIC harness (codex) has no static catalog, so it returns the FULL per-agent
+      :class:`ModelOption`s (``options``) -- id, label, per-model efforts, fast support -- fetched
+      fresh from ``model/list`` on this open (D2), so a subscription-tier change shows up live.
+    * a static/catalog-backed harness (claude, pi) returns ``models`` -- the ids to offer, matched
+      back to the static catalog for labels/efforts (``null`` = offer the whole catalog). This
+      reflects an account-gated set (pi's authenticated models) on a fresh login without a refetch.
     """
     agent_info = _find_agent(agent_id)
     if agent_info is None:
         return _agent_not_found_response(agent_id)
+    resolver = build_resolver(agent_info)
+    dynamic_options = resolver.list_offered_options()
+    if dynamic_options is not None:
+        # Reconcile (D2): this fresh per-open fetch becomes the ONE per-agent set the chip-match and
+        # the switch-validation also read, so immediately after this open all three agree. A failed
+        # fetch (empty) is NOT stored -- it must not clobber the last-known set (seeded on connect or
+        # from an earlier open) that the chip is still matching against. The RAW list behind these
+        # mapped options is also written through to the codex sidecar inside the resolver's
+        # ``list_offered_options`` (where the raw ``model/list`` is still in hand), so the chip
+        # resolves offline after a restart.
+        if dynamic_options:
+            get_state().agent_manager.get_or_create_session(agent_info).note_offered_options(dynamic_options)
+        return _json_response(ModelOptionsResponse(options=dynamic_options).model_dump())
+    return _json_response(ModelOptionsResponse(models=resolver.list_offered_models()).model_dump())
 
-    set_fast_mode_request = SetFastModeRequest.model_validate(request.get_json())
-    command = "/fast on" if set_fast_mode_request.enabled else "/fast off"
 
+def _get_powered_by_endpoint(agent_id: str) -> Response:
+    """The agent's "Powered by" credit label -- a per-agent path decoupled from the model bar.
+
+    The label is a pure function of the agent's harness, so it must never blink with the live
+    model choice or wait on the catalog fetch. This resolves the harness backend-side and
+    returns its product name directly, so the frontend can render the credit from ``agentId``
+    alone, independent of ``model_choice`` and of ``GET /api/harnesses``. 404 for an unknown
+    agent (e.g. a proto-agent), which the frontend treats as "don't show the credit yet".
+    """
+    agent_info = _find_agent(agent_id)
+    if agent_info is None:
+        return _agent_not_found_response(agent_id)
+    return _json_response(PoweredByResponse(label=get_catalog(agent_info.harness).powered_by_label).model_dump())
+
+
+def _build_fast_mode_answered_label_command(agent_name: str) -> list[str]:
+    """Build the ``mngr label`` argv that latches the fast-mode prompt as answered.
+
+    Pure: argv assembly only, so the repo<->mngr CLI contract is testable
+    against the live CLI without a subprocess (see ``server_test.py``).
+    """
+    return ["mngr", "label", agent_name, "-l", "fast_mode_prompt_answered=true"]
+
+
+def _mark_fast_mode_prompt_answered(agent_id: str) -> Response:
+    """Latch the fast-mode prompt as answered for one agent, via an agent label.
+
+    The prompt asks once per agent, ever: any exit from the modal routes here, so
+    the label is the durable record that the question was put to the user. The
+    label reaches the frontend with the next observe relist; the frontend keeps
+    its own in-session mark so the prompt cannot re-fire in the meantime.
+    """
     agent_manager: AgentManager = get_state().agent_manager
-    success = agent_manager.send_message_to_agent(AgentId(agent_info.id), command)
-    if not success:
-        error = ErrorResponse(detail=f"Failed to set fast mode for agent '{agent_info.name}' (0 successful agents)")
-        return _json_response(error.model_dump(), status_code=500)
+    agent_state = agent_manager.get_agent_by_id(agent_id)
+    if agent_state is None:
+        error = ErrorResponse(detail=f"Agent '{agent_id}' not found")
+        return _json_response(error.model_dump(), status_code=404)
 
-    write_path = get_agent_fast_mode_write_path(agent_info.claude_config_dir, agent_info.agent_state_dir)
-    try:
-        write_fast_mode_setting(write_path, set_fast_mode_request.enabled)
-    except (FastModeSettingsError, OSError) as e:
-        # The running session already took the command, so report the part that
-        # failed: the setting will revert the next time the agent launches.
-        logger.opt(exception=e).error("Failed to record fast mode for agent {} at {}", agent_info.name, write_path)
-        error = ErrorResponse(detail=f"Set fast mode for agent '{agent_info.name}' but could not record it")
-        return _json_response(error.model_dump(), status_code=500)
+    result = run_local_command_modern_version(
+        command=_build_fast_mode_answered_label_command(agent_state.name),
+        cwd=None,
+        is_checked=False,
+        timeout=_LABEL_TIMEOUT_SECONDS,
+    )
+    if result.returncode != 0:
+        detail = f"Failed to record the fast-mode answer for '{agent_state.name}': {result.stderr.strip()}"
+        return _json_response(ErrorResponse(detail=detail).model_dump(), status_code=500)
 
-    return _json_response(SendMessageResponse(status="ok").model_dump())
-
-
-def _workspace_fast_mode_decision_path() -> Path | None:
-    """Where this workspace records its fast-mode decision, or None outside a workspace."""
-    work_dir = os.environ.get("MNGR_AGENT_WORK_DIR", "")
-    if not work_dir:
-        return None
-    return get_workspace_fast_mode_decision_path(Path(work_dir))
-
-
-def _get_workspace_fast_mode_endpoint() -> Response:
-    """Return the workspace's fast-mode decision, or null if it has not answered.
-
-    The frontend uses this to decide whether a chat still owes the user the
-    fast-mode prompt.
-    """
-    decision_path = _workspace_fast_mode_decision_path()
-    decision = None if decision_path is None else read_workspace_fast_mode_decision(decision_path)
-    return _json_response(WorkspaceFastModeResponse(fast_mode=decision).model_dump())
-
-
-def _set_workspace_fast_mode_endpoint() -> Response:
-    """Record the user's answer to the fast-mode prompt for the whole workspace.
-
-    Every chat agent created from here on launches with this setting, and no chat
-    prompts again. Applying it to the *running* agent is a separate call to the
-    per-agent fast endpoint, so the two stay independently testable.
-    """
-    decision_path = _workspace_fast_mode_decision_path()
-    if decision_path is None:
-        error = ErrorResponse(detail="Cannot record a fast-mode decision outside a workspace")
-        return _json_response(error.model_dump(), status_code=500)
-
-    set_request = SetWorkspaceFastModeRequest.model_validate(request.get_json())
-    try:
-        write_workspace_fast_mode_decision(decision_path, set_request.enabled)
-    except OSError as e:
-        logger.opt(exception=e).error("Failed to record the workspace fast-mode decision")
-        error = ErrorResponse(detail="Failed to record the fast-mode decision")
-        return _json_response(error.model_dump(), status_code=500)
-
-    return _json_response(WorkspaceFastModeResponse(fast_mode=set_request.enabled).model_dump())
+    return _json_response(FastModePromptAnsweredResponse(status="ok").model_dump())
 
 
 def _activity_endpoint() -> Response:
@@ -656,15 +804,8 @@ def _interrupt_agent_endpoint(agent_id: str) -> Response:
 
     agent_name = agent_info.name
 
-    result = run_local_command_modern_version(
-        command=["mngr", "start", agent_name, "--restart", "--no-resume"],
-        cwd=None,
-        is_checked=False,
-        timeout=60.0,
-    )
-    success = result.returncode == 0
-    output = result.stdout.strip() if success else result.stderr.strip()
-    if not success:
+    is_restarted, output = _restart_agent_process(agent_name)
+    if not is_restarted:
         error = ErrorResponse(detail=f"Failed to interrupt agent '{agent_name}': {output}")
         return _json_response(error.model_dump(), status_code=500)
 
@@ -675,6 +816,189 @@ def _interrupt_agent_endpoint(agent_id: str) -> Response:
     get_state().agent_manager.reset_activity_state(agent_id)
 
     return _json_response(InterruptAgentResponse(status="ok").model_dump())
+
+
+def _restart_agent_process(agent_name: str) -> tuple[bool, str]:
+    """Run ``mngr start <agent> --restart --no-resume``; return ``(is_restarted, output)``.
+
+    Stops the agent (ending any in-progress turn) and relaunches it fresh without
+    a resume prompt: conversation history is preserved (each harness resumes its
+    own on-disk session) and the in-harness queue is dropped by the SIGKILL.
+    ``output`` is stdout on success, stderr on failure (for the caller's message).
+    Refused by mngr for an ``is_primary=true`` agent; callers guard that with a
+    clearer 400 before calling.
+    """
+    result = run_local_command_modern_version(
+        command=["mngr", "start", agent_name, "--restart", "--no-resume"],
+        cwd=None,
+        is_checked=False,
+        timeout=60.0,
+    )
+    is_restarted = result.returncode == 0
+    return is_restarted, (result.stdout.strip() if is_restarted else result.stderr.strip())
+
+
+def _refuse_queue_action_on_primary(agent_info: AgentInfo, action: str) -> Response | None:
+    """A 400 refusing a restart-based queue action on the primary services agent, or None.
+
+    Both queue actions restart the agent; restarting the ``is_primary=true``
+    services agent would tear down the workspace's supervised services. The
+    frontend hides primary agents, so this is defense-in-depth for direct callers.
+    """
+    if agent_info.labels.get("is_primary") == "true":
+        error = ErrorResponse(
+            detail=(
+                f"Refusing to {action} agent '{agent_info.name}': it carries the "
+                "is_primary=true label (services agent for this workspace)"
+            )
+        )
+        return _json_response(error.model_dump(), status_code=400)
+    return None
+
+
+def _interrupt_capabilities(
+    agent_info: AgentInfo,
+) -> tuple[AgentSessionWatcher, Callable[[], tuple[bool, str]], Callable[[], None]]:
+    """The harness-neutral capabilities a queue action binds for one agent: the queue mirror,
+    a process restart (``mngr start --restart --no-resume``), and an activity-settle.
+
+    Shared by the restart-drain flush and the (per-harness) stop button, mirroring how the
+    switch endpoint binds its ``send`` callback.
+    """
+    state = get_state()
+    watcher = state.get_or_create_watcher(agent_info)
+    return (
+        watcher,
+        lambda: _restart_agent_process(agent_info.name),
+        lambda: state.agent_manager.reset_activity_state(agent_info.id),
+    )
+
+
+def _flush_queue_endpoint(agent_id: str) -> Response:
+    """Shoulder tap: restart the agent and resend the whole queue as one turn.
+
+    Combining is required: after the restart the agent is idle, so sending the
+    messages one at a time would let the first open a turn and the rest re-queue.
+    Returns 404 for an unknown agent, 400 for the primary services agent, 500 if
+    the restart or the resend fails, 200 otherwise.
+    """
+    agent_info = _find_agent(agent_id)
+    if agent_info is None:
+        return _agent_not_found_response(agent_id)
+    refusal = _refuse_queue_action_on_primary(agent_info, "flush the queue of")
+    if refusal is not None:
+        return refusal
+
+    watcher, restart_process, settle_activity = _interrupt_capabilities(agent_info)
+    # Empty-queue short-circuit lives HERE (not in the shared restart-drain): a flush with
+    # nothing queued would resend nothing, so it is a clean no-op. The stop button, by contrast,
+    # still interrupts an empty-queue turn -- so the restart-drain no longer short-circuits.
+    if not watcher.get_queued_block():
+        return _json_response(SendMessageResponse(status="ok").model_dump())
+
+    try:
+        block = restart_drain(agent_info, watcher, restart_process, settle_activity)
+    except AgentRestartError as e:
+        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=500)
+
+    if block:
+        agent_manager: AgentManager = get_state().agent_manager
+        is_sent = agent_manager.send_message_to_agent(AgentId(agent_info.id), block)
+        if not is_sent:
+            error = ErrorResponse(detail=f"Failed to resend queued messages to agent '{agent_info.name}'")
+            return _json_response(error.model_dump(), status_code=500)
+
+    return _json_response(SendMessageResponse(status="ok").model_dump())
+
+
+def _shoulder_tap_atomic_endpoint(agent_id: str) -> Response:
+    """Atomic shoulder tap: merge the queue into the live turn without restarting the agent.
+
+    The gentle counterpart to :func:`_flush_queue_endpoint`: rather than SIGKILL-restart the
+    agent and resend the queue, the agent's session delivers the harness's native tap and the
+    agent stays alive. HOW each harness taps lives with its implementation -- claude's cancel
+    chord in ``harnesses/claude/tap.py`` (``ClaudeAtomicShoulderTap``), pi's locked
+    ``pi_inbox`` flush sentinel in ``harnesses/pi_coding/model.py`` (``PiAtomicShoulderTap``),
+    codex's live-ledger interrupt+resend in ``harnesses/codex/session.py`` -- not here.
+
+    Returns 404 for an unknown agent, 400 for a harness whose catalog declares no atomic tap
+    or for the primary services agent, an error status when the tap failed (e.g. a claude
+    dialog block maps to 409), and 200 otherwise with the harness's own verdict (``tapped``,
+    ``no_open_turn``, or the benign ``send_in_flight`` no-op a raced send produces).
+    """
+    agent_info = _find_agent(agent_id)
+    if agent_info is None:
+        return _agent_not_found_response(agent_id)
+    if not get_catalog(agent_info.harness).native_atomic_shoulder_tap_possible:
+        error = ErrorResponse(
+            detail=(
+                f"Agent '{agent_info.name}' runs the {agent_info.harness.value} harness, which does not "
+                "support an atomic shoulder tap"
+            )
+        )
+        return _json_response(error.model_dump(), status_code=400)
+    refusal = _refuse_queue_action_on_primary(agent_info, "shoulder-tap the queue of")
+    if refusal is not None:
+        return refusal
+
+    # The session dispatches to the harness's native tap (claude's chord executor, pi's locked
+    # inbox sentinel, codex's live-ledger interrupt+resend). A retryable refusal racing an
+    # in-flight send is a benign 200 no-op status, never an error dialog -- the pushed
+    # ``shoulder_tap_available`` flag already greys the button while anything is Sending.
+    state = get_state()
+    watcher = state.get_or_create_watcher(agent_info)
+    agent_manager = state.agent_manager
+    outcome = agent_manager.get_or_create_session(agent_info).shoulder_tap(
+        agent_info,
+        watcher,
+        press_chord=lambda: agent_manager.press_key_chord_on_agent(AgentId(agent_info.id), TAP_CHORD),
+        send_recovery=lambda text: agent_manager.send_message_to_agent(AgentId(agent_info.id), text),
+    )
+    if outcome.error_detail is not None:
+        error = ErrorResponse(detail=outcome.error_detail)
+        return _json_response(error.model_dump(), status_code=outcome.error_status_code)
+    return _json_response(ShoulderTapAtomicResponse(status=outcome.status, block=outcome.block).model_dump())
+
+
+def _drain_to_composer_endpoint(agent_id: str) -> Response:
+    """Interrupt to composer: interrupt the running turn and hand the queued block back, unsent.
+
+    Dispatches through the harness's registered interrupt-to-composer implementation (the base
+    restart-drain by default; native overrides for pi, codex, and claude's empty-queue chord),
+    which returns the concatenated block the frontend drops into the composer for the user to
+    edit and send, rather than resent. Unlike the flush there is NO empty-queue short-circuit: a
+    stop mid-turn with nothing queued still interrupts (block comes back empty). The endpoint
+    binds the harness-neutral capabilities -- watcher, restart, activity-settle, and the native
+    cancel keypress (routed through mngr's locked message API, like the tap) -- and the
+    implementation uses whichever it needs. Returns 404 for an unknown agent, 400 for the primary
+    services agent, 500 if the interrupt fails, 200 with ``{block}`` otherwise.
+    """
+    agent_info = _find_agent(agent_id)
+    if agent_info is None:
+        return _agent_not_found_response(agent_id)
+    refusal = _refuse_queue_action_on_primary(agent_info, "interrupt the queue of")
+    if refusal is not None:
+        return refusal
+
+    agent_manager: AgentManager = get_state().agent_manager
+
+    watcher, restart_process, settle_activity = _interrupt_capabilities(agent_info)
+    try:
+        block = agent_manager.get_or_create_session(agent_info).interrupt_to_composer(
+            agent_info,
+            watcher,
+            restart_process,
+            settle_activity,
+            lambda: agent_manager.press_key_chord_on_agent(AgentId(agent_info.id), TAP_CHORD),
+        )
+    except AgentRestartError as e:
+        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=500)
+    except OSError as e:
+        logger.opt(exception=e).error("Failed to record the interrupt for agent {}", agent_info.name)
+        error = ErrorResponse(detail=f"Failed to record the interrupt for agent '{agent_info.name}'")
+        return _json_response(error.model_dump(), status_code=500)
+
+    return _json_response(DrainToComposerResponse(block=block).model_dump())
 
 
 def _get_subagent_events(agent_id: str, subagent_session_id: str) -> Response:
@@ -735,7 +1059,7 @@ def _primary_agent_layout_dir() -> Path | None:
     agent_id = os.environ.get("MNGR_AGENT_ID", "")
     if not agent_id:
         return None
-    return get_host_dir() / "agents" / agent_id / "workspace_layout"
+    return projects.primary_agent_layout_dir(get_host_dir(), agent_id)
 
 
 def _client_activity_events_path() -> Path | None:
@@ -760,52 +1084,252 @@ def _parse_json_object_body() -> dict[str, Any] | Response:
     return body
 
 
-def _default_layout_infos() -> list[dict[str, Any]]:
-    """The two default layout names, for dev/test setups with no layout dir."""
+def _default_project_infos() -> list[dict[str, Any]]:
+    """The starter project, for dev/test setups with no layout dir.
+
+    Mirrors the entry ``projects.py`` seeds into a real registry; nothing is
+    persisted in that case, so the display metadata is inlined here rather
+    than read back from a file that will never exist.
+    """
     return [
-        workspace_layouts.LayoutInfo(slug=slug, display_name=slug, has_content=False).model_dump()
-        for slug in (workspace_layouts.DESKTOP_LAYOUT_SLUG, workspace_layouts.MOBILE_LAYOUT_SLUG)
+        projects.ProjectInfo(
+            project_id=projects.DEFAULT_PROJECT_ID,
+            name=projects.DEFAULT_PROJECT_NAME,
+            color=projects.DEFAULT_PROJECT_COLOR,
+            glyph=projects.DEFAULT_PROJECT_GLYPH,
+            has_content=False,
+            members=(),
+        ).model_dump()
     ]
 
 
-def _list_layouts_endpoint() -> Response:
-    """List every named layout plus the last-active slug."""
+def _parse_project_metadata_body() -> tuple[str, str, int] | Response:
+    """Parse the ``{name, color, glyph}`` body shared by project create and settings.
+
+    Only shape is checked here; the value rules (usable name, ``#RRGGBB``
+    color, in-range glyph) belong to ``projects.py`` and surface as its own
+    errors, so the two callers map them to HTTP identically.
+    """
+    body = _parse_json_object_body()
+    if isinstance(body, Response):
+        return body
+    name = body.get("name")
+    color = body.get("color")
+    glyph = body.get("glyph")
+    if not isinstance(name, str) or not name.strip():
+        error = ErrorResponse(detail="'name' must be a non-empty string")
+        return _json_response(error.model_dump(), status_code=400)
+    if not isinstance(color, str):
+        error = ErrorResponse(detail="'color' must be a '#RRGGBB' string")
+        return _json_response(error.model_dump(), status_code=400)
+    # ``bool`` is an ``int`` subclass, so reject it explicitly rather than
+    # letting ``true`` address the second glyph.
+    if not isinstance(glyph, int) or isinstance(glyph, bool):
+        error = ErrorResponse(detail="'glyph' must be an integer index into the glyph table")
+        return _json_response(error.model_dump(), status_code=400)
+    return name.strip(), color, glyph
+
+
+def _project_metadata_error_response(e: ValueError) -> Response:
+    """Map a rejected name / color / glyph onto a 400 with the module's own message."""
+    return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
+
+
+def _project_not_found_response(project_id: str) -> Response:
+    error = ErrorResponse(detail=f"Project '{project_id}' not found")
+    return _json_response(error.model_dump(), status_code=404)
+
+
+def _list_projects_endpoint() -> Response:
+    """List every project -- members included -- plus the last-active project id."""
     layout_dir = _primary_agent_layout_dir()
     if layout_dir is None:
-        # No primary agent configured (dev/test): expose the default names so
-        # the frontend can still pick an active layout; nothing persists.
-        return _json_response(
-            {"layouts": _default_layout_infos(), "last_active_slug": workspace_layouts.DESKTOP_LAYOUT_SLUG}
-        )
-    infos = workspace_layouts.list_layouts(layout_dir)
+        # No primary agent configured (dev/test): expose the starter project so
+        # the frontend can still pick an active one; nothing persists.
+        return _json_response({"projects": _default_project_infos(), "last_active_id": projects.DEFAULT_PROJECT_ID})
+    infos = projects.list_projects(layout_dir)
     return _json_response(
         {
-            "layouts": [info.model_dump() for info in infos],
-            "last_active_slug": workspace_layouts.get_last_active_slug(layout_dir),
+            "projects": [info.model_dump() for info in infos],
+            "last_active_id": projects.get_last_active_id(layout_dir),
         }
     )
 
 
-def _get_named_layout_endpoint(slug: str) -> Response:
-    """Get one named layout's saved content (null when the layout is still empty)."""
+def _create_project_endpoint() -> Response:
+    """Register a new empty project from the posted display metadata.
+
+    The server owns slugification, so two names that shorten to the same id
+    are rejected rather than silently sharing one content file.
+    """
     layout_dir = _primary_agent_layout_dir()
     if layout_dir is None:
-        return _json_response({"slug": slug, "display_name": slug, "layout": None})
+        error = ErrorResponse(detail="No primary agent configured for this workspace")
+        return _json_response(error.model_dump(), status_code=500)
+    parsed = _parse_project_metadata_body()
+    if isinstance(parsed, Response):
+        return parsed
+    name, color, glyph = parsed
     try:
-        content = workspace_layouts.read_layout_content(layout_dir, slug)
-        display_name = workspace_layouts.get_layout_display_name(layout_dir, slug)
-    except workspace_layouts.LayoutNotFoundError:
-        error = ErrorResponse(detail=f"Layout '{slug}' not found")
-        return _json_response(error.model_dump(), status_code=404)
-    return _json_response({"slug": slug, "display_name": display_name, "layout": content})
+        info = projects.create_project(layout_dir, name, color, glyph)
+    except (projects.ProjectNameError, projects.ProjectColorError, projects.ProjectGlyphError) as e:
+        return _project_metadata_error_response(e)
+    except projects.ProjectConflictError as e:
+        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=409)
+    get_state().broadcaster.broadcast({"type": "project_updated", **info.model_dump()})
+    return _json_response(info.model_dump())
 
 
-def _save_layout_as_endpoint() -> Response:
-    """Save the posted layout under a display name (creating or overwriting).
+def _get_project_endpoint(project_id: str) -> Response:
+    """Get one project's saved content (null when the project is still empty).
 
-    The server owns slugification: an exact display-name match overwrites
-    that layout, while a slug collision with a *different* display name is
-    rejected so two visually-distinct names never share a file.
+    ``?device=desktop|mobile`` selects which device's arrangement to read
+    (default desktop); each client passes its own UA-derived kind.
+    """
+    layout_dir = _primary_agent_layout_dir()
+    if layout_dir is None:
+        return _json_response({"layout": None})
+    device = request.args.get("device", projects.DEFAULT_DEVICE)
+    try:
+        content = projects.read_project_content(layout_dir, project_id, device)
+    except projects.ProjectDeviceError as e:
+        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
+    except projects.ProjectNotFoundError:
+        return _project_not_found_response(project_id)
+    return _json_response({"layout": content})
+
+
+def _autosave_project_endpoint(project_id: str) -> Response:
+    """Persist the posted content to an existing project (the autosave path)."""
+    layout_dir = _primary_agent_layout_dir()
+    if layout_dir is None:
+        error = ErrorResponse(detail="No primary agent configured for this workspace")
+        return _json_response(error.model_dump(), status_code=500)
+    body = _parse_json_object_body()
+    if isinstance(body, Response):
+        return body
+    layout_content = body.get("layout")
+    client_id = str(body.get("client_id") or "")
+    device = str(body.get("device") or projects.DEFAULT_DEVICE)
+    if not isinstance(layout_content, dict):
+        error = ErrorResponse(detail="'layout' must be a JSON object")
+        return _json_response(error.model_dump(), status_code=400)
+    try:
+        projects.write_project_content(layout_dir, project_id, layout_content, device)
+    except projects.ProjectDeviceError as e:
+        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
+    except projects.ProjectNotFoundError:
+        # The project was deleted while this client's autosave was in flight;
+        # the client hears about the deletion over the WebSocket.
+        return _project_not_found_response(project_id)
+    get_state().broadcaster.broadcast(
+        {"type": "project_saved", "project_id": project_id, "saved_by_client_id": client_id, "device": device}
+    )
+    return _json_response({"status": "ok"})
+
+
+def _update_project_settings_endpoint(project_id: str) -> Response:
+    """Replace one project's display metadata, keeping its id, content and members.
+
+    A rename never re-slugifies the id: the id keys both the content file and
+    the registry entry that owns the members, so a rename is purely cosmetic.
+    """
+    layout_dir = _primary_agent_layout_dir()
+    if layout_dir is None:
+        error = ErrorResponse(detail="No primary agent configured for this workspace")
+        return _json_response(error.model_dump(), status_code=500)
+    parsed = _parse_project_metadata_body()
+    if isinstance(parsed, Response):
+        return parsed
+    name, color, glyph = parsed
+    try:
+        info = projects.update_project(layout_dir, project_id, name, color, glyph)
+    except (projects.ProjectNameError, projects.ProjectColorError, projects.ProjectGlyphError) as e:
+        return _project_metadata_error_response(e)
+    except projects.ProjectNotFoundError:
+        return _project_not_found_response(project_id)
+    get_state().broadcaster.broadcast({"type": "project_updated", **info.model_dump()})
+    return _json_response(info.model_dump())
+
+
+def _parse_member_ref_body() -> str | Response:
+    """Parse the ``{ref}`` body shared by the member add and remove endpoints.
+
+    Only shape is checked here; what a ref may look like belongs to the
+    frontend and ``layout_ops``, which own the grammar (``service:<name>``,
+    ``chat:<agent-id>``, ``terminal:<name>``, ``url:<hash>``).
+    """
+    body = _parse_json_object_body()
+    if isinstance(body, Response):
+        return body
+    ref = body.get("ref")
+    if not isinstance(ref, str) or not ref.strip():
+        error = ErrorResponse(detail="'ref' must be a non-empty string")
+        return _json_response(error.model_dump(), status_code=400)
+    return ref.strip()
+
+
+def _broadcast_members_changed(project_ids: list[str]) -> None:
+    """Tell every client that these projects' member lists moved.
+
+    Membership is durable and independent of the layout, so a client that does
+    not have the affected project mounted still has to refresh its sidebar --
+    hence a plain broadcast rather than a layout-targeted one.
+    """
+    get_state().broadcaster.broadcast({"type": "project_members_changed", "project_ids": project_ids})
+
+
+def _add_project_member_endpoint(project_id: str) -> Response:
+    """Add one ref to this project's member list.
+
+    Idempotent, and deliberately indifferent to what else shows the ref: a
+    project is a view, so the same object appearing in several at once is
+    ordinary rather than a conflict.
+    """
+    layout_dir = _primary_agent_layout_dir()
+    if layout_dir is None:
+        error = ErrorResponse(detail="No primary agent configured for this workspace")
+        return _json_response(error.model_dump(), status_code=500)
+    parsed = _parse_member_ref_body()
+    if isinstance(parsed, Response):
+        return parsed
+    try:
+        projects.add_member(layout_dir, project_id, parsed)
+    except projects.ProjectNotFoundError:
+        return _project_not_found_response(project_id)
+    _broadcast_members_changed([project_id])
+    return _json_response({"project_id": project_id, "members": projects.list_members(layout_dir, project_id)})
+
+
+def _remove_project_member_endpoint(project_id: str) -> Response:
+    """Drop one ref from this project's member list.
+
+    "Remove from project" hides the object in this one view and nothing more:
+    it keeps running, it stays in every other project showing it, and it stays
+    in Everything, which is the home for everything on the machine.
+    """
+    layout_dir = _primary_agent_layout_dir()
+    if layout_dir is None:
+        error = ErrorResponse(detail="No primary agent configured for this workspace")
+        return _json_response(error.model_dump(), status_code=500)
+    parsed = _parse_member_ref_body()
+    if isinstance(parsed, Response):
+        return parsed
+    try:
+        projects.remove_member(layout_dir, project_id, parsed)
+    except projects.ProjectNotFoundError:
+        return _project_not_found_response(project_id)
+    _broadcast_members_changed([project_id])
+    return _json_response({"project_id": project_id, "members": projects.list_members(layout_dir, project_id)})
+
+
+def _share_project_member_endpoint() -> Response:
+    """Add one ref to another project without taking it out of any other.
+
+    Opening an object from the launcher's "on this machine" table files it in
+    the project you are looking at. Nothing is reassigned: a project is a view,
+    so the object keeps showing wherever it already showed. Only the
+    destination is therefore broadcast as changed.
     """
     layout_dir = _primary_agent_layout_dir()
     if layout_dir is None:
@@ -814,29 +1338,117 @@ def _save_layout_as_endpoint() -> Response:
     body = _parse_json_object_body()
     if isinstance(body, Response):
         return body
-    display_name = body.get("display_name")
-    layout_content = body.get("layout")
-    client_id = str(body.get("client_id") or "")
-    if not isinstance(display_name, str) or not display_name.strip():
-        error = ErrorResponse(detail="'display_name' must be a non-empty string")
+    ref = body.get("ref")
+    to_project_id = body.get("to_project_id")
+    if not isinstance(ref, str) or not ref.strip():
+        error = ErrorResponse(detail="'ref' must be a non-empty string")
         return _json_response(error.model_dump(), status_code=400)
-    if not isinstance(layout_content, dict):
-        error = ErrorResponse(detail="'layout' must be a JSON object")
+    if not isinstance(to_project_id, str) or not to_project_id:
+        error = ErrorResponse(detail="'to_project_id' must be a non-empty string")
         return _json_response(error.model_dump(), status_code=400)
     try:
-        slug = workspace_layouts.register_layout(layout_dir, display_name.strip())
-    except workspace_layouts.LayoutNameError as e:
-        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
-    except workspace_layouts.LayoutConflictError as e:
+        projects.add_member(layout_dir, to_project_id, ref.strip())
+    except projects.ProjectNotFoundError:
+        return _project_not_found_response(to_project_id)
+    _broadcast_members_changed([to_project_id])
+    return _json_response(
+        {
+            "ref": ref.strip(),
+            "to_project_id": to_project_id,
+            "projects": projects.projects_showing(layout_dir, ref.strip()),
+        }
+    )
+
+
+def _list_project_members_endpoint() -> Response:
+    """Every filed ref on the machine mapped to the projects showing it.
+
+    Membership is many-to-many, so this is a map to *lists*: a ref shows up
+    under every project whose filter includes it, and a ref no project holds is
+    simply absent. It decorates rows rather than resolving them -- nothing has
+    to be looked up here before an object can be opened, because every view
+    opens into its own dock.
+    """
+    layout_dir = _primary_agent_layout_dir()
+    if layout_dir is None:
+        return _json_response({"members": {}})
+    return _json_response({"members": projects.all_members(layout_dir)})
+
+
+def _broadcast_member_title_changed(ref: str, title: str | None) -> None:
+    """Tell every client what this object is called now; None means unnamed again.
+
+    A title belongs to the object rather than to a panel, so a client showing
+    it in a project this one never opened -- or listing it backgrounded, with no
+    panel at all -- still has to repaint. Hence a plain broadcast, as membership
+    changes get.
+    """
+    get_state().broadcaster.broadcast({"type": "member_title_changed", "ref": ref, "title": title})
+
+
+def _list_member_titles_endpoint() -> Response:
+    """Every name the user has given an object, keyed by its ref.
+
+    One flat map for the whole machine: a rename names the object, so the same
+    name is what every view showing it draws, and a ref that is absent is simply
+    unnamed -- the caller falls back to whatever the object calls itself.
+    """
+    layout_dir = _primary_agent_layout_dir()
+    if layout_dir is None:
+        return _json_response({"titles": {}})
+    return _json_response({"titles": member_titles.read_titles(layout_dir)})
+
+
+def _rename_chat_agent_for_ref(layout_dir: Path, ref: str, title: str) -> Response:
+    """Rename the mngr agent behind a ``chat:`` ref, keeping its name pair matched.
+
+    A chat is an mngr agent, and the agent itself holds its name pair -- the
+    canonical true name plus the typed form as its ``display_name`` label (the
+    same pairing minds establishes for hosts). So a chat's rename goes to mngr
+    rather than to the workspace's title store: renaming only the store is what
+    used to leave ``mngr list`` showing a different name than the tab.
+
+    Any *stored* title the ref still carries (a legacy entry, from before chat
+    names lived on the agent) is cleared once mngr accepted the rename, so a
+    stale store entry can never shadow the agent's own name again. The typed
+    name still comes back in the response and the broadcast -- it always equals
+    what the agent's label now derives to, so every surface settles immediately.
+
+    A refused rename leaves everything as it was and surfaces the error: a name
+    conflict answers 409 (retry with another name), an unusable name 400, and an
+    mngr failure 500.
+    """
+    chosen_title = member_titles.validated_title(title)
+    if chosen_title is None:
+        # Clearing is store-only: mngr has no empty name to be given, so the
+        # chat keeps its name and only a legacy stored shadow is dropped.
+        member_titles.clear_title(layout_dir, ref)
+        _broadcast_member_title_changed(ref, None)
+        return _json_response({"ref": ref, "title": None})
+    agent_manager: AgentManager = get_state().agent_manager
+    try:
+        agent_manager.rename_chat_agent(ref[len(_CHAT_MEMBER_REF_PREFIX) :], chosen_title)
+    except AgentNameConflictError as e:
         return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=409)
-    workspace_layouts.write_layout_content(layout_dir, slug, layout_content)
-    resolved_display_name = workspace_layouts.get_layout_display_name(layout_dir, slug)
-    get_state().broadcaster.broadcast_layout_saved(slug, resolved_display_name, client_id)
-    return _json_response({"slug": slug, "display_name": resolved_display_name})
+    except AgentRenameError as e:
+        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=500)
+    member_titles.clear_title(layout_dir, ref)
+    _broadcast_member_title_changed(ref, chosen_title)
+    return _json_response({"ref": ref, "title": chosen_title})
 
 
-def _autosave_named_layout_endpoint(slug: str) -> Response:
-    """Persist the posted content to an existing named layout (the autosave path)."""
+def _set_member_title_endpoint() -> Response:
+    """Name one object, machine-wide, or clear its name with a blank one.
+
+    The ref is not required to be filed anywhere: an object in no project at all
+    still shows in Everything and can still be renamed there, and a backgrounded
+    member can be renamed with no panel to hang the name on -- which is the
+    point of keying this by ref. The stored name comes back in the response and
+    in the broadcast, ``null`` when the entry was cleared.
+
+    A ``chat:`` ref is an mngr agent, whose name lives on the agent itself
+    rather than in the store -- see ``_rename_chat_agent_for_ref``.
+    """
     layout_dir = _primary_agent_layout_dir()
     if layout_dir is None:
         error = ErrorResponse(detail="No primary agent configured for this workspace")
@@ -844,38 +1456,251 @@ def _autosave_named_layout_endpoint(slug: str) -> Response:
     body = _parse_json_object_body()
     if isinstance(body, Response):
         return body
-    layout_content = body.get("layout")
-    client_id = str(body.get("client_id") or "")
-    if not isinstance(layout_content, dict):
-        error = ErrorResponse(detail="'layout' must be a JSON object")
+    ref = body.get("ref")
+    title = body.get("title")
+    if not isinstance(ref, str) or not ref.strip():
+        error = ErrorResponse(detail="'ref' must be a non-empty string")
+        return _json_response(error.model_dump(), status_code=400)
+    if not isinstance(title, str):
+        error = ErrorResponse(detail="'title' must be a string (an empty one clears the name)")
         return _json_response(error.model_dump(), status_code=400)
     try:
-        workspace_layouts.write_layout_content(layout_dir, slug, layout_content)
-        display_name = workspace_layouts.get_layout_display_name(layout_dir, slug)
-    except workspace_layouts.LayoutNotFoundError:
-        # The layout was deleted while this client's autosave was in flight;
-        # the client hears about the deletion over the WebSocket.
-        error = ErrorResponse(detail=f"Layout '{slug}' not found")
-        return _json_response(error.model_dump(), status_code=404)
-    get_state().broadcaster.broadcast_layout_saved(slug, display_name, client_id)
-    return _json_response({"status": "ok"})
+        if ref.strip().startswith(_CHAT_MEMBER_REF_PREFIX):
+            return _rename_chat_agent_for_ref(layout_dir, ref.strip(), title)
+        stored_title = member_titles.set_title(layout_dir, ref, title)
+    except member_titles.MemberTitleLengthError as e:
+        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
+    _broadcast_member_title_changed(ref.strip(), stored_title)
+    return _json_response({"ref": ref.strip(), "title": stored_title})
 
 
-def _delete_named_layout_endpoint(slug: str) -> Response:
-    """Delete a named layout; the last remaining layout cannot be deleted."""
+def _broadcast_member_last_used_changed(ref: str, at_ms: int | None) -> None:
+    """Tell every client when this object was last used; None means never again.
+
+    Recency belongs to the object rather than to a panel, so a client offering
+    it in a launcher this one never opened still has to re-order. Hence a plain
+    broadcast, as renames get.
+    """
+    get_state().broadcaster.broadcast({"type": "member_last_used_changed", "ref": ref, "at_ms": at_ms})
+
+
+def _list_member_last_used_endpoint() -> Response:
+    """When each object was last in front of the user, keyed by its ref.
+
+    One flat map for the whole machine: recency is a fact about the object, so
+    the same ordering is what every client's launcher draws, and a ref that is
+    absent has simply never been used -- the caller renders it with no recency
+    rather than inventing one.
+    """
+    layout_dir = _primary_agent_layout_dir()
+    if layout_dir is None:
+        return _json_response({"last_used": {}})
+    return _json_response({"last_used": member_last_used.read_last_used(layout_dir)})
+
+
+def _touch_member_last_used_endpoint() -> Response:
+    """Record that one object is in front of the user, machine-wide, right now.
+
+    The client sends only the ref; the moment is this server's own clock, which
+    kills the clock-skew question -- every entry in the store is stamped by the
+    one clock that also serves the map back. The ref is not required to be
+    filed anywhere, for the same reason a name is not: an object in no project
+    at all still shows in Everything, and a backgrounded member can be used
+    again the moment it is opened.
+    """
+    layout_dir = _primary_agent_layout_dir()
+    if layout_dir is None:
+        error = ErrorResponse(detail="No primary agent configured for this workspace")
+        return _json_response(error.model_dump(), status_code=500)
+    body = _parse_json_object_body()
+    if isinstance(body, Response):
+        return body
+    ref = body.get("ref")
+    if not isinstance(ref, str) or not ref.strip():
+        error = ErrorResponse(detail="'ref' must be a non-empty string")
+        return _json_response(error.model_dump(), status_code=400)
+    stored_ms = member_last_used.touch_last_used(layout_dir, ref, int(time.time() * 1000))
+    _broadcast_member_last_used_changed(ref.strip(), stored_ms)
+    return _json_response({"ref": ref.strip(), "at_ms": stored_ms})
+
+
+def _stop_project_members(refs: list[str]) -> dict[str, list[str]]:
+    """Tear down the members of a deleted project that have a stop verb.
+
+    Terminals and fleet browsers are the two kinds this workspace can stop, and
+    both go through the same teardown the terminal-destroy and browser-destroy
+    endpoints use. Everything else is reported rather than acted on: a
+    supervised app has no stop control here, and a chat is an agent -- deleting
+    a project must not destroy one, it just leaves the chat project-less. The
+    three lists are what the client reports back after the confirmation it
+    already collected.
+    """
+    stopped: list[str] = []
+    failed: list[str] = []
+    left_running: list[str] = []
+    for ref in refs:
+        if ref.startswith(_TERMINAL_REF_PREFIX):
+            is_stopped = _stop_terminal_member(ref[len(_TERMINAL_REF_PREFIX) :])
+            outcome = stopped if is_stopped else failed
+            outcome.append(ref)
+        elif ref.startswith(_BROWSER_SESSION_REF_PREFIX):
+            is_stopped = _close_fleet_browser(ref[len(_BROWSER_SESSION_REF_PREFIX) :])
+            outcome = stopped if is_stopped else failed
+            outcome.append(ref)
+        else:
+            left_running.append(ref)
+    return {"stopped": stopped, "failed": failed, "left_running": left_running}
+
+
+def _deterministic_panel_id_for_ref(ref: str) -> str | None:
+    """The panel id a ref's tab is always filed under, or None when there is none.
+
+    A named terminal's panel id is deterministic (``terminal-session-<name>``,
+    mirroring the frontend's ``TERMINAL_PANEL_ID_PREFIX``), so its saved panel
+    can be addressed without a client in the loop. Browser and app pane ids are
+    minted per open, so those sweeps rely on ref-resolution instead.
+    """
+    if ref.startswith(_TERMINAL_REF_PREFIX):
+        return f"terminal-session-{ref[len(_TERMINAL_REF_PREFIX) :]}"
+    return None
+
+
+def _sweep_destroyed_ref(layout_dir: Path, ref: str) -> None:
+    """Drop a just-destroyed object's panel and membership from every view.
+
+    The same sweep the panel-delete endpoint runs, for destroys that happen
+    server-side (a project delete stopping its terminals and browsers): the
+    object is gone machine-wide, so its saved panels -- Everything's included
+    -- and its member entries must go too, or the next view to restore would
+    bring back a dead tab (for a terminal, one that silently respawns a fresh
+    session under the old id). Broadcasts what changed so clients still showing
+    the object drop it live instead of autosaving it back.
+    """
+    swept_project_ids = projects.remove_panel_from_all_projects(layout_dir, _deterministic_panel_id_for_ref(ref), ref)
+    if not swept_project_ids:
+        return
+    get_state().broadcaster.broadcast(
+        {
+            "type": "project_panel_removed",
+            "panel_id": _deterministic_panel_id_for_ref(ref),
+            "ref": ref,
+            "project_ids": swept_project_ids,
+        }
+    )
+    # Everything has no member list, so it never belongs in a members-changed
+    # event.
+    member_project_ids = [
+        swept_project_id for swept_project_id in swept_project_ids if swept_project_id != projects.EVERYTHING_VIEW_ID
+    ]
+    if member_project_ids:
+        _broadcast_members_changed(member_project_ids)
+
+
+def _delete_project_endpoint(project_id: str) -> Response:
+    """Delete a project, stop what it showed, and report what actually happened.
+
+    The confirmation is the client's, which enumerates the members first, so by
+    the time this runs the user has already agreed to the teardown. What can be
+    stopped is stopped and what cannot is listed instead, so nothing is
+    silently killed and nothing silently survives. The last remaining project
+    cannot be deleted, since the fallback clients switch to is always another
+    project. Whatever actually stopped also loses the name it was given, exactly
+    as a destroyed tab's object does.
+    """
     layout_dir = _primary_agent_layout_dir()
     if layout_dir is None:
         error = ErrorResponse(detail="No primary agent configured for this workspace")
         return _json_response(error.model_dump(), status_code=500)
     try:
-        fallback_slug = workspace_layouts.delete_layout(layout_dir, slug)
-    except workspace_layouts.LayoutNotFoundError:
-        error = ErrorResponse(detail=f"Layout '{slug}' not found")
-        return _json_response(error.model_dump(), status_code=404)
-    except workspace_layouts.LastLayoutDeletionError as e:
+        members = projects.list_members(layout_dir, project_id)
+        fallback_id = projects.delete_project(layout_dir, project_id)
+    except projects.ProjectNotFoundError:
+        return _project_not_found_response(project_id)
+    except projects.LastProjectDeletionError as e:
         return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=409)
-    get_state().broadcaster.broadcast_layout_deleted(slug, fallback_slug)
-    return _json_response({"status": "ok", "fallback_layout_slug": fallback_slug})
+    stop_report = _stop_project_members(members)
+    # A stopped object's name and recency go with it, for the same reason a
+    # destroyed one's do: refs are handed out again -- the terminal allocator
+    # reuses the lowest free ``terminal-<N>`` -- so either left behind would
+    # land on whatever answers to that ref next. Only what actually stopped is
+    # cleared; anything still running keeps the name it is known by everywhere
+    # else, and its place in the launcher.
+    for stopped_ref in stop_report["stopped"]:
+        if member_titles.clear_title(layout_dir, stopped_ref):
+            _broadcast_member_title_changed(stopped_ref, None)
+        if member_last_used.clear_last_used(layout_dir, stopped_ref):
+            _broadcast_member_last_used_changed(stopped_ref, None)
+        # A stopped object's saved panels and memberships go too, everywhere:
+        # the deleted project's own file went with the delete, but a panel left
+        # in another project's file -- or in Everything's -- would restore as a
+        # dead tab, and for a terminal silently respawn a session under the
+        # reused ref.
+        _sweep_destroyed_ref(layout_dir, stopped_ref)
+    logger.info(
+        "Deleted project {} (stopped {}, failed {}, left running {})",
+        project_id,
+        len(stop_report["stopped"]),
+        len(stop_report["failed"]),
+        len(stop_report["left_running"]),
+    )
+    get_state().broadcaster.broadcast(
+        {"type": "project_deleted", "project_id": project_id, "fallback_id": fallback_id, **stop_report}
+    )
+    return _json_response({"fallback_id": fallback_id, **stop_report})
+
+
+def _delete_project_panel_endpoint(panel_id: str) -> Response:
+    """Drop a destroyed object from every project that holds it.
+
+    Destroying a tab tears down the agent, terminal, or browser behind it, so
+    it has to leave the projects that are not currently mounted too -- as a
+    panel, which would otherwise restore a tab whose identity can no longer be
+    resolved, and as a member, which would otherwise keep listing it as
+    backgrounded forever. The optional ``ref`` in the body is the member that
+    panel stood for; a caller that knows only the panel omits it and drops the
+    panel alone. Clients that have an affected project open re-apply it from
+    the broadcast.
+
+    The name the user gave the object goes with it, since refs are handed out
+    again -- the terminal allocator reuses the lowest free ``terminal-<N>`` --
+    and a name left behind would land on whatever answers to that ref next. It
+    is dropped here rather than inside ``projects``, which knows about member
+    lists and layouts and deliberately not about a machine-wide store.
+    """
+    layout_dir = _primary_agent_layout_dir()
+    if layout_dir is None:
+        error = ErrorResponse(detail="No primary agent configured for this workspace")
+        return _json_response(error.model_dump(), status_code=500)
+    try:
+        body = json.loads(request.get_data() or b"{}")
+    except (json.JSONDecodeError, ValueError) as e:
+        _loguru_logger.opt(exception=e).warning("Panel delete for {} carried invalid JSON", panel_id)
+        error = ErrorResponse(detail="Invalid JSON in request body")
+        return _json_response(error.model_dump(), status_code=400)
+    raw_ref = body.get("ref") if isinstance(body, dict) else None
+    ref = raw_ref.strip() if isinstance(raw_ref, str) and raw_ref.strip() else None
+    changed_project_ids = projects.remove_panel_from_all_projects(layout_dir, panel_id, ref)
+    if changed_project_ids:
+        # The ref rides along so a client showing the object under a different
+        # panel id (browser and app pane ids are minted per open) can still
+        # drop it from its live dock.
+        get_state().broadcaster.broadcast(
+            {"type": "project_panel_removed", "panel_id": panel_id, "ref": ref, "project_ids": changed_project_ids}
+        )
+        # The sweep reaches Everything's saved arrangement too, but Everything
+        # has no member list, so it never belongs in a members-changed event.
+        member_project_ids = [
+            project_id for project_id in changed_project_ids if project_id != projects.EVERYTHING_VIEW_ID
+        ]
+        if ref is not None and member_project_ids:
+            _broadcast_members_changed(member_project_ids)
+    if ref is not None and member_titles.clear_title(layout_dir, ref):
+        _broadcast_member_title_changed(ref, None)
+    # The recency goes for the same reason as the name: a reused ref must not
+    # surface at the top of the launcher on the strength of a dead object.
+    if ref is not None and member_last_used.clear_last_used(layout_dir, ref):
+        _broadcast_member_last_used_changed(ref, None)
+    return _json_response({"project_ids": changed_project_ids})
 
 
 def _tmux_prefix() -> str:
@@ -932,12 +1757,15 @@ def _allocate_terminal() -> Response:
     return _json_response({"session_name": name})
 
 
-def _destroy_terminal(session_name: str) -> Response:
-    """Kill a user-terminal tmux session. Refuses to touch mngr agent sessions."""
-    prefix = _tmux_prefix()
-    if not is_destroyable_terminal_session(session_name, prefix):
-        error = ErrorResponse(detail=f"Refusing to destroy non-terminal session: {session_name!r}")
-        return _json_response(error.model_dump(), status_code=400)
+def _kill_terminal_session(session_name: str) -> str | None:
+    """Kill one tmux session, returning tmux's complaint when it survived.
+
+    tmux returns non-zero both for a genuine failure and for an already-absent
+    session (nothing to kill). The two are told apart by re-listing: if the
+    session is gone, the kill succeeded (or was an idempotent repeat); if it is
+    still present, the kill really failed and the caller must surface that
+    rather than reporting a terminal as gone while it keeps running.
+    """
     # ``=`` forces an exact session-name match so tmux's prefix fallback can't
     # target a different session.
     result = run_local_command_modern_version(
@@ -946,19 +1774,39 @@ def _destroy_terminal(session_name: str) -> Response:
         is_checked=False,
         timeout=5.0,
     )
-    # tmux returns non-zero both for a genuine failure and for an already-absent
-    # session (nothing to kill). Distinguish the two by re-listing: if the
-    # session is gone, the destroy succeeded (or was idempotent); if it is still
-    # present, the kill really failed and we must surface it rather than telling
-    # the UI the terminal is gone when it is still running.
     if result.returncode != 0:
         still_live = any(session.session_name == session_name for session in _list_tmux_sessions())
         if still_live:
             _loguru_logger.warning("Failed to kill terminal session {}: {}", session_name, result.stderr.strip())
-            error = ErrorResponse(detail=f"Failed to destroy terminal {session_name!r}: {result.stderr.strip()}")
-            return _json_response(error.model_dump(), status_code=500)
+            return result.stderr.strip()
     with _terminal_allocate_lock:
         _recently_allocated_terminal_names.discard(session_name)
+    return None
+
+
+def _stop_terminal_member(session_name: str) -> bool:
+    """Kill the tmux session behind one ``terminal:<name>`` member, reporting success.
+
+    Same refusal as the destroy endpoint: a ref naming an mngr agent session is
+    left alone (and reported as not stopped) rather than taking an agent down
+    with a project.
+    """
+    if not is_destroyable_terminal_session(session_name, _tmux_prefix()):
+        _loguru_logger.warning("Refusing to stop non-terminal session {} for a deleted project", session_name)
+        return False
+    return _kill_terminal_session(session_name) is None
+
+
+def _destroy_terminal(session_name: str) -> Response:
+    """Kill a user-terminal tmux session. Refuses to touch mngr agent sessions."""
+    prefix = _tmux_prefix()
+    if not is_destroyable_terminal_session(session_name, prefix):
+        error = ErrorResponse(detail=f"Refusing to destroy non-terminal session: {session_name!r}")
+        return _json_response(error.model_dump(), status_code=400)
+    failure = _kill_terminal_session(session_name)
+    if failure is not None:
+        error = ErrorResponse(detail=f"Failed to destroy terminal {session_name!r}: {failure}")
+        return _json_response(error.model_dump(), status_code=500)
     return _json_response({"status": "ok"})
 
 
@@ -1072,6 +1920,47 @@ def _terminal_notify_endpoint() -> Response:
     return _json_response(error.model_dump(), status_code=400)
 
 
+def _browser_backend_url(path: str) -> str | None:
+    """The registered browser daemon's URL for ``path``, or None when unregistered.
+
+    One resolver for every caller that talks to the daemon -- the fleet
+    passthroughs and the project-delete teardown -- so they agree on which
+    service entry the browser fleet lives behind.
+    """
+    base_url = get_state().agent_manager.get_service_url(_BROWSER_SERVICE_NAME)
+    if base_url is None:
+        return None
+    return f"{base_url.rstrip('/')}/{path}"
+
+
+def _close_fleet_browser(session_name: str) -> bool:
+    """Retire one fleet browser through the daemon, reporting whether it closed.
+
+    Companion to the destroy passthrough for the project-delete teardown, which
+    has no client response to relay: an unregistered or unreachable daemon, and
+    a daemon that refused, all come back as "not stopped" so the caller reports
+    the browser as still running instead of claiming it is gone.
+    """
+    backend_url = _browser_backend_url(f"browsers/{session_name}")
+    if backend_url is None:
+        _loguru_logger.warning("Cannot stop browser {}: the browser service is not registered", session_name)
+        return False
+    try:
+        backend_response = get_state().http_client.delete(backend_url)
+    except httpx.HTTPError as e:
+        _loguru_logger.warning("Browser service DELETE to {} failed: {}", backend_url, e)
+        return False
+    if backend_response.is_success:
+        return True
+    _loguru_logger.warning(
+        "Browser service refused to close {} ({}): {}",
+        session_name,
+        backend_response.status_code,
+        backend_response.text,
+    )
+    return False
+
+
 def _browsers_passthrough() -> Response:
     """Same-origin passthrough for the browser daemon's fleet API.
 
@@ -1086,11 +1975,10 @@ def _browsers_passthrough() -> Response:
     not registered or unreachable.
     """
     state = get_state()
-    base_url = state.agent_manager.get_service_url(_BROWSER_SERVICE_NAME)
-    if base_url is None:
+    backend_url = _browser_backend_url("browsers")
+    if backend_url is None:
         error = ErrorResponse(detail="Browser service is not registered")
         return _json_response(error.model_dump(), status_code=503)
-    backend_url = f"{base_url.rstrip('/')}/browsers"
     try:
         if request.method == "POST":
             backend_response = state.http_client.post(
@@ -1123,11 +2011,10 @@ def _destroy_browser_passthrough(name: str) -> Response:
     service is not registered or unreachable.
     """
     state = get_state()
-    base_url = state.agent_manager.get_service_url(_BROWSER_SERVICE_NAME)
-    if base_url is None:
+    backend_url = _browser_backend_url(f"browsers/{name}")
+    if backend_url is None:
         error = ErrorResponse(detail="Browser service is not registered")
         return _json_response(error.model_dump(), status_code=503)
-    backend_url = f"{base_url.rstrip('/')}/browsers/{name}"
     try:
         backend_response = state.http_client.delete(backend_url)
     except httpx.HTTPError as e:
@@ -1139,6 +2026,62 @@ def _destroy_browser_passthrough(name: str) -> Response:
         status=backend_response.status_code,
         content_type=backend_response.headers.get("content-type", "application/json"),
     )
+
+
+def _run_forward_port_removal(name: str) -> str | None:
+    """Drop one app's row from the port registry, returning the failure text.
+
+    Thin wrapper over ``forward_port.py --remove``: the script holds the
+    registry's lock and does the atomic replace, so this only has to invoke it
+    and report what it said when it refused.
+    """
+    result = run_local_command_modern_version(
+        command=["uv", "run", "python3", str(_FORWARD_PORT_SCRIPT), "--remove", "--name", name],
+        cwd=_WORKSPACE_ROOT_DIRECTORY,
+        is_checked=False,
+        timeout=_FORWARD_PORT_TIMEOUT_SECONDS,
+    )
+    if result.returncode != 0:
+        _loguru_logger.warning("Failed to deregister app {}: {}", name, result.stderr.strip())
+        return result.stderr.strip() or f"forward_port.py exited {result.returncode}"
+    return None
+
+
+def _deregister_app_endpoint(name: str) -> Response:
+    """Take one app out of the port registry and out of every project.
+
+    Deregistering is the whole of what this workspace can do to an app, and the
+    response says so rather than dressing it up as a destroy: nothing here
+    supervises the program behind a registered port. Its row leaves
+    ``data/.state/apps.toml`` (so it stops being an addressable service and
+    stops appearing in the app list), its ``service:<name>`` member leaves every
+    project's list, and whatever is listening on that port keeps listening until
+    whoever started it stops it -- which ``is_process_stopped`` reports as the
+    constant false it always is. An app whose program is supervised simply
+    re-registers itself the next time that program starts.
+    """
+    layout_dir = _primary_agent_layout_dir()
+    if layout_dir is None:
+        error = ErrorResponse(detail="No primary agent configured for this workspace")
+        return _json_response(error.model_dump(), status_code=500)
+    if name == _SHELL_SERVICE_NAME:
+        error = ErrorResponse(detail=f"Refusing to deregister the workspace shell itself: {name!r}")
+        return _json_response(error.model_dump(), status_code=400)
+    if get_state().agent_manager.get_service_url(name) is None:
+        error = ErrorResponse(detail=f"No registered app named {name!r}")
+        return _json_response(error.model_dump(), status_code=404)
+    failure = _run_forward_port_removal(name)
+    if failure is not None:
+        error = ErrorResponse(detail=f"Failed to deregister app {name!r}: {failure}")
+        return _json_response(error.model_dump(), status_code=500)
+    ref = f"{_SERVICE_REF_PREFIX}{name}"
+    project_ids = projects.projects_showing(layout_dir, ref)
+    for project_id in project_ids:
+        projects.remove_member(layout_dir, project_id, ref)
+    if project_ids:
+        _broadcast_members_changed(project_ids)
+    logger.info("Deregistered app {} (left {} project(s); its process was not stopped)", name, len(project_ids))
+    return _json_response({"name": name, "project_ids": project_ids, "is_process_stopped": False})
 
 
 def _get_screen_capture(agent_id: str) -> Response:
@@ -1186,38 +2129,54 @@ def _serve_static_file(basename: str) -> Response:
     return send_file(file_path)
 
 
-def _random_name_endpoint() -> Response:
-    """Generate a random agent name."""
-    agent_manager: AgentManager = get_state().agent_manager
-    name = agent_manager.generate_random_name()
-    return _json_response(RandomNameResponse(name=name).model_dump())
-
-
-def _create_worktree_agent() -> Response:
-    """Create a new worktree agent."""
-    agent_manager: AgentManager = get_state().agent_manager
-    body = request.get_json()
-
-    try:
-        create_request = CreateWorktreeRequest(**body)
-        agent_name = create_request.name
-        selected_agent_id = create_request.selected_agent_id or agent_manager.get_own_agent_id()
-        agent_id = agent_manager.create_worktree_agent(agent_name, selected_agent_id)
-        return _json_response(CreateAgentResponse(agent_id=agent_id).model_dump(), status_code=201)
-    except (AgentCreationError, OSError, ValueError) as e:
-        error = ErrorResponse(detail=str(e))
-        return _json_response(error.model_dump(), status_code=400)
-
-
 def _create_chat_agent() -> Response:
-    """Create a new chat agent in the primary agent's work directory."""
+    """Create a new chat agent in the primary agent's work directory.
+
+    One endpoint for every harness: the ``chat`` role is the same, and the request's
+    ``harness`` field (validated against :class:`HarnessType`, claude by default) picks
+    which harness template the server stacks under it.
+
+    The chat's display name is minted here (server-side) when the request names
+    none: the first free "<word> N" for the harness, counted against every name
+    on the machine -- agents, in-flight creates, and the member-title store's
+    chosen names -- so simultaneous creates cannot both mint "Chat 1". An
+    explicitly requested name that collides answers 409 so the caller can retry
+    with another. The response carries the resulting name pair (canonical
+    ``name`` + human-readable ``display_name``) beside the agent id.
+
+    A chat created inside a project carries that project's id in the agent's
+    ``project`` label, which is where chat membership lives (mngr already
+    propagates the label to the agent's own children). ``project_id`` rides
+    beside the request model rather than inside it for that reason: it is a
+    label on the created agent, not part of the chat's identity. A create with
+    no ``project_id`` leaves the chat filed in no project, which is ordinary:
+    Everything enumerates the machine, so it surfaces there anyway.
+    """
     agent_manager: AgentManager = get_state().agent_manager
-    body = request.get_json()
+    body = _parse_json_object_body()
+    if isinstance(body, Response):
+        return body
+    project_id = str(body.get("project_id") or "")
+    request_fields = {key: value for key, value in body.items() if key != "project_id"}
+
+    # Chosen member titles count as taken so an auto-minted "Chat 2" can never
+    # collide with, say, a terminal someone renamed to "Chat 2".
+    layout_dir = _primary_agent_layout_dir()
+    titled_names = tuple(member_titles.read_titles(layout_dir).values()) if layout_dir is not None else ()
 
     try:
-        create_request = CreateChatRequest(**body)
-        agent_id = agent_manager.create_chat_agent(create_request.name)
-        return _json_response(CreateAgentResponse(agent_id=agent_id).model_dump(), status_code=201)
+        create_request = CreateChatRequest.model_validate(request_fields)
+        created = agent_manager.create_chat_agent(
+            create_request.name,
+            create_request.harness,
+            extra_role_templates=("first",) if create_request.first else (),
+            project_id=project_id,
+            extra_taken_names=titled_names,
+        )
+        response = CreateAgentResponse(agent_id=created.agent_id, name=created.name, display_name=created.display_name)
+        return _json_response(response.model_dump(), status_code=201)
+    except AgentNameConflictError as e:
+        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=409)
     except (AgentCreationError, OSError, ValueError) as e:
         error = ErrorResponse(detail=str(e))
         return _json_response(error.model_dump(), status_code=400)
@@ -1294,7 +2253,13 @@ def _handle_client_state_message(
         # layout; not worth a log line.
         pass
     if layout_dir is not None:
-        workspace_layouts.set_last_active_slug(layout_dir, active_layout)
+        # A client reports its VIEW id (a project id, or "everything"), so the
+        # projects registry is where last-active belongs. Writing it into the
+        # old named-layout store instead -- which rejects unknown slugs -- left
+        # that store pinned at "desktop" forever while warning on every switch,
+        # and layout ops with no explicit target then resolved to a view no
+        # client was ever on (a guaranteed 412).
+        projects.set_last_active_id(layout_dir, active_layout)
         events_path = client_activity.get_events_path(layout_dir)
         if previous_layout and previous_layout != active_layout:
             client_activity.append_layout_switch_event(
@@ -1470,7 +2435,7 @@ def _destroy_agent(agent_id: str) -> Response:
         command=_build_destroy_command(agent_name),
         cwd=None,
         is_checked=False,
-        timeout=30.0,
+        timeout=_DESTROY_TIMEOUT_SECONDS,
     )
     success = result.returncode == 0
     output = result.stdout.strip() if success else result.stderr.strip()
@@ -1513,14 +2478,104 @@ def _start_agent(agent_id: str) -> Response:
     return _json_response(StartAgentResponse(status="ok").model_dump())
 
 
+def _resolve_project_id_for_layout_arg(layout_dir: Path, requested: str) -> str | None:
+    """Resolve a layout op's target name against the *views* a client can be in.
+
+    A connected client reports its active *view* as its active layout -- that
+    view is the arrangement the client autosaves into -- so a layout op naming
+    something that is not a registered named layout still addresses a real
+    target when it names a project. "Everything" resolves too: it has no
+    registry entry, but it is the home a client is most likely to be sitting in
+    and it keeps a content file like any other view. Returns None when the name
+    matches nothing, leaving the caller to report the miss.
+    """
+    try:
+        project_id = projects.slugify_project_name(requested)
+    except projects.ProjectNameError:
+        return None
+    if project_id == projects.EVERYTHING_VIEW_ID:
+        return project_id
+    if any(info.project_id == project_id for info in projects.list_projects(layout_dir)):
+        return project_id
+    return None
+
+
+class LayoutViewEntry(FrozenModel):
+    """One view as the ``views`` op reports it."""
+
+    id: str = Field(description="View id: a project id, or the Everything view id")
+    name: str = Field(description="Display name")
+    is_everything: bool = Field(description="Whether this is the unfiltered Everything view")
+    members: tuple[str, ...] = Field(description="Member refs the view shows (empty for Everything)")
+    has_desktop_content: bool = Field(description="Whether a desktop arrangement file exists yet")
+    has_mobile_content: bool = Field(description="Whether a mobile arrangement file exists yet")
+    clients_on: tuple[str, ...] = Field(description="Ids of connected clients with this view in front")
+
+
+def _layout_views_entry(
+    layout_dir: Path,
+    clients_by_view: dict[str, list[str]],
+    view_id: str,
+    name: str,
+    members: list[str],
+    is_everything: bool,
+) -> LayoutViewEntry:
+    """One view as the ``views`` op reports it: identity, members, per-device
+    content presence, and which connected clients have it in front."""
+    return LayoutViewEntry(
+        id=view_id,
+        name=name,
+        is_everything=is_everything,
+        members=tuple(members),
+        has_desktop_content=projects.project_content_path(layout_dir, view_id).exists(),
+        has_mobile_content=projects.project_content_path(layout_dir, view_id, "mobile").exists(),
+        clients_on=tuple(clients_by_view.get(view_id, [])),
+    )
+
+
+def _layout_op_display_name(layout_dir: Path, slug: str) -> str:
+    """The human-readable name of the view ``slug`` resolved to.
+
+    A project's name comes from the registry; the unfiltered view is named
+    here because it has no registry entry to be named from.
+    """
+    if slug == projects.EVERYTHING_VIEW_ID:
+        return projects.EVERYTHING_VIEW_NAME
+    for info in projects.list_projects(layout_dir):
+        if info.project_id == slug:
+            return info.name
+    return slug
+
+
+def _default_view_id(layout_dir: Path | None) -> str | None:
+    """The view an op with no explicit ``--layout`` targets.
+
+    The view the connected clients are actually on, when they agree -- with one
+    client (the ordinary workspace) this is simply "the view the user is looking
+    at", which is what an agent means when it names no target. When zero or
+    several distinct views are connected, the projects registry's last-active id
+    breaks the tie: it tracks the most recent view any client reported, so it is
+    the best single answer there is. None only without a registry to fall back
+    on (dev/test with no layout dir and no agreeing client).
+    """
+    distinct_views = {
+        info["active_layout_slug"] for info in get_state().broadcaster.get_connected_client_infos()
+    }
+    if len(distinct_views) == 1:
+        return next(iter(distinct_views))
+    if layout_dir is None:
+        return None
+    return projects.get_last_active_id(layout_dir)
+
+
 def _resolve_requested_layout_slug(
     args_raw: dict[str, Any],
     layout_dir: Path | None,
 ) -> tuple[str | None, Response | None]:
-    """Resolve a layout op's ``args.layout`` (or the last-active default) to a slug.
+    """Resolve a layout op's ``args.layout`` (or the current-view default) to a view id.
 
     Returns ``(slug, None)`` on success and ``(None, error_response)`` when an
-    explicitly-named layout is unusable or unknown. With no layout dir
+    explicitly-named view is unusable or unknown. With no layout dir
     configured (dev/test), an explicit name is slugified without registry
     validation and the default is None.
     """
@@ -1528,20 +2583,18 @@ def _resolve_requested_layout_slug(
     if isinstance(requested, str) and requested:
         if layout_dir is None:
             try:
-                return workspace_layouts.slugify_layout_name(requested), None
-            except workspace_layouts.LayoutNameError as e:
+                return projects.slugify_project_name(requested), None
+            except projects.ProjectNameError as e:
                 return None, _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
-        try:
-            return workspace_layouts.resolve_layout_slug(layout_dir, requested), None
-        except workspace_layouts.LayoutNameError as e:
-            return None, _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
-        except workspace_layouts.LayoutNotFoundError:
-            known = ", ".join(info.display_name for info in workspace_layouts.list_layouts(layout_dir))
-            error = ErrorResponse(detail=f"Layout {requested!r} not found (known layouts: {known})")
-            return None, _json_response(error.model_dump(), status_code=404)
-    if layout_dir is None:
-        return None, None
-    return workspace_layouts.get_last_active_slug(layout_dir), None
+        project_id = _resolve_project_id_for_layout_arg(layout_dir, requested)
+        if project_id is not None:
+            return project_id, None
+        known_views = ", ".join(
+            [info.name for info in projects.list_projects(layout_dir)] + [projects.EVERYTHING_VIEW_NAME]
+        )
+        error = ErrorResponse(detail=f"View {requested!r} not found (known views: {known_views})")
+        return None, _json_response(error.model_dump(), status_code=404)
+    return _default_view_id(layout_dir), None
 
 
 def _layout_broadcast_endpoint() -> Response:
@@ -1605,8 +2658,13 @@ def _layout_broadcast_endpoint() -> Response:
         slug, error_response = _resolve_requested_layout_slug(args_raw, layout_dir)
         if error_response is not None:
             return error_response
+        device = str(args_raw.get("device") or projects.DEFAULT_DEVICE)
+        try:
+            projects.validate_device(device)
+        except projects.ProjectDeviceError as e:
+            return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
         layout_path = (
-            workspace_layouts.layout_content_path(layout_dir, slug)
+            projects.project_content_path(layout_dir, slug, device)
             if layout_dir is not None and slug is not None
             else None
         )
@@ -1623,6 +2681,32 @@ def _layout_broadcast_endpoint() -> Response:
         summary = layout_inspect(layout_path, agent_name_by_id)
         logger.info("layout op={} agent_id={} layout={} panels={}", op, agent_id, slug, len(summary.get("panels", [])))
         return _json_response({"ok": True, "layout_slug": slug, "layout": summary})
+
+    if op == "views":
+        # Enumerate the views themselves: every registered project plus the
+        # unfiltered Everything view, with each one's member list, per-device
+        # content presence, and which connected clients have it in front.
+        # ``context`` answers "who asked"; this answers "what views exist".
+        if layout_dir is None:
+            return _json_response({"ok": True, "views": [], "last_active_id": None})
+        clients_by_view: dict[str, list[str]] = {}
+        for client_info in get_state().broadcaster.get_connected_client_infos():
+            clients_by_view.setdefault(client_info["active_layout_slug"], []).append(client_info["client_id"])
+        views = [
+            _layout_views_entry(layout_dir, clients_by_view, info.project_id, info.name, list(info.members), False)
+            for info in projects.list_projects(layout_dir)
+        ]
+        # Everything has no member list: it shows whatever exists.
+        views.append(
+            _layout_views_entry(
+                layout_dir, clients_by_view, projects.EVERYTHING_VIEW_ID, projects.EVERYTHING_VIEW_NAME, [], True
+            )
+        )
+        last_active_id = projects.get_last_active_id(layout_dir)
+        logger.info("layout op={} agent_id={} views={}", op, agent_id, len(views))
+        return _json_response(
+            {"ok": True, "views": [view.model_dump() for view in views], "last_active_id": last_active_id}
+        )
 
     if op == "context":
         # Per-client activity summary: who is connected, on which layout,
@@ -1657,7 +2741,7 @@ def _layout_broadcast_endpoint() -> Response:
             # resolves to a slug or an error response.
             error = ErrorResponse(detail="Failed to resolve the requested layout")
             return _json_response(error.model_dump(), status_code=500)
-        display_name = workspace_layouts.get_layout_display_name(layout_dir, slug)
+        display_name = _layout_op_display_name(layout_dir, slug)
         # Target the explicitly-named client, else the client that most
         # recently messaged the requesting agent, else every client.
         explicit_client = args_raw.get("client")
@@ -1709,20 +2793,20 @@ def _layout_broadcast_endpoint() -> Response:
     layout_mutex: LayoutMutex = get_state().layout_mutex
     broadcaster: WebSocketBroadcaster = get_state().broadcaster
     if is_mutating_op(op):
-        # Mutating ops are layout-targeted: they require an explicit target
-        # layout and are delivered only to connected clients that have it
-        # active (those clients apply the mutation and autosave it into the
-        # named layout's file). With no such client the op cannot take
-        # effect anywhere, so fail loudly rather than broadcasting into the
-        # void.
-        requested_layout = args_raw.get("layout")
-        if not isinstance(requested_layout, str) or not requested_layout:
-            error = ErrorResponse(detail=f"Layout op {op!r} requires a target layout (pass --layout)")
-            return _json_response(error.model_dump(), status_code=400)
+        # Mutating ops are view-targeted: they are delivered only to connected
+        # clients that have the target view active (those clients apply the
+        # mutation and autosave it into the view's file). Naming no view means
+        # "the view the user is looking at" -- the resolve below defaults to
+        # the connected client's own view (see ``_default_view_id``) -- and
+        # with no client on the resolved view the op cannot take effect
+        # anywhere, so it fails loudly rather than broadcasting into the void.
         target_layout_slug, layout_error_response = _resolve_requested_layout_slug(args_raw, layout_dir)
         if layout_error_response is not None:
             return layout_error_response
         if target_layout_slug is None or not broadcaster.has_client_on_layout(target_layout_slug):
+            # The name for the miss: what the caller asked for, or what the
+            # default resolved to when they asked for nothing.
+            requested_layout = args_raw.get("layout") or target_layout_slug or "<no view>"
             connected_clients = broadcaster.get_connected_client_infos()
             _loguru_logger.warning(
                 "Layout op {!r} rejected (412): no connected client on layout {!r}; connected clients: {}",
@@ -1773,11 +2857,14 @@ def _layout_broadcast_endpoint() -> Response:
     return _json_response(response_body)
 
 
-def _handle_unhandled_exception(exc: Exception) -> Response:
+def _handle_unhandled_exception(exc: Exception) -> Response | HTTPException:
     # Let werkzeug's own HTTP errors (404 routing, 405, etc.) render normally;
-    # only genuine unhandled exceptions become a 500 JSON body.
+    # only genuine unhandled exceptions become a 500 JSON body. Returning the
+    # exception (not re-raising it) is how Flask keeps the real status code --
+    # a raise from inside the handler re-enters handle_exception and comes out
+    # as a 500.
     if isinstance(exc, HTTPException):
-        raise exc
+        return exc
     tb = traceback.format_exception(type(exc), exc, exc.__traceback__)
     logger.error("Unhandled exception on {} {}: {}\n{}", request.method, request.path, exc, "".join(tb))
     return _json_response({"detail": f"Internal server error: {exc}"}, status_code=500)
@@ -1816,23 +2903,20 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule("/", view_func=_index, methods=["GET"])
     application.add_url_rule("/favicon.ico", view_func=_favicon, methods=["GET"])
     application.add_url_rule("/api/agents", view_func=_list_agents_endpoint, methods=["GET"])
-    application.add_url_rule("/api/agents/create-worktree", view_func=_create_worktree_agent, methods=["POST"])
     application.add_url_rule("/api/agents/create-chat", view_func=_create_chat_agent, methods=["POST"])
-    application.add_url_rule("/api/random-name", view_func=_random_name_endpoint, methods=["GET"])
     application.add_url_rule("/api/agents/<agent_id>/events", view_func=_get_events, methods=["GET"])
     application.add_url_rule("/api/agents/<agent_id>/stream", view_func=_stream_events, methods=["GET"])
     application.add_url_rule("/api/agents/<agent_id>/message", view_func=_send_message_endpoint, methods=["POST"])
+    application.add_url_rule("/api/harnesses", view_func=_get_harnesses_endpoint, methods=["GET"])
+    application.add_url_rule("/api/agents/<agent_id>/model", view_func=_set_model_choice_endpoint, methods=["POST"])
     application.add_url_rule(
-        "/api/agents/<agent_id>/model-settings", view_func=_get_model_settings_endpoint, methods=["GET"]
+        "/api/agents/<agent_id>/model-options", view_func=_get_model_options_endpoint, methods=["GET"]
     )
-    application.add_url_rule("/api/agents/<agent_id>/model", view_func=_set_model_endpoint, methods=["POST"])
-    application.add_url_rule("/api/agents/<agent_id>/fast", view_func=_set_fast_mode_endpoint, methods=["POST"])
-    application.add_url_rule("/api/workspace/fast-mode", view_func=_get_workspace_fast_mode_endpoint, methods=["GET"])
+    application.add_url_rule("/api/agents/<agent_id>/powered-by", view_func=_get_powered_by_endpoint, methods=["GET"])
     application.add_url_rule(
-        "/api/workspace/fast-mode",
-        view_func=_set_workspace_fast_mode_endpoint,
+        "/api/agents/<agent_id>/fast-mode-answered",
+        view_func=_mark_fast_mode_prompt_answered,
         methods=["POST"],
-        endpoint="_set_workspace_fast_mode",
     )
     application.add_url_rule("/api/activity", view_func=_activity_endpoint, methods=["POST"])
     application.add_url_rule("/api/uploads", view_func=_upload_attachment, methods=["POST"])
@@ -1844,18 +2928,59 @@ def create_application(state: SystemInterfaceState) -> Flask:
         endpoint="_delete_attachment",
     )
     application.add_url_rule("/api/agents/<agent_id>/interrupt", view_func=_interrupt_agent_endpoint, methods=["POST"])
-    application.add_url_rule("/api/layouts", view_func=_list_layouts_endpoint, methods=["GET"])
+    application.add_url_rule("/api/agents/<agent_id>/flush-queue", view_func=_flush_queue_endpoint, methods=["POST"])
     application.add_url_rule(
-        "/api/layouts", view_func=_save_layout_as_endpoint, methods=["POST"], endpoint="_save_layout_as"
-    )
-    application.add_url_rule("/api/layouts/<slug>", view_func=_get_named_layout_endpoint, methods=["GET"])
-    application.add_url_rule(
-        "/api/layouts/<slug>",
-        view_func=_autosave_named_layout_endpoint,
+        "/api/agents/<agent_id>/shoulder-tap-atomic",
+        view_func=_shoulder_tap_atomic_endpoint,
         methods=["POST"],
-        endpoint="_autosave_named_layout",
     )
-    application.add_url_rule("/api/layouts/<slug>/delete", view_func=_delete_named_layout_endpoint, methods=["POST"])
+    application.add_url_rule(
+        "/api/agents/<agent_id>/drain-to-composer", view_func=_drain_to_composer_endpoint, methods=["POST"]
+    )
+    application.add_url_rule("/api/projects", view_func=_list_projects_endpoint, methods=["GET"])
+    application.add_url_rule(
+        "/api/projects", view_func=_create_project_endpoint, methods=["POST"], endpoint="_create_project"
+    )
+    # The static member routes are registered before ``/api/projects/<project_id>``
+    # for readability only: werkzeug matches a literal segment ahead of a
+    # converter regardless of registration order, so ``/api/projects/members``
+    # never resolves to a project called "members".
+    application.add_url_rule("/api/projects/members", view_func=_list_project_members_endpoint, methods=["GET"])
+    application.add_url_rule("/api/projects/members/share", view_func=_share_project_member_endpoint, methods=["POST"])
+    application.add_url_rule("/api/projects/<project_id>", view_func=_get_project_endpoint, methods=["GET"])
+    application.add_url_rule(
+        "/api/projects/<project_id>",
+        view_func=_autosave_project_endpoint,
+        methods=["POST"],
+        endpoint="_autosave_project",
+    )
+    application.add_url_rule(
+        "/api/projects/<project_id>/settings", view_func=_update_project_settings_endpoint, methods=["POST"]
+    )
+    application.add_url_rule(
+        "/api/projects/<project_id>/members", view_func=_add_project_member_endpoint, methods=["POST"]
+    )
+    application.add_url_rule(
+        "/api/projects/<project_id>/members/remove", view_func=_remove_project_member_endpoint, methods=["POST"]
+    )
+    application.add_url_rule("/api/projects/<project_id>/delete", view_func=_delete_project_endpoint, methods=["POST"])
+    application.add_url_rule(
+        "/api/projects/panels/<panel_id>/delete", view_func=_delete_project_panel_endpoint, methods=["POST"]
+    )
+    # Titles are keyed by ref and belong to the machine rather than to any one
+    # project, so they hang off their own route rather than under /api/projects.
+    application.add_url_rule("/api/member-titles", view_func=_list_member_titles_endpoint, methods=["GET"])
+    application.add_url_rule(
+        "/api/member-titles", view_func=_set_member_title_endpoint, methods=["POST"], endpoint="_set_member_title"
+    )
+    # Last-used is keyed by ref and machine-wide for the same reason titles are.
+    application.add_url_rule("/api/member-last-used", view_func=_list_member_last_used_endpoint, methods=["GET"])
+    application.add_url_rule(
+        "/api/member-last-used",
+        view_func=_touch_member_last_used_endpoint,
+        methods=["POST"],
+        endpoint="_touch_member_last_used",
+    )
     application.add_url_rule("/api/agents/<agent_id>/screen", view_func=_get_screen_capture, methods=["GET"])
     application.add_url_rule("/api/agents/<agent_id>/destroy", view_func=_destroy_agent, methods=["POST"])
     application.add_url_rule("/api/agents/<agent_id>/start", view_func=_start_agent, methods=["POST"])
@@ -1879,10 +3004,11 @@ def create_application(state: SystemInterfaceState) -> Flask:
     )
     application.add_url_rule("/api/terminals/notify", view_func=_terminal_notify_endpoint, methods=["POST"])
     application.add_url_rule("/api/browsers", view_func=_browsers_passthrough, methods=["GET", "POST"])
+    application.add_url_rule("/api/browsers/<string:name>", view_func=_destroy_browser_passthrough, methods=["DELETE"])
     application.add_url_rule(
-        "/api/browsers/<string:name>", view_func=_destroy_browser_passthrough, methods=["DELETE"]
+        "/api/apps/<string:name>/deregister", view_func=_deregister_app_endpoint, methods=["POST"]
     )
-    claude_auth_endpoints.register_routes(application)
+    auth_endpoints.register_routes(application)
     latchkey_endpoints.register_routes(application)
     application.add_url_rule("/api/layout/broadcast", view_func=_layout_broadcast_endpoint, methods=["POST"])
     application.add_url_rule(

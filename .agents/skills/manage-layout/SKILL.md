@@ -26,48 +26,65 @@ dockview layout config.
 > `/home/user/workspace/system/scripts/layout.py`); do not prefix them with the skill
 > directory.
 
-## Named layouts (read this first)
+## Views (read this first)
 
-The workspace has multiple *named layouts* -- server-persisted dockview
-states such as `desktop` and `mobile` (users can save more from the
-"+" menu). Each connected browser client has exactly one layout
-active; every change that client makes auto-persists into that layout.
+The workspace shows one *view* at a time: a **project** (a filter over
+the machine's objects plus its own tab arrangement) or **Everything**
+(the unfiltered home). Each connected browser client has exactly one
+view active; every change that client makes auto-persists into that
+view. A view is arranged **per device** -- desktop and mobile clients
+each keep their own arrangement of the same view, sharing its members.
 
 Consequences for you:
 
-- **Every mutating op requires `--layout <name>`** (`open`, `split`,
-  `move`, `focus`, `close`, `rename`, `maximize`, `restore`,
-  `replace-url`). The op applies only on connected clients that have
-  that layout active; with none, it fails fast with a clear error.
-- **Figure out which layout the user means with `context`.** It lists
+- **An op with no target goes to the view the connected client is
+  looking at.** That is what you want nearly always; just run the op.
+- **Pass `--view <name>` to address a different view** (a project's
+  name, or `Everything`; `--layout` is the same flag under its old
+  name). The op applies only on connected clients that have that view
+  active; with none, it fails fast with a clear error listing what
+  each client is on.
+- **`views` lists the views themselves** -- every project plus
+  Everything, each with its member refs, whether it has desktop/mobile
+  content yet, and which connected clients have it in front -- plus the
+  machine's last-active view id. Use it to find a project's exact name
+  before `load` or `--view`.
+- **Figure out which view the user means with `context`.** It lists
   every known client with its device kind (mobile/desktop), current
-  layout, connection state, and last few messages -- the client that
+  view, connection state, and last few messages -- the client that
   most recently messaged you is almost always the requester, and its
-  current layout is the one to target.
-- **`load <layout>` switches a client onto a layout** so you can then
-  mutate it (e.g. the user is on `desktop` and asks you to "set up my
-  mobile layout": `load mobile`, then run your ops with
-  `--layout mobile`). By default it targets the client that most
+  current view is the one to target.
+- **`load <view>` switches a client onto a view** so you can then
+  mutate it (e.g. the user asks to "set up my Research project":
+  `load "Research"`, then run your ops -- the client is now on it, so
+  no `--view` is needed). By default it targets the client that most
   recently messaged you; pass `--client <id>` (from `context`) to pick
   explicitly. When the requester can't be determined, every client
   switches.
-- Messages that arrive outside the chat UI (e.g. typed directly into
-  your tmux session) carry no client metadata. Then either target the
-  most recently used layout (`inspect` with no `--layout` reads it),
-  mutate every layout in turn, or ask the user which one they mean.
+- The read ops (`inspect` / `where` / `list`) take `--device
+  desktop|mobile` to pick which device's arrangement of the view to
+  read (default desktop). Mutations need no device flag: they apply on
+  the live clients, and each client saves into its own device's
+  arrangement.
 
 ## The verbs you'll use 95% of the time
 
 | Goal | Command |
 |---|---|
-| See which client/layout asked for something | `python3 system/scripts/layout.py context` |
-| See what's currently open and how it's laid out | `python3 system/scripts/layout.py inspect [--layout <name>]` |
-| Locate one panel + its tab-mates + cardinal neighbors | `python3 system/scripts/layout.py where <ref> [--layout <name>]` |
+| See which client/view asked for something | `python3 system/scripts/layout.py context` |
+| List the views: every project + Everything, members, who's on each | `python3 system/scripts/layout.py views` |
+| See what's currently open and how it's laid out | `python3 system/scripts/layout.py inspect [--view <name>]` |
+| Locate one panel + its tab-mates + cardinal neighbors | `python3 system/scripts/layout.py where <ref> [--view <name>]` |
 | List everything addressable (services + agents) with open/running flags | `python3 system/scripts/layout.py list` |
-| Switch a client onto a named layout | `python3 system/scripts/layout.py load <layout> [--client <id>]` |
-| Surface a service / URL / terminal / chat alongside your chat | `python3 system/scripts/layout.py open <target> --layout <name>` |
-| Put a new terminal in the same tab group as your chat | `python3 system/scripts/layout.py split terminal --relative-to=self --direction=within --layout <name>` |
-| Close a tab | `python3 system/scripts/layout.py close <ref> --layout <name>` |
+| Switch a client onto a view | `python3 system/scripts/layout.py load <view> [--client <id>]` |
+| Surface a service / URL / terminal / chat alongside your chat | `python3 system/scripts/layout.py open <target>` |
+| Put a new terminal in the same tab group as your chat | `python3 system/scripts/layout.py split terminal --relative-to=self --direction=within` |
+| Close a tab | `python3 system/scripts/layout.py close <ref>` |
+
+A tab you open is filed into **your own project** -- the one named by
+your `project` label -- when you have one; otherwise it is filed into
+the view it opened in. Either way the tab appears in the view the user
+is looking at.
 
 `open` is the opinionated default. It puts the new tab to the right
 of your chat, joining whatever group already lives there if one is
@@ -138,17 +155,17 @@ from `open`.
 
 When `open` isn't enough, reach for one of these:
 
-All of these take the same required `--layout <name>` as `open`
+All of these take the same optional `--view <name>` as `open`
 (except `refresh`, which reloads iframes on every client):
 
 | Goal | Command |
 |---|---|
-| Place a new panel with explicit positioning | `python3 system/scripts/layout.py split <target> --relative-to=<ref> --direction=<left\|right\|above\|below\|within> [--ratio=0.4] [--new-group] --layout <name>` |
-| Focus an existing tab | `python3 system/scripts/layout.py focus <ref> --layout <name>` |
-| Move an open tab next to / into another's group | `python3 system/scripts/layout.py move <ref> --relative-to=<ref> --direction=<dir> [--new-group] --layout <name>` |
-| Rename a tab's label | `python3 system/scripts/layout.py rename <ref> "<title>" --layout <name>` |
-| Maximize / restore a group | `python3 system/scripts/layout.py maximize <ref> --layout <name>` / `python3 system/scripts/layout.py restore --layout <name>` |
-| Point an iframe at a new URL | `python3 system/scripts/layout.py replace-url <ref> service:<name>[/path] --layout <name>` |
+| Place a new panel with explicit positioning | `python3 system/scripts/layout.py split <target> --relative-to=<ref> --direction=<left\|right\|above\|below\|within> [--ratio=0.4] [--new-group]` |
+| Focus an existing tab | `python3 system/scripts/layout.py focus <ref>` |
+| Move an open tab next to / into another's group | `python3 system/scripts/layout.py move <ref> --relative-to=<ref> --direction=<dir> [--new-group]` |
+| Rename a tab's label | `python3 system/scripts/layout.py rename <ref> "<title>"` |
+| Maximize / restore a group | `python3 system/scripts/layout.py maximize <ref>` / `python3 system/scripts/layout.py restore` |
+| Point an iframe at a new URL | `python3 system/scripts/layout.py replace-url <ref> service:<name>[/path]` |
 | Reload one tab (or every iframe for a service) | `python3 system/scripts/layout.py refresh <ref>` |
 
 `split` is the customization escape hatch: it accepts the same
@@ -172,11 +189,11 @@ joining adjacent groups" default isn't what you want.
   is meaningless with `within` and is rejected.
 
 The most common natural request -- "put a new terminal in the same
-tab group as my chat" -- is (targeting the requester's layout, here
-`desktop`):
+tab group as my chat" -- is (with no `--view`, it lands in the view
+the requester is looking at):
 
 ```bash
-python3 system/scripts/layout.py split terminal --relative-to=self --direction=within --layout desktop
+python3 system/scripts/layout.py split terminal --relative-to=self --direction=within
 ```
 
 This creates the terminal and drops it as a tab inside the chat's
@@ -255,8 +272,8 @@ no-op messages always go to stderr.
 - `0` ok (including no-op successes)
 - `1` error (anything failed -- the specific reason is in stderr,
   including the wait-stable timeout and the "no connected client has
-  that layout active" rejection; for the latter, `load` the layout
-  first or ask the user to switch)
+  that view active" rejection; for the latter, `load` the view first
+  or ask the user to switch)
 - `3` mutex conflict -- another agent's layout op is in flight (retry
   after a short backoff; the stderr message includes the in-flight
   holder's `agent_id`, `op`, `args`, `started_at`, and a suggested
@@ -265,7 +282,7 @@ no-op messages always go to stderr.
 ## When NOT to use this skill
 
 - **Building a brand-new app.** Use `build-app` to
-  scaffold the service first; it ends with `layout.py open` calls
-  (one per named layout) to surface the new tab.
+  scaffold the service first; it ends with a `layout.py open` call to
+  surface the new tab.
 - **Persisting layout state.** The frontend auto-saves the layout on
   every change; you don't need to do anything special after a mutation.

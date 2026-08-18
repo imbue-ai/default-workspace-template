@@ -8,10 +8,10 @@ from share_gateway.materials import read_share_materials
 
 _VALID = """
 export SHARE_WORKSPACE_DOMAIN=host-aaaa.bbbb.us1.imbueminds.com
-export SHARE_RELAY_ENDPOINT=relay-us1.infra.imbue.com:7000
 export SHARE_RELAY_TOKEN="tok-123"
 export SHARE_CONNECTOR_URL=https://connector.example.com/
 export SHARE_BROKER_URL='https://accounts.example.com'
+export SHARE_CHROME_ORIGIN=https://minds.imbue.com/
 """
 
 
@@ -19,17 +19,24 @@ def test_parse_share_materials_reads_all_fields() -> None:
     materials = parse_share_materials(_VALID)
     assert materials is not None
     assert materials.workspace_domain == "host-aaaa.bbbb.us1.imbueminds.com"
-    assert materials.relay_host == "relay-us1.infra.imbue.com"
-    assert materials.relay_port == 7000
     assert materials.relay_token == "tok-123"
     assert materials.connector_url == "https://connector.example.com"
     assert materials.broker_url == "https://accounts.example.com"
+    assert materials.chrome_origin == "https://minds.imbue.com"
+
+
+def test_parse_share_materials_defaults_chrome_origin_to_empty_when_absent() -> None:
+    without_chrome = "\n".join(
+        line for line in _VALID.splitlines() if "SHARE_CHROME_ORIGIN" not in line
+    )
+    materials = parse_share_materials(without_chrome)
+    assert materials is not None
+    assert materials.chrome_origin == ""
 
 
 def test_parse_share_materials_rejects_missing_or_malformed_keys() -> None:
     assert parse_share_materials("") is None
     assert parse_share_materials("export SHARE_WORKSPACE_DOMAIN=x") is None
-    assert parse_share_materials(_VALID.replace(":7000", "")) is None
     assert parse_share_materials(_VALID.replace('tok-123', "")) is None
 
 
@@ -39,7 +46,7 @@ def test_read_share_materials_handles_missing_file(tmp_path: Path) -> None:
     materials_path.write_text(_VALID)
     materials = read_share_materials(materials_path)
     assert materials is not None
-    assert materials.relay_port == 7000
+    assert materials.relay_token == "tok-123"
 
 
 def test_signing_secret_is_created_once_and_reused(tmp_path: Path) -> None:

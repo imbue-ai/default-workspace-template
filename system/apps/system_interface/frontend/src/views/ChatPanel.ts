@@ -36,16 +36,19 @@ import {
   getProtoAgents,
   removeAgentsUpdatedListener,
 } from "../models/AgentManager";
-import { openLoginModal } from "../models/ClaudeAuth";
+import { openAgentAuth } from "../models/AgentAuth";
 import { maybePromptForFastMode } from "./fast-mode-prompt";
 import { apiUrl } from "../base-path";
 import { EmptySlot } from "./EmptySlot";
 import { uploadFilesToComposer } from "../models/ComposerAttachments";
 import { MessageInput } from "./MessageInput";
+import { PoweredByCredit } from "./PoweredByCredit";
+import { ModelBar } from "./ModelBar";
 import { buildAgentTerminalUrl, getTerminalUrl, openIframeTabForAgent } from "./DockviewWorkspace";
 import { buildConversationRows, renderTranscriptSegments, type RowDescriptor } from "./conversation-rows";
 import { ActivityIndicator } from "./ActivityIndicator";
-import { renderPendingMessages } from "./PendingMessageView";
+import { renderQueuedMessages } from "./QueuedMessageView";
+import { renderOutgoingMessages } from "./OutgoingMessageView";
 
 function getAgentTerminalUrl(agentId: string): string {
   // The ttyd dispatch script is invoked as `bash -c "$SCRIPT" <args...>` where
@@ -226,7 +229,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       const event = events[i];
       if (event.type === "assistant_message") {
         if (event.is_auth_error === true) {
-          openLoginModal();
+          openAgentAuth(agentId);
         }
         return;
       }
@@ -376,7 +379,11 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     } catch (error) {
       if (agentId === currentAgentId) {
         loading = false;
-        loadingError = (error as Error).message ?? String(error);
+        // mithril attaches the parsed JSON error body to `.response`; the server
+        // sends the human-readable reason there as `detail`. Reading `.message`
+        // alone surfaces the raw body object as "[object Object]".
+        const errResp = (error as { response?: { detail?: string } }).response;
+        loadingError = errResp?.detail ?? (error as Error).message ?? String(error);
       }
     }
   }
@@ -642,33 +649,33 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     const events = getEventsForAgent(agentId);
 
     if (events.length === 0) {
-      // No transcript yet -- but the user may have just sent their first
-      // message, which should still show immediately as an optimistic bubble
-      // rather than be hidden behind the empty-state placeholder.
-      const pendingNodes = renderPendingMessages(agentId);
-      if (pendingNodes.length === 0) {
+      // No transcript yet -- but a message the user just sent may already be
+      // queued (the harness parked it) or still in flight (an optimistic
+      // "Sending…" bubble), so render those rather than the empty-state placeholder.
+      const tailNodes = [...renderQueuedMessages(agentId), ...renderOutgoingMessages(agentId)];
+      if (tailNodes.length === 0) {
         return m(
           "div",
           { class: "message-list-empty flex items-center justify-center h-full" },
           m("p", { class: "text-text-secondary" }, "No events yet for this agent."),
         );
       }
-      return m("div", { class: "message-list-wrapper" }, [m("div", { class: MESSAGE_LIST_CLASS }, pendingNodes)]);
+      return m("div", { class: "message-list-wrapper" }, [m("div", { class: MESSAGE_LIST_CLASS }, tailNodes)]);
     }
 
     const agent = getAgentById(agentId);
     const agentIsIdle = agent?.activity_state === "IDLE";
 
-    // A new chat starts on fast mode; once it has run its grace period, ask the
-    // user whether to keep it. Checked here because this is where the loaded
+    // The first chat starts on fast mode; once it has run its grace period, ask
+    // the user whether to keep it. Checked here because this is where the loaded
     // transcript and the idle flag meet. Re-running it per render is fine:
-    // raising the prompt is idempotent, and three cheap reads (workspace already
-    // answered, agent mid-reply, fast mode already off) short-circuit ahead of
-    // the one gate that is not cheap -- the turn count, which walks the held
-    // transcript. Only an idle fast-mode chat in a workspace that has not
-    // answered reaches that walk, and it raises the modal on the first render
-    // that does, so the window is the one the user is about to close.
-    maybePromptForFastMode(agentId, events, agentIsIdle);
+    // raising the prompt is idempotent, and the cheap gates (harness declared no
+    // prompt, not the first chat, already answered, agent mid-reply, fast mode
+    // already off) short-circuit ahead of the one gate that is not cheap -- the
+    // turn count, which walks the held transcript. Which agents owe the prompt
+    // at all is the harness's declaration (the fast_mode_prompt popup on its
+    // catalog), not a harness-name check here.
+    maybePromptForFastMode(agent, events, agentIsIdle);
 
     // Memoize the turn-grouping -> rows pipeline. buildSections walks the entire
     // held transcript, so recomputing it on every scroll-driven redraw is the
@@ -731,11 +738,13 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     });
 
     return m("div", { class: "message-list-wrapper" }, [
-      // Pending (optimistic) messages render after the virtualized rows so a
-      // just-sent bubble shows at the live tail until its real event lands.
+      // The queued-message group renders after the virtualized rows so it sits at
+      // the live tail, below the last committed turn. It is a full snapshot from
+      // the harness, replaced wholesale on each push.
       m("div", { class: MESSAGE_LIST_CLASS }, [
         ...renderTranscriptSegments(rows, segments),
-        ...renderPendingMessages(agentId),
+        ...renderQueuedMessages(agentId),
+        ...renderOutgoingMessages(agentId),
       ]),
     ]);
   }
@@ -853,28 +862,37 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                 m(EmptySlot, { name: "conversation-before-input" }),
                 isConversationNotFound(agentId)
                   ? null
-                  : m(ActivityIndicator, { agentId, events: getEventsForAgent(agentId) }),
+                  : m(ActivityIndicator, {
+                      agentId,
+                      events: getEventsForAgent(agentId),
+                    }),
                 m(MessageInput, { agentId }),
-                m("div", { class: "chat-agent-terminal-link" }, [
-                  m(
-                    "button",
-                    {
-                      type: "button",
-                      onclick: () => openAgentTerminalTab(agentId),
-                    },
-                    "Open agent terminal",
-                  ),
-                  m("span", { class: "chat-agent-terminal-link-sep" }, " · "),
-                  // Persistent entry to the Claude sign-in modal so the user
-                  // can switch auth modes without waiting for an auth error.
-                  m(
-                    "button",
-                    {
-                      type: "button",
-                      onclick: () => openLoginModal(),
-                    },
-                    "Agent auth",
-                  ),
+                // Below the chat input: the original flex row -- model bar on the left, the
+                // agent-terminal + harness-auth actions right-aligned. The "Powered by" credit is
+                // rendered last as a centered overlay (absolute, pointer-events:none) so it sits
+                // in the middle without reshaping the row. Shared font, no background of its own.
+                m("div", { class: "composer-under-bar" }, [
+                  m(ModelBar, { agentId }),
+                  m("div", { class: "composer-under-bar-actions" }, [
+                    m(
+                      "button",
+                      {
+                        type: "button",
+                        class: "composer-under-bar-action",
+                        onclick: () => openAgentTerminalTab(agentId),
+                      },
+                      "Open agent terminal",
+                    ),
+                    // Persistent entry to the sign-in modal so the user can switch
+                    // auth modes without waiting for an auth error.
+                    m(
+                      "button",
+                      { type: "button", class: "composer-under-bar-action", onclick: () => openAgentAuth(agentId) },
+                      "Agent auth",
+                    ),
+                  ]),
+                  // The centered "Powered by <harness>" credit, overlaid on the bar.
+                  m(PoweredByCredit, { agentId }),
                 ]),
               ]),
         ],

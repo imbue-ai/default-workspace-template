@@ -39,21 +39,31 @@ def test_is_valid_browser_name_rejects_bad_names(name: str) -> None:
     assert names.is_valid_browser_name(name) is False
 
 
-def test_generate_browser_name_is_always_valid() -> None:
-    # Whatever generator is bound (mngr's ENGLISH or the local fallback), every name it
-    # produces must pass server-side validation -- it is used as a URL segment and a
-    # profile-dir suffix unchanged.
-    for _ in range(200):
-        name = names.generate_browser_name()
-        assert names.is_valid_browser_name(name), f"generated invalid name: {name!r}"
-        assert "-" in name  # ~2-word: a first-last pair joined by a dash
+def test_first_free_numbered_browser_name_starts_at_one_on_an_empty_fleet() -> None:
+    assert names.first_free_numbered_browser_name(set()) == "browser-1"
 
 
-def test_local_fallback_generator_produces_valid_names() -> None:
-    # The import-fallback path (when mngr isn't importable) must also produce valid,
-    # dash-joined names. Exercise it directly rather than monkeypatching the bound
-    # _generate, so the fallback word lists are covered.
-    for _ in range(200):
-        name = names._local_generate()
-        assert names.is_valid_browser_name(name)
-        assert name.count("-") == 1  # exactly first-last
+def test_first_free_numbered_browser_name_fills_the_gap_a_closed_browser_left() -> None:
+    # Closing browser-1 deletes its profile and frees the slot; the next create
+    # takes it rather than counting past it forever.
+    assert names.first_free_numbered_browser_name({"browser-2", "browser-3"}) == "browser-1"
+    assert names.first_free_numbered_browser_name({"browser-1", "browser-3"}) == "browser-2"
+
+
+def test_first_free_numbered_browser_name_counts_past_a_full_run() -> None:
+    assert names.first_free_numbered_browser_name({"browser-1", "browser-2"}) == "browser-3"
+
+
+def test_first_free_numbered_browser_name_ignores_legacy_and_near_miss_names() -> None:
+    # Random-named legacy browsers and hand-picked names hold their own names
+    # without shifting the numbering.
+    assert names.first_free_numbered_browser_name({"alex-smith", "browser-abc", "browser-01x"}) == "browser-1"
+
+
+def test_minted_numbered_names_are_always_valid() -> None:
+    # A minted name is used as a URL segment and a profile-dir suffix unchanged.
+    taken: set[str] = set()
+    for _ in range(50):
+        name = names.first_free_numbered_browser_name(taken)
+        assert names.is_valid_browser_name(name), f"minted invalid name: {name!r}"
+        taken.add(name)

@@ -28,9 +28,15 @@ three things running:
    registered service's local backend (from `data/.state/apps.toml`; the
    Caddyfile re-renders and hot-reloads when the registry changes), and
    unknown-but-plausible service origins to an auto-retrying loading page.
-3. **frpc**: the outbound tunnel to the region's relay, authenticated by the
-   per-share relay token (in the client metadata; the connector authorizes
-   every Login/NewProxy). It claims exactly this workspace's domain + wildcard.
+3. **frpc, one per relay**: outbound tunnels to EVERY relay of the region
+   (the multi-relay design: any relay can then serve any visitor),
+   authenticated by the per-share relay token (in the client metadata; the
+   connector authorizes every Login/NewProxy). Each claims exactly this
+   workspace's registered service labels + the auth label. The relay set comes
+   from the connector's `GET /shares/assignment` (relay-token auth), fetched
+   at stack start, re-polled on the server-provided interval, and cached under
+   `data/.state/share_gateway/assignment.json` so restarts work with the
+   connector down; `share.env` carries no relay endpoint.
 
 The TLS private key is generated in the workspace and never leaves it: the
 runner sends a CSR to the connector, which completes ACME DNS-01 and returns
@@ -55,3 +61,36 @@ email_domains = []
 Workspace-level grants admit every service; per-service grants admit exactly
 that service's origin (the shell and siblings stay 403). Matching is
 case-insensitive.
+
+## Request identity (what a service sees)
+
+Every request that reaches a backend carries two gateway-set headers, and a
+service can trust them because caddy strips any inbound copy before
+`forward_auth` and re-injects only the verified values from `/_auth/verify`:
+
+- **`X-Share-Owner`** -- always present, `true` or `false`.
+- **`X-Share-Email`** -- present **only when `X-Share-Owner: false`**: the
+  verified email of the non-owner visitor making the request. It is absent for
+  owner requests; the owner's email is deliberately never revealed per-request.
+
+This is the same contract the local `mngr forward` path honors, so a service
+codes against it identically whether reached over the relay or locally. Locally
+the single authenticated user is always the owner, so `X-Share-Owner: true`
+and no `X-Share-Email` -- a service that needs per-visitor behavior keys off
+`X-Share-Email` whenever `X-Share-Owner` is `false`.
+
+## Owner email (only while shared)
+
+Because the owner's email never rides a request header, a service that needs it
+reads it from a dedicated file the minds app writes when the workspace is
+shared and removes when it is unshared:
+
+```
+data/.state/share/owner_email
+```
+
+The file holds the owner's account email (no trailing newline) and exists
+**only while sharing is active**, so its mere presence is a reliable "this
+workspace is shared" signal. It is absent for an unshared (e.g. purely local
+Docker) workspace, and may also be absent if the owner never signed into an
+Imbue account -- a service must tolerate it being missing.

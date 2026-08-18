@@ -1,6 +1,25 @@
 /**
- * Single shared dockview workspace. All agents, chats, terminals, and
- * apps coexist as tabs in one DockviewComponent.
+ * The dock: one DockviewComponent holding the tabs of whichever *view* is
+ * mounted, plus the bookkeeping that ties those tabs to the machine.
+ *
+ * A view is either a project (a filter over the machine's objects plus its own
+ * saved arrangement) or Everything (the unfiltered view, and the home). Both
+ * mount here identically -- switching saves the outgoing arrangement and loads
+ * the incoming one -- and the only difference is membership: a project has an
+ * explicit member list, and Everything has none because it shows whatever the
+ * machine holds.
+ *
+ * Membership is many-to-many and nothing owns anything, so the rules the dock
+ * enforces are narrow:
+ *   - opening an object in a project adds it to that project's member list;
+ *   - closing a tab changes no membership and stops nothing -- the object keeps
+ *     running, backgrounded, and the sidebar keeps listing it;
+ *   - destroying is the one thing that reaches across views: the object is gone
+ *     from the machine, so it leaves every project's saved content and member
+ *     list at once.
+ *
+ * The dock is never empty. A view with no panels gets a New Tab launcher, which
+ * is also what the "+" opens and what a freshly-created project lands on.
  */
 
 import m from "mithril";
@@ -10,25 +29,47 @@ import {
   type DockviewGroupPanel,
   type IContentRenderer,
   type IHeaderActionsRenderer,
+  type ITabRenderer,
   type SerializedDockview,
+  type TabPartInitParameters,
 } from "dockview-core";
 import { ChatPanel } from "./ChatPanel";
 import { AgentTerminalPanel } from "./AgentTerminalPanel";
-import { IframePanel, IFRAME_PANEL_PANEL_ID_ATTR, reloadIframesForService } from "./IframePanel";
+import { IframePanel, IFRAME_PANEL_LIVE_KEY_ATTR, reloadIframesForService } from "./IframePanel";
+import {
+  BROWSER_SERVICE_NAME,
+  bindSlot,
+  destroyLiveSurface,
+  duplicateLiveKeyPanelIds,
+  ensureLiveSurface,
+  initializeLiveLayer,
+  liveKeyForPanel,
+  liveKeyForRef,
+  liveSurfaceParams,
+  reconcileLiveSurfaces,
+  rekeyLiveSurface,
+  scheduleReconcile,
+  sessionParamFromUrl,
+  setDragInProgress,
+  unbindSlot,
+  type LiveKey,
+  type LiveSurface,
+  type PanelParams,
+  type PanelType,
+} from "./liveSurfaces";
 import { TerminalBanner } from "./TerminalBanner";
 import { SubagentView } from "./SubagentView";
-import { CreateAgentModal } from "./CreateAgentModal";
-import { CreateBrowserModal } from "./CreateBrowserModal";
 import { DestroyConfirmDialog } from "./DestroyConfirmDialog";
-import { LayoutDialog, type LayoutDialogMode } from "./LayoutDialog";
 import { ShareModal } from "./ShareModal";
+import { pickableApps } from "./AllAppsPicker";
+import { serviceIconMarkup } from "./appIcon";
+import { NewTabLauncher, buildLauncherRows } from "./NewTabLauncher";
+import type { LaunchKind, LauncherRow } from "./NewTabLauncher";
+import { placeMenu } from "./Sidebar";
+import type { MenuAnchor, QuickAddTabType, SidebarTabRow } from "./Sidebar";
 import { effectiveLifecycleState, livenessCategoryForState } from "./agentLiveness";
+import { normalizeTabTitle } from "./tab-rename";
 import { attachHoverTooltip } from "./hoverTooltip";
-import {
-  addActivityOverlayListener,
-  getEffectiveActivityState,
-  removeActivityOverlayListener,
-} from "../models/PendingMessages";
 import { CLOSE_ACTIVE_TAB } from "@minds/embed-contract";
 import { setEmbedderMessageHandler } from "../embed";
 import { reloadInterface } from "../reload";
@@ -41,9 +82,13 @@ import {
   addAgentsUpdatedListener,
   addLayoutOpListener,
   addLayoutSyncListener,
+  addMemberLastUsedListener,
+  addMemberTitleListener,
+  addProjectSyncListener,
   addTerminalSessionListener,
   allocateTerminalName,
   buildSessionTerminalUrl,
+  createChatAgent,
   fetchTerminalSessions,
   getAgentById,
   getAgents,
@@ -53,30 +98,62 @@ import {
   removeAgentLocally,
   removeAgentsUpdatedListener,
   reportClientState,
+  whenAppsLoaded,
   type AgentsUpdatedListener,
+  type CreatedChatAgent,
+  type AppEntry,
   type LayoutOpEvent,
-  type LayoutOpListener,
   type LayoutSyncEvent,
-  type LayoutSyncListener,
+  type LayoutOpListener,
+  type MemberLastUsedListener,
+  type MemberTitleListener,
+  type ProjectSyncEvent,
+  type ProjectSyncListener,
   type TerminalSessionInfo,
   type TerminalSessionListener,
 } from "../models/AgentManager";
 import {
-  getActiveLayoutSlug,
+  getActiveProjectId,
   getClientId,
   getDeviceKind,
-  getStoredLayoutSlug,
-  setActiveLayoutSlug,
+  getStoredProjectId,
+  setActiveProjectId,
 } from "../models/ClientIdentity";
+import { loadSnapshotWithStream } from "../models/StreamingMessage";
 import {
-  autosaveLayout,
-  chooseInitialLayout,
-  deleteLayoutRequest,
-  fetchLayoutContent,
-  fetchLayoutsList,
-  saveLayoutAs,
-  type LayoutInfo,
-} from "../models/WorkspaceLayouts";
+  applyMemberTitleChange,
+  displayNameForMember,
+  loadMemberTitles,
+  moveMemberTitle,
+  setMemberTitle,
+} from "../models/MemberTitles";
+import { createBrowser } from "../models/Browsers";
+import { browserDisplayName, chatDisplayName, terminalDisplayName } from "./derived-names";
+import {
+  applyMemberLastUsedChange,
+  getMemberLastUsed,
+  loadMemberLastUsed,
+  touchMemberLastUsed,
+} from "../models/MemberLastUsed";
+import {
+  addMember,
+  autosaveProject,
+  buildEverythingMembers,
+  chooseInitialViewId,
+  fetchProjectContent,
+  fetchProjectsList,
+  isEverythingView,
+  memberKindFromRef,
+  memberRef,
+  filingProjectForAgentOp,
+  projectForViewId,
+  removeMember,
+  removePanelFromAllProjects,
+  shareMember,
+  type MachineInventory,
+  type MachineObject,
+  type ProjectInfo,
+} from "../models/Projects";
 
 const AUTOSAVE_DEBOUNCE_MS = 1500;
 
@@ -88,6 +165,10 @@ const AUTOSAVE_DEBOUNCE_MS = 1500;
 // params from its id alone when the bookkeeping entry is missing.
 const CHAT_PANEL_ID_PREFIX = "chat-";
 const TERMINAL_PANEL_ID_PREFIX = "terminal-session-";
+// New Tab launcher panels. The prefix is what tells a launcher apart after a
+// layout restore, when all that survives is the panel id and its params.
+const LAUNCHER_PANEL_ID_PREFIX = "new-tab-";
+const LAUNCHER_PANEL_TITLE = "New tab";
 
 /** Split the body of a ``service:`` ref into its service name and an
  *  optional ``?query`` suffix. Plain ``service:web`` yields
@@ -162,51 +243,26 @@ function rebuildAgentTerminalUrl(url: string): string | null {
   return args.length >= 3 ? buildAgentTerminalUrl(args[2]) : `${getTerminalUrl()}?arg=_&arg=agent`;
 }
 
-type PanelType = "chat" | "iframe" | "subagent";
-
-interface PanelParams {
-  panelType: PanelType;
-  agentId: string;
-  chatAgentId?: string;
-  url?: string;
-  title?: string;
-  subagentSessionId?: string;
-  // Workspace service name this iframe is tied to (e.g. "web", "api").
-  // Set only for iframe tabs that proxy an actual workspace service; left
-  // undefined for ad-hoc URL tabs, terminals, and agent-owned iframes.
-  // Drives both the WS-driven `layout_op` (op="refresh") service-wide
-  // reload match and the presence of the per-tab Refresh button.
-  serviceName?: string;
-  // Set only on persistent-terminal iframe tabs. ``terminalSessionName`` is
-  // the named tmux session the tab attaches to (attach-or-create); its
-  // presence is what marks a panel as a terminal (drives the banner, the
-  // Destroy button, and layout-restore reattach). ``terminalId`` is a
-  // per-tab id passed into the ttyd URL so the backend can map this tab's
-  // tmux client back to us for live title tracking. ``terminalSessionId`` is
-  // the immutable ``#{session_id}`` used to reflect a rename onto the tab.
-  terminalSessionName?: string;
-  terminalId?: string;
-  terminalSessionId?: string;
-}
-
-// Modal state
-let showNewChatModal = false;
-let showNewAgentModal = false;
-let showNewBrowserModal = false;
-// When a background create POST fails, the New-browser modal is re-opened
-// pre-filled with the name the user typed and the daemon's reason, so the user
-// always learns WHY the browser didn't open (rather than the optimistic pane
-// silently vanishing). Both are cleared on a clean open / cancel.
-let newBrowserPrefillName: string | null = null;
-let newBrowserError: string | null = null;
-
-// The dockview group whose header "+" button opened the New chat / New agent
-// modal. Captured at click time because those modals create their chat panel
-// asynchronously (after the user confirms), by which point the active group
-// may have changed. Consumed in the modal's onCreated callback so the new
-// chat lands in the split the "+" was clicked in, then cleared. Null when the
-// flow was started from the empty-state overlay (no host group).
-let newTabTargetGroup: DockviewGroupPanel | null = null;
+// Second paragraph of each destroy confirmation. Destroying is not a louder
+// Close: closing a tab leaves the object running and still filed wherever it
+// was filed, while destroying takes it off the machine -- so it leaves every
+// project at once, and each variant says so outright. The chat variant also
+// says the transcript survives, because that is the thing people are actually
+// afraid of losing.
+const DESTROY_CHAT_DETAILS =
+  "The agent is removed from every project that shows it, not just this one. The transcript stays accessible.";
+const DESTROY_TERMINAL_DETAILS =
+  "The tmux session is killed and the terminal is removed from every project that shows it, not just this one.";
+const DESTROY_BROWSER_DETAILS =
+  "The browser is retired from the fleet and removed from every project that shows it, not just this one.";
+// The app verb is the one that has to be careful about what it does NOT do.
+// Deregistering takes the app out of the port registry, so it leaves the app
+// list and every project at once — but nothing in this workspace supervises the
+// program behind the port, so that program is still running afterwards. Saying
+// "shut down" here would be a lie.
+const DEREGISTER_APP_DETAILS =
+  "The app disappears from every project that shows it and from the app list, not just from this project. " +
+  "The program it runs is not stopped — it keeps running until the agent that started it stops it.";
 
 // Destroy dialog state
 let showDestroyDialog = false;
@@ -228,6 +284,14 @@ let showBrowserDestroyDialog = false;
 let browserDestroyName: string | null = null;
 let browserDestroyPanelId: string | null = null;
 
+// App-deregister dialog state. Separate for the fourth time, and for the
+// starkest reason: this one does not take anything down. It unregisters the app
+// (POST /api/apps/<name>/deregister, which drives system/scripts/forward_port.py
+// --remove) and unfiles it everywhere, and the process it was serving lives on.
+let showAppDeregisterDialog = false;
+let appDeregisterName: string | null = null;
+let appDeregisterPanelId: string | null = null;
+
 // Share modal state
 let showShareModal = false;
 let shareServiceName: string | null = null;
@@ -243,19 +307,34 @@ let dockviewContainer: HTMLElement | null = null;
 const panelParams = new Map<string, PanelParams>();
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let _layoutOpListener: LayoutOpListener | null = null;
-let _layoutSyncListener: LayoutSyncListener | null = null;
+let _projectSyncListener: ProjectSyncListener | null = null;
+let _memberTitleListener: MemberTitleListener | null = null;
+let _memberLastUsedListener: MemberLastUsedListener | null = null;
 let _terminalSessionListener: TerminalSessionListener | null = null;
 let initialized = false;
+// True while a view's content is being mounted. The teardown half of that
+// removes every panel one at a time, which must not be mistaken for the user
+// emptying the dock (see ``ensureDockIsNotEmpty``).
+let isApplyingLayout = false;
 
-// ---------- Named-layout state ----------
+// ---------- Active-view state ----------
 
-// Which layout dialog ("+" menu: Save / Load / Delete) is open, if any.
-let layoutDialogMode: LayoutDialogMode | null = null;
-// Cached layout registry backing the dialogs; refreshed on dialog open and
-// on every layout_saved / layout_deleted broadcast.
-let availableLayouts: LayoutInfo[] = [];
+// Cached project registry: the sidebar's project list and member lists, and the
+// display names in the project-was-deleted notice. Everything is never in here
+// -- it has no registry entry. Refreshed at startup and on every project
+// broadcast, membership changes included.
+let availableProjects: ProjectInfo[] = [];
+// The view whose content is currently mounted in the dockview, and so also the
+// view autosave writes to -- a project id, or EVERYTHING_VIEW_ID. Deliberately
+// distinct from the *chosen* view in ClientIdentity, which the switcher
+// persists the moment the user clicks -- before this module has loaded
+// anything: saving against the chosen id would write the outgoing view's
+// arrangement into the incoming one, and the already-on-it guard in
+// ``switchToView`` would read a pick that recorded its choice first as a no-op
+// and never load it.
+let mountedViewId: string | null = null;
 // Serialized form of the layout content last persisted to (or received
-// from) the server for the active layout. Autosave skips the POST when the
+// from) the server for the active project. Autosave skips the POST when the
 // current serialization matches -- the content guard half of the live-sync
 // echo suppression.
 let lastPersistedLayoutJson: string | null = null;
@@ -273,93 +352,541 @@ const REMOTE_APPLY_SUPPRESS_MS = AUTOSAVE_DEBOUNCE_MS * 2 + 1000;
 // just-built view dominates while the chat stays legible.
 const OPEN_TAB_SPLIT_FRACTION = 0.6;
 
-function createMithrilRenderer(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  component: m.ComponentTypes<any, any>,
-  attrs: Record<string, unknown>,
-): IContentRenderer {
-  const element = document.createElement("div");
-  element.style.width = "100%";
-  element.style.height = "100%";
-  element.style.display = "flex";
-  element.style.flexDirection = "column";
+/** Reload the single iframe rendered for the live page ``key``.
+ *
+ *  Looks the element up by its live-key attribute and triggers a same-origin
+ *  ``contentWindow.location.reload()``. A cross-origin panel throws a
+ *  SecurityError on that call, so the fallback re-assigns ``src`` to force the
+ *  browser to refetch. Shared by the per-tab Refresh button and the
+ *  agent-driven ``refresh`` op. */
+function reloadIframeForKey(key: LiveKey): void {
+  const iframe = document.querySelector<HTMLIFrameElement>(
+    `iframe[${IFRAME_PANEL_LIVE_KEY_ATTR}="${CSS.escape(key)}"]`,
+  );
+  if (!iframe) return;
+  try {
+    const win = iframe.contentWindow;
+    if (win !== null) {
+      win.location.reload();
+      return;
+    }
+  } catch {
+    // Cross-origin: fall through to src reassignment.
+  }
+  const currentSrc = iframe.getAttribute("src");
+  if (currentSrc !== null) iframe.setAttribute("src", currentSrc);
+}
 
-  // dockview keeps inactive tabs mounted (defaultRenderer: "always"), and
-  // mithril's m.redraw() is global, so a hidden panel's component keeps
-  // redrawing while its element is collapsed to zero size. Thread dockview's
-  // authoritative panel-visibility signal into the component (as the
-  // ``isVisible`` attr) so it can skip work that must not run while hidden --
-  // e.g. ChatPanel's scroll management, which would otherwise corrupt the
-  // retained scroll position against the zero-sized element. Defaults to true
-  // so a component mounted without a panel api behaves as before.
-  let panelVisible = true;
-  let visibilityDisposable: { dispose: () => void } | null = null;
-
-  return {
-    element,
-    init(parameters) {
-      panelVisible = parameters.api.isVisible;
-      visibilityDisposable = parameters.api.onDidVisibilityChange((event) => {
-        panelVisible = event.isVisible;
-        // Redraw so the component re-runs its lifecycle hooks with the new
-        // visibility -- in particular so ChatPanel restores its scroll position
-        // on the first redraw after the tab is shown again.
+/** Reload whatever a tab is showing, whichever kind of tab it is.
+ *
+ *  A service-backed iframe reloads service-wide (every pane on that service,
+ *  which is what an app's own Refresh has always meant, and which now reaches
+ *  backgrounded panes too since their pages are still live); any other iframe
+ *  reloads just itself; a chat refetches its transcript snapshot and
+ *  reconnects its stream. A subagent view owns its own stream and exposes no
+ *  refetch, so it is re-rendered. */
+function refreshPanelContent(panelId: string): void {
+  const params = panelParams.get(panelId);
+  if (params === undefined) return;
+  if (params.panelType === "chat") {
+    const chatAgentId = params.chatAgentId ?? params.agentId;
+    void loadSnapshotWithStream(chatAgentId)
+      .catch(() => {
+        // The transcript that was already on screen stays; the chat's own
+        // reconnect loop keeps retrying.
+      })
+      .finally(() => {
         m.redraw();
-        // A tab switch changes which chat is visible; report so the OOM
-        // prioritizer re-scores (a visible chat is more protected).
-        reportChatTabActivity();
       });
-      m.mount(element, { view: () => m(component, { ...attrs, isVisible: panelVisible }) });
-    },
-    dispose() {
-      if (visibilityDisposable !== null) {
-        visibilityDisposable.dispose();
-        visibilityDisposable = null;
-      }
-      m.mount(element, null);
-    },
+    return;
+  }
+  if (params.panelType === "subagent") {
+    m.redraw();
+    return;
+  }
+  if (params.serviceName) {
+    reloadIframesForService(params.serviceName);
+    return;
+  }
+  const key = liveKeyForPanel(panelId, params);
+  if (key !== null) reloadIframeForKey(key);
+}
+
+// ---------- Tabs ----------
+
+// Equal-width tabs (§5 of the design). ``TAB_STRIP_RESERVED_PX`` is the space
+// every strip keeps for its "+" and the first tab's leading margin; the ideal
+// width is what is left over, divided by the tabs, and clamped so a strip full
+// of tabs stays readable and a strip holding one does not stretch it across the
+// pane.
+const TAB_STRIP_RESERVED_PX = 44;
+// The floor is set by what a tab must still show at its narrowest, hover
+// included: the kind glyph, the revealed minus and kebab, their paddings, and
+// at least three legible characters of title before the fade. 100px held the
+// chrome but could pinch the title to nothing once the controls appeared.
+const TAB_WIDTH_MIN_PX = 140;
+const TAB_WIDTH_MAX_PX = 220;
+// A title too long for its tab fades out over its last 20px instead of taking
+// an ellipsis: the tail of a truncated name is more legible than "...", and the
+// fade never appears on a title that fits.
+const TAB_TITLE_FADE_PX = 20;
+
+/** One tab strip's contribution to the shared tab width. */
+export interface TabStripMetrics {
+  // Width of the whole header, "+" included -- what TAB_STRIP_RESERVED_PX is
+  // measured against.
+  width: number;
+  tabCount: number;
+}
+
+/**
+ * The one width every tab in every strip renders at.
+ *
+ * Per strip the ideal is what is left of its width once the "+" is accounted
+ * for, shared between its tabs; the narrowest of those ideals wins, so no strip
+ * ends up scrolling while another has room to spare. The result is clamped to
+ * [TAB_WIDTH_MIN_PX, 220]: below the floor a hovered tab cannot keep three
+ * characters of title visible beside its controls, and above the
+ * ceiling a lone tab looks like a mistake. Strips with no tabs are skipped, and
+ * a dock with no tabs at all answers with the ceiling -- there is nothing to
+ * apply it to.
+ */
+export function equalTabWidth(strips: readonly TabStripMetrics[]): number {
+  let ideal = Number.POSITIVE_INFINITY;
+  for (const strip of strips) {
+    if (strip.tabCount <= 0) continue;
+    ideal = Math.min(ideal, (strip.width - TAB_STRIP_RESERVED_PX) / strip.tabCount);
+  }
+  if (!Number.isFinite(ideal)) return TAB_WIDTH_MAX_PX;
+  return Math.round(Math.min(TAB_WIDTH_MAX_PX, Math.max(TAB_WIDTH_MIN_PX, ideal)));
+}
+
+/**
+ * Whether a title actually overflows the box it is drawn in.
+ *
+ * Only a truncated title gets the trailing fade; a short one stays crisp to its
+ * last pixel. The one-pixel tolerance is for sub-pixel layout, where a title
+ * that fits exactly can measure a fraction wider than its box.
+ */
+export function isTitleTruncated(scrollWidth: number, clientWidth: number): boolean {
+  return scrollWidth > clientWidth + 1;
+}
+
+const XMLNS = "http://www.w3.org/2000/svg";
+
+// Inner markup for the tab's kind glyphs, drawn on the same 24x24 Feather grid
+// as `icons.ts`, which carries none of them. The rail and the launcher draw the
+// same shapes; all three belong in the shared table once this rework settles.
+const TAB_KIND_PATHS = {
+  chat:
+    '<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7' +
+    'a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>',
+  browser:
+    '<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/>' +
+    '<path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>',
+  terminal: '<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>',
+  app: '<rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/>',
+  url:
+    '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>' +
+    '<path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+  launcher: '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
+  // Filled rather than stroked: at 14px a 1px-radius ring reads as fuzz.
+  kebab:
+    '<circle cx="12" cy="5" r="1.5" fill="currentColor" stroke="none"/>' +
+    '<circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/>' +
+    '<circle cx="12" cy="19" r="1.5" fill="currentColor" stroke="none"/>',
+} as const;
+
+type TabIconName = keyof typeof TAB_KIND_PATHS;
+
+// The size a tab's leading glyph is drawn at.
+const TAB_GLYPH_SIZE = 14;
+
+/** Full <svg> string for one of the tab strip's own glyphs. */
+function tabIcon(name: TabIconName, size: number): string {
+  return (
+    `<svg xmlns="${XMLNS}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" ` +
+    `stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">` +
+    `${TAB_KIND_PATHS[name]}</svg>`
+  );
+}
+
+/** What kind of thing a tab is showing, for its leading glyph. Mirrors the
+ *  member-ref classification -- browsers and terminals are fleets rather than
+ *  installed apps and read as their own kinds -- so a tab and its sidebar row
+ *  wear the same icon. */
+function tabIconNameForPanel(params: PanelParams | undefined): TabIconName {
+  if (params === undefined) return "url";
+  if (params.panelType === "launcher") return "launcher";
+  if (params.panelType === "chat") return "chat";
+  if (isTerminalPanelParams(params)) return "terminal";
+  if (params.serviceName === BROWSER_SERVICE_NAME) return "browser";
+  if (params.serviceName) return "app";
+  return "url";
+}
+
+/** The markup a tab's leading glyph is drawn from: a registered app's own icon
+ *  when it has one, and the kind's built-in glyph otherwise -- so a tab, its
+ *  sidebar row and its launcher row all wear the same picture. */
+function tabIconMarkupForPanel(params: PanelParams | undefined): string {
+  const name = tabIconNameForPanel(params);
+  const fallback = tabIcon(name, TAB_GLYPH_SIZE);
+  if (name !== "app") return fallback;
+  return serviceIconMarkup(params?.serviceName ?? null, TAB_GLYPH_SIZE, fallback);
+}
+
+// ---------- The tab ⋮ menu ----------
+
+interface TabMenuItem {
+  label: string;
+  iconName: IconName;
+  isDestructive?: boolean;
+  run: () => void;
+}
+
+// A separator between groups of items; the design puts one above "Hide tab".
+const MENU_DIVIDER = "divider";
+
+type TabMenuEntry = TabMenuItem | typeof MENU_DIVIDER;
+
+// Menu chrome, settled in the design (§6) and shared with the sidebar's menus:
+// a floating card on the primary surface with a hairline border, 8px radius and
+// the overlay elevation shadow, holding 32px rows of icon + label.
+const TAB_MENU_CARD_CLASS = "fixed z-50 min-w-[180px] rounded-lg border border-border bg-surface py-1 text-[13px]";
+const TAB_MENU_SHADOW_STYLE = "box-shadow: 0 1px 1px 0 rgba(0, 0, 0, 0.08), 0 3px 12px 0 rgba(0, 0, 0, 0.08);";
+const TAB_MENU_ROW_CLASS = "flex h-8 w-full cursor-pointer items-center gap-2 px-3 text-left hover:bg-bg-hover";
+
+// The one open tab menu, if any. Only one is ever up: opening another closes
+// this one first, and so does an outside press, Escape, a scroll, a resize, or
+// picking anything.
+let openTabMenu: { close: () => void } | null = null;
+
+function closeTabMenu(): void {
+  openTabMenu?.close();
+}
+
+/**
+ * Open a tab's ⋮ menu against ``anchor``.
+ *
+ * Built on ``document.body`` rather than inside the tab: the tab strip clips
+ * its own overflow (``.dv-tabs-container`` is ``overflow: auto``), so an in-tab
+ * menu would be cut off -- the same constraint that puts the hover tooltip on
+ * the body. Placement is the sidebar's, so every floating menu in the workspace
+ * flips and clamps by one rule. ``onClosed`` lets the tab drop the hover
+ * treatment it was holding while its menu was up, and ``trigger`` -- the ⋮ that
+ * opened it -- is excluded from the outside-press close so that pressing it
+ * again toggles the menu shut instead of closing and reopening it.
+ */
+function openTabMenuAt(
+  anchor: MenuAnchor,
+  entries: readonly TabMenuEntry[],
+  onClosed: () => void,
+  trigger: HTMLElement | null,
+): void {
+  closeTabMenu();
+  const element = document.createElement("div");
+  element.className = TAB_MENU_CARD_CLASS;
+  element.setAttribute("role", "menu");
+  element.style.cssText = `left: 0; top: 0; ${TAB_MENU_SHADOW_STYLE}`;
+
+  const close = (): void => {
+    document.removeEventListener("pointerdown", onOutsidePointerDown, true);
+    document.removeEventListener("keydown", onKeyDown, true);
+    window.removeEventListener("resize", close);
+    window.removeEventListener("scroll", close, true);
+    element.remove();
+    openTabMenu = null;
+    onClosed();
   };
+
+  function onOutsidePointerDown(event: PointerEvent): void {
+    const target = event.target as Node;
+    if (element.contains(target) || trigger?.contains(target) === true) return;
+    close();
+  }
+
+  function onKeyDown(event: KeyboardEvent): void {
+    if (event.key === "Escape") close();
+  }
+
+  for (const entry of entries) {
+    if (entry === MENU_DIVIDER) {
+      const divider = document.createElement("div");
+      divider.className = "my-1 border-t border-border";
+      element.appendChild(divider);
+      continue;
+    }
+    const row = document.createElement("div");
+    row.className = `${TAB_MENU_ROW_CLASS} ${entry.isDestructive ? "text-red-600" : "text-text-primary"}`;
+    row.setAttribute("role", "menuitem");
+    const glyph = document.createElement("span");
+    glyph.className = "flex w-4 shrink-0 items-center justify-center";
+    glyph.innerHTML = icon(entry.iconName, { size: 14 });
+    const label = document.createElement("span");
+    label.className = "min-w-0 flex-1 truncate";
+    label.textContent = entry.label;
+    row.append(glyph, label);
+    row.addEventListener("click", (event) => {
+      event.stopPropagation();
+      close();
+      entry.run();
+    });
+    element.appendChild(row);
+  }
+
+  document.body.appendChild(element);
+  // Measured after mounting, as the sidebar's menus and the tooltip are: the
+  // card's height depends on how many rows it holds, and both the flip and the
+  // clamp need it. This runs before paint, so the card is never seen at the
+  // origin.
+  const rect = element.getBoundingClientRect();
+  const position = placeMenu(
+    anchor,
+    { width: rect.width, height: rect.height },
+    { width: window.innerWidth, height: window.innerHeight },
+    "below",
+  );
+  element.style.left = `${position.left}px`;
+  element.style.top = `${position.top}px`;
+
+  document.addEventListener("pointerdown", onOutsidePointerDown, true);
+  document.addEventListener("keydown", onKeyDown, true);
+  window.addEventListener("resize", close);
+  window.addEventListener("scroll", close, true);
+  openTabMenu = { close };
 }
 
-function createTabActionButton(
-  title: string,
-  iconName: IconName,
-  onClick: (ev: MouseEvent) => void,
-  className: string = "",
-): HTMLButtonElement {
-  const btn = document.createElement("button");
-  btn.className = `dv-custom-tab-action ${className}`.trim();
-  btn.title = title;
-  // No explicit size: `.dv-custom-tab-action svg` sizes these to 12px in CSS.
-  btn.innerHTML = icon(iconName);
-  btn.addEventListener("pointerdown", (ev) => ev.preventDefault());
-  btn.addEventListener("click", (ev) => {
-    ev.preventDefault();
-    ev.stopPropagation();
-    onClick(ev);
+/**
+ * What one tab's ⋮ menu offers, designed per object type against the verbs the
+ * backend actually has (§6).
+ *
+ * Refresh reloads what the tab is showing, which means nothing for a terminal
+ * (its tmux session is the content, and reattaching is not a refresh) so that
+ * one goes without. Share is an app affordance: the share surface is per
+ * registered service. Hide tab is always last above the destructive verb,
+ * because hiding is the safe, membership-preserving one -- the object keeps
+ * running and stays filed wherever it was filed.
+ *
+ * The destructive verb is whatever taking the object off the machine means for
+ * its kind: destroying a chat's agent, killing a terminal's tmux session,
+ * retiring a browser from the fleet, unregistering an app. The app one is
+ * deliberately weaker than the other three, because that is the truth -- the
+ * workspace owns the port registry and nothing else, so it can unregister an
+ * app but cannot stop the program serving it. An ad-hoc page has no verb at
+ * all: it is only ever a panel, so offering one would be a menu item that
+ * cannot act.
+ */
+function tabMenuEntries(panelId: string): TabMenuEntry[] {
+  const params = panelParams.get(panelId);
+  if (params === undefined) return [];
+  const entries: TabMenuEntry[] = [];
+  const isTerminal = isTerminalPanelParams(params);
+  if (!isTerminal) {
+    entries.push({
+      label: "Refresh",
+      iconName: "refresh",
+      run: () => refreshPanelContent(panelId),
+    });
+  }
+  const serviceName = params.serviceName;
+  if (serviceName !== undefined && serviceName !== BROWSER_SERVICE_NAME && !isTerminal) {
+    entries.push({
+      label: `Share ${serviceName}`,
+      iconName: "share",
+      run: () => {
+        shareServiceName = serviceName;
+        showShareModal = true;
+        m.redraw();
+      },
+    });
+  }
+  if (entries.length > 0) entries.push(MENU_DIVIDER);
+  if (params.panelType === "chat") {
+    // Only a chat is renameable: it is an mngr agent, so a typed name becomes
+    // its display_name label with the canonical form as its true name, and the
+    // pair moves together (see the member-title endpoint). Terminals and
+    // browsers derive their names from their identities instead, and renaming
+    // the identity out from under a live tmux session or Chromium profile is
+    // not something the workspace offers.
+    entries.push({
+      label: "Rename",
+      iconName: "edit",
+      run: () => {
+        // The same inline editor the double-click opens, reached through the
+        // tab's handle so the menu and the gesture stay one mechanism.
+        tabHandlesByPanelId.get(panelId)?.beginTitleEdit();
+      },
+    });
+  }
+  entries.push({
+    label: "Hide tab",
+    iconName: "minus",
+    run: () => {
+      const panel = dockview?.panels.find((candidate) => candidate.id === panelId);
+      panel?.api.close();
+    },
   });
-  return btn;
+  const destroy = tabDestroyEntry(panelId, params);
+  if (destroy !== null) entries.push(destroy);
+  return entries;
 }
 
-function createCustomTab(options: { id: string; name: string }): {
-  element: HTMLElement;
-  init: (params: {
-    title: string;
-    api: {
-      close: () => void;
-      onDidTitleChange: (cb: (e: { title: string }) => void) => { dispose: () => void };
-      isActive: boolean;
-      onDidActiveChange: (cb: (e: { isActive: boolean }) => void) => { dispose: () => void };
+/** What the tab itself is currently called, for a destructive verb's label --
+ *  "Quit {name}" always matches the name printed on the tab, whatever kind of
+ *  object it is. Falls back to the panel's own title (set at creation, before
+ *  any name is filed) on the rare chance the live dock has already lost the
+ *  panel by the time the menu renders. */
+function currentTabTitle(panelId: string, fallback: string): string {
+  return dockview?.panels.find((candidate) => candidate.id === panelId)?.title ?? fallback;
+}
+
+/** The destructive verb for one tab, or null for a kind that has none. Each
+ *  raises its own confirmation, which is where what the destroy takes down --
+ *  and that it reaches every project, not just this one -- is spelled out.
+ *  Every kind reads "Quit {name}" behind the power icon: shutting an object
+ *  down is one act with one wording, whether it is an agent, a terminal, a
+ *  browser, or (weaker, see below) an app. */
+function tabDestroyEntry(panelId: string, params: PanelParams): TabMenuItem | null {
+  if (params.panelType === "chat") {
+    const chatAgentId = params.chatAgentId ?? params.agentId;
+    // The primary agent runs the workspace's own services; destroying it would
+    // take the machine down, so it is not offered.
+    if (!chatAgentId || chatAgentId === getPrimaryAgentId()) return null;
+    const agent = getAgentById(chatAgentId);
+    const agentName = agent === undefined ? chatAgentId : chatDisplayName(agent);
+    return {
+      label: `Quit ${currentTabTitle(panelId, agentName)}`,
+      iconName: "power",
+      isDestructive: true,
+      run: () => {
+        destroyTargetAgentId = chatAgentId;
+        destroyTargetAgentName = agentName;
+        destroyTargetPanelId = panelId;
+        showDestroyDialog = true;
+        m.redraw();
+      },
     };
-  }) => void;
-  dispose: () => void;
-} {
+  }
+  if (isTerminalPanelParams(params)) {
+    const sessionName = params.terminalSessionName;
+    // A terminal still allocating its tmux session name has no session to kill.
+    if (!sessionName) return null;
+    return {
+      label: `Quit ${currentTabTitle(panelId, sessionName)}`,
+      iconName: "power",
+      isDestructive: true,
+      run: () => {
+        terminalDestroySessionName = sessionName;
+        terminalDestroyPanelId = panelId;
+        showTerminalDestroyDialog = true;
+        m.redraw();
+      },
+    };
+  }
+  if (params.serviceName === BROWSER_SERVICE_NAME) {
+    // The browser's name lives in the pane's ``?session=<name>`` query, set on
+    // both freshly-opened and layout-restored panes.
+    const browserName = sessionParamFromUrl(params.url);
+    if (browserName === null) return null;
+    return {
+      label: `Quit ${currentTabTitle(panelId, browserName)}`,
+      iconName: "power",
+      isDestructive: true,
+      run: () => {
+        browserDestroyName = browserName;
+        browserDestroyPanelId = panelId;
+        showBrowserDestroyDialog = true;
+        m.redraw();
+      },
+    };
+  }
+  const serviceName = params.serviceName;
+  // A registered app: a service panel that is not one of the two fleets. The
+  // browser and the terminal are registered services too and have their own
+  // verbs above, so what the ref's kind says decides here rather than the
+  // panel's shape -- a bare ``service:terminal`` pane must not offer to
+  // unregister the terminal service out from under every terminal tab.
+  // The weaker truth behind this one's "Quit" (shared wording, not shared
+  // power) is spelled out in its own confirmation: the workspace can take an
+  // app out of the registry and out of every project, and it cannot stop the
+  // program answering on the port.
+  if (serviceName !== undefined && memberKindFromRef(memberRef("app", serviceName)) === "app") {
+    return {
+      label: `Quit ${currentTabTitle(panelId, serviceName)}`,
+      iconName: "power",
+      isDestructive: true,
+      run: () => {
+        appDeregisterName = serviceName;
+        appDeregisterPanelId = panelId;
+        showAppDeregisterDialog = true;
+        m.redraw();
+      },
+    };
+  }
+  // An ad-hoc page or a subagent view: nothing to tear down beyond the panel,
+  // and the panel is what Close already handles.
+  return null;
+}
+
+// ---------- The tab ----------
+
+/** The live tabs, so the width recompute can size them and re-measure their
+ *  titles, and so a "+" can flash the launcher its pane already holds. Entries
+ *  are added as tabs are rendered and dropped as they are disposed. */
+const tabHandlesByPanelId = new Map<
+  string,
+  { element: HTMLElement; refreshTitleFade: () => void; beginTitleEdit: () => void }
+>();
+
+/**
+ * One tab: kind glyph, title, then the right-aligned minus and ⋮ that hover
+ * reveals.
+ *
+ * The two actions are hidden at rest and shown together (§5) -- a tab at the
+ * 100px floor has room for its title or its buttons, not both, and the design
+ * asks for the title. They are toggled from here rather than by a CSS
+ * ``:hover`` rule because the menu has to hold them open while it is up, after
+ * the pointer has left the tab for the menu card.
+ *
+ * Double-clicking a CHAT tab's title renames the chat: the title becomes a
+ * text field seeded with the current name, Enter and blur commit, Escape puts
+ * the old one back. The commit goes through ``renameMemberRef`` -- the same
+ * path the agent-facing layout op takes -- so the name lands on the mngr agent
+ * itself (its ``display_name`` label, with the canonical form as its true
+ * name) and every view showing the chat says it. Other kinds derive their
+ * names from their identities and are not editable here.
+ */
+function createCustomTab(options: { id: string; name: string }): ITabRenderer {
   const element = document.createElement("div");
   element.className = "dv-default-tab dv-custom-tab";
 
+  const kindIcon = document.createElement("span");
+  kindIcon.className = "dv-custom-tab-icon";
+  kindIcon.style.display = "flex";
+  kindIcon.style.flexShrink = "0";
+  kindIcon.style.alignItems = "center";
+  element.appendChild(kindIcon);
+
   const content = document.createElement("div");
   content.className = "dv-default-tab-content";
+  // The design asks for a trailing fade rather than an ellipsis, so the title
+  // clips and the fade (applied below, only when it actually overflows) does
+  // the rest.
+  content.style.overflow = "hidden";
+  content.style.whiteSpace = "nowrap";
+  content.style.textOverflow = "clip";
   element.appendChild(content);
+
+  // The rename editor, swapped in for the title on a double-click. A real input
+  // rather than a contenteditable title, so the caret, the selection and
+  // Escape behave the way a text field is expected to.
+  const editor = document.createElement("input");
+  editor.type = "text";
+  editor.className = "dv-custom-tab-title-input";
+  editor.spellcheck = false;
+  editor.setAttribute("aria-label", "Tab name");
+  editor.style.display = "none";
+  element.appendChild(editor);
 
   const actions = document.createElement("div");
   actions.className = "dv-custom-tab-actions";
@@ -367,205 +894,384 @@ function createCustomTab(options: { id: string; name: string }): {
   element.appendChild(actions);
 
   const disposables: Array<{ dispose: () => void }> = [];
+  let isPointerOver = false;
+  let isMenuOpen = false;
+  let isEditingTitle = false;
+  // Whether this instance is a row in the tab-overflow dropdown rather than a
+  // tab on the strip. dockview builds a FRESH renderer per dropdown open
+  // (``createTabRenderer("headerOverflow")``), so one panel can have two live
+  // instances at once and only the strip's may carry controls or own the
+  // panel's handle registration.
+  let isOverflowRow = false;
+  // What dockview had the tab's draggable set to before an edit borrowed it.
+  let wasTabDraggable: boolean | null = null;
+
+  /** Fade the title's last 20px, and only while it really is cut off. */
+  const refreshTitleFade = (): void => {
+    const mask = isTitleTruncated(content.scrollWidth, content.clientWidth)
+      ? `linear-gradient(to right, #000 calc(100% - ${TAB_TITLE_FADE_PX}px), transparent 100%)`
+      : "";
+    content.style.maskImage = mask;
+    content.style.webkitMaskImage = mask;
+  };
+
+  const updateActionsVisibility = (): void => {
+    // The buttons stand down for the length of an edit: the row is a text field
+    // for the moment, and the field wants the whole width.
+    actions.style.display = !isEditingTitle && (isPointerOver || isMenuOpen) ? "flex" : "none";
+    // Revealing the buttons takes room from the title, so the fade is re-judged
+    // against the box the title actually has now.
+    refreshTitleFade();
+  };
+
+  /** Whether this tab's object can be renamed at all: only a chat can (its
+   *  name lives on its mngr agent); every other kind derives its name. */
+  const isRenameable = (): boolean => panelParams.get(options.id)?.panelType === "chat";
+
+  /** The ``.dv-tab`` dockview wraps this renderer in. That element, not this
+   *  one, is what carries the tab drag. */
+  const tabElement = (): HTMLElement | null => element.closest(".dv-tab");
+
+  const beginTitleEdit = (): void => {
+    if (isEditingTitle || !isRenameable()) return;
+    isEditingTitle = true;
+    editor.value = content.textContent ?? "";
+    content.style.display = "none";
+    editor.style.display = "block";
+    // dockview marks every tab draggable, and a draggable ancestor swallows the
+    // press-and-sweep that places a caret and selects text inside it -- typing
+    // works, but nothing can be clicked into or selected with the mouse. So the
+    // drag stands down for the length of the edit and is handed straight back.
+    const tab = tabElement();
+    if (tab !== null) {
+      wasTabDraggable = tab.draggable;
+      tab.draggable = false;
+    }
+    updateActionsVisibility();
+    editor.focus();
+    editor.select();
+  };
+
+  /** Leave the editor, committing what was typed or throwing it away. Blur
+   *  commits, so this runs on the way out of every path including a click
+   *  elsewhere in the workspace. */
+  const endTitleEdit = (isCommitting: boolean): void => {
+    if (!isEditingTitle) return;
+    isEditingTitle = false;
+    const typed = editor.value;
+    editor.style.display = "none";
+    content.style.display = "";
+    const tab = tabElement();
+    if (tab !== null && wasTabDraggable !== null) tab.draggable = wasTabDraggable;
+    wasTabDraggable = null;
+    updateActionsVisibility();
+    if (!isCommitting) return;
+    // An empty or whitespace-only title is not a name, so it is treated as
+    // Escape rather than leaving a tab with nothing to click on.
+    const title = normalizeTabTitle(typed);
+    if (title === null || title === content.textContent) return;
+    // The name is filed against the OBJECT this tab is showing, so it reaches
+    // every other view showing it and outlives this tab. A tab opened a moment
+    // ago may not have been filed yet, hence the fallback.
+    void (async () => {
+      const ref = memberRefByPanelId.get(options.id) ?? (await rememberMemberRef(options.id));
+      if (ref === null) return;
+      try {
+        await renameMemberRef(ref, title);
+      } catch (e) {
+        alert(`Failed to rename: ${(e as Error).message}`);
+      }
+    })();
+  };
+
+  content.addEventListener("dblclick", (event) => {
+    // A dropdown row only focuses; renaming happens on the strip.
+    if (isOverflowRow) return;
+    // Only a chat's name is editable (see ``isRenameable``). For everything
+    // else the event still propagates -- to dockview a double-click on a tab
+    // is just a click, and the tab should keep behaving like one.
+    if (!isRenameable()) return;
+    event.preventDefault();
+    event.stopPropagation();
+    beginTitleEdit();
+  });
+  // Everything below the input would otherwise read a click meant for the caret
+  // as a tab activation, a key as a workspace shortcut, and a right-click as a
+  // request for the tab menu instead of the field's own cut/copy/paste one.
+  editor.addEventListener("pointerdown", (event) => event.stopPropagation());
+  editor.addEventListener("dblclick", (event) => event.stopPropagation());
+  editor.addEventListener("contextmenu", (event) => event.stopPropagation());
+  editor.addEventListener("keydown", (event) => {
+    event.stopPropagation();
+    if (event.key === "Enter") {
+      event.preventDefault();
+      endTitleEdit(true);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      endTitleEdit(false);
+    }
+  });
+  editor.addEventListener("blur", () => {
+    endTitleEdit(true);
+  });
 
   return {
     element,
-    init(params) {
-      content.textContent = params.title ?? "";
+    init(parameters: TabPartInitParameters) {
+      // The api's title, not ``parameters.title``: init parameters are the
+      // panel's CREATION-time snapshot, and dockview builds a fresh renderer
+      // for every overflow-dropdown row long after ``syncTabTitlesFromStore``
+      // has renamed the panel -- seeding from the snapshot would put the raw
+      // ``terminal-N`` or agent id back on the row.
+      content.textContent = parameters.api.title ?? parameters.title ?? "";
+      kindIcon.innerHTML = tabIconMarkupForPanel(panelParams.get(options.id));
       disposables.push(
-        params.api.onDidTitleChange((event) => {
+        parameters.api.onDidTitleChange((event) => {
           content.textContent = event.title ?? "";
+          refreshTitleFade();
         }),
       );
 
-      const pp = panelParams.get(options.id);
-      const panelType = pp?.panelType ?? "chat";
-      // Terminal tabs are iframe panels but get their own action set (Destroy
-      // + Close, no Share/Refresh).
-      const isTerminal = isTerminalPanelParams(pp);
+      const params = panelParams.get(options.id);
+      const isLauncher = params?.panelType === "launcher";
 
-      // Share and Refresh buttons -- only on iframe/app tabs.
-      // The Refresh button matches open iframes by their data-service-name
-      // attribute, which is populated only when the tab is tied to a real
-      // workspace service. For tabs without an explicit serviceName
-      // (terminals, custom URLs, agent-owned iframes), suppress the Refresh
-      // button since there is nothing to match against. Browser panes are
-      // also excluded: reloading the pane just reconnects the live view (which
-      // confuses people into thinking it restarts the browser) -- the viewer
-      // has its own in-page Reload button for the actual page.
-      if (panelType === "iframe" && !isTerminal) {
-        const shareName = pp?.serviceName ?? pp?.title ?? "web";
-        if (pp?.serviceName && pp.serviceName !== "browser") {
-          const serviceName = pp.serviceName;
-          actions.appendChild(
-            createTabActionButton("Refresh", "refresh", () => {
-              reloadIframesForService(serviceName);
-            }),
-          );
-        }
-        actions.appendChild(
-          createTabActionButton("Share", "share", () => {
-            shareServiceName = shareName;
-            showShareModal = true;
-            m.redraw();
-          }),
-        );
+      if (params?.panelType === "chat") {
+        appendChatLivenessDot(element, params.chatAgentId ?? params.agentId, disposables);
       }
 
-      // Destroy button -- on chat/agent tabs (except the primary agent)
-      if (panelType === "chat") {
-        const chatAgentId = pp?.chatAgentId ?? pp?.agentId ?? "";
-        const primaryAgentId = getPrimaryAgentId();
-        const isPrimary = chatAgentId === primaryAgentId;
+      // An overflow-dropdown row is just the tab -- icon, title, liveness --
+      // with none of the strip's machinery: the row's whole job is to focus
+      // the tab, and the controls are on the strip once it is. The early
+      // return also keeps this instance away from ``tabHandlesByPanelId``:
+      // letting a dropdown row set (and, on dispose, delete) the panel's
+      // entry would leave the strip tab's Rename and title-fade pointing at
+      // a detached row after the dropdown closes.
+      if (parameters.tabLocation === "headerOverflow") {
+        isOverflowRow = true;
+        actions.remove();
+        return;
+      }
 
-        // Per-agent liveness dot, to the left of the title. Distinct from the
-        // chat's activity indicator: this tracks the agent's mngr lifecycle
-        // state -- green while its claude process is working (RUNNING), yellow
-        // while it is idle and waiting on the user (WAITING), grey while it is
-        // dormant (DONE/STOPPED/etc.; revives on the next message). Hovering
-        // shows the exact lifecycle state via a body-level tooltip (a native
-        // ``title`` is suppressed on dockview's draggable tabs -- see
-        // ``attachHoverTooltip``). Hidden until the agent's state is known.
-        //
-        // The lifecycle RUNNING/WAITING split comes only from the backend's
-        // lifecycle poll and lags a sent message, so the color is resolved through
-        // ``effectiveLifecycleState`` against the prompt activity signal
-        // (transcript-derived, plus the optimistic forced-THINKING the send
-        // applies). That makes the dot turn green the instant a message is sent,
-        // in step with the activity indicator -- hence the second listener below
-        // on the activity overlay, since an optimistic send is not a WS update.
-        const processDot = document.createElement("span");
-        processDot.className = "dv-tab-process-dot";
-        const processDotTooltip = attachHoverTooltip(processDot);
-        const updateProcessDot = (): void => {
-          const state = getAgentById(chatAgentId)?.state;
-          if (!state) {
-            processDot.style.display = "none";
-            processDotTooltip.setText(null);
+      actions.appendChild(
+        // A minus, not an "x": this puts the tab away and leaves the object
+        // running and filed wherever it was filed. Ending it for good is the
+        // menu's job, and wears the "x".
+        createTabActionButton("Hide tab", "minus", disposables, () => {
+          parameters.api.close();
+        }),
+      );
+
+      // A launcher tab is a question about this pane, not an object: there is
+      // nothing to refresh, share or shut down, so it carries only the minus.
+      if (!isLauncher) {
+        const openMenu = (anchor: MenuAnchor, trigger: HTMLElement | null): void => {
+          if (isMenuOpen) {
+            closeTabMenu();
             return;
           }
-          const effective = effectiveLifecycleState(state, getEffectiveActivityState(chatAgentId));
-          processDot.style.display = "";
-          // ``data-liveness`` drives the color (the primary signal). Several
-          // lifecycle states share a color (DONE/STOPPED/REPLACED/UNKNOWN are
-          // all grey "dormant"; RUNNING/RUNNING_UNKNOWN_AGENT_TYPE are both
-          // green), so ``data-lifecycle-state`` carries the exact state and the
-          // CSS gives each a subtly different circular treatment (solid / ring /
-          // ring-with-dot / faded) so same-color states stay tellable apart.
-          processDot.setAttribute("data-liveness", livenessCategoryForState(effective));
-          processDot.setAttribute("data-lifecycle-state", effective);
-          processDotTooltip.setText(effective);
+          isMenuOpen = true;
+          updateActionsVisibility();
+          openTabMenuAt(
+            anchor,
+            tabMenuEntries(options.id),
+            () => {
+              isMenuOpen = false;
+              updateActionsVisibility();
+            },
+            trigger,
+          );
         };
-        updateProcessDot();
-        element.insertBefore(processDot, element.firstChild);
-        const processDotListener: AgentsUpdatedListener = () => updateProcessDot();
-        addAgentsUpdatedListener(processDotListener);
-        addActivityOverlayListener(updateProcessDot);
-        disposables.push({ dispose: () => removeAgentsUpdatedListener(processDotListener) });
-        disposables.push({ dispose: () => removeActivityOverlayListener(updateProcessDot) });
-        disposables.push(processDotTooltip);
-
-        const destroyBtn = createTabActionButton(
-          isPrimary ? "Cannot destroy the primary agent" : "Destroy agent",
-          "trash",
-          () => {
-            if (isPrimary) return;
-            const agent = getAgentById(chatAgentId);
-            destroyTargetAgentId = chatAgentId;
-            destroyTargetAgentName = agent?.name ?? chatAgentId;
-            destroyTargetPanelId = options.id;
-            showDestroyDialog = true;
-            m.redraw();
-          },
-          isPrimary ? "dv-custom-tab-action-disabled" : "dv-custom-tab-action-destructive",
-        );
-        if (isPrimary) {
-          destroyBtn.disabled = true;
-        }
-        actions.appendChild(destroyBtn);
+        const menuButton = createTabActionButton("Tab options", "kebab", disposables, () => {
+          openMenu(menuButton.getBoundingClientRect(), menuButton);
+        });
+        actions.appendChild(menuButton);
+        element.addEventListener("contextmenu", (event: MouseEvent) => {
+          event.preventDefault();
+          // Anchored on the pointer so the menu opens where the click landed.
+          openMenu(
+            { left: event.clientX, right: event.clientX, top: event.clientY, bottom: event.clientY, width: 0 },
+            null,
+          );
+        });
       }
 
-      // Destroy button -- on terminal tabs. Kills the tmux session (closing
-      // the tab alone only detaches). If the session name isn't known yet
-      // (agent-driven terminal mid-allocation), fall back to a plain close.
-      if (isTerminal) {
-        actions.appendChild(
-          createTabActionButton(
-            "Destroy terminal",
-            "trash",
-            () => {
-              const sessionName = pp?.terminalSessionName;
-              if (!sessionName) {
-                params.api.close();
-                return;
-              }
-              terminalDestroySessionName = sessionName;
-              terminalDestroyPanelId = options.id;
-              showTerminalDestroyDialog = true;
-              m.redraw();
-            },
-            "dv-custom-tab-action-destructive",
-          ),
-        );
-      }
-
-      // Destroy button -- on browser panes (iframe tabs whose service is the
-      // browser fleet). Retires the browser in the fleet (closing the tab alone
-      // only detaches the pane). Symmetric to the agent + terminal destroy above.
-      if (panelType === "iframe" && pp?.serviceName === "browser") {
-        // The browser name lives in the pane's ``?session=<name>`` query, set on
-        // both freshly-opened and layout-restored browser panes -- derive it from
-        // the url so both cases work.
-        let browserName: string | null = null;
-        try {
-          browserName = pp?.url ? new URL(pp.url, location.origin).searchParams.get("session") : null;
-        } catch {
-          browserName = null;
-        }
-        actions.appendChild(
-          createTabActionButton(
-            "Destroy browser",
-            "trash",
-            () => {
-              if (!browserName) {
-                params.api.close();
-                return;
-              }
-              browserDestroyName = browserName;
-              browserDestroyPanelId = options.id;
-              showBrowserDestroyDialog = true;
-              m.redraw();
-            },
-            "dv-custom-tab-action-destructive",
-          ),
-        );
-      }
-
-      // Close button -- on all tab types
-      actions.appendChild(
-        createTabActionButton("Close tab", "close", () => {
-          params.api.close();
-        }),
-      );
-
-      // Show/hide actions based on active state
-      function updateActionsVisibility(isActive: boolean): void {
-        actions.style.display = isActive ? "flex" : "none";
-      }
-      updateActionsVisibility(params.api.isActive);
-      disposables.push(
-        params.api.onDidActiveChange((event) => {
-          updateActionsVisibility(event.isActive);
-        }),
-      );
+      element.addEventListener("mouseenter", () => {
+        isPointerOver = true;
+        updateActionsVisibility();
+      });
+      element.addEventListener("mouseleave", () => {
+        isPointerOver = false;
+        updateActionsVisibility();
+      });
+      updateActionsVisibility();
+      tabHandlesByPanelId.set(options.id, { element, refreshTitleFade, beginTitleEdit });
     },
     dispose() {
+      // A dropdown row never claimed the handle, so it must not take the
+      // strip tab's away with it.
+      if (!isOverflowRow) tabHandlesByPanelId.delete(options.id);
       for (const d of disposables) {
         d.dispose();
       }
       disposables.length = 0;
     },
   };
+}
+
+/**
+ * Add the per-agent liveness dot to a chat tab.
+ *
+ * Distinct from the chat's activity indicator: this tracks the agent's mngr
+ * lifecycle state -- green while its claude process is working (RUNNING),
+ * yellow while it is idle and waiting on the user (WAITING), grey while it is
+ * dormant (DONE/STOPPED/etc.; revives on the next message). Hovering shows the
+ * exact lifecycle state via a body-level tooltip (a native ``title`` is
+ * suppressed on dockview's draggable tabs -- see ``attachHoverTooltip``).
+ * Hidden until the agent's state is known.
+ *
+ * The lifecycle RUNNING/WAITING split comes only from the backend's lifecycle
+ * poll and lags a sent message, so the color is resolved through
+ * ``effectiveLifecycleState`` against the prompt activity signal
+ * (transcript-derived, plus the optimistic forced-THINKING the send applies).
+ * That makes the dot turn green the instant a message is sent, in step with the
+ * activity indicator -- hence the second listener below on the activity
+ * overlay, since an optimistic send is not a WS update.
+ */
+function appendChatLivenessDot(
+  element: HTMLElement,
+  chatAgentId: string,
+  disposables: Array<{ dispose: () => void }>,
+): void {
+  const processDot = document.createElement("span");
+  processDot.className = "dv-tab-process-dot";
+  const processDotTooltip = attachHoverTooltip(processDot);
+  const updateProcessDot = (): void => {
+    const state = getAgentById(chatAgentId)?.state;
+    if (!state) {
+      processDot.style.display = "none";
+      processDotTooltip.setText(null);
+      return;
+    }
+    // Prompt activity is backend-derived now (it rides on the agent itself
+    // over the agents WebSocket), so it updates through the same listener as
+    // the lifecycle state -- the old client-side pending-message overlay is
+    // gone with the harness rework.
+    const effective = effectiveLifecycleState(state, getAgentById(chatAgentId)?.activity_state ?? null);
+    processDot.style.display = "";
+    // ``data-liveness`` drives the color (the primary signal). Several lifecycle
+    // states share a color (DONE/STOPPED/REPLACED/UNKNOWN are all grey
+    // "dormant"; RUNNING/RUNNING_UNKNOWN_AGENT_TYPE are both green), so
+    // ``data-lifecycle-state`` carries the exact state and the CSS gives each a
+    // subtly different circular treatment (solid / ring / ring-with-dot /
+    // faded) so same-color states stay tellable apart.
+    processDot.setAttribute("data-liveness", livenessCategoryForState(effective));
+    processDot.setAttribute("data-lifecycle-state", effective);
+    processDotTooltip.setText(effective);
+  };
+  updateProcessDot();
+  element.insertBefore(processDot, element.firstChild);
+  const processDotListener: AgentsUpdatedListener = () => updateProcessDot();
+  addAgentsUpdatedListener(processDotListener);
+  disposables.push({ dispose: () => removeAgentsUpdatedListener(processDotListener) });
+  disposables.push(processDotTooltip);
+}
+
+/** One of a tab's two hover-revealed buttons. The pointerdown guard keeps a
+ *  click on the button from starting dockview's tab drag or activating the
+ *  tab. */
+function createTabActionButton(
+  title: string,
+  iconName: IconName | "kebab",
+  disposables: Array<{ dispose: () => void }>,
+  onClick: (ev: MouseEvent) => void,
+): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.className = "dv-custom-tab-action";
+  button.setAttribute("aria-label", title);
+  // No explicit size: `.dv-custom-tab-action svg` sizes these to 12px in CSS.
+  button.innerHTML = iconName === "kebab" ? tabIcon("kebab", 14) : icon(iconName);
+  const tooltip = attachHoverTooltip(button);
+  tooltip.setText(title);
+  disposables.push(tooltip);
+  button.addEventListener("pointerdown", (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+  });
+  button.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    onClick(ev);
+  });
+  return button;
+}
+
+// ---------- Equal-width tabs ----------
+
+// Coalesces every trigger -- layout change, pane resize, window resize -- into
+// one recompute per frame: several of them fire together on a single splitter
+// drag, and re-measuring per event would read a half-applied layout.
+let tabWidthFrame: number | null = null;
+// Watches each tab strip so dragging a splitter (which resizes panes without
+// changing the layout) re-fits the tabs. Strips come and go with groups, so the
+// observed set is reconciled on every recompute -- only genuinely new strips are
+// observed (each observe delivers an initial notification, so re-observing the
+// same one every frame would recompute forever) and disposed ones are dropped
+// rather than held alive by the observer.
+let tabStripObserver: ResizeObserver | null = null;
+const observedTabStrips = new Set<HTMLElement>();
+
+/** Point the resize observer at exactly the strips that exist now. */
+function observeTabStrips(headers: readonly HTMLElement[]): void {
+  if (tabStripObserver === null) return;
+  const current = new Set(headers);
+  for (const observed of observedTabStrips) {
+    if (current.has(observed)) continue;
+    tabStripObserver.unobserve(observed);
+    observedTabStrips.delete(observed);
+  }
+  for (const header of headers) {
+    if (observedTabStrips.has(header)) continue;
+    tabStripObserver.observe(header);
+    observedTabStrips.add(header);
+  }
+}
+
+/** Every tab strip currently in the dock, header and all. */
+function tabStripHeaders(): HTMLElement[] {
+  if (dockviewContainer === null) return [];
+  return Array.from(dockviewContainer.querySelectorAll<HTMLElement>(".dv-tabs-and-actions-container"));
+}
+
+/** Re-fit every tab to the one shared width, and re-judge each title's fade
+ *  against the box it ends up with. */
+function recomputeTabWidths(): void {
+  const headers = tabStripHeaders();
+  if (headers.length === 0) return;
+  observeTabStrips(headers);
+  const metrics: TabStripMetrics[] = [];
+  const tabElements: HTMLElement[] = [];
+  for (const header of headers) {
+    const tabs = Array.from(header.querySelectorAll<HTMLElement>(".dv-tabs-container > .dv-tab"));
+    metrics.push({ width: header.clientWidth, tabCount: tabs.length });
+    tabElements.push(...tabs);
+  }
+  const width = `${equalTabWidth(metrics)}px`;
+  for (const tab of tabElements) {
+    tab.style.width = width;
+  }
+  for (const handle of tabHandlesByPanelId.values()) {
+    handle.refreshTitleFade();
+  }
+}
+
+/** Ask for a recompute on the next frame. Safe to call from anywhere that
+ *  might have changed a strip's width or its tab count. */
+function scheduleTabWidthRecompute(): void {
+  if (tabWidthFrame !== null) return;
+  tabWidthFrame = requestAnimationFrame(() => {
+    tabWidthFrame = null;
+    recomputeTabWidths();
+  });
 }
 
 /** Report the current open/visible chat tabs to the backend (OOM priority).
@@ -589,39 +1295,15 @@ function reportChatTabActivity(): void {
   reportActivity({ open, visible });
 }
 
-/** Get the set of agent IDs that currently have open chat panels. */
-function getOpenChatAgentIds(): Set<string> {
-  const ids = new Set<string>();
-  for (const [, pp] of panelParams) {
-    if (pp.panelType === "chat") {
-      ids.add(pp.chatAgentId ?? pp.agentId);
-    }
-  }
-  return ids;
-}
-
-/** Get the set of app names that currently have open iframe panels. */
-function getOpenAppNames(): Set<string> {
-  const names = new Set<string>();
-  for (const [, pp] of panelParams) {
-    if (pp.panelType === "iframe" && pp.title) {
-      names.add(pp.title);
-    }
-  }
-  return names;
-}
-
 /** Placement options that tab a newly-added panel into ``targetGroup`` (the
- *  dockview group whose header "+" button was clicked) instead of letting
- *  dockview fall back to the currently-active group. Returns an empty object
- *  -- i.e. default placement -- when no target is given (the empty-state
- *  overlay has no host group) or the target group has since been disposed
- *  (e.g. it was closed while a New chat / New agent modal was open). */
-function placementForGroup(
-  targetGroup: DockviewGroupPanel | null | undefined,
-): { position: { referenceGroup: DockviewGroupPanel } } | Record<string, never> {
+ *  pane whose "+" was clicked, or whose launcher asked for it) instead of
+ *  letting dockview fall back to the currently-active group. Returns an empty
+ *  object -- i.e. default placement -- when no target is given (the dock had no
+ *  pane yet) or the target group has since been disposed (e.g. it was closed
+ *  while an async create was still in flight). */
+function placementForGroup(targetGroup: DockviewGroupPanel | null | undefined): AddPanelPlacementOptions {
   if (targetGroup && dockview?.groups.some((g) => g.id === targetGroup.id)) {
-    return { position: { referenceGroup: targetGroup } };
+    return { position: { referenceGroup: targetGroup.id } };
   }
   return {};
 }
@@ -640,22 +1322,22 @@ interface BrowserInfo {
   human_pinned?: boolean;
 }
 
-// Cached snapshot of the browser fleet, refreshed each time the "+" dropdown
-// opens so it reflects browsers created since boot. The list drives one
-// dropdown item per active browser.
+// Cached snapshot of the browser fleet, re-read whenever a view is mounted, a
+// launcher opens, or a browser is created, so it reflects the fleet as it is
+// rather than as it was at boot. It is what the sidebar's tab list and the
+// launcher's tables enumerate browsers from.
 //
 // Note: we no longer gate the "New browser" button on the daemon's
 // ``can_create``. A create is accepted even during startup/restore (it queues
 // behind the serialized restore on the daemon's shared launch lock) and the
-// fleet cap / duplicate-name rejections come back as inline errors in the
-// New-browser modal, so the button stays always clickable.
+// fleet cap rejections are surfaced by the create flow (see
+// ``openNewBrowser``), so the button stays always clickable.
 let browserFleet: BrowserInfo[] = [];
 
-/** Fetch the live browser fleet for the dropdown listing. ``onUpdate`` runs
- *  after the cache is refreshed so an already-open dropdown can re-render with
- *  the browsers that the (async) fetch just returned -- the dropdown is built
- *  synchronously from the cache, so without this callback a freshly-opened
- *  menu would show a stale fleet until the next open. */
+/** Fetch the live browser fleet into the cache. ``onUpdate`` runs after the
+ *  cache is refreshed, so a surface built synchronously from it (the sidebar
+ *  list, an open launcher) can repaint with what the async fetch returned
+ *  rather than showing a stale fleet until something else redraws it. */
 function refreshBrowserFleet(onUpdate?: () => void): void {
   // Same-origin backend passthrough (the browser service itself lives on a
   // sibling origin, so a direct fetch would be a cross-origin request).
@@ -674,36 +1356,24 @@ function refreshBrowserFleet(onUpdate?: () => void): void {
 // Seed the fleet cache at import time. Skipped in DOM-less (test) imports:
 // ``apiUrl`` reads its base path from a <meta> tag, and every other
 // import-time side effect in this module graph is likewise inert without a
-// document. Interactive callers (the "+" dropdown, browser create) only run
-// in a browser.
+// document. Interactive callers (the launcher, browser create) only run in a
+// browser.
 if (typeof document !== "undefined") {
   refreshBrowserFleet();
-}
-
-/** Human-readable owner suffix for a browser dropdown item:
- *  "(you took control)" when a human holds it, "(agent <name> has control)"
- *  when an agent does, or "" when it's free. */
-function browserOwnerLabel(browser: BrowserInfo): string {
-  if (browser.controller === "human") return browser.human_pinned ? " (you took control)" : " (free)";
-  if (browser.controller === "agent") {
-    const name = browser.owner_name ?? browser.owner_agent_id ?? "agent";
-    return ` (agent ${name} has control)`;
-  }
-  return "";
 }
 
 /** Open (or focus, via ``addPanelForRef`` dedup) the pane for browser
  *  ``name``. Routed through the same ``service:browser?session=<name>`` ref the
  *  agent CLI uses so the two surfaces share dedup/focus and on-disk shape.
  *  If the pane is already open, ``addPanelForRef`` focuses it; opening a new
- *  pane activates it (the user explicitly asked for this browser from the
- *  "+" menu, so taking focus is the intended behavior, matching every other
- *  "+" menu action). Tabs into ``targetGroup`` when it's a live group.
+ *  pane activates it (the user explicitly asked for this browser, so taking
+ *  focus is the intended behavior). Tabs into ``targetGroup`` when it's a live
+ *  group.
  *
  *  This is also the optimistic 'starting' pane: when called right after the
- *  user accepts a name in the New-browser modal (before the launch finishes),
- *  the viewer shows "Browser starting…" and retries the cast connection until
- *  the daemon registers the name.
+ *  create flow mints a name (before the launch finishes), the viewer shows
+ *  "Browser starting…" and retries the cast connection until the daemon
+ *  registers the name.
  *
  *  Returns ``true`` when this call CREATED a new pane, ``false`` when it merely
  *  deduped onto (focused) a pane that was already open for the same browser.
@@ -715,216 +1385,107 @@ function openBrowserSessionTab(name: string, targetGroup?: DockviewGroupPanel | 
   // Was a pane already open for this browser? If so, ``addPanelForRef`` will
   // dedup/focus it rather than create a new one -- report that to the caller.
   const alreadyOpen = findIframePanelIdForServiceRef(`browser?session=${name}`) !== null;
-  const placement =
-    targetGroup && dockview.groups.some((g) => g.id === targetGroup.id)
-      ? { position: { referenceGroup: targetGroup.id } }
-      : {};
-  addPanelForRef(`service:browser?session=${name}`, getPrimaryAgentId(), placement);
+  addPanelForRef(`service:browser?session=${name}`, getPrimaryAgentId(), placementForGroup(targetGroup));
+  // The fleet gained (or is about to gain) a browser the sidebar lists.
+  refreshMachineInventory();
   return !alreadyOpen;
 }
 
-/** Close the (optimistic) pane for browser ``name`` if it is open. Used when a
- *  create POST fails after the pane was opened on modal-accept: the launch
- *  never registered the name, so the pane would otherwise sit on a stale
- *  "Browser starting…" / "browser closed" banner forever. Dedup keys panes on
- *  the resolved ``service:browser?session=<name>`` URL, so the lookup mirrors
- *  ``openBrowserSessionTab``'s ref. */
-function closeBrowserSessionTab(name: string): void {
-  if (!dockview) return;
-  const panelId = findIframePanelIdForServiceRef(`browser?session=${name}`);
-  if (panelId === null) return;
-  const panel = dockview.panels.find((p) => p.id === panelId);
+// ---------- The "+" and the New Tab launcher ----------
+
+/** The group a panel currently lives in, or null when it is not open. */
+function groupForPanel(panelId: string): DockviewGroupPanel | null {
+  return dockview?.panels.find((panel) => panel.id === panelId)?.api.group ?? null;
+}
+
+/** The launcher already open in ``group``, or null. At most one launcher lives
+ *  in a pane: a second would ask the same question twice. */
+function launcherPanelIdInGroup(group: DockviewGroupPanel | null): string | null {
+  if (!dockview || group === null) return null;
+  for (const panel of dockview.panels) {
+    if (panelParams.get(panel.id)?.panelType !== "launcher") continue;
+    if (panel.api.group.id === group.id) return panel.id;
+  }
+  return null;
+}
+
+/** Blink a tab to point at it. Used when the "+" is clicked in a pane that
+ *  already has a launcher: the answer is "it is right there", and opening a
+ *  second one would only clutter the strip. */
+function flashPanelTab(panelId: string): void {
+  const handle = tabHandlesByPanelId.get(panelId);
+  handle?.element.animate([{ opacity: 1 }, { opacity: 0.3 }, { opacity: 1 }], { duration: 240, iterations: 2 });
+}
+
+/**
+ * Open a New Tab launcher in ``targetGroup`` (or wherever dockview puts it when
+ * there is no group yet), focusing and flashing the one already there instead
+ * of stacking a second.
+ *
+ * A launcher is not an object on the machine, so it joins no member list. It is
+ * what the "+" opens, what a view with no saved content mounts, and what closing
+ * the last tab leaves behind -- the dock is never empty.
+ */
+function openLauncherPanel(targetGroup: DockviewGroupPanel | null): string | null {
+  if (!dockview) return null;
+  const existingPanelId = launcherPanelIdInGroup(targetGroup);
+  if (existingPanelId !== null) {
+    const existing = dockview.panels.find((panel) => panel.id === existingPanelId);
+    if (existing) dockview.setActivePanel(existing);
+    flashPanelTab(existingPanelId);
+    return existingPanelId;
+  }
+  const panelId = mintId(LAUNCHER_PANEL_ID_PREFIX);
+  const params: PanelParams = { panelType: "launcher", agentId: getPrimaryAgentId() };
+  panelParams.set(panelId, params);
+  dockview.addPanel({
+    id: panelId,
+    component: "launcher",
+    title: LAUNCHER_PANEL_TITLE,
+    params,
+    ...placementForGroup(targetGroup),
+  });
+  // The launcher lists the machine, so the fleets it lists are re-read as it
+  // opens rather than only at startup.
+  refreshMachineInventory();
+  return panelId;
+}
+
+/** Retire the launcher a just-opened tab was asked for from. The launcher asks
+ *  "what do you want in this pane", so an answer replaces it -- but only once
+ *  the answer has actually arrived, which for the async creates is when the
+ *  object exists. */
+function retireLauncher(panelId: string | null): void {
+  if (panelId === null || !dockview) return;
+  if (panelParams.get(panelId)?.panelType !== "launcher") return;
+  const panel = dockview.panels.find((candidate) => candidate.id === panelId);
   if (panel) dockview.removePanel(panel);
 }
 
-function buildDropdownItems(
-  targetGroup?: DockviewGroupPanel,
-): Array<{ label: string; action: () => void; dividerAfter?: boolean; disabled?: boolean; disabledReason?: string }> {
-  const items: Array<{
-    label: string;
-    action: () => void;
-    dividerAfter?: boolean;
-    disabled?: boolean;
-    disabledReason?: string;
-  }> = [];
-  const openChatIds = getOpenChatAgentIds();
-  const openAppNames = getOpenAppNames();
-
-  // --- Existing items section ---
-
-  // Apps that do not have open tabs. Exclude "system_interface"
-  // (that's the surrounding chrome UI, not a tab-able app), "terminal"
-  // (reachable via the "New terminal" menu item further down), and "browser"
-  // (the fleet has its own per-session items + "New browser" below; the bare
-  // browser app entry would open a session-less viewer that doesn't dedup
-  // against the fleet panes).
-  const apps = getApps().filter(
-    (app) => app.name !== "system_interface" && app.name !== "terminal" && app.name !== "browser",
-  );
-  for (const app of apps) {
-    if (!openAppNames.has(app.name)) {
-      const serviceUrl = deriveServiceOrigin(labelForService(app.name));
-      items.push({
-        label: app.name,
-        action: () => openIframeTab(serviceUrl, app.name, "iframe", app.name, targetGroup),
-      });
+/** A launcher is a question -- "what goes in this pane?" -- and clicking off
+ *  to some other tab is an answer: not this, not now. Every launcher folds up
+ *  the moment a real panel takes focus, rather than lingering as a tab the
+ *  user has to close by hand. Only runs when the newly focused panel is NOT a
+ *  launcher itself, which also guarantees the dock cannot be emptied here: the
+ *  focused panel survives, and a group that held only its launcher collapses
+ *  away with it. */
+function retireLaunchersOnFocusLeaving(activePanelId: string): void {
+  if (!dockview) return;
+  if (panelParams.get(activePanelId)?.panelType === "launcher") return;
+  for (const panel of [...dockview.panels]) {
+    if (panel.id !== activePanelId && panelParams.get(panel.id)?.panelType === "launcher") {
+      dockview.removePanel(panel);
     }
   }
-
-  // Agents/chats that don't have open tabs
-  const allAgents = getAgents();
-  for (const agent of allAgents) {
-    if (!openChatIds.has(agent.id)) {
-      items.push({
-        label: agent.name,
-        action: () => addChatPanel(agent.id, agent.name, targetGroup),
-      });
-    }
-  }
-
-  // Proto-agents that don't have open tabs
-  const protos = getProtoAgents();
-  for (const proto of protos) {
-    if (!openChatIds.has(proto.agent_id)) {
-      items.push({
-        label: `${proto.name} (creating...)`,
-        action: () => addChatPanel(proto.agent_id, proto.name, targetGroup),
-      });
-    }
-  }
-
-  // Active browsers in the fleet -- one item each, labeled with the owner.
-  // Clicking focuses the pane if it's already open (``openBrowserSessionTab``
-  // dedups on the ``?session=<id>`` URL) or opens it otherwise. Built from
-  // the cached fleet snapshot the dropdown open-handler refreshed.
-  for (const browser of browserFleet) {
-    items.push({
-      label: `Browser ${browser.id}${browserOwnerLabel(browser)}`,
-      action: () => openBrowserSessionTab(browser.id, targetGroup),
-    });
-  }
-
-  // Live terminal sessions (any non-mngr- tmux session) that don't have an
-  // open tab. Selecting one reattaches -- the session keeps running after its
-  // tab is closed, so this is how a closed-but-alive terminal is reopened.
-  const openTerminalNames = getOpenTerminalSessionNames();
-  for (const terminal of terminalFleet) {
-    if (!openTerminalNames.has(terminal.session_name)) {
-      items.push({
-        label: terminal.session_name,
-        action: () => reattachTerminal(terminal.session_name, targetGroup),
-      });
-    }
-  }
-
-  // Add divider if we had existing items
-  if (items.length > 0) {
-    items[items.length - 1].dividerAfter = true;
-  }
-
-  // --- "New ..." items ---
-
-  items.push({
-    label: "New chat",
-    action: () => {
-      newTabTargetGroup = targetGroup ?? null;
-      showNewChatModal = true;
-      m.redraw();
-    },
-  });
-
-  // New terminal -- allocates a fresh named tmux session anchored at the
-  // primary agent's work_dir.
-  items.push({
-    label: "New terminal",
-    action: () => {
-      void openNewTerminal(targetGroup);
-    },
-  });
-
-  // Direct control is keyless -- the agent (and you) drive the browser by hand.
-  // The item stays ALWAYS clickable: a create is accepted even during
-  // startup/restore (it queues behind the serialized restore on the daemon's
-  // shared launch lock and just takes longer), so the button must not be
-  // gated on init. Cap (3) and duplicate names are enforced server-side and
-  // surfaced as inline errors in the New-browser modal. Clicking opens that
-  // modal pre-filled with a random name, mirroring "New agent".
-  items.push({
-    label: "New browser",
-    action: () => {
-      newTabTargetGroup = targetGroup ?? null;
-      // Clean open: drop any leftover failure pre-fill so the modal fetches a
-      // fresh random name and shows no error.
-      newBrowserPrefillName = null;
-      newBrowserError = null;
-      showNewBrowserModal = true;
-      m.redraw();
-    },
-  });
-
-  items.push({
-    label: "New agent",
-    action: () => {
-      newTabTargetGroup = targetGroup ?? null;
-      showNewAgentModal = true;
-      m.redraw();
-    },
-    dividerAfter: true,
-  });
-
-  // --- Named-layout section ---
-  // Each opens a dialog over the fresh registry (refreshed on open so a
-  // layout another client just saved shows up).
-  const openLayoutDialog = (mode: LayoutDialogMode) => {
-    layoutDialogMode = mode;
-    void refreshLayoutsList();
-    m.redraw();
-  };
-  items.push({ label: "Save layout...", action: () => openLayoutDialog("save") });
-  items.push({ label: "Load layout...", action: () => openLayoutDialog("load") });
-  items.push({ label: "Delete layout...", action: () => openLayoutDialog("delete") });
-
-  return items;
 }
 
-/** Render ``buildDropdownItems(targetGroup)`` into ``dropdown`` (clearing it
- *  first). Shared by the header "+" button and the empty-state overlay so
- *  the item markup + click wiring live in one place. Re-invoked when the
- *  async browser-fleet fetch resolves so a freshly-opened menu picks up the
- *  live browser list. */
-function renderDropdownItems(dropdown: HTMLElement, targetGroup?: DockviewGroupPanel): void {
-  dropdown.innerHTML = "";
-  const items = buildDropdownItems(targetGroup);
-  for (const item of items) {
-    const menuItem = document.createElement("div");
-    menuItem.className = "dockview-add-tab-dropdown-item";
-    menuItem.textContent = item.label;
-    if (item.disabled) {
-      menuItem.style.opacity = "0.5";
-      menuItem.style.cursor = "not-allowed";
-    }
-    menuItem.addEventListener("click", (clickEvent) => {
-      clickEvent.stopPropagation();
-      dropdown.style.display = "none";
-      // A disabled item doesn't run its action; if it has a reason, surface it (the
-      // "click pops a modal explaining why" path). Without this a disabled item would
-      // still fire -- only visually greyed.
-      if (item.disabled) {
-        if (item.disabledReason) alert(item.disabledReason);
-        return;
-      }
-      item.action();
-    });
-    dropdown.appendChild(menuItem);
-
-    if (item.dividerAfter) {
-      const divider = document.createElement("div");
-      divider.className = "dockview-add-tab-dropdown-divider";
-      divider.style.borderTop = "1px solid #e5e7eb";
-      divider.style.margin = "4px 0";
-      dropdown.appendChild(divider);
-    }
-  }
+/** Keep the dock from ever being empty: the view a user emptied gets a
+ *  launcher, which is the design's empty state. Suppressed while a layout is
+ *  being mounted, where the teardown legitimately removes every panel. */
+function ensureDockIsNotEmpty(): void {
+  if (isApplyingLayout || !dockview) return;
+  if (dockview.panels.length > 0) return;
+  openLauncherPanel(null);
 }
 
 function createAddTabButton(group: DockviewGroupPanel): IHeaderActionsRenderer {
@@ -933,51 +1494,453 @@ function createAddTabButton(group: DockviewGroupPanel): IHeaderActionsRenderer {
 
   const button = document.createElement("button");
   button.className = "dockview-add-tab-button";
-  button.title = "Add tab";
+  button.setAttribute("aria-label", LAUNCHER_PANEL_TITLE);
   button.textContent = "+";
+  const tooltip = attachHoverTooltip(button);
+  tooltip.setText(LAUNCHER_PANEL_TITLE);
   element.appendChild(button);
 
-  const dropdown = document.createElement("div");
-  dropdown.className = "dockview-add-tab-dropdown";
-  dropdown.style.display = "none";
-
-  element.appendChild(dropdown);
-
-  button.addEventListener("click", (e) => {
-    e.stopPropagation();
-    const isVisible = dropdown.style.display !== "none";
-    if (isVisible) {
-      dropdown.style.display = "none";
-    } else {
-      // Build from current state, then refresh the browser fleet and
-      // re-render once it resolves (only if the menu is still open) so the
-      // active-browser items reflect the live fleet rather than a stale
-      // snapshot from a previous open.
-      renderDropdownItems(dropdown, group);
-      refreshBrowserFleet(() => {
-        if (dropdown.style.display !== "none") renderDropdownItems(dropdown, group);
-      });
-      refreshTerminalFleet(() => {
-        if (dropdown.style.display !== "none") renderDropdownItems(dropdown, group);
-      });
-      dropdown.style.display = "block";
-    }
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    openLauncherPanel(group);
   });
-
-  const closeDropdown = (e: MouseEvent) => {
-    if (!element.contains(e.target as Node)) {
-      dropdown.style.display = "none";
-    }
-  };
-  document.addEventListener("click", closeDropdown);
 
   return {
     element,
     init() {},
     dispose() {
-      document.removeEventListener("click", closeDropdown);
+      tooltip.dispose();
     },
   };
+}
+
+/** Content renderer for a launcher tab. Its attrs are read on every redraw so
+ *  the tables follow the machine (an agent appearing, a browser retiring) while
+ *  it sits open. */
+function createLauncherRenderer(panelId: string): IContentRenderer {
+  const element = document.createElement("div");
+  element.style.width = "100%";
+  element.style.height = "100%";
+  return {
+    element,
+    init() {
+      m.mount(element, {
+        view: () =>
+          m(NewTabLauncher, {
+            rows: launcherRows(),
+            memberRows: launcherMemberRows(),
+            isEverything: mountedViewId !== null && isEverythingView(mountedViewId),
+            onOpenNew: (kind: LaunchKind) => {
+              openTabOfTypeInGroup(kind, groupForPanel(panelId), panelId);
+            },
+            onOpenMember: (row: LauncherRow) => {
+              if (openMemberRef(row.ref, groupForPanel(panelId)) !== null) retireLauncher(panelId);
+            },
+            onOpenFromMachine: (row: LauncherRow) => {
+              openFromMachine(row.ref, panelId);
+            },
+          }),
+      });
+    },
+    dispose() {
+      m.mount(element, null);
+    },
+  };
+}
+
+/**
+ * Open something the active project does not show yet, from the launcher's
+ * "on this machine" table.
+ *
+ * The object joins this project and is taken from nowhere: membership is
+ * many-to-many, so it keeps running and stays in every project that already
+ * shows it. Filing comes first so the sidebar lists it even if the panel
+ * creation finds nothing to open (a url ref whose page is long gone).
+ */
+function openFromMachine(ref: string, launcherPanelId: string): void {
+  const viewId = mountedViewId;
+  const targetGroup = groupForPanel(launcherPanelId);
+  void (async () => {
+    if (viewId !== null && !isEverythingView(viewId)) {
+      try {
+        await shareMember(ref, viewId);
+        await refreshProjectsList();
+      } catch {
+        // Opening it is still worth doing; the next open files it again.
+      }
+    }
+    if (openMemberRef(ref, targetGroup) !== null) retireLauncher(launcherPanelId);
+    m.redraw();
+  })();
+}
+
+/** Every object on the machine, as launcher rows. Rows are named through
+ *  ``labelForMemberRef`` like every other surface, so a renamed object is
+ *  offered here under the name it was given, and dated through the machine-wide
+ *  last-used map, so an object used in any view ranks by that use here. A ref
+ *  the map has no entry for keeps ``lastActiveMs`` null and renders as unknown
+ *  rather than being invented here. */
+function launcherRows(): LauncherRow[] {
+  return buildLauncherRows(machineInventory(), getMemberLastUsed()).map((row) => ({
+    ...row,
+    label: labelForMemberRef(row.ref),
+  }));
+}
+
+/**
+ * Record that the object behind a panel is in front of the user.
+ *
+ * Called when a panel is opened and when the dock's focus lands on one. The
+ * ref resolution is the same as everywhere else (the cached entry, else the
+ * async derivation -- a ``url:`` ref is a hash the platform computes
+ * asynchronously), and a panel that stands for no object (the launcher)
+ * records nothing. The per-ref throttle lives in ``touchMemberLastUsed``:
+ * focus flapping between two panes must not produce a write per click.
+ */
+function touchPanelLastUsed(panelId: string): void {
+  void (async () => {
+    const ref = memberRefByPanelId.get(panelId) ?? (await rememberMemberRef(panelId));
+    if (ref === null) return;
+    touchMemberLastUsed(ref);
+  })();
+}
+
+/** The active view's members as launcher rows: the rail's tab list (see
+ *  getSidebarRows) decorated with the machine-wide last-used map. Sharing the
+ *  rail's source is what keeps the launcher's "In this project" table and the
+ *  rail from disagreeing -- a backgrounded member the machine reports no live
+ *  signal for still rows in both. For Everything the launcher renders the
+ *  single machine-wide table instead and ignores these. */
+function launcherMemberRows(): LauncherRow[] {
+  const lastUsed = getMemberLastUsed();
+  return getSidebarRows().map((row) => ({
+    ref: row.ref,
+    kind: row.kind,
+    label: row.label,
+    lastActiveMs: lastUsed[row.ref] ?? null,
+  }));
+}
+
+// ---------- The machine, as the sidebar and the launcher see it ----------
+
+/** Re-read the fleets the sidebar and the launcher enumerate. Called when a
+ *  view is mounted, when a launcher opens, and after creating a browser or a
+ *  terminal, so a freshly-created one is listed without waiting for the next
+ *  mount. */
+function refreshMachineInventory(): void {
+  refreshBrowserFleet(() => m.redraw());
+  refreshTerminalFleet(() => m.redraw());
+}
+
+/**
+ * Everything the machine currently holds, gathered per kind from the source
+ * that knows about it.
+ *
+ * This is what makes Everything the *home*: its tab list enumerates the machine
+ * rather than unioning the projects' member lists, so an object filed in no
+ * project at all still shows up. Names are the identity each kind's ref is
+ * built from -- a chat's stable agent id, a tmux session, a fleet browser's
+ * session name, a service name -- and never the display label.
+ */
+function machineInventory(): MachineInventory {
+  const urlTabs: MachineObject[] = [];
+  for (const [panelId, ref] of memberRefByPanelId) {
+    if (memberKindFromRef(ref) !== "url") continue;
+    urlTabs.push({ name: memberRefBody(ref), label: panelParams.get(panelId)?.title ?? "Page" });
+  }
+  return {
+    chatAgents: getAgents().map((agent) => ({ name: agent.id, label: chatDisplayName(agent) })),
+    terminals: terminalFleet.map((terminal) => ({
+      name: terminal.session_name,
+      label: terminalDisplayName(terminal.session_name),
+    })),
+    browsers: browserFleet.map((browser) => ({ name: browser.id, label: browserDisplayName(browser.id) })),
+    apps: pickableApps().map((app) => ({ name: app.name, label: app.name })),
+    urlTabs,
+  };
+}
+
+/**
+ * What an object is called, everywhere it is listed.
+ *
+ * The chosen name wins when the object has one, and it is filed by ref, so the
+ * same object shows the same name in every view that lists it -- and keeps it
+ * while it is backgrounded, with no panel to hang a name on. Failing that, the
+ * name is derived from what the object is, which is what lets an agent renamed
+ * through mngr drag its chat row along with it.
+ *
+ * A layout saved before names were kept by ref may still carry one on the panel
+ * (``customTitle``); it is read as a last fallback so such a layout does not
+ * lose its name, and never overrides the store.
+ */
+function labelForMemberRef(ref: string): string {
+  return displayNameForMember(ref, derivedLabelForMemberRef(ref), legacyPanelTitleForRef(ref));
+}
+
+/** The name a saved layout is still carrying for this object on the panel
+ *  showing it, from before names were filed by ref. Nothing writes one now. */
+function legacyPanelTitleForRef(ref: string): string | undefined {
+  const openPanelId = panelIdForMemberRef(ref);
+  return openPanelId === null ? undefined : panelParams.get(openPanelId)?.customTitle;
+}
+
+/** What a member ref is called before anybody renamed it. A chat is filed under
+ *  its agent id, so its name is looked up live -- the ``display_name`` label the
+ *  agent carries (falling back to its true name) -- and follows the agent
+ *  through renames; everything else derives its display form from the identity
+ *  it is filed under ("Terminal 3" from ``terminal-3``, "Browser 1" from
+ *  ``browser-1``). An ad-hoc page has no name of its own beyond its tab's
+ *  title, which only exists while it is open. */
+function derivedLabelForMemberRef(ref: string): string {
+  const openPanelId = panelIdForMemberRef(ref);
+  const body = memberRefBody(ref);
+  switch (memberKindFromRef(ref)) {
+    case "chat": {
+      const agent = getAgentById(body);
+      if (agent !== undefined) return chatDisplayName(agent);
+      const protoName = getProtoAgents().find((proto) => proto.agent_id === body)?.name;
+      if (protoName !== undefined) return protoName;
+      // A chat the machine does not know yet: a create whose proto broadcast
+      // was missed, or a restored panel for an agent still resolving. The open
+      // tab's current title -- the display name the create handed back, or a
+      // saved layout's -- beats the bare agent id, which must never reach a
+      // surface the user reads.
+      const panelTitle =
+        openPanelId === null ? undefined : dockview?.panels.find((panel) => panel.id === openPanelId)?.title;
+      return panelTitle !== undefined && panelTitle !== "" ? panelTitle : body;
+    }
+    case "terminal":
+      return terminalDisplayName(body);
+    case "browser":
+      return browserDisplayName(serviceSessionLabel(parseServiceRefBody(body).query));
+    case "app":
+      return body;
+    case "url":
+      return (openPanelId === null ? undefined : panelParams.get(openPanelId)?.title) ?? "Page";
+  }
+}
+
+// The chat harnesses a create can stack (see ``CreateChatRequest.harness``).
+// The display name each create wears ("Chat N", "Codex N", "Pi N") is minted
+// server-side, so no numbering lives here.
+type ChatHarness = "claude" | "codex" | "pi";
+
+/** The project registry, for the sidebar's switcher and its member lists.
+ *  Everything is never in it. */
+export function getAvailableProjects(): ProjectInfo[] {
+  return availableProjects;
+}
+
+/** The mounted view: a project id, or EVERYTHING_VIEW_ID. Empty only before the
+ *  registry has loaded. */
+export function getActiveViewId(): string {
+  return mountedViewId ?? "";
+}
+
+/** Re-read the project registry. Exported for the sidebar, whose create,
+ *  rename and delete all change it. */
+export function refreshProjects(): void {
+  void refreshProjectsList();
+}
+
+/**
+ * The active view's tab list: every object it holds, open or backgrounded.
+ *
+ * A project lists its members -- explicitly filed, so a member with no panel is
+ * simply backgrounded and stays listed. Everything lists the machine, because
+ * an object filed in no project at all has to appear somewhere and that
+ * somewhere is the home.
+ *
+ * Both halves name their rows through ``labelForMemberRef``, so an object two
+ * views hold reads the same in both: a name belongs to the object.
+ */
+export function getSidebarRows(): SidebarTabRow[] {
+  const viewId = mountedViewId;
+  if (viewId === null) return [];
+  if (isEverythingView(viewId)) {
+    return buildEverythingMembers(machineInventory(), {}).map((row) => ({
+      ref: row.ref,
+      kind: row.kind,
+      label: labelForMemberRef(row.ref),
+      isOpen: panelIdForMemberRef(row.ref) !== null,
+    }));
+  }
+  const members = projectForViewId(availableProjects, viewId)?.members ?? [];
+  return members.map((ref) => ({
+    ref,
+    kind: memberKindFromRef(ref),
+    label: labelForMemberRef(ref),
+    isOpen: panelIdForMemberRef(ref) !== null,
+  }));
+}
+
+/**
+ * Focus the tab a member already has, or open one for it in the active pane.
+ *
+ * Returns the panel id, or null when the object cannot be opened from its ref
+ * alone: an ad-hoc page is addressed by a hash of its panel, so once its tab is
+ * closed the URL it pointed at is gone and only "Remove from project" is left
+ * for it.
+ */
+function openMemberRef(ref: string, targetGroup: DockviewGroupPanel | null): string | null {
+  if (!dockview) return null;
+  const openPanelId = panelIdForMemberRef(ref);
+  if (openPanelId !== null) {
+    const panel = dockview.panels.find((candidate) => candidate.id === openPanelId);
+    if (panel) dockview.setActivePanel(panel);
+    return openPanelId;
+  }
+  const body = memberRefBody(ref);
+  switch (memberKindFromRef(ref)) {
+    case "chat": {
+      const chatAgentId = body;
+      const agent = getAgentById(chatAgentId);
+      focusOrCreateChatPanel(chatAgentId, agent === undefined ? chatAgentId : chatDisplayName(agent), targetGroup);
+      return chatPanelId(chatAgentId);
+    }
+    case "terminal":
+      return addTerminalPanel(body, { targetGroup });
+    case "browser":
+    case "app":
+      // Both are ``service:`` refs, which addPanelForRef creates and dedups --
+      // including the browser fleet's ``?session=`` form.
+      return addPanelForRef(ref, getPrimaryAgentId(), placementForGroup(targetGroup));
+    case "url":
+      console.warn(`Cannot reopen ${ref}: an ad-hoc page's address does not survive its tab`);
+      return null;
+  }
+}
+
+/** Sidebar row click: focus the object's tab, or open it into the active pane. */
+export function openMemberRow(row: SidebarTabRow): void {
+  openMemberRef(row.ref, null);
+  m.redraw();
+}
+
+/**
+ * Stop showing a member in the active view.
+ *
+ * This hides it here and nowhere else: it keeps running, it stays in every
+ * other project showing it, and it stays in Everything. Its tab goes with it --
+ * a view that no longer shows an object must not keep it docked -- which is the
+ * one place closing a tab and removing a member coincide, and only because the
+ * removal drove it.
+ */
+export function removeMemberRow(row: SidebarTabRow): void {
+  removeMemberRefWithAlert(row.ref);
+}
+
+/** Stop showing one ref in the active view, shouting if the server refuses.
+ *  The click-and-forget half of ``removeMemberRefFromView``, shared by the
+ *  rail's row menu and its unpin toggle: unpinning an app IS removing it from
+ *  the view, so both take the same path. */
+function removeMemberRefWithAlert(ref: string): void {
+  void removeMemberRefFromView(ref).catch((e: Error) => {
+    alert(`Failed to remove from project: ${e.message}`);
+  });
+}
+
+/**
+ * Pin an app in the active view, or unpin it.
+ *
+ * Pinning an app to a project is the same fact as its membership -- it is
+ * pinned exactly when the project's member list holds its ``service:<name>``
+ * ref -- so there is nothing to this beyond adding or removing that member.
+ * Unpinning goes through the same path as any other "remove from project": the
+ * app keeps running, it stays in every other project showing it, and it stays
+ * in Everything. Everything itself pins nothing, so neither verb applies there.
+ */
+export function setAppPinnedInView(app: AppEntry, isPinned: boolean): void {
+  const ref = memberRef("app", app.name);
+  if (!isPinned) {
+    removeMemberRefWithAlert(ref);
+    return;
+  }
+  const viewId = mountedViewId;
+  if (viewId === null || isEverythingView(viewId)) return;
+  void (async () => {
+    try {
+      await addMember(viewId, ref);
+      await refreshProjectsList();
+    } catch (e) {
+      alert(`Failed to pin ${app.name}: ${(e as Error).message}`);
+    }
+    m.redraw();
+  })();
+}
+
+/**
+ * Stop showing one ref in the mounted view, resolving or rejecting with why.
+ *
+ * Kept apart from ``removeMemberRefWithAlert`` only so that shape has
+ * something awaitable to wrap: every current caller fires and forgets through
+ * it, catching the rejection into an alert rather than needing the promise
+ * itself.
+ */
+export async function removeMemberRefFromView(ref: string): Promise<void> {
+  const viewId = mountedViewId;
+  // Nothing can be removed from Everything: it is the home, and an object
+  // leaves it only by being destroyed.
+  if (viewId === null || isEverythingView(viewId)) return;
+  const panelId = panelIdForMemberRef(ref);
+  if (panelId !== null && dockview) {
+    const panel = dockview.panels.find((candidate) => candidate.id === panelId);
+    if (panel) dockview.removePanel(panel);
+  }
+  try {
+    await removeMember(viewId, ref);
+    await refreshProjectsList();
+  } finally {
+    m.redraw();
+  }
+}
+
+/** Open the machine's share surface for an app row. */
+export function shareMemberRow(row: SidebarTabRow): void {
+  if (row.kind !== "app") return;
+  shareServiceName = memberRefBody(row.ref);
+  showShareModal = true;
+  m.redraw();
+}
+
+/**
+ * Destroy the object behind a sidebar row, machine-wide.
+ *
+ * Each kind raises its own confirmation, and each says what it takes down and
+ * that the object leaves every project rather than only this view. The panel id
+ * handed to the destroy is the live tab's when the object has one, else the
+ * deterministic id its kind is always filed under, so destroying something
+ * backgrounded still clears the tab another project would otherwise restore.
+ */
+export function destroyMemberRow(row: SidebarTabRow): void {
+  const body = memberRefBody(row.ref);
+  const livePanelId = panelIdForMemberRef(row.ref);
+  switch (memberKindFromRef(row.ref)) {
+    case "chat":
+      destroyTargetAgentId = body;
+      destroyTargetAgentName = row.label;
+      destroyTargetPanelId = livePanelId ?? chatPanelId(body);
+      showDestroyDialog = true;
+      break;
+    case "terminal":
+      terminalDestroySessionName = body;
+      terminalDestroyPanelId = livePanelId ?? terminalPanelId(body);
+      showTerminalDestroyDialog = true;
+      break;
+    case "browser":
+      browserDestroyName = serviceSessionLabel(parseServiceRefBody(body).query);
+      // A browser pane's id is minted per open, so a backgrounded one has none
+      // to sweep; dropping the member everywhere is the whole of it.
+      browserDestroyPanelId = livePanelId ?? row.ref;
+      showBrowserDestroyDialog = true;
+      break;
+    // An app or an ad-hoc page has nothing to destroy: nothing here stops a
+    // supervised app or deletes its package, and a page is only ever a panel.
+    case "app":
+    case "url":
+      return;
+  }
+  m.redraw();
 }
 
 function focusOrCreateChatPanel(
@@ -1010,6 +1973,7 @@ function addChatPanel(chatAgentId: string, chatAgentName: string, targetGroup?: 
     renderer: "always",
     ...placementForGroup(targetGroup),
   });
+  recordMembership(panelId);
 }
 
 /**
@@ -1028,15 +1992,14 @@ function openInitialChatTab(): boolean {
   const candidates = getAgents();
   if (candidates.length === 0) return false;
   const initial = candidates[0];
-  addChatPanel(initial.id, initial.name);
+  addChatPanel(initial.id, chatDisplayName(initial));
   return true;
 }
 
-// `awaitingInitialChat` flips on when init runs against an empty agent
-// list, and back off as soon as we successfully open the initial tab.
-// While true, an agents_updated listener keeps retrying. The empty-state
-// overlay uses this flag to decide whether to show "Waiting for initial
-// chat agent..." vs the default "+ Open new tab" message.
+// `awaitingInitialChat` flips on when the initial mount runs against an empty
+// agent list -- a machine whose bootstrap is still creating its first chat --
+// and back off as soon as that tab opens. While true, an agents_updated
+// listener keeps retrying, and a launcher stands in until it lands.
 let awaitingInitialChat = false;
 let agentsUpdatedListener: AgentsUpdatedListener | null = null;
 
@@ -1059,6 +2022,7 @@ function openIframeTab(
     params,
     ...placementForGroup(targetGroup),
   });
+  recordMembership(panelId);
 }
 
 /** Find the chat panel id to anchor an agent-initiated split against.
@@ -1148,15 +2112,15 @@ function chatPanelId(chatAgentId: string): string {
 }
 
 /** Deterministic dockview panel id for a named terminal session, so reopening
- *  the same session from the "+" menu (or a layout restore) focuses the
- *  existing tab instead of stacking a duplicate. */
+ *  the same session from a sidebar row, a launcher row, or a layout restore
+ *  focuses the existing tab instead of stacking a duplicate. */
 function terminalPanelId(sessionName: string): string {
   return `${TERMINAL_PANEL_ID_PREFIX}${sessionName}`;
 }
 
 /** Rebuild a panel's params from its (deterministic) panel id.
  *
- *  Chat and persistent-terminal panel ids encode their identity, so a panel
+ *  Launcher, chat and persistent-terminal panel ids encode their identity, so a panel
  *  whose ``panelParams`` entry is missing at creation time -- a layout file
  *  written by an older build, a hand-edited one, or a bookkeeping bug -- can
  *  still be bound to the right agent / tmux session instead of silently
@@ -1168,6 +2132,9 @@ function derivePanelParamsFromId(panelId: string): PanelParams | null {
     const chatAgentId = panelId.substring(CHAT_PANEL_ID_PREFIX.length);
     if (!chatAgentId) return null;
     return { panelType: "chat", agentId: chatAgentId, chatAgentId };
+  }
+  if (panelId.startsWith(LAUNCHER_PANEL_ID_PREFIX)) {
+    return { panelType: "launcher", agentId: getPrimaryAgentId() };
   }
   if (panelId.startsWith(TERMINAL_PANEL_ID_PREFIX)) {
     const sessionName = panelId.substring(TERMINAL_PANEL_ID_PREFIX.length);
@@ -1218,7 +2185,7 @@ function createUnrecoverablePanelRenderer(panelId: string): IContentRenderer {
   element.style.height = "100%";
   element.style.padding = "16px";
   element.style.textAlign = "center";
-  element.textContent = "This tab's contents could not be restored. Close it and open it again from the + menu.";
+  element.textContent = "This tab's contents could not be restored. Close it and open it again from the sidebar.";
   console.warn(`Rendering unrecoverable-panel placeholder for dockview panel ${panelId}`);
   return {
     element,
@@ -1236,11 +2203,35 @@ function isTerminalPanelParams(pp: PanelParams | undefined): boolean {
   return pp?.terminalSessionName !== undefined || pp?.terminalId !== undefined;
 }
 
+/**
+ * Change what a panel is showing.
+ *
+ * The params object is shared with the live page that renders it, so the
+ * mutation reaches the screen and the next autosave at once and nothing else
+ * has to be plumbed. What does need saying is identity: a terminal is filed
+ * under ``panel:<id>`` until its tmux session name is allocated, and moves
+ * again if the session is renamed, so a mutation that changes the object's name
+ * re-files its page under the new one -- without touching the page.
+ */
+function mutatePanelParams(panelId: string, mutate: (params: PanelParams) => void): void {
+  const params = panelParams.get(panelId);
+  if (params === undefined) return;
+  const previousKey = liveKeyForPanel(panelId, params);
+  mutate(params);
+  const nextKey = liveKeyForPanel(panelId, params);
+  if (previousKey !== null && nextKey !== null) rekeyLiveSurface(previousKey, nextKey);
+}
+
+/** A fresh id under ``prefix``, unique for as long as this workspace runs. */
+function mintId(prefix: string): string {
+  const unique = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : String(Date.now());
+  return `${prefix}${unique}`;
+}
+
 /** Mint a fresh per-tab terminal id. The backend maps this back to the tab's
  *  tmux client (via the pty) for live title tracking. */
 function mintTerminalId(): string {
-  const unique = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : String(Date.now());
-  return `term-${unique}`;
+  return mintId("term-");
 }
 
 /** The primary agent's work_dir, or "" (the ttyd dispatch treats an empty
@@ -1249,9 +2240,10 @@ function primaryWorkDir(): string {
   return getAgentById(getPrimaryAgentId())?.work_dir ?? "";
 }
 
-// Cached snapshot of the live terminal-session fleet, refreshed each time the
-// "+" dropdown opens (mirrors ``browserFleet``). Drives one dropdown item per
-// non-open terminal session so a closed-but-alive terminal can be reattached.
+// Cached snapshot of the live terminal-session fleet, re-read alongside the
+// browser fleet (see ``refreshMachineInventory``). It is what lists a
+// closed-but-alive terminal in the sidebar and the launcher, so it can be
+// reattached rather than lost.
 let terminalFleet: TerminalSessionInfo[] = [];
 
 function refreshTerminalFleet(onUpdate?: () => void): void {
@@ -1264,21 +2256,11 @@ function refreshTerminalFleet(onUpdate?: () => void): void {
     });
 }
 
-/** Session names of terminals currently open in a tab, so the "+" menu can
- *  exclude them (mirrors ``getOpenAppNames`` for apps). */
-function getOpenTerminalSessionNames(): Set<string> {
-  const names = new Set<string>();
-  for (const [, pp] of panelParams) {
-    if (pp.terminalSessionName) names.add(pp.terminalSessionName);
-  }
-  return names;
-}
-
 /** Open (or focus, if already open) a tab attached to ``sessionName``. Shared
- *  by "New terminal" (freshly allocated name) and the "+" menu reattach path
- *  (existing name). ``panelIdOverride`` is used by the agent-driven
- *  ``service:terminal`` path so the server-minted panel id (and thus its
- *  ``terminal:<hash>`` ref) is preserved. */
+ *  by "New terminal" (freshly allocated name) and the reattach path a sidebar
+ *  row or a launcher row takes (existing name). ``options.panelId`` is used by
+ *  the agent-driven ``service:terminal`` path so the server-minted panel id
+ *  (and thus its ``terminal:<hash>`` ref) is preserved. */
 function addTerminalPanel(
   sessionName: string,
   options: { panelId?: string; targetGroup?: DockviewGroupPanel | null },
@@ -1292,11 +2274,12 @@ function addTerminalPanel(
   }
   const terminalId = mintTerminalId();
   const url = buildSessionTerminalUrl(sessionName, terminalId, primaryWorkDir());
+  const title = terminalDisplayName(sessionName);
   const params: PanelParams = {
     panelType: "iframe",
     agentId: getPrimaryAgentId(),
     url,
-    title: sessionName,
+    title,
     terminalSessionName: sessionName,
     terminalId,
   };
@@ -1304,17 +2287,22 @@ function addTerminalPanel(
   dockview.addPanel({
     id: panelId,
     component: "iframe",
-    title: sessionName,
+    title,
     params,
     ...placementForGroup(options.targetGroup),
   });
+  recordMembership(panelId);
+  // The fleet gained a session the sidebar lists.
+  refreshMachineInventory();
   return panelId;
 }
 
-/** "New terminal" button: allocate the next free ``terminal-N`` name from the
- *  backend, then open a tab attached to it. */
-async function openNewTerminal(targetGroup?: DockviewGroupPanel | null): Promise<void> {
-  if (!dockview) return;
+/** "New terminal": allocate the next free ``terminal-N`` name from the backend,
+ *  then open a tab attached to it. The tmux session name is the identity; the
+ *  tab derives its "Terminal N" display name from it. Returns the new panel's
+ *  id, or null when the allocation failed. */
+async function openNewTerminal(targetGroup?: DockviewGroupPanel | null): Promise<string | null> {
+  if (!dockview) return null;
   let sessionName: string;
   try {
     sessionName = await allocateTerminalName();
@@ -1323,14 +2311,65 @@ async function openNewTerminal(targetGroup?: DockviewGroupPanel | null): Promise
     // the "New terminal" click with no visible effect (matches the alert used
     // by the other terminal/agent actions in this file).
     alert(`Failed to open terminal: ${(e as Error).message}`);
-    return;
+    return null;
   }
-  addTerminalPanel(sessionName, { targetGroup });
+  return addTerminalPanel(sessionName, { targetGroup });
 }
 
-/** "+" menu: reattach a tab to an already-running terminal session. */
-function reattachTerminal(sessionName: string, targetGroup?: DockviewGroupPanel | null): void {
-  addTerminalPanel(sessionName, { targetGroup });
+/**
+ * "New chat": start a chat agent and open its tab under the display name the
+ * server minted for it ("Chat N", or the harness's own word).
+ *
+ * No dialog: the server picks the first free name, its canonical form is the
+ * agent's mngr name, and the typed form rides as the agent's ``display_name``
+ * label -- so the name the user sees is the name mngr holds. A chat started
+ * while a project is mounted carries that project's id in its agent's
+ * ``project`` label, matching ``startProjectChat`` (a chat started in
+ * Everything carries none). On failure the launcher stays and the reason is
+ * surfaced, matching ``openNewTerminal``.
+ */
+async function openNewChat(
+  targetGroup: DockviewGroupPanel | null,
+  launcherPanelId: string | null,
+  harness: ChatHarness = "claude",
+  isFirst: boolean = false,
+): Promise<void> {
+  const viewId = mountedViewId;
+  const projectId = viewId !== null && !isEverythingView(viewId) ? viewId : "";
+  let created: CreatedChatAgent;
+  try {
+    created = await createChatAgent(projectId, harness, isFirst);
+  } catch (e) {
+    alert(`Failed to create chat: ${(e as Error).message}`);
+    return;
+  }
+  focusOrCreateChatPanel(created.agentId, created.displayName, targetGroup);
+  retireLauncher(launcherPanelId);
+  m.redraw();
+}
+
+/**
+ * "New browser": register a browser with the daemon and open its pane.
+ *
+ * No dialog: the daemon mints the first free ``browser-<N>`` name -- the
+ * browser's identity everywhere (ref, cast socket, profile dir) -- and the tab
+ * derives its "Browser N" display name from it. The registration itself is
+ * fast (the multi-second Chromium launch runs in the background and the pane
+ * watches it flip from ``init`` to ``running`` over the cast socket), so the
+ * pane opens as soon as the daemon has answered with the name. On failure
+ * nothing was opened and the daemon's reason is surfaced with the alert
+ * pattern the other create flows use.
+ */
+async function openNewBrowser(targetGroup: DockviewGroupPanel | null, launcherPanelId: string | null): Promise<void> {
+  const result = await createBrowser();
+  if (!result.ok) {
+    alert(`Failed to create browser: ${result.reason}`);
+    return;
+  }
+  openBrowserSessionTab(result.name, targetGroup);
+  retireLauncher(launcherPanelId);
+  refreshBrowserFleet();
+  m.redraw();
 }
 
 /** Dedup-then-add for a ``service:``, ``chat:``, or ``https://`` ref.
@@ -1387,14 +2426,21 @@ function addPanelForRef(ref: string, requesterAgentId: string, addOptions: AddPa
     });
     void allocateTerminalName()
       .then((sessionName) => {
-        const stored = panelParams.get(panelId);
-        if (!stored) return;
-        stored.terminalSessionName = sessionName;
-        stored.title = sessionName;
-        stored.url = buildSessionTerminalUrl(sessionName, terminalId, primaryWorkDir());
-        dockview?.panels.find((p) => p.id === panelId)?.api.setTitle(sessionName);
+        if (!panelParams.has(panelId)) return;
+        // Also the point where the page stops being addressed by its panel and
+        // starts being addressed by the tmux session it attached to.
+        mutatePanelParams(panelId, (stored) => {
+          stored.terminalSessionName = sessionName;
+          stored.title = terminalDisplayName(sessionName);
+          stored.url = buildSessionTerminalUrl(sessionName, terminalId, primaryWorkDir());
+        });
+        dockview?.panels.find((p) => p.id === panelId)?.api.setTitle(terminalDisplayName(sessionName));
         m.redraw();
         scheduleSave();
+        // Filed only once the session name has landed: the member ref is
+        // ``terminal:<session>``, which the placeholder the panel was created
+        // with cannot spell yet.
+        recordMembership(panelId);
       })
       .catch(() => {
         // Allocation failed: leave the placeholder tab so the user can close it.
@@ -1440,6 +2486,7 @@ function addPanelForRef(ref: string, requesterAgentId: string, addOptions: AddPa
       params,
       ...placement,
     });
+    recordMembership(panelId);
     return panelId;
   }
 
@@ -1458,11 +2505,12 @@ function addPanelForRef(ref: string, requesterAgentId: string, addOptions: AddPa
     dockview.addPanel({
       id: panelId,
       component: "chat",
-      title: agent.name,
+      title: chatDisplayName(agent),
       params,
       renderer: "always",
       ...placement,
     });
+    recordMembership(panelId);
     return panelId;
   }
 
@@ -1497,6 +2545,7 @@ function addPanelForRef(ref: string, requesterAgentId: string, addOptions: AddPa
       params,
       ...placement,
     });
+    recordMembership(panelId);
     return panelId;
   }
 
@@ -1511,8 +2560,8 @@ function addPanelForRef(ref: string, requesterAgentId: string, addOptions: AddPa
     const panelId = `iframe-${ownerId}-${Date.now()}`;
     const title = externalUrlTitle(ref);
     // ``serviceName`` is intentionally left unset: this is an ad-hoc URL
-    // tab, not a proxied workspace service, so it gets no per-tab Refresh
-    // button and is skipped by service-wide reload matching.
+    // tab, not a proxied workspace service, so it is skipped by service-wide
+    // reload matching and its per-tab Refresh reloads just this iframe.
     const params: PanelParams = { panelType: "iframe", agentId: ownerId, url: ref, title };
     panelParams.set(panelId, params);
     dockview.addPanel({
@@ -1522,6 +2571,7 @@ function addPanelForRef(ref: string, requesterAgentId: string, addOptions: AddPa
       params,
       ...placement,
     });
+    recordMembership(panelId);
     return panelId;
   }
 
@@ -1658,6 +2708,7 @@ export function openIframeTabForAgent(agentId: string, url: string, title: strin
     title,
     params,
   });
+  recordMembership(panelId);
 }
 
 export function openSubagentTab(agentId: string, subagentSessionId: string, description: string): void {
@@ -1686,6 +2737,201 @@ export function openSubagentTab(agentId: string, subagentSessionId: string, desc
     title: description,
     params,
   });
+  recordMembership(panelId);
+}
+
+/**
+ * Start a new object of ``tabType`` in ``targetGroup``.
+ *
+ * This is the create half, and it always creates: a chat starts a new agent, a
+ * browser and a terminal start new instances, and a custom app focuses its
+ * single one. That is what the launcher's "Open new" tiles ask for by name; the
+ * rail's shortcuts go through ``openTabOfType``, which looks for something to
+ * focus first. Nothing here asks the user for a name: identities are
+ * machine-minted, and each create files the first free "Chat N" /
+ * "Terminal N" / "Browser N" display name as it goes (see ``fileAutoTitle``).
+ * The launcher that asked is only retired once the object actually exists,
+ * which is why each create path retires it in its own completion handler
+ * rather than it being closed here.
+ */
+function openTabOfTypeInGroup(
+  // LaunchKind rather than QuickAddTabType: the launcher's tiles include the
+  // flag-gated harness kinds (codex/pi), which have no rail shortcut. The
+  // rail's QuickAddTabType is a subset, so its callers pass through unchanged.
+  tabType: LaunchKind,
+  targetGroup: DockviewGroupPanel | null,
+  launcherPanelId: string | null,
+): void {
+  if (
+    tabType === "chat" ||
+    tabType === "codex" ||
+    tabType === "pi" ||
+    tabType === "intro-chat" ||
+    tabType === "intro-codex" ||
+    tabType === "intro-pi"
+  ) {
+    // The harness tiles are the same create as Chat -- the same `chat` role in
+    // the primary's work dir -- stacked on a different harness template. The
+    // intro- variants additionally stack the `first` create template (fast
+    // launch where the harness supports it, /welcome, the first=true label).
+    // No dialog for any of them: the name is auto-minted like every other create.
+    const isFirst = tabType.startsWith("intro-");
+    const bareKind = isFirst ? tabType.slice("intro-".length) : tabType;
+    const harness: ChatHarness = bareKind === "chat" ? "claude" : (bareKind as ChatHarness);
+    void openNewChat(targetGroup, launcherPanelId, harness, isFirst).then(() => {
+      m.redraw();
+    });
+    return;
+  }
+  if (tabType === "terminal") {
+    void openNewTerminal(targetGroup).then((panelId) => {
+      if (panelId !== null) retireLauncher(launcherPanelId);
+      m.redraw();
+    });
+    return;
+  }
+  if (tabType === "browser") {
+    void openNewBrowser(targetGroup, launcherPanelId).then(() => {
+      m.redraw();
+    });
+    return;
+  }
+  // What is left ("files") is not a tab type the workspace builds itself -- it
+  // is whichever app of that name the machine runs, so it opens through the
+  // same path as the rail's app rows, and opens nothing where none runs.
+  const backingApp = getApps().find((app) => app.name === tabType);
+  if (backingApp === undefined) return;
+  openAppTab(backingApp);
+  retireLauncher(launcherPanelId);
+}
+
+/** The shortcuts that go to an object the active view already shows instead of
+ *  starting another one. See ``refForShortcutFocus``. */
+export type FocusableTabType = "chat" | "browser" | "terminal";
+
+/**
+ * Which object a Chat or Browser shortcut should go to, or null when the view
+ * shows none of that kind and the shortcut has to create one.
+ *
+ * ``memberRefs`` is the active view's tab list in the order it renders (a
+ * project's member list, or the machine for Everything), so "the first one the
+ * view lists" means the first one the user sees. ``preferredRef`` is the one
+ * the view names as *its* object of that kind (see ``preferredChatRefForView``)
+ * and is honored only while the view still lists it; without one, or once it is
+ * gone, the first listed wins. Backgrounded objects count -- they are listed
+ * and still running, and the caller opens one into the active pane.
+ */
+export function refForShortcutFocus(
+  memberRefs: readonly string[],
+  tabType: FocusableTabType,
+  preferredRef: string | null,
+): string | null {
+  const candidates = memberRefs.filter((ref) => memberKindFromRef(ref) === tabType);
+  if (candidates.length === 0) return null;
+  if (preferredRef !== null && candidates.includes(preferredRef)) return preferredRef;
+  return candidates[0];
+}
+
+/**
+ * The chat a view's Chat shortcut goes to before any other, or null when the
+ * view names none and listing order decides.
+ *
+ * A project has ONE chat of its own: the one started with it (see
+ * ``startProjectChat``), which carries the project's id in its agent's
+ * ``project`` label. That is what makes the shortcut a singleton -- it keeps
+ * going to the project's chat however many others the project is later given,
+ * and it never mints a second one.
+ *
+ * Everything is not a project and has no chat of its own, so it keeps naming
+ * the primary agent's chat, which is the closest the machine has to a home
+ * chat. ``originatingProjectByChatRef`` maps a chat ref to the project its
+ * agent was created in; a chat still starting up is not in it yet, which only
+ * costs a preference and never a wrong answer.
+ *
+ * An agent's children inherit its ``project`` label, so a project may list
+ * several chats claiming it. Listing order settles that, and the project's own
+ * chat is first: it was filed the moment the project was made, before anything
+ * else could be.
+ */
+export function preferredChatRefForView(
+  memberRefs: readonly string[],
+  viewId: string,
+  originatingProjectByChatRef: Readonly<Record<string, string>>,
+  primaryAgentId: string,
+): string | null {
+  if (isEverythingView(viewId)) return primaryAgentId === "" ? null : memberRef("chat", primaryAgentId);
+  const own = memberRefs.find(
+    (ref) => memberKindFromRef(ref) === "chat" && originatingProjectByChatRef[ref] === viewId,
+  );
+  return own ?? null;
+}
+
+/** Which project each known chat agent was started in, keyed by the chat's
+ *  member ref. The label rides the agent (mngr propagates it to its children),
+ *  so this follows the machine rather than any one project's member list. */
+function originatingProjectByChatRef(): Record<string, string> {
+  const byRef: Record<string, string> = {};
+  for (const agent of getAgents()) {
+    if (agent.project) byRef[memberRef("chat", agent.id)] = agent.project;
+  }
+  return byRef;
+}
+
+/** Go to the Chat, Browser or Terminal the active view already shows, reporting whether
+ *  there was one. Focuses its tab when it has one and opens it into the active
+ *  pane when it is backgrounded -- ``openMemberRef`` is the same path the
+ *  sidebar rows take, so a member with no panel is opened rather than
+ *  ignored. */
+function focusExistingForShortcut(tabType: FocusableTabType): boolean {
+  const memberRefs = getSidebarRows().map((row) => row.ref);
+  // Only a chat has a per-view singleton to prefer. A browser and a terminal
+  // have no notion of the view's *own* one, so the first the view lists wins.
+  const preferredRef =
+    tabType === "chat"
+      ? preferredChatRefForView(memberRefs, mountedViewId ?? "", originatingProjectByChatRef(), getPrimaryAgentId())
+      : null;
+  const ref = refForShortcutFocus(memberRefs, tabType, preferredRef);
+  if (ref === null) return false;
+  if (openMemberRef(ref, null) === null) return false;
+  m.redraw();
+  return true;
+}
+
+/**
+ * Open ``tabType`` in the active pane. Exported for the sidebar's shortcut rows,
+ * which offer the machine's starting points as one-click rows.
+ *
+ * Chat, Browser and Terminal all go to what the active view already shows and
+ * only create when it shows none. This deliberately REVERSES spec §7, which has
+ * Chat always create a new agent and Browser and Terminal always create a new
+ * session: Preston asked for the rail's chat to be "a singleton to refer to the
+ * primary chat of each
+ * project", and for the browser to behave the same way, and later extended
+ * terminals to match. Do not "fix" it back -- starting another one from
+ * scratch is what the launcher's "Open new" tiles are for.
+ *
+ * A project therefore has exactly one chat of its own, started with the project
+ * itself (``startProjectChat``), and this shortcut goes to that chat rather
+ * than minting another. Everything is not a project and has no chat of its own,
+ * so its shortcut keeps creating one on the machine when it lists none.
+ */
+export function openTabOfType(tabType: QuickAddTabType): void {
+  if (tabType !== "files" && focusExistingForShortcut(tabType)) return;
+  openTabOfTypeInGroup(tabType, null, null);
+}
+
+/** Open ``app``'s pane in the active project, focusing the one already open
+ *  rather than stacking a second. Exported for the machine rail and the
+ *  all-apps picker, and used by the launcher's app rows. */
+export function openAppTab(app: AppEntry): void {
+  if (!dockview) return;
+  const openPanelId = findIframePanelIdForService(app.name);
+  const openPanel = openPanelId === null ? undefined : dockview.panels.find((p) => p.id === openPanelId);
+  if (openPanel !== undefined) {
+    dockview.setActivePanel(openPanel);
+    return;
+  }
+  openIframeTab(deriveServiceOrigin(labelForService(app.name)), app.name, "iframe", app.name);
 }
 
 function buildLayoutPayload(): SavedLayout | null {
@@ -1697,10 +2943,176 @@ function buildLayoutPayload(): SavedLayout | null {
   return { dockview: dockview.toJSON(), panelParams: serializedParams };
 }
 
+// ---------- Membership ----------
+
+// The member ref each live panel stands for, filled in as panels are created
+// and as a restored layout is mounted, and dropped when a panel is disposed.
+// Two things need it: filing a freshly-opened object into the active project,
+// and answering "does this member have a tab right now" for the sidebar. It is
+// a cache rather than a derivation because a ``url:<hash>`` ref is a SHA-256 of
+// the panel id, which the platform only computes asynchronously.
+const memberRefByPanelId = new Map<string, string>();
+
+/** The part of a member ref after its scheme: a chat's agent id, a terminal's
+ *  tmux session name, a service's name (plus the browser fleet's
+ *  ``?session=<name>`` suffix). Every ref the store defines has the
+ *  ``<scheme>:<body>`` shape -- see ``memberRef``, which builds them. */
+function memberRefBody(ref: string): string {
+  const separator = ref.indexOf(":");
+  return separator === -1 ? ref : ref.substring(separator + 1);
+}
+
+/**
+ * The member ref a panel is filed under, or null when it is not a member at all.
+ *
+ * Follows the grammar the store and ``layout_ops`` share (see
+ * ``_panel_member_ref`` in projects.py), including its one deliberate
+ * difference: a chat is filed under its stable agent id rather than the agent's
+ * renameable display name, so membership survives a rename. A panel that names
+ * nothing recognizable falls back to ``url:<hash>``, the form an ad-hoc URL
+ * panel is addressed by. A launcher tab is not an object on the machine -- it
+ * is a question about this pane -- so it is filed nowhere.
+ */
+async function memberRefForPanel(panelId: string): Promise<string | null> {
+  const params = panelParams.get(panelId);
+  if (params === undefined || params.panelType === "launcher") return null;
+  if (params.panelType === "chat") {
+    const chatAgentId = params.chatAgentId ?? params.agentId;
+    return chatAgentId ? memberRef("chat", chatAgentId) : null;
+  }
+  if (params.terminalSessionName) return memberRef("terminal", params.terminalSessionName);
+  if (params.serviceName) {
+    const browserSession = params.serviceName === BROWSER_SERVICE_NAME ? sessionParamFromUrl(params.url) : null;
+    return browserSession === null ? memberRef("app", params.serviceName) : memberRef("browser", browserSession);
+  }
+  return memberRef("url", await shortHash(panelId));
+}
+
+/** Record (and return) the ref a panel is filed under, so later lookups are
+ *  synchronous. A panel that is not a member records nothing. */
+async function rememberMemberRef(panelId: string): Promise<string | null> {
+  const ref = await memberRefForPanel(panelId);
+  if (ref === null) {
+    memberRefByPanelId.delete(panelId);
+    return null;
+  }
+  memberRefByPanelId.set(panelId, ref);
+  return ref;
+}
+
+/**
+ * Re-derive the refs of every live panel, and file any the view is not already
+ * showing.
+ *
+ * Run after mounting a layout, where the panels arrive all at once rather than
+ * through the creation paths that would have filed them. A panel always
+ * corresponds to a member, so an arrangement that restores something the member
+ * list lost -- a layout written before members existed, a hand-edited registry
+ * -- files it again rather than leaving a docked tab the sidebar never lists.
+ * Filing is idempotent, so the ordinary case is a run of no-ops.
+ */
+function reconcileMembersWithPanels(): void {
+  void (async () => {
+    memberRefByPanelId.clear();
+    for (const panelId of panelParams.keys()) {
+      await rememberMemberRef(panelId);
+    }
+    // The restored tabs were titled from the layout's derived names; now that
+    // each one knows which object it is showing, the chosen names go back on.
+    syncTabTitlesFromStore();
+    m.redraw();
+    for (const panelId of panelParams.keys()) {
+      recordMembership(panelId);
+    }
+  })();
+}
+
+/** The panel currently showing ``ref``, or null when the object is
+ *  backgrounded (running, just not docked) or gone. */
+function panelIdForMemberRef(ref: string): string | null {
+  for (const [panelId, candidate] of memberRefByPanelId) {
+    if (candidate === ref) return panelId;
+  }
+  return null;
+}
+
+/**
+ * File a freshly-opened object into the view it was opened in.
+ *
+ * Opening is the only thing that adds a member: closing a tab deliberately
+ * leaves the member list alone, so an object opened here stays listed
+ * (backgrounded) until it is explicitly removed or destroyed. Adding is
+ * idempotent and indifferent to what else shows the object -- membership is
+ * many-to-many -- and Everything takes no members at all, since it shows
+ * whatever the machine holds.
+ *
+ * Best-effort by construction: it runs after the tab is already open and
+ * swallows every failure, because failing to reach the server must never stop a
+ * tab from opening.
+ */
+function recordMembership(panelId: string): void {
+  // Captured before any await: an agent-driven op's filing override is only
+  // valid while the op is being applied.
+  const filingViewId = agentOpFilingProjectId ?? mountedViewId;
+  void (async () => {
+    const ref = await rememberMemberRef(panelId);
+    if (ref === null) return;
+    // A freshly-opened tab is titled from what it shows; now that its object is
+    // known, a name that object was given -- possibly while it had no tab at
+    // all -- goes on the strip.
+    syncTabTitlesFromStore();
+    const viewId = filingViewId;
+    // Nothing mounted means no project registry was reachable at startup, so
+    // there is nowhere to file this either.
+    if (viewId === null || isEverythingView(viewId)) return;
+    if (projectForViewId(availableProjects, viewId)?.members.includes(ref) === true) return;
+    try {
+      await addMember(viewId, ref);
+      await refreshProjectsList();
+    } catch {
+      // The object is open regardless, and opening it again files it again.
+    }
+  })();
+}
+
+/**
+ * Take a destroyed object out of every project, and out of the dock if it is
+ * still on screen.
+ *
+ * Destroy is the one cross-project operation. Closing a tab leaves both the
+ * layout entry and the membership alone, but destroying tears down the agent,
+ * terminal, or browser behind it, so it has to leave the projects that are not
+ * currently mounted as well -- as a panel in their saved content, which would
+ * otherwise restore a tab whose identity can no longer be resolved, and as a
+ * member, which would otherwise keep listing it as backgrounded forever.
+ *
+ * ``panelId`` is the panel to sweep: the live one when the object had a tab,
+ * else the deterministic id a chat or a named terminal is always filed under so
+ * a backgrounded object is swept too. The server-side sweep is best-effort --
+ * the destroy has already happened, and a project that still holds the panel
+ * drops it the next time it is saved.
+ */
+async function forgetDestroyedObject(ref: string, panelId: string): Promise<void> {
+  // The one thing that ends a live page. Closing a tab, switching view or
+  // re-arranging all leave it running and merely stop showing it; there is
+  // nothing left to show once the object itself is off the machine.
+  destroyLiveSurface(liveKeyForRef(ref, panelId));
+  if (dockview) {
+    const panel = dockview.panels.find((p) => p.id === panelId);
+    if (panel) dockview.removePanel(panel);
+  }
+  try {
+    await removePanelFromAllProjects(panelId, ref);
+    await refreshProjectsList();
+  } catch {
+    // Best-effort; see above.
+  }
+}
+
 async function saveLayout(): Promise<void> {
   if (!dockview) return;
-  const activeSlug = getActiveLayoutSlug();
-  if (!activeSlug) return;
+  const targetViewId = mountedViewId;
+  if (targetViewId === null) return;
   if (Date.now() < suppressAutosaveUntilMs) return;
   const payload = buildLayoutPayload();
   if (payload === null) return;
@@ -1710,11 +3122,11 @@ async function saveLayout(): Promise<void> {
   if (serialized === lastPersistedLayoutJson) return;
 
   try {
-    await autosaveLayout(activeSlug, payload, getClientId());
+    await autosaveProject(targetViewId, payload, getClientId());
     lastPersistedLayoutJson = serialized;
   } catch {
-    // Layout save is best-effort (e.g. the layout was deleted mid-flight;
-    // the deletion broadcast switches us to the fallback).
+    // The save is best-effort (e.g. the project was deleted mid-flight; the
+    // deletion broadcast switches us to the fallback).
   }
 }
 
@@ -1739,14 +3151,14 @@ async function flushPendingSave(): Promise<void> {
   }
 }
 
-/** Mark ``content`` as what the server currently holds for the active
- *  layout, so the content guard in saveLayout can skip no-op persists. */
+/** Mark ``content`` as what the server currently holds for the active view,
+ *  so the content guard in saveLayout can skip no-op persists. */
 function markServerContent(content: SavedLayout | null): void {
   lastPersistedLayoutJson = content === null ? null : JSON.stringify(content);
 }
 
 /** Open the autosave-suppression window used when applying content that
- *  arrived over a ``layout_saved`` broadcast: the apply (and its follow-on
+ *  arrived over a ``project_saved`` broadcast: the apply (and its follow-on
  *  resize events) must settle without re-persisting, or two clients with
  *  different window sizes would ping-pong saves at each other. User-driven
  *  applies (initial load, load/switch) do NOT suppress -- their follow-on
@@ -1755,29 +3167,53 @@ function beginRemoteApplySuppression(): void {
   suppressAutosaveUntilMs = Date.now() + REMOTE_APPLY_SUPPRESS_MS;
 }
 
-async function refreshLayoutsList(): Promise<void> {
-  const listResponse = await fetchLayoutsList();
-  availableLayouts = listResponse.layouts;
+async function refreshProjectsList(): Promise<void> {
+  const listResponse = await fetchProjectsList();
+  availableProjects = listResponse.projects;
   m.redraw();
 }
 
-function displayNameForSlug(slug: string): string {
-  return availableLayouts.find((layout) => layout.slug === slug)?.display_name ?? slug;
+function displayNameForProject(projectId: string): string {
+  return availableProjects.find((project) => project.project_id === projectId)?.name ?? projectId;
 }
 
 /**
  * Mount ``saved`` into the dockview, replacing whatever is currently shown.
- * ``null`` (a layout with no saved content, or none could be fetched)
- * renders the fresh-workspace state: the initial welcome chat auto-opens
- * (or the empty-state overlay waits for it). Mirrors the restore semantics
- * that previously lived inline in ``initializeDockview``.
+ *
+ * ``null`` -- a view with no saved content, or none that could be fetched --
+ * mounts the New Tab launcher, which is what a freshly-created project opens
+ * on. ``isInitialMount`` is the one exception: a machine whose starter project
+ * has never been saved is a machine that has just booted, and the chat its
+ * bootstrap created is what the user came for, so that one opens instead (and
+ * ``awaitingInitialChat`` waits for it when the bootstrap is still running).
+ * Switching to an empty project never takes that branch -- it is a project the
+ * user just made, and the launcher is exactly the "pick what to start with"
+ * surface the design asks for there.
  */
-function applyLayoutContent(saved: SavedLayout | null): void {
+async function applyLayoutContent(saved: SavedLayout | null, isInitialMount: boolean = false): Promise<void> {
+  if (!dockview) return;
+  // A restored layout re-derives every service/terminal origin from its
+  // service label below. On a share those labels only resolve once the app
+  // list has loaded (locally the bare name routes, so it never mattered
+  // before), so wait for it first -- bounded, so a workspace that reports no
+  // apps still proceeds -- to avoid mounting an unroutable ``<name>.<domain>``
+  // origin that the gateway 403s. A null (fresh-workspace) layout derives
+  // nothing, so it never waits.
+  if (saved) await whenAppsLoaded();
+  // ``dockview`` may have been torn down while awaiting; re-check before use.
   if (!dockview) return;
   const dv = dockview;
   awaitingInitialChat = false;
+  // Teardown removes every panel one by one; the dock-never-empty rule must not
+  // fire a launcher into the middle of that.
+  isApplyingLayout = true;
 
-  // Tear the outgoing layout down BEFORE seeding the incoming params.
+  // Tear the outgoing layout down BEFORE seeding the incoming params. Only the
+  // panels go: they are slots, and a slot's disposal merely stops a live page
+  // from being shown -- the page itself stays mounted and hidden until an
+  // incoming slot picks it up again, so an object both views hold never
+  // reloads and never forks.
+  //
   // ``fromJSON`` disposes the current panels before creating the new ones, and
   // ``onDidRemovePanel`` deletes each disposed panel's ``panelParams`` entry.
   // Panel ids are deterministic (``chat-<agent-id>``,
@@ -1788,7 +3224,6 @@ function applyLayoutContent(saved: SavedLayout | null): void {
   dv.clear();
   panelParams.clear();
 
-  let savedHadAnyPanels = false;
   if (saved) {
     for (const [id, params] of Object.entries(saved.panelParams)) {
       panelParams.set(id, params);
@@ -1807,7 +3242,19 @@ function applyLayoutContent(saved: SavedLayout | null): void {
     // the url is rebuilt from it on the current host, preserving any
     // ``?query`` (e.g. a browser pane's ``session=<name>``). This is what
     // keeps saved layouts portable across hosts and shares.
-    for (const [, params] of panelParams) {
+    //
+    // None of it may touch an object whose page is already live: every one of
+    // these rewrites changes an iframe's ``src``, which is a reload, and the
+    // whole point is that the page carries on. So a live page's own params
+    // replace the seeded hint outright -- that is also what makes the next
+    // autosave record what is really on screen rather than the stale hint.
+    for (const [panelId, params] of panelParams) {
+      const liveKey = liveKeyForPanel(panelId, params);
+      const liveParams = liveKey === null ? null : liveSurfaceParams(liveKey);
+      if (liveParams !== null) {
+        panelParams.set(panelId, liveParams);
+        continue;
+      }
       if (params.terminalSessionName) {
         params.terminalId = mintTerminalId();
         params.url = buildSessionTerminalUrl(params.terminalSessionName, params.terminalId, primaryWorkDir());
@@ -1824,7 +3271,6 @@ function applyLayoutContent(saved: SavedLayout | null): void {
       panelParams.clear();
       dv.clear();
     }
-    savedHadAnyPanels = dv.panels.length > 0;
     // Strip any chat panels that point at the is_primary services agent.
     // Older saved layouts (or layouts saved by the previous code path
     // that auto-opened the primary agent's chat) may carry a chat-
@@ -1846,134 +3292,239 @@ function applyLayoutContent(saved: SavedLayout | null): void {
         }
       }
     }
-  }
 
-  // Auto-open the initial chat tab when:
-  //   - the layout has no saved content yet (fresh layout), OR
-  //   - the saved content existed but all its panels were services-agent
-  //     panels we just stripped above.
-  // If the saved content was a non-empty layout that the user
-  // intentionally emptied (savedHadAnyPanels=false because saved
-  // existed but had zero panels), we respect that and leave the
-  // empty state visible.
-  const shouldAutoOpen = saved === null || (savedHadAnyPanels && dv.panels.length === 0);
-  if (shouldAutoOpen) {
-    if (!openInitialChatTab()) {
-      awaitingInitialChat = true;
+    // An object is a singleton with one page, so an arrangement naming the same
+    // one twice would give two tabs a page to fight over. The first occurrence
+    // keeps it.
+    for (const duplicatePanelId of duplicateLiveKeyPanelIds(
+      dv.panels.map((panel) => ({ panelId: panel.id, key: liveKeyForPanel(panel.id, panelParams.get(panel.id)) })),
+    )) {
+      const panel = dv.panels.find((candidate) => candidate.id === duplicatePanelId);
+      if (panel) dv.removePanel(panel);
     }
   }
-  updateEmptyState();
+
+  // Whether the mount left the dock with nothing in it: a view saved with no
+  // panels, a view that has never been saved, or one whose saved panels were
+  // all services-agent chats we just stripped above.
+  const isDockEmpty = dv.panels.length === 0;
+  if (isDockEmpty && isInitialMount && saved === null) {
+    // A freshly-booted machine: show the chat its bootstrap created, and keep
+    // waiting when that agent has not been registered yet.
+    if (!openInitialChatTab()) {
+      awaitingInitialChat = true;
+      openLauncherPanel(null);
+    }
+  } else if (isDockEmpty) {
+    openLauncherPanel(null);
+  }
+  isApplyingLayout = false;
+  // The restored panels arrived all at once rather than through the creation
+  // paths, so their refs are derived (and filed) here instead.
+  reconcileMembersWithPanels();
+  // Now rather than on the next frame: a page both views show has to land in
+  // its new pane in the same paint the new arrangement does, or it would be
+  // seen for a frame where the outgoing view had it.
+  reconcileLiveSurfaces();
+  scheduleTabWidthRecompute();
+}
+
+/** Record ``viewId`` as this browser's active view.
+ *
+ *  The active view IS this client's identity toward the server: it is the value
+ *  ``reportClientState`` registers and the one a sent chat message is
+ *  attributed to, and leaving it unset would deregister the client entirely. */
+function setActiveView(viewId: string): void {
+  setActiveProjectId(viewId);
+  mountedViewId = viewId;
 }
 
 /**
- * Pick this client's initial layout (stored per-browser choice, else the
- * user-agent default, else the first layout), register it with the server,
- * and mount its content. Runs once at startup, after the dockview exists.
+ * Pick this client's initial view (its stored per-browser choice, else the
+ * first project), register it with the server, and mount its content. Runs once
+ * at startup, after the dockview exists.
  */
-async function initializeActiveLayout(): Promise<void> {
-  const listResponse = await fetchLayoutsList();
-  availableLayouts = listResponse.layouts;
-  const chosen = chooseInitialLayout(availableLayouts, getStoredLayoutSlug(), getDeviceKind());
-  if (chosen === null) {
-    // No layouts at all (server unreachable / no primary agent): run with
-    // the fresh-workspace state; nothing persists.
-    applyLayoutContent(null);
+async function initializeActiveView(): Promise<void> {
+  // Before anything is mounted: the names and recencies are machine-wide, so
+  // the first paint of the rail and the dock already says what things are
+  // called, and the first launcher already ranks by recency.
+  await loadMemberTitles();
+  await loadMemberLastUsed();
+  const listResponse = await fetchProjectsList();
+  availableProjects = listResponse.projects;
+  const chosenId = chooseInitialViewId(availableProjects, getStoredProjectId());
+  if (chosenId === null) {
+    // No projects at all (server unreachable / no primary agent): run with the
+    // fresh-workspace state; nothing persists.
+    await applyLayoutContent(null, true);
     m.redraw();
     return;
   }
-  setActiveLayoutSlug(chosen.slug);
+  setActiveView(chosenId);
   reportClientState();
-  const saved = (await fetchLayoutContent(chosen.slug)) as SavedLayout | null;
+  refreshMachineInventory();
+  const saved = (await fetchProjectContent(chosenId)) as SavedLayout | null;
   markServerContent(saved);
-  applyLayoutContent(saved);
+  await applyLayoutContent(saved, true);
   m.redraw();
 }
 
 /**
- * Switch this client onto another named layout: flush pending edits into
- * the old layout, repoint the autosave target, tell the server (which
- * records the switch event), and mount the new layout's content.
+ * Switch this client onto another view: flush pending edits into the old one,
+ * repoint the autosave target, tell the server (which records the switch
+ * event), and mount the new view's content.
+ *
+ * Everything is switched to exactly like a project -- it has a layout of its
+ * own, so there is no lens mode and no dock to leave in place. Exported for the
+ * sidebar's switcher, which owns the *choice* and hands the load over here.
  */
-async function switchToLayout(slug: string): Promise<void> {
+export async function switchToView(viewId: string): Promise<void> {
   if (!dockview) return;
-  const previousSlug = getActiveLayoutSlug();
-  if (previousSlug === slug) return;
+  const previousViewId = mountedViewId ?? getActiveProjectId();
+  if (previousViewId === viewId) return;
   await flushPendingSave();
-  setActiveLayoutSlug(slug);
-  reportClientState(previousSlug);
-  const saved = (await fetchLayoutContent(slug)) as SavedLayout | null;
+  setActiveView(viewId);
+  reportClientState(previousViewId);
+  refreshMachineInventory();
+  const saved = (await fetchProjectContent(viewId)) as SavedLayout | null;
   markServerContent(saved);
-  applyLayoutContent(saved);
+  await applyLayoutContent(saved);
   m.redraw();
 }
 
-/** "Save layout..." confirm: persist the current on-screen state under
- *  ``displayName``. After any save the client is on the layout it saved to
- *  (uniform rule), so saving under another name switches the autosave
- *  target without re-mounting anything. */
-async function saveLayoutUnderName(displayName: string): Promise<void> {
-  if (!dockview) return;
-  await flushPendingSave();
-  const payload = buildLayoutPayload();
-  if (payload === null) return;
-  try {
-    const result = await saveLayoutAs(displayName, payload, getClientId());
-    lastPersistedLayoutJson = JSON.stringify(payload);
-    const previousSlug = getActiveLayoutSlug();
-    if (result.slug !== previousSlug) {
-      setActiveLayoutSlug(result.slug);
-      reportClientState(previousSlug);
-    }
-    await refreshLayoutsList();
-  } catch (e) {
-    alert(`Failed to save layout: ${(e as Error).message}`);
-  }
+/** The launcher a just-mounted empty view is showing, when it is the only thing
+ *  in the dock. That launcher is the pane asking what to put in it, so the
+ *  project's own chat answers it and replaces it; a dock the user has already
+ *  put something in is left alone. */
+function soleLauncherPanelId(): string | null {
+  if (!dockview || dockview.panels.length !== 1) return null;
+  const panelId = dockview.panels[0].id;
+  return panelParams.get(panelId)?.panelType === "launcher" ? panelId : null;
 }
 
-/** "Delete layout..." confirm. The resulting ``layout_deleted`` broadcast
- *  (which this client receives too) handles switching anyone who had the
- *  deleted layout active onto the fallback. */
-async function deleteLayoutBySlug(slug: string): Promise<void> {
+/**
+ * Start the chat a freshly-created project is made with, file it as a member,
+ * and open it into that project.
+ *
+ * Every project gets exactly one chat, made with it, so the user lands in a
+ * working chat instead of an empty launcher and the rail's Chat shortcut has
+ * something to go to (see ``openTabOfType``, which no longer creates one per
+ * click). The chat carries the project's id in its agent's ``project`` label,
+ * which is what ``preferredChatRefForView`` recognizes it by.
+ *
+ * The create is asynchronous and may fail, and the project is already created
+ * and usable by the time it does: the failure is reported rather than swallowed
+ * -- the rail's Chat shortcut is then the way to try again -- and nothing about
+ * the project is rolled back. The chat is filed before it is shown so a user
+ * who switched away while it was starting still finds it in the project;
+ * opening only happens if that project is still the mounted one, since opening
+ * it anywhere else would file it into the wrong view.
+ */
+export async function startProjectChat(projectId: string): Promise<void> {
+  let created: CreatedChatAgent;
   try {
-    await deleteLayoutRequest(slug);
-    await refreshLayoutsList();
-  } catch (e) {
-    alert(`Failed to delete layout: ${(e as Error).message}`);
+    // The display name ("Chat N") is minted server-side, exactly as the
+    // launcher's tiles do; its canonical form is the agent's mngr name.
+    created = await createChatAgent(projectId);
+    await addMember(projectId, memberRef("chat", created.agentId));
+    await refreshProjectsList();
+  } catch (error) {
+    alert(
+      `Project "${displayNameForProject(projectId)}" was created, but its chat could not be set up: ` +
+        `${(error as Error).message}. Use the rail's Chat shortcut to start one.`,
+    );
+    return;
   }
+  if (mountedViewId === projectId) {
+    // The agent is still starting -- it is a proto agent until mngr registers
+    // it -- and its chat panel opens on that id right away, exactly as the
+    // launcher's Chat tile does.
+    const launcherPanelId = soleLauncherPanelId();
+    focusOrCreateChatPanel(
+      created.agentId,
+      created.displayName,
+      launcherPanelId === null ? null : groupForPanel(launcherPanelId),
+    );
+    retireLauncher(launcherPanelId);
+  }
+  m.redraw();
 }
 
-/** React to layout registry / sync broadcasts from other clients + agents. */
-function handleLayoutSyncEvent(event: LayoutSyncEvent): void {
+/** React to project registry / sync broadcasts from other clients + agents.
+ *  The WebSocket dispatcher calls this with each ``project_*`` event. */
+export function handleProjectSyncEvent(event: ProjectSyncEvent): void {
   if (event.kind === "saved") {
-    void refreshLayoutsList();
-    // Live sync: another client saved the layout we're on -- re-apply it.
+    void refreshProjectsList();
+    // Live sync: another client saved the project we're on -- re-apply it.
     // Skipping our own saves (by client id) is the originator half of the
     // echo suppression; the content guard in saveLayout is the other half.
-    if (event.layoutSlug === getActiveLayoutSlug() && event.savedByClientId !== getClientId()) {
+    // A save from the other device kind is someone else's arrangement of the
+    // same view (a phone rearranging while a desktop watches): our own file
+    // did not change, so there is nothing to re-apply.
+    if (
+      event.projectId === mountedViewId &&
+      event.savedByClientId !== getClientId() &&
+      event.device === getDeviceKind()
+    ) {
       void (async () => {
-        const saved = (await fetchLayoutContent(event.layoutSlug)) as SavedLayout | null;
+        const saved = (await fetchProjectContent(event.projectId)) as SavedLayout | null;
         markServerContent(saved);
         beginRemoteApplySuppression();
-        applyLayoutContent(saved);
+        await applyLayoutContent(saved);
         m.redraw();
       })();
     }
     return;
   }
+  if (event.kind === "panel_removed") {
+    // The object behind the panel was destroyed and its panel stripped from
+    // the named views' saved content (Everything included). The destroying
+    // client already dropped it live; any other client still showing it drops
+    // it here -- both because the tab is a corpse and because keeping it would
+    // make this client's next autosave write the dead panel straight back into
+    // the file the server just stripped. The removal is keyed on the live dock
+    // rather than on ``projectIds`` so a dock holding the panel unsaved sheds
+    // it too; on clients not showing it there is nothing to do. This client's
+    // panel for the object may wear a different id than the destroyer's
+    // (browser and app pane ids are minted per open), so the ref resolves
+    // against the local dock as well.
+    const doomedPanelIds = new Set<string>();
+    if (event.panelId !== null) doomedPanelIds.add(event.panelId);
+    if (event.ref !== null) {
+      const localPanelId = panelIdForMemberRef(event.ref);
+      if (localPanelId !== null) doomedPanelIds.add(localPanelId);
+      // The page outlives its panels by design, so it is torn down by ref even
+      // on a client whose current view holds no tab for it.
+      destroyLiveSurface(liveKeyForRef(event.ref, event.panelId ?? ""));
+    }
+    if (dockview) {
+      for (const doomedPanelId of doomedPanelIds) {
+        const panel = dockview.panels.find((candidate) => candidate.id === doomedPanelId);
+        if (!panel) continue;
+        const liveKey = liveKeyForPanel(doomedPanelId, panelParams.get(doomedPanelId));
+        if (liveKey !== null) destroyLiveSurface(liveKey);
+        dockview.removePanel(panel);
+      }
+    }
+    void refreshProjectsList();
+    return;
+  }
   if (event.kind === "deleted") {
-    void refreshLayoutsList();
-    if (event.layoutSlug === getActiveLayoutSlug()) {
-      const deletedName = displayNameForSlug(event.layoutSlug);
-      void switchToLayout(event.fallbackLayoutSlug).then(() => {
-        alert(`Layout "${deletedName}" was deleted; switched to "${displayNameForSlug(event.fallbackLayoutSlug)}".`);
+    // Read the deleted project's name before the (async) refresh drops it
+    // from the cache.
+    const deletedName = displayNameForProject(event.projectId);
+    void refreshProjectsList();
+    if (event.projectId === mountedViewId) {
+      void switchToView(event.fallbackId).then(() => {
+        alert(`Project "${deletedName}" was deleted; switched to "${displayNameForProject(event.fallbackId)}".`);
       });
     }
     return;
   }
-  // Agent-driven load: switch when addressed to us (or to everyone).
-  if (event.targetClientId === null || event.targetClientId === getClientId()) {
-    void switchToLayout(event.layoutSlug);
-  }
+  // Renamed / restyled, or a member list moved (here or in another project):
+  // the content is untouched either way, so re-list and let the sidebar
+  // repaint from the fresh registry.
+  void refreshProjectsList();
 }
 
 // ---------- Agent-driven layout op handlers ----------
@@ -2091,9 +3642,25 @@ function asNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+// While an agent-driven layout op is being applied, panels it opens are filed
+// into the requesting agent's own project (its ``project`` label) rather than
+// whichever view the user happens to be looking at. Captured synchronously by
+// ``recordMembership`` at panel-creation time; null outside agent ops or when
+// the requester has no registered project (fall back to the mounted view).
+let agentOpFilingProjectId: string | null = null;
+
 async function handleLayoutOp(event: LayoutOpEvent): Promise<void> {
   if (!dockview) return;
   const requesterAgentId = event.requesterAgentId;
+  agentOpFilingProjectId = filingProjectForAgentOp(getAgentById(requesterAgentId)?.project, availableProjects);
+  try {
+    await dispatchLayoutOp(event, requesterAgentId);
+  } finally {
+    agentOpFilingProjectId = null;
+  }
+}
+
+async function dispatchLayoutOp(event: LayoutOpEvent, requesterAgentId: string): Promise<void> {
   switch (event.op) {
     case "open":
       await handleOpen(event.args, requesterAgentId);
@@ -2360,19 +3927,73 @@ async function handleMove(args: Record<string, unknown>, requesterAgentId: strin
   });
 }
 
+/**
+ * Name an object, machine-wide.
+ *
+ * The one rename path: the agent-facing ``layout_op`` and the chat tab's own
+ * double-click editor both land here, and both go through the member-title
+ * endpoint. The server routes a ``chat:`` ref to mngr -- the typed name becomes
+ * the agent's ``display_name`` label with its canonical form as the agent's
+ * true name, the same pairing a create establishes -- and stores every other
+ * kind in the machine's title store keyed by the object's ref (see
+ * models/MemberTitles). Either way the name belongs to the object, not to this
+ * view's saved layout, so every view showing it says the same thing and an
+ * object with no panel anywhere -- backgrounded, or filed in no project at all
+ * -- can be named too. Nothing is written to ``panelParams``: ``params.title``
+ * stays the *derived* name, which is what the tab falls back to if the chosen
+ * one is ever cleared.
+ *
+ * The tab strip is repainted here rather than waiting for the broadcast that
+ * follows, so this client settles immediately; the broadcast repaints every
+ * other one (and this one again, harmlessly). Throws with the server's detail
+ * when the rename is refused: both callers await it and report the rejection
+ * their own way -- an alert on the tab editor, a console warning on the
+ * agent-facing op.
+ */
+export async function renameMemberRef(ref: string, title: string): Promise<void> {
+  await setMemberTitle(ref, title);
+  syncTabTitlesFromStore();
+  m.redraw();
+}
+
+/**
+ * Put the name each object is called by onto the tab showing it.
+ *
+ * The same resolution every other surface uses (``labelForMemberRef``): the
+ * chosen name when the object has one, else the name derived live from what
+ * the object is -- so a renamed chat agent drags its tab along with it, and
+ * clearing a chosen name puts the derived one back rather than freezing the
+ * last chosen one on the strip. Panels that stand for no object (the launcher)
+ * are left alone. Called whenever the store moves, whenever a panel learns
+ * which object it is showing, and whenever the agent list changes.
+ */
+function syncTabTitlesFromStore(): void {
+  if (!dockview) return;
+  for (const panel of dockview.panels) {
+    const ref = memberRefByPanelId.get(panel.id);
+    if (ref === undefined) continue;
+    if (!panelParams.has(panel.id)) continue;
+    const shown = labelForMemberRef(ref);
+    if (shown !== "" && shown !== panel.title) panel.api.setTitle(shown);
+  }
+}
+
 async function handleRename(args: Record<string, unknown>, requesterAgentId: string): Promise<void> {
   if (!dockview) return;
   const ref = asString(args.ref);
-  const title = asString(args.title);
-  if (!ref || !title) return;
+  const title = normalizeTabTitle(asString(args.title) ?? "");
+  if (!ref || title === null) return;
   const panelId = await resolveRefToPanelId(ref, requesterAgentId);
   if (panelId === null) return;
-  const panel = dockview.panels.find((p) => p.id === panelId);
-  if (!panel) return;
-  panel.api.setTitle(title);
-  const params = panelParams.get(panelId);
-  if (params) {
-    params.title = title;
+  // An agent addresses a *panel* (``self``, a service name, a tab id), so the
+  // object behind it is resolved here before the name is filed by ref. A panel
+  // that stands for no object -- a launcher -- has nothing to name.
+  const memberRefForRename = memberRefByPanelId.get(panelId) ?? (await rememberMemberRef(panelId));
+  if (memberRefForRename === null) return;
+  try {
+    await renameMemberRef(memberRefForRename, title);
+  } catch (e) {
+    console.warn(`Cannot rename ${ref}: ${(e as Error).message}`);
   }
 }
 
@@ -2402,9 +4023,10 @@ async function handleReplaceUrl(args: Record<string, unknown>, requesterAgentId:
   if (!ref || !url) return;
   const panelId = await resolveRefToPanelId(ref, requesterAgentId);
   if (panelId === null) return;
-  const params = panelParams.get(panelId);
-  if (!params || params.panelType !== "iframe") return;
-  params.url = resolveReplaceUrl(url);
+  if (panelParams.get(panelId)?.panelType !== "iframe") return;
+  mutatePanelParams(panelId, (params) => {
+    params.url = resolveReplaceUrl(url);
+  });
   m.redraw();
   scheduleSave();
 }
@@ -2420,217 +4042,115 @@ async function handleRefresh(args: Record<string, unknown>, requesterAgentId: st
   if (panelId === null) return;
   const params = panelParams.get(panelId);
   if (!params || params.panelType !== "iframe") return;
-  // Single-panel reload: look the iframe up by its panel-id attribute
-  // and trigger a same-origin ``contentWindow.location.reload()``. If the
-  // panel is cross-origin the ``reload()`` call throws a SecurityError and
-  // we fall back to re-assigning ``src`` to force the browser to refetch.
-  const iframe = document.querySelector<HTMLIFrameElement>(
-    `iframe[${IFRAME_PANEL_PANEL_ID_ATTR}="${CSS.escape(panelId)}"]`,
-  );
-  if (iframe) {
-    try {
-      const win = iframe.contentWindow;
-      if (win !== null) {
-        win.location.reload();
-        return;
-      }
-    } catch {
-      // Cross-origin: fall through to src reassignment.
-    }
-    const currentSrc = iframe.getAttribute("src");
-    if (currentSrc !== null) iframe.setAttribute("src", currentSrc);
+  const key = liveKeyForPanel(panelId, params);
+  if (key !== null) reloadIframeForKey(key);
+}
+
+// ---------- Live pages ----------
+
+/** Which component a live page is. Decided once, when the page is created: a
+ *  page does not change what it is, and re-deciding it on every redraw would
+ *  let a url rewrite swap a running terminal for a fresh one. */
+type LiveContentKind = "chat" | "subagent" | "terminal" | "agent-terminal" | "iframe";
+
+/** What ``params`` describes, or null when it describes nothing this build can
+ *  render -- a layout naming a panel kind that no longer exists. */
+function liveContentKind(params: PanelParams): LiveContentKind | null {
+  if (params.panelType === "chat") return "chat";
+  if (params.panelType === "subagent") return "subagent";
+  if (params.panelType !== "iframe") return null;
+  // Persistent-terminal tabs render the lifecycle banner above the iframe.
+  // Identified by the terminal params, which no other iframe sets.
+  if (isTerminalPanelParams(params)) return "terminal";
+  // Agent-terminal tabs start their agent before attaching its terminal
+  // session. They are identified by their URL shape: the terminal service URL
+  // plus the ttyd agent-dispatch key (`arg=agent`), which
+  // `buildAgentTerminalUrl` constructs and no other iframe URL uses.
+  const url = params.url ?? "";
+  if (url.startsWith(getTerminalUrl()) && url.includes("arg=agent")) return "agent-terminal";
+  return "iframe";
+}
+
+/**
+ * Mount the page a surface holds. Runs once per object, ever.
+ *
+ * The mount outlives every pane that shows it, so nothing about the page is
+ * captured here: the url, the title and whether anything is looking at it are
+ * all read off the surface on each redraw. That is what lets an agent-driven
+ * ``replace-url`` or a terminal's late session allocation reach the iframe
+ * without the panel being recreated -- and what lets a chat learn it is on
+ * screen again after a project switch.
+ */
+function mountLiveContent(surface: LiveSurface, kind: LiveContentKind): void {
+  m.mount(surface.element, { view: () => renderLiveContent(surface, kind) });
+}
+
+function renderLiveContent(surface: LiveSurface, kind: LiveContentKind): m.Children {
+  const params = surface.params;
+  const url = params.url ?? "";
+  switch (kind) {
+    case "chat":
+      // dockview keeps hidden panels mounted and mithril's redraw is global, so
+      // a page nothing is showing keeps redrawing at whatever size it was left.
+      // ``isVisible`` is what lets the chat skip work that must not run then --
+      // its scroll management, which would otherwise corrupt the retained
+      // scroll position against a display:none element.
+      return m(ChatPanel, { agentId: params.chatAgentId ?? params.agentId, isVisible: surface.isVisible });
+    case "subagent":
+      return m(SubagentView, { agentId: params.agentId, subagentSessionId: params.subagentSessionId ?? "" });
+    case "terminal":
+      return [
+        m(TerminalBanner),
+        m(
+          "div",
+          { style: "flex: 1 1 auto; min-height: 0;" },
+          m(IframePanel, { url, title: params.title ?? "terminal", liveKey: surface.key }),
+        ),
+      ];
+    case "agent-terminal":
+      return m(AgentTerminalPanel, { agentId: params.agentId, url, title: params.title ?? "Tab" });
+    case "iframe":
+      return m(IframePanel, {
+        url,
+        title: params.title ?? "Tab",
+        serviceName: params.serviceName,
+        liveKey: surface.key,
+      });
   }
 }
 
-/** Build a dockview content renderer for an iframe panel that re-reads
- *  ``panelParams[panelId]`` on every mithril redraw. This keeps the
- *  iframe in sync with agent-driven mutations to ``url``/``title`` so
- *  ``replace-url`` doesn't need to remove-and-recreate the panel. */
-function createReactiveIframeRenderer(panelId: string): IContentRenderer {
+/**
+ * A dockview panel, now that a panel is only a place: an empty div dockview
+ * creates, positions, hides and disposes at will, standing in for a live page
+ * that outlives it.
+ *
+ * ``init`` is where a view starts showing an object and ``dispose`` is where it
+ * stops -- neither creates or destroys anything, which is the whole point.
+ */
+function createLiveSlotRenderer(
+  panelId: string,
+  key: LiveKey,
+  params: PanelParams,
+  kind: LiveContentKind,
+): IContentRenderer {
   const element = document.createElement("div");
-  element.style.width = "100%";
-  element.style.height = "100%";
-  element.style.display = "flex";
-  element.style.flexDirection = "column";
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const iframePanelComponent: m.ComponentTypes<any, any> = IframePanel;
+  element.className = "si-live-slot";
   return {
     element,
-    init() {
-      m.mount(element, {
-        view: () => {
-          const p = panelParams.get(panelId);
-          return m(iframePanelComponent, {
-            url: p?.url ?? "",
-            title: p?.title ?? "Tab",
-            serviceName: p?.serviceName,
-            panelId,
-          });
-        },
-      });
+    init(parameters) {
+      const surface = ensureLiveSurface(key, params, (created) => mountLiveContent(created, kind));
+      // What is on screen is what the next autosave has to record, so this
+      // view's bookkeeping entry becomes the very params object the page
+      // renders from -- and stays that object, so every later mutation reaches
+      // both at once. Done inside the apply's synchronous window, before any
+      // autosave could fire against the hint the restore seeded.
+      panelParams.set(panelId, surface.params);
+      bindSlot(surface, panelId, parameters.api);
     },
     dispose() {
-      m.mount(element, null);
+      unbindSlot(panelId);
     },
   };
-}
-
-/** Like ``createReactiveIframeRenderer`` but stacks the terminal lifecycle
- *  banner above the iframe. Reads ``panelParams[panelId]`` live so the
- *  async-allocated (agent-driven) and layout-restore url rewrites re-render
- *  the iframe with the new src. */
-function createReactiveTerminalRenderer(panelId: string): IContentRenderer {
-  const element = document.createElement("div");
-  element.style.width = "100%";
-  element.style.height = "100%";
-  element.style.display = "flex";
-  element.style.flexDirection = "column";
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const iframePanelComponent: m.ComponentTypes<any, any> = IframePanel;
-  return {
-    element,
-    init() {
-      m.mount(element, {
-        view: () => {
-          const p = panelParams.get(panelId);
-          return [
-            m(TerminalBanner),
-            m(
-              "div",
-              { style: "flex: 1 1 auto; min-height: 0;" },
-              m(iframePanelComponent, {
-                url: p?.url ?? "",
-                title: p?.title ?? "terminal",
-                panelId,
-              }),
-            ),
-          ];
-        },
-      });
-    },
-    dispose() {
-      m.mount(element, null);
-    },
-  };
-}
-
-// The empty-state overlay sits inside the dockview container as a sibling
-// to dockview's own DOM. Shown when panels.length === 0; hidden otherwise.
-// Its "+" button opens the SAME dropdown buildDropdownItems() backs in the
-// header's add-tab button, so the user has the same set of actions even
-// when no tabs are visible.
-let emptyStateOverlay: HTMLElement | null = null;
-let emptyStateStatus: HTMLElement | null = null;
-let emptyStateAction: HTMLButtonElement | null = null;
-let emptyStateDropdown: HTMLElement | null = null;
-
-function createEmptyStateOverlay(): HTMLElement {
-  const overlay = document.createElement("div");
-  overlay.className = "dockview-empty-state";
-  overlay.style.position = "absolute";
-  overlay.style.inset = "0";
-  overlay.style.display = "none";
-  overlay.style.alignItems = "center";
-  overlay.style.justifyContent = "center";
-  overlay.style.pointerEvents = "auto";
-  overlay.style.zIndex = "1";
-
-  const card = document.createElement("div");
-  card.className = "dockview-empty-state-card";
-  card.style.display = "flex";
-  card.style.flexDirection = "column";
-  card.style.alignItems = "center";
-  card.style.padding = "32px 40px";
-  card.style.background = "#fff";
-  card.style.border = "1px solid #e5e7eb";
-  card.style.borderRadius = "12px";
-  card.style.boxShadow = "0 4px 12px rgba(0,0,0,0.06)";
-  card.style.position = "relative";
-
-  const status = document.createElement("div");
-  status.className = "dockview-empty-state-status";
-  status.style.marginBottom = "16px";
-  status.style.color = "#374151";
-  status.style.fontSize = "14px";
-  status.textContent = "No tabs open";
-  card.appendChild(status);
-
-  const action = document.createElement("button");
-  action.className = "dockview-empty-state-action";
-  action.style.padding = "10px 20px";
-  action.style.fontSize = "16px";
-  action.style.fontWeight = "500";
-  action.style.background = "#3b82f6";
-  action.style.color = "#fff";
-  action.style.border = "none";
-  action.style.borderRadius = "8px";
-  action.style.cursor = "pointer";
-  action.textContent = "+ Open new tab";
-  card.appendChild(action);
-
-  const dropdown = document.createElement("div");
-  dropdown.className = "dockview-empty-state-dropdown";
-  dropdown.style.position = "absolute";
-  dropdown.style.top = "calc(100% + 8px)";
-  dropdown.style.left = "50%";
-  dropdown.style.transform = "translateX(-50%)";
-  dropdown.style.minWidth = "240px";
-  dropdown.style.background = "#fff";
-  dropdown.style.border = "1px solid #e5e7eb";
-  dropdown.style.borderRadius = "8px";
-  dropdown.style.boxShadow = "0 4px 12px rgba(0,0,0,0.08)";
-  dropdown.style.padding = "4px 0";
-  dropdown.style.display = "none";
-  dropdown.style.zIndex = "2";
-  card.appendChild(dropdown);
-
-  action.addEventListener("click", (e) => {
-    e.stopPropagation();
-    const isOpen = dropdown.style.display !== "none";
-    if (isOpen) {
-      dropdown.style.display = "none";
-      return;
-    }
-    // Same build-now-then-refresh pattern as the header "+" dropdown: render
-    // from the cached fleet immediately, then re-render once the live fetch
-    // resolves (if still open) so active browsers show up here too.
-    renderDropdownItems(dropdown);
-    refreshBrowserFleet(() => {
-      if (dropdown.style.display !== "none") renderDropdownItems(dropdown);
-    });
-    refreshTerminalFleet(() => {
-      if (dropdown.style.display !== "none") renderDropdownItems(dropdown);
-    });
-    dropdown.style.display = "block";
-  });
-
-  // Close the dropdown when clicking elsewhere.
-  document.addEventListener("click", () => {
-    dropdown.style.display = "none";
-  });
-
-  overlay.appendChild(card);
-  emptyStateStatus = status;
-  emptyStateAction = action;
-  emptyStateDropdown = dropdown;
-  return overlay;
-}
-
-function updateEmptyState(): void {
-  if (!emptyStateOverlay || !dockview) return;
-  const isEmpty = dockview.panels.length === 0;
-  emptyStateOverlay.style.display = isEmpty ? "flex" : "none";
-  if (!isEmpty) {
-    if (emptyStateDropdown) emptyStateDropdown.style.display = "none";
-    return;
-  }
-  if (awaitingInitialChat) {
-    if (emptyStateStatus) emptyStateStatus.textContent = "Waiting for initial chat agent...";
-    if (emptyStateAction) emptyStateAction.style.display = "none";
-  } else {
-    if (emptyStateStatus) emptyStateStatus.textContent = "No tabs open";
-    if (emptyStateAction) emptyStateAction.style.display = "";
-  }
 }
 
 function closeActiveTabFromEmbedder(): void {
@@ -2649,8 +4169,16 @@ function initializeDockview(parentElement: HTMLElement): void {
   dockviewContainer.style.position = "relative";
   parentElement.appendChild(dockviewContainer);
 
-  emptyStateOverlay = createEmptyStateOverlay();
-  dockviewContainer.appendChild(emptyStateOverlay);
+  // A pane resize changes a strip's width without changing the layout, so the
+  // strips are watched directly; ``recomputeTabWidths`` re-observes them as
+  // groups come and go.
+  tabStripObserver = new ResizeObserver(() => {
+    scheduleTabWidthRecompute();
+  });
+  window.addEventListener("resize", scheduleTabWidthRecompute);
+  // The dock's panes move with the window, and the live pages are positioned
+  // against the dock rather than laid out inside it, so they follow explicitly.
+  window.addEventListener("resize", scheduleReconcile);
 
   // dockview-core's Scrollbar only reads event.deltaY, so mice with a dedicated
   // horizontal scroll wheel (e.g. Logitech MX Master) emit deltaX events that
@@ -2688,66 +4216,63 @@ function initializeDockview(parentElement: HTMLElement): void {
         return createUnrecoverablePanelRenderer(options.id);
       }
 
-      switch (options.name) {
-        case "chat":
-          return createMithrilRenderer(ChatPanel, {
-            agentId: params.chatAgentId ?? params.agentId,
-          });
-
-        case "iframe": {
-          // Agent-terminal tabs route to AgentTerminalPanel, which starts the
-          // agent before attaching its terminal session. They are identified
-          // by their URL shape: the terminal service URL plus the ttyd
-          // agent-dispatch key (`arg=agent`), which `buildAgentTerminalUrl`
-          // constructs and no other iframe URL uses. Terminals are never the
-          // target of an agent-driven ``replace-url``, so they don't need the
-          // reactive renderer below.
-          const iframeUrl = params.url ?? "";
-          // Persistent-terminal tabs render the lifecycle banner above a
-          // reactive iframe (the url is filled in / rewritten after mount for
-          // the agent-driven and layout-restore paths). Identified by the
-          // terminal-panel params, which no other iframe sets.
-          const isSessionTerminal = isTerminalPanelParams(params);
-          if (isSessionTerminal) {
-            return createReactiveTerminalRenderer(options.id);
-          }
-          const isAgentTerminal = iframeUrl.startsWith(getTerminalUrl()) && iframeUrl.includes("arg=agent");
-          if (isAgentTerminal) {
-            return createMithrilRenderer(AgentTerminalPanel, {
-              agentId: params.agentId,
-              url: iframeUrl,
-              title: params.title ?? "Tab",
-            });
-          }
-          // Pull live values out of ``panelParams`` on every redraw so an
-          // agent-driven ``replace-url`` (which mutates the stored
-          // params) re-renders the iframe with the new src instead of
-          // staying frozen on the initial url captured at mount time.
-          return createReactiveIframeRenderer(options.id);
-        }
-
-        case "subagent":
-          return createMithrilRenderer(SubagentView, {
-            agentId: params.agentId,
-            subagentSessionId: params.subagentSessionId ?? "",
-          });
-
-        default:
-          // An unknown component name: the layout references a panel kind this
-          // build does not have. Say so rather than rendering a chat for the
-          // wrong agent.
-          return createUnrecoverablePanelRenderer(options.id);
+      // A launcher is a question about a pane rather than an object on the
+      // machine, so it is the one panel that still owns what it shows: there is
+      // nothing about it worth keeping alive once the pane stops asking.
+      if (params.panelType === "launcher") {
+        return createLauncherRenderer(options.id);
       }
+      // Everything else is a place to show a live page. The page is filed under
+      // the object's identity, not the panel's, so the same object shown by
+      // another view -- or by another pane in this one -- resolves to the page
+      // that is already running rather than a second copy of it.
+      const kind = liveContentKind(params);
+      const key = liveKeyForPanel(options.id, params);
+      if (kind === null || key === null) {
+        // The layout references a panel kind this build does not have. Say so
+        // rather than rendering a chat for the wrong agent.
+        return createUnrecoverablePanelRenderer(options.id);
+      }
+      return createLiveSlotRenderer(options.id, key, params, kind);
     },
     createTabComponent(options) {
       return createCustomTab(options);
     },
-    createLeftHeaderActionComponent(group) {
+    // The "+" sits after each pane's tabs (§5), so it is a right-hand header
+    // action rather than a left one.
+    createRightHeaderActionComponent(group) {
       return createAddTabButton(group);
     },
   });
 
   dockview = dv;
+
+  // The live pages go in the same layer dockview positions its own panel
+  // overlays in, so they share its coordinate space and the shipped pane clip.
+  // That layer is stable across every ``clear()`` and ``fromJSON`` -- the
+  // gridview only ever swaps its root child -- which is what lets a page
+  // outlive the panels that show it.
+  initializeLiveLayer(dv.overlayRenderContainer.element, reportChatTabActivity);
+
+  // A surface sits over the (now empty) panel overlay that carries dockview's
+  // drop-target forwarding, so it steps out of the way for the length of a
+  // drag; otherwise the drop would land inside the framed page instead of on
+  // the pane behind it.
+  const endDrag = (): void => {
+    setDragInProgress(false);
+  };
+  dv.api.onWillDragPanel(() => {
+    setDragInProgress(true);
+  });
+  dv.api.onWillDragGroup(() => {
+    setDragInProgress(true);
+  });
+  dv.api.onDidDrop(endDrag);
+  document.addEventListener("dragend", endDrag, true);
+  document.addEventListener("drop", endDrag, true);
+  // Belt and braces: a drag that somehow ended without either event above must
+  // never leave the whole workspace unclickable.
+  document.addEventListener("pointerdown", endDrag, true);
 
   // The embedding minds chrome forwards its close-tab shortcut (Cmd/Ctrl+W
   // while this workspace is displayed) through the embed contract; close the
@@ -2760,27 +4285,66 @@ function initializeDockview(parentElement: HTMLElement): void {
     // Opening, closing, or moving a tab changes the open/visible chat set;
     // report it so the OOM prioritizer re-scores the affected chats.
     reportChatTabActivity();
+    // ...and it changes how many tabs each strip is fitting.
+    scheduleTabWidthRecompute();
+    // ...and where the live pages have to be drawn.
+    scheduleReconcile();
+  });
+  // A pure move fires no layout change of its own, so the pages follow the
+  // panel here as well. Maximizing hides every other pane without resizing
+  // them, so it needs saying too -- a page whose pane is gone must not be left
+  // floating over the maximized one.
+  dv.api.onDidMovePanel(() => {
+    scheduleReconcile();
+  });
+  dv.api.onDidMaximizedGroupChange(() => {
+    scheduleReconcile();
   });
 
-  // Clean up params on panel removal. We DON'T reopen anything when
-  // panels.length hits zero -- instead the empty-state overlay (see
-  // below) appears, giving the user the same "+" dropdown actions the
-  // dockview header normally hosts. This is the user-visible escape from
-  // the previous "system-services keeps coming back" behavior.
+  // Clean up the bookkeeping a disposed panel leaves behind. Closing a tab is
+  // deliberately nothing more than that: the object it was showing keeps
+  // running -- its page included, still mounted and merely hidden -- stays a
+  // member of every project holding it, and stays listed in the sidebar as
+  // backgrounded. What the close must not leave behind is an empty dock, so an
+  // emptied view falls back to the launcher.
   dv.api.onDidRemovePanel((panel) => {
     panelParams.delete(panel.id);
-    updateEmptyState();
+    memberRefByPanelId.delete(panel.id);
+    ensureDockIsNotEmpty();
+    scheduleTabWidthRecompute();
   });
-  dv.api.onDidAddPanel(() => {
-    updateEmptyState();
+  dv.api.onDidAddPanel((panel) => {
+    scheduleTabWidthRecompute();
+    // A freshly-opened object is in front of the user by definition. Guarded
+    // while a view's saved content is being mounted: those panels arrive all
+    // at once and were not touched by anyone.
+    if (!isApplyingLayout) touchPanelLastUsed(panel.id);
   });
 
-  // While awaitingInitialChat is true, every agents_updated event is
-  // another chance for the bootstrap-created chat agent to show up.
+  // The dock's focus moving onto a panel is what "using" an object looks like
+  // from here. Mount-time activations are skipped for the same reason as
+  // above: switching views must not stamp the incoming view's active panel as
+  // just-used. The per-ref throttle in ``touchMemberLastUsed`` keeps focus
+  // flapping between two panes from producing a write per click.
+  dv.api.onDidActivePanelChange((panel) => {
+    if (panel === undefined || isApplyingLayout) return;
+    touchPanelLastUsed(panel.id);
+    retireLaunchersOnFocusLeaving(panel.id);
+  });
+
+  // Every agents_updated event may carry a new name pair for an agent some tab
+  // is showing (a rename lands as a changed name + display_name label), so the
+  // strip is re-synced from the live labels. While awaitingInitialChat is true,
+  // the event is also another chance for the bootstrap-created chat to show up.
   agentsUpdatedListener = () => {
-    if (awaitingInitialChat && openInitialChatTab()) {
+    syncTabTitlesFromStore();
+    m.redraw();
+    if (!awaitingInitialChat) return;
+    const launcherPanelId = dv.panels.find((panel) => panelParams.get(panel.id)?.panelType === "launcher")?.id ?? null;
+    if (openInitialChatTab()) {
       awaitingInitialChat = false;
-      updateEmptyState();
+      // The launcher was only standing in until the chat arrived.
+      retireLauncher(launcherPanelId);
     }
   };
   addAgentsUpdatedListener(agentsUpdatedListener);
@@ -2793,6 +4357,46 @@ function initializeDockview(parentElement: HTMLElement): void {
   };
   addLayoutOpListener(_layoutOpListener);
 
+  // Project registry / sync broadcasts: another client saving the project we
+  // are mounted on re-applies it here, and a deleted project moves everyone
+  // still on it onto the fallback.
+  _projectSyncListener = (event: ProjectSyncEvent) => {
+    handleProjectSyncEvent(event);
+  };
+  addProjectSyncListener(_projectSyncListener);
+
+  // ``layout.py load <view>``: an agent switching what this client is looking
+  // at. The server resolved the name to a view id and picked the target client
+  // (an explicit one, else the one that last messaged the requesting agent,
+  // else everyone); here that means ignore loads addressed to someone else,
+  // and treat a load for the mounted view as already done.
+  addLayoutSyncListener((event: LayoutSyncEvent) => {
+    if (event.targetClientId !== null && event.targetClientId !== getClientId()) return;
+    if (event.layoutSlug === mountedViewId) return;
+    void switchToView(event.layoutSlug);
+  });
+
+  // A rename anywhere on the machine -- another client's, an agent's, or the
+  // name dropped when an object was destroyed. It names the object rather than
+  // a panel, so it repaints the dock tab showing it, the rail's rows, the
+  // launcher and the settings list, in this view and in Everything alike.
+  _memberTitleListener = (ref: string, title: string | null) => {
+    applyMemberTitleChange(ref, title);
+    syncTabTitlesFromStore();
+    m.redraw();
+  };
+  addMemberTitleListener(_memberTitleListener);
+
+  // A use anywhere on the machine -- another client's focus, or the entry
+  // dropped when an object was destroyed. It dates the object rather than a
+  // panel, so an open launcher re-orders its tables on the next redraw, in
+  // this view and in Everything alike.
+  _memberLastUsedListener = (ref: string, atMs: number | null) => {
+    applyMemberLastUsedChange(ref, atMs);
+    m.redraw();
+  };
+  addMemberLastUsedListener(_memberLastUsedListener);
+
   // Terminal session updates (client switched session / session renamed) push
   // over the same WebSocket; reflect them onto the owning tab's title.
   _terminalSessionListener = (terminalId, sessionId, sessionName) => {
@@ -2800,15 +4404,8 @@ function initializeDockview(parentElement: HTMLElement): void {
   };
   addTerminalSessionListener(_terminalSessionListener);
 
-  // Layout registry / sync broadcasts: another client saved or deleted a
-  // layout, or an agent asked a client to load one.
-  _layoutSyncListener = (event: LayoutSyncEvent) => {
-    handleLayoutSyncEvent(event);
-  };
-  addLayoutSyncListener(_layoutSyncListener);
-
-  // Pick this browser's active named layout and mount its content.
-  void initializeActiveLayout();
+  // Pick this browser's active view and mount its content.
+  void initializeActiveView();
 }
 
 async function executeDestroy(agentId: string, panelId: string): Promise<void> {
@@ -2831,13 +4428,7 @@ async function executeDestroy(agentId: string, panelId: string): Promise<void> {
   // Remove from local state
   removeAgentLocally(agentId);
 
-  // Remove the panel from dockview
-  if (dockview) {
-    const panel = dockview.panels.find((p) => p.id === panelId);
-    if (panel) {
-      dockview.removePanel(panel);
-    }
-  }
+  await forgetDestroyedObject(memberRef("chat", agentId), panelId);
 
   m.redraw();
 }
@@ -2861,12 +4452,28 @@ function handleTerminalSessionUpdate(terminalId: string | null, sessionId: strin
     }
   }
   if (targetPanelId === null) return;
-  const params = panelParams.get(targetPanelId);
-  if (!params) return;
-  params.terminalSessionName = sessionName;
-  params.terminalSessionId = sessionId;
-  params.title = sessionName;
-  dockview.panels.find((p) => p.id === targetPanelId)?.api.setTitle(sessionName);
+  const previousRef = memberRefByPanelId.get(targetPanelId);
+  // A rename moves the terminal's identity, so the page is re-filed under the
+  // new session name here too (see ``mutatePanelParams``), and so is the name
+  // the user gave it: the object is the same one, and it is filed by ref.
+  mutatePanelParams(targetPanelId, (params) => {
+    params.terminalSessionName = sessionName;
+    params.terminalSessionId = sessionId;
+    params.title = terminalDisplayName(sessionName);
+  });
+  void (async () => {
+    const nextRef = await rememberMemberRef(targetPanelId);
+    if (previousRef !== undefined && nextRef !== null) {
+      // A tab the user named keeps that name: the session it attached to is
+      // being renamed, not the object.
+      await moveMemberTitle(previousRef, nextRef).catch(() => {
+        // Best-effort: the terminal is attached either way, and the name it
+        // falls back to is the session's own.
+      });
+    }
+    syncTabTitlesFromStore();
+    m.redraw();
+  })();
   m.redraw();
   scheduleSave();
 }
@@ -2888,12 +4495,7 @@ async function executeTerminalDestroy(sessionName: string, panelId: string): Pro
     return;
   }
 
-  if (dockview) {
-    const panel = dockview.panels.find((p) => p.id === panelId);
-    if (panel) {
-      dockview.removePanel(panel);
-    }
-  }
+  await forgetDestroyedObject(memberRef("terminal", sessionName), panelId);
 
   m.redraw();
 }
@@ -2920,12 +4522,36 @@ async function executeBrowserDestroy(name: string, panelId: string): Promise<voi
     return;
   }
 
-  if (dockview) {
-    const panel = dockview.panels.find((p) => p.id === panelId);
-    if (panel) {
-      dockview.removePanel(panel);
+  await forgetDestroyedObject(memberRef("browser", name), panelId);
+
+  m.redraw();
+}
+
+async function executeAppDeregister(name: string, panelId: string): Promise<void> {
+  // Unregister the app, then drop the tab. The endpoint runs
+  // system/scripts/forward_port.py --remove (so the app leaves data/.state/apps.toml
+  // and the app list) and unfiles ``service:<name>`` from every project. It does
+  // not stop anything: the program the agent started keeps serving its port, and
+  // re-registering brings the app straight back.
+  try {
+    const response = await fetch(apiUrl(`/api/apps/${encodeURIComponent(name)}/deregister`), {
+      method: "POST",
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      const detail = (data as { detail?: string }).detail ?? "Unknown error";
+      alert(`Failed to unregister app: ${detail}`);
+      return;
     }
+  } catch (e) {
+    alert(`Failed to unregister app: ${(e as Error).message}`);
+    return;
   }
+
+  // The app has no page left to show once it is off the registry -- its origin
+  // no longer resolves -- so the live surface goes the way a destroyed object's
+  // does, and the panel leaves every project's saved layout with it.
+  await forgetDestroyedObject(memberRef("app", name), panelId);
 
   m.redraw();
 }
@@ -2956,111 +4582,10 @@ export const DockviewWorkspace: m.Component = {
         style: "width: 100%; height: 100%;",
       },
       [
-        showNewChatModal
-          ? m(CreateAgentModal, {
-              mode: "chat",
-              onCreated(newAgentId: string, newAgentName: string) {
-                showNewChatModal = false;
-                const targetGroup = newTabTargetGroup;
-                newTabTargetGroup = null;
-                focusOrCreateChatPanel(newAgentId, newAgentName, targetGroup);
-              },
-              onCancel() {
-                showNewChatModal = false;
-                newTabTargetGroup = null;
-              },
-            })
-          : null,
-
-        showNewAgentModal
-          ? m(CreateAgentModal, {
-              mode: "worktree",
-              onCreated(newAgentId: string, newAgentName: string) {
-                showNewAgentModal = false;
-                const targetGroup = newTabTargetGroup;
-                newTabTargetGroup = null;
-                focusOrCreateChatPanel(newAgentId, newAgentName, targetGroup);
-              },
-              onCancel() {
-                showNewAgentModal = false;
-                newTabTargetGroup = null;
-              },
-            })
-          : null,
-
-        showNewBrowserModal
-          ? m(CreateBrowserModal, {
-              // NO `key` here. This modal sits in a children array among unkeyed
-              // sibling vnodes (the other modals/dialogs); Mithril throws "vnodes must
-              // either all have keys or none" if one child is keyed and the rest aren't,
-              // which silently kills the entire render so the modal never appears. A key
-              // isn't needed anyway: onAccept sets showNewBrowserModal=false before the
-              // POST, so a failure re-open (showNewBrowserModal back to true) is a fresh
-              // mount and oninit re-reads initialName/initialError on its own.
-              // Names of browsers already in the fleet, so the modal can
-              // pre-validate a typed name and reject a duplicate inline BEFORE
-              // opening a pane or calling create -- never optimistically
-              // touching the pane of the browser that already owns that name.
-              existingBrowserNames: browserFleet.map((b) => b.id),
-              // Set only when re-opened after a background create failed: the
-              // modal pre-fills the input with this name and shows the error
-              // inline (instead of fetching a fresh random name).
-              initialName: newBrowserPrefillName ?? undefined,
-              initialError: newBrowserError,
-              // Fires the instant the user accepts a name: open the optimistic
-              // 'starting' pane (which shows the full "Starting browser…" overlay
-              // and flips to the live page on its own when the daemon broadcasts
-              // ``running``) AND close the modal immediately -- we don't wait for
-              // the create POST. Returns whether THIS call created a new pane (vs
-              // deduped onto an existing one) so a later failure only tears down a
-              // pane this flow created. ``newTabTargetGroup`` is cleared here too
-              // since the modal is done; the background POST's success/failure
-              // callbacks reference the pane by name, not the group.
-              onAccept(browserName: string): boolean {
-                const createdPane = openBrowserSessionTab(browserName, newTabTargetGroup);
-                showNewBrowserModal = false;
-                newTabTargetGroup = null;
-                // The accept succeeded optimistically; clear any leftover failure
-                // pre-fill so a subsequent clean open starts fresh.
-                newBrowserPrefillName = null;
-                newBrowserError = null;
-                return createdPane;
-              },
-              // The background create POST succeeded: the modal is already closed
-              // and the pane already open, so just refresh the fleet so the next
-              // dropdown lists the new browser.
-              onCreated() {
-                refreshBrowserFleet();
-              },
-              // Create failed (400 invalid / 409 duplicate-or-full / 503
-              // installing / network). Two things must happen so the user always
-              // learns WHY the browser didn't open: (1) tear down the optimistic
-              // pane ONLY if this flow created it (``createdPane``) -- if the open
-              // deduped onto a pre-existing browser's healthy pane, leave it
-              // alone; and (2) RE-OPEN this modal pre-filled with the typed name
-              // and the daemon's ``reason`` shown inline, so the failure is
-              // surfaced rather than the pane silently vanishing.
-              onFailed(browserName: string, createdPane: boolean, reason: string) {
-                if (createdPane) {
-                  closeBrowserSessionTab(browserName);
-                }
-                newBrowserPrefillName = browserName;
-                newBrowserError = reason;
-                showNewBrowserModal = true;
-                m.redraw();
-              },
-              onCancel() {
-                showNewBrowserModal = false;
-                newTabTargetGroup = null;
-                newBrowserPrefillName = null;
-                newBrowserError = null;
-              },
-            })
-          : null,
-
         showDestroyDialog && destroyTargetAgentId && destroyTargetAgentName
           ? m(DestroyConfirmDialog, {
               agentName: destroyTargetAgentName,
+              details: DESTROY_CHAT_DETAILS,
               onConfirm() {
                 showDestroyDialog = false;
                 const targetId = destroyTargetAgentId!;
@@ -3083,6 +4608,7 @@ export const DockviewWorkspace: m.Component = {
           ? m(DestroyConfirmDialog, {
               agentName: terminalDestroySessionName,
               title: "Destroy terminal",
+              details: DESTROY_TERMINAL_DETAILS,
               onConfirm() {
                 showTerminalDestroyDialog = false;
                 const sessionName = terminalDestroySessionName!;
@@ -3103,6 +4629,7 @@ export const DockviewWorkspace: m.Component = {
           ? m(DestroyConfirmDialog, {
               agentName: browserDestroyName,
               title: "Destroy browser",
+              details: DESTROY_BROWSER_DETAILS,
               onConfirm() {
                 showBrowserDestroyDialog = false;
                 const name = browserDestroyName!;
@@ -3119,34 +4646,37 @@ export const DockviewWorkspace: m.Component = {
             })
           : null,
 
+        showAppDeregisterDialog && appDeregisterName
+          ? m(DestroyConfirmDialog, {
+              agentName: appDeregisterName,
+              title: "Unregister app",
+              // Not "Are you sure you want to destroy ...? This cannot be
+              // undone", which the other three ask: neither half is true here.
+              question: ["Unregister ", m("strong", appDeregisterName), "?"],
+              details: DEREGISTER_APP_DETAILS,
+              confirmLabel: "Unregister",
+              onConfirm() {
+                showAppDeregisterDialog = false;
+                const name = appDeregisterName!;
+                const panelId = appDeregisterPanelId!;
+                appDeregisterName = null;
+                appDeregisterPanelId = null;
+                executeAppDeregister(name, panelId);
+              },
+              onCancel() {
+                showAppDeregisterDialog = false;
+                appDeregisterName = null;
+                appDeregisterPanelId = null;
+              },
+            })
+          : null,
+
         showShareModal && shareServiceName
           ? m(ShareModal, {
               serviceName: shareServiceName,
               onClose() {
                 showShareModal = false;
                 shareServiceName = null;
-              },
-            })
-          : null,
-
-        layoutDialogMode !== null
-          ? m(LayoutDialog, {
-              mode: layoutDialogMode,
-              layouts: availableLayouts,
-              activeSlug: getActiveLayoutSlug(),
-              onConfirm(value: string) {
-                const mode = layoutDialogMode;
-                layoutDialogMode = null;
-                if (mode === "save") {
-                  void saveLayoutUnderName(value);
-                } else if (mode === "load") {
-                  void switchToLayout(value);
-                } else if (mode === "delete") {
-                  void deleteLayoutBySlug(value);
-                }
-              },
-              onCancel() {
-                layoutDialogMode = null;
               },
             })
           : null,

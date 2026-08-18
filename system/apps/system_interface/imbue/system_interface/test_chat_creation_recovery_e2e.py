@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import contextlib
 import os
-import sys
 import threading
 import urllib.request
 from collections.abc import Callable
@@ -37,20 +36,14 @@ from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.server import create_application
 from imbue.system_interface.testing import RecordingMngrMessenger
 from imbue.system_interface.testing import build_test_state
+from imbue.system_interface.testing import is_e2e_browser_installed
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import make_threaded_server
 
 
 def _playwright_browsers_installed() -> bool:
-    """Check if Playwright browsers are installed by looking for the cache directory."""
-    env_path = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
-    if env_path:
-        cache_dir = Path(env_path)
-    elif sys.platform == "darwin":
-        cache_dir = Path.home() / "Library" / "Caches" / "ms-playwright"
-    else:
-        cache_dir = Path.home() / ".cache" / "ms-playwright"
-    return cache_dir.exists() and any(cache_dir.iterdir())
+    """Check whether a launchable browser is present (Fortress or Playwright's cache)."""
+    return is_e2e_browser_installed()
 
 
 def _frontend_built() -> bool:
@@ -211,14 +204,18 @@ def _is_serving(base_url: str) -> bool:
 
 
 def _create_chat_through_ui(page: Page, base_url: str) -> None:
-    """Drive the "+" menu's New chat flow, exactly as a user would."""
+    """Drive the New Tab launcher's Chat tile, exactly as a user would.
+
+    The "+" no longer drops a menu down: it opens a full-page launcher tab whose
+    "Open new" row starts a chat. There is no naming dialog: the tile creates
+    the agent directly under a machine-minted name and files a friendly
+    "Chat N" display title on its own.
+    """
     page.goto(base_url)
     page.wait_for_selector(".dockview-add-tab-button", timeout=_RECOVERY_TIMEOUT_MS)
     page.locator(".dockview-add-tab-button").first.click()
-    page.locator(".dockview-add-tab-dropdown-item:visible", has_text="New chat").click()
-    page.wait_for_selector(".custom-url-dialog-input", timeout=_RECOVERY_TIMEOUT_MS)
-    page.locator(".custom-url-dialog-input").fill("recovery-chat")
-    page.locator(".custom-url-dialog-open").click()
+    page.wait_for_selector(".new-tab-launcher", timeout=_RECOVERY_TIMEOUT_MS)
+    page.locator(".new-tab-launcher-tile:visible", has_text="Chat").click()
 
 
 @pytest.mark.tmux
@@ -235,6 +232,14 @@ def test_not_found_panel_recovers_when_the_agent_resolves(
     """
     with _serving_workspace(tmp_path, monkeypatch, port=_PORT, release_on_completion=False) as base_url:
         _create_chat_through_ui(page, base_url)
+
+        # The tile filed the first free "Chat N" the moment the create
+        # returned, so the new tab wears the friendly display name -- the
+        # machine petname the agent actually runs under never shows on the
+        # strip and was never asked for.
+        expect(page.locator(".dv-default-tab-content", has_text="Chat 1").first).to_be_visible(
+            timeout=_RECOVERY_TIMEOUT_MS
+        )
 
         not_found = page.locator(".message-list-not-found")
         expect(not_found).to_be_visible(timeout=_RECOVERY_TIMEOUT_MS)
