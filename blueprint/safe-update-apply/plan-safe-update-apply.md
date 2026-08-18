@@ -28,6 +28,12 @@
 - Killed without a restart and the DRI agent gone too: a permanent cron entry (installed at provision time, every ~5 minutes) runs `recover` with an only-if-stale guard — marker present, recorded PID dead, older than a grace period — and is a silent no-op in every normal state. It invokes the stdlib-only script directly, not the automations/agent machinery.
 - The DRI agent, when alive, simply re-runs the idempotent `apply`; every step tolerates re-entry.
 
+### Memory pressure
+
+- The apply orchestrator is close to OOM-exempt: it bands itself well above every agent, chat, and ordinary service — losing the build is an ordinary failure the rollback absorbs, but losing the apply mid-motion is the half-applied state this whole design exists to prevent. Only the authority paths that would repair a failed apply (owner-exec, the terminal) stay below it.
+- Subprocesses inherit that protection by default, which is what the recovery-critical steps need: git operations, snapshot copies and restores, service restarts, the provisioner, `mngr` invocations. During the forward apply, only the genuinely memory-hungry and cleanly recoverable steps — `npm ci` / `npm run build`, the uv installs, the pre-flight boot — are tagged back to the expendable band.
+- During rollback and `recover`, nothing is tagged expendable: there is no further rollback to absorb a shed, so every recovery step keeps the orchestrator's protection (extending PR 409's banding split, via the same shared `oom_priority.bands` mechanism).
+
 ### Skew hardening (independent of the atomic apply)
 
 - The system interface reads mngr config with `strict=False` at its single `load_config` call site, so a settings file written for a newer mngr degrades to a logged warning instead of a 500 on every send — the lockout that made the geebspace incident self-locking. `mngr config set` and all CLI paths keep strict parsing.
@@ -55,6 +61,7 @@
 - `.agents/skills/update-system-interface/SKILL.md`: Steps 4–5 replaced by a call to the general apply (worker branch as the merge source); preview flow unchanged.
 - `system/apps/system_interface`: `strict=False` at the `agent_discovery` config read; startup-HEAD staleness header and informational banner (reading the marker for the interrupted-update variant).
 - Change classification: vendored-mngr source and `.mngr/settings.toml` become restart-requiring classes.
+- OOM banding (`oom_priority.bands`): a near-exempt band for the apply orchestrator (above agents, chats, and ordinary services; below only owner-exec and the terminal); expendable tagging applied to the hungry forward-apply steps only, never during rollback/recover.
 - `system/libs/bootstrap` (or its startup sequence): marker check + direct recovery + DRI agent wake at container start.
 - Provisioning (`setup_system.sh` / `build_workspace.sh`): install the permanent recovery cron entry. (Verify crond runs in these containers.)
 - Tests for the apply's control flow (recording-runner style, as PR 409's), the recovery paths, the marker/lease lifecycle, the classifier additions, and the SI strict/staleness changes; changelog entries per touched project.
