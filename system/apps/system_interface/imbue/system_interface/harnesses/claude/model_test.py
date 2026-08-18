@@ -36,11 +36,13 @@ def test_catalog_options_carry_suffix_free_reported_ids() -> None:
 def test_live_statusline_model_ids_match_their_catalog_option() -> None:
     # The model ids claude 2.1.226's statusline actually reports, captured from a live
     # binary launched exactly as the workspace launches it (settings.json model="opus[1m]",
-    # then /model sonnet). Opus keeps the [1m] launch suffix in the reported id and reaches
-    # its option through match_option's prefix pass; sonnet reports the bare id.
+    # then /model sonnet, /model haiku). Only sonnet reports the bare catalog key: opus keeps
+    # its [1m] launch suffix and haiku reports a dated id, so two of the three reach their
+    # option through match_option's prefix pass rather than an exact key hit.
     for reported_id, expected_label in (
         ("claude-opus-5[1m]", "Opus 5 (1M)"),
         ("claude-sonnet-5", "Sonnet 5"),
+        ("claude-haiku-4-5-20251001", "Haiku 4.5"),
     ):
         matched = match_option(
             ModelIdentity(model_id=reported_id, effort="high", fast=False), CLAUDE_CATALOG.options
