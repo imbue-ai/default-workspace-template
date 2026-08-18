@@ -1,6 +1,7 @@
 import json
 import os
 import queue
+import re
 import shlex
 import threading
 import tomllib
@@ -40,7 +41,7 @@ from imbue.mngr.primitives import AgentNameStyle
 from imbue.mngr.primitives import HostName
 from imbue.mngr.utils.name_generator import generate_agent_name
 from imbue.system_interface import client_activity
-from imbue.system_interface import workspace_layouts
+from imbue.system_interface import projects
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.activity_state import RUNNING_LIFECYCLE_STATES
 from imbue.system_interface.activity_state import is_lifecycle_dead
@@ -101,6 +102,64 @@ _COMPLETION_SIGNAL_PUT_TIMEOUT_SECONDS = 5.0
 # auto-open its tab so the user lands on it without hunting.
 _ASSIST_AUTO_OPEN_LABEL = "assist"
 
+# An app's icon is SVG markup carried verbatim on its registry row and handed to
+# the browser, which inlines it. ``system/scripts/forward_port.py`` is the real
+# validator (it parses the markup and rejects anything that is not a single,
+# inert ``<svg>`` element); the checks below are a backstop for a hand-edited or
+# otherwise unvalidated ``apps.toml``, so a bad icon is dropped here instead of
+# reaching the DOM. They deliberately mirror, and are never looser than, that
+# validator. Keep the cap in step with its ``MAX_ICON_LENGTH``.
+_MAX_ICON_LENGTH = 16384
+_FORBIDDEN_ICON_SUBSTRINGS = ("<script", "<style", "<foreignobject", "javascript:", "<!", "<?")
+# An ``on*=`` attribute anywhere in a tag, e.g. ``<svg onload="...">``.
+_ICON_EVENT_HANDLER_PATTERN = re.compile(r"<[^>]*\son[a-z]+\s*=", re.IGNORECASE)
+
+
+def _accepted_icon(raw_icon: str) -> str:
+    """Return ``raw_icon`` when it is safe to inline as an app icon, else ''."""
+    icon = raw_icon.strip()
+    if not icon or len(icon) > _MAX_ICON_LENGTH:
+        return ""
+    if not icon.startswith("<svg") or not icon.endswith(">"):
+        return ""
+    lowered = icon.lower()
+    if any(forbidden in lowered for forbidden in _FORBIDDEN_ICON_SUBSTRINGS):
+        return ""
+    if _ICON_EVENT_HANDLER_PATTERN.search(icon) is not None:
+        return ""
+    return icon
+
+
+def _chat_project_label(primary_labels: dict[str, str], project_id: str) -> str:
+    """The ``project`` label value a new chat agent should carry.
+
+    Chats are agents, and mngr already propagates an agent's ``project`` label
+    to the children it spawns, so a chat created inside a project records that
+    project here and its children inherit it. The label names the chat's
+    *originating* project rather than an owner: membership is many-to-many, and
+    what a view shows is its own member list, so this is where a chat starts out
+    filed and not where it is stuck. A chat created outside any project inherits
+    whatever the primary agent carries, and one left with no label at all is
+    filed nowhere -- which costs it nothing, since Everything lists every object
+    on the machine.
+    """
+    if project_id:
+        return project_id
+    return primary_labels.get("project", "")
+
+
+def _canonical_agent_name(name: str) -> str:
+    """The true-name form of a human-readable chat name ("Chat 2" -> "Chat-2").
+
+    Mirrors mngr's own ``canonicalize_agent_name`` rather than importing it: a
+    workspace's vendored mngr may predate free-form names, and passing it a
+    name it would reject fails the create outright. Sending the canonical name
+    (plus the typed one as a ``display_name`` label) is accepted by every mngr
+    version and is exactly the pair newer mngr derives for itself.
+    """
+    stripped = re.sub(r"[^a-zA-Z0-9 _-]+", "", name.strip())
+    return re.sub(r"\s+", "-", stripped).strip("-_")
+
 
 def _build_chat_create_command(
     mngr_binary: str,
@@ -109,6 +168,7 @@ def _build_chat_create_command(
     primary_labels: dict[str, str],
     harness: HarnessType,
     extra_role_templates: tuple[str, ...] = (),
+    project_id: str = "",
 ) -> list[str]:
     """Build the ``mngr create`` argv for a chat agent on a given harness.
 
@@ -125,9 +185,11 @@ def _build_chat_create_command(
     cmd = [
         mngr_binary,
         "create",
-        name,
+        _canonical_agent_name(name) or name,
         "--id",
         agent_id,
+        "--transfer",
+        "none",
         "--type",
         harness,
         "--template",
@@ -137,12 +199,21 @@ def _build_chat_create_command(
         # dynamic chat band (re-tagged from live UI engagement), not the worker band.
         "--label",
         "user_created=true",
+        # The name the user sees. Its canonical form is the agent name above --
+        # the pairing newer mngr enforces -- and it is what ``mngr list`` and
+        # the workspace's own surfaces show.
+        "--label",
+        f"display_name={name}",
         "--no-connect",
     ]
-    # Inherit the project label from the primary agent. The chat agent belongs to
-    # its workspace by sharing the host; it carries no workspace label.
-    if "project" in primary_labels:
-        cmd.extend(["--label", f"project={primary_labels['project']}"])
+    # The project the chat starts out filed in: the one it was created inside
+    # when there is one, else whatever the primary agent carries. The chat agent
+    # belongs to its workspace by sharing the host; it carries no workspace
+    # label. (Fast-mode launch settings ride the ``first`` create template now,
+    # so the builder no longer takes a fast-mode flag.)
+    project_label = _chat_project_label(primary_labels, project_id)
+    if project_label:
+        cmd.extend(["--label", f"project={project_label}"])
     return cmd
 
 
@@ -304,7 +375,9 @@ def _assert_special_kinds_declared(harness: HarnessType, events: list[dict[str, 
             continue
         kind = event.get("kind")
         if kind not in {k.value for k in declared}:
-            raise AssertionError(f"{harness.value} emitted undeclared special kind {kind!r} (declared: {sorted(k.value for k in declared)})")
+            raise AssertionError(
+                f"{harness.value} emitted undeclared special kind {kind!r} (declared: {sorted(k.value for k in declared)})"
+            )
 
 
 class AgentManager:
@@ -559,7 +632,7 @@ class AgentManager:
         """
         if not self._own_agent_id:
             return
-        layout_dir = workspace_layouts.primary_agent_layout_dir(self._host_dir, self._own_agent_id)
+        layout_dir = projects.primary_agent_layout_dir(self._host_dir, self._own_agent_id)
         events = client_activity.read_client_activity_events(client_activity.get_events_path(layout_dir))
         last_message_at_by_agent_id: dict[str, float] = {}
         for agent_id, timestamp in client_activity.last_message_time_by_agent(events).items():
@@ -636,10 +709,19 @@ class AgentManager:
         with self._lock:
             return list(self._apps)
 
-    def get_apps_serialized(self) -> list[dict[str, str]]:
+    def get_apps_serialized(self) -> list[dict[str, str | bool]]:
         """Return the primary agent's app list serialized for JSON."""
         with self._lock:
-            return [{"name": app.name, "url": app.url, "label": app.label} for app in self._apps]
+            return [
+                {
+                    "name": app.name,
+                    "url": app.url,
+                    "label": app.label,
+                    "icon": app.icon,
+                    "internal": app.internal,
+                }
+                for app in self._apps
+            ]
 
     def get_service_url(self, service_name: str) -> str | None:
         """Return the local backend URL for a service, or None if it isn't registered."""
@@ -655,7 +737,18 @@ class AgentManager:
             return tuple(sorted(app.name for app in self._apps))
 
     def get_agents_serialized(self) -> list[dict[str, Any]]:
-        """Return agent list serialized for JSON."""
+        """Return agent list serialized for JSON.
+
+        ``project`` is lifted out of the labels because it is the chat-to-project
+        linkage the workspace UI reads on every agent it lists (see
+        ``_chat_project_label``); null means the chat was created inside no
+        project, which Everything lists all the same.
+
+        ``display_name`` is lifted for the same reason: it is the human-readable
+        name mngr holds for the agent, and ``name`` is its canonical form, so the
+        UI can show what the user typed while still addressing the agent by
+        ``name``. Null means mngr has no such label and ``name`` is all there is.
+        """
         with self._lock:
             return [
                 {
@@ -663,6 +756,8 @@ class AgentManager:
                     "name": a.name,
                     "state": a.state,
                     "labels": a.labels,
+                    "project": a.labels.get("project"),
+                    "display_name": a.labels.get("display_name"),
                     "work_dir": a.work_dir,
                     "harness": a.harness,
                     "activity_state": a.activity_state,
@@ -715,12 +810,16 @@ class AgentManager:
         name: str,
         harness: HarnessType = HarnessType.CLAUDE,
         extra_role_templates: tuple[str, ...] = (),
+        project_id: str = "",
     ) -> str:
         """Create a chat agent in the primary agent's work dir on the given harness.
 
         Returns the pre-generated agent ID. ``harness`` is also the name of the harness
         create template it stacks; the `chat` role template supplies everything else, so a
-        new harness needs no new method here.
+        new harness needs no new method here. ``project_id`` is the project the chat was
+        created inside, which becomes the agent's ``project`` label -- the project it
+        starts out filed in (see ``_chat_project_label``); empty keeps the primary
+        agent's inherited label.
 
         An alt harness authenticates through its own CLI; if that CLI is signed out, refuse
         the create up front (raising ``AgentCreationError``) rather than launch a chat that
@@ -748,6 +847,7 @@ class AgentManager:
             primary_labels,
             harness,
             extra_role_templates,
+            project_id,
         )
 
         log_queue: queue.Queue[str | None] = queue.Queue(maxsize=10000)
@@ -770,8 +870,9 @@ class AgentManager:
         )
 
         labels: dict[str, str] = {}
-        if "project" in primary_labels:
-            labels["project"] = primary_labels["project"]
+        project_label = _chat_project_label(primary_labels, project_id)
+        if project_label:
+            labels["project"] = project_label
         self._launch_creation_thread(agent_id, name, cmd, Path(work_dir), log_queue, labels, harness)
 
         return agent_id
@@ -1536,7 +1637,9 @@ class AgentManager:
             return
         # The disk read (model_state.json) stays outside the lock. Only harness +
         # state dir are needed -- not claude_config_dir, which would cost an env-file read.
-        identity = read_model_identity(get_model_state_path(harness_state.harness, self._get_agent_state_dir(agent_id)))
+        identity = read_model_identity(
+            get_model_state_path(harness_state.harness, self._get_agent_state_dir(agent_id))
+        )
         # The match SOURCE is per-agent for a dynamic harness (codex): its options come from the
         # cached model/list, not a static catalog. Computed OUTSIDE the lock (it takes the lock
         # itself), then matched below -- the matcher, read, and broadcast are otherwise unchanged.
@@ -1755,8 +1858,10 @@ class AgentManager:
                     name = entry.get("name", "")
                     url = entry.get("url", "")
                     label = entry.get("label", "")
+                    icon = _accepted_icon(str(entry.get("icon", "")))
+                    internal = bool(entry.get("internal", False))
                     if name and url:
-                        apps.append(AppEntry(name=name, url=url, label=label))
+                        apps.append(AppEntry(name=name, url=url, label=label, icon=icon, internal=internal))
             except (OSError, tomllib.TOMLDecodeError, KeyError, ValueError) as e:
                 _loguru_logger.opt(exception=e).error("Failed to parse {}", toml_path)
 

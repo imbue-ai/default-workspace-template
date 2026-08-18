@@ -1,6 +1,8 @@
 import json
 import queue
 import threading
+from collections.abc import Mapping
+from collections.abc import Sequence
 from typing import Any
 
 from loguru import logger as _loguru_logger
@@ -171,8 +173,18 @@ class WebSocketBroadcaster(MutableModel):
         """Broadcast an agents_updated event."""
         self.broadcast({"type": "agents_updated", "agents": agents})
 
-    def broadcast_apps_updated(self, apps: list[dict[str, str]]) -> None:
-        """Broadcast an apps_updated event."""
+    def broadcast_apps_updated(self, apps: Sequence[Mapping[str, str | bool]]) -> None:
+        """Broadcast an apps_updated event.
+
+        Values are not all strings: an entry carries `internal` as a bool (see
+        AppEntry), which is what tells the client an app has a port to forward
+        but no page of its own to offer.
+
+        Read-only and covariant (Sequence/Mapping rather than list/dict) because
+        this only serializes what it is handed: `list` and `dict` are invariant,
+        so a caller holding a plain `list[dict[str, str]]` -- every app registered
+        without the bool -- could not pass it without annotating the literal.
+        """
         self.broadcast({"type": "apps_updated", "apps": apps})
 
     def broadcast_proto_agent_created(
@@ -232,36 +244,6 @@ class WebSocketBroadcaster(MutableModel):
             self.broadcast(message)
         else:
             self.broadcast_to_layout(message, target_layout_slug)
-
-    def broadcast_layout_saved(self, layout_slug: str, display_name: str, saved_by_client_id: str) -> None:
-        """Broadcast that a named layout's content was saved.
-
-        Sent to every client (not just those on the layout): the "+" menu
-        dialogs list all layouts, so everyone needs the fresh registry. A
-        client with the layout active (other than the saver, identified by
-        ``saved_by_client_id``) re-fetches and re-applies the content.
-        """
-        self.broadcast(
-            {
-                "type": "layout_saved",
-                "layout_slug": layout_slug,
-                "display_name": display_name,
-                "saved_by_client_id": saved_by_client_id,
-            }
-        )
-
-    def broadcast_layout_deleted(self, layout_slug: str, fallback_layout_slug: str) -> None:
-        """Broadcast that a named layout was deleted.
-
-        Clients with the layout active switch to ``fallback_layout_slug``.
-        """
-        self.broadcast(
-            {
-                "type": "layout_deleted",
-                "layout_slug": layout_slug,
-                "fallback_layout_slug": fallback_layout_slug,
-            }
-        )
 
     def broadcast_load_layout(self, layout_slug: str, display_name: str, target_client_id: str | None) -> None:
         """Broadcast an agent-driven request that a client switch to a layout.

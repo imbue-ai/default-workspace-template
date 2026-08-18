@@ -18,6 +18,7 @@ import { openAgentAuth } from "../models/AgentAuth";
 import { ensureHarnessCatalogs, findComposerPopup, getHarnessCatalog } from "../models/HarnessCatalog";
 import { getAgentById } from "../models/AgentManager";
 import { isWorkingActivityState } from "./ActivityIndicator";
+import { hoverTooltipAttrs } from "./hoverTooltip";
 import { icon, stopIcon } from "./icons";
 
 const MAX_TEXTAREA_HEIGHT_PX = 200;
@@ -120,7 +121,11 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
       [
         thumbnail,
         m("span", { class: "composer-attachment-info" }, [
-          m("span", { class: "composer-attachment-name", title: attachment.fileName }, attachment.fileName),
+          m(
+            "span",
+            { class: "composer-attachment-name", ...hoverTooltipAttrs(attachment.fileName) },
+            attachment.fileName,
+          ),
           attachment.status === "ready" && attachment.uploaded !== undefined
             ? m("span", { class: "composer-attachment-detail" }, formatFileSize(attachment.uploaded.size))
             : null,
@@ -136,8 +141,8 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
               {
                 type: "button",
                 class: "composer-attachment-remove",
-                title: "Remove attachment",
                 "aria-label": "Remove attachment",
+                ...hoverTooltipAttrs("Remove attachment"),
                 onclick: () => removeComposerAttachment(agentId, attachment.localId),
               },
               m.trust(icon("close", { size: 12, strokeWidth: 2.5 })),

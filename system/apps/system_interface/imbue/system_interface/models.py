@@ -262,6 +262,24 @@ class AppEntry(FrozenModel):
             "origin uses. Empty for legacy rows written before labels existed."
         ),
     )
+    icon: str = Field(
+        default="",
+        description=(
+            "The app's icon as SVG markup (a single ``<svg>`` element), stored "
+            "verbatim in the registry by ``system/scripts/forward_port.py``. "
+            "Empty when the app registered no icon, which is the normal case; "
+            "consumers fall back to their generic app glyph."
+        ),
+    )
+    internal: bool = Field(
+        default=False,
+        description=(
+            "Registered with ``forward_port.py --internal``: has a port to "
+            "forward but no page of its own, so the frontend must not offer it "
+            "as something to open (the New Tab launcher's machine table, the "
+            "rail's All apps popover, its shortcuts)."
+        ),
+    )
 
 
 class TerminalSessionInfo(FrozenModel):

@@ -91,6 +91,7 @@ _KNOWN_OPS: frozenset[str] = frozenset(
         "reload_system_interface",
         "context",
         "load",
+        "views",
     }
 )
 

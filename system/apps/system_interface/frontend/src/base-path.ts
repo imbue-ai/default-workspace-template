@@ -56,6 +56,12 @@ function isFeatureFlagEnabled(metaTagName: string): boolean {
   if (cached !== undefined) {
     return cached;
   }
+  // ``document`` is absent under the node-environment unit tests, which render
+  // components that consult these flags (the launcher's tiles). No DOM means no
+  // meta tag, which reads as every flag's own default: off.
+  if (typeof document === "undefined") {
+    return false;
+  }
   const metaElement = document.querySelector(`meta[name="${metaTagName}"]`);
   // Off unless the tag is explicitly "true", so a server that never injected it
   // (or an older one) leaves the gated surface hidden.

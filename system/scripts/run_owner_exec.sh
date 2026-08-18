@@ -29,6 +29,18 @@ if [ -n "${MNGR_HOST_DIR:-}" ] && [ -f "${MNGR_HOST_DIR}/data.json" ]; then
     HOST_ID="$(jq -r '.host_id // ""' "${MNGR_HOST_DIR}/data.json" 2>/dev/null || true)"
 fi
 
+# Register the port from here rather than letting the daemon do it
+# (register_port = false below): the daemon's registration is a plain one, and
+# owner-exec must be registered --internal -- it has a port to forward but no
+# page of its own, so a plain row puts an openable-looking app in the New Tab
+# launcher and the All apps popover that opens blank. The pinned Go binary has
+# no flag for that; the row is static (name + url), so registering it once
+# here before exec is equivalent to the daemon doing it at startup.
+python3 "${REPO_ROOT}/system/scripts/forward_port.py" \
+    --name owner-exec \
+    --url "http://127.0.0.1:8793" \
+    --internal
+
 cat > "$CONFIG_PATH" <<TOML
 role = "inner"
 host_id = "${HOST_ID}"
@@ -39,7 +51,7 @@ authorized_keys_path = "${HOME}/.ssh/authorized_keys"
 host_key_path = "/etc/ssh/ssh_host_ed25519_key"
 grants_enabled = true
 share_env_path = "${REPO_ROOT}/data/.secrets/share.env"
-register_port = true
+register_port = false
 service_name = "owner-exec"
 forward_port_script = "${REPO_ROOT}/system/scripts/forward_port.py"
 TOML
