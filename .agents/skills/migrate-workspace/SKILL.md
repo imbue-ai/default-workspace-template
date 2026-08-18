@@ -196,8 +196,9 @@ through the same candidate probe as the backup above. `mngr` is on the agent's
 PATH (`/root/.local/bin`) and resolves which host dir to act on from
 `MNGR_HOST_DIR`; an ssh session has neither, and on a pre-declutter source that
 host dir is `/mngr` rather than the default. Exit 66 means this source predates
-the wrapper and cannot be quiesced that way -- say so rather than improvising. A decline is fine either way;
-anything that shifts is re-synced during verification (Step 8).
+the wrapper and cannot be quiesced that way -- say so rather than improvising.
+A decline is fine either way; anything that shifts is re-synced during
+verification (Step 8).
 
 ## 4. Detect the layout, then resolve the baseline
 
