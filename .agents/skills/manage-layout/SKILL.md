@@ -37,8 +37,18 @@ each keep their own arrangement of the same view, sharing its members.
 
 Consequences for you:
 
-- **An op with no target goes to the view the connected client is
-  looking at.** That is what you want nearly always; just run the op.
+- **An op with no target goes to your own view**: the view you were
+  last messaged from, or -- if nobody has messaged you directly -- the
+  project your chat belongs to. That is what you want nearly always;
+  just run the op. Only when you have neither does the op fall back to
+  the view the connected client is looking at. This is why a tab you
+  open lands next to the chat that asked for it rather than in
+  whichever project the user has since scrolled to.
+- **A 412 means your view isn't in front of anyone.** The user has
+  moved to another view since messaging you, and a view nobody has open
+  cannot be rearranged. `load <your view>` brings them back to it and
+  then the op applies -- do that only if the work genuinely needs to be
+  seen; otherwise say what you built and let them switch when ready.
 - **Pass `--view <name>` to address a different view** (a project's
   name, or `Everything`; `--layout` is the same flag under its old
   name). The op applies only on connected clients that have that view
@@ -81,10 +91,8 @@ Consequences for you:
 | Put a new terminal in the same tab group as your chat | `python3 system/scripts/layout.py split terminal --relative-to=self --direction=within` |
 | Close a tab | `python3 system/scripts/layout.py close <ref>` |
 
-A tab you open is filed into **your own project** -- the one named by
-your `project` label -- when you have one; otherwise it is filed into
-the view it opened in. Either way the tab appears in the view the user
-is looking at.
+A tab you open lands in **your own view** -- see below -- and is filed
+into that view's member list, so it stays listed there once closed.
 
 `open` is the opinionated default. It puts the new tab to the right
 of your chat, joining whatever group already lives there if one is
