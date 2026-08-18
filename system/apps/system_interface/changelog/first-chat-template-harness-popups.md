@@ -20,7 +20,7 @@ The grace-period prompt (5 user turns) is now agent-scoped and harness-declared.
 
 - claude declares `open_auth` for `/login` `/logout`, its measured declined-command list (moved out of the frontend's `claudeSlashCommands.ts`), and the fast-mode check.
 - codex declares `open_auth` for `/login` `/logout`, declines `/archive /btw /clear /delete /effort /exit /experimental /fast /fork /keymap /model /new /plan /quit /resume /side /vim` (its messages go over the app-server, so slash commands would reach the model as prose — and `/model` `/fast` `/effort` would additionally be hidden from the transcript by the shared display rules), and the fast-mode check.
-- pi declares only `open_auth` for `/login`.
+- pi declares `open_auth` for `/login`, and declines `/clone /compact /fork /llama /model /name /new /quit /resume /scoped-models /session /tree` (pi is driven through its lifecycle extension's inbox rather than by typing into the pane, so these would reach the model as prose; the session-switching ones would also strand the chat's view of the conversation).
 
 The composer guard matches on the first token for auth commands too, so `/login please` now intercepts (it used to slip past the whole-message match). A slash-shaped message awaits the catalog load once when it has not landed yet, so an early `/login` cannot slip through the fetch window; the catalog fetch is now single-flight and retries after a failure.
 
