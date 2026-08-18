@@ -25,18 +25,18 @@ export interface AgentState {
   // a chat, never an owner.
   project?: string | null;
   work_dir: string | null;
-  // The agent's harness ("claude", "codex", ...), from the backend. Read in three
-  // places: ModelBar picks the harness's catalog with it, ChatPanel gates the
-  // claude-only fast-mode prompt on it, and MessageInput intercepts /login and
-  // /logout for claude. Everything else is resolved backend-side -- tool calls arrive
-  // pre-labelled and activity arrives as an already-derived state -- so those three
-  // are the whole surface, and the two claude comparisons are the ones a per-harness
-  // capability on the catalog should eventually replace.
+  // The agent's harness ("claude", "codex", ...), from the backend. Used only as
+  // a lookup key into the per-harness catalog (GET /api/harnesses): ModelBar picks
+  // the model catalog with it, and the composer guards, fast-mode prompt, and
+  // agent-auth surface all follow the popups/auth declarations the catalog
+  // carries. The frontend never branches on the harness name itself; everything
+  // else is resolved backend-side (tool calls arrive pre-labelled, activity
+  // arrives as an already-derived state).
   harness?: string;
   // Per-agent chat activity. THINKING/TOOL_RUNNING/IDLE, or null when the
   // system interface has no per-agent activity tracking available (e.g.
   // remote agents whose state directory is not present on this host,
-  // proto-agents, non-Claude agent types).
+  // proto-agents).
   activity_state?: string | null;
   // The agent's live model/effort/fast selection plus the catalog option it
   // matched, pushed by the backend beside activity_state. Null when no model
@@ -822,11 +822,12 @@ export async function createChatAgent(
   name: string,
   projectId: string,
   harness: "claude" | "codex" | "pi" = "claude",
+  isFirst: boolean = false,
 ): Promise<string> {
   const response = await fetch(apiUrl("/api/agents/create-chat"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, project_id: projectId, harness }),
+    body: JSON.stringify({ name, project_id: projectId, harness, first: isFirst }),
   });
   if (!response.ok) {
     const data = (await response.json().catch(() => ({}))) as { detail?: string };

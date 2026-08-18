@@ -4,8 +4,10 @@ import { describe, expect, it, vi } from "vitest";
 // real implementation caches a meta-tag read, which a test cannot safely poke;
 // this keeps it a plain switch, off by default like the real flag.
 let otherHarnessesEnabled = false;
+let introductoryAgentsEnabled = false;
 vi.mock("../base-path", () => ({
   areOtherHarnessesEnabled: () => otherHarnessesEnabled,
+  areIntroductoryAgentsEnabled: () => introductoryAgentsEnabled,
 }));
 
 // Mithril captures `requestAnimationFrame` at import time so it can schedule
@@ -324,6 +326,21 @@ describe("NewTabLauncher", () => {
       expect(labels.slice(0, 3)).toEqual(["Chat", "Codex agent", "Pi agent"]);
     } finally {
       otherHarnessesEnabled = false;
+    }
+  });
+
+  it("offers the introductory-chat tiles only where the host enables them", () => {
+    introductoryAgentsEnabled = true;
+    try {
+      const labels = buttonsOf(render()).map((tile) => texts(tile.children)[1]);
+      expect(labels.slice(0, 4)).toEqual([
+        "Chat",
+        "Introductory Claude chat",
+        "Introductory Codex chat",
+        "Introductory Pi chat",
+      ]);
+    } finally {
+      introductoryAgentsEnabled = false;
     }
   });
 

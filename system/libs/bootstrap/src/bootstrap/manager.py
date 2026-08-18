@@ -50,10 +50,6 @@ _CRON_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 # Signal file gating exactly-once creation of the initial chat agent. Lives
 # under data/.state/, which persists with the container volume.
 INITIAL_CHAT_SIGNAL = STATE_DIR / "initial_chat_created"
-# The workspace's fast-mode decision, written by the system interface when the user
-# answers the fast-mode prompt. Its `fast_mode_policy.py` owns the format; this
-# path is repeated (not imported) to keep bootstrap's dependencies minimal.
-FAST_MODE_DECISION_FILE = STATE_DIR / "fast_mode_decision.json"
 # Basename (under $MNGR_HOST_DIR) of the file holding the initial chat agent's id,
 # read by system_interface's welcome_resend to address the resend by id.
 INITIAL_CHAT_AGENT_ID_FILENAME = "initial_chat_agent_id"
@@ -136,59 +132,18 @@ def _read_main_agent_labels() -> dict[str, str]:
     return {str(k): str(v) for k, v in labels.items()}
 
 
-def _read_workspace_fast_mode_enabled() -> bool:
-    """Whether new chat agents should launch with fast mode on.
-
-    Reads the same decision file the system interface writes when the user
-    answers the fast-mode prompt (see its `fast_mode_policy.py`, which owns the
-    format). Unanswered -- the normal case on first boot -- means fast, so the
-    opening conversation is responsive. Bootstrap parses it directly rather than
-    importing the system interface, which is a far heavier dependency than this
-    one-shot first-boot program should carry.
-    """
-    try:
-        raw = FAST_MODE_DECISION_FILE.read_text()
-    except FileNotFoundError:
-        return True
-    except OSError as e:
-        logger.warning(
-            "Failed to read fast-mode decision {}: {}", FAST_MODE_DECISION_FILE, e
-        )
-        return True
-    try:
-        decision = json.loads(raw)
-    except json.JSONDecodeError as e:
-        logger.warning(
-            "Ignored malformed fast-mode decision {}: {}", FAST_MODE_DECISION_FILE, e
-        )
-        return True
-    is_enabled = (
-        decision.get("is_fast_mode_enabled") if isinstance(decision, dict) else None
-    )
-    if not isinstance(is_enabled, bool):
-        # Unlike an absent file, this is a format skew with the writer, and the
-        # fallback below is the setting that costs money -- say so.
-        logger.warning(
-            "Ignored fast-mode decision {} with no boolean is_fast_mode_enabled: {}",
-            FAST_MODE_DECISION_FILE,
-            raw,
-        )
-        return True
-    return is_enabled
-
-
-def _build_create_chat_command(
-    host_name: str, labels: dict[str, str], is_fast_mode_enabled: bool
-) -> list[str]:
+def _build_create_chat_command(host_name: str, labels: dict[str, str]) -> list[str]:
     """Build the `mngr create` argv for the initial chat agent.
 
     Mirrors the New Agent button's create path (see
     system/apps/system_interface/.../agent_manager.py:create_chat_agent): the
-    harness chosen via `--type claude`, the `chat` role template, no-connect, and
-    the inherited `project` label when present on the services agent. Adds
-    `--message /welcome`, which used to live on `create_templates.main`. The chat
-    agent belongs to its workspace by virtue of sharing the host; it carries no
-    `workspace` label.
+    harness chosen via `--type claude`, the `first` + `chat` role templates,
+    no-connect, and the inherited `project` label when present on the services
+    agent. The `first` template carries everything unique to the workspace's
+    opening chat -- the `/welcome` message, the `first=true` label, and the
+    fast-mode launch settings (see `[create_templates.first]` in
+    .mngr/settings.toml). The chat agent belongs to its workspace by virtue of
+    sharing the host; it carries no `workspace` label.
     """
     cmd: list[str] = [
         "mngr",
@@ -207,20 +162,14 @@ def _build_create_chat_command(
         "--type",
         "claude",
         "--template",
+        "first",
+        "--template",
         "chat",
-        "--message",
-        "/welcome",
         # Tags the initial chat as a user-created agent so the OOM agent-tagging
         # hook puts it in the protected user-agent band (matching the New Chat /
         # New Agent paths in system/apps/system_interface).
         "--label",
         "user_created=true",
-        # Chat is the only interactive agent type, so it is the only one that
-        # starts fast; .mngr/settings.toml defaults every other type to standard
-        # speed. See that file's [agent_types.claude] note for why the override
-        # targets `claude` rather than `chat`.
-        "-S",
-        f"agent_types.claude.settings_overrides.fastMode={str(is_fast_mode_enabled).lower()}",
         "--no-connect",
         "--format",
         "json",
@@ -309,9 +258,7 @@ def _file_initial_chat_title(agent_id: str) -> None:
 
 def _create_initial_chat_agent(host_name: str, labels: dict[str, str]) -> bool:
     """Invoke `mngr create` for the initial chat agent; persist its id. Returns success."""
-    cmd = _build_create_chat_command(
-        host_name, labels, _read_workspace_fast_mode_enabled()
-    )
+    cmd = _build_create_chat_command(host_name, labels)
     logger.info("Creating initial chat agent: {}", " ".join(cmd))
     result = subprocess.run(cmd, capture_output=True, text=True, check=False)
     if result.returncode != 0:
