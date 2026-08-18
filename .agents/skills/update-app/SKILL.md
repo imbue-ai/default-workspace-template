@@ -49,9 +49,10 @@ the request is -- it changes what you do *before* touching code:
 
   When a hand mock won't convince -- a redesign, or a data-touching change --
   boot the *actually changed* service as a labeled preview tab beside the
-  live one via the shared `serve_isolated_instance.py` script (invocation
-  under "Protect the user's data while you verify"; it's the same preview
-  mechanism the system-interface flow uses). Keep the lighter hand mock for
+  live one via the shared `serve_isolated_instance.py` script (invocation in
+  `.agents/shared/references/data-isolation.md`, preview flags under "Protect
+  the user's data while you verify"; it's the same preview mechanism the
+  system-interface flow uses). Keep the lighter hand mock for
   quick look-and-feel loops. Either way, *reading* the live store to render a
   preview is fine; never let a preview or verification *write* to it.
 
