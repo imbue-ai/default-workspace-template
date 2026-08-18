@@ -252,11 +252,11 @@ none of the agent environment, so the variable expands to nothing and the `cat`
 reads the wrong path. On a pre-declutter source that host dir is `/mngr` (the
 path map above); `/home/user/.mngr` is the current layout's, and reading it here
 prints nothing -- the same silence this section exists to stop you believing.
-(Prefixing the command with `with_agent_env.sh` resolves the variable instead,
-including here: a pre-declutter source built from 2026-07-07 on carries one at
-`/mngr/code/scripts/with_agent_env.sh`. Where it sits depends on the source's
-generation, so use Step 3's candidate probe rather than naming a path; a source
-older than that has none, and the spelled-out path above is the only way in.)
+(On a *post*-declutter source, prefixing the command with `with_agent_env.sh`
+resolves the variable instead -- see Step 3's candidate probe. That is no help
+here: the wrapper first shipped in `minds-v0.3.10`, one release after the
+declutter, so no pre-declutter source has one under any path. Spelling the path
+out is the only way in.)
 
 That pointer file exists only on a source running the `minds-v0.3.9` backup
 service or newer. Before that, the events sit under the *primary* agent's state
