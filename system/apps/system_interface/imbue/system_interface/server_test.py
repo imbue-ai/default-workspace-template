@@ -1530,9 +1530,7 @@ def test_shoulder_tap_atomic_rejects_is_primary_agent(client: FlaskClient, tmp_p
     assert "is_primary" in response.get_json()["detail"]
 
 
-def test_shoulder_tap_atomic_pi_no_ops_benignly_when_a_send_is_in_flight(
-    client: FlaskClient, tmp_path: Path
-) -> None:
+def test_shoulder_tap_atomic_pi_no_ops_benignly_when_a_send_is_in_flight(client: FlaskClient, tmp_path: Path) -> None:
     """The pi flush writer takes the same ``message.lock`` a send holds: with a send in flight
     past the bounded wait, no sentinel is written -- but that refusal is a benign 200 no-op, not
     a 500. The backend availability flag greys the button whenever a send is in flight, so a tap
@@ -3522,7 +3520,9 @@ def test_autosave_unknown_project_returns_404(
     assert response.status_code == 404
 
 
-def test_project_content_routes_by_device(client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_project_content_routes_by_device(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A mobile save lands in its own file: desktop reads stay null, mobile round-trips."""
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
@@ -3793,7 +3793,10 @@ def test_delete_project_sweeps_stopped_members_out_of_every_view(
     assert client.post("/api/projects/project-1/members", json={"ref": "terminal:terminal-4"}).status_code == 200
     layout_data = {
         "dockview": {
-            "panels": {"terminal-session-terminal-4": {"id": "terminal-session-terminal-4"}, "chat-1": {"id": "chat-1"}}
+            "panels": {
+                "terminal-session-terminal-4": {"id": "terminal-session-terminal-4"},
+                "chat-1": {"id": "chat-1"},
+            }
         },
         "panelParams": {"terminal-session-terminal-4": {"terminalSessionName": "terminal-4"}},
     }
@@ -4086,6 +4089,127 @@ def test_member_titles_do_not_need_the_object_to_be_filed_anywhere(
     assert client.get("/api/member-titles").get_json()["titles"] == {"chat:agent-nowhere": "Scratch"}
     # Clearing a name nothing ever had is a no-op rather than a 404.
     assert client.post("/api/member-titles", json={"ref": "chat:agent-elsewhere", "title": ""}).status_code == 200
+
+
+def _rename_result(returncode: int, stderr: str = "") -> FinishedProcess:
+    return FinishedProcess(
+        returncode=returncode,
+        stdout="",
+        stderr=stderr,
+        command=("mngr", "rename"),
+        is_output_already_logged=False,
+    )
+
+
+def test_renaming_a_chat_renames_the_mngr_agent(
+    client: FlaskClient, app: Flask, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A chat is an mngr agent, so naming it names it in mngr too.
+
+    Renaming only the workspace's title store left ``mngr list`` showing the old
+    name. The agent is renamed to the canonical form of what was typed and
+    carries the typed name as its ``display_name`` label -- the same pair
+    ``mngr create`` establishes, and the pair every mngr version accepts.
+    """
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    _register_agent(app, "agent-7", "Chat-2", "RUNNING")
+
+    with patch(
+        "imbue.system_interface.agent_manager.run_local_command_modern_version",
+        return_value=_rename_result(0),
+    ) as mock_run:
+        response = client.post("/api/member-titles", json={"ref": "chat:agent-7", "title": "  Planning notes  "})
+
+    assert response.status_code == 200
+    argv = list(mock_run.call_args.kwargs["command"])
+    assert argv == ["mngr", "rename", "agent-7", "Planning-notes", "--label", "display_name=Planning notes"]
+    # The title store still holds the typed name: the surfaces draw from it.
+    assert client.get("/api/member-titles").get_json()["titles"] == {"chat:agent-7": "Planning notes"}
+    # ...and the agent answers to its new name right away, rather than after the
+    # next observe relist.
+    agent_manager: AgentManager = state_of(app).agent_manager
+    renamed = agent_manager.get_agent_by_id("agent-7")
+    assert renamed is not None
+    assert renamed.name == "Planning-notes"
+    assert renamed.labels["display_name"] == "Planning notes"
+
+
+def test_renaming_a_non_chat_member_never_reaches_mngr(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Terminals, browsers and apps are not agents: only the title store moves."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+
+    with patch("imbue.system_interface.agent_manager.run_local_command_modern_version") as mock_run:
+        assert (
+            client.post("/api/member-titles", json={"ref": "terminal:terminal-1", "title": "Build"}).status_code == 200
+        )
+        assert client.post("/api/member-titles", json={"ref": "service:docs", "title": "Docs"}).status_code == 200
+
+    mock_run.assert_not_called()
+
+
+def test_failed_chat_rename_leaves_both_names_untouched(
+    client: FlaskClient, app: Flask, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A refused ``mngr rename`` is an error, not a half-applied rename.
+
+    mngr goes first precisely so that a failure can stop the store write: the
+    two names must not end up disagreeing without anyone being told.
+    """
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    _register_agent(app, "agent-7", "Chat-2", "RUNNING")
+
+    with patch(
+        "imbue.system_interface.agent_manager.run_local_command_modern_version",
+        return_value=_rename_result(1, stderr="name already taken"),
+    ):
+        response = client.post("/api/member-titles", json={"ref": "chat:agent-7", "title": "Planning"})
+
+    assert response.status_code == 500
+    assert "name already taken" in response.get_json()["detail"]
+    assert client.get("/api/member-titles").get_json() == {"titles": {}}
+    agent_manager: AgentManager = state_of(app).agent_manager
+    still_named = agent_manager.get_agent_by_id("agent-7")
+    assert still_named is not None
+    assert still_named.name == "Chat-2"
+
+
+def test_clearing_a_chat_title_leaves_the_agent_named(
+    client: FlaskClient, app: Flask, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """mngr has no empty name to be given, so clearing only drops the stored one."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    _register_agent(app, "agent-7", "Chat-2", "RUNNING")
+
+    with patch("imbue.system_interface.agent_manager.run_local_command_modern_version") as mock_run:
+        response = client.post("/api/member-titles", json={"ref": "chat:agent-7", "title": "  "})
+
+    assert response.status_code == 200
+    assert response.get_json() == {"ref": "chat:agent-7", "title": None}
+    mock_run.assert_not_called()
+
+
+def test_over_long_chat_title_is_rejected_before_mngr_is_touched(
+    client: FlaskClient, app: Flask, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The cap is enforced first, so a name the store would refuse never reaches mngr."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    _register_agent(app, "agent-7", "Chat-2", "RUNNING")
+
+    with patch("imbue.system_interface.agent_manager.run_local_command_modern_version") as mock_run:
+        response = client.post(
+            "/api/member-titles",
+            json={"ref": "chat:agent-7", "title": "n" * (MAX_MEMBER_TITLE_LENGTH + 1)},
+        )
+
+    assert response.status_code == 400
+    mock_run.assert_not_called()
 
 
 def test_set_member_title_rejects_bad_bodies_and_over_long_names(

@@ -5,104 +5,99 @@ import socket
 import threading
 import time
 import traceback
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Final
+from typing import Any
+from typing import Final
 from uuid import uuid4
 
 import httpx
-from flask import Flask, Response, request, send_file, send_from_directory
+from flask import Flask
+from flask import Response
+from flask import request
+from flask import send_file
+from flask import send_from_directory
 from flask_sock import Sock
+from loguru import logger as _loguru_logger
+from pydantic import Field
+from simple_websocket import ConnectionClosed
+from werkzeug.exceptions import HTTPException
+
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.mngr.errors import MngrError
 from imbue.mngr.primitives import AgentId
-from imbue.system_interface import (
-    client_activity,
-    latchkey_endpoints,
-    member_last_used,
-    member_titles,
-    projects,
-)
-from imbue.system_interface.agent_discovery import (
-    AgentInfo,
-    discover_agents,
-    get_host_dir,
-    start_agent,
-)
+from imbue.system_interface import client_activity
+from imbue.system_interface import latchkey_endpoints
+from imbue.system_interface import member_last_used
+from imbue.system_interface import member_titles
+from imbue.system_interface import projects
+from imbue.system_interface.agent_discovery import AgentInfo
+from imbue.system_interface.agent_discovery import discover_agents
+from imbue.system_interface.agent_discovery import get_host_dir
+from imbue.system_interface.agent_discovery import start_agent
 from imbue.system_interface.agent_manager import AgentManager
-from imbue.system_interface.app_context import (
-    SystemInterfaceState,
-    attach_state,
-    get_state,
-)
-from imbue.system_interface.attachments import (
-    delete_upload,
-    get_uploads_directory,
-    resolve_upload_path,
-    store_uploaded_file,
-)
+from imbue.system_interface.app_context import SystemInterfaceState
+from imbue.system_interface.app_context import attach_state
+from imbue.system_interface.app_context import get_state
+from imbue.system_interface.attachments import delete_upload
+from imbue.system_interface.attachments import get_uploads_directory
+from imbue.system_interface.attachments import resolve_upload_path
+from imbue.system_interface.attachments import store_uploaded_file
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
 from imbue.system_interface.file_serving import try_serve_file
 from imbue.system_interface.harnesses.claude import auth_endpoints
 from imbue.system_interface.harnesses.claude.tap import TAP_CHORD
 from imbue.system_interface.harnesses.interrupt import restart_drain
-from imbue.system_interface.harnesses.model import ModelIdentity, ModelOption
-from imbue.system_interface.harnesses.registry import (
-    HARNESS_SPECS,
-    build_resolver,
-    get_catalog,
-    get_harness_spec,
-)
+from imbue.system_interface.harnesses.model import ModelIdentity
+from imbue.system_interface.harnesses.model import ModelOption
+from imbue.system_interface.harnesses.registry import HARNESS_SPECS
+from imbue.system_interface.harnesses.registry import build_resolver
+from imbue.system_interface.harnesses.registry import get_catalog
+from imbue.system_interface.harnesses.registry import get_harness_spec
 from imbue.system_interface.harnesses.session import SendOutcome
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
-from imbue.system_interface.layout_ops import (
-    LayoutMutex,
-    allocate_next_terminal_name,
-    allocate_terminal_panel_id,
-    filter_user_terminal_sessions,
-    is_broadcasting_op,
-    is_destroyable_terminal_session,
-    is_known_op,
-    is_mutating_op,
-    is_sessionless_browser_ref,
-    layout_inspect,
-    layout_list,
-    parse_tmux_sessions_output,
-)
-from imbue.system_interface.models import (
-    ActivityRequest,
-    ActivityResponse,
-    AgentCreationError,
-    AgentListItem,
-    AgentListResponse,
-    AgentRestartError,
-    AttachmentError,
-    AttachmentUploadResponse,
-    CreateAgentResponse,
-    CreateChatRequest,
-    DestroyAgentResponse,
-    DrainToComposerResponse,
-    ErrorResponse,
-    FastModePromptAnsweredResponse,
-    InterruptAgentResponse,
-    ModelOptionsResponse,
-    PoweredByResponse,
-    RandomNameResponse,
-    SendMessageRequest,
-    SendMessageResponse,
-    SetModelChoiceRequest,
-    ShoulderTapAtomicResponse,
-    StartAgentResponse,
-    TerminalSessionInfo,
-)
+from imbue.system_interface.layout_ops import LayoutMutex
+from imbue.system_interface.layout_ops import allocate_next_terminal_name
+from imbue.system_interface.layout_ops import allocate_terminal_panel_id
+from imbue.system_interface.layout_ops import filter_user_terminal_sessions
+from imbue.system_interface.layout_ops import is_broadcasting_op
+from imbue.system_interface.layout_ops import is_destroyable_terminal_session
+from imbue.system_interface.layout_ops import is_known_op
+from imbue.system_interface.layout_ops import is_mutating_op
+from imbue.system_interface.layout_ops import is_sessionless_browser_ref
+from imbue.system_interface.layout_ops import layout_inspect
+from imbue.system_interface.layout_ops import layout_list
+from imbue.system_interface.layout_ops import parse_tmux_sessions_output
+from imbue.system_interface.models import ActivityRequest
+from imbue.system_interface.models import ActivityResponse
+from imbue.system_interface.models import AgentCreationError
+from imbue.system_interface.models import AgentListItem
+from imbue.system_interface.models import AgentListResponse
+from imbue.system_interface.models import AgentRenameError
+from imbue.system_interface.models import AgentRestartError
+from imbue.system_interface.models import AttachmentError
+from imbue.system_interface.models import AttachmentUploadResponse
+from imbue.system_interface.models import CreateAgentResponse
+from imbue.system_interface.models import CreateChatRequest
+from imbue.system_interface.models import DestroyAgentResponse
+from imbue.system_interface.models import DrainToComposerResponse
+from imbue.system_interface.models import ErrorResponse
+from imbue.system_interface.models import FastModePromptAnsweredResponse
+from imbue.system_interface.models import InterruptAgentResponse
+from imbue.system_interface.models import ModelOptionsResponse
+from imbue.system_interface.models import PoweredByResponse
+from imbue.system_interface.models import RandomNameResponse
+from imbue.system_interface.models import SendMessageRequest
+from imbue.system_interface.models import SendMessageResponse
+from imbue.system_interface.models import SetModelChoiceRequest
+from imbue.system_interface.models import ShoulderTapAtomicResponse
+from imbue.system_interface.models import StartAgentResponse
+from imbue.system_interface.models import TerminalSessionInfo
 from imbue.system_interface.plugins import get_plugin_manager
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
-from loguru import logger as _loguru_logger
-from pydantic import Field
-from simple_websocket import ConnectionClosed
-from werkzeug.exceptions import HTTPException
 
 _LOOPBACK_CLIENT_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
@@ -164,6 +159,10 @@ _WS_PING_INTERVAL_SECONDS = 25
 _DESTROY_TIMEOUT_SECONDS = 120.0
 # `mngr label` is a metadata write (data.json merge), fast even on a busy host.
 _LABEL_TIMEOUT_SECONDS = 30.0
+
+# The member-ref prefix that marks an object as an mngr agent. The rest of a
+# chat ref is the agent's id (``chat:<agent-id>``, as every UI surface files it).
+_CHAT_MEMBER_REF_PREFIX = "chat:"
 
 
 class _ReflectClientSubprotocols:
@@ -1400,6 +1399,34 @@ def _list_member_titles_endpoint() -> Response:
     return _json_response({"titles": member_titles.read_titles(layout_dir)})
 
 
+def _rename_chat_agent_for_ref(ref: str, title: str) -> Response | None:
+    """Carry a chat's new name into mngr, or answer with why it could not be.
+
+    A chat is an mngr agent, so its name lives in mngr (the agent name, plus the
+    typed form as its ``display_name`` label) as well as in the workspace's title
+    store -- renaming only the store is what left ``mngr list`` showing the old
+    name. mngr goes first and the store is only written when it succeeded, so a
+    refused rename leaves *both* names as they were rather than silently
+    disagreeing; the returned error response is what the tab editor alerts with.
+
+    Only ``chat:`` refs are agents: terminals, browsers, apps and URLs have no
+    mngr name and are stored exactly as before (None means "nothing to do, carry
+    on"). Clearing a chat's name is stored-only too: mngr has no empty name to
+    be given, so the chat keeps the name it has and the surfaces fall back to it.
+    """
+    if not ref.startswith(_CHAT_MEMBER_REF_PREFIX):
+        return None
+    chosen_title = member_titles.validated_title(title)
+    if chosen_title is None:
+        return None
+    agent_manager: AgentManager = get_state().agent_manager
+    try:
+        agent_manager.rename_chat_agent(ref[len(_CHAT_MEMBER_REF_PREFIX) :], chosen_title)
+    except AgentRenameError as e:
+        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=500)
+    return None
+
+
 def _set_member_title_endpoint() -> Response:
     """Name one object, machine-wide, or clear its name with a blank one.
 
@@ -1408,6 +1435,9 @@ def _set_member_title_endpoint() -> Response:
     member can be renamed with no panel to hang the name on -- which is the
     point of keying this by ref. The stored name comes back in the response and
     in the broadcast, ``null`` when the entry was cleared.
+
+    A ``chat:`` ref additionally renames the mngr agent behind it, before
+    anything is stored (see ``_rename_chat_agent_for_ref``).
     """
     layout_dir = _primary_agent_layout_dir()
     if layout_dir is None:
@@ -1425,6 +1455,9 @@ def _set_member_title_endpoint() -> Response:
         error = ErrorResponse(detail="'title' must be a string (an empty one clears the name)")
         return _json_response(error.model_dump(), status_code=400)
     try:
+        rename_refusal = _rename_chat_agent_for_ref(ref.strip(), title)
+        if rename_refusal is not None:
+            return rename_refusal
         stored_title = member_titles.set_title(layout_dir, ref, title)
     except member_titles.MemberTitleLengthError as e:
         return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)

@@ -42,6 +42,7 @@ from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.agent_manager import _LogQueueCallback
 from imbue.system_interface.agent_manager import _build_chat_create_command
+from imbue.system_interface.agent_manager import _build_chat_rename_command
 from imbue.system_interface.agent_manager import _build_observe_command_argv
 from imbue.system_interface.agent_manager import _chat_project_label
 from imbue.system_interface.agent_manager import _make_apps_file_handler
@@ -55,6 +56,7 @@ from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.registry import get_model_state_path
 from imbue.system_interface.harnesses.session import FileHarnessSession
 from imbue.system_interface.models import AgentCreationError
+from imbue.system_interface.models import AgentRenameError
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.models import AppEntry
 from imbue.system_interface.models import QueuedMessageState
@@ -229,9 +231,7 @@ def test_read_apps_drops_an_unsafe_icon(agent_manager: AgentManager, tmp_path: P
     """``forward_port.py`` never writes markup like this, but a hand-edited
     registry must not be able to push it into the client's DOM."""
     toml_file = tmp_path / "apps.toml"
-    toml_file.write_text(
-        "[[apps]]\nname = \"web\"\nurl = \"http://localhost:8000\"\n" f"icon = {json.dumps(icon)}\n"
-    )
+    toml_file.write_text(f'[[apps]]\nname = "web"\nurl = "http://localhost:8000"\nicon = {json.dumps(icon)}\n')
 
     agent_manager._read_apps(toml_file)
 
@@ -1223,6 +1223,79 @@ def test_chat_create_argv_omits_the_project_label_when_there_is_no_project() -> 
     assert_mngr_argv_valid(argv)
 
 
+def test_chat_rename_argv_accepted_by_live_cli() -> None:
+    """A rename carries the same name pair a create does: canonical name + typed label.
+
+    The canonical name is what an older vendored mngr accepts, and the typed
+    name rides the same atomic write as the rename so no observer sees the
+    renamed agent without its ``display_name``.
+    """
+    argv = _build_chat_rename_command(mngr_binary="mngr", agent_id="agent-123", name="Planning notes")
+    assert_mngr_argv_valid(argv)
+    assert argv == ["mngr", "rename", "agent-123", "Planning-notes", "--label", "display_name=Planning notes"]
+
+
+def test_rename_chat_agent_refuses_a_chat_that_is_still_being_created(
+    broadcaster: WebSocketBroadcaster,
+) -> None:
+    """A create in flight already carries a name; renaming to another would race it.
+
+    Filing the name the chat is *already* being created under is the ordinary
+    case (the workspace stores it the moment the create is accepted) and is a
+    no-op here; anything else is refused rather than silently diverging from
+    whatever the create ends up writing.
+    """
+    manager = AgentManager.build(broadcaster)
+    try:
+        with manager._lock:
+            manager._proto_agents["proto-1"] = {"agent_id": "proto-1", "name": "Chat 2"}
+        manager.rename_chat_agent("proto-1", "Chat 2")
+        with pytest.raises(AgentRenameError):
+            manager.rename_chat_agent("proto-1", "Something else")
+    finally:
+        manager.stop()
+
+
+def test_rename_chat_agent_leaves_mngr_alone_for_an_untracked_id(
+    broadcaster: WebSocketBroadcaster,
+    false_binary: str,
+) -> None:
+    """An id belonging to no agent has no mngr name to diverge from.
+
+    The stand-in binary always exits non-zero, so this returning quietly is the
+    proof that nothing was run: an actual invocation would have raised.
+    """
+    manager = AgentManager.build(broadcaster, mngr_binary=false_binary)
+    try:
+        manager.rename_chat_agent("agent-nowhere", "Scratch")
+    finally:
+        manager.stop()
+
+
+def test_rename_chat_agent_raises_when_mngr_refuses(
+    broadcaster: WebSocketBroadcaster,
+    false_binary: str,
+) -> None:
+    """A non-zero ``mngr rename`` is an error, and the agent keeps its old name.
+
+    The caller (the member-title endpoint) turns this into an error response and
+    writes nothing, so the two names cannot drift apart unnoticed.
+    """
+    manager = AgentManager.build(broadcaster, mngr_binary=false_binary)
+    try:
+        with manager._lock:
+            manager._agents["agent-7"] = AgentStateItem(
+                id="agent-7", name="Chat-2", state="RUNNING", labels={}, work_dir=None
+            )
+        with pytest.raises(AgentRenameError):
+            manager.rename_chat_agent("agent-7", "Planning notes")
+        still_named = manager.get_agent_by_id("agent-7")
+        assert still_named is not None
+        assert still_named.name == "Chat-2"
+    finally:
+        manager.stop()
+
+
 def test_serialized_agents_expose_the_project_label(broadcaster: WebSocketBroadcaster) -> None:
     """The workspace reads each chat's originating project off the agent payload."""
     manager = AgentManager.build(broadcaster)
@@ -1492,7 +1565,6 @@ def test_waiting_lifecycle_trusts_the_active_marker(agent_manager: AgentManager,
     (state_dir / "active").unlink()
     agent_manager._recompute_activity_state("agent-1", broadcast_on_change=False)
     assert agent_manager._activity_state_by_agent.get("agent-1") == ActivityState.IDLE
-
 
 
 def test_session_events_user_message_drives_thinking(
@@ -1769,9 +1841,7 @@ def test_update_queued_messages_caches_broadcasts_and_serializes(
         agent_manager.stop()
 
 
-def test_shoulder_tap_available_reflects_queue_and_send_in_flight(
-    agent_manager: AgentManager, tmp_path: Path
-) -> None:
+def test_shoulder_tap_available_reflects_queue_and_send_in_flight(agent_manager: AgentManager, tmp_path: Path) -> None:
     """The derived ``shoulder_tap_available`` is true iff something is queued AND no send is in
     flight (contract Shoulder-tap), recomputed at each serialize from the two authoritative
     pieces of manager state -- never stored, so it cannot go stale."""
@@ -1834,9 +1904,7 @@ def test_working_to_idle_drains_the_queue_via_the_registered_handler(
         # ``update_queued_messages``'s pre-broadcast recompute, and in production the
         # enqueue only ever happens mid-turn.
         agent_manager.update_session_events("agent-1", [{"type": "user_message", "content": "go"}])
-        agent_manager.update_queued_messages(
-            "agent-1", [{"queued_id": "q1", "content": "hi", "timestamp": "t"}]
-        )
+        agent_manager.update_queued_messages("agent-1", [{"queued_id": "q1", "content": "hi", "timestamp": "t"}])
         with agent_manager._lock:
             assert agent_manager._activity_state_by_agent["agent-1"] == ActivityState.THINKING
             assert len(agent_manager._agents["agent-1"].queued_messages) == 1
@@ -1949,9 +2017,7 @@ def test_stopped_codex_agent_snapshot_is_swept_before_any_broadcast(
     try:
         listener = broadcaster.register()
         # The dead generation's orphan chips arrive from a late snapshot push.
-        agent_manager.update_queued_messages(
-            "agent-1", [{"queued_id": "q1", "content": "phantom", "timestamp": "t"}]
-        )
+        agent_manager.update_queued_messages("agent-1", [{"queued_id": "q1", "content": "phantom", "timestamp": "t"}])
 
         messages = _drain(listener)
         updates = [message for message in messages if message.get("type") == "agents_updated"]
@@ -2323,6 +2389,8 @@ def test_offline_codex_chip_matches_the_persisted_selection_from_the_sidecar(age
     assert choice.identity.model_id == "gpt-5.6-terra"
     assert choice.matched is not None
     assert choice.matched.id == "gpt-5.6-terra"
+
+
 def _capture_prioritizer_writes(manager: AgentManager, pids: dict[str, int]) -> list[tuple[int, int]]:
     """Swap in an OOM prioritizer that captures its band writes, and return the log.
 
@@ -2350,9 +2418,7 @@ def _write_client_activity_message(host_dir: Path, agent_id: str, seconds_ago: f
     abandoned.
     """
     timestamp = format_nanosecond_iso_timestamp(datetime.now(timezone.utc) - timedelta(seconds=seconds_ago))
-    events_path = client_activity.get_events_path(
-        projects.primary_agent_layout_dir(host_dir, "test-agent-id")
-    )
+    events_path = client_activity.get_events_path(projects.primary_agent_layout_dir(host_dir, "test-agent-id"))
     events_path.parent.mkdir(parents=True, exist_ok=True)
     with events_path.open("a") as event_file:
         event_file.write(
