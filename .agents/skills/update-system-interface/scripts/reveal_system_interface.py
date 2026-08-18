@@ -20,7 +20,9 @@ What it does, given the pre-merge revision (``--rollback-to``):
    would otherwise crash the service on restart.
 4. For a backend change, *pre-flight* the merged code on a throwaway port before
    touching the live service -- if it cannot boot, the live service is never
-   restarted and we go straight to rollback (the UI never went down).
+   restarted and we go straight to rollback (the UI never went down). The
+   throwaway boot's output rides back on the failure, because "it did not boot"
+   without the traceback sends whoever reads it guessing at a cause.
 5. Build the frontend bundle and restart the backend, as applicable, then ask
    every open view of the workspace to reload, via
    ``system/scripts/refresh_workspace_view.py`` -- for a backend-only change
@@ -88,6 +90,7 @@ import os
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -173,6 +176,10 @@ _HEALTH_INTERVAL_SECONDS = 1.0
 # Pre-flight boot is a fresh process on a throwaway port; give it the same grace.
 _PREFLIGHT_ATTEMPTS = 30
 _PREFLIGHT_INTERVAL_SECONDS = 1.0
+# How much of a failed pre-flight boot's output rides back on the error. Enough
+# for a Python traceback plus the log lines leading into it; the rest is startup
+# chatter that pushed the interesting part off the top.
+_PREFLIGHT_OUTPUT_TAIL_LINES = 40
 
 
 class RevealError(Exception):
@@ -251,6 +258,7 @@ class Spawned:
     """A handle to a spawned throwaway server process."""
 
     _process: subprocess.Popen
+    _output_path: Path
 
     def terminate(self) -> None:
         self._process.terminate()
@@ -259,23 +267,49 @@ class Spawned:
         except subprocess.TimeoutExpired:
             self._process.kill()
 
+    def has_exited(self) -> bool:
+        """True once the child is gone, and so can never answer another probe."""
+        return self._process.poll() is not None
+
+    def read_output(self) -> str:
+        """Return what the child wrote to stdout and stderr, interleaved.
+
+        Read after ``terminate``, so a child that died on its own has already
+        flushed. An unreadable file yields ``""``: the caller is already
+        reporting a failure and must not fail again while explaining it.
+        """
+        try:
+            return self._output_path.read_text(errors="replace")
+        except OSError:
+            return ""
+
 
 class Spawner:
     """Indirection over ``subprocess.Popen`` for the pre-flight throwaway boot.
 
     ``spawn`` returns a managed child (terminated in a ``finally``) used to boot
     the merged backend on a throwaway port before touching the live service.
+
+    The child's stdout and stderr go to ``output_path`` rather than a pipe: it is
+    a chatty server nobody is reading from while we poll, and a pipe whose buffer
+    filled would block the very boot we are timing -- turning a healthy backend
+    into a pre-flight failure. A file has no such backpressure.
     """
 
-    def spawn(self, argv: Sequence[str], cwd: str, env: dict) -> Spawned:
-        process = subprocess.Popen(
-            list(argv),
-            cwd=cwd,
-            env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        return Spawned(_process=process)
+    def spawn(
+        self, argv: Sequence[str], cwd: str, env: dict, output_path: Path
+    ) -> Spawned:
+        # The child dups the fd, so closing our handle right after the spawn
+        # leaves it writing to the still-open file.
+        with output_path.open("wb") as output_file:
+            process = subprocess.Popen(
+                list(argv),
+                cwd=cwd,
+                env=env,
+                stdout=output_file,
+                stderr=subprocess.STDOUT,
+            )
+        return Spawned(_process=process, _output_path=output_path)
 
 
 def classify_changes(paths: Sequence[str]) -> ChangeSet:
@@ -395,39 +429,75 @@ def wait_healthy(
     attempts: int,
     interval: float,
     sleeper: Callable[[float], None],
+    should_stop: Callable[[], bool] | None = None,
 ) -> bool:
-    """Poll ``url`` until it returns HTTP 200, up to ``attempts`` times."""
+    """Poll ``url`` until it returns HTTP 200, up to ``attempts`` times.
+
+    ``should_stop`` (the pre-flight passes its child's liveness) ends the poll
+    early once there is nothing left that could turn healthy. Sitting out the
+    remaining deadline would not change the verdict, and on a failed reveal every
+    second of it is a second before the rollback starts.
+    """
     for index in range(attempts):
         if http.get_status(url, timeout=5.0) == 200:
             return True
+        if should_stop is not None and should_stop():
+            return False
         if index < attempts - 1:
             sleeper(interval)
     return False
 
 
-def _preflight_ok(
+def _tail(text: str, limit: int) -> str:
+    """Return the last ``limit`` lines of ``text``, noting anything dropped."""
+    lines = text.strip().splitlines()
+    if len(lines) <= limit:
+        return "\n".join(lines)
+    dropped = len(lines) - limit
+    return "\n".join([f"[{dropped} earlier line(s) omitted]", *lines[-limit:]])
+
+
+def _preflight(
     repo_root: Path,
     http: HttpClient,
     spawner: Spawner,
     sleeper: Callable[[float], None],
-) -> bool:
+) -> str | None:
     """Boot the merged backend on a throwaway port and probe it, without touching
-    the live service. Returns True iff it serves a healthy response."""
+    the live service.
+
+    Returns ``None`` iff it serves a healthy response. Otherwise returns the tail
+    of what the throwaway boot wrote -- the traceback for a backend that died on
+    import, or how far it got before the deadline. That output is the only record
+    of *why* the merged code did not come up, and the process and its scratch
+    file are both gone by the time anyone reads the failure, so it has to travel
+    back with the error rather than be left somewhere to look up.
+    """
     port = find_free_port()
     env = dict(os.environ)
     env["SYSTEM_INTERFACE_HOST"] = "127.0.0.1"
     env["SYSTEM_INTERFACE_PORT"] = str(port)
-    spawned = spawner.spawn([TOOL_NAME], cwd=str(repo_root / APP_DIR), env=env)
-    try:
-        return wait_healthy(
-            http,
-            f"http://127.0.0.1:{port}{HEALTH_PATH}",
-            _PREFLIGHT_ATTEMPTS,
-            _PREFLIGHT_INTERVAL_SECONDS,
-            sleeper,
+    with tempfile.TemporaryDirectory() as scratch:
+        output_path = Path(scratch) / "preflight-boot.log"
+        spawned = spawner.spawn(
+            [TOOL_NAME],
+            cwd=str(repo_root / APP_DIR),
+            env=env,
+            output_path=output_path,
         )
-    finally:
-        spawned.terminate()
+        try:
+            if wait_healthy(
+                http,
+                f"http://127.0.0.1:{port}{HEALTH_PATH}",
+                _PREFLIGHT_ATTEMPTS,
+                _PREFLIGHT_INTERVAL_SECONDS,
+                sleeper,
+                should_stop=spawned.has_exited,
+            ):
+                return None
+        finally:
+            spawned.terminate()
+        return _tail(spawned.read_output(), _PREFLIGHT_OUTPUT_TAIL_LINES)
 
 
 def _refresh_workspace_view(repo_root: Path, runner: Runner) -> None:
@@ -498,11 +568,18 @@ def _apply_reveal(
             runner, ["npm", "run", "build"], repo_root / FRONTEND_DIR, "npm run build"
         )
     if changes.backend:
-        if not _preflight_ok(repo_root, http, spawner, sleeper):
+        preflight_output = _preflight(repo_root, http, spawner, sleeper)
+        if preflight_output is not None:
             # Live service was never restarted, so it is still serving known-good
             # code -- recovery must not restart it (live_service_restarted=False).
+            detail = (
+                f"\n--- pre-flight boot output ---\n{preflight_output}"
+                if preflight_output
+                else "\n(the pre-flight boot wrote nothing at all)"
+            )
             raise RevealFailed(
-                "merged backend failed to boot in a pre-flight check; live service not restarted"
+                "merged backend failed to boot in a pre-flight check; live service "
+                f"not restarted{detail}"
             )
         # From here on the live service has been (or is being) restarted, so any
         # failure leaves it potentially running broken code: recovery must restart.
