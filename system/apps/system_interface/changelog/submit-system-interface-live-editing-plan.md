@@ -70,8 +70,9 @@ scoped to this one capability, not to the instance: a `FOLLOW` instance still
 discovers and tracks agents against the same host dir, so it is not read-only at
 large.
 
-An unknown `/api/*` path is now a JSON 404 instead of HTTP 200 with the app's
-`index.html`. The single-page-app catch-all answered any unmatched path with the
-shell, so a mistyped API fetch "succeeded" and its caller parsed a web page as
-data -- and probing whether a route existed yet reported that every route already
-did. Client-side routes are unaffected; only the `api/` prefix changes.
+An unknown `/api/*` path (including the bare `/api` itself) is now a JSON 404
+instead of HTTP 200 with the app's `index.html`. The single-page-app catch-all
+answered any unmatched path with the shell, so a mistyped API fetch "succeeded"
+and its caller parsed a web page as data -- and probing whether a route existed
+yet reported that every route already did. Client-side routes are unaffected;
+only the `api` prefix changes.
