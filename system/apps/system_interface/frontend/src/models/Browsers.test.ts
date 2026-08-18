@@ -4,58 +4,31 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 // has no document for; identity keeps the asserted URLs the bare /api paths.
 vi.mock("../base-path", () => ({ apiUrl: (path: string) => path }));
 
-import { createBrowser, validateBrowserName } from "./Browsers";
+import { createBrowser } from "./Browsers";
 
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("validateBrowserName", () => {
-  it("accepts lowercase alnum words joined by single dashes", () => {
-    expect(validateBrowserName("alex-smith")).toBeNull();
-    expect(validateBrowserName("browser-2")).toBeNull();
-    expect(validateBrowserName("a")).toBeNull();
-  });
-
-  it("rejects everything the daemon's is_valid_browser_name rejects", () => {
-    // Mirrors the daemon's rule: lowercase alnum words joined by single dashes,
-    // 1..40 chars, no leading/trailing/double dash, not all-digits. The create
-    // flow guards the machine-minted name with this before opening a pane.
-    const invalidNames = [
-      "",
-      "Has-Caps",
-      "has_underscore",
-      "has space",
-      "-leading",
-      "trailing-",
-      "double--dash",
-      "tr" + "a".repeat(40), // 42 chars: over the 40-char limit
-      "123",
-      "name!",
-    ];
-    for (const bad of invalidNames) {
-      expect(validateBrowserName(bad), bad).not.toBeNull();
-    }
-  });
-});
-
 describe("createBrowser", () => {
-  it("posts {name} to the daemon and reports the daemon's final name", async () => {
+  it("posts an empty body and reports the daemon's minted name", async () => {
+    // The daemon mints the name (the first free browser-<N>); the client sends
+    // no name of its own and takes whatever came back as the identity to open.
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ name: "alex-smith", key_available: true }) });
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ name: "browser-1", key_available: true }) });
     vi.stubGlobal("fetch", fetchMock);
 
-    expect(await createBrowser("alex-smith")).toEqual({ ok: true, name: "alex-smith", reason: "" });
+    expect(await createBrowser()).toEqual({ ok: true, name: "browser-1", reason: "" });
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/browsers",
-      expect.objectContaining({ method: "POST", body: JSON.stringify({ name: "alex-smith" }) }),
+      expect.objectContaining({ method: "POST", body: JSON.stringify({}) }),
     );
   });
 
   it("carries the daemon's reason out of a rejection instead of throwing", async () => {
-    // 400 invalid / 409 duplicate-or-full / 503 installing: the caller has an
-    // optimistic pane open, so the refusal comes back as a value it can act on.
+    // 400 invalid / 409 duplicate-or-full / 503 installing: the refusal comes
+    // back as a value the caller surfaces (nothing was opened yet).
     const fetchMock = vi.fn().mockResolvedValueOnce({
       ok: false,
       status: 409,
@@ -63,18 +36,29 @@ describe("createBrowser", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    expect(await createBrowser("my-browser")).toEqual({
+    expect(await createBrowser()).toEqual({
       ok: false,
-      name: "my-browser",
+      name: "",
       reason: "3/3 browsers open -- close one first.",
     });
+  });
+
+  it("treats a success with no name in the body as a failure", async () => {
+    // The name IS the result: a create that cannot say what it made gives the
+    // caller nothing to open, so it must walk the failure branch.
+    const fetchMock = vi.fn().mockResolvedValueOnce({ ok: true, json: async () => ({}) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await createBrowser();
+    expect(result.ok).toBe(false);
+    expect(result.name).toBe("");
   });
 
   it("falls back to a generic reason when the daemon error body is missing", async () => {
     const fetchMock = vi.fn().mockResolvedValueOnce({ ok: false, status: 503, json: async () => ({}) });
     vi.stubGlobal("fetch", fetchMock);
 
-    expect((await createBrowser("my-browser")).reason).toBe("The browser could not be created.");
+    expect((await createBrowser()).reason).toBe("The browser could not be created.");
   });
 
   it("reports a network failure with a human-readable reason so it is never silent", async () => {
@@ -83,7 +67,7 @@ describe("createBrowser", () => {
       vi.fn(() => Promise.reject(new Error("network down"))),
     );
 
-    const result = await createBrowser("my-browser");
+    const result = await createBrowser();
     expect(result.ok).toBe(false);
     expect(result.reason).toMatch(/Could not reach the browser service/);
   });

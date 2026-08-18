@@ -798,50 +798,50 @@ export async function allocateTerminalName(): Promise<string> {
   return data.session_name;
 }
 
-/** A fresh agent name from the backend's name generator, which is what the
- *  create modals pre-fill their input with. Never throws: a machine that
- *  cannot reach the generator still gets a usable name, since a name is only
- *  what the agent is called. */
-export async function fetchRandomAgentName(): Promise<string> {
-  try {
-    const response = await fetch(apiUrl("/api/random-name"));
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const data = (await response.json()) as { name?: string };
-    if (!data.name) throw new Error("random-name returned no name");
-    return data.name;
-  } catch {
-    return `agent-${Date.now().toString(36)}`;
-  }
+/** A freshly-created chat agent's identity: its id and its name pair (the
+ *  canonical true name plus the human-readable display name the server minted
+ *  or accepted). */
+export interface CreatedChatAgent {
+  agentId: string;
+  name: string;
+  displayName: string;
 }
 
 /**
- * Start a chat agent, returning the id it will be known by.
+ * Start a chat agent, returning the id it will be known by and its name pair.
  *
  * The create returns as soon as the agent has an id: the agent itself is still
  * starting (it shows up as a proto agent until mngr registers it), which is
- * what lets a caller open its chat tab immediately. ``projectId`` becomes the
- * agent's ``project`` label -- the project the chat was started in, which mngr
- * propagates to its children -- and is empty for a chat started outside any
- * project. Throws with the server's detail on rejection.
+ * what lets a caller open its chat tab immediately. The display name is minted
+ * server-side (the first free "Chat N" / "Codex N" / "Pi N" on the machine), so
+ * two clients creating at once cannot both mint "Chat 1"; its canonical form is
+ * the agent's mngr name and the typed form its ``display_name`` label.
+ * ``projectId`` becomes the agent's ``project`` label -- the project the chat
+ * was started in, which mngr propagates to its children -- and is empty for a
+ * chat started outside any project. Throws with the server's detail on
+ * rejection.
  */
 export async function createChatAgent(
-  name: string,
   projectId: string,
   harness: "claude" | "codex" | "pi" = "claude",
   isFirst: boolean = false,
-): Promise<string> {
+): Promise<CreatedChatAgent> {
   const response = await fetch(apiUrl("/api/agents/create-chat"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, project_id: projectId, harness, first: isFirst }),
+    body: JSON.stringify({ project_id: projectId, harness, first: isFirst }),
   });
   if (!response.ok) {
     const data = (await response.json().catch(() => ({}))) as { detail?: string };
     throw new Error(data.detail ?? `HTTP ${response.status}`);
   }
-  const created = (await response.json()) as { agent_id?: string };
+  const created = (await response.json()) as { agent_id?: string; name?: string; display_name?: string };
   if (!created.agent_id) {
     throw new Error("Chat creation returned no agent id");
   }
-  return created.agent_id;
+  return {
+    agentId: created.agent_id,
+    name: created.name ?? "",
+    displayName: created.display_name ?? created.name ?? "",
+  };
 }

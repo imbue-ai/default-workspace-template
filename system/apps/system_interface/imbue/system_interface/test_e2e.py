@@ -224,6 +224,15 @@ def _running_e2e_server(
     )
     fake_claude.chmod(0o755)
 
+    # A fake `mngr` for the paths that shell out to it. Renaming a chat renames
+    # its mngr agent before the workspace shows the new name, and the fixture's
+    # agents are injected fakes with no real mngr behind them -- without this a
+    # rename fails and the tab keeps its old name. Exiting 0 stands in for
+    # "mngr accepted the rename"; the failure policy itself is unit-tested.
+    fake_mngr = fake_bin_dir / "mngr"
+    fake_mngr.write_text("#!/bin/sh\nexit 0\n")
+    fake_mngr.chmod(0o755)
+
     # Isolate the workspace environment: point MNGR_HOST_DIR at the fixture's
     # tmp tree so the session endpoint (_find_agent) resolves the fixture agent's
     # state dir + env file, and set MNGR_AGENT_ID per ``primary_agent_id`` so
@@ -1509,19 +1518,51 @@ def _member_titles(layout_dir: Path) -> dict[str, str]:
 
 _AUTO_TITLE_PORT = 18878
 
+# What a terminal tab reads: the "Terminal N" display form derived from its
+# allocated ``terminal-N`` session. The number is the allocator's lowest free
+# slot on the (shared) tmux socket, so tests capture it instead of assuming 1.
+_TERMINAL_TAB_TITLE_RE = re.compile(r"^Terminal \d+$")
+
+
+def _create_terminal_from_launcher(page: Page, known_titles: set[str]) -> str:
+    """Create a terminal from the launcher's Terminal tile; return its tab title.
+
+    ``known_titles`` holds the terminal tab titles earlier calls returned, so a
+    second create resolves to the NEW tab rather than the first one again. No
+    naming dialog ever appears: the session name is machine-allocated and the
+    display name is derived from it.
+    """
+    page.locator(".dockview-add-tab-button").first.click()
+    expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=10000)
+    page.locator(".new-tab-launcher-tile:visible", has_text="Terminal").click()
+    expect(page.locator(".custom-url-dialog")).to_have_count(0)
+
+    found: dict[str, str] = {}
+
+    def _new_tab_appeared() -> bool:
+        for tab in page.locator(".dv-default-tab-content", has_text=_TERMINAL_TAB_TITLE_RE).all():
+            title = tab.inner_text().strip()
+            if title and title not in known_titles:
+                found["title"] = title
+                return True
+        return False
+
+    wait_for(_new_tab_appeared, timeout=10.0, poll_interval=0.1, error_message="no new terminal tab appeared")
+    known_titles.add(found["title"])
+    return found["title"]
+
 
 @pytest.mark.timeout(120, func_only=False)
-def test_ui_created_terminal_wears_an_auto_filed_friendly_name(tmp_path: Path, page: Page) -> None:
-    """A terminal created from the UI comes into being already named "Terminal 1".
+def test_ui_created_terminal_wears_a_derived_friendly_name(tmp_path: Path, page: Page) -> None:
+    """A terminal created from the UI comes into being named "Terminal N".
 
     No create flow asks the user for a name: the tmux session name
     (``terminal-N``) stays the identity, machine-allocated and never surfaced
-    as something to pick, and the create files the first free "Terminal N"
-    into the machine's title store the moment the session name is allocated --
-    exactly as if the user had renamed it. The store on disk is asserted
-    alongside the strip because that is what makes it a name rather than a tab
-    title: it is keyed by the terminal's ref, where every view (and a reload)
-    reads it from.
+    as something to pick, and the tab's "Terminal N" is DERIVED from it -- the
+    same display-name/canonical-name pairing chats and browsers use -- so
+    nothing is written to the machine's title store. The store staying empty is
+    asserted alongside the strip because that is the difference from the old
+    arrangement, where each create filed a second copy of the name.
     """
     primary_agent_id = "primary-services-agent"
     with _running_e2e_server(tmp_path, _AUTO_TITLE_PORT, primary_agent_id=primary_agent_id) as (
@@ -1535,35 +1576,83 @@ def test_ui_created_terminal_wears_an_auto_filed_friendly_name(tmp_path: Path, p
         expect(page.locator(".dv-default-tab-content", has_text="test-agent").first).to_be_visible(timeout=15000)
         assert _member_titles(layout_dir) == {}, "something was named before anything was created"
 
-        # The launcher's Terminal tile creates directly -- no naming dialog
-        # ever appears.
-        page.locator(".dockview-add-tab-button").first.click()
-        expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=10000)
-        page.locator(".new-tab-launcher-tile:visible", has_text="Terminal").click()
-        expect(page.locator(".custom-url-dialog")).to_have_count(0)
+        # The launcher's Terminal tile creates directly -- no naming dialog ever
+        # appears -- and the tab reads "Terminal N" for the allocated session.
+        titles_seen: set[str] = set()
+        first_title = _create_terminal_from_launcher(page, titles_seen)
+        first_number = int(first_title.removeprefix("Terminal "))
 
-        # The tab repaints to the friendly name once the title write lands
-        # (the strings differ by more than case -- "Terminal 1" never matches
-        # the derived ``terminal-N`` -- so this is the auto-filed name).
-        expect(page.locator(".dv-default-tab-content", has_text="Terminal 1").first).to_be_visible(timeout=10000)
+        # A second create allocates the next free session, so its number is a
+        # different one (the exact values depend on what the shared tmux socket
+        # already holds).
+        second_title = _create_terminal_from_launcher(page, titles_seen)
+        second_number = int(second_title.removeprefix("Terminal "))
+        assert second_number != first_number
 
-        # And it landed in the machine's store, keyed by the terminal's ref,
-        # whose body is the machine-allocated session name the user never saw
-        # a prompt for.
-        titles = _member_titles(layout_dir)
-        terminal_titles = {ref: title for ref, title in titles.items() if ref.startswith("terminal:terminal-")}
-        assert list(terminal_titles.values()) == ["Terminal 1"], f"unexpected titles: {titles}"
+        # The names were derived, not stored: nothing was written to the
+        # machine's title store for either create.
+        page.wait_for_timeout(AUTOSAVE_SETTLE_MS)
+        assert _member_titles(layout_dir) == {}, "a derived terminal name was needlessly stored"
 
-        # A second create counts on: "Terminal 1" is taken (by the title just
-        # filed), so the next free slot is "Terminal 2".
-        page.locator(".dockview-add-tab-button").first.click()
-        expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=10000)
-        page.locator(".new-tab-launcher-tile:visible", has_text="Terminal").click()
-        expect(page.locator(".dv-default-tab-content", has_text="Terminal 2").first).to_be_visible(timeout=10000)
 
-        titles = _member_titles(layout_dir)
-        terminal_titles = {ref: title for ref, title in titles.items() if ref.startswith("terminal:terminal-")}
-        assert sorted(terminal_titles.values()) == ["Terminal 1", "Terminal 2"], f"unexpected titles: {titles}"
+_TAB_RENAME_PORT = 18872
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_double_click_renames_a_chat_and_the_name_survives_a_reload(tmp_path: Path, page: Page) -> None:
+    """Double-clicking a chat tab's title renames the chat, and the name is kept.
+
+    The gesture is only half of it. A chat's name lives on its mngr agent --
+    the typed form as its ``display_name`` label, the canonical form as its
+    true name -- so the commit goes through ``mngr rename`` (the fixture's stub
+    accepts it) and NOTHING lands in the machine's title store: the label is
+    the name now, and a stored copy is exactly the second source of truth this
+    arrangement removed. The reload is what proves the name stuck to the agent
+    rather than to the tab -- the strip re-derives it from the agents payload.
+    """
+    primary_agent_id = "primary-services-agent"
+    with _running_e2e_server(tmp_path, _TAB_RENAME_PORT, primary_agent_id=primary_agent_id) as (
+        base_url,
+        _agent_info,
+        _session_file,
+    ):
+        layout_dir = tmp_path / "agents" / primary_agent_id / "workspace_layout"
+        page.on("dialog", lambda dialog: dialog.accept())
+        page.goto(base_url)
+
+        # The fixture chat auto-opens wearing the name derived from its agent,
+        # which is the name the rename replaces.
+        tab_title = page.locator(".dv-default-tab-content", has_text="test-agent").first
+        expect(tab_title).to_be_visible(timeout=15000)
+        page.wait_for_function(
+            f"localStorage.getItem('si-active-project-id') === '{DEFAULT_PROJECT_ID}'", timeout=10000
+        )
+        assert _member_titles(layout_dir) == {}, "something was named before anyone renamed anything"
+
+        # The title becomes a field seeded with the name it has now, so typing
+        # over a name is one gesture rather than a select-all first.
+        tab_title.dblclick()
+        editor = page.locator(".dv-custom-tab-title-input:visible")
+        expect(editor).to_be_visible(timeout=5000)
+        expect(editor).to_have_value("test-agent")
+
+        editor.fill("Design notes")
+        editor.press("Enter")
+
+        # Enter commits: the field goes away and the strip draws the new name.
+        expect(page.locator(".dv-default-tab-content", has_text="Design notes").first).to_be_visible(timeout=5000)
+        expect(page.locator(".dv-custom-tab-title-input:visible")).to_have_count(0)
+
+        # The name went to the agent, not the store: nothing was written there.
+        page.wait_for_timeout(AUTOSAVE_SETTLE_MS)
+        assert _member_titles(layout_dir) == {}, "a chat rename wrote into the title store"
+
+        page.reload()
+        expect(page.locator(".dv-default-tab-content", has_text="Design notes").first).to_be_visible(timeout=15000)
+        # Still the chat that was renamed, not a tab that merely kept a string.
+        expect(page.locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
+        # And the old name is gone rather than restored onto a second tab.
+        expect(page.locator(".dv-default-tab-content", has_text="test-agent")).to_have_count(0)
 
 
 _TERMINAL_DESTROY_PORT = 18879
@@ -1598,10 +1687,9 @@ def test_shut_down_terminal_leaves_no_resurrected_tab_in_everything(tmp_path: Pa
     machine table to offer, and what gives the shutdown a real session to kill.
 
     The destroy's whole blast radius is asserted rather than one fact of it:
-    the tab leaves the mounted project, the session leaves tmux, the name
-    leaves the machine's title store, the panel leaves Everything's saved
-    content -- and, the regression, mounting Everything afterwards draws no
-    terminal tab and respawns no session.
+    the tab leaves the mounted project, the session leaves tmux, the panel
+    leaves Everything's saved content -- and, the regression, mounting
+    Everything afterwards draws no terminal tab and respawns no session.
     """
     primary_agent_id = "primary-services-agent"
     with _running_e2e_server(tmp_path, _TERMINAL_DESTROY_PORT, primary_agent_id=primary_agent_id) as (
@@ -1624,23 +1712,12 @@ def test_shut_down_terminal_leaves_no_resurrected_tab_in_everything(tmp_path: Pa
         )
 
         # Create the terminal from the launcher's tile, exactly as the user did.
-        page.locator(".dockview-add-tab-button").first.click()
-        expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=10000)
-        page.locator(".new-tab-launcher-tile:visible", has_text="Terminal").click()
-        expect(page.locator(".dv-default-tab-content", has_text="Terminal 1").first).to_be_visible(timeout=10000)
-
-        # The machine-allocated session name, read back from the ref the
-        # auto-filed "Terminal 1" was keyed under -- never hardcoded, because
-        # the allocator hands out the lowest ``terminal-N`` the socket is not
-        # already using.
-        wait_for(
-            lambda: any(ref.startswith("terminal:") for ref in _member_titles(layout_dir)),
-            timeout=15.0,
-            poll_interval=0.1,
-            error_message="the terminal's auto-filed name never reached the title store",
-        )
-        terminal_ref = next(ref for ref in _member_titles(layout_dir) if ref.startswith("terminal:"))
-        session_name = terminal_ref.removeprefix("terminal:")
+        # The tab's "Terminal N" is derived from the machine-allocated session
+        # name -- never hardcoded, because the allocator hands out the lowest
+        # ``terminal-N`` the socket is not already using -- so the session name
+        # is recovered by the reverse of the same derivation.
+        terminal_title = _create_terminal_from_launcher(page, set())
+        session_name = f"terminal-{terminal_title.removeprefix('Terminal ')}"
 
         # Session creation is lazy (on ttyd attach) and no terminal service
         # runs in this harness, so stand in for the attach. Without a live
@@ -1668,8 +1745,10 @@ def test_shut_down_terminal_leaves_no_resurrected_tab_in_everything(tmp_path: Pa
                 f"localStorage.getItem('si-active-project-id') === '{EVERYTHING_VIEW_ID}'", timeout=10000
             )
             expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=15000)
-            page.locator(".new-tab-launcher-row:visible", has_text="Terminal 1").first.click()
-            expect(page.locator(".dv-default-tab-content", has_text="Terminal 1").first).to_be_visible(timeout=15000)
+            page.locator(".new-tab-launcher-row:visible", has_text=terminal_title).first.click()
+            expect(page.locator(".dv-default-tab-content", has_text=terminal_title).first).to_be_visible(
+                timeout=15000
+            )
             wait_for(
                 lambda: everything_file.exists() and session_name in everything_file.read_text(),
                 timeout=15.0,
@@ -1686,29 +1765,22 @@ def test_shut_down_terminal_leaves_no_resurrected_tab_in_everything(tmp_path: Pa
             )
             _collapse_rail(page)
             terminal_tab = page.locator(
-                ".dv-tab", has=page.locator(".dv-default-tab-content", has_text="Terminal 1")
+                ".dv-tab", has=page.locator(".dv-default-tab-content", has_text=terminal_title)
             ).first
             expect(terminal_tab).to_be_visible(timeout=15000)
             terminal_tab.hover()
             terminal_tab.locator(".dv-custom-tab-action").last.click()
-            page.locator("[role='menuitem']", has_text="Quit Terminal 1").click()
+            page.locator("[role='menuitem']", has_text=f"Quit {terminal_title}").click()
             page.locator(".destroy-dialog-btn-destroy").click()
 
             # The whole blast radius. The tab leaves the mounted project ...
-            expect(page.locator(".dv-default-tab-content", has_text="Terminal 1")).to_have_count(0, timeout=10000)
+            expect(page.locator(".dv-default-tab-content", has_text=terminal_title)).to_have_count(0, timeout=10000)
             # ... the session leaves tmux ...
             wait_for(
                 lambda: session_name not in _terminal_session_names(base_url),
                 timeout=15.0,
                 poll_interval=0.1,
                 error_message=f"the destroy left tmux session {session_name} running",
-            )
-            # ... the name leaves the machine's title store ...
-            wait_for(
-                lambda: terminal_ref not in _member_titles(layout_dir),
-                timeout=15.0,
-                poll_interval=0.1,
-                error_message="the destroy left the terminal's name in the title store",
             )
             # ... and the panel leaves Everything's saved content. The terminal
             # was all Everything held, so the strip may delete the file outright
@@ -1729,14 +1801,14 @@ def test_shut_down_terminal_leaves_no_resurrected_tab_in_everything(tmp_path: Pa
                 f"localStorage.getItem('si-active-project-id') === '{EVERYTHING_VIEW_ID}'", timeout=10000
             )
             expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=15000)
-            expect(page.locator(".dv-default-tab-content", has_text="Terminal 1")).to_have_count(0)
+            expect(page.locator(".dv-default-tab-content", has_text=terminal_title)).to_have_count(0)
             expect(page.locator(".dv-default-tab-content", has_text="terminal-")).to_have_count(0)
 
             # And after the time an attach-or-create would have needed, the
             # mount still spawned nothing: no terminal session is live now that
             # was not already live before this test created anything.
             page.wait_for_timeout(AUTOSAVE_SETTLE_MS)
-            expect(page.locator(".dv-default-tab-content", has_text="Terminal 1")).to_have_count(0)
+            expect(page.locator(".dv-default-tab-content", has_text=terminal_title)).to_have_count(0)
             respawned = {
                 name
                 for name in _terminal_session_names(base_url)
@@ -2199,10 +2271,11 @@ def test_overflowed_tabs_list_as_plain_rows_and_the_strip_keeps_its_handles(tmp_
         expect(page.locator(".dv-default-tab-content", has_text="test-agent").first).to_be_visible(timeout=15000)
 
         # Fill the strip from the launcher's Terminal tile, exactly as the
-        # user would; each create auto-names "Terminal N". No tmux session
+        # user would; each tab derives "Terminal N" from its allocated session
+        # (the numbers depend on the shared tmux socket). No tmux session
         # comes into being here -- session creation is lazy (on ttyd attach)
         # and no terminal service runs in this harness, exactly as in the
-        # auto-filed-name test above.
+        # derived-name test above.
         #
         # All eight are created rather than stopping at the first sign of the
         # "N more" control: stopping there leaves exactly one tab folded away,
@@ -2212,13 +2285,9 @@ def test_overflowed_tabs_list_as_plain_rows_and_the_strip_keeps_its_handles(tmp_
         # in a 900px window whatever the metrics, and several tabs are folded
         # away. The chat is only one of them, so a terminal is certainly among
         # them, which is what the name assertions below need.
-        for index in range(1, 9):
-            page.locator(".dockview-add-tab-button").first.click()
-            expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=10000)
-            page.locator(".new-tab-launcher-tile:visible", has_text="Terminal").click()
-            expect(page.locator(".dv-default-tab-content", has_text=f"Terminal {index}").first).to_be_visible(
-                timeout=10000
-            )
+        titles_seen: set[str] = set()
+        for _ in range(8):
+            _create_terminal_from_launcher(page, titles_seen)
 
         # The fold is observer-driven, so give it a beat to catch up.
         overflow_control = page.locator(".dv-tabs-overflow-dropdown-default")
@@ -2237,11 +2306,12 @@ def test_overflowed_tabs_list_as_plain_rows_and_the_strip_keeps_its_handles(tmp_
         expect(rows.first).to_be_visible(timeout=5000)
 
         # ... under the names the strip says, not the creation-time snapshot.
-        # A terminal's panel comes into being titled by its raw session name
-        # and is renamed to "Terminal N" only once the auto-filed name lands,
-        # and dockview seeds each dropdown row's renderer from the panel's
-        # ORIGINAL init parameters -- so a row that read its title from those
-        # would say ``terminal-N`` here while the strip says "Terminal N".
+        # A terminal's panel comes into being titled by a placeholder and is
+        # retitled to the derived "Terminal N" once its session name is
+        # allocated, and dockview seeds each dropdown row's renderer from the
+        # panel's ORIGINAL init parameters -- so a row that read its title from
+        # those would say ``terminal-N`` (or the placeholder) here while the
+        # strip says "Terminal N".
         expect(
             container.locator(".dv-default-tab-content", has_text=re.compile(r"^Terminal \d+$")).first
         ).to_be_visible(timeout=5000)
@@ -2309,12 +2379,9 @@ def test_dropping_on_a_tab_draws_a_line_and_on_a_pane_draws_a_wash(tmp_path: Pat
         expect(page.locator(".dv-default-tab-content", has_text="test-agent").first).to_be_visible(timeout=15000)
 
         # A second tab, so there is a neighbour to drop against.
-        page.locator(".dockview-add-tab-button").first.click()
-        expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=10000)
-        page.locator(".new-tab-launcher-tile:visible", has_text="Terminal").click()
-        expect(page.locator(".dv-default-tab-content", has_text="Terminal 1").first).to_be_visible(timeout=10000)
+        terminal_title = _create_terminal_from_launcher(page, set())
 
-        dragged = page.locator(".dv-tab", has=page.locator(".dv-default-tab-content", has_text="Terminal 1")).first
+        dragged = page.locator(".dv-tab", has=page.locator(".dv-default-tab-content", has_text=terminal_title)).first
         target_tab = page.locator(".dv-tab", has=page.locator(".dv-default-tab-content", has_text="test-agent")).first
         source_box = dragged.bounding_box()
         assert source_box is not None, "the dragged tab has no box"
@@ -2439,7 +2506,9 @@ def test_rail_hover_expansion_holds_a_fixed_layout_and_only_a_pointer_leave_clos
         # virtual pointer onto the element first), so it should read exactly as
         # it did the instant before the click.
         page.locator(".project-rail-shortcut", has_text="Terminal").click()
-        expect(page.locator(".dv-default-tab-content", has_text="Terminal 1").first).to_be_visible(timeout=10000)
+        expect(page.locator(".dv-default-tab-content", has_text=_TERMINAL_TAB_TITLE_RE).first).to_be_visible(
+            timeout=10000
+        )
         expect(page.locator(".project-rail-search")).to_be_visible(timeout=1000)
 
         # Only the pointer actually leaving closes it.

@@ -42,6 +42,8 @@ from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.agent_manager import _LogQueueCallback
 from imbue.system_interface.agent_manager import _build_chat_create_command
+from imbue.system_interface.agent_manager import _build_chat_display_label_command
+from imbue.system_interface.agent_manager import _build_chat_rename_command
 from imbue.system_interface.agent_manager import _build_observe_command_argv
 from imbue.system_interface.agent_manager import _chat_project_label
 from imbue.system_interface.agent_manager import _make_apps_file_handler
@@ -55,6 +57,8 @@ from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.registry import get_model_state_path
 from imbue.system_interface.harnesses.session import FileHarnessSession
 from imbue.system_interface.models import AgentCreationError
+from imbue.system_interface.models import AgentNameConflictError
+from imbue.system_interface.models import AgentRenameError
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.models import AppEntry
 from imbue.system_interface.models import QueuedMessageState
@@ -140,13 +144,6 @@ def _last_agents_updated(messages: list[dict[str, Any]]) -> dict[str, Any] | Non
         if message.get("type") == "agents_updated":
             return message
     return None
-
-
-def test_generate_random_name(agent_manager: AgentManager) -> None:
-    name = agent_manager.generate_random_name()
-    assert isinstance(name, str)
-    assert len(name) > 0
-    assert "-" in name
 
 
 def test_get_agents_initially_empty(agent_manager: AgentManager) -> None:
@@ -399,17 +396,19 @@ def test_create_chat_agent_broadcasts_proto_created(
     """The proto_agent_created broadcast fires before the creation thread runs."""
     q = broadcaster.register()
 
-    agent_id = agent_manager.create_chat_agent("test-chat")
+    created = agent_manager.create_chat_agent("test-chat")
     agent_manager.stop()
 
-    assert isinstance(agent_id, str)
-    assert len(agent_id) > 0
+    assert isinstance(created.agent_id, str)
+    assert len(created.agent_id) > 0
+    assert created.name == "test-chat"
+    assert created.display_name == "test-chat"
 
     raw = q.get_nowait()
     assert raw is not None
     proto_msg = json.loads(raw)
     assert proto_msg["type"] == "proto_agent_created"
-    assert proto_msg["agent_id"] == agent_id
+    assert proto_msg["agent_id"] == created.agent_id
     assert proto_msg["creation_type"] == "chat"
     assert proto_msg["parent_agent_id"] is None
 
@@ -435,10 +434,10 @@ def test_create_codex_agent_broadcasts_proto_created_with_the_chat_creation_type
             work_dir=str(git_work_dir),
         )
 
-    agent_id = agent_manager.create_chat_agent("test-codex", HarnessType.CODEX)
+    created = agent_manager.create_chat_agent("test-codex", HarnessType.CODEX)
     agent_manager.stop()
 
-    assert isinstance(agent_id, str)
+    assert isinstance(created.agent_id, str)
 
     raw = q.get_nowait()
     assert raw is not None
@@ -459,8 +458,8 @@ def test_get_log_queue_for_proto_agent(agent_manager: AgentManager, git_work_dir
             work_dir=str(git_work_dir),
         )
 
-    agent_id = agent_manager.create_chat_agent("test-chat")
-    log_q = agent_manager.get_log_queue(agent_id)
+    created = agent_manager.create_chat_agent("test-chat")
+    log_q = agent_manager.get_log_queue(created.agent_id)
     assert log_q is not None
 
     agent_manager.stop()
@@ -1193,6 +1192,237 @@ def test_chat_create_argv_canonicalizes_the_name_and_labels_the_human_one() -> N
     labels = [argv[i + 1] for i, arg in enumerate(argv) if arg == "--label"]
     assert "display_name=Chat 2" in labels
     assert_mngr_argv_valid(argv)
+
+
+def test_chat_rename_argv_accepted_by_live_cli() -> None:
+    """A rename carries the same name pair a create does: canonical name + typed label.
+
+    The canonical name is what an older vendored mngr accepts, and the typed
+    name rides the same atomic write as the rename so no observer sees the
+    renamed agent without its ``display_name``.
+    """
+    argv = _build_chat_rename_command(mngr_binary="mngr", agent_id="agent-123", name="Planning notes")
+    assert_mngr_argv_valid(argv)
+    assert argv == ["mngr", "rename", "agent-123", "Planning-notes", "--label", "display_name=Planning notes"]
+
+
+def test_chat_display_label_argv_accepted_by_live_cli() -> None:
+    """A display-only rename rewrites the label without renaming anything."""
+    argv = _build_chat_display_label_command(mngr_binary="mngr", agent_id="agent-123", name="Chat 2")
+    assert_mngr_argv_valid(argv)
+    assert argv == ["mngr", "label", "agent-123", "--label", "display_name=Chat 2"]
+
+
+def _tracked_chat(manager: AgentManager, agent_id: str, name: str, display_name: str | None = None) -> None:
+    labels = {} if display_name is None else {"display_name": display_name}
+    with manager._lock:
+        manager._agents[agent_id] = AgentStateItem(id=agent_id, name=name, state="RUNNING", labels=labels, work_dir=None)
+
+
+def test_rename_chat_agent_refuses_a_chat_that_is_still_being_created(
+    broadcaster: WebSocketBroadcaster,
+) -> None:
+    """A create in flight already carries a name; renaming to another would race it.
+
+    Filing the name the chat is *already* being created under is the ordinary
+    case and is a no-op here; anything else is refused rather than silently
+    diverging from whatever the create ends up writing.
+    """
+    manager = AgentManager.build(broadcaster)
+    try:
+        with manager._lock:
+            manager._proto_agents["proto-1"] = {"agent_id": "proto-1", "name": "Chat 2"}
+        manager.rename_chat_agent("proto-1", "Chat 2")
+        with pytest.raises(AgentRenameError):
+            manager.rename_chat_agent("proto-1", "Something else")
+    finally:
+        manager.stop()
+
+
+def test_rename_chat_agent_leaves_mngr_alone_for_an_untracked_id(
+    broadcaster: WebSocketBroadcaster,
+    false_binary: str,
+) -> None:
+    """An id belonging to no agent has no mngr name to diverge from.
+
+    The stand-in binary always exits non-zero, so this returning quietly is the
+    proof that nothing was run: an actual invocation would have raised.
+    """
+    manager = AgentManager.build(broadcaster, mngr_binary=false_binary)
+    try:
+        manager.rename_chat_agent("agent-nowhere", "Scratch")
+    finally:
+        manager.stop()
+
+
+def test_rename_chat_agent_raises_when_mngr_refuses(
+    broadcaster: WebSocketBroadcaster,
+    false_binary: str,
+) -> None:
+    """A non-zero ``mngr rename`` is an error, and the agent keeps its old name.
+
+    The caller (the member-title endpoint) turns this into an error response and
+    records nothing, so the two names cannot drift apart unnoticed.
+    """
+    manager = AgentManager.build(broadcaster, mngr_binary=false_binary)
+    try:
+        _tracked_chat(manager, "agent-7", "Chat-2")
+        with pytest.raises(AgentRenameError):
+            manager.rename_chat_agent("agent-7", "Planning notes")
+        still_named = manager.get_agent_by_id("agent-7")
+        assert still_named is not None
+        assert still_named.name == "Chat-2"
+    finally:
+        manager.stop()
+
+
+def test_rename_chat_agent_rejects_a_name_already_held_by_another_chat(
+    broadcaster: WebSocketBroadcaster,
+    false_binary: str,
+) -> None:
+    """Names collide by canonical form, before mngr is even asked.
+
+    "chat 3" canonicalizes to another agent's true name, so the rename is
+    refused with the conflict error the endpoint answers 409 with -- and the
+    always-failing stand-in binary proves the check fired first.
+    """
+    manager = AgentManager.build(broadcaster, mngr_binary=false_binary)
+    try:
+        _tracked_chat(manager, "agent-7", "Chat-2", display_name="Chat 2")
+        _tracked_chat(manager, "agent-8", "Chat-3", display_name="Chat 3")
+        with pytest.raises(AgentNameConflictError):
+            manager.rename_chat_agent("agent-7", "chat 3")
+    finally:
+        manager.stop()
+
+
+def test_rename_chat_agent_refuses_the_primary_agent(
+    broadcaster: WebSocketBroadcaster,
+    false_binary: str,
+) -> None:
+    """The services agent's name belongs to the minds app, not to a chat tab."""
+    manager = AgentManager.build(broadcaster, mngr_binary=false_binary)
+    try:
+        with manager._lock:
+            manager._agents["agent-1"] = AgentStateItem(
+                id="agent-1", name="system-services", state="RUNNING", labels={"is_primary": "true"}, work_dir=None
+            )
+        with pytest.raises(AgentRenameError):
+            manager.rename_chat_agent("agent-1", "My machine")
+    finally:
+        manager.stop()
+
+
+def test_rename_chat_agent_rejects_a_name_with_no_usable_characters(
+    broadcaster: WebSocketBroadcaster,
+    false_binary: str,
+) -> None:
+    manager = AgentManager.build(broadcaster, mngr_binary=false_binary)
+    try:
+        _tracked_chat(manager, "agent-7", "Chat-2")
+        with pytest.raises(AgentRenameError):
+            manager.rename_chat_agent("agent-7", "!!!")
+    finally:
+        manager.stop()
+
+
+def test_create_chat_agent_mints_the_first_free_numbered_name(
+    agent_manager: AgentManager,
+) -> None:
+    """An empty requested name allocates "Chat N" server-side, filling gaps.
+
+    "Chat 1" is held by a live agent's display label and "Chat 3" by a chosen
+    member title the endpoint passes through, so the mint lands on "Chat 2" --
+    and its canonical form is the agent's name.
+    """
+    _tracked_chat(agent_manager, "agent-1", "Chat-1", display_name="Chat 1")
+    created = agent_manager.create_chat_agent("", extra_taken_names=("Chat 3",))
+    agent_manager.stop()
+
+    assert created.display_name == "Chat 2"
+    assert created.name == "Chat-2"
+
+
+def test_create_chat_agent_counts_in_flight_creates_as_taken(
+    agent_manager: AgentManager,
+) -> None:
+    """Two concurrent creates cannot both mint "Chat 1": an in-flight create's
+    proto entry blocks the slot. The in-flight create is pinned as a proto
+    entry directly, so the test cannot race its background completion."""
+    with agent_manager._lock:
+        agent_manager._proto_agents["proto-1"] = {"agent_id": "proto-1", "name": "Chat 1"}
+    created = agent_manager.create_chat_agent("")
+    agent_manager.stop()
+
+    assert created.display_name == "Chat 2"
+
+
+def test_create_chat_agent_numbers_each_harness_under_its_own_word(
+    agent_manager: AgentManager,
+) -> None:
+    """A codex chat is "Codex 1", not "Chat 2": the fleets number independently."""
+    agent_manager._auth_gate = lambda check: None
+    chat = agent_manager.create_chat_agent("")
+    codex = agent_manager.create_chat_agent("", HarnessType.CODEX)
+    agent_manager.stop()
+
+    assert chat.display_name == "Chat 1"
+    assert codex.display_name == "Codex 1"
+
+
+def test_create_chat_agent_rejects_an_explicit_name_that_collides(
+    agent_manager: AgentManager,
+) -> None:
+    """An explicitly requested name that canonicalizes onto an existing agent's
+    true name is refused up front (the endpoint answers 409), not left for the
+    background mngr create to fail on."""
+    _tracked_chat(agent_manager, "agent-1", "Chat-2", display_name="Chat 2")
+    with pytest.raises(AgentNameConflictError):
+        agent_manager.create_chat_agent("chat 2")
+    agent_manager.stop()
+
+
+def test_create_chat_agent_registers_the_pre_observe_state_under_the_name_pair(
+    broadcaster: WebSocketBroadcaster,
+    git_work_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The AgentStateItem registered before observe relists carries the same
+    canonical name + display_name label the created mngr agent will hold, so
+    the UI renders identically before and after the relist.
+
+    ``true`` stands in for a succeeding ``mngr create``; the log queue's
+    ``done`` sentinel is the deterministic "creation thread finished" signal.
+    """
+    monkeypatch.setenv("MNGR_AGENT_ID", "test-agent-id")
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(git_work_dir))
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    true_binary = shutil.which("true")
+    assert true_binary is not None
+    manager = AgentManager.build(broadcaster, mngr_binary=true_binary)
+    try:
+        created = manager.create_chat_agent("My planning chat")
+        assert created.name == "My-planning-chat"
+
+        log_q = manager.get_log_queue(created.agent_id)
+        assert log_q is not None
+        done_message: dict[str, Any] | None = None
+        deadline = time.monotonic() + 30.0
+        while done_message is None:
+            raw = log_q.get(timeout=max(0.1, deadline - time.monotonic()))
+            message = None if raw is None else json.loads(raw)
+            if message is not None and message.get("done"):
+                done_message = message
+        assert done_message["success"] is True
+
+        agent = manager.get_agent_by_id(created.agent_id)
+        assert agent is not None
+        assert agent.name == "My-planning-chat"
+        assert agent.labels["display_name"] == "My planning chat"
+        assert agent.labels["user_created"] == "true"
+    finally:
+        manager.stop()
 
 
 def test_chat_create_argv_labels_the_project_the_chat_was_created_in() -> None:

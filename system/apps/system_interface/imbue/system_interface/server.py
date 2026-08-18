@@ -76,6 +76,8 @@ from imbue.system_interface.models import ActivityResponse
 from imbue.system_interface.models import AgentCreationError
 from imbue.system_interface.models import AgentListItem
 from imbue.system_interface.models import AgentListResponse
+from imbue.system_interface.models import AgentNameConflictError
+from imbue.system_interface.models import AgentRenameError
 from imbue.system_interface.models import AgentRestartError
 from imbue.system_interface.models import AttachmentError
 from imbue.system_interface.models import AttachmentUploadResponse
@@ -88,7 +90,6 @@ from imbue.system_interface.models import FastModePromptAnsweredResponse
 from imbue.system_interface.models import InterruptAgentResponse
 from imbue.system_interface.models import ModelOptionsResponse
 from imbue.system_interface.models import PoweredByResponse
-from imbue.system_interface.models import RandomNameResponse
 from imbue.system_interface.models import SendMessageRequest
 from imbue.system_interface.models import SendMessageResponse
 from imbue.system_interface.models import SetModelChoiceRequest
@@ -158,6 +159,10 @@ _WS_PING_INTERVAL_SECONDS = 25
 _DESTROY_TIMEOUT_SECONDS = 120.0
 # `mngr label` is a metadata write (data.json merge), fast even on a busy host.
 _LABEL_TIMEOUT_SECONDS = 30.0
+
+# The member-ref prefix that marks an object as an mngr agent. The rest of a
+# chat ref is the agent's id (``chat:<agent-id>``, as every UI surface files it).
+_CHAT_MEMBER_REF_PREFIX = "chat:"
 
 
 class _ReflectClientSubprotocols:
@@ -1394,6 +1399,44 @@ def _list_member_titles_endpoint() -> Response:
     return _json_response({"titles": member_titles.read_titles(layout_dir)})
 
 
+def _rename_chat_agent_for_ref(layout_dir: Path, ref: str, title: str) -> Response:
+    """Rename the mngr agent behind a ``chat:`` ref, keeping its name pair matched.
+
+    A chat is an mngr agent, and the agent itself holds its name pair -- the
+    canonical true name plus the typed form as its ``display_name`` label (the
+    same pairing minds establishes for hosts). So a chat's rename goes to mngr
+    rather than to the workspace's title store: renaming only the store is what
+    used to leave ``mngr list`` showing a different name than the tab.
+
+    Any *stored* title the ref still carries (a legacy entry, from before chat
+    names lived on the agent) is cleared once mngr accepted the rename, so a
+    stale store entry can never shadow the agent's own name again. The typed
+    name still comes back in the response and the broadcast -- it always equals
+    what the agent's label now derives to, so every surface settles immediately.
+
+    A refused rename leaves everything as it was and surfaces the error: a name
+    conflict answers 409 (retry with another name), an unusable name 400, and an
+    mngr failure 500.
+    """
+    chosen_title = member_titles.validated_title(title)
+    if chosen_title is None:
+        # Clearing is store-only: mngr has no empty name to be given, so the
+        # chat keeps its name and only a legacy stored shadow is dropped.
+        member_titles.clear_title(layout_dir, ref)
+        _broadcast_member_title_changed(ref, None)
+        return _json_response({"ref": ref, "title": None})
+    agent_manager: AgentManager = get_state().agent_manager
+    try:
+        agent_manager.rename_chat_agent(ref[len(_CHAT_MEMBER_REF_PREFIX) :], chosen_title)
+    except AgentNameConflictError as e:
+        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=409)
+    except AgentRenameError as e:
+        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=500)
+    member_titles.clear_title(layout_dir, ref)
+    _broadcast_member_title_changed(ref, chosen_title)
+    return _json_response({"ref": ref, "title": chosen_title})
+
+
 def _set_member_title_endpoint() -> Response:
     """Name one object, machine-wide, or clear its name with a blank one.
 
@@ -1402,6 +1445,9 @@ def _set_member_title_endpoint() -> Response:
     member can be renamed with no panel to hang the name on -- which is the
     point of keying this by ref. The stored name comes back in the response and
     in the broadcast, ``null`` when the entry was cleared.
+
+    A ``chat:`` ref is an mngr agent, whose name lives on the agent itself
+    rather than in the store -- see ``_rename_chat_agent_for_ref``.
     """
     layout_dir = _primary_agent_layout_dir()
     if layout_dir is None:
@@ -1419,6 +1465,8 @@ def _set_member_title_endpoint() -> Response:
         error = ErrorResponse(detail="'title' must be a string (an empty one clears the name)")
         return _json_response(error.model_dump(), status_code=400)
     try:
+        if ref.strip().startswith(_CHAT_MEMBER_REF_PREFIX):
+            return _rename_chat_agent_for_ref(layout_dir, ref.strip(), title)
         stored_title = member_titles.set_title(layout_dir, ref, title)
     except member_titles.MemberTitleLengthError as e:
         return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
@@ -2081,19 +2129,20 @@ def _serve_static_file(basename: str) -> Response:
     return send_file(file_path)
 
 
-def _random_name_endpoint() -> Response:
-    """Generate a random agent name."""
-    agent_manager: AgentManager = get_state().agent_manager
-    name = agent_manager.generate_random_name()
-    return _json_response(RandomNameResponse(name=name).model_dump())
-
-
 def _create_chat_agent() -> Response:
     """Create a new chat agent in the primary agent's work directory.
 
     One endpoint for every harness: the ``chat`` role is the same, and the request's
     ``harness`` field (validated against :class:`HarnessType`, claude by default) picks
     which harness template the server stacks under it.
+
+    The chat's display name is minted here (server-side) when the request names
+    none: the first free "<word> N" for the harness, counted against every name
+    on the machine -- agents, in-flight creates, and the member-title store's
+    chosen names -- so simultaneous creates cannot both mint "Chat 1". An
+    explicitly requested name that collides answers 409 so the caller can retry
+    with another. The response carries the resulting name pair (canonical
+    ``name`` + human-readable ``display_name``) beside the agent id.
 
     A chat created inside a project carries that project's id in the agent's
     ``project`` label, which is where chat membership lives (mngr already
@@ -2110,15 +2159,24 @@ def _create_chat_agent() -> Response:
     project_id = str(body.get("project_id") or "")
     request_fields = {key: value for key, value in body.items() if key != "project_id"}
 
+    # Chosen member titles count as taken so an auto-minted "Chat 2" can never
+    # collide with, say, a terminal someone renamed to "Chat 2".
+    layout_dir = _primary_agent_layout_dir()
+    titled_names = tuple(member_titles.read_titles(layout_dir).values()) if layout_dir is not None else ()
+
     try:
         create_request = CreateChatRequest.model_validate(request_fields)
-        agent_id = agent_manager.create_chat_agent(
+        created = agent_manager.create_chat_agent(
             create_request.name,
             create_request.harness,
             extra_role_templates=("first",) if create_request.first else (),
             project_id=project_id,
+            extra_taken_names=titled_names,
         )
-        return _json_response(CreateAgentResponse(agent_id=agent_id).model_dump(), status_code=201)
+        response = CreateAgentResponse(agent_id=created.agent_id, name=created.name, display_name=created.display_name)
+        return _json_response(response.model_dump(), status_code=201)
+    except AgentNameConflictError as e:
+        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=409)
     except (AgentCreationError, OSError, ValueError) as e:
         error = ErrorResponse(detail=str(e))
         return _json_response(error.model_dump(), status_code=400)
@@ -2846,7 +2904,6 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule("/favicon.ico", view_func=_favicon, methods=["GET"])
     application.add_url_rule("/api/agents", view_func=_list_agents_endpoint, methods=["GET"])
     application.add_url_rule("/api/agents/create-chat", view_func=_create_chat_agent, methods=["POST"])
-    application.add_url_rule("/api/random-name", view_func=_random_name_endpoint, methods=["GET"])
     application.add_url_rule("/api/agents/<agent_id>/events", view_func=_get_events, methods=["GET"])
     application.add_url_rule("/api/agents/<agent_id>/stream", view_func=_stream_events, methods=["GET"])
     application.add_url_rule("/api/agents/<agent_id>/message", view_func=_send_message_endpoint, methods=["POST"])

@@ -13,7 +13,6 @@ import {
   getMemberTitles,
   loadMemberTitles,
   moveMemberTitle,
-  nextFreeAutoName,
   setMemberTitle,
 } from "./MemberTitles";
 
@@ -141,38 +140,6 @@ describe("setMemberTitle", () => {
 
     await expect(setMemberTitle(DOCS, "a".repeat(500))).rejects.toThrow("Title is 500 characters");
     expect(getMemberTitle(DOCS)).toBeNull();
-  });
-});
-
-describe("nextFreeAutoName", () => {
-  it("starts at 1 on an empty machine", () => {
-    expect(nextFreeAutoName("Chat", new Set())).toBe("Chat 1");
-  });
-
-  it("fills the gap a destroyed object left rather than counting past it", () => {
-    // Destroy clears the title server-side, so "Chat 2" is free again and the
-    // next create takes it -- the desired "first free" behavior.
-    expect(nextFreeAutoName("Chat", new Set(["Chat 1", "Chat 3"]))).toBe("Chat 2");
-  });
-
-  it("counts past a full run of taken slots", () => {
-    expect(nextFreeAutoName("Terminal", new Set(["Terminal 1", "Terminal 2"]))).toBe("Terminal 3");
-  });
-
-  it("treats a user-typed name as taken whatever its casing", () => {
-    // A user who renamed something to "chat 1" by hand still blocks the slot;
-    // trailing whitespace does not sneak a duplicate past either.
-    expect(nextFreeAutoName("Chat", new Set(["chat 1", " CHAT 2 "]))).toBe("Chat 3");
-  });
-
-  it("collides with derived labels too, not just chosen names", () => {
-    // The caller feeds in every derived label as well, so an agent whose
-    // petname-derived label happens to read "Chat 2" blocks that slot.
-    expect(nextFreeAutoName("Chat", new Set(["green-triumphant-trout", "Chat 2", "Chat 1"]))).toBe("Chat 3");
-  });
-
-  it("ignores names of other kinds and near-misses", () => {
-    expect(nextFreeAutoName("Chat", new Set(["Terminal 1", "Chat", "Chat 1a", "MyChat 1"]))).toBe("Chat 1");
   });
 });
 
