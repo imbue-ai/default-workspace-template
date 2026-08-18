@@ -224,6 +224,16 @@ def _running_e2e_server(
     )
     fake_claude.chmod(0o755)
 
+    # A fake `mngr` for the paths that shell out to it. Renaming a chat renames
+    # its mngr agent before the workspace records the new name (so the two can
+    # never disagree), and these agents are injected fakes with no real mngr
+    # behind them -- without this the rename fails and the tab keeps its old
+    # name. Exiting 0 stands in for "mngr accepted the rename", which is what
+    # these tests are about; the failure policy itself is unit-tested.
+    fake_mngr = fake_bin_dir / "mngr"
+    fake_mngr.write_text("#!/bin/sh\nexit 0\n")
+    fake_mngr.chmod(0o755)
+
     # Isolate the workspace environment: point MNGR_HOST_DIR at the fixture's
     # tmp tree so the session endpoint (_find_agent) resolves the fixture agent's
     # state dir + env file, and set MNGR_AGENT_ID per ``primary_agent_id`` so
