@@ -101,6 +101,11 @@ PUBLIC_FILES = glob(
         # helper package stay public: the app conftest and collectable
         # tests import them.
         "apps/minds/CLAUDE.md",
+        # Deployment/operations docs: tier runbooks, Vault layout, box/pool
+        # operations, release procedure, per-release deploy history. The
+        # whole folder is excluded so future operator docs are private by
+        # default -- see apps/minds/docs/deploy/README.md.
+        "apps/minds/docs/deploy/**",
         "apps/minds/deployment_tests/**",
         "apps/minds/test_aws_workspace_release.py",
         # The behavior-corpus guard test dev-depends on imbue-mngr-behaviors,
