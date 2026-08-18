@@ -147,7 +147,7 @@ def _read_main_agent_labels() -> dict[str, str]:
     return {str(k): str(v) for k, v in labels.items()}
 
 
-def _build_create_chat_command(host_name: str, labels: dict[str, str]) -> list[str]:
+def _build_create_chat_command(labels: dict[str, str]) -> list[str]:
     """Build the `mngr create` argv for the initial chat agent.
 
     Mirrors the New Agent button's create path (see
@@ -160,21 +160,26 @@ def _build_create_chat_command(host_name: str, labels: dict[str, str]) -> list[s
     .mngr/settings.toml). The chat agent belongs to its workspace by virtue of
     sharing the host; it carries no `workspace` label.
 
-    The positional is `NAME@HOST`, so the chat is created *on* the workspace's
-    host rather than under the host's own name (which is why the first chat
-    used to be called `p6`). Both halves of the name are sent explicitly: the
-    canonical `Chat-1` as the agent name and `Chat 1` as the `display_name`
-    label. Passing the canonical form rather than letting mngr derive it from
+    The positional is the new agent's NAME, and the host is implicit: this
+    runs inside the workspace, so mngr creates on the local host. (Passing
+    `host_name` here is what used to name the first chat after its workspace,
+    e.g. `p7` -- it was never targeting a host, and writing `NAME@<host_name>`
+    would ask mngr for a host by that name and fail with "Could not find
+    host".)
+
+    Both halves of the chat's name are sent explicitly: the canonical
+    `Chat-1` as the agent name and `Chat 1` as the `display_name` label.
+    Passing the canonical form rather than letting mngr derive it from
     "Chat 1" is deliberate -- a workspace's vendored mngr may predate
-    free-form names, and would reject the spaced form outright, failing the
-    first-boot chat create. The pair is what newer mngr would have produced
-    anyway, so it satisfies its rule that the true name is the canonical form
-    of the display name.
+    free-form names and would reject the spaced form outright, failing the
+    first-boot chat create. The pair is what newer mngr produces for itself,
+    so its rule that the true name is the canonical form of the display name
+    holds either way.
     """
     cmd: list[str] = [
         "mngr",
         "create",
-        f"{_INITIAL_CHAT_AGENT_NAME}@{host_name}",
+        _INITIAL_CHAT_AGENT_NAME,
         # `--transfer none` matches what `AgentManager.create_chat_agent`
         # uses for the "New Chat" button (system/apps/system_interface/.../
         # agent_manager.py). Without it, mngr defaults to creating a
@@ -288,9 +293,9 @@ def _file_initial_chat_title(agent_id: str) -> None:
     logger.info("Filed the initial chat's display name as 'Chat 1'")
 
 
-def _create_initial_chat_agent(host_name: str, labels: dict[str, str]) -> bool:
+def _create_initial_chat_agent(labels: dict[str, str]) -> bool:
     """Invoke `mngr create` for the initial chat agent; persist its id. Returns success."""
-    cmd = _build_create_chat_command(host_name, labels)
+    cmd = _build_create_chat_command(labels)
     logger.info("Creating initial chat agent: {}", " ".join(cmd))
     result = subprocess.run(cmd, capture_output=True, text=True, check=False)
     if result.returncode != 0:
@@ -421,15 +426,18 @@ def _maybe_create_initial_chat() -> None:
             "Signal file {} present; skipping initial chat create", INITIAL_CHAT_SIGNAL
         )
         return
-    host_name = _read_host_name()
-    if not host_name:
+    # Readiness check rather than a create input: the create names only the
+    # agent (the host is implicit -- this runs inside it), but an unreadable
+    # host data.json means mngr state is not set up yet, so creating now would
+    # fail anyway.
+    if not _read_host_name():
         logger.warning(
             "Could not resolve host_name; skipping initial chat agent create"
         )
         return
     _initialize_workspace_main_branch()
     labels = _read_main_agent_labels()
-    if not _create_initial_chat_agent(host_name, labels):
+    if not _create_initial_chat_agent(labels):
         return
     _touch_signal()
     logger.info("Wrote signal file {}", INITIAL_CHAT_SIGNAL)
