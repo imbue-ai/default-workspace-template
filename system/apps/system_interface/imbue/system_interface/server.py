@@ -5,96 +5,104 @@ import socket
 import threading
 import time
 import traceback
-from collections.abc import Callable
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Any
-from typing import Final
+from typing import Any, Final
 from uuid import uuid4
 
 import httpx
-from flask import Flask
-from flask import Response
-from flask import request
-from flask import send_file
-from flask import send_from_directory
+from flask import Flask, Response, request, send_file, send_from_directory
 from flask_sock import Sock
-from loguru import logger as _loguru_logger
-from simple_websocket import ConnectionClosed
-from werkzeug.exceptions import HTTPException
-
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
+from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.mngr.errors import MngrError
 from imbue.mngr.primitives import AgentId
-from imbue.system_interface import client_activity
-from imbue.system_interface import latchkey_endpoints
-from imbue.system_interface import member_last_used
-from imbue.system_interface import member_titles
-from imbue.system_interface import projects
-from imbue.system_interface.agent_discovery import AgentInfo
-from imbue.system_interface.agent_discovery import discover_agents
-from imbue.system_interface.agent_discovery import get_host_dir
-from imbue.system_interface.agent_discovery import start_agent
+from imbue.system_interface import (
+    client_activity,
+    latchkey_endpoints,
+    member_last_used,
+    member_titles,
+    projects,
+)
+from imbue.system_interface.agent_discovery import (
+    AgentInfo,
+    discover_agents,
+    get_host_dir,
+    start_agent,
+)
 from imbue.system_interface.agent_manager import AgentManager
-from imbue.system_interface.app_context import SystemInterfaceState
-from imbue.system_interface.app_context import attach_state
-from imbue.system_interface.app_context import get_state
-from imbue.system_interface.attachments import delete_upload
-from imbue.system_interface.attachments import get_uploads_directory
-from imbue.system_interface.attachments import resolve_upload_path
-from imbue.system_interface.attachments import store_uploaded_file
+from imbue.system_interface.app_context import (
+    SystemInterfaceState,
+    attach_state,
+    get_state,
+)
+from imbue.system_interface.attachments import (
+    delete_upload,
+    get_uploads_directory,
+    resolve_upload_path,
+    store_uploaded_file,
+)
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
 from imbue.system_interface.file_serving import try_serve_file
 from imbue.system_interface.harnesses.claude import auth_endpoints
 from imbue.system_interface.harnesses.claude.tap import TAP_CHORD
 from imbue.system_interface.harnesses.interrupt import restart_drain
-from imbue.system_interface.harnesses.model import ModelIdentity
-from imbue.system_interface.harnesses.model import ModelOption
-from imbue.system_interface.harnesses.registry import HARNESS_SPECS
-from imbue.system_interface.harnesses.registry import build_resolver
-from imbue.system_interface.harnesses.registry import get_catalog
-from imbue.system_interface.harnesses.registry import get_harness_spec
+from imbue.system_interface.harnesses.model import ModelIdentity, ModelOption
+from imbue.system_interface.harnesses.registry import (
+    HARNESS_SPECS,
+    build_resolver,
+    get_catalog,
+    get_harness_spec,
+)
 from imbue.system_interface.harnesses.session import SendOutcome
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
-from imbue.system_interface.layout_ops import LayoutMutex
-from imbue.system_interface.layout_ops import allocate_next_terminal_name
-from imbue.system_interface.layout_ops import allocate_terminal_panel_id
-from imbue.system_interface.layout_ops import filter_user_terminal_sessions
-from imbue.system_interface.layout_ops import is_broadcasting_op
-from imbue.system_interface.layout_ops import is_destroyable_terminal_session
-from imbue.system_interface.layout_ops import is_known_op
-from imbue.system_interface.layout_ops import is_mutating_op
-from imbue.system_interface.layout_ops import is_sessionless_browser_ref
-from imbue.system_interface.layout_ops import layout_inspect
-from imbue.system_interface.layout_ops import layout_list
-from imbue.system_interface.layout_ops import parse_tmux_sessions_output
-from imbue.system_interface.models import ActivityRequest
-from imbue.system_interface.models import ActivityResponse
-from imbue.system_interface.models import AgentCreationError
-from imbue.system_interface.models import AgentListItem
-from imbue.system_interface.models import AgentListResponse
-from imbue.system_interface.models import AgentRestartError
-from imbue.system_interface.models import AttachmentError
-from imbue.system_interface.models import AttachmentUploadResponse
-from imbue.system_interface.models import CreateAgentResponse
-from imbue.system_interface.models import CreateChatRequest
-from imbue.system_interface.models import DestroyAgentResponse
-from imbue.system_interface.models import DrainToComposerResponse
-from imbue.system_interface.models import ErrorResponse
-from imbue.system_interface.models import InterruptAgentResponse
-from imbue.system_interface.models import ModelOptionsResponse
-from imbue.system_interface.models import PoweredByResponse
-from imbue.system_interface.models import RandomNameResponse
-from imbue.system_interface.models import SendMessageRequest
-from imbue.system_interface.models import SendMessageResponse
-from imbue.system_interface.models import SetModelChoiceRequest
-from imbue.system_interface.models import ShoulderTapAtomicResponse
-from imbue.system_interface.models import StartAgentResponse
-from imbue.system_interface.models import TerminalSessionInfo
-from imbue.system_interface.models import FastModePromptAnsweredResponse
+from imbue.system_interface.layout_ops import (
+    LayoutMutex,
+    allocate_next_terminal_name,
+    allocate_terminal_panel_id,
+    filter_user_terminal_sessions,
+    is_broadcasting_op,
+    is_destroyable_terminal_session,
+    is_known_op,
+    is_mutating_op,
+    is_sessionless_browser_ref,
+    layout_inspect,
+    layout_list,
+    parse_tmux_sessions_output,
+)
+from imbue.system_interface.models import (
+    ActivityRequest,
+    ActivityResponse,
+    AgentCreationError,
+    AgentListItem,
+    AgentListResponse,
+    AgentRestartError,
+    AttachmentError,
+    AttachmentUploadResponse,
+    CreateAgentResponse,
+    CreateChatRequest,
+    DestroyAgentResponse,
+    DrainToComposerResponse,
+    ErrorResponse,
+    FastModePromptAnsweredResponse,
+    InterruptAgentResponse,
+    ModelOptionsResponse,
+    PoweredByResponse,
+    RandomNameResponse,
+    SendMessageRequest,
+    SendMessageResponse,
+    SetModelChoiceRequest,
+    ShoulderTapAtomicResponse,
+    StartAgentResponse,
+    TerminalSessionInfo,
+)
 from imbue.system_interface.plugins import get_plugin_manager
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
+from loguru import logger as _loguru_logger
+from pydantic import Field
+from simple_websocket import ConnectionClosed
+from werkzeug.exceptions import HTTPException
 
 _LOOPBACK_CLIENT_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
@@ -2440,6 +2448,18 @@ def _resolve_project_id_for_layout_arg(layout_dir: Path, requested: str) -> str 
     return None
 
 
+class LayoutViewEntry(FrozenModel):
+    """One view as the ``views`` op reports it."""
+
+    id: str = Field(description="View id: a project id, or the Everything view id")
+    name: str = Field(description="Display name")
+    is_everything: bool = Field(description="Whether this is the unfiltered Everything view")
+    members: tuple[str, ...] = Field(description="Member refs the view shows (empty for Everything)")
+    has_desktop_content: bool = Field(description="Whether a desktop arrangement file exists yet")
+    has_mobile_content: bool = Field(description="Whether a mobile arrangement file exists yet")
+    clients_on: tuple[str, ...] = Field(description="Ids of connected clients with this view in front")
+
+
 def _layout_views_entry(
     layout_dir: Path,
     clients_by_view: dict[str, list[str]],
@@ -2447,18 +2467,18 @@ def _layout_views_entry(
     name: str,
     members: list[str],
     is_everything: bool,
-) -> dict[str, Any]:
+) -> LayoutViewEntry:
     """One view as the ``views`` op reports it: identity, members, per-device
     content presence, and which connected clients have it in front."""
-    return {
-        "id": view_id,
-        "name": name,
-        "is_everything": is_everything,
-        "members": members,
-        "has_desktop_content": projects.project_content_path(layout_dir, view_id).exists(),
-        "has_mobile_content": projects.project_content_path(layout_dir, view_id, "mobile").exists(),
-        "clients_on": clients_by_view.get(view_id, []),
-    }
+    return LayoutViewEntry(
+        id=view_id,
+        name=name,
+        is_everything=is_everything,
+        members=tuple(members),
+        has_desktop_content=projects.project_content_path(layout_dir, view_id).exists(),
+        has_mobile_content=projects.project_content_path(layout_dir, view_id, "mobile").exists(),
+        clients_on=tuple(clients_by_view.get(view_id, [])),
+    )
 
 
 def _layout_op_display_name(layout_dir: Path, slug: str) -> str:
@@ -2632,7 +2652,9 @@ def _layout_broadcast_endpoint() -> Response:
         )
         last_active_id = projects.get_last_active_id(layout_dir)
         logger.info("layout op={} agent_id={} views={}", op, agent_id, len(views))
-        return _json_response({"ok": True, "views": views, "last_active_id": last_active_id})
+        return _json_response(
+            {"ok": True, "views": [view.model_dump() for view in views], "last_active_id": last_active_id}
+        )
 
     if op == "context":
         # Per-client activity summary: who is connected, on which layout,

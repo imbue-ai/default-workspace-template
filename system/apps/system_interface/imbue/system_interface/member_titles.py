@@ -31,13 +31,11 @@ name the allocator does reuse -- never inherits a dead one.
 import json
 import threading
 from pathlib import Path
-from typing import Any
 from typing import Final
-
-from loguru import logger as _loguru_logger
 
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.projects import validated_member_ref
+from loguru import logger as _loguru_logger
 
 _TITLES_FILENAME: Final[str] = "member_titles.json"
 
@@ -98,7 +96,7 @@ def _read_unlocked(layout_dir: Path) -> dict[str, str]:
     except (json.JSONDecodeError, OSError) as e:
         _loguru_logger.opt(exception=e).warning("Failed to read {}; treating every object as unnamed", titles_path)
         return {}
-    title_by_ref: Any = stored.get("title_by_ref") if isinstance(stored, dict) else None
+    title_by_ref: object = stored.get("title_by_ref") if isinstance(stored, dict) else None
     if not isinstance(title_by_ref, dict):
         return {}
     return {ref: title for ref, title in title_by_ref.items() if isinstance(ref, str) and isinstance(title, str)}
