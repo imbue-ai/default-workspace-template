@@ -14,10 +14,12 @@ What it does, given the pre-merge revision (``--rollback-to``):
 1. Refuse to run on a dirty tree (so a rollback can never clobber unrelated work).
 2. Classify what changed since the known-good revision (frontend src / frontend
    manifest / backend src / backend manifest).
-3. Refresh dependencies only if a manifest changed (``npm ci`` / ``uv tool
-   install -e system/apps/system_interface --reinstall``). A plain restart does NOT
-   re-resolve the editable tool's dependencies, so a backend dependency add
-   would otherwise crash the service on restart.
+3. Refresh dependencies only if a manifest changed (``npm ci``, then the same
+   tool installs and ``uv sync`` that ``build_workspace.sh`` does). A plain
+   restart does NOT re-resolve an editable install's dependencies, so a
+   dependency add would otherwise crash the service on restart -- and an
+   editable install pins only the source path, so this bites the vendored mngr
+   the backend shells out to just as hard as the backend itself.
 4. For a backend change, *pre-flight* the merged code on a throwaway port before
    touching the live service -- if it cannot boot, the live service is never
    restarted and we go straight to rollback (the UI never went down). The
@@ -92,6 +94,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -107,6 +110,16 @@ ENV_MNGR_AGENT_ID = "MNGR_AGENT_ID"
 # how the served environment is constructed.
 APP_DIR = "system/apps/system_interface"
 FRONTEND_DIR = f"{APP_DIR}/frontend"
+# The vendored mngr the workspace runs on, and the uv tool built from it. An
+# editable install pins the *source path*, not the dependency closure -- so the
+# moment a merge advances this tree, the ``mngr`` CLI starts running new code
+# against whatever was resolved for the old code. build_workspace.sh re-resolves
+# it; a reveal that did not would leave ``mngr`` broken (and with it ``mngr
+# start --restart``, and the ``mngr observe`` the backend spawns).
+MNGR_DIR = "system/vendor/mngr/libs/mngr"
+MNGR_TOOL_NAME = "imbue-mngr"
+# uv records how a tool was installed here, inside the tool's own directory.
+_RECEIPT = "uv-receipt.toml"
 # The frontend build output the backend serves at ``/``. Both ``node_modules``
 # and this ``static/`` bundle are gitignored, so a fresh worktree has neither
 # until the worker builds it. The preview serves the worker's app dir as-is and
@@ -539,15 +552,88 @@ def _refresh_workspace_view(repo_root: Path, runner: Runner) -> None:
         sys.stderr.write(completed.stderr)
 
 
+def _tool_extras(tool_name: str, repo_root: Path, runner: Runner) -> list[str]:
+    """Return the ``--with``/``--with-editable`` args a tool was installed with.
+
+    A ``uv tool install --reinstall`` rebuilds the environment from the base
+    package alone, dropping every extra -- for the mngr tool those extras *are*
+    its plugins, so dropping them leaves a CLI that cannot parse its own plugin
+    config. uv records them in the tool's ``uv-receipt.toml``, so we read them
+    back and pass them through rather than keeping a second copy of the plugin
+    list here for build_workspace.sh's to drift away from.
+
+    A tool with no receipt we can read contributes no extras: it is not
+    installed (or predates the receipt), and the reinstall below is then the
+    plain install it would have gotten anyway.
+    """
+    result = runner.run(
+        ["uv", "tool", "dir"],
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if getattr(result, "returncode", 0) != 0:
+        return []
+    receipt = Path((getattr(result, "stdout", "") or "").strip()) / tool_name / _RECEIPT
+    try:
+        parsed = tomllib.loads(receipt.read_text())
+    except (OSError, tomllib.TOMLDecodeError):
+        return []
+    extras: list[str] = []
+    for requirement in parsed.get("tool", {}).get("requirements", []):
+        name = requirement.get("name", "")
+        if _canonical(name) == _canonical(tool_name):
+            continue  # the base package, which we re-pin to its in-tree source
+        editable = requirement.get("editable") or requirement.get("directory")
+        extras.extend(["--with-editable", editable] if editable else ["--with", name])
+    return extras
+
+
+def _canonical(name: str) -> str:
+    """Normalize a package name the way packaging does, for comparison."""
+    return name.replace("_", "-").lower()
+
+
+def _reinstall_tool(
+    tool_name: str, source_dir: str, repo_root: Path, runner: Runner
+) -> None:
+    """Re-resolve a uv tool from its in-tree source, keeping its extras.
+
+    The base is re-pinned to ``source_dir`` rather than left to the receipt: a
+    receipt that has lost its editable marker would otherwise resolve the base
+    from the index, quietly swapping the workspace's own vendored code for a
+    published release.
+    """
+    _run_checked(
+        runner,
+        ["uv", "tool", "install", "-e", source_dir, *_tool_extras(tool_name, repo_root, runner), "--reinstall"],
+        repo_root,
+        f"uv tool install {tool_name} --reinstall",
+    )
+
+
 def _refresh_dependencies(changes: ChangeSet, repo_root: Path, runner: Runner) -> None:
+    """Rebuild the environments the served backend runs from, mirroring
+    ``system/scripts/build_workspace.sh`` -- which is the source of truth for how
+    they are constructed, and which refreshes all three.
+
+    All three, because ``supervisord`` starts the backend as a bare
+    ``system-interface`` off PATH: which of the tool install and the workspace
+    venv answers that is a PATH question, and the backend shells out to ``mngr``
+    besides. Refreshing only one of them leaves a merge half-applied in a way
+    that surfaces as a crash somewhere else entirely.
+    """
     if changes.frontend_manifest:
         _run_checked(runner, ["npm", "ci"], repo_root / FRONTEND_DIR, "npm ci")
     if changes.backend_manifest:
+        _reinstall_tool(MNGR_TOOL_NAME, MNGR_DIR, repo_root, runner)
+        _reinstall_tool(TOOL_NAME, APP_DIR, repo_root, runner)
         _run_checked(
             runner,
-            ["uv", "tool", "install", "-e", APP_DIR, "--reinstall"],
+            ["uv", "sync", "--all-packages"],
             repo_root,
-            "uv tool install --reinstall",
+            "uv sync --all-packages",
         )
 
 
