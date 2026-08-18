@@ -34,17 +34,22 @@ read that is folded into one starter project (see
 
 import hashlib
 import json
+import os
 import re
 import threading
 import urllib.parse
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Final, TypedDict
+from typing import Any
+from typing import Final
+from typing import TypedDict
+from uuid import uuid4
+
+from loguru import logger as _loguru_logger
+from pydantic import Field
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
-from loguru import logger as _loguru_logger
-from pydantic import Field
 
 # The project every workspace starts on: the one a fresh machine seeds, and the
 # one a pre-projects machine's arrangement migrates into. Its name follows the
@@ -365,9 +370,22 @@ def _default_meta() -> dict[str, Any]:
     }
 
 
+def _write_json_atomic(path: Path, text: str) -> None:
+    """Write ``text`` to ``path`` via a same-directory temp file and rename.
+
+    A plain ``write_text`` truncates before it writes, so a concurrent reader
+    (another process inspecting the file, an agent, a test poll) can observe
+    an empty or partial file. ``os.replace`` makes the swap atomic on POSIX,
+    so readers only ever see the old or the new content in full.
+    """
+    temp_path = path.with_name(f"{path.name}.tmp-{uuid4().hex}")
+    temp_path.write_text(text)
+    os.replace(temp_path, path)
+
+
 def _write_meta_unlocked(layout_dir: Path, meta: dict[str, Any]) -> None:
     layout_dir.mkdir(parents=True, exist_ok=True)
-    _meta_path(layout_dir).write_text(json.dumps(meta, indent=2))
+    _write_json_atomic(_meta_path(layout_dir), json.dumps(meta, indent=2))
 
 
 def _read_retired_store_content(layout_dir: Path, *candidate_paths: Path) -> dict[str, Any] | None:
@@ -417,11 +435,12 @@ def _migrate_named_layouts_unlocked(layout_dir: Path) -> dict[str, Any] | None:
         return None
     members = member_refs_from_content(content)
     starter_path.parent.mkdir(parents=True, exist_ok=True)
-    starter_path.write_text(json.dumps(content, separators=(",", ":")))
+    _write_json_atomic(starter_path, json.dumps(content, separators=(",", ":")))
     mobile_content = _read_retired_store_content(layout_dir, layout_dir / "layouts" / "mobile.json")
     if mobile_content is not None:
-        project_content_path(layout_dir, DEFAULT_PROJECT_ID, "mobile").write_text(
-            json.dumps(mobile_content, separators=(",", ":"))
+        _write_json_atomic(
+            project_content_path(layout_dir, DEFAULT_PROJECT_ID, "mobile"),
+            json.dumps(mobile_content, separators=(",", ":")),
         )
     _loguru_logger.info(
         "Migrated the pre-projects layout store into the '{}' project with {} member(s)",
@@ -555,7 +574,7 @@ def write_project_content(
             raise ProjectNotFoundError(project_id)
         content_path = project_content_path(layout_dir, project_id, device)
         content_path.parent.mkdir(parents=True, exist_ok=True)
-        content_path.write_text(json.dumps(content, separators=(",", ":")))
+        _write_json_atomic(content_path, json.dumps(content, separators=(",", ":")))
 
 
 def list_members(layout_dir: Path, project_id: str) -> list[str]:
@@ -802,7 +821,7 @@ def _strip_panel_device_file_unlocked(content_path: Path, panel_id: str | None, 
     if stripped is None:
         content_path.unlink(missing_ok=True)
     else:
-        content_path.write_text(json.dumps(stripped, separators=(",", ":")))
+        _write_json_atomic(content_path, json.dumps(stripped, separators=(",", ":")))
     return True
 
 

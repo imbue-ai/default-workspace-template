@@ -1991,8 +1991,16 @@ _ROW_REMOVAL_PORT = 18873
 
 
 def _project_members(layout_dir: Path) -> list[str]:
-    """The starter project's member refs, straight out of the registry on disk."""
-    registry = json.loads((layout_dir / "projects_meta.json").read_text())
+    """The starter project's member refs, straight out of the registry on disk.
+
+    Registry writes are atomic (tmp + rename), so a read sees either the old
+    or the new content in full -- but the file may not exist yet before the
+    first write, which reads as "no members yet" for the polls calling this.
+    """
+    try:
+        registry = json.loads((layout_dir / "projects_meta.json").read_text())
+    except FileNotFoundError:
+        return []
     members = registry["project_by_id"][DEFAULT_PROJECT_ID]["members"]
     assert isinstance(members, list)
     return members
