@@ -91,7 +91,7 @@ browser morgan-lee: human (took control) -- 1 tab(s), active: https://bank.examp
   ```
 
 - `new` starts a browser, minting the first free `browser-<N>` name, and prints it (`-> started browser browser-1`). Pass `new <name>` to choose the name yourself (e.g. `new my-browser`); a **duplicate** name is rejected (pick another -- note a *crashed* browser still holds its name until you `close` it), and an invalid name (anything other than lowercase letters/digits joined by single dashes) is rejected too. `new` returns the name **immediately**; the browser's Chromium launches in the background (serialized, so back-to-back `new`s come up one at a time). If your very next command lands while it's still launching it returns `still starting up (Chromium is launching) -- try again in a few seconds` (exit 3) -- just wait a moment and retry the same command; it is **not** an error.
-- `close <name>` closes an entire browser (all its tabs) and retires its name (never reused). Use when permanently done with a browser. For a single tab, use `tab <name> close`.
+- `close <name>` closes an entire browser (all its tabs), retiring its name and deleting its profile (cookies, logins) with it -- which frees the `browser-<N>` number for a later `new` to mint as a brand-new browser. Use when permanently done with a browser. For a single tab, use `tab <name> close`.
 - The fleet is **capped (2 by default)**. `new` past the cap returns `2/2 browsers open -- close one first` -- `release` or `close` one you're done with first.
 - If there are no browsers yet, `ls` says so. There is **no default browser**: run `new` first (it prints a name), then drive by that name.
 
