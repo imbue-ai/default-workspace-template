@@ -75,7 +75,8 @@ CLAUDE_CATALOG: HarnessCatalog = HarnessCatalog(
     ),
     switch_mode=SwitchMode.EAGER_THEN_RECONCILE,
     picker_mode=PickerMode.LIST,
-    powered_by_label="Claude Code",
+    # No credit for claude: the harness declares an empty string, so nothing renders.
+    powered_by_text="",
     # The "Shoulder tap" flushes claude's queue natively (a meta+q -> chat:cancel chord
     # delivered via mngr) instead of the SIGKILL-restart base path. See harnesses/claude/tap.py.
     native_atomic_shoulder_tap_possible=True,
