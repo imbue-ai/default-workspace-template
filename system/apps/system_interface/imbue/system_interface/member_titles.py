@@ -60,13 +60,17 @@ class MemberTitleLengthError(ValueError):
 
 
 @pure
-def _validated_title(title: str) -> str | None:
+def validated_title(title: str) -> str | None:
     """Whitespace-trim a chosen name, or None when it names nothing.
 
     None is a real answer rather than a rejection: clearing a name is spelled
     by submitting an empty one, which is what an editor emptied and committed
     hands over. An over-long name is a disagreement with the frontend's own cap
     and raises instead.
+
+    Public because a chat's name has to reach mngr *instead of* being stored
+    here (see the title endpoint), and the name that goes to mngr must be the
+    exact one this would keep -- deriving it separately is how the two drift.
     """
     trimmed = title.strip()
     if not trimmed:
@@ -128,7 +132,7 @@ def set_title(layout_dir: Path, ref: str, title: str) -> str | None:
     Raises MemberTitleLengthError for a name over the cap.
     """
     member_ref = validated_member_ref(ref)
-    chosen_title = _validated_title(title)
+    chosen_title = validated_title(title)
     with _titles_lock:
         title_by_ref = _read_unlocked(layout_dir)
         if chosen_title is None:

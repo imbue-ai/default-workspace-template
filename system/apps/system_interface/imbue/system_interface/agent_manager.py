@@ -37,9 +37,7 @@ from imbue.mngr.api.observe import parse_observe_event_line
 from imbue.mngr.errors import MngrError
 from imbue.mngr.interfaces.data_types import AgentDetails
 from imbue.mngr.primitives import AgentId
-from imbue.mngr.primitives import AgentNameStyle
 from imbue.mngr.primitives import HostName
-from imbue.mngr.utils.name_generator import generate_agent_name
 from imbue.system_interface import client_activity
 from imbue.system_interface import projects
 from imbue.system_interface.activity_state import ActivityState
@@ -72,9 +70,16 @@ from imbue.system_interface.harnesses.registry import get_model_state_path
 from imbue.system_interface.harnesses.session import AgentHarnessSession
 from imbue.system_interface.harnesses.session import SessionDeps
 from imbue.system_interface.models import AgentCreationError
+from imbue.system_interface.models import AgentNameConflictError
+from imbue.system_interface.models import AgentRenameError
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.models import AppEntry
+from imbue.system_interface.models import CreatedChatAgent
 from imbue.system_interface.models import QueuedMessageState
+from imbue.system_interface.naming import AUTO_NAME_WORD_BY_HARNESS
+from imbue.system_interface.naming import canonical_agent_name
+from imbue.system_interface.naming import first_free_numbered_name
+from imbue.system_interface.naming import is_name_conflict
 from imbue.system_interface.oom_prioritizer import ChatOomPrioritizer
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
@@ -96,6 +101,12 @@ _DEFAULT_MESSENGER: Final[MngrMessenger] = MngrMessenger()
 
 
 _COMPLETION_SIGNAL_PUT_TIMEOUT_SECONDS = 5.0
+
+# How long one ``mngr rename`` / ``mngr label`` may take. Both edit the
+# provider's persisted agent data (rename also moves the tmux session on a live
+# host), so they are short local operations -- but they run inside a request the
+# user is waiting on, so they are bounded rather than left to hang.
+_RENAME_TIMEOUT_SECONDS: Final[float] = 30.0
 
 # A chat spawned by the minds "get help -> have an agent help" flow carries this
 # label (set on its ``mngr create``). When such an agent is first discovered, we
@@ -148,19 +159,6 @@ def _chat_project_label(primary_labels: dict[str, str], project_id: str) -> str:
     return primary_labels.get("project", "")
 
 
-def _canonical_agent_name(name: str) -> str:
-    """The true-name form of a human-readable chat name ("Chat 2" -> "Chat-2").
-
-    Mirrors mngr's own ``canonicalize_agent_name`` rather than importing it: a
-    workspace's vendored mngr may predate free-form names, and passing it a
-    name it would reject fails the create outright. Sending the canonical name
-    (plus the typed one as a ``display_name`` label) is accepted by every mngr
-    version and is exactly the pair newer mngr derives for itself.
-    """
-    stripped = re.sub(r"[^a-zA-Z0-9 _-]+", "", name.strip())
-    return re.sub(r"\s+", "-", stripped).strip("-_")
-
-
 def _build_chat_create_command(
     mngr_binary: str,
     name: str,
@@ -185,7 +183,7 @@ def _build_chat_create_command(
     cmd = [
         mngr_binary,
         "create",
-        _canonical_agent_name(name) or name,
+        canonical_agent_name(name) or name,
         "--id",
         agent_id,
         "--transfer",
@@ -215,6 +213,47 @@ def _build_chat_create_command(
     if project_label:
         cmd.extend(["--label", f"project={project_label}"])
     return cmd
+
+
+def _build_chat_rename_command(mngr_binary: str, agent_id: str, name: str) -> list[str]:
+    """Build the ``mngr rename`` argv that renames a chat agent to a typed name.
+
+    The mirror image of ``_build_chat_create_command``'s naming: the agent is
+    addressed by id (an agent address accepts either an id or a name, and the id
+    cannot go stale under a rename), and it is given the *canonical* form of the
+    typed name plus the typed name itself as a ``display_name`` label. Sending
+    the pair explicitly is what makes this work against a vendored mngr that
+    predates free-form names, exactly as the create path does; the label rides
+    the same atomic write as the rename, so no observer sees the renamed agent
+    without it.
+
+    Pure: argv assembly only, so the repo<->mngr CLI contract is testable
+    against the live CLI without a subprocess (see ``agent_manager_test.py``).
+    """
+    return [
+        mngr_binary,
+        "rename",
+        agent_id,
+        canonical_agent_name(name) or name,
+        "--label",
+        f"display_name={name}",
+    ]
+
+
+def _build_chat_display_label_command(mngr_binary: str, agent_id: str, name: str) -> list[str]:
+    """Build the ``mngr label`` argv for a display-only rename.
+
+    Used when the new name's canonical form IS the agent's current true name
+    (e.g. "chat 2" -> "Chat 2"): only the human-readable half moves, so the
+    label is rewritten without renaming anything. Pure (see above).
+    """
+    return [
+        mngr_binary,
+        "label",
+        agent_id,
+        "--label",
+        f"display_name={name}",
+    ]
 
 
 def _build_observe_command_argv(mngr_binary: str) -> list[str]:
@@ -704,6 +743,89 @@ class AgentManager:
         self._stop_model_tracking(agent_id)
         self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
 
+    def rename_chat_agent(self, agent_ref: str, display_name: str) -> None:
+        """Give a chat agent the name the user just typed, keeping its name pair matched.
+
+        ``agent_ref`` is what a ``chat:`` member ref carries -- an agent id from
+        every UI surface, or an agent name from the agent-facing layout listing --
+        so both are resolved here. The display name's canonical form becomes the
+        agent's true name and the typed form its ``display_name`` label, the same
+        pairing ``mngr create`` establishes. When the canonical form is already
+        the agent's name (a display-only change, e.g. "chat 2" -> "Chat 2"),
+        only the label is rewritten -- no rename, so nothing embedded in tmux
+        sessions or refs moves for a cosmetic change.
+
+        Raises ``AgentRenameError`` when the rename could not be made (so the
+        caller can refuse to record the new name anywhere else -- the workspace
+        and mngr must never disagree about what a chat is called), and its
+        subclass ``AgentNameConflictError`` when the new name collides with
+        another agent's (by canonical form; the caller answers 409 so the user
+        can retry with a different name).
+
+        An id this manager does not track is not an mngr agent it can rename:
+        an agent still being created already carries the typed name on its
+        ``mngr create`` (and renaming it to something *else* mid-create would
+        race that create, so it is refused), and an id belonging to no agent at
+        all has no name to diverge from. Both return without running anything.
+        """
+        if not canonical_agent_name(display_name):
+            raise AgentRenameError(f"Chat name '{display_name}' contains no usable characters")
+
+        with self._lock:
+            agent_state = self._agents.get(agent_ref) or next(
+                (agent for agent in self._agents.values() if agent.name == agent_ref), None
+            )
+            proto_agent = self._proto_agents.get(agent_ref)
+            taken_names = () if agent_state is None else tuple(self._taken_names_locked(agent_state.id))
+
+        if agent_state is None:
+            if proto_agent is not None and str(proto_agent.get("name", "")) != display_name:
+                raise AgentRenameError(
+                    f"Chat '{agent_ref}' is still being created; it cannot be renamed to '{display_name}' yet"
+                )
+            if proto_agent is None:
+                _loguru_logger.warning("No tracked agent for chat ref {}; leaving mngr alone", agent_ref)
+            return
+
+        # The services agent runs the workspace itself; its name is the minds
+        # app's to manage (alongside the host's), not a chat tab's.
+        if agent_state.labels.get("is_primary") == "true":
+            raise AgentRenameError("The workspace's services agent cannot be renamed from a chat tab")
+
+        new_canonical_name = canonical_agent_name(display_name)
+        is_display_only = new_canonical_name == agent_state.name
+        if not is_display_only and is_name_conflict(display_name, taken_names):
+            raise AgentNameConflictError(f"A chat named '{display_name}' already exists; pick another name")
+
+        if is_display_only:
+            cmd = _build_chat_display_label_command(self._mngr_binary, agent_state.id, display_name)
+        else:
+            cmd = _build_chat_rename_command(self._mngr_binary, agent_state.id, display_name)
+        try:
+            result = run_local_command_modern_version(
+                command=cmd,
+                cwd=None,
+                is_checked=False,
+                timeout=_RENAME_TIMEOUT_SECONDS,
+            )
+        except (OSError, ConcurrencyGroupError) as e:
+            _loguru_logger.opt(exception=e).error("Error renaming agent {}", agent_state.id)
+            raise AgentRenameError(f"Failed to rename agent '{agent_state.name}': {e}") from e
+        if result.returncode != 0:
+            detail = result.stderr.strip() or f"{cmd[1]} exited with code {result.returncode}"
+            raise AgentRenameError(f"Failed to rename agent '{agent_state.name}': {detail}")
+
+        # Reflect the new name pair immediately rather than waiting for the
+        # observe stream to relist, exactly as destroy drops the agent immediately.
+        with self._lock:
+            renamed = self._agents.get(agent_state.id)
+            if renamed is not None:
+                self._agents[agent_state.id] = renamed.model_copy_update(
+                    to_update(renamed.field_ref().name, new_canonical_name),
+                    to_update(renamed.field_ref().labels, {**renamed.labels, "display_name": display_name}),
+                )
+        self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
+
     def get_apps(self) -> list[AppEntry]:
         """Return the primary agent's app list."""
         with self._lock:
@@ -801,25 +923,60 @@ class AgentManager:
         """Return this server's own agent ID from the environment."""
         return self._own_agent_id
 
-    def generate_random_name(self) -> str:
-        """Generate a random agent name using mngr's name generator."""
-        return str(generate_agent_name(AgentNameStyle.COOLNAME))
+    def _taken_names_locked(self, exclude_agent_id: str | None = None) -> list[str]:
+        """Every name in use on the machine's agents. Must be called with lock held.
+
+        Both halves of each agent's name pair count (the ``display_name`` label
+        and the true name), plus every in-flight create's name, so a fresh
+        allocation or a rename can collide with neither. ``exclude_agent_id``
+        leaves one agent out, which is how a rename avoids colliding with the
+        agent being renamed.
+        """
+        taken: list[str] = []
+        for agent in self._agents.values():
+            if agent.id == exclude_agent_id:
+                continue
+            taken.append(agent.name)
+            display_label = agent.labels.get("display_name")
+            if display_label:
+                taken.append(display_label)
+        for proto_agent_id, proto in self._proto_agents.items():
+            if proto_agent_id == exclude_agent_id:
+                continue
+            proto_name = str(proto.get("name", ""))
+            if proto_name:
+                taken.append(proto_name)
+        return taken
 
     def create_chat_agent(
         self,
-        name: str,
+        requested_name: str,
         harness: HarnessType = HarnessType.CLAUDE,
         extra_role_templates: tuple[str, ...] = (),
         project_id: str = "",
-    ) -> str:
+        extra_taken_names: tuple[str, ...] = (),
+    ) -> CreatedChatAgent:
         """Create a chat agent in the primary agent's work dir on the given harness.
 
-        Returns the pre-generated agent ID. ``harness`` is also the name of the harness
-        create template it stacks; the `chat` role template supplies everything else, so a
-        new harness needs no new method here. ``project_id`` is the project the chat was
-        created inside, which becomes the agent's ``project`` label -- the project it
-        starts out filed in (see ``_chat_project_label``); empty keeps the primary
-        agent's inherited label.
+        Returns the pre-generated agent ID together with the chat's name pair: the
+        human-readable display name and its canonical true name (see
+        ``imbue.system_interface.naming``). An empty ``requested_name`` mints the
+        first free "<word> N" for the harness ("Chat 1", "Codex 2", ...) here,
+        server-side, under the same lock that registers the in-flight create --
+        so two simultaneous creates cannot both mint "Chat 1".
+        ``extra_taken_names`` widens the taken set beyond the machine's agents
+        (the caller passes the member-title store's chosen names, so a terminal
+        someone renamed to "Chat 2" blocks that slot too).
+
+        ``harness`` is also the name of the harness create template it stacks; the
+        `chat` role template supplies everything else, so a new harness needs no new
+        method here. ``project_id`` is the project the chat was created inside, which
+        becomes the agent's ``project`` label -- the project it starts out filed in
+        (see ``_chat_project_label``); empty keeps the primary agent's inherited label.
+
+        Raises ``AgentNameConflictError`` when an explicitly requested name collides
+        with an existing agent or an in-flight create (by canonical form -- the same
+        collision mngr itself would reject).
 
         An alt harness authenticates through its own CLI; if that CLI is signed out, refuse
         the create up front (raising ``AgentCreationError``) rather than launch a chat that
@@ -829,20 +986,42 @@ class AgentManager:
         if unauthenticated_reason is not None:
             raise AgentCreationError(unauthenticated_reason)
 
-        agent_id = str(AgentId())
+        explicit_name = requested_name.strip()
+        if explicit_name and not canonical_agent_name(explicit_name):
+            raise AgentCreationError(f"Chat name '{explicit_name}' contains no usable characters")
 
+        agent_id = str(AgentId())
+        log_queue: queue.Queue[str | None] = queue.Queue(maxsize=10000)
+
+        # Name resolution and proto registration happen under one lock hold, so a
+        # concurrent create sees this one's name as taken (and vice versa).
         with self._lock:
             work_dir = self._resolve_agent_work_dir(self._own_agent_id)
+            if work_dir is None:
+                raise AgentCreationError(f"Cannot determine work directory for primary agent {self._own_agent_id}")
             primary = self._agents.get(self._own_agent_id)
             primary_labels = dict(primary.labels) if primary else {}
 
-        if work_dir is None:
-            msg = f"Cannot determine work directory for primary agent {self._own_agent_id}"
-            raise AgentCreationError(msg)
+            taken_names = self._taken_names_locked() + list(extra_taken_names)
+            if explicit_name:
+                if is_name_conflict(explicit_name, taken_names):
+                    raise AgentNameConflictError(f"A chat named '{explicit_name}' already exists; pick another name")
+                display_name = explicit_name
+            else:
+                display_name = first_free_numbered_name(AUTO_NAME_WORD_BY_HARNESS[harness], taken_names)
+
+            proto_info = {
+                "agent_id": agent_id,
+                "name": display_name,
+                "creation_type": CHAT_CREATION_TYPE,
+                "parent_agent_id": None,
+            }
+            self._proto_agents[agent_id] = proto_info
+            self._log_queues[agent_id] = log_queue
 
         cmd = _build_chat_create_command(
             self._mngr_binary,
-            name,
+            display_name,
             agent_id,
             primary_labels,
             harness,
@@ -850,32 +1029,24 @@ class AgentManager:
             project_id,
         )
 
-        log_queue: queue.Queue[str | None] = queue.Queue(maxsize=10000)
-
-        proto_info = {
-            "agent_id": agent_id,
-            "name": name,
-            "creation_type": CHAT_CREATION_TYPE,
-            "parent_agent_id": None,
-        }
-        with self._lock:
-            self._proto_agents[agent_id] = proto_info
-            self._log_queues[agent_id] = log_queue
-
         self._broadcaster.broadcast_proto_agent_created(
             agent_id=agent_id,
-            name=name,
+            name=display_name,
             creation_type=CHAT_CREATION_TYPE,
             parent_agent_id=None,
         )
 
-        labels: dict[str, str] = {}
+        # Mirror the labels the created mngr agent will carry (see
+        # ``_build_chat_create_command``), so the pre-observe AgentStateItem below
+        # renders exactly like the observed agent will.
+        labels: dict[str, str] = {"user_created": "true", "display_name": display_name}
         project_label = _chat_project_label(primary_labels, project_id)
         if project_label:
             labels["project"] = project_label
-        self._launch_creation_thread(agent_id, name, cmd, Path(work_dir), log_queue, labels, harness)
+        canonical_name = canonical_agent_name(display_name)
+        self._launch_creation_thread(agent_id, canonical_name, cmd, Path(work_dir), log_queue, labels, harness)
 
-        return agent_id
+        return CreatedChatAgent(agent_id=agent_id, name=canonical_name, display_name=display_name)
 
     def _launch_creation_thread(
         self,
