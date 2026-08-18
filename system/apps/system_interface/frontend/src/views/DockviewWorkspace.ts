@@ -1862,23 +1862,10 @@ export function openMemberRow(row: SidebarTabRow): void {
   m.redraw();
 }
 
-/**
- * Stop showing a member in the active view.
- *
- * This hides it here and nowhere else: it keeps running, it stays in every
- * other project showing it, and it stays in Everything. Its tab goes with it --
- * a view that no longer shows an object must not keep it docked -- which is the
- * one place closing a tab and removing a member coincide, and only because the
- * removal drove it.
- */
-export function removeMemberRow(row: SidebarTabRow): void {
-  removeMemberRefWithAlert(row.ref);
-}
-
 /** Stop showing one ref in the active view, shouting if the server refuses.
- *  The click-and-forget half of ``removeMemberRefFromView``, shared by the
- *  rail's row menu and its unpin toggle: unpinning an app IS removing it from
- *  the view, so both take the same path. */
+ *  The click-and-forget half of ``removeMemberRefFromView``, used by the
+ *  rail's pin-icon unpin toggle: unpinning an app IS removing it from the
+ *  view. */
 function removeMemberRefWithAlert(ref: string): void {
   void removeMemberRefFromView(ref).catch((e: Error) => {
     alert(`Failed to remove from project: ${e.message}`);
@@ -1979,13 +1966,55 @@ export function destroyMemberRow(row: SidebarTabRow): void {
       browserDestroyPanelId = livePanelId ?? row.ref;
       showBrowserDestroyDialog = true;
       break;
-    // An app or an ad-hoc page has nothing to destroy: nothing here stops a
-    // supervised app or deletes its package, and a page is only ever a panel.
     case "app":
+      // Weaker than the other three (see DEREGISTER_APP_DETAILS and
+      // executeAppDeregister): it takes the app out of the registry and every
+      // project, not the program answering on its port. A pinned-but-
+      // backgrounded app's panel id, like a browser's, is minted per open, so
+      // it has none to sweep either.
+      appDeregisterName = body;
+      appDeregisterPanelId = livePanelId ?? row.ref;
+      showAppDeregisterDialog = true;
+      break;
+    // An ad-hoc page has nothing to destroy: it is only ever a panel.
     case "url":
       return;
   }
   m.redraw();
+}
+
+/** Reload what a row is showing when it has an open tab; opens it fresh when
+ *  it is backgrounded, since there is then nothing live to reload -- opening
+ *  a backgrounded object already puts fresh content on screen, the same job a
+ *  reload would otherwise do. The rail's counterpart to the tab's own Refresh
+ *  (refreshPanelContent), addressed by ref instead of by a known-open panel
+ *  id. */
+export function refreshMemberRow(row: SidebarTabRow): void {
+  const panelId = panelIdForMemberRef(row.ref);
+  if (panelId === null) {
+    openMemberRow(row);
+    return;
+  }
+  refreshPanelContent(panelId);
+}
+
+/** Close a row's own tab without touching membership -- the rail's
+ *  counterpart of the tab's own "Hide tab" (see tabMenuEntries). Only ever
+ *  called while the row is open (SidebarTabRow.isOpen), so there is always a
+ *  panel here to close. */
+export function hideMemberRowTab(row: SidebarTabRow): void {
+  const panelId = panelIdForMemberRef(row.ref);
+  if (panelId === null || !dockview) return;
+  dockview.panels.find((candidate) => candidate.id === panelId)?.api.close();
+}
+
+/** Rail-initiated rename, reporting a rejection with an alert -- the
+ *  click-and-forget half of ``renameMemberRef``, matching how the tab's own
+ *  inline editor reports the same rejection. */
+export function renameMemberRowWithAlert(row: SidebarTabRow, title: string): void {
+  void renameMemberRef(row.ref, title).catch((e: Error) => {
+    alert(`Failed to rename: ${e.message}`);
+  });
 }
 
 function focusOrCreateChatPanel(

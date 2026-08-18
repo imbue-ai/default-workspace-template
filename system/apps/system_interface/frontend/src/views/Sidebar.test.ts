@@ -171,7 +171,9 @@ function makeAttrs(overrides: Partial<SidebarAttrs> = {}): SidebarAttrs {
     onOpenApp: vi.fn(),
     onSetAppPinned: vi.fn(),
     onOpenRow: vi.fn(),
-    onRemoveFromView: vi.fn(),
+    onRefreshRow: vi.fn(),
+    onRenameRow: vi.fn(),
+    onHideRowTab: vi.fn(),
     onShareApp: vi.fn(),
     onDeleteFromMachine: vi.fn(),
     ...overrides,
@@ -441,6 +443,155 @@ describe("Sidebar pinned-app rows", () => {
     } finally {
       vi.mocked(getApps).mockReturnValue([]);
     }
+  });
+});
+
+describe("Sidebar row menu (shared object-menu entries)", () => {
+  /** Right-clicks the given rail row's own text and returns the menu that
+   *  opens, if any -- the rail's row menu, not the switcher or All apps. */
+  function openRowMenuByContextClick(root: HTMLElement, redraw: () => void, label: string): HTMLElement | null {
+    const target = Array.from(root.querySelectorAll(".project-rail-tab")).find((element) =>
+      element.textContent?.includes(label),
+    );
+    target?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    redraw();
+    return root.querySelector('.project-rail-menu[role="menu"]');
+  }
+
+  function menuItemLabels(menu: HTMLElement | null): (string | null)[] {
+    return Array.from(menu?.querySelectorAll('[role="menuitem"]') ?? []).map((element) => element.textContent);
+  }
+
+  it("opens on a right-click, the same as the kebab button does", () => {
+    const rows: SidebarTabRow[] = [{ ref: "chat:agent-1", kind: "chat", label: "Chat 1", isOpen: true }];
+    const { root, redraw } = mountSidebar(makeAttrs({ rows }));
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+    expect(root.querySelector('.project-rail-menu[role="menu"]')).toBeNull();
+
+    const menu = openRowMenuByContextClick(root, redraw, "Chat 1");
+    expect(menu).not.toBeNull();
+  });
+
+  it("renders the shared verb set for an open chat row, not the old removal items", () => {
+    const rows: SidebarTabRow[] = [{ ref: "chat:agent-1", kind: "chat", label: "Chat 1", isOpen: true }];
+    const { root, redraw } = mountSidebar(makeAttrs({ rows }));
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    const menu = openRowMenuByContextClick(root, redraw, "Chat 1");
+    // Refresh, Rename, Hide tab, Quit -- exactly objectMenuEntries("chat", ...)
+    // for an OPEN row (hideTab non-null). No Share (chat-only exclusion) and
+    // no "Remove from project" / "Delete from this machine": those verbs moved
+    // to the project settings modal and the shared Quit verb respectively.
+    expect(menuItemLabels(menu)).toEqual(["Refresh", "Rename", "Hide tab", "Quit Chat 1"]);
+    expect(menu?.textContent).not.toContain("Remove from project");
+    expect(menu?.textContent).not.toContain("Delete from this machine");
+  });
+
+  it("omits Hide tab for a backgrounded row, since it has no open tab to hide", () => {
+    const rows: SidebarTabRow[] = [{ ref: "terminal:build", kind: "terminal", label: "Terminal 1", isOpen: false }];
+    const { root, redraw } = mountSidebar(makeAttrs({ rows }));
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    const menu = openRowMenuByContextClick(root, redraw, "Terminal 1");
+    expect(menuItemLabels(menu)).toEqual(["Refresh", "Rename", "Quit Terminal 1"]);
+  });
+
+  it("adds Share, keyed off the service name, for an app row -- and offers Quit too", () => {
+    const rows: SidebarTabRow[] = [{ ref: "service:grafana", kind: "app", label: "Grafana", isOpen: false }];
+    const { root, redraw } = mountSidebar(makeAttrs({ rows }));
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    const menu = openRowMenuByContextClick(root, redraw, "Grafana");
+    // "Grafana" is the row's chosen display label; the share verb names the
+    // underlying service instead, matching the tab's own wording.
+    expect(menuItemLabels(menu)).toEqual(["Refresh", "Share grafana", "Rename", "Quit Grafana"]);
+  });
+
+  it("offers no row menu at all for a legacy url member", () => {
+    const rows: SidebarTabRow[] = [{ ref: "url:abc123", kind: "url", label: "Some Page", isOpen: false }];
+    const { root, redraw } = mountSidebar(makeAttrs({ rows }));
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    const row = Array.from(root.querySelectorAll(".project-rail-tab")).find((element) =>
+      element.textContent?.includes("Some Page"),
+    );
+    expect(row?.querySelector('[aria-label^="Actions for"]')).toBeNull();
+    row?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    redraw();
+    expect(root.querySelector('.project-rail-menu[role="menu"]')).toBeNull();
+  });
+
+  it("routes Quit to onDeleteFromMachine, closing the menu", () => {
+    const rows: SidebarTabRow[] = [{ ref: "chat:agent-1", kind: "chat", label: "Chat 1", isOpen: true }];
+    const attrs = makeAttrs({ rows });
+    const { root, redraw } = mountSidebar(attrs);
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    const menu = openRowMenuByContextClick(root, redraw, "Chat 1");
+    const quitItem = Array.from(menu?.querySelectorAll('[role="menuitem"]') ?? []).find(
+      (element) => element.textContent === "Quit Chat 1",
+    );
+    click(quitItem ?? null);
+    redraw();
+    expect(attrs.onDeleteFromMachine).toHaveBeenCalledWith(rows[0]);
+    expect(root.querySelector('.project-rail-menu[role="menu"]')).toBeNull();
+  });
+
+  it("opens an inline rename field from the menu's Rename item, and commits it on blur", () => {
+    const rows: SidebarTabRow[] = [{ ref: "chat:agent-1", kind: "chat", label: "Chat 1", isOpen: true }];
+    const attrs = makeAttrs({ rows });
+    const { root, redraw } = mountSidebar(attrs);
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    const menu = openRowMenuByContextClick(root, redraw, "Chat 1");
+    const renameItem = Array.from(menu?.querySelectorAll('[role="menuitem"]') ?? []).find(
+      (element) => element.textContent === "Rename",
+    );
+    click(renameItem ?? null);
+    redraw();
+
+    const input = Array.from(root.querySelectorAll("input")).find(
+      (element) => (element as HTMLInputElement).value === "Chat 1",
+    ) as HTMLInputElement | undefined;
+    expect(input).not.toBeUndefined();
+
+    if (input) input.value = "Renamed Chat";
+    input?.dispatchEvent(new Event("blur"));
+    redraw();
+    expect(attrs.onRenameRow).toHaveBeenCalledWith(rows[0], "Renamed Chat");
+  });
+
+  it("discards the edit on Escape rather than committing it", () => {
+    const rows: SidebarTabRow[] = [{ ref: "chat:agent-1", kind: "chat", label: "Chat 1", isOpen: true }];
+    const attrs = makeAttrs({ rows });
+    const { root, redraw } = mountSidebar(attrs);
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    const menu = openRowMenuByContextClick(root, redraw, "Chat 1");
+    const renameItem = Array.from(menu?.querySelectorAll('[role="menuitem"]') ?? []).find(
+      (element) => element.textContent === "Rename",
+    );
+    click(renameItem ?? null);
+    redraw();
+
+    const input = Array.from(root.querySelectorAll("input")).find(
+      (element) => (element as HTMLInputElement).value === "Chat 1",
+    ) as HTMLInputElement | undefined;
+    if (input) input.value = "Should not stick";
+    input?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    redraw();
+
+    expect(attrs.onRenameRow).not.toHaveBeenCalled();
+    // The row reads as plain text again, not a field.
+    expect(root.querySelector('input[value="Should not stick"]')).toBeNull();
   });
 });
 
