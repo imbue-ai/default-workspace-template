@@ -202,6 +202,34 @@ def test_classify_treats_root_uv_lock_as_backend_manifest() -> None:
     assert changes.backend_manifest and changes.backend and not changes.frontend
 
 
+def test_classify_treats_a_vendored_manifest_as_a_backend_manifest() -> None:
+    # The change that actually ships in a release. Every "system/vendor/mngr:
+    # refresh" commit in this repo's history leaves uv.lock untouched, so keying
+    # the dependency refresh only off the lock would never fire on the merge that
+    # moves the vendored mngr -- which is exactly the one that stales the editable
+    # tool's dependency closure and breaks the mngr CLI.
+    changes = reveal_mod.classify_changes(["system/vendor/mngr/libs/mngr/pyproject.toml"])
+    assert changes.backend_manifest and changes.backend
+
+
+def test_classify_treats_the_root_manifest_as_a_backend_manifest() -> None:
+    # It holds the [tool.uv.sources] the tool installs resolve through.
+    assert reveal_mod.classify_changes(["pyproject.toml"]).backend_manifest
+
+
+def test_classify_ignores_vendored_source_and_nested_paths() -> None:
+    # Source edits do not move the dependency closure, and a manifest deeper in
+    # the tree is not one of the vendored packages we install from.
+    changes = reveal_mod.classify_changes(
+        [
+            "system/vendor/mngr/libs/mngr/imbue/mngr/main.py",
+            "system/vendor/mngr/libs/mngr/imbue/mngr/pyproject.toml",
+            "system/vendor/mngr/pyproject.toml",
+        ]
+    )
+    assert not changes.any
+
+
 def test_classify_ignores_backend_test_files() -> None:
     changes = reveal_mod.classify_changes(
         [
@@ -337,7 +365,7 @@ def test_backend_with_manifest_refreshes_preflights_restarts_and_probes() -> Non
         ["uv", "tool", "install", "-e", "system/vendor/mngr/libs/mngr", "--reinstall"],
         ["uv", "tool", "install", "-e", "system/apps/system_interface", "--reinstall"],
     ]
-    assert runner.ran("uv", "sync", "--all-packages")
+    assert runner.ran("uv", "sync", "--all-packages", "--frozen")
     assert spawner.spawns and spawner.spawns[0] == [
         reveal_mod.TOOL_NAME
     ]  # pre-flight booted
@@ -474,13 +502,16 @@ def test_tool_location_comes_from_the_console_scripts_shebang(tmp_path: Path) ->
     # names its own environment, so we take the answer from there.
     bin_dir = tmp_path / "root" / ".local" / "bin"
     bin_dir.mkdir(parents=True)
+    tools = tmp_path / "root" / ".local" / "share" / "uv" / "tools"
     script = bin_dir / "mngr"
     script.write_text(
-        f"#!{tmp_path}/root/.local/share/uv/tools/imbue-mngr/bin/python3\n"
-        "# -*- coding: utf-8 -*-\nimport sys\n"
+        f"#!{tools}/imbue-mngr/bin/python3\n# -*- coding: utf-8 -*-\nimport sys\n"
     )
 
-    location = reveal_mod._tool_location(script)
+    (tools / "imbue-mngr").mkdir(parents=True)
+    (tools / "imbue-mngr" / "uv-receipt.toml").write_text("[tool]\nrequirements = []\n")
+
+    location = reveal_mod._tool_location(script, "imbue-mngr")
 
     assert location == (
         tmp_path / "root" / ".local" / "share" / "uv" / "tools",
@@ -503,11 +534,24 @@ def test_tool_location_declines_what_it_cannot_read(contents: str, tmp_path: Pat
     script = tmp_path / "mngr"
     script.write_text(contents)
 
-    assert reveal_mod._tool_location(script) is None
+    assert reveal_mod._tool_location(script, "imbue-mngr") is None
+
+
+def test_tool_location_declines_the_workspace_venvs_console_script(tmp_path: Path) -> None:
+    # Both names are also uv sync members, so PATH can resolve to the venv's own
+    # entrypoint. Deriving a "tool directory" from that would build a tool
+    # environment inside the served checkout -- dirtying the tree the next reveal
+    # refuses to run on, and overwriting the venv's entrypoint. No receipt, no deal.
+    venv_bin = tmp_path / "workspace" / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    script = venv_bin / "system-interface"
+    script.write_text(f"#!{venv_bin}/python3\nimport sys\n")
+
+    assert reveal_mod._tool_location(script, "system-interface") is None
 
 
 def test_tool_location_declines_a_script_it_cannot_open(tmp_path: Path) -> None:
-    assert reveal_mod._tool_location(tmp_path / "does-not-exist") is None
+    assert reveal_mod._tool_location(tmp_path / "does-not-exist", "imbue-mngr") is None
 
 
 def test_dependency_refresh_targets_the_installation_actually_on_path(
@@ -520,6 +564,8 @@ def test_dependency_refresh_targets_the_installation_actually_on_path(
     bin_dir.mkdir(parents=True)
     tools = tmp_path / "root" / ".local" / "share" / "uv" / "tools"
     (bin_dir / "mngr").write_text(f"#!{tools}/imbue-mngr/bin/python3\nimport sys\n")
+    (tools / "imbue-mngr").mkdir(parents=True)
+    (tools / "imbue-mngr" / "uv-receipt.toml").write_text("[tool]\nrequirements = []\n")
     runner = _runner_with_diff("M\tuv.lock\n")
     runner.executables["mngr"] = str(bin_dir / "mngr")
 
@@ -664,7 +710,7 @@ def test_failed_preflight_with_manifest_refreshes_deps_but_does_not_restart() ->
     # tool too -- the rollback moves the vendored source back, which stales its
     # closure exactly as the merge did.
     assert len(runner.argvs_starting("uv", "tool", "install")) == 4
-    assert len(runner.argvs_starting("uv", "sync", "--all-packages")) == 2
+    assert len(runner.argvs_starting("uv", "sync", "--all-packages", "--frozen")) == 2
 
 
 def test_failed_post_restart_health_triggers_rollback_then_recovers() -> None:
