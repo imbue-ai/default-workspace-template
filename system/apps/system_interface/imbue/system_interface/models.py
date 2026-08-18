@@ -16,18 +16,6 @@ class AgentCreationError(ValueError):
     ...
 
 
-class AgentRenameError(ValueError):
-    """Raised when an agent cannot be renamed in mngr.
-
-    A chat's name lives in two places -- mngr's own agent name (plus its
-    ``display_name`` label) and the workspace's title store -- so a rename that
-    cannot reach mngr must stop the whole rename rather than write only one of
-    them. This is what the title endpoint turns into an error response.
-    """
-
-    ...
-
-
 class AttachmentError(ValueError):
     """Raised when a chat attachment cannot be stored or located."""
 

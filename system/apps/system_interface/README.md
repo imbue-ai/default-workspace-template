@@ -135,8 +135,9 @@ view: both are keyed by member ref in their own small registries
 every surface calls an object the same thing and recency ranks the same
 in every launcher. New chats, terminals, and browsers are named
 automatically -- "Chat 1", "Terminal 2", and so on, taking the lowest
-free number -- and nothing asks for a name; double-clicking a tab's
-title (or its menu's Rename) renames the object everywhere it appears.
+free number -- and nothing asks for a name. There is no rename gesture
+in the UI at all; an agent can still name an object it opened, through
+`layout.py rename`, and the name reaches every surface showing it.
 Destroying an object drops its name and recency with it.
 
 Each browser client remembers its active view in localStorage

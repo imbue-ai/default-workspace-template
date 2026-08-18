@@ -72,7 +72,6 @@ from imbue.system_interface.harnesses.registry import get_model_state_path
 from imbue.system_interface.harnesses.session import AgentHarnessSession
 from imbue.system_interface.harnesses.session import SessionDeps
 from imbue.system_interface.models import AgentCreationError
-from imbue.system_interface.models import AgentRenameError
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.models import AppEntry
 from imbue.system_interface.models import QueuedMessageState
@@ -97,12 +96,6 @@ _DEFAULT_MESSENGER: Final[MngrMessenger] = MngrMessenger()
 
 
 _COMPLETION_SIGNAL_PUT_TIMEOUT_SECONDS = 5.0
-
-# How long one ``mngr rename`` may take. It edits the provider's persisted agent
-# data (and, for a live host, the tmux session and env file), so it is a short
-# local operation -- but it runs inside a request the user is waiting on, so it
-# is bounded rather than left to hang.
-_RENAME_TIMEOUT_SECONDS: Final[float] = 30.0
 
 # A chat spawned by the minds "get help -> have an agent help" flow carries this
 # label (set on its ``mngr create``). When such an agent is first discovered, we
@@ -222,31 +215,6 @@ def _build_chat_create_command(
     if project_label:
         cmd.extend(["--label", f"project={project_label}"])
     return cmd
-
-
-def _build_chat_rename_command(mngr_binary: str, agent_id: str, name: str) -> list[str]:
-    """Build the ``mngr rename`` argv that renames a chat agent to a typed name.
-
-    The mirror image of ``_build_chat_create_command``'s naming: the agent is
-    addressed by id (an agent address accepts either an id or a name, and the id
-    cannot go stale under a rename), and it is given the *canonical* form of the
-    typed name plus the typed name itself as a ``display_name`` label. Sending
-    the pair explicitly is what makes this work against a vendored mngr that
-    predates free-form names, exactly as the create path does; the label rides
-    the same atomic write as the rename, so no observer sees the renamed agent
-    without it.
-
-    Pure: argv assembly only, so the repo<->mngr CLI contract is testable
-    against the live CLI without a subprocess (see ``agent_manager_test.py``).
-    """
-    return [
-        mngr_binary,
-        "rename",
-        agent_id,
-        _canonical_agent_name(name) or name,
-        "--label",
-        f"display_name={name}",
-    ]
 
 
 def _build_observe_command_argv(mngr_binary: str) -> list[str]:
@@ -734,69 +702,6 @@ class AgentManager:
         self._stop_app_watcher(agent_id)
         self._stop_activity_tracking(agent_id)
         self._stop_model_tracking(agent_id)
-        self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
-
-    def rename_chat_agent(self, agent_ref: str, display_name: str) -> None:
-        """Give a chat agent the name the user just typed, in mngr.
-
-        ``agent_ref`` is what a ``chat:`` member ref carries -- an agent id from
-        every UI surface, or an agent name from the agent-facing layout listing --
-        so both are resolved here. The agent is renamed to the canonical form of
-        ``display_name`` and carries the typed name as its ``display_name``
-        label, which is the pairing ``mngr create`` already establishes for a
-        chat (see ``_build_chat_rename_command``).
-
-        Raises ``AgentRenameError`` when the rename could not be made, so the
-        caller can refuse to record the new name anywhere else: the workspace's
-        title store and mngr must not end up disagreeing about what a chat is
-        called, which is the whole reason this is called before that write.
-
-        An id this manager does not track is not an mngr agent it can rename:
-        an agent still being created already carries the typed name on its
-        ``mngr create`` (and renaming it to something *else* mid-create would
-        race that create, so it is refused), and an id belonging to no agent at
-        all has no name to diverge from. Both return without running anything.
-        """
-        with self._lock:
-            agent_state = self._agents.get(agent_ref) or next(
-                (agent for agent in self._agents.values() if agent.name == agent_ref), None
-            )
-            proto_agent = self._proto_agents.get(agent_ref)
-
-        if agent_state is None:
-            if proto_agent is not None and str(proto_agent.get("name", "")) != display_name:
-                raise AgentRenameError(
-                    f"Chat '{agent_ref}' is still being created; it cannot be renamed to '{display_name}' yet"
-                )
-            if proto_agent is None:
-                _loguru_logger.warning("No tracked agent for chat ref {}; leaving mngr alone", agent_ref)
-            return
-
-        cmd = _build_chat_rename_command(self._mngr_binary, agent_state.id, display_name)
-        try:
-            result = run_local_command_modern_version(
-                command=cmd,
-                cwd=None,
-                is_checked=False,
-                timeout=_RENAME_TIMEOUT_SECONDS,
-            )
-        except (OSError, ConcurrencyGroupError) as e:
-            _loguru_logger.opt(exception=e).error("Error renaming agent {}", agent_state.id)
-            raise AgentRenameError(f"Failed to rename agent '{agent_state.name}': {e}") from e
-        if result.returncode != 0:
-            detail = result.stderr.strip() or f"mngr rename exited with code {result.returncode}"
-            raise AgentRenameError(f"Failed to rename agent '{agent_state.name}': {detail}")
-
-        # Reflect the new name immediately rather than waiting for the observe
-        # stream to relist, exactly as destroy drops the agent immediately.
-        new_name = _canonical_agent_name(display_name) or display_name
-        with self._lock:
-            renamed = self._agents.get(agent_state.id)
-            if renamed is not None:
-                self._agents[agent_state.id] = renamed.model_copy_update(
-                    to_update(renamed.field_ref().name, new_name),
-                    to_update(renamed.field_ref().labels, {**renamed.labels, "display_name": display_name}),
-                )
         self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
 
     def get_apps(self) -> list[AppEntry]:

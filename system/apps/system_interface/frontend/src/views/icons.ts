@@ -62,7 +62,7 @@ const STROKE_PATHS = {
   search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>',
   "external-link":
     '<path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M19 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h6"/>',
-  // Pencil, on the tab menu's Rename row.
+  // Pencil, on the project switcher's per-row settings control.
   edit: '<path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/>',
   // Gear, on the switcher's current-project row: the project you are already in
   // does not need to be offered again, so that row leads to its settings.

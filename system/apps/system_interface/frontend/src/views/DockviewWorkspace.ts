@@ -701,17 +701,6 @@ function tabMenuEntries(panelId: string): TabMenuEntry[] {
     });
   }
   if (entries.length > 0) entries.push(MENU_DIVIDER);
-  if (params.panelType !== "launcher") {
-    entries.push({
-      label: "Rename",
-      iconName: "edit",
-      run: () => {
-        // The same inline editor the double-click opens, reached through the
-        // tab's handle so the menu and the gesture stay one mechanism.
-        tabHandlesByPanelId.get(panelId)?.beginTitleEdit();
-      },
-    });
-  }
   entries.push({
     label: "Hide tab",
     iconName: "minus",
@@ -826,10 +815,7 @@ function tabDestroyEntry(panelId: string, params: PanelParams): TabMenuItem | nu
 /** The live tabs, so the width recompute can size them and re-measure their
  *  titles, and so a "+" can flash the launcher its pane already holds. Entries
  *  are added as tabs are rendered and dropped as they are disposed. */
-const tabHandlesByPanelId = new Map<
-  string,
-  { element: HTMLElement; refreshTitleFade: () => void; beginTitleEdit: () => void }
->();
+const tabHandlesByPanelId = new Map<string, { element: HTMLElement; refreshTitleFade: () => void }>();
 
 /**
  * One tab: kind glyph, title, then the right-aligned minus and ⋮ that hover
@@ -841,11 +827,9 @@ const tabHandlesByPanelId = new Map<
  * ``:hover`` rule because the menu has to hold them open while it is up, after
  * the pointer has left the tab for the menu card.
  *
- * Double-clicking the title renames the object this tab is showing: it becomes
- * a text field seeded with the current name, Enter and blur commit, Escape puts
- * the old one back. The commit goes through ``renameMemberRef`` like every
- * other rename, so the name is the machine's rather than this tab's -- every
- * view showing the object says it, and it survives the tab being closed.
+ * The title itself is not editable. Objects are named when they are created
+ * ("Chat 2", "Terminal 1"), and the name a tab shows comes from the machine's
+ * title store rather than from anything typed on the strip.
  */
 function createCustomTab(options: { id: string; name: string }): ITabRenderer {
   const element = document.createElement("div");
@@ -868,17 +852,6 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
   content.style.textOverflow = "clip";
   element.appendChild(content);
 
-  // The rename editor, swapped in for the title on a double-click. A real input
-  // rather than a contenteditable title, so the caret, the selection and
-  // Escape behave the way a text field is expected to.
-  const editor = document.createElement("input");
-  editor.type = "text";
-  editor.className = "dv-custom-tab-title-input";
-  editor.spellcheck = false;
-  editor.setAttribute("aria-label", "Tab name");
-  editor.style.display = "none";
-  element.appendChild(editor);
-
   const actions = document.createElement("div");
   actions.className = "dv-custom-tab-actions";
   actions.style.display = "none";
@@ -887,15 +860,12 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
   const disposables: Array<{ dispose: () => void }> = [];
   let isPointerOver = false;
   let isMenuOpen = false;
-  let isEditingTitle = false;
   // Whether this instance is a row in the tab-overflow dropdown rather than a
   // tab on the strip. dockview builds a FRESH renderer per dropdown open
   // (``createTabRenderer("headerOverflow")``), so one panel can have two live
   // instances at once and only the strip's may carry controls or own the
   // panel's handle registration.
   let isOverflowRow = false;
-  // What dockview had the tab's draggable set to before an edit borrowed it.
-  let wasTabDraggable: boolean | null = null;
 
   /** Fade the title's last 20px, and only while it really is cut off. */
   const refreshTitleFade = (): void => {
@@ -907,103 +877,11 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
   };
 
   const updateActionsVisibility = (): void => {
-    // The buttons stand down for the length of an edit: the row is a text field
-    // for the moment, and the field wants the whole width.
-    actions.style.display = !isEditingTitle && (isPointerOver || isMenuOpen) ? "flex" : "none";
+    actions.style.display = isPointerOver || isMenuOpen ? "flex" : "none";
     // Revealing the buttons takes room from the title, so the fade is re-judged
     // against the box the title actually has now.
     refreshTitleFade();
   };
-
-  /** The ``.dv-tab`` dockview wraps this renderer in. That element, not this
-   *  one, is what carries the tab drag. */
-  const tabElement = (): HTMLElement | null => element.closest(".dv-tab");
-
-  const beginTitleEdit = (): void => {
-    if (isEditingTitle) return;
-    isEditingTitle = true;
-    editor.value = content.textContent ?? "";
-    content.style.display = "none";
-    editor.style.display = "block";
-    // dockview marks every tab draggable, and a draggable ancestor swallows the
-    // press-and-sweep that places a caret and selects text inside it -- typing
-    // works, but nothing can be clicked into or selected with the mouse. So the
-    // drag stands down for the length of the edit and is handed straight back.
-    const tab = tabElement();
-    if (tab !== null) {
-      wasTabDraggable = tab.draggable;
-      tab.draggable = false;
-    }
-    updateActionsVisibility();
-    editor.focus();
-    editor.select();
-  };
-
-  /** Leave the editor, committing what was typed or throwing it away. Blur
-   *  commits, so this runs on the way out of every path including a click
-   *  elsewhere in the workspace. */
-  const endTitleEdit = (isCommitting: boolean): void => {
-    if (!isEditingTitle) return;
-    isEditingTitle = false;
-    const typed = editor.value;
-    editor.style.display = "none";
-    content.style.display = "";
-    const tab = tabElement();
-    if (tab !== null && wasTabDraggable !== null) tab.draggable = wasTabDraggable;
-    wasTabDraggable = null;
-    updateActionsVisibility();
-    if (!isCommitting) return;
-    // An empty or whitespace-only title is not a name, so it is treated as
-    // Escape rather than leaving a tab with nothing to click on.
-    const title = normalizeTabTitle(typed);
-    if (title === null || title === content.textContent) return;
-    // The name is filed against the OBJECT this tab is showing, so it reaches
-    // every other view showing it and outlives this tab. A tab opened a moment
-    // ago may not have been filed yet, hence the fallback; a launcher stands
-    // for no object and so has nothing to name.
-    void (async () => {
-      const ref = memberRefByPanelId.get(options.id) ?? (await rememberMemberRef(options.id));
-      if (ref === null) return;
-      try {
-        await renameMemberRef(ref, title);
-      } catch (e) {
-        alert(`Failed to rename: ${(e as Error).message}`);
-      }
-    })();
-  };
-
-  content.addEventListener("dblclick", (event) => {
-    // A dropdown row only focuses; renaming happens on the strip.
-    if (isOverflowRow) return;
-    // A launcher stands for no object, so there is nothing to name: the
-    // gesture is refused outright rather than opening an editor whose commit
-    // would have nowhere to go. The event still propagates -- to dockview a
-    // double-click on a tab is just a click, and the launcher tab should keep
-    // behaving like one.
-    if (panelParams.get(options.id)?.panelType === "launcher") return;
-    event.preventDefault();
-    event.stopPropagation();
-    beginTitleEdit();
-  });
-  // Everything below the input would otherwise read a click meant for the caret
-  // as a tab activation, a key as a workspace shortcut, and a right-click as a
-  // request for the tab menu instead of the field's own cut/copy/paste one.
-  editor.addEventListener("pointerdown", (event) => event.stopPropagation());
-  editor.addEventListener("dblclick", (event) => event.stopPropagation());
-  editor.addEventListener("contextmenu", (event) => event.stopPropagation());
-  editor.addEventListener("keydown", (event) => {
-    event.stopPropagation();
-    if (event.key === "Enter") {
-      event.preventDefault();
-      endTitleEdit(true);
-    } else if (event.key === "Escape") {
-      event.preventDefault();
-      endTitleEdit(false);
-    }
-  });
-  editor.addEventListener("blur", () => {
-    endTitleEdit(true);
-  });
 
   return {
     element,
@@ -1034,8 +912,8 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
       // the tab, and the controls are on the strip once it is. The early
       // return also keeps this instance away from ``tabHandlesByPanelId``:
       // letting a dropdown row set (and, on dispose, delete) the panel's
-      // entry would leave the strip tab's Rename and title-fade pointing at
-      // a detached row after the dropdown closes.
+      // entry would leave the strip tab's title-fade pointing at a detached
+      // row after the dropdown closes.
       if (parameters.tabLocation === "headerOverflow") {
         isOverflowRow = true;
         actions.remove();
@@ -1094,7 +972,7 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
         updateActionsVisibility();
       });
       updateActionsVisibility();
-      tabHandlesByPanelId.set(options.id, { element, refreshTitleFade, beginTitleEdit });
+      tabHandlesByPanelId.set(options.id, { element, refreshTitleFade });
     },
     dispose() {
       // A dropdown row never claimed the handle, so it must not take the
@@ -4002,21 +3880,20 @@ async function handleMove(args: Record<string, unknown>, requesterAgentId: strin
 /**
  * Name an object, machine-wide.
  *
- * The one rename path: the agent-facing ``layout_op`` and the tab's own
- * double-click editor both land here. The name goes to the machine's title
- * store keyed by the object's ref (see models/MemberTitles), not into this
- * view's saved layout, so every view showing the object says the same thing
- * and an object with no panel anywhere -- backgrounded, or filed in no project
- * at all -- can be named too. Nothing is written to ``panelParams``:
- * ``params.title`` stays the *derived* name, which is what the tab falls back
- * to if the chosen one is ever cleared.
+ * The one rename path, and the only one left: the agent-facing ``layout_op``.
+ * Nothing in the UI renames -- objects are named when they are created -- so
+ * this is how an agent names something it opened. The name goes to the
+ * machine's title store keyed by the object's ref (see models/MemberTitles),
+ * not into this view's saved layout, so every view showing the object says the
+ * same thing and an object with no panel anywhere -- backgrounded, or filed in
+ * no project at all -- can be named too. Nothing is written to
+ * ``panelParams``: ``params.title`` stays the *derived* name, which is what
+ * the tab falls back to if the chosen one is ever cleared.
  *
  * The tab strip is repainted here rather than waiting for the broadcast that
- * follows, so the tab the user just typed into settles immediately; the
- * broadcast repaints every other client (and this one again, harmlessly).
- * Throws with the server's detail when the rename is refused: both callers
- * await it and report the rejection their own way -- an alert on the tab
- * editor, a console warning on the agent-facing op.
+ * follows, so this client settles immediately; the broadcast repaints every
+ * other one (and this one again, harmlessly). Throws with the server's detail
+ * when the rename is refused, which the caller reports as a console warning.
  */
 export async function renameMemberRef(ref: string, title: string): Promise<void> {
   await setMemberTitle(ref, title);

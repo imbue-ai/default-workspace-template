@@ -42,7 +42,6 @@ from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.agent_manager import _LogQueueCallback
 from imbue.system_interface.agent_manager import _build_chat_create_command
-from imbue.system_interface.agent_manager import _build_chat_rename_command
 from imbue.system_interface.agent_manager import _build_observe_command_argv
 from imbue.system_interface.agent_manager import _chat_project_label
 from imbue.system_interface.agent_manager import _make_apps_file_handler
@@ -56,7 +55,6 @@ from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.registry import get_model_state_path
 from imbue.system_interface.harnesses.session import FileHarnessSession
 from imbue.system_interface.models import AgentCreationError
-from imbue.system_interface.models import AgentRenameError
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.models import AppEntry
 from imbue.system_interface.models import QueuedMessageState
@@ -1223,79 +1221,6 @@ def test_chat_create_argv_omits_the_project_label_when_there_is_no_project() -> 
     assert_mngr_argv_valid(argv)
 
 
-def test_chat_rename_argv_accepted_by_live_cli() -> None:
-    """A rename carries the same name pair a create does: canonical name + typed label.
-
-    The canonical name is what an older vendored mngr accepts, and the typed
-    name rides the same atomic write as the rename so no observer sees the
-    renamed agent without its ``display_name``.
-    """
-    argv = _build_chat_rename_command(mngr_binary="mngr", agent_id="agent-123", name="Planning notes")
-    assert_mngr_argv_valid(argv)
-    assert argv == ["mngr", "rename", "agent-123", "Planning-notes", "--label", "display_name=Planning notes"]
-
-
-def test_rename_chat_agent_refuses_a_chat_that_is_still_being_created(
-    broadcaster: WebSocketBroadcaster,
-) -> None:
-    """A create in flight already carries a name; renaming to another would race it.
-
-    Filing the name the chat is *already* being created under is the ordinary
-    case (the workspace stores it the moment the create is accepted) and is a
-    no-op here; anything else is refused rather than silently diverging from
-    whatever the create ends up writing.
-    """
-    manager = AgentManager.build(broadcaster)
-    try:
-        with manager._lock:
-            manager._proto_agents["proto-1"] = {"agent_id": "proto-1", "name": "Chat 2"}
-        manager.rename_chat_agent("proto-1", "Chat 2")
-        with pytest.raises(AgentRenameError):
-            manager.rename_chat_agent("proto-1", "Something else")
-    finally:
-        manager.stop()
-
-
-def test_rename_chat_agent_leaves_mngr_alone_for_an_untracked_id(
-    broadcaster: WebSocketBroadcaster,
-    false_binary: str,
-) -> None:
-    """An id belonging to no agent has no mngr name to diverge from.
-
-    The stand-in binary always exits non-zero, so this returning quietly is the
-    proof that nothing was run: an actual invocation would have raised.
-    """
-    manager = AgentManager.build(broadcaster, mngr_binary=false_binary)
-    try:
-        manager.rename_chat_agent("agent-nowhere", "Scratch")
-    finally:
-        manager.stop()
-
-
-def test_rename_chat_agent_raises_when_mngr_refuses(
-    broadcaster: WebSocketBroadcaster,
-    false_binary: str,
-) -> None:
-    """A non-zero ``mngr rename`` is an error, and the agent keeps its old name.
-
-    The caller (the member-title endpoint) turns this into an error response and
-    writes nothing, so the two names cannot drift apart unnoticed.
-    """
-    manager = AgentManager.build(broadcaster, mngr_binary=false_binary)
-    try:
-        with manager._lock:
-            manager._agents["agent-7"] = AgentStateItem(
-                id="agent-7", name="Chat-2", state="RUNNING", labels={}, work_dir=None
-            )
-        with pytest.raises(AgentRenameError):
-            manager.rename_chat_agent("agent-7", "Planning notes")
-        still_named = manager.get_agent_by_id("agent-7")
-        assert still_named is not None
-        assert still_named.name == "Chat-2"
-    finally:
-        manager.stop()
-
-
 def test_serialized_agents_expose_the_project_label(broadcaster: WebSocketBroadcaster) -> None:
     """The workspace reads each chat's originating project off the agent payload."""
     manager = AgentManager.build(broadcaster)
@@ -2389,8 +2314,6 @@ def test_offline_codex_chip_matches_the_persisted_selection_from_the_sidecar(age
     assert choice.identity.model_id == "gpt-5.6-terra"
     assert choice.matched is not None
     assert choice.matched.id == "gpt-5.6-terra"
-
-
 def _capture_prioritizer_writes(manager: AgentManager, pids: dict[str, int]) -> list[tuple[int, int]]:
     """Swap in an OOM prioritizer that captures its band writes, and return the log.
 
