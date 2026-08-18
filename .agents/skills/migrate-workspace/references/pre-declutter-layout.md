@@ -239,8 +239,11 @@ In each case the tick is over, but the waiter polls to its 30-minute default
 affects the in-flight wait that runs *first*, so a source whose last tick ended
 in `snapshot_failed` looks permanently mid-backup.
 
-So pass a short `--timeout`, and when it expires read the tick's real outcome off
-the events log rather than believing the silence:
+Over SSH you never get that far, though: without the agent environment the
+command cannot locate the events log at all and exits 2 within a second of
+starting, and a pre-declutter source has no wrapper to supply that environment
+(Step 3). Either way -- a wait that runs out or a refusal to start -- read the
+tick's real outcome off the events log rather than believing the silence:
 
 ```bash
 ssh ... 'cat /mngr/host_backup/service_events_dir'
@@ -261,11 +264,12 @@ out is the only way in.)
 That pointer file exists only on a source running the `minds-v0.3.9` backup
 service or newer. Before that, the events sit under the *primary* agent's state
 dir (`<host_dir>/agents/<primary-agent-id>/events/backup/events.jsonl` -- Step
-5's `list-agents` names the primary), and `host-backup-now` over SSH fails
-*immediately* rather than hanging, because it derives the events dir from
-`MNGR_AGENT_STATE_DIR`, which an SSH session does not have. An immediate exit 2
-saying it cannot locate the events log means an old backup service, not a broken
-source.
+5's `list-agents` names the primary). Which of the two holds the events is the
+only thing the vintage decides here: `host-backup-now` reads the pointer from
+`MNGR_HOST_DIR` and falls back to `MNGR_AGENT_STATE_DIR`, and an un-wrapped SSH
+session has neither, so it exits 2 saying it cannot locate the events log on
+*every* pre-declutter source whatever backup service it runs. Read that exit as
+"no agent environment", never as a verdict on the source.
 
 Both of these are quirks of the command's *waiter*, never of the backup: the
 service itself ticks, writes its events, and (given an `restic.env`) uploads
