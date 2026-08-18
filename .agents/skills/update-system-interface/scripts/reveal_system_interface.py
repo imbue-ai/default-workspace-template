@@ -664,7 +664,9 @@ def _uv_tool_env(executable: str, tool_name: str, runner: Runner) -> dict:
     return env
 
 
-def _tool_extras(tool_name: str, repo_root: Path, runner: Runner, env: dict) -> list[str]:
+def _tool_extras(
+    tool_name: str, repo_root: Path, runner: Runner, env: dict
+) -> list[str]:
     """Return the ``--with``/``--with-editable`` args a tool was installed with.
 
     A ``uv tool install --reinstall`` rebuilds the environment from the base

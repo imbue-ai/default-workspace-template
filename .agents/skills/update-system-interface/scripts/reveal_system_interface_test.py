@@ -208,7 +208,9 @@ def test_classify_treats_a_vendored_manifest_as_a_backend_manifest() -> None:
     # the dependency refresh only off the lock would never fire on the merge that
     # moves the vendored mngr -- which is exactly the one that stales the editable
     # tool's dependency closure and breaks the mngr CLI.
-    changes = reveal_mod.classify_changes(["system/vendor/mngr/libs/mngr/pyproject.toml"])
+    changes = reveal_mod.classify_changes(
+        ["system/vendor/mngr/libs/mngr/pyproject.toml"]
+    )
     assert changes.backend_manifest and changes.backend
 
 
@@ -438,14 +440,18 @@ def test_failed_preflight_never_restarts_live_service_and_rolls_back() -> None:
     assert not runner.ran("git", "checkout", _ROLLBACK)
 
 
-def _with_receipt(runner: _RecordingRunner, tool_dir: Path, tool: str, body: str) -> None:
+def _with_receipt(
+    runner: _RecordingRunner, tool_dir: Path, tool: str, body: str
+) -> None:
     """Point ``uv tool dir`` at ``tool_dir`` and give ``tool`` a receipt there."""
     runner.respond(("uv", "tool", "dir"), _Result(stdout=f"{tool_dir}\n"))
     (tool_dir / tool).mkdir(parents=True, exist_ok=True)
     (tool_dir / tool / "uv-receipt.toml").write_text(body)
 
 
-def test_dependency_refresh_preserves_a_tools_registered_plugins(tmp_path: Path) -> None:
+def test_dependency_refresh_preserves_a_tools_registered_plugins(
+    tmp_path: Path,
+) -> None:
     # A bare --reinstall rebuilds a tool from its base package alone. For the mngr
     # tool the extras ARE its plugins, so dropping them leaves a CLI that cannot
     # parse its own plugin config -- swapping one broken workspace for another.
@@ -480,7 +486,9 @@ def test_dependency_refresh_preserves_a_tools_registered_plugins(tmp_path: Path)
     ]
 
 
-def test_dependency_refresh_repins_the_base_to_the_in_tree_source(tmp_path: Path) -> None:
+def test_dependency_refresh_repins_the_base_to_the_in_tree_source(
+    tmp_path: Path,
+) -> None:
     # A receipt that has lost its editable marker (observed in the wild) must not
     # make us resolve the base from the index -- that would silently swap the
     # workspace's own vendored code for a published release.
@@ -538,7 +546,9 @@ def test_tool_location_comes_from_the_console_scripts_shebang(tmp_path: Path) ->
         "#!/python3\n",  # too shallow to name a tool directory
     ],
 )
-def test_tool_location_declines_what_it_cannot_read(contents: str, tmp_path: Path) -> None:
+def test_tool_location_declines_what_it_cannot_read(
+    contents: str, tmp_path: Path
+) -> None:
     # Anything we cannot interpret means we do not know which installation this
     # is, and the caller falls back to letting uv decide -- guessing a directory
     # would be worse than uv's own default.
@@ -548,7 +558,9 @@ def test_tool_location_declines_what_it_cannot_read(contents: str, tmp_path: Pat
     assert reveal_mod._tool_location(script, "imbue-mngr") is None
 
 
-def test_tool_location_declines_the_workspace_venvs_console_script(tmp_path: Path) -> None:
+def test_tool_location_declines_the_workspace_venvs_console_script(
+    tmp_path: Path,
+) -> None:
     # Both names are also uv sync members, so PATH can resolve to the venv's own
     # entrypoint. Deriving a "tool directory" from that would build a tool
     # environment inside the served checkout -- dirtying the tree the next reveal
@@ -643,7 +655,9 @@ def test_failed_preflight_reports_why_the_backend_did_not_boot(capsys) -> None:
         output="Traceback (most recent call last):\nModuleNotFoundError: No module named 'frontmatter'\n"
     )
 
-    code = _reveal(runner, _FakeHttp(lambda url: 200 if _is_live(url) else None), spawner)
+    code = _reveal(
+        runner, _FakeHttp(lambda url: 200 if _is_live(url) else None), spawner
+    )
 
     assert code == 2
     reported = capsys.readouterr().err
@@ -661,7 +675,9 @@ def test_failed_preflight_that_produced_no_output_says_so(capsys) -> None:
         "M\tsystem/apps/system_interface/imbue/system_interface/server.py\n"
     )
 
-    _reveal(runner, _FakeHttp(lambda url: 200 if _is_live(url) else None), _FakeSpawner())
+    _reveal(
+        runner, _FakeHttp(lambda url: 200 if _is_live(url) else None), _FakeSpawner()
+    )
 
     assert "wrote nothing at all" in capsys.readouterr().err
 
