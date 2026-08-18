@@ -1,10 +1,10 @@
 /**
  * What a typed title becomes before it is filed as an object's name.
  *
- * Every rename path -- the tab's own double-click editor and the agent-facing
- * layout op alike -- goes through `renameMemberRef` in the end, and both hand
- * it a title normalized here first. Needs no DOM, panel or project, which is
- * why it lives apart from them.
+ * The agent-facing layout op -- the only rename path there is, since nothing
+ * in the UI renames -- goes through `renameMemberRef`, and hands it a title
+ * normalized here first. Needs no DOM, panel or project, which is why it lives
+ * apart from them.
  */
 
 /** Longest title kept. Far more than the 220px tab ceiling can show -- the

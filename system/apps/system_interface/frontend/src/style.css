@@ -2367,23 +2367,6 @@ body > .dv-tab.dv-dragged {
   }
 }
 
-/* The inline rename editor, swapped in for the title on a double-click. It
-   takes the title's own box so the tab neither grows nor jumps as it opens,
-   and inherits the tab's type so the name reads the same while it is being
-   typed as it will once it is committed. The accent ring is the only thing
-   that marks it as editable. */
-.dv-custom-tab-title-input {
-  flex: 1 1 auto;
-  min-width: 0;
-  padding: 0 3px;
-  border: 1px solid var(--color-accent);
-  border-radius: 3px;
-  outline: none;
-  background: var(--color-bg);
-  color: var(--color-text-primary);
-  font: inherit;
-}
-
 .dv-custom-tab-actions {
   display: flex;
   align-items: center;

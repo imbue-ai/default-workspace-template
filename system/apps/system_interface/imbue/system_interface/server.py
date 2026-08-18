@@ -76,7 +76,6 @@ from imbue.system_interface.models import ActivityResponse
 from imbue.system_interface.models import AgentCreationError
 from imbue.system_interface.models import AgentListItem
 from imbue.system_interface.models import AgentListResponse
-from imbue.system_interface.models import AgentRenameError
 from imbue.system_interface.models import AgentRestartError
 from imbue.system_interface.models import AttachmentError
 from imbue.system_interface.models import AttachmentUploadResponse
@@ -159,10 +158,6 @@ _WS_PING_INTERVAL_SECONDS = 25
 _DESTROY_TIMEOUT_SECONDS = 120.0
 # `mngr label` is a metadata write (data.json merge), fast even on a busy host.
 _LABEL_TIMEOUT_SECONDS = 30.0
-
-# The member-ref prefix that marks an object as an mngr agent. The rest of a
-# chat ref is the agent's id (``chat:<agent-id>``, as every UI surface files it).
-_CHAT_MEMBER_REF_PREFIX = "chat:"
 
 
 class _ReflectClientSubprotocols:
@@ -1399,34 +1394,6 @@ def _list_member_titles_endpoint() -> Response:
     return _json_response({"titles": member_titles.read_titles(layout_dir)})
 
 
-def _rename_chat_agent_for_ref(ref: str, title: str) -> Response | None:
-    """Carry a chat's new name into mngr, or answer with why it could not be.
-
-    A chat is an mngr agent, so its name lives in mngr (the agent name, plus the
-    typed form as its ``display_name`` label) as well as in the workspace's title
-    store -- renaming only the store is what left ``mngr list`` showing the old
-    name. mngr goes first and the store is only written when it succeeded, so a
-    refused rename leaves *both* names as they were rather than silently
-    disagreeing; the returned error response is what the tab editor alerts with.
-
-    Only ``chat:`` refs are agents: terminals, browsers, apps and URLs have no
-    mngr name and are stored exactly as before (None means "nothing to do, carry
-    on"). Clearing a chat's name is stored-only too: mngr has no empty name to
-    be given, so the chat keeps the name it has and the surfaces fall back to it.
-    """
-    if not ref.startswith(_CHAT_MEMBER_REF_PREFIX):
-        return None
-    chosen_title = member_titles.validated_title(title)
-    if chosen_title is None:
-        return None
-    agent_manager: AgentManager = get_state().agent_manager
-    try:
-        agent_manager.rename_chat_agent(ref[len(_CHAT_MEMBER_REF_PREFIX) :], chosen_title)
-    except AgentRenameError as e:
-        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=500)
-    return None
-
-
 def _set_member_title_endpoint() -> Response:
     """Name one object, machine-wide, or clear its name with a blank one.
 
@@ -1435,9 +1402,6 @@ def _set_member_title_endpoint() -> Response:
     member can be renamed with no panel to hang the name on -- which is the
     point of keying this by ref. The stored name comes back in the response and
     in the broadcast, ``null`` when the entry was cleared.
-
-    A ``chat:`` ref additionally renames the mngr agent behind it, before
-    anything is stored (see ``_rename_chat_agent_for_ref``).
     """
     layout_dir = _primary_agent_layout_dir()
     if layout_dir is None:
@@ -1455,9 +1419,6 @@ def _set_member_title_endpoint() -> Response:
         error = ErrorResponse(detail="'title' must be a string (an empty one clears the name)")
         return _json_response(error.model_dump(), status_code=400)
     try:
-        rename_refusal = _rename_chat_agent_for_ref(ref.strip(), title)
-        if rename_refusal is not None:
-            return rename_refusal
         stored_title = member_titles.set_title(layout_dir, ref, title)
     except member_titles.MemberTitleLengthError as e:
         return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
