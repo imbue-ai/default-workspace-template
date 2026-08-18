@@ -20,11 +20,19 @@ def _cache() -> JwksCache:
     return JwksCache("https://accounts.example.com/share/jwks.json", preloaded_keys_by_kid={_KID: _KEY.public_key()})
 
 
-def _token(nonce: str = "n1", jti: str = "j1", kid: str = _KID, ttl_seconds: int = 60, email: str = "a@b.co") -> str:
+def _token(
+    nonce: str = "n1",
+    jti: str = "j1",
+    kid: str = _KID,
+    ttl_seconds: int = 60,
+    email: str = "a@b.co",
+    is_owner: bool = False,
+) -> str:
     now = datetime.now(timezone.utc)
     payload = {
         "sub": "u1",
         "email": email,
+        "owner": is_owner,
         "aud": _DOMAIN,
         "jti": jti,
         "nonce": nonce,
@@ -34,9 +42,15 @@ def _token(nonce: str = "n1", jti: str = "j1", kid: str = _KID, ttl_seconds: int
     return jwt.encode(payload, _KEY, algorithm="RS256", headers={"kid": kid})
 
 
-def test_valid_token_returns_email() -> None:
-    email = verify_handoff_token(_token(), "n1", _DOMAIN, _cache(), SingleUseJtiRegistry())
-    assert email == "a@b.co"
+def test_valid_token_returns_email_and_not_owner_by_default() -> None:
+    result = verify_handoff_token(_token(), "n1", _DOMAIN, _cache(), SingleUseJtiRegistry())
+    assert result.email == "a@b.co"
+    assert result.is_owner is False
+
+
+def test_valid_token_carries_owner_claim() -> None:
+    result = verify_handoff_token(_token(is_owner=True), "n1", _DOMAIN, _cache(), SingleUseJtiRegistry())
+    assert result.is_owner is True
 
 
 def test_expired_token_is_rejected() -> None:

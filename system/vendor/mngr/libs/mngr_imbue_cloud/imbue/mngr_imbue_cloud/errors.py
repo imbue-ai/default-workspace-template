@@ -62,6 +62,20 @@ class ImbueCloudQuotaExceededError(ImbueCloudError):
         self.current = current
 
 
+class ImbueCloudEmailNotVerifiedError(ImbueCloudError):
+    """Raised when the connector refuses an action because the account's email is unverified.
+
+    Carries the structured detail from the connector's 403 (``code:
+    email_not_verified``) so callers (e.g. the minds desktop client) can
+    respond with a contextual "verify your email" prompt instead of a
+    generic failure.
+    """
+
+    def __init__(self, message: str, email: str | None) -> None:
+        super().__init__(message)
+        self.email = email
+
+
 class ImbueCloudAccountError(ImbueCloudError):
     """Raised when an account (plan / entitlements / usage) operation fails."""
 
@@ -171,3 +185,74 @@ class FixedAgentIdError(ImbueCloudError, ValueError):
 
 class ClaudeConfigPatchError(ImbueCloudError, RuntimeError):
     """Raised when patching the claude config on a leased imbue_cloud host fails."""
+
+
+class AdoptionError(ImbueCloudError):
+    """Raised when adopting a leased slice (reconciler install / key rotation / verification) fails."""
+
+
+class HostKeyDriftError(AdoptionError):
+    """Raised when an adopted endpoint serves a key that matches neither its pin nor a pending rotation.
+
+    Somebody other than this user's devices re-keyed the host (e.g. an operator
+    re-key, or a rebuild this device has not recorded). The device correctly
+    refuses to trust the new key; the user re-adopts (or re-syncs) to recover.
+    """
+
+
+class WireEnumMissingUnknownMemberError(ImbueCloudError, TypeError):
+    """Raised when a WireEnum subclass fails to define the UNKNOWN member its coercion contract requires."""
+
+
+# The standard remedy text for the client-too-old refusal, shown when neither
+# the connector's HTTP 426 detail nor the plugin's stderr carries a message of
+# its own. Shared so the plugin and the desktop wrapper can never diverge.
+CLIENT_TOO_OLD_FALLBACK_MESSAGE = "This app version is no longer supported; please update it."
+
+
+class ImbueCloudClientTooOldError(ImbueCloudError):
+    """Raised when the connector refuses a request because this client version is no longer supported.
+
+    Carries the structured detail from the connector's HTTP 426 (``code:
+    client_too_old``). Deterministic -- retrying cannot succeed until the
+    client updates -- so callers surface an "update the app" prompt instead
+    of a generic failure. ``min_version`` / ``sunset_date`` are None when the
+    server's refusal did not carry them.
+    """
+
+    def __init__(self, message: str, min_version: str | None, sunset_date: str | None) -> None:
+        super().__init__(message)
+        self.min_version = min_version
+        self.sunset_date = sunset_date
+
+
+class ImbueCloudRecordFormatTooNewError(ImbueCloudSyncError):
+    """Raised when a record push is refused because the stored row's record_format is newer.
+
+    The connector's structured 409 (``code: record_format_too_new``): the
+    stored record's semantics postdate this client, so modifying it could
+    corrupt meaning the client cannot see. The record stays readable; the
+    remedy is updating the app.
+    """
+
+
+class UnrecognizedWorkspaceStatusError(ImbueCloudError):
+    """Raised when a state-changing operation targets a workspace whose status this client cannot interpret.
+
+    The wire status coerced to ``WorkspaceStatus.UNKNOWN`` (a newer server's
+    vocabulary). Observation stays available, but driving a lifecycle
+    transition from an unintelligible state would act blindly, so the client
+    refuses with an "update the app" message instead.
+    """
+
+
+class WorkspacesEndpointUnavailableError(ImbueCloudConnectorError):
+    """Raised when the connector predates the /workspaces lifecycle endpoints."""
+
+
+class WorkspaceStartFailedError(ImbueCloudError):
+    """Raised when a workspace start ended in failure server-side (row back on stopped)."""
+
+
+class WorkspaceStartTimeoutError(ImbueCloudError):
+    """Raised when a workspace start did not reach running within the client's poll window."""

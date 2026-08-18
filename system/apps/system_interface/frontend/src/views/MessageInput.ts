@@ -11,24 +11,14 @@ import {
 } from "../models/ComposerAttachments";
 import type { ComposerAttachment } from "../models/ComposerAttachments";
 import { buildMessageWithAttachments, formatFileSize } from "../models/attachments";
-import { interruptAgent, sendMessage, getEventsForAgent } from "../models/Response";
-import {
-  addPendingMessage,
-  getEffectiveActivityState,
-  markPendingMessageQueued,
-  removePendingMessage,
-} from "../models/PendingMessages";
+import { drainToComposer, sendMessage } from "../models/Response";
+import { addOutgoing, clearOutgoing, dropOutgoing, getOutgoingMessages } from "../models/OutgoingMessages";
 import { describeRequestError } from "../models/request-error";
-import {
-  fetchModelSettings,
-  getModelSettings,
-  getSelectedOption,
-  setFastMode,
-  setModel,
-} from "../models/ModelSettings";
-import { openLoginModal } from "../models/ClaudeAuth";
-import { findDeclinedSlashCommand } from "../models/claudeSlashCommands";
+import { openAgentAuth } from "../models/AgentAuth";
+import { ensureHarnessCatalogs, findComposerPopup, getHarnessCatalog } from "../models/HarnessCatalog";
+import { getAgentById } from "../models/AgentManager";
 import { isWorkingActivityState } from "./ActivityIndicator";
+import { hoverTooltipAttrs } from "./hoverTooltip";
 import { icon, stopIcon } from "./icons";
 
 const MAX_TEXTAREA_HEIGHT_PX = 200;
@@ -37,6 +27,26 @@ const MESSAGE_TEXT_KEY_PREFIX = "message-text:";
 
 function messageTextKey(agentId: string): string {
   return `${MESSAGE_TEXT_KEY_PREFIX}${agentId}`;
+}
+
+// Blocks handed back to the composer from OUTSIDE this component (a native shoulder tap whose combined
+// resend failed -- see QueuedMessageView), keyed by agent. The composer's own ``messageText`` is a
+// per-instance closure, so a sibling view cannot merge into it directly; it drops the block here and
+// redraws, and the composer applies it on its next view pass (prepend, then persist), the same
+// merge-not-drop rule Stop's drain-to-composer uses. Persisted to localStorage regardless, so the text
+// survives even if the composer is not currently mounted -- never swallowed (contract A1a).
+const pendingComposerPrepends = new Map<string, string>();
+
+/** Hand ``block`` back to ``agentId``'s composer (prepended above any draft), from a sibling view. */
+export function prependToComposer(agentId: string, block: string): void {
+  if (!block) {
+    return;
+  }
+  const existingDraft = localStorage.getItem(messageTextKey(agentId)) ?? "";
+  const merged = existingDraft.trim().length === 0 ? block : `${block}\n\n${existingDraft}`;
+  localStorage.setItem(messageTextKey(agentId), merged);
+  pendingComposerPrepends.set(agentId, merged);
+  m.redraw();
 }
 
 function autoResizeTextarea(textarea: HTMLTextAreaElement): void {
@@ -61,27 +71,20 @@ function imageFilesFromClipboard(clipboardData: DataTransfer | null): File[] {
   return files;
 }
 
-// Compatibility export
-export function setSelectedModelId(_modelId: string): void {}
-
 export function MessageInput(): m.Component<{ agentId: string | null }> {
   let messageText = "";
   let currentAgentId: string | null = null;
   let messageTextareaElement: HTMLTextAreaElement | null = null;
-  // Set instead of sending when the user types one of claude's own auth
-  // commands. Delivered to the TUI, /logout would exit the agent's process
-  // and wipe shared onboarding state without actually signing the workspace
-  // out, and /login would start claude's interactive sign-in inside the
-  // agent's terminal -- both bypassing the managed agent-auth screen (auth
-  // lives in settings.json / claude's credential store, managed there).
-  let interceptedAuthCommand: "/login" | "/logout" | null = null;
+  // Set instead of sending when the user types one of the harness's declared
+  // auth commands (the `open_auth` composer popup). Delivered raw, /login or
+  // /logout would run the harness's own auth flow inside the agent's terminal
+  // (or reach the model as prose), bypassing the managed agent-auth surface.
+  let interceptedAuthCommand: string | null = null;
   // A slash command the chat declines to deliver, because it would change the agent's terminal
   // rather than start a turn. It still works from that terminal, which the notice says.
   let declinedSlashCommand: string | null = null;
   let fileInputElement: HTMLInputElement | null = null;
   let isInterruptInFlight = false;
-  let isModelDropdownOpen = false;
-  let modelSelectorElement: HTMLElement | null = null;
 
   function focusMessageTextarea(): void {
     messageTextareaElement?.focus();
@@ -95,116 +98,6 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
       declinedSlashCommand = null;
       m.redraw();
     }
-  }
-
-  // Stable reference (defined once for the component's life) so the dropdown's
-  // add/removeEventListener pair to the same function -- a per-render closure
-  // would leak a listener each time the dropdown reopens.
-  function handleModelOutsideMousedown(event: MouseEvent): void {
-    if (modelSelectorElement !== null && !modelSelectorElement.contains(event.target as Node)) {
-      isModelDropdownOpen = false;
-      m.redraw();
-    }
-  }
-
-  // The model picker + fast-mode toggle live in the composer toolbar, alongside
-  // the attach and stop/send buttons. The current selection is read from the
-  // agent's Claude Code settings (fetched on agent switch); picking a model or
-  // flipping fast mode posts a `/model` / `/fast` command that the running
-  // session applies immediately (see ModelSettings.ts + server.py). The fast
-  // toggle is an icon button that only appears for a model that supports fast
-  // mode (Opus) and lights up while it is on. Returns the toolbar items (model
-  // pill first, then the fast toggle when applicable) for the caller to place.
-  function renderModelControls(agentId: string): m.Children[] {
-    const settings = getModelSettings(agentId);
-    const selected = getSelectedOption(agentId);
-    const triggerLabel = selected?.label ?? "Model";
-
-    const modelWrapper = m(
-      "div",
-      {
-        class: "model-selector-wrapper",
-        oncreate: (wrapperVnode: m.VnodeDOM) => {
-          modelSelectorElement = wrapperVnode.dom as HTMLElement;
-        },
-        onremove: () => {
-          modelSelectorElement = null;
-        },
-      },
-      [
-        m(
-          "button",
-          {
-            type: "button",
-            class: "model-selector-trigger",
-            disabled: settings === null,
-            "data-tooltip": "Select model",
-            onclick: (event: MouseEvent) => {
-              event.stopPropagation();
-              isModelDropdownOpen = !isModelDropdownOpen;
-            },
-          },
-          [
-            m("span", { class: "model-selector-label" }, triggerLabel),
-            m("span", { class: "model-selector-chevron" }, m.trust(icon("chevron-down", { size: 12 }))),
-          ],
-        ),
-        isModelDropdownOpen && settings !== null
-          ? m(
-              "div",
-              {
-                class: "model-selector-dropdown",
-                // Close on any click outside the picker while it is open.
-                oncreate: () => document.addEventListener("mousedown", handleModelOutsideMousedown),
-                onremove: () => document.removeEventListener("mousedown", handleModelOutsideMousedown),
-              },
-              [
-                m("div", { class: "model-selector-dropdown-header" }, "Model"),
-                m(
-                  "ul",
-                  { class: "model-selector-dropdown-list" },
-                  settings.options.map((option) =>
-                    m(
-                      "li",
-                      {
-                        key: option.id,
-                        class:
-                          "model-selector-option" +
-                          (selected?.id === option.id ? " model-selector-option--selected" : ""),
-                        onclick: () => {
-                          isModelDropdownOpen = false;
-                          if (selected?.id !== option.id) {
-                            setModel(agentId, option.id);
-                          }
-                        },
-                      },
-                      option.label,
-                    ),
-                  ),
-                ),
-              ],
-            )
-          : null,
-      ],
-    );
-
-    const fastToggle =
-      settings !== null && settings.fast_mode_supported
-        ? m(
-            "button",
-            {
-              type: "button",
-              class: `fast-toggle${settings.fast_mode ? " fast-toggle--on" : ""}`,
-              "data-tooltip": settings.fast_mode ? "Disable fast mode" : "Enable fast mode",
-              "aria-label": settings.fast_mode ? "Disable fast mode" : "Enable fast mode",
-              "aria-pressed": settings.fast_mode ? "true" : "false",
-              onclick: () => setFastMode(agentId, !settings.fast_mode),
-            },
-            m.trust(icon("zap", { size: 16 })),
-          )
-        : null;
-
-    return [modelWrapper, fastToggle];
   }
 
   function renderComposerAttachment(agentId: string, attachment: ComposerAttachment): m.Vnode {
@@ -228,7 +121,11 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
       [
         thumbnail,
         m("span", { class: "composer-attachment-info" }, [
-          m("span", { class: "composer-attachment-name", title: attachment.fileName }, attachment.fileName),
+          m(
+            "span",
+            { class: "composer-attachment-name", ...hoverTooltipAttrs(attachment.fileName) },
+            attachment.fileName,
+          ),
           attachment.status === "ready" && attachment.uploaded !== undefined
             ? m("span", { class: "composer-attachment-detail" }, formatFileSize(attachment.uploaded.size))
             : null,
@@ -244,8 +141,8 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
               {
                 type: "button",
                 class: "composer-attachment-remove",
-                title: "Remove attachment",
                 "aria-label": "Remove attachment",
+                ...hoverTooltipAttrs("Remove attachment"),
                 onclick: () => removeComposerAttachment(agentId, attachment.localId),
               },
               m.trust(icon("close", { size: 12, strokeWidth: 2.5 })),
@@ -266,30 +163,46 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         currentAgentId = agentId;
         messageText = localStorage.getItem(messageTextKey(agentId)) ?? "";
         isInterruptInFlight = false;
-        isModelDropdownOpen = false;
-        // The notice names a command typed for the previous agent, so it must not follow the user
-        // to the next one.
+        // The notices name a command typed for the previous agent, so they must not follow the
+        // user to the next one.
         declinedSlashCommand = null;
-        // Load this agent's model + fast-mode selection for the picker (cached
-        // per agent, so this is a no-op once loaded).
-        fetchModelSettings(agentId);
+        interceptedAuthCommand = null;
+      }
+
+      // A sibling view (a native tap whose resend failed) merged a returned block into this agent's
+      // persisted draft; adopt it into the live composer so it is visible at once, then clear the flag.
+      const pendingPrepend = pendingComposerPrepends.get(agentId);
+      if (pendingPrepend !== undefined) {
+        pendingComposerPrepends.delete(agentId);
+        messageText = pendingPrepend;
       }
 
       async function handleSend(): Promise<void> {
         if (!agentId) {
           return;
         }
-        const trimmedCommand = messageText.trim().toLowerCase();
-        if (trimmedCommand === "/login" || trimmedCommand === "/logout") {
-          interceptedAuthCommand = trimmedCommand;
-          m.redraw();
-          return;
-        }
-        const declined = findDeclinedSlashCommand(messageText);
-        if (declined !== null) {
-          declinedSlashCommand = declined;
-          m.redraw();
-          return;
+        // The composer guard is whatever the agent's harness declared (its
+        // `composer_command` popups on the catalog): auth commands open the
+        // harness's agent-auth surface, declined commands get the notice, and a
+        // harness that declared nothing (pi's declines) sends everything as-is.
+        // Only slash-shaped messages consult it, and only those block on the
+        // catalog when it has not loaded yet -- otherwise an early /login could
+        // slip through the fetch window.
+        if (messageText.trim().startsWith("/")) {
+          const harness = getAgentById(agentId)?.harness;
+          if (getHarnessCatalog(harness) === null) {
+            await ensureHarnessCatalogs();
+          }
+          const match = findComposerPopup(harness, messageText);
+          if (match !== null) {
+            if (match.popup.action === "open_auth") {
+              interceptedAuthCommand = match.command;
+            } else {
+              declinedSlashCommand = match.command;
+            }
+            m.redraw();
+            return;
+          }
         }
         // Wait for in-flight uploads so a just-dropped file is included rather
         // than dropped from the message.
@@ -309,36 +222,33 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         messageText = "";
         clearComposerAttachments(agentId);
         localStorage.removeItem(messageTextKey(agentId));
-        // Show the message immediately (and force "Thinking..." if the agent is
-        // idle) instead of waiting for it to round-trip through the transcript.
-        const pendingId = addPendingMessage(agentId, finalText, getEventsForAgent(agentId));
+
+        // Paint an optimistic "Sending…" bubble at the tail immediately -- the ONE
+        // optimism the frontend is allowed (contract A2). It is a client-only overlay
+        // (see models/OutgoingMessages) whose removal is BACKEND-DRIVEN: it drops only
+        // once the real message arrives from the backend (its queued chip or committed
+        // transcript turn), real-first, so there is never a gap.
+        const outgoingId = addOutgoing(agentId, sentText);
         m.redraw();
 
         try {
           await sendMessage(agentId, finalText);
-          // The POST resolves once the backend confirms the agent accepted the
-          // message into its queue, so move the bubble to "queued". It stays up
-          // until the real transcript event reconciles it away -- that is when
-          // the agent has genuinely received it (the user-facing "sent").
-          if (pendingId !== null) {
-            markPendingMessageQueued(agentId, pendingId);
-          }
+          // The send resolved: the message is now real (committed or queued), so its
+          // "Sending…" bubble is removed by the arriving transcript turn or queued
+          // snapshot (see OutgoingMessages.noteBackendArrivals) -- nothing to do here.
         } catch (err) {
           // The send genuinely failed (the backend confirms delivery before
-          // resolving, so a rejection means the message was NOT accepted). Roll
-          // the optimistic bubble back (clearing the forced-"Thinking..."
-          // override) so the UI does not show a message that was never
-          // delivered, and surface the real error.
+          // resolving, so a rejection means the message was NOT accepted). Drop the
+          // optimistic bubble and handle failure the original way: restore the
+          // text/attachments to the composer, then surface a popup.
           const detail = describeRequestError(err);
           console.error(`Failed to send message to agent ${agentId}: ${detail}`);
-          if (pendingId !== null) {
-            removePendingMessage(agentId, pendingId);
-          }
+          dropOutgoing(agentId, outgoingId);
           // Restore the user's text and attachments so the send is not silently
-          // lost -- but only if they have not already started a new draft for
-          // this agent (the input was cleared at send time, so during the
-          // in-flight request the user may have typed or attached something
-          // new; blindly restoring would clobber that newer draft).
+          // lost -- but only if they have not already started a new draft for this
+          // agent (the input was cleared at send time, so during the in-flight
+          // request the user may have typed or attached something new; blindly
+          // restoring would clobber that newer draft).
           const currentDraft =
             currentAgentId === agentId ? messageText : (localStorage.getItem(messageTextKey(agentId)) ?? "");
           const isComposerEmpty = currentDraft.trim().length === 0 && getComposerAttachments(agentId).length === 0;
@@ -347,13 +257,9 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
             restoreComposerAttachments(agentId, sentAttachments);
             if (currentAgentId === agentId) {
               messageText = sentText;
-              m.redraw();
             }
           }
-          // Surface the failure to the user with an explicit signal: the bubble
-          // vanishing on its own is too subtle to read as "your message did not
-          // send." Matches the alert-based feedback convention for user-initiated
-          // mutations in this file (see handleInterrupt).
+          m.redraw();
           alert(`Failed to send message: ${detail}`);
         }
 
@@ -362,22 +268,45 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         });
       }
 
-      async function handleInterrupt(): Promise<void> {
+      async function handleStopToComposer(): Promise<void> {
         if (!agentId || isInterruptInFlight) {
           return;
         }
-        // Hide the stop button until the restart request settles so the user
-        // cannot fire off multiple restarts in quick succession.
+        // Hide the stop button until the request settles so the user cannot fire
+        // off multiple restarts in quick succession.
         isInterruptInFlight = true;
+        // Snapshot the Sending bubbles that exist BEFORE the interrupt round-trip. On
+        // success we clear exactly these: every one is now either Delivered (its turn
+        // already dropped its bubble via arrival) or Returned into the composer via the
+        // block below -- so any that remain are Returned with no arrival to clear them
+        // (the ghost). Clearing only the pre-interrupt set leaves a message the user
+        // sends DURING the round-trip untouched (it is not in the returned block).
+        const preInterruptBubbleIds = getOutgoingMessages(agentId).map((message) => message.id);
         m.redraw();
         try {
-          await interruptAgent(agentId);
+          // Interrupt the agent and pull any queued messages back into the composer,
+          // unsent, for the user to edit and send. Empty block = nothing was queued
+          // (a clean no-op).
+          const { block } = await drainToComposer(agentId);
+          // Every not-Delivered message is now back in the composer (or was Delivered and
+          // dropped its own bubble); clear the pre-interrupt Sending bubbles so none ghost.
+          clearOutgoing(agentId, preInterruptBubbleIds);
+          if (block) {
+            // Merge instead of drop: prepend the handed-back block above any existing draft
+            // (block, blank line, draft) rather than dropping it when the composer is
+            // non-empty. Under pi's native retract the messages survive nowhere else, so
+            // dropping them here would lose them outright.
+            const draft = messageText;
+            const merged = draft.trim().length === 0 ? block : `${block}\n\n${draft}`;
+            messageText = merged;
+            localStorage.setItem(messageTextKey(agentId), merged);
+          }
         } catch (err) {
           const detail = describeRequestError(err);
           console.error(`Failed to interrupt agent ${agentId}: ${detail}`);
-          // Surface the failure to the user: they deliberately clicked Stop,
-          // and on failure the agent is still running. Matches the alert-based
-          // feedback convention for user-initiated mutations (see executeDestroy).
+          // Surface the failure: they deliberately clicked Stop, and on failure
+          // the agent is still running. Matches the alert-based feedback
+          // convention for user-initiated mutations (see executeDestroy).
           alert(`Failed to interrupt agent: ${detail}`);
         } finally {
           isInterruptInFlight = false;
@@ -464,14 +393,11 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         );
       }
 
-      function renderAuthCommandNotice(command: "/login" | "/logout"): m.Vnode {
-        const title = command === "/login" ? "Sign-in is managed here" : "Sign-out is managed here";
+      function renderAuthCommandNotice(command: string): m.Vnode {
+        const title = command === "/logout" ? "Sign-out is managed here" : "Sign-in is managed here";
         const explanation =
-          command === "/login"
-            ? "Sending /login to the agent would start Claude's own sign-in inside the agent's terminal, " +
-              "which would not sign the rest of the workspace in. Use the agent auth screen instead."
-            : "Sending /logout to the agent would shut it down without signing the workspace out. " +
-              "Use the agent auth screen to switch or remove credentials.";
+          `Sending ${command} to the agent would run its own auth flow inside the agent's terminal, ` +
+          "outside this workspace's managed sign-in. Use the agent auth screen instead.";
         return m(
           "div.custom-url-dialog-overlay",
           {
@@ -490,10 +416,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
             },
             [
               m("h3.custom-url-dialog-title", title),
-              m(
-                "p.logout-notice-body",
-                `This workspace's Claude sign-in is managed by this interface. ${explanation}`,
-              ),
+              m("p.logout-notice-body", explanation),
               m("div.custom-url-dialog-actions", [
                 m("button.custom-url-dialog-cancel", { onclick: () => dismissAuthCommandNotice() }, "Cancel"),
                 m(
@@ -501,7 +424,9 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
                   {
                     onclick: () => {
                       dismissAuthCommandNotice();
-                      openLoginModal();
+                      if (agentId) {
+                        openAgentAuth(agentId);
+                      }
                     },
                   },
                   "Open agent auth",
@@ -517,11 +442,9 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
       const canSend = hasMessageText || hasReadyAttachments(agentId);
 
       // The stop button is only meaningful while the agent has an interruptible
-      // turn in progress -- the same condition that drives the activity
-      // indicator above the input. Use the effective state so a just-sent
-      // message that forced "Thinking..." also surfaces the stop button, keeping
-      // the two in lockstep. Hide it whenever the agent is idle.
-      const isAgentWorking = isWorkingActivityState(getEffectiveActivityState(agentId));
+      // turn in progress -- the same condition that drives the activity indicator
+      // above the input, read straight off the backend-derived activity state.
+      const isAgentWorking = isWorkingActivityState(getAgentById(agentId)?.activity_state ?? null);
       const isStopButtonVisible = isAgentWorking && !isInterruptInFlight;
 
       return m("div", { class: "message-input mx-auto w-full" }, [
@@ -554,7 +477,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
           m("div", { class: "message-input-row flex flex-row items-center" }, [
             m("textarea", {
               class: "message-input-textbox flex-1 resize-none focus:outline-none",
-              placeholder: "Type a message...",
+              placeholder: isAgentWorking ? "Type to queue more messages..." : "Type a message...",
               rows: 1,
               value: messageText,
               oncreate: (textareaVnode: m.VnodeDOM) => {
@@ -579,7 +502,6 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
               onpaste: handlePaste,
             }),
             m("div", { class: "message-input-toolbar" }, [
-              ...renderModelControls(agentId),
               m(
                 "button",
                 {
@@ -596,9 +518,9 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
                     "button",
                     {
                       class: "message-input-stop-button",
-                      "data-tooltip": "Interrupt",
-                      "aria-label": "Interrupt",
-                      onclick: handleInterrupt,
+                      "data-tooltip": "Interrupt and bring queued messages to the composer",
+                      "aria-label": "Interrupt and bring queued messages to the composer",
+                      onclick: handleStopToComposer,
                     },
                     m.trust(stopIcon(14)),
                   )

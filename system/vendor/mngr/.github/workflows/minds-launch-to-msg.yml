@@ -261,7 +261,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
       - name: look up marker cache
         id: marker
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           # Path is required by the action even with lookup-only; the
           # file never has to exist locally because we're not restoring.
@@ -308,9 +308,9 @@ jobs:
     # for the darwin git bundle, and bundling uv/lima needs native arm64
     # binaries.
     runs-on: [self-hosted, macOS, minds-runner]
-    # 85 min = the 70-min `pnpm dist` step budget (below) + ~15 min for the
+    # 135 min = the 120-min `pnpm dist` step budget (below) + ~15 min for the
     # post-failure cancel step to tear an orphaned ToDesktop build down.
-    timeout-minutes: 85
+    timeout-minutes: 135
     env:
       # Resolved relative to pnpm's CWD (apps/minds), not the repo root.
       MINDS_CLIENT_CONFIG_BUNDLE: imbue/minds/config/envs/production/client.toml
@@ -432,9 +432,9 @@ jobs:
       - name: pnpm dist (build + upload to ToDesktop)
         id: dist
         if: steps.existing.outputs.url == ''
-        # A fresh dual-arch build runs ~43 min, longer when ToDesktop's
-        # source-download step stalls; notarization is the long pole.
-        timeout-minutes: 70
+        # A fresh dual-arch build runs 45-75 min: ToDesktop's packaging step
+        # can stall 15+ min, and each arch is signed and notarized in turn.
+        timeout-minutes: 120
         working-directory: apps/minds
         # build.js::bundleLatchkey smoke-tests the bundled CLI, which needs
         # an encryption key; the headless runner's keychain is locked, so
@@ -1014,13 +1014,15 @@ jobs:
       - name: install minds.app from the build job's artifact
         run: |
           TMP=$(mktemp -d)
-          curl -fSL --silent --show-error -o "$TMP/minds.zip" "${{ needs.build.outputs.app_zip_url }}"
+          # --retry-all-errors also retries a mid-transfer drop (curl exit 56),
+          # which plain --retry does not cover.
+          curl -fSL --retry 5 --retry-all-errors --retry-delay 5 --silent --show-error -o "$TMP/minds.zip" "${{ needs.build.outputs.app_zip_url }}"
           unzip -q -d "$TMP" "$TMP/minds.zip"
           sudo cp -R "$TMP/Minds.app" /Applications/Minds.app
           sudo xattr -dr com.apple.quarantine /Applications/Minds.app || true
           defaults read /Applications/Minds.app/Contents/Info.plist CFBundleVersion
       - name: setup node 24
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '24.15.0'
       - name: setup pnpm
@@ -1052,7 +1054,7 @@ jobs:
             --reporter=list,html
       - name: upload Playwright report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: macos-launch-playwright-report-${{ github.run_id }}-attempt-${{ github.run_attempt }}
           path: |
@@ -1085,7 +1087,7 @@ jobs:
             echo "run_url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           } | tee /tmp/launch-to-msg-marker.txt
       - name: save marker cache
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: /tmp/launch-to-msg-marker.txt
           key: launch-to-msg-green-mngr-${{ needs.check_should_run.outputs.mngr_sha }}-default-workspace-template-${{ needs.check_should_run.outputs.default_workspace_template_sha }}

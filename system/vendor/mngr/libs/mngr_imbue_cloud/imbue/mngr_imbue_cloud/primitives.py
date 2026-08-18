@@ -207,23 +207,6 @@ FAST_PATH_ADOPTABLE_START_ARGS: Final[frozenset[str]] = frozenset(
 )
 
 
-class InvalidR2BucketAccess(ValueError):
-    """Raised when an R2 key access scope is not 'read' or 'readwrite'."""
-
-
-_R2_ACCESS_VALUES: Final[tuple[str, ...]] = ("read", "readwrite")
-
-
-class R2BucketAccess(NonEmptyStr):
-    """Access scope for an R2 bucket key: 'read' or 'readwrite' (lowercase wire form)."""
-
-    def __new__(cls, value: str) -> Self:
-        normalized = value.strip().lower()
-        if normalized not in _R2_ACCESS_VALUES:
-            raise InvalidR2BucketAccess(f"access must be one of {_R2_ACCESS_VALUES}, got '{value}'")
-        return super().__new__(cls, normalized)
-
-
 class R2BucketShortName(NonEmptyStr):
     """A user-supplied short bucket name (the connector derives the full R2 name)."""
 

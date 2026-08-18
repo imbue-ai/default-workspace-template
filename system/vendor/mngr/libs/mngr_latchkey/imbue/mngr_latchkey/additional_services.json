@@ -1,7 +1,17 @@
 {
   "claude-ai": {
     "display_name": "Claude",
-    "base_api_url": "https://claude.ai/",
+    "registration": {
+      "baseApiUrl": "https://claude.ai/",
+      "loginUrl": "https://claude.ai/login",
+      "loginFlow": {
+        "name": "cookie-capture",
+        "params": {
+          "cookieKeys": ["sessionKey"],
+          "cookieUrl": "https://claude.ai/"
+        }
+      }
+    },
     "scope": {
       "name": "claude-ai",
       "schema": {

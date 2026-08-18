@@ -19,7 +19,6 @@ callable from a bare background thread (``create_desktop_client`` wraps them
 in an app context).
 """
 
-import queue
 import threading
 from collections.abc import Callable
 
@@ -29,8 +28,8 @@ from pydantic import Field
 from pydantic import PrivateAttr
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
+from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
-from imbue.minds.desktop_client.chrome_event_broadcast import ChromeEventBroadcaster
 from imbue.minds.desktop_client.ui_channel import UiChannelBroadcaster
 from imbue.minds.desktop_client.ui_models import UI_SCHEMA_VERSION
 from imbue.minds.desktop_client.ui_models import UiAccountsMessage
@@ -42,6 +41,7 @@ from imbue.minds.desktop_client.ui_models import UiProvidersMessage
 from imbue.minds.desktop_client.ui_models import UiReloadMessage
 from imbue.minds.desktop_client.ui_models import UiRequestsMessage
 from imbue.minds.desktop_client.ui_models import UiSnapshot
+from imbue.minds.desktop_client.ui_models import UiWorkspaceRefreshMessage
 from imbue.minds.desktop_client.ui_models import UiWorkspaceStoppedMessage
 from imbue.minds.desktop_client.ui_models import UiWorkspacesMessage
 from imbue.minds.errors import MindError
@@ -49,7 +49,7 @@ from imbue.mngr.errors import MngrError
 
 # The one-shot message types a producer pushes directly (no diffing): health
 # edges ride through publish_health so connect-time snapshots stay coherent.
-UiOneShotMessage = UiWorkspaceStoppedMessage | UiOpenHelpMessage | UiReloadMessage
+UiOneShotMessage = UiWorkspaceStoppedMessage | UiOpenHelpMessage | UiWorkspaceRefreshMessage | UiReloadMessage
 
 
 class UiStatePublisher(MutableModel):
@@ -75,9 +75,6 @@ class UiStatePublisher(MutableModel):
     _stop_event: threading.Event = PrivateAttr(default_factory=threading.Event)
     _last_frame_by_type: dict[str, str] = PrivateAttr(default_factory=dict)
     _is_started: bool = PrivateAttr(default=False)
-    # One-shot payload dicts bridged from the legacy ChromeEventBroadcaster
-    # (workspace_stopped / open_help producers keep their existing call sites).
-    _legacy_event_queue: "queue.Queue[dict[str, str]]" = PrivateAttr(default_factory=queue.Queue)
 
     def start(self, concurrency_group: ConcurrencyGroup) -> None:
         """Start the publish strand. Idempotent."""
@@ -103,43 +100,12 @@ class UiStatePublisher(MutableModel):
         """
         self._wake_event.set()
 
-    def bridge_legacy_broker(self, broker: ChromeEventBroadcaster) -> None:
-        """Receive the legacy chrome broker's one-shot events and wakes on this publisher.
-
-        Subscribing with the publisher's own wake event means every existing
-        ``broadcast``/``wake_subscribers`` call site in the legacy handlers
-        reaches the channel without those handlers changing; the bridge is
-        deleted with the broker in the final cleanup phase.
-        """
-        broker.subscribe(self._legacy_event_queue, self._wake_event)
-
-    def _drain_bridged_legacy_events(self) -> None:
-        is_drained = False
-        while not is_drained:
-            try:
-                payload = self._legacy_event_queue.get_nowait()
-            except queue.Empty:
-                is_drained = True
-                continue
-            payload_type = payload.get("type", "")
-            if payload_type == "workspace_stopped":
-                self.publish_one_shot(UiWorkspaceStoppedMessage(agent_id=payload.get("agent_id", "")))
-            elif payload_type == "open_help":
-                self.publish_one_shot(
-                    UiOpenHelpMessage(
-                        description=payload.get("description", ""),
-                        workspace_agent_id=payload.get("workspace_agent_id", ""),
-                    )
-                )
-            else:
-                logger.warning("Dropped an unrecognized bridged chrome event of type {}", payload_type)
-
     def publish_health(self, message: UiHealthMessage) -> None:
         """Broadcast one workspace's health edge immediately (no diffing)."""
         self.broadcaster.broadcast(message.model_dump_json())
 
     def publish_one_shot(self, message: UiOneShotMessage) -> None:
-        """Broadcast a fire-and-forget event frame (workspace_stopped / open_help / reload_ui)."""
+        """Broadcast a fire-and-forget event frame (workspace_stopped / open_help / workspace_refresh / reload_ui)."""
         self.broadcaster.broadcast(message.model_dump_json())
 
     def build_snapshot(self) -> UiSnapshot:
@@ -162,13 +128,16 @@ class UiStatePublisher(MutableModel):
         frames.append(snapshot.providers.model_dump_json())
         frames.append(snapshot.requests.model_dump_json())
         for health_message in snapshot.health:
-            frames.append(health_message.model_dump_json())
+            # Marked here rather than at the derive: the same derive backs the
+            # inlined bootstrap JSON, and these frames are the only ones a
+            # client sees as a replay.
+            marked = health_message.model_copy_update(to_update(health_message.field_ref().is_snapshot, True))
+            frames.append(marked.model_dump_json())
         frames.append(snapshot.discovery_health.model_dump_json())
         return frames
 
     def publish_now(self) -> None:
         """One synchronous derive+diff+broadcast pass (also the loop body; exposed for tests)."""
-        self._drain_bridged_legacy_events()
         derives: tuple[
             Callable[
                 [],

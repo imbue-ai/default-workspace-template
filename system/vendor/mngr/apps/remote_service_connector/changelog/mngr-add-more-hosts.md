@@ -1,0 +1,1 @@
+Document the local `scripts/delete_accounts.py` operator tool in the README, next to the account-admin API, and note explicitly that there is no account-deletion endpoint (full account deletion is an out-of-band operator action via that local tool).

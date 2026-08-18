@@ -43,10 +43,11 @@ def make_agent_details(
     initial_branch: str | None = None,
     labels: dict[str, str] | None = None,
     plugin: dict[str, Any] | None = None,
+    agent_id: AgentId | None = None,
 ) -> AgentDetails:
     """Create a minimal AgentDetails for testing."""
     return AgentDetails(
-        id=AgentId.generate(),
+        id=agent_id or AgentId.generate(),
         name=AgentName(name),
         type="claude",
         command=CommandString("claude"),
@@ -108,6 +109,9 @@ def make_additional_pr(number: int, state: PrState = PrState.OPEN) -> Additional
     return AdditionalPrReference(number=number, url=f"https://github.com/org/repo/pull/{number}", state=state)
 
 
+TEST_BOARD_HOST_ID: HostId = HostId("host-" + "0" * 31 + "d")
+
+
 def make_board_entry(
     name: str = "test-agent",
     state: AgentLifecycleState = AgentLifecycleState.RUNNING,
@@ -117,9 +121,16 @@ def make_board_entry(
     section: BoardSection = BoardSection.STILL_COOKING,
     fields: Mapping[str, FieldValue] | None = None,
     cells: Mapping[str, CellDisplay] | None = None,
+    agent_id: AgentId | None = None,
+    host_id: HostId | None = None,
 ) -> AgentBoardEntry:
     """Create an AgentBoardEntry for testing."""
     return AgentBoardEntry(
+        agent_id=agent_id or AgentId.generate(),
+        # A fixed default host: tests that model "the same agent across two
+        # snapshots" pass the same agent_id and must land on the same instance
+        # key. Pass host_id explicitly to model agents on distinct hosts.
+        host_id=host_id or TEST_BOARD_HOST_ID,
         name=AgentName(name),
         state=state,
         provider_name=ProviderInstanceName(provider_name),

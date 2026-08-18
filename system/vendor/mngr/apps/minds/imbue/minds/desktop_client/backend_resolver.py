@@ -6,6 +6,7 @@ from abc import abstractmethod
 from collections.abc import Callable
 from collections.abc import Iterable
 from collections.abc import Mapping
+from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Final
@@ -431,15 +432,19 @@ def parse_agents_from_json(json_output: str | None) -> ParsedAgentsResult:
         if ssh is None:
             continue
 
+        # known_hosts_path is optional: older mngr versions don't emit it, and the
+        # tunnel falls back to the key-sibling convention when it is absent.
+        raw_known_hosts = ssh.get("known_hosts_path")
         try:
             ssh_info = RemoteSSHInfo(
                 user=ssh["user"],
                 host=ssh["host"],
                 port=ssh["port"],
                 key_path=Path(ssh["key_path"]),
+                known_hosts_path=Path(raw_known_hosts) if raw_known_hosts else None,
             )
             ssh_info_by_id[agent_id_str] = ssh_info
-        except (KeyError, ValueError) as e:
+        except (KeyError, TypeError, ValueError) as e:
             logger.warning("Failed to parse SSH info for agent {}: {}", agent_id_str, e)
 
     return ParsedAgentsResult(
@@ -576,6 +581,25 @@ def _display_info_from_agent(agent: DiscoveredAgent) -> AgentDisplayInfo:
     )
 
 
+def _warn_if_agent_id_spans_machines(agent_id: AgentId, sorted_host_ids: Sequence[HostId]) -> None:
+    """Warn when a workspace agent id resolves to more than one machine.
+
+    Agent ids are unique per host, not globally, so an id can span machines
+    (e.g. mid-migration). minds has no workspace-level policy for that yet, so
+    callers pick the first machine of the sorted list deterministically and
+    this warns rather than silently first-matching. No-op for a single (or no)
+    machine.
+    """
+    if len(sorted_host_ids) <= 1:
+        return
+    logger.warning(
+        "Workspace agent id {} resolved to {} machines ({}); using the first",
+        agent_id,
+        len(sorted_host_ids),
+        ", ".join(str(host_id) for host_id in sorted_host_ids),
+    )
+
+
 def _find_system_services_agent(records: Iterable[_AgentRecord], workspace_agent_id: AgentId) -> AgentId | None:
     """Resolve the system-services agent that shares the workspace agent's host.
 
@@ -584,9 +608,9 @@ def _find_system_services_agent(records: Iterable[_AgentRecord], workspace_agent
     system-services agent on that same host. ``None`` if either is absent.
     """
     records = tuple(records)
-    host_id: HostId | None = next(
-        (record.host_id for record in records if record.agent_id == workspace_agent_id), None
-    )
+    matching_host_ids = sorted({record.host_id for record in records if record.agent_id == workspace_agent_id})
+    _warn_if_agent_id_spans_machines(workspace_agent_id, matching_host_ids)
+    host_id: HostId | None = matching_host_ids[0] if matching_host_ids else None
     if host_id is None:
         return None
     for record in records:
@@ -668,7 +692,7 @@ class _WorkspaceNameOverride(FrozenModel):
 
 
 # Sized for the slowest legitimate stop/start round-trip (a cloud VM's first stop
-# can run ~20 min; see workspace_lifecycle._HOST_STOP_TIMEOUT_SECONDS) plus
+# can run ~20 min; see workspace_lifecycle.HOST_STOP_TIMEOUT_SECONDS) plus
 # discovery reconcile headroom. Purely a backstop: a retention is normally dropped
 # the moment discovery re-lists the host, long before this.
 _HOST_TRANSITION_RETENTION_CAP_SECONDS: Final[float] = 1500.0
@@ -1451,9 +1475,16 @@ class MngrCliBackendResolver(BackendResolverInterface):
         retained row still renders name/provider/host until discovery returns.
         """
         with self._lock:
-            for agent in self._agents_result.discovered_agents:
-                if agent.agent_id == agent_id:
-                    return _display_info_from_agent(agent)
+            # Sorted by host id so a duplicated agent id (unique per host, not
+            # globally, e.g. mid-migration) resolves to the same machine on
+            # every refresh rather than flapping with discovery order.
+            live_matches = sorted(
+                (agent for agent in self._agents_result.discovered_agents if agent.agent_id == agent_id),
+                key=lambda agent: str(agent.host_id),
+            )
+            _warn_if_agent_id_spans_machines(agent_id, [agent.host_id for agent in live_matches])
+            if live_matches:
+                return _display_info_from_agent(live_matches[0])
             for retention in self._transition_retention_by_host_id.values():
                 for agent in retention.agents:
                     if agent.agent_id == agent_id:

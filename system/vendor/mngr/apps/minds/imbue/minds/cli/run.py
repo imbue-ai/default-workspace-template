@@ -37,6 +37,7 @@ from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.minds.bootstrap import MindsRoot
 from imbue.minds.bootstrap import minds_data_dir_for
+from imbue.minds.bootstrap import resolve_effective_mngr_host_dir
 from imbue.minds.bootstrap import resolve_minds_root_name
 from imbue.minds.build_info import resolve_git_sha
 from imbue.minds.build_info import resolve_release_id
@@ -94,9 +95,9 @@ from imbue.minds.desktop_client.supertokens_routes import bounce_latchkey_forwar
 from imbue.minds.desktop_client.sync_scheduler import WorkspaceSyncScheduler
 from imbue.minds.desktop_client.system_interface_health import SystemInterfaceHealthTracker
 from imbue.minds.desktop_client.system_interface_health import should_enroll_suspect_for_backend_failure
-from imbue.minds.desktop_client.templates import DEFAULT_WORKSPACE_TEMPLATE_GIT_URL
-from imbue.minds.desktop_client.templates import FALLBACK_BRANCH
-from imbue.minds.desktop_client.templates import is_local_workspace_defaults_opt_in
+from imbue.minds.desktop_client.workspace_defaults import DEFAULT_WORKSPACE_TEMPLATE_GIT_URL
+from imbue.minds.desktop_client.workspace_defaults import FALLBACK_BRANCH
+from imbue.minds.desktop_client.workspace_defaults import is_local_workspace_defaults_opt_in
 from imbue.minds.desktop_client.workspace_record_store import WorkspaceRecordStore
 from imbue.minds.desktop_client.workspace_record_store import read_device_label
 from imbue.minds.envs.docker_cleanup import DockerCleanupError
@@ -231,8 +232,7 @@ def run(
     anonymous_user_id = resolve_anonymous_user_id(data_directory)
     # Resolved up front (and reused below for the state container + the ``mngr forward``
     # consumer): the Sentry attachment sweep needs the discovery events dir under it.
-    mngr_host_dir_str = os.environ.get("MNGR_HOST_DIR")
-    mngr_host_dir = Path(mngr_host_dir_str).expanduser() if mngr_host_dir_str else (Path.home() / ".mngr")
+    mngr_host_dir = resolve_effective_mngr_host_dir()
     # Built before Sentry setup so the attachment sweep knows the latchkey plugin
     # data dir (the detached ``mngr latchkey forward`` daemon's logs live there).
     latchkey = _build_latchkey(data_directory=data_directory)
@@ -491,9 +491,12 @@ def run(
     # otherwise early failures would dispatch against an empty list).
     system_interface_health_tracker = SystemInterfaceHealthTracker()
 
-    # The plugin reports every non-2xx response; minds decides which ones count.
-    # Only connection-level failures and infrastructure 5xx enroll a suspect --
-    # application errors (and UNRESOLVED, a routeless warm-up) are left alone.
+    # The plugin reports every backend failure it observes; minds decides which
+    # ones count. Only envelopes carrying no status code, or an infrastructure
+    # 5xx, enroll a suspect -- application errors (and UNRESOLVED, a routeless
+    # warm-up) are left alone. STALLED enrolls despite not reporting a failed
+    # request at all: a wedged backend and a slow one look identical until the
+    # probe adjudicates.
     consumer.add_on_system_interface_backend_failure_callback(
         lambda agent_id, reason, status_code: system_interface_health_tracker.record_failure(agent_id)
         if should_enroll_suspect_for_backend_failure(reason, status_code)

@@ -12,8 +12,11 @@ from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from imbue.mngr.config.data_types import PluginConfig
+from imbue.mngr.primitives import AgentId
+from imbue.mngr.primitives import AgentInstanceKey
 from imbue.mngr.primitives import AgentLifecycleState
 from imbue.mngr.primitives import AgentName
+from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import ProviderInstanceName
 from imbue.mngr_kanpan.data_source import CellDisplay
 from imbue.mngr_kanpan.data_source import FieldValue
@@ -76,6 +79,8 @@ def section_label(section: BoardSection) -> str:
 class AgentBoardEntry(FrozenModel):
     """A single agent entry on the kanpan board."""
 
+    agent_id: AgentId = Field(description="Agent ID (unique per host, not globally)")
+    host_id: HostId = Field(description="Host the agent runs on")
     name: AgentName = Field(description="Agent name")
     state: AgentLifecycleState = Field(description="Agent lifecycle state")
     provider_name: ProviderInstanceName = Field(description="Provider instance name")
@@ -96,6 +101,16 @@ class AgentBoardEntry(FrozenModel):
         default=BoardSection.STILL_COOKING,
         description="Board section this agent belongs to",
     )
+
+    @property
+    def instance_key(self) -> AgentInstanceKey:
+        """The ``(host, agent)`` coordinate identifying this row's concrete agent instance.
+
+        Marks and mark-driven commands key on this (never the bare agent id):
+        the same agent id can exist on multiple hosts (e.g. mid-migration),
+        and acting on one row must never touch the other host's instance.
+        """
+        return AgentInstanceKey.build(self.agent_id, self.host_id)
 
 
 class BoardSnapshot(FrozenModel):
@@ -281,8 +296,8 @@ class KanpanPluginConfig(PluginConfig):
         description="Text shown at the right of the header, e.g. "
         "'{state == \"RUNNING\"} running / {total}'. Each braced CEL expression renders as the number "
         "of agents the board is showing that it holds for, counted against the same entry shape "
-        "`--format json` emits (name, state, provider_name, work_dir, branch, is_muted, section, "
-        "fields, cells). That shape is narrower than what --include sees, so an expression naming "
+        "`--format json` emits (agent_id, name, state, provider_name, work_dir, branch, is_muted, "
+        "section, fields, cells). That shape is narrower than what --include sees, so an expression naming "
         "anything else (labels, host, age) matches no agent and stays at zero. '{total}' counts "
         "every agent; '{{' and '}}' are literal braces. Unset (default) shows nothing.",
     )

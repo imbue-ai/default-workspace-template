@@ -15,7 +15,7 @@
 #     context even though it's never committed.
 [private]
 _generate-dockerignore:
-    grep -vE '^/?\.dockerignore$|^/libs/mngr/imbue/mngr/resources/Dockerfile\.release$' .gitignore > .dockerignore
+    bash scripts/generate_dockerignore.sh
 
 # Generate Dockerfile.release from Dockerfile + Dockerfile.release.extras so the
 # two Dockerfiles stay in sync without duplicating the base layers. Strips the
@@ -264,16 +264,14 @@ minds-test-deployment-only *tests:
 # with a real display can run the underlying pytest directly without xvfb-run.
 # Requires apps/minds/node_modules/ (`cd apps/minds && pnpm install`) and a real
 # ANTHROPIC_API_KEY exported (the key is typed into the modal and talks to the
-# official Anthropic API; the test skips without it). Depends on `minds-css` because the test launches
-# `electron main.js` directly (not via `pnpm start`), so nothing else compiles
-# the gitignored stylesheet. The test lives in the snapshot-resume suite (it
+# official Anthropic API; the test skips without it). The test lives in the snapshot-resume suite (it
 # runs in CI in the snapshot offload stage, reusing that image's warm Electron
 # toolchain) but creates its own fresh workspace, so it runs fine locally too.
 # The test itself only consumes the DEFAULT_WORKSPACE_TEMPLATE worktree (erroring if absent), so this
 # recipe first materializes it (paired DEFAULT_WORKSPACE_TEMPLATE branch + vendored mngr) unless an
 # operator worktree is already present, mirroring the CI snapshot bake.
 [group("minds test")]
-minds-test-electron *args: minds-css
+minds-test-electron *args:
   uv run python -c 'from imbue.minds.desktop_client.default_workspace_template_worktree import materialize_paired_default_workspace_template_worktree; materialize_paired_default_workspace_template_worktree()'
   xvfb-run -a uv run pytest apps/minds/test_snapshot_resume.py::test_create_workspace_and_sign_in_via_modal_then_chat_via_electron -v --no-cov --cov-fail-under=0 {{args}}
 
@@ -291,24 +289,65 @@ minds-test-electron *args: minds-css
 # first (the minds-dev-workflow does this on every startup).
 # Screenshots of each step land in /tmp/minds-electron-flow/.
 [group("minds test")]
-minds-test-electron-flow *args: minds-css
+minds-test-electron-flow *args:
   xvfb-run -a uv run --package minds python apps/minds/scripts/electron_full_flow_e2e.py {{args}}
 
-# Compile the minds desktop client's Tailwind v4 stylesheet
-# (static/app.css -> static/app.min.css, minified + tree-shaken) via the
-# pinned @tailwindcss/cli. `just minds-start` rebuilds + watches it live (its
-# `prestart` hook builds it once, then `watch:css` keeps it fresh), and
-# packaged builds compile it in scripts/build.js, so normally you do not need
-# to invoke this recipe -- use it after nuking static/ or to force a rebuild.
-[group("minds build")]
-minds-css:
-  bash -c '. apps/minds/scripts/select_node_version.sh && cd apps/minds && pnpm run build:css'
+# Generate a harbor task dataset from a minds eval config (one task per persona
+# case). Datasets default OUTSIDE the repo tree: each generated task embeds a
+# full mngr-internal clone, which must not sit under the repo's apps/ scan (it
+# would trip the snapshot-resume marked-test discovery). They are regenerable
+# from the checked-in config, so a scratch dir is fine; pass a unique <output>
+# per dataset.
+[group("minds evals")]
+minds-evals-generate config output="/tmp/minds-evals/datasets/generated":
+    uv run minds-evals-harbor generate --config "{{config}}" --output "{{output}}"
+
+# Run a generated dataset on Modal with the persona driver. Requires
+# ANTHROPIC_API_KEY (decider + judge) and ~/.modal.toml. Each trial boots its
+# own 6-CPU/16-GB box, so this is a scheduled/nightly regression job, not a
+# per-PR gate. `concurrency` bounds simultaneous boxes -- set it to the case
+# count so all cases run in one wave (cost = concurrency * box size). push_r2
+# defaults false everywhere, including CI. Extra harbor args pass through last;
+# --ak snapshot_mode=per-turn overrides the default of final.
+[group("minds evals")]
+minds-evals-run dataset job_name concurrency="4" push_r2="false" *harbor_args="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    : "${ANTHROPIC_API_KEY:?set ANTHROPIC_API_KEY -- the decider and judge call the Anthropic API}"
+    cmd=(uv run harbor run
+        -p "{{dataset}}"
+        -a imbue.minds_evals.driver:MindsPersonaDriver
+        -e modal
+        -n "{{concurrency}}"
+        -y
+        --job-name "{{job_name}}"
+        -o apps/minds_evals/jobs
+        --agent-setup-timeout-multiplier 3
+        --ak snapshot_mode=final
+        --ek sandbox_timeout_secs=14400
+        {{harbor_args}})
+    echo ">> ${cmd[*]}"
+    "${cmd[@]}"
+    if [ "{{push_r2}}" = "true" ] || [ "${MINDS_EVALS_PUSH_R2:-0}" = "1" ]; then
+        # Reuse the old harness's scoped R2 creds file when present.
+        if [ -f "$HOME/.minds-eval/r2.env" ]; then set -a; . "$HOME/.minds-eval/r2.env"; set +a; fi
+        : "${MINDS_EVAL_BUCKET:?R2 push needs MINDS_EVAL_BUCKET (see apps/minds_evals/README.md)}"
+        : "${MINDS_EVAL_S3_ENDPOINT:?R2 push needs MINDS_EVAL_S3_ENDPOINT}"
+        aws s3 sync "apps/minds_evals/jobs/{{job_name}}" \
+            "s3://${MINDS_EVAL_BUCKET}/harbor-jobs/{{job_name}}" \
+            --endpoint-url "${MINDS_EVAL_S3_ENDPOINT}"
+    fi
+
 # Create an independent default-workspace-template checkout nested in the
 # current mngr checkout at .external_worktrees/default-workspace-template -- the
 # CLAUDE.md convention for developing default_workspace_template alongside mngr. Defaults the default_workspace_template branch
 # to the current mngr branch; override with a positional arg. Errors if a checkout
 # already exists or the branch is already on default_workspace_template. It is a full clone (survives
 # deletion of any other clone/cache) and needs no configuration.
+# The checkout is reviewed by the code-guardian stop hook alongside mngr: the recipe
+# writes a gitignored .reviewer/settings.local.json enabling the gates there, so
+# stopping merges main into it, pushes its branch to the default_workspace_template
+# remote, and blocks until a PR exists on it.
 # Set DEFAULT_WORKSPACE_TEMPLATE_DIR (gitignored apps/minds/.env or your shell) to a local default_workspace_template clone to
 # make the clone fast -- purely a speed hint, no lasting dependency is created.
 [group("minds install")]
@@ -324,7 +363,7 @@ default-workspace-template-worktree branch="" base="origin/main":
 # HEAD / the verified release SHA, NOT blindly `main`, which can drift past it
 # between verification and merge. The recipe archives HEAD, replaces system/vendor/mngr/
 # with that snapshot, and commits in DEFAULT_WORKSPACE_TEMPLATE. Does not push. Aborts if DEFAULT_WORKSPACE_TEMPLATE is dirty.
-# Full release flow: apps/minds/docs/release.md.
+# Full release flow: apps/minds/docs/deploy/release.md.
 [group("minds dev")]
 sync-vendor-mngr default_workspace_template="":
     #!/bin/bash
@@ -392,6 +431,71 @@ sync-vendor-mngr default_workspace_template="":
 [group("minds ops")]
 deploy *args:
     uv run minds env deploy {{args}}
+
+# Stand up the activated dev/ci env's OWN share relay in one shot:
+# provision an OVH instance, register it in THIS env's connector fleet
+# inventory (relays table), install frps + config pointed at the env's
+# connector, and reconcile the region DNS records. The region label is
+# the env name (underscores mapped to hyphens) -- each dev env gets its
+# own relay instead of competing for one shared dev relay whose frps
+# plugin-auth URL can only serve a single env's connector. Reads the
+# relay SSH key, frps auth secret, admin key, OVH + Cloudflare creds
+# from the tier's Vault entries (requires a vault login). Idempotent-ish:
+# re-running provisions a NEW instance; use `just list-share-relays` /
+# `just destroy-share-relay` + `just deregister-share-relay` to clean up
+# an old one (DNS self-heals via the connector's health sweep).
+[group("minds ops")]
+provision-dev-relay ovh_region="US-EAST-VA-1" ordinal="1":
+    #!/bin/bash
+    set -ueo pipefail
+    root_name="${MINDS_ROOT_NAME:?activate a dev env first: eval \"\$(uv run minds env activate <env>)\"}"
+    config_path="${MINDS_CLIENT_CONFIG_PATH:?activate a dev env first (MINDS_CLIENT_CONFIG_PATH is unset)}"
+    env_name="${root_name#minds-}"
+    case "$env_name" in
+        dev-*) tier="dev" ;;
+        ci-*) tier="ci" ;;
+        *) echo "error: provision-dev-relay serves dev/ci envs only (got '$env_name')" >&2; exit 2 ;;
+    esac
+
+    # Everything derived: region label from the env name, content domain from
+    # the tier deploy config, connector URL from the activated client.toml,
+    # creds + relay SSH key + admin key from the tier's Vault entries.
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+    uv run python scripts/provision_dev_relay_config.py "$env_name" "$tier" "$config_path" "$tmp"
+
+    region="$(jq -r .region "$tmp/params.json")"
+    content_domain="$(jq -r .content_domain "$tmp/params.json")"
+    plugin_auth_url="$(jq -r .plugin_auth_url "$tmp/params.json")"
+    connector_url="$(jq -r .connector_url "$tmp/params.json")"
+    set -a; . "$tmp/relay.env"; set +a
+
+    echo "Provisioning relay for env '$env_name' (region '$region', domain '$content_domain', OVH {{ovh_region}})"
+    provision_json="$(uv run share-relay provision --env-name "$env_name" --region "$region" \
+        --ordinal "{{ordinal}}" --ovh-region "{{ovh_region}}" --ssh-public-key-file "$tmp/relay_key.pub" | tail -n 1)"
+    ip="$(jq -r .ip <<<"$provision_json")"
+    instance_name="$(jq -r .name <<<"$provision_json")"
+
+    echo "Registering relay in the connector fleet inventory"
+    register_json="$(uv run share-relay register --connector-url "$connector_url" --region "$region" \
+        --tunnel-endpoint "$ip:7000" --ip "$ip" --instance-name "$instance_name" | tail -n 1)"
+    relay_id="$(jq -r .relay_id <<<"$register_json")"
+
+    echo "Instance up at $ip (relay_id $relay_id); installing frps + config"
+    ssh-agent bash -c "ssh-add '$tmp/relay_key' 2>/dev/null && \
+        uv run share-relay deploy --host '$ip' --relay-id '$relay_id' --region '$region' \
+            --content-domain '$content_domain' --plugin-auth-url '$plugin_auth_url'"
+    # Seed DNS with THIS relay's IP only. `share-relay dns` reconciles the
+    # record set, so on a second relay (ordinal >= 2) this transiently drops
+    # the sibling's IP -- the connector's per-minute health sweep restores the
+    # full region set from the relays table right after.
+    uv run share-relay dns --region "$region" --content-domain "$content_domain" --ip "$ip"
+
+    echo
+    echo "Relay ready for env '$env_name':"
+    echo "  relay_id:  $relay_id (registered; workspaces learn the endpoint via GET /shares/assignment)"
+    echo "  wildcard:  *.$region.$content_domain -> $ip"
+    echo "Re-enable sharing on any workspace whose share was created against another region."
 
 # Start the minds desktop client (electron) in dev mode against the
 # activated env. Sources .env if present, scrubs any ambient
@@ -588,6 +692,11 @@ minds-start branch="" default_workspace_template="" debug_port="":
     # Put the Node version apps/minds pins (.nvmrc) first on PATH so pnpm's
     # engine-strict check passes regardless of the shell's default node.
     . apps/minds/scripts/select_node_version.sh || exit 2
+    # Build the SPA the app server actually serves. `pnpm start` only builds
+    # the legacy JinjaX stylesheet; static/ui/ is produced at wheel-build time
+    # and is gitignored, so without this a dev run serves whatever bundle
+    # happened to be built last -- or 404s on a fresh worktree.
+    (cd apps/minds/frontend && pnpm install --silent && pnpm run generate && pnpm run build) || exit 2
     cd apps/minds && pnpm start
 
 # Launch the minds desktop client (electron) in dev mode against the
@@ -602,7 +711,7 @@ minds-start branch="" default_workspace_template="" debug_port="":
 # gets a fast-path lease of that slice instead of falling back to the slow
 # rebuild path. (The local-worktree defaults that minds-start exports point
 # at a filesystem path + dev branch that no pool host can clone or match --
-# see _operator_workspace_default in desktop_client/templates.py.)
+# see _operator_workspace_default in desktop_client/workspace_defaults.py.)
 #
 # It also skips the live-mngr -> system/vendor/mngr/ rsync that minds-start does on
 # every launch: a leased pool slice already carries the mngr snapshot baked
@@ -660,6 +769,10 @@ minds-start-cloud debug_port="":
     # Put apps/minds's pinned Node (.nvmrc) first on PATH so pnpm's
     # engine-strict check passes regardless of the shell's default node.
     . apps/minds/scripts/select_node_version.sh || exit 2
+    # Build the SPA the app server actually serves, same as minds-start:
+    # `pnpm start` only launches electron, and static/ui/ is gitignored
+    # (produced at wheel-build time), so a fresh worktree would 404 without this.
+    (cd apps/minds/frontend && pnpm install --silent && pnpm run generate && pnpm run build) || exit 2
     cd apps/minds && pnpm start
 
 # Stop the minds desktop client started in this worktree by `just minds-start`
@@ -1067,6 +1180,37 @@ create-new-mind-repo repo_name parent_dir="$HOME/project":
 # datacenter code. Server selection picks the `ready` box with the most free
 # slots and is not region-filtered today, so the box must have a free slot.
 
+# Deploy the fixed per-tier OAuth redirector (apps/oauth_redirector) -- once per
+# dev/CI tier, NOT part of `minds env deploy` (it is tier-level and holds no
+# secrets). Bakes the tier's connector-hostname allowlist at deploy time and
+# prints the deployed URL; register that URL as the sole redirect URI on the
+# tier's shared Google Web client and set it as OAUTH_REDIRECTOR_URL in the
+# tier's `sharing` Vault entry. Production/staging register their stable
+# accounts domain directly and never need this.
+#   just deploy-oauth-redirector dev    # deploys into the minds-dev workspace's main env
+#   just deploy-oauth-redirector ci
+[group("minds ops")]
+deploy-oauth-redirector tier:
+    #!/usr/bin/env bash
+    set -ueo pipefail
+    tier="{{tier}}"
+    case "$tier" in
+        dev) workspace="minds-dev" ;;
+        ci) workspace="minds-ci" ;;
+        *) echo "error: the redirector is only for the dev/ci tiers (got '$tier')" >&2; exit 2 ;;
+    esac
+    # Per-env connector hosts follow <workspace>-<env>--rsc-<tier>-api.modal.run
+    # (see per_env_deploy.per_env_connector_url); the tier-shared shape without
+    # an env segment is also allowed for completeness.
+    allowed_host_regex="${workspace}(-[a-z0-9-]+)?--rsc-${tier}-api\.modal\.run"
+    MNGR_DEPLOY_ENV="$tier" OAUTH_REDIRECTOR_ALLOWED_HOST_REGEX="$allowed_host_regex" \
+        uv run modal deploy --name "oauth-redirector-$tier" --env main \
+        apps/oauth_redirector/imbue/oauth_redirector/app.py
+    echo
+    echo "Deployed. The forward endpoint is https://${workspace}--oauth-redirector-${tier}-redirect.modal.run/forward"
+    echo "1. Register that URL as the sole authorized redirect URI on the $tier tier's shared Google Web client."
+    echo "2. Set OAUTH_REDIRECTOR_URL to it in the tier's 'sharing' Vault entry and redeploy the connector."
+
 # Dev slice bake from a working tree (identity = its origin remote + current branch).
 # workspace_dir resolves: explicit arg, else DEFAULT_WORKSPACE_TEMPLATE_DIR (shell or gitignored
 # apps/minds/.env), else the .external_worktrees/default-workspace-template checkout
@@ -1157,6 +1301,15 @@ audit-boxes:
 [group("minds ops")]
 prep-server server_id *extra_args:
     uv run minds server prep --server-id "{{server_id}}" {{extra_args}}
+
+# Backfill the volume-gated minds-autostart units onto every existing slice VM
+# of the activated env's fleet (reboot-resilience rollout Step 2; see
+# apps/minds/docs/deploy/reboot-resilience-rollout.md). Idempotent and safe on running
+# workspaces. Pass --dry-run to list the per-VM plan first, or
+# --server-id <id> (repeatable) to scope to specific boxes.
+#   just backfill-autostart --dry-run
+backfill-autostart *extra_args:
+    uv run minds server backfill-autostart {{extra_args}}
 
 # One-time host-key backfill for the activated minds env. Keyscans every
 # pre-existing pool host + bare-metal box whose recorded sshd host key columns

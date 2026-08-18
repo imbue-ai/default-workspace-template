@@ -13,14 +13,20 @@ materials + connector ``shares delete`` (the relay token dies, so the tunnel's
 next reconnect is rejected even if the materials linger).
 """
 
+import socket
+import time
 import tomllib
+from collections.abc import Callable
+from collections.abc import Mapping
 from typing import Any
 from typing import Final
 
 import httpx
 from loguru import logger
 
+from imbue.minds.config.data_types import ClientEnvConfig
 from imbue.minds.desktop_client.backend_resolver import BackendResolverInterface
+from imbue.minds.desktop_client.imbue_cloud_cli import ActiveShareCache
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCli
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCliError
 from imbue.minds.desktop_client.imbue_cloud_cli import ShareCliInfo
@@ -28,9 +34,8 @@ from imbue.minds.desktop_client.session_store import MultiAccountSessionStore
 from imbue.minds.desktop_client.share_materials_injection import ShareInjectionError
 from imbue.minds.desktop_client.share_materials_injection import build_share_env_text
 from imbue.minds.desktop_client.share_materials_injection import clear_share_materials_from_agent
-from imbue.minds.desktop_client.share_materials_injection import has_share_materials_in_agent
-from imbue.minds.desktop_client.share_materials_injection import inject_share_grants_into_agent
-from imbue.minds.desktop_client.share_materials_injection import inject_share_materials_into_agent
+from imbue.minds.desktop_client.share_materials_injection import probe_share_state_in_agent
+from imbue.minds.desktop_client.share_materials_injection import provision_share_files_in_agent
 from imbue.minds.desktop_client.share_materials_injection import read_share_grants_from_agent
 from imbue.minds.desktop_client.share_materials_injection import render_grants_toml
 from imbue.minds.desktop_client.state import get_state
@@ -40,6 +45,10 @@ from imbue.mngr.primitives import AgentId
 # How long the readiness probe waits on a single fetch of the shared hostname
 # before treating the share as not-ready-yet.
 SHARE_READINESS_PROBE_TIMEOUT_SECONDS: Final[float] = 4.0
+
+# How long one relay latency probe (a bare TCP connect to the relay's
+# tunnel-control endpoint) may take before that relay is skipped.
+RELAY_LATENCY_PROBE_TIMEOUT_SECONDS: Final[float] = 1.5
 
 # Signals in the plugin's JSON error body for the two failures a user can
 # actually do something about. Matched on the message text because the plugin
@@ -121,6 +130,97 @@ def resolve_agent_for_host(
     raise SharingError(f"No workspace is known for machine '{host_id}'.")
 
 
+def split_relay_endpoint(endpoint: str) -> tuple[str, int] | None:
+    """Split a relay ``host:port`` endpoint into (host, port), or None when malformed.
+
+    Handles bracketed IPv6 literals (``[::1]:7000``) by unwrapping the
+    brackets; an unbracketed IPv6 literal has no unambiguous port split and is
+    refused.
+    """
+    raw_host, separator, port_text = endpoint.rpartition(":")
+    if not separator or not raw_host:
+        return None
+    if raw_host.startswith("[") and raw_host.endswith("]"):
+        host = raw_host[1:-1]
+    elif ":" in raw_host:
+        return None
+    else:
+        host = raw_host
+    if not host:
+        return None
+    try:
+        port = int(port_text)
+    except ValueError:
+        return None
+    return (host, port)
+
+
+def _measure_tcp_connect_seconds(endpoint: str, timeout_seconds: float) -> float | None:
+    """Time a bare TCP connect to a ``host:port`` endpoint; None when unparseable or unreachable."""
+    host_and_port = split_relay_endpoint(endpoint)
+    if host_and_port is None:
+        logger.debug("Skipping unparseable relay endpoint: {}", endpoint)
+        return None
+    host, port = host_and_port
+    started_at = time.monotonic()
+    try:
+        with socket.create_connection((host, port), timeout=timeout_seconds):
+            pass
+    except OSError as exc:
+        logger.debug("Relay latency probe to {} failed: {}", endpoint, exc)
+        return None
+    return time.monotonic() - started_at
+
+
+def pick_lowest_latency_relay_region(
+    relay_endpoints_by_region: Mapping[str, tuple[str, ...]],
+    # Injected for tests: measures one endpoint's connect time in seconds
+    # (None = unreachable). Production callers pass _measure_tcp_connect_seconds.
+    measure_connect_seconds: Callable[[str], float | None],
+) -> str | None:
+    """The region whose fastest relay answered a TCP connect quickest, or None when none did.
+
+    A region is scored by its best endpoint (every relay in a region shares a
+    datacenter, so any reachable one represents its proximity). With a single
+    region (dev tiers) the measurement is skipped entirely -- there is nothing
+    to choose between.
+    """
+    if len(relay_endpoints_by_region) <= 1:
+        return next(iter(relay_endpoints_by_region), None)
+    seconds_by_region: dict[str, float] = {}
+    for region, endpoints in relay_endpoints_by_region.items():
+        endpoint_seconds = [
+            seconds for endpoint in endpoints if (seconds := measure_connect_seconds(endpoint)) is not None
+        ]
+        if endpoint_seconds:
+            seconds_by_region[region] = min(endpoint_seconds)
+    if not seconds_by_region:
+        return None
+    return min(seconds_by_region, key=lambda region: seconds_by_region[region])
+
+
+def _pick_preferred_relay_region(cli: ImbueCloudCli, account_email: str) -> str | None:
+    """Best-effort: the lowest-latency relay region as measured from this machine.
+
+    Used only for a first-time share of a local workspace (the workspace runs
+    on this machine, so the desktop's own latency is the right proximity
+    signal). Any failure degrades to None -- the connector then falls back to
+    its default region.
+    """
+    try:
+        relay_endpoints_by_region = cli.list_share_relays(account=account_email)
+    except ImbueCloudCliError as exc:
+        logger.debug("Could not list share relays for region picking: {}", exc)
+        return None
+    region = pick_lowest_latency_relay_region(
+        relay_endpoints_by_region,
+        lambda endpoint: _measure_tcp_connect_seconds(endpoint, RELAY_LATENCY_PROBE_TIMEOUT_SECONDS),
+    )
+    if region is not None:
+        logger.debug("Picked relay region {} by connect latency", region)
+    return region
+
+
 def _grants_have_any_grantee(workspace_grants: dict[str, list[str]], service_grants: dict[str, Any]) -> bool:
     if workspace_grants.get("emails") or workspace_grants.get("email_domains"):
         return True
@@ -130,20 +230,39 @@ def _grants_have_any_grantee(workspace_grants: dict[str, list[str]], service_gra
     return False
 
 
-def _broker_base_url() -> str:
-    config = get_state().client_env_config
-    if config is None:
-        raise SharingError("Client environment config is unavailable; cannot determine the accounts broker URL.")
-    if config.accounts_base_url is not None:
-        return str(config.accounts_base_url).rstrip("/")
-    return str(config.connector_url).rstrip("/")
+def require_client_env_config() -> ClientEnvConfig:
+    """Resolve the client env config from the app state, or raise :class:`SharingError`.
 
-
-def _connector_base_url() -> str:
+    Reads ``get_state()``, so it MUST be called from a Flask app/request context
+    (a request handler, or a worker that captured the app). Callers that run in a
+    bare worker thread -- e.g. the post-create web-access enabler -- must instead
+    capture the config in the request context and thread it in, since ``get_state()``
+    falls back to ``current_app`` and raises "working outside of application context"
+    off a request.
+    """
     config = get_state().client_env_config
     if config is None:
         raise SharingError("Client environment config is unavailable; cannot determine the connector URL.")
-    return str(config.connector_url).rstrip("/")
+    return config
+
+
+def _broker_base_url(client_env_config: ClientEnvConfig) -> str:
+    if client_env_config.accounts_base_url is not None:
+        return str(client_env_config.accounts_base_url).rstrip("/")
+    return str(client_env_config.connector_url).rstrip("/")
+
+
+def _connector_base_url(client_env_config: ClientEnvConfig) -> str:
+    return str(client_env_config.connector_url).rstrip("/")
+
+
+def _is_imbue_cloud_agent(backend_resolver: BackendResolverInterface, agent_id: AgentId) -> bool:
+    """Whether the agent runs on an imbue_cloud (leased pool host) provider instance."""
+    display_info = backend_resolver.get_agent_display_info(agent_id)
+    provider_name = display_info.provider_name if display_info is not None else None
+    if not provider_name:
+        return False
+    return provider_name == "imbue_cloud" or provider_name.startswith("imbue_cloud_")
 
 
 def enable_sharing(
@@ -156,11 +275,14 @@ def enable_sharing(
 
     When the machine is already actively shared, only the grants file is
     rewritten (no token rotation, no tunnel restart -- the gateway re-reads
-    grants per request). Otherwise the full provisioning flow runs: connector
-    share + relay token, then materials injection. Returns the sharing-status
-    document, which reports ``enabled`` true as soon as the connector share
-    exists; the UI separately polls the readiness endpoint for end-to-end
-    liveness of the shared hostname.
+    grants per request). Otherwise the full provisioning flow runs
+    client-side for every row -- connector ``shares create`` + materials
+    injection over the user's own SSH -- regardless of provider; the
+    connector's server-side enable-sharing primitive is used only for
+    web-created workspaces, which have no desktop client to inject from.
+    Returns the sharing-status document, which reports ``enabled`` true as
+    soon as the connector share exists; the UI separately polls the
+    readiness endpoint for end-to-end liveness of the shared hostname.
     """
     if not _grants_have_any_grantee(workspace_grants, service_grants):
         raise EmptyGrantsError("Sharing requires at least one email or email domain to grant access to.")
@@ -170,7 +292,27 @@ def enable_sharing(
     session_store = get_state().session_store
     agent_id = resolve_agent_for_host(backend_resolver, host_id, session_store)
     account_email = resolve_account_email_for_workspace(session_store, agent_id)
-    return _enable_sharing_with_cli(host_id, agent_id, workspace_grants, service_grants, cli, account_email)
+    # Resolved here (a request-context caller) rather than deep inside the
+    # share flow, so the same helper can serve the post-create enabler, which
+    # runs off a request context and must be handed the config explicitly.
+    return _enable_sharing_with_cli(
+        host_id,
+        agent_id,
+        workspace_grants,
+        service_grants,
+        cli,
+        account_email,
+        require_client_env_config(),
+        is_cloud_row=_is_imbue_cloud_agent(backend_resolver, agent_id),
+        entry_label=_resolve_entry_label(backend_resolver, agent_id),
+    )
+
+
+def _resolve_entry_label(backend_resolver: BackendResolverInterface, agent_id: AgentId) -> str | None:
+    """The workspace shell's origin label, recorded server-side as the chrome's entry origin."""
+    labels = backend_resolver.list_service_labels_for_agent(agent_id)
+    shell_label = next((label for name, label in labels.items() if str(name) == _SHELL_SERVICE_NAME), None)
+    return shell_label or None
 
 
 def _enable_sharing_with_cli(
@@ -180,63 +322,150 @@ def _enable_sharing_with_cli(
     service_grants: dict[str, dict[str, list[str]]],
     cli: ImbueCloudCli,
     account_email: str,
+    # Passed in (not resolved via ``get_state()`` here) so this can run off a
+    # request context -- the post-create web-access enabler runs in a worker
+    # thread where ``current_app`` is unbound.
+    client_env_config: ClientEnvConfig,
+    # True for imbue_cloud (leased pool host) rows. The bring-up path is the
+    # same client-side one for every row; this only disables the relay-region
+    # latency measurement, whose desktop-proximity signal is only meaningful
+    # for a workspace that runs on this machine.
+    is_cloud_row: bool,
+    entry_label: str | None = None,
 ) -> dict[str, Any]:
     grants_toml = render_grants_toml(workspace_grants, service_grants)
 
+    # One exec answers everything the flow needs from the workspace: whether
+    # the template ships the share gateway, whether share.env is present, and
+    # the current grants document.
     try:
-        existing = cli.get_share_status(account=account_email, host_id=host_id)
-    except ImbueCloudCliError as exc:
-        raise SharingError(f"Could not read the machine's sharing status: {describe_connector_failure(exc)}") from exc
+        probe = probe_share_state_in_agent(agent_id, cli.mngr_caller)
+    except ShareInjectionError as exc:
+        raise SharingError(str(exc)) from exc
 
-    if existing is not None and existing.state == "active" and has_share_materials_in_agent(agent_id, cli.mngr_caller):
-        # Grants-only update: no token rotation, the gateway picks the new
-        # grants up on its next request. Gated on the materials actually being
-        # present in the workspace: an earlier enable that failed between the
-        # connector-side create and the injection leaves the share "active"
-        # with no tunnel, and only the full provisioning path below can repair
-        # that (the connector reuses the share row and rotates the token).
-        #
-        # Before replacing the whole document, make sure the current one is
-        # readable: a save built against a policy that could not be read would
-        # silently erase whatever the unreadable file really granted. (Should
-        # never happen -- writes are atomic and serialized -- but the failure
-        # mode is permanent data loss, so it is checked anyway.)
+    # Workspaces created from a pre-share-gateway template (minds-v0.3.11 and
+    # older) have no service watching share.env, so a share enabled for them
+    # would go active on the connector and never become reachable. Refuse up
+    # front with the fix: update the workspace (update-self), then re-share --
+    # which self-heals, since the gateway picks the materials up on its own.
+    # CLEANUP: drop this guard (and the probe's has_gateway signal) once no
+    # supported workspaces predate the share gateway -- i.e. after the first
+    # post-v0.3.11 release is deployed and old workspaces have run update-self.
+    if not probe.has_gateway:
+        raise SharingError(
+            "This machine's workspace template is too old to support sharing. "
+            'Ask the machine to update itself (send it "update yourself", which runs '
+            "the update-self skill), then enable sharing again."
+        )
+
+    if probe.has_share_env:
+        # Materials are present, so this is either a grants-only update (share
+        # active server-side: no token rotation, the gateway picks the new
+        # grants up on its next request) or stale materials from a share since
+        # disabled elsewhere (fall through to full re-provisioning). Only this
+        # rare path needs the connector's status; the common enable-from-off
+        # path never reads it -- create is the source of truth there.
         try:
-            current_grants_text = read_share_grants_from_agent(agent_id, cli.mngr_caller)
-        except ShareInjectionError as exc:
-            raise SharingError(str(exc)) from exc
-        if current_grants_text is not None and _parse_grants_toml(current_grants_text) is None:
+            existing = cli.get_share_status(account=account_email, host_id=host_id)
+        except ImbueCloudCliError as exc:
             raise SharingError(
-                "The machine's current sharing permissions file is unreadable, so this change "
-                "was not saved (saving would erase whoever it currently grants). To reset it, "
-                "disable sharing for this machine and enable it again."
-            )
-        try:
-            inject_share_grants_into_agent(agent_id, grants_toml, cli.mngr_caller)
-        except ShareInjectionError as exc:
-            raise SharingError(str(exc)) from exc
-        return _share_status_document(host_id, existing, workspace_grants, service_grants)
+                f"Could not read the machine's sharing status: {describe_connector_failure(exc)}"
+            ) from exc
+        if existing is not None and existing.state == "active":
+            # Before replacing the whole document, make sure the current one is
+            # readable: a save built against a policy that could not be read
+            # would silently erase whatever the unreadable file really granted.
+            # (Should never happen -- writes are atomic and serialized -- but
+            # the failure mode is permanent data loss, so it is checked anyway.)
+            if probe.grants_toml_text is not None and _parse_grants_toml(probe.grants_toml_text) is None:
+                raise SharingError(
+                    "The machine's current sharing permissions file is unreadable, so this change "
+                    "was not saved (saving would erase whoever it currently grants). To reset it, "
+                    "disable sharing for this machine and enable it again."
+                )
+            try:
+                # The owner-email file is refreshed alongside, so a share
+                # enabled before that feature existed gains it on a grants edit.
+                provision_share_files_in_agent(agent_id, grants_toml, account_email, None, cli.mngr_caller)
+            except ShareInjectionError as exc:
+                raise SharingError(str(exc)) from exc
+            return _share_status_document(host_id, existing, workspace_grants, service_grants)
 
+    # Local shares with no materials in the workspace pick the relay by
+    # measured latency from here (the workspace runs on this machine, so the
+    # desktop's latency is the right proximity signal). A cloud row runs
+    # elsewhere, and a stale-materials re-provision is already placed, so both
+    # skip the measurement. A re-share after a disable measures again -- the
+    # preference is advisory: the connector honors it only for hosts it has no
+    # region record of, so an existing share always keeps its region.
+    is_relay_region_measured = not is_cloud_row and not probe.has_share_env
+    preferred_region = _pick_preferred_relay_region(cli, account_email) if is_relay_region_measured else None
     try:
-        share = cli.create_share(account=account_email, host_id=host_id)
+        share = cli.create_share(
+            account=account_email, host_id=host_id, entry_label=entry_label, preferred_region=preferred_region
+        )
     except ImbueCloudCliError as exc:
         raise SharingError(f"Could not enable sharing: {describe_connector_failure(exc)}") from exc
-    if share.relay_token is None or not share.relay_endpoint:
-        raise SharingError("Sharing enabled but the connector did not return the relay coordinates.")
+    if share.relay_token is None:
+        raise SharingError("Sharing enabled but the connector did not return a relay token.")
 
     share_env_text = build_share_env_text(
         workspace_domain=share.workspace_domain,
-        relay_endpoint=share.relay_endpoint,
         relay_token=share.relay_token.get_secret_value(),
-        connector_url=_connector_base_url(),
-        broker_url=_broker_base_url(),
+        connector_url=_connector_base_url(client_env_config),
+        broker_url=_broker_base_url(client_env_config),
+        # The hosted chrome is path-served on the connector origin, which is
+        # also what `minds env deploy` pushes as the connector's own
+        # SHARE_CHROME_ORIGIN -- so desktop-shared workspaces are embeddable
+        # and health-probeable from /web exactly like connector-shared ones.
+        chrome_origin=_connector_base_url(client_env_config),
     )
+    # Everything lands in one exec, share.env last -- the gateway brings the
+    # stack up the moment it appears, so the grants must already be in place.
     try:
-        inject_share_grants_into_agent(agent_id, grants_toml, cli.mngr_caller)
-        inject_share_materials_into_agent(agent_id, share_env_text, cli.mngr_caller)
+        provision_share_files_in_agent(agent_id, grants_toml, account_email, share_env_text, cli.mngr_caller)
     except ShareInjectionError as exc:
         raise SharingError(str(exc)) from exc
     return _share_status_document(host_id, share, workspace_grants, service_grants)
+
+
+def enable_web_access_for_workspace(
+    agent_id: AgentId,
+    host_id: str,
+    is_cloud_row: bool,
+    cli: ImbueCloudCli,
+    session_store: MultiAccountSessionStore | None,
+    backend_resolver: BackendResolverInterface,
+    # Captured by the caller in a request context and threaded in: this runs
+    # in the post-create worker thread, where ``get_state()`` cannot resolve
+    # ``current_app``.
+    client_env_config: ClientEnvConfig,
+) -> None:
+    """Bring sharing up for a just-created workspace so it is reachable from /web.
+
+    The create form's "enable web access" toggle: every row -- cloud and local
+    alike -- runs the desktop share flow with the owning account as the sole
+    grantee. (The connector's server-side enable-sharing primitive is used
+    only for web-created workspaces, which have no desktop to inject from.)
+    Raises :class:`SharingError` when the workspace has no associated account
+    or the share bring-up fails.
+    """
+    account_email = resolve_account_email_for_workspace(session_store, agent_id)
+    owner_grants = {"emails": [account_email], "email_domains": []}
+    _enable_sharing_with_cli(
+        host_id,
+        agent_id,
+        owner_grants,
+        {},
+        cli,
+        account_email,
+        client_env_config,
+        is_cloud_row=is_cloud_row,
+        # The chrome can only enter the workspace at <label>.<domain> (the
+        # bare domain is unrouted on the relay), so record the shell label
+        # like the settings-page enable does; None when not registered yet.
+        entry_label=_resolve_entry_label(backend_resolver, agent_id),
+    )
 
 
 def _share_status_document(
@@ -343,6 +572,22 @@ def get_sharing(
     return _share_status_document(host_id, share, workspace_grants, service_grants)
 
 
+def get_active_share_cached(
+    host_id: str,
+    backend_resolver: BackendResolverInterface,
+    cli: ImbueCloudCli | None,
+    session_store: MultiAccountSessionStore | None,
+    cache: ActiveShareCache,
+) -> ShareCliInfo | None:
+    """:func:`get_active_share` behind the short-TTL cache (the readiness poll's read path)."""
+    cached = cache.get(host_id)
+    if cached is not None:
+        return cached.share
+    share = get_active_share(host_id, backend_resolver, cli, session_store)
+    cache.put(host_id, share)
+    return share
+
+
 def get_active_share(
     host_id: str,
     backend_resolver: BackendResolverInterface,
@@ -447,9 +692,8 @@ def resolve_share_probe_host(
     except SharingError as exc:
         logger.debug("Cannot resolve a share probe host for {} yet: {}", host_id, exc)
         return None
-    labels = backend_resolver.list_service_labels_for_agent(agent_id)
-    shell_label = next((label for name, label in labels.items() if str(name) == _SHELL_SERVICE_NAME), None)
-    if not shell_label:
+    shell_label = _resolve_entry_label(backend_resolver, agent_id)
+    if shell_label is None:
         return None
     return f"{shell_label}.{workspace_domain}"
 

@@ -53,6 +53,7 @@ from imbue.minds.desktop_client.backup_provisioning import BackupSetupRequest
 from imbue.minds.desktop_client.backup_provisioning import configure_backups_for_host
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCli
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCliError
+from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudClientTooOldCliError
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudQuotaExceededCliError
 from imbue.minds.desktop_client.labeled_hosts import ListedHost
 from imbue.minds.desktop_client.labeled_hosts import WORKSPACE_ID_LABELED_PROVIDER_NAMES
@@ -876,6 +877,21 @@ _FAST_PATH_UNAVAILABLE_ERROR_CLASS: Final[str] = "FastPathUnavailableError"
 # so the next create still gets the fast path.
 _PREBAKED_IMAGE_WAIT_TIMEOUT_SECONDS: Final[float] = 600.0
 _PREBAKED_IMAGE_POLL_INTERVAL_SECONDS: Final[float] = 1.0
+
+# How long a cold-booted workspace is given to answer its first HTTP 200 through
+# the plugin. First-boot provisioning (uv sync, npm ci + run build for the
+# system_interface frontend) regularly takes 90-180s on a fresh VM or Docker
+# host, so this is sized for the slow end of a cold boot rather than the typical
+# one; the earlier 60s left users staring at the recovery surface while the
+# workspace was still finishing provisioning. The probe is cheap, so a generous
+# ceiling costs nothing.
+#
+# Every wait for a cold-booted workspace's interface is sized from this one
+# number -- the create attempt's readiness wait (``workspace_ready_timeout_seconds``
+# below) and the restart worker's post-``mngr start`` wait in
+# :mod:`workspace_recovery` -- so the two can never drift into disagreeing about
+# how long a cold boot takes.
+WORKSPACE_READY_TIMEOUT_SECONDS: Final[float] = 300.0
 
 # Readiness window for a Lima create with no pre-baked image. Such a create
 # builds the whole workspace inside the VM (setup_system.sh +
@@ -1870,15 +1886,13 @@ class AgentCreator(MutableModel):
         ),
     )
     workspace_ready_timeout_seconds: float = Field(
-        default=300.0,
+        default=WORKSPACE_READY_TIMEOUT_SECONDS,
         frozen=True,
         description=(
             "Maximum time to wait for the new agent's system_interface to return HTTP 200. "
-            "First-boot provisioning (uv sync, npm ci + run build for the system_interface "
-            "frontend) regularly takes 90-180s on a fresh VM or Docker host, so the previous "
-            "60s default left users on the recovery page while the agent was still finishing "
-            "provisioning. The probe is cheap so a generous cap is harmless; we still publish "
-            "the redirect anyway if it expires."
+            "Defaults to the shared cold-boot budget (``WORKSPACE_READY_TIMEOUT_SECONDS``); "
+            "see that constant for how it is sized. We still publish the redirect anyway "
+            "if it expires."
         ),
     )
     workspace_ready_poll_interval_seconds: float = Field(
@@ -2712,7 +2726,7 @@ class AgentCreator(MutableModel):
                     self.system_interface_health_tracker.end_create_attempt_grace(canonical_id)
 
                 # The redirect URL is *absolute* and points at the plugin's
-                # bare origin. ``creating.js`` does
+                # bare origin. The SPA creating page does
                 # ``window.location.href = data.redirect_url`` directly; a
                 # relative ``/goto/...`` would navigate to the minds origin
                 # (port :8420) where ``/goto/`` is unrouted -- the user
@@ -2943,9 +2957,9 @@ class AgentCreator(MutableModel):
         """
 
         try:
-            # A structured quota refusal is deterministic (retrying cannot
-            # succeed), so it is excluded from the retry predicate and falls
-            # straight through to the notification below.
+            # Structured quota and client-too-old refusals are deterministic
+            # (retrying cannot succeed), so they are excluded from the retry
+            # predicate and fall straight through to the notification below.
             quota_evictor = (
                 self.backup_quota_evictor_factory(backup_request.account_email)
                 if self.backup_quota_evictor_factory is not None and backup_request.account_email
@@ -2953,7 +2967,7 @@ class AgentCreator(MutableModel):
             )
             for attempt in Retrying(
                 retry=retry_if_exception_type((BackupProvisioningError, ImbueCloudCliError))
-                & retry_if_not_exception_type(ImbueCloudQuotaExceededCliError),
+                & retry_if_not_exception_type((ImbueCloudQuotaExceededCliError, ImbueCloudClientTooOldCliError)),
                 stop=stop_after_delay(self.backup_setup_retry_budget_seconds),
                 wait=wait_fixed(self.backup_setup_retry_wait_seconds),
                 reraise=True,

@@ -1,14 +1,22 @@
-// Inbox model: typed card list + per-kind detail payloads + grant/deny flow.
+// Inbox model: the pending-request queue + per-kind detail payloads + the
+// grant/deny flow behind the request-review popup.
 //
 // Ports the legacy Inbox.jinja shell semantics onto the /ui/api inbox routes:
-// master/detail selection, Approve busy states (progress -> granted/denied /
-// needs-manual-credentials / failed), fire-and-forget Deny with "(denying...)"
-// cards, advance-after-resolution vs dismiss (keep-open semantics), the
-// file-sharing path validation (home expansion + within-roots), and the
-// predefined dialog's wildcard-permission exclusivity. Grants/denies submit
-// the SAME form fields to the legacy /requests/<id>/grant|deny routes.
+// Approve busy states (progress -> granted/denied / needs-manual-credentials /
+// failed), fire-and-forget Deny, the file-sharing path validation (home
+// expansion + within-roots), and the predefined dialog's wildcard-permission
+// exclusivity. Grants/denies submit the SAME form fields to the legacy
+// /requests/<id>/grant|deny routes.
+//
+// ONE request per open, and answering it closes: the page is opened on the
+// request the reader picked -- a "Waiting on you" row, an in-chat card -- so
+// the review they asked for is over when that request has a verdict, and
+// swapping the next pending one in under the click that finished it would
+// answer a question nobody had asked yet. The list they picked from is where
+// closing takes them (see returnToPanelAfterRequest).
 
-import type { RequestsStore } from "./requests";
+import type { UiPermissionGrantGroup } from "../generated/ui";
+import { forgetWarmedRequestDetails, readWarmedRequestDetail, requestDetailUrl } from "./requestDetailPrefetch";
 
 export interface InboxCard {
   id: string;
@@ -16,6 +24,9 @@ export interface InboxCard {
   ws_name: string;
   display_name: string;
   accent: string;
+  /** The WORKSPACE the request belongs to, not the sibling agent that filed
+   * it (see UiInboxCard). Empty when it could not be resolved. */
+  workspace_agent_id: string;
 }
 
 export interface PermissionAccountChoice {
@@ -57,14 +68,15 @@ export interface PredefinedPermissionDetail {
   rationale: string;
   scope: string;
   display_name: string;
-  permission_schemas: string[];
-  description_by_permission_name: Record<string, string>;
+  /** Catalog service whose brand mark leads the dialog; "" when it has none. */
+  service_name: string;
+  /** Every offered permission, grouped: full access first, the wildcard last. */
+  permission_groups: UiPermissionGrantGroup[];
   checked_permissions: string[];
   account_choices: PermissionAccountChoice[];
   selected_account_value: string;
   new_account_value: string;
   wildcard_permission: string;
-  wildcard_label: string;
   will_open_browser: boolean;
   manual_credentials: ManualCredentialsPrompt | null;
 }
@@ -129,7 +141,8 @@ export type InboxDetail =
   | UnavailableDetail;
 
 export interface GrantResponse {
-  outcome: "GRANTED" | "DENIED" | "NEEDS_MANUAL_CREDENTIALS" | "FAILED" | string;
+  outcome:
+    "GRANTED" | "DENIED" | "NEEDS_MANUAL_CREDENTIALS" | "FAILED" | string;
   message?: string;
   manual_credentials?: ManualCredentialsPrompt;
 }
@@ -142,8 +155,19 @@ export function expandSharePathHome(value: string, homeDir: string): string {
   return value;
 }
 
+/** The inverse, for display: a path under the home directory reads as `~/...`. */
+export function collapseSharePathHome(value: string, homeDir: string): string {
+  if (!homeDir) return value;
+  if (value === homeDir) return "~";
+  if (value.startsWith(homeDir + "/")) return "~" + value.slice(homeDir.length);
+  return value;
+}
+
 /** Case-insensitive, purely lexical at-or-beneath check mirroring the server. */
-export function isSharePathWithinRoots(value: string, roots: readonly string[]): boolean {
+export function isSharePathWithinRoots(
+  value: string,
+  roots: readonly string[],
+): boolean {
   if (!value) return false;
   const lower = value.toLowerCase();
   return roots.some((root) => {
@@ -152,8 +176,9 @@ export function isSharePathWithinRoots(value: string, roots: readonly string[]):
   });
 }
 
-/** While the wildcard permission is checked, the specific boxes are disabled
- * (they keep their own state) so only the active side gets submitted. */
+/** While the wildcard permission is checked, the specific boxes are disabled.
+ * They keep their own state, so unticking the wildcard restores the earlier
+ * selection; `submittedPermissions` is what keeps that state off the wire. */
 export function isPermissionCheckboxDisabled(
   permission: string,
   wildcardPermission: string,
@@ -162,30 +187,58 @@ export function isPermissionCheckboxDisabled(
   return permission !== wildcardPermission && checked.has(wildcardPermission);
 }
 
+/** The permissions a predefined grant actually submits. The wildcard is
+ * mutually exclusive with the specific ones, and disabling a checkbox does
+ * not unset it: a permission ticked BEFORE the wildcard would otherwise ride
+ * along and grant more than the dialog shows. Enforced here, at the only
+ * place the set leaves the client, so no click order (and no server-seeded
+ * set) can defeat it. */
+export function submittedPermissions(
+  checked: ReadonlySet<string>,
+  wildcardPermission: string,
+): string[] {
+  if (wildcardPermission !== "" && checked.has(wildcardPermission))
+    return [wildcardPermission];
+  return [...checked];
+}
+
 interface FetchLike {
   (url: string, init?: RequestInit): Promise<Response>;
 }
 
+export type RequestVerdict = "granted" | "denied";
+
+export interface ResolvedRequest {
+  requestId: string;
+  /** The agent that asked, or null for the detail kinds that name none. */
+  agentId: string | null;
+  verdict: RequestVerdict;
+}
+
+/** Shortest gap between two attempts at the pending list once one has failed.
+ * The page reconciles from the requests store on every redraw, and a failed
+ * load makes itself reconcilable again (there is nothing to say the set was
+ * handled), so without a floor the two close a loop: a machine whose gateway
+ * is down would be asked for its list as fast as the window redraws. */
+const LIST_RETRY_MS = 3000;
+
 export interface InboxModelOptions {
   /** Injected in tests; defaults to window.fetch. */
   fetcher?: FetchLike;
-  /** Called when resolving a request should dismiss the inbox surface. */
+  /** Injected in tests; defaults to Date.now. */
+  nowMs?: () => number;
+  /** Called when the request under review turns out to be gone -- resolved in
+   * another window, or withdrawn by the agent -- so the list it was in can drop
+   * it without waiting for its own read. No verdict: this page did not give
+   * one, and nothing downstream should be told there was one. */
+  onGone?: (requestId: string) => void;
+  /** Called when the request under review has a verdict (or is gone), so the
+   * page should dismiss. Fires at most once. */
   onClose?: () => void;
+  /** Called the moment a request gets a verdict, before the page closes. */
+  onResolved?: (resolved: ResolvedRequest) => void;
   /** Injected in tests; defaults to m.redraw (loaded lazily to keep the model DOM-free). */
   redraw?: () => void;
-}
-
-// The requests store the shell attaches at boot so an open inbox page reacts
-// to live pending-set changes. Attached from the app entrypoint; null until
-// then (the page still works, it just refreshes only on its own actions).
-let attachedRequestsStore: RequestsStore | null = null;
-
-export function attachInboxRequestsStore(store: RequestsStore): void {
-  attachedRequestsStore = store;
-}
-
-export function getAttachedRequestsStore(): RequestsStore | null {
-  return attachedRequestsStore;
 }
 
 export class InboxModel {
@@ -194,7 +247,6 @@ export class InboxModel {
   isListLoaded = false;
   /** User-visible reason the last list load failed; null when it succeeded. */
   listErrorMessage: string | null = null;
-  autoOpen = true;
   selectedId: string | null = null;
   detail: InboxDetail | null = null;
   isDetailLoading = false;
@@ -212,65 +264,143 @@ export class InboxModel {
   manualCredentialValues: Record<string, string> = {};
   /** Name for the new account the manually-entered credentials belong to. */
   manualAccountName = "";
-  /** Ids whose deny POST is in flight (cards fade + become unclickable). */
+  /** Ids whose deny POST is in flight, so a re-selection never lands back on one. */
   denyingIds = new Set<string>();
-  /** Whether resolving a request advances to the next one (true) or dismisses (false). */
-  isKeepOpen = true;
 
   // Per-detail editable state (lives here so views stay stateless).
   checkedPermissions = new Set<string>();
   selectedAccount = "";
   filePathValue = "";
   targetScope: "selected" | "all" = "selected";
+  /** Whether the predefined dialog shows its full editor instead of the summary. */
+  isPermissionEditorShown = false;
+
+  /** Whether a list load is in flight, so a reconciliation that lands while
+   * one is running joins it rather than starting a second. */
+  private isListLoading = false;
+  /** Earliest the list may be asked for again after a failure. */
+  private nextListRetryAtMs = 0;
+  /** The paced retry after a failure, so the promise the error notice makes
+   * ("they will be retried automatically") is kept without a redraw to drive
+   * it -- and cancelled with the page, so a closed one stops asking. */
+  private listRetryTimer: ReturnType<typeof setTimeout> | null = null;
 
   private readonly options: InboxModelOptions;
-  private lastPendingKey = "";
+  /** The pending set this model has already reflected, or null for "none yet".
+   * Null rather than "" so an empty pending set is still a change worth
+   * reacting to (it is exactly the set that closes the popup). */
+  private lastPendingKey: string | null = null;
 
   constructor(options: InboxModelOptions = {}) {
     this.options = options;
   }
 
   private fetcher(): FetchLike {
-    return this.options.fetcher ?? ((url, init) => fetch(url, { credentials: "same-origin", ...init }));
+    return (
+      this.options.fetcher ??
+      ((url, init) => fetch(url, { credentials: "same-origin", ...init }))
+    );
   }
 
   private redraw(): void {
     this.options.redraw?.();
   }
 
+  private nowMs(): number {
+    return (this.options.nowMs ?? Date.now)();
+  }
+
+  /** Stop the retry timer. Called when the page closes and when it is torn
+   * down, so a timer never outlives the page that wanted the list. */
+  dispose(): void {
+    if (this.listRetryTimer === null) return;
+    clearTimeout(this.listRetryTimer);
+    this.listRetryTimer = null;
+  }
+
+  /** Whether the page has already been told to dismiss. The same resolution
+   * arrives twice -- once from the grant/deny that made it, and again from the
+   * pending-set reconciliation that the same verdict triggers -- and the second
+   * one would navigate a page that is already on its way out. */
+  private isClosed = false;
+
   private close(): void {
+    if (this.isClosed) return;
+    this.isClosed = true;
+    this.dispose();
     this.options.onClose?.();
   }
 
+  /** Announce a verdict, naming the workspace the resolved request belongs to.
+   *
+   * Read from the CARD for `requestId`, never from the live `detail`: an
+   * approval can await a browser sign-in, and anything that re-selects the
+   * popup meanwhile (a second entry point picking another request) swaps
+   * `detail` out from under it. Attributing the verdict to whatever was on
+   * screen would post one workspace's request id into another's page. */
+  private announceResolved(requestId: string, verdict: RequestVerdict): void {
+    // A resolution can change what any pending request is offered (an account
+    // just signed in is one the next dialog can pick), so the warms are spent
+    // rather than trusted: the next open fetches afresh.
+    forgetWarmedRequestDetails();
+    const card = this.cards.find((entry) => entry.id === requestId) ?? null;
+    const agentId =
+      card !== null && card.workspace_agent_id !== ""
+        ? card.workspace_agent_id
+        : null;
+    this.options.onResolved?.({ requestId, agentId, verdict });
+  }
+
   async loadList(): Promise<void> {
+    // One at a time. Every redraw reconciles, so without this a slow list would
+    // have a second attempt started on top of it before the first came back.
+    if (this.isListLoading) return;
+    this.isListLoading = true;
     try {
       const response = await this.fetcher()("/ui/api/inbox");
       if (!response.ok) {
         this.markListLoadFailed();
         return;
       }
-      const body = (await response.json()) as { cards: InboxCard[]; auto_open: boolean };
+      const body = (await response.json()) as { cards: InboxCard[] };
       this.cards = body.cards;
-      this.autoOpen = body.auto_open;
     } catch {
       this.markListLoadFailed();
       return;
+    } finally {
+      this.isListLoading = false;
     }
     this.listErrorMessage = null;
     this.isListLoaded = true;
     // Prune deny markers for cards the server has dropped.
-    this.denyingIds = new Set([...this.denyingIds].filter((id) => this.cards.some((card) => card.id === id)));
+    this.denyingIds = new Set(
+      [...this.denyingIds].filter((id) =>
+        this.cards.some((card) => card.id === id),
+      ),
+    );
     this.redraw();
   }
 
   private markListLoadFailed(): void {
-    this.listErrorMessage = "Could not load requests. They will be retried automatically.";
-    // The attempt completed: the page's live-refresh gate (isListLoaded)
+    this.listErrorMessage =
+      "Could not load requests. They will be retried automatically.";
+    // The attempt completed: the popup's live-refresh gate (isListLoaded)
     // must open so the store-driven reconciliation keeps running...
     this.isListLoaded = true;
     // ...and the pending-set key must be forgotten so that reconciliation
     // actually retries the load instead of seeing an unchanged set.
-    this.lastPendingKey = "";
+    this.lastPendingKey = null;
+    // Paced, and driven by its own timer rather than by the redraw this
+    // failure is about to cause: reconciling is what asks for the list, and a
+    // failure that makes itself reconcilable again would otherwise ask for it
+    // once per redraw for as long as the machine stayed down.
+    this.nextListRetryAtMs = this.nowMs() + LIST_RETRY_MS;
+    if (this.listRetryTimer === null && !this.isClosed) {
+      this.listRetryTimer = setTimeout(() => {
+        this.listRetryTimer = null;
+        void this.loadList();
+      }, LIST_RETRY_MS);
+    }
     this.redraw();
   }
 
@@ -285,7 +415,22 @@ export class InboxModel {
     this.manualAccountName = "";
     this.isProgressShown = false;
     this.redraw();
-    const response = await this.fetcher()(`/ui/api/inbox/${encodeURIComponent(id)}/detail`);
+    // Warmed on the way in (pointing at a "Waiting on you" row starts the
+    // fetch), so the common open spends a wait that has already happened.
+    const warmed = readWarmedRequestDetail(id);
+    if (warmed !== null) {
+      const detail = await warmed;
+      // A warm that failed says nothing about why; fall through and let the
+      // real fetch below report for itself.
+      if (detail !== null) {
+        this.isDetailLoading = false;
+        this.detail = detail;
+        this.seedEditableStateFromDetail(detail);
+        this.redraw();
+        return;
+      }
+    }
+    const response = await this.fetcher()(requestDetailUrl(id));
     this.isDetailLoading = false;
     if (!response.ok) {
       this.detail = { kind: "unavailable", message: "" };
@@ -303,6 +448,9 @@ export class InboxModel {
     this.selectedAccount = "";
     this.filePathValue = "";
     this.targetScope = "selected";
+    // Each request is reviewed from its summary; only this user's Adjust
+    // click opens the editor, and never for the request that follows.
+    this.isPermissionEditorShown = false;
     if (detail.kind === "predefined") {
       this.checkedPermissions = new Set(detail.checked_permissions);
       this.selectedAccount = detail.selected_account_value;
@@ -319,7 +467,7 @@ export class InboxModel {
     }
   }
 
-  /** The account radio currently selected, when the detail offers one. */
+  /** The account currently picked, when the detail offers a choice. */
   selectedAccountChoice(): PermissionAccountChoice | null {
     const detail = this.detail;
     if (detail === null || detail.kind !== "predefined") return null;
@@ -376,19 +524,51 @@ export class InboxModel {
       return this.checkedPermissions.size > 0;
     }
     if (detail.kind === "file_sharing") {
-      const expanded = expandSharePathHome(this.filePathValue.trim(), detail.home_dir);
-      return expanded.length > 0 && isSharePathWithinRoots(expanded, detail.allowed_roots);
+      const expanded = expandSharePathHome(
+        this.filePathValue.trim(),
+        detail.home_dir,
+      );
+      return (
+        expanded.length > 0 &&
+        isSharePathWithinRoots(expanded, detail.allowed_roots)
+      );
     }
     if (detail.kind === "accounts") return true;
     return false;
+  }
+
+  /** Reveal the predefined dialog's full permission editor. The summary is
+   * the default reading of the request; only a user who wants to change the
+   * grant leaves it, and `hidePermissionEditor` brings them back. */
+  showPermissionEditor(): void {
+    this.isPermissionEditorShown = true;
+    this.redraw();
+  }
+
+  /** Leave the editor for the summary, discarding the edits made in it: the
+   * way back is "back to the agent's picks", so it restores exactly the set
+   * the detail arrived with rather than keeping a half-made selection. */
+  hidePermissionEditor(): void {
+    const detail = this.detail;
+    if (detail !== null && detail.kind === "predefined") {
+      this.checkedPermissions = new Set(detail.checked_permissions);
+    }
+    this.isPermissionEditorShown = false;
+    this.redraw();
   }
 
   /** Non-empty but out-of-roots file path: show the instant hint (legacy parity). */
   isSharePathHintShown(): boolean {
     const detail = this.detail;
     if (detail === null || detail.kind !== "file_sharing") return false;
-    const expanded = expandSharePathHome(this.filePathValue.trim(), detail.home_dir);
-    return expanded.length > 0 && !isSharePathWithinRoots(expanded, detail.allowed_roots);
+    const expanded = expandSharePathHome(
+      this.filePathValue.trim(),
+      detail.home_dir,
+    );
+    return (
+      expanded.length > 0 &&
+      !isSharePathWithinRoots(expanded, detail.allowed_roots)
+    );
   }
 
   private buildGrantForm(): FormData {
@@ -396,15 +576,24 @@ export class InboxModel {
     const detail = this.detail;
     if (detail === null) return form;
     if (detail.kind === "predefined") {
-      for (const permission of this.checkedPermissions) form.append("permissions", permission);
+      for (const permission of submittedPermissions(
+        this.checkedPermissions,
+        detail.wildcard_permission,
+      )) {
+        form.append("permissions", permission);
+      }
       form.append("account", this.selectedAccount);
       this.appendManualCredentialFields(form);
     } else if (detail.kind === "workspace") {
-      for (const permission of this.checkedPermissions) form.append("permissions", permission);
+      for (const permission of this.checkedPermissions)
+        form.append("permissions", permission);
       form.append("target_scope", this.targetScope);
     } else if (detail.kind === "file_sharing") {
       form.append("permissions", "file-sharing");
-      form.append("file_path", expandSharePathHome(this.filePathValue.trim(), detail.home_dir));
+      form.append(
+        "file_path",
+        expandSharePathHome(this.filePathValue.trim(), detail.home_dir),
+      );
     } else {
       // Accounts grants carry no parameters (all-or-nothing approve).
     }
@@ -445,7 +634,11 @@ export class InboxModel {
       }
       const data = (await response.json()) as GrantResponse;
       if (data.outcome === "GRANTED" || data.outcome === "DENIED") {
-        await this.advanceAfterResolution(resolvedId);
+        this.announceResolved(
+          resolvedId,
+          data.outcome === "GRANTED" ? "granted" : "denied",
+        );
+        this.close();
         return;
       }
       this.isProgressShown = false;
@@ -461,7 +654,8 @@ export class InboxModel {
       } else {
         // FAILED (and anything unrecognized): request stays pending; show
         // the reason and let the user retry.
-        this.errorMessage = data.message ?? "Approval failed; please try again.";
+        this.errorMessage =
+          data.message ?? "Approval failed; please try again.";
       }
     } catch (error) {
       this.isProgressShown = false;
@@ -477,73 +671,54 @@ export class InboxModel {
     const resolvedId = this.selectedId;
     if (resolvedId === null) return;
     this.denyingIds.add(resolvedId);
+    this.announceResolved(resolvedId, "denied");
     // Fire-and-forget (keepalive) so the user never waits on the mngr
     // message round trip and the next-item swap starts immediately.
     void this.fetcher()(`/requests/${encodeURIComponent(resolvedId)}/deny`, {
       method: "POST",
       keepalive: true,
     }).catch(() => undefined);
-    void this.advanceAfterResolution(resolvedId);
+    this.close();
   }
 
-  async advanceAfterResolution(resolvedId: string): Promise<void> {
-    if (!this.isKeepOpen) {
-      // Opened for a single request (auto-open/notification): resolving it
-      // dismisses the surface rather than surfacing an unrelated stale one.
-      this.close();
-      return;
-    }
-    const nextId = this.findNextPendingId(resolvedId);
-    await this.loadList();
-    let target = nextId;
-    if (target !== null) {
-      const stillSelectable = this.cards.some((card) => card.id === target && !this.denyingIds.has(card.id));
-      if (!stillSelectable) {
-        const fallback = this.cards.find((card) => !this.denyingIds.has(card.id));
-        target = fallback ? fallback.id : null;
-      }
-    }
-    if (target !== null) {
-      await this.select(target);
-    } else {
-      this.close();
-    }
-  }
-
-  private findNextPendingId(resolvedId: string): string | null {
-    const selectable = this.cards.filter((card) => !this.denyingIds.has(card.id));
-    const index = selectable.findIndex((card) => card.id === resolvedId);
-    if (index === -1) {
-      const other = selectable.find((card) => card.id !== resolvedId);
-      return other ? other.id : null;
-    }
-    const after = selectable.slice(index + 1).find((card) => card.id !== resolvedId);
-    if (after) return after.id;
-    const before = [...selectable.slice(0, index)].reverse().find((card) => card.id !== resolvedId);
-    return before ? before.id : null;
+  /** Record `requestIds` as the pending set already on screen, so the first
+   * live reconciliation after an open does not refetch what it just loaded. */
+  markPendingSetSeen(requestIds: readonly string[]): void {
+    this.lastPendingKey = requestIds.join(",");
   }
 
   /** React to a live pending-set change (from the requests store). */
   async refreshIfPendingChanged(requestIds: readonly string[]): Promise<void> {
+    // A running approval owns the pane -- it may be waiting on a browser
+    // sign-in -- and the key is left unconsumed so this reconciles once it
+    // finishes.
+    if (this.isApproveBusy) return;
+    // A failed attempt has its own retry running; asking again before it is due
+    // is the loop this paces. The key is left unconsumed, so the retry that
+    // does land still reconciles this set.
+    if (this.listErrorMessage !== null && this.nowMs() < this.nextListRetryAtMs) return;
     const key = requestIds.join(",");
     if (key === this.lastPendingKey) return;
     this.lastPendingKey = key;
     const selected = this.selectedId;
-    await this.loadList();
-    if (selected !== null && !requestIds.includes(selected)) {
-      // The selection was resolved elsewhere; the server owns the copy.
-      await this.select(selected);
+    // Only a request this popup HAD pending can have been resolved out from
+    // under it. A selection that was never in the queue is a stale link the
+    // user followed on purpose -- it is already saying the request is gone, and
+    // advancing would swap an unrelated machine's live Approve/Deny form in
+    // under a click aimed at dismissing it (see requestedSelection in
+    // InboxPage.ts).
+    const wasPending =
+      selected !== null && this.cards.some((card) => card.id === selected);
+    if (wasPending && !requestIds.includes(selected)) {
+      // Resolved on another surface (another window, the agent giving up):
+      // close rather than leave a form up that can no longer be submitted.
+      // The list it came from is told first -- it is what the closing page
+      // hands the reader back to, and a row for a request that is already gone
+      // is exactly what it must not hand them back to.
+      this.options.onGone?.(selected);
+      this.close();
+      return;
     }
-    this.redraw();
-  }
-
-  setAutoOpen(enabled: boolean): void {
-    this.autoOpen = enabled;
-    void this.fetcher()("/ui/api/inbox/auto-open", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ enabled }),
-      keepalive: true,
-    }).catch(() => undefined);
+    await this.loadList();
   }
 }

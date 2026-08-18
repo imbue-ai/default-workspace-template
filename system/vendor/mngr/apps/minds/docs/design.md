@@ -49,9 +49,18 @@ Agent creation is also available via the `/api/create-agent` API endpoint, which
 
 ### Workspace sharing
 
-The remote service connector URL comes from the per-tier `client.toml` selected by `minds run --config-file <path>` (see `apps/minds/docs/environments.md`). `minds run` has no implicit default: if neither `--config-file` nor `MINDS_CLIENT_CONFIG_PATH` is set it refuses to start. The packaged Electron build passes `--config-file` explicitly from the bundled `client.toml`. Every share request authenticates with the signed-in user's SuperTokens session (the JWT is sent as a Bearer token). No client-side Basic-auth credentials or `OWNER_EMAIL` need to be configured.
+The remote service connector URL comes from the per-tier `client.toml` selected by `minds run --config-file <path>` (see `apps/minds/docs/deploy/environments.md`). `minds run` has no implicit default: if neither `--config-file` nor `MINDS_CLIENT_CONFIG_PATH` is set it refuses to start. The packaged Electron build passes `--config-file` explicitly from the bundled `client.toml`. Every share request authenticates with the signed-in user's SuperTokens session (the JWT is sent as a Bearer token). No client-side Basic-auth credentials or `OWNER_EMAIL` need to be configured.
 
 Sharing is machine-level and user-initiated: nothing sharing-related happens at create time. When the user enables sharing for a workspace, the desktop client registers a share with the connector (`mngr imbue_cloud shares create`) and injects the relay coordinates + relay token into the workspace, whose share-gateway then dials the self-hosted relay and terminates TLS inside the workspace. Within each workspace's dockview UI, a Share action opens a modal that surfaces the shared link and edits the grants controlling who may access it.
+
+#### Request identity handed to in-workspace services
+
+A workspace service learns who is making a request from two headers, set the same way whether the request arrives over the relay (the share-gateway) or over the local desktop forward (`mngr forward`):
+
+- **`X-Share-Owner`** -- always present, `true` or `false`. Over the local forward the single authenticated user is always the owner, so it is always `true`.
+- **`X-Share-Email`** -- present **only when `X-Share-Owner: false`**: the verified email of the non-owner visitor. The owner's own email is never sent per-request. Both sides strip any client-supplied copy of these headers before injecting the authoritative value, so a workspace page cannot forge them.
+
+The owner's email is instead delivered out-of-band, and only while the workspace is shared: on share-enable the desktop client writes it to `data/.state/share/owner_email` inside the workspace (removed on unshare), so a service that needs the owner's email reads that file, and its presence also signals that sharing is active. The gateway's own contract and the file location are documented in the default-workspace-template's `system/services/share_gateway/README.md`.
 
 # Command line interface
 

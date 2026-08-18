@@ -18,6 +18,8 @@ from typing import Final
 THIRD_PARTY_IMPORT_ROOTS: Final[frozenset[str]] = frozenset(
     {
         "acme",
+        "boto3",
+        "botocore",
         "cryptography",
         "fastapi",
         "httpx",

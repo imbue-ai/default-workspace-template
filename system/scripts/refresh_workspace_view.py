@@ -39,11 +39,15 @@ Environment:
                                 (default http://127.0.0.1:8000).
     MNGR_AGENT_ID               This agent's id. Sent for telemetry on the
                                 broadcast.
-    LATCHKEY_GATEWAY,           Gateway address + credentials mngr injects into
-    LATCHKEY_GATEWAY_PASSWORD,  the agent environment. All three must be present
+    LATCHKEY_GATEWAY,           Gateway address + password mngr injects into the
+    LATCHKEY_GATEWAY_PASSWORD   agent environment. Both must be present to reach
+                                the Minds app; the broadcast still runs without
+                                them.
     LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE
-                                to reach the Minds app; the broadcast still runs
-                                without them.
+                                The per-agent authorization JWT, forwarded when
+                                set. Only a desktop-hosted gateway injects it, so
+                                its absence is normal and not a reason to skip
+                                the app refresh.
 """
 
 from __future__ import annotations
@@ -190,10 +194,10 @@ def broadcast_reload(http: HttpClient, base_url: str) -> bool:
 def request_app_refresh(http: HttpClient, runner: Runner) -> bool:
     """Ask the Minds app to rebuild its view of this workspace.
 
-    Returns whether the app accepted the request. Absent gateway env means we are
-    not running under a Minds desktop app at all (a bare ``mngr`` workspace, a
-    test harness), which is not a failure -- the broadcast alone is the whole
-    story there.
+    Returns whether the app accepted the request. No gateway URL or password
+    means we are not running under a Minds desktop app at all (a bare ``mngr``
+    workspace, a test harness), which is not a failure -- the broadcast alone is
+    the whole story there.
 
     The primary-agent lookup happens after that env check, not before: it is a
     subprocess with a 30s budget, and there is nothing to address it to when no
@@ -201,8 +205,7 @@ def request_app_refresh(http: HttpClient, runner: Runner) -> bool:
     """
     gateway = os.environ.get(ENV_GATEWAY, "")
     password = os.environ.get(ENV_GATEWAY_PASSWORD, "")
-    permissions = os.environ.get(ENV_GATEWAY_PERMISSIONS, "")
-    if not gateway or not password or not permissions:
+    if not gateway or not password:
         sys.stderr.write(
             "refresh: latchkey gateway env not set; skipping the Minds app refresh.\n"
         )
@@ -210,14 +213,25 @@ def request_app_refresh(http: HttpClient, runner: Runner) -> bool:
     primary_agent_id = resolve_primary_agent_id(runner)
     if not primary_agent_id:
         return False
+    headers = {
+        "Content-Type": "application/json",
+        "X-Latchkey-Gateway-Password": password,
+    }
+    # Forwarded only when set, like every other gateway caller here
+    # (``bootstrap/manager.py``, ``github_sync/wiring.py``, the ``latchkey``
+    # skill's ``${VAR:+...}`` guard). Both directions bite: a desktop-hosted
+    # gateway needs it as the per-agent authorization JWT -- without it the
+    # gateway resolves the request against a deny-all default -- while a
+    # VPS-hosted one never injects it, because its forwarding extension
+    # substitutes a desktop-target JWT of its own. Requiring it would disable
+    # this channel on every remote workspace.
+    permissions = os.environ.get(ENV_GATEWAY_PERMISSIONS, "")
+    if permissions:
+        headers["X-Latchkey-Gateway-Permissions-Override"] = permissions
     status = http.post_json(
         f"{gateway.rstrip('/')}/minds-api-proxy/api/v1/agents/{primary_agent_id}/refresh",
         {},
-        {
-            "Content-Type": "application/json",
-            "X-Latchkey-Gateway-Password": password,
-            "X-Latchkey-Gateway-Permissions-Override": permissions,
-        },
+        headers,
         timeout=_TIMEOUT_SECONDS,
     )
     if status == 200:

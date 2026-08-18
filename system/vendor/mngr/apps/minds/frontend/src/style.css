@@ -254,7 +254,8 @@
  * over Tailwind utilities they had when tokens.css was a separate stylesheet.
  *
  * The titlebar takes only --titlebar-bg (the workspace accent, set per-
- * workspace via inline style by chrome.js); .titlebar-surface derives the
+ * workspace on the document root by paintAccent in
+ * views/shell/shell-state.ts); .titlebar-surface derives the
  * contrasting foreground text tokens from it in pure CSS (lch relative color),
  * so there is no JS contrast math and no --titlebar-fg. --workspace-accent /
  * --titlebar-bg feed the .accent-spine / .accent-swatch / .titlebar-* rules
@@ -311,46 +312,35 @@
 }
 
 /*
- * Always reserve space for the scrollbar gutter so that toggling page
- * height (e.g. expanding the permission dialog's "Adjust" editor) does
- * not make a classic scrollbar appear/disappear and shift the centered
- * layout sideways. No-op for macOS-style overlay scrollbars.
- */
-html {
-  scrollbar-gutter: stable;
-}
-/*
- * Opt-out for the edge-to-edge chrome / overlay surfaces (the chrome
- * titlebar page, the overlay host, and the modal pages hosted in it).
- * These paint fixed full-viewport layers and never scroll at the
- * document level, but with classic (always-visible) scrollbars the
- * reserved gutter shrinks the initial containing block by 15px, so
- * nothing paints the window's right edge: tooltips get clipped
- * mid-label, modal dim backdrops stop short of the edge (twice over for
- * a modal iframe inside the overlay host -- a 30px un-dimmed strip),
- * and the titlebar's right-aligned buttons shift inward. The class must
- * sit on the html element because the gutter belongs to the viewport
- * scroller: overlay-view pages get it from the OverlaySurface wrapper,
- * and the chrome page passes it via Base's ``html_class``.
- */
-html.no-scrollbar-gutter {
-  scrollbar-gutter: auto;
-}
-/*
  * Both shell modes lock the document to the viewport: the agent surface fills
  * it with the fixed workspace iframe, and local pages scroll inside
- * #local-page-scroll -- a container pinned below the fixed 38px titlebar (see
- * ChromeShell.jinja). So the DOCUMENT never scrolls on any minds page, the
- * titlebar never shares an edge with a scrollbar, and its buttons never shift
- * with gutter differences between pages. A universal default (a page that
- * genuinely needs document scroll can override on its own html/body); kept
- * here with the rest of the app's CSS rather than in a template <style> so all
- * scoping and order live in one place.
+ * #local-page-scroll -- a container pinned below the fixed 38px titlebar. So
+ * the DOCUMENT never scrolls on any minds page, the titlebar never shares an
+ * edge with a scrollbar, and its buttons never shift with gutter differences
+ * between pages. A universal default (a page that genuinely needs document
+ * scroll can override on its own html/body); kept here with the rest of the
+ * app's CSS rather than in a template <style> so all scoping and order live in
+ * one place.
+ *
+ * Which is also why the html element reserves NO scrollbar gutter. The gutter
+ * belongs to the viewport scroller, and with classic (always-visible)
+ * scrollbars a reserved one shrinks the initial containing block by 15px, so
+ * nothing can paint the window's right edge: everything anchored to it -- the
+ * inset workspace card and its notice band, #local-page-scroll's right inset,
+ * the titlebar's right-aligned buttons, tooltips, modal backdrops -- lands
+ * 15px short, which reads as a right margin four times the left one. The
+ * pre-SPA renderer reserved it globally for its scrolling document pages and
+ * had the chrome page opt back out (``html_class="no-scrollbar-gutter"``); the
+ * SPA is only ever the chrome page, so here there is nothing to opt out of.
+ * Its scroll containers set ``scrollbar-gutter: stable`` on themselves.
  */
 html,
 body {
   height: 100%;
   overflow: hidden;
+}
+body {
+  -webkit-font-smoothing: antialiased;
 }
 /*
  * The whole app background takes the per-workspace accent (--titlebar-bg, set
@@ -390,6 +380,45 @@ body:has(#minds-titlebar.titlebar-surface) #local-page-scroll {
   border-radius: 12px;
 }
 
+/*
+ * The workspace content surface -- the sandboxed iframe and the white mirror
+ * behind it -- kept here beside #local-page-scroll so the shell's geometry
+ * lives in one place.
+ *
+ * Flush to the left, right and bottom edges of the window: only the top is
+ * inset, clearing the titlebar. The per-workspace accent therefore shows as a
+ * band above the machine rather than as a border around it. All four corners
+ * are rounded even so: the machine reads as one card tucked under the
+ * titlebar, and the bottom pair land exactly on the OS window's own rounded
+ * corners. (#notice-band matches this geometry; the two have to move together
+ * or the band overhangs the surface below it.)
+ *
+ * --notice-band-height is 0 until the shell's failure band is up, at which
+ * point the surface shrinks by exactly the band's measured height. The band
+ * layers over the app, never over the machine: whatever the user was looking
+ * at stays on screen and stays readable.
+ */
+:root {
+  --notice-band-height: 0px;
+}
+.workspace-surface {
+  position: fixed;
+  left: 0;
+  width: 100%;
+  top: calc(38px + var(--notice-band-height));
+  height: calc(100% - 38px - var(--notice-band-height));
+  border-radius: 12px;
+}
+/*
+ * With the band up, it carries this card's top corners (it is flush and
+ * rounded to the same 12px), so the surface meets it square: one card, no
+ * seam where the two edges disagree.
+ */
+body:has(#notice-band) .workspace-surface {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
 .accent-spine::before {
   content: "";
   position: absolute;
@@ -406,8 +435,9 @@ body:has(#minds-titlebar.titlebar-surface) #local-page-scroll {
 
 /*
  * Titlebar self-theming. The bar is painted with the per-workspace color
- * (--titlebar-bg, set on the document root by chrome.js). The
- * ``.titlebar-surface`` class -- toggled onto #minds-titlebar by chrome.js only
+ * (--titlebar-bg, set on the document root by paintAccent in
+ * views/shell/shell-state.ts). The ``.titlebar-surface`` class -- toggled
+ * onto #minds-titlebar by the same code only
  * while a workspace accent is active -- derives a black-or-white contrast base
  * from that color entirely in CSS (relative color: lch lightness clamped to
  * 0/100 via the ``* infinity`` trick) and re-bases the foreground token VALUES
@@ -434,13 +464,13 @@ body:has(#minds-titlebar.titlebar-surface) #local-page-scroll {
 
 /*
  * Shared card surface (bg, border, rounded corners). No baseline shadow
- * -- non-clickable cards read as flat surfaces; the Card.jinja
- * ``interactive`` prop adds ``hover:shadow-sm`` so clickable cards lift
- * slightly on hover. The Card.jinja component composes this with
- * Tailwind utilities for layout (flex/justify) and padding. JS-rendered
- * surfaces that can't call the Jinja component -- e.g. the providers
- * list in templates/pages/Landing.jinja -- reference the same class
- * string so one edit here re-styles every card. Values mirror the
+ * -- non-clickable cards read as flat surfaces; the Card component's
+ * ``interactive`` prop (views/components/Card.ts) adds the hover
+ * border/shadow lift so clickable cards read as clickable. The Card
+ * component composes this with Tailwind utilities for layout
+ * (flex/justify) and padding, and surfaces that assemble the class
+ * string directly reference it too, so one edit here re-styles every
+ * card. Values mirror the
  * Tailwind utilities they replace: bg-surface-primary, border
  * border-default, rounded-lg.
  */
@@ -451,18 +481,18 @@ body:has(#minds-titlebar.titlebar-surface) #local-page-scroll {
 }
 
 /*
- * Create-from-Inspiration numbered stepper (CreateInspirationPage). The active
+ * Create-from-Template numbered stepper (CreateTemplatePage). The active
  * step's circle is a solid inverse bubble with a contrasting number; a completed
  * step is a faint fill with a muted number -- both opaque so the connector line
  * stays hidden behind them. Completed steps link down to the next with a solid
  * 1px line; the current (last visible) step gets a short dotted "more to come"
- * stub instead, unless it is the final step. Ported from InspirationCreate.jinja.
+ * stub instead, unless it is the final step. Ported from TemplateCreate.jinja.
  */
-.inspiration-step-circle[data-state="active"] {
+.template-step-circle[data-state="active"] {
   background-color: var(--c-surface-inverse);
   color: var(--c-text-inverse-primary);
 }
-.inspiration-step-circle[data-state="done"] {
+.template-step-circle[data-state="done"] {
   background-color: color-mix(in srgb, var(--c-text-primary) 10%, var(--c-surface-primary));
   color: var(--c-text-secondary);
 }
@@ -481,7 +511,7 @@ body:has(#minds-titlebar.titlebar-surface) #local-page-scroll {
 }
 
 /*
- * The copyable "/use-inspiration <repo>" box on the add branch: a slight lift
+ * The copyable "/use-template <repo>" box on the add branch: a slight lift
  * with a stronger border + soft shadow on hover. The border/background
  * transitions also carry the green "Copied" confirmation (set via inline style,
  * which overrides the hover border while the green is showing). The whole box
@@ -507,16 +537,12 @@ body:has(#minds-titlebar.titlebar-surface) #local-page-scroll {
 }
 
 /*
- * Custom tooltip bubble -- shared appearance for the two render backends in
- * static/tooltip_triggers.js: the overlay surface (static/overlay.js, used by
- * the chrome titlebar + the modal pages) and the in-page fallback that
- * first-party content-view pages (e.g. the workspace-row buttons in
- * Landing.jinja) render themselves, because that view has no ``window.minds``
- * bridge. Both build the bubble in JS, so this is the "shared across files"
- * case that gets a named ``@apply`` class (see README) instead of an inline
- * utility string -- one definition keeps the two backends visually identical.
- * Layout that differs per backend (position / left / top / z-index) is set in
- * JS; this class is appearance only. ``type-helper`` is the 12px/1.4 hints
+ * Custom tooltip bubble, built in JS by the delegated tooltip controller
+ * (views/shell/tooltips.ts): one shared bubble element appended to <body>
+ * for every [data-tooltip] trigger. Because the markup lives in JS, this is
+ * the "shared across files" case that gets a named ``@apply`` class (see
+ * README) instead of an inline utility string. Layout (position / left /
+ * top / z-index) is set by the controller; this class is appearance only. ``type-helper`` is the 12px/1.4 hints
  * role and ``shadow-overlay`` the menus/modals/tooltips elevation; the
  * max-width + whitespace/pointer-events keep it a compact, non-interactive
  * label. The max-width is generous enough that short button labels (e.g.
@@ -556,6 +582,158 @@ body:has(#minds-titlebar.titlebar-surface) #local-page-scroll {
   padding: 0.125rem 0.375rem;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.95em;
+}
+
+/*
+ * Toggle switch (the Permissions tab's per-permission control). Drawn
+ * entirely in CSS from one state attribute, so the view only flips
+ * ``aria-checked`` / ``checked`` and never touches classes: a 44x24 pill
+ * whose 20px white knob carries a small accent check when on (empty when
+ * off), the track filling with the accent in the on state. The knob is the
+ * ::after pseudo-element; the check is a ::before masked to a check glyph so
+ * it takes the accent token in both themes, riding the same transform as the
+ * knob. Disabled switches fade rather than disappear, so a grant that can't
+ * be restored from here is still legible.
+ */
+.perm-switch,
+.perm-switch-input {
+  position: relative;
+  width: 44px;
+  height: 24px;
+  margin: 0;
+  border: none;
+  border-radius: 9999px;
+  background: var(--c-fill-active);
+  cursor: pointer;
+  transition: background-color 150ms ease;
+}
+.perm-switch::after,
+.perm-switch-input::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  transition: transform 150ms ease;
+}
+/* The knob's check glyph: masked so it takes the accent color, sitting over
+   the knob (::before paints after ::after here thanks to the explicit
+   z-index) and moving with it. Hidden until the switch is on. */
+.perm-switch::before,
+.perm-switch-input::before {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  top: 6px;
+  left: 6px;
+  width: 12px;
+  height: 12px;
+  background: var(--c-accent);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+  opacity: 0;
+  transition:
+    transform 150ms ease,
+    opacity 150ms ease;
+}
+.perm-switch[aria-checked="true"],
+.perm-switch-input:checked {
+  background: var(--c-accent);
+}
+.perm-switch[aria-checked="true"]::after,
+.perm-switch-input:checked::after {
+  transform: translateX(20px);
+}
+.perm-switch[aria-checked="true"]::before,
+.perm-switch-input:checked::before {
+  transform: translateX(20px);
+  opacity: 1;
+}
+.perm-switch:disabled,
+.perm-switch-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+/* A flip whose write is still in flight: keep the control visibly busy so a
+   second click (ignored while the request runs) reads as "wait", not
+   "broken". */
+.perm-switch.is-busy {
+  opacity: 0.6;
+  cursor: progress;
+}
+.perm-switch:focus-visible,
+.perm-switch-input:focus-visible {
+  outline: 2px solid var(--c-accent);
+  outline-offset: 2px;
+}
+/* ``.perm-switch-input`` is the checkbox-backed variant for form controls
+   (the grant dialog's Adjust editor): a real ``<input type="checkbox">`` so
+   form semantics -- name/value/checked, and disabled inputs being omitted
+   from submission -- are untouched. */
+.perm-switch-input {
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+/*
+ * A permission scope row (Permissions tab and the grant dialog's Adjust
+ * editor). On hover the fill is widened 8px past the row's box on both sides
+ * with x-offset shadows, so the highlight breathes around the text without
+ * the row needing horizontal padding of its own.
+ */
+.perm-row:hover {
+  background: var(--c-fill-subtle);
+  box-shadow:
+    -8px 0 0 0 var(--c-fill-subtle),
+    8px 0 0 0 var(--c-fill-subtle);
+  border-radius: 8px;
+}
+
+/*
+ * A service's brand mark: the vendor's own logo, drawn as an <img>.
+ *
+ * An image and not a CSS mask because a mask keeps only the artwork's alpha
+ * and discards its color, and these logos are full-color. An <img> is also an
+ * isolated document, which Notion's mark needs -- it pairs a white path with
+ * an unfilled one, so inlining it under a `fill: currentColor` ancestor would
+ * repaint it.
+ */
+.service-mark {
+  display: inline-block;
+}
+.service-mark-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+/* Five brands are near-black and vanish on the dark surface. Each ships the
+ * vendor's own white variant as a second file and the theme picks between the
+ * two here, so no logo is ever recolored to suit the theme. The switch is a
+ * `.dark` ancestor rather than a media query or a JS read because that class
+ * is what themes this app, and it scopes subtrees as well as the document.
+ * Each rule below names the image by both its classes, so it out-ranks the
+ * base rule above whichever way that one is written. */
+.service-mark-img.on-dark-surface {
+  display: none;
+}
+.dark .service-mark-img.on-light-surface {
+  display: none;
+}
+.dark .service-mark-img.on-dark-surface {
+  display: block;
+}
+/* An account that is no longer connected: the same logo drained and dimmed, so
+ * the row reads as inactive without the mark changing shape or brand. */
+.service-mark-muted .service-mark-img {
+  filter: grayscale(1);
+  opacity: 0.55;
 }
 
 .spinner {
@@ -873,8 +1051,9 @@ body:has(#minds-titlebar.titlebar-surface) #local-page-scroll {
  * right, the machine below it. A pointer approves the request, and the
  * green button then travels across and settles as the link between the
  * cloud and the machine -- the same element throughout, so it reads as one
- * thing moving rather than two appearing. onboarding.js adds is-playing
- * when the step comes up, so the sequence starts over on each visit.
+ * thing moving rather than two appearing. The walkthrough renders the
+ * scene with is-playing on a keyed mount (views/pages/creating/graphics.ts),
+ * so the sequence starts over on each visit.
  */
 .connect-scene {
   position: relative;
@@ -1180,8 +1359,8 @@ body:has(#minds-titlebar.titlebar-surface) #local-page-scroll {
   100% { opacity: 0; transform: translateY(60px); }
 }
 
-/* Nothing should loop forever when motion is unwelcome, and app.css has no
- * blanket reduced-motion reset, so the loop is switched off explicitly (the
+/* Nothing should loop forever when motion is unwelcome, and this stylesheet
+ * has no blanket reduced-motion reset, so the loop is switched off explicitly (the
  * other connect animations get away without it only because they end where
  * their reduced-motion state puts them). One pulse rests mid-link so the
  * tunnel still reads as carrying something. */
@@ -1201,9 +1380,9 @@ body:has(#minds-titlebar.titlebar-surface) #local-page-scroll {
 
 /*
  * Sharing step: the arrow draws from the laptop to the phone, and the
- * phone's interface appears once it lands. onboarding.js adds is-playing
- * when the step comes up (and takes it off again), so the sequence starts
- * over on each visit.
+ * phone's interface appears once it lands. The walkthrough renders the
+ * scene with is-playing on a keyed mount (views/pages/creating/graphics.ts),
+ * so the sequence starts over on each visit.
  */
 #gfx-devices .devices-arrow-line {
   stroke-dasharray: 40;
@@ -1242,9 +1421,9 @@ body:has(#minds-titlebar.titlebar-surface) #local-page-scroll {
 /*
  * Chat step. The request types itself out, backspaces, and tries another
  * thing to build; the reply rises in underneath once the first request has
- * landed. onboarding.js owns the text, because a CSS typewriter (a clip
- * animation across a fixed width) cannot backspace through lines that differ
- * in length. The bubbles borrow the browser demo's chat language.
+ * landed. ChatTypewriter (models/walkthrough.ts) owns the text, because a
+ * CSS typewriter (a clip animation across a fixed width) cannot backspace
+ * through lines that differ in length. The bubbles borrow the browser demo's chat language.
  */
 .chat-bubble {
   /* 1rem rather than a type role, for the same reason .onboarding-copy is at
@@ -1578,10 +1757,11 @@ body:has(#minds-titlebar.titlebar-surface) #local-page-scroll {
 }
 /*
  * Split view (the tabs step): the agent pulls the app up beside the chat.
- * onboarding.js puts is-split on #theme-demo when the step shows; the chat
- * column narrows, the app column appears (which is also what starts the
- * charts' entrance animations, declared below), and the app's tab joins the
- * strip already selected -- no pointer, nothing to click.
+ * The tabs step renders #theme-demo with is-split
+ * (views/pages/creating/graphics.ts); the chat column narrows, the app
+ * column appears (which is also what starts the charts' entrance
+ * animations, declared below), and the app's tab joins the strip already
+ * selected -- no pointer, nothing to click.
  */
 .demo-chat-col {
   width: 100%;
@@ -1771,12 +1951,13 @@ body:has(#minds-titlebar.titlebar-surface) #local-page-scroll {
 }
 /*
  * App cloud: the apps latchkey can connect to, floating in a soft cloud.
- * Icons are the monochrome simple-icons served as <img> (recolored to a
- * muted tone; inverted under the app dark theme).
+ * Icons are the bundled brand marks, inlined as data: URIs and drawn as
+ * <img>. They are shown as each vendor publishes them: nothing tints or
+ * inverts them, because that would rewrite the brands' own colors.
  */
 /*
  * App wheel: one big icon centered in the cloud with a smaller one either
- * side. onboarding.js moves each icon forward through
+ * side. CloudWheel (models/walkthrough.ts) moves each icon forward through
  * enter -> left -> center -> right -> exit on a timer, so the icons read as
  * a wheel spinning apps through the cloud. Positions are pure transforms
  * (composited) and every element only ever moves forward, so the motion
@@ -1801,12 +1982,17 @@ body:has(#minds-titlebar.titlebar-surface) #local-page-scroll {
   --wheel-offset: 58px;
   --wheel-size: 40px;
 }
+/* The box is square but the vendors' marks are not (AWS is 256x153, Maps
+ * 256x367), so the artwork is fitted rather than stretched to the box. The
+ * silhouettes this replaced were all a square 24x24, which is why the box
+ * could get away without this before. */
 .cloud-wheel-item {
   position: absolute;
   left: 50%;
   top: 0;
   width: var(--wheel-size);
   height: var(--wheel-size);
+  object-fit: contain;
   margin-left: calc(var(--wheel-size) / -2);
   margin-top: calc(var(--wheel-size) / -2);
   opacity: 0;
@@ -1834,9 +2020,6 @@ body:has(#minds-titlebar.titlebar-surface) #local-page-scroll {
 .cloud-wheel-item.is-exit {
   transform: translateX(calc(var(--wheel-offset) * 1.5)) scale(0.4);
   opacity: 0;
-}
-.dark .cloud-wheel-item {
-  filter: invert(1);
 }
 /* The centered app's name, popping in under it as the icon lands. The
  * keyframes carry the -50% centering translate so the animation does not
@@ -1869,8 +2052,9 @@ body:has(#minds-titlebar.titlebar-surface) #local-page-scroll {
 
 /*
  * Entry transition: the page zooms into the graphic before entering the
- * workspace. onboarding.js adds is-entering to #onboarding, waits for the
- * animation, then hands the redirect URL to the shell bridge.
+ * workspace. The walkthrough view adds is-entering to #onboarding
+ * (views/pages/creating/OnboardingWalkthrough.ts), waits for the
+ * animation, then navigates to the ready workspace.
  */
 @keyframes onboarding-enter-zoom {
   to { transform: scale(6); opacity: 0; }
@@ -1886,7 +2070,7 @@ body:has(#minds-titlebar.titlebar-surface) #local-page-scroll {
 }
 
 /*
- * Electron window drag regions (ChromeShell.jinja parity). The titlebar is
+ * Electron window drag regions. The titlebar is
  * the window's drag handle on frameless (Linux) and hiddenInset (macOS)
  * windows; its buttons opt back out so they stay clickable.
  *

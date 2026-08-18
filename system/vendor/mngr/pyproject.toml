@@ -18,6 +18,12 @@ dependencies = [
 # fresh dep and break resolution. This only buys a detection delay;
 # it can't catch a compromise that stays undetected past the window.
 exclude-newer = "2026-07-20T00:00:00Z"
+# harbor 0.21.0 declares rich>=14.1.0, but litellm[proxy] (a regular dependency
+# of apps/modal_litellm) caps rich<14 in every version inside the cooldown
+# window, so the two can never co-resolve. Override rich to the workspace
+# status quo (13.x); harbor runs fine on it (verified via the minds_evals
+# oracle smoke run on Modal).
+override-dependencies = ["rich>=13.9.4,<14.0"]
 
 [tool.uv.sources]
 imbue-common = { workspace = true }
@@ -105,6 +111,7 @@ addopts = [
   "--cov=imbue.minds",
   "--cov=imbue.slack_exporter",
   "--cov=imbue.remote_service_connector",
+  "--cov=imbue.oauth_redirector",
   "--cov=imbue.apt_mirror",
   "--cov=imbue.share_relay",
   "--cov=imbue.concurrency_group",
@@ -119,6 +126,7 @@ addopts = [
   "--cov=imbue.mngr_gcp",
   "--cov=imbue.mngr_azure",
   "--cov=imbue.mngr_minds_eval",
+  "--cov=imbue.minds_evals",
   # NOTE: no --cov-report/--coverage-to-file here. Per-run coverage reports
   # are expensive to generate (they walk every measured file) and are only
   # useful interactively, so the local recipes that want them
@@ -178,7 +186,15 @@ format-command="uv run ruff format --force-exclude --config pyproject.toml --std
 [tool.ty.src]
 # apps/minds/hatch_build.py imports hatchling, which exists only inside
 # hatchling's isolated build environment, never in the dev venv.
-exclude = ["scripts/style_guide.py", "contrib/", "apps/minds/scripts/", "apps/minds/hatch_build.py"]
+# minds_evals templates run inside eval containers (rewardkit arrives via uvx
+# in the verifier image), so their imports are unresolvable in the dev venv.
+exclude = [
+    "scripts/style_guide.py",
+    "contrib/",
+    "apps/minds/scripts/",
+    "apps/minds/hatch_build.py",
+    "apps/minds_evals/imbue/minds_evals/templates/",
+]
 
 [tool.ty.environment]
 extra-paths = ["scripts"]
@@ -199,6 +215,9 @@ omit = [
     "test_*.py",
     "*/tests/*",
     "*/conftest.py",
+    # minds_evals's harbor task templates run inside eval containers, never in
+    # the dev/test process.
+    "*/minds_evals/templates/*",
     # Test utility modules contain helpers only used by tests
     "*/testing.py",
     "*/utils/plugin_testing.py",
@@ -211,6 +230,9 @@ omit = [
     "*/imbue_common/sentry/*",
     # Modal provider plugin requires network access for testing
     "libs/mngr_modal/imbue/mngr_modal/*",
+    # Manual frp verification harness (real frps binaries, live sockets); run
+    # by hand on frp version bumps, never in CI
+    "apps/share_relay/imbue/share_relay/frp_verification.py",
     # Docker provider requires a Docker daemon for testing
     "libs/mngr/imbue/mngr/providers/docker/instance.py",
     "libs/mngr/imbue/mngr/providers/docker/volume.py",
@@ -347,6 +369,7 @@ layers = [
     "imbue.mngr_imbue_cloud.slices",
     "imbue.mngr_imbue_cloud.connector",
     "imbue.mngr_imbue_cloud.config",
+    "imbue.mngr_imbue_cloud.interfaces",
     "imbue.mngr_imbue_cloud.data_types",
     "imbue.mngr_imbue_cloud.errors",
     "imbue.mngr_imbue_cloud.primitives",
@@ -367,6 +390,7 @@ layers = [
     "imbue.remote_service_connector.retention",
     "imbue.remote_service_connector.accounts",
     "imbue.remote_service_connector.llm_keys | imbue.remote_service_connector.r2.grants | imbue.remote_service_connector.share_certs | imbue.remote_service_connector.share_broker",
+    "imbue.remote_service_connector.accounts_web",
     "imbue.remote_service_connector.r2.sweep",
     "imbue.remote_service_connector.r2.buckets",
     "imbue.remote_service_connector.hosts | imbue.remote_service_connector.sync | imbue.remote_service_connector.auth_proxy | imbue.remote_service_connector.shares | imbue.remote_service_connector.r2.stores | imbue.remote_service_connector.r2.naming",

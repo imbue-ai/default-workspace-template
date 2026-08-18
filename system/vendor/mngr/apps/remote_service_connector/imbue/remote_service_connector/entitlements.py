@@ -16,14 +16,12 @@ from typing import NoReturn
 from typing import Protocol
 
 from fastapi import HTTPException
-from fastapi import Request
 from pydantic import BaseModel
 from pydantic import Field
 from supertokens_python.exceptions import GeneralError as SuperTokensGeneralError
 from supertokens_python.recipe.session.exceptions import SuperTokensSessionError
 from supertokens_python.syncio import get_user
 
-import imbue.remote_service_connector.auth as auth_module
 from imbue.remote_service_connector import db
 from imbue.remote_service_connector.auth import UserAuth
 from imbue.remote_service_connector.auth import is_email_paid
@@ -39,6 +37,7 @@ logger = logging.getLogger(__name__)
 # endpoint validates entitlement names against it.
 QUOTA_ENTITLEMENT_NAMES: tuple[str, ...] = (
     "max_remote_workspaces",
+    "max_total_workspaces",
     "max_buckets",
     "max_total_bucket_bytes",
     "monthly_llm_spend_usd",
@@ -53,7 +52,8 @@ INTEGER_ENTITLEMENT_NAMES: frozenset[str] = frozenset(QUOTA_ENTITLEMENT_NAMES) -
 class PlanEntitlements(BaseModel):
     """The quota values a plan grants (also the per-user entitlement values)."""
 
-    max_remote_workspaces: int = Field(description="Max concurrent pool-host leases (running or stopped)")
+    max_remote_workspaces: int = Field(description="Max running remote workspaces (leased/stopping/starting rows)")
+    max_total_workspaces: int = Field(description="Max total remote workspaces, running + stopped")
     max_buckets: int = Field(description="Max R2 buckets")
     max_total_bucket_bytes: int = Field(description="Max total bytes across all the account's buckets")
     monthly_llm_spend_usd: float = Field(description="Monthly LLM spend cap in USD (rolling; 0 disables key minting)")
@@ -85,6 +85,7 @@ class AccountEntitlements(PlanEntitlements):
     def quota_values(self) -> PlanEntitlements:
         return PlanEntitlements(
             max_remote_workspaces=self.max_remote_workspaces,
+            max_total_workspaces=self.max_total_workspaces,
             max_buckets=self.max_buckets,
             max_total_bucket_bytes=self.max_total_bucket_bytes,
             monthly_llm_spend_usd=self.monthly_llm_spend_usd,
@@ -281,11 +282,20 @@ def ensure_account_entitlements(
     return AccountEntitlements(**stored)
 
 
-def resolve_entitlements_for_user(request: Request, user: UserAuth) -> AccountEntitlements:
-    """Resolve (lazily creating) the entitlements row for a user-authenticated request."""
-    token = request.headers.get("authorization", "")[7:]
-    user_id = auth_module.get_user_id_from_access_token(token)
-    return ensure_account_entitlements(user_id=user_id, user_id_prefix=user.user_id_prefix, email=user.email or "")
+def resolve_entitlements_for_user(user_id: str, user: UserAuth) -> AccountEntitlements:
+    """Resolve (lazily creating) the entitlements row for a user-authenticated request.
+
+    ``user_id`` is the caller's full SuperTokens user id, as resolved by the
+    endpoint's own authentication (Bearer token or browser session). This
+    deliberately does not re-derive the id from an Authorization header --
+    doing so made every quota-checked endpoint 401 for the hosted chrome's
+    cookie sessions. The lazy creation's paid-list check may only consume a
+    verified email (ally is authorized by domain ownership), so an unverified
+    account is backfilled as a plain explorer row.
+    """
+    return ensure_account_entitlements(
+        user_id=user_id, user_id_prefix=user.user_id_prefix, email=user.verified_email or ""
+    )
 
 
 def raise_quota_exceeded(entitlement: str, limit: float, current: float, noun: str) -> NoReturn:

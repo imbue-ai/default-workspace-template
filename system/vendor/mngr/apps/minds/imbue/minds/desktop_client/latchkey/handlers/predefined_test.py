@@ -1,5 +1,4 @@
 import json
-import re
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -16,6 +15,7 @@ from imbue.minds.desktop_client.backend_resolver import BackendResolverInterface
 from imbue.minds.desktop_client.backend_resolver import StaticBackendResolver
 from imbue.minds.desktop_client.cookie_manager import SESSION_COOKIE_NAME
 from imbue.minds.desktop_client.cookie_manager import create_session_cookie
+from imbue.minds.desktop_client.latchkey.handlers.account_choices import NEW_ACCOUNT_FORM_VALUE
 from imbue.minds.desktop_client.latchkey.handlers.messaging import MngrMessageSender
 from imbue.minds.desktop_client.latchkey.handlers.predefined import EMPTY_MANUAL_CREDENTIAL_SUBMISSION
 from imbue.minds.desktop_client.latchkey.handlers.predefined import GrantOutcome
@@ -23,7 +23,6 @@ from imbue.minds.desktop_client.latchkey.handlers.predefined import LatchkeyPerm
 from imbue.minds.desktop_client.latchkey.handlers.predefined import LatchkeyPermissionGrantHandler
 from imbue.minds.desktop_client.latchkey.handlers.predefined import ManualCredentialSubmission
 from imbue.minds.desktop_client.latchkey.handlers.predefined import _build_account_choices
-from imbue.minds.desktop_client.latchkey.handlers.templates import NEW_ACCOUNT_FORM_VALUE
 from imbue.minds.desktop_client.latchkey.testing import FakeLatchkeyGatewayClient
 from imbue.minds.desktop_client.latchkey.testing import build_fake_gateway_client
 from imbue.minds.desktop_client.request_events import RequestInbox
@@ -71,7 +70,7 @@ def _message_sender() -> MngrMessageSender:
     """Build a recording message sender bound to the test's concurrency group."""
     cg = _MESSAGE_CONCURRENCY_GROUP["cg"]
     assert cg is not None
-    return MngrMessageSender(mngr_caller=RecordingMngrCaller(), concurrency_group=cg)
+    return MngrMessageSender(mngr_caller=RecordingMngrCaller(), concurrency_group=cg, retry_delays_seconds=())
 
 
 def _recorded_caller(handler: LatchkeyPermissionGrantHandler) -> RecordingMngrCaller:
@@ -415,14 +414,14 @@ def test_grant_with_unknown_credentials_and_set_only_auth_proceeds(tmp_path: Pat
     assert _read_recording(tmp_path / "auth_latchkey_report.jsonl") == []
 
 
-def test_render_detail_fragment_with_unknown_credentials_does_not_promise_browser(tmp_path: Path) -> None:
+def test_detail_payload_with_unknown_credentials_does_not_promise_browser(tmp_path: Path) -> None:
     # The dialog's progress notice must match what ``grant()`` will
     # actually do: UNKNOWN credential status proceeds straight to the
-    # grant (no ``latchkey auth browser``), so the fragment must show
-    # the generic notice, not the sign-in one. Empty auth options mirror
-    # the real degraded-UNKNOWN case (``services info`` fails for a
-    # non-latchkey scope) and hit the legacy "no auth options" fallback,
-    # which would falsely promise a browser under a plain not-VALID test.
+    # grant (no ``latchkey auth browser``), so the payload must not
+    # promise a sign-in browser. Empty auth options mirror the real
+    # degraded-UNKNOWN case (``services info`` fails for a non-latchkey
+    # scope) and hit the legacy "no auth options" fallback, which would
+    # falsely promise a browser under a plain not-VALID test.
     handler = _build_handler(
         tmp_path,
         credential_status="unknown",
@@ -434,33 +433,14 @@ def test_render_detail_fragment_with_unknown_credentials_does_not_promise_browse
         rationale="need to read a channel",
     )
 
-    body = handler.render_request_detail_fragment(
+    payload = handler.build_request_detail_payload(
         req_event=event,
         backend_resolver=StaticBackendResolver(url_by_agent_and_service={}),
-        mngr_forward_origin="",
     )
 
-    assert "Granting permission..." in body
-    assert "Opening a browser window for you to sign in to" not in body
-
-
-def test_render_detail_fragment_with_missing_credentials_promises_browser(tmp_path: Path) -> None:
-    # MISSING credentials with a browser auth option still run
-    # ``latchkey auth browser`` on Approve, so the notice must say so.
-    handler = _build_handler(tmp_path, credential_status="missing")
-    event = create_latchkey_predefined_permission_request_event(
-        agent_id=str(AgentId()),
-        scope="slack-api",
-        rationale="need to read a channel",
-    )
-
-    body = handler.render_request_detail_fragment(
-        req_event=event,
-        backend_resolver=StaticBackendResolver(url_by_agent_and_service={}),
-        mngr_forward_origin="",
-    )
-
-    assert "Opening a browser window for you to sign in to" in body
+    if not isinstance(payload, UiPredefinedPermissionDetail):
+        pytest.fail(f"expected a predefined detail payload, got {payload!r}")
+    assert payload.will_open_browser is False
 
 
 def test_grant_failed_browser_flow_stays_pending_without_denying(tmp_path: Path) -> None:
@@ -1027,7 +1007,7 @@ def test_deny_sends_mngr_message(tmp_path: Path) -> None:
     mngr_argvs = _wait_for_recorded_mngr_argvs(handler)
     assert len(mngr_argvs) == 1
     argv = mngr_argvs[0]
-    assert "denied" in argv[2].lower()
+    assert "denied" in argv[argv.index("-m") + 1].lower()
 
 
 def test_grant_calls_gateway_client_set_permission_and_delete_request(tmp_path: Path) -> None:
@@ -1121,12 +1101,11 @@ def test_apply_deny_request_succeeds_for_unknown_scope(tmp_path: Path) -> None:
     """Deny must work even when the request's scope is not in the gateway catalog.
 
     An agent can file a permission request under an unknown scope
-    (typo, stale catalog, etc.); the rendered detail fragment
-    (:func:`_render_unknown_scope_fragment`) offers Deny as the only
-    action. The deny HTTP path must therefore still tear down the
-    pending request, append a DENIED response event, and notify the
-    agent -- using the raw scope string in place of a catalog
-    display name.
+    (typo, stale catalog, etc.); the detail payload
+    (``UiUnknownScopeDetail``) offers Deny as the only action. The deny
+    HTTP path must therefore still tear down the pending request,
+    append a DENIED response event, and notify the agent -- using the
+    raw scope string in place of a catalog display name.
     """
     fake_client = FakeLatchkeyGatewayClient()
     handler = _build_handler(tmp_path, credential_status="valid")
@@ -1164,8 +1143,9 @@ def test_apply_deny_request_succeeds_for_unknown_scope(tmp_path: Path) -> None:
     mngr_argvs = _wait_for_recorded_mngr_argvs(handler)
     assert len(mngr_argvs) == 1
     argv = mngr_argvs[0]
-    assert "denied" in argv[2].lower()
-    assert "not-in-catalog-scope" in argv[2]
+    message_text = argv[argv.index("-m") + 1]
+    assert "denied" in message_text.lower()
+    assert "not-in-catalog-scope" in message_text
 
 
 def test_grant_preserves_existing_schemas_block_in_permissions_file(tmp_path: Path) -> None:
@@ -1408,7 +1388,7 @@ def test_grant_fails_when_the_signed_in_account_is_ambiguous(tmp_path: Path) -> 
     assert load_response_events(tmp_path) == []
 
 
-def test_render_detail_fragment_offers_every_account_plus_a_new_one(tmp_path: Path) -> None:
+def test_detail_payload_offers_every_account_plus_a_new_one(tmp_path: Path) -> None:
     latchkey = _make_multi_account_latchkey(tmp_path, {"alice@x": "valid", "bob@x": "valid"})
     handler = _build_handler_for_latchkey(tmp_path, latchkey)
     event = create_latchkey_predefined_permission_request_event(
@@ -1418,21 +1398,22 @@ def test_render_detail_fragment_offers_every_account_plus_a_new_one(tmp_path: Pa
         account="bob@x",
     )
 
-    body = handler.render_request_detail_fragment(
+    payload = handler.build_request_detail_payload(
         req_event=event,
         backend_resolver=StaticBackendResolver(url_by_agent_and_service={}),
-        mngr_forward_origin="",
     )
 
-    assert 'value="alice@x"' in body
-    assert 'value="bob@x"' in body
-    assert f'value="{NEW_ACCOUNT_FORM_VALUE}"' in body
-    # The account the agent asked for is the preselected one (and the only one).
-    checked_values = re.findall(r'name="account" value="([^"]*)"[^>]*\bchecked\b', body)
-    assert checked_values == ["bob@x"]
+    if not isinstance(payload, UiPredefinedPermissionDetail):
+        pytest.fail(f"expected a predefined detail payload, got {payload!r}")
+    account_values = [choice.value for choice in payload.account_choices]
+    assert "alice@x" in account_values
+    assert "bob@x" in account_values
+    assert NEW_ACCOUNT_FORM_VALUE in account_values
+    # The account the agent asked for is the preselected one.
+    assert payload.selected_account_value == "bob@x"
 
 
-def test_render_detail_fragment_offers_a_requested_account_that_is_not_connected(tmp_path: Path) -> None:
+def test_detail_payload_offers_a_requested_account_that_is_not_connected(tmp_path: Path) -> None:
     """An agent may name an account nobody has signed in to; the dialog must say so.
 
     Dropping it would silently preselect a *different* account, so approving
@@ -1448,20 +1429,23 @@ def test_render_detail_fragment_offers_a_requested_account_that_is_not_connected
         account="bob@x",
     )
 
-    body = handler.render_request_detail_fragment(
+    payload = handler.build_request_detail_payload(
         req_event=event,
         backend_resolver=StaticBackendResolver(url_by_agent_and_service={}),
-        mngr_forward_origin="",
     )
 
+    if not isinstance(payload, UiPredefinedPermissionDetail):
+        pytest.fail(f"expected a predefined detail payload, got {payload!r}")
     # The un-connected account is offered *and* preselected, next to the
-    # already-connected one.
-    assert 'value="alice@x"' in body
-    assert 'value="bob@x"' in body
-    assert re.findall(r'name="account" value="([^"]*)"[^>]*\bchecked\b', body) == ["bob@x"]
-    assert "not connected yet" in body
+    # already-connected one, and is flagged as needing sign-in.
+    account_values = [choice.value for choice in payload.account_choices]
+    assert "alice@x" in account_values
+    assert "bob@x" in account_values
+    assert payload.selected_account_value == "bob@x"
+    bob_choice = next(choice for choice in payload.account_choices if choice.value == "bob@x")
+    assert "not connected yet" in bob_choice.hint
     # Approving will therefore open a browser rather than granting silently.
-    assert "Opening a browser window for you to sign in to" in body
+    assert payload.will_open_browser is True
 
 
 def test_grant_for_a_requested_account_that_is_not_connected_signs_it_in(tmp_path: Path) -> None:
@@ -1518,13 +1502,18 @@ def test_build_account_choices_keeps_a_single_sign_in_option_when_nothing_is_con
     assert selected == NEW_ACCOUNT_FORM_VALUE
 
 
+def _offered_permissions(payload: UiPredefinedPermissionDetail) -> tuple[str, ...]:
+    """Every permission the dialog offers, in the order its groups render them."""
+    return tuple(row.permission for group in payload.permission_groups for row in group.rows)
+
+
 def test_build_account_choices_promises_a_credential_form_without_browser_auth() -> None:
     """A service with no browser flow must not promise a browser sign-in."""
     choices, _ = _build_account_choices((), "alice@x", is_browser_auth_supported=False)
 
     assert [(choice.value, choice.label, choice.hint) for choice in choices] == [
-        ("alice@x", "alice@x", "not connected yet -- asks you for credentials"),
-        (NEW_ACCOUNT_FORM_VALUE, "Use a new account", "asks you for credentials"),
+        ("alice@x", "alice@x", "not connected yet — asks you for credentials"),
+        (NEW_ACCOUNT_FORM_VALUE, "+ Add account", "asks you for credentials"),
     ]
 
 
@@ -1573,16 +1562,87 @@ def test_build_request_detail_payload_mirrors_the_fragment_derivation(tmp_path: 
         pytest.fail(f"expected a predefined detail payload, got {payload!r}")
     assert payload.request_id == str(event.event_id)
     assert payload.scope == "slack-api"
-    assert "slack-read-all" in payload.permission_schemas
+    assert "slack-read-all" in _offered_permissions(payload)
     assert "slack-read-all" in payload.checked_permissions
     assert payload.rationale == "need to read a channel"
     # MISSING credentials + a browser auth option: approving will pop a
     # browser sign-in, exactly as the fragment's progress notice promises.
     assert payload.will_open_browser is True
     assert payload.new_account_value
-    assert payload.wildcard_label == "all"
     account_values = [choice.value for choice in payload.account_choices]
     assert payload.selected_account_value in account_values
+
+
+def test_build_request_detail_payload_groups_permissions_for_the_dialog(tmp_path: Path) -> None:
+    """Offered permissions arrive grouped, labelled, full access first and the wildcard last.
+
+    The dialog renders labels only, so every row must carry one, and the
+    catch-all must be flagged so the client can keep it exclusive and set it
+    apart visually.
+    """
+    handler = _build_handler(tmp_path, credential_status="valid")
+    event = create_latchkey_predefined_permission_request_event(
+        agent_id=str(AgentId()),
+        scope="slack-api",
+        permissions=("slack-chat-read",),
+        rationale="need to read a channel",
+    )
+
+    payload = handler.build_request_detail_payload(
+        req_event=event,
+        backend_resolver=StaticBackendResolver(url_by_agent_and_service={}),
+    )
+
+    if not isinstance(payload, UiPredefinedPermissionDetail):
+        pytest.fail(f"expected a predefined detail payload, got {payload!r}")
+    assert [(group.heading, group.is_extras) for group in payload.permission_groups] == [
+        ("Full access", False),
+        ("Chat", False),
+        ("Extras", True),
+    ]
+    # Every offered permission is grouped exactly once, and the wildcard is
+    # the sole occupant of the trailing group.
+    offered = _offered_permissions(payload)
+    catalog_info = handler.services_catalog.get_by_scope("slack-api")
+    if catalog_info is None:
+        pytest.fail("expected the test catalog to expose the slack-api scope")
+    assert sorted(offered) == sorted(catalog_info.permission_schemas)
+    assert len(offered) == len(set(offered))
+    assert [row.permission for row in payload.permission_groups[-1].rows] == [WILDCARD_PERMISSION_NAME]
+    # Labels are human-readable and never echo the schema name.
+    rows_by_permission = {row.permission: row for group in payload.permission_groups for row in group.rows}
+    assert rows_by_permission["slack-chat-read"].label == "Read chat"
+    assert rows_by_permission[WILDCARD_PERMISSION_NAME].label == "Everything (unrestricted)"
+    assert all(row.label != row.permission for row in rows_by_permission.values())
+    # Only the catch-all is flagged as the wildcard.
+    assert [row.permission for row in rows_by_permission.values() if row.is_wildcard] == [WILDCARD_PERMISSION_NAME]
+
+
+def test_build_request_detail_payload_carries_catalog_descriptions_on_the_rows(tmp_path: Path) -> None:
+    """A described permission carries that description on its own row.
+
+    The simple view shows it under the label, so it has to travel with the
+    row rather than in a separate lookup table. Permissions the catalog does
+    not describe carry an empty string, not a missing key.
+    """
+    handler = _build_handler(tmp_path, credential_status="valid")
+    event = create_latchkey_predefined_permission_request_event(
+        agent_id=str(AgentId()),
+        scope="slack-api",
+        permissions=("slack-read-all",),
+        rationale="need to read a channel",
+    )
+
+    payload = handler.build_request_detail_payload(
+        req_event=event,
+        backend_resolver=StaticBackendResolver(url_by_agent_and_service={}),
+    )
+
+    if not isinstance(payload, UiPredefinedPermissionDetail):
+        pytest.fail(f"expected a predefined detail payload, got {payload!r}")
+    rows_by_permission = {row.permission: row for group in payload.permission_groups for row in group.rows}
+    assert rows_by_permission["slack-read-all"].description == "All read operations across the Slack API."
+    assert rows_by_permission["slack-write-all"].description == ""
 
 
 class _FixedHostResolver(StaticBackendResolver):
@@ -1668,7 +1728,7 @@ def test_build_request_detail_payload_offers_but_never_auto_checks_the_wildcard(
 
     if not isinstance(payload, UiPredefinedPermissionDetail):
         pytest.fail(f"expected a predefined detail payload, got {payload!r}")
-    assert WILDCARD_PERMISSION_NAME in payload.permission_schemas
+    assert WILDCARD_PERMISSION_NAME in _offered_permissions(payload)
     assert WILDCARD_PERMISSION_NAME not in payload.checked_permissions
     assert set(payload.checked_permissions) == {"slack-read-all", "slack-chat-read"}
 

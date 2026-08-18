@@ -7,7 +7,13 @@
 // the Electron main process's SSE relay.
 
 import m from "mithril";
-import type { UiOpenHelpMessage, UiServerMessage, UiWorkspaceStoppedMessage } from "./messages";
+import type {
+  UiHealthMessage,
+  UiOpenHelpMessage,
+  UiServerMessage,
+  UiWorkspaceRefreshMessage,
+  UiWorkspaceStoppedMessage,
+} from "./messages";
 import { parseServerMessage } from "./messages";
 import type { AppStores } from "../models/boot";
 import { VISIBLE_AFTER_FAILURES, backoffDelayMs } from "./backoff";
@@ -34,8 +40,16 @@ export interface ChannelOptions {
   /** Called on one-shot messages the shell must act on. */
   onWorkspaceStopped?: (message: UiWorkspaceStoppedMessage) => void;
   onOpenHelp?: (message: UiOpenHelpMessage) => void;
+  onWorkspaceRefresh?: (message: UiWorkspaceRefreshMessage) => void;
+  /** Called after each health message lands. The message's own ``is_snapshot``
+   * tells a connect-time replay of current state apart from a live edge. */
+  onHealthChanged?: (message: UiHealthMessage) => void;
+  /** A fresh snapshot is about to replay: the per-workspace health store has
+   * just been cleared and everything after this is the server restating the
+   * world. */
+  onSnapshotStart?: () => void;
   /** Relays state messages to the Electron main process (window bookkeeping);
-   * called for workspaces/health/workspace_stopped/open_help/discovery_health. */
+   * called for workspaces/health/workspace_stopped/open_help. */
   relayShellEvent?: (message: UiServerMessage) => void;
   /** Deterministic jitter for tests; defaults to Math.random. */
   jitter01?: () => number;
@@ -153,7 +167,6 @@ export class UiChannelClient {
       case "health":
       case "workspace_stopped":
       case "open_help":
-      case "discovery_health":
         this.options.relayShellEvent?.(message);
         break;
       default:
@@ -165,6 +178,7 @@ export class UiChannelClient {
         // snapshot only carries non-HEALTHY agents: clear the per-workspace
         // health so agents that recovered while disconnected come back clean.
         stores.health.reset();
+        this.options.onSnapshotStart?.();
         this.handleHello(message.schema_version);
         break;
       case "workspaces":
@@ -181,6 +195,7 @@ export class UiChannelClient {
         break;
       case "health":
         stores.health.applyHealthMessage(message);
+        this.options.onHealthChanged?.(message);
         break;
       case "discovery_health":
         stores.health.applyDiscoveryHealthMessage(message);
@@ -190,6 +205,9 @@ export class UiChannelClient {
         break;
       case "open_help":
         this.options.onOpenHelp?.(message);
+        break;
+      case "workspace_refresh":
+        this.options.onWorkspaceRefresh?.(message);
         break;
       case "reload_ui":
         (this.options.reloadPage ?? (() => location.reload()))();

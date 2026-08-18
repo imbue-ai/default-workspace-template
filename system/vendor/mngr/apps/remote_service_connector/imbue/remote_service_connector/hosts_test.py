@@ -1,3 +1,6 @@
+import stat
+import subprocess
+from pathlib import Path
 from uuid import UUID
 
 import pytest
@@ -10,6 +13,7 @@ from imbue.remote_service_connector.testing import _make_pool_quota_test_client
 from imbue.remote_service_connector.testing import _make_pool_test_client
 from imbue.remote_service_connector.testing import _seed_entitlements_row
 from imbue.remote_service_connector.testing import _user_headers
+from imbue.remote_service_connector.testing import make_storage_config
 
 
 def test_lease_host_returns_available_host(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -77,6 +81,136 @@ def test_lease_host_fails_closed_when_host_keys_missing(monkeypatch: pytest.Monk
     # The row must NOT have been leased, and no SSH key injection was attempted.
     assert backend.pool_rows[0].status == "available"
     assert backend.append_key_calls == []
+
+
+def test_lease_host_quarantines_dead_host_and_leases_the_next_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A row whose SSH key injection fails is quarantined and the next match is leased.
+
+    This is the 2026-08 production outage shape: the oldest available row sat on a
+    dead box, and every lease retried it forever. The fix flips the dead row to
+    'unreachable' (so it leaves rotation) and serves the caller from the next row
+    in the same request.
+    """
+    client, backend = _make_pool_test_client(monkeypatch)
+    backend.append_key_failure_addresses = {"10.0.0.1"}
+    backend.add_available_host(
+        host_id=UUID("00000000-0000-0000-0000-000000000001"),
+        version="v0.1.0",
+        vps_address="10.0.0.1",
+    )
+    backend.add_available_host(
+        host_id=UUID("00000000-0000-0000-0000-000000000002"),
+        version="v0.1.0",
+        vps_address="10.0.0.2",
+    )
+    resp = client.post(
+        "/hosts/lease",
+        json={
+            "ssh_public_key": "ssh-ed25519 AAAA testkey",
+            "host_name": "my-workspace",
+            "attributes": {"version": "v0.1.0"},
+        },
+        headers=_user_headers(),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["host_db_id"] == "00000000-0000-0000-0000-000000000002"
+    # The dead row is quarantined, the healthy one is leased.
+    assert backend.pool_rows[0].status == "unreachable"
+    assert backend.pool_rows[1].status == "leased"
+    assert backend.pool_rows[1].leased_to_user == _USER_STUB_USER_ID_PREFIX
+
+
+def test_lease_host_returns_503_when_the_only_candidate_was_quarantined(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When quarantining drains the pool, the caller gets the standard no-capacity 503.
+
+    Retrying cannot help (there are no rows left to try), so this must read as
+    no-capacity -- the client maps 503 to its lease-unavailable error -- while the
+    dead row still leaves rotation.
+    """
+    client, backend = _make_pool_test_client(monkeypatch)
+    backend.append_key_failure_addresses = {"10.0.0.1"}
+    backend.add_available_host(
+        host_id=UUID("00000000-0000-0000-0000-000000000001"),
+        version="v0.1.0",
+        vps_address="10.0.0.1",
+    )
+    resp = client.post(
+        "/hosts/lease",
+        json={
+            "ssh_public_key": "ssh-ed25519 AAAA testkey",
+            "host_name": "my-workspace",
+            "attributes": {"version": "v0.1.0"},
+        },
+        headers=_user_headers(),
+    )
+    assert resp.status_code == 503
+    assert "No pre-created agents" in resp.json()["detail"]
+    assert backend.pool_rows[0].status == "unreachable"
+
+
+def test_lease_host_keeps_quarantine_when_a_keyless_row_stops_the_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A keyless row after a quarantined one still 503s, and the quarantine sticks.
+
+    The keyless-row 503 is raised after the lease transaction commits: raising it
+    inside would roll back the quarantine of the dead row tried first, and every
+    retry would re-wedge on that same dead row (the outage shape all over again).
+    """
+    client, backend = _make_pool_test_client(monkeypatch)
+    backend.append_key_failure_addresses = {"10.0.0.1"}
+    backend.add_available_host(
+        host_id=UUID("00000000-0000-0000-0000-000000000001"),
+        version="v0.1.0",
+        vps_address="10.0.0.1",
+    )
+    backend.add_available_host(
+        host_id=UUID("00000000-0000-0000-0000-000000000002"),
+        version="v0.1.0",
+        vps_address="10.0.0.2",
+        outer_host_public_key=None,
+        container_host_public_key=None,
+    )
+    resp = client.post(
+        "/hosts/lease",
+        json={
+            "ssh_public_key": "ssh-ed25519 AAAA testkey",
+            "host_name": "my-workspace",
+            "attributes": {"version": "v0.1.0"},
+        },
+        headers=_user_headers(),
+    )
+    assert resp.status_code == 503
+    assert "host-key backfill" in resp.json()["detail"]
+    # The dead row's quarantine survives the keyless-row 503.
+    assert backend.pool_rows[0].status == "unreachable"
+    assert backend.pool_rows[1].status == "available"
+
+
+def test_lease_host_bounds_quarantine_attempts_and_returns_502(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A request quarantines at most three rows, then returns a retryable 502.
+
+    The cap bounds the request's worst-case latency; the fourth dead row stays
+    available for the caller's retry (which quarantines onward from there).
+    """
+    client, backend = _make_pool_test_client(monkeypatch)
+    backend.append_key_failure_addresses = {"10.0.0.1", "10.0.0.2", "10.0.0.3", "10.0.0.4"}
+    for idx in (1, 2, 3, 4):
+        backend.add_available_host(
+            host_id=UUID(f"00000000-0000-0000-0000-00000000000{idx}"),
+            version="v0.1.0",
+            vps_address=f"10.0.0.{idx}",
+        )
+    resp = client.post(
+        "/hosts/lease",
+        json={
+            "ssh_public_key": "ssh-ed25519 AAAA testkey",
+            "host_name": "my-workspace",
+            "attributes": {"version": "v0.1.0"},
+        },
+        headers=_user_headers(),
+    )
+    assert resp.status_code == 502
+    assert "quarantined" in resp.json()["detail"]
+    assert [row.status for row in backend.pool_rows] == ["unreachable", "unreachable", "unreachable", "available"]
 
 
 def test_lease_host_returns_503_when_pool_empty(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -310,6 +444,110 @@ def test_release_host_fails_loudly_when_slice_teardown_fails(monkeypatch: pytest
     assert backend.pool_rows[0].status == "removing"
 
 
+def test_release_host_of_crashed_row_survives_a_dead_box(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Releasing a 'crashed' row whose box is unreachable still deletes the row.
+
+    'crashed' is the operator's abandon-time assertion that the box is
+    permanently dead, so the teardown attempt is best-effort: its failure is
+    logged and the release proceeds, instead of wedging the row in 'removing'
+    forever against a box that will never answer.
+    """
+    client, backend = _make_pool_test_client(monkeypatch)
+    backend.slice_teardown_should_fail = True
+    row = backend.add_leased_host(
+        host_id=UUID("00000000-0000-0000-0000-0000000000cd"),
+        version="v0.1.0",
+        leased_to_user=_USER_STUB_USER_ID_PREFIX,
+    )
+    row.status = "crashed"
+    row.transition_error = "abandoned: box permanently dead"
+    row.bare_metal_server_id = UUID("00000000-0000-0000-0000-0000000000b1")
+    resp = client.post("/hosts/00000000-0000-0000-0000-0000000000cd/release", headers=_user_headers())
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "released"
+    assert backend.pool_rows == []
+
+
+def test_release_host_of_crashed_row_still_attempts_teardown(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Releasing a 'crashed' row whose box turns out reachable tears the VM down normally."""
+    client, backend = _make_pool_test_client(monkeypatch)
+    row = backend.add_leased_host(
+        host_id=UUID("00000000-0000-0000-0000-0000000000ce"),
+        version="v0.1.0",
+        leased_to_user=_USER_STUB_USER_ID_PREFIX,
+    )
+    row.status = "crashed"
+    row.bare_metal_server_id = UUID("00000000-0000-0000-0000-0000000000b1")
+    resp = client.post("/hosts/00000000-0000-0000-0000-0000000000ce/release", headers=_user_headers())
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "released"
+    assert backend.pool_rows == []
+    assert len(backend.slice_teardowns) == 1
+
+
+def test_release_host_of_crashed_row_stays_best_effort_across_retries(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A crashed release interrupted after its status flip still completes on retry.
+
+    The flip to 'removing' clears the box link, so a retry -- which reads
+    'removing', not 'crashed' -- does not turn into a must-succeed teardown
+    against the permanently dead box. Here the first attempt fails at the
+    artifact deletion (a transient storage outage); the retry, with storage
+    healed but the box still dead, must release cleanly.
+    """
+    client, backend = _make_pool_test_client(monkeypatch)
+    backend.storage_config = make_storage_config()
+    backend.delete_prefix_should_fail = True
+    backend.slice_teardown_should_fail = True
+    row = backend.add_leased_host(
+        host_id=UUID("00000000-0000-0000-0000-0000000000cf"),
+        version="v0.1.0",
+        leased_to_user=_USER_STUB_USER_ID_PREFIX,
+    )
+    row.status = "crashed"
+    row.bare_metal_server_id = UUID("00000000-0000-0000-0000-0000000000b1")
+
+    resp = client.post("/hosts/00000000-0000-0000-0000-0000000000cf/release", headers=_user_headers())
+    assert resp.status_code == 500
+    assert len(backend.pool_rows) == 1
+    assert backend.pool_rows[0].status == "removing"
+
+    backend.delete_prefix_should_fail = False
+    resp = client.post("/hosts/00000000-0000-0000-0000-0000000000cf/release", headers=_user_headers())
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "released"
+    assert backend.pool_rows == []
+
+
+def test_release_host_of_mid_restore_starting_row_skips_teardown_and_deletes_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Releasing a 'starting' row whose restore has not yet placed its VM must succeed.
+
+    Between a stop finalize and the restore's final CAS the row has no box link
+    (bare_metal_server_id is NULL): there is no recorded VM anywhere, so a
+    release must not attempt a slice teardown (which can only fail, wedging the
+    row in 'removing' forever) -- it deletes the row directly.
+    """
+    client, backend = _make_pool_test_client(monkeypatch)
+    row = backend.add_leased_host(
+        host_id=UUID("00000000-0000-0000-0000-0000000000ab"),
+        version="v0.1.0",
+        leased_to_user=_USER_STUB_USER_ID_PREFIX,
+    )
+    row.status = "starting"
+    row.vps_address = None
+    row.ssh_port = None
+    row.container_ssh_port = None
+    row.lima_instance_name = "mngr-slice-test-" + "ab" * 16
+    row.lima_disk_name = "mngr-slice-test-" + "ab" * 16 + "-data"
+    assert row.bare_metal_server_id is None
+    resp = client.post("/hosts/00000000-0000-0000-0000-0000000000ab/release", headers=_user_headers())
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "released"
+    assert backend.pool_rows == []
+    assert backend.slice_teardowns == []
+
+
 def test_release_host_returns_403_for_non_owner(monkeypatch: pytest.MonkeyPatch) -> None:
     """POST /hosts/{id}/release returns 403 when the caller is not the lease owner."""
     client, backend = _make_pool_test_client(monkeypatch)
@@ -460,6 +698,63 @@ def test_slice_name_env_owner_returns_none_for_legacy_and_non_slice_names() -> N
     assert hosts_mod.slice_name_env_owner("some-other-vm") is None
 
 
+# Verbatim from the 2026-08-07 production incident box (51.81.185.229): nvme0
+# dropped off the bus, both RAID1 arrays run degraded on nvme1, and the dead
+# disk's raw swap partition lingers as a "(deleted)" entry.
+_DEGRADED_MDSTAT = """\
+Personalities : [raid1] [linear] [multipath] [raid0] [raid6] [raid5] [raid4] [raid10]
+md2 : active raid1 nvme1n1p2[1]
+      1046528 blocks super 1.2 [2/1] [_U]
+      bitmap: 1/1 pages [4KB], 65536KB chunk
+
+md3 : active raid1 nvme1n1p3[1]
+      936244224 blocks super 1.2 [2/1] [_U]
+      bitmap: 7/7 pages [28KB], 65536KB chunk
+
+unused devices: <none>
+"""
+
+_HEALTHY_MDSTAT = """\
+Personalities : [raid1]
+md3 : active raid1 nvme0n1p3[0] nvme1n1p3[1]
+      935460864 blocks super 1.2 [2/2] [UU]
+md2 : active raid1 nvme0n1p2[0] nvme1n1p2[1]
+      1046528 blocks super 1.2 [2/2] [UU]
+unused devices: <none>
+"""
+
+_INCIDENT_PROC_SWAPS = """\
+Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority
+/dev/nvme1n1p4                          partition\t524284\t\t220932\t\t-2
+/dev/nvme0n1p4\\040(deleted)             partition\t524284\t\t346108\t\t-3
+/swapfile                               file\t\t33554428\t1426020\t\t-4
+"""
+
+
+def test_parse_degraded_md_arrays_reports_arrays_missing_a_member() -> None:
+    assert hosts_mod._parse_degraded_md_arrays(_DEGRADED_MDSTAT) == ["md2", "md3"]
+
+
+def test_parse_degraded_md_arrays_reports_nothing_for_healthy_arrays() -> None:
+    assert hosts_mod._parse_degraded_md_arrays(_HEALTHY_MDSTAT) == []
+    assert hosts_mod._parse_degraded_md_arrays("") == []
+
+
+def test_parse_raw_swap_devices_flags_partitions_but_not_the_swapfile() -> None:
+    # Both raw partitions are flagged -- including the dead disk's lingering
+    # "(deleted)" entry -- while the mirrored swapfile is not.
+    assert hosts_mod._parse_raw_swap_devices(_INCIDENT_PROC_SWAPS) == [
+        "/dev/nvme1n1p4",
+        "/dev/nvme0n1p4\\040(deleted)",
+    ]
+
+
+def test_parse_raw_swap_devices_ignores_md_backed_swap_and_empty_input() -> None:
+    md_swap = "Filename\tType\tSize\tUsed\tPriority\n/dev/md1 partition 524284 0 -2\n"
+    assert hosts_mod._parse_raw_swap_devices(md_swap) == []
+    assert hosts_mod._parse_raw_swap_devices("") == []
+
+
 def test_build_slice_teardown_commands_includes_disk_when_present() -> None:
     """Verify that when a data disk name is supplied, teardown emits both the instance
     delete and a separate disk delete command (in that order). The test would fail if the
@@ -489,3 +784,46 @@ def test_build_slice_teardown_commands_quotes_unsafe_names() -> None:
     assert ";" not in commands[0].replace("'a b; rm -rf /'", "")
     assert commands[0] == "limactl delete --force 'a b; rm -rf /'"
     assert commands[1] == "limactl disk delete --force 'd$x'"
+
+
+def _run_container_file_write_command(target: Path, content: str, is_seed_only: bool) -> None:
+    """Execute the built write command locally through ``sh``, failing loudly on a non-zero exit."""
+    command = hosts_mod.build_container_file_write_command(str(target), content, is_seed_only=is_seed_only)
+    result = subprocess.run(["sh", "-c", command], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_build_container_file_write_command_writes_shell_hostile_content_with_0600_mode(tmp_path: Path) -> None:
+    """Verify the built command creates the file byte-for-byte -- including content full of
+    shell metacharacters (quotes, dollars, backticks, newlines) -- with 0600 permissions,
+    creating parent directories as needed, and that a second non-seed write replaces the
+    content (share.env must be rewritten on every enable to rotate the relay token). The
+    test would fail if quoting or the base64 transport mangled the bytes, or if a plain
+    write skipped an existing file."""
+    target = tmp_path / "sub dir" / "share.env"
+    content = "export SHARE_RELAY_TOKEN='a b'\n$HOME `whoami` \\ end\n"
+    _run_container_file_write_command(target, content, is_seed_only=False)
+    assert target.read_text() == content
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
+    _run_container_file_write_command(target, "rotated\n", is_seed_only=False)
+    assert target.read_text() == "rotated\n"
+
+
+def test_build_container_file_write_command_seed_only_creates_when_absent_and_skips_when_present(
+    tmp_path: Path,
+) -> None:
+    """Verify seed-if-absent semantics: the first seed write creates the file, but once the
+    file exists a later seed write leaves it byte-for-byte untouched (and still exits 0).
+    This is what keeps re-enabling sharing from clobbering a grants document the user has
+    edited since the first seed. The test would fail if the existence guard were dropped,
+    inverted, or mis-quoted so the write ran anyway."""
+    target = tmp_path / "share_grants.toml"
+    seed = "[workspace]\nemails = []\nemail_domains = []\n"
+    _run_container_file_write_command(target, seed, is_seed_only=True)
+    assert target.read_text() == seed
+
+    edited = '[workspace]\nemails = ["friend@example.com"]\nemail_domains = []\n'
+    target.write_text(edited)
+    _run_container_file_write_command(target, seed, is_seed_only=True)
+    assert target.read_text() == edited

@@ -185,6 +185,11 @@ Done (prompt-level + report plumbing, in `libs/mngr_tmr`):
 - Report (`report.py`, `report_assets/report.html.j2`): parses and renders
   `normalizations` and `escalations` so unresolved blockers are visible, not dropped.
 
+Note: the outcome schema described here was superseded. `normalizations` was
+folded into a single `escalations` array whose entries group the mappers' own
+escalations, and the BLOCKER/SHARED_PATTERN kinds were replaced. See
+`specs/tmr-escalations-review/report.md` for the current design and why it changed.
+
 Deferred (orchestration / larger surface):
 
 - Wiring the reducer to actually run a blast-radius subset on offload (creds passthrough +

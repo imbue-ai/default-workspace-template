@@ -16,15 +16,18 @@ parses those into typed pydantic objects.
 import json as _json
 import os
 import tempfile
+import threading
 import time
 from collections.abc import Mapping
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
+from typing import Final
 
 from loguru import logger
 from pydantic import AnyUrl
 from pydantic import Field
+from pydantic import PrivateAttr
 from pydantic import SecretStr
 
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -33,9 +36,16 @@ from imbue.minds.errors import MindError
 from imbue.minds.utils.mngr_caller import MngrCallResult
 from imbue.minds.utils.mngr_caller import MngrCaller
 from imbue.minds.utils.mngr_caller import get_default_mngr_caller
+from imbue.mngr_imbue_cloud.errors import CLIENT_TOO_OLD_FALLBACK_MESSAGE
+from imbue.mngr_imbue_cloud.wire import WireModel
 
 _DEFAULT_TIMEOUT_SECONDS = 60.0
 _LEASE_TIMEOUT_SECONDS = 300.0
+# The plugin's `auth login` enforces its own 300s listen deadline
+# (_LOGIN_LISTEN_TIMEOUT_SECONDS in the plugin's cli/auth.py) with a proper
+# timeout error; this outer kill deadline needs headroom over it (spawn, code
+# exchange, session persist) so the plugin's message is the one that surfaces.
+_WEB_LOGIN_TIMEOUT_SECONDS = 330.0
 _KEY_OP_TIMEOUT_SECONDS = 90.0
 # Force-destroy empties the bucket over S3 before deleting it, so it can run
 # far longer than the other bucket ops (many objects, plus credential
@@ -52,6 +62,16 @@ _CONNECTOR_URL_SUBPROCESS_ENV: str = "MNGR__PROVIDERS__IMBUE_CLOUD__CONNECTOR_UR
 # into its JSON stderr body by handle_imbue_cloud_errors. Substring-matched
 # (like the 503 unavailable_signal) because log lines may surround the body.
 _QUOTA_ERROR_CLASS_SIGNAL = "ImbueCloudQuotaExceededError"
+
+# The plugin's error_class marker for a structured email-verification refusal
+# (``code: email_not_verified``), written by handle_imbue_cloud_errors.
+# Substring-matched like the quota signal.
+_EMAIL_NOT_VERIFIED_ERROR_CLASS_SIGNAL = "ImbueCloudEmailNotVerifiedError"
+
+# The plugin's error_class marker for the connector's structured HTTP 426
+# "client too old" refusal, written by handle_imbue_cloud_errors. Substring-
+# matched like the quota signal.
+_CLIENT_TOO_OLD_ERROR_CLASS_SIGNAL = "ImbueCloudClientTooOldError"
 
 # The plugin's error_class marker for a structured auth rejection, written by
 # ``_persist_auth_response`` in the plugin's auth CLI whenever the connector
@@ -89,8 +109,30 @@ class ImbueCloudQuotaExceededCliError(ImbueCloudCliError):
     """
 
 
+class ImbueCloudEmailNotVerifiedCliError(ImbueCloudCliError):
+    """The connector refused the operation because the account's email is unverified.
+
+    Raised for the connector's structured ``email_not_verified`` 403 (relayed
+    through the plugin). Deterministic like a quota refusal -- retrying cannot
+    succeed until the user clicks the verification link -- so callers surface
+    a contextual "verify your email" prompt instead of a generic failure.
+    ``email`` is the address the verification link goes to (None when the
+    connector could not resolve one).
+    """
+
+    email: str | None = None
+
+
+class ImbueCloudClientTooOldCliError(ImbueCloudCliError):
+    """The connector refused the operation because this app version is no longer supported.
+
+    Deterministic -- retrying cannot succeed until the app updates -- so
+    callers surface an "update the app" prompt instead of a generic failure.
+    """
+
+
 class ImbueCloudAuthFailedCliError(ImbueCloudCliError):
-    """The auth backend rejected an ``auth signin`` / ``signup`` / ``oauth`` attempt.
+    """The auth backend rejected an ``auth signin`` / ``signup`` / ``login`` attempt.
 
     ``auth_status`` carries the connector's own verdict (``WRONG_CREDENTIALS``,
     ``EMAIL_ALREADY_EXISTS``, ``FIELD_ERROR``, ...) and ``auth_message`` its
@@ -114,8 +156,8 @@ class ImbueCloudSyncConflictCliError(ImbueCloudCliError):
     stored_record: dict[str, Any] | None = None
 
 
-class ImbueCloudAuthSession(FrozenModel):
-    """Result of a successful auth signin/signup/oauth invocation."""
+class ImbueCloudAuthSession(WireModel):
+    """Result of a successful auth signin/signup/login invocation."""
 
     user_id: str
     email: str
@@ -123,7 +165,7 @@ class ImbueCloudAuthSession(FrozenModel):
     needs_email_verification: bool = False
 
 
-class ImbueCloudAuthAccount(FrozenModel):
+class ImbueCloudAuthAccount(WireModel):
     """One entry from `mngr imbue_cloud auth list`."""
 
     user_id: str
@@ -132,22 +174,7 @@ class ImbueCloudAuthAccount(FrozenModel):
     is_active: bool = False
 
 
-class ImbueCloudVerificationStatus(FrozenModel):
-    """Result of `mngr imbue_cloud auth is-verified`.
-
-    When ``verified`` is True the plugin has already promoted the pending
-    session (it now appears in ``auth list`` and is the active account), so
-    the identity fields let the caller finish its own signin bookkeeping
-    without another subprocess round trip.
-    """
-
-    verified: bool
-    user_id: str
-    email: str
-    display_name: str | None = None
-
-
-class LeasedHost(FrozenModel):
+class LeasedHost(WireModel):
     """One row of `mngr imbue_cloud hosts list`."""
 
     host_db_id: str
@@ -161,27 +188,101 @@ class LeasedHost(FrozenModel):
     leased_at: str
 
 
-class LiteLLMKeyMaterial(FrozenModel):
+class LiteLLMKeyMaterial(WireModel):
     """Result of `mngr imbue_cloud keys litellm create`."""
 
     key: SecretStr
     base_url: AnyUrl
 
 
-class ShareCliInfo(FrozenModel):
+class ShareCliRelayEndpoint(WireModel):
+    """One relay a shared workspace tunnels to (from `shares create` / `shares status`)."""
+
+    relay_id: str
+    endpoint: str
+
+
+class ShareCliRelayLogin(WireModel):
+    """One relay's last tunnel Login stamp for a share (from `shares status`)."""
+
+    relay_id: str
+    last_login_at: str | None = None
+
+
+class ShareCliInfo(WireModel):
     """Result of `mngr imbue_cloud shares create` / `shares status`."""
 
     host_id: str
     workspace_domain: str
     region: str
     state: str
-    relay_endpoint: str | None = None
+    relay_endpoints: tuple[ShareCliRelayEndpoint, ...] = ()
+    # Per-relay tunnel login stamps; `shares status` output only (ops signal,
+    # not shown in the end-user UI).
+    relays: tuple[ShareCliRelayLogin, ...] = ()
     relay_token: SecretStr | None = None
     last_tunnel_login_at: str | None = None
     cert_not_after: str | None = None
 
 
-class R2BucketKeyMaterial(FrozenModel):
+# How long a readiness poll may reuse a cached connector share lookup. The
+# share's domain is immutable for its lifetime and the progress stamps riding
+# along (cert expiry, tunnel login) change on the scale of the ACME/tunnel
+# bring-up, so one connector read per window is plenty -- while the poll
+# itself fires every ~2 seconds and each uncached read is a multi-second
+# ``mngr imbue_cloud shares status`` subprocess.
+_ACTIVE_SHARE_CACHE_TTL_SECONDS: Final[float] = 20.0
+
+
+class CachedShareLookup(FrozenModel):
+    """One cached connector share lookup (``share`` is None for 'not actively shared')."""
+
+    share: ShareCliInfo | None = Field(description="The active share, or None when the host has no active share")
+
+
+class ActiveShareCache(MutableModel):
+    """Short-TTL cache of connector share lookups, keyed by host id.
+
+    Serves the readiness poll: the poll needs the share's (immutable) domain
+    plus slow-moving progress stamps every ~2 seconds, and an uncached lookup
+    costs a multi-second CLI subprocess. Enable/disable invalidate their
+    host's entry so state flips are observed immediately rather than at TTL
+    expiry.
+    """
+
+    ttl_seconds: float = Field(
+        default=_ACTIVE_SHARE_CACHE_TTL_SECONDS,
+        frozen=True,
+        description="How long one lookup may be reused",
+    )
+    _lookup_and_deadline_by_host_id: dict[str, tuple[float, CachedShareLookup]] = PrivateAttr(default_factory=dict)
+    _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
+
+    def get(self, host_id: str) -> CachedShareLookup | None:
+        """The unexpired cached lookup for ``host_id``, or None on a miss."""
+        with self._lock:
+            entry = self._lookup_and_deadline_by_host_id.get(host_id)
+            if entry is None:
+                return None
+            deadline, lookup = entry
+            if time.monotonic() >= deadline:
+                del self._lookup_and_deadline_by_host_id[host_id]
+                return None
+            return lookup
+
+    def put(self, host_id: str, share: ShareCliInfo | None) -> None:
+        with self._lock:
+            self._lookup_and_deadline_by_host_id[host_id] = (
+                time.monotonic() + self.ttl_seconds,
+                CachedShareLookup(share=share),
+            )
+
+    def invalidate(self, host_id: str) -> None:
+        with self._lock:
+            self._lookup_and_deadline_by_host_id.pop(host_id, None)
+
+
+class R2BucketKeyMaterial(WireModel):
     """A bucket-scoped S3 credential, as emitted by `mngr imbue_cloud bucket ...`.
 
     Mirror of the plugin's ``R2KeyMaterial`` JSON shape; the secret is
@@ -195,14 +296,14 @@ class R2BucketKeyMaterial(FrozenModel):
     access: str
 
 
-class R2BucketInfo(FrozenModel):
+class R2BucketInfo(WireModel):
     """Metadata for an R2 bucket, as emitted by `mngr imbue_cloud bucket info`."""
 
     bucket_name: str
     s3_endpoint: AnyUrl
 
 
-class R2BucketCreateResult(FrozenModel):
+class R2BucketCreateResult(WireModel):
     """Result of `mngr imbue_cloud bucket create`: the bucket plus its default key."""
 
     bucket: R2BucketInfo
@@ -292,6 +393,15 @@ class ImbueCloudCli(MutableModel):
             exc.stdout = result.stdout
             exc.stderr = result.stderr
             raise exc
+        if _CLIENT_TOO_OLD_ERROR_CLASS_SIGNAL in result.stderr:
+            too_old_message = _parse_stderr_error_message(result.stderr)
+            too_old_exc = ImbueCloudClientTooOldCliError(
+                too_old_message if too_old_message else CLIENT_TOO_OLD_FALLBACK_MESSAGE
+            )
+            too_old_exc.exit_code = exit_code
+            too_old_exc.stdout = result.stdout
+            too_old_exc.stderr = result.stderr
+            raise too_old_exc
         if _QUOTA_ERROR_CLASS_SIGNAL in result.stderr:
             quota_message = _parse_stderr_error_message(result.stderr)
             quota_exc = ImbueCloudQuotaExceededCliError(
@@ -301,6 +411,20 @@ class ImbueCloudCli(MutableModel):
             quota_exc.stdout = result.stdout
             quota_exc.stderr = result.stderr
             raise quota_exc
+        if _EMAIL_NOT_VERIFIED_ERROR_CLASS_SIGNAL in result.stderr:
+            verification_body = _parse_stderr_error_body(result.stderr) or {}
+            verification_message = _parse_stderr_error_message(result.stderr)
+            verification_exc = ImbueCloudEmailNotVerifiedCliError(
+                f"{command_repr}: {verification_message}"
+                if verification_message
+                else f"{command_repr}: this action requires a verified email"
+            )
+            raw_email = verification_body.get("email")
+            verification_exc.email = raw_email if isinstance(raw_email, str) and raw_email else None
+            verification_exc.exit_code = exit_code
+            verification_exc.stdout = result.stdout
+            verification_exc.stderr = result.stderr
+            raise verification_exc
         auth_failure_body = _parse_auth_failure_body(result.stderr)
         if auth_failure_body is not None:
             auth_message = str(auth_failure_body["error"])
@@ -346,45 +470,27 @@ class ImbueCloudCli(MutableModel):
     # Auth
     # ------------------------------------------------------------------
 
-    def auth_signin(self, account: str, password: str) -> ImbueCloudAuthSession:
-        result = self._run(
-            ["auth", "signin", "--account", account, "--password", password],
-            cg_name="imbue-cloud-auth-signin",
-        )
-        body = self._expect_success(result, "auth signin")
-        return ImbueCloudAuthSession.model_validate(body)
-
-    def auth_signup(self, account: str, password: str) -> ImbueCloudAuthSession:
-        result = self._run(
-            ["auth", "signup", "--account", account, "--password", password],
-            cg_name="imbue-cloud-auth-signup",
-        )
-        body = self._expect_success(result, "auth signup")
-        return ImbueCloudAuthSession.model_validate(body)
-
-    def auth_oauth(
+    def auth_login(
         self,
-        account: str,
-        provider_id: str,
-        callback_port: int | None = None,
-        no_browser: bool = False,
         success_redirect_url: str | None = None,
+        url_file: Path | None = None,
     ) -> ImbueCloudAuthSession:
-        args: list[str] = [
-            "auth",
-            "oauth",
-            provider_id,
-            "--account",
-            account,
-        ]
-        if callback_port is not None:
-            args.extend(["--callback-port", str(callback_port)])
-        if no_browser:
-            args.append("--no-browser")
+        """Run the browser login flow (``mngr imbue_cloud auth login``).
+
+        The plugin opens the hosted accounts page in the system browser,
+        listens on a localhost loopback for the one-time code, and exchanges
+        it (PKCE) for this machine's session. ``url_file`` is where the plugin
+        writes the sign-in URL once its listener is live -- the desktop
+        client's copy-the-link fallback reads it. Blocks until the flow
+        finishes (or the plugin's own 300s timeout).
+        """
+        args: list[str] = ["auth", "login"]
         if success_redirect_url is not None:
             args.extend(["--success-redirect-url", success_redirect_url])
-        result = self._run(args, cg_name="imbue-cloud-auth-oauth", timeout_seconds=_LEASE_TIMEOUT_SECONDS)
-        body = self._expect_success(result, "auth oauth")
+        if url_file is not None:
+            args.extend(["--url-file", str(url_file)])
+        result = self._run(args, cg_name="imbue-cloud-auth-login", timeout_seconds=_WEB_LOGIN_TIMEOUT_SECONDS)
+        body = self._expect_success(result, "auth login")
         return ImbueCloudAuthSession.model_validate(body)
 
     def auth_signout(self, account: str) -> None:
@@ -429,21 +535,6 @@ class ImbueCloudCli(MutableModel):
         )
         return self._expect_success(result, "auth refresh")
 
-    def auth_is_email_verified(self, account: str) -> ImbueCloudVerificationStatus:
-        """Ask the connector whether ``account``'s email is verified.
-
-        When it is, the plugin promotes the pending session as a side effect
-        (the account starts appearing in ``auth list`` and becomes active), so
-        this is the desktop client's verification poll AND the step that
-        completes a deferred signup.
-        """
-        result = self._run(
-            ["auth", "is-verified", "--account", account],
-            cg_name="imbue-cloud-auth-is-verified",
-        )
-        body = self._expect_success(result, "auth is-verified")
-        return ImbueCloudVerificationStatus.model_validate(body)
-
     def auth_resend_verification(self, account: str) -> bool:
         """Re-send ``account``'s verification email; False when the server cooldown suppressed it."""
         result = self._run(
@@ -459,14 +550,6 @@ class ImbueCloudCli(MutableModel):
             shape = f"dict with keys {sorted(body)}" if isinstance(body, dict) else type(body).__name__
             raise ImbueCloudCliError(f"Malformed auth resend-verification output: expected a 'sent' bool, got {shape}")
         return sent
-
-    def auth_forgot_password(self, account: str) -> None:
-        """Ask the connector to send a password-reset email for ``account``."""
-        result = self._run(
-            ["auth", "forgot-password", "--account", account],
-            cg_name="imbue-cloud-auth-forgot-password",
-        )
-        self._expect_success(result, "auth forgot-password")
 
     # ------------------------------------------------------------------
     # Hosts (list / release)
@@ -580,10 +663,30 @@ class ImbueCloudCli(MutableModel):
     # Shares (self-hosted relays)
     # ------------------------------------------------------------------
 
-    def create_share(self, *, account: str, host_id: str) -> ShareCliInfo:
-        """Enable sharing for a workspace host; the returned relay token is only ever returned here."""
+    def create_share(
+        self,
+        *,
+        account: str,
+        host_id: str,
+        entry_label: str | None = None,
+        preferred_region: str | None = None,
+    ) -> ShareCliInfo:
+        """Enable sharing for a workspace host; the returned relay token is only ever returned here.
+
+        ``entry_label`` is the workspace's shell-service origin label, recorded
+        server-side so the hosted web chrome knows the routable origin to enter
+        the workspace at; None keeps any previously recorded label.
+        ``preferred_region`` steers a first-time share of a local workspace to
+        a specific relay region; the connector ignores it for pool hosts and
+        keeps an existing share's region.
+        """
+        args = ["shares", "create", host_id, "--account", account]
+        if entry_label:
+            args.extend(["--entry-label", entry_label])
+        if preferred_region:
+            args.extend(["--preferred-region", preferred_region])
         result = self._run(
-            ["shares", "create", host_id, "--account", account],
+            args,
             cg_name="imbue-cloud-shares-create",
         )
         body = self._expect_success(result, "shares create")
@@ -612,6 +715,20 @@ class ImbueCloudCli(MutableModel):
         if not isinstance(body, dict) or body.get("state") in (None, "", "none"):
             return None
         return ShareCliInfo.model_validate(body)
+
+    def list_share_relays(self, *, account: str) -> dict[str, tuple[str, ...]]:
+        """The relay fleet as ``{region: tunnel-control endpoints}`` (for latency-based region picking)."""
+        result = self._run(
+            ["shares", "relays", "--account", account],
+            cg_name="imbue-cloud-shares-relays",
+        )
+        body = self._expect_success(result, "shares relays")
+        relays = body.get("relays") if isinstance(body, dict) else None
+        if not isinstance(relays, dict):
+            raise ImbueCloudCliError("Malformed shares relays output: expected a relays map")
+        if not all(isinstance(endpoints, list) for endpoints in relays.values()):
+            raise ImbueCloudCliError("Malformed shares relays output: expected an endpoint list per region")
+        return {str(region): tuple(str(endpoint) for endpoint in endpoints) for region, endpoints in relays.items()}
 
     # ------------------------------------------------------------------
     # R2 buckets (one per workspace; used to back up the host_dir via restic)

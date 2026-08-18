@@ -7,10 +7,12 @@ import imbue.remote_service_connector.app as app_mod
 import imbue.remote_service_connector.sync as sync_mod
 from imbue.remote_service_connector.sync import PostgresSyncStore
 from imbue.remote_service_connector.sync import SyncActiveAgentConflictError
+from imbue.remote_service_connector.sync import SyncRecordFormatTooNewError
 from imbue.remote_service_connector.sync import SyncRevisionConflictError
 from imbue.remote_service_connector.sync import SyncStoreConsistencyError
 from imbue.remote_service_connector.sync import _MAX_ENCRYPTED_SECRETS_BYTES
 from imbue.remote_service_connector.sync import get_sync_store
+from imbue.remote_service_connector.testing import ALL_RECORD_FIELDS_SENT
 from imbue.remote_service_connector.testing import FakePoolBackend
 from imbue.remote_service_connector.testing import InMemoryEntitlementsStore
 from imbue.remote_service_connector.testing import InMemorySyncStore
@@ -234,7 +236,7 @@ def _make_postgres_sync_store(monkeypatch: pytest.MonkeyPatch) -> tuple[Postgres
 def test_postgres_sync_store_round_trips_a_record(monkeypatch: pytest.MonkeyPatch) -> None:
     store, _backend = _make_postgres_sync_store(monkeypatch)
 
-    written = store.put_record("user-1", _store_record(encrypted_secrets=b"\x00opaque-blob"))
+    written = store.put_record("user-1", _store_record(encrypted_secrets=b"\x00opaque-blob"), ALL_RECORD_FIELDS_SENT)
 
     assert written["revision"] == 1
     assert written["encrypted_secrets"] == base64.b64encode(b"\x00opaque-blob").decode("ascii")
@@ -243,7 +245,7 @@ def test_postgres_sync_store_round_trips_a_record(monkeypatch: pytest.MonkeyPatc
     assert listed[0]["created_at"] != ""
     assert store.list_records("user-2") == []
 
-    updated = store.put_record("user-1", _store_record(display_name="renamed", revision=2))
+    updated = store.put_record("user-1", _store_record(display_name="renamed", revision=2), ALL_RECORD_FIELDS_SENT)
     assert updated["display_name"] == "renamed"
     assert updated["revision"] == 2
     # The metadata-only update carried no secrets, so the blob is now gone.
@@ -252,10 +254,10 @@ def test_postgres_sync_store_round_trips_a_record(monkeypatch: pytest.MonkeyPatc
 
 def test_postgres_sync_store_raises_the_stored_row_on_a_stale_push(monkeypatch: pytest.MonkeyPatch) -> None:
     store, _backend = _make_postgres_sync_store(monkeypatch)
-    store.put_record("user-1", _store_record())
+    store.put_record("user-1", _store_record(), ALL_RECORD_FIELDS_SENT)
 
     with pytest.raises(SyncRevisionConflictError) as conflict:
-        store.put_record("user-1", _store_record(display_name="stale", revision=1))
+        store.put_record("user-1", _store_record(display_name="stale", revision=1), ALL_RECORD_FIELDS_SENT)
 
     assert conflict.value.stored_record["revision"] == 1
     assert conflict.value.stored_record["display_name"] == "my-workspace"
@@ -263,13 +265,15 @@ def test_postgres_sync_store_raises_the_stored_row_on_a_stale_push(monkeypatch: 
 
 def test_postgres_sync_store_enforces_one_active_record_per_agent(monkeypatch: pytest.MonkeyPatch) -> None:
     store, _backend = _make_postgres_sync_store(monkeypatch)
-    store.put_record("user-1", _store_record())
+    store.put_record("user-1", _store_record(), ALL_RECORD_FIELDS_SENT)
 
     with pytest.raises(SyncActiveAgentConflictError):
-        store.put_record("user-1", _store_record(host_id="host-bbb222"))
+        store.put_record("user-1", _store_record(host_id="host-bbb222"), ALL_RECORD_FIELDS_SENT)
 
     # A tombstone for the same agent on another host is allowed by the partial index.
-    tombstone = store.put_record("user-1", _store_record(host_id="host-bbb222", state="destroyed"))
+    tombstone = store.put_record(
+        "user-1", _store_record(host_id="host-bbb222", state="destroyed"), ALL_RECORD_FIELDS_SENT
+    )
     assert tombstone["state"] == "destroyed"
 
 
@@ -280,7 +284,7 @@ def test_postgres_sync_store_reports_an_insert_race_as_a_cas_conflict(monkeypatc
     # The loser's INSERT hits the primary key after the winner commits; the
     # retry then reports the race through the regular CAS path.
     with pytest.raises(SyncRevisionConflictError) as conflict:
-        store.put_record("user-1", _store_record(display_name="loser"))
+        store.put_record("user-1", _store_record(display_name="loser"), ALL_RECORD_FIELDS_SENT)
 
     assert conflict.value.stored_record["display_name"] == "winner"
 
@@ -289,17 +293,17 @@ def test_postgres_sync_store_surfaces_a_rowless_update_as_a_server_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store, backend = _make_postgres_sync_store(monkeypatch)
-    store.put_record("user-1", _store_record())
+    store.put_record("user-1", _store_record(), ALL_RECORD_FIELDS_SENT)
     backend.sync_update_returns_no_row = True
 
     with pytest.raises(SyncStoreConsistencyError):
-        store.put_record("user-1", _store_record(revision=2))
+        store.put_record("user-1", _store_record(revision=2), ALL_RECORD_FIELDS_SENT)
 
 
 def test_postgres_sync_store_deletes_and_scrubs(monkeypatch: pytest.MonkeyPatch) -> None:
     store, _backend = _make_postgres_sync_store(monkeypatch)
-    store.put_record("user-1", _store_record(encrypted_secrets=b"blob"))
-    store.put_record("user-1", _store_record(host_id="host-bbb222", agent_id="agent-2"))
+    store.put_record("user-1", _store_record(encrypted_secrets=b"blob"), ALL_RECORD_FIELDS_SENT)
+    store.put_record("user-1", _store_record(host_id="host-bbb222", agent_id="agent-2"), ALL_RECORD_FIELDS_SENT)
 
     assert store.scrub_secrets("user-1") == 1
     assert all(record["encrypted_secrets"] is None for record in store.list_records("user-1"))
@@ -338,6 +342,27 @@ def test_postgres_sync_store_bundle_crud(monkeypatch: pytest.MonkeyPatch) -> Non
 
     store.delete_bundle("user-1")
     assert store.get_bundle("user-1") is None
+
+
+def test_postgres_sync_store_put_bundle_if_absent_never_replaces(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Two clients racing to mint the account's first DEK: exactly one
+    # create-only put wins, and the loser's bundle never lands.
+    store, _backend = _make_postgres_sync_store(monkeypatch)
+    bundle = {
+        "kdf_salt": b"salt-bytes",
+        "kdf_time_cost": 3,
+        "kdf_memory_kib": 65536,
+        "kdf_parallelism": 4,
+        "wrapped_dek": b"first-tab-dek",
+        "key_epoch": 1,
+    }
+
+    assert store.put_bundle_if_absent("user-1", bundle) is True
+    assert store.put_bundle_if_absent("user-1", {**bundle, "wrapped_dek": b"second-tab-dek"}) is False
+
+    fetched = store.get_bundle("user-1")
+    assert fetched is not None
+    assert fetched["wrapped_dek"] == base64.b64encode(b"first-tab-dek").decode("ascii")
 
 
 def test_get_sync_store_returns_a_cached_postgres_store() -> None:
@@ -390,15 +415,102 @@ def test_postgres_sync_store_stamps_destroyed_at_and_clears_on_resurrection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store, _backend = _make_postgres_sync_store(monkeypatch)
-    active = store.put_record("user-1", _store_record())
+    active = store.put_record("user-1", _store_record(), ALL_RECORD_FIELDS_SENT)
     assert active["destroyed_at"] is None
 
-    tombstoned = store.put_record("user-1", _store_record(state="destroyed", revision=2))
+    tombstoned = store.put_record("user-1", _store_record(state="destroyed", revision=2), ALL_RECORD_FIELDS_SENT)
     assert tombstoned["destroyed_at"] is not None
 
     # A further destroyed-state update keeps the original stamp.
-    updated = store.put_record("user-1", _store_record(state="destroyed", display_name="renamed", revision=3))
+    updated = store.put_record(
+        "user-1", _store_record(state="destroyed", display_name="renamed", revision=3), ALL_RECORD_FIELDS_SENT
+    )
     assert updated["destroyed_at"] == tombstoned["destroyed_at"]
 
-    resurrected = store.put_record("user-1", _store_record(state="active", revision=4))
+    resurrected = store.put_record("user-1", _store_record(state="active", revision=4), ALL_RECORD_FIELDS_SENT)
     assert resurrected["destroyed_at"] is None
+
+
+def test_put_record_preserves_fields_absent_from_the_push(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An update names only the fields it sends; absent updatable fields keep their stored values."""
+    store, _backend = _make_postgres_sync_store(monkeypatch)
+    store.put_record(
+        "user-1", _store_record(display_name="original", encrypted_secrets=b"\x01blob"), ALL_RECORD_FIELDS_SENT
+    )
+
+    # An older client's push that never heard of display_name/encrypted_secrets:
+    # they are absent from sent_fields, so the stored values must survive.
+    partial_sent = ALL_RECORD_FIELDS_SENT - {"display_name", "encrypted_secrets"}
+    updated = store.put_record("user-1", _store_record(display_name="", revision=2), partial_sent)
+
+    assert updated["display_name"] == "original"
+    assert updated["encrypted_secrets"] == base64.b64encode(b"\x01blob").decode("ascii")
+    assert updated["revision"] == 2
+
+
+def test_put_record_explicit_null_clears_a_field(monkeypatch: pytest.MonkeyPatch) -> None:
+    store, _backend = _make_postgres_sync_store(monkeypatch)
+    store.put_record("user-1", _store_record(encrypted_secrets=b"\x01blob"), ALL_RECORD_FIELDS_SENT)
+
+    updated = store.put_record("user-1", _store_record(encrypted_secrets=None, revision=2), ALL_RECORD_FIELDS_SENT)
+
+    assert updated["encrypted_secrets"] is None
+
+
+def test_put_record_rejects_a_push_below_the_stored_record_format(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The record_format write-lock outranks the revision CAS."""
+    store, _backend = _make_postgres_sync_store(monkeypatch)
+    newer = _store_record()
+    newer["record_format"] = 2
+    store.put_record("user-1", newer, ALL_RECORD_FIELDS_SENT)
+
+    stale_format = _store_record(display_name="from an old client", revision=2)
+    with pytest.raises(SyncRecordFormatTooNewError) as exc_info:
+        store.put_record("user-1", stale_format, ALL_RECORD_FIELDS_SENT)
+    assert exc_info.value.stored_record["record_format"] == 2
+
+    # A stale *revision* alongside the stale format still reports the format
+    # refusal (terminal beats retryable).
+    stale_both = _store_record(display_name="from an old client", revision=99)
+    with pytest.raises(SyncRecordFormatTooNewError):
+        store.put_record("user-1", stale_both, ALL_RECORD_FIELDS_SENT)
+
+
+def test_put_record_endpoint_answers_409_record_format_too_new(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, _store, _caller = _make_sync_test_client(monkeypatch)
+    newer_body = dict(_sync_record_body())
+    newer_body["record_format"] = 2
+    assert client.put("/sync/records/host-aaa111", json=newer_body, headers=_user_headers()).status_code == 200
+
+    old_client_body = dict(_sync_record_body(revision=2))
+    # A pre-format client sends no record_format at all (implicitly 1).
+    resp = client.put("/sync/records/host-aaa111", json=old_client_body, headers=_user_headers())
+
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert detail["code"] == "record_format_too_new"
+    assert detail["stored"]["record_format"] == 2
+    assert "update the app" in detail["message"]
+
+
+def test_put_record_endpoint_accepts_a_format_upgrade(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, _store, _caller = _make_sync_test_client(monkeypatch)
+    assert (
+        client.put("/sync/records/host-aaa111", json=_sync_record_body(), headers=_user_headers()).status_code == 200
+    )
+
+    upgraded = dict(_sync_record_body(revision=2))
+    upgraded["record_format"] = 3
+    resp = client.put("/sync/records/host-aaa111", json=upgraded, headers=_user_headers())
+
+    assert resp.status_code == 200
+    assert resp.json()["record_format"] == 3
+
+
+def test_put_record_endpoint_ignores_unknown_body_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A tolerant round-trip: clients may echo response fields (or newer fields) the model ignores."""
+    client, _store, _caller = _make_sync_test_client(monkeypatch)
+    body = dict(_sync_record_body())
+    body["added_by_a_newer_client"] = "ignored"
+    resp = client.put("/sync/records/host-aaa111", json=body, headers=_user_headers())
+    assert resp.status_code == 200

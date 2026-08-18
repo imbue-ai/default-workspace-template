@@ -127,7 +127,7 @@ verification fails, back the change out or record it as unverified.
 
 ## Find and collapse repeated changes
 
-Do this FIRST, before the other normalizations. You are the only step that sees
+Do this FIRST, before the other cleanups. You are the only step that sees
 every agent's diff at once, so you are the only one who can tell that twenty
 agents made the same change twenty times. Each of them thought they were fixing
 their own test; you can see that they were all working around one problem.
@@ -161,13 +161,14 @@ such group, do exactly one of:
   local edits unnecessary (a conftest default, a shared fixture, a config value,
   a fix to whatever the tests are working around) AND verify it by running the
   affected tests, apply it, DELETE the N local edits, commit as `[NORMALIZE]`,
-  and record it under "normalizations". This is the highest-value thing you do
-  in the whole run: N local patches become one real fix.
+  and record it as a resolved escalation (see "escalations" in the outcome
+  schema). This is the highest-value thing you do in the whole run: N local
+  patches become one real fix.
 - **Escalate it.** If you cannot identify or cannot verify such a change, record
-  an escalation of kind "SHARED_PATTERN" whose detail_markdown gives the group's
-  description, its exact occurrence count, and the affected files. A reviewer
-  seeing "39 tests independently added a timeout marker" will know what to do
-  even when you do not.
+  an unresolved escalation of kind "SUITE_DUPLICATION" whose
+  description_markdown gives the group's description, its exact occurrence count,
+  and the affected files. A reviewer seeing "39 tests independently added a
+  timeout marker" will know what to do even when you do not.
 
 Never leave a group of this size untouched and unmentioned. Silently shipping N
 copies of one change is the specific failure this step exists to prevent.
@@ -198,20 +199,21 @@ Two more guardrails:
   large blast radius: a subtle mistake there would break many tests on the next
   run.
 
-Record each extraction under "normalizations" in the outcome.
+Record each extraction as a resolved escalation in the outcome.
 
-## Resolve or escalate what the test agents raised
+## Group every escalation the test agents raised
 
 Every test agent reports an `escalations` list in its outcome, independent of
-whether its own test passed. Two kinds matter here:
+whether its own test passed. Each carries a `kind` (`UNCAUGHT_BUG`,
+`FIX_DIRECTION_AMBIGUOUS`, `HARNESS_DEFECT`, `SUITE_DUPLICATION`), a
+`description_markdown` whose first line summarizes it, and `locations`.
 
-- `BLOCKER`: the agent could not proceed without a shared change. These also
-  carry a `# FIXME(tmr): ...` comment in the tree.
-- `SHARED_PATTERN`: the agent's local fix worked, but it found the same fix
-  already present on sibling tests. Several agents independently applying the
-  same patch is the signal that ONE shared change should replace all of them.
+You are the only step that sees them all at once, so **your escalations are
+groupings of theirs**. Many agents describe one problem in their own words; the
+grouping is what turns hundreds of reports into the handful of problems they are
+actually about. Every mapper escalation must end up in one of your groups.
 
-Collect both -- the escalations from every outcome file, and the FIXMEs:
+Collect them, with the id each one is known by, plus the FIXMEs:
 
 ```bash
 for outcome in {{ inputs_dirname }}/*/test_output/{{ mapper_outcome_filename }}; do
@@ -219,33 +221,55 @@ for outcome in {{ inputs_dirname }}/*/test_output/{{ mapper_outcome_filename }};
     python3 -c '
 import json, sys
 data = json.load(open(sys.argv[1]))
-for e in data.get("escalations") or []:
-    print("{}\t{}\t{}".format(e.get("kind", "BLOCKER"), sys.argv[2], e.get("title", "")))
+for i, e in enumerate(data.get("escalations") or []):
+    summary = (e.get("description_markdown") or "").splitlines()[:1]
+    print("{}#{}\t{}\t{}".format(sys.argv[2], i, e.get("kind", ""), summary[0] if summary else ""))
 ' "$outcome" "$agent"
 done | sort
 
 grep -rn "FIXME(tmr):" . || true
 ```
 
-Group them by the underlying problem -- many agents will report the same one in
-different words. For each distinct problem:
+The id is `<agent_name>#<index>`: the agent's directory name, then the
+escalation's position in its list, counting from 0. Those are the ids that go in
+each group's `member_ids`.
 
-- If you can resolve it suite-wide AND verify it by running the affected tests
-  (e.g. add a shared fixture and switch tests onto it, or hoist a repeated
-  per-test setting into the shared conftest), do so. Where a `SHARED_PATTERN`
-  fix lets you *delete* the N local copies the agents applied, delete them --
-  replacing N local patches with one shared change is the single most valuable
-  thing you do here. Remove any resolved FIXME comment, commit as
-  `[NORMALIZE]`, and record it under "normalizations".
-- If it requires the environment to provide something absent (e.g. OpenAI
-  credentials for codex), or is otherwise beyond what you can verify here, leave
-  the FIXME in place and record it under "escalations" so it reaches the user. Do
-  NOT apply an unverifiable cross-cutting change.
+Group by the underlying problem, not by wording. For each group, do exactly one:
 
-Carry every unresolved escalation through to your own "escalations" field, even
-the ones that came from a test agent whose test passed. Both your escalations
-and theirs are rendered into the run's report, and into the pull request body
-when one is opened.
+- **Resolve it.** If you can fix it suite-wide AND verify it by running the
+  affected tests (add a shared fixture and switch tests onto it, hoist a repeated
+  per-test setting into the shared conftest, fix the thing the tests are working
+  around), do so. Where the fix lets you *delete* the N local copies the agents
+  applied, delete them -- replacing N local patches with one shared change is the
+  single most valuable thing you do here. Remove any resolved FIXME comment,
+  commit as `[NORMALIZE]`, and record the group with `resolved_in_commit_hash`
+  set to that commit.
+- **Leave it unresolved.** If it needs the environment to provide something
+  absent (OpenAI credentials for codex, say), or is otherwise beyond what you can
+  verify here, leave the FIXME in place and record the group with no
+  `resolved_in_commit_hash`. Do NOT apply an unverifiable cross-cutting change.
+  An escalation you judge to need no change goes here too: say so in the
+  description, and let a person confirm it.
+
+You will also find problems no mapper reported, because they are only visible
+across the whole integrated diff -- two agents reaching opposite conclusions, for
+instance. Record those as groups too, with an empty `member_ids`.
+
+### Check that your grouping covers everything
+
+A mapper escalation in none of your groups is missing from every grouped view,
+silently. Check it mechanically rather than by eye:
+
+```bash
+uv run --project libs/mngr_tmr python -m imbue.mngr_tmr.escalation_coverage \
+    {{ inputs_dirname }} --reducer-outcome .test_output/{{ reducer_outcome_filename }}
+```
+
+It exits non-zero and lists any ids belonging to no group. Write your outcome
+file first, then run this, then fix the gaps and rewrite. Note what it cannot
+check: whether your grouping is *sound*. Sweeping a long tail into one "other
+findings" group passes the check and helps nobody, so keep each group about one
+problem.
 
 # Write the unified changelog entry
 
@@ -310,23 +334,25 @@ hand -- it reads the same outcome files and will not miscount:
 ```bash
 INPUTS={{ inputs_dirname }}
 OUTCOME=.test_output/{{ reducer_outcome_filename }}
-TITLE=$(uv run --project libs/mngr_tmr python -m imbue.mngr_tmr.pr_summary --title "$BRANCH" "$INPUTS")
+TITLE=$(uv run --project libs/mngr_tmr python -m imbue.mngr_tmr.pr_summary --title "$BRANCH" --reducer-outcome "$OUTCOME" "$INPUTS")
 FINDINGS=$(uv run --project libs/mngr_tmr python -m imbue.mngr_tmr.pr_summary --reducer-outcome "$OUTCOME" "$INPUTS")
 ```
 
 Then open the PR as a draft, against `$TMR_BASE_BRANCH`, with that title and a
 body containing, in order:
 
-1. The mechanical provenance line: that this is an automated PR from TMR run
-   `$TMR_RUN_URL`, followed by the report link:
-{% if report_url %}   `HTML report: {{ report_url }} (also attached as the tmr-report artifact on the workflow run).`
-{% else %}   `HTML report: attached as the tmr-report artifact on the workflow run; download and open index.html.`
-{% endif %}
-2. `$FINDINGS` verbatim -- the mapper status breakdown and the escalations
-   table, which covers both the test agents' escalations and your own.
-3. A short prose paragraph of your own: the themes you saw across the run, what
-   you normalized, and anything a reviewer should look at first. This is the one
-   part that is yours to write; keep it to a few sentences.
+{% if report_url %}- `Full report: {{ report_url }}` on its own line, first -- it is what a reviewer
+  follows for anything the body summarizes, so it goes at the top.
+- The provenance line: that this is an automated PR from TMR run `$TMR_RUN_URL`.
+{% else %}- The provenance line: that this is an automated PR from TMR run `$TMR_RUN_URL`,
+  noting that the report is attached as the tmr-report artifact on that run.
+{% endif %}- `$FINDINGS` verbatim -- the mapper status breakdown, then your unresolved
+  escalations in full, then your resolved ones one line each. Only your
+  escalations appear: they are groupings of the test agents', and the raw
+  per-agent list lives in the report.
+- A short prose paragraph of your own: the themes you saw across the run, what
+  you resolved, and anything a reviewer should look at first. This is the one
+  part that is yours to write; keep it to a few sentences.
 
 Use the `gh` CLI if it is available (`gh pr create --draft --base ... --head ...
 --title ... --body ...`, plus `--label`/`--assignee` when those variables are
@@ -361,8 +387,14 @@ The schema is:
  "impl_priority": ["branch3"],
  "impl_commit_hashes": {"branch3": "def5678"},
  "failed": ["branch4"],
- "normalizations": [{"summary_markdown": "Extracted the mngr-list agent-running check into e2e.assert_agent_running (verified across 6 tests)"}],
- "escalations": [{"kind": "BLOCKER", "title": "codex tests need OpenAI credentials", "detail_markdown": "test_create_codex mocks codex with sleep because OPENAI_API_KEY is absent from the test env; a real fake-codex fixture or credentials are needed."}],
+ "escalations": [
+   {"kind": "HARNESS_DEFECT",
+    "description_markdown": "The codex tests need OpenAI credentials this environment does not provide.\n\ntest_create_codex mocks codex with sleep because OPENAI_API_KEY is absent; a real fake-codex fixture or credentials are needed.",
+    "member_ids": ["tmr-run-test-create-codex#0", "tmr-run-test-agent-types#1"]},
+   {"kind": "SUITE_DUPLICATION",
+    "description_markdown": "The mngr-list agent-running check was reimplemented in six tests.\n\nExtracted into e2e.assert_agent_running and the six local copies deleted; verified by running all six.",
+    "member_ids": ["tmr-run-test-list#0"],
+    "resolved_in_commit_hash": "abc1234"}],
  "pull_request_url": "https://github.com/owner/repo/pull/1234"}
 
 Fields:
@@ -371,8 +403,12 @@ Fields:
 - impl_priority: impl branch names in priority order, highest first
 - impl_commit_hashes: mapping of impl branch name to its commit hash on the integrated branch
 - failed: branch names that could not be integrated
-- normalizations: suite-wide cleanups you applied and verified (each with summary_markdown). Omit or use [] if none.
-- escalations: everything you could NOT resolve or verify, to surface to the user -- both your own findings and the unresolved ones carried through from the test agents. Each has kind ("BLOCKER" or "SHARED_PATTERN"), title, and detail_markdown. Omit or use [] if none.
+- escalations: every escalation you report, resolved and unresolved alike, each one a grouping of the test agents' escalations. Fields:
+  - kind: one of "UNCAUGHT_BUG", "FIX_DIRECTION_AMBIGUOUS", "HARNESS_DEFECT", "SUITE_DUPLICATION".
+  - description_markdown: first line a one-sentence summary; then the problem, its scale, and what it needs (or what you did about it).
+  - member_ids: the `<agent_name>#<index>` ids of the mapper escalations this group covers. Empty only for a problem you found yourself across the integrated diff.
+  - resolved_in_commit_hash: the `[NORMALIZE]` commit that fixed it. Present ONLY when you fixed and verified it -- its presence is what marks the group resolved. Omit it otherwise.
+  A suite-wide cleanup you applied is a resolved escalation you raised to yourself, so it belongs here too; there is no separate normalizations field.
 - pull_request_url: URL of the pull request you opened.
 - pull_request_error: present only if opening the PR failed; describe what went wrong.
 

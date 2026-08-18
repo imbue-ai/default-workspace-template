@@ -5,7 +5,9 @@
 
 import m from "mithril";
 import type { AppStores } from "../../models/boot";
+import type { WorkspaceHealth } from "../../models/health";
 import type { UiChannelClient } from "../../channel/client";
+import type { RequestVerdict, ResolvedRequest } from "../../models/inbox";
 import {
   accentSourceForRoute,
   isAppOverlayPath,
@@ -13,6 +15,28 @@ import {
   overlayBehindWorkspaceId,
   workspaceSurfaceIdFromPath,
 } from "./classify";
+
+/** Posts one permission-resolution message into the mounted workspace frame
+ * over the embed contract. Registered by WorkspaceFrame, which owns the
+ * contract endpoint; the shell only decides whether the message is due. */
+export type PermissionResolvedSender = (requestId: string, verdict: RequestVerdict) => void;
+
+/** The mounted Permissions pane's waiting list, as the shell addresses it. */
+export interface WaitingRequestList {
+  /** Drop an answered request from the list, at once. */
+  forgetWaitingRequest(requestId: string): void;
+  /** Whether the list still has anything on it (asked after an answer, so the
+   * request just answered is already gone from it). */
+  hasWaitingRequests(): boolean;
+}
+
+/** The mounted workspace content iframe, as the shell addresses it. */
+export interface WorkspaceFrameHandle {
+  /** The workspace the frame is navigated to, or null before it is first armed. */
+  armedWorkspaceAnyId(): string | null;
+  /** Re-navigate the frame to that workspace's root URL. */
+  reload(): void;
+}
 
 export class ShellState {
   readonly stores: AppStores;
@@ -23,13 +47,53 @@ export class ShellState {
   sidebarAnchor: { x: number; y: number; width: number; height: number } | null = null;
   /** The workspace whose CONTENT is displayed (null on hub pages). */
   displayedWorkspaceAnyId: string | null = null;
-  /** Re-entrancy guard for closeAppOverlay: a single Escape can reach it from
-   * both the in-document listener and the Electron before-input-event forward,
-   * and its history.back() is not idempotent. Cleared on the next route change. */
+  /** The workspace-options route an app modal was opened over, so the Shell can
+   * keep that panel painted (and mounted) beneath the modal: the live route is
+   * the modal's, which carries none of the panel's params. Null whenever no
+   * modal floats over the panel. */
+  panelRouteBehindOverlay: string | null = null;
+  /**
+   * The one piece of recovery-card state: which machine's card is up, and
+   * whether the shell raised it or the user did.
+   *
+   * Not derived from health. The card auto-raises on a single edge, and an edge
+   * fires once, so there is nothing to re-derive and no dismissal to remember.
+   * The isAutoRaised bit decides one thing: whether the card leaves on its own
+   * when the machine comes back.
+   */
+  private openRecovery: { agentId: string; isAutoRaised: boolean } | null = null;
+  /** The mounted content iframe, installed by WorkspaceFrame (null when none is
+   * mounted: hub pages, recovery, destroying, the workspace sub-pages). The
+   * frame is ALSO mounted behind an app modal that forwarded ?workspace=, which
+   * is why the workspace it is showing is asked of it rather than read off
+   * `displayedWorkspaceAnyId`. */
+  workspaceFrame: WorkspaceFrameHandle | null = null;
+  /** Re-entrancy guard for closeAppOverlay: its history.back() is not
+   * idempotent, and a repeated Escape can reach it again before the first
+   * back() has landed. Cleared on the next route change. */
   private isAppOverlayClosing = false;
+  /** The path the last `handleRouteChanged` saw, so a redraw on the route the
+   * window is already on is not mistaken for a navigation to it. */
+  private lastHandledRoutePath: string | null = null;
+
+  private permissionResolvedSender: PermissionResolvedSender | null = null;
+  /** The mounted Permissions pane's live list, registered while one is up. The
+   * popup answers a request; the pane behind it is what shows the list that
+   * request was in. */
+  private waitingRequestList: WaitingRequestList | null = null;
 
   constructor(stores: AppStores) {
     this.stores = stores;
+  }
+
+  /** Rebuild this window's workspace view, if its frame is showing the one named. */
+  reloadWorkspaceFrame(agentScopedId: string): void {
+    const frame = this.workspaceFrame;
+    if (frame === null) return;
+    const armed = frame.armedWorkspaceAnyId();
+    if (armed === null) return;
+    if (this.stores.workspaces.toAgentScopedId(armed) !== agentScopedId) return;
+    frame.reload();
   }
 
   currentRoutePath(): string {
@@ -48,19 +112,90 @@ export class ShellState {
     m.route.set(`/workspace/${agentScoped}`);
   }
 
-  /** Open the Requests inbox over the current surface: forward the displayed
-   * workspace as ?workspace so the drawer floats over that live workspace (kept
-   * mounted) instead of navigating the base layer to Home, mirroring how Get
-   * help forwards ?workspace. Opened from Home (no workspace displayed), it
-   * carries none and floats over Home. Extra query params (e.g. a pre-selected
-   * request on auto-open) are merged in. */
+  /** Open the request-review popup over the current surface: forward the
+   * displayed workspace as ?workspace so it floats over that live workspace
+   * (kept mounted) instead of navigating the base layer to Home, mirroring how
+   * Get help forwards ?workspace. Opened from Home (no workspace displayed), it
+   * carries none and floats over Home. Extra query params (`selected` for a
+   * named request) are merged in.
+   *
+   * Opened from the workspace-options panel, the route it was opened from is
+   * remembered so that panel stays mounted underneath rather than being torn
+   * down and rebuilt around the popup. */
   openInbox(params: Record<string, string> = {}): void {
+    const path = this.currentRoutePath();
+    // Only ever set here (handleRouteChanged clears it), so a second request
+    // arriving while the popup is already up does not drop the panel it floats
+    // over -- the route is /inbox by then, which names no panel.
+    if (isWorkspaceOverlayPath(path)) this.panelRouteBehindOverlay = m.route.get() ?? null;
     const displayed = this.displayedWorkspaceAnyId;
     const query =
-      displayed === null
-        ? params
-        : { ...params, workspace: this.stores.workspaces.toAgentScopedId(displayed) };
-    m.route.set("/inbox", query);
+      displayed === null ? params : { ...params, workspace: this.stores.workspaces.toAgentScopedId(displayed) };
+    // Swinging the OPEN popup onto another request replaces its history entry
+    // rather than stacking a second one, so one dismissal still lands back on
+    // the surface the popup was opened over instead of on the request before it.
+    m.route.set("/inbox", query, path === "/inbox" ? { replace: true } : undefined);
+  }
+
+  /** Register the mounted Permissions pane's list, and drop it on the way out
+   * (guarded like the frame's sender: a pane torn down after its successor
+   * registered must not clear the successor's). */
+  registerWaitingRequestList(list: WaitingRequestList): void {
+    this.waitingRequestList = list;
+  }
+
+  unregisterWaitingRequestList(list: WaitingRequestList): void {
+    if (this.waitingRequestList === list) this.waitingRequestList = null;
+  }
+
+  /** Drop a request from the mounted pane's list. Answering one goes through
+   * `notifyRequestResolved`; this is for the other way a request stops
+   * waiting -- answered in another window, or withdrawn by the agent -- where
+   * there is no verdict to relay but the row is just as gone. */
+  forgetWaitingRequest(requestId: string): void {
+    this.waitingRequestList?.forgetWaitingRequest(requestId);
+  }
+
+  /** Register the mounted workspace frame's contract sender. */
+  registerPermissionResolvedSender(sender: PermissionResolvedSender): void {
+    this.permissionResolvedSender = sender;
+  }
+
+  /** Drop `sender` if it is still the registered one (a frame torn down after
+   * its successor registered must not clear the successor's). */
+  unregisterPermissionResolvedSender(sender: PermissionResolvedSender): void {
+    if (this.permissionResolvedSender === sender) this.permissionResolvedSender = null;
+  }
+
+  /** Tell the workspace that asked that its request now has a verdict, so its
+   * in-chat card flips without waiting for the agent transcript to carry the
+   * resolution back.
+   *
+   * Only the displayed workspace is told, and only when it is the one that
+   * asked: the chrome mounts a single workspace frame, so no other workspace
+   * has a live page in this window, and posting a request id into a workspace
+   * that did not ask would hand it to foreign content for nothing. A verdict
+   * given while looking at some other workspace is simply not relayed -- that
+   * page is rebuilt from the transcript when the user returns to it, by which
+   * point the agent's own resolution message has landed.
+   *
+   * Both sides of the comparison are WORKSPACE agent ids. The request's own
+   * ``agent_id`` is not usable here: latchkey requests are filed by the
+   * workspace's system-services sibling agent, so it never equals the id of
+   * the tile on screen -- which is why the card carries the workspace it
+   * belongs to, resolved server-side by name. */
+  notifyRequestResolved(resolved: ResolvedRequest): void {
+    // The pane behind this popup is showing the list the request was in, and
+    // the answer was just given: a row that sits there until the next read
+    // comes back reads as an answer that did not take. Unconditional, unlike
+    // the relay below -- the list is this window's own, whichever machine the
+    // request belongs to.
+    this.forgetWaitingRequest(resolved.requestId);
+    const sender = this.permissionResolvedSender;
+    const displayed = this.displayedWorkspaceAnyId;
+    if (sender === null || displayed === null || resolved.agentId === null) return;
+    if (this.stores.workspaces.toAgentScopedId(displayed) !== resolved.agentId) return;
+    sender(resolved.requestId, resolved.verdict);
   }
 
   /** Close the options overlay if one is open, returning whether it was. */
@@ -73,49 +208,190 @@ export class ShellState {
     return true;
   }
 
-  /** Dismiss an open app-level modal (Minds settings / Accounts / Get help),
-   * returning to the surface it was opened over. Prefers history so the opener
-   * (Home, Create, or the workspace) is restored exactly; falls back to routing
-   * to the base when there is no history (a cold-start deep link). */
-  closeAppOverlay(): void {
+  /** Dismiss an open app-level modal (the request popup, Minds settings,
+   * Accounts, Get help), returning to the surface it was opened over, and
+   * report whether there was one. Prefers history so the opener (Home, Create,
+   * the workspace, or its options panel) is restored exactly; falls back to
+   * routing to the base when there is no history (a cold-start deep link). */
+  closeAppOverlay(): boolean {
     const path = this.currentRoutePath();
     const search = this.currentRouteSearch();
-    // The fixed app modals are always closeable; the New machine inspiration
+    // The fixed app modals are always closeable; the New machine template
     // stepper is a closeable modal only while it floats over a machine
     // (?workspace=) -- with none it is a redirect, not an overlay.
     const isCloseable =
       isAppOverlayPath(path) ||
-      (path === "/create/inspiration" && overlayBehindWorkspaceId(path, search) !== null);
-    if (!isCloseable) return;
-    // A single Escape reaches here twice under Electron (in-document listener +
-    // main-process before-input-event forward). history.back() does not update
-    // the route synchronously, so guard against a second dismissal firing
-    // another back() and over-navigating past the opener.
-    if (this.isAppOverlayClosing) return;
+      (path === "/create/template" && overlayBehindWorkspaceId(path, search) !== null);
+    if (!isCloseable) return false;
+    // history.back() does not update the route synchronously, so a second
+    // dismissal arriving before it lands (a repeated Escape) would fire
+    // another back() and over-navigate past the opener. Reported as handled
+    // even so: the key belongs to the overlay that is still on its way out.
+    if (this.isAppOverlayClosing) return true;
     this.isAppOverlayClosing = true;
     if (window.history.length > 1) {
       window.history.back();
-      return;
+      return true;
     }
     const behind = overlayBehindWorkspaceId(path, search);
     m.route.set(behind !== null ? `/workspace/${behind}` : "/");
+    return true;
+  }
+
+  /**
+   * Go back up to the Permissions panel this popup was opened from, reporting
+   * whether there was one.
+   *
+   * The way OUT of the popup leaves the window (see `dismissAppOverlay`); this
+   * is the way BACK, for a reader who opened a request from the panel and wants
+   * the panel again. It restores the panel's own route, so the tab and section
+   * it was left on come back with it.
+   */
+  returnToPanelBehindOverlay(): boolean {
+    const panelRoute = this.panelRouteBehindOverlay;
+    if (panelRoute === null) return false;
+    // Left set: handleRouteChanged drops it on arrival, and until then the
+    // panel underneath keeps rendering rather than blinking out.
+    m.route.set(panelRoute);
+    return true;
+  }
+
+  /**
+   * Dismiss an app-level modal the way the person dismissing it means it,
+   * reporting whether there was one.
+   *
+   * Differs from `closeAppOverlay` for one surface: the request popup opened
+   * from a "Waiting on you" row. That popup takes the options panel's window
+   * over -- it hangs from the same key and resizes out of the panel's box -- so
+   * it reads as that window showing a request, not as a second card stacked on
+   * one. Clicking away from it therefore leaves the window, rather than
+   * uncovering a panel the reader has not thought of as still being there.
+   *
+   * Resolving the last request still goes through `closeAppOverlay`, which
+   * returns to the panel: finishing the review is what the panel is FOR, and
+   * landing back on it is how the new grant is seen.
+   */
+  dismissAppOverlay(): boolean {
+    const path = this.currentRoutePath();
+    if (path === "/inbox" && this.panelRouteBehindOverlay !== null) {
+      const behind = overlayBehindWorkspaceId(path, this.currentRouteSearch());
+      if (behind !== null) {
+        // Same re-entrancy guard as closeAppOverlay: one dismissal can arrive
+        // twice (the in-document Escape plus Electron's forward of it).
+        if (this.isAppOverlayClosing) return true;
+        this.isAppOverlayClosing = true;
+        // Straight to the machine rather than back through history: the panel
+        // is the history entry, and going back to it is the thing this avoids.
+        // handleRouteChanged forgets the remembered panel on the way.
+        m.route.set(`/workspace/${behind}`);
+        return true;
+      }
+    }
+    return this.closeAppOverlay();
+  }
+
+  /**
+   * Hand the Permissions panel back once the request it was opened from has
+   * been answered, reporting whether there was a panel to hand back. A request
+   * opened from the chat has none, and its page simply closes.
+   *
+   * Back to the panel's own route while other requests are still waiting: the
+   * list the reader picked from is still there, still theirs to work through,
+   * and it is the section they left. Once nothing is waiting that list is gone,
+   * so returning them to it would return them to nothing -- they land on Add
+   * connection instead, the next thing anyone is in that pane to do.
+   */
+  returnToPanelAfterRequest(): boolean {
+    const panelRoute = this.panelRouteBehindOverlay;
+    if (panelRoute === null) return false;
+    // Asked after the answer, and the pane drops an answered request the
+    // moment it is answered, so "any left" is already the list without it.
+    if (this.waitingRequestList?.hasWaitingRequests() === true) return this.returnToPanelBehindOverlay();
+    const [path, query = ""] = panelRoute.split("?");
+    const params = new URLSearchParams(query);
+    params.set("tab", "permissions");
+    params.set("section", "add-connection");
+    m.route.set(`${path}?${params.toString()}`);
+    return true;
+  }
+
+  /**
+   * Dismiss the topmost dismissible surface, reporting whether there was one.
+   *
+   * The one place that knows what is stacked over what, so the precedence is a
+   * plain ordered list rather than something the surfaces negotiate through
+   * listener registration order (which follows mount order, not z-order).
+   *
+   * The switcher popover leads: it is the only surface that can open over the
+   * recovery card. The card comes before the two route-based overlays because
+   * it is not one -- it can be raised over the workspace options overlay, and
+   * it sits above it. It is never raised over an app-level modal, so this never
+   * has to choose between those two. The two route-based closers gate on the
+   * live route, so a request popup floating over the options panel closes
+   * alone (the route is the popup's) and leaves the panel standing.
+   */
+  handleEscape(): boolean {
+    if (this.isSidebarOpen) {
+      this.closeSidebar();
+      return true;
+    }
+    return this.closeOpenRecoveryModal() || this.closeWorkspaceOverlay() || this.dismissAppOverlay();
   }
 
   /** Route-change hook: track displayed workspace, repaint accent, register. */
   handleRouteChanged(path: string, search = ""): void {
+    // The router runs this from its render, which is every redraw and not only
+    // every navigation -- so "the route is no longer a modal's" has to mean the
+    // route CHANGED to one, not merely that this draw is not on one.
+    //
+    // Opening the popup is exactly where that bites: `openInbox` remembers the
+    // panel and then asks for the route, and `m.route.set` lands a tick later.
+    // Mithril redraws as soon as the click handler returns, so a draw happens
+    // with the panel's own route still current -- and taking that for a
+    // navigation threw away the panel that had just been remembered, one
+    // instruction after it was written.
+    const isSameRoute = path === this.lastHandledRoutePath;
+    this.lastHandledRoutePath = path;
     // The dismissal navigation has landed; clear the closeAppOverlay guard.
-    this.isAppOverlayClosing = false;
+    // Gated on an actual navigation, like the panel below: history.back() does
+    // not land synchronously, so a redraw on the route still being left would
+    // otherwise drop the guard before the dismissal it guards -- and a held
+    // Escape (repeating every ~30ms) would fire a second back(), carrying the
+    // reader past the surface the popup was opened over.
+    if (!isSameRoute) this.isAppOverlayClosing = false;
+    // The panel underneath belongs to the modal that was opened over it; once
+    // the route is no longer a modal's, the panel is (or is not) the route.
+    if (!isSameRoute && !isAppOverlayPath(path)) this.panelRouteBehindOverlay = null;
     // Pass the query so an app modal opened over a workspace (/help?workspace=)
     // keeps that workspace's accent painting behind it.
     const accentSource = accentSourceForRoute(path, search);
-    // The options overlay keeps the workspace surface mounted, so it still
-    // counts as displaying that workspace.
-    this.displayedWorkspaceAnyId = workspaceSurfaceIdFromPath(path);
+    // The options overlay and the app modals both keep the workspace surface
+    // mounted behind them, so either still counts as displaying that
+    // workspace -- which is what addresses a verdict to the machine that asked
+    // while its request popup is the current route.
+    this.displayedWorkspaceAnyId =
+      workspaceSurfaceIdFromPath(path) ?? overlayBehindWorkspaceId(path, search);
     this.paintAccent(accentSource);
     const agentScoped =
       this.displayedWorkspaceAnyId === null
         ? null
         : this.stores.workspaces.toAgentScopedId(this.displayedWorkspaceAnyId);
+    // A card belongs to one machine; arriving anywhere else does not carry it
+    // along. Keyed on the card's own machine rather than on "the route
+    // changed", so a card opened for a machine the window is still navigating
+    // to survives its arrival.
+    //
+    // "Anywhere else" means the machine is off screen entirely, not merely
+    // covered: an app-level modal opened over it (Get help, the Requests inbox)
+    // keeps its surface mounted behind the backdrop, and the Shell renders no
+    // card while one is up but expects it back on the way out. The card's own
+    // "Report a problem" opens exactly such a modal.
+    const heldWorkspaceAnyId = this.displayedWorkspaceAnyId ?? overlayBehindWorkspaceId(path, search);
+    const heldAgentScoped =
+      heldWorkspaceAnyId === null ? null : this.stores.workspaces.toAgentScopedId(heldWorkspaceAnyId);
+    if (this.openRecovery !== null && this.openRecovery.agentId !== heldAgentScoped) {
+      this.openRecovery = null;
+    }
     this.channel?.setClientState(path, agentScoped);
   }
 
@@ -141,6 +417,114 @@ export class ShellState {
 
   private setTitlebarSurface(isOn: boolean): void {
     document.getElementById("minds-titlebar")?.classList.toggle("titlebar-surface", isOn);
+  }
+
+  /** Publish the failure band's measured height so the workspace surface can
+   * shrink by it (see .workspace-surface). A CSS variable rather than view
+   * state: nothing needs to re-render for the surface to follow. */
+  setNoticeBandHeight(height: number): void {
+    document.documentElement.style.setProperty("--notice-band-height", `${height}px`);
+  }
+
+  /** Whether the recovery card is up over `agentId`. */
+  isRecoveryModalOpenFor(agentId: string): boolean {
+    return this.openRecovery?.agentId === agentId;
+  }
+
+  /** Whether the card that is up was raised by the shell rather than asked for. */
+  isRecoveryModalAutoRaised(agentId: string): boolean {
+    return this.openRecovery?.agentId === agentId && this.openRecovery.isAutoRaised;
+  }
+
+  /** The user asked for the card, from the band's "Open recovery". */
+  openRecoveryModal(agentId: string): void {
+    this.openRecovery = { agentId, isAutoRaised: false };
+  }
+
+  /**
+   * A machine came back under an auto-raised card: drop the card.
+   *
+   * Does not reload the stale frame behind it. The server owns that: the
+   * tracker's recovery edge broadcasts a ``workspace_refresh``, which every
+   * window applies to its own frame -- including the ones with no card up.
+   */
+  finishRecovery(): void {
+    this.openRecovery = null;
+  }
+
+  /** The user closed the card, which can happen while the machine is still
+   * down -- so no recovery edge is coming, and this is the only thing that
+   * repaints the dead page the frame is holding. */
+  closeRecoveryModal(): void {
+    this.workspaceFrame?.reload();
+    this.openRecovery = null;
+  }
+
+  /** Close the recovery card if one is up over the displayed machine,
+   * reporting whether there was one. ``handleEscape``'s step for the card,
+   * ahead of the two route-based overlays it can be raised over.
+   *
+   * Keyed on ``displayedWorkspaceAnyId``, which ``handleRouteChanged`` derives
+   * with the same ``workspaceSurfaceIdFromPath`` the router computes the
+   * Shell's ``workspaceParam`` from -- the condition the card is rendered
+   * under. The two must keep sharing that derivation: a card held through an
+   * app-level modal (see ``handleRouteChanged``) is not rendered, and reporting
+   * the key as spent on it would leave Escape unable to dismiss the modal that
+   * is actually on top. */
+  closeOpenRecoveryModal(): boolean {
+    const displayed = this.displayedWorkspaceAnyId;
+    if (displayed === null) return false;
+    if (!this.isRecoveryModalOpenFor(this.stores.workspaces.toAgentScopedId(displayed))) return false;
+    this.closeRecoveryModal();
+    return true;
+  }
+
+  /**
+   * A fresh snapshot is starting: give up any card this shell raised itself.
+   *
+   * After a reconnect the window no longer knows the edge that raised the card
+   * still stands. A machine that recovered while the socket was down sends no
+   * frame to say so -- hello clears the health store and the snapshot carries
+   * only unhealthy agents -- so nothing else would ever drop the card. If the
+   * failure does stand, the snapshot says so a moment later and the band
+   * offers "Open recovery". A card the user opened themselves survives.
+   */
+  handleSnapshotStart(): void {
+    if (this.openRecovery?.isAutoRaised === true) this.openRecovery = null;
+  }
+
+  /**
+   * Raise the card on the edge into restart_failed for the displayed machine,
+   * and drop an auto-raised one on the edge back into healthy.
+   *
+   * restart_failed means the app restarted the machine and it is still
+   * unresponsive. That is the end of the unattended path, and a one-line band
+   * is too quiet for it; every other condition leaves the band as the sole
+   * surface and waits to be asked.
+   *
+   * Only an edge raises it -- ``isSnapshotFrame`` marks the connect-time replay
+   * of current state -- so a window that opens onto a machine already in this
+   * state gets the band, whose "Open recovery" is one click away.
+   *
+   * Nothing raises itself while the discovery consumer is dead: every machine
+   * reads unhealthy then, and the card's actions all route through the forward
+   * that consumer feeds, so it would offer "Restart Machine" over a band
+   * correctly saying only restarting Minds can help.
+   *
+   * A card the user opened stays up when the machine answers -- they asked to
+   * be there, and it gets to tell them how it ended.
+   */
+  handleHealthChanged(agentId: string, health: WorkspaceHealth, isSnapshotFrame: boolean): void {
+    if (health === "healthy") {
+      if (this.openRecovery?.agentId === agentId && this.openRecovery.isAutoRaised) this.finishRecovery();
+      return;
+    }
+    if (isSnapshotFrame || health !== "restart_failed") return;
+    if (this.openRecovery !== null) return;
+    if (this.stores.health.discoveryHealth === "blocked") return;
+    const displayed = this.displayedWorkspaceAnyId;
+    if (displayed === null || this.stores.workspaces.toAgentScopedId(displayed) !== agentId) return;
+    this.openRecovery = { agentId, isAutoRaised: true };
   }
 
   openSidebar(anchor: { x: number; y: number; width: number; height: number }): void {

@@ -47,9 +47,8 @@ export function livenessCategoryForState(state: string): AgentLivenessCategory {
  * The lifecycle RUNNING/WAITING split itself comes only from the system
  * interface's lifecycle poll, which lags a sent message by up to one poll
  * interval -- so a just-messaged WAITING agent would stay yellow for that whole
- * window. The activity signal (``activity_state``, plus the optimistic
- * forced-THINKING the send applies) updates promptly and answers the same
- * working-vs-idle question, so among live agents we let it drive the color:
+ * window. The activity signal (``activity_state``) updates promptly and answers
+ * the same working-vs-idle question, so among live agents we let it drive the color:
  *
  *   - not a live state -> returned unchanged (dormant: DONE/STOPPED/REPLACED/UNKNOWN)
  *   - live, activity not tracked (null) -> returned unchanged (trust lifecycle)

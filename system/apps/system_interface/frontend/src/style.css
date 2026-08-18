@@ -135,86 +135,95 @@ body {
   padding: 0.08em 0.2em;
 }
 
-/* ── Optimistic (pending) message ── */
-/* An optimistic bubble for a message the user just sent. While the send request
-   is in flight it is dimmed and captioned "Sending…"; on success it settles to a
-   normal bubble (the opacity transition makes the confirmation feel smooth). */
-/* A plain block wrapper -- deliberately NOT a flex/align-items:flex-end column.
-   The inner .message-user must fill the full column width exactly as it does in
-   the main message list (which stretches its children); otherwise it would
-   shrink-wrap to its content and the bubble's max-width:80% would resolve
-   against that narrower base, capping the sending bubble narrower than a normal
-   message. Right alignment of the bubble comes from .message-user's own
-   align-items:flex-end, and of the caption from text-align below. */
-.pending-message {
-  /* Own the inter-message spacing here, and zero out the inner bubble's own
-     margin (below), so the "Sending…" caption hugs its own bubble rather than
-     being pushed 20px down by the bubble's margin and ending up flush against
-     the next message. */
+/* ── Queued messages (the shoulder-tap group) ── */
+/* Messages the harness has parked while the agent is mid-turn, rendered below the
+   last committed turn as a distinct group under a subtle header row. This is a
+   full snapshot from the backend -- there is no optimistic/"sending" state. */
+.queued-group {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
   margin-bottom: 20px;
 }
 
-.pending-message .message {
-  margin-bottom: 0;
-}
-
-.pending-message .message-user-bubble {
-  transition: opacity 0.2s ease;
-}
-
-.pending-message--sending .message-user-bubble {
-  opacity: 0.6;
-}
-
-.pending-message-status {
+/* Header row spanning the message column's left..right bounds: 'Queued messages'
+   left-aligned with the chat message column / composer, the [Shoulder tap] button
+   pinned to the column's right. When the column is narrow the label truncates
+   rather than crowding the button -- space-between + gap keeps spacing between
+   them, and the button never shrinks. */
+.queued-header {
   display: flex;
-  justify-content: flex-end;
   align-items: center;
-  gap: 8px;
-  margin-top: 4px;
-  padding-right: 4px;
-  font-size: 12px;
-  color: var(--color-text-secondary);
+  justify-content: space-between;
+  gap: 12px;
 }
 
-/* "Interrupt and send now" action on a queued message: a compact icon button
-   (up-arrow), styled as an understated secondary control, with a CSS tooltip
-   (native `title` is unreliable in the desktop webview). */
-.pending-message-interrupt {
-  position: relative;
-  display: inline-flex;
+/* Left group: the 'Queued messages' label plus its (i) info icon, kept together
+   and allowed to shrink/ellipsize so the [Shoulder tap] button on the right is
+   never crowded. */
+.queued-header-title {
+  display: flex;
   align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  background: none;
+  gap: 6px;
+  min-width: 0;
+}
+
+.queued-header-label {
+  font-family: var(--font-family-base);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
   color: var(--color-text-secondary);
+  /* Let the label shrink and ellipsize in a narrow column instead of overlapping
+     the button. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queued-action {
+  position: relative;
+  flex-shrink: 0;
+  height: 28px;
+  padding: 0 12px;
+  font-family: var(--font-family-base);
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  background: none;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
   cursor: pointer;
+  white-space: nowrap;
   transition:
     color 0.15s ease,
     background 0.15s ease,
     border-color 0.15s ease;
 }
 
-.pending-message-interrupt:hover {
+.queued-action:hover:not(:disabled) {
   color: var(--color-accent);
   border-color: var(--color-accent);
   background: var(--color-accent-light);
 }
 
-.pending-message-interrupt::after {
+.queued-action:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* CSS tooltip for the [Shoulder tap] button (native title= is unreliable in the
+   webview). Right-anchored so it never clips the panel's right edge; points down
+   from above the button, matching the progress-view marker tooltips. */
+.queued-action[data-tooltip]::after {
   content: attr(data-tooltip);
   position: absolute;
   bottom: calc(100% + 7px);
-  /* Right-anchored (the button sits at the message column's right edge), so the
-     bubble extends leftward and never clips against the panel's right side. */
   right: 0;
   z-index: 1000;
   width: max-content;
-  max-width: 240px;
+  max-width: 260px;
   padding: 6px 9px;
   border-radius: 6px;
   background: var(--color-text-primary);
@@ -230,26 +239,106 @@ body {
   transition: opacity 0.12s ease;
 }
 
-.pending-message-interrupt::before {
-  content: "";
+.queued-action[data-tooltip]:hover::after,
+.queued-action[data-tooltip]:focus-visible::after {
+  opacity: 1;
+  visibility: visible;
+}
+
+/* A queued bubble reuses the user-bubble view but is marked as not-yet-sent: a
+   slightly muted fill distinguishes it from a committed turn (the labeled 'Queued
+   messages' group is what sets it apart; no outline). */
+.queued-message {
+  margin-bottom: 0;
+}
+
+.queued-message .message-user-bubble {
+  opacity: 0.85;
+}
+
+/* Frozen queued group: while a shoulder-tap restart is in flight, the captured
+   messages are held greyed (ignoring the backend snapshot briefly emptying) so
+   they do not blip out and back, until a backend arrival releases the hold. No
+   countdown is shown. */
+.queued-group--frozen {
+  opacity: 0.55;
+}
+
+.queued-header--frozen {
+  color: var(--color-text-secondary);
+}
+
+/* The (i) info affordance next to 'Queued messages'. */
+.queued-info {
+  position: relative;
+  flex-shrink: 0;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--color-text-secondary);
+  opacity: 0.7;
+  cursor: help;
+}
+
+.queued-info:hover {
+  opacity: 1;
+}
+
+/* Its hover tooltip, same right-anchored CSS pattern as the [Shoulder tap] button
+   (native title= is unreliable in the webview). Left-anchored here since the icon
+   sits at the column's left edge, so the tooltip does not clip off-screen. */
+.queued-info[data-tooltip]::after {
+  content: attr(data-tooltip);
   position: absolute;
-  bottom: calc(100% + 2px);
-  /* Centre the little pointer under the button (which is ~24px wide). */
-  right: 7px;
+  bottom: calc(100% + 7px);
+  left: 0;
   z-index: 1000;
-  border: 5px solid transparent;
-  border-top-color: var(--color-text-primary);
+  width: max-content;
+  max-width: 300px;
+  padding: 6px 9px;
+  border-radius: 6px;
+  background: var(--color-text-primary);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.4;
+  white-space: normal;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
   opacity: 0;
   visibility: hidden;
+  pointer-events: none;
   transition: opacity 0.12s ease;
 }
 
-.pending-message-interrupt:hover::after,
-.pending-message-interrupt:focus-visible::after,
-.pending-message-interrupt:hover::before,
-.pending-message-interrupt:focus-visible::before {
+.queued-info[data-tooltip]:hover::after,
+.queued-info[data-tooltip]:focus-visible::after {
   opacity: 1;
   visibility: visible;
+}
+
+/* Optimistic "Sending…" bubble: shown at the tail the instant the user sends,
+   until the real (queued/committed) state arrives or it fails. Reuses the
+   user-bubble view with a small status caption; a failed one turns its caption
+   red and stays put. */
+.outgoing-message {
+  margin-bottom: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.outgoing-message--sending {
+  opacity: 0.6;
+}
+
+.outgoing-message .message-user-bubble {
+  border: 1px dashed var(--color-border);
+}
+
+.outgoing-status {
+  margin-top: 3px;
+  font-family: var(--font-family-base);
+  font-size: 11px;
+  color: var(--color-text-secondary);
 }
 
 /* ── Assistant message ── */
@@ -265,26 +354,76 @@ body {
   border: none;
 }
 
-.chat-agent-terminal-link {
-  margin-top: 6px;
-  text-align: center;
-  font-size: 11px;
-  color: var(--color-text-faint);
+/* The row below the chat input: model bar on the left, agent-terminal + harness-auth actions
+   right-aligned -- the original flex row, undisturbed. The "Powered by" credit is centered over
+   the bar as a non-interactive overlay (see .composer-under-bar-credit) rather than as a flow
+   element, so it never reshapes the row or clips the pickers. Shares the model bar's font; no
+   background of its own; text at the visible secondary color. */
+.composer-under-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 0 4px;
+  max-width: calc(var(--width-message-column) + 2 * var(--radius-composer));
+  margin-left: auto;
+  margin-right: auto;
+  width: 100%;
+  /* Containing block for the centered credit overlay. */
+  position: relative;
 }
 
-.chat-agent-terminal-link button {
-  color: inherit;
+.composer-under-bar-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.composer-under-bar-action {
+  height: 30px;
+  padding: 0 8px;
+  font-family: var(--font-family-base);
+  font-size: 13px;
+  color: var(--color-text-secondary);
   background: none;
   border: none;
-  padding: 0;
-  font: inherit;
+  border-radius: 8px;
   cursor: pointer;
-  opacity: 0.7;
+  white-space: nowrap;
+  transition:
+    color 120ms,
+    background 120ms;
 }
 
-.chat-agent-terminal-link button:hover {
-  opacity: 1;
-  text-decoration: underline;
+.composer-under-bar-action:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+}
+
+/* A non-clickable credit sharing the action buttons' font, but static: no hover,
+   no pointer cursor, not focusable. */
+.composer-under-bar-credit {
+  /* Centered over the bar as an overlay: pointer-events:none so it never intercepts clicks on
+     the model bar or buttons beneath it, and being out of flow it leaves the original flex row
+     unchanged. max-width keeps it clear of the side groups; it ellipsizes if it would collide. */
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: inline-flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 8px;
+  font-family: var(--font-family-base);
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  user-select: none;
 }
 
 .message-input {
@@ -334,15 +473,19 @@ body {
 }
 
 /* Hover tooltips for the composer toolbar controls (model picker, fast-mode
-   toggle, attach, interrupt, send). Uses the shared CSS-tooltip pattern -- a
-   `::after` bubble fed by `data-tooltip` -- rather than native `title`, which is
-   unreliable in the desktop webview (see .pending-message-interrupt). The
-   toolbar sits at the composer's bottom, so the bubble points upward. */
-.message-input-toolbar [data-tooltip] {
+   toggle, attach, interrupt, send) and the under-bar row beneath the input
+   (the model/effort/fast slots live here, not in the toolbar). Uses the shared
+   CSS-tooltip pattern -- a `::after` bubble fed by `data-tooltip` -- rather than
+   native `title`, which is unreliable in the desktop webview (see
+   .pending-message-interrupt). Both rows sit at the composer's bottom, so the
+   bubble points upward. */
+.message-input-toolbar [data-tooltip],
+.composer-under-bar [data-tooltip] {
   position: relative;
 }
 
-.message-input-toolbar [data-tooltip]::after {
+.message-input-toolbar [data-tooltip]::after,
+.composer-under-bar [data-tooltip]::after {
   content: attr(data-tooltip);
   position: absolute;
   bottom: calc(100% + 8px);
@@ -368,7 +511,9 @@ body {
 }
 
 .message-input-toolbar [data-tooltip]:hover::after,
-.message-input-toolbar [data-tooltip]:focus-visible::after {
+.message-input-toolbar [data-tooltip]:focus-visible::after,
+.composer-under-bar [data-tooltip]:hover::after,
+.composer-under-bar [data-tooltip]:focus-visible::after {
   opacity: 1;
   visibility: visible;
 }
@@ -669,6 +814,22 @@ body {
 }
 
 /* ── Model selector ── */
+.model-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.model-bar-shrug {
+  display: inline-flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 6px;
+  font-size: 15px;
+  color: var(--color-text-secondary);
+  user-select: none;
+}
+
 .model-selector-wrapper {
   position: relative;
   display: inline-block;
@@ -710,10 +871,14 @@ body {
   --_dropdown-padding: 6px;
   position: absolute;
   bottom: calc(100% + 8px);
-  /* Anchored to the right edge: the picker sits on the right of the composer
-     toolbar, so a left-anchored menu would spill off the composer. */
-  right: 0;
+  /* Anchored to the trigger's left edge; ModelBar's positionDropdown() then nudges it
+     with a translateX to line its text up under the trigger label and clamp the whole
+     box inside the viewport (see dropdown-position.ts). */
+  left: 0;
   min-width: 200px;
+  /* Bound the width so a long provider/model tag can't grow the menu leftward off the
+     edge of the screen; options past this width ellipsize (full text on hover). */
+  max-width: min(92vw, 460px);
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: 12px;
@@ -731,6 +896,48 @@ body {
   font-weight: 500;
   color: var(--color-text-faint);
   padding: 4px 10px 6px;
+}
+
+.model-selector-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 2px 6px;
+  padding: 0 8px;
+  height: 30px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg-hover);
+  transition:
+    border-color 120ms,
+    background 120ms;
+}
+
+.model-selector-search:focus-within {
+  border-color: var(--color-accent);
+  background: var(--color-surface);
+}
+
+.model-selector-search-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--color-text-faint);
+  flex: 0 0 auto;
+}
+
+.model-selector-search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: none;
+  font-family: var(--font-family-base);
+  font-size: 13px;
+  color: var(--color-text-primary);
+}
+
+.model-selector-search-input::placeholder {
+  color: var(--color-text-faint);
 }
 
 .model-selector-dropdown-list {
@@ -754,12 +961,14 @@ body {
   font-size: 13px;
   color: var(--color-text-primary);
   height: var(--_option-height);
-  display: flex;
-  align-items: center;
+  line-height: var(--_option-height);
+  display: block;
   padding: 0 10px;
   border-radius: 6px;
   cursor: pointer;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   transition: background 80ms;
 }
 
@@ -783,6 +992,18 @@ body {
 }
 
 .model-selector-trigger:disabled:hover {
+  color: var(--color-text-secondary);
+  background: none;
+}
+
+/* A read-only slot (a read_only-switch-mode harness) is NOT `disabled` -- it renders at
+   normal weight/color and keeps its hover tooltip -- but it isn't interactive: default
+   cursor, no hover brighten/background. The model is switched from the agent's terminal. */
+.model-selector-trigger--readonly {
+  cursor: default;
+}
+
+.model-selector-trigger--readonly:hover {
   color: var(--color-text-secondary);
   background: none;
 }
@@ -815,6 +1036,17 @@ body {
 .fast-toggle--on:hover {
   color: var(--color-accent);
   background: var(--color-accent-light);
+}
+
+/* Read-only fast toggle: not `disabled` (keeps its tooltip), default cursor, no hover
+   brighten. `:not(--on)` so a read-only harness with fast enabled still shows the accent. */
+.fast-toggle--readonly {
+  cursor: default;
+}
+
+.fast-toggle--readonly:not(.fast-toggle--on):hover {
+  color: var(--color-text-secondary);
+  background: none;
 }
 
 /* A non-interactive copy of the toggle, set inline in running text so a sentence
@@ -1146,6 +1378,22 @@ body {
   color: #dc2626;
 }
 
+/* ── Model API error (e.g. "API Error: 529 Overloaded") ── */
+/* Light-red tint on the failure text; a grey note below when it's the model
+   provider's fault (a 5xx / overloaded) rather than our request. */
+.message-api-error {
+  border-radius: 6px;
+  padding: 0.5em 0.75em;
+  background: rgba(220, 38, 38, 0.08);
+  color: #dc2626;
+}
+
+.message-api-error-note {
+  margin-top: 0.4em;
+  font-size: 0.85em;
+  color: rgba(120, 120, 120, 0.95);
+}
+
 /* ── Sub-agent link card ── */
 .subagent-card {
   margin-top: 0.75em;
@@ -1243,8 +1491,9 @@ body {
 
 /* ── Permission request card ──
    An agent permission request, rendered as a standalone card (not a generic
-   tool block): the specific request, a button that opens the modal, and a
-   disclosure preserving the raw request/response. */
+   tool block): an eyebrow, the request's title + rationale, a button that opens
+   the review modal (or the verdict receipt once decided), and a toggle
+   revealing the raw request/response. */
 .permission-request {
   border: 1px solid var(--color-border);
   border-radius: 10px;
@@ -1253,16 +1502,13 @@ body {
   max-width: 560px;
 }
 
-.permission-request-heading {
+/* The eyebrow every card state shares: a small key + "Permission request". */
+.permission-request-eyebrow {
   display: flex;
   align-items: center;
-  gap: 8px;
-  color: var(--color-text-primary);
-}
-
-.permission-request-title {
-  font-size: 14px;
-  font-weight: 600;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
 }
 
 .permission-request-status {
@@ -1271,50 +1517,86 @@ body {
   color: var(--color-text-secondary);
 }
 
-.permission-request-detail {
+/* Pending body: a rounded subject badge beside the title + rationale column. */
+.permission-request-body {
   margin-top: 10px;
   display: flex;
-  gap: 7px;
-  align-items: baseline;
+  align-items: flex-start;
+  gap: 10px;
 }
 
-.permission-request-detail-label {
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--color-text-secondary);
-}
-
-.permission-request-detail-value {
-  font-family: ui-monospace, monospace;
-  font-size: 12px;
-  color: var(--color-text-primary);
+.permission-request-badge {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
   background: var(--color-bg-hover);
-  border-radius: 5px;
-  padding: 2px 7px;
+  color: var(--color-text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
 }
 
-.permission-request-reason-value {
+/* The smaller badge on the resolved receipt row. */
+.permission-request-badge--sm {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+}
+
+.permission-request-info {
+  min-width: 0;
+  flex: 1;
+}
+
+.permission-request-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.permission-request-reason {
   font-size: 12px;
   line-height: 1.45;
-  color: var(--color-text-primary);
+  color: var(--color-text-secondary);
 }
 
 .permission-request-actions {
   margin-top: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+/* The raw toggle on its own row (unparsed and resolved states), kept subtle
+   at the right edge. */
+.permission-request-toggle-row {
+  margin-top: 8px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.permission-request-raw-toggle {
+  font-size: 12px;
+  color: var(--color-text-faint);
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  transition: color 120ms;
+}
+
+.permission-request-raw-toggle:hover {
+  color: var(--color-text-secondary);
 }
 
 .permission-request-raw {
   margin-top: 10px;
 }
 
-.permission-request-raw > summary {
-  font-size: 12px;
-  color: var(--color-text-faint);
-  cursor: pointer;
-}
-
 .permission-request-raw > pre {
-  margin: 8px 0 0;
+  margin: 0;
   font-family: ui-monospace, monospace;
   font-size: 12px;
   color: var(--color-text-secondary);
@@ -1326,40 +1608,69 @@ body {
 }
 
 .permission-request-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
   font-size: 13px;
   font-weight: 500;
-  color: var(--color-accent);
-  background: transparent;
-  border: 1px solid var(--color-accent);
+  color: #fff;
+  background: var(--color-accent);
+  border: none;
   border-radius: var(--radius-base);
-  padding: 5px 12px;
+  padding: 6px 14px;
   cursor: pointer;
-  transition:
-    background 120ms,
-    color 120ms;
+  transition: background 120ms;
 }
 
 .permission-request-button:hover {
-  color: var(--color-accent-hover);
-  background: #dfeee7;
+  background: var(--color-accent-hover);
 }
 
 .permission-request-icon {
   flex-shrink: 0;
 }
 
-/* The granted/denied verdict shown in place of the action button once the user
-   has decided. Granted reads in the accent green; denied in the same red the
-   tool-call error output uses. */
+/* The service's own brand mark inside the badge. Drawn as an <img> and never
+   inlined: the artwork carries its own color, and marks that pair a white path
+   with an unfilled one would be repainted by a currentColor ancestor.
+   `object-fit` matters because several of the marks are non-square. */
+.permission-request-mark {
+  display: block;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+/* The resolved receipt, all on one compact line: badge, title, the verdict
+   right beside the title, and the raw toggle at the right edge. */
+.permission-request-receipt {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.permission-request-receipt-title {
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The raw toggle inside the receipt row, kept at the right edge. */
+.permission-request-receipt-toggle {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* The verdict beside the receipt title. Approved reads in the accent
+   green; denied reads neutral (a decision, not an error). */
 .permission-request-verdict {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  font-size: 13px;
+  gap: 5px;
+  font-size: 12px;
   font-weight: 600;
+  flex-shrink: 0;
 }
 
 .permission-request-verdict--granted {
@@ -1367,7 +1678,7 @@ body {
 }
 
 .permission-request-verdict--denied {
-  color: #dc2626;
+  color: var(--color-text-secondary);
 }
 
 .permission-request-verdict--error {
@@ -1378,55 +1689,86 @@ body {
   flex-shrink: 0;
 }
 
-/* A hyphenated token in the "Requesting" line (permission name, scope, or path).
-   `nowrap` keeps each on one line so a long name never breaks mid-name; the line
-   wraps between tokens instead. */
-.permission-request-token,
-.permission-request-perm {
-  white-space: nowrap;
+/* ── Machine rail ── */
+/* The narrow icon strip down the left edge. Its collapsed width (37px), the
+   width transition and the label fade all live on the element as utilities, so
+   the whole expansion animates off one state flag -- what is left here is the
+   part those cannot express.
+
+   The rail overlays the panels to its right while expanded, so a drag that
+   starts on a row must not select the labels it sweeps across, and the app
+   list's scrollbar must not eat into the 37px the icons need. The scrollbar is
+   therefore transparent until the rail is open. */
+.machine-sidebar {
+  user-select: none;
 }
 
-/* A requested permission name, hoverable for its plain-English description. The
-   dotted underline signals it's interactive; the tooltip bubble is centered over
-   the name (mirrors the .pv-tl-missing CSS-tooltip pattern -- native `title` is
-   unreliable in the desktop webview). */
-.permission-request-perm {
-  position: relative;
-  text-decoration: underline dotted;
-  text-underline-offset: 2px;
-  cursor: help;
+.machine-sidebar ::-webkit-scrollbar {
+  width: 6px;
 }
 
-.permission-request-perm::after {
-  content: attr(data-tooltip);
-  position: absolute;
-  bottom: calc(100% + 7px);
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 1000;
-  width: max-content;
-  max-width: 280px;
-  padding: 6px 9px;
-  border-radius: 6px;
-  background: var(--color-text-primary);
-  color: #fff;
-  font-family: ui-sans-serif, system-ui, sans-serif;
-  font-size: 12px;
-  font-weight: 400;
-  line-height: 1.4;
-  text-align: left;
-  white-space: normal;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
-  opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
-  transition: opacity 0.12s ease;
+.machine-sidebar ::-webkit-scrollbar-track {
+  background: transparent;
 }
 
-.permission-request-perm:hover::after,
-.permission-request-perm:focus-visible::after {
-  opacity: 1;
-  visibility: visible;
+.machine-sidebar ::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 3px;
+}
+
+.machine-sidebar:hover ::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+}
+
+.machine-sidebar:hover ::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-faint);
+}
+
+/* ── Workspace surface: the connected tab card ──
+   The whole content area is one flat grey canvas, and every pane is a white
+   card floating on it whose active tab is physically part of the card. The
+   pieces that make that read as one shape:
+
+   - the canvas runs edge to edge. A 4px top padding is the gap the outermost
+     panes sit in against the title bar above, rather than a rim of some other
+     color; the left, right and bottom edges carry no padding, so the dock
+     sits flush against the viewport there;
+   - each group insets itself 2px, which puts 4px of bare canvas between two
+     adjacent panes -- that gap is the whole of a split separator;
+   - the tab strip paints nothing, so it is canvas with labels on it. The active
+     tab is the only white one, carries the card's hairline on its top/left and
+     right, and the pane below is pulled up 1px so its own top border passes
+     underneath the tab rather than cutting across the junction;
+   - the pane's top-left corner is square only when the FIRST tab is active,
+     because that is the one case where the tab meets the corner and the two
+     outlines have to continue into each other.
+
+   The machine's accent belongs to chrome: the send button and the focus ring
+   below use it, and nothing here does -- no accent wash on a card, a canvas or
+   a tab strip.
+
+   DARK MODE IS UNDECIDED (§1 of the design says "dark mode TBD"), and this app
+   carries no dark tokens of its own. The values below are therefore the light
+   design serving as the default in both schemes; when the dark canvas is
+   settled it belongs here, as a `prefers-color-scheme` override. */
+.app-main {
+  --si-canvas: rgb(245 245 245);
+  --si-pane-surface: #ffffff;
+  --si-pane-border: rgba(0, 0, 0, 0.09);
+  --si-pane-radius: 12px;
+  /* Half of the 4px separator: each of the two neighbours contributes its own
+     inset, and the outermost panes get the same half against the canvas edge. */
+  --si-pane-inset: 2px;
+  /* The canvas runs edge to edge and the padding is the outermost pane gap, so
+     the grey is painted across the padding too. Clipping it to the content box
+     instead would let the app's off-white body show as a band around the dock,
+     which reads as a seam rather than as an inset. The top carries that gap
+     against the title bar, and the left carries a matching one so the rail has
+     a few pixels of canvas to hover into before it reaches the literal window
+     edge -- flush there makes the reveal awkward to land the pointer on. Right
+     and bottom stay flush against the viewport. */
+  padding: 4px 0 0 4px;
+  background: var(--si-canvas);
 }
 
 /* ── Dockview workspace ── */
@@ -1440,31 +1782,243 @@ body {
   left: 0;
 }
 
-/* ── Dockview theme overrides ── */
-.dockview-theme-light {
-  --dv-background-color: var(--color-bg);
+/* ── Dockview theme overrides ──
+
+   The class is doubled to win on specificity. dockview-core does not rely on
+   the stylesheet we import at the top of this file: it *injects its own style
+   element at runtime*, which therefore lands after our linked stylesheet and
+   beats a plain `.dockview-theme-light` rule on document order alone. That is
+   what used to leave the dock painted white over our grey canvas, and the tab
+   strip painted its own grey, no matter what this block said. Anything here
+   that overrides a `--dv-*` default has to stay inside this doubled selector. */
+.dockview-theme-light.dockview-theme-light {
   --dv-paneview-header-border-color: var(--color-border);
-  --dv-tabs-and-actions-container-background-color: var(--color-bg-sidebar);
-  --dv-activegroup-visiblepanel-tab-background-color: var(--color-bg);
-  --dv-activegroup-hiddenpanel-tab-background-color: var(--color-bg-sidebar);
-  --dv-inactivegroup-visiblepanel-tab-background-color: var(--color-bg);
-  --dv-inactivegroup-hiddenpanel-tab-background-color: var(--color-bg-sidebar);
+  /* Everything dockview would paint itself is transparent: the canvas behind
+     the dock is the app's, and the only surface is the pane card. */
+  --dv-background-color: transparent;
+  --dv-group-view-background-color: transparent;
+  --dv-tabs-and-actions-container-background-color: transparent;
+  --dv-activegroup-visiblepanel-tab-background-color: var(--si-pane-surface);
+  --dv-inactivegroup-visiblepanel-tab-background-color: var(--si-pane-surface);
+  --dv-activegroup-hiddenpanel-tab-background-color: transparent;
+  --dv-inactivegroup-hiddenpanel-tab-background-color: transparent;
   --dv-activegroup-visiblepanel-tab-color: var(--color-text-primary);
   --dv-activegroup-hiddenpanel-tab-color: var(--color-text-secondary);
   --dv-inactivegroup-visiblepanel-tab-color: var(--color-text-primary);
   --dv-inactivegroup-hiddenpanel-tab-color: var(--color-text-secondary);
-  --dv-tab-divider-color: var(--color-border);
-  --dv-separator-border: var(--color-border);
-  --dv-group-view-background-color: var(--color-bg);
+  /* Inactive tabs are bare labels: no dividers between them, and no line under
+     the strip. The 4px gap is the separator, so that goes too. */
+  --dv-tab-divider-color: transparent;
+  --dv-separator-border: transparent;
   --dv-tabs-container-scrollbar-color: var(--color-border);
   --dv-drag-over-background-color: var(--color-accent-light);
   --dv-drag-over-border-color: var(--color-accent);
 }
 
-.dockview-theme-light .dv-tabs-container {
-  /* No bottom border: the selected tab shares the content's background
-     (--color-bg), so dropping the line lets it bleed straight into the panel. */
+/* The gap between panes. Padding rather than a margin so dockview's own sizing
+   (which writes pixel widths onto the views outside) is left alone. */
+.dockview-theme-light .dv-groupview {
+  padding: var(--si-pane-inset);
+}
+
+/* The pane card. It is pulled up 1px so its top border lands on the strip's
+   last row, where the active tab covers it and the junction closes. */
+.dockview-theme-light .dv-groupview > .dv-content-container {
+  margin-top: -1px;
+  background: var(--si-pane-surface);
+  border: 1px solid var(--si-pane-border);
+  border-radius: var(--si-pane-radius);
+}
+
+/* Square only where the first tab connects to it. */
+.dockview-theme-light
+  .dv-groupview:has(> .dv-tabs-and-actions-container .dv-tabs-container > .dv-tab:first-child.dv-active-tab)
+  > .dv-content-container {
+  border-top-left-radius: 0;
+}
+
+/* Panels render with dockview's "always" renderer, which hoists their content
+   into an overlay layered over the pane rather than inside it. The overlay is
+   sized to the card exactly, so it takes the card's rounded clip here, and a
+   1px transparent border keeps the content off the hairline.
+
+   The overlay sits outside the group's subtree and carries nothing that says
+   which pane it belongs to, so this clip cannot be the conditional one the card
+   above gets: it rounds all four corners. Where a card is square at the
+   top-left, a panel painted anything other than white therefore leaves the
+   card's own white showing in that corner -- directly under the white active
+   tab that squared it. The card's outline, which is what reads as the shape, is
+   still exactly right. */
+.dockview-theme-light .dv-render-overlay {
+  border: 1px solid transparent;
+  border-radius: var(--si-pane-radius);
+  overflow: hidden;
+}
+
+/* A live surface is a .dv-render-overlay we own rather than one dockview owns.
+   There is one per object, machine-wide, created when the object is first
+   opened and left in the DOM until the object is destroyed -- because removing
+   an iframe destroys its document and re-parenting one reloads it. Its rect
+   and its visibility are mirrored from whichever pane is showing it, so it
+   carries the same clip as the overlays beside it and only the layout differs.
+   It is hidden with `display: none`, exactly as dockview hides an inactive
+   tab's content.
+
+   The selector is doubled on purpose: dockview's own `.dv-render-overlay` rule
+   declares `z-index: 1` at the same specificity and is loaded after this file,
+   so a bare `.si-live-surface` would lose the tie and sit at 1 alongside the
+   slot overlay -- which, being a later sibling, would then paint over the page
+   and swallow every click into it. */
+.dv-render-overlay.si-live-surface {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  /* Above the (now empty) panel overlay standing in for it, which is a sibling
+     at z-index 1 and comes later in the DOM. Drop targets sit at 1000/9999 and
+     still paint over both. */
+  z-index: 2;
+}
+
+/* While a tab is being dragged the surface stops taking pointer events, so the
+   drag reaches the panel overlay underneath -- which is what forwards it to the
+   pane's drop target. Without this a drop over a pane would land inside the
+   framed page instead. */
+.si-live-surface--drag {
+  pointer-events: none;
+}
+
+/* The slot a panel is reduced to: it holds no content, it just gives dockview a
+   pane-sized box to position and dispose. */
+.si-live-slot {
+  width: 100%;
+  height: 100%;
+}
+
+.dockview-theme-light .dv-tabs-and-actions-container {
+  /* Above the pane, so the active tab's white closes over the 1px of card
+     border the negative margin above tucked under the strip. */
+  position: relative;
+  z-index: 1;
+}
+
+/* The "+" belongs immediately after the pane's tabs; dockview's void container
+   (the drop region that eats the leftover width) is what would otherwise push
+   it to the far edge, so it is ordered last instead. */
+.dockview-theme-light .dv-void-container {
+  order: 1;
+}
+
+.dockview-theme-light .dv-tab {
+  height: 100%;
+  /* No padding of its own -- `.dv-default-tab` inside fills the tab and carries
+     the insets, so the tab's box is exactly the card shape. */
+  padding: 0;
+  border: 1px solid transparent;
   border-bottom: none;
+  border-radius: var(--si-pane-radius) var(--si-pane-radius) 0 0;
+}
+
+/* The drag ghost: dockview-core clones the dragged `.dv-tab` (tab.js,
+   `dragHandler.onDragStart`), copies its FULL computed style onto the clone
+   as inline styles, and appends the clone as a direct child of `<body>`
+   (dnd/ghost.js's `addGhostImage`) so the browser can use it as the drag
+   image. The clone therefore inherits this tab's square BOTTOM corners --
+   which exist only so a connected tab can meet the pane card below it -- but
+   the ghost has no pane under it while it floats, so it reads as a
+   half-rounded chip instead of a floating card. `body > .dv-tab` reaches
+   only that clone: every live tab is nested many levels deeper, under
+   `.dockview-theme-light`, never a direct child of `<body>`. `!important` is
+   required because the copied computed style already sets `border-radius`
+   inline, which otherwise beats any selector here regardless of specificity. */
+body > .dv-tab.dv-dragged {
+  border-radius: var(--si-pane-radius) !important;
+}
+
+.dockview-theme-light .dv-tab.dv-active-tab {
+  border-color: var(--si-pane-border);
+}
+
+/* Hovering an inactive tab paints NOTHING. A fill at the strip's edges always
+   fights the pane's rounded corner below it (two attempts at that shape both
+   read as a boxy cutoff), so the hover affordance is everything except a
+   background: the pointer cursor, the title going bold, and the tab's own
+   action buttons appearing -- which the strip already reveals on hover.
+   Spelled out down the whole chain because that is the shape dockview paints
+   tab states with, and a shorter selector would simply lose to it. */
+.dockview-theme-light
+  .dv-groupview
+  > .dv-tabs-and-actions-container
+  .dv-tabs-container
+  > .dv-tab.dv-inactive-tab:hover {
+  cursor: pointer;
+}
+
+/* ── Tab overflow: the "N more" dropdown at the strip's right edge ──
+   dockview builds this from theme variables this app sets to transparent (the
+   divider is the tab gap, the group background is the canvas), so untouched it
+   rendered as bare text floating over the pane. It is a menu, so it wears the
+   same chrome as every other floating card: primary surface, hairline border,
+   8px radius, the overlay shadow, and 32px rows with the shared hover fill. */
+.dockview-theme-light .dv-tabs-overflow-dropdown-default {
+  gap: 4px;
+  padding: 0 6px;
+  border-radius: 6px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.dockview-theme-light .dv-tabs-overflow-dropdown-default:hover {
+  background-color: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.dockview-theme-light .dv-tabs-overflow-container {
+  min-width: 160px;
+  padding: 4px 0;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background-color: var(--color-surface);
+  box-shadow:
+    0 1px 1px 0 rgba(0, 0, 0, 0.08),
+    0 3px 12px 0 rgba(0, 0, 0, 0.08);
+}
+
+/* Rows. The strip's card shape does not belong here -- inside a menu a tab is
+   just a row -- so the radius, the fixed equal width and the per-row divider
+   all stand down, and the active tab is told apart by weight rather than by a
+   second surface. */
+.dockview-theme-light .dv-tabs-overflow-container .dv-tab {
+  width: auto;
+  height: 32px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 0;
+  background-color: transparent;
+  cursor: pointer;
+}
+
+.dockview-theme-light .dv-tabs-overflow-container .dv-tab:hover {
+  background-color: var(--color-bg-hover);
+}
+
+.dockview-theme-light .dv-tabs-overflow-container .dv-tab.dv-active-tab .dv-default-tab-content {
+  font-weight: 600;
+}
+
+/* Bolding is confined to the title span. The tab's width is fixed by the
+   equal-width rule, so the heavier face cannot reflow the strip -- at worst a
+   long title fades a character earlier while hovered. */
+.dockview-theme-light .dv-tab.dv-inactive-tab:hover .dv-default-tab-content {
+  font-weight: 600;
+}
+
+/* dockview outlines a focused tab in the (now transparent) divider color, so
+   the keyboard ring is spelled out here instead -- in the accent, which is
+   where the accent is allowed. */
+.dockview-theme-light .dv-tab:focus-visible::after {
+  outline: 2px solid var(--color-accent) !important;
+  outline-offset: -2px;
 }
 
 .dockview-theme-light .dv-default-tab {
@@ -1480,9 +2034,66 @@ body {
   height: 12px;
 }
 
+/* ── Drag and drop ──
+   A drop onto a PANE and a drop onto a TAB are different questions and get
+   different answers. "Which side of this pane?" is a region, so it stays a
+   filled wash -- but a neutral grey light enough to read the pane through,
+   rather than dockview's opaque blue-grey slab. "Before or after this tab?" is
+   a position BETWEEN two tabs, not a region, so it draws as an insertion line
+   at that edge instead of shading half of the neighbouring tab.
+
+   Every drop target paints the same way -- a `dv-drop-target-selection` sized
+   to the half it would take -- so the tab case is picked out structurally, by
+   the selection sitting inside a `.dv-tab`. dockview only thins the selection
+   into a line by itself when the target is under 100px wide, and a tab here is
+   never allowed to get that narrow (the strip holds them at a 140px floor), so
+   left it alone every tab drop reads as a block over half its neighbour.
+
+   The selection's box is an inline style, animated between targets, so the
+   line is a pseudo-element on the edge the selection already sits against
+   rather than an attempt to resize it: a left-drop selection covers the tab's
+   left half, so its left edge IS the seam the tab would land on, and a
+   right-drop selection's right edge likewise.
+
+   Only the left/right variants lose their fill. A drop onto the empty end of
+   the strip has no side to it and keeps the wash, which is what says the drop
+   will land there at all. */
+.dockview-theme-light.dockview-theme-light {
+  --dv-drag-over-background-color: rgba(0, 0, 0, 0.06);
+  --dv-drag-over-border-color: transparent;
+}
+
+.dockview-theme-light.dockview-theme-light .dv-tab .dv-drop-target-selection.dv-drop-target-left,
+.dockview-theme-light.dockview-theme-light .dv-tab .dv-drop-target-selection.dv-drop-target-right {
+  background-color: transparent;
+}
+
+.dockview-theme-light.dockview-theme-light .dv-tab .dv-drop-target-selection.dv-drop-target-left::after,
+.dockview-theme-light.dockview-theme-light .dv-tab .dv-drop-target-selection.dv-drop-target-right::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  border-radius: 1px;
+  /* Neutral, like everything else on the dock: the accent is chrome's, and an
+     insertion caret here would be the one accent-colored thing in the pane. */
+  background: var(--color-text-primary);
+}
+
+.dockview-theme-light.dockview-theme-light .dv-tab .dv-drop-target-selection.dv-drop-target-left::after {
+  left: 0;
+}
+
+.dockview-theme-light.dockview-theme-light .dv-tab .dv-drop-target-selection.dv-drop-target-right::after {
+  right: 0;
+}
+
 /* Chat panel within dockview */
 .chat-panel {
-  background: var(--color-bg);
+  /* The pane card's own white: a chat fills its pane edge to edge, so anything
+     else here would read as a second surface inside the card. */
+  background: var(--si-pane-surface);
 }
 
 .chat-panel .app-footer {
@@ -1522,34 +2133,6 @@ body {
 .dockview-add-tab-button:hover {
   background: var(--color-bg-hover);
   color: var(--color-text-primary);
-}
-
-.dockview-add-tab-dropdown {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  min-width: 140px;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-base);
-  box-shadow:
-    0 4px 16px rgba(55, 53, 47, 0.1),
-    0 1px 4px rgba(55, 53, 47, 0.06);
-  padding: 4px;
-  z-index: 1000;
-}
-
-.dockview-add-tab-dropdown-item {
-  padding: 6px 10px;
-  font-size: 13px;
-  color: var(--color-text-primary);
-  border-radius: 4px;
-  cursor: pointer;
-  transition: background 80ms;
-}
-
-.dockview-add-tab-dropdown-item:hover {
-  background: var(--color-bg-hover);
 }
 
 /* ── Custom URL dialog ── */
@@ -1654,29 +2237,30 @@ body {
   cursor: not-allowed;
 }
 
-/* ── Layout save/load/delete dialog ── */
-.layout-dialog-list {
-  max-height: 220px;
-  overflow-y: auto;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-base);
-  margin-bottom: 12px;
+/* ── Project settings pickers ── */
+/* The color swatches and the squiggle cells of the project settings modal. They
+   are the only toggles a dialog carries, so ``aria-pressed`` is what tells them
+   apart from its Cancel/Save row. Their size, fill and selection ring are set
+   inline (the ring is the project's own color), leaving the grids' shared
+   feedback here. */
+.custom-url-dialog button[aria-pressed] {
+  transition: transform 80ms ease-out;
 }
 
-.layout-dialog-item {
-  padding: 8px 12px;
-  font-size: 14px;
-  color: var(--color-text-primary);
-  cursor: pointer;
+.custom-url-dialog button[aria-pressed]:hover {
+  transform: scale(1.08);
 }
 
-.layout-dialog-item:hover {
-  background: var(--color-bg-hover);
-}
-
-.layout-dialog-item-selected {
-  background: var(--color-bg-hover);
-  font-weight: 600;
+/* Both a ring and an outline, because an inline style always wins: a swatch
+   carries its selection ring as ``outline`` and a squiggle cell carries its own
+   as ``box-shadow``, so whichever property is spoken for on a given cell, the
+   other one still shows the focus. */
+.custom-url-dialog button[aria-pressed]:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  box-shadow:
+    0 0 0 2px var(--color-surface),
+    0 0 0 4px var(--color-accent);
 }
 
 /* ── Custom tab renderer ── */
@@ -1737,24 +2321,67 @@ body {
   opacity: 0.45;
 }
 
-/* Hover tooltip for the liveness dot, appended to <body> and positioned (fixed)
-   just below the dot by attachHoverTooltip. It lives on the body rather than as
-   a ::after bubble because the tab strip clips overflow, and as a JS element
-   rather than a native title because dockview's draggable tabs suppress those. */
-.dv-tab-hover-tooltip {
+/* ── Hover tooltip ── */
+/* The one tooltip bubble in the workspace, built on <body> and positioned
+   (fixed) by views/hoverTooltip.ts. It stands in for native `title`
+   everywhere: dockview's draggable tabs suppress those, and a ::after bubble
+   is clipped by the tab strip's overflow.
+
+   The appearance is the minds shell's `.minds-tooltip`, so chrome and
+   workspace tooltips are indistinguishable -- inverse surface with matching
+   inverse text, 12px helper type, 6px radius, 8px/4px padding, the overlay
+   elevation shadow, and centered text wrapping at 400px. `display` is toggled
+   in JS (`inline-flex` when shown) and there is deliberately no transition:
+   the bubble appears after the 250ms hover-intent delay and disappears
+   instantly. It has to clear the modals, which sit at 10000.
+
+   This app has no theme tokens for an inverted surface, so both modes are
+   spelled out here off `prefers-color-scheme` -- the only theme signal that
+   reaches this iframe. */
+.minds-tooltip {
   position: fixed;
-  z-index: 1000;
-  transform: translateX(-50%);
+  z-index: 10001;
+  display: none;
+  align-items: center;
+  gap: 6px;
+  max-width: 400px;
   padding: 4px 8px;
   border-radius: 6px;
-  background: var(--color-text-primary);
-  color: #fff;
-  font-size: 11px;
+  background: #000000;
+  color: #ffffff;
+  font-size: 12px;
   font-weight: 400;
   line-height: 1.4;
-  white-space: nowrap;
+  text-align: center;
+  white-space: normal;
   pointer-events: none;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+  box-shadow:
+    0 1px 1px 0 rgba(0, 0, 0, 0.08),
+    0 3px 12px 0 rgba(0, 0, 0, 0.08);
+}
+
+@media (prefers-color-scheme: dark) {
+  .minds-tooltip {
+    background: #ffffff;
+    color: #000000;
+  }
+}
+
+/* The inline rename editor, swapped in for the title on a double-click. It
+   takes the title's own box so the tab neither grows nor jumps as it opens,
+   and inherits the tab's type so the name reads the same while it is being
+   typed as it will once it is committed. The accent ring is the only thing
+   that marks it as editable. */
+.dv-custom-tab-title-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0 3px;
+  border: 1px solid var(--color-accent);
+  border-radius: 3px;
+  outline: none;
+  background: var(--color-bg);
+  color: var(--color-text-primary);
+  font: inherit;
 }
 
 .dv-custom-tab-actions {
@@ -1790,21 +2417,6 @@ body {
 .dv-custom-tab-action:hover {
   background: rgba(0, 0, 0, 0.08);
   color: var(--color-text-primary);
-}
-
-.dv-custom-tab-action-destructive:hover {
-  background: rgba(220, 38, 38, 0.1);
-  color: #dc2626;
-}
-
-.dv-custom-tab-action-disabled {
-  opacity: 0.3;
-  cursor: not-allowed;
-}
-
-.dv-custom-tab-action-disabled:hover {
-  background: none;
-  color: var(--color-text-secondary);
 }
 
 /* ── Destroy confirmation dialog ── */
@@ -1844,29 +2456,6 @@ body {
   color: var(--color-text-secondary);
   margin: 0 0 16px;
   line-height: 1.5;
-}
-
-.destroy-dialog-children {
-  margin-bottom: 16px;
-}
-
-.destroy-dialog-children-warning {
-  font-size: 13px;
-  font-weight: 500;
-  color: #dc2626;
-  margin: 0 0 8px;
-}
-
-.destroy-dialog-children-list {
-  list-style: disc;
-  margin: 0;
-  padding-left: 20px;
-  font-size: 13px;
-  color: var(--color-text-secondary);
-}
-
-.destroy-dialog-children-list li {
-  margin-bottom: 2px;
 }
 
 .destroy-dialog-actions {

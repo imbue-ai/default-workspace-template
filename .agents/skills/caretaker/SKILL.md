@@ -114,10 +114,9 @@ You're always in control: everything here is adjustable any time -- the schedule
 
 That is the whole message. Right after sending it, silently surface your tab
 so the user sees it: run
-`for L in desktop mobile; do python3 system/scripts/layout.py open --layout "$L" "chat:$MNGR_AGENT_NAME"; done`
-(`--layout` is required and each op only applies on clients with that layout
-active, so try both named layouts; the inactive one fails fast and harmlessly.
-Best-effort -- continue if both fail). Then
+`python3 system/scripts/layout.py open "chat:$MNGR_AGENT_NAME"`
+(with no `--view`, the op goes to the view the connected client is looking at.
+Best-effort -- continue if it fails). Then
 create your permissions file at `data/.state/caretaker/permissions.md` with the
 template below -- this is an internal file write, not shown to the user, and the file's
 existence is what marks you as introduced. Leave every value as `not set yet` --
@@ -171,9 +170,9 @@ finds something.
    as your opening reply *before* you create or start any step, so it lands in the
    conversation and never as a step title, caption, or ticket. Right after the
    hello is sent, silently surface your tab with
-   `for L in desktop mobile; do python3 system/scripts/layout.py open --layout "$L" "chat:$MNGR_AGENT_NAME"; done`
-   (best-effort, continue on failure; the layout the user is not on fails fast
-   and harmlessly) -- after, not before, so the tab never pops up empty. It is one short,
+   `python3 system/scripts/layout.py open "chat:$MNGR_AGENT_NAME"`
+   (best-effort, continue on failure; it lands in the view the user is looking
+   at) -- after, not before, so the tab never pops up empty. It is one short,
    friendly opening message -- who you are and what you're about to do -- shaped by
    whether they've allowed you to check their apps (read it from
    `data/.state/caretaker/permissions.md`):

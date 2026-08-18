@@ -3,7 +3,6 @@ import os
 import queue
 import re
 import shlex
-import threading
 import time
 from collections.abc import Callable
 from collections.abc import Mapping
@@ -24,6 +23,7 @@ from pydantic import PrivateAttr
 from pydantic import SecretStr
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
+from imbue.imbue_common.model_update import to_update
 from imbue.minds.bootstrap import MINDS_ROOT_NAME_ENV_VAR
 from imbue.minds.config.data_types import ClientEnvConfig
 from imbue.minds.config.data_types import WorkspacePaths
@@ -47,13 +47,16 @@ from imbue.minds.desktop_client.backup_verification_store import is_backup_verif
 from imbue.minds.desktop_client.backup_verification_store import set_backup_verification_enabled
 from imbue.minds.desktop_client.conftest import FAKE_CONNECTOR_URL
 from imbue.minds.desktop_client.conftest import FakeImbueCloudCli
+from imbue.minds.desktop_client.conftest import TEST_RELAY_ENDPOINTS
 from imbue.minds.desktop_client.conftest import make_agents_json
 from imbue.minds.desktop_client.conftest import make_fake_imbue_cloud_cli
 from imbue.minds.desktop_client.conftest import make_resolver_with_data
 from imbue.minds.desktop_client.conftest import make_service_log
 from imbue.minds.desktop_client.conftest import make_session_store_for_test
+from imbue.minds.desktop_client.conftest import make_share_probe_result
 from imbue.minds.desktop_client.cookie_manager import SESSION_COOKIE_NAME
 from imbue.minds.desktop_client.cookie_manager import create_session_cookie
+from imbue.minds.desktop_client.create_status import status_text_for
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCli
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCliError
 from imbue.minds.desktop_client.imbue_cloud_cli import ShareCliInfo
@@ -62,12 +65,13 @@ from imbue.minds.desktop_client.session_store import MultiAccountSessionStore
 from imbue.minds.desktop_client.state import get_state
 from imbue.minds.desktop_client.system_interface_health import AgentHealth
 from imbue.minds.desktop_client.system_interface_health import SystemInterfaceHealthTracker
-from imbue.minds.desktop_client.templates import default_workspace_template_ref
-from imbue.minds.desktop_client.templates import status_text_for
 from imbue.minds.desktop_client.testing import capture_error_logs
+from imbue.minds.desktop_client.testing import drain_ui_channel_frames
 from imbue.minds.desktop_client.testing import restic_backup_a_file
+from imbue.minds.desktop_client.workspace_defaults import default_workspace_template_ref
 from imbue.minds.desktop_client.workspace_operations import WorkspaceOperationKind
 from imbue.minds.desktop_client.workspace_operations import WorkspaceOperationStatus
+from imbue.minds.desktop_client.workspace_record_store import RECORD_TOO_NEW_MESSAGE
 from imbue.minds.errors import WorkspaceNameInUseError
 from imbue.minds.primitives import CreateAttemptId
 from imbue.minds.primitives import DockerRuntime
@@ -1049,6 +1053,78 @@ def test_destroy_unknown_workspace_returns_404(tmp_path: Path) -> None:
     assert response.status_code == 404
 
 
+class _ResolverOnAParseableHost(StaticBackendResolver):
+    """Static resolver reporting a host id the lifecycle routes can parse.
+
+    The interface default reports the ``"localhost"`` placeholder, which the
+    destroy route refuses with a 409 before it gets anywhere near a teardown.
+    """
+
+    def get_agent_display_info(self, agent_id: AgentId) -> AgentDisplayInfo | None:
+        return AgentDisplayInfo(agent_name=str(agent_id), host_id="host-" + "0" * 31 + "1")
+
+
+def test_destroying_a_machine_keeps_the_app_from_starting_it_back_up(tmp_path: Path) -> None:
+    """A destroy marks the machine, the same as a stop does.
+
+    The interface dies within seconds of the destroy starting, and the probe
+    loop reads that exactly as it reads a wedge -- so without the mark the
+    unattended dispatch would run ``mngr start`` against a host being torn down.
+    The mark goes on as an in-flight one, since the interface answers for the
+    first seconds of a teardown and that 200 must not clear it.
+    """
+    agent_id = AgentId()
+    tracker = SystemInterfaceHealthTracker()
+    client = _build_client(
+        tmp_path,
+        _ResolverOnAParseableHost(url_by_agent_and_service={str(agent_id): {}}),
+        mngr_binary=_write_fake_mngr(tmp_path / "bin"),
+        system_interface_health_tracker=tracker,
+    )
+
+    response = client.post(f"/api/v1/workspaces/{agent_id}/destroy", headers=_auth_header())
+
+    assert response.status_code == 202
+    tracker.record_probe_success(agent_id)
+    assert tracker.is_unattended_recovery_suppressed(agent_id) is True
+
+
+@pytest.mark.witnesses("remote-compatibility.newer-records-read-only", partial="covers the destroy API gate only")
+def test_destroy_refuses_a_record_written_by_a_newer_app_version(tmp_path: Path) -> None:
+    """The destroy route 409s with the update remedy when the workspace's record is too new.
+
+    Seeded through a pull (as a newer client's server row arrives in real
+    life), since the local write paths themselves refuse too-new records.
+    """
+    agent_id = AgentId()
+    email = "user@example.com"
+    cli = make_fake_imbue_cloud_cli()
+    cli.sync_records_by_email[email] = {
+        "host-too-new": {
+            "host_id": "host-too-new",
+            "agent_id": str(agent_id),
+            "provider_kind": "lima",
+            "state": "active",
+            "revision": 1,
+            "record_format": 2,
+        }
+    }
+    store = make_session_store_for_test(tmp_path / "sessions", cli=cli)
+    assert store.record_store is not None
+    assert store.record_store.pull("user-1", email) is True
+    client = _build_client(
+        tmp_path,
+        _ResolverOnAParseableHost(url_by_agent_and_service={str(agent_id): {}}),
+        mngr_binary=_write_fake_mngr(tmp_path / "bin"),
+        session_store=store,
+    )
+
+    response = client.post(f"/api/v1/workspaces/{agent_id}/destroy", headers=_auth_header())
+
+    assert response.status_code == 409
+    assert json.loads(response.data)["error"] == RECORD_TOO_NEW_MESSAGE
+
+
 def test_lifecycle_without_concurrency_group_returns_501(tmp_path: Path) -> None:
     agent_id = AgentId()
     client = _client_with_workspace(tmp_path, agent_id)
@@ -1061,13 +1137,14 @@ def test_lifecycle_without_concurrency_group_returns_501(tmp_path: Path) -> None
 def test_stop_workspace_broadcasts_workspace_stopped_event(
     tmp_path: Path, root_concurrency_group: ConcurrencyGroup
 ) -> None:
-    """A successful v1 stop broadcasts a one-shot ``workspace_stopped`` chrome SSE payload.
+    """A successful v1 stop broadcasts a one-shot ``workspace_stopped`` frame on ``/ui/ws``.
 
     The Electron shell closes any window still open to the workspace off this
-    event (otherwise the open view would observe the dead interface, redirect
-    to recovery, and auto-restart the host -- silently undoing an
-    agent-requested stop). The landing-page stop shares this route, so both
-    stop paths emit through the one mechanism.
+    frame, rather than leaving it on an interface that is going away. What keeps
+    the app from starting the machine straight back up is a separate thing --
+    the health-tracker mark ``perform_mind_host_action`` applies before it runs
+    the stop -- so this frame must not be read as that guard. The landing-page
+    stop shares this route, so both stop paths emit through the one mechanism.
     """
     agent_id = AgentId()
     services_id = AgentId()
@@ -1080,15 +1157,12 @@ def test_stop_workspace_broadcasts_workspace_stopped_event(
         mngr_binary=fake_mngr,
         mngr_host_dir=tmp_path / "host",
     )
-    event_queue: "queue.Queue[dict[str, str]]" = queue.Queue()
-    wake_event = threading.Event()
-    get_state(client.application).chrome_event_broadcaster.subscribe(event_queue, wake_event)
+    client_queue = get_state(client.application).ui_channel_broadcaster.register()
 
     response = client.post(f"/api/v1/workspaces/{agent_id}/stop", headers=_auth_header())
 
     assert response.status_code == 200
-    assert wake_event.is_set()
-    assert event_queue.get_nowait() == {"type": "workspace_stopped", "agent_id": str(agent_id)}
+    assert json.loads(client_queue.get_nowait() or "") == {"type": "workspace_stopped", "agent_id": str(agent_id)}
 
 
 def test_start_workspace_does_not_broadcast_workspace_stopped(
@@ -1106,13 +1180,116 @@ def test_start_workspace_does_not_broadcast_workspace_stopped(
         mngr_binary=fake_mngr,
         mngr_host_dir=tmp_path / "host",
     )
-    event_queue: "queue.Queue[dict[str, str]]" = queue.Queue()
-    get_state(client.application).chrome_event_broadcaster.subscribe(event_queue, threading.Event())
+    client_queue = get_state(client.application).ui_channel_broadcaster.register()
 
     response = client.post(f"/api/v1/workspaces/{agent_id}/start", headers=_auth_header())
 
     assert response.status_code == 200
-    assert event_queue.empty()
+    assert client_queue.empty()
+
+
+def test_workspace_refresh_broadcasts_to_every_ui_connection(tmp_path: Path) -> None:
+    """The refresh route reaches every open window, keyed to the path agent id.
+
+    This is the whole mechanism: the agent has no other way to reach the shell,
+    so a frame that does not land on each registered ``/ui/ws`` connection
+    means a window keeps rendering the pre-change interface.
+    """
+    agent_id = AgentId()
+    client = _client_with_workspace(tmp_path, agent_id)
+    broadcaster = get_state(client.application).ui_channel_broadcaster
+    first_queue = broadcaster.register()
+    second_queue = broadcaster.register()
+
+    # Exactly what default-workspace-template's ``system/scripts/refresh_workspace_view.py``
+    # puts on the wire: an empty JSON object with a JSON content type. The route
+    # declares no request model, so this pins that an empty body is accepted
+    # rather than rejected as invalid.
+    response = client.post(f"/api/v1/agents/{agent_id}/refresh", json={}, headers=_auth_header())
+
+    assert response.status_code == 200
+    expected = {"type": "workspace_refresh", "agent_id": str(agent_id)}
+    assert json.loads(first_queue.get_nowait() or "") == expected
+    assert json.loads(second_queue.get_nowait() or "") == expected
+
+
+def test_workspace_refresh_succeeds_with_no_window_open(tmp_path: Path) -> None:
+    """A closed workspace still answers ``ok``: the refresh is fire-and-forget.
+
+    The caller is an agent mid-``update-self`` / ``update-app``; failing it
+    because the user happens to have the window shut would turn a cosmetic
+    no-op into a failed reveal.
+    """
+    agent_id = AgentId()
+    client = _client_with_workspace(tmp_path, agent_id)
+
+    response = client.post(f"/api/v1/agents/{agent_id}/refresh", headers=_auth_header())
+
+    assert response.status_code == 200
+    assert response.get_json() == {"ok": True}
+
+
+def _drain_refresh_frames(client_queue: "queue.Queue[str | None]") -> list[dict[str, Any]]:
+    """Every ``workspace_refresh`` frame waiting on one ``/ui/ws`` connection.
+
+    Filtered by type because the tracker transitions these tests drive also
+    publish health frames onto the same channel.
+    """
+    return [frame for frame in drain_ui_channel_frames(client_queue) if frame["type"] == "workspace_refresh"]
+
+
+def test_a_machine_coming_back_tells_every_window_to_rebuild_its_view(tmp_path: Path) -> None:
+    """A recovered machine broadcasts the same refresh an in-workspace agent can ask for.
+
+    While the machine was down every window went on painting whatever it served
+    -- an error page, or a half-loaded one -- and nothing about the recovery
+    changes the content frame's URL, so that dead page would sit there until the
+    user navigated away and back. The unattended restart usually succeeds
+    without ever raising a recovery card, so the card cannot be what covers this.
+    """
+    agent_id = AgentId()
+    tracker = SystemInterfaceHealthTracker(stuck_threshold_seconds=0.0)
+    client = _build_client(
+        tmp_path,
+        StaticBackendResolver(url_by_agent_and_service={str(agent_id): {}}),
+        system_interface_health_tracker=tracker,
+    )
+    window_queue = get_state(client.application).ui_channel_broadcaster.register()
+
+    # An outage, then the machine answering again -- the only thing that ends one.
+    tracker.record_failure(agent_id)
+    tracker.record_probe_failure(agent_id)
+    assert tracker.get_health(agent_id) == AgentHealth.STUCK
+    tracker.record_probe_success(agent_id)
+
+    assert _drain_refresh_frames(window_queue) == [{"type": "workspace_refresh", "agent_id": str(agent_id)}]
+
+
+def test_a_machine_that_never_went_down_does_not_refresh_windows(tmp_path: Path) -> None:
+    """Only the recovery edge refreshes: a probe success on a healthy machine is every probe.
+
+    The probe loop reports success continuously for the machines it watches, so
+    a refresh keyed on the probe rather than the edge would re-navigate every
+    window every couple of seconds. The lap that has to stay quiet is the one
+    where the tracker still holds a clean record (enrolled by a failure
+    envelope, still HEALTHY); after that record is dropped there is nothing to
+    compare and the lap is quiet either way.
+    """
+    agent_id = AgentId()
+    tracker = SystemInterfaceHealthTracker(stuck_threshold_seconds=0.0)
+    client = _build_client(
+        tmp_path,
+        StaticBackendResolver(url_by_agent_and_service={str(agent_id): {}}),
+        system_interface_health_tracker=tracker,
+    )
+    window_queue = get_state(client.application).ui_channel_broadcaster.register()
+
+    tracker.record_failure(agent_id)
+    assert tracker.get_health(agent_id) == AgentHealth.HEALTHY
+    tracker.record_probe_success(agent_id)
+    tracker.record_probe_success(agent_id)
+
+    assert _drain_refresh_frames(window_queue) == []
 
 
 def test_operation_status_unknown_create_id_returns_404(tmp_path: Path) -> None:
@@ -1364,11 +1541,13 @@ class FakeSharingCli(FakeImbueCloudCli):
     share: ShareCliInfo | None = None
     created_shares: list[str] = Field(default_factory=list)
     deleted_shares: list[str] = Field(default_factory=list)
+    share_status_call_count: int = Field(default=0, description="How many times get_share_status was consulted")
     create_share_error: str | None = Field(
         default=None, description="When set, create_share raises an ImbueCloudCliError with this message"
     )
 
     def get_share_status(self, *, account: str, host_id: str) -> ShareCliInfo | None:
+        self.share_status_call_count += 1
         if self.share is None:
             return None
         # The status document never carries the relay token (only create does).
@@ -1377,13 +1556,20 @@ class FakeSharingCli(FakeImbueCloudCli):
             workspace_domain=self.share.workspace_domain,
             region=self.share.region,
             state=self.share.state,
-            relay_endpoint=self.share.relay_endpoint,
+            relay_endpoints=self.share.relay_endpoints,
             relay_token=None,
             last_tunnel_login_at=self.share.last_tunnel_login_at,
             cert_not_after=self.share.cert_not_after,
         )
 
-    def create_share(self, *, account: str, host_id: str) -> ShareCliInfo:
+    def create_share(
+        self,
+        *,
+        account: str,
+        host_id: str,
+        entry_label: str | None = None,
+        preferred_region: str | None = None,
+    ) -> ShareCliInfo:
         if self.create_share_error is not None:
             raise ImbueCloudCliError(self.create_share_error)
         self.created_shares.append(host_id)
@@ -1392,7 +1578,7 @@ class FakeSharingCli(FakeImbueCloudCli):
             workspace_domain=f"{host_id}.owner1234.us1.shares.example",
             region="us1",
             state="active",
-            relay_endpoint="relay-us1.shares.example:7000",
+            relay_endpoints=TEST_RELAY_ENDPOINTS,
             relay_token=SecretStr("relay-token-abc"),
         )
         return self.share
@@ -1405,7 +1591,7 @@ class FakeSharingCli(FakeImbueCloudCli):
                 workspace_domain=self.share.workspace_domain,
                 region=self.share.region,
                 state="inactive",
-                relay_endpoint=self.share.relay_endpoint,
+                relay_endpoints=self.share.relay_endpoints,
                 relay_token=self.share.relay_token,
                 last_tunnel_login_at=self.share.last_tunnel_login_at,
                 cert_not_after=self.share.cert_not_after,
@@ -1816,7 +2002,7 @@ def _active_share(host_id: str = _TEST_HOST_ID) -> ShareCliInfo:
         workspace_domain=f"{host_id}.owner1234.us1.shares.example",
         region="us1",
         state="active",
-        relay_endpoint="relay-us1.shares.example:7000",
+        relay_endpoints=TEST_RELAY_ENDPOINTS,
     )
 
 
@@ -1868,6 +2054,35 @@ def test_machine_sharing_status_reports_unknown_grants_when_the_read_fails(tmp_p
     assert body["grants"] is None
 
 
+class _ShareProbeCaller(RecordingMngrCaller):
+    """Recording caller answering the enable flow's one-exec share state probe.
+
+    The probe command is recognized by its marker prefix; every other call
+    (the combined write exec) keeps the canned default result. ``grants_stdout``
+    is the current grants document ('' plays the absent-document case).
+    """
+
+    is_gateway_present: bool = Field(default=True, description="Whether the probe reports the share gateway")
+    is_share_env_present: bool = Field(default=False, description="Whether the probe reports share.env present")
+    grants_stdout: str = Field(default="", description="The current grants document; '' means absent")
+
+    def call(
+        self,
+        argv: Sequence[str],
+        timeout: float | None = None,
+        env_overrides: Mapping[str, str] | None = None,
+        cwd: Path | None = None,
+    ) -> MngrCallResult:
+        result = super().call(argv, timeout=timeout, env_overrides=env_overrides, cwd=cwd)
+        if any("MNGR_SHARE_GATEWAY" in part for part in argv):
+            return make_share_probe_result(
+                is_gateway_present=self.is_gateway_present,
+                is_share_env_present=self.is_share_env_present,
+                grants_toml_text=self.grants_stdout or None,
+            )
+        return result
+
+
 class _GrantsReadCaller(RecordingMngrCaller):
     """Recording caller that answers the grants read with a proper exec JSON envelope.
 
@@ -1911,7 +2126,10 @@ def test_machine_sharing_status_reports_unknown_grants_when_the_document_is_malf
 
 def test_machine_sharing_put_refuses_to_replace_a_malformed_grants_document(tmp_path: Path) -> None:
     agent_id = AgentId()
-    cli = _fake_sharing_cli(share=_active_share(), mngr_caller=_GrantsReadCaller(grants_stdout="not toml [["))
+    cli = _fake_sharing_cli(
+        share=_active_share(),
+        mngr_caller=_ShareProbeCaller(is_share_env_present=True, grants_stdout="not toml [["),
+    )
     client = _sharing_client(tmp_path, agent_id, cli)
 
     response = client.put(
@@ -1930,7 +2148,7 @@ def test_machine_sharing_put_refuses_to_replace_a_malformed_grants_document(tmp_
 
 def test_machine_sharing_put_enables_and_injects_materials(tmp_path: Path) -> None:
     agent_id = AgentId()
-    cli = _fake_sharing_cli()
+    cli = _fake_sharing_cli(mngr_caller=_ShareProbeCaller())
     client = _sharing_client(tmp_path, agent_id, cli)
 
     response = client.put(
@@ -1945,8 +2163,8 @@ def test_machine_sharing_put_enables_and_injects_materials(tmp_path: Path) -> No
     assert body["url"] == f"https://{_TEST_HOST_ID}.owner1234.us1.shares.example/"
     assert body["grants"]["workspace"]["emails"] == ["viewer@example.com"]
     assert cli.created_shares == [_TEST_HOST_ID]
-    # The materials + grants writes ride over the recording mngr caller: one
-    # exec for the grants file, one for share.env.
+    # The grants + owner email + share.env writes ride over the recording mngr
+    # caller in a single combined exec.
     recorded = _recorded_mngr_calls(cli)
     assert any("share_grants.toml" in " ".join(argv) for argv in recorded)
     assert any("share.env" in " ".join(argv) for argv in recorded)
@@ -1954,8 +2172,9 @@ def test_machine_sharing_put_enables_and_injects_materials(tmp_path: Path) -> No
 
 def test_machine_sharing_put_on_active_share_updates_grants_without_rotation(tmp_path: Path) -> None:
     agent_id = AgentId()
-    # The guard read before the replace sees no existing document (fresh envelope).
-    cli = _fake_sharing_cli(share=_active_share(), mngr_caller=_GrantsReadCaller())
+    # The probe reports materials present with no existing document, so the
+    # guard sees nothing to protect and the grants-only path runs.
+    cli = _fake_sharing_cli(share=_active_share(), mngr_caller=_ShareProbeCaller(is_share_env_present=True))
     client = _sharing_client(tmp_path, agent_id, cli)
 
     response = client.put(
@@ -1971,26 +2190,6 @@ def test_machine_sharing_put_on_active_share_updates_grants_without_rotation(tmp
     assert not any("share.env" in " ".join(argv) and "printf" in " ".join(argv) for argv in recorded)
 
 
-class _SharePresenceProbeFailingCaller(RecordingMngrCaller):
-    """Recording caller whose share-materials presence probe reports absent.
-
-    Every other mngr call (grants + share.env writes) still succeeds, so the
-    repair path can be observed end to end.
-    """
-
-    def call(
-        self,
-        argv: Sequence[str],
-        timeout: float | None = None,
-        env_overrides: Mapping[str, str] | None = None,
-        cwd: Path | None = None,
-    ) -> MngrCallResult:
-        result = super().call(argv, timeout=timeout, env_overrides=env_overrides, cwd=cwd)
-        if any("test -f" in part for part in argv):
-            return MngrCallResult(returncode=1)
-        return result
-
-
 def test_machine_sharing_put_reprovisions_an_active_share_whose_materials_are_missing(tmp_path: Path) -> None:
     """An enable that failed between the connector create and the injection must be repairable.
 
@@ -2000,7 +2199,7 @@ def test_machine_sharing_put_reprovisions_an_active_share_whose_materials_are_mi
     the share row and rotates the token) and inject the materials.
     """
     agent_id = AgentId()
-    cli = _fake_sharing_cli(share=_active_share(), mngr_caller=_SharePresenceProbeFailingCaller())
+    cli = _fake_sharing_cli(share=_active_share(), mngr_caller=_ShareProbeCaller(is_share_env_present=False))
     client = _sharing_client(tmp_path, agent_id, cli)
 
     response = client.put(
@@ -2033,7 +2232,7 @@ def test_machine_sharing_put_rejects_empty_grants(tmp_path: Path) -> None:
 
 def test_machine_sharing_put_surfaces_connector_errors(tmp_path: Path) -> None:
     agent_id = AgentId()
-    cli = _fake_sharing_cli(create_share_error="shares create failed (exit 1)")
+    cli = _fake_sharing_cli(create_share_error="shares create failed (exit 1)", mngr_caller=_ShareProbeCaller())
     client = _sharing_client(tmp_path, agent_id, cli)
 
     response = client.put(
@@ -2105,22 +2304,61 @@ def test_machine_sharing_readiness_ready_when_shell_label_origin_answers(tmp_pat
     response = client.get(f"/api/v1/machines/{_TEST_HOST_ID}/sharing/readiness", headers=_auth_header())
 
     assert response.status_code == 200
-    assert json.loads(response.data) == {"ready": True}
+    assert json.loads(response.data) == {"ready": True, "cert_not_after": None, "last_tunnel_login_at": None}
     # It probed the shell LABEL origin, never the bare machine domain.
     assert probed_hosts == [f"system_interface-shl1.{_active_share().workspace_domain}"]
 
 
-def test_machine_sharing_readiness_not_ready_when_shell_label_unknown(tmp_path: Path) -> None:
-    # Enabled share, but the workspace has not registered its shell service yet,
-    # so there is no routable origin to probe -- report not-ready.
+def test_machine_sharing_readiness_polls_reuse_the_cached_share_lookup(tmp_path: Path) -> None:
+    # The readiness poll fires every ~2 seconds; each uncached share lookup is
+    # a multi-second CLI subprocess, so back-to-back polls must reuse one
+    # lookup (the TLS probe below is the only per-tick work).
     agent_id = AgentId()
     cli = _fake_sharing_cli(share=_active_share())
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(302, headers={"location": "https://accounts.example/share/authorize"})
+
+    http_client = httpx.Client(transport=httpx.MockTransport(_handler), follow_redirects=False)
+    client = _sharing_client(
+        tmp_path,
+        agent_id,
+        cli,
+        http_client=http_client,
+        service_logs={
+            str(agent_id): make_service_log("system_interface", "http://localhost:8000", "system_interface-shl1")
+        },
+    )
+
+    first = client.get(f"/api/v1/machines/{_TEST_HOST_ID}/sharing/readiness", headers=_auth_header())
+    second = client.get(f"/api/v1/machines/{_TEST_HOST_ID}/sharing/readiness", headers=_auth_header())
+
+    assert json.loads(first.data)["ready"] is True
+    assert json.loads(second.data)["ready"] is True
+    assert cli.share_status_call_count == 1
+
+
+def test_machine_sharing_readiness_not_ready_when_shell_label_unknown(tmp_path: Path) -> None:
+    # Enabled share, but the workspace has not registered its shell service yet,
+    # so there is no routable origin to probe -- report not-ready, but still
+    # surface the per-step provisioning signals from the share record.
+    agent_id = AgentId()
+    bare_share = _active_share()
+    share = bare_share.model_copy_update(
+        to_update(bare_share.field_ref().cert_not_after, "2027-01-01 00:00:00+00:00"),
+        to_update(bare_share.field_ref().last_tunnel_login_at, "2026-08-13 12:00:00+00:00"),
+    )
+    cli = _fake_sharing_cli(share=share)
     client = _sharing_client(tmp_path, agent_id, cli, http_client=httpx.Client())
 
     response = client.get(f"/api/v1/machines/{_TEST_HOST_ID}/sharing/readiness", headers=_auth_header())
 
     assert response.status_code == 200
-    assert json.loads(response.data) == {"ready": False}
+    assert json.loads(response.data) == {
+        "ready": False,
+        "cert_not_after": "2027-01-01 00:00:00+00:00",
+        "last_tunnel_login_at": "2026-08-13 12:00:00+00:00",
+    }
 
 
 def test_machine_sharing_readiness_not_ready_when_disabled(tmp_path: Path) -> None:
@@ -2130,7 +2368,7 @@ def test_machine_sharing_readiness_not_ready_when_disabled(tmp_path: Path) -> No
     response = client.get(f"/api/v1/machines/{_TEST_HOST_ID}/sharing/readiness", headers=_auth_header())
 
     assert response.status_code == 200
-    assert json.loads(response.data) == {"ready": False}
+    assert json.loads(response.data) == {"ready": False, "cert_not_after": None, "last_tunnel_login_at": None}
 
 
 def test_machine_sharing_readiness_not_ready_without_http_client(tmp_path: Path) -> None:
@@ -2140,7 +2378,7 @@ def test_machine_sharing_readiness_not_ready_without_http_client(tmp_path: Path)
     response = client.get(f"/api/v1/machines/{_TEST_HOST_ID}/sharing/readiness", headers=_auth_header())
 
     assert response.status_code == 200
-    assert json.loads(response.data) == {"ready": False}
+    assert json.loads(response.data) == {"ready": False, "cert_not_after": None, "last_tunnel_login_at": None}
 
 
 # -- Workspace recovery: health probe + restart --

@@ -33,15 +33,20 @@ describe("classifyRoute", () => {
     expect(classifyRoute("/workspace/agent-ab12/options", "tab=settings&group=backup").activeTab).toBe(
       "settings",
     );
+    expect(classifyRoute("/workspace/agent-ab12/options", "tab=permissions").activeTab).toBe("permissions");
+    expect(
+      classifyRoute("/workspace/agent-ab12/options", "tab=permissions&section=local-files").activeTab,
+    ).toBe("permissions");
+    expect(classifyRoute("/workspace/agent-ab12/options", "tab=nonsense").activeTab).toBe("share");
   });
 
   it("labels hub pages and back visibility like the legacy chrome", () => {
     expect(classifyRoute("/create")).toMatchObject({ kind: "page", pageLabel: "New machine", isBackShown: true });
     expect(classifyRoute("/creating/agent-ff00")).toMatchObject({ kind: "page", isBackShown: false });
-    // Inspiration over a machine is that machine's modal; standalone it is a
+    // Template over a machine is that machine's modal; standalone it is a
     // plain New machine page (until it redirects to the create form).
-    expect(classifyRoute("/create/inspiration")).toMatchObject({ kind: "page", pageLabel: "New machine", isBackShown: false });
-    expect(classifyRoute("/create/inspiration", "workspace=agent-ab12")).toMatchObject({
+    expect(classifyRoute("/create/template")).toMatchObject({ kind: "page", pageLabel: "New machine", isBackShown: false });
+    expect(classifyRoute("/create/template", "workspace=agent-ab12")).toMatchObject({
       kind: "workspace",
       workspaceAnyId: "agent-ab12",
     });
@@ -97,18 +102,18 @@ describe("app overlay routing", () => {
     expect(isAppOverlayPath("/workspace/agent-ab12")).toBe(false);
   });
 
-  it("reads the workspace behind /help, /inbox, the inspiration modal, and AI-keys from ?workspace only", () => {
+  it("reads the workspace behind /help, /inbox, the template modal, and AI-keys from ?workspace only", () => {
     expect(overlayBehindWorkspaceId("/help", "workspace=agent-ab12")).toBe("agent-ab12");
     expect(overlayBehindWorkspaceId("/help", "workspace=host-99aa")).toBe("host-99aa");
     expect(overlayBehindWorkspaceId("/help", "")).toBeNull();
     expect(overlayBehindWorkspaceId("/help", "workspace=not-an-id")).toBeNull();
-    // The inbox drawer floats over the workspace it was opened from, or Home.
+    // The request popup floats over the workspace it was opened from, or Home.
     expect(overlayBehindWorkspaceId("/inbox", "workspace=agent-ab12")).toBe("agent-ab12");
     expect(overlayBehindWorkspaceId("/inbox", "")).toBeNull();
-    // The New machine inspiration stepper floats over the machine it was opened
+    // The New machine template stepper floats over the machine it was opened
     // from; with none it redirects to the create form (no behind-workspace).
-    expect(overlayBehindWorkspaceId("/create/inspiration", "workspace=agent-ab12")).toBe("agent-ab12");
-    expect(overlayBehindWorkspaceId("/create/inspiration", "")).toBeNull();
+    expect(overlayBehindWorkspaceId("/create/template", "workspace=agent-ab12")).toBe("agent-ab12");
+    expect(overlayBehindWorkspaceId("/create/template", "")).toBeNull();
     // The AI-keys mint dialog floats over the machine that opened it, keyed by
     // that machine's HOST id (the mint endpoint resolves the account from it).
     expect(overlayBehindWorkspaceId("/settings/ai-keys", "workspace=host-99aa")).toBe("host-99aa");

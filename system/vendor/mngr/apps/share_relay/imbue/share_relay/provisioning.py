@@ -41,9 +41,9 @@ class _InstanceNotActiveYetError(ShareRelayError):
 
 
 @pure
-def build_relay_instance_name(env_name: str, region: RegionCode) -> str:
-    """The canonical instance name for one env+region relay."""
-    return f"share-relay-{env_name}-{region}"
+def build_relay_instance_name(env_name: str, region: RegionCode, ordinal: int) -> str:
+    """The canonical instance name for one relay: env + region + ordinal (regions run several relays)."""
+    return f"share-relay-{env_name}-{region}-{ordinal}"
 
 
 @pure

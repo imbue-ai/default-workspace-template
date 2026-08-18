@@ -17,6 +17,7 @@ resolve or export.
 import json
 import os
 import re
+import shutil
 import subprocess
 import urllib.request
 from pathlib import Path
@@ -24,6 +25,11 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from loguru import logger
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_fixed
+
+from bootstrap.claude_state_migration import (
+    LEGACY_ROOT_HOME,
+    migrate_legacy_claude_state,
+)
 
 # Path (relative to the repo root, which is bootstrap's cwd) of the supervisord
 # config that defines every background service.
@@ -47,13 +53,26 @@ _CRON_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 # Signal file gating exactly-once creation of the initial chat agent. Lives
 # under data/.state/, which persists with the container volume.
 INITIAL_CHAT_SIGNAL = STATE_DIR / "initial_chat_created"
-# The workspace's fast-mode decision, written by the system interface when the user
-# answers the fast-mode prompt. Its `fast_mode_policy.py` owns the format; this
-# path is repeated (not imported) to keep bootstrap's dependencies minimal.
-FAST_MODE_DECISION_FILE = STATE_DIR / "fast_mode_decision.json"
 # Basename (under $MNGR_HOST_DIR) of the file holding the initial chat agent's id,
 # read by system_interface's welcome_resend to address the resend by id.
 INITIAL_CHAT_AGENT_ID_FILENAME = "initial_chat_agent_id"
+# The human-readable name the workspace's first chat is created under, carried
+# as the agent's `display_name` label. The system interface reads the label as
+# the chat's display name and numbers later chats against it ("Chat 2", ...).
+_INITIAL_CHAT_DISPLAY_NAME = "Chat 1"
+# The agent name that display name canonicalizes to. Passed literally rather
+# than letting mngr derive it: a workspace's vendored mngr may predate
+# canonicalization, and a name it rejects would fail the first-boot chat create
+# outright. Both names are sent -- the canonical one as the agent name, the
+# human one as the ``display_name`` label -- which every mngr version accepts
+# and which satisfies newer mngr's rule that the true name is the canonical
+# form of the display name.
+_INITIAL_CHAT_AGENT_NAME = "Chat-1"
+# The view the first chat is filed in: the starter project the workspace seeds.
+# Duplicated from system_interface's ``projects.DEFAULT_PROJECT_ID`` rather than
+# imported, to keep this one-shot first-boot program's dependencies minimal (the
+# same trade ``FAST_MODE_DECISION_FILE`` makes above).
+_STARTER_PROJECT_ID = "project-1"
 
 # Env var names used by the bootstrap's responsibilities.
 _AGENT_ID_ENV_VAR = "MNGR_AGENT_ID"
@@ -133,63 +152,39 @@ def _read_main_agent_labels() -> dict[str, str]:
     return {str(k): str(v) for k, v in labels.items()}
 
 
-def _read_workspace_fast_mode_enabled() -> bool:
-    """Whether new chat agents should launch with fast mode on.
-
-    Reads the same decision file the system interface writes when the user
-    answers the fast-mode prompt (see its `fast_mode_policy.py`, which owns the
-    format). Unanswered -- the normal case on first boot -- means fast, so the
-    opening conversation is responsive. Bootstrap parses it directly rather than
-    importing the system interface, which is a far heavier dependency than this
-    one-shot first-boot program should carry.
-    """
-    try:
-        raw = FAST_MODE_DECISION_FILE.read_text()
-    except FileNotFoundError:
-        return True
-    except OSError as e:
-        logger.warning(
-            "Failed to read fast-mode decision {}: {}", FAST_MODE_DECISION_FILE, e
-        )
-        return True
-    try:
-        decision = json.loads(raw)
-    except json.JSONDecodeError as e:
-        logger.warning(
-            "Ignored malformed fast-mode decision {}: {}", FAST_MODE_DECISION_FILE, e
-        )
-        return True
-    is_enabled = (
-        decision.get("is_fast_mode_enabled") if isinstance(decision, dict) else None
-    )
-    if not isinstance(is_enabled, bool):
-        # Unlike an absent file, this is a format skew with the writer, and the
-        # fallback below is the setting that costs money -- say so.
-        logger.warning(
-            "Ignored fast-mode decision {} with no boolean is_fast_mode_enabled: {}",
-            FAST_MODE_DECISION_FILE,
-            raw,
-        )
-        return True
-    return is_enabled
-
-
-def _build_create_chat_command(
-    host_name: str, labels: dict[str, str], is_fast_mode_enabled: bool
-) -> list[str]:
+def _build_create_chat_command(labels: dict[str, str]) -> list[str]:
     """Build the `mngr create` argv for the initial chat agent.
 
     Mirrors the New Agent button's create path (see
     system/apps/system_interface/.../agent_manager.py:create_chat_agent): the
-    `chat` template, no-connect, and the inherited `project` label when
-    present on the services agent. Adds `--message /welcome`, which used to
-    live on `create_templates.main`. The chat agent belongs to its workspace
-    by virtue of sharing the host; it carries no `workspace` label.
+    harness chosen via `--type claude`, the `first` + `chat` role templates,
+    no-connect, and the inherited `project` label when present on the services
+    agent. The `first` template carries everything unique to the workspace's
+    opening chat -- the `/welcome` message, the `first=true` label, and the
+    fast-mode launch settings (see `[create_templates.first]` in
+    .mngr/settings.toml). The chat agent belongs to its workspace by virtue of
+    sharing the host; it carries no `workspace` label.
+
+    The positional is the new agent's NAME, and the host is implicit: this
+    runs inside the workspace, so mngr creates on the local host. (Passing
+    `host_name` here is what used to name the first chat after its workspace,
+    e.g. `p7` -- it was never targeting a host, and writing `NAME@<host_name>`
+    would ask mngr for a host by that name and fail with "Could not find
+    host".)
+
+    Both halves of the chat's name are sent explicitly: the canonical
+    `Chat-1` as the agent name and `Chat 1` as the `display_name` label.
+    Passing the canonical form rather than letting mngr derive it from
+    "Chat 1" is deliberate -- a workspace's vendored mngr may predate
+    free-form names and would reject the spaced form outright, failing the
+    first-boot chat create. The pair is what newer mngr produces for itself,
+    so its rule that the true name is the canonical form of the display name
+    holds either way.
     """
     cmd: list[str] = [
         "mngr",
         "create",
-        host_name,
+        _INITIAL_CHAT_AGENT_NAME,
         # `--transfer none` matches what `AgentManager.create_chat_agent`
         # uses for the "New Chat" button (system/apps/system_interface/.../
         # agent_manager.py). Without it, mngr defaults to creating a
@@ -200,30 +195,30 @@ def _build_create_chat_command(
         # already exists". With --transfer none the chat agent reuses
         # the services agent's /home/user/workspace/ as its work_dir, which is what we
         # want (one workspace == one work_dir, shared across all chats).
-        "--transfer",
-        "none",
+        "--type",
+        "claude",
+        "--template",
+        "first",
         "--template",
         "chat",
-        "--message",
-        "/welcome",
         # Tags the initial chat as a user-created agent so the OOM agent-tagging
         # hook puts it in the protected user-agent band (matching the New Chat /
         # New Agent paths in system/apps/system_interface).
         "--label",
         "user_created=true",
-        # Chat is the only interactive agent type, so it is the only one that
-        # starts fast; .mngr/settings.toml defaults every other type to standard
-        # speed. See that file's [agent_types.claude] note for why the override
-        # targets `claude` rather than `chat`.
-        "-S",
-        f"agent_types.claude.settings_overrides.fastMode={str(is_fast_mode_enabled).lower()}",
+        "--label",
+        f"display_name={_INITIAL_CHAT_DISPLAY_NAME}",
         "--no-connect",
         "--format",
         "json",
     ]
-    project = labels.get("project")
-    if project:
-        cmd.extend(["--label", f"project={project}"])
+    # The view this chat starts out filed in. The workspace's starter project is
+    # where the first chat lives, and naming it explicitly matters: the services
+    # agent's own ``project`` label is mngr's -- the repo it works on, e.g.
+    # ``default-workspace-template`` -- and inheriting that gave the first chat
+    # a label that names no view at all, so work it started landed in whatever
+    # view the user was looking at instead of its own.
+    cmd.extend(["--label", f"project={_STARTER_PROJECT_ID}"])
     return cmd
 
 
@@ -265,11 +260,9 @@ def _persist_initial_chat_agent_id(agent_id: str) -> None:
     logger.info("Persisted initial chat agent id {} for welcome resend", agent_id)
 
 
-def _create_initial_chat_agent(host_name: str, labels: dict[str, str]) -> bool:
+def _create_initial_chat_agent(labels: dict[str, str]) -> bool:
     """Invoke `mngr create` for the initial chat agent; persist its id. Returns success."""
-    cmd = _build_create_chat_command(
-        host_name, labels, _read_workspace_fast_mode_enabled()
-    )
+    cmd = _build_create_chat_command(labels)
     logger.info("Creating initial chat agent: {}", " ".join(cmd))
     result = subprocess.run(cmd, capture_output=True, text=True, check=False)
     if result.returncode != 0:
@@ -399,15 +392,18 @@ def _maybe_create_initial_chat() -> None:
             "Signal file {} present; skipping initial chat create", INITIAL_CHAT_SIGNAL
         )
         return
-    host_name = _read_host_name()
-    if not host_name:
+    # Readiness check rather than a create input: the create names only the
+    # agent (the host is implicit -- this runs inside it), but an unreadable
+    # host data.json means mngr state is not set up yet, so creating now would
+    # fail anyway.
+    if not _read_host_name():
         logger.warning(
             "Could not resolve host_name; skipping initial chat agent create"
         )
         return
     _initialize_workspace_main_branch()
     labels = _read_main_agent_labels()
-    if not _create_initial_chat_agent(host_name, labels):
+    if not _create_initial_chat_agent(labels):
         return
     _touch_signal()
     logger.info("Wrote signal file {}", INITIAL_CHAT_SIGNAL)
@@ -599,6 +595,57 @@ def _ensure_supervisor_log_dir() -> None:
         )
 
 
+# Bound on the boot-time venv converge. A venv that already matches the
+# lockfile no-ops in well under a second; a genuinely drifted one (image bake
+# older than the landed branch tip) reinstalls from uv's baked warm cache,
+# which stays comfortably inside this bound.
+_UV_SYNC_TIMEOUT_SECONDS = 600.0
+
+
+def _sync_workspace_venv() -> None:
+    """Converge the workspace .venv to the landed lockfile before any agent runs.
+
+    The venv is a bake-time artifact (build_workspace.sh at image build / host
+    provisioning) while the working tree is a landing-time artifact (the
+    create's git-mirror checkout) -- and on docker and pool-lease hosts nothing
+    re-runs the sync at create, so the two can disagree whenever the baked
+    image lags the landed branch. Left alone, the FIRST implicit ``uv run``
+    sync reconciles them lazily: mid-boot, concurrent with the services and
+    the initial chat agent, and with root-closure scope rather than
+    --all-packages. Whatever imports from the venv during that rewrite window
+    fails intermittently (ModuleNotFoundError for imbue_common and friends).
+
+    Converging here -- once, up front, before the chat agent exists and before
+    supervisord starts anything -- removes both the race window and the scope
+    gap; every later implicit sync then no-ops. ``--frozen`` asserts the
+    committed lockfile is canonical, matching build_workspace.sh. Best-effort:
+    a failure is logged loudly but never blocks boot (the per-``uv run``
+    implicit syncs remain the fallback).
+    """
+    try:
+        result = subprocess.run(
+            ["uv", "sync", "--all-packages", "--frozen"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_UV_SYNC_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        logger.error(
+            "uv sync --all-packages timed out after {}s; continuing boot",
+            _UV_SYNC_TIMEOUT_SECONDS,
+        )
+        return
+    if result.returncode != 0:
+        logger.error(
+            "uv sync --all-packages failed (rc={}): {}",
+            result.returncode,
+            (result.stderr or result.stdout).strip()[-500:],
+        )
+        return
+    logger.info("Workspace venv converged (uv sync --all-packages --frozen)")
+
+
 def _exec_supervisord() -> None:
     """Replace this process with supervisord running in the foreground.
 
@@ -609,6 +656,57 @@ def _exec_supervisord() -> None:
     """
     logger.info("Launching supervisord with config {}", SUPERVISORD_CONF)
     os.execvp("supervisord", ["supervisord", "-n", "-c", str(SUPERVISORD_CONF)])
+
+
+# Bound on the boot-time venv converge. A venv that already matches the
+# lockfile no-ops in well under a second; a genuinely drifted one (image bake
+# older than the landed branch tip) reinstalls from uv's baked warm cache,
+# which stays comfortably inside this bound.
+_UV_SYNC_TIMEOUT_SECONDS = 600.0
+
+
+def _sync_workspace_venv() -> None:
+    """Converge the workspace .venv to the landed lockfile before any agent runs.
+
+    The venv is a bake-time artifact (build_workspace.sh at image build / host
+    provisioning) while the working tree is a landing-time artifact (the
+    create's git-mirror checkout) -- and on docker and pool-lease hosts nothing
+    re-runs the sync at create, so the two can disagree whenever the baked
+    image lags the landed branch. Left alone, the FIRST implicit ``uv run``
+    sync reconciles them lazily: mid-boot, concurrent with the services and
+    the initial chat agent, and with root-closure scope rather than
+    --all-packages. Whatever imports from the venv during that rewrite window
+    fails intermittently (ModuleNotFoundError for imbue_common and friends).
+
+    Converging here -- once, up front, before the chat agent exists and before
+    supervisord starts anything -- removes both the race window and the scope
+    gap; every later implicit sync then no-ops. ``--frozen`` asserts the
+    committed lockfile is canonical, matching build_workspace.sh. Best-effort:
+    a failure is logged loudly but never blocks boot (the per-``uv run``
+    implicit syncs remain the fallback).
+    """
+    try:
+        result = subprocess.run(
+            ["uv", "sync", "--all-packages", "--frozen"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_UV_SYNC_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        logger.error(
+            "uv sync --all-packages timed out after {}s; continuing boot",
+            _UV_SYNC_TIMEOUT_SECONDS,
+        )
+        return
+    if result.returncode != 0:
+        logger.error(
+            "uv sync --all-packages failed (rc={}): {}",
+            result.returncode,
+            (result.stderr or result.stdout).strip()[-500:],
+        )
+        return
+    logger.info("Workspace venv converged (uv sync --all-packages --frozen)")
 
 
 def _run_env_converge_fast_phase() -> None:
@@ -634,12 +732,38 @@ def _run_env_converge_fast_phase() -> None:
         )
 
 
+def _migrate_legacy_claude_state_best_effort() -> None:
+    """Heal pre-/home/user-layout workspaces whose claude state is root-homed.
+
+    Must run before supervisord starts (the services would otherwise create
+    fresh state at the new location) and before the initial chat agent could
+    exist. Best-effort: a failure is logged loudly but never blocks boot --
+    the state stays where it was, and the next boot retries.
+    """
+    try:
+        migrate_legacy_claude_state(LEGACY_ROOT_HOME, Path.home())
+    except (OSError, shutil.Error) as e:
+        logger.opt(exception=e).error(
+            "Failed to migrate legacy claude state; continuing boot"
+        )
+
+
 def main() -> None:
     logger.info("Bootstrap starting: first-boot setup, then supervisord")
+
+    # Move any root-homed claude state (pre-/home/user-layout workspaces) into
+    # the current home BEFORE anything claude-related starts, so an updated
+    # workspace keeps its chat history and sign-in.
+    _migrate_legacy_claude_state_best_effort()
 
     # Apply the global git config (https rewrites) before any service or
     # agent runs git.
     _configure_git_global()
+
+    # Converge the workspace venv BEFORE the initial chat agent is created
+    # (below) and before supervisord's `uv run` services start, so nothing
+    # races the reconcile or runs against a bake-stale venv.
+    _sync_workspace_venv()
 
     # Set the container clock to the user's timezone so cron schedules run in
     # their local time. Must precede _exec_supervisord: cron reads the

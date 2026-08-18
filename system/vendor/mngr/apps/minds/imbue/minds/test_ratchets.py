@@ -31,7 +31,7 @@ def test_prevent_while_true() -> None:
 
 
 def test_prevent_time_sleep() -> None:
-    # Six matches: ``destroying_test.py`` (a real test poll loop),
+    # Justified matches: ``destroying_test.py`` (a real test poll loop),
     # ``cli/env.py::_exec_into_recover`` (the 5-second auto-rollback
     # countdown -- a deliberate user-facing pause so the operator can
     # Ctrl-C if they want to intervene before recover fires),
@@ -50,8 +50,11 @@ def test_prevent_time_sleep() -> None:
     # serving traffic; same Modal swap-window justification), and
     # ``deployment_tests/test_litellm_via_workspace.py::_await_key_spend``
     # (polling the env's litellm Postgres spend table until the proxy's
-    # asynchronous spend flush lands -- no event-driven alternative).
-    rc.check_time_sleep(_DIR, snapshot(10))
+    # asynchronous spend flush lands -- no event-driven alternative), and
+    # ``deployment_tests/test_relay_fleet.py`` (deadline-bounded healthz
+    # poll after restarting a stopped relay's frps -- pacing probes of a
+    # real remote service; no event-driven alternative).
+    rc.check_time_sleep(_DIR, snapshot(11))
 
 
 def test_prevent_global_keyword() -> None:
@@ -81,6 +84,10 @@ def test_prevent_broad_exception_catch() -> None:
     # the same reason: it is the only publisher of chrome state, so an unexpected
     # exception in one pass must be logged (with traceback) and survived rather
     # than silently freezing every window's state for the process lifetime.
+    # ``WebAccessEnabler.__call__`` carries the same guard for the same reason: it
+    # is a best-effort post-create side effect running in the create worker, so an
+    # unexpected failure must be logged (with traceback) and survived rather than
+    # crashing the worker and skipping the create's remaining steps.
     rc.check_broad_exception_catch(_DIR, snapshot(11))
 
 
@@ -96,7 +103,7 @@ def test_prevent_silent_decode_error_catches() -> None:
     # The added catch is ``build_info.py`` parsing the desktop app's package.json
     # for the Sentry release id: a malformed file degrades to a fallback version
     # (logged at debug) rather than crashing startup.
-    rc.check_silent_decode_error_catches(_DIR, snapshot(4))
+    rc.check_silent_decode_error_catches(_DIR, snapshot(3))
 
 
 # --- Import style ---
@@ -381,10 +388,10 @@ def test_prevent_if_elif_without_else() -> None:
 
 def test_prevent_inline_functions() -> None:
     # The remaining inline functions are closures that capture the local state they were
-    # defined next to: the SSE generator and its watch callbacks plus the unhandled-exception
-    # hook in app.py, a thread target in api_v1.py, the signal handler in server.py, the WSGI
-    # app in webdav.py, and the ``record_loss`` helper in the ported Sentry HTTP transport.
-    rc.check_inline_functions(_DIR, snapshot(7))
+    # defined next to: the unhandled-exception hook and the health-edge publisher in app.py,
+    # a thread target in api_v1.py, the signal handler in server.py, the WSGI app in
+    # webdav.py, and the per-service probe body in permission_overview.py.
+    rc.check_inline_functions(_DIR, snapshot(6))
 
 
 def test_prevent_underscore_imports() -> None:

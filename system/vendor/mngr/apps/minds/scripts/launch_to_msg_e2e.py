@@ -88,9 +88,11 @@ from loguru import logger
 # `--remote-debugging-port=<N>` so its Chromium DevTools endpoint is reachable,
 # then `chromium.connect_over_cdp()`. Same API for pages, locators, etc.
 from playwright.sync_api import BrowserContext
+from playwright.sync_api import ConsoleMessage
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Frame
 from playwright.sync_api import Page
+from playwright.sync_api import WebError
 from playwright.sync_api import sync_playwright
 from pydantic import BaseModel
 from pydantic import ConfigDict
@@ -674,8 +676,9 @@ def _wait_cdp(port: int, timeout: float = 60.0) -> str:
 def dismiss_consent_if_present(page: Page, *, timeout: float = 8_000) -> bool:
     """Answer the "Help improve Minds" consent screen if it is up. True if dismissed.
 
-    Consent.jinja takes over the page while ``error_reporting_consent_given`` is
-    False, which it always is on a wiped ~/.minds. It is not once-per-run: it can
+    The SPA consent screen (ConsentPage) takes over the page while
+    ``error_reporting_consent_given`` is False, which it always is on a wiped
+    ~/.minds. It is not once-per-run: it can
     be back on a later ``goto("/")``, and a caller that assumed otherwise spent
     the rest of the run driving a dialog it thought was the home page.
     """
@@ -779,6 +782,40 @@ def live_url(target: Page | Frame) -> str:
     with contextlib.suppress(Exception):
         return target.url
     return ""
+
+
+def _log_console_message(message: ConsoleMessage) -> None:
+    """Mirror a page's console errors and warnings into the run log, tagged with the emitting script and line.
+
+    Electron forwards only its main process's console to electron.log, so a
+    workspace page's own `console.error` -- the app's own account of a failure
+    -- lands nowhere the CI artifacts can show.
+    """
+    if message.type not in ("error", "warning"):
+        return
+    source = message.location
+    # Playwright reports the line 0-based.
+    origin = f"{source['url']}:{source['lineNumber'] + 1}" if source["url"] else "?"
+    logger.warning("[renderer:{}] {}: {}", message.type, origin, message.text)
+
+
+def _log_web_error(web_error: WebError) -> None:
+    """Mirror a page's uncaught exceptions into the run log."""
+    error = web_error.error
+    logger.warning("[renderer:pageerror] {}", error.stack or error.message)
+
+
+def capture_renderer_diagnostics(ctx: BrowserContext) -> None:
+    """Log console errors, warnings and uncaught exceptions from every page in ``ctx``, including later ones.
+
+    A page's out-of-process frames report here too, so a workspace document --
+    which lives under ``page.frames``, not ``ctx.pages`` -- is covered.
+
+    Playwright delivers a console message only to listeners registered when it
+    arrives, so whatever a page logged before this call is gone.
+    """
+    ctx.on("console", _log_console_message)
+    ctx.on("weberror", _log_web_error)
 
 
 def find_chat_window(ctx: BrowserContext, host: str | None = None) -> Frame | None:
@@ -1347,6 +1384,7 @@ def run_e2e() -> int:
         browser = pw.chromium.connect_over_cdp(cdp_url, timeout=60_000)
         # Single Electron context wraps all WebContentsViews as pages.
         ctx = browser.contexts[0] if browser.contexts else browser.new_context()
+        capture_renderer_diagnostics(ctx)
         # Wait for first page (chrome shell or splash) to materialise.
         for _ in range(60):
             if ctx.pages:
@@ -1377,7 +1415,7 @@ def run_e2e() -> int:
         snap_page(win, "02-home-after-auth")
 
         # The post-login "Help improve Minds" error-reporting consent screen
-        # (Consent.jinja, shown while error_reporting_consent_given is False --
+        # (the SPA ConsentPage, shown while error_reporting_consent_given is False --
         # always here, since the runner's ~/.minds is wiped each run) sits on
         # the home page until answered. Dismiss it once via Continue; the
         # POST /consent + reload then proceeds home, so the create flow and the
@@ -2071,6 +2109,7 @@ def run_e2e() -> int:
             cdp_url2 = _wait_cdp(cdp_port2)
             browser = pw.chromium.connect_over_cdp(cdp_url2, timeout=60_000)
             ctx = browser.contexts[0] if browser.contexts else browser.new_context()
+            capture_renderer_diagnostics(ctx)
             for _ in range(60):
                 if ctx.pages:
                     break
@@ -2187,81 +2226,46 @@ def _advance_approval(
     if decision not in ("approve", "deny"):
         raise E2EFailure(f"_advance_approval: decision must be approve|deny, got {decision!r}")
     snap_stage0, snap_stage1, snap_stage2_pre, snap_stage2_post = snap_prefix_pair
-    # The inbox is the /inbox route floated over the current surface (see
-    # find_inbox_frame); the master/detail split lives in that one
-    # document (left list = rows carrying data-request-id, right detail holds
-    # the Approve/Deny form, whose buttons carry the permissions-approve-btn
-    # and permissions-deny-btn ids).
-    # Stage 0 waits for the /inbox frame (it auto-opens on new pending
-    # requests by default, see MindsConfig.get_auto_open_requests_panel).
-    # Stage 1 clicks the inbox card for the slack request to load the detail
-    # fragment. Stage 2 clicks Approve / Deny within the same frame.
+    # The review popup is the SPA's /inbox app-overlay route (see
+    # find_inbox_frame), floated over the surface it was opened from and
+    # showing one pending request at a time with no left list. It opens only
+    # when asked: stage 0 asks, via the in-chat card's "Review & respond"
+    # button; stage 1 waits for the overlay; stage 2 answers it.
     if stage == 0:
-        # Check if the inbox already auto-opened (see find_inbox_frame).
+        # An already-open overlay means the click landed on a previous pass.
         found = find_inbox_frame(ctx)
         if found is not None:
             owner, _ = found
-            logger.info("inbox modal auto-opened; advancing to stage 1")
+            logger.info("review popup already open; advancing to stage 1")
             state["stage"] = 1
             snap_page(owner, snap_stage0)
             return
-        # Wait for the agent to emit its request signal first. Case-fold
-        # because Claude rephrases the message each run (eg "Waiting"
-        # vs "awaiting" vs "wait for").
-        body = (chat.evaluate("document.body.innerText")).lower()
-        # "approval" catches "Waiting for your approval", "awaiting", etc.
-        if not any(
-            s in body
-            for s in (
-                "permission request",
-                "requested read",
-                "approval",
-                "approve",
-            )
-        ):
-            # Not ready yet.
-            return
-        # Auto-open should fire on the SSE-pushed pending-set update; if
-        # it hasn't fired after a couple of polls, hit /inbox/toggle on
-        # the chrome titlebar as a fallback (the inbox icon's aria-label
-        # is "Inbox"; the old `button[title="Requests"]` is gone).
-        for w in all_pages(ctx):
-            try:
-                btn = w.locator('button[aria-label="Inbox"], button[title="Inbox"]')
-                if btn.count() > 0 and btn.first.is_visible():
-                    logger.info("clicking Inbox titlebar trigger")
-                    snap_page(w, snap_stage0)
-                    btn.first.click()
-                    state["stage"] = 1
-                    return
-            except Exception:
-                pass
+        # The in-chat card is rendered by the system_interface app inside the
+        # workspace iframe, and carries this button only while the request is
+        # pending (a resolved request renders as a one-line receipt). Clicking
+        # it posts OPEN_REQUEST_MODAL to the embedder, which floats /inbox.
+        try:
+            trigger = chat.locator("button.permission-request-button")
+            if trigger.count() > 0 and trigger.first.is_visible():
+                logger.info("clicking the in-chat 'Review & respond' button")
+                snap_page(chat, snap_stage0)
+                trigger.first.click()
+                state["stage"] = 1
+                return
+        except Exception:
+            pass
 
-    # Stage 1: click the slack entry in the inbox left list.
+    # Stage 1: the overlay opens straight onto the pending request's detail,
+    # so its presence is the whole of this stage.
     elif stage == 1:
         found = find_inbox_frame(ctx)
         if found is None:
             return
-        owner, panel = found
-        # Prefer the slack-named card; fall back to the first selectable card
-        # if there's only one pending request. ``data-request-id`` is the
-        # card row's only stable hook -- everything else on it is a Tailwind
-        # utility class.
-        for sel in (
-            '[data-request-id]:has-text("slack")',
-            '[data-request-id]:has-text("Slack")',
-            "[data-request-id]",
-        ):
-            try:
-                loc = panel.locator(sel).first
-                if loc.count() > 0 and loc.is_visible():
-                    logger.info("clicking inbox card via {!r}", sel)
-                    snap_page(owner, snap_stage1)
-                    loc.click()
-                    state["stage"] = 2
-                    return
-            except Exception:
-                pass
+        owner, _ = found
+        logger.info("review popup open on the request detail; advancing to stage 2")
+        snap_page(owner, snap_stage1)
+        state["stage"] = 2
+        return
 
     # Stage 2: click Approve or Deny in the inbox detail pane (same /inbox page).
     elif stage == 2:

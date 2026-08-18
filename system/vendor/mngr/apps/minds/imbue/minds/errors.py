@@ -104,6 +104,22 @@ class DeployLifecycleConfigError(MindError, ValueError):
     ...
 
 
+class OriginsConfigError(MindError, ValueError):
+    """Raised when a deploy.toml ``[origins]`` block is invalid.
+
+    Subclasses ``ValueError`` so pydantic treats it as a validation failure
+    when raised inside a model validator.
+    """
+
+    ...
+
+
+class WebTemplateRefRequiredError(MindError):
+    """Raised when a dev-tier deploy with web workspaces enabled has no explicit ``MINDS_WEB_TEMPLATE_REF``."""
+
+    ...
+
+
 class EnvelopeStreamConsumerError(MindError, RuntimeError):
     """Raised when the envelope stream consumer is used out of lifecycle order."""
 
@@ -130,6 +146,17 @@ class DeviceIdError(MindError):
 
 class WorkspaceSyncError(MindError):
     """Raised when a workspace-record sync (push/pull/reconcile) operation fails."""
+
+    ...
+
+
+class WorkspaceRecordTooNewError(WorkspaceSyncError):
+    """Raised when a state-changing operation targets a record whose record_format postdates this app.
+
+    The record was written by a newer app version, so modifying it here could
+    corrupt semantics this version cannot see. The record stays readable; the
+    remedy is updating the app.
+    """
 
     ...
 

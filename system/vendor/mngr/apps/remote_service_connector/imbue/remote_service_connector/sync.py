@@ -12,6 +12,7 @@ import base64
 import binascii
 import functools
 import logging
+from collections.abc import Set as AbstractSet
 from datetime import datetime
 from enum import Enum
 from typing import Any
@@ -24,11 +25,10 @@ from fastapi import Request
 from pydantic import BaseModel
 from pydantic import Field
 
-import imbue.remote_service_connector.auth as auth_module
+import imbue.remote_service_connector.accounts_web as accounts_web_module
 import imbue.remote_service_connector.entitlements as entitlements_module
 from imbue.remote_service_connector import db
 from imbue.remote_service_connector.auth import UserAuth
-from imbue.remote_service_connector.auth import authenticate_request
 from imbue.remote_service_connector.entitlements import raise_quota_exceeded
 from imbue.remote_service_connector.http_api import handle_endpoint_errors
 
@@ -88,6 +88,15 @@ class WorkspaceRecordModel(BaseModel):
         default=None, description="Base64 of the client-encrypted secrets blob (opaque to the server)"
     )
     revision: int = Field(ge=1, description="Per-row monotonic revision; PUT is CAS on this")
+    record_format: int = Field(
+        default=1,
+        ge=1,
+        description=(
+            "Semantic format of the record (missing = 1, which every pre-format client implicitly "
+            "pushes). A push whose value is below the stored row's is rejected with a structured 409 "
+            "(code: record_format_too_new) so an old client can never half-rewrite newer semantics."
+        ),
+    )
     created_at: str = Field(default="", description="Server timestamp (response only)")
     updated_at: str = Field(default="", description="Server timestamp (response only)")
     destroyed_at: str | None = Field(
@@ -120,6 +129,14 @@ class SyncRevisionConflictError(Exception):
         self.stored_record = stored_record
 
 
+class SyncRecordFormatTooNewError(Exception):
+    """A push carried a record_format below the stored row's (a client too old for this record)."""
+
+    def __init__(self, stored_record: dict[str, Any]) -> None:
+        super().__init__("record_format_too_new")
+        self.stored_record = stored_record
+
+
 class SyncActiveAgentConflictError(Exception):
     """A second ACTIVE record for the same (user_id, agent_id) was rejected."""
 
@@ -130,7 +147,26 @@ class SyncStoreConsistencyError(RuntimeError):
 
 _WORKSPACE_RECORD_COLUMNS = (
     "host_id, agent_id, display_name, color, provider_kind, hosting_device_id, device_label, "
-    "state, restored_from_host_id, encrypted_secrets, revision, created_at, updated_at, destroyed_at"
+    "state, restored_from_host_id, encrypted_secrets, revision, created_at, updated_at, destroyed_at, "
+    "record_format"
+)
+
+# Columns a PUT may modify, in a fixed whitelist so the preserve-on-absent
+# UPDATE below can never write a column the request did not name. A field
+# absent from the push keeps its stored value; an explicitly sent null clears
+# it. (host_id is the row key; revision/updated_at/destroyed_at are managed
+# by the store itself.)
+UPDATABLE_RECORD_COLUMNS = (
+    "agent_id",
+    "display_name",
+    "color",
+    "provider_kind",
+    "hosting_device_id",
+    "device_label",
+    "state",
+    "restored_from_host_id",
+    "encrypted_secrets",
+    "record_format",
 )
 
 # Must match the index name in migrations/013_workspace_sync.sql; used to tell
@@ -157,6 +193,7 @@ def _workspace_record_row_to_dict(row: tuple[Any, ...]) -> dict[str, Any]:
         "created_at": str(row[11]) if row[11] is not None else "",
         "updated_at": str(row[12]) if row[12] is not None else "",
         "destroyed_at": str(row[13]) if row[13] is not None else None,
+        "record_format": row[14],
     }
 
 
@@ -164,11 +201,20 @@ class SyncStore(Protocol):
     """Abstraction over the workspace_records + account_key_bundles tables."""
 
     def list_records(self, user_id: str) -> list[dict[str, Any]]: ...
-    def put_record(self, user_id: str, record: dict[str, Any]) -> dict[str, Any]: ...
+
+    def put_record(self, user_id: str, record: dict[str, Any], sent_fields: AbstractSet[str]) -> dict[str, Any]:
+        """Insert or CAS-update one record; ``sent_fields`` names the fields the push actually carried."""
+        ...
+
     def delete_record(self, user_id: str, host_id: str) -> None: ...
     def scrub_secrets(self, user_id: str) -> int: ...
     def get_bundle(self, user_id: str) -> dict[str, Any] | None: ...
     def put_bundle(self, user_id: str, bundle: dict[str, Any]) -> None: ...
+
+    def put_bundle_if_absent(self, user_id: str, bundle: dict[str, Any]) -> bool:
+        """Store the bundle only when none exists yet; False when one already does (atomic)."""
+        ...
+
     def delete_bundle(self, user_id: str) -> None: ...
     def list_destroyed_records_before(self, cutoff: datetime) -> list[dict[str, Any]]:
         """List destroyed records whose destroyed_at is before ``cutoff`` (the reaper's candidates)."""
@@ -196,10 +242,15 @@ class PostgresSyncStore:
             conn.close()
         return [_workspace_record_row_to_dict(row) for row in rows]
 
-    def put_record(self, user_id: str, record: dict[str, Any]) -> dict[str, Any]:
+    def put_record(self, user_id: str, record: dict[str, Any], sent_fields: AbstractSet[str]) -> dict[str, Any]:
         """Insert or CAS-update one record; returns the stored row after the write.
 
-        An update requires ``record["revision"] == stored revision + 1``;
+        The update is preserve-on-absent: only the ``UPDATABLE_RECORD_COLUMNS``
+        named by ``sent_fields`` are written, so a field this client version
+        does not know about keeps its stored value (an explicitly sent null
+        clears it). A push whose ``record_format`` is below the stored row's
+        raises :class:`SyncRecordFormatTooNewError` before any write. An
+        update requires ``record["revision"] == stored revision + 1``;
         otherwise :class:`SyncRevisionConflictError` carries the stored row so
         the client can merge and retry. The partial unique index on
         ``(user_id, agent_id) WHERE state = 'active'`` surfaces as
@@ -210,11 +261,11 @@ class PostgresSyncStore:
         path (409 + stored row) rather than as an agent conflict.
         """
         try:
-            return self._put_record_once(user_id, record)
+            return self._put_record_once(user_id, record, sent_fields)
         except psycopg2.errors.UniqueViolation:
-            return self._put_record_once(user_id, record)
+            return self._put_record_once(user_id, record, sent_fields)
 
-    def _put_record_once(self, user_id: str, record: dict[str, Any]) -> dict[str, Any]:
+    def _put_record_once(self, user_id: str, record: dict[str, Any], sent_fields: AbstractSet[str]) -> dict[str, Any]:
         conn = db.get_pool_db_connection()
         try:
             with conn:
@@ -236,8 +287,8 @@ class PostgresSyncStore:
                             cur.execute(
                                 "INSERT INTO workspace_records (user_id, host_id, agent_id, display_name, color, "
                                 "provider_kind, hosting_device_id, device_label, state, restored_from_host_id, "
-                                "encrypted_secrets, revision, destroyed_at) "
-                                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
+                                "encrypted_secrets, revision, record_format, destroyed_at) "
+                                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
                                 "CASE WHEN %s = 'destroyed' THEN NOW() END) "
                                 f"RETURNING {_WORKSPACE_RECORD_COLUMNS}",
                                 (
@@ -253,36 +304,46 @@ class PostgresSyncStore:
                                     record["restored_from_host_id"],
                                     encrypted_bytes,
                                     record["revision"],
+                                    record["record_format"],
                                     record["state"],
                                 ),
                             )
                         else:
                             stored = _workspace_record_row_to_dict(existing)
+                            # The write-lock outranks the CAS: a client that
+                            # cannot read this record's semantics must never
+                            # write it, so it gets the terminal refusal even
+                            # when its revision also happens to be stale.
+                            if record["record_format"] < stored["record_format"]:
+                                raise SyncRecordFormatTooNewError(stored)
                             if record["revision"] != stored["revision"] + 1:
                                 raise SyncRevisionConflictError(stored)
+                            # Preserve-on-absent: write only the whitelisted
+                            # columns this push actually named, so a field a
+                            # future client added survives an older client's
+                            # pushes instead of being reset to its default.
+                            set_clauses = []
+                            update_params: list[Any] = []
+                            for column in UPDATABLE_RECORD_COLUMNS:
+                                if column not in sent_fields:
+                                    continue
+                                set_clauses.append(f"{column} = %s")
+                                update_params.append(
+                                    encrypted_bytes if column == "encrypted_secrets" else record[column]
+                                )
+                            set_clauses.append("revision = %s")
+                            update_params.append(record["revision"])
+                            set_clauses.append("updated_at = NOW()")
+                            set_clauses.append(
+                                "destroyed_at = CASE WHEN %s = 'destroyed' THEN COALESCE(destroyed_at, NOW()) END"
+                            )
+                            update_params.append(record["state"])
+                            update_params.extend([user_id, record["host_id"]])
                             cur.execute(
-                                "UPDATE workspace_records SET agent_id = %s, display_name = %s, color = %s, "
-                                "provider_kind = %s, hosting_device_id = %s, device_label = %s, state = %s, "
-                                "restored_from_host_id = %s, encrypted_secrets = %s, "
-                                "revision = %s, updated_at = NOW(), "
-                                "destroyed_at = CASE WHEN %s = 'destroyed' THEN COALESCE(destroyed_at, NOW()) END "
+                                f"UPDATE workspace_records SET {', '.join(set_clauses)} "
                                 "WHERE user_id = %s AND host_id = %s "
                                 f"RETURNING {_WORKSPACE_RECORD_COLUMNS}",
-                                (
-                                    record["agent_id"],
-                                    record["display_name"],
-                                    record["color"],
-                                    record["provider_kind"],
-                                    record["hosting_device_id"],
-                                    record["device_label"],
-                                    record["state"],
-                                    record["restored_from_host_id"],
-                                    encrypted_bytes,
-                                    record["revision"],
-                                    record["state"],
-                                    user_id,
-                                    record["host_id"],
-                                ),
+                                tuple(update_params),
                             )
                         written = cur.fetchone()
                     except psycopg2.errors.UniqueViolation as exc:
@@ -377,6 +438,31 @@ class PostgresSyncStore:
                             bundle["key_epoch"],
                         ),
                     )
+        finally:
+            conn.close()
+
+    def put_bundle_if_absent(self, user_id: str, bundle: dict[str, Any]) -> bool:
+        # ON CONFLICT DO NOTHING makes the existence check and the insert one
+        # atomic statement, so two racing first-time setups cannot both win.
+        conn = db.get_pool_db_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO account_key_bundles (user_id, kdf_salt, kdf_time_cost, kdf_memory_kib, "
+                        "kdf_parallelism, wrapped_dek, key_epoch) VALUES (%s, %s, %s, %s, %s, %s, %s) "
+                        "ON CONFLICT (user_id) DO NOTHING",
+                        (
+                            user_id,
+                            psycopg2.Binary(bundle["kdf_salt"]),
+                            bundle["kdf_time_cost"],
+                            bundle["kdf_memory_kib"],
+                            bundle["kdf_parallelism"],
+                            psycopg2.Binary(bundle["wrapped_dek"]),
+                            bundle["key_epoch"],
+                        ),
+                    )
+                    return cur.rowcount == 1
         finally:
             conn.close()
 
@@ -493,10 +579,26 @@ def _decode_size_capped_base64(field_name: str, encoded: str, max_bytes: int) ->
     return decoded
 
 
+def _record_wire_response(record: dict[str, Any]) -> dict[str, object]:
+    """Serialize one stored record for the wire, omitting a format-1 record_format.
+
+    CLEANUP: serve record_format unconditionally once the pre-tolerant desktop
+    fleet (minds <= 0.3.17, whose extra="forbid" SyncWorkspaceRecord rejects
+    any new response field) has left the support window per the access log's
+    imbue_client field. Format-1 records are exactly the ones those clients
+    may still read and push, so the field is omitted where it carries no
+    information (absent means 1 to every tolerant client); records with a
+    genuinely newer format were never parseable by that fleet anyway.
+    """
+    dump = WorkspaceRecordModel(**record).model_dump()
+    if dump.get("record_format") == 1:
+        del dump["record_format"]
+    return dump
+
+
 def _sync_caller(request: Request) -> tuple[UserAuth, str]:
     """Authenticate a sync endpoint call; returns (user auth, full user_id)."""
-    user = authenticate_request(request)
-    return user, auth_module.get_user_id_from_access_token(request.headers.get("authorization", "")[7:])
+    return accounts_web_module.resolve_web_user_identity(request)
 
 
 def _sync_caller_user_id(request: Request) -> str:
@@ -510,7 +612,7 @@ def list_workspace_records_endpoint(request: Request) -> dict[str, object]:
     with handle_endpoint_errors():
         user_id = _sync_caller_user_id(request)
         records = get_sync_store().list_records(user_id)
-        return {"records": [WorkspaceRecordModel(**record).model_dump() for record in records]}
+        return {"records": [_record_wire_response(record) for record in records]}
 
 
 @router.put("/sync/records/{host_id}")
@@ -531,8 +633,10 @@ def put_workspace_record_endpoint(request: Request, host_id: str, body: Workspac
             existing_row = next((r for r in existing_records if r["host_id"] == host_id), None)
             is_new_active = existing_row is None or existing_row["state"] != WorkspaceRecordState.ACTIVE.value
             if is_new_active:
+                # Verified-only email: the backfill's paid-list check is
+                # authorized by domain ownership.
                 entitlements = entitlements_module.ensure_account_entitlements(
-                    user_id=user_id, user_id_prefix=user.user_id_prefix, email=user.email or ""
+                    user_id=user_id, user_id_prefix=user.user_id_prefix, email=user.verified_email or ""
                 )
                 active_count = sum(1 for r in existing_records if r["state"] == WorkspaceRecordState.ACTIVE.value)
                 if active_count >= entitlements.max_active_synced_workspaces:
@@ -549,18 +653,30 @@ def put_workspace_record_endpoint(request: Request, host_id: str, body: Workspac
             else None
         )
         try:
-            stored = get_sync_store().put_record(user_id, record)
+            stored = get_sync_store().put_record(user_id, record, body.model_fields_set)
+        except SyncRecordFormatTooNewError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "record_format_too_new",
+                    "message": (
+                        "This record was written by a newer client "
+                        f"(record_format {exc.stored_record.get('record_format')}); update the app to modify it."
+                    ),
+                    "stored": _record_wire_response(exc.stored_record),
+                },
+            ) from exc
         except SyncRevisionConflictError as exc:
             raise HTTPException(
                 status_code=409,
                 detail={
                     "message": "revision conflict",
-                    "stored": WorkspaceRecordModel(**exc.stored_record).model_dump(),
+                    "stored": _record_wire_response(exc.stored_record),
                 },
             ) from exc
         except SyncActiveAgentConflictError as exc:
             raise HTTPException(status_code=409, detail={"message": str(exc)}) from exc
-        return WorkspaceRecordModel(**stored).model_dump()
+        return _record_wire_response(stored)
 
 
 @router.delete("/sync/records/{host_id}")
@@ -592,8 +708,16 @@ def get_key_bundle_endpoint(request: Request) -> dict[str, object]:
 
 
 @router.put("/sync/bundle")
-def put_key_bundle_endpoint(request: Request, body: AccountKeyBundleModel) -> dict[str, str]:
-    """Store (replace) the caller's password-wrapped key bundle."""
+def put_key_bundle_endpoint(
+    request: Request,
+    body: AccountKeyBundleModel,
+    # First-time setup passes if_absent=true so two clients racing to mint the
+    # account's first DEK cannot silently clobber each other: exactly one
+    # wins; the loser gets a 409 and unlocks with the winner's password
+    # instead of holding a DEK the stored bundle can never recover.
+    if_absent: bool = False,
+) -> dict[str, str]:
+    """Store the caller's password-wrapped key bundle (replace, or create-only with ``if_absent``)."""
     with handle_endpoint_errors():
         user_id = _sync_caller_user_id(request)
         bundle = body.model_dump()
@@ -601,7 +725,17 @@ def put_key_bundle_endpoint(request: Request, body: AccountKeyBundleModel) -> di
         bundle["wrapped_dek"] = _decode_size_capped_base64(
             "wrapped_dek", body.wrapped_dek, _MAX_KEY_BUNDLE_FIELD_BYTES
         )
-        get_sync_store().put_bundle(user_id, bundle)
+        if if_absent:
+            if not get_sync_store().put_bundle_if_absent(user_id, bundle):
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "bundle_exists",
+                        "message": "A key bundle is already stored for this account.",
+                    },
+                )
+        else:
+            get_sync_store().put_bundle(user_id, bundle)
         return {"status": "ok"}
 
 

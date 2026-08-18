@@ -80,6 +80,17 @@ import tomllib
 with open('system/config/parent.toml', 'rb') as f:
     print(tomllib.load(f)['url'])
 ")"
+# Heal a shallow-history workspace before fetching. Workspaces created from a
+# pool host baked before the full-history bake fix carry a `--depth 1` clone:
+# `git log` dead-ends at a parentless graft commit, `git describe` fails, and
+# "what changed since the fork point" is unanswerable. The upstream template is
+# public, so completing the history is one fetch; the guard keeps this a no-op
+# everywhere else (`--unshallow` errors on a repo that is not shallow).
+# `--git-common-dir` (not `--git-dir`) because the shallow marker is repo-wide
+# state that lives in the common dir, which is what a worktree checkout shares.
+if [ -f "$(git rev-parse --git-common-dir)/shallow" ]; then
+    git fetch --unshallow upstream
+fi
 git fetch upstream --tags
 
 python3 .agents/skills/update-self/scripts/update_self.py resolve-target --local-tags \
@@ -271,13 +282,22 @@ tk start <ticket-id>
 ```
 
 Write the task file. Use the two-heredoc form the other worker skills use: an
-**unquoted** frontmatter block so `$REF` expands, then a **quoted** body so its
-backticks stay literal:
+**unquoted** frontmatter block so `$MNGR_AGENT_NAME` and `$REF` expand, then a
+**quoted** body so its backticks stay literal.
+
+Unlike every other worker skill, this template DOES set `lead_agent`, and the
+line must stay: this SKILL.md is executed cross-version -- an older workspace's
+lead follows this staged prose (via the `differs` branch of §2a) but launches
+with its *own* `launch-task/create_worker.py`, which may predate launch-time
+`lead_agent` stamping. Under a current launcher the line is harmless (launch
+overwrites it from the environment); under an old launcher it is the only thing
+that gives the worker a report address.
 
 ```bash
 {
 cat << FRONTMATTER_EOF
 ---
+lead_agent: $MNGR_AGENT_NAME
 finish_report_path: data/.tasks/update-self/reports/report.md
 target_ref: $REF
 ---
@@ -300,8 +320,9 @@ this file's frontmatter (already fetched into `upstream`).
 
 ## Reporting back
 Per `.agents/shared/references/worker-reporting.md`. Valid `name:` values:
-`question` (mid-flight gate for a genuine, unresolvable conflict), `done` /
-`stuck` (terminal). Substitutions: `<TASK_FILE_GLOB>` -> `data/.tasks/update-self/task.md`;
+`question` (mid-flight gate: a genuine, unresolvable conflict, or the §4c
+review-gate escape hatch), `done` / `stuck` (terminal). Substitutions:
+`<TASK_FILE_GLOB>` -> `data/.tasks/update-self/task.md`;
 `<RUNTIME_REPORTS_DIR>` -> `data/.tasks/update-self/reports`.
 BODY_EOF
 } > data/.tasks/update-self/task.md
@@ -323,21 +344,33 @@ uv run .agents/skills/launch-task/scripts/create_worker.py await \
 ## 4. Proxy the `question` gate
 
 Per `.agents/shared/references/lead-proxy.md` (worker `update-self`, branch
-`mngr/update-self`, reports dir `data/.tasks/update-self/reports/`). The worker
-surfaces only genuine, unresolvable conflicts -- a real decision about how to
+`mngr/update-self`, reports dir `data/.tasks/update-self/reports/`). Almost
+always this is a genuine, unresolvable conflict -- a real decision about how to
 reconcile a file both sides rewrote incompatibly. **Escalate it to the user**,
 relay their resolution via `mngr message`, consume the report, and re-arm.
 
-**Compose the question per the §5a rules -- plain-language and pointed at a
-resolution, not the worker's raw conflict dump.** Lead with where things stand
-("The update is almost ready -- one file needs a decision from you before I can
-finish"), explain the choice in plain terms (what the new version does vs. what
-your workspace currently does, and what's at stake each way), and **propose a way
-forward**: a recommended option when you have one, the concrete trade-offs when
-you genuinely don't. Close by inviting the user to resolve it *with* you rather
-than only to rule on it -- "tell me which you'd prefer, or talk it through with me
-and we'll land on the best option together." Reassure that nothing has been
-applied and the workspace is untouched.
+The one other thing a `question` can be is the worker's review-gate escape hatch
+(its §4c): a *process* question about whether or at what scope the gates run.
+That is not the user's to answer -- **answer it yourself** per `lead-proxy.md`.
+The default answer is to apply the §4c rule as written: the rule already is the
+proportionality decision, so any situation it covers gets the branch the rule
+gives it. Where the rule is genuinely silent -- the case §4c routes here --
+decide it on the rule's own principle rather than on the worker's proposal: the
+fallback is always more coverage, never less, so the gates run unless the worker
+has shown the skip branch's three conditions hold. Either way, reply, consume,
+and re-arm without involving the user. Escalate only if the worker has surfaced
+a real question of user intent inside it.
+
+For the conflict case, **compose the question per the §5a rules -- plain-language
+and pointed at a resolution, not the worker's raw conflict dump.** Lead with
+where things stand ("The update is almost ready -- one file needs a decision from
+you before I can finish"), explain the choice in plain terms (what the new
+version does vs. what your workspace currently does, and what's at stake each
+way), and **propose a way forward**: a recommended option when you have one, the
+concrete trade-offs when you genuinely don't. Close by inviting the user to
+resolve it *with* you rather than only to rule on it -- "tell me which you'd
+prefer, or talk it through with me and we'll land on the best option together."
+Reassure that nothing has been applied and the workspace is untouched.
 
 ## 5. Terminal status
 
@@ -359,6 +392,29 @@ applied and the workspace is untouched.
 - **`done`** -> the approval gate below.
 
 ### 5a. Approval gate
+
+**Audit the report before composing anything.** The worker contract (the
+staged copy's `references/update-self-worker.md`, §4c and §6) makes the review
+gates rule-driven and the report evidence-bearing: it must either show the
+clean-pull skip's conditions held (`has_merge_work: false`, no impacted
+user-created code, and no worker-authored in-branch edits such as 4a mirror
+edits) or carry the gate run's own evidence (fix commits
+kept/reverted, or a clean gate run, plus architecture-gate verdicts). Likewise
+a side-picked conflict must carry the discarded-side accounting, not a bare
+"superset" claim. A report missing any of this -- including one that openly
+discloses skipping or narrowing a gate outside the rule -- goes back to the
+worker to be completed: run the Step 4 gate cycle over it (say what is missing
+via `mngr message`, consume this report into
+`data/.tasks/update-self/reports/consumed/`, re-arm the background poll) and
+audit the replacement, because `done` otherwise ends the poll and a report left
+at the report path would satisfy the next `await` instantly. Do not compose an
+approval message over the gap, and never repackage a worker-disclosed deviation
+as reassurance. A deviation only *stands* when completing it is genuinely out of
+reach -- the worker is gone and the gap cannot be closed from here, or you told
+the user about it and they chose to go ahead anyway; not because the reasoning
+behind it persuaded you. In that case the approval message states the deviation
+itself, plainly, where the user will read it -- it is a caveat, never a footnote
+to a reassurance.
 
 The `done` report is *your* raw material, not the user's message. It is a
 comprehensive, technical digest for the lead -- changelog entries in range, the
@@ -397,7 +453,14 @@ order:
    some readers want the specifics, others happily skim it as "great, they're on
    it." Do not thin it out -- carry the worker's digest, just in prose a lay reader
    parses (describe what each change does, not the file names).
-4. **Conflicts** -- "none," or what needed reconciling.
+4. **Conflicts** -- "none," or what needed reconciling. When the worker kept
+   local code over the release's version of the same file, do not present that
+   as a settled fact: say what was kept, what the release's version would have
+   changed, and offer the alternative in the same breath ("I kept your
+   version; if you'd rather match the official release exactly there, I can do
+   that instead"). The choice between a local divergence and the tested
+   release is one the user may well care about, and it is cheap to offer now
+   and expensive to unwind later.
 5. **Validation** -- did the suite pass; is any failure pre-existing/unrelated.
 6. **Caveats** -- only if any; what to expect after applying.
 7. **Pre-existing issues** -- only if any, and only after verifying attribution
@@ -431,12 +494,11 @@ WORK_DIR=$(mngr ls --include 'name == "update-self"' --format json \
     | python3 -c 'import sys, json; print(json.load(sys.stdin)["agents"][0]["work_dir"])')
 python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py preview \
     --slug update-self --work-dir "$WORK_DIR"
-for L in desktop mobile; do python3 system/scripts/layout.py open --layout "$L" si-preview; done
+python3 system/scripts/layout.py open si-preview
 ```
 
-The `open` loop targets both named layouts because mutating `layout.py` ops
-require `--layout` and only apply on clients with that layout active; the call
-for the layout the user is not on fails fast and harmlessly.
+With no `--view`, the `open` goes to the view the connected client is looking
+at, which is where the user expects the preview tab.
 
 **Other user apps are optional previews.** When the report says another user
 app took meaningful merge work, use your judgment: serve it from the
@@ -462,9 +524,13 @@ off this exact `HEAD`, so the merge fast-forwards and **preserves the worker's
 
 ```bash
 ROLLBACK_TO=$(git rev-parse HEAD)
-git fetch . mngr/update-self:mngr/update-self   # materialize the worker branch locally
 git merge --ff-only mngr/update-self
 ```
+
+No fetch is needed first: the worker runs in a linked worktree of this same
+repository, so `mngr/update-self` already exists in the shared ref store (and a
+`git fetch . mngr/update-self:mngr/update-self` would be refused anyway while
+the worker's worktree has the branch checked out).
 
 If the fast-forward is refused, `HEAD` moved under the pass: treat it as stale
 per `.agents/shared/references/harden-contention.md` and re-dispatch off the
@@ -485,7 +551,7 @@ MERGE_SHA=$(git rev-parse HEAD)
 
 Then write the entry directly into `docs/VERSION_HISTORY.md`. There is no helper
 skill -- this block is the whole recording contract, and it owns the format so
-`update-self`, `publish-inspiration`, and `update-published-inspiration` all write
+`update-self`, `publish-template`, and `update-published-template` all write
 identical lines. The rules: append-only (existing lines are copied through
 verbatim, never re-flowed); every `## Workspace` line ends in a commit; and a
 retried landing must be a no-op, never a duplicate. Do the three parts below in
@@ -493,7 +559,7 @@ order.
 
 **Part 1 -- if `docs/VERSION_HISTORY.md` is missing** (deleted since creation),
 recreate the shipped starter first, then append. This heredoc is the canonical
-starter that `publish-inspiration` and `update-published-inspiration` recreate by reference
+starter that `publish-template` and `update-published-template` recreate by reference
 to here:
 
 ```bash
@@ -501,24 +567,24 @@ to here:
 # Version history
 
 Where this workspace came from, what it has migrated in, what it has published,
-and the inspirations it has adopted. Entries are appended automatically -- by
+and the templates it has adopted. Entries are appended automatically -- by
 `update-self` when it lands a template update, by `migrate-workspace` when it
-pulls another workspace in, by `publish-inspiration` and
-`update-published-inspiration` when they publish, and by
-`update-installed-inspiration` when it pulls a newer version of an adopted
-inspiration -- and earlier lines are never rewritten. Each Workspace, Migrations,
-and Inspirations line ends in the commit it was cut from.
+pulls another workspace in, by `publish-template` and
+`update-published-template` when they publish, and by
+`update-installed-template` when it pulls a newer version of an adopted
+template -- and earlier lines are never rewritten. Each Workspace, Migrations,
+and Templates line ends in the commit it was cut from.
 
 ## Workspace
 
 ## Migrations
 
-## Inspirations
+## Templates
 
-## Adopted inspirations
+## Adopted templates
 
-Each inspiration this mind has adopted and the version it is on;
-`update-installed-inspiration` appends here when it pulls a newer version.
+Each template this mind has adopted and the version it is on;
+`update-installed-template` appends here when it pulls a newer version.
 VERSION_HISTORY_EOF
 ```
 
@@ -545,7 +611,10 @@ if ! grep -q "created from" docs/VERSION_HISTORY.md; then
     C_SHA=$(git rev-parse --short=7 "$CREATION")
     C_VERSION=$(git describe --tags --abbrev=0 --match 'minds-v*' "$CREATION" 2>/dev/null)
     # Then insert `- <C_DATE>  created from <C_VERSION or "the workspace template">
-    # <C_SHA>` as the FIRST line under the `## Workspace` heading, note padded to 26.
+    # <C_SHA>` as the FIRST line under the `## Workspace` heading, note padded
+    # per Part 3's rule (width 26, but never fewer than two spaces before the
+    # sha -- `created from minds-v0.3.NN` is exactly 26 chars, so a bare
+    # pad-to-26 would land the sha flush against the version).
 fi
 ```
 
@@ -555,7 +624,7 @@ bootstrap writes ON TOP of the cloned template commit, and an `update-self:`
 marker is a merge commit -- in both cases the `minds-v*` tag is on an ancestor, so
 a pointing-at lookup always comes up empty and every origin line would silently
 degrade to the unnamed `created from the workspace template` fallback. (This walk
-takes the **OLDEST** marker -- where the mind *started*. `publish-inspiration`
+takes the **OLDEST** marker -- where the mind *started*. `publish-template`
 §2's `BASE_REF` walk uses the same markers but takes the **NEWEST**; the
 difference is load-bearing.)
 
@@ -566,8 +635,10 @@ existing line, append exactly one line of the form:
 - <today, YYYY-MM-DD>  updated to <$REF>  <7-char $MERGE_SHA>
 ```
 
-Pad the note (`updated to <$REF>`) to width 26 so the sha lines up; a longer note
-just pushes its own sha right, and earlier lines are never re-flowed. Compute the
+Pad the note (`updated to <$REF>`) to width 26 so the sha lines up, and always
+keep at least two spaces between the note and the sha: a note of 26 characters
+or more takes a two-space gap and pushes its own sha right rather than landing
+flush against it. Earlier lines are never re-flowed. Compute the
 sha as `git rev-parse --short=7 "$MERGE_SHA"`. **Idempotence:** if a `##
 Workspace` line already carries this exact note AND this exact 7-char sha, it is
 already recorded -- change nothing and skip the commit below.
@@ -598,7 +669,7 @@ That prints the newest template-state marker -- the merge you just landed -- and
 keeps printing it afterwards, so the whole block is safe to re-run.
 
 **Never give this commit an `update-self:` subject**: that prefix is the
-template-state marker `assist` and `publish-inspiration` §2 resolve `BASE_REF`
+template-state marker `assist` and `publish-template` §2 resolve `BASE_REF`
 from, it belongs to the merge commit alone, and `$MERGE_SHA` above depends on it
 staying that way.
 
@@ -615,7 +686,7 @@ The report says which classes merged. Apply each; a clean pull-in is still
   python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py reveal \
       --rollback-to "$ROLLBACK_TO"
   python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py unpreview --slug update-self
-  for L in desktop mobile; do python3 system/scripts/layout.py close --layout "$L" si-preview; done
+  python3 system/scripts/layout.py close si-preview
   ```
 
   Exit codes per `update-system-interface` Step 5 (`0` revealed; `2`
@@ -644,8 +715,20 @@ The report says which classes merged. Apply each; a clean pull-in is still
   on stderr and is never a reason to stop.
 
 - **`editable_tool` (`system/vendor/mngr/**`)** -- `.py` is picked up live; a manifest
-  change needs an env refresh (`uv sync --all-packages`, or `uv tool install -e
-  system/vendor/mngr --reinstall` for a tool entry point). Any other `is_manifest` change
+  change needs an env refresh of **both** mngr installs a standard workspace
+  carries: the root venv `uv run mngr` uses (`uv sync --all-packages`) and the
+  uv-managed tool the bare `mngr` on PATH is, which
+  `system/scripts/build_workspace.sh` installs (`uv tool install -e
+  system/vendor/mngr/libs/mngr --reinstall`; check with `uv tool list`). The
+  vendored tree is the whole mngr monorepo, whose root `pyproject.toml` is not
+  installable, so the tool package is its `libs/mngr`. **Re-register the tool's
+  plugins right after that reinstall** -- note them first with `mngr plugin list`,
+  then `mngr plugin add --path system/vendor/mngr/libs/mngr_claude --path
+  system/vendor/mngr/libs/mngr_wait` (plus any others the list showed) --
+  because a reinstall rebuilds the tool environment from the base package alone
+  and drops the plugin packages `build_workspace.sh` registered, leaving an
+  `mngr` that cannot parse its own plugin config and so cannot create agents.
+  Any other `is_manifest` change
   the report flags (a root-workspace `pyproject.toml` / `uv.lock`) likewise needs
   `uv sync --all-packages` so the new dependencies resolve.
 
@@ -750,8 +833,8 @@ command is a cheap no-op pass -- run it anyway so unit-pin bumps still apply.
 ## 6. Teardown
 
 If you previewed a non-system_interface service in 5a, tear that preview down
-too: stop its isolated instance and close its tab on each named layout
-(`for L in desktop mobile; do python3 system/scripts/layout.py close --layout "$L" <name>; done`).
+too: stop its isolated instance and close its tab
+(`python3 system/scripts/layout.py close <name>`).
 Then:
 
 ```bash

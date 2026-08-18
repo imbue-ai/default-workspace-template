@@ -36,12 +36,14 @@ const WORKSPACE_PACKAGES = {
   'imbue-mngr':             'libs/mngr',
   'imbue-mngr-aws':         'libs/mngr_aws',
   'imbue-mngr-claude':      'libs/mngr_claude',
+  'imbue-mngr-codex':       'libs/mngr_codex',
   'imbue-mngr-forward':     'libs/mngr_forward',
   'imbue-mngr-imbue-cloud': 'libs/mngr_imbue_cloud',
   'imbue-mngr-latchkey':    'libs/mngr_latchkey',
   'imbue-mngr-lima':        'libs/mngr_lima',
   'imbue-mngr-modal':       'libs/mngr_modal',
   'imbue-mngr-ovh':         'libs/mngr_ovh',
+  'imbue-mngr-pi-coding':   'libs/mngr_pi_coding',
   'imbue-mngr-vps':         'libs/mngr_vps',
   'imbue-common':           'libs/imbue_common',
   'concurrency-group':      'libs/concurrency_group',
@@ -61,21 +63,6 @@ const WORKSPACE_PACKAGES = {
  * Returns a map of package name → wheel filename, used downstream when
  * rewriting `pyproject.toml` to reference the wheels.
  */
-/**
- * Compile the desktop client's Tailwind v4 stylesheet
- * (static/app.css -> static/app.min.css) before the minds wheel is built.
- *
- * app.min.css is gitignored and force-included into the wheel via
- * `[tool.hatch.build] artifacts` in apps/minds/pyproject.toml, so it MUST
- * exist on disk before buildWorkspaceWheels() runs -- otherwise the packaged
- * app ships unstyled. Delegates to the pinned @tailwindcss/cli via the
- * `build:css` pnpm script (also exposed as `just minds-css`).
- */
-function buildCss() {
-  console.log('Compiling Tailwind CSS (static/app.css -> static/app.min.css)...');
-  execSync('pnpm run build:css', { cwd: ROOT, stdio: 'inherit' });
-}
-
 function buildWorkspaceWheels() {
   const wheelsDir = path.join(RESOURCES_DIR, 'wheels');
   fs.mkdirSync(wheelsDir, { recursive: true });
@@ -501,7 +488,6 @@ async function main() {
   // The only staging whose output reaches the packaged app.
   await downloadBinaries(RESOURCES_DIR);
 
-  buildCss();
   bundleLatchkey();
   const wheelByPackage = buildWorkspaceWheels();
   stageRuntimePyproject(wheelByPackage);

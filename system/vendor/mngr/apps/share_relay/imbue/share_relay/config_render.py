@@ -30,12 +30,14 @@ def render_frps_toml(config: RelayConfiguration) -> str:
 
     frps builds the plugin callback URL by concatenating ``addr`` + ``path``,
     so the configured auth URL is split into its origin (``addr``) and its URL
-    path (``path``) rather than rendered whole.
+    path (``path``) rather than rendered whole. The relay's own id is appended
+    as the final path segment so the connector can attribute every callback
+    (and the per-relay tunnel-login stamps) to this relay.
     """
     ops = ", ".join(f'"{op}"' for op in _PLUGIN_OPS)
     auth_url = urlsplit(str(config.plugin_auth_url))
     plugin_addr = f"{auth_url.scheme}://{auth_url.netloc}"
-    plugin_path = auth_url.path or "/"
+    plugin_path = f"{auth_url.path.rstrip('/')}/{config.relay_id}"
     return f"""\
 # Rendered by imbue.share_relay -- do not edit on the host; re-render and redeploy.
 # frps in SNI-passthrough mode for region {config.region} ({config.region_domain}).

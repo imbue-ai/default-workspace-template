@@ -39,6 +39,13 @@ enable_docker = true
 # per-sandbox startup vs faster warm-cache hit rate.
 build_inputs = [
     "libs/mngr/imbue/mngr/resources/Dockerfile",
+    # The sandbox base image's `COPY . /code/mngr/` is filtered by the
+    # .dockerignore that scripts/generate_dockerignore.sh derives from
+    # .gitignore, so a change to either alters which files exist in the
+    # image and must rebuild the checkpoint (a stale checkpoint silently
+    # drops newly-unignored committed files -- seen with .minds/template).
+    "scripts/generate_dockerignore.sh",
+    ".gitignore",
     "libs/mngr/imbue/mngr/resources/Dockerfile.release.extras",
     "libs/mngr/imbue/mngr/resources/start-dockerd.sh",
     "pyproject.toml",

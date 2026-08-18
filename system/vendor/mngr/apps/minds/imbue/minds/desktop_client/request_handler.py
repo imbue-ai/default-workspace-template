@@ -25,6 +25,7 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.minds.desktop_client.backend_resolver import BackendResolverInterface
 from imbue.minds.desktop_client.request_events import RequestEvent
+from imbue.minds.desktop_client.ui_models import UiPermissionGrantGroup
 from imbue.mngr_latchkey.credential_commands import CredentialCommandParameter
 
 
@@ -67,7 +68,7 @@ class UiWorkspaceVerbChoice(FrozenModel):
 
 
 class UiPredefinedPermissionDetail(FrozenModel):
-    """Typed twin of the predefined (catalog-backed) permission detail fragment."""
+    """Inbox detail payload for a predefined (catalog-backed) permission request."""
 
     kind: Literal["predefined"] = "predefined"
     request_id: str = Field(description="Request event id (grant/deny routes key on it)")
@@ -76,14 +77,20 @@ class UiPredefinedPermissionDetail(FrozenModel):
     rationale: str = Field(description="Agent's stated reason for the request")
     scope: str = Field(description="Detent scope schema (e.g. 'slack-api')")
     display_name: str = Field(description="Service display name for the dialog header")
-    permission_schemas: tuple[str, ...] = Field(description="All grantable permission schemas under the scope")
-    description_by_permission_name: dict[str, str] = Field(description="Permission descriptions keyed by schema name")
+    service_name: str = Field(
+        description=(
+            "Catalog service name whose brand mark leads the dialog header (e.g. 'slack'). Empty when the "
+            "scope resolves to no catalog service, in which case the header draws its fallback glyph."
+        )
+    )
+    permission_groups: tuple[UiPermissionGrantGroup, ...] = Field(
+        description="Every grantable permission under the scope, grouped: full access first, the wildcard last"
+    )
     checked_permissions: tuple[str, ...] = Field(description="Schemas to pre-check")
     account_choices: tuple[UiPermissionAccountChoice, ...] = Field(description="Accounts the grant can attach to")
     selected_account_value: str = Field(description="Preselected account choice value")
     new_account_value: str = Field(description="Form value of the sign-a-new-account-in choice")
     wildcard_permission: str = Field(description="The catch-all permission's submitted value (e.g. 'any')")
-    wildcard_label: str = Field(description="User-facing label for the catch-all permission (e.g. 'all')")
     will_open_browser: bool = Field(description="Whether approving is expected to pop a browser sign-in")
     manual_credentials: UiManualCredentialsPrompt | None = Field(
         description=(
@@ -94,7 +101,7 @@ class UiPredefinedPermissionDetail(FrozenModel):
 
 
 class UiFileSharingPermissionDetail(FrozenModel):
-    """Typed twin of the file-sharing permission detail fragment."""
+    """Inbox detail payload for a file-sharing permission request."""
 
     kind: Literal["file_sharing"] = "file_sharing"
     request_id: str = Field(description="Request event id")
@@ -109,7 +116,7 @@ class UiFileSharingPermissionDetail(FrozenModel):
 
 
 class UiWorkspacePermissionDetail(FrozenModel):
-    """Typed twin of the cross-workspace (minds-workspaces) permission detail fragment."""
+    """Inbox detail payload for a cross-workspace (minds-workspaces) permission request."""
 
     kind: Literal["workspace"] = "workspace"
     request_id: str = Field(description="Request event id")
@@ -124,7 +131,7 @@ class UiWorkspacePermissionDetail(FrozenModel):
 
 
 class UiAccountsPermissionDetail(FrozenModel):
-    """Typed twin of the accounts permission detail fragment (all-or-nothing approve)."""
+    """Inbox detail payload for an accounts permission request (all-or-nothing approve)."""
 
     kind: Literal["accounts"] = "accounts"
     request_id: str = Field(description="Request event id")
@@ -163,7 +170,7 @@ RequestDetailPayload = (
 class RequestEventHandler(MutableModel, ABC):
     """Per-``RequestType`` handler for the request inbox flow.
 
-    Each implementation owns rendering the request detail fragment,
+    Each implementation owns building the typed request detail payload,
     applying a grant, applying a deny, and providing the human-readable
     labels the inbox list uses to describe pending requests of its
     kind. The route layer guarantees that ``req_event.request_type``
@@ -190,30 +197,6 @@ class RequestEventHandler(MutableModel, ABC):
         """
 
     @abstractmethod
-    def render_request_detail_fragment(
-        self,
-        req_event: RequestEvent,
-        backend_resolver: BackendResolverInterface,
-        mngr_forward_origin: str,
-    ) -> str:
-        """Render the right-pane HTML fragment for an inbox detail view.
-
-        The fragment is embedded inside the inbox modal's
-        ``#inbox-detail`` container (or innerHTML-swapped into it). It
-        must not include ``<html>``, a backdrop, a close button, or any
-        per-handler script tags: chrome and submission JS live in the
-        inbox shell and operate on shared element ids the fragment
-        emits (``#permissions-form``, ``#permissions-approve-btn``,
-        ``#permissions-error``, ``#permissions-progress``,
-        ``#permissions-manual-credentials``).
-
-        ``mngr_forward_origin`` is the bare-origin URL of the
-        ``mngr forward`` plugin (e.g. ``"http://localhost:8421"``);
-        handlers thread it into rendered templates so workspace links
-        target the plugin's ``/goto/<agent>/`` route rather than minds.
-        """
-
-    @abstractmethod
     def build_request_detail_payload(
         self,
         req_event: RequestEvent,
@@ -221,11 +204,9 @@ class RequestEventHandler(MutableModel, ABC):
     ) -> RequestDetailPayload:
         """Build the typed inbox-detail payload for the SPA's right pane.
 
-        The JSON twin of :meth:`render_request_detail_fragment`: same data,
-        typed instead of pre-rendered. The SPA renders the dialog client-side
-        and submits the same form fields to the legacy grant/deny routes, so
-        the values here must stay in lockstep with what
-        :meth:`apply_grant_request` parses.
+        The SPA renders the dialog client-side and submits the same form
+        fields to the grant/deny routes, so the values here must stay in
+        lockstep with what :meth:`apply_grant_request` parses.
         """
 
     @abstractmethod

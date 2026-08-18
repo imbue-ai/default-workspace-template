@@ -1,4 +1,6 @@
 import json
+from base64 import b64decode
+from base64 import b64encode
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
@@ -10,7 +12,10 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from imbue.imbue_common.model_update import to_update
+from imbue.imbue_common.secret_wrapping import decrypt_secrets
+from imbue.imbue_common.secret_wrapping import encrypt_secrets
 from imbue.minds.config.data_types import WorkspacePaths
+from imbue.minds.desktop_client.backend_resolver import MngrCliBackendResolver
 from imbue.minds.desktop_client.backup_env_store import write_canonical_env
 from imbue.minds.desktop_client.conftest import FakeImbueCloudCli
 from imbue.minds.desktop_client.conftest import make_agents_json
@@ -18,18 +23,24 @@ from imbue.minds.desktop_client.conftest import make_fake_imbue_cloud_cli
 from imbue.minds.desktop_client.conftest import make_resolver_with_data
 from imbue.minds.desktop_client.conftest import seed_provider_snapshots
 from imbue.minds.desktop_client.dek_store import ensure_dek
+from imbue.minds.desktop_client.dek_store import load_dek
 from imbue.minds.desktop_client.testing import device_id_for_test
 from imbue.minds.desktop_client.workspace_record_store import RECORD_STATE_ACTIVE
 from imbue.minds.desktop_client.workspace_record_store import RECORD_STATE_DESTROYED
 from imbue.minds.desktop_client.workspace_record_store import ReplicaRecord
 from imbue.minds.desktop_client.workspace_record_store import WorkspaceRecordStore
+from imbue.minds.desktop_client.workspace_record_store import WorkspaceSecretsPayload
 from imbue.minds.desktop_client.workspace_record_store import collect_ssh_key_material
 from imbue.minds.desktop_client.workspace_record_store import derive_openssh_public_key_line
-from imbue.minds.desktop_client.workspace_record_store import merge_known_hosts_text
+from imbue.minds.desktop_client.workspace_record_store import replica_record_from_wire
+from imbue.minds.errors import WorkspaceRecordTooNewError
 from imbue.minds.errors import WorkspaceSyncError
 from imbue.mngr.api.discovery_events import DiscoveryError
 from imbue.mngr.primitives import AgentId
+from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import ProviderInstanceName
+from imbue.mngr.providers.host_key_store import HostKeyOrigin
+from imbue.mngr.providers.host_key_store import pin_host_key
 
 _EMAIL = "alice@example.com"
 
@@ -159,6 +170,46 @@ def test_pull_keeps_dirty_local_rows(paths: WorkspacePaths) -> None:
 
     assert store.list_records(user_id)[0].display_name == "queued"
     assert store.list_records(user_id)[0].is_dirty
+
+
+@pytest.mark.witnesses(
+    "remote-compatibility.newer-records-read-only", partial="covers pull adoption of newer rows only"
+)
+def test_pull_adopts_a_newer_format_server_row_over_dirty_local_changes(paths: WorkspacePaths) -> None:
+    """A dirty row whose server counterpart is newer-format must not wedge: the server row wins.
+
+    This app can never push the pending local change (the connector's
+    terminal record_format_too_new refusal), so keeping the row dirty would
+    block every future pull of it and the read-only gates would never engage.
+    """
+    cli = make_fake_imbue_cloud_cli()
+    cli.is_sync_offline = True
+    store = _make_store(paths, cli)
+    user_id = _user_id()
+    agent_id = _agent_id()
+    record = ReplicaRecord(host_id="host-1", agent_id=agent_id, display_name="queued", provider_kind="lima")
+    store.upsert_local_record(user_id, _EMAIL, record)
+    assert store.list_records(user_id)[0].is_dirty
+
+    cli.is_sync_offline = False
+    cli.sync_records_by_email[_EMAIL] = {
+        "host-1": {
+            "host_id": "host-1",
+            "agent_id": agent_id,
+            "display_name": "renamed by a newer client",
+            "provider_kind": "lima",
+            "state": RECORD_STATE_ACTIVE,
+            "revision": 7,
+            "record_format": 2,
+        }
+    }
+
+    assert store.pull(user_id, _EMAIL) is True
+
+    (pulled,) = store.list_records(user_id)
+    assert pulled.record_format == 2
+    assert pulled.display_name == "renamed by a newer client"
+    assert not pulled.is_dirty
 
 
 def test_associations_view_reflects_active_records_only(paths: WorkspacePaths) -> None:
@@ -576,48 +627,77 @@ def test_reconcile_does_not_tombstone_other_device_rows(paths: WorkspacePaths) -
     assert records[0].state == RECORD_STATE_ACTIVE
 
 
-def test_collect_ssh_key_material_finds_per_host_keys(tmp_path: Path) -> None:
+def _make_mngr_profile_dir(tmp_path: Path) -> tuple[Path, Path]:
+    """A minimal mngr host dir with one active profile; returns (mngr_host_dir, profile_dir)."""
     mngr_dir = tmp_path / "mngr"
     profile_dir = mngr_dir / "profiles" / "profile1"
-    (mngr_dir / "config.toml").parent.mkdir(parents=True, exist_ok=True)
+    profile_dir.mkdir(parents=True)
     (mngr_dir / "config.toml").write_text('profile = "profile1"\n')
-    host_dir = profile_dir / "providers" / "imbue_cloud_alice" / "imbue_cloud_alice" / "hosts" / "host-abc"
+    return mngr_dir, profile_dir
+
+
+def _make_per_host_key_dir(profile_dir: Path, host_id: str) -> Path:
+    host_dir = profile_dir / "providers" / "imbue_cloud_alice" / "imbue_cloud_alice" / "hosts" / host_id
     host_dir.mkdir(parents=True)
+    return host_dir
+
+
+def test_collect_ssh_key_material_finds_per_host_keys(tmp_path: Path) -> None:
+    mngr_dir, profile_dir = _make_mngr_profile_dir(tmp_path)
+    host_dir = _make_per_host_key_dir(profile_dir, "host-abc")
     (host_dir / "ssh_key").write_text("PRIVATE-KEY-BYTES")
     (host_dir / "known_hosts").write_text("[1.2.3.4]:2222 ssh-ed25519 AAAA")
 
-    private_key, known_hosts = collect_ssh_key_material(mngr_dir, "imbue_cloud_alice", "host-abc")
+    private_key, known_hosts = collect_ssh_key_material(mngr_dir, "host-abc")
 
     assert private_key == "PRIVATE-KEY-BYTES"
-    assert known_hosts is not None and "ssh-ed25519" in known_hosts
+    assert known_hosts == "[1.2.3.4]:2222 ssh-ed25519 AAAA\n"
+
+
+def test_collect_ssh_key_material_renders_clean_pins_from_the_store(tmp_path: Path) -> None:
+    """The record carries the store's current pins -- one per (endpoint, keytype) --
+    not the file's raw lines: a stale duplicate an old append-only writer left in
+    the file collapses to the live pin instead of entering the record."""
+    mngr_dir, profile_dir = _make_mngr_profile_dir(tmp_path)
+    host_id = HostId.generate()
+    host_dir = _make_per_host_key_dir(profile_dir, str(host_id))
+    (host_dir / "ssh_key").write_text("PRIVATE-KEY-BYTES")
+    (host_dir / "known_hosts").write_text(
+        "[1.2.3.4]:22001 ssh-ed25519 AAAA-stale\n[1.2.3.4]:22001 ssh-ed25519 AAAA-live\n"
+    )
+    pin_host_key(host_dir / "known_hosts", "1.2.3.4", 23001, "ssh-ed25519 AAAA-vm", host_id, HostKeyOrigin.USER)
+
+    _, known_hosts = collect_ssh_key_material(mngr_dir, str(host_id))
+
+    assert known_hosts == "[1.2.3.4]:22001 ssh-ed25519 AAAA-live\n[1.2.3.4]:23001 ssh-ed25519 AAAA-vm\n"
+
+
+def test_collect_ssh_key_material_never_collects_provider_wide_keys(tmp_path: Path) -> None:
+    """A synced record may only ever carry a key that opens its one host -- the lima
+    provider-wide root key (which opens ALL of the user's lima VMs) must not be
+    collected even for lima-hosted workspaces."""
+    mngr_dir, profile_dir = _make_mngr_profile_dir(tmp_path)
+    lima_keys_dir = profile_dir / "providers" / "lima" / "lima" / "keys"
+    lima_keys_dir.mkdir(parents=True)
+    (lima_keys_dir / "root_ssh_key").write_text("PROVIDER-WIDE-KEY")
+    (lima_keys_dir / "hosts").write_text("[127.0.0.1]:60022 ssh-ed25519 AAAA")
+
+    assert collect_ssh_key_material(mngr_dir, "host-lima-1") == (None, None)
 
 
 def test_collect_ssh_key_material_returns_none_when_uninitialized(tmp_path: Path) -> None:
-    assert collect_ssh_key_material(tmp_path / "missing", "lima", "host-x") == (None, None)
+    assert collect_ssh_key_material(tmp_path / "missing", "host-x") == (None, None)
 
 
-def test_merge_known_hosts_text_appends_only_missing_lines() -> None:
-    existing = "[1.2.3.4]:22 ssh-ed25519 AAAA-pinned\n"
-    synced = "[1.2.3.4]:22 ssh-ed25519 AAAA-pinned\n[1.2.3.4]:2222 ssh-ed25519 AAAA-outer\n"
+def test_workspace_secrets_payload_tolerates_unknown_fields() -> None:
+    """A payload written by a future minds version must still parse here -- rejecting
+    the whole blob would cost this install everything in it, including restic_env."""
+    payload = WorkspaceSecretsPayload.model_validate_json(
+        '{"restic_env": "RESTIC_REPOSITORY=s3:bucket", "future_field": {"nested": 1}}'
+    )
 
-    merged = merge_known_hosts_text(existing, synced)
-
-    assert merged == "[1.2.3.4]:22 ssh-ed25519 AAAA-pinned\n[1.2.3.4]:2222 ssh-ed25519 AAAA-outer\n"
-
-
-def test_merge_known_hosts_text_returns_none_when_nothing_new() -> None:
-    existing = "[1.2.3.4]:22 ssh-ed25519 AAAA-pinned\n"
-
-    assert merge_known_hosts_text(existing, existing) is None
-    assert merge_known_hosts_text(existing, None) is None
-    assert merge_known_hosts_text(existing, "\n   \n") is None
-
-
-def test_merge_known_hosts_text_writes_synced_entries_into_an_empty_file() -> None:
-    synced = "[9.9.9.9]:22 ssh-ed25519 AAAA-new\n"
-
-    assert merge_known_hosts_text(None, synced) == synced
-    assert merge_known_hosts_text("", synced) == synced
+    assert payload.restic_env == "RESTIC_REPOSITORY=s3:bucket"
+    assert payload.ssh_private_key is None
 
 
 def test_derive_openssh_public_key_line_roundtrips_an_openssh_format_key() -> None:
@@ -637,9 +717,10 @@ def test_derive_openssh_public_key_line_roundtrips_an_openssh_format_key() -> No
 
 
 def test_derive_openssh_public_key_line_roundtrips_mngrs_traditional_pem_rsa_key() -> None:
-    # The exact flavor mngr's generate_ssh_keypair writes for client keys:
-    # RSA in traditional PEM ("-----BEGIN RSA PRIVATE KEY-----"), which needs
-    # the PEM loader, not the OpenSSH one.
+    # The legacy flavor older mngr installs wrote for client keys (mngr now
+    # generates Ed25519): RSA in traditional PEM ("-----BEGIN RSA PRIVATE
+    # KEY-----"), which needs the PEM loader, not the OpenSSH one. Records
+    # synced from those installs still carry these keys.
     private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     private_text = private_key.private_bytes(
         encoding=serialization.Encoding.PEM,
@@ -728,3 +809,167 @@ def test_reconcile_never_resurrects_other_device_tombstones(paths: WorkspacePath
     store.reconcile({user_id: _EMAIL}, resolver)
 
     assert store.list_records(user_id)[0].state == RECORD_STATE_DESTROYED
+
+
+def _empty_complete_resolver(provider_names: tuple[str, ...]) -> MngrCliBackendResolver:
+    """A resolver whose discovery completed cleanly and lists no workspaces at all."""
+    resolver = make_resolver_with_data(agents_json=json.dumps({"agents": []}))
+    seed_provider_snapshots(
+        resolver,
+        error_by_provider_name={},
+    )
+    for provider_name in provider_names:
+        resolver.update_providers(
+            provider_name=ProviderInstanceName(provider_name),
+            provider=None,
+            error=None,
+            last_snapshot_at=datetime.now(timezone.utc),
+        )
+    return resolver
+
+
+def test_cloud_rows_are_never_tombstoned_as_definitively_absent(paths: WorkspacePaths) -> None:
+    """The tombstone-safety invariant for web-created / cloud workspaces.
+
+    A cloud (imbue_cloud) row may be created by a device that never
+    materializes its SSH key here, and its lease can be live while a listing
+    pass transiently misses it -- so "absent from this device's discovery"
+    must never tombstone it. Only the lease going away (server-driven) ends a
+    cloud row's life.
+    """
+    cli = make_fake_imbue_cloud_cli()
+    user_id = _user_id()
+    cli.add_account(user_id=user_id, email=_EMAIL)
+    store = _make_store(paths, cli)
+
+    cloud_host_id = f"host-{uuid4().hex}"
+    cloud_record = ReplicaRecord(
+        host_id=cloud_host_id,
+        agent_id=_agent_id(),
+        display_name="web-created",
+        provider_kind="imbue_cloud_alice",
+        hosting_device_id=None,
+        device_label="web",
+        state=RECORD_STATE_ACTIVE,
+        revision=0,
+        is_dirty=True,
+    )
+    local_host_id = f"host-{uuid4().hex}"
+    local_record = ReplicaRecord(
+        host_id=local_host_id,
+        agent_id=_agent_id(),
+        display_name="local-docker",
+        provider_kind="docker",
+        hosting_device_id=store.device_id,
+        device_label="test-laptop",
+        state=RECORD_STATE_ACTIVE,
+        revision=0,
+        is_dirty=True,
+    )
+    store.upsert_local_record(user_id, _EMAIL, cloud_record)
+    store.upsert_local_record(user_id, _EMAIL, local_record)
+
+    # Discovery completed cleanly for both providers and lists nothing.
+    resolver = _empty_complete_resolver(("imbue_cloud_alice", "docker"))
+    store.reconcile({user_id: _EMAIL}, resolver)
+
+    pushed = cli.sync_records_by_email[_EMAIL]
+    # The locally-hosted row IS tombstoned (the absent pass works)...
+    assert pushed[local_host_id]["state"] == RECORD_STATE_DESTROYED
+    # ...but the cloud row survives untouched: never "definitively absent".
+    assert pushed[cloud_host_id]["state"] == RECORD_STATE_ACTIVE
+    replica_states = {record.host_id: record.state for record in store.list_records(user_id)}
+    assert replica_states[cloud_host_id] == RECORD_STATE_ACTIVE
+
+
+@pytest.mark.witnesses("remote-compatibility.newer-record-push-refused")
+@pytest.mark.witnesses("remote-compatibility.newer-records-read-only", partial="covers pushes only")
+def test_upsert_refuses_a_record_with_a_newer_record_format(paths: WorkspacePaths) -> None:
+    store = _make_store(paths)
+    too_new = ReplicaRecord(host_id="host-1", agent_id=_agent_id(), provider_kind="lima", record_format=2)
+
+    with pytest.raises(WorkspaceRecordTooNewError, match="update the app"):
+        store.upsert_local_record(_user_id(), _EMAIL, too_new)
+
+
+@pytest.mark.witnesses(
+    "remote-compatibility.newer-records-read-only", partial="covers tombstone/disassociate/remove only"
+)
+def test_state_changing_operations_refuse_a_newer_format_record(paths: WorkspacePaths) -> None:
+    cli = make_fake_imbue_cloud_cli()
+    store = _make_store(paths, cli)
+    user_id = _user_id()
+    agent_id = _agent_id()
+    # Seed via a pull of a server row written by a newer client: the pull
+    # itself must tolerate the newer record_format (the record stays readable).
+    cli.sync_records_by_email[_EMAIL] = {
+        "host-9": {
+            "host_id": "host-9",
+            "agent_id": agent_id,
+            "provider_kind": "lima",
+            "state": RECORD_STATE_ACTIVE,
+            "revision": 3,
+            "record_format": 2,
+        }
+    }
+    assert store.pull(user_id, _EMAIL) is True
+
+    with pytest.raises(WorkspaceRecordTooNewError):
+        store.tombstone_record(user_id, _EMAIL, agent_id)
+    with pytest.raises(WorkspaceRecordTooNewError):
+        store.disassociate_workspace_or_raise(user_id, _EMAIL, agent_id)
+    with pytest.raises(WorkspaceRecordTooNewError):
+        store.remove_record_or_raise(user_id, _EMAIL, "host-9")
+    # The record itself is untouched (still active, still present).
+    kept = store.list_records(user_id)
+    assert [r.state for r in kept] == [RECORD_STATE_ACTIVE]
+
+
+def test_replica_record_from_wire_defaults_and_carries_record_format() -> None:
+    defaulted = replica_record_from_wire({"host_id": "host-1", "agent_id": "a", "revision": 1})
+    assert defaulted.record_format == 1
+    carried = replica_record_from_wire({"host_id": "host-1", "agent_id": "a", "revision": 1, "record_format": 3})
+    assert carried.record_format == 3
+    assert carried.to_wire(2)["record_format"] == 3
+
+
+@pytest.mark.witnesses("remote-compatibility.newer-payloads-never-rewritten", partial="rewrite refusal only")
+def test_build_encrypted_secrets_refuses_a_newer_payload_format(paths: WorkspacePaths) -> None:
+    store = _make_store(paths)
+    user_id = _user_id()
+    agent_id = AgentId.generate()
+    ensure_dek(paths, user_id)
+    write_canonical_env(paths, agent_id, "RESTIC_REPOSITORY=x\nRESTIC_PASSWORD=y\n")
+    dek = load_dek(paths, user_id)
+    assert dek is not None
+    newer_blob = b64encode(
+        encrypt_secrets(dek, json.dumps({"payload_format": 2, "from_the_future": "keep"}).encode("utf-8"))
+    ).decode("ascii")
+
+    built = store.build_encrypted_secrets(user_id, str(agent_id), "host-1", newer_blob)
+
+    assert built is None
+
+
+@pytest.mark.witnesses("remote-compatibility.newer-payloads-never-rewritten", partial="unknown-key round-trip only")
+def test_build_encrypted_secrets_round_trips_unknown_payload_keys(paths: WorkspacePaths) -> None:
+    store = _make_store(paths)
+    user_id = _user_id()
+    agent_id = AgentId.generate()
+    ensure_dek(paths, user_id)
+    env_text = "RESTIC_REPOSITORY=x\nRESTIC_PASSWORD=y\n"
+    write_canonical_env(paths, agent_id, env_text)
+    dek = load_dek(paths, user_id)
+    assert dek is not None
+    existing_payload = {"payload_format": 1, "restic_env": "old", "added_by_a_newer_client": "must-survive"}
+    existing_blob = b64encode(encrypt_secrets(dek, json.dumps(existing_payload).encode("utf-8"))).decode("ascii")
+
+    built = store.build_encrypted_secrets(user_id, str(agent_id), "host-1", existing_blob)
+
+    assert built is not None
+    rewritten = json.loads(decrypt_secrets(dek, b64decode(built.encrypted)))
+    # This client's own material overwrites the fields it owns...
+    assert rewritten["restic_env"] == env_text
+    # ...while a field a newer client added rides through verbatim.
+    assert rewritten["added_by_a_newer_client"] == "must-survive"
+    assert rewritten["payload_format"] == 1

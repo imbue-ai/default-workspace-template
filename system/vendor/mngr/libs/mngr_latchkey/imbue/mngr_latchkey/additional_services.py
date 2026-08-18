@@ -2,17 +2,25 @@
 
 Additional services are third-party services that are **not** part of
 latchkey's builtin catalog (``services.json``, generated from detent's builtin
-request schemas). minds registers each one with latchkey at gateway bring-up
-(``latchkey services register``) and ships its detent scope/permission schemas
-itself, so an agent can request and be granted access to it exactly like a
-builtin service.
+request schemas). minds registers each one in latchkey's ``config.json`` (the
+``registeredServices`` block ``latchkey services register`` writes) and ships
+its detent scope/permission schemas itself, so an agent can request and be
+granted access to it exactly like a builtin service.
 
 The data ships as ``additional_services.json`` beside this module, keyed by
 canonical service name. Each value carries the human-readable ``display_name``,
-the ``base_api_url`` passed to ``latchkey services register``, the single Detent
+the ``registration`` latchkey stores for the service, the single Detent
 ``scope`` the service exposes (its schema-name plus the inline scope schema),
 and the ``permissions`` grantable under it (each with an inline permission
 schema).
+
+``registration`` is written in latchkey's *own* shape -- it is the value that
+lands verbatim under ``registeredServices.<name>`` in latchkey's config, so a
+service is described here the same way ``latchkey services register`` would
+persist it. This module therefore neither models nor validates its contents:
+latchkey owns that schema and checks it when it loads the config, and a field a
+later latchkey release adds (a ``serviceFamily``, another login flow's params)
+reaches the gateway without touching this file's readers.
 
 Nothing reads this file to answer "what services exist": the *catalog* entries
 are folded into ``services.json`` by ``scripts/generate_services_json.py``, so
@@ -20,9 +28,11 @@ are folded into ``services.json`` by ``scripts/generate_services_json.py``, so
 extensions see one file in one shape. This file remains the source of the two
 things the catalog does not carry:
 
-* ``base_api_url`` -- :func:`load_additional_service_registrations`, consumed by
-  :mod:`imbue.mngr_latchkey.core` to register each service with the latchkey CLI
-  at gateway bring-up.
+* the latchkey registration itself --
+  :func:`additional_service_registration_entries`, consumed by
+  :mod:`imbue.mngr_latchkey.core` to write the ``registeredServices`` block of
+  every gateway's ``config.json`` (the desktop's and, via
+  :mod:`imbue.mngr_latchkey.remote_gateway`, each VPS's).
 * the inline detent schemas -- :func:`additional_service_shared_schemas` /
   :func:`shared_schemas_file_content`, materialized into the single shared file
   that every host ``permissions.json`` references via detent's ``include``, so a
@@ -40,11 +50,13 @@ import json
 from collections.abc import Mapping
 from functools import cache
 from importlib import resources
+from typing import Annotated
 from typing import Final
 
 from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import JsonValue
+from pydantic import StringConstraints
 from pydantic import TypeAdapter
 from pydantic import ValidationError
 
@@ -55,6 +67,12 @@ from imbue.imbue_common.frozen_model import FrozenModel
 # reads it -- the catalog entries it contributes reach them via ``services.json``.
 _PACKAGE: Final[str] = "imbue.mngr_latchkey"
 _ADDITIONAL_SERVICES_FILENAME: Final[str] = "additional_services.json"
+
+# The service names latchkey accepts (``canonicalizeServiceName`` rejects
+# anything else). We write the registration into ``config.json`` ourselves
+# rather than shelling out to ``latchkey services register``, so this is where
+# an unusable name in the bundled file is caught.
+_SERVICE_NAME_PATTERN: Final[str] = r"^[a-z0-9][a-z0-9_-]*$"
 
 
 class AdditionalServicesCatalogError(RuntimeError):
@@ -95,23 +113,24 @@ class _AdditionalServiceEntry(FrozenModel):
     model_config = ConfigDict(extra="ignore")
 
     display_name: str = Field(min_length=1, description="Human-readable label shown in the permission dialog.")
-    base_api_url: str = Field(min_length=1, description="Base API URL passed to ``latchkey services register``.")
+    registration: Mapping[str, JsonValue] = Field(
+        description=(
+            "The service's entry in latchkey's ``registeredServices`` config block, in latchkey's own "
+            "shape (``baseApiUrl``, plus ``loginUrl`` / ``loginFlow`` for a browser sign-in). Copied "
+            "through verbatim; latchkey owns the schema and validates it."
+        )
+    )
     scope: _AdditionalServiceScopeEntry = Field(description="The single Detent scope this service exposes.")
     permissions: tuple[_AdditionalServicePermissionEntry, ...] = Field(
         default=(), description="Permissions grantable under the scope, each with its plain-English summary."
     )
 
 
-class AdditionalServiceRegistration(FrozenModel):
-    """A custom latchkey service minds registers with latchkey at gateway bring-up."""
-
-    name: str = Field(description="Canonical service name passed to ``latchkey services register``.")
-    base_api_url: str = Field(description="Base API URL passed to ``latchkey services register --base-api-url``.")
-
-
 # The catalog is a JSON object keyed by canonical service name; a module-level
-# adapter validates the bundled file.
-_ADDITIONAL_SERVICES_ADAPTER: Final = TypeAdapter(dict[str, _AdditionalServiceEntry])
+# adapter validates the bundled file, names included.
+_ADDITIONAL_SERVICES_ADAPTER: Final = TypeAdapter(
+    dict[Annotated[str, StringConstraints(pattern=_SERVICE_NAME_PATTERN)], _AdditionalServiceEntry]
+)
 
 
 @cache
@@ -153,12 +172,19 @@ def additional_services_catalog_payload() -> dict[str, list[dict[str, object]]]:
     }
 
 
-def load_additional_service_registrations() -> tuple[AdditionalServiceRegistration, ...]:
-    """Return the (name, base_api_url) of every additional service to register with latchkey."""
+def additional_service_registration_entries() -> dict[str, JsonValue]:
+    """Return every additional service as latchkey's ``registeredServices`` block.
+
+    The bundled file already stores each service's registration in latchkey's
+    own shape, so this is a copy rather than a translation: nothing here knows
+    what a registration contains, and a field latchkey adds later needs no code
+    change to reach it. :mod:`imbue.mngr_latchkey.core` merges the result into
+    the config of every gateway that must inject these services' credentials --
+    the desktop's and each VPS's -- so the registration always travels with the
+    credentials it belongs to.
+    """
     entries = _load_additional_service_entries()
-    return tuple(
-        AdditionalServiceRegistration(name=name, base_api_url=entry.base_api_url) for name, entry in entries.items()
-    )
+    return {name: dict(entry.registration) for name, entry in entries.items()}
 
 
 def additional_service_shared_schemas() -> dict[str, JsonValue]:

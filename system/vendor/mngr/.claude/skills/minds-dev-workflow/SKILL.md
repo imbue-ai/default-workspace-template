@@ -172,10 +172,10 @@ Both `minds env deploy` (which reads dev-tier provisioning credentials -- Neon, 
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
-| `MINDS_WORKSPACE_GIT_URL` | Template repo path/URL for the create-form | `<repo>/.external_worktrees/default-workspace-template/` (create it with `just default-workspace-template-worktree`); `just minds-start` sets this. Absent it, `templates.py` falls back to the default-workspace-template remote URL |
+| `MINDS_WORKSPACE_GIT_URL` | Template repo path/URL for the create-form | `<repo>/.external_worktrees/default-workspace-template/` (create it with `just default-workspace-template-worktree`); `just minds-start` sets this. Absent it, `workspace_defaults.py` falls back to the default-workspace-template remote URL |
 | `MINDS_WORKSPACE_BRANCH` | Default git branch for the template | The DEFAULT_WORKSPACE_TEMPLATE path's current branch (matches your mngr branch when you set up the worktree on a parallel-named branch) |
 
-The desktop client reads these in `apps/minds/imbue/minds/desktop_client/templates.py`.
+The desktop client reads these in `apps/minds/imbue/minds/desktop_client/workspace_defaults.py`.
 
 ### Clean shutdown
 

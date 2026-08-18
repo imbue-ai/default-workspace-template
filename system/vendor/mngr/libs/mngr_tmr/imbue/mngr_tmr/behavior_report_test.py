@@ -201,14 +201,23 @@ def test_behavior_report_section_no_outcome_is_running() -> None:
     assert behavior_report_section_of(_row()) == ReportSection.RUNNING
 
 
-def test_behavior_report_section_all_failed_changes_is_unresolved() -> None:
+def test_behavior_report_section_all_failed_changes_is_fix_failed() -> None:
     changes = {BehaviorChangeKind.CREATE_TEST: Change(status=ChangeStatus.FAILED, summary_markdown="x")}
-    assert behavior_report_section_of(_row(changes=changes)) == ReportSection.UNRESOLVED
+    assert behavior_report_section_of(_row(changes=changes)) == ReportSection.FIX_FAILED
 
 
-def test_behavior_report_section_test_kinds_are_non_impl_fixes() -> None:
+def test_behavior_report_section_test_kinds_are_test_and_doc_fixes() -> None:
     changes = {BehaviorChangeKind.CREATE_TEST: Change(status=ChangeStatus.SUCCEEDED, summary_markdown="x")}
-    assert behavior_report_section_of(_row(changes=changes)) == ReportSection.NON_IMPL_FIXES
+    assert behavior_report_section_of(_row(changes=changes)) == ReportSection.TEST_AND_DOC_FIXES
+
+
+def test_behavior_report_section_fix_impl_wins_over_a_test_change() -> None:
+    """A mapper that fixed both made an implementation fix, and that is what a reviewer needs."""
+    changes = {
+        BehaviorChangeKind.CREATE_TEST: Change(status=ChangeStatus.SUCCEEDED, summary_markdown="x"),
+        BehaviorChangeKind.FIX_IMPL: Change(status=ChangeStatus.SUCCEEDED, summary_markdown="y"),
+    }
+    assert behavior_report_section_of(_row(changes=changes)) == ReportSection.IMPL_FIXES
 
 
 def test_behavior_report_section_fix_impl_alone_is_impl_fixes() -> None:
@@ -221,9 +230,9 @@ def test_behavior_report_section_converged_units_with_no_changes_is_clean_pass()
     assert behavior_report_section_of(_row(units=units)) == ReportSection.CLEAN_PASS
 
 
-def test_behavior_report_section_unconverged_units_with_no_changes_is_unresolved() -> None:
+def test_behavior_report_section_unconverged_units_with_no_changes_is_indeterminate() -> None:
     units = (_unit(BehaviorUnitVerdict.FULL), _unit(BehaviorUnitVerdict.PARTIAL_IMPROVABLE))
-    assert behavior_report_section_of(_row(units=units)) == ReportSection.UNRESOLVED
+    assert behavior_report_section_of(_row(units=units)) == ReportSection.INDETERMINATE
 
 
 def _mapper_metadata(agent_name: str, task_id: str, branch_name: str) -> AgentMetadata:
@@ -281,8 +290,17 @@ def test_generate_behavior_html_report_renders_rows_matrix_and_escalations(tmp_p
             {
                 "squashed_branches": ["tmr-behaviors/run/browser-authorization.signin"],
                 "squashed_commit_hash": "abc1234",
-                "normalizations": [{"summary_markdown": "Consolidated two signin fixtures"}],
-                "escalations": [{"title": "Docker needed", "detail_markdown": "bridge scenarios undrivable"}],
+                "escalations": [
+                    {
+                        "kind": "HARNESS_DEFECT",
+                        "description_markdown": "Docker needed\n\nbridge scenarios undrivable",
+                    },
+                    {
+                        "kind": "SUITE_DUPLICATION",
+                        "description_markdown": "Consolidated two signin fixtures",
+                        "resolved_in_commit_hash": "def5678",
+                    },
+                ],
             }
         )
     )
@@ -329,6 +347,8 @@ def test_generate_behavior_html_report_renders_rows_matrix_and_escalations(tmp_p
     # Integrator panels render, and no violation banner appears for a clean gate.
     assert "Consolidated two signin fixtures" in report_html
     assert "Docker needed" in report_html
+    assert "Unresolved escalations (1)" in report_html
+    assert "Resolved escalations (1)" in report_html
     assert "Corpus violation" not in report_html
     # Raw HTML in agent markdown is escaped, not executed.
     assert "<script>alert(1)</script>" not in report_html

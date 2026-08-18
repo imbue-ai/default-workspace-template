@@ -654,6 +654,21 @@ def archive_todos_completed_before(
     )
 ```
 
+## CLEANUP comments
+
+Mark code that exists only to bridge a rollout -- compatibility shims, guards
+for not-yet-migrated data, temporary probes -- with a `# CLEANUP:` comment.
+Every CLEANUP comment must state both **what** can be cleaned up and **when**
+it becomes safe to do so:
+
+```python
+# CLEANUP: drop this fallback (and the legacy parser it calls) once every
+# production workspace has been migrated to the v2 manifest format.
+```
+
+The convention makes rollout debt greppable: after a deploy lands, search for
+`CLEANUP:` and remove every entry whose "when" has arrived.
+
 # Naming
 
 Always use very literal, concrete names (ex: `find_overdue_incomplete_todos`)
@@ -1448,6 +1463,27 @@ Event log files are always append-only. Never modify or delete individual lines.
 ## Rotation
 
 Event files can be rotated (by date, by size) if they get too large. Rotation should preserve the file naming convention (`events.jsonl`) and archive old files with a date suffix (e.g. `events.2026-02-28.jsonl.gz`). Not all sources should (or even can) be rotated.
+
+## Schema evolution
+
+Persisted event records are cross-process, cross-version wire data: a shared append-only events file is routinely read back by a *different* (often older) program version than the one that wrote it. Therefore:
+
+- Event models -- and every payload model nested inside them -- must ignore unknown fields (`extra="ignore"`), never reject them (`extra="forbid"`). One additive field must never make an already-released reader reject the whole stream.
+- Schema changes to event models must be additive-with-defaults. A breaking change (removing, renaming, or re-typing a required field) needs a new event type or an explicit versioning mechanism instead.
+- Readers should skip-and-warn on individual lines that fail schema validation (including wholly unknown event types from newer versions) rather than failing the whole read.
+
+The `EventEnvelope` base class in `imbue_common` provides the tolerant config, and a repo-wide meta check (`test_meta_ratchets.py`) bans its subclasses from re-tightening `extra` to `"forbid"`.
+
+# Wire models (cross-version HTTP responses)
+
+HTTP responses from a continuously deployed service to shipped clients are cross-version wire data, exactly like persisted events: an already-released client routinely parses responses produced by a *newer* server. Every client-side model that validates such a response must therefore be forward compatible:
+
+- Inherit the service's tolerant wire bases instead of `FrozenModel` (for the remote_service_connector: `WireModel` / `WireEnum` in `mngr_imbue_cloud`'s `wire.py`, with parsing routed through `validate_wire` / `parse_wire_entries`). `WireModel` ignores unknown fields; required fields stay required, so removals still fail loudly.
+- Enums whose values arrive on the wire must subclass `WireEnum` and define an `UNKNOWN` member; unrecognized values coerce to it at the parse boundary. Consumers treat UNKNOWN as "shown but not actionable, never treated as absent, never a reason to delete".
+- Wire response models live in a dedicated `wire_types.py`, whose classes a repo-wide meta ratchet requires to be WireModels/WireEnums (and bans from re-forbidding extras).
+- List parsing must never let a schema break masquerade as an empty listing: skip a failed entry with a warning, but raise when a non-empty listing fails entirely (or the body is not a list).
+- Server-side, response-shape changes must be additive-with-defaults, proven by the service's golden compat test against vendored old-client model snapshots (see the connector's `wire_compat_test.py`). A breaking change waits for the affected snapshots to leave the support window. If data must ship to new clients before then, add a new endpoint (old clients never call it) rather than new fields on an existing response.
+- Fields that clients round-trip back to the server (e.g. sync records) additionally need server-side preserve-on-absent merge semantics, so an older client's push cannot reset a field it does not know about.
 
 # Configuration
 

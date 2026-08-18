@@ -1,6 +1,7 @@
 """Unit tests for deploy_utils shared utilities."""
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
@@ -232,3 +233,54 @@ def test_collect_provider_profile_files_excludes_specified_files(
     # The single remaining file should be config.toml
     dest_paths = list(result.keys())
     assert any("config.toml" in str(p) for p in dest_paths)
+
+
+def _ctx_with_host_dir(host_dir: Path, profile_dir: Path) -> MngrContext:
+    """MngrContext stand-in exposing just profile_dir + config.default_host_dir."""
+    config = SimpleNamespace(default_host_dir=host_dir)
+    return cast(MngrContext, SimpleNamespace(profile_dir=profile_dir, config=config))
+
+
+def test_collect_provider_profile_files_maps_when_host_dir_outside_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression for #392: provider files are staged to ~/.{root_name}/... even when the
+    host dir lives outside $HOME (the modal acceptance-fixture layout that raised ValueError)."""
+    monkeypatch.setenv("MNGR_ROOT_NAME", "mngr")
+    # host_dir deliberately lives outside $HOME -- the layout that raised ValueError.
+    host_dir = tmp_path / "outside" / "mngr"
+    profile_dir = host_dir / "profiles" / "abc123"
+    provider_dir = profile_dir / "providers" / "modal"
+    provider_dir.mkdir(parents=True, exist_ok=True)
+    settings_file = provider_dir / "settings.toml"
+    settings_file.write_text("x = 1\n")
+    mngr_ctx = _ctx_with_host_dir(host_dir, profile_dir)
+
+    result = collect_provider_profile_files(mngr_ctx, "modal", frozenset())
+
+    assert result[Path("~/.mngr/profiles/abc123/providers/modal/settings.toml")] == settings_file
+
+
+def test_collect_provider_profile_files_skips_lock_files(
+    temp_mngr_ctx: MngrContext,
+) -> None:
+    """Transient flock artifacts (e.g. .modal_ssh_key.lock) must never be collected.
+
+    load_or_create_ssh_keypair leaves its lock file behind in the provider
+    dir; collecting it raced host creation in CI (the file exists only once
+    key generation has run in the profile) and is meaningless on the
+    deployed host.
+    """
+    provider_dir = temp_mngr_ctx.profile_dir / "providers" / "test-provider"
+    provider_dir.mkdir(parents=True, exist_ok=True)
+    (provider_dir / "config.toml").write_text("test config")
+    (provider_dir / ".modal_ssh_key.lock").write_text("")
+
+    result = collect_provider_profile_files(
+        mngr_ctx=temp_mngr_ctx,
+        provider_name="test-provider",
+        excluded_file_names=frozenset(),
+    )
+
+    assert len(result) == 1
+    assert any("config.toml" in str(p) for p in result)

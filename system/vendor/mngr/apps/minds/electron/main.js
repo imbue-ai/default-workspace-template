@@ -960,8 +960,6 @@ function restoreWindowBounds(bundle, entry) {
 // still acts on. Every window relays the same broadcasts, so handlers must be
 // idempotent; genuinely once-only reactions dedupe via recentShellEventKeys.
 
-let discoveryBlockedShown = false;
-
 function isDuplicateShellEvent(key) {
   const now = Date.now();
   for (const [k, ts] of recentShellEventKeys) {
@@ -1023,37 +1021,19 @@ function handleShellEvent(evt, senderBundle) {
     if (target && !target.window.isDestroyed() && !target.window.webContents.isDestroyed()) {
       target.window.webContents.send('open-overlay', { kind: 'help', workspace: wsId, description });
     }
-  } else if (evt.type === 'focus_window') {
-    // The SPA's requests auto-open policy asks main to surface the app (the
-    // legacy main-owned flow called bring-app-to-front itself). Every window
-    // relays the same broadcast, so act once and raise the sender's window
-    // (else the most recent one).
-    if (isDuplicateShellEvent('focus_window')) return;
-    const target = senderBundle && !senderBundle.window.isDestroyed() ? senderBundle : getMostRecentWindow();
-    if (target && !target.window.isDestroyed()) {
-      if (isMac) app.focus({ steal: true });
-      focusBundle(target);
-    }
-  } else if (evt.type === 'discovery_health') {
-    if (String(evt.state).toLowerCase() === 'blocked' && !discoveryBlockedShown) {
-      discoveryBlockedShown = true;
-      showErrorInAllWindows(
-        "Minds has disconnected from your workspaces and can't automatically reconnect. Restart the app to recover. Your data has not been lost.",
-        readLastLogLines(50),
-        'Restart Minds',
-      );
-    }
   }
 }
 
 // The frame types main acts on; anything else is dropped before dispatch.
+// discovery_health is deliberately absent: a dead consumer is surfaced by the
+// SPA's own band now, so main has nothing to do with it. focus_window is
+// likewise absent: the request popup only opens on an explicit click, so
+// nothing asks main to raise a window on its behalf.
 const KNOWN_SHELL_EVENT_TYPES = new Set([
   'workspaces',
   'health',
   'workspace_stopped',
   'open_help',
-  'discovery_health',
-  'focus_window',
 ]);
 
 // Only the SPA page itself may drive window management: the sender must be a
@@ -1695,9 +1675,9 @@ function handleDeeplink(rawUrl) {
   }
   if (!mru) return;
   focusBundle(mru);
-  // An Inspiration link always navigates to the SPA's Create from
-  // Inspiration page: it carries both legacy branches (create a new machine,
-  // or add the Inspiration to an existing one), so the old in-machine modal
+  // A Template link always navigates to the SPA's Create from
+  // Template page: it carries both legacy branches (create a new machine,
+  // or add the Template to an existing one), so the old in-machine modal
   // variant is gone.
   const targetPath = deeplinkTargetPath(rawUrl);
   if (!targetPath) return;
@@ -1798,37 +1778,21 @@ async function handleMngrForwardStarted(event) {
 
 function handleAuthEvent(event) {
   if (event.event === 'auth_success') {
+    // Sign-in happens on the hosted browser page; the SPA's accounts channel
+    // frame carries the new identity, but pre-WS surfaces (and any window
+    // stuck on a stale state) pick it up from a plain reload.
     for (const b of bundles) {
       if (b.window.isDestroyed() || b.window.webContents.isDestroyed()) continue;
-      // A window sitting on a backend-served /auth page cannot pick the
-      // sign-in up from a reload: that just re-renders the pristine auth form
-      // and kills the page's own status poller (which loses a deterministic
-      // race anyway -- auth_success is emitted before the OAuth flow is
-      // marked done). Send it through /post-login, which owns the
-      // just-signed-in landing decision, preserving any ?return_to it
-      // carried. Other windows keep the legacy reload so pre-WS surfaces
-      // pick up has_accounts.
-      let authPageReturnTo = null;
-      let isOnAuthPage = false;
-      try {
-        const current = new URL(b.window.webContents.getURL());
-        isOnAuthPage = current.pathname.startsWith('/auth/');
-        authPageReturnTo = current.searchParams.get('return_to');
-      } catch { /* non-URL states (about:blank, shell.html) just reload */ }
-      if (isOnAuthPage && backendBaseUrl) {
-        const postLoginUrl = `${backendBaseUrl}/post-login` +
-          (authPageReturnTo ? `?return_to=${encodeURIComponent(authPageReturnTo)}` : '');
-        b.window.webContents.loadURL(postLoginUrl).catch(() => {});
-      } else {
-        b.window.webContents.reload();
-      }
+      b.window.webContents.reload();
     }
   } else if (event.event === 'auth_required') {
     const mru = getMostRecentWindow();
     if (!mru) return;
     focusBundle(mru);
     if (backendBaseUrl) {
-      const authUrl = `${backendBaseUrl}/auth/login?message=` +
+      // ``?web-login=1`` makes the SPA start the browser sign-in flow on
+      // load, with the message rendered in its waiting modal.
+      const authUrl = `${backendBaseUrl}/?web-login=1&web-login-message=` +
         encodeURIComponent('You need to sign in to Imbue in order to share');
       navigateBundle(mru, authUrl);
     }
@@ -1890,7 +1854,6 @@ ipcMain.on('reload-chrome', (event) => {
 ipcMain.on('retry', async (event) => {
   const senderBundle = getBundleFromEvent(event);
   if (senderBundle) focusBundle(senderBundle);
-  discoveryBlockedShown = false;
   await shutdown();
   prepareAllWindowsForRetry();
   await startBackendWithRetry();

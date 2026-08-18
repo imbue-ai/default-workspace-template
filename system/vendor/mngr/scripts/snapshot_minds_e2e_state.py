@@ -550,31 +550,25 @@ def _build_snapshot_image(
         # venv / node_modules with the actual checkout (e.g. a member
         # pyproject.toml whose metadata changed).
         #
-        # ensure-binaries + build:css then run (both need what pnpm install
-        # provides), mirroring `pnpm start`'s prestart hook, which the e2e
-        # runner never triggers because it runs the app straight from source.
+        # ensure-binaries then runs (it needs what pnpm install provides),
+        # mirroring `pnpm start`'s prestart hook, which the e2e runner never
+        # triggers because it runs the app straight from source.
         # ensure-binaries downloads the bundled binaries (restic, uv, git,
         # limactl, desync) into apps/minds/resources/ -- without restic there,
         # the sync-e2e backup flows fail with "restic binary not found".
-        # build:css produces the gitignored Tailwind stylesheet app.min.css:
-        # without it app.min.css 404s in the renderer -- and since the
-        # onboarding driver detects a screen advancing via
-        # `wait_for_selector(state="hidden")` and the `.hidden` rule lives in
-        # that stylesheet, a missing stylesheet makes every onboarding screen
-        # look stuck. Mirrors the Electron e2e test setup.
         #
         # The /app -> /code/mngr symlink (independent) works around offload
         # v0.9.7's create_from_image hardcoding workdir="/app": our project is at
         # /code/mngr, so the symlink lets `uv run pytest` find the project venv
         # from offload's chosen workdir.
-        # The SPA bundle build mirrors build:css's role for the Mithril UI:
-        # static/ui/ is gitignored build output, and without it every hub
-        # route serves the "frontend not built" page, so the e2e onboarding
-        # driver never sees the create form.
+        # The SPA bundle build produces the Mithril UI: static/ui/ is
+        # gitignored build output, and without it every hub route serves the
+        # "frontend not built" page, so the e2e onboarding driver never sees
+        # the create form.
         .run_commands(
             "( cd /code/mngr && uv sync --all-packages ) && "
             "( cd /code/mngr/apps/minds && pnpm install --frozen-lockfile ) && "
-            "( cd /code/mngr/apps/minds && node scripts/ensure-binaries.js && pnpm run build:css ) && "
+            "( cd /code/mngr/apps/minds && node scripts/ensure-binaries.js ) && "
             "( cd /code/mngr/apps/minds/frontend && pnpm install --frozen-lockfile && pnpm generate && pnpm build ) && "
             "ln -s /code/mngr /app",
         )
@@ -666,9 +660,13 @@ def _create_workspace_in_sandbox(sandbox: modal.Sandbox) -> None:
     because Electron needs an X display.
     """
     command = "cd /code/mngr && xvfb-run -a uv run python -c {}".format(shlex.quote(_IN_SANDBOX_RUNNER_PROGRAM))
-    # Budget: 1500s, sized for the Electron create itself (the in-sandbox
-    # DEFAULT_WORKSPACE_TEMPLATE container build, the headline phase -- a few
-    # minutes in practice, so this carries large headroom).
+    # Budget: 1500s. The wrapped runner budgets 900s for the post-submit create
+    # phase alone (its headline cost is the in-sandbox DEFAULT_WORKSPACE_TEMPLATE
+    # container build, legitimately ~8-10.5 minutes in CI), plus the Electron
+    # launch/attach and system-interface phases. Keeping this exec timeout above
+    # any realistic run total means a stall hits the runner's own per-phase
+    # deadline (which names the stuck phase) rather than this generic exec
+    # timeout.
     returncode = _exec_in_sandbox(
         sandbox,
         command,

@@ -1,0 +1,59 @@
+#!/bin/bash
+# supervisord launcher for the in-container ("inner") owner-exec service.
+#
+# Writes the daemon's TOML config from the workspace's runtime paths, then execs
+# the pinned Go binary (installed at /usr/local/bin/owner-exec). The audience is
+# the workspace share domain read from share.env (so it matches the hosted
+# chrome's inner-audience binding and disables exec while unshared); the grants
+# endpoints are enabled; responses are signed with the container's SSH host key.
+set -euo pipefail
+
+REPO_ROOT="${MINDS_WORKSPACE_ROOT:-/home/user/workspace}"
+CONFIG_DIR="${REPO_ROOT}/data/.state"
+CONFIG_PATH="${CONFIG_DIR}/owner_exec_inner.toml"
+mkdir -p "$CONFIG_DIR"
+
+# Converge the pinned binary before exec'ing it. The installer is idempotent
+# and version-gated (a binary already at the pin exits in milliseconds), so
+# this is a no-op on every normal start -- but on a workspace that adopted the
+# owner-exec service via update-self (where the binary is normally installed
+# only at image build), or after a version-pin bump, it installs the pin
+# instead of hot-looping supervisord on a missing/stale binary.
+bash "${REPO_ROOT}/system/scripts/install_owner_exec.sh"
+
+# Resolve this workspace's mngr host id (host-<hex>) from the host record, so
+# the daemon's fixed audience is container:<host-id>. Empty if unavailable, in
+# which case the daemon falls back to the share-domain audience alone.
+HOST_ID=""
+if [ -n "${MNGR_HOST_DIR:-}" ] && [ -f "${MNGR_HOST_DIR}/data.json" ]; then
+    HOST_ID="$(jq -r '.host_id // ""' "${MNGR_HOST_DIR}/data.json" 2>/dev/null || true)"
+fi
+
+# Register the port from here rather than letting the daemon do it
+# (register_port = false below): the daemon's registration is a plain one, and
+# owner-exec must be registered --internal -- it has a port to forward but no
+# page of its own, so a plain row puts an openable-looking app in the New Tab
+# launcher and the All apps popover that opens blank. The pinned Go binary has
+# no flag for that; the row is static (name + url), so registering it once
+# here before exec is equivalent to the daemon doing it at startup.
+python3 "${REPO_ROOT}/system/scripts/forward_port.py" \
+    --name owner-exec \
+    --url "http://127.0.0.1:8793" \
+    --internal
+
+cat > "$CONFIG_PATH" <<TOML
+role = "inner"
+host_id = "${HOST_ID}"
+listen_host = "127.0.0.1"
+listen_port = 8793
+repo_root = "${REPO_ROOT}"
+authorized_keys_path = "${HOME}/.ssh/authorized_keys"
+host_key_path = "/etc/ssh/ssh_host_ed25519_key"
+grants_enabled = true
+share_env_path = "${REPO_ROOT}/data/.secrets/share.env"
+register_port = false
+service_name = "owner-exec"
+forward_port_script = "${REPO_ROOT}/system/scripts/forward_port.py"
+TOML
+
+exec /usr/local/bin/owner-exec --config "$CONFIG_PATH"

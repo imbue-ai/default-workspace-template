@@ -19,8 +19,10 @@ from imbue.mngr.api.list import list_agents
 from imbue.mngr.config.data_types import MngrContext
 from imbue.mngr.interfaces.data_types import AgentDetails
 from imbue.mngr.primitives import AgentAddress
-from imbue.mngr.primitives import AgentName
+from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import ErrorBehavior
+from imbue.mngr.primitives import HostAddress
+from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import LOCAL_PROVIDER_NAME
 from imbue.mngr_kanpan.data_source import BoolField
 from imbue.mngr_kanpan.data_source import FIELD_MUTED
@@ -45,7 +47,7 @@ class FetchResult(FrozenModel):
     """Result of a fetch operation, carrying both the snapshot and new cached fields."""
 
     snapshot: BoardSnapshot = Field(description="The board snapshot")
-    cached_fields: dict[AgentName, dict[str, FieldValue]] = Field(
+    cached_fields: dict[AgentId, dict[str, FieldValue]] = Field(
         description="Updated cached fields for the next refresh cycle"
     )
 
@@ -53,7 +55,7 @@ class FetchResult(FrozenModel):
 def fetch_board_snapshot(
     mngr_ctx: MngrContext,
     data_sources: Sequence[KanpanDataSource],
-    cached_fields: dict[AgentName, dict[str, FieldValue]],
+    cached_fields: dict[AgentId, dict[str, FieldValue]],
     include_filters: tuple[str, ...] = (),
     exclude_filters: tuple[str, ...] = (),
 ) -> FetchResult:
@@ -63,6 +65,9 @@ def fetch_board_snapshot(
     Returns a FetchResult with the snapshot and updated cached fields for the next cycle.
     """
     start_time = time.monotonic()
+    # Stamped before the read so `created` marks when the values below were true, which is
+    # what orders a fetch against a mute pressed while it was still running.
+    read_at = now_utc()
     errors: list[str] = []
 
     result = list_agents(
@@ -82,23 +87,21 @@ def fetch_board_snapshot(
     errors.extend(source_errors)
 
     # Merge new fields into flat dict
-    all_fields: dict[AgentName, dict[str, FieldValue]] = {}
+    all_fields: dict[AgentId, dict[str, FieldValue]] = {}
     for _source_name, source_fields in new_fields_by_source.items():
-        for agent_name, agent_fields in source_fields.items():
-            if agent_name not in all_fields:
-                all_fields[agent_name] = {}
-            all_fields[agent_name].update(agent_fields)
+        for agent_id, agent_fields in source_fields.items():
+            if agent_id not in all_fields:
+                all_fields[agent_id] = {}
+            all_fields[agent_id].update(agent_fields)
 
     # Build board entries. The muted bit rides on each AgentDetails (populated by
     # kanpan's agent_field_generators / offline_agent_field_generators during the
-    # list_agents call above), so it is sourced as resiliently as the agent list
-    # itself and its `created` is now.
-    now = now_utc()
+    # list_agents call above), so it is sourced as resiliently as the agent list itself.
     entries: list[AgentBoardEntry] = []
     for agent in agents:
-        agent_fields = dict(all_fields.get(agent.name, {}))
+        agent_fields = dict(all_fields.get(agent.id, {}))
         is_agent_muted = is_muted(agent.plugin.get(PLUGIN_NAME, {}))
-        agent_fields[FIELD_MUTED] = BoolField(value=is_agent_muted, created=now)
+        agent_fields[FIELD_MUTED] = BoolField(value=is_agent_muted, created=read_at)
 
         cells = {key: field.display() for key, field in agent_fields.items()}
         section = compute_section(agent_fields)
@@ -106,6 +109,8 @@ def fetch_board_snapshot(
 
         entries.append(
             AgentBoardEntry(
+                agent_id=agent.id,
+                host_id=agent.host.id,
                 name=agent.name,
                 state=agent.state,
                 provider_name=agent.host.provider_name,
@@ -130,7 +135,7 @@ def fetch_board_snapshot(
 def fetch_local_snapshot(
     mngr_ctx: MngrContext,
     data_sources: Sequence[KanpanDataSource],
-    cached_fields: dict[AgentName, dict[str, FieldValue]],
+    cached_fields: dict[AgentId, dict[str, FieldValue]],
     include_filters: tuple[str, ...] = (),
     exclude_filters: tuple[str, ...] = (),
 ) -> FetchResult:
@@ -158,18 +163,18 @@ def _get_local_work_dir(agent: AgentDetails) -> Path | None:
 def _run_data_sources_parallel(
     data_sources: Sequence[KanpanDataSource],
     agents: tuple[AgentDetails, ...],
-    cached_fields: dict[AgentName, dict[str, FieldValue]],
+    cached_fields: dict[AgentId, dict[str, FieldValue]],
     mngr_ctx: MngrContext,
-) -> tuple[dict[str, dict[AgentName, dict[str, FieldValue]]], list[str]]:
+) -> tuple[dict[str, dict[AgentId, dict[str, FieldValue]]], list[str]]:
     """Run all data sources in parallel. Returns (results_by_source_name, errors)."""
     all_errors: list[str] = []
-    results: dict[str, dict[AgentName, dict[str, FieldValue]]] = {}
+    results: dict[str, dict[AgentId, dict[str, FieldValue]]] = {}
 
     if not data_sources:
         return results, all_errors
 
     with ThreadPoolExecutor(max_workers=min(len(data_sources), 8)) as executor:
-        futures: dict[str, Future[tuple[dict[AgentName, dict[str, FieldValue]], Sequence[str]]]] = {}
+        futures: dict[str, Future[tuple[dict[AgentId, dict[str, FieldValue]], Sequence[str]]]] = {}
         for source in data_sources:
             futures[source.name] = executor.submit(source.compute, agents, cached_fields, mngr_ctx)
 
@@ -220,9 +225,14 @@ def compute_section(fields: dict[str, FieldValue]) -> BoardSection:
     raise AssertionError(f"Unhandled PR state: {pr.state}")
 
 
-def toggle_agent_mute(mngr_ctx: MngrContext, agent_name: AgentName) -> bool:
-    """Toggle the mute state of an agent. Returns the new mute state."""
-    host_ref, agent_ref = find_one_agent(AgentAddress(agent=agent_name), mngr_ctx)
+def set_agent_mute(mngr_ctx: MngrContext, agent_id: AgentId, host_id: HostId, is_agent_muted: bool) -> None:
+    """Set the mute state of the agent instance with this id on this host.
+
+    Takes the state to write rather than flipping what is stored, so a caller that has
+    already decided from what it shows cannot disagree with the stored value about which
+    way the flip goes. Host-scoped because agent ids are only unique per host.
+    """
+    host_ref, agent_ref = find_one_agent(AgentAddress(agent=agent_id, host=HostAddress(host=host_id)), mngr_ctx)
     agent, _host = resolve_to_started_host_and_agent(
         host_ref=host_ref,
         agent_ref=agent_ref,
@@ -230,10 +240,8 @@ def toggle_agent_mute(mngr_ctx: MngrContext, agent_name: AgentName) -> bool:
         mngr_ctx=mngr_ctx,
     )
     plugin_data = agent.get_plugin_data(PLUGIN_NAME)
-    is_agent_muted = not plugin_data.get(FIELD_MUTED, False)
     plugin_data[FIELD_MUTED] = is_agent_muted
     agent.set_plugin_data(PLUGIN_NAME, plugin_data)
-    return is_agent_muted
 
 
 def _cache_file_path(mngr_ctx: MngrContext) -> Path:
@@ -243,7 +251,7 @@ def _cache_file_path(mngr_ctx: MngrContext) -> Path:
 
 def save_field_cache(
     mngr_ctx: MngrContext,
-    cached_fields: dict[AgentName, dict[str, FieldValue]],
+    cached_fields: dict[AgentId, dict[str, FieldValue]],
 ) -> None:
     """Persist cached fields to a local JSON file atomically.
 
@@ -256,7 +264,7 @@ def save_field_cache(
     tmp_path: str | None = None
     try:
         serialized: dict[str, dict[str, Any]] = {}
-        for agent_name, agent_fields in cached_fields.items():
+        for agent_id, agent_fields in cached_fields.items():
             agent_data: dict[str, Any] = {}
             for key, field in agent_fields.items():
                 # mode="json" emits JSON-native primitives (datetime -> ISO
@@ -265,7 +273,7 @@ def save_field_cache(
                 # envelope is needed -- load_field_cache rehydrates via the
                 # discriminated-union TypeAdapter.
                 agent_data[key] = field.model_dump(mode="json")
-            serialized[str(agent_name)] = agent_data
+            serialized[str(agent_id)] = agent_data
 
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp_path = tempfile.mkstemp(dir=cache_path.parent, suffix=".tmp")
@@ -283,7 +291,7 @@ def save_field_cache(
 def load_field_cache(
     mngr_ctx: MngrContext,
     data_sources: Sequence[KanpanDataSource],
-) -> dict[AgentName, dict[str, FieldValue]]:
+) -> dict[AgentId, dict[str, FieldValue]]:
     """Load cached fields from the local JSON file.
 
     Each slot's TypeAdapter (from ``KanpanDataSource.field_types``) validates
@@ -303,20 +311,22 @@ def load_field_cache(
 
     try:
         raw = json.loads(cache_path.read_text())
-        result: dict[AgentName, dict[str, FieldValue]] = {}
-        for agent_name_str, agent_data in raw.items():
+        result: dict[AgentId, dict[str, FieldValue]] = {}
+        for agent_id_str, agent_data in raw.items():
             # deserialize_fields drops per-key ValidationErrors with a debug
             # log (covers the legacy-entries-missing-`created` migration case).
             agent_fields = deserialize_fields(agent_data, adapters)
             if agent_fields:
-                result[AgentName(agent_name_str)] = agent_fields
+                result[AgentId(agent_id_str)] = agent_fields
         return result
     except Exception as e:
         # Tolerate any read/parse/decode failure and behave as the docstring
         # promises ("returns empty dict if the cache file doesn't exist or
-        # is corrupt"). The broad catch is intentional and covers
-        # UnicodeDecodeError from partial-write corruption alongside the
-        # narrower OSError / json.JSONDecodeError cases.
+        # is corrupt"). The broad catch is intentional: it covers
+        # UnicodeDecodeError from partial-write corruption, the narrower
+        # OSError / json.JSONDecodeError cases, and an unparseable key (e.g. a
+        # pre-existing cache keyed by AgentName, which is not a valid AgentId)
+        # -- a dropped stale cache triggers a correct full refetch.
         logger.debug("Failed to load field cache: {}", e)
         return {}
 

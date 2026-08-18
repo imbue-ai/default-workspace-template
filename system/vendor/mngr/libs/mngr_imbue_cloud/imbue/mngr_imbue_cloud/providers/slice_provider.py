@@ -60,6 +60,12 @@ _SLICE_PLAN: str = "slice"
 # Conservative free-disk requirement (bytes) checked on the box before saving the
 # DEFAULT_WORKSPACE_TEMPLATE image tar -- the box boot disk is shared, so fail early rather than fill it.
 _ESTIMATED_DEFAULT_WORKSPACE_TEMPLATE_IMAGE_BYTES: Final[int] = 15 * 1024**3
+# How many check-tar/contend-lock/wait rounds a slice runs before giving up on the
+# box image cache. Each no-progress round burns a full WAIT_FOR_TAR_TIMEOUT_SECONDS
+# (a live builder that never publishes); dead-seeder rounds recycle in seconds, so
+# this mostly bounds the pathological wedged-builder case. The enclosing
+# ``mngr create`` timeout bounds the total wall clock well below the worst case.
+_IMAGE_CACHE_WAIT_ROUNDS: Final[int] = 4
 # Generous cap for the seeding slice's base DEFAULT_WORKSPACE_TEMPLATE image build (the inner create budget
 # is 45 min; the build is the long pole, the Playwright derive + save the rest).
 _SEED_BASE_BUILD_TIMEOUT_SECONDS: Final[float] = 1800.0
@@ -341,6 +347,7 @@ class SliceVpsDockerProvider(VpsProvider):
                 hostname=box,
                 port=vm_ssh_port,
                 public_key=vps_host_public_key,
+                host_id=host_id,
             )
             wait_for_sshd(hostname=box, port=vm_ssh_port, timeout_seconds=self.config.ssh_connect_timeout)
 
@@ -416,16 +423,22 @@ class SliceVpsDockerProvider(VpsProvider):
     ) -> None:
         """Make image_tag present in the slice's dockerd: load the box tar, or seed it as the first slice.
 
-        Block-then-load: only the build-lock holder builds + seeds; everyone else
-        waits for the tar then loads. At most two rounds, so a stale lock left by a
-        builder that died mid-seed is reclaimed (try_acquire_build_lock reclaims it)
-        rather than wedging the box's pool fill.
+        Block-then-load with dead-seeder handoff: only the build-lock holder builds
+        + seeds; everyone else waits for the tar then loads. The wait returns early
+        when the lock disappears without a tar (the seeder died or its build
+        failed), and every round re-checks the tar and re-contends the lock -- so a
+        failed seed hands off to a new builder within seconds instead of stranding
+        the waiters for the full wait window. Rounds are bounded so repeated seed
+        failures (or a wedged builder outliving the stale-lock TTL reclaim) surface
+        as an error rather than waiting forever.
         """
         cache = self._make_box_image_cache()
-        if cache.has_tar(image_tag):
-            self._load_cached_image(cache=cache, outer=outer, vm_ssh_port=vm_ssh_port, image_tag=image_tag)
-            return
-        for _attempt in range(2):
+        for _round_idx in range(_IMAGE_CACHE_WAIT_ROUNDS):
+            # Re-checked every round: a seed that published while we contended the
+            # lock (or between the lock vanishing and our wait returning) is a hit.
+            if cache.has_tar(image_tag):
+                self._load_cached_image(cache=cache, outer=outer, vm_ssh_port=vm_ssh_port, image_tag=image_tag)
+                return
             if cache.try_acquire_build_lock(image_tag):
                 try:
                     self._seed_box_image(
@@ -439,10 +452,19 @@ class SliceVpsDockerProvider(VpsProvider):
                 finally:
                     cache.release_build_lock(image_tag)
                 return
-            if cache.wait_for_tar(image_tag, timeout_seconds=WAIT_FOR_TAR_TIMEOUT_SECONDS):
-                self._load_cached_image(cache=cache, outer=outer, vm_ssh_port=vm_ssh_port, image_tag=image_tag)
-                return
-        raise BoxImageCacheError(f"timed out waiting for the box DEFAULT_WORKSPACE_TEMPLATE image tar for {image_tag}")
+            # Another slice is seeding: wait for it to publish the tar or die.
+            # Either way the next round re-checks the tar and re-contends the lock.
+            cache.wait_for_tar(image_tag, timeout_seconds=WAIT_FOR_TAR_TIMEOUT_SECONDS)
+        # One final check: a tar published during an earlier round's wait is caught
+        # by the next round's re-check, but the LAST round's wait has no following
+        # round -- load rather than fail on a tar that is right there.
+        if cache.has_tar(image_tag):
+            self._load_cached_image(cache=cache, outer=outer, vm_ssh_port=vm_ssh_port, image_tag=image_tag)
+            return
+        raise BoxImageCacheError(
+            f"gave up waiting for the box DEFAULT_WORKSPACE_TEMPLATE image tar for {image_tag} "
+            f"after {_IMAGE_CACHE_WAIT_ROUNDS} rounds"
+        )
 
     def _load_cached_image(
         self, *, cache: BoxImageCacheInterface, outer: OuterHostInterface, vm_ssh_port: int, image_tag: str
@@ -606,10 +628,11 @@ class SliceVpsDockerProvider(VpsProvider):
         finally:
             outer.disconnect()
 
-    def _wait_for_container_sshd(self, vps_ip: str, realizer: HostRealizer | None = None) -> None:
+    def _wait_for_container_sshd(self, vps_ip: str, host_id: HostId, realizer: HostRealizer | None = None) -> None:
         # imbue_cloud is container-only (it rejects bare), and the agent sshd is
-        # reached on a dynamically forwarded port, so the realizer is unused here.
-        del realizer
+        # reached on a dynamically forwarded port, so the realizer (and the
+        # host_id it would resolve a key for) is unused here.
+        del host_id, realizer
         port = (
             self._current_container_port
             if self._current_container_port is not None
@@ -618,7 +641,7 @@ class SliceVpsDockerProvider(VpsProvider):
         wait_for_sshd(hostname=vps_ip, port=port, timeout_seconds=self.config.ssh_connect_timeout)
 
     def _create_host_object(self, host_id: HostId, host_name: HostName, vps_ip: str, realizer: HostRealizer) -> Host:
-        container_key_path, _container_pub = self._get_container_ssh_keypair()
+        container_key_path, _container_pub = self._get_container_ssh_keypair(host_id)
         _container_host_key_path, container_host_public_key = self._get_container_host_keypair(host_id)
         port = (
             self._current_container_port
@@ -631,6 +654,7 @@ class SliceVpsDockerProvider(VpsProvider):
             hostname=vps_ip,
             port=port,
             public_key=container_host_public_key,
+            host_id=host_id,
         )
         pyinfra_host = create_pyinfra_host(
             hostname=vps_ip,

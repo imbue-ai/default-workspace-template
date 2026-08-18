@@ -1,17 +1,22 @@
 // The fixed 38px titlebar: breadcrumb (home / workspace / page), workspace
-// icon-tabs, requests inbox badge, bug-report button, and non-mac window
-// controls. Faithful port of ChromeShell.jinja's markup + chrome.js's
-// context state machine; DOM ids are preserved for the Playwright
-// renderer-contract specs.
+// icon-tabs, bug-report button, and non-mac window controls. Faithful port of
+// ChromeShell.jinja's markup + chrome.js's context state machine; DOM ids are
+// preserved for the Playwright renderer-contract specs.
+//
+// There is deliberately no requests entry here: a pending permission request
+// surfaces only as the centered popup the Shell floats over whatever is on
+// screen, never as a place the user has to remember to go and look.
 
 import m from "mithril";
-import { Badge } from "../components/Badge";
 import { Icon12, Icon16 } from "../components/Icon";
 import { TitlebarButton } from "../components/TitlebarButton";
 import { electronBridge } from "../../electron-bridge";
+import type { OptionsTab } from "../../models/workspaceOptions";
 import type { ShellState } from "./shell-state";
 import type { TitlebarContext } from "./classify";
 import { classifyRoute, isWorkspaceOverlayPath } from "./classify";
+import { defaultFetchJson } from "../../models/workspaceOptions";
+import { warmPermissionsOverview } from "../../models/permissionsPrefetch";
 
 export interface TitlebarAttrs {
   shell: ShellState;
@@ -29,14 +34,20 @@ export function Titlebar(): m.Component<TitlebarAttrs> {
       const workspaceName = isWorkspace
         ? (workspaces.accentEntry(context.workspaceAnyId ?? "")?.name ?? "…")
         : "";
-      const requestCount = shell.stores.requests.count;
       const isDesktop = electronBridge.isDesktop;
       const isHomeSelected = context.kind === "home";
       // While the docked options panel is up it draws its own tab strip at this
       // strip's measured rect, so hide ours (by visibility, keeping the crumb's
       // box and the rect true) or the two would ghost through each other --
-      // matching the legacy body.ws-options-open rule.
-      const isOptionsOverlayOpen = isWorkspaceOverlayPath(routePath);
+      // matching the legacy body.ws-options-open rule. The panel is still up,
+      // frozen, while an app modal (a request popup) floats over it.
+      // Also while the request popup is up: it draws the same strip at this
+      // strip's measured rect, so leaving ours painted would ghost two strips
+      // through each other -- the reason the panel hides them in the first
+      // place. `/inbox` covers the popup opened from the in-chat card too,
+      // which names no panel.
+      const isOptionsOverlayOpen =
+        isWorkspaceOverlayPath(routePath) || routePath === "/inbox" || shell.panelRouteBehindOverlay !== null;
 
       return m(
         "div#minds-titlebar",
@@ -109,18 +120,23 @@ export function Titlebar(): m.Component<TitlebarAttrs> {
                     m(
                       TitlebarButton,
                       {
-                        id: "ws-tab-share",
-                        "aria-label": "Share machine",
-                        "data-tooltip": "Share machine",
-                        tone: context.activeTab === "share" ? "default" : "muted",
+                        id: "ws-tab-permissions",
+                        "aria-label": "Permissions",
+                        "data-tooltip": "Permissions",
+                        tone: context.activeTab === "permissions" ? "default" : "muted",
                         extra: isOptionsOverlayOpen
                           ? "invisible"
-                          : context.activeTab === "share"
+                          : context.activeTab === "permissions"
                             ? "bg-fill-active"
                             : "",
-                        onclick: () => toggleWorkspaceOptions(shell, routePath, context, "share"),
+                        // Pointing at the key starts the read the pane makes
+                        // on its first mount, so opening it usually lands on
+                        // an answer instead of on "Loading permissions...".
+                        onpointerenter: () => warmPermissionsFor(shell, context),
+                        onfocus: () => warmPermissionsFor(shell, context),
+                        onclick: () => toggleWorkspaceOptions(shell, routePath, context, "permissions"),
                       },
-                      m(Icon16, { name: "share" }),
+                      m(Icon16, { name: "key" }),
                     ),
                     m(
                       TitlebarButton,
@@ -137,6 +153,22 @@ export function Titlebar(): m.Component<TitlebarAttrs> {
                         onclick: () => toggleWorkspaceOptions(shell, routePath, context, "settings"),
                       },
                       m(Icon16, { name: "settings" }),
+                    ),
+                    m(
+                      TitlebarButton,
+                      {
+                        id: "ws-tab-share",
+                        "aria-label": "Share machine",
+                        "data-tooltip": "Share machine",
+                        tone: context.activeTab === "share" ? "default" : "muted",
+                        extra: isOptionsOverlayOpen
+                          ? "invisible"
+                          : context.activeTab === "share"
+                            ? "bg-fill-active"
+                            : "",
+                        onclick: () => toggleWorkspaceOptions(shell, routePath, context, "share"),
+                      },
+                      m(Icon16, { name: "send" }),
                     ),
                   ]),
                 ]
@@ -158,19 +190,6 @@ export function Titlebar(): m.Component<TitlebarAttrs> {
           ),
         ]),
         m("div", { class: "flex items-center justify-end shrink-0" }, [
-          m(
-            TitlebarButton,
-            {
-              id: "requests-toggle",
-              "aria-label": "Requests",
-              "data-tooltip": "Requests",
-              extra: "gap-[3px]",
-              // Float the inbox over the current workspace (kept mounted), like
-              // the bug button does for Get help, rather than dropping to Home.
-              onclick: () => shell.openInbox(),
-            },
-            [m(Icon16, { name: "inbox" }), m(Badge, { id: "requests-badge", count: requestCount, hidden: requestCount === 0 })],
-          ),
           m(
             TitlebarButton,
             {
@@ -244,7 +263,7 @@ function toggleWorkspaceOptions(
   shell: ShellState,
   routePath: string,
   context: TitlebarContext,
-  tab: "share" | "settings",
+  tab: OptionsTab,
 ): void {
   if (context.workspaceAnyId === null) return;
   const agentScoped = shell.stores.workspaces.toAgentScopedId(context.workspaceAnyId);
@@ -253,4 +272,10 @@ function toggleWorkspaceOptions(
     return;
   }
   m.route.set(`/workspace/${agentScoped}/options?tab=${tab}`);
+}
+
+/** Start reading this machine's permissions, if the route names one. */
+function warmPermissionsFor(shell: ShellState, context: TitlebarContext): void {
+  if (context.workspaceAnyId === null || context.workspaceAnyId === undefined) return;
+  warmPermissionsOverview(shell.stores.workspaces.toAgentScopedId(context.workspaceAnyId), defaultFetchJson);
 }

@@ -42,7 +42,13 @@ logger = logging.getLogger(__name__)
 
 
 def _sweep_owner_email(user_id: str, email_getter: Callable[[str], str | None]) -> str | None:
-    """Best-effort verified-email lookup for the sweep's lazy row creation."""
+    """Best-effort backfill-email lookup for the sweep's lazy row creation.
+
+    The default getter follows :func:`imbue.remote_service_connector.auth.get_backfill_email`
+    semantics: a verified email, ``""`` for an existing-but-unverified owner
+    (create the row, skip the paid check), or ``None`` for an owner whose
+    SuperTokens record cannot be resolved (the sweep must skip them).
+    """
     try:
         return email_getter(user_id)
     except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
@@ -97,9 +103,10 @@ def _resolve_owner_storage_limit_bytes(
 ) -> int | None:
     """Resolve the owner's storage limit, lazily creating their entitlements row when needed.
 
-    Mirrors the request-path rule (paid pre-cutoff accounts land on ally).
-    Returns ``None`` for an unresolvable owner (no row and no verified email)
-    -- the sweep must skip them, never enforce against guessed limits.
+    Mirrors the request-path rule (paid pre-cutoff accounts land on ally; an
+    existing-but-unverified owner gets a plain explorer row). Returns ``None``
+    only for an owner whose SuperTokens record cannot be resolved at all --
+    the sweep must skip them, never enforce against guessed limits.
     """
     existing = entitlements_store.get_entitlements(owner_user_id)
     if existing is not None:
@@ -177,7 +184,7 @@ def run_r2_quota_sweep(
     key_store: KeyStore,
     entitlements_store: EntitlementsStore,
     grant_store: GrantStore,
-    email_getter: Callable[[str], str | None] = auth_module.default_email_getter,
+    email_getter: Callable[[str], str | None] = auth_module.get_backfill_email,
     enforcement_lock: Callable[[str], contextlib.AbstractContextManager[None]] = r2_enforcement_lock,
     only_user_id: str | None = None,
 ) -> dict[str, int]:

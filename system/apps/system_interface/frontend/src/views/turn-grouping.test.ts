@@ -6,8 +6,13 @@ import type { PermissionResolution } from "./message-classification";
 
 // --- Event builders ---
 
-function userMsg(ts: string, content: string, id = `u-${ts}`): UserMessageEvent {
-  return { timestamp: ts, type: "user_message", event_id: id, source: "test", role: "user", content };
+function userMsg(
+  ts: string,
+  content: string,
+  id = `u-${ts}`,
+  extra: Partial<UserMessageEvent> = {},
+): UserMessageEvent {
+  return { timestamp: ts, type: "user_message", event_id: id, source: "test", role: "user", content, ...extra };
 }
 
 function assistantText(ts: string, text: string, id = `a-${ts}`): AssistantMessageEvent {
@@ -22,6 +27,9 @@ function assistantText(ts: string, text: string, id = `a-${ts}`): AssistantMessa
     stop_reason: null,
     usage: null,
     is_auth_error: false,
+    is_api_error: false,
+    api_error_kind: null,
+    is_provider_fault: false,
   };
 }
 
@@ -38,12 +46,27 @@ function workMsg(ts: string, toolName: string, callId: string, id = `a-${callId}
     stop_reason: null,
     usage: null,
     is_auth_error: false,
+    is_api_error: false,
+    api_error_kind: null,
+    is_provider_fault: false,
   };
 }
 
-/** A tk lifecycle command as it appears in the transcript: a Bash tool call
- *  whose input_preview is the JSON-encoded command. */
+/** A tk lifecycle command as it appears in the transcript: a Bash tool call whose
+ *  input_preview is the JSON-encoded command, carrying the backend's hidden decision. */
 function tkMsg(ts: string, command: string, callId: string, id = `a-${callId}`): AssistantMessageEvent {
+  return bashMsg(ts, command, callId, id, "hidden");
+}
+
+/** A plain Bash command (e.g. a look-alike merely mentioning a tk verb): the backend
+ *  stamps NO display decision, so it renders as ordinary work. */
+function bashMsg(
+  ts: string,
+  command: string,
+  callId: string,
+  id = `a-${callId}`,
+  display?: "hidden",
+): AssistantMessageEvent {
   return {
     timestamp: ts,
     type: "assistant_message",
@@ -51,10 +74,36 @@ function tkMsg(ts: string, command: string, callId: string, id = `a-${callId}`):
     source: "test",
     model: "m",
     text: "",
-    tool_calls: [{ tool_call_id: callId, tool_name: "Bash", input_preview: JSON.stringify({ command }) }],
+    tool_calls: [
+      {
+        tool_call_id: callId,
+        tool_name: "Bash",
+        input_preview: JSON.stringify({ command }),
+        ...(display ? { display } : {}),
+      },
+    ],
     stop_reason: null,
     usage: null,
     is_auth_error: false,
+    is_api_error: false,
+    api_error_kind: null,
+    is_provider_fault: false,
+  };
+}
+
+/** The codex form of a tk lifecycle command: a code-mode `exec` call whose
+ *  input_preview is the JS program invoking `tools.exec_command({cmd})`. */
+function codexTkMsg(ts: string, command: string, callId: string, id = `a-${callId}`): AssistantMessageEvent {
+  return {
+    ...tkMsg(ts, command, callId, id),
+    tool_calls: [
+      {
+        tool_call_id: callId,
+        tool_name: "exec",
+        input_preview: `await tools.exec_command(${JSON.stringify({ cmd: command })});`,
+        display: "hidden",
+      },
+    ],
   };
 }
 
@@ -75,11 +124,15 @@ function permissionMsg(ts: string, callId: string, text = "", id = `a-${callId}`
         input_preview: JSON.stringify({
           command: "latchkey curl -XPOST http://latchkey-self.invalid/permission-requests -d '{}'",
         }),
+        display: "permission_request",
       },
     ],
     stop_reason: null,
     usage: null,
     is_auth_error: false,
+    is_api_error: false,
+    api_error_kind: null,
+    is_provider_fault: false,
   };
 }
 
@@ -225,6 +278,33 @@ describe("decoration from the transcript", () => {
     expect(steps[0].events.map((e) => e.event_id)).toEqual(["a-w1"]);
   });
 
+  // pi's shell tool is lowercase `bash` (not claude's `Bash` / codex's `exec`); its tk
+  // lifecycle calls must still be recognised as step markers, or the pi step timeline
+  // would render nothing.
+  it("recognises a lowercase pi `bash` tk call as a step marker", () => {
+    const piTk = (ts: string, command: string, callId: string): AssistantMessageEvent => ({
+      ...tkMsg(ts, command, callId),
+      tool_calls: [
+        { tool_call_id: callId, tool_name: "bash", input_preview: JSON.stringify({ command }), display: "hidden" },
+      ],
+    });
+    const events = [
+      userMsg("t0", "go"),
+      piTk("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Fix it")),
+      workMsg("t2", "Edit", "w1"),
+      result("t2", "w1", "ok"),
+      piTk("t3", "tk close s1", "t2"),
+      result("t3", "t2", closeOut("s1", "Fix it", "Fixed the bug")),
+    ];
+    const steps = stepItems(run(events)[0].items);
+    expect(steps).toHaveLength(1);
+    expect(steps[0].title).toBe("Fix it");
+    expect(steps[0].summary).toBe("Fixed the bug");
+    // The tk calls are consumed as markers, so only the real Edit work is inside the step.
+    expect(steps[0].events.map((e) => e.event_id)).toEqual(["a-w1"]);
+  });
+
   it("reads a pending step's title from its `Created` line", () => {
     const events = [
       userMsg("t0", "go"),
@@ -250,6 +330,21 @@ describe("decoration from the transcript", () => {
     ];
     const sections = run(events);
     const steps = stepItems(sections[0].items);
+    expect(steps[0].events).toHaveLength(0);
+    expect(sections[0].items.filter((i) => i.kind === "ungrouped")).toHaveLength(0);
+  });
+
+  it("hides a codex exec tk call the same way as a claude Bash one", () => {
+    // Codex runs tk through code-mode exec (tool_name "exec", command under "cmd");
+    // it must be consumed as a step marker, not rendered as a raw tool card.
+    const events = [
+      userMsg("t0", "go"),
+      codexTkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Do it")),
+    ];
+    const sections = run(events);
+    const steps = stepItems(sections[0].items);
+    expect(steps).toHaveLength(1);
     expect(steps[0].events).toHaveLength(0);
     expect(sections[0].items.filter((i) => i.kind === "ungrouped")).toHaveLength(0);
   });
@@ -576,7 +671,7 @@ describe("audit regressions", () => {
       tkMsg("t1", "tk start s1", "k1"),
       result("t1", "k1", startOut("s1", "Do it")),
       // A real git command whose message mentions "tk close" -- not a tk command.
-      tkMsg("t2", "git commit -m 'tk close the bug'", "gc"),
+      bashMsg("t2", "git commit -m 'tk close the bug'", "gc"),
       result("t2", "gc", "[main abc] tk close the bug"),
     ];
     const sections = run(events, /* idle */ false);
@@ -588,7 +683,7 @@ describe("audit regressions", () => {
   it("keeps a tk-mentioning command visible (ungrouped) when no step is open", () => {
     const events = [
       userMsg("t0", "go"),
-      tkMsg("t1", "echo 'run tk start later'", "e1"),
+      bashMsg("t1", "echo 'run tk start later'", "e1"),
       result("t1", "e1", "run tk start later"),
     ];
     const sections = run(events);
@@ -620,11 +715,19 @@ describe("audit regressions", () => {
       text: "",
       tool_calls: [
         { tool_call_id: "real1", tool_name: "Edit", input_preview: `{"path":"x"}` },
-        { tool_call_id: "tkc", tool_name: "Bash", input_preview: JSON.stringify({ command: "tk close s1" }) },
+        {
+          tool_call_id: "tkc",
+          tool_name: "Bash",
+          input_preview: JSON.stringify({ command: "tk close s1" }),
+          display: "hidden",
+        },
       ],
       stop_reason: null,
       usage: null,
       is_auth_error: false,
+      is_api_error: false,
+      api_error_kind: null,
+      is_provider_fault: false,
     };
     const events = [
       userMsg("t0", "go"),
@@ -673,7 +776,7 @@ describe("audit regressions", () => {
       userMsg("t0", "go"),
       tkMsg("t1", "tk start s1", "k1"),
       result("t1", "k1", startOut("s1", "Do it")),
-      userMsg("t2", "Stop hook feedback:\nhook", "sh1"),
+      userMsg("t2", "Stop hook feedback:\nhook", "sh1", { display: "chip", display_label: "Stop hook feedback" }),
       workMsg("t3", "Edit", "w1"),
       result("t3", "w1", "ok"),
       tkMsg("t4", "tk close s1", "k2"),
@@ -692,7 +795,11 @@ describe("audit regressions", () => {
     const events = [
       userMsg("t0", "go"),
       assistantText("t1", "working on it", "a1"),
-      userMsg("t2", "<agentic-browser-fleet>Browser foo-1 was handed back to you.</agentic-browser-fleet>", "bf1"),
+      userMsg("t2", "<agentic-browser-fleet>Browser foo-1 was handed back to you.</agentic-browser-fleet>", "bf1", {
+        display: "chip",
+        display_label: "Browser fleet",
+        display_body: "Browser foo-1 was handed back to you.",
+      }),
       assistantText("t3", "resuming", "a2"),
     ];
     const sections = run(events);
@@ -705,12 +812,169 @@ describe("audit regressions", () => {
     const events = [
       userMsg("t0", "go"),
       assistantText("t1", "spawned a background task", "a1"),
-      userMsg("t2", "<task-notification>\n<status>completed</status>\n</task-notification>", "tn1"),
+      userMsg("t2", "<task-notification>\n<status>completed</status>\n</task-notification>", "tn1", {
+        display: "chip",
+        display_label: "Background task",
+      }),
       assistantText("t3", "handling the result", "a2"),
     ];
     const sections = run(events);
     expect(sections.length).toBe(1);
     expect(sections[0].items.some((i) => i.kind === "chip" && i.event.event_id === "tn1")).toBe(true);
+  });
+
+  // The post-auto-compaction summary carries is_compact_summary and is the FIRST
+  // event of a resumed session -- there is no section open yet. It must still
+  // render (as a top chip in a fresh section), not be dropped.
+  it("renders a LEADING compaction summary as a top chip instead of dropping it", () => {
+    const summary: UserMessageEvent = {
+      ...userMsg("t0", "This session is being continued from a previous conversation ...", "cs1"),
+      display: "chip",
+      display_label: "Summary of earlier conversation",
+    };
+    const events = [summary, assistantText("t1", "continuing the work", "a1")];
+    const sections = run(events);
+    expect(sections.length).toBe(1);
+    // It is a chip (folded), not a user-prompt turn boundary.
+    expect(sections[0].user_event).toBeNull();
+    expect(sections[0].items.some((i) => i.kind === "chip" && i.event.event_id === "cs1")).toBe(true);
+  });
+
+  it("folds a mid-session compaction summary into the current section as a chip", () => {
+    const summary: UserMessageEvent = {
+      ...userMsg("t2", "This session is being continued from a previous conversation ...", "cs2"),
+      display: "chip",
+      display_label: "Summary of earlier conversation",
+    };
+    const events = [
+      userMsg("t0", "go"),
+      assistantText("t1", "working", "a1"),
+      summary,
+      assistantText("t3", "more", "a2"),
+    ];
+    const sections = run(events);
+    expect(sections.length).toBe(1);
+    expect(sections[0].items.some((i) => i.kind === "chip" && i.event.event_id === "cs2")).toBe(true);
+  });
+});
+
+// Prose sitting immediately before a chip is a delivered reply: an injected
+// user-side line only arrives at a request boundary, so prose can precede one
+// only when that response ended with text and no tool call -- the agent stopped
+// there. The work it does after being woken must not retroactively bury that
+// reply inside the step that happened to still be open. See the stint split in
+// finalizeSection.
+describe("chips as stint boundaries", () => {
+  it("keeps a delivered reply surfaced when a stop hook wakes the agent into the same step", () => {
+    const events = [
+      userMsg("t0", "go"),
+      tkMsg("t1", "tk start s1", "k1"),
+      result("t1", "k1", startOut("s1", "Do it")),
+      workMsg("t2", "Edit", "w1"),
+      result("t2", "w1", "ok"),
+      assistantText("t3", "Here is what I found.", "wrapup"),
+      userMsg("t4", "Stop hook feedback:\nhook", "sh1", { display: "chip", display_label: "Stop hook feedback" }),
+      workMsg("t5", "Edit", "w2"),
+      result("t5", "w2", "ok"),
+      assistantText("t6", "Done now.", "reply"),
+    ];
+    const sections = run(events);
+    const steps = stepItems(sections[0].items);
+    // The wrap-up is ejected from the step, not collapsed inside it alongside
+    // the work that followed the hook.
+    expect(steps[0].events.map((e) => e.event_id)).toEqual(["a-w1", "a-w2"]);
+    // It renders inline at its own position, immediately before the chip.
+    expect(sections[0].items.map((i) => i.kind)).toEqual(["step", "ungrouped", "chip"]);
+    const ung = sections[0].items[1] as { kind: "ungrouped"; events: AssistantMessageEvent[] };
+    expect(ung.events.map((e) => e.event_id)).toEqual(["wrapup"]);
+    expect(sections[0].trailing_reply.map((e) => e.event_id)).toEqual(["reply"]);
+  });
+
+  it("keeps a delivered reply surfaced when a background-task notice wakes the agent", () => {
+    const events = [
+      userMsg("t0", "go"),
+      tkMsg("t1", "tk start s1", "k1"),
+      result("t1", "k1", startOut("s1", "Do it")),
+      workMsg("t2", "Bash", "w1"),
+      result("t2", "w1", "ok"),
+      assistantText("t3", "Kicked it off; I'll relay the findings.", "wrapup"),
+      userMsg("t4", "<task-notification>\n<status>completed</status>\n</task-notification>", "tn1", {
+        display: "chip",
+        display_label: "Background task",
+      }),
+      workMsg("t5", "Bash", "w2"),
+      result("t5", "w2", "ok"),
+    ];
+    const sections = run(events);
+    const steps = stepItems(sections[0].items);
+    expect(steps[0].events.map((e) => e.event_id)).toEqual(["a-w1", "a-w2"]);
+    expect(steps[0].narration).toBeNull();
+  });
+
+  // The live frontier step's LAST stint has not ended, so its trailing prose is
+  // still in-flight narration. Only its earlier stints -- each of which a chip
+  // proved ended -- get their closing prose ejected.
+  it("ejects a frontier step's pre-chip prose but keeps its live narration", () => {
+    const events = [
+      userMsg("t0", "go"),
+      tkMsg("t1", "tk start s1", "k1"),
+      result("t1", "k1", startOut("s1", "Do it")),
+      workMsg("t2", "Edit", "w1"),
+      result("t2", "w1", "ok"),
+      assistantText("t3", "Here is what I found.", "wrapup"),
+      userMsg("t4", "Stop hook feedback:\nhook", "sh1", { display: "chip", display_label: "Stop hook feedback" }),
+      workMsg("t5", "Edit", "w2"),
+      result("t5", "w2", "ok"),
+      assistantText("t6", "Still going.", "narr"),
+    ];
+    const sections = run(events, /* idle */ false);
+    const steps = stepItems(sections[0].items);
+    expect(steps[0].is_frontier).toBe(true);
+    expect(steps[0].events.map((e) => e.event_id)).toEqual(["a-w1", "a-w2", "narr"]);
+    expect(steps[0].narration).toBe("Still going.");
+    expect(sections[0].trailing_reply).toHaveLength(0);
+  });
+
+  // The flicker variant: the notice lands and the agent has not yet produced
+  // anything. It flips the derived activity state, making the still-open step
+  // the frontier -- which must not retract the reply already shown.
+  it("keeps the reply surfaced when a notice lands before the agent has resumed", () => {
+    const events = [
+      userMsg("t0", "go"),
+      tkMsg("t1", "tk start s1", "k1"),
+      result("t1", "k1", startOut("s1", "Do it")),
+      workMsg("t2", "Bash", "w1"),
+      result("t2", "w1", "ok"),
+      assistantText("t3", "All three parts are done.", "wrapup"),
+      userMsg("t4", "<task-notification>\n<status>completed</status>\n</task-notification>", "tn1", {
+        display: "chip",
+        display_label: "Background task",
+      }),
+    ];
+    const sections = run(events, /* idle */ false);
+    const steps = stepItems(sections[0].items);
+    expect(steps[0].events.map((e) => e.event_id)).toEqual(["a-w1"]);
+    expect(sections[0].trailing_reply.map((e) => e.event_id)).toEqual(["wrapup"]);
+  });
+
+  // Prose mid-stint is ordinary narration: it is followed by more work before
+  // any chip, so it is not a closing remark and must stay in the step.
+  it("leaves mid-stint narration inside the step", () => {
+    const events = [
+      userMsg("t0", "go"),
+      tkMsg("t1", "tk start s1", "k1"),
+      result("t1", "k1", startOut("s1", "Do it")),
+      userMsg("t2", "Stop hook feedback:\nhook", "sh1", { display: "chip", display_label: "Stop hook feedback" }),
+      workMsg("t3", "Edit", "w1"),
+      result("t3", "w1", "ok"),
+      assistantText("t4", "Now the tests.", "narr"),
+      workMsg("t5", "Bash", "w2"),
+      result("t5", "w2", "ok"),
+    ];
+    const sections = run(events);
+    const steps = stepItems(sections[0].items);
+    expect(steps[0].events.map((e) => e.event_id)).toEqual(["a-w1", "narr", "a-w2"]);
+    expect(steps[0].narration).toBe("Now the tests.");
   });
 });
 
@@ -726,7 +990,7 @@ describe("regular ticket transitions", () => {
       result("t1", "k1", startOut("cod-step-s1", "Do it")),
       // The crystallize command: not a recognised pure-tk call (begins with cd),
       // so it renders as work; its output starts a regular ticket.
-      tkMsg("t2", "cd /code && tk create x && tk start cod-oglc", "cr"),
+      bashMsg("t2", "cd /code && tk create x && tk start cod-oglc", "cr"),
       result("t2", "cr", "Updated cod-oglc -> in_progress\nTICKET=cod-oglc"),
       workMsg("t3", "Bash", "w1"),
       result("t3", "w1", "ok"),
@@ -803,7 +1067,7 @@ describe("step-id fallback (no decoration in the loaded window)", () => {
       tkMsg("t1", "tk start cod-step-aaaa", "k1"),
       result("t1", "k1", "Updated cod-step-aaaa -> in_progress"),
       // A regular ticket the agent picked up: renders as work; output starts it.
-      tkMsg("t2", "cd /code && tk start cod-oglc", "cr"),
+      bashMsg("t2", "cd /code && tk start cod-oglc", "cr"),
       result("t2", "cr", "Updated cod-oglc -> in_progress"),
       workMsg("t3", "Bash", "w1"),
       result("t3", "w1", "ok"),
@@ -935,6 +1199,7 @@ describe("permission resolutions", () => {
         "2026-05-01T01:00:02Z",
         "Your permission request for Slack was granted with the following permissions: slack-read-all. Please retry the call that was blocked.",
         "u-res",
+        { display: "permission_resolution", resolution: "granted" },
       ),
     ];
     const sections = run(events);
@@ -956,7 +1221,10 @@ describe("permission resolutions", () => {
       result("2026-05-01T01:00:01Z", "c-s1", startOut("s1", "Connect to your Gmail account")),
       permissionMsg("2026-05-01T01:00:02Z", "perm"),
       result("2026-05-01T01:00:02Z", "perm", '{"request_id":"r1"}'),
-      userMsg("2026-05-01T01:00:03Z", "Your permission request for Gmail was granted. Retry.", "u-res"),
+      userMsg("2026-05-01T01:00:03Z", "Your permission request for Gmail was granted. Retry.", "u-res", {
+        display: "permission_resolution",
+        resolution: "granted",
+      }),
       // Post-approval work and the step closing happen after the boundary.
       workMsg("2026-05-01T01:00:04Z", "Bash", "w-after"),
       result("2026-05-01T01:00:04Z", "w-after", "ok"),
@@ -988,6 +1256,7 @@ describe("permission resolutions", () => {
         "2026-05-01T01:00:02Z",
         "Your permission request for Slack was denied. Do not retry the blocked call.",
         "u-res",
+        { display: "permission_resolution", resolution: "denied" },
       ),
     ];
     const sections = run(events);
@@ -1001,8 +1270,14 @@ describe("permission resolutions", () => {
       result("2026-05-01T01:00:01Z", "perm1", '{"request_id":"r1"}'),
       permissionMsg("2026-05-01T01:00:02Z", "perm2"),
       result("2026-05-01T01:00:02Z", "perm2", '{"request_id":"r2"}'),
-      userMsg("2026-05-01T01:00:03Z", "Your permission request for Slack was granted. Retry.", "u-res1"),
-      userMsg("2026-05-01T01:00:04Z", "Your permission request for GitHub was denied. Do not retry.", "u-res2"),
+      userMsg("2026-05-01T01:00:03Z", "Your permission request for Slack was granted. Retry.", "u-res1", {
+        display: "permission_resolution",
+        resolution: "granted",
+      }),
+      userMsg("2026-05-01T01:00:04Z", "Your permission request for GitHub was denied. Do not retry.", "u-res2", {
+        display: "permission_resolution",
+        resolution: "denied",
+      }),
     ];
     const sections = run(events);
     const perms = sections[0].items.filter((i) => i.kind === "permission") as PermissionItem[];
@@ -1024,6 +1299,7 @@ describe("permission resolutions", () => {
         "2026-05-01T01:00:02Z",
         "Your cross-workspace permission request was granted (minds-workspaces-read) for all workspaces.",
         "u-res-ws",
+        { display: "permission_resolution", resolution: "granted" },
       ),
       permissionMsg("2026-05-01T01:00:03Z", "perm-slack"),
       result("2026-05-01T01:00:03Z", "perm-slack", '{"request_id":"r-slack"}'),
@@ -1031,6 +1307,7 @@ describe("permission resolutions", () => {
         "2026-05-01T01:00:04Z",
         "Your permission request for Slack was denied. Do not retry the blocked call.",
         "u-res-slack",
+        { display: "permission_resolution", resolution: "denied" },
       ),
     ];
     const sections = run(events);
@@ -1043,7 +1320,10 @@ describe("permission resolutions", () => {
   it("leaves a notification with no open request to render as a normal turn", () => {
     const events = [
       userMsg("2026-05-01T01:00:00Z", "go"),
-      userMsg("2026-05-01T01:00:01Z", "Your permission request for Slack was granted. Retry.", "u-orphan"),
+      userMsg("2026-05-01T01:00:01Z", "Your permission request for Slack was granted. Retry.", "u-orphan", {
+        display: "permission_resolution",
+        resolution: "granted",
+      }),
     ];
     const sections = run(events);
     // No card to claim it, so it falls through and opens its own turn.
