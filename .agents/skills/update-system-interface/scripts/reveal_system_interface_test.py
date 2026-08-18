@@ -51,14 +51,22 @@ class _RecordingRunner(reveal_mod.Runner):
     """
 
     calls: list[list[str]] = field(default_factory=list)
+    envs: list[dict | None] = field(default_factory=list)
+    # What each executable resolves to on PATH; absent means "not installed",
+    # which is also the default so tests never reach the real machine's PATH.
+    executables: dict[str, str] = field(default_factory=dict)
     _responses: dict[tuple[str, ...], object] = field(default_factory=dict)
 
     def respond(self, prefix: tuple[str, ...], result: object) -> None:
         self._responses[prefix] = result
 
+    def which(self, executable: str) -> str | None:
+        return self.executables.get(executable)
+
     def run(self, argv: Sequence[str], **kwargs) -> _Result:
         argv_list = list(argv)
         self.calls.append(argv_list)
+        self.envs.append(kwargs.get("env"))
         for prefix, result in self._responses.items():
             if tuple(argv_list[: len(prefix)]) == prefix:
                 if isinstance(result, list):
@@ -456,6 +464,76 @@ def test_dependency_refresh_repins_the_base_to_the_in_tree_source(tmp_path: Path
         "system/vendor/mngr/libs/mngr",
         "--reinstall",
     ]
+
+
+def test_tool_location_comes_from_the_console_scripts_shebang(tmp_path: Path) -> None:
+    # uv's default tool directory follows $HOME, and the workspace runs under a
+    # different $HOME than build_workspace.sh installed with -- so defaulting
+    # rebuilds a shadow copy nothing on PATH runs, and the stale tool everyone
+    # actually executes is reported as successfully refreshed. The console script
+    # names its own environment, so we take the answer from there.
+    bin_dir = tmp_path / "root" / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    script = bin_dir / "mngr"
+    script.write_text(
+        f"#!{tmp_path}/root/.local/share/uv/tools/imbue-mngr/bin/python3\n"
+        "# -*- coding: utf-8 -*-\nimport sys\n"
+    )
+
+    location = reveal_mod._tool_location(script)
+
+    assert location == (
+        tmp_path / "root" / ".local" / "share" / "uv" / "tools",
+        bin_dir,
+    )
+
+
+@pytest.mark.parametrize(
+    "contents",
+    [
+        "import sys\n",  # no shebang at all
+        "#!\n",  # shebang with no interpreter
+        "#!/python3\n",  # too shallow to name a tool directory
+    ],
+)
+def test_tool_location_declines_what_it_cannot_read(contents: str, tmp_path: Path) -> None:
+    # Anything we cannot interpret means we do not know which installation this
+    # is, and the caller falls back to letting uv decide -- guessing a directory
+    # would be worse than uv's own default.
+    script = tmp_path / "mngr"
+    script.write_text(contents)
+
+    assert reveal_mod._tool_location(script) is None
+
+
+def test_tool_location_declines_a_script_it_cannot_open(tmp_path: Path) -> None:
+    assert reveal_mod._tool_location(tmp_path / "does-not-exist") is None
+
+
+def test_dependency_refresh_targets_the_installation_actually_on_path(
+    tmp_path: Path,
+) -> None:
+    # The whole point: uv would otherwise default to a tool directory under
+    # $HOME, rebuild a copy there, and report success while the tool that is
+    # really being run stays stale.
+    bin_dir = tmp_path / "root" / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    tools = tmp_path / "root" / ".local" / "share" / "uv" / "tools"
+    (bin_dir / "mngr").write_text(f"#!{tools}/imbue-mngr/bin/python3\nimport sys\n")
+    runner = _runner_with_diff("M\tuv.lock\n")
+    runner.executables["mngr"] = str(bin_dir / "mngr")
+
+    _reveal(runner, _FakeHttp(_all_healthy), _FakeSpawner())
+
+    install_env = next(
+        env
+        for argv, env in zip(runner.calls, runner.envs)
+        if argv[:4] == ["uv", "tool", "install", "-e"]
+        and argv[4] == "system/vendor/mngr/libs/mngr"
+    )
+    assert install_env is not None
+    assert install_env["UV_TOOL_DIR"] == str(tools)
+    assert install_env["UV_TOOL_BIN_DIR"] == str(bin_dir)
 
 
 def test_dependency_refresh_survives_a_tool_with_no_receipt() -> None:

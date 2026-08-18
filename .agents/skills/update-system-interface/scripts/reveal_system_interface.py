@@ -89,6 +89,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -118,6 +119,9 @@ FRONTEND_DIR = f"{APP_DIR}/frontend"
 # start --restart``, and the ``mngr observe`` the backend spawns).
 MNGR_DIR = "system/vendor/mngr/libs/mngr"
 MNGR_TOOL_NAME = "imbue-mngr"
+# The console script that tool installs; the reveal resolves it on PATH to find
+# which of the possibly-several installations is the one actually being run.
+MNGR_EXECUTABLE = "mngr"
 # uv records how a tool was installed here, inside the tool's own directory.
 _RECEIPT = "uv-receipt.toml"
 # The frontend build output the backend serves at ``/``. Both ``node_modules``
@@ -250,6 +254,10 @@ class Runner:
 
     def run(self, argv: Sequence[str], **kwargs) -> subprocess.CompletedProcess:
         return subprocess.run(list(argv), **kwargs)
+
+    def which(self, executable: str) -> str | None:
+        """Resolve ``executable`` on PATH, as the shell running us would."""
+        return shutil.which(executable)
 
 
 class HttpClient:
@@ -419,6 +427,7 @@ def _run_checked(
     what: str,
     *,
     live_service_restarted: bool = False,
+    env: dict | None = None,
 ) -> None:
     """Run a reveal command; raise :class:`RevealFailed` on a non-zero exit.
 
@@ -426,7 +435,7 @@ def _run_checked(
     that run the live restart can record that recovery must restart (see
     :class:`RevealFailed`)."""
     result = runner.run(
-        list(argv), cwd=str(cwd), capture_output=True, text=True, check=False
+        list(argv), cwd=str(cwd), capture_output=True, text=True, check=False, env=env
     )
     if getattr(result, "returncode", 0) != 0:
         stderr = (getattr(result, "stderr", "") or "").strip()
@@ -552,7 +561,52 @@ def _refresh_workspace_view(repo_root: Path, runner: Runner) -> None:
         sys.stderr.write(completed.stderr)
 
 
-def _tool_extras(tool_name: str, repo_root: Path, runner: Runner) -> list[str]:
+def _tool_location(script: Path) -> tuple[Path, Path] | None:
+    """Return ``(tool_dir, bin_dir)`` for the tool that owns console ``script``.
+
+    We have to ask rather than let uv default, because uv's tool directory
+    follows ``$HOME`` and the workspace runs with a ``$HOME`` that is not the one
+    ``build_workspace.sh`` installed under (it runs as root at image build; the
+    workspace then runs as root with ``HOME=/home/user``). Defaulting therefore
+    rebuilds a *second*, shadow installation that nothing on PATH executes --
+    leaving the tool everyone actually runs exactly as stale as before, while
+    every command reports success.
+
+    uv writes each console script with a shebang naming the interpreter inside
+    that tool's own environment
+    (``#!/root/.local/share/uv/tools/imbue-mngr/bin/python3``), so the script we
+    are about to re-resolve tells us precisely which installation it belongs to.
+    ``None`` means we could not read that, and the caller lets uv default.
+    """
+    try:
+        shebang = script.read_text(errors="replace").split("\n", 1)[0]
+    except OSError:
+        return None
+    if not shebang.startswith("#!"):
+        return None
+    interpreter = shebang[2:].strip().split(" ", 1)[0]
+    if not interpreter:
+        return None
+    # <tool_dir>/<tool_name>/bin/python -> <tool_dir>
+    parents = Path(interpreter).parents
+    if len(parents) < 3:
+        return None
+    return parents[2], script.parent
+
+
+def _uv_tool_env(executable: str, runner: Runner) -> dict:
+    """The environment for a ``uv tool`` call, aimed at ``executable``'s own
+    installation when we can tell which that is."""
+    env = dict(os.environ)
+    found = runner.which(executable)
+    location = _tool_location(Path(found)) if found is not None else None
+    if location is not None:
+        env["UV_TOOL_DIR"] = str(location[0])
+        env["UV_TOOL_BIN_DIR"] = str(location[1])
+    return env
+
+
+def _tool_extras(tool_name: str, repo_root: Path, runner: Runner, env: dict) -> list[str]:
     """Return the ``--with``/``--with-editable`` args a tool was installed with.
 
     A ``uv tool install --reinstall`` rebuilds the environment from the base
@@ -566,16 +620,20 @@ def _tool_extras(tool_name: str, repo_root: Path, runner: Runner) -> list[str]:
     installed (or predates the receipt), and the reinstall below is then the
     plain install it would have gotten anyway.
     """
-    result = runner.run(
-        ["uv", "tool", "dir"],
-        cwd=str(repo_root),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if getattr(result, "returncode", 0) != 0:
-        return []
-    receipt = Path((getattr(result, "stdout", "") or "").strip()) / tool_name / _RECEIPT
+    tool_dir = env.get("UV_TOOL_DIR")
+    if tool_dir is None:
+        result = runner.run(
+            ["uv", "tool", "dir"],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            check=False,
+            env=env,
+        )
+        if getattr(result, "returncode", 0) != 0:
+            return []
+        tool_dir = (getattr(result, "stdout", "") or "").strip()
+    receipt = Path(tool_dir) / tool_name / _RECEIPT
     try:
         parsed = tomllib.loads(receipt.read_text())
     except (OSError, tomllib.TOMLDecodeError):
@@ -596,20 +654,31 @@ def _canonical(name: str) -> str:
 
 
 def _reinstall_tool(
-    tool_name: str, source_dir: str, repo_root: Path, runner: Runner
+    tool_name: str, executable: str, source_dir: str, repo_root: Path, runner: Runner
 ) -> None:
-    """Re-resolve a uv tool from its in-tree source, keeping its extras.
+    """Re-resolve the installed ``executable``'s tool from its in-tree source,
+    keeping the extras it was installed with.
 
     The base is re-pinned to ``source_dir`` rather than left to the receipt: a
     receipt that has lost its editable marker would otherwise resolve the base
     from the index, quietly swapping the workspace's own vendored code for a
     published release.
     """
+    env = _uv_tool_env(executable, runner)
     _run_checked(
         runner,
-        ["uv", "tool", "install", "-e", source_dir, *_tool_extras(tool_name, repo_root, runner), "--reinstall"],
+        [
+            "uv",
+            "tool",
+            "install",
+            "-e",
+            source_dir,
+            *_tool_extras(tool_name, repo_root, runner, env),
+            "--reinstall",
+        ],
         repo_root,
         f"uv tool install {tool_name} --reinstall",
+        env=env,
     )
 
 
@@ -627,8 +696,8 @@ def _refresh_dependencies(changes: ChangeSet, repo_root: Path, runner: Runner) -
     if changes.frontend_manifest:
         _run_checked(runner, ["npm", "ci"], repo_root / FRONTEND_DIR, "npm ci")
     if changes.backend_manifest:
-        _reinstall_tool(MNGR_TOOL_NAME, MNGR_DIR, repo_root, runner)
-        _reinstall_tool(TOOL_NAME, APP_DIR, repo_root, runner)
+        _reinstall_tool(MNGR_TOOL_NAME, MNGR_EXECUTABLE, MNGR_DIR, repo_root, runner)
+        _reinstall_tool(TOOL_NAME, TOOL_NAME, APP_DIR, repo_root, runner)
         _run_checked(
             runner,
             ["uv", "sync", "--all-packages"],
