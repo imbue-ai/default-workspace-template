@@ -150,6 +150,7 @@ Do NOT use a key from `~/.mngr/profiles/...` -- that belongs to non-minds mngr a
 | `apps/minds/scripts/propagate_changes ...` | Sync changes into a running container without restarting the Electron app from scratch. See "Iterating on a running agent". Requires an activated env. |
 | `mngr imbue_cloud admin pool create --mngr-source <monorepo-root> ...` | Bake an OVH pool host (the imbue_cloud pool's VPS provider). `--mngr-source` rsyncs the monorepo into the DEFAULT_WORKSPACE_TEMPLATE system/vendor/mngr/ for the duration of the bake. (For pool hosts only -- has no effect on Docker mode.) Requires an activated env. Typically driven via the `minds pool create` wrapper, which injects OVH + pool-ssh credentials from Vault. |
 | `just deploy [--yes-i-mean-<tier>]` | Run `minds env deploy` on the activated env. For dev envs: provisions Modal env / Neon / SuperTokens + deploys both Modal apps + writes `~/.minds-<env>/{client.toml,secrets.toml}`. For tier deploys: pushes Vault secrets to Modal + deploys both Modal apps, no local state written. |
+| `just sync-vendor-mngr-live [default-workspace-template-path]` | Rsync the live mngr working tree (uncommitted changes included) into DEFAULT_WORKSPACE_TEMPLATE's system/vendor/mngr/, no commit. This is the sync `just minds-start` runs at launch; run it directly to re-sync mid-session without relaunching. |
 | `just sync-vendor-mngr <default-workspace-template-path>` | One-shot: snapshot mngr HEAD into DEFAULT_WORKSPACE_TEMPLATE's system/vendor/mngr/ via `git archive` and commit in DEFAULT_WORKSPACE_TEMPLATE. Use for "release" syncs, not dev iteration (it commits and only carries committed mngr content). |
 
 ### Vault (for `minds env deploy` and pool / slice bakes)
@@ -206,7 +207,7 @@ investigate, do not just kill the orphans.
 
 ### Rsync exclusions
 
-`just minds-start`, `mngr imbue_cloud admin pool create --mngr-source ...`, and `propagate_changes` all rsync into `system/vendor/mngr/` using one shared form (`rsync -a --delete --filter=':- .gitignore' --exclude=.git --exclude=uv.lock`). The form, the rationale for each exclude, and the source-of-truth constants live in `apps/minds/docs/vendor-mngr-sync.md`.
+`just sync-vendor-mngr-live` (which `just minds-start` calls), `mngr imbue_cloud admin pool create --mngr-source ...`, and `propagate_changes` all rsync into `system/vendor/mngr/` using one shared form (`rsync -a --delete --filter=':- .gitignore' --exclude=.git --exclude=uv.lock`). The form, the rationale for each exclude, and the source-of-truth constants live in `apps/minds/docs/vendor-mngr-sync.md`.
 
 `propagate_changes` additionally protects `data/`, `.mngr/`, and `.claude/settings.local.json` from deletion when rsyncing into `/home/user/workspace/`.
 
@@ -249,7 +250,13 @@ cd "${DEFAULT_WORKSPACE_TEMPLATE_DIR:-$HOME/project/default-workspace-template}"
 git worktree add /path/to/mngr/worktree/.external_worktrees/default-workspace-template -b <branch-name> origin/main
 ```
 
-### Sync mngr code into the DEFAULT_WORKSPACE_TEMPLATE worktree's system/vendor/mngr/ by hand
+### Sync mngr code into the DEFAULT_WORKSPACE_TEMPLATE worktree's system/vendor/mngr/ on its own
+
+```bash
+just sync-vendor-mngr-live
+```
+
+This is the sync `just minds-start` runs at launch, so use it to re-sync mid-session without relaunching the app (the desktop client picks the new copy up on the next Create). `mngr imbue_cloud admin pool create --mngr-source ...` does the same for the duration of the bake, and `propagate_changes` does it as step 1 on each iteration. The underlying form is:
 
 ```bash
 rsync -a --delete \
@@ -257,8 +264,6 @@ rsync -a --delete \
     --exclude=.git --exclude=uv.lock \
     ./ .external_worktrees/default-workspace-template/system/vendor/mngr/
 ```
-
-This is what `just minds-start` does internally, what `mngr imbue_cloud admin pool create --mngr-source ...` does for the duration of the bake, and what `propagate_changes` does as step 1 on each iteration.
 
 ### Start electron by hand without the just recipe
 

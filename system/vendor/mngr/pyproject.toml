@@ -114,6 +114,7 @@ addopts = [
   "--cov=imbue.oauth_redirector",
   "--cov=imbue.apt_mirror",
   "--cov=imbue.share_relay",
+  "--cov=imbue.observability",
   "--cov=imbue.concurrency_group",
   "--cov=imbue.modal_proxy",
   "--cov=imbue.modal_app_kit",

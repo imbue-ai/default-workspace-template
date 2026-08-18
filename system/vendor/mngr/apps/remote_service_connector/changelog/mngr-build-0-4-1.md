@@ -1,0 +1,1 @@
+Noted on the minds 0.4.0 wire-compat snapshot that it also covers the minds 0.4.1 release: the strictly-parsed connector response surface is unchanged between the two tags, so no new snapshot module is needed and the existing `SUPPORT_ENDS` date stands.
