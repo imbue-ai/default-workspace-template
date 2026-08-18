@@ -131,15 +131,26 @@ panel filed as a member -- and its old `mobile` layout into that
 project's mobile arrangement -- so nothing moves and nothing is lost.
 
 Names and last-used timestamps belong to the object, not to any one
-view: both are keyed by member ref in their own small registries
-(`workspace_layout/member_titles.json` and `member_last_used.json`), so
-every surface calls an object the same thing and recency ranks the same
-in every launcher. New chats, terminals, and browsers are named
-automatically -- "Chat 1", "Terminal 2", and so on, taking the lowest
-free number -- and nothing asks for a name. There is no rename gesture
-in the UI at all; an agent can still name an object it opened, through
-`layout.py rename`, and the name reaches every surface showing it.
-Destroying an object drops its name and recency with it.
+view. Every object is named the way the minds app names hosts: a
+human-readable display name paired with a canonical true name that is a
+deterministic transform of it. New chats, terminals, and browsers are
+named automatically -- "Chat 1", "Terminal 2", "Browser 1", taking the
+lowest free number -- and nothing asks for a name. A chat's display
+name lives on its mngr agent (its `display_name` label, whose canonical
+form -- `Chat-1` -- is the agent's mngr name), so `mngr list` and the
+tab always agree; renaming a chat (double-click its tab title, or its
+tab menu's Rename, or `layout.py rename`) goes through `mngr rename`
+and keeps the pair matched, refusing a name whose canonical form
+collides with another agent's. Terminals and browsers derive their
+display names from their identities ("Terminal 3" from the `terminal-3`
+tmux session, "Browser 1" from the daemon-minted `browser-1`) and have
+no rename gesture; an agent's `layout.py rename` for those kinds writes
+the machine-wide title registry
+(`workspace_layout/member_titles.json`), which every surface reads
+before falling back to the derived name. Last-used timestamps are keyed
+by member ref in `member_last_used.json` the same way, so recency ranks
+the same in every launcher. Destroying an object drops its name and
+recency with it.
 
 Each browser client remembers its active view in localStorage
 (`si-active-project-id`) and reopens it on the next connect, falling
@@ -190,7 +201,8 @@ own once another panel takes focus.
 Every tab carries a minus that closes the tab and nothing else, plus a
 menu offering Refresh (reloads what the tab is showing -- service-wide
 for a service-backed iframe, the transcript and stream for a chat;
-terminals have none), Share for app tabs, Rename, Close tab, and one
+terminals have none), Share for app tabs, Rename for chats (the one
+kind whose name is chosen rather than derived), Close tab, and one
 confirm-gated destructive verb per kind: Shut down agent, Shut down
 terminal, Shut down browser, or Unregister app. The shut-downs tear
 down the object itself, so it leaves *every* project, including ones no

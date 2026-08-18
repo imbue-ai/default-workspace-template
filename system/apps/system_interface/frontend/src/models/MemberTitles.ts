@@ -104,32 +104,6 @@ export function applyMemberTitleChange(ref: string, title: string | null): void 
   titleByRef[ref] = title;
 }
 
-/**
- * The first free "<word> N" display name: "Chat 1", "Terminal 2", ...
- *
- * This is what a UI-created object is called from the moment it exists: the
- * underlying identifier stays machine-generated (an agent petname, a tmux
- * session name) and is never surfaced as something to pick, while the display
- * name filed in this store reads like something a person would say. "First
- * free" fills gaps -- destroying "Chat 1" frees the slot for the next create.
- *
- * Matching is case-insensitive so a user who typed "chat 2" as a rename still
- * blocks that slot; whitespace is trimmed the way the store trims. Pure: the
- * caller gathers the taken names (every chosen title on the machine plus every
- * derived label, so a derived "terminal-3" never collides but a derived agent
- * name that happens to read "Chat 2" does).
- */
-export function nextFreeAutoName(word: string, takenNames: ReadonlySet<string>): string {
-  const taken = new Set<string>();
-  for (const name of takenNames) {
-    taken.add(name.trim().toLowerCase());
-  }
-  for (let n = 1; ; n += 1) {
-    const candidate = `${word} ${n}`;
-    if (!taken.has(candidate.toLowerCase())) return candidate;
-  }
-}
-
 async function errorDetailFromResponse(response: Response): Promise<string> {
   const data = (await response.json().catch(() => ({}))) as { detail?: string };
   return data.detail ?? `HTTP ${response.status}`;
