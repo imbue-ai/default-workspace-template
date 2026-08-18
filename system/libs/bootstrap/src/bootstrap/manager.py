@@ -68,6 +68,11 @@ _INITIAL_CHAT_DISPLAY_NAME = "Chat 1"
 # and which satisfies newer mngr's rule that the true name is the canonical
 # form of the display name.
 _INITIAL_CHAT_AGENT_NAME = "Chat-1"
+# The view the first chat is filed in: the starter project the workspace seeds.
+# Duplicated from system_interface's ``projects.DEFAULT_PROJECT_ID`` rather than
+# imported, to keep this one-shot first-boot program's dependencies minimal (the
+# same trade ``FAST_MODE_DECISION_FILE`` makes above).
+_STARTER_PROJECT_ID = "project-1"
 
 # Env var names used by the bootstrap's responsibilities.
 _AGENT_ID_ENV_VAR = "MNGR_AGENT_ID"
@@ -207,9 +212,13 @@ def _build_create_chat_command(labels: dict[str, str]) -> list[str]:
         "--format",
         "json",
     ]
-    project = labels.get("project")
-    if project:
-        cmd.extend(["--label", f"project={project}"])
+    # The view this chat starts out filed in. The workspace's starter project is
+    # where the first chat lives, and naming it explicitly matters: the services
+    # agent's own ``project`` label is mngr's -- the repo it works on, e.g.
+    # ``default-workspace-template`` -- and inheriting that gave the first chat
+    # a label that names no view at all, so work it started landed in whatever
+    # view the user was looking at instead of its own.
+    cmd.extend(["--label", f"project={_STARTER_PROJECT_ID}"])
     return cmd
 
 
