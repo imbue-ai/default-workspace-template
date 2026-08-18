@@ -117,11 +117,15 @@ export interface SidebarAttrs {
 const COLLAPSED_CLASS = "w-[37px] border-transparent bg-transparent";
 const EXPANDED_CLASS = "w-[240px] rounded-lg border-border bg-surface shadow-lg";
 
-// The rail's own padding, and the leading icon box every row shares. Together
-// they put an icon's center at 5 + 27/2 = 18.5px: the middle of the collapsed
-// 37px strip, so nothing moves horizontally as the rail expands.
+// The rail's own padding, and the leading icon box every row shares. The box
+// is sized to hug ROW_ICON_SIZE (see below) rather than pad it, so the flex
+// gap that follows (ROW_CLASS's `gap-1`) is the whole of the visual space
+// before a row's label -- a wider box would add its own centering padding on
+// top of that gap, which is what used to make the rail read looser than its
+// menus. Both numbers are fixed regardless of the rail's own width, so the
+// icon does not move as the rail expands -- only the label past it does.
 const RAIL_PADDING_CLASS = "p-[5px]";
-const ICON_BOX_CLASS = "flex w-[27px] shrink-0 items-center justify-center";
+const ICON_BOX_CLASS = "flex w-[20px] shrink-0 items-center justify-center";
 
 // Full-bleed against the rail's padding, so a divider spans the whole card.
 // Color, not the element, is what's conditional on `expanded` at the one call
@@ -136,30 +140,65 @@ const ICON_BOX_CLASS = "flex w-[27px] shrink-0 items-center justify-center";
 // supplying it.
 const DIVIDER_CLASS = "-mx-[5px] shrink-0 border-t border-border";
 
+// The rail's whole type scale, defined once so a new row inherits it rather
+// than picking its own size. ROW_TEXT_CLASS is every row's label, rail rows
+// and menu rows alike. ROW_ICON_SIZE is what a row's own leading glyph draws
+// at -- it identifies what the row IS. ACTION_ICON_SIZE is the smaller size a
+// row's trailing controls draw at instead (a kebab, a rename pencil, a pin
+// toggle, the switcher's chevron) -- those are secondary to the row, not what
+// it is, and stayed a consistent 14px even while the rows around them drifted.
+const ROW_TEXT_CLASS = "text-[13px]";
+const ROW_ICON_SIZE = 16;
+const ACTION_ICON_SIZE = 14;
+
 const ROW_CLASS = "flex h-7 w-full shrink-0 cursor-pointer items-center gap-1 rounded-md text-left";
 
 // Menu chrome, settled in the design (§6): a floating card on the primary
 // surface with a hairline border, 8px radius and the overlay elevation shadow,
 // holding 32px rows of icon + label.
-const MENU_CARD_CLASS =
-  "project-rail-menu fixed z-50 rounded-lg border border-border bg-surface py-1 text-[13px] text-text-primary";
+const MENU_CARD_CLASS = `project-rail-menu fixed z-50 rounded-lg border border-border bg-surface py-1 ${ROW_TEXT_CLASS} text-text-primary`;
 const MENU_SHADOW_STYLE = "box-shadow: 0 1px 1px 0 rgba(0, 0, 0, 0.08), 0 3px 12px 0 rgba(0, 0, 0, 0.08);";
 // `group` so a row's own trailing controls (the switcher's edit pencil) can
 // reveal themselves on `group-hover:`, the same reveal-on-hover pattern the
-// tab list's kebab uses.
+// tab list's kebab uses. `gap-1` (4px) matches the rail's own rows
+// (ROW_CLASS) -- it used to be a looser `gap-2`, which is what made a menu
+// row read as less tight than the rail row sitting right above it.
 const MENU_ROW_CLASS =
-  "project-rail-menu-item group flex h-8 w-full cursor-pointer items-center gap-2 px-3 text-left hover:bg-bg-hover";
+  "project-rail-menu-item group flex h-8 w-full cursor-pointer items-center gap-1 px-3 text-left hover:bg-bg-hover";
+
+// A transparent overlay rendered behind any open menu and above everything
+// else. Menus already dismiss on an outside pointerdown (see
+// handleOutsideMousedown below), but without something to catch that press it
+// falls through to whatever control happens to sit underneath -- activating
+// it, and dragging hover state across it on the way. The scrim gives the
+// dismissing press somewhere of its own to land, so closing the menu is *all*
+// it does.
+const MENU_SCRIM_CLASS = "fixed inset-0 z-40";
 
 // Minimum gap between a floating menu and the window edges, matching the
 // tooltip's own margin so everything that floats clears the frame alike.
 const MENU_MARGIN = 6;
 
-const HEADER_GLYPH_SIZE = 18;
-const MENU_GLYPH_SIZE = 16;
+// The switcher dropdown's own width: a touch wider than the expanded rail
+// (240px) it hangs off, since a long project name plus its trailing control
+// needs a little more room than that. Deliberately not as wide as it used to
+// be (280px) -- that 40px of slack is most of what made the dropdown read as
+// its own floating thing rather than a continuation of the rail card sitting
+// directly below it.
+const SWITCHER_MENU_WIDTH = 256;
 
-// The switcher dropdown's own width, wider than the rail (37-240px) it hangs
-// off: a project name plus its edit pencil need more room than that.
-const SWITCHER_MENU_WIDTH = 280;
+// The switcher's own project/Everything/New-project rows: the rail's own
+// leading inset (RAIL_PADDING_CLASS) rather than a generic menu row's roomier
+// `px-3`, paired with the rail's own ICON_BOX_CLASS for the icon slot passed
+// alongside it (see switcherMenu). The switcher's card shares the rail card's
+// own left edge (its anchor is the header's bounding rect, which is the rail
+// card's), so matching the per-row inset too is what lands a project's icon
+// and label at the exact x the rail draws its own rows at -- a few px to the
+// left of where the generic menu padding put them, and the reason the
+// dropdown now reads as sitting on top of the rail rather than beside it.
+const SWITCHER_ROW_CLASS =
+  "project-rail-menu-item group flex h-8 w-full cursor-pointer items-center gap-1 pl-[5px] pr-3 text-left " +
+  "hover:bg-bg-hover";
 
 // Inner markup for the rail's own glyphs, drawn on the same 24x24 Feather grid
 // as `icons.ts`. They live here rather than in that shared table because the
@@ -189,6 +228,13 @@ const RAIL_PATHS = {
     '<circle cx="5" cy="12" r="1.5" fill="currentColor" stroke="none"/>' +
     '<circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/>' +
     '<circle cx="19" cy="12" r="1.5" fill="currentColor" stroke="none"/>',
+  // A pushpin. Every row that wears this is already pinned (the rail only
+  // ever lists pinned apps), so unlike AllAppsPicker's own toggle -- which has
+  // to show both states -- this one carries no unfilled variant: the head is
+  // filled to read as "pinned" at a glance, the string stroked underneath it.
+  pin:
+    '<path d="M9 4h6l-1 5 3 3v2H7v-2l3-3-1-5z" fill="currentColor" stroke="currentColor"/>' +
+    '<line x1="12" y1="14" x2="12" y2="20" fill="none" stroke="currentColor"/>',
 } as const;
 
 type RailIconName = keyof typeof RAIL_PATHS;
@@ -215,17 +261,14 @@ const ICON_BY_MEMBER_KIND: Record<MemberKind, RailIconName> = {
   url: "url",
 };
 
-// The rail draws its rows at 16px, shortcuts and tab list alike.
-const ROW_GLYPH_SIZE = 16;
-
 /** The glyph one tab-list row wears: an app's own icon when it registered a
  *  usable one, and the kind's built-in glyph otherwise. Only apps have an icon
  *  of their own -- a chat, a terminal, a browser session and a page are all
  *  drawn by what they are. */
 function rowIconMarkup(row: SidebarTabRow): string {
-  const fallback = railIcon(ICON_BY_MEMBER_KIND[row.kind], ROW_GLYPH_SIZE);
+  const fallback = railIcon(ICON_BY_MEMBER_KIND[row.kind], ROW_ICON_SIZE);
   if (row.kind !== "app") return fallback;
-  return serviceIconMarkup(serviceNameFromRef(row.ref), ROW_GLYPH_SIZE, fallback);
+  return serviceIconMarkup(serviceNameFromRef(row.ref), ROW_ICON_SIZE, fallback);
 }
 
 const SHORTCUT_ROWS: readonly { tabType: QuickAddTabType; label: string }[] = [
@@ -574,7 +617,8 @@ export function Sidebar(): m.Component<SidebarAttrs> {
       "span",
       {
         class:
-          `min-w-0 flex-1 truncate pr-1 text-[13px] whitespace-nowrap transition-opacity duration-150 ${extraClass} ` +
+          `min-w-0 flex-1 truncate pr-1 ${ROW_TEXT_CLASS} whitespace-nowrap transition-opacity duration-150 ` +
+          `${extraClass} ` +
           (expanded ? "opacity-100" : "opacity-0"),
       },
       content,
@@ -611,7 +655,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
         },
       },
       [
-        m("span", { class: ICON_BOX_CLASS }, m.trust(viewIdentityMarkup(project, HEADER_GLYPH_SIZE))),
+        m("span", { class: ICON_BOX_CLASS }, m.trust(viewIdentityMarkup(project, ROW_ICON_SIZE))),
         railLabel(viewName, "font-semibold"),
         m(
           "span",
@@ -620,7 +664,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
               "flex shrink-0 items-center pr-1 text-text-secondary transition-opacity duration-150 " +
               (expanded ? "opacity-100" : "opacity-0"),
           },
-          m.trust(icon("chevron-down", { size: 14 })),
+          m.trust(icon("chevron-down", { size: ACTION_ICON_SIZE })),
         ),
       ],
     );
@@ -656,30 +700,75 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     );
   }
 
+  /** One pinned-app row. Structured like the tab list's own rows (a clickable
+   *  `div` with a trailing hover-revealed control) rather than `shortcutRow`'s
+   *  plain `button`, since nesting the unpin button inside another button is
+   *  not valid markup. The toggle unpins in one click -- pinning an app to a
+   *  project IS its membership (see `pinnedAppNamesForView`), so there is no
+   *  second pin state to reconcile, clicking it just drops the member ref --
+   *  which today the All apps popover is the only other place to do. Gated on
+   *  `expanded` the same as the tab list's own trailing controls: collapsed,
+   *  the row is icon-only and has nothing to reveal a control onto. */
+  function pinnedAppRow(app: AppEntry, attrs: SidebarAttrs): m.Vnode {
+    // An app renamed anywhere is renamed here too: the shortcut and the tab
+    // list are two views of one object, so they must not disagree about what
+    // it is called.
+    const label = displayNameForMember(memberRef("app", app.name), app.name);
+    return m(
+      "span",
+      { key: `app:${app.name}`, class: "flex w-full shrink-0", ...hoverTooltipAttrs(label) },
+      m(
+        "div",
+        {
+          class: `project-rail-shortcut group ${ROW_CLASS} pr-1 text-text-primary hover:bg-bg-hover`,
+          onclick: () => pick(() => attrs.onOpenApp(app)),
+        },
+        [
+          m(
+            "span",
+            { class: ICON_BOX_CLASS },
+            m.trust(appIconMarkup(app.icon, ROW_ICON_SIZE, railIcon("app", ROW_ICON_SIZE), app.name)),
+          ),
+          railLabel(label, ""),
+          expanded
+            ? m(
+                "button",
+                {
+                  type: "button",
+                  class:
+                    "project-rail-pin flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded " +
+                    "text-text-faint opacity-0 hover:bg-bg-hover hover:text-text-primary " +
+                    "focus-visible:opacity-100 group-hover:opacity-100",
+                  "aria-label": `Unpin ${app.name}`,
+                  ...hoverTooltipAttrs(
+                    "Unpins it here only. It keeps running, and stays in every other project showing it.",
+                  ),
+                  onclick: (event: MouseEvent) => {
+                    // The row underneath opens the app; the pin toggle must not.
+                    event.stopPropagation();
+                    attrs.onSetAppPinned(app, false);
+                  },
+                },
+                m.trust(railIcon("pin", ACTION_ICON_SIZE)),
+              )
+            : null,
+        ],
+      ),
+    );
+  }
+
   function shortcuts(attrs: SidebarAttrs, shortcutApps: readonly AppEntry[]): m.Vnode {
     return m("div", { class: "min-h-0 shrink overflow-x-hidden overflow-y-auto" }, [
       ...SHORTCUT_ROWS.map((row) =>
         shortcutRow({
           key: `tab-type:${row.tabType}`,
-          iconMarkup: railIcon(row.tabType, ROW_GLYPH_SIZE),
+          iconMarkup: railIcon(row.tabType, ROW_ICON_SIZE),
           label: row.label,
           tooltip: row.tabType === "files" ? FILE_VIEWER_TOOLTIP : SHORTCUT_TOOLTIPS[row.tabType],
           onclick: row.tabType === "files" ? null : () => pick(() => attrs.onOpenTabType(row.tabType)),
         }),
       ),
-      ...shortcutApps.map((app) => {
-        // An app renamed anywhere is renamed here too: the shortcut and the tab
-        // list are two views of one object, so they must not disagree about
-        // what it is called.
-        const label = displayNameForMember(memberRef("app", app.name), app.name);
-        return shortcutRow({
-          key: `app:${app.name}`,
-          iconMarkup: appIconMarkup(app.icon, ROW_GLYPH_SIZE, railIcon("app", ROW_GLYPH_SIZE), app.name),
-          label,
-          tooltip: label,
-          onclick: () => pick(() => attrs.onOpenApp(app)),
-        });
-      }),
+      ...shortcutApps.map((app) => pinnedAppRow(app, attrs)),
     ]);
   }
 
@@ -701,7 +790,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
           openMenuAt({ kind: "allApps", anchor: anchorForEvent(event) });
         },
       },
-      [m("span", { class: ICON_BOX_CLASS }, m.trust(railIcon("ellipsis", 16))), railLabel("All apps", "")],
+      [m("span", { class: ICON_BOX_CLASS }, m.trust(railIcon("ellipsis", ROW_ICON_SIZE))), railLabel("All apps", "")],
     );
   }
 
@@ -710,11 +799,11 @@ export function Sidebar(): m.Component<SidebarAttrs> {
       "div",
       { class: "my-1 flex h-7 shrink-0 items-center gap-2 rounded-md bg-bg-sidebar px-2 text-text-faint" },
       [
-        m("span", { class: "flex shrink-0 items-center" }, m.trust(railIcon("search", 14))),
+        m("span", { class: "flex shrink-0 items-center" }, m.trust(railIcon("search", ACTION_ICON_SIZE))),
         m("input", {
           type: "text",
           class:
-            "project-rail-search min-w-0 flex-1 bg-transparent text-[13px] text-text-primary outline-none " +
+            `project-rail-search min-w-0 flex-1 bg-transparent ${ROW_TEXT_CLASS} text-text-primary outline-none ` +
             "placeholder:text-text-faint",
           placeholder: `Find a tab in ${viewName}`,
           value: searchQuery,
@@ -755,7 +844,17 @@ export function Sidebar(): m.Component<SidebarAttrs> {
         class:
           `project-rail-tab group ${ROW_CLASS} pr-1 hover:bg-bg-hover ` +
           (row.isOpen ? "text-text-primary" : "text-text-faint"),
-        onclick: () => pick(() => attrs.onOpenRow(row)),
+        onclick: () =>
+          pick(() => {
+            attrs.onOpenRow(row);
+            // Already open: focusing its tab changed nothing the user can see
+            // through an expanded rail sitting on top of it, so the click
+            // would otherwise look like it did nothing. Force the rail closed
+            // the same way a completed view switch does (see
+            // `lastRenderedViewId` below) rather than waiting on a mouseleave
+            // that may not come until well after the click.
+            if (row.isOpen) expanded = false;
+          }),
         oncontextmenu: (event: MouseEvent) => {
           event.preventDefault();
           if (!hasMenu) return;
@@ -764,7 +863,11 @@ export function Sidebar(): m.Component<SidebarAttrs> {
       },
       [
         m("span", { class: ICON_BOX_CLASS }, m.trust(rowIconMarkup(row))),
-        m("span", { class: "min-w-0 flex-1 truncate text-[13px] whitespace-nowrap" }, matchedLabel(row.label, ranges)),
+        m(
+          "span",
+          { class: `min-w-0 flex-1 truncate ${ROW_TEXT_CLASS} whitespace-nowrap` },
+          matchedLabel(row.label, ranges),
+        ),
         hasMenu
           ? m(
               "button",
@@ -785,7 +888,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
                   openMenuAt({ kind: "row", anchor: anchorForEvent(event), ref: row.ref });
                 },
               },
-              m.trust(railIcon("kebab", 14)),
+              m.trust(railIcon("kebab", ACTION_ICON_SIZE)),
             )
           : null,
       ],
@@ -797,7 +900,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     if (results.length === 0) {
       return m(
         "div",
-        { class: "px-2 py-2 text-[13px] text-text-faint" },
+        { class: `px-2 py-2 ${ROW_TEXT_CLASS} text-text-faint` },
         attrs.rows.length === 0 ? "Nothing here yet." : "No tabs match that.",
       );
     }
@@ -813,6 +916,22 @@ export function Sidebar(): m.Component<SidebarAttrs> {
   }
 
   // ---------- Floating menus ----------
+
+  /** The transparent overlay behind any open menu -- see MENU_SCRIM_CLASS. Its
+   *  own pointerdown closes the open menu and stops there: `stopPropagation`
+   *  keeps the press from also reaching (and activating) whatever rail or
+   *  dock control it visually sits on top of, which is the whole reason it
+   *  exists rather than relying on `handleOutsideMousedown` alone. */
+  function menuScrim(): m.Vnode {
+    return m("div", {
+      class: MENU_SCRIM_CLASS,
+      onmousedown: (event: MouseEvent) => {
+        event.preventDefault();
+        event.stopPropagation();
+        closeMenus();
+      },
+    });
+  }
 
   /**
    * A floating card, placed against `anchor` once it has been measured.
@@ -857,23 +976,32 @@ export function Sidebar(): m.Component<SidebarAttrs> {
   function menuRow(options: {
     iconMarkup: string | null;
     label: string;
-    // The row for whatever is currently mounted. Marked with a plain
-    // background rather than a checkmark or a swapped-in icon, so it reads
-    // the same way regardless of what else the row carries (the switcher's
-    // edit pencil sits on every row now, current or not).
-    isActive?: boolean;
     isDestructive?: boolean;
+    // Tertiary at rest ("New project" is the one user today), text-text-faint
+    // -- but reads as clickable rather than disabled, so it goes fully
+    // primary on hover rather than staying faint.
     isQuiet?: boolean;
     tooltip?: string | null;
     onclick: (event: MouseEvent) => void;
     onmouseenter?: (event: MouseEvent) => void;
     trailing?: m.Children;
+    // Overrides the row's own chrome and its icon's leading box, so the
+    // switcher's project rows can borrow the rail's own tighter geometry
+    // (SWITCHER_ROW_CLASS + ICON_BOX_CLASS) instead of a menu's roomier
+    // default -- see switcherMenu, the one caller that needs its icons and
+    // labels to land at the same x the rail itself draws them at.
+    rowClass?: string;
+    iconBoxClass?: string;
   }): m.Vnode {
-    const tone = options.isDestructive ? "text-red-600" : options.isQuiet ? "text-text-faint" : "text-text-primary";
+    const tone = options.isDestructive
+      ? "text-red-600"
+      : options.isQuiet
+        ? "text-text-faint hover:text-text-primary"
+        : "text-text-primary";
     return m(
       "div",
       {
-        class: `${MENU_ROW_CLASS} ${tone} ` + (options.isActive ? "bg-bg-sidebar" : ""),
+        class: `${options.rowClass ?? MENU_ROW_CLASS} ${tone}`,
         role: "menuitem",
         ...(options.tooltip === null || options.tooltip === undefined ? {} : hoverTooltipAttrs(options.tooltip)),
         onclick: options.onclick,
@@ -882,38 +1010,92 @@ export function Sidebar(): m.Component<SidebarAttrs> {
       [
         options.iconMarkup === null
           ? null
-          : m("span", { class: "flex w-4 shrink-0 items-center justify-center" }, m.trust(options.iconMarkup)),
+          : m(
+              "span",
+              { class: options.iconBoxClass ?? "flex w-4 shrink-0 items-center justify-center" },
+              m.trust(options.iconMarkup),
+            ),
         m("span", { class: "min-w-0 flex-1 truncate" }, options.label),
         options.trailing ?? null,
       ],
     );
   }
 
-  /** The pencil every switcher project row carries: opens that row's own
-   *  project settings, never the row it happens to render in the current
-   *  view. It stops propagation so it never also fires the row's own click
-   *  (switch to that project, or nothing on the one already mounted) -- the
-   *  same shape the tab list's kebab uses for the same reason. Revealed on
-   *  row hover via `group-hover:` rather than sitting there always, matching
-   *  that kebab too. Everything carries no pencil: it is not a project, and
-   *  has no settings to open. */
-  function switcherEditButton(project: ProjectInfo, onOpen: (project: ProjectInfo) => void): m.Vnode {
+  /** The pencil a switcher row carries: opens that row's own project
+   *  settings, never the row it happens to render in the current view. It
+   *  stops propagation so it never also fires the row's own click (switch to
+   *  that project, or nothing on the one already mounted) -- the same shape
+   *  the tab list's kebab uses for the same reason. `isStacked` sizes it to
+   *  fill its wrapper exactly, so it can sit under the active row's checkmark
+   *  and swap places with it on hover instead of beside it (see
+   *  `switcherRowTrailing`); an inactive row's pencil is the only thing in its
+   *  own slot and needs no such positioning. */
+  function switcherEditButton(
+    project: ProjectInfo,
+    onOpen: (project: ProjectInfo) => void,
+    isStacked: boolean,
+  ): m.Vnode {
     return m(
       "button",
       {
         type: "button",
         class:
           "flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded text-text-faint opacity-0 " +
-          "hover:bg-bg-hover hover:text-text-primary focus-visible:opacity-100 group-hover:opacity-100",
-        "aria-label": `Project settings for ${project.name}`,
-        ...hoverTooltipAttrs(`Project settings for ${project.name}`),
+          "hover:bg-bg-hover hover:text-text-primary focus-visible:opacity-100 group-hover:opacity-100 " +
+          (isStacked ? "absolute inset-0" : ""),
+        "aria-label": `Edit ${project.name}`,
+        ...hoverTooltipAttrs(`Edit ${project.name}`),
         onclick: (event: MouseEvent) => {
           event.stopPropagation();
           onOpen(project);
         },
       },
-      m.trust(icon("edit", { size: 14, strokeWidth: 1.75 })),
+      m.trust(icon("edit", { size: ACTION_ICON_SIZE, strokeWidth: 1.75 })),
     );
+  }
+
+  /**
+   * A switcher row's trailing control.
+   *
+   * The active view's own row carries a checkmark instead of the plain
+   * background fill the switcher used to mark it with -- and, for a project
+   * (not Everything), that checkmark swaps for the same rename pencil every
+   * other row reveals on hover, rather than showing both at once. That still
+   * leaves every project renameable exactly one way: hover its row for the
+   * pencil, whether or not it happens to be the active one.
+   *
+   * `onOpen` is null for Everything, which is not a project and has no
+   * settings to open -- its active row is a bare, unswapped checkmark.
+   */
+  function switcherRowTrailing(
+    isActive: boolean,
+    project: ProjectInfo | null,
+    onOpen: ((project: ProjectInfo) => void) | null,
+  ): m.Vnode | null {
+    if (project === null || onOpen === null) {
+      return isActive
+        ? m(
+            "span",
+            {
+              class: "project-rail-check flex h-5 w-5 shrink-0 items-center justify-center text-text-secondary",
+            },
+            m.trust(icon("check", { size: ACTION_ICON_SIZE })),
+          )
+        : null;
+    }
+    if (!isActive) return switcherEditButton(project, onOpen, false);
+    return m("span", { class: "relative flex h-5 w-5 shrink-0 items-center justify-center" }, [
+      m(
+        "span",
+        {
+          class:
+            "project-rail-check pointer-events-none absolute inset-0 flex items-center justify-center " +
+            "text-text-secondary transition-opacity duration-100 group-hover:opacity-0",
+        },
+        m.trust(icon("check", { size: ACTION_ICON_SIZE })),
+      ),
+      switcherEditButton(project, onOpen, true),
+    ]);
   }
 
   function switcherMenu(attrs: SidebarAttrs, anchor: MenuAnchor): m.Vnode {
@@ -922,19 +1104,23 @@ export function Sidebar(): m.Component<SidebarAttrs> {
       anchor,
       placement: "below",
       role: "menu",
-      // Its own width rather than the header's: a project name plus the edit
-      // pencil next to it need more room than the rail itself provides, which
-      // the header's own width would otherwise clamp this to (down to 37px
-      // collapsed).
+      // A touch wider than the rail it hangs off (see SWITCHER_MENU_WIDTH),
+      // not the header's own width -- a project name plus its trailing
+      // control need a little more room than that.
       width: SWITCHER_MENU_WIDTH,
       children: [
         attrs.projects.map((project) => {
           const isCurrent = project.project_id === attrs.activeViewId;
           return menuRow({
-            iconMarkup: viewIdentityMarkup(project, MENU_GLYPH_SIZE),
+            iconMarkup: viewIdentityMarkup(project, ROW_ICON_SIZE),
             label: project.name,
-            isActive: isCurrent,
-            trailing: switcherEditButton(project, (target) =>
+            // The rail's own row geometry, not a generic menu row's: it puts
+            // a project's icon and label at the same x the rail draws its
+            // own rows at, so the switcher reads as a continuation of the
+            // rail underneath it rather than an oddly-padded dropdown.
+            rowClass: SWITCHER_ROW_CLASS,
+            iconBoxClass: ICON_BOX_CLASS,
+            trailing: switcherRowTrailing(isCurrent, project, (target) =>
               pick(() => {
                 settingsProject = target;
               }),
@@ -949,9 +1135,11 @@ export function Sidebar(): m.Component<SidebarAttrs> {
           });
         }),
         menuRow({
-          iconMarkup: railIcon("plus", 14),
+          iconMarkup: railIcon("plus", ROW_ICON_SIZE),
           label: "New project",
           isQuiet: true,
+          rowClass: SWITCHER_ROW_CLASS,
+          iconBoxClass: ICON_BOX_CLASS,
           onclick: () => {
             void createNewProject(attrs);
           },
@@ -962,9 +1150,11 @@ export function Sidebar(): m.Component<SidebarAttrs> {
         // projects -- it is the unfiltered view they all live inside -- but it
         // is picked exactly like one, and has a dock of its own.
         menuRow({
-          iconMarkup: compositeSquiggleMarkup(MENU_GLYPH_SIZE),
+          iconMarkup: compositeSquiggleMarkup(ROW_ICON_SIZE),
           label: EVERYTHING_VIEW_NAME,
-          isActive: isEverythingActive,
+          rowClass: SWITCHER_ROW_CLASS,
+          iconBoxClass: ICON_BOX_CLASS,
+          trailing: switcherRowTrailing(isEverythingActive, null, null),
           onclick: () => pick(() => attrs.onSelectView(EVERYTHING_VIEW_ID)),
         }),
       ],
@@ -1006,7 +1196,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
       children: [
         direct.map((item) =>
           menuRow({
-            iconMarkup: icon("share", { size: 14 }),
+            iconMarkup: icon("share", { size: ACTION_ICON_SIZE }),
             label: item.label,
             onclick: () => pick(item.run),
           }),
@@ -1017,7 +1207,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
             // The safe verb keeps the minus the tab strip uses for closing, and
             // the destructive one the "x" that ends an object, so the pair reads
             // the same here as it does on a tab.
-            iconMarkup: icon(item.isDestructive ? "close" : "minus", { size: 14 }),
+            iconMarkup: icon(item.isDestructive ? "close" : "minus", { size: ACTION_ICON_SIZE }),
             label: item.label,
             isDestructive: item.isDestructive,
             tooltip: item.tooltip,
@@ -1133,11 +1323,13 @@ export function Sidebar(): m.Component<SidebarAttrs> {
             // menu that was open goes with it rather than being left hanging
             // over the dock with nothing behind it.
             //
-            // "All apps" is the one exception. It is a browse-and-pick list
-            // rather than a quick switch, so it holds the rail open while the
-            // pointer works down it -- and it extends past the rail's own box,
-            // which is exactly the case a plain mouseleave would get wrong.
-            if (openMenu?.kind === "allApps") return;
+            // An open menu is the exception: it holds the rail open while the
+            // pointer works down it, since every one of them extends past the
+            // rail's own box (some further than others, "All apps" most of
+            // all) -- exactly the case a plain mouseleave would get wrong,
+            // folding the rail out from under a menu the pointer is still
+            // using the moment it crosses that edge to reach it.
+            if (openMenu !== null) return;
             closeMenus();
           },
         },
@@ -1171,6 +1363,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
               expanded ? tabList(attrs, isEverything) : null,
             ],
           ),
+          openMenu === null ? null : menuScrim(),
           openMenu?.kind === "switcher" ? switcherMenu(attrs, openMenu.anchor) : null,
           openMenu?.kind === "header" && project !== null ? headerMenu(project, openMenu.anchor) : null,
           openMenu?.kind === "allApps"
