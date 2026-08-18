@@ -89,7 +89,6 @@ import {
   allocateTerminalName,
   buildSessionTerminalUrl,
   createChatAgent,
-  fetchRandomAgentName,
   fetchTerminalSessions,
   getAgentById,
   getAgents,
@@ -101,6 +100,7 @@ import {
   reportClientState,
   whenAppsLoaded,
   type AgentsUpdatedListener,
+  type CreatedChatAgent,
   type AppEntry,
   type LayoutOpEvent,
   type LayoutSyncEvent,
@@ -123,13 +123,12 @@ import { loadSnapshotWithStream } from "../models/StreamingMessage";
 import {
   applyMemberTitleChange,
   displayNameForMember,
-  getMemberTitles,
   loadMemberTitles,
   moveMemberTitle,
-  nextFreeAutoName,
   setMemberTitle,
 } from "../models/MemberTitles";
-import { createBrowser, validateBrowserName } from "../models/Browsers";
+import { createBrowser } from "../models/Browsers";
+import { browserDisplayName, chatDisplayName, terminalDisplayName } from "./derived-names";
 import {
   applyMemberLastUsedChange,
   getMemberLastUsed,
@@ -702,6 +701,23 @@ function tabMenuEntries(panelId: string): TabMenuEntry[] {
     });
   }
   if (entries.length > 0) entries.push(MENU_DIVIDER);
+  if (params.panelType === "chat") {
+    // Only a chat is renameable: it is an mngr agent, so a typed name becomes
+    // its display_name label with the canonical form as its true name, and the
+    // pair moves together (see the member-title endpoint). Terminals and
+    // browsers derive their names from their identities instead, and renaming
+    // the identity out from under a live tmux session or Chromium profile is
+    // not something the workspace offers.
+    entries.push({
+      label: "Rename",
+      iconName: "edit",
+      run: () => {
+        // The same inline editor the double-click opens, reached through the
+        // tab's handle so the menu and the gesture stay one mechanism.
+        tabHandlesByPanelId.get(panelId)?.beginTitleEdit();
+      },
+    });
+  }
   entries.push({
     label: "Hide tab",
     iconName: "minus",
@@ -736,7 +752,8 @@ function tabDestroyEntry(panelId: string, params: PanelParams): TabMenuItem | nu
     // The primary agent runs the workspace's own services; destroying it would
     // take the machine down, so it is not offered.
     if (!chatAgentId || chatAgentId === getPrimaryAgentId()) return null;
-    const agentName = getAgentById(chatAgentId)?.name ?? chatAgentId;
+    const agent = getAgentById(chatAgentId);
+    const agentName = agent === undefined ? chatAgentId : chatDisplayName(agent);
     return {
       label: `Quit ${currentTabTitle(panelId, agentName)}`,
       iconName: "power",
@@ -816,7 +833,10 @@ function tabDestroyEntry(panelId: string, params: PanelParams): TabMenuItem | nu
 /** The live tabs, so the width recompute can size them and re-measure their
  *  titles, and so a "+" can flash the launcher its pane already holds. Entries
  *  are added as tabs are rendered and dropped as they are disposed. */
-const tabHandlesByPanelId = new Map<string, { element: HTMLElement; refreshTitleFade: () => void }>();
+const tabHandlesByPanelId = new Map<
+  string,
+  { element: HTMLElement; refreshTitleFade: () => void; beginTitleEdit: () => void }
+>();
 
 /**
  * One tab: kind glyph, title, then the right-aligned minus and ⋮ that hover
@@ -828,9 +848,13 @@ const tabHandlesByPanelId = new Map<string, { element: HTMLElement; refreshTitle
  * ``:hover`` rule because the menu has to hold them open while it is up, after
  * the pointer has left the tab for the menu card.
  *
- * The title itself is not editable. Objects are named when they are created
- * ("Chat 2", "Terminal 1"), and the name a tab shows comes from the machine's
- * title store rather than from anything typed on the strip.
+ * Double-clicking a CHAT tab's title renames the chat: the title becomes a
+ * text field seeded with the current name, Enter and blur commit, Escape puts
+ * the old one back. The commit goes through ``renameMemberRef`` -- the same
+ * path the agent-facing layout op takes -- so the name lands on the mngr agent
+ * itself (its ``display_name`` label, with the canonical form as its true
+ * name) and every view showing the chat says it. Other kinds derive their
+ * names from their identities and are not editable here.
  */
 function createCustomTab(options: { id: string; name: string }): ITabRenderer {
   const element = document.createElement("div");
@@ -853,6 +877,17 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
   content.style.textOverflow = "clip";
   element.appendChild(content);
 
+  // The rename editor, swapped in for the title on a double-click. A real input
+  // rather than a contenteditable title, so the caret, the selection and
+  // Escape behave the way a text field is expected to.
+  const editor = document.createElement("input");
+  editor.type = "text";
+  editor.className = "dv-custom-tab-title-input";
+  editor.spellcheck = false;
+  editor.setAttribute("aria-label", "Tab name");
+  editor.style.display = "none";
+  element.appendChild(editor);
+
   const actions = document.createElement("div");
   actions.className = "dv-custom-tab-actions";
   actions.style.display = "none";
@@ -861,12 +896,15 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
   const disposables: Array<{ dispose: () => void }> = [];
   let isPointerOver = false;
   let isMenuOpen = false;
+  let isEditingTitle = false;
   // Whether this instance is a row in the tab-overflow dropdown rather than a
   // tab on the strip. dockview builds a FRESH renderer per dropdown open
   // (``createTabRenderer("headerOverflow")``), so one panel can have two live
   // instances at once and only the strip's may carry controls or own the
   // panel's handle registration.
   let isOverflowRow = false;
+  // What dockview had the tab's draggable set to before an edit borrowed it.
+  let wasTabDraggable: boolean | null = null;
 
   /** Fade the title's last 20px, and only while it really is cut off. */
   const refreshTitleFade = (): void => {
@@ -878,11 +916,104 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
   };
 
   const updateActionsVisibility = (): void => {
-    actions.style.display = isPointerOver || isMenuOpen ? "flex" : "none";
+    // The buttons stand down for the length of an edit: the row is a text field
+    // for the moment, and the field wants the whole width.
+    actions.style.display = !isEditingTitle && (isPointerOver || isMenuOpen) ? "flex" : "none";
     // Revealing the buttons takes room from the title, so the fade is re-judged
     // against the box the title actually has now.
     refreshTitleFade();
   };
+
+  /** Whether this tab's object can be renamed at all: only a chat can (its
+   *  name lives on its mngr agent); every other kind derives its name. */
+  const isRenameable = (): boolean => panelParams.get(options.id)?.panelType === "chat";
+
+  /** The ``.dv-tab`` dockview wraps this renderer in. That element, not this
+   *  one, is what carries the tab drag. */
+  const tabElement = (): HTMLElement | null => element.closest(".dv-tab");
+
+  const beginTitleEdit = (): void => {
+    if (isEditingTitle || !isRenameable()) return;
+    isEditingTitle = true;
+    editor.value = content.textContent ?? "";
+    content.style.display = "none";
+    editor.style.display = "block";
+    // dockview marks every tab draggable, and a draggable ancestor swallows the
+    // press-and-sweep that places a caret and selects text inside it -- typing
+    // works, but nothing can be clicked into or selected with the mouse. So the
+    // drag stands down for the length of the edit and is handed straight back.
+    const tab = tabElement();
+    if (tab !== null) {
+      wasTabDraggable = tab.draggable;
+      tab.draggable = false;
+    }
+    updateActionsVisibility();
+    editor.focus();
+    editor.select();
+  };
+
+  /** Leave the editor, committing what was typed or throwing it away. Blur
+   *  commits, so this runs on the way out of every path including a click
+   *  elsewhere in the workspace. */
+  const endTitleEdit = (isCommitting: boolean): void => {
+    if (!isEditingTitle) return;
+    isEditingTitle = false;
+    const typed = editor.value;
+    editor.style.display = "none";
+    content.style.display = "";
+    const tab = tabElement();
+    if (tab !== null && wasTabDraggable !== null) tab.draggable = wasTabDraggable;
+    wasTabDraggable = null;
+    updateActionsVisibility();
+    if (!isCommitting) return;
+    // An empty or whitespace-only title is not a name, so it is treated as
+    // Escape rather than leaving a tab with nothing to click on.
+    const title = normalizeTabTitle(typed);
+    if (title === null || title === content.textContent) return;
+    // The name is filed against the OBJECT this tab is showing, so it reaches
+    // every other view showing it and outlives this tab. A tab opened a moment
+    // ago may not have been filed yet, hence the fallback.
+    void (async () => {
+      const ref = memberRefByPanelId.get(options.id) ?? (await rememberMemberRef(options.id));
+      if (ref === null) return;
+      try {
+        await renameMemberRef(ref, title);
+      } catch (e) {
+        alert(`Failed to rename: ${(e as Error).message}`);
+      }
+    })();
+  };
+
+  content.addEventListener("dblclick", (event) => {
+    // A dropdown row only focuses; renaming happens on the strip.
+    if (isOverflowRow) return;
+    // Only a chat's name is editable (see ``isRenameable``). For everything
+    // else the event still propagates -- to dockview a double-click on a tab
+    // is just a click, and the tab should keep behaving like one.
+    if (!isRenameable()) return;
+    event.preventDefault();
+    event.stopPropagation();
+    beginTitleEdit();
+  });
+  // Everything below the input would otherwise read a click meant for the caret
+  // as a tab activation, a key as a workspace shortcut, and a right-click as a
+  // request for the tab menu instead of the field's own cut/copy/paste one.
+  editor.addEventListener("pointerdown", (event) => event.stopPropagation());
+  editor.addEventListener("dblclick", (event) => event.stopPropagation());
+  editor.addEventListener("contextmenu", (event) => event.stopPropagation());
+  editor.addEventListener("keydown", (event) => {
+    event.stopPropagation();
+    if (event.key === "Enter") {
+      event.preventDefault();
+      endTitleEdit(true);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      endTitleEdit(false);
+    }
+  });
+  editor.addEventListener("blur", () => {
+    endTitleEdit(true);
+  });
 
   return {
     element,
@@ -913,8 +1044,8 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
       // the tab, and the controls are on the strip once it is. The early
       // return also keeps this instance away from ``tabHandlesByPanelId``:
       // letting a dropdown row set (and, on dispose, delete) the panel's
-      // entry would leave the strip tab's title-fade pointing at a detached
-      // row after the dropdown closes.
+      // entry would leave the strip tab's Rename and title-fade pointing at
+      // a detached row after the dropdown closes.
       if (parameters.tabLocation === "headerOverflow") {
         isOverflowRow = true;
         actions.remove();
@@ -973,7 +1104,7 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
         updateActionsVisibility();
       });
       updateActionsVisibility();
-      tabHandlesByPanelId.set(options.id, { element, refreshTitleFade });
+      tabHandlesByPanelId.set(options.id, { element, refreshTitleFade, beginTitleEdit });
     },
     dispose() {
       // A dropdown row never claimed the handle, so it must not take the
@@ -1260,24 +1391,6 @@ function openBrowserSessionTab(name: string, targetGroup?: DockviewGroupPanel | 
   return !alreadyOpen;
 }
 
-/** Close the (optimistic) pane for browser ``name`` if it is open, and tear its
- *  page down with it. Used when a create POST fails after the pane was opened
- *  optimistically: the launch never registered the name, so the pane would
- *  otherwise sit on a stale "Browser starting…" / "browser closed" banner
- *  forever. Closing a tab normally leaves the page running -- but there is no
- *  object here to keep running, so this is one of the destroy paths. Dedup keys
- *  panes on the resolved ``service:browser?session=<name>`` URL, so the lookup
- *  mirrors ``openBrowserSessionTab``'s ref. */
-function closeBrowserSessionTab(name: string): void {
-  if (!dockview) return;
-  const panelId = findIframePanelIdForServiceRef(`browser?session=${name}`);
-  if (panelId !== null) {
-    const panel = dockview.panels.find((p) => p.id === panelId);
-    if (panel) dockview.removePanel(panel);
-  }
-  destroyLiveSurface(`service:${BROWSER_SERVICE_NAME}?session=${name}`);
-}
-
 // ---------- The "+" and the New Tab launcher ----------
 
 /** The group a panel currently lives in, or null when it is not open. */
@@ -1536,9 +1649,12 @@ function machineInventory(): MachineInventory {
     urlTabs.push({ name: memberRefBody(ref), label: panelParams.get(panelId)?.title ?? "Page" });
   }
   return {
-    chatAgents: getAgents().map((agent) => ({ name: agent.id, label: agent.name })),
-    terminals: terminalFleet.map((terminal) => ({ name: terminal.session_name, label: terminal.session_name })),
-    browsers: browserFleet.map((browser) => ({ name: browser.id, label: `Browser ${browser.id}` })),
+    chatAgents: getAgents().map((agent) => ({ name: agent.id, label: chatDisplayName(agent) })),
+    terminals: terminalFleet.map((terminal) => ({
+      name: terminal.session_name,
+      label: terminalDisplayName(terminal.session_name),
+    })),
+    browsers: browserFleet.map((browser) => ({ name: browser.id, label: browserDisplayName(browser.id) })),
     apps: pickableApps().map((app) => ({ name: app.name, label: app.name })),
     urlTabs,
   };
@@ -1569,20 +1685,25 @@ function legacyPanelTitleForRef(ref: string): string | undefined {
 }
 
 /** What a member ref is called before anybody renamed it. A chat is filed under
- *  its agent id, so its name is looked up live and follows the agent;
- *  everything else is named by the identity it is filed under. An ad-hoc page
- *  has no name of its own beyond its tab's title, which only exists while it is
- *  open. */
+ *  its agent id, so its name is looked up live -- the ``display_name`` label the
+ *  agent carries (falling back to its true name) -- and follows the agent
+ *  through renames; everything else derives its display form from the identity
+ *  it is filed under ("Terminal 3" from ``terminal-3``, "Browser 1" from
+ *  ``browser-1``). An ad-hoc page has no name of its own beyond its tab's
+ *  title, which only exists while it is open. */
 function derivedLabelForMemberRef(ref: string): string {
   const openPanelId = panelIdForMemberRef(ref);
   const body = memberRefBody(ref);
   switch (memberKindFromRef(ref)) {
-    case "chat":
-      return getAgentById(body)?.name ?? getProtoAgents().find((proto) => proto.agent_id === body)?.name ?? body;
+    case "chat": {
+      const agent = getAgentById(body);
+      if (agent !== undefined) return chatDisplayName(agent);
+      return getProtoAgents().find((proto) => proto.agent_id === body)?.name ?? body;
+    }
     case "terminal":
-      return body;
+      return terminalDisplayName(body);
     case "browser":
-      return `Browser ${serviceSessionLabel(parseServiceRefBody(body).query)}`;
+      return browserDisplayName(serviceSessionLabel(parseServiceRefBody(body).query));
     case "app":
       return body;
     case "url":
@@ -1590,64 +1711,10 @@ function derivedLabelForMemberRef(ref: string): string {
   }
 }
 
-/**
- * The first free "Chat N" / "Terminal N" / "Browser N" name on this machine.
- *
- * The taken set matches the title store's scope -- the whole machine, not the
- * mounted view: every chosen name (including ones on backgrounded or
- * other-project objects) plus every derived label, so a user who renamed
- * something to "Chat 2" by hand, or an object whose derived label happens to
- * read "Chat 2", blocks that slot. Destroy clears titles server-side, so a
- * destroyed "Chat 1" frees its slot for the next create.
- *
- * Known and accepted limitation: two clients creating simultaneously can both
- * compute "Chat 1". The titles POST is per-ref last-write-wins, so both
- * objects survive with duplicate display names; a rename fixes it.
- */
-// The chat harnesses a create can stack (see ``CreateChatRequest.harness``),
-// and the word each one's auto-minted names count under: a Codex chat is
-// "Codex 1", not "Chat 2", so the two fleets number independently and the tab
-// says which harness is behind it.
+// The chat harnesses a create can stack (see ``CreateChatRequest.harness``).
+// The display name each create wears ("Chat N", "Codex N", "Pi N") is minted
+// server-side, so no numbering lives here.
 type ChatHarness = "claude" | "codex" | "pi";
-type AutoNameWord = "Chat" | "Terminal" | "Browser" | "Codex" | "Pi";
-const AUTO_NAME_WORD_BY_HARNESS: Record<ChatHarness, AutoNameWord> = {
-  claude: "Chat",
-  codex: "Codex",
-  pi: "Pi",
-};
-
-function autoNameForKind(word: AutoNameWord): string {
-  const taken = new Set<string>(Object.values(getMemberTitles()));
-  for (const row of buildEverythingMembers(machineInventory(), {})) {
-    taken.add(labelForMemberRef(row.ref));
-  }
-  return nextFreeAutoName(word, taken);
-}
-
-/**
- * File the first free "<word> N" as ``ref``'s display name, best-effort.
- *
- * This is how a UI-created object comes into being already wearing a friendly
- * name -- exactly as if the user had renamed it the moment it appeared -- while
- * its identifier stays machine-generated and is never surfaced as something to
- * pick. Best-effort by design: the object works fine under its derived name,
- * so a failed write costs only the nicety, and the tab repaints to "<word> N"
- * whenever the write lands (this client via the sync below, every other via
- * the broadcast).
- */
-function fileAutoTitle(ref: string, word: AutoNameWord, chosenName?: string): void {
-  // ``chosenName`` is passed when the caller already picked the name (a chat is
-  // created UNDER its human name, so mngr holds it), which keeps the title
-  // store and the agent's own name from drifting apart.
-  void setMemberTitle(ref, chosenName ?? autoNameForKind(word))
-    .then(() => {
-      syncTabTitlesFromStore();
-      m.redraw();
-    })
-    .catch(() => {
-      // Best-effort: the object keeps its derived name.
-    });
-}
 
 /** The project registry, for the sidebar's switcher and its member lists.
  *  Everything is never in it. */
@@ -1718,7 +1785,8 @@ function openMemberRef(ref: string, targetGroup: DockviewGroupPanel | null): str
   switch (memberKindFromRef(ref)) {
     case "chat": {
       const chatAgentId = body;
-      focusOrCreateChatPanel(chatAgentId, getAgentById(chatAgentId)?.name ?? chatAgentId, targetGroup);
+      const agent = getAgentById(chatAgentId);
+      focusOrCreateChatPanel(chatAgentId, agent === undefined ? chatAgentId : chatDisplayName(agent), targetGroup);
       return chatPanelId(chatAgentId);
     }
     case "terminal":
@@ -1915,7 +1983,7 @@ function openInitialChatTab(): boolean {
   const candidates = getAgents();
   if (candidates.length === 0) return false;
   const initial = candidates[0];
-  addChatPanel(initial.id, initial.name);
+  addChatPanel(initial.id, chatDisplayName(initial));
   return true;
 }
 
@@ -2197,11 +2265,12 @@ function addTerminalPanel(
   }
   const terminalId = mintTerminalId();
   const url = buildSessionTerminalUrl(sessionName, terminalId, primaryWorkDir());
+  const title = terminalDisplayName(sessionName);
   const params: PanelParams = {
     panelType: "iframe",
     agentId: getPrimaryAgentId(),
     url,
-    title: sessionName,
+    title,
     terminalSessionName: sessionName,
     terminalId,
   };
@@ -2209,7 +2278,7 @@ function addTerminalPanel(
   dockview.addPanel({
     id: panelId,
     component: "iframe",
-    title: sessionName,
+    title,
     params,
     ...placementForGroup(options.targetGroup),
   });
@@ -2220,9 +2289,9 @@ function addTerminalPanel(
 }
 
 /** "New terminal": allocate the next free ``terminal-N`` name from the backend,
- *  then open a tab attached to it. The tmux session name stays the identity;
- *  the tab wears the auto-filed "Terminal N" display name. Returns the new
- *  panel's id, or null when the allocation failed. */
+ *  then open a tab attached to it. The tmux session name is the identity; the
+ *  tab derives its "Terminal N" display name from it. Returns the new panel's
+ *  id, or null when the allocation failed. */
 async function openNewTerminal(targetGroup?: DockviewGroupPanel | null): Promise<string | null> {
   if (!dockview) return null;
   let sessionName: string;
@@ -2235,25 +2304,20 @@ async function openNewTerminal(targetGroup?: DockviewGroupPanel | null): Promise
     alert(`Failed to open terminal: ${(e as Error).message}`);
     return null;
   }
-  const panelId = addTerminalPanel(sessionName, { targetGroup });
-  if (panelId !== null) {
-    // The ref exists once the allocation resolved; the tab opens either way
-    // and keeps its derived ``terminal-N`` title if the write fails.
-    fileAutoTitle(memberRef("terminal", sessionName), "Terminal");
-  }
-  return panelId;
+  return addTerminalPanel(sessionName, { targetGroup });
 }
 
 /**
- * "New chat": start a chat agent under a machine petname and open its tab
- * wearing the auto-filed "Chat N" display name.
+ * "New chat": start a chat agent and open its tab under the display name the
+ * server minted for it ("Chat N", or the harness's own word).
  *
- * No dialog: the petname is the agent's identity, never something the user
- * picks -- what they see is the friendly name, filed the moment the create
- * returns the agent id. A chat started while a project is mounted carries that
- * project's id in its agent's ``project`` label, matching ``startProjectChat``
- * (a chat started in Everything carries none). On failure the launcher stays
- * and the reason is surfaced, matching ``openNewTerminal``.
+ * No dialog: the server picks the first free name, its canonical form is the
+ * agent's mngr name, and the typed form rides as the agent's ``display_name``
+ * label -- so the name the user sees is the name mngr holds. A chat started
+ * while a project is mounted carries that project's id in its agent's
+ * ``project`` label, matching ``startProjectChat`` (a chat started in
+ * Everything carries none). On failure the launcher stays and the reason is
+ * surfaced, matching ``openNewTerminal``.
  */
 async function openNewChat(
   targetGroup: DockviewGroupPanel | null,
@@ -2261,76 +2325,41 @@ async function openNewChat(
   harness: ChatHarness = "claude",
   isFirst: boolean = false,
 ): Promise<void> {
-  // Created UNDER its human-readable name ("Chat 2", "Codex 1"): the backend
-  // canonicalizes that to the agent's true name (``Chat-2``) and keeps the
-  // typed form as its ``display_name`` label, so the name a user sees is the
-  // name mngr holds -- no machine-minted coolname to look up.
-  const chatName = autoNameForKind(AUTO_NAME_WORD_BY_HARNESS[harness]);
   const viewId = mountedViewId;
   const projectId = viewId !== null && !isEverythingView(viewId) ? viewId : "";
-  let agentId: string;
+  let created: CreatedChatAgent;
   try {
-    agentId = await createChatAgent(chatName, projectId, harness, isFirst);
+    created = await createChatAgent(projectId, harness, isFirst);
   } catch (e) {
     alert(`Failed to create chat: ${(e as Error).message}`);
     return;
   }
-  // The ref exists as soon as the create returned the id -- before the agent
-  // finishes starting -- so the tab reads "Chat N" (or the harness's own word)
-  // from its first paint on.
-  fileAutoTitle(memberRef("chat", agentId), AUTO_NAME_WORD_BY_HARNESS[harness], chatName);
-  focusOrCreateChatPanel(agentId, chatName, targetGroup);
+  focusOrCreateChatPanel(created.agentId, created.displayName, targetGroup);
   retireLauncher(launcherPanelId);
   m.redraw();
 }
 
 /**
- * "New browser": mint a machine name, open the optimistic 'starting' pane
- * wearing the auto-filed "Browser N" display name, and register the browser
- * with the daemon in the background.
+ * "New browser": register a browser with the daemon and open its pane.
  *
- * No dialog: the name IS the browser's identity everywhere (ref, cast socket,
- * profile dir), but it is machine-minted -- a coolname satisfies the daemon's
- * rule (lowercase words joined by dashes), and the guard below falls back to a
- * timestamp name if the generator misbehaves or the name already names a
- * fleet browser (opening a pane for an existing name would dedup onto that
- * browser's healthy pane, which a failure teardown must never close).
- *
- * The pane opens before the POST resolves (the daemon registers instantly and
- * launches in the background). On failure the user must still learn WHY: the
- * optimistic pane is torn down (only if this flow created it), the auto-title
- * is cleared (no browser was registered, so the server-side destroy hooks that
- * normally clear titles never run), and the daemon's reason is surfaced with
- * the alert pattern the other create flows use.
+ * No dialog: the daemon mints the first free ``browser-<N>`` name -- the
+ * browser's identity everywhere (ref, cast socket, profile dir) -- and the tab
+ * derives its "Browser N" display name from it. The registration itself is
+ * fast (the multi-second Chromium launch runs in the background and the pane
+ * watches it flip from ``init`` to ``running`` over the cast socket), so the
+ * pane opens as soon as the daemon has answered with the name. On failure
+ * nothing was opened and the daemon's reason is surfaced with the alert
+ * pattern the other create flows use.
  */
 async function openNewBrowser(targetGroup: DockviewGroupPanel | null, launcherPanelId: string | null): Promise<void> {
-  let name = await fetchRandomAgentName();
-  if (validateBrowserName(name) !== null || browserFleet.some((browser) => browser.id === name)) {
-    name = `browser-${Date.now().toString(36)}`;
-  }
-  const ref = memberRef("browser", name);
-  // The ref exists the instant the name is minted -- before the POST even
-  // runs -- so the optimistic pane's tab reads "Browser N" immediately.
-  fileAutoTitle(ref, "Browser");
-  const createdPane = openBrowserSessionTab(name, targetGroup);
-  retireLauncher(launcherPanelId);
-  m.redraw();
-
-  const result = await createBrowser(name);
-  if (result.ok) {
-    // The pane is already open; just refresh the fleet so the sidebar and the
-    // launcher list the new browser.
-    refreshBrowserFleet();
+  const result = await createBrowser();
+  if (!result.ok) {
+    alert(`Failed to create browser: ${result.reason}`);
     return;
   }
-  if (createdPane) {
-    closeBrowserSessionTab(name);
-  }
-  void setMemberTitle(ref, "").catch(() => {
-    // Best-effort: an uncleared title on a never-registered browser only
-    // shadows one "Browser N" slot until someone renames over it.
-  });
-  alert(`Failed to create browser: ${result.reason}`);
+  openBrowserSessionTab(result.name, targetGroup);
+  retireLauncher(launcherPanelId);
+  refreshBrowserFleet();
   m.redraw();
 }
 
@@ -2393,10 +2422,10 @@ function addPanelForRef(ref: string, requesterAgentId: string, addOptions: AddPa
         // starts being addressed by the tmux session it attached to.
         mutatePanelParams(panelId, (stored) => {
           stored.terminalSessionName = sessionName;
-          stored.title = sessionName;
+          stored.title = terminalDisplayName(sessionName);
           stored.url = buildSessionTerminalUrl(sessionName, terminalId, primaryWorkDir());
         });
-        dockview?.panels.find((p) => p.id === panelId)?.api.setTitle(sessionName);
+        dockview?.panels.find((p) => p.id === panelId)?.api.setTitle(terminalDisplayName(sessionName));
         m.redraw();
         scheduleSave();
         // Filed only once the session name has landed: the member ref is
@@ -2467,7 +2496,7 @@ function addPanelForRef(ref: string, requesterAgentId: string, addOptions: AddPa
     dockview.addPanel({
       id: panelId,
       component: "chat",
-      title: agent.name,
+      title: chatDisplayName(agent),
       params,
       renderer: "always",
       ...placement,
@@ -3383,12 +3412,12 @@ function soleLauncherPanelId(): string | null {
  * it anywhere else would file it into the wrong view.
  */
 export async function startProjectChat(projectId: string): Promise<void> {
-  // Created under its human-readable name, exactly as the launcher's tiles do.
-  const chatName = autoNameForKind("Chat");
-  let chatAgentId: string;
+  let created: CreatedChatAgent;
   try {
-    chatAgentId = await createChatAgent(chatName, projectId);
-    await addMember(projectId, memberRef("chat", chatAgentId));
+    // The display name ("Chat N") is minted server-side, exactly as the
+    // launcher's tiles do; its canonical form is the agent's mngr name.
+    created = await createChatAgent(projectId);
+    await addMember(projectId, memberRef("chat", created.agentId));
     await refreshProjectsList();
   } catch (error) {
     alert(
@@ -3397,15 +3426,16 @@ export async function startProjectChat(projectId: string): Promise<void> {
     );
     return;
   }
-  // The same name the create used, so the title store and the agent's own
-  // name never drift; best-effort like every other UI create.
-  fileAutoTitle(memberRef("chat", chatAgentId), "Chat", chatName);
   if (mountedViewId === projectId) {
     // The agent is still starting -- it is a proto agent until mngr registers
     // it -- and its chat panel opens on that id right away, exactly as the
     // launcher's Chat tile does.
     const launcherPanelId = soleLauncherPanelId();
-    focusOrCreateChatPanel(chatAgentId, chatName, launcherPanelId === null ? null : groupForPanel(launcherPanelId));
+    focusOrCreateChatPanel(
+      created.agentId,
+      created.displayName,
+      launcherPanelId === null ? null : groupForPanel(launcherPanelId),
+    );
     retireLauncher(launcherPanelId);
   }
   m.redraw();
@@ -3891,20 +3921,25 @@ async function handleMove(args: Record<string, unknown>, requesterAgentId: strin
 /**
  * Name an object, machine-wide.
  *
- * The one rename path, and the only one left: the agent-facing ``layout_op``.
- * Nothing in the UI renames -- objects are named when they are created -- so
- * this is how an agent names something it opened. The name goes to the
- * machine's title store keyed by the object's ref (see models/MemberTitles),
- * not into this view's saved layout, so every view showing the object says the
- * same thing and an object with no panel anywhere -- backgrounded, or filed in
- * no project at all -- can be named too. Nothing is written to
- * ``panelParams``: ``params.title`` stays the *derived* name, which is what
- * the tab falls back to if the chosen one is ever cleared.
+ * The one rename path: the agent-facing ``layout_op`` and the chat tab's own
+ * double-click editor both land here, and both go through the member-title
+ * endpoint. The server routes a ``chat:`` ref to mngr -- the typed name becomes
+ * the agent's ``display_name`` label with its canonical form as the agent's
+ * true name, the same pairing a create establishes -- and stores every other
+ * kind in the machine's title store keyed by the object's ref (see
+ * models/MemberTitles). Either way the name belongs to the object, not to this
+ * view's saved layout, so every view showing it says the same thing and an
+ * object with no panel anywhere -- backgrounded, or filed in no project at all
+ * -- can be named too. Nothing is written to ``panelParams``: ``params.title``
+ * stays the *derived* name, which is what the tab falls back to if the chosen
+ * one is ever cleared.
  *
  * The tab strip is repainted here rather than waiting for the broadcast that
  * follows, so this client settles immediately; the broadcast repaints every
  * other one (and this one again, harmlessly). Throws with the server's detail
- * when the rename is refused, which the caller reports as a console warning.
+ * when the rename is refused: both callers await it and report the rejection
+ * their own way -- an alert on the tab editor, a console warning on the
+ * agent-facing op.
  */
 export async function renameMemberRef(ref: string, title: string): Promise<void> {
   await setMemberTitle(ref, title);
@@ -3915,20 +3950,21 @@ export async function renameMemberRef(ref: string, title: string): Promise<void>
 /**
  * Put the name each object is called by onto the tab showing it.
  *
- * The chosen name when the object has one, and the name the panel derived for
- * itself when it does not -- so clearing a name puts the derived one back
- * rather than freezing the last chosen one on the strip. Panels that stand for
- * no object (the launcher) are left alone. Called whenever the store moves and
- * whenever a panel learns which object it is showing.
+ * The same resolution every other surface uses (``labelForMemberRef``): the
+ * chosen name when the object has one, else the name derived live from what
+ * the object is -- so a renamed chat agent drags its tab along with it, and
+ * clearing a chosen name puts the derived one back rather than freezing the
+ * last chosen one on the strip. Panels that stand for no object (the launcher)
+ * are left alone. Called whenever the store moves, whenever a panel learns
+ * which object it is showing, and whenever the agent list changes.
  */
 function syncTabTitlesFromStore(): void {
   if (!dockview) return;
   for (const panel of dockview.panels) {
     const ref = memberRefByPanelId.get(panel.id);
     if (ref === undefined) continue;
-    const params = panelParams.get(panel.id);
-    if (params === undefined) continue;
-    const shown = displayNameForMember(ref, params.title ?? "", params.customTitle);
+    if (!panelParams.has(panel.id)) continue;
+    const shown = labelForMemberRef(ref);
     if (shown !== "" && shown !== panel.title) panel.api.setTitle(shown);
   }
 }
@@ -4287,9 +4323,13 @@ function initializeDockview(parentElement: HTMLElement): void {
     retireLaunchersOnFocusLeaving(panel.id);
   });
 
-  // While awaitingInitialChat is true, every agents_updated event is
-  // another chance for the bootstrap-created chat agent to show up.
+  // Every agents_updated event may carry a new name pair for an agent some tab
+  // is showing (a rename lands as a changed name + display_name label), so the
+  // strip is re-synced from the live labels. While awaitingInitialChat is true,
+  // the event is also another chance for the bootstrap-created chat to show up.
   agentsUpdatedListener = () => {
+    syncTabTitlesFromStore();
+    m.redraw();
     if (!awaitingInitialChat) return;
     const launcherPanelId = dv.panels.find((panel) => panelParams.get(panel.id)?.panelType === "launcher")?.id ?? null;
     if (openInitialChatTab()) {
@@ -4410,7 +4450,7 @@ function handleTerminalSessionUpdate(terminalId: string | null, sessionId: strin
   mutatePanelParams(targetPanelId, (params) => {
     params.terminalSessionName = sessionName;
     params.terminalSessionId = sessionId;
-    params.title = sessionName;
+    params.title = terminalDisplayName(sessionName);
   });
   void (async () => {
     const nextRef = await rememberMemberRef(targetPanelId);
