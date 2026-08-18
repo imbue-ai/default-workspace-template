@@ -214,7 +214,7 @@ def test_build_create_chat_command_argv_accepted_by_live_cli() -> None:
     assert_mngr_argv_valid(argv)
 
 
-def test_build_create_chat_command_positional_parses_to_a_named_chat_on_the_host() -> None:
+def test_build_create_chat_command_positional_names_the_chat_on_the_host() -> None:
     """The CLI contract check above is shape-only -- click sees the positional as
     an opaque string. This runs it through mngr's own address parser, which is
     what decides that "Chat 1@host-1" is the true name `Chat-1` on `host-1` with
