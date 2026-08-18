@@ -13,7 +13,6 @@ never regress, because a broken backend takes down the user's whole UI.
 from __future__ import annotations
 
 import importlib.util
-import json
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -114,22 +113,6 @@ class _FakeSpawner(reveal_mod.Spawner):
         self.envs.append(dict(env))
         self.last = _FakeSpawned()
         return self.last
-
-
-@pytest.fixture(autouse=True)
-def _no_ambient_live_layout(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Default every test to "no live layout" so preview seeding never reads the
-    developer's real mngr state.
-
-    MNGR_HOST_DIR is pointed at an empty directory rather than unset: the
-    resolver falls back to ``~/.mngr`` when it is missing, which on a developer's
-    box is a real host dir full of real agents. Seeding tests repopulate this
-    host dir via ``_seed_live_layout``.
-    """
-    empty_host_dir = tmp_path / "empty-mngr-host"
-    empty_host_dir.mkdir()
-    monkeypatch.setenv("MNGR_HOST_DIR", str(empty_host_dir))
-    monkeypatch.delenv("MNGR_AGENT_ID", raising=False)
 
 
 def _supervisor_status(pid: int) -> _Result:
@@ -761,51 +744,6 @@ def test_preview_rejects_a_work_dir_without_the_app(tmp_path: Path) -> None:
 
     assert code == 1
     assert not runner.argvs_starting(*_SERVE_UP)
-
-
-def _write_agent_record(host_dir: Path, agent_id: str, *, is_primary: bool) -> Path:
-    """Create one agent's state dir with the ``data.json`` mngr writes there."""
-    state_dir = host_dir / "agents" / agent_id
-    state_dir.mkdir(parents=True, exist_ok=True)
-    labels = {"is_primary": "true"} if is_primary else {"user_created": "true"}
-    (state_dir / "data.json").write_text(json.dumps({"labels": labels}))
-    return state_dir
-
-
-def _seed_live_layout(
-    monkeypatch: pytest.MonkeyPatch,
-    host_dir: Path,
-    primary_agent_id: str = "services-agent",
-    caller_agent_id: str = "chat-agent",
-) -> Path:
-    """Populate a fake live workspace_layout and point the env at that host dir.
-
-    Models the real two-agent shape, which is what the resolution has to get
-    right: the layout belongs to the workspace's *primary* (services) agent --
-    the ``is_primary=true`` one the system interface itself runs under -- while
-    MNGR_AGENT_ID names the ordinary chat agent that runs this script. The two
-    ids are deliberately always distinct here, because deriving the layout path
-    from MNGR_AGENT_ID landed on a directory that never exists and silently
-    seeded nothing, so every preview opened with the default tabs.
-
-    Writes the two layout files the preview should copy plus the two kinds of
-    non-layout state it must *not* -- the client-activity event log (a nested
-    sub-tree, at the path ``client_activity.get_events_path`` really uses) and
-    the terminal banner.
-    """
-    primary_state_dir = _write_agent_record(host_dir, primary_agent_id, is_primary=True)
-    _write_agent_record(host_dir, caller_agent_id, is_primary=False)
-    layout_dir = primary_state_dir / "workspace_layout"
-    (layout_dir / "layouts").mkdir(parents=True)
-    (layout_dir / "layouts" / "desktop.json").write_text('{"panels":["chat"]}')
-    (layout_dir / "layouts_meta.json").write_text('{"last_active_slug":"desktop"}')
-    events_dir = layout_dir / "events" / "client_activity"
-    events_dir.mkdir(parents=True)
-    (events_dir / "events.jsonl").write_text('{"e":1}\n')
-    (layout_dir / "terminal_banner.json").write_text('{"dismissed":true}')
-    monkeypatch.setenv("MNGR_HOST_DIR", str(host_dir))
-    monkeypatch.setenv("MNGR_AGENT_ID", caller_agent_id)
-    return layout_dir
 
 
 def test_preview_refuses_a_work_dir_without_a_frontend_build(tmp_path: Path) -> None:
