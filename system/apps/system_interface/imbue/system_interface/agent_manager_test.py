@@ -1407,12 +1407,13 @@ def test_create_chat_agent_registers_the_pre_observe_state_under_the_name_pair(
 
         log_q = manager.get_log_queue(created.agent_id)
         assert log_q is not None
+        done_message: dict[str, Any] | None = None
         deadline = time.monotonic() + 30.0
-        while True:
+        while done_message is None:
             raw = log_q.get(timeout=max(0.1, deadline - time.monotonic()))
             if raw is not None and json.loads(raw).get("done"):
-                assert json.loads(raw)["success"] is True
-                break
+                done_message = json.loads(raw)
+        assert done_message["success"] is True
 
         agent = manager.get_agent_by_id(created.agent_id)
         assert agent is not None
