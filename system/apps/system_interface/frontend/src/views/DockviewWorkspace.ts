@@ -1635,8 +1635,11 @@ function autoNameForKind(word: AutoNameWord): string {
  * whenever the write lands (this client via the sync below, every other via
  * the broadcast).
  */
-function fileAutoTitle(ref: string, word: AutoNameWord): void {
-  void setMemberTitle(ref, autoNameForKind(word))
+function fileAutoTitle(ref: string, word: AutoNameWord, chosenName?: string): void {
+  // ``chosenName`` is passed when the caller already picked the name (a chat is
+  // created UNDER its human name, so mngr holds it), which keeps the title
+  // store and the agent's own name from drifting apart.
+  void setMemberTitle(ref, chosenName ?? autoNameForKind(word))
     .then(() => {
       syncTabTitlesFromStore();
       m.redraw();
@@ -2258,12 +2261,16 @@ async function openNewChat(
   harness: ChatHarness = "claude",
   isFirst: boolean = false,
 ): Promise<void> {
-  const agentName = await fetchRandomAgentName();
+  // Created UNDER its human-readable name ("Chat 2", "Codex 1"): the backend
+  // canonicalizes that to the agent's true name (``Chat-2``) and keeps the
+  // typed form as its ``display_name`` label, so the name a user sees is the
+  // name mngr holds -- no machine-minted coolname to look up.
+  const chatName = autoNameForKind(AUTO_NAME_WORD_BY_HARNESS[harness]);
   const viewId = mountedViewId;
   const projectId = viewId !== null && !isEverythingView(viewId) ? viewId : "";
   let agentId: string;
   try {
-    agentId = await createChatAgent(agentName, projectId, harness, isFirst);
+    agentId = await createChatAgent(chatName, projectId, harness, isFirst);
   } catch (e) {
     alert(`Failed to create chat: ${(e as Error).message}`);
     return;
@@ -2271,8 +2278,8 @@ async function openNewChat(
   // The ref exists as soon as the create returned the id -- before the agent
   // finishes starting -- so the tab reads "Chat N" (or the harness's own word)
   // from its first paint on.
-  fileAutoTitle(memberRef("chat", agentId), AUTO_NAME_WORD_BY_HARNESS[harness]);
-  focusOrCreateChatPanel(agentId, agentName, targetGroup);
+  fileAutoTitle(memberRef("chat", agentId), AUTO_NAME_WORD_BY_HARNESS[harness], chatName);
+  focusOrCreateChatPanel(agentId, chatName, targetGroup);
   retireLauncher(launcherPanelId);
   m.redraw();
 }
@@ -3376,7 +3383,8 @@ function soleLauncherPanelId(): string | null {
  * it anywhere else would file it into the wrong view.
  */
 export async function startProjectChat(projectId: string): Promise<void> {
-  const chatName = await fetchRandomAgentName();
+  // Created under its human-readable name, exactly as the launcher's tiles do.
+  const chatName = autoNameForKind("Chat");
   let chatAgentId: string;
   try {
     chatAgentId = await createChatAgent(chatName, projectId);
@@ -3389,9 +3397,9 @@ export async function startProjectChat(projectId: string): Promise<void> {
     );
     return;
   }
-  // The petname stays the agent's identity; what the user sees is the
-  // auto-filed "Chat N", best-effort like every other UI create.
-  fileAutoTitle(memberRef("chat", chatAgentId), "Chat");
+  // The same name the create used, so the title store and the agent's own
+  // name never drift; best-effort like every other UI create.
+  fileAutoTitle(memberRef("chat", chatAgentId), "Chat", chatName);
   if (mountedViewId === projectId) {
     // The agent is still starting -- it is a proto agent until mngr registers
     // it -- and its chat panel opens on that id right away, exactly as the
