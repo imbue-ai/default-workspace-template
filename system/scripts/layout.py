@@ -21,12 +21,10 @@ Subcommands:
 
 The workspace shows one *view* at a time: a project, or ``Everything`` (the
 unfiltered home). Each connected browser client has one active, and that view
-is the arrangement the client saves into. An op with no target goes to *your
-own* view -- the one you were last messaged from, else the project your chat
-belongs to, else whatever the connected client is looking at -- which is what
-you want nearly always; pass ``--view <name>`` (a project's name, or
-``Everything``; ``--layout`` is the same flag under its old name) to address
-a view no client has in front, and the
+is the arrangement the client saves into. An op with no target goes to the view
+the connected client is looking at, which is what you want nearly always; pass
+``--view <name>`` (a project's name, or ``Everything``; ``--layout`` is the
+same flag under its old name) to address a view no client has in front, and the
 op then takes effect only when a connected client has it active (failing with a
 clear error listing the connected clients otherwise). A view is arranged per
 device -- desktop and mobile clients each save their own arrangement of it,
@@ -1514,10 +1512,9 @@ def _add_mutating_view_argument(subparser: argparse.ArgumentParser) -> None:
         metavar="VIEW",
         default=None,
         help=(
-            "View to mutate: a project's name, or ``Everything``. Defaults to your "
-            "own view: the one you were last messaged from, else your chat's project, "
-            "else the view the connected client is on. Mutating ops only apply on "
-            "connected clients that have the view active; use ``context`` to see each "
+            "View to mutate: a project's name, or ``Everything``. Defaults to the "
+            "view the connected client is on. Mutating ops only apply on connected "
+            "clients that have the view active; use ``context`` to see each "
             "client's current view. ``--layout`` is the same flag under its old name."
         ),
     )
@@ -1530,9 +1527,8 @@ def _add_read_view_argument(subparser: argparse.ArgumentParser) -> None:
         dest="layout",
         metavar="VIEW",
         default=None,
-        help="View (a project's name, or ``Everything``) to read; defaults to your own "
-        "view (the one you were last messaged from, else your chat's project, else the "
-        "view the connected client is on). ``--layout`` is the same flag under its old name.",
+        help="View (a project's name, or ``Everything``) to read; defaults to the "
+        "view the connected client is on. ``--layout`` is the same flag under its old name.",
     )
     subparser.add_argument(
         "--device",

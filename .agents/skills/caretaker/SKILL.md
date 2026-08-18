@@ -115,8 +115,8 @@ You're always in control: everything here is adjustable any time -- the schedule
 That is the whole message. Right after sending it, silently surface your tab
 so the user sees it: run
 `python3 system/scripts/layout.py open "chat:$MNGR_AGENT_NAME"`
-(with no `--view`, the op goes to your own view -- the one you were last
-messaged from. Best-effort -- continue if it fails). Then
+(with no `--view`, the op goes to the view the connected client is looking at.
+Best-effort -- continue if it fails). Then
 create your permissions file at `data/.state/caretaker/permissions.md` with the
 template below -- this is an internal file write, not shown to the user, and the file's
 existence is what marks you as introduced. Leave every value as `not set yet` --

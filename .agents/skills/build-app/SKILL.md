@@ -343,13 +343,11 @@ new tab. Without this step the user would have to discover it via the
 python3 system/scripts/layout.py open <name>
 ```
 
-With no `--view`, the op goes to your own view -- the one you were
-last messaged from -- which is where the user asked for the app and so
-where they expect the new tab. (Pass `--view <name>` -- a project's
-name, or `Everything` -- to surface it in a different view instead; the
-op then applies only on connected clients that have that view active.
-A 412 means the user has since moved off your view: say what you built
-and let them switch back, or `layout.py load` them back to it.)
+With no `--view`, the op goes to the view the connected client is
+looking at, which is where the user expects the new tab. (Pass
+`--view <name>` -- a project's name, or `Everything` -- to surface it
+in a different view instead; the op then applies only on connected
+clients that have that view active.)
 `layout.py` POSTs to a loopback-only workspace_server endpoint that
 broadcasts a `layout_op` message over its WebSocket. The frontend
 focuses the panel if a tab for `<name>` is already open, otherwise

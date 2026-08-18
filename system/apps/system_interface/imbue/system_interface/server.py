@@ -2489,70 +2489,20 @@ def _layout_op_display_name(layout_dir: Path, slug: str) -> str:
     return slug
 
 
-def _is_known_view_id(layout_dir: Path | None, view_id: str) -> bool:
-    """Whether ``view_id`` still names a view: a registered project, or Everything."""
-    if view_id == projects.EVERYTHING_VIEW_ID:
-        return True
-    if layout_dir is None:
-        return False
-    return any(info.project_id == view_id for info in projects.list_projects(layout_dir))
-
-
-def _agent_home_project_id(agent_id: str) -> str | None:
-    """The requesting agent's ``project`` label -- the project its chat belongs to.
-
-    mngr propagates the label to the agents an agent spawns, so a child doing the
-    work answers with the same project its parent chat was started in.
-    """
-    if not agent_id:
-        return None
-    for agent in get_state().agent_manager.get_agents_serialized():
-        if agent["id"] == agent_id:
-            project_id = agent.get("project")
-            return str(project_id) if project_id else None
-    return None
-
-
-def _requester_view_id(layout_dir: Path | None, agent_id: str) -> str | None:
-    """The view a layout op's requesting agent belongs to, or None if there is none.
-
-    Two signals, in order: the view the requester was looking at when it last
-    messaged this agent -- ask from project A and switch to B, and the work
-    still lands in A -- then the agent's own ``project`` label, the only signal
-    an agent nobody messaged directly (a spawned child, a scheduled task) has.
-
-    Both are validated against the registry, which matters more than it looks:
-    ``project`` is also mngr's own label for the repo an agent works on, so an
-    agent can carry ``project=default-workspace-template``. That is not a view
-    id and is skipped here rather than misread as one. A view that genuinely
-    existed and was later deleted is skipped the same way.
-    """
-    events_path = _client_activity_events_path()
-    events = client_activity.read_client_activity_events(events_path) if events_path is not None else []
-    candidates = (client_activity.find_layout_slug_for_agent(events, agent_id), _agent_home_project_id(agent_id))
-    for candidate in candidates:
-        if candidate is not None and _is_known_view_id(layout_dir, candidate):
-            return candidate
-    return None
-
-
-def _default_view_id(layout_dir: Path | None, agent_id: str) -> str | None:
+def _default_view_id(layout_dir: Path | None) -> str | None:
     """The view an op with no explicit ``--layout`` targets.
 
-    The requesting agent's own view, when it has one: an agent's tabs belong
-    where its chat is, not in whichever project the user happens to be looking at
-    when the op lands. Without one -- no message on record and no project label --
-    the view the connected clients are actually on, when they agree: with one
-    client that is simply "the view the user is looking at". When zero or
+    The view the connected clients are actually on, when they agree -- with one
+    client (the ordinary workspace) this is simply "the view the user is looking
+    at", which is what an agent means when it names no target. When zero or
     several distinct views are connected, the projects registry's last-active id
     breaks the tie: it tracks the most recent view any client reported, so it is
     the best single answer there is. None only without a registry to fall back
     on (dev/test with no layout dir and no agreeing client).
     """
-    requester_view_id = _requester_view_id(layout_dir, agent_id)
-    if requester_view_id is not None:
-        return requester_view_id
-    distinct_views = {info["active_layout_slug"] for info in get_state().broadcaster.get_connected_client_infos()}
+    distinct_views = {
+        info["active_layout_slug"] for info in get_state().broadcaster.get_connected_client_infos()
+    }
     if len(distinct_views) == 1:
         return next(iter(distinct_views))
     if layout_dir is None:
@@ -2563,15 +2513,13 @@ def _default_view_id(layout_dir: Path | None, agent_id: str) -> str | None:
 def _resolve_requested_layout_slug(
     args_raw: dict[str, Any],
     layout_dir: Path | None,
-    agent_id: str,
 ) -> tuple[str | None, Response | None]:
-    """Resolve a layout op's ``args.layout`` (or the requester's default) to a view id.
+    """Resolve a layout op's ``args.layout`` (or the current-view default) to a view id.
 
     Returns ``(slug, None)`` on success and ``(None, error_response)`` when an
     explicitly-named view is unusable or unknown. With no layout dir
     configured (dev/test), an explicit name is slugified without registry
-    validation. ``agent_id`` names the requesting agent, whose own view is the
-    default when no view is named (see ``_default_view_id``).
+    validation and the default is None.
     """
     requested = args_raw.get("layout")
     if isinstance(requested, str) and requested:
@@ -2588,7 +2536,7 @@ def _resolve_requested_layout_slug(
         )
         error = ErrorResponse(detail=f"View {requested!r} not found (known views: {known_views})")
         return None, _json_response(error.model_dump(), status_code=404)
-    return _default_view_id(layout_dir, agent_id), None
+    return _default_view_id(layout_dir), None
 
 
 def _layout_broadcast_endpoint() -> Response:
@@ -2649,7 +2597,7 @@ def _layout_broadcast_endpoint() -> Response:
     layout_dir = _primary_agent_layout_dir()
 
     if op in {"list", "inspect"}:
-        slug, error_response = _resolve_requested_layout_slug(args_raw, layout_dir, agent_id)
+        slug, error_response = _resolve_requested_layout_slug(args_raw, layout_dir)
         if error_response is not None:
             return error_response
         device = str(args_raw.get("device") or projects.DEFAULT_DEVICE)
@@ -2727,7 +2675,7 @@ def _layout_broadcast_endpoint() -> Response:
         if layout_dir is None:
             error = ErrorResponse(detail="No primary agent configured for this workspace")
             return _json_response(error.model_dump(), status_code=500)
-        slug, error_response = _resolve_requested_layout_slug(args_raw, layout_dir, agent_id)
+        slug, error_response = _resolve_requested_layout_slug(args_raw, layout_dir)
         if error_response is not None:
             return error_response
         if slug is None:
@@ -2790,12 +2738,11 @@ def _layout_broadcast_endpoint() -> Response:
         # Mutating ops are view-targeted: they are delivered only to connected
         # clients that have the target view active (those clients apply the
         # mutation and autosave it into the view's file). Naming no view means
-        # "my own view" -- the resolve below defaults to the view the requesting
-        # agent was last messaged from, else its project, else the connected
-        # client's own view (see ``_default_view_id``) -- and with no client on
-        # the resolved view the op cannot take effect anywhere, so it fails
-        # loudly rather than broadcasting into the void.
-        target_layout_slug, layout_error_response = _resolve_requested_layout_slug(args_raw, layout_dir, agent_id)
+        # "the view the user is looking at" -- the resolve below defaults to
+        # the connected client's own view (see ``_default_view_id``) -- and
+        # with no client on the resolved view the op cannot take effect
+        # anywhere, so it fails loudly rather than broadcasting into the void.
+        target_layout_slug, layout_error_response = _resolve_requested_layout_slug(args_raw, layout_dir)
         if layout_error_response is not None:
             return layout_error_response
         if target_layout_slug is None or not broadcaster.has_client_on_layout(target_layout_slug):
