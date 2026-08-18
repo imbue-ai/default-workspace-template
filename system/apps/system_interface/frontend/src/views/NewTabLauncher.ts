@@ -560,7 +560,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
                   type: "button",
                   "aria-disabled": isDisabled ? "true" : undefined,
                   class:
-                    "new-tab-launcher-tile border-border flex h-9 flex-1 items-center justify-center gap-2 " +
+                    "new-tab-launcher-tile border-border flex h-9 min-w-0 flex-1 items-center justify-center gap-2 " +
                     "rounded-lg border px-4 text-[13px] font-medium " +
                     (isDisabled
                       ? "text-text-faint cursor-not-allowed"
@@ -574,7 +574,10 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
                     { class: "text-text-faint flex shrink-0 items-center" },
                     m.trust(launcherIcon(tile.kind, GLYPH_SIZE)),
                   ),
-                  tile.label,
+                  // Truncates rather than wrapping: a second line would change
+                  // the tile's height and break the row of tiles out of its
+                  // rhythm, and the label is the only part that can overflow.
+                  m("span", { class: "min-w-0 truncate" }, tile.label),
                 ],
               );
             }),
