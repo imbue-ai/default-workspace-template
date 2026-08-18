@@ -855,11 +855,11 @@ function buildDropdownItems(
       },
     });
 
-    // "First" chats: the same launchers with the `first` create template stacked
-    // on top (fast launch, /welcome, the first=true label), so the first-chat
-    // flow can be exercised without re-creating a workspace.
+    // Introductory chats: the same launchers with the `first` create template
+    // stacked on top (fast launch, /welcome, the first=true label), so the
+    // first-chat flow can be exercised without re-creating a workspace.
     items.push({
-      label: "New first Claude chat",
+      label: "New introductory Claude chat",
       action: () => {
         newTabTargetGroup = targetGroup ?? null;
         newFirstModalMode = "chat";
@@ -868,7 +868,7 @@ function buildDropdownItems(
     });
 
     items.push({
-      label: "New first Codex chat",
+      label: "New introductory Codex chat",
       action: () => {
         newTabTargetGroup = targetGroup ?? null;
         newFirstModalMode = "codex";
