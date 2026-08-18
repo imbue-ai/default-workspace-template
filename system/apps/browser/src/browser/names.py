@@ -31,6 +31,7 @@ _MAX_NAME_LEN = 40
 # it (see the system interface's ``derivedLabelForMemberRef``).
 NUMBERED_NAME_STEM = "browser"
 
+
 def first_free_numbered_browser_name(taken_names: set[str]) -> str:
     """The first free ``browser-<N>`` name (N counts from 1).
 
