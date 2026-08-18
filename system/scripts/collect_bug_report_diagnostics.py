@@ -26,6 +26,7 @@ archive into a way around the scan, so the scan always happens first.
 
 import base64
 import configparser
+from datetime import datetime
 import glob
 import io
 import json
@@ -54,30 +55,23 @@ SUPERVISOR_LOG_DIR = "/var/log/supervisor"
 # binaries it drives are baked into the image by install_secret_scanners.sh.
 SCAN_GATE_DIR = WORKSPACE_DIR + "/.agents/skills/publish-inspiration/scripts"
 
+# The workspace's own mngr, asked for what agents exist and what was said in
+# them. Named here rather than inline so a test can point it at a stub.
+MNGR_BINARY = "mngr"
+
 # The kernel's own readings, named here rather than inline so the host-health
 # section can be exercised against fixtures.
 MEMINFO_PATH = "/proc/meminfo"
 UPTIME_PATH = "/proc/uptime"
 LOADAVG_PATH = "/proc/loadavg"
 
-# mngr's per-agent state, where every agent's common transcript is written. The
-# exec runs as root, so "~" is /root rather than the workspace user's home; the
-# explicit path is tried first and the expansions are fallbacks for a workspace
-# laid out differently.
-MNGR_HOME_CANDIDATES = [
-    "/home/user/.mngr",
-    os.environ.get("MNGR_HOST_DIR", ""),
-    os.path.expanduser("~/.mngr"),
-]
-
-# Event-source directory names under an agent's events/ that are not a harness
-# transcript. ``logs`` is the common-transcript converter's own stdout stream.
-NON_HARNESS_EVENT_SOURCES = ("logs",)
-
 # How far back a chat counts as recent: every chat transcript written to inside
 # this window is attached, on the view that a bug is rarely about exactly one
 # conversation. Outside it, the single most relevant chat still rides along.
 TRANSCRIPT_RECENCY_WINDOW_SECONDS = 2 * 60 * 60
+
+WORKSPACE_LOGS_KEY = "workspace_logs"
+TRANSCRIPT_KEY = "transcript"
 
 MAX_LOG_FILES = 100
 MAX_LINES_PER_LOG = 200
@@ -88,43 +82,24 @@ MAX_MEMINFO_LINES = 40
 # Ceiling on how much of any one file is read. supervisord rotates each log at
 # 10MB, so reading 100 of them whole would cost a gigabyte for 200 lines each.
 MAX_READ_BYTES = 256 * 1024
-# Ceiling on the base64 zip payload the JSON line carries. Over it, the oldest
-# chats are dropped first and the drop is recorded inside the zip itself (see
-# DROPPED_CHATS_MEMBER_NAME) so a reader can tell a trimmed set from a full one.
-MAX_ENCODED_ZIP_BYTES = 8 * 1024 * 1024
-# Well under the collection budget, so a slow scan degrades to
-# scanner_unavailable instead of timing out the whole exec. The host overrides
-# this via --scan-timeout to keep it the same fraction of whatever budget it is
-# running under (a test budget on a slow CI sandbox is several times longer).
+# Well under the host's collection budget, so a slow scan degrades to
+# scanner_unavailable instead of consuming the whole budget. The host overrides
+# it via --scan-timeout to keep it the same fraction of whatever budget it runs
+# under.
 DEFAULT_SCAN_TIMEOUT_SECONDS = 12
 SUPERVISORCTL_TIMEOUT_SECONDS = 2
 DF_TIMEOUT_SECONDS = 2
 GIT_TIMEOUT_SECONDS = 2
 
-WORKSPACE_LOGS_KEY = "workspace_logs"
-TRANSCRIPT_KEY = "transcript"
-
-WORKSPACE_LOGS_MEMBER_NAME = "workspace-logs.log"
+# Where each kind of member lives inside the archive.
+METADATA_MEMBER_NAME = "metadata.json"
+LOG_MEMBER_DIR = "logs"
 CHAT_MEMBER_DIR = "chats"
-# The note member recording chats dropped for size. Its prose is authored here
-# and the member names it lists were each scanned alongside their chat, so it
-# carries nothing the scanner did not read.
-DROPPED_CHATS_MEMBER_NAME = "DROPPED-CHATS.txt"
-# In-band marker for a logs member that lost its older half to the size cap,
-# and the floor below which no further halving is attempted.
-LOGS_TRUNCATION_NOTE = (
-    "(truncated to fit the bug-report size cap; older lines dropped)\n"
-)
-MIN_TRUNCATED_LOGS_BYTES = 1024
 
 # The window of modification times the zip format can record, as a DOS date
 # packing the year into 7 bits from 1980: 1980-01-01 to 2107-12-31, both UTC.
 # Member timestamps are clamped into it rather than passed through, because
-# either end raises mid-archive and would cost the report every attachment. A
-# transcript whose mtime could not be read falls back to 0 (the 1970 epoch) and
-# a clock-skewed or bogusly touched file can sit past 2107, so both ends are
-# reachable. Read back with time.gmtime, never localtime: the lower bound is
-# 1979 in every timezone behind UTC, which the format rejects just the same.
+# either end raises mid-archive and would cost the report every attachment.
 ZIP_MIN_TIMESTAMP = 315532800
 ZIP_MAX_TIMESTAMP = 4354819199
 
@@ -186,54 +161,6 @@ def safe_mtime(path: str) -> float:
         return os.path.getmtime(path)
     except OSError:
         return 0.0
-
-
-def build_host_health() -> str:
-    """Disk, memory, uptime/load, and the recent memory-shed events.
-
-    Prepended to the log bundle because the questions a bug report raises about a
-    slow or half-dead workspace ("did it run out of disk? was something shed?")
-    are answered by these four readings, not by any one service's log.
-    """
-    sections = [
-        "--- df -h ---\n" + run_command(["df", "-h"], DF_TIMEOUT_SECONDS),
-        # meminfo is head-ordered: MemTotal/MemFree/MemAvailable/Buffers/Cached
-        # lead the file, and the tail is Hugetlb/Vmalloc detail nobody reads.
-        "--- {} ---\n".format(MEMINFO_PATH)
-        + read_head(MEMINFO_PATH, MAX_MEMINFO_LINES),
-        "--- {} (seconds up, seconds idle) ---\n".format(UPTIME_PATH)
-        + read_head(UPTIME_PATH, 2),
-        "--- {} ---\n".format(LOADAVG_PATH) + read_head(LOADAVG_PATH, 2),
-        "--- recent memory-shed events ({}) ---\n".format(SHED_LEDGER)
-        + read_tail(SHED_LEDGER, MAX_SHED_LINES),
-    ]
-    return "\n\n".join(sections)
-
-
-def build_workspace_version() -> str:
-    """The workspace checkout's own version: commit, branch, and any local drift.
-
-    The report's basics carry the desktop app's version, but the bug may live in
-    the workspace template itself, and the two move independently. Outside a git
-    checkout this degrades to git's own error text -- still worth attaching,
-    since "the workspace is not a git repo" is itself diagnostic.
-    """
-    return "\n".join(
-        [
-            run_command(
-                ["git", "-C", WORKSPACE_DIR, "log", "-1", "--format=%H %cI %s"],
-                GIT_TIMEOUT_SECONDS,
-            ),
-            run_command(
-                ["git", "-C", WORKSPACE_DIR, "rev-parse", "--abbrev-ref", "HEAD"],
-                GIT_TIMEOUT_SECONDS,
-            ),
-            run_command(
-                ["git", "-C", WORKSPACE_DIR, "status", "--short"], GIT_TIMEOUT_SECONDS
-            )
-            or "(clean)",
-        ]
-    )
 
 
 def load_user_program_names() -> set[str] | None:
@@ -298,164 +225,74 @@ def select_log_files(user_programs: set[str] | None) -> list[str]:
     return candidates[:MAX_LOG_FILES]
 
 
-def build_workspace_logs() -> str:
-    """The whole workspace-logs payload: host health, service status, service logs."""
+def build_metadata() -> dict[str, object]:
+    """The report's structured context: what this workspace is and how it is doing.
+
+    A json member rather than headed sections in a text blob, so a reader (or a
+    tool) gets fields instead of something to re-parse. Values that are
+    inherently command output -- df, meminfo, supervisorctl -- stay as their own
+    string fields rather than being given an invented schema; what matters is
+    that they are separately addressable instead of concatenated together.
+    """
     user_programs = load_user_program_names()
-    parts = ["=== workspace version ===", build_workspace_version(), ""]
-    parts.extend(["=== host health ===", build_host_health(), ""])
-    if user_programs is None:
-        parts.append(
-            "=== NOTE ===\n"
-            "Could not read {}, so user-created services could not be identified\n"
-            "and every supervisord log below is included.".format(SUPERVISORD_CONF)
-        )
-        parts.append("")
-    parts.append("=== supervisorctl status ===")
-    parts.append(
-        run_command(
-            ["supervisorctl", "-c", SUPERVISORD_CONF, "status"],
-            SUPERVISORCTL_TIMEOUT_SECONDS,
-        )
-    )
-    parts.append("")
-    log_files = select_log_files(user_programs)
-    parts.append(
-        "=== {} service log files (last {} lines each) ===".format(
-            len(log_files), MAX_LINES_PER_LOG
-        )
-    )
-    for path in log_files:
-        parts.append("")
-        parts.append("--- {} ---".format(path))
-        parts.append(read_tail(path, MAX_LINES_PER_LOG))
-    return "\n".join(parts)
+    return {
+        "workspace": {
+            "commit": run_command(
+                ["git", "-C", WORKSPACE_DIR, "log", "-1", "--format=%H %cI %s"],
+                GIT_TIMEOUT_SECONDS,
+            ),
+            "branch": run_command(
+                ["git", "-C", WORKSPACE_DIR, "rev-parse", "--abbrev-ref", "HEAD"],
+                GIT_TIMEOUT_SECONDS,
+            ),
+            "local_changes": run_command(
+                ["git", "-C", WORKSPACE_DIR, "status", "--short"], GIT_TIMEOUT_SECONDS
+            )
+            or "(clean)",
+        },
+        "host_health": {
+            "disk": run_command(["df", "-h"], DF_TIMEOUT_SECONDS),
+            # meminfo is head-ordered: MemTotal/MemFree/MemAvailable/Buffers/Cached
+            # lead the file, and the tail is Hugetlb/Vmalloc detail nobody reads.
+            "memory": read_head(MEMINFO_PATH, MAX_MEMINFO_LINES),
+            "uptime_seconds_up_and_idle": read_head(UPTIME_PATH, 2),
+            "loadavg": read_head(LOADAVG_PATH, 2),
+            "recent_memory_shed_events": read_tail(SHED_LEDGER, MAX_SHED_LINES),
+        },
+        "services": {
+            "status": run_command(
+                ["supervisorctl", "-c", SUPERVISORD_CONF, "status"],
+                SUPERVISORCTL_TIMEOUT_SECONDS,
+            ),
+            # None means the config could not be read, so user-created services
+            # could not be told apart and every log was collected. Recorded
+            # rather than silent: it changes what the log members mean.
+            "are_user_services_identified": user_programs is not None,
+            "log_lines_per_file": MAX_LINES_PER_LOG,
+        },
+    }
 
 
-def agent_labels_for_transcript(path: str) -> dict[str, object]:
-    """The owning agent's labels, from its data.json; {} when unreadable.
+def collect_log_members() -> list[tuple[str, str, float]]:
+    """One member per service log, as ``(member name, content, mtime)``.
 
-    The transcript sits at agents/<id>/events/<source>/common_transcript/
-    events.jsonl, so the agent's record is four directories up. An agent whose
-    record cannot be read carries no marks, and no marks reads as a chat below
-    -- old workspaces without labels keep working.
+    Separate members rather than one concatenated file: the payload is an
+    archive, so there is no reason to make a reader split headed sections apart
+    again. User-created services' logs are excluded -- those are the user's
+    content, not diagnostics -- by the workspace's own service definitions.
     """
-    agent_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(path))))
-    try:
-        with open(os.path.join(agent_dir, "data.json"), encoding="utf-8") as fh:
-            record = json.load(fh)
-    except (OSError, ValueError):
-        return {}
-    labels = record.get("labels") if isinstance(record, dict) else None
-    return labels if isinstance(labels, dict) else {}
-
-
-def is_chat_agent(labels: Mapping[str, object]) -> bool:
-    """Whether these labels mark a chat agent, by the workspace's own definition.
-
-    Mirrors system_interface's get_chat_agent_ids: a chat is any agent that is
-    neither a worker another agent spawned (``agent_created=true`` -- caretaker
-    runs, automations) nor the primary services agent (``is_primary=true``).
-    Those two marks are how the workspace itself tells its background agents
-    apart, so they are read here rather than a list of agent types being kept.
-    """
-    return labels.get("agent_created") != "true" and labels.get("is_primary") != "true"
-
-
-def last_user_message_timestamp(path: str) -> str | None:
-    """Timestamp of the transcript tail's last user message, or None when it has none.
-
-    When the user last spoke is a far better recency signal than the file's
-    mtime: a background chat's assistant can churn out events long after the
-    user stopped looking at it, and every one of them bumps the mtime. Only the
-    tail is scanned (the same byte-bounded read the log tails use), so a user
-    message older than the tail window reads as none -- by then the transcript's
-    recent activity is all non-user anyway, which is exactly the signal.
-    Timestamps are compared as strings: common-transcript events carry ISO-8601
-    UTC, where lexicographic order is time order.
-    """
-    for line in reversed(read_bounded(path, True).splitlines()):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            event = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(event, dict) and event.get("type") == "user_message":
-            timestamp = event.get("timestamp")
-            return timestamp if isinstance(timestamp, str) else ""
-    return None
-
-
-def gather_chat_transcripts() -> list[tuple[str, float]]:
-    """Every chat agent's transcript as (path, mtime), deduplicated.
-
-    Only chat agents' transcripts are candidates (see ``is_chat_agent``): a
-    workspace whose only transcripts belong to background agents has no chat
-    transcript to send. The source segment names the harness whose transcript
-    this is (claude, codex, ...), except for ``logs``, which is the converter's
-    own stdout stream -- it records that it converted, not what was said -- and
-    is never a candidate.
-    """
-    seen = set()
-    candidates = []
-    for root in MNGR_HOME_CANDIDATES:
-        if not root:
-            continue
-        pattern = os.path.join(
-            root, "agents", "*", "events", "*", "common_transcript", "events.jsonl"
-        )
-        for path in glob.glob(pattern):
-            if (
-                os.path.basename(os.path.dirname(os.path.dirname(path)))
-                in NON_HARNESS_EVENT_SOURCES
-            ):
-                continue
-            real = os.path.realpath(path)
-            if real in seen:
-                continue
-            seen.add(real)
-            if not is_chat_agent(agent_labels_for_transcript(path)):
-                continue
-            candidates.append((path, safe_mtime(path)))
-    return candidates
-
-
-def select_transcript_paths() -> list[str]:
-    """The chat transcripts a report should carry, newest first; [] when none exist.
-
-    A bug is rarely about exactly one conversation, so every chat written to
-    inside the recency window rides along, ordered newest first. When the
-    window is empty -- the workspace has sat idle -- the report still carries
-    its best single context: the chat the user most recently wrote in, ranked
-    by the last user message (a background chat's assistant churning does not
-    move that signal) with the file mtime breaking ties and standing in for
-    transcripts holding no user message.
-    """
-    candidates = gather_chat_transcripts()
-    cutoff = time.time() - TRANSCRIPT_RECENCY_WINDOW_SECONDS
-    recent = sorted(
-        (c for c in candidates if c[1] >= cutoff), key=lambda c: c[1], reverse=True
-    )
-    if recent:
-        return [path for path, _ in recent]
-    best = None
-    best_rank = None
-    for path, mtime in candidates:
-        user_timestamp = last_user_message_timestamp(path)
-        rank = (user_timestamp is not None, user_timestamp or "", mtime)
-        if best_rank is None or rank > best_rank:
-            best, best_rank = path, rank
-    return [best] if best is not None else []
-
-
-def read_transcript(path: str) -> str | None:
-    """The transcript's raw JSONL, or None when it cannot be read."""
-    try:
-        with open(path, "rb") as fh:
-            return fh.read().decode("utf-8", errors="replace")
-    except OSError:
-        return None
+    members = []
+    used_names: set[str] = set()
+    for path in select_log_files(load_user_program_names()):
+        stem = safe_member_component(program_name_for_log(path))
+        member = "{}/{}.log".format(LOG_MEMBER_DIR, stem)
+        index = 2
+        while member in used_names:
+            member = "{}/{}-{}.log".format(LOG_MEMBER_DIR, stem, index)
+            index += 1
+        used_names.add(member)
+        members.append((member, read_tail(path, MAX_LINES_PER_LOG), safe_mtime(path)))
+    return members
 
 
 def safe_member_component(text: str) -> str:
@@ -467,52 +304,187 @@ def safe_member_component(text: str) -> str:
     name a traversal (``..``) or a hidden file.
     """
     cleaned = re.sub(r"[^A-Za-z0-9_.-]", "_", text).lstrip(".")
-    return cleaned or "unknown"
+    # A dotted run cannot traverse without a separator, which the substitution
+    # above already removed -- collapsed anyway so no member name can read as
+    # a relative path at a glance.
+    return cleaned.replace("..", "_") or "unknown"
 
 
-def transcript_member_name(path: str, used_names: set[str]) -> str:
-    """The zip member name for one chat transcript, unique within the archive.
+def transcript_member_name(name: str, harness: str, used_names: set[str]) -> str:
+    """The zip member name for one chat, unique within the archive.
 
-    Carries the owning agent id and the harness source under the fixed
-    ``chats/`` directory, so the conversations stay tellable apart with nothing
-    injected into the transcript itself. The member keeps the harness's own
-    .jsonl, so it opens in whatever reads a transcript normally.
+    Carries the agent's name and the harness that wrote it, under the fixed ``chats/``
+    directory, so the conversations stay tellable apart with nothing injected
+    into the transcript itself. The member keeps the harness's own .jsonl, so it
+    opens in whatever reads a transcript normally.
     """
-    agent_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(path))))
-    source = os.path.basename(os.path.dirname(os.path.dirname(path)))
-    stem = "{}-{}".format(
-        safe_member_component(os.path.basename(agent_dir)),
-        safe_member_component(source),
-    )
-    name = "{}/{}.jsonl".format(CHAT_MEMBER_DIR, stem)
+    stem = "{}-{}".format(safe_member_component(name), safe_member_component(harness))
+    member = "{}/{}.jsonl".format(CHAT_MEMBER_DIR, stem)
     index = 2
-    while name in used_names:
-        name = "{}/{}-{}.jsonl".format(CHAT_MEMBER_DIR, stem, index)
+    while member in used_names:
+        member = "{}/{}-{}.jsonl".format(CHAT_MEMBER_DIR, stem, index)
         index += 1
-    used_names.add(name)
-    return name
+    used_names.add(member)
+    return member
 
 
-def collect_transcript_members(paths: Sequence[str]) -> list[tuple[str, str, float]]:
-    """The chat transcripts to attach, as (member name, content, mtime) triples.
+def run_mngr(args: Sequence[str], timeout: float) -> str | None:
+    """Stdout of a ``mngr`` subcommand, or None when it could not be run.
 
-    Each chat stays its own file: the attachment is an archive, so there is no
-    reason to flatten several JSONL streams into one blob a reader has to split
-    back apart. Order follows ``select_transcript_paths`` (newest chat first).
-    A transcript that cannot be read is skipped, and an empty result is the
-    no-transcript answer.
+    The workspace's own mngr is the source of truth for what agents exist and
+    what was said in them, so the collector asks it rather than re-deriving
+    either from the files under ~/.mngr. Any failure returns None and the
+    caller reports no transcript: a collector that guessed at mngr's state
+    would be the duplicate this exists to avoid.
     """
-    members = []
-    used_names = set()
-    for path in paths:
-        content = read_transcript(path)
-        if content is None:
-            continue
-        members.append(
-            (transcript_member_name(path, used_names), content, safe_mtime(path))
+    try:
+        proc = subprocess.run(
+            [MNGR_BINARY, *args], capture_output=True, text=True, timeout=timeout
         )
-    return members
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout
 
+
+def list_chat_agents(timeout: float) -> list[str]:
+    """Each chat agent's name, by the workspace's own definition.
+
+    Mirrors system_interface's get_chat_agent_ids: a chat is any agent that is
+    neither a worker another agent spawned (``agent_created=true`` -- caretaker
+    runs, automations) nor the primary services agent (``is_primary=true``).
+    Those two marks are how the workspace tells its background agents apart, so
+    they are read rather than a list of agent types being kept here.
+
+    The pipe-delimited template is used rather than ``--format json``: inside a
+    workspace container mngr cannot reach the providers that back its hosts, and
+    the json path fails outright on that where the template still answers from
+    local state.
+    """
+    listed = run_mngr(
+        [
+            "list",
+            "--format",
+            "{name}|{type}|{labels.is_primary}|{labels.agent_created}",
+        ],
+        timeout,
+    )
+    if listed is None:
+        return []
+    agents: list[str] = []
+    for line in listed.splitlines():
+        parts = line.split("|")
+        if len(parts) != 4:
+            continue
+        name, agent_type, is_primary, agent_created = (p.strip() for p in parts)
+        if not name or not agent_type:
+            continue
+        if is_primary.lower() == "true" or agent_created.lower() == "true":
+            continue
+        agents.append(name)
+    return agents
+
+
+def fetch_transcript(name: str, timeout: float) -> str | None:
+    """One agent's conversation as raw JSONL, or None when it has none.
+
+    The harness is NOT derived from the agent's type: an agent of type ``chat``
+    writes its events under ``claude/``, so the two do not map onto each other.
+    Instead mngr is asked for every source and filtered on the source each event
+    carries, which keeps the set of harnesses mngr's business rather than a list
+    kept here.
+
+    ``logs/`` is excluded deliberately: everything under it is the converter's
+    own stdout -- it records *that* it converted, not what was said -- so
+    including it would attach a log of conversions in place of the conversation.
+    """
+    events = run_mngr(
+        [
+            "event",
+            name,
+            "--include",
+            'source.endsWith("common_transcript")',
+            "--exclude",
+            'source.startsWith("logs/")',
+            "--format",
+            "jsonl",
+        ],
+        timeout,
+    )
+    if events is None or not events.strip():
+        return None
+    return events
+
+
+def transcript_source(events: str) -> str:
+    """The harness that wrote these events (``claude``, ``codex``, ...).
+
+    Taken from the events' own ``source`` field rather than the agent's type,
+    which does not name it: a ``chat`` agent's events live under ``claude/``.
+    """
+    for line in events.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            source = json.loads(line).get("source")
+        except ValueError:
+            continue
+        if isinstance(source, str) and "/" in source:
+            return source.split("/", 1)[0]
+    return "chat"
+
+
+def newest_event_time(events: str) -> float:
+    """When this conversation was last written to, as an epoch; 0.0 when unknown.
+
+    Read from the events themselves rather than mngr's ``user_activity_time``,
+    which is unpopulated on the agents this runs against, and rather than a file
+    mtime, which the collector no longer resolves paths for.
+    """
+    newest = 0.0
+    for line in events.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            stamp = json.loads(line).get("timestamp")
+        except ValueError:
+            continue
+        if not isinstance(stamp, str):
+            continue
+        try:
+            parsed = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        newest = max(newest, parsed.timestamp())
+    return newest
+
+
+def collect_transcript_members(timeout: float) -> list[tuple[str, str, float]]:
+    """The chats to attach, as ``(member name, content, last-written epoch)``.
+
+    A bug is rarely about exactly one conversation, so every chat written to
+    inside the recency window rides along, newest first. When the window is
+    empty -- the workspace sat idle -- the report still carries its best single
+    context rather than nothing, since a stale workspace is exactly where the
+    conversation is hardest to reconstruct from anything else.
+    """
+    fetched = []
+    used_names: set[str] = set()
+    for name in list_chat_agents(timeout):
+        events = fetch_transcript(name, timeout)
+        if events is None:
+            continue
+        member = transcript_member_name(name, transcript_source(events), used_names)
+        fetched.append((member, events, newest_event_time(events)))
+    if not fetched:
+        return []
+    fetched.sort(key=lambda item: item[2], reverse=True)
+    cutoff = time.time() - TRANSCRIPT_RECENCY_WINDOW_SECONDS
+    recent = [item for item in fetched if item[2] >= cutoff]
+    return recent if recent else fetched[:1]
 
 def build_zip(members: Sequence[tuple[str, str, float]]) -> bytes:
     """Deflate the members into one archive, returned as raw zip bytes.
@@ -537,65 +509,24 @@ def build_zip(members: Sequence[tuple[str, str, float]]) -> bytes:
     return buffer.getvalue()
 
 
-def build_dropped_chats_note(dropped_names: Sequence[str]) -> str:
-    return (
-        "The following chat transcripts were collected and scanned clean, but were\n"
-        "dropped (oldest first) to keep the bug-report payload under its size cap:\n\n"
-        + "\n".join(dropped_names)
-        + "\n"
-    )
-
-
-def encode_zip_capped(
-    logs_member: tuple[str, str, float] | None,
+def encode_zip(
+    log_members: Sequence[tuple[str, str, float]],
     chat_members: Sequence[tuple[str, str, float]],
-) -> tuple[str | None, list[str]]:
-    """The base64 zip payload under the size cap, plus the chat members dropped to fit.
+) -> str | None:
+    """Everything collected, packed and base64-encoded; None when there is nothing.
 
-    Oldest chats go first (they are the least likely to describe the bug), and
-    every drop is recorded inside the zip as a note member -- a silently trimmed
-    set would be indistinguishable from a complete one, the same reason one
-    secret finding withholds all chats. If the logs alone still bust the cap
-    (only reachable when many services tail incompressible garbage), the logs
-    text keeps losing its older half until it fits -- truncating text the scan
-    already cleared cannot introduce anything unscanned, and the loss is marked
-    in-band at the top of the member. None means there was nothing to pack.
+    Deliberately unbounded. The payload returns on the collector's stdout, which
+    carries it whole -- 32MB was measured arriving intact -- so there is no
+    transport cliff to stay under, and S3 does not care either. What a large
+    payload costs is time (roughly 0.45s per MB on top of a ~4s floor) against
+    the host's collection budget, and a collection that outgrows that budget
+    fails loudly as ``exec_timeout`` rather than quietly shipping a trimmed set
+    a reader could not tell from a complete one.
     """
-    kept_chats = list(chat_members)
-    dropped_names: list[str] = []
-    while True:
-        members = ([] if logs_member is None else [logs_member]) + kept_chats
-        if dropped_names:
-            members = members + [
-                (
-                    DROPPED_CHATS_MEMBER_NAME,
-                    build_dropped_chats_note(dropped_names),
-                    time.time(),
-                )
-            ]
-        if not members:
-            return None, dropped_names
-        encoded = base64.b64encode(build_zip(members)).decode("ascii")
-        if len(encoded) <= MAX_ENCODED_ZIP_BYTES:
-            return encoded, dropped_names
-        if kept_chats:
-            # Chats are ordered newest first, so the oldest is the last one kept.
-            dropped_names.append(kept_chats.pop()[0])
-        elif (
-            logs_member is not None and len(logs_member[1]) >= MIN_TRUNCATED_LOGS_BYTES
-        ):
-            # Logs are append-ordered, so the older half is the expendable one.
-            name, content, mtime = logs_member
-            logs_member = (
-                name,
-                LOGS_TRUNCATION_NOTE + content[len(content) // 2 :],
-                mtime,
-            )
-        else:
-            # Nothing left to shrink; effectively unreachable (a zip of a few
-            # hundred text bytes cannot exceed the cap) but ships rather than
-            # loops.
-            return encoded, dropped_names
+    members = list(log_members) + list(chat_members)
+    if not members:
+        return None
+    return base64.b64encode(build_zip(members)).decode("ascii")
 
 
 def scan_targets(
@@ -677,11 +608,16 @@ def main(argv: Sequence[str]) -> None:
     scan_timeout_seconds = parse_scan_timeout(list(flags))
     omissions: dict[str, str] = {}
 
-    logs_text = build_workspace_logs() if "--logs" in flags else None
+    log_members: list[tuple[str, str, float]] = []
+    if "--logs" in flags:
+        log_members = [
+            (METADATA_MEMBER_NAME, json.dumps(build_metadata(), indent=2), time.time()),
+            *collect_log_members(),
+        ]
 
     chat_members: list[tuple[str, str, float]] = []
     if "--transcript" in flags:
-        chat_members = collect_transcript_members(select_transcript_paths())
+        chat_members = collect_transcript_members(scan_timeout_seconds)
         if not chat_members:
             omissions[TRANSCRIPT_KEY] = REASON_NO_CHAT_TRANSCRIPT
 
@@ -697,17 +633,23 @@ def main(argv: Sequence[str]) -> None:
     staging_dir = tempfile.mkdtemp(prefix="bug-report-scan-")
     try:
         staged_by_key: dict[str, list[str]] = {}
-        if logs_text is not None:
-            logs_staged = stage_for_scan(
-                staging_dir,
-                WORKSPACE_LOGS_KEY,
-                WORKSPACE_LOGS_MEMBER_NAME + "\n" + logs_text,
-            )
+        if log_members:
+            logs_staged: list[str] | None = []
+            for index, (name, content, _) in enumerate(log_members):
+                staged = stage_for_scan(
+                    staging_dir,
+                    "{}-{}".format(WORKSPACE_LOGS_KEY, index),
+                    name + "\n" + content,
+                )
+                if staged is None:
+                    logs_staged = None
+                    break
+                logs_staged.append(staged)
             if logs_staged is None:
-                logs_text = None
+                log_members = []
                 omissions[WORKSPACE_LOGS_KEY] = REASON_SCANNER_UNAVAILABLE
             else:
-                staged_by_key[WORKSPACE_LOGS_KEY] = [logs_staged]
+                staged_by_key[WORKSPACE_LOGS_KEY] = logs_staged
         if chat_members:
             transcript_staged: list[str] | None = []
             for index, (name, content, _) in enumerate(chat_members):
@@ -741,7 +683,7 @@ def main(argv: Sequence[str]) -> None:
                 reason = next((r for r in reasons if r is not None), None)
                 if reason is not None:
                     if key == WORKSPACE_LOGS_KEY:
-                        logs_text = None
+                        log_members = []
                     if key == TRANSCRIPT_KEY:
                         chat_members = []
                     omissions[key] = reason
@@ -751,12 +693,7 @@ def main(argv: Sequence[str]) -> None:
     # Base64 because JSON holds no bytes; the host decodes it back and stages
     # the archive verbatim. "zip" is absent -- never empty -- when nothing was
     # collected.
-    logs_member = (
-        None
-        if logs_text is None
-        else (WORKSPACE_LOGS_MEMBER_NAME, logs_text, time.time())
-    )
-    encoded, _ = encode_zip_capped(logs_member, chat_members)
+    encoded = encode_zip(log_members, chat_members)
     payload: dict[str, object] = {
         "contract_version": CONTRACT_VERSION,
         "omissions": omissions,
