@@ -37,12 +37,13 @@ from imbue.mngr.primitives import ProviderInstanceName
 from imbue.mngr.utils.polling import poll_until
 from imbue.mngr_codex.app_server_client import CodexModel
 from imbue.system_interface import client_activity
-from imbue.system_interface import workspace_layouts
+from imbue.system_interface import projects
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.agent_manager import _LogQueueCallback
 from imbue.system_interface.agent_manager import _build_chat_create_command
 from imbue.system_interface.agent_manager import _build_observe_command_argv
+from imbue.system_interface.agent_manager import _chat_project_label
 from imbue.system_interface.agent_manager import _make_apps_file_handler
 from imbue.system_interface.harnesses.codex.activity import CodexActivityTracker
 from imbue.system_interface.harnesses.codex.model import codex_models_to_options
@@ -190,6 +191,75 @@ url = "http://localhost:7681"
     assert apps[1].label == ""
 
 
+def test_read_apps_reads_the_registered_icon(agent_manager: AgentManager, tmp_path: Path) -> None:
+    icon = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M2 2h12v12H2z"/></svg>'
+    toml_file = tmp_path / "apps.toml"
+    toml_file.write_text(
+        "[[apps]]\n"
+        'name = "web"\n'
+        'url = "http://localhost:8000"\n'
+        'label = "web-x7k9q2w1"\n'
+        f"icon = {json.dumps(icon)}\n"
+        "\n"
+        "[[apps]]\n"
+        'name = "terminal"\n'
+        'url = "http://localhost:7681"\n'
+    )
+
+    agent_manager._read_apps(toml_file)
+
+    apps = agent_manager.get_apps()
+    assert apps[0].icon == icon
+    # An app that registered no icon reads back with an empty one.
+    assert apps[1].icon == ""
+
+
+@pytest.mark.parametrize(
+    "icon",
+    [
+        "<svg><script>alert(1)</script></svg>",
+        '<svg onload="alert(1)"></svg>',
+        "<svg><style>* { display: none }</style></svg>",
+        '<svg><a href="javascript:alert(1)"></a></svg>',
+        "<div>not an svg</div>",
+        "<svg" + " " * 20000 + "></svg>",
+    ],
+)
+def test_read_apps_drops_an_unsafe_icon(agent_manager: AgentManager, tmp_path: Path, icon: str) -> None:
+    """``forward_port.py`` never writes markup like this, but a hand-edited
+    registry must not be able to push it into the client's DOM."""
+    toml_file = tmp_path / "apps.toml"
+    toml_file.write_text(f'[[apps]]\nname = "web"\nurl = "http://localhost:8000"\nicon = {json.dumps(icon)}\n')
+
+    agent_manager._read_apps(toml_file)
+
+    apps = agent_manager.get_apps()
+    # The app itself still registers; only its icon is refused.
+    assert len(apps) == 1
+    assert apps[0].icon == ""
+
+
+def test_read_apps_reads_the_internal_flag(agent_manager: AgentManager, tmp_path: Path) -> None:
+    toml_file = tmp_path / "apps.toml"
+    toml_file.write_text(
+        "[[apps]]\n"
+        'name = "owner-exec"\n'
+        'url = "http://localhost:8793"\n'
+        "internal = true\n"
+        "\n"
+        "[[apps]]\n"
+        'name = "web"\n'
+        'url = "http://localhost:8000"\n'
+    )
+
+    agent_manager._read_apps(toml_file)
+
+    apps = agent_manager.get_apps()
+    assert apps[0].internal is True
+    # A row with no `internal` key -- every ordinary app -- reads back False.
+    assert apps[1].internal is False
+
+
 def test_read_apps_handles_missing_file(agent_manager: AgentManager, tmp_path: Path) -> None:
     toml_file = tmp_path / "nonexistent.toml"
     agent_manager._read_apps(toml_file)
@@ -246,7 +316,56 @@ def test_get_apps_serialized(agent_manager: AgentManager) -> None:
         ]
 
     serialized = agent_manager.get_apps_serialized()
-    assert serialized == [{"name": "web", "url": "http://localhost:8000", "label": "web-x7k9q2w1"}]
+    assert serialized == [
+        {
+            "name": "web",
+            "url": "http://localhost:8000",
+            "label": "web-x7k9q2w1",
+            "icon": "",
+            "internal": False,
+        }
+    ]
+
+
+def test_get_apps_serialized_carries_the_icon(agent_manager: AgentManager) -> None:
+    """The icon rides alongside name/url/label everywhere the app list is sent,
+    so a client can draw the app's own glyph without a second request."""
+    icon = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M2 2h12v12H2z"/></svg>'
+    with agent_manager._lock:
+        agent_manager._apps = [
+            AppEntry(name="web", url="http://localhost:8000", label="web-x7k9q2w1", icon=icon),
+        ]
+
+    serialized = agent_manager.get_apps_serialized()
+    assert serialized == [
+        {
+            "name": "web",
+            "url": "http://localhost:8000",
+            "label": "web-x7k9q2w1",
+            "icon": icon,
+            "internal": False,
+        }
+    ]
+
+
+def test_get_apps_serialized_carries_internal(agent_manager: AgentManager) -> None:
+    """The frontend's `pickableApps` excludes an internal app everywhere it
+    offers apps to open, so the flag has to reach it over the wire."""
+    with agent_manager._lock:
+        agent_manager._apps = [
+            AppEntry(name="owner-exec", url="http://localhost:8793", internal=True),
+        ]
+
+    serialized = agent_manager.get_apps_serialized()
+    assert serialized == [
+        {
+            "name": "owner-exec",
+            "url": "http://localhost:8793",
+            "label": "",
+            "icon": "",
+            "internal": True,
+        }
+    ]
 
 
 def test_resolve_agent_work_dir_from_own_env(agent_manager: AgentManager) -> None:
@@ -1034,6 +1153,113 @@ def test_chat_create_argv_stacks_extra_role_templates_after_chat() -> None:
     assert templates == ["chat", "first"]
 
 
+# --- the chat's originating project (the mngr ``project`` label) ---
+# A chat is an agent, so the project it was created inside rides the label mngr
+# already propagates to the agent's children rather than a parallel list. The
+# label is where a chat starts out filed, not an owner: membership is
+# many-to-many and each view's member list says what that view shows.
+
+
+def test_chat_project_label_prefers_the_project_the_chat_was_created_in() -> None:
+    assert _chat_project_label({"project": "taxes"}, "website-redesign") == "website-redesign"
+
+
+def test_chat_project_label_inherits_the_primary_agents_project_outside_any_project() -> None:
+    assert _chat_project_label({"project": "taxes"}, "") == "taxes"
+
+
+def test_chat_project_label_is_empty_when_nothing_names_a_project() -> None:
+    """A chat filed in no project is fine -- Everything lists every object anyway."""
+    assert _chat_project_label({}, "") == ""
+
+
+def test_chat_create_argv_canonicalizes_the_name_and_labels_the_human_one() -> None:
+    """A chat is created under its true name with the typed name as a label.
+
+    Both are sent explicitly so the create works against any vendored mngr,
+    including one predating free-form names -- and the pair is what newer mngr
+    derives for itself, so its "true name is the canonical form of the display
+    name" rule holds either way.
+    """
+    argv = _build_chat_create_command(
+        "mngr",
+        "Chat 2",
+        "agent-1",
+        {},
+        HarnessType.CLAUDE,
+    )
+
+    assert argv[2] == "Chat-2"
+    labels = [argv[i + 1] for i, arg in enumerate(argv) if arg == "--label"]
+    assert "display_name=Chat 2" in labels
+    assert_mngr_argv_valid(argv)
+
+
+def test_chat_create_argv_labels_the_project_the_chat_was_created_in() -> None:
+    argv = _build_chat_create_command(
+        mngr_binary="mngr",
+        name="demo",
+        agent_id="agent-123",
+        primary_labels={"workspace": "ws", "project": "taxes"},
+        harness=HarnessType.CLAUDE,
+        project_id="website-redesign",
+    )
+    assert "project=website-redesign" in argv
+    assert "project=taxes" not in argv
+    assert_mngr_argv_valid(argv)
+
+
+def test_chat_create_argv_omits_the_project_label_when_there_is_no_project() -> None:
+    argv = _build_chat_create_command(
+        mngr_binary="mngr",
+        name="demo",
+        agent_id="agent-123",
+        primary_labels={"workspace": "ws"},
+        harness=HarnessType.CLAUDE,
+    )
+    assert not any(token.startswith("project=") for token in argv)
+    assert_mngr_argv_valid(argv)
+
+
+def test_serialized_agents_expose_the_project_label(broadcaster: WebSocketBroadcaster) -> None:
+    """The workspace reads each chat's originating project off the agent payload."""
+    manager = AgentManager.build(broadcaster)
+    try:
+        with manager._lock:
+            for agent_id, labels in (
+                ("filed", {"user_created": "true", "project": "taxes"}),
+                ("unfiled", {"user_created": "true"}),
+            ):
+                manager._agents[agent_id] = AgentStateItem(
+                    id=agent_id, name=agent_id, state="RUNNING", labels=labels, work_dir=None
+                )
+        project_by_id = {agent["id"]: agent["project"] for agent in manager.get_agents_serialized()}
+        assert project_by_id == {"filed": "taxes", "unfiled": None}
+    finally:
+        manager.stop()
+
+
+def test_serialized_agents_expose_the_display_name_label(broadcaster: WebSocketBroadcaster) -> None:
+    """The human-readable name mngr holds rides along; ``name`` stays the true mngr name."""
+    manager = AgentManager.build(broadcaster)
+    try:
+        with manager._lock:
+            for agent_id, name, labels in (
+                ("named", "Chat-1", {"user_created": "true", "display_name": "Chat 1"}),
+                ("unnamed", "brave-otter", {"user_created": "true"}),
+            ):
+                manager._agents[agent_id] = AgentStateItem(
+                    id=agent_id, name=name, state="RUNNING", labels=labels, work_dir=None
+                )
+        by_id = {agent["id"]: agent for agent in manager.get_agents_serialized()}
+        assert by_id["named"]["display_name"] == "Chat 1"
+        assert by_id["unnamed"]["display_name"] is None
+        assert by_id["named"]["name"] == "Chat-1"
+        assert by_id["unnamed"]["name"] == "brave-otter"
+    finally:
+        manager.stop()
+
+
 def test_get_chat_agent_ids_excludes_workers_and_primary(broadcaster: WebSocketBroadcaster) -> None:
     """Only chats are OOM-managed: workers and the primary keep their launch bands."""
     manager = AgentManager.build(broadcaster)
@@ -1264,7 +1490,6 @@ def test_waiting_lifecycle_trusts_the_active_marker(agent_manager: AgentManager,
     (state_dir / "active").unlink()
     agent_manager._recompute_activity_state("agent-1", broadcast_on_change=False)
     assert agent_manager._activity_state_by_agent.get("agent-1") == ActivityState.IDLE
-
 
 
 def test_session_events_user_message_drives_thinking(
@@ -1541,9 +1766,7 @@ def test_update_queued_messages_caches_broadcasts_and_serializes(
         agent_manager.stop()
 
 
-def test_shoulder_tap_available_reflects_queue_and_send_in_flight(
-    agent_manager: AgentManager, tmp_path: Path
-) -> None:
+def test_shoulder_tap_available_reflects_queue_and_send_in_flight(agent_manager: AgentManager, tmp_path: Path) -> None:
     """The derived ``shoulder_tap_available`` is true iff something is queued AND no send is in
     flight (contract Shoulder-tap), recomputed at each serialize from the two authoritative
     pieces of manager state -- never stored, so it cannot go stale."""
@@ -1606,9 +1829,7 @@ def test_working_to_idle_drains_the_queue_via_the_registered_handler(
         # ``update_queued_messages``'s pre-broadcast recompute, and in production the
         # enqueue only ever happens mid-turn.
         agent_manager.update_session_events("agent-1", [{"type": "user_message", "content": "go"}])
-        agent_manager.update_queued_messages(
-            "agent-1", [{"queued_id": "q1", "content": "hi", "timestamp": "t"}]
-        )
+        agent_manager.update_queued_messages("agent-1", [{"queued_id": "q1", "content": "hi", "timestamp": "t"}])
         with agent_manager._lock:
             assert agent_manager._activity_state_by_agent["agent-1"] == ActivityState.THINKING
             assert len(agent_manager._agents["agent-1"].queued_messages) == 1
@@ -1721,9 +1942,7 @@ def test_stopped_codex_agent_snapshot_is_swept_before_any_broadcast(
     try:
         listener = broadcaster.register()
         # The dead generation's orphan chips arrive from a late snapshot push.
-        agent_manager.update_queued_messages(
-            "agent-1", [{"queued_id": "q1", "content": "phantom", "timestamp": "t"}]
-        )
+        agent_manager.update_queued_messages("agent-1", [{"queued_id": "q1", "content": "phantom", "timestamp": "t"}])
 
         messages = _drain(listener)
         updates = [message for message in messages if message.get("type") == "agents_updated"]
@@ -2122,9 +2341,7 @@ def _write_client_activity_message(host_dir: Path, agent_id: str, seconds_ago: f
     abandoned.
     """
     timestamp = format_nanosecond_iso_timestamp(datetime.now(timezone.utc) - timedelta(seconds=seconds_ago))
-    events_path = client_activity.get_events_path(
-        workspace_layouts.primary_agent_layout_dir(host_dir, "test-agent-id")
-    )
+    events_path = client_activity.get_events_path(projects.primary_agent_layout_dir(host_dir, "test-agent-id"))
     events_path.parent.mkdir(parents=True, exist_ok=True)
     with events_path.open("a") as event_file:
         event_file.write(

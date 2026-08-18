@@ -4,15 +4,19 @@ interface IframePanelAttrs {
   url: string;
   title: string;
   serviceName?: string;
-  panelId?: string;
+  /** The identity of the live page this iframe *is*, machine-wide. There is
+   *  one of these per object rather than one per pane, which is what lets the
+   *  per-tab Refresh find the right iframe without knowing which pane (or
+   *  which project) is showing it. */
+  liveKey?: string;
 }
 
 export const IFRAME_PANEL_SERVICE_NAME_ATTR = "data-service-name";
-export const IFRAME_PANEL_PANEL_ID_ATTR = "data-panel-id";
+export const IFRAME_PANEL_LIVE_KEY_ATTR = "data-live-key";
 
 export const IframePanel: m.Component<IframePanelAttrs> = {
   view(vnode) {
-    const { url, title, serviceName, panelId } = vnode.attrs;
+    const { url, title, serviceName, liveKey } = vnode.attrs;
     const attrs: Record<string, string> = {
       src: url,
       title,
@@ -28,8 +32,8 @@ export const IframePanel: m.Component<IframePanelAttrs> = {
     if (serviceName) {
       attrs[IFRAME_PANEL_SERVICE_NAME_ATTR] = serviceName;
     }
-    if (panelId) {
-      attrs[IFRAME_PANEL_PANEL_ID_ATTR] = panelId;
+    if (liveKey) {
+      attrs[IFRAME_PANEL_LIVE_KEY_ATTR] = liveKey;
     }
     return m("iframe", attrs);
   },
@@ -42,7 +46,11 @@ export const IframePanel: m.Component<IframePanelAttrs> = {
  *  src-reassignment fallback is the normal path. The
  *  contentWindow.location.reload() branch is kept for the rare same-origin
  *  iframe. Used by both the per-tab refresh button and the WS-driven
- *  agent-triggered refresh. */
+ *  agent-triggered refresh.
+ *
+ *  Every pane on the service reloads, backgrounded ones included: a page stays
+ *  live whether or not a view is showing it, and "refresh the app" has always
+ *  meant the app rather than this pane. */
 export function reloadIframesForService(serviceName: string): number {
   const iframes = document.querySelectorAll<HTMLIFrameElement>(
     `iframe[${IFRAME_PANEL_SERVICE_NAME_ATTR}="${CSS.escape(serviceName)}"]`,

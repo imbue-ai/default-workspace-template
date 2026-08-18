@@ -10,6 +10,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 import pytest
+from imbue.mngr.api.address_parsers import parse_new_agent_location
 from imbue.mngr.cli.output_helpers import write_json_line
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 
@@ -20,6 +21,7 @@ from bootstrap.manager import (
     _build_create_chat_command,
     _configure_git_global,
     _fetch_user_timezone,
+    _file_initial_chat_title,
     _initialize_workspace_main_branch,
     _install_runtime_cron_entries,
     _maybe_create_initial_chat,
@@ -145,8 +147,10 @@ def test_read_main_agent_labels_returns_empty_when_labels_field_absent(
 
 
 def test_build_create_chat_command_stacks_first_and_chat_templates() -> None:
-    cmd = _build_create_chat_command("my-workspace", {"workspace": "my-workspace"})
-    assert cmd[:3] == ["mngr", "create", "my-workspace"]
+    cmd = _build_create_chat_command({"workspace": "my-workspace"})
+    # `NAME@HOST`: the first chat is created as the human-readable "Chat 1" *on*
+    # the workspace's host, not under the host's own name.
+    assert cmd[:3] == ["mngr", "create", "Chat-1"]
     # The harness rides `--type claude`; the roles ride the template stack. The
     # `first` template owns everything unique to the opening chat (/welcome,
     # the first=true label, fast-mode launch settings), so the argv itself must
@@ -168,12 +172,12 @@ def test_build_create_chat_command_leaves_transfer_to_the_chat_role() -> None:
     worktree so the chat reuses the services agent's work_dir. Without it, mngr
     collides with the services agent's existing `mngr/<host>` branch.
     """
-    cmd = _build_create_chat_command("my-workspace", {"workspace": "my-workspace"})
+    cmd = _build_create_chat_command({"workspace": "my-workspace"})
     assert "--transfer" not in cmd
 
 
 def test_build_create_chat_command_carries_no_workspace_label() -> None:
-    cmd = _build_create_chat_command("my-workspace", {"workspace": "my-workspace"})
+    cmd = _build_create_chat_command({"workspace": "my-workspace"})
     # The chat agent belongs to its workspace by sharing the host; it carries no
     # workspace label (the label was removed from the naming model).
     labels = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "--label"]
@@ -184,21 +188,31 @@ def test_build_create_chat_command_tags_user_created() -> None:
     """The initial chat agent is tagged ``user_created=true`` so the OOM
     agent-tagging hook places it in the protected user-agent band (shed only as a
     last resort)."""
-    cmd = _build_create_chat_command("my-workspace", {"workspace": "my-workspace"})
+    cmd = _build_create_chat_command({"workspace": "my-workspace"})
     labels = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "--label"]
     assert "user_created=true" in labels
 
 
-def test_build_create_chat_command_passes_project_label_when_present() -> None:
-    cmd = _build_create_chat_command("ws", {"workspace": "ws", "project": "my-project"})
+def test_build_create_chat_command_files_the_chat_in_the_starter_project() -> None:
+    """The first chat is filed in the workspace's starter project, never in the
+    services agent's inherited ``project`` label.
+
+    That label is mngr's own -- the repo the agent works on, e.g.
+    ``default-workspace-template`` -- and names no view. Inheriting it left the
+    first chat belonging to no project, so work it started landed in whichever
+    view the user happened to be looking at.
+    """
+    cmd = _build_create_chat_command({"workspace": "ws", "project": "default-workspace-template"})
     labels = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "--label"]
-    assert "project=my-project" in labels
+
+    assert "project=project-1" in labels
+    assert "project=default-workspace-template" not in labels
 
 
-def test_build_create_chat_command_omits_project_label_when_missing() -> None:
-    cmd = _build_create_chat_command("ws", {"workspace": "ws"})
+def test_build_create_chat_command_files_the_chat_even_with_no_inherited_label() -> None:
+    cmd = _build_create_chat_command({"workspace": "ws"})
     labels = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "--label"]
-    assert all(not label.startswith("project=") for label in labels)
+    assert "project=project-1" in labels
 
 
 def test_build_create_chat_command_argv_accepted_by_live_cli() -> None:
@@ -206,13 +220,41 @@ def test_build_create_chat_command_argv_accepted_by_live_cli() -> None:
     a system/vendor/mngr rename of ``create``/its flags fails here at merge time rather
     than only at host boot. A ``workspace`` label is supplied so the builder's
     label resolution short-circuits without reading host files."""
-    argv = _build_create_chat_command("host-1", {"workspace": "ws", "project": "proj"})
+    argv = _build_create_chat_command({"workspace": "ws", "project": "proj"})
     assert_mngr_argv_valid(argv)
+
+
+def test_build_create_chat_command_positional_is_the_agent_name_not_a_host() -> None:
+    """The CLI contract check above is shape-only -- click sees the positional as
+    an opaque string. This runs it through mngr's own address parser to pin
+    what the positional MEANS: the new agent's name, with no host part. The
+    host is implicit (the bootstrap runs inside it); naming one here asks mngr
+    to look up a host by that name and fails with "Could not find host", which
+    leaves a booting workspace with no chat at all.
+
+    The positional also carries the CANONICAL name, with the human one riding
+    as a label, so any vendored mngr parses it -- including one predating
+    free-form names.
+    """
+    argv = _build_create_chat_command({"workspace": "ws"})
+    location = parse_new_agent_location(argv[2])
+
+    assert location.name == "Chat-1"
+    assert location.host_name is None
+
+
+def test_build_create_chat_command_labels_the_chats_human_readable_name() -> None:
+    """The name the user sees rides as the ``display_name`` label, whose
+    canonical form is the agent name above -- the invariant newer mngr enforces."""
+    cmd = _build_create_chat_command({"workspace": "ws"})
+    labels = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "--label"]
+
+    assert "display_name=Chat 1" in labels
 
 
 def test_build_create_chat_command_requests_json_output() -> None:
     """`--format json` lets the create step read back the new agent's id."""
-    cmd = _build_create_chat_command("ws", {"workspace": "ws"})
+    cmd = _build_create_chat_command({"workspace": "ws"})
     assert "--format" in cmd
     assert cmd[cmd.index("--format") + 1] == "json"
 
@@ -221,7 +263,7 @@ def test_build_create_chat_command_never_pins_claude_config_dir() -> None:
     """Every claude in the workspace must resolve claude's own default
     ~/.claude, so the create argv must not export CLAUDE_CONFIG_DIR (the old
     services-agent-owned shared dir was removed in the ~/.claude cutover)."""
-    cmd = _build_create_chat_command("ws", {"workspace": "ws"})
+    cmd = _build_create_chat_command({"workspace": "ws"})
     assert all("CLAUDE_CONFIG_DIR" not in arg for arg in cmd)
 
 
@@ -273,6 +315,56 @@ def test_persist_initial_chat_agent_id_skips_when_host_dir_unset(
     monkeypatch.chdir(tmp_path)
     _persist_initial_chat_agent_id("agent-abc")
     assert not (tmp_path / INITIAL_CHAT_AGENT_ID_FILENAME).exists()
+
+
+# --- _file_initial_chat_title ---
+
+
+def test_file_initial_chat_title_names_the_first_chat(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The agent now carries "Chat 1" in mngr too (as its display_name label),
+    # but nothing lifts that label into the serialized AgentState, so the
+    # frontend still reads the tab's name out of the machine-wide title store.
+    # Filed in the exact shape system_interface's member_titles.py reads back.
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-services")
+
+    _file_initial_chat_title("agent-abc")
+
+    titles_path = (
+        tmp_path / "agents" / "agent-services" / "workspace_layout" / "member_titles.json"
+    )
+    assert json.loads(titles_path.read_text()) == {
+        "title_by_ref": {"chat:agent-abc": "Chat 1"}
+    }
+
+
+def test_file_initial_chat_title_merges_into_an_existing_store(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-services")
+    layout_dir = tmp_path / "agents" / "agent-services" / "workspace_layout"
+    layout_dir.mkdir(parents=True)
+    (layout_dir / "member_titles.json").write_text(
+        json.dumps({"title_by_ref": {"terminal:build": "Build box"}})
+    )
+
+    _file_initial_chat_title("agent-abc")
+
+    assert json.loads((layout_dir / "member_titles.json").read_text()) == {
+        "title_by_ref": {"terminal:build": "Build box", "chat:agent-abc": "Chat 1"}
+    }
+
+
+def test_file_initial_chat_title_skips_when_env_unset(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.delenv("MNGR_AGENT_ID", raising=False)
+    _file_initial_chat_title("agent-abc")
+    assert not (tmp_path / "agents").exists()
 
 
 # --- _maybe_create_initial_chat ---
