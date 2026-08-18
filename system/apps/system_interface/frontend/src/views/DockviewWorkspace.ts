@@ -189,10 +189,11 @@ interface PanelParams {
 let showNewChatModal = false;
 let showNewCodexModal = false;
 let showNewPiModal = false;
-// The flag-gated "New first ..." launchers: which harness mode to create a
-// `first`-template chat on, or null when the modal is closed. For testing the
-// first-chat flow (fast launch, /welcome, grace-period prompt) on demand.
-let newFirstModalMode: "chat" | "codex" | null = null;
+// The flag-gated "New introductory ..." launchers: which harness mode to create
+// a `first`-template chat on, or null when the modal is closed. For exercising
+// the introductory-chat flow (fast launch where the harness supports it,
+// /welcome, grace-period prompt) on demand.
+let newFirstModalMode: "chat" | "codex" | "pi" | null = null;
 let showNewBrowserModal = false;
 // When a background create POST fails, the New-browser modal is re-opened
 // pre-filled with the name the user typed and the daemon's reason, so the user
@@ -872,6 +873,15 @@ function buildDropdownItems(
       action: () => {
         newTabTargetGroup = targetGroup ?? null;
         newFirstModalMode = "codex";
+        m.redraw();
+      },
+    });
+
+    items.push({
+      label: "New introductory Pi chat",
+      action: () => {
+        newTabTargetGroup = targetGroup ?? null;
+        newFirstModalMode = "pi";
         m.redraw();
       },
     });
