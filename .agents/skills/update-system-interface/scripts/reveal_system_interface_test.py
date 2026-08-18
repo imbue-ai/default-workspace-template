@@ -322,14 +322,14 @@ def test_backend_with_manifest_refreshes_preflights_restarts_and_probes() -> Non
     code = _reveal(runner, http, spawner)
 
     assert code == 0
-    assert runner.argvs_starting("uv", "tool", "install")[0] == [
-        "uv",
-        "tool",
-        "install",
-        "-e",
-        "system/apps/system_interface",
-        "--reinstall",
+    # Every environment the served backend can be started from gets rebuilt, in
+    # build_workspace.sh's order: the vendored mngr the backend shells out to,
+    # the backend's own tool, then the workspace venv.
+    assert runner.argvs_starting("uv", "tool", "install") == [
+        ["uv", "tool", "install", "-e", "system/vendor/mngr/libs/mngr", "--reinstall"],
+        ["uv", "tool", "install", "-e", "system/apps/system_interface", "--reinstall"],
     ]
+    assert runner.ran("uv", "sync", "--all-packages")
     assert spawner.spawns and spawner.spawns[0] == [
         reveal_mod.TOOL_NAME
     ]  # pre-flight booted
@@ -389,6 +389,85 @@ def test_failed_preflight_never_restarts_live_service_and_rolls_back() -> None:
     # An added file is removed on rollback (not checked out).
     assert runner.ran("git", "rm", "--force", "--ignore-unmatch")
     assert not runner.ran("git", "checkout", _ROLLBACK)
+
+
+def _with_receipt(runner: _RecordingRunner, tool_dir: Path, tool: str, body: str) -> None:
+    """Point ``uv tool dir`` at ``tool_dir`` and give ``tool`` a receipt there."""
+    runner.respond(("uv", "tool", "dir"), _Result(stdout=f"{tool_dir}\n"))
+    (tool_dir / tool).mkdir(parents=True, exist_ok=True)
+    (tool_dir / tool / "uv-receipt.toml").write_text(body)
+
+
+def test_dependency_refresh_preserves_a_tools_registered_plugins(tmp_path: Path) -> None:
+    # A bare --reinstall rebuilds a tool from its base package alone. For the mngr
+    # tool the extras ARE its plugins, so dropping them leaves a CLI that cannot
+    # parse its own plugin config -- swapping one broken workspace for another.
+    runner = _runner_with_diff("M\tuv.lock\n")
+    _with_receipt(
+        runner,
+        tmp_path / "tools",
+        "imbue-mngr",
+        """
+        [tool]
+        requirements = [
+            { name = "imbue-mngr", editable = "/repo/system/vendor/mngr/libs/mngr" },
+            { name = "imbue-mngr-claude", editable = "/repo/system/vendor/mngr/libs/mngr_claude" },
+            { name = "imbue-mngr-wait", editable = "/repo/system/vendor/mngr/libs/mngr_wait" },
+        ]
+        """,
+    )
+
+    _reveal(runner, _FakeHttp(_all_healthy), _FakeSpawner())
+
+    assert runner.argvs_starting("uv", "tool", "install")[0] == [
+        "uv",
+        "tool",
+        "install",
+        "-e",
+        "system/vendor/mngr/libs/mngr",
+        "--with-editable",
+        "/repo/system/vendor/mngr/libs/mngr_claude",
+        "--with-editable",
+        "/repo/system/vendor/mngr/libs/mngr_wait",
+        "--reinstall",
+    ]
+
+
+def test_dependency_refresh_repins_the_base_to_the_in_tree_source(tmp_path: Path) -> None:
+    # A receipt that has lost its editable marker (observed in the wild) must not
+    # make us resolve the base from the index -- that would silently swap the
+    # workspace's own vendored code for a published release.
+    runner = _runner_with_diff("M\tuv.lock\n")
+    _with_receipt(
+        runner,
+        tmp_path / "tools",
+        "imbue-mngr",
+        '[tool]\nrequirements = [{ name = "imbue-mngr" }]\n',
+    )
+
+    _reveal(runner, _FakeHttp(_all_healthy), _FakeSpawner())
+
+    install = runner.argvs_starting("uv", "tool", "install")[0]
+    assert install == [
+        "uv",
+        "tool",
+        "install",
+        "-e",
+        "system/vendor/mngr/libs/mngr",
+        "--reinstall",
+    ]
+
+
+def test_dependency_refresh_survives_a_tool_with_no_receipt() -> None:
+    # No readable receipt means the tool is not installed (or predates receipts);
+    # the refresh must still run as the plain install it would otherwise be.
+    runner = _runner_with_diff("M\tuv.lock\n")
+    runner.respond(("uv", "tool", "dir"), _Result(returncode=1, stdout=""))
+
+    code = _reveal(runner, _FakeHttp(_all_healthy), _FakeSpawner())
+
+    assert code == 0
+    assert len(runner.argvs_starting("uv", "tool", "install")) == 2
 
 
 def test_failed_preflight_reports_why_the_backend_did_not_boot(capsys) -> None:
@@ -502,9 +581,12 @@ def test_failed_preflight_with_manifest_refreshes_deps_but_does_not_restart() ->
 
     assert code == 2
     assert not runner.ran("mngr", "start")  # untouched live service is not restarted
-    # uv tool install ran twice: once in the failed reveal, once in recovery to
-    # restore the known-good dependency set on disk.
-    assert len(runner.argvs_starting("uv", "tool", "install")) == 2
+    # Both tools are rebuilt twice: once in the failed reveal, once in recovery to
+    # restore the known-good dependency set on disk. Recovery has to cover the mngr
+    # tool too -- the rollback moves the vendored source back, which stales its
+    # closure exactly as the merge did.
+    assert len(runner.argvs_starting("uv", "tool", "install")) == 4
+    assert len(runner.argvs_starting("uv", "sync", "--all-packages")) == 2
 
 
 def test_failed_post_restart_health_triggers_rollback_then_recovers() -> None:
