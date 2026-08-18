@@ -150,7 +150,7 @@ def test_build_create_chat_command_stacks_first_and_chat_templates() -> None:
     cmd = _build_create_chat_command("my-workspace", {"workspace": "my-workspace"})
     # `NAME@HOST`: the first chat is created as the human-readable "Chat 1" *on*
     # the workspace's host, not under the host's own name.
-    assert cmd[:3] == ["mngr", "create", "Chat 1@my-workspace"]
+    assert cmd[:3] == ["mngr", "create", "Chat-1@my-workspace"]
     # The harness rides `--type claude`; the roles ride the template stack. The
     # `first` template owns everything unique to the opening chat (/welcome,
     # the first=true label, fast-mode launch settings), so the argv itself must
@@ -217,17 +217,29 @@ def test_build_create_chat_command_argv_accepted_by_live_cli() -> None:
 def test_build_create_chat_command_positional_names_the_chat_on_the_host() -> None:
     """The CLI contract check above is shape-only -- click sees the positional as
     an opaque string. This runs it through mngr's own address parser, which is
-    what decides that "Chat 1@host-1" is the true name `Chat-1` on `host-1` with
-    the typed name kept as the `display_name` label. A create whose positional
-    mngr rejects leaves a booting workspace with no chat at all, so the semantics
-    are pinned here and not just the token count.
+    what decides the positional names `Chat-1` on `host-1`. A create whose
+    positional mngr rejects leaves a booting workspace with no chat at all, so
+    the semantics are pinned here and not just the token count.
+
+    The positional carries the CANONICAL name, and the human one rides as a
+    label: any vendored mngr parses it, including one that predates free-form
+    names. Parsing the spaced form instead would tie first boot to the vendored
+    mngr's version.
     """
     argv = _build_create_chat_command("host-1", {"workspace": "ws"})
     location = parse_new_agent_location(argv[2])
 
     assert location.name == "Chat-1"
     assert location.host_name == "host-1"
-    assert location.display_name == "Chat 1"
+
+
+def test_build_create_chat_command_labels_the_chats_human_readable_name() -> None:
+    """The name the user sees rides as the ``display_name`` label, whose
+    canonical form is the agent name above -- the invariant newer mngr enforces."""
+    cmd = _build_create_chat_command("host-1", {"workspace": "ws"})
+    labels = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "--label"]
+
+    assert "display_name=Chat 1" in labels
 
 
 def test_build_create_chat_command_requests_json_output() -> None:

@@ -1175,6 +1175,28 @@ def test_chat_project_label_is_empty_when_nothing_names_a_project() -> None:
     assert _chat_project_label({}, "") == ""
 
 
+def test_chat_create_argv_canonicalizes_the_name_and_labels_the_human_one() -> None:
+    """A chat is created under its true name with the typed name as a label.
+
+    Both are sent explicitly so the create works against any vendored mngr,
+    including one predating free-form names -- and the pair is what newer mngr
+    derives for itself, so its "true name is the canonical form of the display
+    name" rule holds either way.
+    """
+    argv = _build_chat_create_command(
+        "mngr",
+        "Chat 2",
+        "agent-1",
+        {},
+        HarnessType.CLAUDE,
+    )
+
+    assert argv[2] == "Chat-2"
+    labels = [argv[i + 1] for i, arg in enumerate(argv) if arg == "--label"]
+    assert "display_name=Chat 2" in labels
+    assert_mngr_argv_valid(argv)
+
+
 def test_chat_create_argv_labels_the_project_the_chat_was_created_in() -> None:
     argv = _build_chat_create_command(
         mngr_binary="mngr",

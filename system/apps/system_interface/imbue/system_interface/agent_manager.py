@@ -7,76 +7,88 @@ import threading
 import tomllib
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
-from typing import Final
+from typing import Any, Final
 
-from loguru import logger as _loguru_logger
-from oom_priority.bands import set_oom_score_adj
-from oom_priority.registry import lookup_pid_by_agent_id
-from pydantic import Field
-from watchdog.events import FileMovedEvent
-from watchdog.events import FileSystemEvent
-from watchdog.events import FileSystemEventHandler
-from watchdog.observers import Observer as _Observer
-
-from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
-from imbue.concurrency_group.concurrency_group import InvalidConcurrencyGroupStateError
-from imbue.concurrency_group.errors import ConcurrencyGroupError
-from imbue.concurrency_group.errors import EnvironmentStoppedError
-from imbue.concurrency_group.errors import ProcessError
+from imbue.concurrency_group.concurrency_group import (
+    ConcurrencyGroup,
+    InvalidConcurrencyGroupStateError,
+)
+from imbue.concurrency_group.errors import (
+    ConcurrencyGroupError,
+    EnvironmentStoppedError,
+    ProcessError,
+)
 from imbue.concurrency_group.event_utils import ShutdownEvent
 from imbue.concurrency_group.local_process import RunningProcess
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.mngr.api.find import AgentMatch
-from imbue.mngr.api.observe import AgentRemovedEvent
-from imbue.mngr.api.observe import AgentStateEvent
-from imbue.mngr.api.observe import FullAgentStateEvent
-from imbue.mngr.api.observe import parse_observe_event_line
+from imbue.mngr.api.observe import (
+    AgentRemovedEvent,
+    AgentStateEvent,
+    FullAgentStateEvent,
+    parse_observe_event_line,
+)
 from imbue.mngr.errors import MngrError
 from imbue.mngr.interfaces.data_types import AgentDetails
-from imbue.mngr.primitives import AgentId
-from imbue.mngr.primitives import AgentNameStyle
-from imbue.mngr.primitives import HostName
+from imbue.mngr.primitives import AgentId, AgentNameStyle, HostName
 from imbue.mngr.utils.name_generator import generate_agent_name
-from imbue.system_interface import client_activity
-from imbue.system_interface import projects
-from imbue.system_interface.activity_state import ActivityState
-from imbue.system_interface.activity_state import RUNNING_LIFECYCLE_STATES
-from imbue.system_interface.activity_state import is_lifecycle_dead
-from imbue.system_interface.activity_state import parse_iso_timestamp_to_epoch
-from imbue.system_interface.agent_discovery import AgentInfo
-from imbue.system_interface.agent_discovery import MngrMessenger
-from imbue.system_interface.agent_discovery import discover_agents
-from imbue.system_interface.agent_discovery import get_host_dir
-from imbue.system_interface.agent_discovery import read_claude_config_dir_from_env_file
+from imbue.system_interface import client_activity, projects
+from imbue.system_interface.activity_state import (
+    RUNNING_LIFECYCLE_STATES,
+    ActivityState,
+    is_lifecycle_dead,
+    parse_iso_timestamp_to_epoch,
+)
+from imbue.system_interface.agent_discovery import (
+    AgentInfo,
+    MngrMessenger,
+    discover_agents,
+    get_host_dir,
+    read_claude_config_dir_from_env_file,
+)
 from imbue.system_interface.harnesses.activity import HarnessActivityTracker
-from imbue.system_interface.harnesses.auth_check import HarnessAuthCheck
-from imbue.system_interface.harnesses.auth_check import find_unauthenticated_harness_reason
+from imbue.system_interface.harnesses.auth_check import (
+    HarnessAuthCheck,
+    find_unauthenticated_harness_reason,
+)
 from imbue.system_interface.harnesses.events import SPECIAL_EVENT_TYPE
-from imbue.system_interface.harnesses.harness_type import DEFAULT_HARNESS
-from imbue.system_interface.harnesses.harness_type import HarnessType
-from imbue.system_interface.harnesses.harness_type import parse_harness
-from imbue.system_interface.harnesses.model import ModelChoice
-from imbue.system_interface.harnesses.model import ModelOption
-from imbue.system_interface.harnesses.model import match_option
-from imbue.system_interface.harnesses.model import read_model_identity
+from imbue.system_interface.harnesses.harness_type import (
+    DEFAULT_HARNESS,
+    HarnessType,
+    parse_harness,
+)
+from imbue.system_interface.harnesses.model import (
+    ModelChoice,
+    ModelOption,
+    match_option,
+    read_model_identity,
+)
 from imbue.system_interface.harnesses.path_watch import PathWatcher
-from imbue.system_interface.harnesses.registry import build_interrupt_to_composer
-from imbue.system_interface.harnesses.registry import build_shoulder_tap
-from imbue.system_interface.harnesses.registry import build_tracker
-from imbue.system_interface.harnesses.registry import get_catalog
-from imbue.system_interface.harnesses.registry import get_harness_spec
-from imbue.system_interface.harnesses.registry import get_model_state_path
-from imbue.system_interface.harnesses.session import AgentHarnessSession
-from imbue.system_interface.harnesses.session import SessionDeps
-from imbue.system_interface.models import AgentCreationError
-from imbue.system_interface.models import AgentStateItem
-from imbue.system_interface.models import AppEntry
-from imbue.system_interface.models import QueuedMessageState
+from imbue.system_interface.harnesses.registry import (
+    build_interrupt_to_composer,
+    build_shoulder_tap,
+    build_tracker,
+    get_catalog,
+    get_harness_spec,
+    get_model_state_path,
+)
+from imbue.system_interface.harnesses.session import AgentHarnessSession, SessionDeps
+from imbue.system_interface.models import (
+    AgentCreationError,
+    AgentStateItem,
+    AppEntry,
+    QueuedMessageState,
+)
 from imbue.system_interface.oom_prioritizer import ChatOomPrioritizer
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
+from loguru import logger as _loguru_logger
+from oom_priority.bands import set_oom_score_adj
+from oom_priority.registry import lookup_pid_by_agent_id
+from pydantic import Field
+from watchdog.events import FileMovedEvent, FileSystemEvent, FileSystemEventHandler
+from watchdog.observers import Observer as _Observer
 
 # The role template every UI-created agent gets. The harness is chosen separately via
 # `--type` (see `_build_chat_create_command`); only the role varies in the template list,
@@ -148,6 +160,19 @@ def _chat_project_label(primary_labels: dict[str, str], project_id: str) -> str:
     return primary_labels.get("project", "")
 
 
+def _canonical_agent_name(name: str) -> str:
+    """The true-name form of a human-readable chat name ("Chat 2" -> "Chat-2").
+
+    Mirrors mngr's own ``canonicalize_agent_name`` rather than importing it: a
+    workspace's vendored mngr may predate free-form names, and passing it a
+    name it would reject fails the create outright. Sending the canonical name
+    (plus the typed one as a ``display_name`` label) is accepted by every mngr
+    version and is exactly the pair newer mngr derives for itself.
+    """
+    stripped = re.sub(r"[^a-zA-Z0-9 _-]+", "", name.strip())
+    return re.sub(r"\s+", "-", stripped).strip("-_")
+
+
 def _build_chat_create_command(
     mngr_binary: str,
     name: str,
@@ -172,7 +197,7 @@ def _build_chat_create_command(
     cmd = [
         mngr_binary,
         "create",
-        name,
+        _canonical_agent_name(name) or name,
         "--id",
         agent_id,
         "--transfer",
@@ -186,6 +211,11 @@ def _build_chat_create_command(
         # dynamic chat band (re-tagged from live UI engagement), not the worker band.
         "--label",
         "user_created=true",
+        # The name the user sees. Its canonical form is the agent name above --
+        # the pairing newer mngr enforces -- and it is what ``mngr list`` and
+        # the workspace's own surfaces show.
+        "--label",
+        f"display_name={name}",
         "--no-connect",
     ]
     # The project the chat starts out filed in: the one it was created inside
