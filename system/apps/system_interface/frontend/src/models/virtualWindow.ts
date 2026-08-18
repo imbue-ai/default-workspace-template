@@ -256,6 +256,48 @@ export function computeTranscriptSlices(input: TranscriptSlicesInput): Transcrip
 }
 
 /**
+ * The row whose vertical extent contains `adjustedScrollTop` (the row at the
+ * viewport top), with how many pixels into it the viewport is scrolled -- the
+ * inverse of `resolveAnchorScrollTop`. A position past the last row's bottom is
+ * absorbed into the last row (a transient overshoot while heights settle), so a
+ * capture never fails on a non-empty list. Null only for an empty list.
+ */
+export function findAnchorRow(input: {
+  count: number;
+  getKey: (index: number) => string;
+  getHeight: (index: number) => number;
+  /** scrollTop in the loaded rows' own coordinate space (scrollTop - phantomTopHeight, >= 0). */
+  adjustedScrollTop: number;
+  /**
+   * Lowest row index eligible as the anchor. When the caller knows lower rows are
+   * not a stable content reference (ChatPanel: while older history remains, the
+   * boundary row absorbs each backfilled page into itself, so its top drifts with
+   * the insertions), the anchor shifts to this row instead and `offsetIntoRow`
+   * goes negative -- the position is above the anchor row's top, but measured
+   * against content that stays put. Default 0.
+   */
+  minIndex?: number;
+}): { index: number; key: string; offsetIntoRow: number } | null {
+  const { count, getKey, getHeight, adjustedScrollTop, minIndex = 0 } = input;
+  if (count <= 0) {
+    return null;
+  }
+  const first = Math.min(Math.max(0, minIndex), count - 1);
+  let before = 0;
+  for (let i = 0; i < first; i++) {
+    before += getHeight(i);
+  }
+  for (let i = first; i < count; i++) {
+    const height = getHeight(i);
+    if (before + height > adjustedScrollTop || i === count - 1) {
+      return { index: i, key: getKey(i), offsetIntoRow: adjustedScrollTop - before };
+    }
+    before += height;
+  }
+  return null;
+}
+
+/**
  * Resolve the scrollTop that lands `anchorKey` at `offsetInViewport` pixels below
  * the top of its row, given the *current* keys/heights. Used to restore a reading
  * position across a mutation that shifted row indices (e.g. an older-page backfill

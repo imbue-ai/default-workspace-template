@@ -24,7 +24,7 @@ import {
   isConversationNotFound,
   MAX_HELD_EVENTS,
 } from "../models/Response";
-import { computeTranscriptSlices, computeVisibleWindow, resolveAnchorScrollTop } from "../models/virtualWindow";
+import { computeTranscriptSlices, findAnchorRow, resolveAnchorScrollTop } from "../models/virtualWindow";
 import { isSelectionActiveWithin } from "../models/scrollFollow";
 import { OVERSCAN_PX } from "./row-measurement";
 import { resolveSelectionRowRange, selectionStateWithin } from "./scroll-selection";
@@ -128,6 +128,14 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       if (currentAgentId !== null) {
         maybePage(currentAgentId, element);
       }
+      // The user's own scrolling is what moves the reading anchor; re-derive it
+      // here (after maybePage, whose jump path replaces the window) so the next
+      // redraw compensates relative to where they actually are.
+      if (scroll.userScrolledUp) {
+        captureReadingAnchor(element);
+      } else {
+        readingAnchor = null;
+      }
     },
   });
   // Memoized turn-grouping output. buildSections walks the whole held
@@ -154,17 +162,22 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   // reserved heights now sized by a stable constant, the top of the loaded window
   // doesn't drift as rows measure, so a single pin suffices -- no timed settle.
   let pendingPinToWindowTop = false;
-  // Captured just before an older-page backfill fires: the row sitting at the top
-  // of the viewport (by stable key) and its exact pixel offset within it. Restored
-  // by applyScrollPosition once the page lands, because native scroll anchoring
-  // alone isn't reliable here -- phantomTopHeight shrinks by the flat
-  // ESTIMATED_EVENT_HEIGHT_PX per newly loaded event, while those same events
-  // report their own windowing height via the per-role ESTIMATED_*_HEIGHT_PX
-  // fallback (row-measurement.ts) once loaded, and the two estimates routinely
-  // diverge by more than OVERSCAN_PX across a 50-event page. When they do, the
-  // windowing math picks a different render window on this very redraw and can
-  // evict the row the user was reading before the browser gets a say.
-  let pendingBackfillAnchor: { key: string; offsetInViewport: number } | null = null;
+  // While the user is scrolled up, their position is DERIVED state: the row at
+  // the top of the viewport (by stable key), how many pixels into it the viewport
+  // sits, and the scrollTop that encoding was captured at. Each redraw recomputes
+  // where that content now lands (resolveAnchorScrollTop) and applies the
+  // difference to the live scrollTop (see applyScrollPosition), so any geometry
+  // change above the reader -- an older page landing, a turn regrouping, an
+  // estimate-sized row measuring -- is compensated in the same frame. Native
+  // scroll anchoring cannot do this: phantomTopHeight moves by the flat
+  // ESTIMATED_EVENT_HEIGHT_PX per event while real tool-heavy rows render at a
+  // fraction of that, so a single 50-event page shifts the window mapping by more
+  // than OVERSCAN_PX and the browser's anchor node is unmounted mid-redraw
+  // (native anchoring is disabled on this panel's scroll container for exactly
+  // that reason -- it must not double-compensate the frames it does survive).
+  // Captured on every user scroll; cleared when following the tail, on an offset
+  // jump, and on agent switch.
+  let readingAnchor: { key: string; offsetIntoRow: number; capturedScrollTop: number } | null = null;
 
   // File drag-and-drop: dropping a file anywhere over the chat stages it as a
   // composer attachment. ``dragDepth`` counts dragenter minus dragleave across
@@ -414,7 +427,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     currentAgentId = agentId;
     scroll.reset();
     backfillInFlight = false;
-    pendingBackfillAnchor = null;
+    readingAnchor = null;
     loadAgent(agentId);
   }
 
@@ -457,10 +470,45 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
 
   // Measured height of the row currently at ``cachedRows[index]``, falling back to
   // its per-role estimate before it has ever been mounted. Shared between the
-  // render-time windowing math and the backfill-anchor bookkeeping below so both
+  // render-time windowing math and the reading-anchor bookkeeping below so both
   // agree on the same heights.
   function rowHeightAt(index: number): number {
     return scroll.rowMeasurer.getHeight(cachedRows[index].key) ?? cachedRows[index].estimate;
+  }
+
+  /**
+   * Re-derive the reading anchor from the current scroll position, in the same
+   * data space (cachedRows + rowHeightAt) the compensation resolves it in, so an
+   * unchanged geometry always resolves back to `capturedScrollTop` exactly and
+   * the compensation is a pure function of geometry changes -- observing the DOM
+   * instead would feed the compensation's own one-frame render lag back into
+   * itself and oscillate. Cleared while the viewport sits over a reserved
+   * phantom region: there is no loaded row under the reader to anchor to, and
+   * the paging/jump machinery is about to reposition them anyway.
+   *
+   * While older history remains above, the first row is not eligible as the
+   * anchor (minIndex 1): turn-grouping folds each backfilled page into the
+   * boundary section (most visibly the "pre" section, whose key is stable), so
+   * that row's top drifts with every insertion. Anchoring to the first interior
+   * row instead -- the offset going negative when the viewport is above it --
+   * measures the reader's position against content the insertions cannot move.
+   */
+  function captureReadingAnchor(element: HTMLElement): void {
+    const scrollTop = element.scrollTop;
+    const loadedBottom = element.scrollHeight - phantomBottomHeight;
+    if (scrollTop < phantomTopHeight || scrollTop > loadedBottom) {
+      readingAnchor = null;
+      return;
+    }
+    const anchor = findAnchorRow({
+      count: cachedRows.length,
+      getKey: (index) => cachedRows[index].key,
+      getHeight: rowHeightAt,
+      adjustedScrollTop: scrollTop - phantomTopHeight,
+      minIndex: currentAgentId !== null && hasMoreBefore(currentAgentId) ? 1 : 0,
+    });
+    readingAnchor =
+      anchor === null ? null : { key: anchor.key, offsetIntoRow: anchor.offsetIntoRow, capturedScrollTop: scrollTop };
   }
 
   /**
@@ -526,25 +574,10 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       return;
     }
 
-    // Near the top of the loaded rows -> page older. Capture the row currently at
-    // the top of the viewport (by key) and its exact pixel offset, so
-    // applyScrollPosition can restore it once the page lands: native scroll
-    // anchoring alone can't be trusted across this transition (see
-    // pendingBackfillAnchor's declaration for why).
+    // Near the top of the loaded rows -> page older. The landing redraw is
+    // repositioned by the reading-anchor compensation in applyScrollPosition; no
+    // per-fetch capture is needed.
     if (hasMoreBefore(agentId) && element.scrollTop - phantomTopHeight < BACKFILL_TRIGGER_PX) {
-      const anchorWindow = computeVisibleWindow({
-        count: cachedRows.length,
-        getHeight: rowHeightAt,
-        scrollTop: Math.max(0, element.scrollTop - phantomTopHeight),
-        viewportHeight: element.clientHeight,
-        overscanPx: 0,
-      });
-      if (anchorWindow.startIndex < cachedRows.length) {
-        pendingBackfillAnchor = {
-          key: cachedRows[anchorWindow.startIndex].key,
-          offsetInViewport: element.scrollTop - phantomTopHeight - anchorWindow.topPad,
-        };
-      }
       backfillInFlight = true;
       fetchBackfillEvents(agentId).finally(() => {
         backfillInFlight = false;
@@ -572,38 +605,61 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     if (!panelVisible) {
       return;
     }
-    // An older-page backfill just landed (or was discarded/deduped -- either way
-    // maybePage's .finally() redraws): restore the captured anchor row to its
-    // exact prior on-screen offset, recomputed from the now-current rows/heights.
-    // This overrides whatever window native scroll anchoring produced, so it does
-    // not matter whether that mismatched the corrected position.
-    if (pendingBackfillAnchor !== null) {
-      const anchor = pendingBackfillAnchor;
-      pendingBackfillAnchor = null;
-      const newTop = resolveAnchorScrollTop({
-        keyToIndex: cachedKeyToIndex,
-        getHeight: rowHeightAt,
-        phantomTopHeight,
-        anchorKey: anchor.key,
-        offsetInViewport: anchor.offsetInViewport,
-      });
-      if (newTop !== null) {
-        scroll.pinTo(element, newTop);
-        return;
-      }
-      // The anchor row is no longer loaded (e.g. evicted, or a jump replaced the
-      // window while the backfill was in flight) -- fall through to the normal
-      // path below.
-    }
     // After an offset jump, pin the viewport once to the top of the freshly loaded
     // rows (just below the top reserved spacer) so the user lands on the jumped-to
     // content rather than in the reserved (blank) region above it. The reserved
     // top height is a stable constant * offset, so it doesn't drift as the loaded
-    // rows measure -- a single pin lands correctly without a timed settle.
+    // rows measure -- a single pin lands correctly without a timed settle. The old
+    // reading anchor died with the replaced window; the next user scroll captures
+    // a fresh one.
     if (pendingPinToWindowTop) {
       pendingPinToWindowTop = false;
       scroll.pinTo(element, phantomTopHeight);
+      readingAnchor = null;
       return;
+    }
+    // While scrolled up, hold the reader on their anchor: recompute where the
+    // anchored content sits under the current geometry, and apply the difference.
+    // The write is RELATIVE to the live scrollTop -- a wheel gesture whose scroll
+    // event hasn't processed yet must compose with the correction, not be
+    // overwritten by an absolute restore. Re-deriving the anchor immediately
+    // after keeps the pair (anchor, capturedScrollTop) self-consistent even if
+    // the next redraw arrives before the pin's own scroll event does.
+    if (scroll.userScrolledUp) {
+      if (readingAnchor !== null) {
+        // Where the anchored content sits under the current geometry, resolved in
+        // the same data space it was captured in: with nothing changed this is
+        // exactly capturedScrollTop (no write); after a change the difference is
+        // the pure geometry shift. Heights of rows that have never measured are
+        // estimates, so a landing's correction can be off by their estimate
+        // error for a frame -- the measure pass then feeds the residual back
+        // through this same path, converging without ever reading scroll
+        // positions out of the DOM (which would loop the render lag back in).
+        const target = resolveAnchorScrollTop({
+          keyToIndex: cachedKeyToIndex,
+          getHeight: rowHeightAt,
+          phantomTopHeight,
+          anchorKey: readingAnchor.key,
+          offsetInViewport: readingAnchor.offsetIntoRow,
+        });
+        if (target === null) {
+          // The anchor row left the loaded window (evicted, or a reconnect
+          // snapshot replaced the window); re-derive from wherever the reader is.
+          readingAnchor = null;
+        } else {
+          const geometryShift = target - readingAnchor.capturedScrollTop;
+          if (Math.abs(geometryShift) > 1) {
+            scroll.pinTo(element, element.scrollTop + geometryShift);
+            captureReadingAnchor(element);
+            return;
+          }
+        }
+      }
+      if (readingAnchor === null) {
+        captureReadingAnchor(element);
+      }
+    } else {
+      readingAnchor = null;
     }
     scroll.applyScrollPosition(element);
   }
@@ -869,6 +925,12 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
             "main",
             {
               class: "app-content flex-1 overflow-y-auto px-8 py-6",
+              // Scroll anchoring is owned by the reading-anchor compensation in
+              // applyScrollPosition; disabling the browser's own (which cannot
+              // survive this panel's window remaps anyway) prevents the two from
+              // double-correcting the frames both would catch. On the container,
+              // this disables native anchoring for the whole scroller.
+              style: "overflow-anchor: none",
               onscroll: (event: Event) => scroll.onScroll(event),
               // Mark the start of a drag (likely a selection) so the tail-follow pin
               // defers while the button is held (see the controller's applyTailFollow).

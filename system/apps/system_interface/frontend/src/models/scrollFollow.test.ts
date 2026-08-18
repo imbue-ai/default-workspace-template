@@ -1,32 +1,61 @@
 import { describe, expect, it } from "vitest";
 import { nextUserScrolledUp, isSelectionActiveWithin } from "./scrollFollow";
 
-const base = { isClamp: false, wasUserScrolledUp: false };
+const base = { isClamp: false, didScrollUp: false, didScrollDown: false, hasMoreAfter: false };
 
 describe("nextUserScrolledUp", () => {
   it("disengages following on any upward scroll, even within the bottom band", () => {
     // The core of the jitter bug: while streaming, the viewport sits within the
     // bottom band and a small upward scroll must stop tail-following so the next
     // redraw does not re-pin it to the bottom.
-    expect(nextUserScrolledUp({ ...base, didScrollUp: true, isNearBottom: true, hasMoreAfter: false })).toBe(true);
+    expect(nextUserScrolledUp({ ...base, didScrollUp: true, isNearBottom: true, wasUserScrolledUp: false })).toBe(
+      true,
+    );
   });
 
   it("disengages following on an upward scroll high above the bottom", () => {
-    expect(nextUserScrolledUp({ ...base, didScrollUp: true, isNearBottom: false, hasMoreAfter: false })).toBe(true);
+    expect(nextUserScrolledUp({ ...base, didScrollUp: true, isNearBottom: false, wasUserScrolledUp: false })).toBe(
+      true,
+    );
   });
 
-  it("resumes following only at the true tail: near bottom with no newer history", () => {
-    expect(nextUserScrolledUp({ ...base, didScrollUp: false, isNearBottom: true, hasMoreAfter: false })).toBe(false);
+  it("re-arms following on a downward scroll into the true tail", () => {
+    expect(nextUserScrolledUp({ ...base, didScrollDown: true, isNearBottom: true, wasUserScrolledUp: true })).toBe(
+      false,
+    );
   });
 
-  it("does not follow when scrolling down but still above the bottom band", () => {
-    expect(nextUserScrolledUp({ ...base, didScrollUp: false, isNearBottom: false, hasMoreAfter: false })).toBe(true);
+  it("does not re-arm on a downward scroll still above the bottom band", () => {
+    expect(nextUserScrolledUp({ ...base, didScrollDown: true, isNearBottom: false, wasUserScrolledUp: true })).toBe(
+      true,
+    );
   });
 
-  it("does not follow at the bottom of a jumped window that has newer history below", () => {
+  it("does not re-arm at the bottom of a jumped window that has newer history below", () => {
     // After an offset jump the window sits off the live tail, so newer events
     // remain unloaded below; being near that window's bottom is not the tail.
-    expect(nextUserScrolledUp({ ...base, didScrollUp: false, isNearBottom: true, hasMoreAfter: true })).toBe(true);
+    expect(
+      nextUserScrolledUp({
+        ...base,
+        didScrollDown: true,
+        isNearBottom: true,
+        hasMoreAfter: true,
+        wasUserScrolledUp: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not re-arm a scrolled-up reader on a zero-delta event at the bottom", () => {
+    // The landing-clamp cascade: an older page lands, its scrollHeight shrink
+    // clamps the reading user to the new bottom, and a native-anchoring
+    // adjustment (or a programmatic pin's echo) then fires a scroll event with
+    // no direction at that clamped position. Position alone is not intent; the
+    // reader must not be snapped to the tail they never asked for.
+    expect(nextUserScrolledUp({ ...base, isNearBottom: true, wasUserScrolledUp: true })).toBe(true);
+  });
+
+  it("keeps following on a zero-delta event at the bottom (a tail pin's own echo)", () => {
+    expect(nextUserScrolledUp({ ...base, isNearBottom: true, wasUserScrolledUp: false })).toBe(false);
   });
 
   it("keeps following through a shrink-clamp (does not read the clamp as scroll-up)", () => {
@@ -35,9 +64,9 @@ describe("nextUserScrolledUp", () => {
     // must keep following (the same redraw re-pins to the true tail).
     expect(
       nextUserScrolledUp({
+        ...base,
         didScrollUp: true,
         isNearBottom: true,
-        hasMoreAfter: false,
         isClamp: true,
         wasUserScrolledUp: false,
       }),
@@ -49,9 +78,9 @@ describe("nextUserScrolledUp", () => {
     // content below them collapsed and the browser clamped scrollTop.
     expect(
       nextUserScrolledUp({
+        ...base,
         didScrollUp: true,
         isNearBottom: true,
-        hasMoreAfter: false,
         isClamp: true,
         wasUserScrolledUp: true,
       }),

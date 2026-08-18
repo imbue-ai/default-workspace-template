@@ -11,6 +11,11 @@
 
 export interface FollowStateInput {
   didScrollUp: boolean;
+  // scrollTop increased. Both direction flags false means a zero-delta event:
+  // the browser reporting a scroll it performed itself (a programmatic pin's
+  // echo -- the pin already synced the previous position -- or a native
+  // scroll-anchoring adjustment), which carries no user intent.
+  didScrollDown: boolean;
   isNearBottom: boolean;
   // Newer history exists on the server but isn't loaded (only after a jump moved
   // the window off the live tail), so the bottom of the window isn't the tail.
@@ -27,11 +32,13 @@ export interface FollowStateInput {
 
 /**
  * Returns the next value of ``userScrolledUp`` (true == do not follow the tail).
- * Any upward movement disengages immediately; following resumes only at the true
- * tail (near the bottom with no newer history unloaded). A shrink-clamp is not
- * movement: it preserves the prior state, so a follower keeps following (the next
- * redraw re-pins to the true tail) and a scrolled-up reader is not yanked to the
- * tail just because content collapsed below them.
+ * Any upward movement disengages immediately; following resumes only on downward
+ * movement that reaches the true tail (near the bottom with no newer history
+ * unloaded). Everything else preserves the current state: a shrink-clamp (no
+ * user intent, see isClamp) and a zero-delta event (a programmatic pin's echo or
+ * a native anchoring adjustment). Position alone never re-arms following -- a
+ * page landing can clamp a reading user to the bottom, and re-arming there
+ * hard-snaps them to the tail they never asked for.
  */
 export function nextUserScrolledUp(input: FollowStateInput): boolean {
   if (input.isClamp) {
@@ -40,7 +47,10 @@ export function nextUserScrolledUp(input: FollowStateInput): boolean {
   if (input.didScrollUp) {
     return true;
   }
-  return !(input.isNearBottom && !input.hasMoreAfter);
+  if (input.didScrollDown && input.isNearBottom && !input.hasMoreAfter) {
+    return false;
+  }
+  return input.wasUserScrolledUp;
 }
 
 /**
