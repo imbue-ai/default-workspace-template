@@ -1166,7 +1166,7 @@ def test_build_that_writes_no_bundle_is_a_failure_not_a_success(repo: Path) -> N
 
 
 def test_recovery_rebuilds_when_there_was_no_bundle_to_snapshot(
-    unbuilt_repo: Path,
+    unbuilt_repo: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # A workspace that never built a bundle has nothing to restore, so recovery
     # falls back to building the known-good tree -- the behaviour from before
@@ -1185,6 +1185,10 @@ def test_recovery_rebuilds_when_there_was_no_bundle_to_snapshot(
     assert code == 2
     assert _bundle_exists(unbuilt_repo)
     assert len(runner.argvs_starting("npm", "run", "build")) == 2
+    # The skipped snapshot says so, like a failed copy does: the emergency
+    # path's docs tell the reader to check the stderr for why there is no
+    # snapshot path, so both reasons must actually leave a line there.
+    assert "no built bundle to copy aside" in capsys.readouterr().err
 
 
 def test_a_recovery_rebuild_reinstalls_the_rolled_back_dependencies(
