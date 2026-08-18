@@ -65,6 +65,8 @@ import { pickableApps } from "./AllAppsPicker";
 import { serviceIconMarkup } from "./appIcon";
 import { NewTabLauncher, buildLauncherRows } from "./NewTabLauncher";
 import type { LaunchKind, LauncherRow } from "./NewTabLauncher";
+import { OBJECT_MENU_DIVIDER, objectMenuEntries } from "./objectMenu";
+import type { ObjectMenuActions, ObjectMenuEntry, ObjectMenuKind } from "./objectMenu";
 import { placeMenu } from "./Sidebar";
 import type { MenuAnchor, QuickAddTabType, SidebarTabRow } from "./Sidebar";
 import { effectiveLifecycleState, livenessCategoryForState } from "./agentLiveness";
@@ -257,9 +259,18 @@ const DESTROY_BROWSER_DETAILS =
   "The browser is retired from the fleet and removed from every project that shows it, not just this one.";
 // The app verb is the one that has to be careful about what it does NOT do.
 // Deregistering takes the app out of the port registry, so it leaves the app
-// list and every project at once — but nothing in this workspace supervises the
-// program behind the port, so that program is still running afterwards. Saying
-// "shut down" here would be a lie.
+// list and every project at once, but does not stop the program behind the
+// port. That is not because nothing on the machine COULD: every app onboarded
+// through the build-app skill -- the scaffolded-Flask path and the
+// wrap-an-existing-server escape hatch alike -- registers as a same-named
+// supervisord ``[program:<name>]`` block (system/supervisord.conf), so
+// ``supervisorctl stop <name>`` (or supervisor's own RPC interface, over the
+// unix socket that config also declares) would genuinely end it. apps.toml
+// just records no "this entry is supervisord-managed" flag, so a real stop
+// needs the backend to check first and fall back to registry-only removal for
+// the rare entry with no matching program -- server.py's
+// ``_deregister_app_endpoint`` does not do that yet. Saying "shut down" here
+// would be a lie until it does.
 const DEREGISTER_APP_DETAILS =
   "The app disappears from every project that shows it and from the app list, not just from this project. " +
   "The program it runs is not stopped — it keeps running until the agent that started it stops it.";
@@ -381,10 +392,18 @@ function reloadIframeForKey(key: LiveKey): void {
  *
  *  A service-backed iframe reloads service-wide (every pane on that service,
  *  which is what an app's own Refresh has always meant, and which now reaches
- *  backgrounded panes too since their pages are still live); any other iframe
- *  reloads just itself; a chat refetches its transcript snapshot and
- *  reconnects its stream. A subagent view owns its own stream and exposes no
- *  refetch, so it is re-rendered. */
+ *  backgrounded panes too since their pages are still live); a chat refetches
+ *  its transcript snapshot and reconnects its stream. A subagent view owns its
+ *  own stream and exposes no refetch, so it is re-rendered.
+ *
+ *  A terminal has no serviceName (see addTerminalPanel), so it falls to the
+ *  generic "any other iframe reloads just itself" case below -- which, for a
+ *  terminal, is exactly the reattach Refresh means for it: the pane's URL
+ *  already points at ``run_ttyd.sh``'s per-session dispatch, and that script's
+ *  own ``tmux new-session -A -s <name>`` attaches to the existing session
+ *  rather than killing and recreating it, so a plain iframe reload reconnects
+ *  the ttyd client without touching the session or its scrollback (the same
+ *  path a tab reopen or a ttyd restart already takes). */
 function refreshPanelContent(panelId: string): void {
   const params = panelParams.get(panelId);
   if (params === undefined) return;
@@ -536,18 +555,12 @@ function tabIconMarkupForPanel(params: PanelParams | undefined): string {
 }
 
 // ---------- The tab ⋮ menu ----------
-
-interface TabMenuItem {
-  label: string;
-  iconName: IconName;
-  isDestructive?: boolean;
-  run: () => void;
-}
-
-// A separator between groups of items; the design puts one above "Hide tab".
-const MENU_DIVIDER = "divider";
-
-type TabMenuEntry = TabMenuItem | typeof MENU_DIVIDER;
+//
+// The verb SET (which of Refresh/Share/Rename/Hide tab/Quit a kind gets, in
+// what order) is defined once in objectMenu.ts, shared with the rail's row
+// menu. What lives here is the tab-specific half: turning a live panel into
+// the ObjectMenuActions that module asks for, and the floating-card chrome
+// that renders whatever list comes back.
 
 // Menu chrome, settled in the design (§6) and shared with the sidebar's menus:
 // a floating card on the primary surface with a hairline border, 8px radius and
@@ -579,7 +592,7 @@ function closeTabMenu(): void {
  */
 function openTabMenuAt(
   anchor: MenuAnchor,
-  entries: readonly TabMenuEntry[],
+  entries: readonly ObjectMenuEntry[],
   onClosed: () => void,
   trigger: HTMLElement | null,
 ): void {
@@ -610,7 +623,7 @@ function openTabMenuAt(
   }
 
   for (const entry of entries) {
-    if (entry === MENU_DIVIDER) {
+    if (entry === OBJECT_MENU_DIVIDER) {
       const divider = document.createElement("div");
       divider.className = "my-1 border-t border-border";
       element.appendChild(divider);
@@ -656,176 +669,180 @@ function openTabMenuAt(
   openTabMenu = { close };
 }
 
-/**
- * What one tab's ⋮ menu offers, designed per object type against the verbs the
- * backend actually has (§6).
- *
- * Refresh reloads what the tab is showing, which means nothing for a terminal
- * (its tmux session is the content, and reattaching is not a refresh) so that
- * one goes without. Share is an app affordance: the share surface is per
- * registered service. Hide tab is always last above the destructive verb,
- * because hiding is the safe, membership-preserving one -- the object keeps
- * running and stays filed wherever it was filed.
- *
- * The destructive verb is whatever taking the object off the machine means for
- * its kind: destroying a chat's agent, killing a terminal's tmux session,
- * retiring a browser from the fleet, unregistering an app. The app one is
- * deliberately weaker than the other three, because that is the truth -- the
- * workspace owns the port registry and nothing else, so it can unregister an
- * app but cannot stop the program serving it. An ad-hoc page has no verb at
- * all: it is only ever a panel, so offering one would be a menu item that
- * cannot act.
- */
-function tabMenuEntries(panelId: string): TabMenuEntry[] {
-  const params = panelParams.get(panelId);
-  if (params === undefined) return [];
-  const entries: TabMenuEntry[] = [];
-  const isTerminal = isTerminalPanelParams(params);
-  if (!isTerminal) {
-    entries.push({
-      label: "Refresh",
-      iconName: "refresh",
-      run: () => refreshPanelContent(panelId),
-    });
+/** Which of the four consolidated kinds a panel is showing, or null when it is
+ *  not one of them at all (a launcher, a subagent view, an ad-hoc URL page --
+ *  see the module docstring on objectMenu.ts for why those carry no verb set).
+ *  Mirrors the branching ``memberRefForPanelParams`` uses to decide whether a
+ *  panel is a machine object in the first place; kept separate from it because
+ *  a terminal panel counts here (isTerminalPanelParams) the instant it is
+ *  created, before its tmux session name has landed, whereas it is not yet a
+ *  *member* until that name exists to build ``terminal:<name>`` from -- the two
+ *  questions ("what kind of menu does this tab get" vs "what ref is this tab
+ *  filed under") resolve at different moments for that one panel shape. */
+function objectMenuKindForPanel(params: PanelParams): ObjectMenuKind | null {
+  if (params.panelType === "chat") return "chat";
+  if (isTerminalPanelParams(params)) return "terminal";
+  if (params.serviceName === BROWSER_SERVICE_NAME) return "browser";
+  // A registered app: a service panel that is not one of the two fleets. The
+  // browser and the terminal are registered services too and are handled
+  // above, so what the ref's kind says decides here rather than the panel's
+  // shape -- a bare ``service:terminal`` pane must not read as an app and
+  // offer to unregister the terminal service out from under every terminal
+  // tab.
+  if (params.serviceName !== undefined && memberKindFromRef(memberRef("app", params.serviceName)) === "app") {
+    return "app";
   }
-  const serviceName = params.serviceName;
-  if (serviceName !== undefined && serviceName !== BROWSER_SERVICE_NAME && !isTerminal) {
-    entries.push({
-      label: `Share ${serviceName}`,
-      iconName: "share",
-      run: () => {
-        shareServiceName = serviceName;
-        showShareModal = true;
-        m.redraw();
-      },
-    });
-  }
-  if (entries.length > 0) entries.push(MENU_DIVIDER);
-  if (params.panelType === "chat") {
-    // Only a chat is renameable: it is an mngr agent, so a typed name becomes
-    // its display_name label with the canonical form as its true name, and the
-    // pair moves together (see the member-title endpoint). Terminals and
-    // browsers derive their names from their identities instead, and renaming
-    // the identity out from under a live tmux session or Chromium profile is
-    // not something the workspace offers.
-    entries.push({
-      label: "Rename",
-      iconName: "edit",
-      run: () => {
-        // The same inline editor the double-click opens, reached through the
-        // tab's handle so the menu and the gesture stay one mechanism.
-        tabHandlesByPanelId.get(panelId)?.beginTitleEdit();
-      },
-    });
-  }
-  entries.push({
-    label: "Hide tab",
-    iconName: "minus",
-    run: () => {
-      const panel = dockview?.panels.find((candidate) => candidate.id === panelId);
-      panel?.api.close();
-    },
-  });
-  const destroy = tabDestroyEntry(panelId, params);
-  if (destroy !== null) entries.push(destroy);
-  return entries;
+  return null;
 }
 
-/** What the tab itself is currently called, for a destructive verb's label --
- *  "Quit {name}" always matches the name printed on the tab, whatever kind of
- *  object it is. Falls back to the panel's own title (set at creation, before
- *  any name is filed) on the rare chance the live dock has already lost the
- *  panel by the time the menu renders. */
+/**
+ * What one tab's ⋮ menu offers.
+ *
+ * The verb SET comes from ``objectMenuEntries`` (objectMenu.ts), keyed by
+ * kind and shared with the rail's row menu -- this function's whole job is
+ * building the ``ObjectMenuActions`` that call takes, i.e. turning "what
+ * Refresh/Rename/Hide tab/Quit mean" into closures over THIS live, open
+ * panel. A panel that is not one of the four kinds (a launcher never reaches
+ * here -- see its call site below -- a subagent view or an ad-hoc URL page)
+ * gets a minimal menu of its own: there is nothing on it to name, share or
+ * destroy, only the panel itself to reload or put away.
+ */
+function tabMenuEntries(panelId: string): ObjectMenuEntry[] {
+  const params = panelParams.get(panelId);
+  if (params === undefined) return [];
+  const kind = objectMenuKindForPanel(params);
+  if (kind === null) {
+    return [
+      { label: "Refresh", iconName: "refresh", run: () => refreshPanelContent(panelId) },
+      OBJECT_MENU_DIVIDER,
+      {
+        label: "Hide tab",
+        iconName: "minus",
+        run: () => dockview?.panels.find((candidate) => candidate.id === panelId)?.api.close(),
+      },
+    ];
+  }
+  const actions: ObjectMenuActions = {
+    // Reloads what the tab is showing for chat/browser/app; for a terminal
+    // this reattaches its tmux session instead of reloading anything (see
+    // refreshPanelContent) -- the session survives independently of the tab,
+    // so a reattach never loses scrollback or respawns the shell.
+    refresh: () => refreshPanelContent(panelId),
+    // Only ever read by objectMenuEntries when kind is "app" -- constructed
+    // just for that case rather than for every serviceName-bearing panel, so
+    // a browser pane (which has a serviceName too) does not build a Share it
+    // will never be offered.
+    share:
+      kind === "app" && params.serviceName !== undefined
+        ? {
+            label: `Share ${params.serviceName}`,
+            run: () => {
+              shareServiceName = params.serviceName ?? null;
+              showShareModal = true;
+              m.redraw();
+            },
+          }
+        : null,
+    rename: () => {
+      // The same inline editor the double-click opens, reached through the
+      // tab's handle so the menu and the gesture stay one mechanism.
+      tabHandlesByPanelId.get(panelId)?.beginTitleEdit();
+    },
+    // tabMenuEntries only ever runs for an open tab's own kebab, so there is
+    // always a tab here to hide -- unlike a rail row, which may be showing a
+    // backgrounded object with no panel at all.
+    hideTab: () => dockview?.panels.find((candidate) => candidate.id === panelId)?.api.close(),
+    quit: tabQuitAction(panelId, params, kind),
+  };
+  return objectMenuEntries(kind, actions);
+}
+
+/** What the tab itself is currently called, for the destructive verb's label
+ *  -- "Quit {name}" always matches the name printed on the tab, whatever kind
+ *  of object it is. Falls back to the panel's own title (set at creation,
+ *  before any name is filed) on the rare chance the live dock has already
+ *  lost the panel by the time the menu renders. */
 function currentTabTitle(panelId: string, fallback: string): string {
   return dockview?.panels.find((candidate) => candidate.id === panelId)?.title ?? fallback;
 }
 
-/** The destructive verb for one tab, or null for a kind that has none. Each
- *  raises its own confirmation, which is where what the destroy takes down --
- *  and that it reaches every project, not just this one -- is spelled out.
- *  Every kind reads "Quit {name}" behind the power icon: shutting an object
- *  down is one act with one wording, whether it is an agent, a terminal, a
- *  browser, or (weaker, see below) an app. */
-function tabDestroyEntry(panelId: string, params: PanelParams): TabMenuItem | null {
-  if (params.panelType === "chat") {
-    const chatAgentId = params.chatAgentId ?? params.agentId;
-    // The primary agent runs the workspace's own services; destroying it would
-    // take the machine down, so it is not offered.
-    if (!chatAgentId || chatAgentId === getPrimaryAgentId()) return null;
-    const agent = getAgentById(chatAgentId);
-    const agentName = agent === undefined ? chatAgentId : chatDisplayName(agent);
-    return {
-      label: `Quit ${currentTabTitle(panelId, agentName)}`,
-      iconName: "power",
-      isDestructive: true,
-      run: () => {
-        destroyTargetAgentId = chatAgentId;
-        destroyTargetAgentName = agentName;
-        destroyTargetPanelId = panelId;
-        showDestroyDialog = true;
-        m.redraw();
-      },
-    };
+/** The destructive verb for one tab, or null for an object that has none right
+ *  now. Each raises its own confirmation, which is where what the destroy
+ *  takes down -- and that it reaches every project, not just this one -- is
+ *  spelled out. Every kind reads "Quit {name}" behind the power icon: shutting
+ *  an object down is one act with one wording, whether it is an agent, a
+ *  terminal, a browser, or (weaker, see below) an app. This absorbs what used
+ *  to be the rail's separately-worded "Delete from this machine" -- one
+ *  destroy, one name, on both surfaces. */
+function tabQuitAction(
+  panelId: string,
+  params: PanelParams,
+  kind: ObjectMenuKind,
+): { label: string; run: () => void } | null {
+  switch (kind) {
+    case "chat": {
+      const chatAgentId = params.chatAgentId ?? params.agentId;
+      // The primary agent runs the workspace's own services; destroying it
+      // would take the machine down, so it is not offered.
+      if (!chatAgentId || chatAgentId === getPrimaryAgentId()) return null;
+      const agent = getAgentById(chatAgentId);
+      const agentName = agent === undefined ? chatAgentId : chatDisplayName(agent);
+      return {
+        label: `Quit ${currentTabTitle(panelId, agentName)}`,
+        run: () => {
+          destroyTargetAgentId = chatAgentId;
+          destroyTargetAgentName = agentName;
+          destroyTargetPanelId = panelId;
+          showDestroyDialog = true;
+          m.redraw();
+        },
+      };
+    }
+    case "terminal": {
+      const sessionName = params.terminalSessionName;
+      // A terminal still allocating its tmux session name has no session to
+      // kill.
+      if (!sessionName) return null;
+      return {
+        label: `Quit ${currentTabTitle(panelId, sessionName)}`,
+        run: () => {
+          terminalDestroySessionName = sessionName;
+          terminalDestroyPanelId = panelId;
+          showTerminalDestroyDialog = true;
+          m.redraw();
+        },
+      };
+    }
+    case "browser": {
+      // The browser's name lives in the pane's ``?session=<name>`` query, set
+      // on both freshly-opened and layout-restored panes.
+      const browserName = sessionParamFromUrl(params.url);
+      if (browserName === null) return null;
+      return {
+        label: `Quit ${currentTabTitle(panelId, browserName)}`,
+        run: () => {
+          browserDestroyName = browserName;
+          browserDestroyPanelId = panelId;
+          showBrowserDestroyDialog = true;
+          m.redraw();
+        },
+      };
+    }
+    case "app": {
+      const serviceName = params.serviceName;
+      // objectMenuKindForPanel only returns "app" once serviceName is known.
+      if (serviceName === undefined) return null;
+      return {
+        label: `Quit ${currentTabTitle(panelId, serviceName)}`,
+        run: () => {
+          appDeregisterName = serviceName;
+          appDeregisterPanelId = panelId;
+          showAppDeregisterDialog = true;
+          m.redraw();
+        },
+      };
+    }
   }
-  if (isTerminalPanelParams(params)) {
-    const sessionName = params.terminalSessionName;
-    // A terminal still allocating its tmux session name has no session to kill.
-    if (!sessionName) return null;
-    return {
-      label: `Quit ${currentTabTitle(panelId, sessionName)}`,
-      iconName: "power",
-      isDestructive: true,
-      run: () => {
-        terminalDestroySessionName = sessionName;
-        terminalDestroyPanelId = panelId;
-        showTerminalDestroyDialog = true;
-        m.redraw();
-      },
-    };
-  }
-  if (params.serviceName === BROWSER_SERVICE_NAME) {
-    // The browser's name lives in the pane's ``?session=<name>`` query, set on
-    // both freshly-opened and layout-restored panes.
-    const browserName = sessionParamFromUrl(params.url);
-    if (browserName === null) return null;
-    return {
-      label: `Quit ${currentTabTitle(panelId, browserName)}`,
-      iconName: "power",
-      isDestructive: true,
-      run: () => {
-        browserDestroyName = browserName;
-        browserDestroyPanelId = panelId;
-        showBrowserDestroyDialog = true;
-        m.redraw();
-      },
-    };
-  }
-  const serviceName = params.serviceName;
-  // A registered app: a service panel that is not one of the two fleets. The
-  // browser and the terminal are registered services too and have their own
-  // verbs above, so what the ref's kind says decides here rather than the
-  // panel's shape -- a bare ``service:terminal`` pane must not offer to
-  // unregister the terminal service out from under every terminal tab.
-  // The weaker truth behind this one's "Quit" (shared wording, not shared
-  // power) is spelled out in its own confirmation: the workspace can take an
-  // app out of the registry and out of every project, and it cannot stop the
-  // program answering on the port.
-  if (serviceName !== undefined && memberKindFromRef(memberRef("app", serviceName)) === "app") {
-    return {
-      label: `Quit ${currentTabTitle(panelId, serviceName)}`,
-      iconName: "power",
-      isDestructive: true,
-      run: () => {
-        appDeregisterName = serviceName;
-        appDeregisterPanelId = panelId;
-        showAppDeregisterDialog = true;
-        m.redraw();
-      },
-    };
-  }
-  // An ad-hoc page or a subagent view: nothing to tear down beyond the panel,
-  // and the panel is what Close already handles.
-  return null;
 }
 
 // ---------- The tab ----------
@@ -848,13 +865,25 @@ const tabHandlesByPanelId = new Map<
  * ``:hover`` rule because the menu has to hold them open while it is up, after
  * the pointer has left the tab for the menu card.
  *
- * Double-clicking a CHAT tab's title renames the chat: the title becomes a
- * text field seeded with the current name, Enter and blur commit, Escape puts
- * the old one back. The commit goes through ``renameMemberRef`` -- the same
- * path the agent-facing layout op takes -- so the name lands on the mngr agent
- * itself (its ``display_name`` label, with the canonical form as its true
- * name) and every view showing the chat says it. Other kinds derive their
- * names from their identities and are not editable here.
+ * Double-clicking a tab's title renames the object it shows, for all four
+ * kinds that carry one (chat, terminal, browser, app -- see objectMenu.ts):
+ * the title becomes a text field seeded with the current name, Enter and blur
+ * commit, Escape puts the old one back. The commit goes through
+ * ``renameMemberRef`` -- the same path the agent-facing layout op and the
+ * kebab menu's own Rename take -- which is only ever a store write
+ * (``/api/member-titles``) from here. What that write actually DOES differs
+ * by kind, and the asymmetry is deliberate: a chat is an mngr agent, so the
+ * server routes a ``chat:`` ref's rename to ``mngr rename`` instead of the
+ * store, moving the agent's ``display_name`` label (with the canonical form
+ * as its true name) so `mngr list` and the tab keep agreeing -- see
+ * ``_rename_chat_agent_for_ref`` in server.py. A terminal, a browser and an
+ * app have no such canonical name to move: the typed title is DISPLAY-ONLY,
+ * stored purely in the machine-wide title map (models/MemberTitles.ts) and
+ * read back everywhere the object is shown, while the tmux session name and
+ * the Chromium fleet identity that actually address the object underneath
+ * stay exactly what they were. Renaming a browser tab to "Research" does not
+ * rename its ``browser-1`` session, and must not -- that identity is what the
+ * fleet, the layout store and every other client resolve the object by.
  */
 function createCustomTab(options: { id: string; name: string }): ITabRenderer {
   const element = document.createElement("div");
@@ -924,9 +953,13 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
     refreshTitleFade();
   };
 
-  /** Whether this tab's object can be renamed at all: only a chat can (its
-   *  name lives on its mngr agent); every other kind derives its name. */
-  const isRenameable = (): boolean => panelParams.get(options.id)?.panelType === "chat";
+  /** Whether this tab's object can be renamed at all: chat, terminal,
+   *  browser and app all can (see ``objectMenuKindForPanel``); a launcher, a
+   *  subagent view or an ad-hoc URL page has no object behind it to name. */
+  const isRenameable = (): boolean => {
+    const params = panelParams.get(options.id);
+    return params !== undefined && objectMenuKindForPanel(params) !== null;
+  };
 
   /** The ``.dv-tab`` dockview wraps this renderer in. That element, not this
    *  one, is what carries the tab drag. */
@@ -987,9 +1020,10 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
   content.addEventListener("dblclick", (event) => {
     // A dropdown row only focuses; renaming happens on the strip.
     if (isOverflowRow) return;
-    // Only a chat's name is editable (see ``isRenameable``). For everything
-    // else the event still propagates -- to dockview a double-click on a tab
-    // is just a click, and the tab should keep behaving like one.
+    // Only one of the four consolidated kinds is editable (see
+    // ``isRenameable``). For everything else the event still propagates -- to
+    // dockview a double-click on a tab is just a click, and the tab should
+    // keep behaving like one.
     if (!isRenameable()) return;
     event.preventDefault();
     event.stopPropagation();
@@ -1409,9 +1443,12 @@ function launcherPanelIdInGroup(group: DockviewGroupPanel | null): string | null
   return null;
 }
 
-/** Blink a tab to point at it. Used when the "+" is clicked in a pane that
- *  already has a launcher: the answer is "it is right there", and opening a
- *  second one would only clutter the strip. */
+/** Blink a tab to point at it. Used whenever some other control asks to open
+ *  something that is already open -- the "+" landing on a pane that already
+ *  has a launcher, a rail row or a launcher row for a member that already has
+ *  a tab, an app already open from the rail or the all-apps popover -- so the
+ *  click visibly does something ("it is right there") instead of appearing to
+ *  do nothing. */
 function flashPanelTab(panelId: string): void {
   const handle = tabHandlesByPanelId.get(panelId);
   handle?.element.animate([{ opacity: 1 }, { opacity: 0.3 }, { opacity: 1 }], { duration: 240, iterations: 2 });
@@ -1781,6 +1818,13 @@ export function getSidebarRows(): SidebarTabRow[] {
  * alone: an ad-hoc page is addressed by a hash of its panel, so once its tab is
  * closed the URL it pointed at is gone and only "Remove from project" is left
  * for it.
+ *
+ * Flashes the tab when it was already open: every caller here is a click on a
+ * row that ASKS to open something (a rail row, a launcher's member/machine
+ * table, a rail shortcut), and when the answer is "it is already right there"
+ * the flash is what makes the click visibly do something instead of appearing
+ * to do nothing -- the same acknowledgement ``openLauncherPanel`` already
+ * gives a "+" click that lands on an already-open launcher.
  */
 function openMemberRef(ref: string, targetGroup: DockviewGroupPanel | null): string | null {
   if (!dockview) return null;
@@ -1788,6 +1832,7 @@ function openMemberRef(ref: string, targetGroup: DockviewGroupPanel | null): str
   if (openPanelId !== null) {
     const panel = dockview.panels.find((candidate) => candidate.id === openPanelId);
     if (panel) dockview.setActivePanel(panel);
+    flashPanelTab(openPanelId);
     return openPanelId;
   }
   const body = memberRefBody(ref);
@@ -2920,15 +2965,16 @@ export function openTabOfType(tabType: QuickAddTabType): void {
   openTabOfTypeInGroup(tabType, null, null);
 }
 
-/** Open ``app``'s pane in the active project, focusing the one already open
- *  rather than stacking a second. Exported for the machine rail and the
- *  all-apps picker, and used by the launcher's app rows. */
+/** Open ``app``'s pane in the active project, focusing (and flashing) the one
+ *  already open rather than stacking a second. Exported for the machine rail
+ *  and the all-apps picker, and used by the launcher's app rows. */
 export function openAppTab(app: AppEntry): void {
   if (!dockview) return;
   const openPanelId = findIframePanelIdForService(app.name);
   const openPanel = openPanelId === null ? undefined : dockview.panels.find((p) => p.id === openPanelId);
   if (openPanel !== undefined) {
     dockview.setActivePanel(openPanel);
+    flashPanelTab(openPanel.id);
     return;
   }
   openIframeTab(deriveServiceOrigin(labelForService(app.name)), app.name, "iframe", app.name);
@@ -2963,18 +3009,34 @@ function memberRefBody(ref: string): string {
 }
 
 /**
- * The member ref a panel is filed under, or null when it is not a member at all.
+ * The member ref one panel's params stand for, or null when the panel is not
+ * a machine object at all.
  *
  * Follows the grammar the store and ``layout_ops`` share (see
- * ``_panel_member_ref`` in projects.py), including its one deliberate
- * difference: a chat is filed under its stable agent id rather than the agent's
- * renameable display name, so membership survives a rename. A panel that names
- * nothing recognizable falls back to ``url:<hash>``, the form an ad-hoc URL
- * panel is addressed by. A launcher tab is not an object on the machine -- it
- * is a question about this pane -- so it is filed nowhere.
+ * ``_panel_member_ref`` in projects.py) for the three kinds with a durable
+ * identity, including its one deliberate difference: a chat is filed under
+ * its stable agent id rather than the agent's renameable display name, so
+ * membership survives a rename.
+ *
+ * A panel with none of a chat's agent id, a terminal's session name, or a
+ * service name -- an ad-hoc URL page, or a subagent view, which sets none of
+ * the three either -- used to fall back to ``url:<hash-of-the-panel-id>`` and
+ * get filed as a member anyway. That was already the least reliable ref the
+ * store had: the hash names the PANEL, not the page behind it, so a closed
+ * and reopened tab for the very same URL answers to a different ref and the
+ * old one is simply orphaned, and there is no destroy verb for it either (see
+ * ``objectMenuKindForPanel``, which returns null for the same panels). Such a
+ * panel is not a persistent, nameable, destroyable object the way the four
+ * real member kinds are, so it now files nothing at all --
+ * ``rememberMemberRef`` already treats a null ref as "this panel is not a
+ * member" and records nothing for it.
+ *
+ * Pure and synchronous (unlike the old fallback, which needed the panel id to
+ * hash), so it is the part of resolving a panel's membership worth testing
+ * directly -- see ``memberRefForPanel``, which is just this applied to
+ * whatever ``panelParams`` currently holds for one panel id.
  */
-async function memberRefForPanel(panelId: string): Promise<string | null> {
-  const params = panelParams.get(panelId);
+export function memberRefForPanelParams(params: PanelParams | undefined): string | null {
   if (params === undefined || params.panelType === "launcher") return null;
   if (params.panelType === "chat") {
     const chatAgentId = params.chatAgentId ?? params.agentId;
@@ -2985,7 +3047,15 @@ async function memberRefForPanel(panelId: string): Promise<string | null> {
     const browserSession = params.serviceName === BROWSER_SERVICE_NAME ? sessionParamFromUrl(params.url) : null;
     return browserSession === null ? memberRef("app", params.serviceName) : memberRef("browser", browserSession);
   }
-  return memberRef("url", await shortHash(panelId));
+  return null;
+}
+
+/** ``memberRefForPanelParams`` for a live panel id, looked up in
+ *  ``panelParams``. Async only for its callers' sake (every one of them is
+ *  already inside an async flow that used to need the hash's own await);
+ *  the lookup itself is synchronous now. */
+async function memberRefForPanel(panelId: string): Promise<string | null> {
+  return memberRefForPanelParams(panelParams.get(panelId));
 }
 
 /** Record (and return) the ref a panel is filed under, so later lookups are
