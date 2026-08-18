@@ -674,9 +674,12 @@ def _tool_extras(tool_name: str, repo_root: Path, runner: Runner, env: dict) -> 
     back and pass them through rather than keeping a second copy of the plugin
     list here for build_workspace.sh's to drift away from.
 
-    A tool with no receipt we can read contributes no extras: it is not
-    installed (or predates the receipt), and the reinstall below is then the
-    plain install it would have gotten anyway.
+    A tool with no receipt at all contributes no extras: it is not installed (or
+    predates the receipt), and the reinstall below is then the plain install it
+    would have gotten anyway. A receipt we cannot *read* is a different story --
+    we had a tool and lost the record of it -- so that degrades to the same empty
+    answer but says so, because the silent version of it hands back exactly the
+    plugin-less CLI this refresh exists to prevent, while reporting success.
     """
     tool_dir = env.get("UV_TOOL_DIR")
     if tool_dir is None:
@@ -689,12 +692,15 @@ def _tool_extras(tool_name: str, repo_root: Path, runner: Runner, env: dict) -> 
             env=env,
         )
         if getattr(result, "returncode", 0) != 0:
+            _warn_extras_lost(tool_name, f"'uv tool dir' exited {result.returncode}")
             return []
         tool_dir = (getattr(result, "stdout", "") or "").strip()
     receipt = Path(tool_dir) / tool_name / _RECEIPT
     try:
         parsed = tomllib.loads(receipt.read_text())
-    except (OSError, tomllib.TOMLDecodeError):
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        if receipt.is_file():
+            _warn_extras_lost(tool_name, f"{receipt} is unreadable ({exc})")
         return []
     extras: list[str] = []
     for requirement in parsed.get("tool", {}).get("requirements", []):
@@ -711,6 +717,15 @@ def _tool_extras(tool_name: str, repo_root: Path, runner: Runner, env: dict) -> 
         else:
             extras.extend(["--with", name])
     return extras
+
+
+def _warn_extras_lost(tool_name: str, why: str) -> None:
+    """Report that ``tool_name`` is about to be rebuilt without its extras."""
+    sys.stderr.write(
+        f"refresh: cannot read what '{tool_name}' was installed with ({why}); "
+        "reinstalling from the base package alone, which drops any plugins it "
+        "had registered.\n"
+    )
 
 
 def _canonical(name: str) -> str:
