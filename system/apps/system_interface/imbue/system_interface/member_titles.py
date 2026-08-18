@@ -9,11 +9,15 @@ would still read "docs-viewer" in another, and an object with no panel anywhere
 name at all. Keying the name by ref instead makes both of those go away.
 
 Keys are the member refs the rest of the system files objects under
-(``service:<name>``, ``service:browser?session=<name>``, ``chat:<agent-id>``,
-``terminal:<name>``, ``url:<hash>``), which is why the ref validator is borrowed
-from ``projects`` rather than restated here. The dependency runs one way only:
-nothing in ``projects`` reaches back into this module, so the store a title
-lives in stays independent of the store a membership lives in.
+(``service:<name>``, ``service:browser?session=<name>``, ``terminal:<name>``,
+``url:<hash>``), which is why the ref validator is borrowed from ``projects``
+rather than restated here. A ``chat:<agent-id>`` ref is the exception: a chat's
+name lives on its mngr agent (the ``display_name`` label, paired with the
+canonical true name), so the title endpoint routes chat renames to mngr and
+clears any legacy chat entry still stored here instead of writing one. The
+dependency runs one way only: nothing in ``projects`` reaches back into this
+module, so the store a title lives in stays independent of the store a
+membership lives in.
 
 That independence is also why this is its own file rather than another key in
 ``projects_meta.json``: a title belongs to the machine and a member list belongs
