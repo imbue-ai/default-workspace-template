@@ -60,7 +60,7 @@ export function FastModeModal(): m.Component {
               ]),
               m("p.fast-mode-modal-message", [
                 promptingAgentName() !== null ? [m("strong", promptingAgentName()), " has Fast Mode on. "] : null,
-                "Fast Mode is 2.5x faster and 6x more expensive (",
+                "Fast Mode is 2.5x faster and 2x more expensive (",
                 m(
                   "a.fast-mode-modal-link",
                   { href: FAST_MODE_DOC_URL, target: "_blank", rel: "noopener noreferrer" },

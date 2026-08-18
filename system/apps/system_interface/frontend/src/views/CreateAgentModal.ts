@@ -86,7 +86,7 @@ export function CreateAgentModal(): m.Component<CreateAgentModalAttrs> {
         codex: "Create Codex Agent",
         pi: "Create Pi Agent",
       };
-      const title = attrs.first === true ? `${titleByMode[attrs.mode]} (first)` : titleByMode[attrs.mode];
+      const title = attrs.first === true ? `${titleByMode[attrs.mode]} (introductory)` : titleByMode[attrs.mode];
 
       return m(
         "div.custom-url-dialog-overlay",
