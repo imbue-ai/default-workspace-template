@@ -217,11 +217,42 @@ class RevealFailed(RevealError):
     in which case the live service is untouched and still serving known-good
     code, so recovery must NOT restart it -- and ``True`` once the restart has
     been attempted, where recovery must restart to reload known-good code.
+
+    ``detail`` is captured output explaining the failure (the pre-flight boot's
+    own log). It is kept apart from the message because the two readers want
+    different amounts of it: stderr gets all of it, while the rollback commit
+    gets only :meth:`headline` -- a commit body is read by everyone who ever
+    looks at this file's history, and a backend's startup log is a poor thing to
+    write into git and push, since it holds whatever the process chose to print.
     """
 
-    def __init__(self, message: str, *, live_service_restarted: bool = False) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        live_service_restarted: bool = False,
+        detail: str = "",
+    ) -> None:
         super().__init__(message)
         self.live_service_restarted = live_service_restarted
+        self.detail = detail
+
+    def headline(self) -> str:
+        """The message plus only the last line of ``detail``.
+
+        That last line is the payload -- a traceback ends on the exception, which
+        is the part that names the cause -- while everything above it is the
+        startup chatter that led there, already on stderr for whoever is looking.
+        """
+        last = next(
+            (
+                line
+                for line in reversed(self.detail.strip().splitlines())
+                if line.strip()
+            ),
+            "",
+        )
+        return f"{self}: {last}" if last else str(self)
 
 
 @dataclass(frozen=True)
@@ -506,6 +537,11 @@ def wait_healthy(
         if index < attempts - 1:
             sleeper(interval)
     return False
+
+
+def _detail_block(detail: str) -> str:
+    """Render captured failure output for stderr, or nothing when there is none."""
+    return f"--- pre-flight boot output ---\n{detail}\n" if detail else ""
 
 
 def _tail(text: str, limit: int) -> str:
@@ -809,14 +845,10 @@ def _apply_reveal(
         if preflight_output is not None:
             # Live service was never restarted, so it is still serving known-good
             # code -- recovery must not restart it (live_service_restarted=False).
-            detail = (
-                f"\n--- pre-flight boot output ---\n{preflight_output}"
-                if preflight_output
-                else "\n(the pre-flight boot wrote nothing at all)"
-            )
             raise RevealFailed(
                 "merged backend failed to boot in a pre-flight check; live service "
-                f"not restarted{detail}"
+                "not restarted",
+                detail=preflight_output or "(the pre-flight boot wrote nothing at all)",
             )
         # From here on the live service has been (or is being) restarted, so any
         # failure leaves it potentially running broken code: recovery must restart.
@@ -986,14 +1018,15 @@ def reveal(
         _apply_reveal(changes, repo_root, resolved_base, runner, http, spawner, sleeper)
     except RevealFailed as exc:
         sys.stderr.write(
-            f"reveal failed: {exc}\nrolling back to {rollback_to[:12]} and restoring the live UI...\n"
+            f"reveal failed: {exc}\n{_detail_block(exc.detail)}"
+            f"rolling back to {rollback_to[:12]} and restoring the live UI...\n"
         )
         _restore_tree(name_status, rollback_to, repo_root, runner)
         _commit_rollback(
             repo_root,
             runner,
             rollback_to,
-            f"Reveal failed and was auto-reverted: {exc}",
+            f"Reveal failed and was auto-reverted: {exc.headline()}",
         )
         if _recover_running_state(
             changes,
