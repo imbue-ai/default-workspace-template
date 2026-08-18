@@ -146,6 +146,7 @@ import {
   isEverythingView,
   memberKindFromRef,
   memberRef,
+  filingProjectForAgentOp,
   projectForViewId,
   removeMember,
   removePanelFromAllProjects,
@@ -3127,6 +3128,9 @@ function panelIdForMemberRef(ref: string): string | null {
  * tab from opening.
  */
 function recordMembership(panelId: string): void {
+  // Captured before any await: an agent-driven op's filing override is only
+  // valid while the op is being applied.
+  const filingViewId = agentOpFilingProjectId ?? mountedViewId;
   void (async () => {
     const ref = await rememberMemberRef(panelId);
     if (ref === null) return;
@@ -3134,7 +3138,7 @@ function recordMembership(panelId: string): void {
     // known, a name that object was given -- possibly while it had no tab at
     // all -- goes on the strip.
     syncTabTitlesFromStore();
-    const viewId = mountedViewId;
+    const viewId = filingViewId;
     // Nothing mounted means no project registry was reachable at startup, so
     // there is nowhere to file this either.
     if (viewId === null || isEverythingView(viewId)) return;
@@ -3713,9 +3717,25 @@ function asNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+// While an agent-driven layout op is being applied, panels it opens are filed
+// into the requesting agent's own project (its ``project`` label) rather than
+// whichever view the user happens to be looking at. Captured synchronously by
+// ``recordMembership`` at panel-creation time; null outside agent ops or when
+// the requester has no registered project (fall back to the mounted view).
+let agentOpFilingProjectId: string | null = null;
+
 async function handleLayoutOp(event: LayoutOpEvent): Promise<void> {
   if (!dockview) return;
   const requesterAgentId = event.requesterAgentId;
+  agentOpFilingProjectId = filingProjectForAgentOp(getAgentById(requesterAgentId)?.project, availableProjects);
+  try {
+    await dispatchLayoutOp(event, requesterAgentId);
+  } finally {
+    agentOpFilingProjectId = null;
+  }
+}
+
+async function dispatchLayoutOp(event: LayoutOpEvent, requesterAgentId: string): Promise<void> {
   switch (event.op) {
     case "open":
       await handleOpen(event.args, requesterAgentId);
