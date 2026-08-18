@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   computeVisibleWindow,
+  findAnchorRow,
   computeTranscriptSlices,
   resolveAnchorScrollTop,
   type WindowSegment,
@@ -334,5 +335,97 @@ describe("resolveAnchorScrollTop", () => {
     // just at a scrollTop that reflects the real prepended height, not the stale one.
     expect(after).toBe(4 * 240 + 20);
     expect(after).not.toBe(before);
+  });
+});
+
+describe("findAnchorRow", () => {
+  const keys = ["a", "b", "c"];
+  const input = { count: 3, getKey: (i: number) => keys[i], getHeight: uniform(100) };
+
+  it("returns the row containing the position, with the offset into it", () => {
+    expect(findAnchorRow({ ...input, adjustedScrollTop: 150 })).toEqual({ index: 1, key: "b", offsetIntoRow: 50 });
+  });
+
+  it("returns the first row at position 0 with zero offset", () => {
+    expect(findAnchorRow({ ...input, adjustedScrollTop: 0 })).toEqual({ index: 0, key: "a", offsetIntoRow: 0 });
+  });
+
+  it("absorbs an overshoot past the last row's bottom into the last row", () => {
+    // A transient overshoot while heights settle must still capture something,
+    // so the compensation can carry the reader through the settle.
+    expect(findAnchorRow({ ...input, adjustedScrollTop: 999 })).toEqual({ index: 2, key: "c", offsetIntoRow: 799 });
+  });
+
+  it("returns null for an empty list", () => {
+    expect(findAnchorRow({ ...input, count: 0, adjustedScrollTop: 0 })).toBeNull();
+    expect(findAnchorRow({ ...input, count: 0, adjustedScrollTop: 0, minIndex: 1 })).toBeNull();
+  });
+
+  it("shifts an ineligible boundary row's anchor to the first interior row, offset going negative", () => {
+    // The reader sits 40px into row "a", but the caller declared row 0 unstable
+    // (it absorbs backfilled events): the anchor becomes "b", measured from above.
+    expect(findAnchorRow({ ...input, adjustedScrollTop: 40, minIndex: 1 })).toEqual({
+      index: 1,
+      key: "b",
+      offsetIntoRow: -60,
+    });
+  });
+
+  it("clamps minIndex to the last row when only ineligible rows exist", () => {
+    expect(findAnchorRow({ ...input, count: 1, adjustedScrollTop: 30, minIndex: 1 })).toEqual({
+      index: 0,
+      key: "a",
+      offsetIntoRow: 30,
+    });
+  });
+});
+
+describe("resolveAnchorScrollTop as the compensation fallback", () => {
+  it("resolves a negative anchor offset to the position above the anchor row", () => {
+    // The boundary-row skip stores the reader's position relative to the first
+    // interior row, so the offset can be negative (viewport above the row's top).
+    const top = resolveAnchorScrollTop({
+      keyToIndex: new Map([
+        ["a", 0],
+        ["b", 1],
+      ]),
+      getHeight: uniform(100),
+      phantomTopHeight: 400,
+      anchorKey: "b",
+      offsetInViewport: -60,
+    });
+    expect(top).toBe(400 + 100 - 60);
+  });
+
+  it("shifts by exactly the geometry delta when a page lands -- the compensation contract", () => {
+    // Captured under the pre-landing geometry: 50 unloaded events reserved at
+    // the flat 160px/event estimate above one loaded 100px row, read 40px in.
+    const phantomBefore = 50 * 160;
+    const capturedScrollTop = phantomBefore + 40;
+    const before = resolveAnchorScrollTop({
+      keyToIndex: new Map([["anchor", 0]]),
+      getHeight: uniform(100),
+      phantomTopHeight: phantomBefore,
+      anchorKey: "anchor",
+      offsetInViewport: 40,
+    });
+    expect(before).toBe(capturedScrollTop);
+
+    // The 50-event page lands as tool-heavy rows totalling 1690px where the
+    // phantom reserved 8000px. The resolved target moves by exactly the
+    // geometry delta, which the caller applies to the live scrollTop.
+    const landedHeights = [1690, 100];
+    const target = resolveAnchorScrollTop({
+      keyToIndex: new Map([
+        ["page", 0],
+        ["anchor", 1],
+      ]),
+      getHeight: (i) => landedHeights[i],
+      phantomTopHeight: 0,
+      anchorKey: "anchor",
+      offsetInViewport: 40,
+    });
+    expect(target).toBe(1690 + 40);
+    expect(target! - capturedScrollTop).toBe(1690 - 8000);
   });
 });

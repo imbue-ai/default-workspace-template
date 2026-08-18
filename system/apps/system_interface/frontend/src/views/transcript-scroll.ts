@@ -10,9 +10,13 @@
  *    scroll-up from a browser shrink-clamp (see scrollFollow);
  *  - the pointer-drag and viewport-resize lifecycle.
  *
- * Viewport stability while scrolled up is left entirely to native scroll anchoring
- * (the views' spacers opt out) -- the controller writes scrollTop only for the two
- * deliberate pins: following the tail, and landing an offset jump (`pinTo`).
+ * Viewport stability while scrolled up is view-specific and lives outside this
+ * controller: ChatPanel derives scrollTop from a reading anchor and applies the
+ * correction through `pinTo` (native anchoring cannot survive its window remaps),
+ * while SubagentView -- whose whole transcript is loaded, so geometry only drifts
+ * by small measurements -- still relies on native scroll anchoring (its spacers
+ * opt out). The controller itself writes scrollTop only through the deliberate
+ * pins: following the tail, and `pinTo`.
  *
  * The two views differ only in a few spots, injected via `config`: dockview
  * visibility gating, whether newer history exists below the loaded window, and any
@@ -61,8 +65,8 @@ export interface TranscriptScroll {
   attach(element: HTMLElement): void;
   /** Tear down listeners + observers; call from onremove. */
   detach(): void;
-  /** Apply the tail-follow pin if following (no-op while scrolled up -- native
-   *  anchoring handles that). Call from oncreate/onupdate. */
+  /** Apply the tail-follow pin if following (no-op while scrolled up -- the view's
+   *  own anchoring owns the position then). Call from oncreate/onupdate. */
   applyScrollPosition(element: HTMLElement): void;
   /** Pin scrollTop to an exact position once (ChatPanel: land an offset jump at the
    *  top of the freshly loaded rows), syncing the follow bookkeeping. */
@@ -137,6 +141,7 @@ export function createTranscriptScroll(config: TranscriptScrollConfig = {}): Tra
       // applyScrollPosition keeps previousScrollTop in lockstep with its own
       // programmatic pins, so only a genuine user scroll registers as movement.
       const didScrollUp = element.scrollTop < previousScrollTop;
+      const didScrollDown = element.scrollTop > previousScrollTop;
       const atBottom = element.scrollHeight - element.scrollTop - element.clientHeight < SCROLL_BOTTOM_THRESHOLD_PX;
       // A shrink-clamp looks like a scroll-up but carries no user intent; the follow
       // state must be preserved rather than re-derived (see scrollFollow).
@@ -145,6 +150,7 @@ export function createTranscriptScroll(config: TranscriptScrollConfig = {}): Tra
       scrollTop = element.scrollTop;
       userScrolledUp = nextUserScrolledUp({
         didScrollUp,
+        didScrollDown,
         isNearBottom: atBottom,
         hasMoreAfter: getHasMoreAfter(),
         isClamp,
@@ -209,8 +215,9 @@ export function createTranscriptScroll(config: TranscriptScrollConfig = {}): Tra
       if (!isVisible()) {
         return;
       }
-      // While scrolled up the app writes nothing -- native scroll anchoring holds the
-      // viewport. Only the tail pin writes scrollTop.
+      // While scrolled up the controller writes nothing -- the view's own anchoring
+      // (ChatPanel's derived pin, SubagentView's native anchoring) holds the
+      // viewport. Only the tail pin writes scrollTop here.
       if (!userScrolledUp) {
         applyTailFollow(element);
       }
