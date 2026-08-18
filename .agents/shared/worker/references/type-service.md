@@ -30,18 +30,8 @@ solely to support one app lives in that app's folder under
 
 Point the service at scratch state (env-var overrides, a copied data dir) --
 never at the live workspace's `data/` -- and keep every run bounded so a
-long-lived daemon loop cannot outlive the test. `update-app`'s "Protect the
-user's data while you verify" owns the full contract and the
-`.agents/shared/scripts/serve_isolated_instance.py` helper that implements it.
-
-**A service's tests must not depend on particular user data being present.**
-Resolve the persistent path injectably -- `DATA_DIR = Path(os.environ.get(
-"<PACKAGE_UPPER>_DATA_DIR", "data/.apps/<name>"))`, the form the `build-app`
-scaffold emits -- and give each test its own directory through that same
-override, set for the process under test before the module reads it (which is
-exactly what `serve_isolated_instance.py` does with `--env`). A test that reads whatever happens to be on disk is not
-deterministic, and worse, it *passes* against an empty store while never
-exercising the code path it exists to cover. Where a test uses fixtures, the
-fixtures must be accurate: a fixture that does not match a real record's shape
-buys confidence the code has not earned. Retrofit older services when you touch
-them, the same way `update-app` describes.
+long-lived daemon loop cannot outlive the test.
+`.agents/shared/references/data-isolation.md` owns the full contract: the
+`serve_isolated_instance.py` helper that implements it, and the `DATA_DIR`
+override a service's tests must resolve through so they do not depend on
+particular user data being present.
