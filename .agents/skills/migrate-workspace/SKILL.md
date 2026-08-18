@@ -121,11 +121,10 @@ anything.
 uv run host-backup-now --timeout 600
 ssh -i /tmp/mind_key -p <port> <user>@<host> \
     'for w in /home/user/workspace/system/scripts/with_agent_env.sh \
-              /home/user/workspace/system/libs/automations/with_agent_env.sh \
-              /mngr/code/scripts/with_agent_env.sh; do
+              /home/user/workspace/system/libs/automations/with_agent_env.sh; do
        [ -x "$w" ] && exec "$w" uv run host-backup-now --timeout 600
      done
-     echo "no with_agent_env.sh in this source generation" >&2; exit 127'
+     echo "no with_agent_env.sh in this source generation" >&2; exit 66'
 ```
 
 **Send it through `with_agent_env.sh`.** sshd builds a fresh environment per
@@ -135,16 +134,18 @@ wait on -- it exits 2 at once, saying on stderr that it cannot locate the events
 log and leaving stdout empty. The wrapper rebuilds the agent environment from the
 files mngr maintains and execs from the repo root (so it replaces the `cd` too).
 
-**Probe for it; do not hardcode one path.** This command runs on the *source*,
-so what matters is where that source's generation keeps the wrapper -- and it has
-moved three times: added at the repo root's `scripts/` on 2026-07-07, carried to
-`system/scripts/` by the 2026-07-27 restructure, to `system/libs/automations/` on
-2026-07-28, and back to `system/scripts/` on 2026-08-17. The third candidate is
-that first home on a pre-declutter source, whose repo root is `/mngr/code`.
-Naming a single path fails with 127 on every source outside that one window. The same candidate-list shape is used
-for `minds_start_services_agent.sh` in `.mngr/settings.toml`. Exit 127 means the
-source predates the wrapper entirely; fall back to the explicit events-log paths
-in [references/pre-declutter-layout.md](references/pre-declutter-layout.md).
+**Probe for it; do not hardcode one path.** The wrapper shipped at
+`system/scripts/` (2026-07-27), moved to `system/libs/automations/` two days
+later, and moved back on 2026-08-17 -- so `minds-v0.3.10` through `minds-v0.4.0`
+carry the second candidate and anything newer the first. The same candidate-list
+shape is used for `minds_start_services_agent.sh` in `.mngr/settings.toml`.
+
+**A pre-declutter source has no wrapper at all**, under any name or path -- it
+postdates the declutter by a release -- so there is no third candidate, and the
+agent environment cannot be rebuilt this way there. The loop's `exit 66` says
+exactly that (deliberately not 127, which the wrapped command can return on its
+own): fall back to the explicit events-log paths in
+[references/pre-declutter-layout.md](references/pre-declutter-layout.md).
 
 **Bound both waits explicitly.** An older `host-backup-now` ends its wait only on
 a restic outcome, so a tick that never reaches restic -- most likely one skipped
@@ -194,8 +195,8 @@ its host -- SSH needs that up) so the tree cannot shift mid-copy:
 through the same candidate probe as the backup above. `mngr` is on the agent's
 PATH (`/root/.local/bin`) and resolves which host dir to act on from
 `MNGR_HOST_DIR`; an ssh session has neither, and on a pre-declutter source that
-host dir is `/mngr` rather than the default. Exit 127 means this source cannot be
-quiesced that way -- say so rather than improvising. A decline is fine either way;
+host dir is `/mngr` rather than the default. Exit 66 means this source predates
+the wrapper and cannot be quiesced that way -- say so rather than improvising. A decline is fine either way;
 anything that shifts is re-synced during verification (Step 8).
 
 ## 4. Detect the layout, then resolve the baseline
@@ -375,8 +376,7 @@ carries code only and the live copy is still what persists), excluding
 regenerable bulk such as repo caches. Then exercise each migrated app against
 that data and confirm the user's own records render, rather than inferring it
 from where the files were copied. See
-`.agents/shared/worker/references/harden-creation.md` ("Isolation") for the
-general contract.
+`.agents/shared/references/data-isolation.md` for the general contract.
 
 **Creations.** Each app lands under `system/apps/<package>/`, is added to the root
 `pyproject.toml`, gets a `[program:<name>]` block in `system/supervisord.conf`
