@@ -2173,9 +2173,7 @@ def _create_chat_agent() -> Response:
             project_id=project_id,
             extra_taken_names=titled_names,
         )
-        response = CreateAgentResponse(
-            agent_id=created.agent_id, name=created.name, display_name=created.display_name
-        )
+        response = CreateAgentResponse(agent_id=created.agent_id, name=created.name, display_name=created.display_name)
         return _json_response(response.model_dump(), status_code=201)
     except AgentNameConflictError as e:
         return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=409)
