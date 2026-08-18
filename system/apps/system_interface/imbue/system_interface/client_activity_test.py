@@ -6,6 +6,7 @@ from imbue.system_interface.client_activity import append_client_connected_event
 from imbue.system_interface.client_activity import append_layout_switch_event
 from imbue.system_interface.client_activity import append_message_event
 from imbue.system_interface.client_activity import find_client_id_for_agent
+from imbue.system_interface.client_activity import find_layout_slug_for_agent
 from imbue.system_interface.client_activity import last_message_time_by_agent
 from imbue.system_interface.client_activity import read_client_activity_events
 from imbue.system_interface.client_activity import summarize_client_activity
@@ -137,6 +138,27 @@ def test_find_client_id_for_agent_picks_most_recent(tmp_path: Path) -> None:
     assert find_client_id_for_agent(events, "agent-1") == "c2"
     assert find_client_id_for_agent(events, "agent-unknown") is None
     assert find_client_id_for_agent(events, "") is None
+
+
+def test_find_layout_slug_for_agent_reports_where_the_request_came_from(tmp_path: Path) -> None:
+    """The view an agent was last messaged from -- what its own layout ops target.
+
+    Recorded at send time, so a client that has since switched views does not
+    drag the agent's work along with it.
+    """
+    events_path = _events_path(tmp_path)
+    append_message_event(events_path, "c1", "desktop", "research", "agent-1", "alice", "first")
+    append_message_event(events_path, "c1", "desktop", "project-1", "agent-2", "bob", "unrelated")
+    append_layout_switch_event(
+        events_path, client_id="c1", device_kind="desktop", from_layout_slug="research", to_layout_slug="project-1"
+    )
+    events = read_client_activity_events(events_path)
+
+    # The switch is not a request: agent-1's last *message* still names research.
+    assert find_layout_slug_for_agent(events, "agent-1") == "research"
+    assert find_layout_slug_for_agent(events, "agent-2") == "project-1"
+    assert find_layout_slug_for_agent(events, "agent-unknown") is None
+    assert find_layout_slug_for_agent(events, "") is None
 
 
 def test_last_message_time_by_agent_keeps_each_agents_newest(tmp_path: Path) -> None:

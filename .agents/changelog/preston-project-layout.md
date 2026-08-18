@@ -8,4 +8,4 @@ The layout-driving skills speak projects natively. `manage-layout`'s "Named layo
 
 `manage-layout` documents the new `layout.py views` subcommand for listing the machine's views (projects + Everything) with members and per-client presence.
 
-`manage-layout` documents that agent-opened tabs are filed into the agent's own project (its `project` label) when it has one, falling back to the view the tab opened in.
+`manage-layout` documents the corrected targeting rule for an op with no `--view`: it goes to your own view -- the one you were last messaged from, else your chat's project -- and only then to whatever the connected client is looking at, so a tab you open lands next to the chat that asked for it. It also explains the 412 that means the user has moved off your view. The `build-app`, `caretaker`, `update-self` and `update-system-interface` surfacing steps are reworded to match.

@@ -279,16 +279,43 @@ def last_message_time_by_agent(events: Sequence[dict[str, Any]]) -> dict[str, st
 
 
 @pure
+def _last_message_event_for_agent(events: Sequence[dict[str, Any]], agent_id: str) -> dict[str, Any] | None:
+    """The most recent message event addressed to ``agent_id``, or None.
+
+    The log is chronological, so the last such line wins. This single lookup
+    backs every "who asked me this" question: the client that asked, and the
+    view they asked from.
+    """
+    if not agent_id:
+        return None
+    for event in reversed(events):
+        if event.get("type") == MESSAGE_EVENT_TYPE and event.get("agent_id") == agent_id:
+            return event
+    return None
+
+
+@pure
 def find_client_id_for_agent(events: Sequence[dict[str, Any]], agent_id: str) -> str | None:
     """The client that most recently messaged ``agent_id``, or None.
 
     This is how an agent-initiated op is attributed back to "the client that
     asked for it": the requester's most recent message event names them.
     """
-    if not agent_id:
+    event = _last_message_event_for_agent(events, agent_id)
+    if event is None:
         return None
-    for event in reversed(events):
-        if event.get("type") == MESSAGE_EVENT_TYPE and event.get("agent_id") == agent_id:
-            client_id = str(event.get("client_id", ""))
-            return client_id or None
-    return None
+    return str(event.get("client_id", "")) or None
+
+
+@pure
+def find_layout_slug_for_agent(events: Sequence[dict[str, Any]], agent_id: str) -> str | None:
+    """The view ``agent_id`` was most recently messaged *from*, or None.
+
+    Recorded at send time, so it names where the request came from rather than
+    wherever the client has moved since -- which is what an agent's own layout
+    ops should target, and what its output should be filed into.
+    """
+    event = _last_message_event_for_agent(events, agent_id)
+    if event is None:
+        return None
+    return str(event.get("layout_slug", "")) or None
