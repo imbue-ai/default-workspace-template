@@ -217,6 +217,18 @@ def test_classify_treats_the_root_manifest_as_a_backend_manifest() -> None:
     assert reveal_mod.classify_changes(["pyproject.toml"]).backend_manifest
 
 
+def test_classify_treats_the_vendored_workspace_root_as_a_backend_manifest() -> None:
+    # `uv tool install -e system/vendor/mngr/libs/mngr` walks up to this file to
+    # find the workspace that package belongs to, so it -- not the repo root --
+    # supplies the sources for imbue-common and overlay (which libs/mngr pins
+    # exactly and which resolve nowhere else), the exclude-newer cooldown mngr
+    # advances before each release, and the dependency overrides. Vendor syncs
+    # move it without necessarily touching any libs/*/pyproject.toml.
+    assert reveal_mod.classify_changes(
+        ["system/vendor/mngr/pyproject.toml"]
+    ).backend_manifest
+
+
 def test_classify_ignores_vendored_source_and_nested_paths() -> None:
     # Source edits do not move the dependency closure, and a manifest deeper in
     # the tree is not one of the vendored packages we install from.
@@ -224,7 +236,6 @@ def test_classify_ignores_vendored_source_and_nested_paths() -> None:
         [
             "system/vendor/mngr/libs/mngr/imbue/mngr/main.py",
             "system/vendor/mngr/libs/mngr/imbue/mngr/pyproject.toml",
-            "system/vendor/mngr/pyproject.toml",
         ]
     )
     assert not changes.any
