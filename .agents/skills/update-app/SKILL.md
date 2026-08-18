@@ -173,7 +173,7 @@ python3 system/scripts/layout.py refresh <name>
 the change is ready to show, surface it instead by opening it on each named
 layout -- `open` requires `--layout` and only applies on clients with that
 layout active, so the layout the user is not on fails fast and harmlessly:
-`for L in desktop mobile; do python3 system/scripts/layout.py open --layout "$L" <name>; done`.
+`python3 system/scripts/layout.py open <name>`.
 For any other tab manipulation, see `manage-layout`. Background daemons have
 no tab -- skip the tab refresh, but not the rest of this step.
 
@@ -228,7 +228,7 @@ redesign, or a risky change where a hand mock won't convince -- add
 "preview" tab, and open it with:
 
 ```bash
-for L in desktop mobile; do python3 system/scripts/layout.py open --layout "$L" <name>-preview; done
+python3 system/scripts/layout.py open <name>-preview
 ```
 
 That is the same machinery the system-interface flow uses. Use judgment on when

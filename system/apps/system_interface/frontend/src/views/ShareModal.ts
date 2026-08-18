@@ -9,6 +9,7 @@
  */
 
 import m from "mithril";
+import { hoverTooltipAttrs } from "./hoverTooltip";
 
 interface ShareModalAttrs {
   serviceName: string;
@@ -29,7 +30,7 @@ export const ShareModal: m.Component<ShareModalAttrs> = {
         m("div.share-modal", [
           m("div.share-modal-header", [
             m("h3.share-modal-title", `Share "${serviceName}"`),
-            m("button.share-modal-close-x", { onclick: onClose, title: "Close" }, "x"),
+            m("button.share-modal-close-x", { onclick: onClose, ...hoverTooltipAttrs("Close") }, "x"),
           ]),
           m("div", { style: "padding: 8px 0; color: #444; font-size: 14px; line-height: 1.5;" }, [
             m("p", { style: "margin: 0 0 12px 0;" }, [

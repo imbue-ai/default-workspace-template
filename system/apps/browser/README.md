@@ -14,9 +14,12 @@ agent, identified by its `MNGR_AGENT_ID`, or the human).
   and streamed to the viewer as live H.264 (pixelflux, damage-driven stripes) plus
   Opus audio (pcmflux) over a WebSocket, with XTEST input, resize, and clipboard back
   the other way (see `videopipe.py` / `audiopipe.py` / `mediastream.py`). Each browser
-  is addressed by a random ~2-word english NAME (e.g. `alex-smith`), generated on
-  demand and never reused; the fleet starts empty and there is no default
-  browser.
+  is addressed by NAME: daemon-minted ones are numbered `browser-<N>` (shown as
+  "Browser N" in the workspace UI -- the same display-name/canonical-name pairing
+  chats and minds hosts use), while browsers created by older builds keep their
+  random english names. Closing a browser retires its name and deletes its
+  profile, which is what frees the number for a later create; the fleet starts
+  empty and there is no default browser.
 - **Ownership** is one locked, compare-and-set state machine per browser. Agents
   never preempt each other -- a second agent waits in a FIFO queue
   (monitor-and-wait). The human can take control from the UI at any time, which
@@ -25,7 +28,7 @@ agent, identified by its `MNGR_AGENT_ID`, or the human).
   auto-released when idle); for `task` it is bound to the live request connection.
 - **CLI** (`agentic-browser-fleet`): the thin client the agent uses to drive the
   fleet. The fleet starts empty, so the first step is always `new` (it prints the
-  random name of the browser it started); every other command takes that
+  name of the browser it started); every other command takes that
   `<name>`. Primary path is **direct control** -- `state <name>` shows the page as
   a numbered list of clickable elements, then `open`/`click`/`input`/`scroll`/
   `keys`/`screenshot`/`tab` act on it (lifting browser-use's own executor against

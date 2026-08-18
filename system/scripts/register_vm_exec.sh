@@ -26,6 +26,9 @@ if ! curl -fsS --max-time 5 "$alive_url" >/dev/null 2>&1; then
     exit 0
 fi
 
+# --internal: vm-exec is an exec API with no page of its own, so it must not
+# be offered as an openable app in the launcher or the All apps popover.
 python3 "${REPO_ROOT}/system/scripts/forward_port.py" \
     --name vm-exec \
-    --url "http://${gateway}:${VM_EXEC_PORT}"
+    --url "http://${gateway}:${VM_EXEC_PORT}" \
+    --internal

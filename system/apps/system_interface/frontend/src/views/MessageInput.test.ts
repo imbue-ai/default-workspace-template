@@ -40,6 +40,7 @@ const mocks = vi.hoisted(() => {
   return {
     sendMessage: vi.fn(async () => {}),
     drainToComposer: vi.fn(async () => ({ block: "" })),
+    openAgentAuth: vi.fn(),
     listeners,
     agent,
   };
@@ -69,12 +70,42 @@ vi.mock("../models/ModelSettings", () => ({
   isPickInFlight: () => false,
   setModelChoice: vi.fn(),
 }));
-vi.mock("../models/HarnessCatalog", () => ({
-  ensureHarnessCatalogs: vi.fn(),
-  getHarnessCatalog: () => null,
-}));
+// The composer guard follows whatever popups the harness declared on its catalog,
+// so the mock ships a per-harness fixture mirroring the real declarations (the
+// matcher itself is reimplemented here minimally; the real one is covered by
+// HarnessCatalog.test.ts).
+vi.mock("../models/HarnessCatalog", () => {
+  const catalogs: Record<string, { popups: { trigger: string; commands: string[]; action: string }[] }> = {
+    claude: {
+      popups: [
+        { trigger: "composer_command", commands: ["/login", "/logout"], action: "open_auth" },
+        { trigger: "composer_command", commands: ["/status", "/exit"], action: "notice" },
+      ],
+    },
+    codex: {
+      popups: [
+        { trigger: "composer_command", commands: ["/login", "/logout"], action: "open_auth" },
+        { trigger: "composer_command", commands: ["/new", "/fast"], action: "notice" },
+      ],
+    },
+  };
+  const getHarnessCatalog = (harness?: string) => (harness ? (catalogs[harness] ?? null) : null);
+  return {
+    ensureHarnessCatalogs: vi.fn(async () => {}),
+    getHarnessCatalog,
+    findComposerPopup: (harness: string | undefined, text: string) => {
+      const firstToken = text.trim().toLowerCase().split(/\s+/, 1)[0] ?? "";
+      for (const popup of getHarnessCatalog(harness)?.popups ?? []) {
+        if (popup.trigger === "composer_command" && popup.commands.includes(firstToken)) {
+          return { popup, command: firstToken };
+        }
+      }
+      return null;
+    },
+  };
+});
 vi.mock("../models/AgentManager", () => ({ getAgentById: () => mocks.agent }));
-vi.mock("../models/ClaudeAuth", () => ({ openLoginModal: vi.fn() }));
+vi.mock("../models/AgentAuth", () => ({ openAgentAuth: mocks.openAgentAuth }));
 vi.mock("./icons", () => ({ icon: () => "", stopIcon: () => "" }));
 
 import { MessageInput } from "./MessageInput";
@@ -131,6 +162,7 @@ async function typeAndSend(component: m.Component<{ agentId: string | null }>, a
 describe("MessageInput send guard", () => {
   beforeEach(() => {
     mocks.sendMessage.mockClear();
+    mocks.openAgentAuth.mockClear();
     mocks.agent.harness = "claude";
     mocks.agent.activity_state = undefined;
     localStorage.clear();
@@ -194,19 +226,41 @@ describe("MessageInput send guard", () => {
     expect((mocks.listeners.get("keydown") ?? []).length).toBe(registered - 1);
   });
 
-  it("sends /status to a non-Claude agent instead of declining it", async () => {
-    // The declined-command list is a fact about Claude Code's terminal; for another
-    // harness /status is just text, so it goes through with no notice.
+  it("sends a command another harness never declared", async () => {
+    // /status is claude's declaration; codex declared its own list, and /status
+    // is not on it, so for a codex agent it goes through with no notice.
     mocks.agent.harness = "codex";
     const after = await typeAndSend(MessageInput(), "agent-1", "/status");
     expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "/status");
     expect(renderedText(after)).not.toContain("can't be sent from chat");
   });
 
-  it("sends /login to a non-Claude agent instead of opening the Claude auth modal", async () => {
+  it("declines the commands the other harness declared", async () => {
     mocks.agent.harness = "codex";
-    await typeAndSend(MessageInput(), "agent-1", "/login");
-    expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "/login");
+    const after = await typeAndSend(MessageInput(), "agent-1", "/new");
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+    expect(renderedText(after)).toContain("/new can't be sent from chat");
+  });
+
+  it("intercepts an auth command with the agent-auth notice, even with arguments", async () => {
+    const component = MessageInput();
+    // The argument form must intercept too: matched on the first token, so
+    // "/login please" cannot slip past the guard mid-fetch or mid-typo.
+    const after = await typeAndSend(component, "agent-1", "/login please");
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+    expect(renderedText(after)).toContain("Sign-in is managed here");
+
+    // "Open agent auth" routes through the per-harness dispatch.
+    const openButton = findByClass(after, "custom-url-dialog-open");
+    (openButton?.attrs?.onclick as (() => void) | undefined)?.();
+    expect(mocks.openAgentAuth).toHaveBeenCalledWith("agent-1");
+  });
+
+  it("intercepts auth commands for every harness that declared them", async () => {
+    mocks.agent.harness = "codex";
+    const after = await typeAndSend(MessageInput(), "agent-1", "/login");
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+    expect(renderedText(after)).toContain("Sign-in is managed here");
   });
 
   it("does not carry the notice over to another agent", async () => {

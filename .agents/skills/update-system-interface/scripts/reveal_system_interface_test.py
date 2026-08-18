@@ -13,7 +13,9 @@ never regress, because a broken backend takes down the user's whole UI.
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Sequence
@@ -49,14 +51,22 @@ class _RecordingRunner(reveal_mod.Runner):
     """
 
     calls: list[list[str]] = field(default_factory=list)
+    envs: list[dict | None] = field(default_factory=list)
+    # What each executable resolves to on PATH; absent means "not installed",
+    # which is also the default so tests never reach the real machine's PATH.
+    executables: dict[str, str] = field(default_factory=dict)
     _responses: dict[tuple[str, ...], object] = field(default_factory=dict)
 
     def respond(self, prefix: tuple[str, ...], result: object) -> None:
         self._responses[prefix] = result
 
+    def which(self, executable: str) -> str | None:
+        return self.executables.get(executable)
+
     def run(self, argv: Sequence[str], **kwargs) -> _Result:
         argv_list = list(argv)
         self.calls.append(argv_list)
+        self.envs.append(kwargs.get("env"))
         for prefix, result in self._responses.items():
             if tuple(argv_list[: len(prefix)]) == prefix:
                 if isinstance(result, list):
@@ -90,22 +100,39 @@ class _FakeHttp(reveal_mod.HttpClient):
 
 @dataclass
 class _FakeSpawned:
+    output: str = ""
+    exited: bool = False
     terminated: bool = False
 
     def terminate(self) -> None:
         self.terminated = True
 
+    def has_exited(self) -> bool:
+        return self.exited
+
+    def read_output(self) -> str:
+        return self.output
+
 
 @dataclass
 class _FakeSpawner(reveal_mod.Spawner):
-    """Records the pre-flight throwaway boot ``reveal`` runs before a live restart."""
+    """Records the pre-flight throwaway boot ``reveal`` runs before a live restart.
 
+    ``output`` is what the throwaway backend "wrote" while failing to boot.
+    """
+
+    output: str = ""
+    exited: bool = False
     spawns: list[list[str]] = field(default_factory=list)
+    output_paths: list[Path] = field(default_factory=list)
     last: _FakeSpawned | None = None
 
-    def spawn(self, argv: Sequence[str], cwd: str, env: dict) -> _FakeSpawned:
+    def spawn(
+        self, argv: Sequence[str], cwd: str, env: dict, output_path: Path
+    ) -> _FakeSpawned:
         self.spawns.append(list(argv))
-        self.last = _FakeSpawned()
+        self.output_paths.append(output_path)
+        self.last = _FakeSpawned(output=self.output, exited=self.exited)
         return self.last
 
 
@@ -173,6 +200,47 @@ def test_classify_distinguishes_all_four_kinds() -> None:
 def test_classify_treats_root_uv_lock_as_backend_manifest() -> None:
     changes = reveal_mod.classify_changes(["uv.lock"])
     assert changes.backend_manifest and changes.backend and not changes.frontend
+
+
+def test_classify_treats_a_vendored_manifest_as_a_backend_manifest() -> None:
+    # The change that actually ships in a release. Every "system/vendor/mngr:
+    # refresh" commit in this repo's history leaves uv.lock untouched, so keying
+    # the dependency refresh only off the lock would never fire on the merge that
+    # moves the vendored mngr -- which is exactly the one that stales the editable
+    # tool's dependency closure and breaks the mngr CLI.
+    changes = reveal_mod.classify_changes(
+        ["system/vendor/mngr/libs/mngr/pyproject.toml"]
+    )
+    assert changes.backend_manifest and changes.backend
+
+
+def test_classify_treats_the_root_manifest_as_a_backend_manifest() -> None:
+    # It holds the [tool.uv.sources] the tool installs resolve through.
+    assert reveal_mod.classify_changes(["pyproject.toml"]).backend_manifest
+
+
+def test_classify_treats_the_vendored_workspace_root_as_a_backend_manifest() -> None:
+    # `uv tool install -e system/vendor/mngr/libs/mngr` walks up to this file to
+    # find the workspace that package belongs to, so it -- not the repo root --
+    # supplies the sources for imbue-common and overlay (which libs/mngr pins
+    # exactly and which resolve nowhere else), the exclude-newer cooldown mngr
+    # advances before each release, and the dependency overrides. Vendor syncs
+    # move it without necessarily touching any libs/*/pyproject.toml.
+    assert reveal_mod.classify_changes(
+        ["system/vendor/mngr/pyproject.toml"]
+    ).backend_manifest
+
+
+def test_classify_ignores_vendored_source_and_nested_paths() -> None:
+    # Source edits do not move the dependency closure, and a manifest deeper in
+    # the tree is not one of the vendored packages we install from.
+    changes = reveal_mod.classify_changes(
+        [
+            "system/vendor/mngr/libs/mngr/imbue/mngr/main.py",
+            "system/vendor/mngr/libs/mngr/imbue/mngr/pyproject.toml",
+        ]
+    )
+    assert not changes.any
 
 
 def test_classify_ignores_backend_test_files() -> None:
@@ -303,14 +371,14 @@ def test_backend_with_manifest_refreshes_preflights_restarts_and_probes() -> Non
     code = _reveal(runner, http, spawner)
 
     assert code == 0
-    assert runner.argvs_starting("uv", "tool", "install")[0] == [
-        "uv",
-        "tool",
-        "install",
-        "-e",
-        "system/apps/system_interface",
-        "--reinstall",
+    # Every environment the served backend can be started from gets rebuilt, in
+    # build_workspace.sh's order: the vendored mngr the backend shells out to,
+    # the backend's own tool, then the workspace venv.
+    assert runner.argvs_starting("uv", "tool", "install") == [
+        ["uv", "tool", "install", "-e", "system/vendor/mngr/libs/mngr", "--reinstall"],
+        ["uv", "tool", "install", "-e", "system/apps/system_interface", "--reinstall"],
     ]
+    assert runner.ran("uv", "sync", "--all-packages", "--frozen")
     assert spawner.spawns and spawner.spawns[0] == [
         reveal_mod.TOOL_NAME
     ]  # pre-flight booted
@@ -372,6 +440,321 @@ def test_failed_preflight_never_restarts_live_service_and_rolls_back() -> None:
     assert not runner.ran("git", "checkout", _ROLLBACK)
 
 
+def _with_receipt(
+    runner: _RecordingRunner, tool_dir: Path, tool: str, body: str
+) -> None:
+    """Point ``uv tool dir`` at ``tool_dir`` and give ``tool`` a receipt there."""
+    runner.respond(("uv", "tool", "dir"), _Result(stdout=f"{tool_dir}\n"))
+    (tool_dir / tool).mkdir(parents=True, exist_ok=True)
+    (tool_dir / tool / "uv-receipt.toml").write_text(body)
+
+
+def test_dependency_refresh_preserves_a_tools_registered_plugins(
+    tmp_path: Path,
+) -> None:
+    # A bare --reinstall rebuilds a tool from its base package alone. For the mngr
+    # tool the extras ARE its plugins, so dropping them leaves a CLI that cannot
+    # parse its own plugin config -- swapping one broken workspace for another.
+    runner = _runner_with_diff("M\tuv.lock\n")
+    _with_receipt(
+        runner,
+        tmp_path / "tools",
+        "imbue-mngr",
+        """
+        [tool]
+        requirements = [
+            { name = "imbue-mngr", editable = "/repo/system/vendor/mngr/libs/mngr" },
+            { name = "imbue-mngr-claude", editable = "/repo/system/vendor/mngr/libs/mngr_claude" },
+            { name = "imbue-mngr-wait", editable = "/repo/system/vendor/mngr/libs/mngr_wait" },
+        ]
+        """,
+    )
+
+    _reveal(runner, _FakeHttp(_all_healthy), _FakeSpawner())
+
+    assert runner.argvs_starting("uv", "tool", "install")[0] == [
+        "uv",
+        "tool",
+        "install",
+        "-e",
+        "system/vendor/mngr/libs/mngr",
+        "--with-editable",
+        "/repo/system/vendor/mngr/libs/mngr_claude",
+        "--with-editable",
+        "/repo/system/vendor/mngr/libs/mngr_wait",
+        "--reinstall",
+    ]
+
+
+def test_dependency_refresh_repins_the_base_to_the_in_tree_source(
+    tmp_path: Path,
+) -> None:
+    # A receipt that has lost its editable marker (observed in the wild) must not
+    # make us resolve the base from the index -- that would silently swap the
+    # workspace's own vendored code for a published release.
+    runner = _runner_with_diff("M\tuv.lock\n")
+    _with_receipt(
+        runner,
+        tmp_path / "tools",
+        "imbue-mngr",
+        '[tool]\nrequirements = [{ name = "imbue-mngr" }]\n',
+    )
+
+    _reveal(runner, _FakeHttp(_all_healthy), _FakeSpawner())
+
+    install = runner.argvs_starting("uv", "tool", "install")[0]
+    assert install == [
+        "uv",
+        "tool",
+        "install",
+        "-e",
+        "system/vendor/mngr/libs/mngr",
+        "--reinstall",
+    ]
+
+
+def test_tool_location_comes_from_the_console_scripts_shebang(tmp_path: Path) -> None:
+    # uv's default tool directory follows $HOME, and the workspace runs under a
+    # different $HOME than build_workspace.sh installed with -- so defaulting
+    # rebuilds a shadow copy nothing on PATH runs, and the stale tool everyone
+    # actually executes is reported as successfully refreshed. The console script
+    # names its own environment, so we take the answer from there.
+    bin_dir = tmp_path / "root" / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    tools = tmp_path / "root" / ".local" / "share" / "uv" / "tools"
+    script = bin_dir / "mngr"
+    script.write_text(
+        f"#!{tools}/imbue-mngr/bin/python3\n# -*- coding: utf-8 -*-\nimport sys\n"
+    )
+
+    (tools / "imbue-mngr").mkdir(parents=True)
+    (tools / "imbue-mngr" / "uv-receipt.toml").write_text("[tool]\nrequirements = []\n")
+
+    location = reveal_mod._tool_location(script, "imbue-mngr")
+
+    assert location == (
+        tmp_path / "root" / ".local" / "share" / "uv" / "tools",
+        bin_dir,
+    )
+
+
+@pytest.mark.parametrize(
+    "contents",
+    [
+        "import sys\n",  # no shebang at all
+        "#!\n",  # shebang with no interpreter
+        "#!/python3\n",  # too shallow to name a tool directory
+    ],
+)
+def test_tool_location_declines_what_it_cannot_read(
+    contents: str, tmp_path: Path
+) -> None:
+    # Anything we cannot interpret means we do not know which installation this
+    # is, and the caller falls back to letting uv decide -- guessing a directory
+    # would be worse than uv's own default.
+    script = tmp_path / "mngr"
+    script.write_text(contents)
+
+    assert reveal_mod._tool_location(script, "imbue-mngr") is None
+
+
+def test_tool_location_declines_the_workspace_venvs_console_script(
+    tmp_path: Path,
+) -> None:
+    # Both names are also uv sync members, so PATH can resolve to the venv's own
+    # entrypoint. Deriving a "tool directory" from that would build a tool
+    # environment inside the served checkout -- dirtying the tree the next reveal
+    # refuses to run on, and overwriting the venv's entrypoint. No receipt, no deal.
+    venv_bin = tmp_path / "workspace" / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    script = venv_bin / "system-interface"
+    script.write_text(f"#!{venv_bin}/python3\nimport sys\n")
+
+    assert reveal_mod._tool_location(script, "system-interface") is None
+
+
+def test_tool_location_declines_a_script_it_cannot_open(tmp_path: Path) -> None:
+    assert reveal_mod._tool_location(tmp_path / "does-not-exist", "imbue-mngr") is None
+
+
+def test_dependency_refresh_targets_the_installation_actually_on_path(
+    tmp_path: Path,
+) -> None:
+    # The whole point: uv would otherwise default to a tool directory under
+    # $HOME, rebuild a copy there, and report success while the tool that is
+    # really being run stays stale.
+    bin_dir = tmp_path / "root" / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    tools = tmp_path / "root" / ".local" / "share" / "uv" / "tools"
+    (bin_dir / "mngr").write_text(f"#!{tools}/imbue-mngr/bin/python3\nimport sys\n")
+    (tools / "imbue-mngr").mkdir(parents=True)
+    (tools / "imbue-mngr" / "uv-receipt.toml").write_text("[tool]\nrequirements = []\n")
+    runner = _runner_with_diff("M\tuv.lock\n")
+    runner.executables["mngr"] = str(bin_dir / "mngr")
+
+    _reveal(runner, _FakeHttp(_all_healthy), _FakeSpawner())
+
+    install_env = next(
+        env
+        for argv, env in zip(runner.calls, runner.envs)
+        if argv[:4] == ["uv", "tool", "install", "-e"]
+        and argv[4] == "system/vendor/mngr/libs/mngr"
+    )
+    assert install_env is not None
+    assert install_env["UV_TOOL_DIR"] == str(tools)
+    assert install_env["UV_TOOL_BIN_DIR"] == str(bin_dir)
+
+
+def test_dependency_refresh_survives_a_tool_with_no_receipt() -> None:
+    # No readable receipt means the tool is not installed (or predates receipts);
+    # the refresh must still run as the plain install it would otherwise be.
+    runner = _runner_with_diff("M\tuv.lock\n")
+    runner.respond(("uv", "tool", "dir"), _Result(returncode=1, stdout=""))
+
+    code = _reveal(runner, _FakeHttp(_all_healthy), _FakeSpawner())
+
+    assert code == 0
+    assert len(runner.argvs_starting("uv", "tool", "install")) == 2
+
+
+def test_dependency_refresh_reports_a_receipt_it_cannot_read(
+    tmp_path: Path, capsys
+) -> None:
+    # A receipt that is present but garbled is not the fresh-install case: we had
+    # a tool and lost the record of what it was installed with, so the reinstall
+    # below rebuilds it without its plugins. Degrading silently would hand back
+    # exactly the plugin-less CLI this refresh exists to prevent, and report
+    # success while doing it.
+    runner = _runner_with_diff("M\tuv.lock\n")
+    _with_receipt(runner, tmp_path / "tools", "imbue-mngr", "[tool]\nrequirements = [")
+
+    code = _reveal(runner, _FakeHttp(_all_healthy), _FakeSpawner())
+
+    assert code == 0
+    assert runner.argvs_starting("uv", "tool", "install")[0] == [
+        "uv",
+        "tool",
+        "install",
+        "-e",
+        "system/vendor/mngr/libs/mngr",
+        "--reinstall",
+    ]
+    reported = capsys.readouterr().err
+    assert "imbue-mngr" in reported and "drops any plugins" in reported
+
+
+def test_failed_preflight_reports_why_the_backend_did_not_boot(capsys) -> None:
+    # The whole point of the pre-flight is that the merged code never reaches the
+    # live service -- so its output is the only evidence of *why* it was rejected.
+    # Without it a reveal exit 2 is indistinguishable from a slow boot, and whoever
+    # picks it up diagnoses a cause they cannot see.
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/imbue/system_interface/server.py\n"
+    )
+    spawner = _FakeSpawner(
+        output=(
+            "starting up\nDEBUG loading agents\nTraceback (most recent call last):\n"
+            "ModuleNotFoundError: No module named 'frontmatter'\n"
+        )
+    )
+
+    code = _reveal(
+        runner, _FakeHttp(lambda url: 200 if _is_live(url) else None), spawner
+    )
+
+    assert code == 2
+    reported = capsys.readouterr().err
+    # stderr gets all of it -- whoever ran the reveal is looking right now.
+    assert "ModuleNotFoundError: No module named 'frontmatter'" in reported
+    assert "DEBUG loading agents" in reported
+    # The rollback commit carries the cause, so the reason survives in git history
+    # after the terminal that ran the reveal is gone -- but only the line that
+    # names it. A commit body is read by everyone who ever looks at this file's
+    # history, and a backend's startup log is a poor thing to write into git.
+    commits = runner.argvs_starting("git", "commit")
+    message = next(arg for arg in commits[0] if "auto-reverted" in arg)
+    assert "ModuleNotFoundError: No module named 'frontmatter'" in message
+    assert "DEBUG loading agents" not in message
+    assert "starting up" not in message
+
+
+def test_failed_preflight_that_produced_no_output_says_so(capsys) -> None:
+    # A silent failure is itself a finding (the tool never got far enough to log),
+    # and must not read as "the output was dropped again".
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/imbue/system_interface/server.py\n"
+    )
+
+    _reveal(
+        runner, _FakeHttp(lambda url: 200 if _is_live(url) else None), _FakeSpawner()
+    )
+
+    assert "wrote nothing at all" in capsys.readouterr().err
+
+
+def test_preflight_output_is_tailed_to_the_interesting_end() -> None:
+    # A backend that logs its way to a crash would otherwise bury the traceback
+    # under startup chatter, so we keep the end and say what was dropped.
+    limit = reveal_mod._PREFLIGHT_OUTPUT_TAIL_LINES
+    tailed = reveal_mod._tail(
+        "\n".join([f"chatter {i}" for i in range(limit + 10)] + ["the actual error"]),
+        limit,
+    )
+
+    assert tailed.splitlines()[-1] == "the actual error"
+    assert len(tailed.splitlines()) == limit + 1  # the omission notice
+    assert "11 earlier line(s) omitted" in tailed
+    assert "chatter 0" not in tailed
+
+
+def test_spawner_captures_both_streams_of_a_real_child(tmp_path: Path) -> None:
+    # The capture has to survive a real Popen: stderr is redirected onto stdout's
+    # file, and the parent closes its handle while the child keeps writing. Models
+    # the case that matters -- a backend that dies on import, whose traceback is
+    # the whole reason the pre-flight rejected the merge.
+    output_path = tmp_path / "boot.log"
+    spawned = reveal_mod.Spawner().spawn(
+        [
+            sys.executable,
+            "-c",
+            "import sys; print('on stdout'); print('on stderr', file=sys.stderr)",
+        ],
+        cwd=str(tmp_path),
+        env=dict(os.environ),
+        output_path=output_path,
+    )
+    for _ in range(500):
+        if spawned.has_exited():
+            break
+        time.sleep(0.01)
+    assert spawned.has_exited()
+    spawned.terminate()
+
+    captured = spawned.read_output()
+    assert "on stdout" in captured
+    assert "on stderr" in captured
+
+
+def test_preflight_stops_polling_once_the_backend_has_died() -> None:
+    # A backend that died on import will not become healthy, so the reveal must
+    # not sit out the rest of the deadline before rolling back.
+    probes: list[str] = []
+
+    def _record(url: str) -> int | None:
+        probes.append(url)
+        return 200 if _is_live(url) else None
+
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/imbue/system_interface/server.py\n"
+    )
+
+    code = _reveal(runner, _FakeHttp(_record), _FakeSpawner(exited=True))
+
+    assert code == 2
+    # One pre-flight probe, not _PREFLIGHT_ATTEMPTS of them.
+    assert len([u for u in probes if not _is_live(u)]) == 1
+
+
 def test_failed_preflight_with_manifest_refreshes_deps_but_does_not_restart() -> None:
     # A backend manifest change whose merged code fails pre-flight. Recovery must
     # still reinstall deps back to known-good (to fix the on-disk venv) but must
@@ -385,9 +768,12 @@ def test_failed_preflight_with_manifest_refreshes_deps_but_does_not_restart() ->
 
     assert code == 2
     assert not runner.ran("mngr", "start")  # untouched live service is not restarted
-    # uv tool install ran twice: once in the failed reveal, once in recovery to
-    # restore the known-good dependency set on disk.
-    assert len(runner.argvs_starting("uv", "tool", "install")) == 2
+    # Both tools are rebuilt twice: once in the failed reveal, once in recovery to
+    # restore the known-good dependency set on disk. Recovery has to cover the mngr
+    # tool too -- the rollback moves the vendored source back, which stales its
+    # closure exactly as the merge did.
+    assert len(runner.argvs_starting("uv", "tool", "install")) == 4
+    assert len(runner.argvs_starting("uv", "sync", "--all-packages", "--frozen")) == 2
 
 
 def test_failed_post_restart_health_triggers_rollback_then_recovers() -> None:
