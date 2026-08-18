@@ -90,7 +90,7 @@ browser morgan-lee: human (took control) -- 1 tab(s), active: https://bank.examp
       [1]  Dashboard           https://example.com/home
   ```
 
-- `new` starts a browser with a random name and prints it (`-> started browser browser-1`). Pass `new <name>` to choose the name yourself (e.g. `new my-browser`); a **duplicate** name is rejected (pick another -- note a *crashed* browser still holds its name until you `close` it), and an invalid name (anything other than lowercase letters/digits joined by single dashes) is rejected too. `new` returns the name **immediately**; the browser's Chromium launches in the background (serialized, so back-to-back `new`s come up one at a time). If your very next command lands while it's still launching it returns `still starting up (Chromium is launching) -- try again in a few seconds` (exit 3) -- just wait a moment and retry the same command; it is **not** an error.
+- `new` starts a browser, minting the first free `browser-<N>` name, and prints it (`-> started browser browser-1`). Pass `new <name>` to choose the name yourself (e.g. `new my-browser`); a **duplicate** name is rejected (pick another -- note a *crashed* browser still holds its name until you `close` it), and an invalid name (anything other than lowercase letters/digits joined by single dashes) is rejected too. `new` returns the name **immediately**; the browser's Chromium launches in the background (serialized, so back-to-back `new`s come up one at a time). If your very next command lands while it's still launching it returns `still starting up (Chromium is launching) -- try again in a few seconds` (exit 3) -- just wait a moment and retry the same command; it is **not** an error.
 - `close <name>` closes an entire browser (all its tabs) and retires its name (never reused). Use when permanently done with a browser. For a single tab, use `tab <name> close`.
 - The fleet is **capped (2 by default)**. `new` past the cap returns `2/2 browsers open -- close one first` -- `release` or `close` one you're done with first.
 - If there are no browsers yet, `ls` says so. There is **no default browser**: run `new` first (it prints a name), then drive by that name.
@@ -248,9 +248,9 @@ uv run agentic-browser-fleet state browser-1
 
 # Two browsers, independently (no queueing -- different names).
 uv run agentic-browser-fleet new                          # -> started browser browser-1
-uv run agentic-browser-fleet new                          # -> started browser riley-jones
+uv run agentic-browser-fleet new                          # -> started browser browser-2
 uv run agentic-browser-fleet open browser-1 https://site-a.com
-uv run agentic-browser-fleet open riley-jones https://site-b.com
+uv run agentic-browser-fleet open browser-2 https://site-b.com
 
 # Hit a CAPTCHA -- hand it to the user, then STOP.
 uv run agentic-browser-fleet handoff browser-1 "solve the CAPTCHA on the sign-in page"
