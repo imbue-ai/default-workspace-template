@@ -8,7 +8,6 @@ from imbue.system_interface.projects import DEFAULT_PROJECT_COLOR
 from imbue.system_interface.projects import EVERYTHING_VIEW_ID
 from imbue.system_interface.projects import DEFAULT_PROJECT_ID
 from imbue.system_interface.projects import DEFAULT_PROJECT_NAME
-from imbue.system_interface.projects import LastProjectDeletionError
 from imbue.system_interface.projects import ProjectColorError
 from imbue.system_interface.projects import ProjectConflictError
 from imbue.system_interface.projects import ProjectGlyphError
@@ -243,10 +242,50 @@ def test_delete_project_unfiles_its_members(tmp_path: Path) -> None:
     assert projects_showing(tmp_path, "service:notes") == [DEFAULT_PROJECT_ID]
 
 
-def test_deleting_the_last_project_raises(tmp_path: Path) -> None:
-    with pytest.raises(LastProjectDeletionError):
+def test_deleting_the_last_project_leaves_the_machine_with_none(tmp_path: Path) -> None:
+    # Delete is a pure view operation now, so there is no undeletable project:
+    # a machine may end up with zero of them, with Everything as the fallback.
+    fallback_id = delete_project(tmp_path, DEFAULT_PROJECT_ID)
+
+    assert fallback_id == EVERYTHING_VIEW_ID
+    assert list_projects(tmp_path) == []
+    assert get_last_active_id(tmp_path) == EVERYTHING_VIEW_ID
+    # Reading again does not resurrect the starter project: an empty registry
+    # is a legitimate, persistent state rather than something to reseed.
+    assert list_projects(tmp_path) == []
+    with pytest.raises(ProjectNotFoundError):
         delete_project(tmp_path, DEFAULT_PROJECT_ID)
-    assert [info.project_id for info in list_projects(tmp_path)] == [DEFAULT_PROJECT_ID]
+
+
+def test_everything_still_works_with_zero_projects(tmp_path: Path) -> None:
+    # Everything has no registry entry, so it never depended on a project
+    # existing; deleting every project must not take it down too.
+    write_project_content(tmp_path, EVERYTHING_VIEW_ID, {"dockview": {}, "panelParams": {}})
+    delete_project(tmp_path, DEFAULT_PROJECT_ID)
+
+    assert read_project_content(tmp_path, EVERYTHING_VIEW_ID) == {"dockview": {}, "panelParams": {}}
+    write_project_content(tmp_path, EVERYTHING_VIEW_ID, {"dockview": {"grid": {}}, "panelParams": {}})
+    assert read_project_content(tmp_path, EVERYTHING_VIEW_ID) == {"dockview": {"grid": {}}, "panelParams": {}}
+
+
+def test_deleting_a_project_never_touches_other_projects_or_everything(tmp_path: Path) -> None:
+    # A pure view operation: the deleted project's own member list and content
+    # go, and nothing about any other view -- not a member list, not a saved
+    # arrangement -- moves.
+    create_project(tmp_path, "Scratch", "#3B82F6", 3)
+    add_member(tmp_path, "scratch", "terminal:terminal-4")
+    add_member(tmp_path, DEFAULT_PROJECT_ID, "terminal:terminal-4")
+    write_project_content(tmp_path, EVERYTHING_VIEW_ID, _content_with_panels("terminal-session-terminal-4"))
+
+    delete_project(tmp_path, "scratch")
+
+    # The surviving project keeps the member the deleted one also showed.
+    assert list_members(tmp_path, DEFAULT_PROJECT_ID) == ["terminal:terminal-4"]
+    assert projects_showing(tmp_path, "terminal:terminal-4") == [DEFAULT_PROJECT_ID]
+    # Everything's saved arrangement is untouched: nothing was destroyed.
+    assert content_contains_panel(
+        read_project_content(tmp_path, EVERYTHING_VIEW_ID) or {}, "terminal-session-terminal-4"
+    )
 
 
 def test_set_last_active_ignores_unknown_id(tmp_path: Path) -> None:
@@ -310,12 +349,14 @@ def test_corrupt_meta_recovers_to_defaults(tmp_path: Path) -> None:
     assert get_last_active_id(tmp_path) == DEFAULT_PROJECT_ID
 
 
-def test_registry_with_no_projects_recovers_to_defaults(tmp_path: Path) -> None:
-    # Nothing is undeletable any more, so an externally emptied registry has to
-    # reseed rather than leave the workspace with no project to fall back to.
+def test_registry_with_no_projects_is_read_as_is(tmp_path: Path) -> None:
+    # Deleting is a pure view operation with no undeletable project any more, so
+    # an on-disk registry holding zero of them is a legitimate state -- reached
+    # by deleting down to none -- and must not be reseeded back to the starter
+    # project on the next read.
     (tmp_path / "projects_meta.json").write_text('{"project_by_id": {}, "last_active_id": "gone"}')
-    assert [info.project_id for info in list_projects(tmp_path)] == [DEFAULT_PROJECT_ID]
-    assert get_last_active_id(tmp_path) == DEFAULT_PROJECT_ID
+    assert list_projects(tmp_path) == []
+    assert get_last_active_id(tmp_path) == EVERYTHING_VIEW_ID
 
 
 def test_corrupt_content_reads_as_empty(tmp_path: Path) -> None:
