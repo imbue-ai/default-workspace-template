@@ -153,12 +153,12 @@ export async function updateProjectSettings(
   return (await response.json()) as ProjectInfo;
 }
 
-/** Delete a project. Stopping the services behind its members is the server's
- *  half of this, and the confirmation that precedes it is the caller's, so by
- *  the time this is called the user has already seen what goes away. Throws
- *  with the server's detail on rejection (unknown project, or the last
- *  remaining project, which may not be deleted -- the dock always needs a real
- *  project behind it). */
+/** Delete a project. This is a pure view operation: only the project's
+ *  registry entry, member list and saved content go, and the server never
+ *  touches the objects it showed -- they keep running, and stay in Everything
+ *  and in any other project already showing them. A machine may end up with
+ *  zero projects; Everything is always there. Throws with the server's detail
+ *  on rejection (unknown project). */
 export async function deleteProjectRequest(projectId: string): Promise<void> {
   const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(projectId)}/delete`), { method: "POST" });
   if (!response.ok) {
@@ -268,8 +268,14 @@ export async function fetchMemberMap(): Promise<Record<string, string[]>> {
 
 /**
  * Pick the view a client should mount on: its stored per-browser choice when
- * that view still exists, else the first project. Null only when no projects
- * exist at all, which means the registry could not be read.
+ * that view still exists, else the first project, else Everything.
+ *
+ * A machine may genuinely have zero projects now that deleting one is a pure
+ * view operation with no undeletable project left, and a registry that could
+ * not be read (server unreachable) looks the same as one holding none --
+ * either way Everything is always there to land on. This keeps its nullable
+ * return type for callers written against it, but no longer actually returns
+ * null.
  *
  * A client last looking at Everything lands back on Everything: it is the home
  * and has a layout of its own, so there is nothing to fall back from.
@@ -278,7 +284,7 @@ export function chooseInitialViewId(projects: readonly ProjectInfo[], storedId: 
   if (isEverythingView(storedId)) return EVERYTHING_VIEW_ID;
   const stored = projects.find((project) => project.project_id === storedId);
   if (stored) return stored.project_id;
-  return projects.length === 0 ? null : projects[0].project_id;
+  return projects.length === 0 ? EVERYTHING_VIEW_ID : projects[0].project_id;
 }
 
 /**
@@ -365,6 +371,22 @@ export function memberRef(kind: MemberKind, name: string): string {
   }
 }
 
+/** The stable agent id out of a `chat:<agent-id>` ref, or null for a ref that
+ *  addresses no chat. The inverse of `memberRef("chat", id)`. */
+export function chatAgentIdFromRef(ref: string): string | null {
+  if (!ref.startsWith(CHAT_REF_PREFIX)) return null;
+  const id = ref.substring(CHAT_REF_PREFIX.length);
+  return id === "" ? null : id;
+}
+
+/** The tmux session name out of a `terminal:<name>` ref, or null for a ref
+ *  that addresses no terminal. The inverse of `memberRef("terminal", name)`. */
+export function terminalSessionFromRef(ref: string): string | null {
+  if (!ref.startsWith(TERMINAL_REF_PREFIX)) return null;
+  const name = ref.substring(TERMINAL_REF_PREFIX.length);
+  return name === "" ? null : name;
+}
+
 /**
  * The service name a `service:<name>` ref addresses, or null for a ref that
  * addresses no service.
@@ -381,6 +403,22 @@ export function serviceNameFromRef(ref: string): string | null {
   const name = ref.substring(SERVICE_REF_PREFIX.length);
   if (name === "" || name.includes("?")) return null;
   return name;
+}
+
+/**
+ * The fleet browser's own session name out of a `service:browser?session=<id>`
+ * ref, or null for a ref that addresses no fleet browser.
+ *
+ * The counterpart to `serviceNameFromRef`, which deliberately refuses this same
+ * ref shape: an installed app has no `?session=` suffix, and a fleet browser
+ * has one, so the two calls together are how a caller tells the two `service:`
+ * shapes apart. `memberRef("browser", name)` is the inverse.
+ */
+export function browserSessionFromRef(ref: string): string | null {
+  const prefix = memberRef("browser", "");
+  if (!ref.startsWith(prefix)) return null;
+  const session = ref.substring(prefix.length);
+  return session === "" ? null : session;
 }
 
 /** One object as the machine reports it, before it becomes a row: the name its
