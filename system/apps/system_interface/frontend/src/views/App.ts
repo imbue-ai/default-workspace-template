@@ -5,11 +5,13 @@ import {
   getActiveViewId,
   getAvailableProjects,
   getSidebarRows,
+  hideMemberRowTab,
   openAppTab,
   openMemberRow,
   openTabOfType,
+  refreshMemberRow,
   refreshProjects,
-  removeMemberRow,
+  renameMemberRowWithAlert,
   setAppPinnedInView,
   shareMemberRow,
   startProjectChat,
@@ -80,8 +82,14 @@ export function App(): m.Component {
               onOpenRow: (row: SidebarTabRow) => {
                 openMemberRow(row);
               },
-              onRemoveFromView: (row: SidebarTabRow) => {
-                removeMemberRow(row);
+              onRefreshRow: (row: SidebarTabRow) => {
+                refreshMemberRow(row);
+              },
+              onRenameRow: (row: SidebarTabRow, title: string) => {
+                renameMemberRowWithAlert(row, title);
+              },
+              onHideRowTab: (row: SidebarTabRow) => {
+                hideMemberRowTab(row);
               },
               onShareApp: (row: SidebarTabRow) => {
                 shareMemberRow(row);

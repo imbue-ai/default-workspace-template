@@ -18,7 +18,7 @@ vi.mock("../models/AgentManager", () => ({
 }));
 
 import type { AppEntry } from "../models/AgentManager";
-import { AllAppsPicker, filterApps, partitionAppsByPin, pickableApps } from "./AllAppsPicker";
+import { AllAppsPicker, filterApps, pickableApps, unpinnedApps } from "./AllAppsPicker";
 
 // Deliberately unsorted, and deliberately including the chrome UI plus the two
 // fleet services, all three of which the popover hides.
@@ -160,56 +160,42 @@ describe("filterApps", () => {
   });
 });
 
-describe("partitionAppsByPin", () => {
-  it("splits the project's pinned apps from the rest of the machine", () => {
-    const split = partitionAppsByPin(APPS, ["docs", "redis"]);
-    expect(split.pinned.map((app) => app.name)).toEqual(["docs", "redis"]);
-    expect(split.unpinned.map((app) => app.name)).toContain("grafana");
-    expect(split.unpinned.map((app) => app.name)).not.toContain("docs");
+describe("unpinnedApps", () => {
+  it("excludes the project's pinned apps from the rest of the machine", () => {
+    const rest = unpinnedApps(APPS, ["docs", "redis"]).map((app) => app.name);
+    expect(rest).toContain("grafana");
+    expect(rest).not.toContain("docs");
+    expect(rest).not.toContain("redis");
   });
 
-  it("keeps the pinned group in member order rather than the machine's", () => {
-    const split = partitionAppsByPin(APPS, ["redis", "docs"]);
-    expect(split.pinned.map((app) => app.name)).toEqual(["redis", "docs"]);
+  it("ignores a pinned name the machine no longer offers", () => {
+    // A member left behind by an app that has since been unregistered: it
+    // addresses nothing in `apps`, so excluding it is a no-op rather than an
+    // error.
+    const rest = unpinnedApps(APPS, ["docs", "gone"]).map((app) => app.name);
+    expect(rest).not.toContain("docs");
+    expect(rest).toContain("grafana");
   });
 
-  it("drops a pinned name the machine no longer offers", () => {
-    // A member left behind by an app that has since been unregistered.
-    const split = partitionAppsByPin(APPS, ["docs", "gone"]);
-    expect(split.pinned.map((app) => app.name)).toEqual(["docs"]);
-  });
-
-  it("leaves every app unpinned when the view pins nothing", () => {
+  it("excludes nothing when the view pins nothing", () => {
     // Everything's case: the unfiltered view holds no members at all.
-    const split = partitionAppsByPin(APPS, []);
-    expect(split.pinned).toEqual([]);
-    expect(split.unpinned).toEqual([...APPS]);
+    expect(unpinnedApps(APPS, [])).toEqual([...APPS]);
   });
 });
 
 describe("AllAppsPicker", () => {
-  it("renders one row per app, under the two pin headings", () => {
+  it("excludes apps already pinned in the project, rather than heading them off", () => {
+    // Pinned apps already have a row in the rail's own shortcuts -- see the
+    // module docstring -- so this popover is for the other apps only. There is
+    // no second group or heading left to hold them.
     appState.apps = APPS;
-    const tree = render({ pinnedAppNames: ["docs"] });
-    expect(rowsOf(tree).length).toBe(7);
-    expect(texts(tree)).toContain("Pinned in Newsreader");
-    expect(texts(tree)).toContain("Unpinned");
-  });
-
-  it("clips a long project name in the pinned heading instead of wrapping it", () => {
-    // The popover is a fixed 240px card, and a project name is user-chosen
-    // free text -- nothing bounds its length. Clipped via truncate/title
-    // rather than a hand-picked character count, so it still tracks actual
-    // rendered width rather than an arbitrary string length.
-    appState.apps = APPS;
-    const longName = "A Very Long Project Name That Would Otherwise Wrap Onto Several Lines";
-    const tree = render({ projectName: longName, pinnedAppNames: ["docs"] });
-    const headingText = `Pinned in ${longName}`;
-    expect(texts(tree)).toContain(headingText);
-    const heading = flatten(tree).find(
-      (n): n is VnodeLike => typeof n === "object" && n !== null && (n as VnodeLike).attrs?.title === headingText,
-    );
-    expect(heading?.attrs?.className).toContain("truncate");
+    const tree = render({ pinnedAppNames: ["docs", "redis"] });
+    expect(rowsOf(tree).length).toBe(5);
+    expect(texts(tree)).not.toContain("docs");
+    expect(texts(tree)).not.toContain("redis");
+    expect(texts(tree)).toContain("grafana");
+    expect(texts(tree)).not.toContain("Pinned in Newsreader");
+    expect(texts(tree)).not.toContain("Unpinned");
   });
 
   it("renders one flat list with no toggles under Everything", () => {
@@ -237,42 +223,77 @@ describe("AllAppsPicker", () => {
   });
 
   it("reports a pin without opening the app", () => {
-    appState.apps = APPS;
-    const opened: string[] = [];
-    const pinned: [string, boolean][] = [];
-    const tree = render({
-      onOpenApp: (app) => {
-        opened.push(app.name);
-      },
-      onTogglePin: (app, wanted) => {
-        pinned.push([app.name, wanted]);
-      },
-    });
-    const pinButton = buttonsOf(rowsOf(tree)[0].children)[0];
-    let stopped = false;
-    (pinButton.attrs?.onclick as (e: unknown) => void)({
-      stopPropagation: () => {
-        stopped = true;
-      },
-    });
-    expect(pinned).toEqual([["docs", true]]);
-    expect(stopped).toBe(true);
-    expect(opened).toEqual([]);
+    vi.useFakeTimers();
+    try {
+      appState.apps = APPS;
+      const opened: string[] = [];
+      const pinned: [string, boolean][] = [];
+      const tree = render({
+        onOpenApp: (app) => {
+          opened.push(app.name);
+        },
+        onTogglePin: (app, wanted) => {
+          pinned.push([app.name, wanted]);
+        },
+      });
+      const pinButton = buttonsOf(rowsOf(tree)[0].children)[0];
+      expect(pinButton.attrs?.["aria-label"]).toBe("Pin docs");
+      let stopped = false;
+      (pinButton.attrs?.onclick as (e: unknown) => void)({
+        stopPropagation: () => {
+          stopped = true;
+        },
+      });
+      expect(pinned).toEqual([["docs", true]]);
+      expect(stopped).toBe(true);
+      expect(opened).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
-  it("asks to unpin an app the project already pins", () => {
-    appState.apps = APPS;
-    const pinned: [string, boolean][] = [];
-    const tree = render({
-      pinnedAppNames: ["docs"],
-      onTogglePin: (app, wanted) => {
-        pinned.push([app.name, wanted]);
-      },
-    });
-    const pinButton = buttonsOf(rowsOf(tree)[0].children)[0];
-    expect(pinButton.attrs?.["aria-label"]).toBe("Unpin docs");
-    (pinButton.attrs?.onclick as (e: unknown) => void)({ stopPropagation: () => {} });
-    expect(pinned).toEqual([["docs", false]]);
+  it("keeps a just-pinned row on screen, fading, until its own transition finishes", () => {
+    // The popover deliberately stays open so several apps can be pinned in
+    // one visit -- an instant removal would risk a stray click landing on
+    // whatever row slides up to fill the gap the instant the project's
+    // member list catches up with the pin.
+    vi.useFakeTimers();
+    try {
+      appState.apps = APPS;
+      let pinnedAppNames: string[] = [];
+      const component = AllAppsPicker();
+      const vnode = () =>
+        makeVnode({
+          pinnedAppNames,
+          onTogglePin: (app, wanted) => {
+            if (wanted) pinnedAppNames = [...pinnedAppNames, app.name];
+          },
+        });
+
+      const before = rowsOf(component.view(vnode()));
+      expect(before.length).toBe(7);
+      const pinButton = buttonsOf(before[0].children)[0];
+      (pinButton.attrs?.onclick as (e: unknown) => void)({ stopPropagation: () => {} });
+
+      // The click already asked the workspace to pin "docs" (and this stand-in
+      // reflects that back into `pinnedAppNames` synchronously, the way a real
+      // redraw eventually would) -- but the row itself is still rendered,
+      // collapsing and fading rather than gone outright.
+      const midFade = rowsOf(component.view(vnode()));
+      expect(midFade.length).toBe(7);
+      const fadingRow = midFade.find((row) => texts(row.children).includes("docs"));
+      expect(fadingRow?.attrs?.className).toContain("opacity-0");
+      expect(fadingRow?.attrs?.className).toContain("h-0");
+      // No pin toggle on a row already on its way out.
+      expect(buttonsOf(fadingRow?.children).length).toBe(0);
+
+      vi.advanceTimersByTime(150);
+      const after = rowsOf(component.view(vnode()));
+      expect(after.length).toBe(6);
+      expect(texts(after)).not.toContain("docs");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("shows the filter box only once the list is long", () => {
@@ -301,7 +322,29 @@ describe("AllAppsPicker", () => {
     expect(opened).toEqual(["grafana"]);
   });
 
-  it("distinguishes an empty machine from an empty filter result", () => {
+  it("skips a pinned app when Enter opens the top match -- its row is not on screen", () => {
+    appState.apps = [...APPS, ...EXTRA_APPS];
+    const opened: string[] = [];
+    const component = AllAppsPicker();
+    const vnode = makeVnode({
+      pinnedAppNames: ["airflow"],
+      onOpenApp: (app) => {
+        opened.push(app.name);
+      },
+    });
+
+    const input = inputsOf(component.view(vnode))[0];
+    (input.attrs?.oninput as (e: unknown) => void)({ target: { value: "a" } });
+    const filtered = component.view(vnode);
+    // Matches "a": airflow, grafana, kibana, pgadmin, vault -- airflow is
+    // pinned and excluded, so only four rows are actually on screen.
+    expect(rowsOf(filtered).length).toBe(4);
+
+    (inputsOf(filtered)[0].attrs?.onkeydown as (e: unknown) => void)({ key: "Enter" });
+    expect(opened).toEqual(["grafana"]);
+  });
+
+  it("distinguishes an empty machine, an empty filter result, and a fully-pinned project", () => {
     appState.apps = [];
     expect(texts(render())).toContain("No apps are running on this machine.");
 
@@ -311,5 +354,14 @@ describe("AllAppsPicker", () => {
     const input = inputsOf(component.view(vnode))[0];
     (input.attrs?.oninput as (e: unknown) => void)({ target: { value: "zzz" } });
     expect(texts(component.view(vnode))).toContain('No apps match "zzz".');
+
+    // Every app the machine offers is already pinned: a new empty state, only
+    // reachable now that a pinned app's row is excluded rather than merely
+    // marked.
+    appState.apps = APPS;
+    const allPinnedNames = pickableApps().map((app) => app.name);
+    expect(texts(render({ pinnedAppNames: allPinnedNames }))).toContain(
+      "Every app on this machine is already pinned here.",
+    );
   });
 });

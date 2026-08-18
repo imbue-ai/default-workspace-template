@@ -43,6 +43,8 @@ import { AllAppsPicker, pickableApps } from "./AllAppsPicker";
 import { appIconMarkup, serviceIconMarkup } from "./appIcon";
 import { hoverTooltipAttrs } from "./hoverTooltip";
 import { icon } from "./icons";
+import { OBJECT_MENU_DIVIDER, objectMenuEntries } from "./objectMenu";
+import type { ObjectMenuActions, ObjectMenuKind } from "./objectMenu";
 import { ProjectSettingsModal } from "./ProjectSettingsModal";
 import { SQUIGGLE_GLYPHS, compositeSquiggleMarkup, monogramMarkup, squiggleMarkup } from "./squiggles";
 
@@ -103,14 +105,22 @@ export interface SidebarAttrs {
   onSetAppPinned: (app: AppEntry, isPinned: boolean) => void;
   // Focus this row's existing tab, or open the object into the active pane.
   onOpenRow: (row: SidebarTabRow) => void;
-  // Stop showing this row in the active view. Never offered on Everything:
-  // nothing can be removed from the home. The object keeps running and stays
-  // in every other project showing it.
-  onRemoveFromView: (row: SidebarTabRow) => void;
+  // Reload what this row is showing when it has an open tab; opens it fresh
+  // when it is backgrounded, since there is then nothing live to reload.
+  onRefreshRow: (row: SidebarTabRow) => void;
+  // Name the object behind this row, machine-wide -- the same rename every
+  // other naming surface goes through (see renameMemberRef), so a chosen name
+  // reaches this row's own tab immediately if it has one open.
+  onRenameRow: (row: SidebarTabRow, title: string) => void;
+  // Close this row's own tab without touching membership. Only ever called
+  // while the row is open (see SidebarTabRow.isOpen) -- a backgrounded row has
+  // no tab to close.
+  onHideRowTab: (row: SidebarTabRow) => void;
   // Open the machine's share surface with this app pre-selected.
   onShareApp: (row: SidebarTabRow) => void;
-  // Destroy the object behind this row, machine-wide. The workspace confirms
-  // first -- it is the half that knows what each kind takes down with it.
+  // Destroy the object behind this row, machine-wide (weaker for an app: see
+  // objectMenu.ts). The workspace confirms first -- it is the half that knows
+  // what each kind takes down with it.
   onDeleteFromMachine: (row: SidebarTabRow) => void;
 }
 
@@ -229,9 +239,10 @@ const RAIL_PATHS = {
     '<circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/>' +
     '<circle cx="19" cy="12" r="1.5" fill="currentColor" stroke="none"/>',
   // A pushpin. Every row that wears this is already pinned (the rail only
-  // ever lists pinned apps), so unlike AllAppsPicker's own toggle -- which has
-  // to show both states -- this one carries no unfilled variant: the head is
-  // filled to read as "pinned" at a glance, the string stroked underneath it.
+  // ever lists pinned apps), so unlike AllAppsPicker's own toggle -- which
+  // only ever offers to pin, since a pinned app no longer has a row there at
+  // all -- this one carries no unfilled variant: the head is filled to read
+  // as "pinned" at a glance, the string stroked underneath it.
   pin:
     '<path d="M9 4h6l-1 5 3 3v2H7v-2l3-3-1-5z" fill="currentColor" stroke="currentColor"/>' +
     '<line x1="12" y1="14" x2="12" y2="20" fill="none" stroke="currentColor"/>',
@@ -430,55 +441,19 @@ export function nextGlyphIndex(usedGlyphs: readonly number[]): number {
 
 // ---------- Row menus ----------
 
-interface RowMenuItem {
-  label: string;
-  // Shown in red, and always last: these are the ones that take the object off
-  // the machine.
-  isDestructive: boolean;
-  // Explains a verb whose name overstates it. Only "Remove from project" has
-  // one, because "remove" reads like a deletion and this one is not.
-  tooltip: string | null;
-  run: () => void;
-}
-
 /**
- * What the "Remove" group offers for one row.
+ * Which shared verb set (objectMenu.ts) a row's kebab/context menu offers, or
+ * null for a kind that module has nothing to say about.
  *
- * Designed per object type against the verbs that actually exist (§6). Apps and
- * URL tabs get no destroy: nothing in this workspace stops a supervised app or
- * deletes its package, and a URL tab is only ever a panel, so either item would
- * be a button that does nothing. Everything contributes no "remove from
- * project" at all -- it is the home, and an object leaves it only by being
- * destroyed.
+ * The four consolidated kinds map straight across; a "url" row (an ad-hoc
+ * page, no longer filed as a member going forward -- see objectMenu.ts's own
+ * module docstring) gets no menu at all rather than a partial one. A legacy
+ * url member still on an older project's list is removed from the project
+ * settings modal's own member list instead (see ProjectSettingsModal), which
+ * is reachable independent of what any one row offers.
  */
-function removalItemsForRow(row: SidebarTabRow, isEverything: boolean, attrs: SidebarAttrs): RowMenuItem[] {
-  const items: RowMenuItem[] = [];
-  if (!isEverything) {
-    items.push({
-      label: "Remove from project",
-      isDestructive: false,
-      tooltip: "Hides it here only. It keeps running, and stays in Everything and any other project showing it.",
-      run: () => attrs.onRemoveFromView(row),
-    });
-  }
-  if (row.kind === "chat" || row.kind === "terminal" || row.kind === "browser") {
-    // One label for all three kinds: what each destroy actually takes down is
-    // spelled out in the confirmation the workspace raises, where it matters.
-    items.push({
-      label: "Delete from this machine",
-      isDestructive: true,
-      tooltip: null,
-      run: () => attrs.onDeleteFromMachine(row),
-    });
-  }
-  return items;
-}
-
-/** A row's items above the removal group. Sharing is an app affordance: the
- *  share surface is per registered service. */
-function directItemsForRow(row: SidebarTabRow, attrs: SidebarAttrs): RowMenuItem[] {
-  if (row.kind !== "app") return [];
-  return [{ label: "Share app", isDestructive: false, tooltip: null, run: () => attrs.onShareApp(row) }];
+function objectMenuKindForRow(row: SidebarTabRow): ObjectMenuKind | null {
+  return row.kind === "url" ? null : row.kind;
 }
 
 // ---------- The component ----------
@@ -501,6 +476,10 @@ export function Sidebar(): m.Component<SidebarAttrs> {
   let openMenu: OpenMenu | null = null;
   // The project whose settings modal is up, or null while it is closed.
   let settingsProject: ProjectInfo | null = null;
+  // The ref of the row currently showing its inline rename field in place of
+  // its label, or null while every row reads as plain text. At most one row
+  // renames at a time, the same way at most one menu is ever open.
+  let renamingRef: string | null = null;
   let searchQuery = "";
   let menuError: string | null = null;
   let rootElement: HTMLElement | null = null;
@@ -585,6 +564,44 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     action();
     openMenu = null;
     menuError = null;
+  }
+
+  /** Commit a row's rename, or drop it silently for an empty or unchanged
+   *  name -- the same "not a name" treatment the tab's own inline editor
+   *  gives a blank field, so canceling a half-typed edit can never blank a
+   *  chosen name out. */
+  function commitRename(row: SidebarTabRow, typed: string, attrs: SidebarAttrs): void {
+    renamingRef = null;
+    const title = typed.trim();
+    if (title === "" || title === row.label) return;
+    attrs.onRenameRow(row, title);
+  }
+
+  /**
+   * The rail's own ``ObjectMenuActions`` for one row -- the half of the shared
+   * verb set (objectMenu.ts) that varies by caller.
+   *
+   * The one real difference from the tab's own build (``tabMenuEntries`` in
+   * DockviewWorkspace): a rail row can be showing a *backgrounded* object with
+   * no open panel at all, so ``hideTab`` -- which only ever closes a live tab
+   * -- is offered exactly when ``row.isOpen`` says there is one to close.
+   * Rename carries no such condition: an object is nameable whether or not it
+   * currently has a tab (the rename is filed by ref, not by panel), so it
+   * always opens the rail's own inline editor.
+   */
+  function railMenuActions(row: SidebarTabRow, attrs: SidebarAttrs): ObjectMenuActions {
+    return {
+      refresh: () => attrs.onRefreshRow(row),
+      share:
+        row.kind === "app"
+          ? { label: `Share ${serviceNameFromRef(row.ref) ?? row.label}`, run: () => attrs.onShareApp(row) }
+          : null,
+      rename: () => {
+        renamingRef = row.ref;
+      },
+      hideTab: row.isOpen ? () => attrs.onHideRowTab(row) : null,
+      quit: { label: `Quit ${row.label}`, run: () => attrs.onDeleteFromMachine(row) },
+    };
   }
 
   async function createNewProject(attrs: SidebarAttrs): Promise<void> {
@@ -832,7 +849,42 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     return parts;
   }
 
+  /** A row mid-rename: its icon stays put and its label becomes a live text
+   *  field seeded with the row's current name. Committing happens on blur --
+   *  matching the tab's own inline editor, and for the same reason: it is how
+   *  the edit ends on every path out (Enter, clicking another row, the rail
+   *  itself collapsing) without each needing its own handler. Escape instead
+   *  discards it; the `renamingRef` guard on `onblur` keeps that discard from
+   *  being immediately overwritten by the blur its own removal triggers. */
+  function renameRow(row: SidebarTabRow, attrs: SidebarAttrs): m.Vnode {
+    return m("div", { key: row.ref, class: `${ROW_CLASS} pr-1` }, [
+      m("span", { class: ICON_BOX_CLASS }, m.trust(rowIconMarkup(row))),
+      m("input", {
+        type: "text",
+        class:
+          `min-w-0 flex-1 rounded border border-border bg-bg-sidebar px-1 ${ROW_TEXT_CLASS} ` +
+          "text-text-primary outline-none",
+        value: row.label,
+        oncreate: (vnode: m.VnodeDOM) => {
+          const input = vnode.dom as HTMLInputElement;
+          input.focus();
+          input.select();
+        },
+        onclick: (event: MouseEvent) => event.stopPropagation(),
+        onblur: (event: FocusEvent) => {
+          if (renamingRef !== row.ref) return;
+          commitRename(row, (event.target as HTMLInputElement).value, attrs);
+        },
+        onkeydown: (event: KeyboardEvent) => {
+          if (event.key === "Enter") (event.target as HTMLInputElement).blur();
+          else if (event.key === "Escape") renamingRef = null;
+        },
+      }),
+    ]);
+  }
+
   function tabRow(row: SidebarTabRow, ranges: readonly MatchRange[], attrs: SidebarAttrs, hasMenu: boolean): m.Vnode {
+    if (renamingRef === row.ref) return renameRow(row, attrs);
     const isMenuOpenHere = openMenu?.kind === "row" && openMenu.ref === row.ref;
     return m(
       "div",
@@ -895,7 +947,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     );
   }
 
-  function tabList(attrs: SidebarAttrs, isEverything: boolean): m.Vnode {
+  function tabList(attrs: SidebarAttrs): m.Vnode {
     const results = searchMembers(attrs.rows, searchQuery);
     if (results.length === 0) {
       return m(
@@ -909,8 +961,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
       { class: "min-h-0 flex-1 overflow-x-hidden overflow-y-auto" },
       results.map((result) => {
         const row = result.member;
-        const hasMenu = directItemsForRow(row, attrs).length + removalItemsForRow(row, isEverything, attrs).length > 0;
-        return tabRow(row, result.labelRanges, attrs, hasMenu);
+        return tabRow(row, result.labelRanges, attrs, objectMenuKindForRow(row) !== null);
       }),
     );
   }
@@ -1178,43 +1229,34 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     });
   }
 
-  function rowMenu(attrs: SidebarAttrs, menu: Extract<OpenMenu, { kind: "row" }>, isEverything: boolean): m.Children {
+  /**
+   * A row's kebab/context menu: the same shared verb set the tab's own ⋮ menu
+   * renders (see objectMenu.ts), so right-clicking a rail row and opening the
+   * tab it stands for offer exactly the same list. ``railMenuActions`` is the
+   * only place that differs from the tab's build -- everything about WHICH
+   * verbs show, in what order, is fixed by ``objectMenuEntries`` alone.
+   */
+  function rowMenu(attrs: SidebarAttrs, menu: Extract<OpenMenu, { kind: "row" }>): m.Children {
     const row = attrs.rows.find((candidate) => candidate.ref === menu.ref);
     if (row === undefined) return null;
-    const direct = directItemsForRow(row, attrs);
-    // The removal verbs sit in the menu itself rather than behind a "Remove"
-    // submenu. There are at most two of them and they are the whole point of
-    // opening the menu, so a flyout only added a hover and a step between the
-    // user and the thing they came for -- and hid the difference between the
-    // two, which is the one thing worth reading before clicking.
-    const removal = removalItemsForRow(row, isEverything, attrs);
+    const kind = objectMenuKindForRow(row);
+    if (kind === null) return null;
+    const entries = objectMenuEntries(kind, railMenuActions(row, attrs));
     return floatingCard({
       anchor: menu.anchor,
       placement: "right",
       role: "menu",
       width: null,
-      children: [
-        direct.map((item) =>
-          menuRow({
-            iconMarkup: icon("share", { size: ACTION_ICON_SIZE }),
-            label: item.label,
-            onclick: () => pick(item.run),
-          }),
-        ),
-        direct.length > 0 && removal.length > 0 ? m("div", { class: "my-1 border-t border-border" }) : null,
-        removal.map((item) =>
-          menuRow({
-            // The safe verb keeps the minus the tab strip uses for closing, and
-            // the destructive one the "x" that ends an object, so the pair reads
-            // the same here as it does on a tab.
-            iconMarkup: icon(item.isDestructive ? "close" : "minus", { size: ACTION_ICON_SIZE }),
-            label: item.label,
-            isDestructive: item.isDestructive,
-            tooltip: item.tooltip,
-            onclick: () => pick(item.run),
-          }),
-        ),
-      ],
+      children: entries.map((entry) =>
+        entry === OBJECT_MENU_DIVIDER
+          ? m("div", { class: "my-1 border-t border-border" })
+          : menuRow({
+              iconMarkup: icon(entry.iconName, { size: ACTION_ICON_SIZE }),
+              label: entry.label,
+              isDestructive: entry.isDestructive,
+              onclick: () => pick(entry.run),
+            }),
+      ),
     });
   }
 
@@ -1274,6 +1316,9 @@ export function Sidebar(): m.Component<SidebarAttrs> {
       const attrs = vnode.attrs;
       if (lastRenderedViewId !== null && lastRenderedViewId !== attrs.activeViewId) {
         closeMenus();
+        // The row being renamed does not survive the switch either: it is not
+        // even necessarily still in the destination view's own row list.
+        renamingRef = null;
       }
       lastRenderedViewId = attrs.activeViewId;
       const isEverything = isEverythingView(attrs.activeViewId);
@@ -1328,8 +1373,12 @@ export function Sidebar(): m.Component<SidebarAttrs> {
             // rail's own box (some further than others, "All apps" most of
             // all) -- exactly the case a plain mouseleave would get wrong,
             // folding the rail out from under a menu the pointer is still
-            // using the moment it crosses that edge to reach it.
-            if (openMenu !== null) return;
+            // using the moment it crosses that edge to reach it. A row mid-
+            // rename holds the rail open the same way: its input sits inside
+            // the rail's own card, and collapsing out from under a half-typed
+            // name would commit whatever was typed so far (native blur-on-
+            // removal) without the user having asked to.
+            if (openMenu !== null || renamingRef !== null) return;
             closeMenus();
           },
         },
@@ -1360,7 +1409,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
               expanded ? allAppsRow() : null,
               expanded ? m("div", { class: `${DIVIDER_CLASS} mt-1` }) : null,
               expanded ? searchPill(viewName) : null,
-              expanded ? tabList(attrs, isEverything) : null,
+              expanded ? tabList(attrs) : null,
             ],
           ),
           openMenu === null ? null : menuScrim(),
@@ -1369,7 +1418,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
           openMenu?.kind === "allApps"
             ? allAppsMenu(attrs, openMenu.anchor, isEverything ? null : viewName, pinnedAppNames)
             : null,
-          openMenu?.kind === "row" ? rowMenu(attrs, openMenu, isEverything) : null,
+          openMenu?.kind === "row" ? rowMenu(attrs, openMenu) : null,
           settingsModal(attrs),
         ],
       );
