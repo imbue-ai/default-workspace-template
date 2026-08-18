@@ -60,8 +60,9 @@ python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.p
 ```
 
 It classifies what changed and does only what is needed: refreshes dependencies
-if a manifest changed (`npm ci` / `uv tool install -e system/apps/system_interface
---reinstall`), rebuilds the gitignored `static/` bundle (frontend), and/or
+if a manifest changed (`npm ci`, plus the vendored mngr tool, the backend tool
+and the workspace venv -- the same environments `build_workspace.sh` builds),
+rebuilds the gitignored `static/` bundle (frontend), and/or
 restarts the services agent so the editable backend re-imports the merged `.py`
 (backend), then asks every open view of the workspace to reload --
 unconditionally, since a backend-only change leaves the open page rendering what
