@@ -55,7 +55,6 @@ from imbue.system_interface.projects import EVERYTHING_VIEW_ID
 from imbue.system_interface.projects import EVERYTHING_VIEW_NAME
 from imbue.system_interface.projects import add_member
 from imbue.system_interface.projects import create_project
-from imbue.system_interface.projects import set_last_active_id
 from imbue.system_interface.projects import write_project_content
 from imbue.system_interface.server import _DEFAULT_TAIL_COUNT
 from imbue.system_interface.server import _FORWARD_PORT_SCRIPT
@@ -2145,123 +2144,12 @@ def test_layout_broadcast_open_emits_targeted_ws_message(app: Flask) -> None:
     assert other_queue.empty()
 
 
-def test_layout_broadcast_defaults_to_the_view_the_requester_was_messaged_from(app: Flask) -> None:
-    """An unlabeled requester falls back to the view it was asked from.
-
-    This agent carries no ``project`` label (it belongs to no project), so the
-    message log is the only signal left: it records the view each request came
-    from, which beats wherever the user has scrolled to by the time the op
-    lands -- the client sitting elsewhere sees nothing.
-    """
-    client_activity.append_message_event(
-        _isolated_client_activity_events_path(),
-        client_id="client-1",
-        device_kind="desktop",
-        layout_slug=EVERYTHING_VIEW_ID,
-        agent_id="agent-42",
-        agent_name="chat-agent",
-        message_text="build me an app",
-    )
-    # The requester has since moved on to Project 1, which is also the registry's
-    # last-active view -- the answer the old current-view default would give.
-    asked_from_queue = _register_fake_client(app, "client-2", EVERYTHING_VIEW_ID)
-    moved_on_queue = _register_fake_client(app, "client-1", "project-1")
-
-    client = app.test_client()
-    response = client.post(
-        "/api/layout/broadcast",
-        json={"op": "open", "args": {"ref": "service:web"}, "agent_id": "agent-42"},
-    )
-
-    assert response.status_code == 200
-    assert _next_broadcast_message(asked_from_queue)["args"] == {"ref": "service:web"}
-    assert moved_on_queue.empty()
-
-
-def test_layout_broadcast_prefers_where_it_was_asked_over_the_requesters_label(tmp_path: Path) -> None:
-    """The view a request came from wins over the requester's ``project`` label.
-
-    Ask from project A and switch to B, and the work still lands in A. The
-    label is the fallback for an agent nobody messaged directly, and it is also
-    the weaker signal on purpose: mngr sets ``project`` to the repo an agent
-    works on, so a chat can carry one that names no view at all.
-    """
-    layout_dir = _isolated_primary_layout_dir()
-    create_project(layout_dir, "Research", "#12B5A5", 4)
-    client_activity.append_message_event(
-        _isolated_client_activity_events_path(),
-        client_id="client-1",
-        device_kind="desktop",
-        # The user was looking at the starter project when they messaged a chat
-        # that lives in Research.
-        layout_slug="project-1",
-        agent_id="agent-42",
-        agent_name="chat-agent",
-        message_text="build me an app",
-    )
-    manager = AgentManager.build(WebSocketBroadcaster())
-    with manager._lock:
-        manager._agents["agent-42"] = AgentStateItem(
-            id="agent-42",
-            name="worker",
-            state="RUNNING",
-            labels={"project": "research"},
-            work_dir=str(tmp_path / "work"),
-        )
-    app = create_application(build_test_state(agent_manager=manager))
-    labeled_queue = _register_fake_client(app, "client-2", "research")
-    messaged_from_queue = _register_fake_client(app, "client-1", "project-1")
-
-    response = app.test_client().post(
-        "/api/layout/broadcast",
-        json={"op": "open", "args": {"ref": "service:web"}, "agent_id": "agent-42"},
-    )
-
-    assert response.status_code == 200
-    assert _next_broadcast_message(messaged_from_queue)["args"] == {"ref": "service:web"}
-    assert labeled_queue.empty()
-
-
-def test_layout_broadcast_defaults_to_the_requesters_project_when_never_messaged(tmp_path: Path) -> None:
-    """An agent nobody messaged directly falls back to its own ``project`` label.
-
-    Spawned children and scheduled tasks have no message on record, but mngr
-    propagates the ``project`` label they were started under, so their work still
-    lands in the project it belongs to rather than in the last-active view.
-    """
-    layout_dir = _isolated_primary_layout_dir()
-    create_project(layout_dir, "Research", "#12B5A5", 4)
-    set_last_active_id(layout_dir, "project-1")
-    manager = AgentManager.build(WebSocketBroadcaster())
-    with manager._lock:
-        manager._agents["agent-42"] = AgentStateItem(
-            id="agent-42",
-            name="worker",
-            state="RUNNING",
-            labels={"project": "research"},
-            work_dir=str(tmp_path / "work"),
-        )
-    app = create_application(build_test_state(agent_manager=manager))
-    research_queue = _register_fake_client(app, "client-1", "research")
-    last_active_queue = _register_fake_client(app, "client-2", "project-1")
-
-    response = app.test_client().post(
-        "/api/layout/broadcast",
-        json={"op": "open", "args": {"ref": "service:web"}, "agent_id": "agent-42"},
-    )
-
-    assert response.status_code == 200
-    assert _next_broadcast_message(research_queue)["args"] == {"ref": "service:web"}
-    assert last_active_queue.empty()
-
-
 def test_layout_broadcast_mutating_op_defaults_to_the_single_clients_view(app: Flask) -> None:
     """A mutating op without a target goes to the one connected client's view.
 
-    The fallback when the requester has no view of its own: no message on record
-    and no project label. Naming no view then means "the view the user is looking
-    at". This used to be a 400 demanding --layout, which made every agent spell
-    out a view it had no way to know.
+    Naming no view means "the view the user is looking at". This used to be a
+    400 demanding --layout, which made every agent spell out a view it had no
+    way to know; now the single connected client's own view is the default.
     """
     _register_fake_client(app, "client-1", "desktop")
     client = app.test_client()
@@ -2380,14 +2268,17 @@ def test_layout_broadcast_mutating_op_targets_everything(app: Flask) -> None:
     assert other_queue.empty()
 
 
-def _isolated_primary_layout_dir() -> Path:
-    """The primary agent's workspace_layout dir inside the autouse-isolated MNGR_HOST_DIR."""
-    return Path(os.environ["MNGR_HOST_DIR"]) / "agents" / os.environ["MNGR_AGENT_ID"] / "workspace_layout"
-
-
 def _isolated_client_activity_events_path() -> Path:
     """The client-activity events file inside the autouse-isolated MNGR_HOST_DIR."""
-    return _isolated_primary_layout_dir() / "events" / "client_activity" / "events.jsonl"
+    return (
+        Path(os.environ["MNGR_HOST_DIR"])
+        / "agents"
+        / os.environ["MNGR_AGENT_ID"]
+        / "workspace_layout"
+        / "events"
+        / "client_activity"
+        / "events.jsonl"
+    )
 
 
 def test_ws_client_connected_write_uses_connect_time_layout_dir(

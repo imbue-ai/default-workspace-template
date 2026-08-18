@@ -497,8 +497,8 @@ python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.p
 python3 system/scripts/layout.py open si-preview
 ```
 
-With no `--view`, the `open` goes to your own view -- the one you were last
-messaged from -- which is where the user expects the preview tab.
+With no `--view`, the `open` goes to the view the connected client is looking
+at, which is where the user expects the preview tab.
 
 **Other user apps are optional previews.** When the report says another user
 app took meaningful merge work, use your judgment: serve it from the

@@ -165,7 +165,7 @@ coordinate with the other pass (its stderr says how to tear down an abandoned
 one).
 
 Open it as a tab and ask the user to explore. With no `--view`, the op goes
-to your own view -- the one you were last messaged from:
+to the view the connected client is looking at:
 
 ```bash
 python3 system/scripts/layout.py open si-preview

@@ -15,6 +15,7 @@ import {
   fetchMemberMap,
   fetchProjectContent,
   fetchProjectsList,
+  filingProjectForAgentOp,
   isEverythingView,
   memberKindFromRef,
   memberRef,
@@ -712,5 +713,19 @@ describe("searchMembers", () => {
 
     expect(result.member).toBe(rows[0]);
     expect(result.member.ref).toBe("service:browser?session=2");
+  });
+});
+
+describe("filingProjectForAgentOp", () => {
+  it("files into the requester's own project when it is registered", () => {
+    expect(filingProjectForAgentOp("website-redesign", [WEBSITE])).toBe("website-redesign");
+  });
+
+  it("falls back when the requester has no project label or an unregistered one", () => {
+    expect(filingProjectForAgentOp(null, [WEBSITE])).toBeNull();
+    expect(filingProjectForAgentOp(undefined, [WEBSITE])).toBeNull();
+    expect(filingProjectForAgentOp("", [WEBSITE])).toBeNull();
+    // A label naming a project that no longer exists must not file anywhere.
+    expect(filingProjectForAgentOp("deleted-project", [WEBSITE])).toBeNull();
   });
 });
