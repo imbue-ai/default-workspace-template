@@ -26,7 +26,10 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from loguru import logger
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_fixed
 
-from bootstrap.claude_state_migration import LEGACY_ROOT_HOME, migrate_legacy_claude_state
+from bootstrap.claude_state_migration import (
+    LEGACY_ROOT_HOME,
+    migrate_legacy_claude_state,
+)
 
 # Path (relative to the repo root, which is bootstrap's cwd) of the supervisord
 # config that defines every background service.
@@ -57,6 +60,14 @@ INITIAL_CHAT_AGENT_ID_FILENAME = "initial_chat_agent_id"
 # canonicalizes it to the true name `Chat-1` and keeps this as the agent's
 # `display_name` label; the New Tab launcher numbers its own chats from here.
 _INITIAL_CHAT_DISPLAY_NAME = "Chat 1"
+# The agent name that display name canonicalizes to. Passed literally rather
+# than letting mngr derive it: a workspace's vendored mngr may predate
+# canonicalization, and a name it rejects would fail the first-boot chat create
+# outright. Both names are sent -- the canonical one as the agent name, the
+# human one as the ``display_name`` label -- which every mngr version accepts
+# and which satisfies newer mngr's rule that the true name is the canonical
+# form of the display name.
+_INITIAL_CHAT_AGENT_NAME = "Chat-1"
 
 # Env var names used by the bootstrap's responsibilities.
 _AGENT_ID_ENV_VAR = "MNGR_AGENT_ID"
@@ -149,18 +160,21 @@ def _build_create_chat_command(host_name: str, labels: dict[str, str]) -> list[s
     .mngr/settings.toml). The chat agent belongs to its workspace by virtue of
     sharing the host; it carries no `workspace` label.
 
-    The positional is `NAME@HOST`, so the chat is created as the human-readable
-    "Chat 1" *on* the workspace's host rather than under the host's own name:
-    mngr canonicalizes the name part to the true name `Chat-1` and keeps the
-    typed name as the agent's `display_name` label. Before mngr accepted
-    free-form names the only way to hold a name with a space was the workspace's
-    separate title store, which is why the first chat used to be named after its
-    host (`p6`) and read "Chat 1" only through that store.
+    The positional is `NAME@HOST`, so the chat is created *on* the workspace's
+    host rather than under the host's own name (which is why the first chat
+    used to be called `p6`). Both halves of the name are sent explicitly: the
+    canonical `Chat-1` as the agent name and `Chat 1` as the `display_name`
+    label. Passing the canonical form rather than letting mngr derive it from
+    "Chat 1" is deliberate -- a workspace's vendored mngr may predate
+    free-form names, and would reject the spaced form outright, failing the
+    first-boot chat create. The pair is what newer mngr would have produced
+    anyway, so it satisfies its rule that the true name is the canonical form
+    of the display name.
     """
     cmd: list[str] = [
         "mngr",
         "create",
-        f"{_INITIAL_CHAT_DISPLAY_NAME}@{host_name}",
+        f"{_INITIAL_CHAT_AGENT_NAME}@{host_name}",
         # `--transfer none` matches what `AgentManager.create_chat_agent`
         # uses for the "New Chat" button (system/apps/system_interface/.../
         # agent_manager.py). Without it, mngr defaults to creating a
@@ -182,6 +196,8 @@ def _build_create_chat_command(host_name: str, labels: dict[str, str]) -> list[s
         # New Agent paths in system/apps/system_interface).
         "--label",
         "user_created=true",
+        "--label",
+        f"display_name={_INITIAL_CHAT_DISPLAY_NAME}",
         "--no-connect",
         "--format",
         "json",
