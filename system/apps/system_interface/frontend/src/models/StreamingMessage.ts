@@ -10,7 +10,7 @@ import { apiUrl } from "../base-path";
 import { ReconnectBackoff } from "./backoff";
 import { appendEvents, fetchEvents, type TranscriptEvent } from "./Response";
 import { parseJsonMessage } from "./ws-json";
-import { openLoginModal } from "./ClaudeAuth";
+import { openAgentAuth } from "./AgentAuth";
 
 const activeStreams = new Map<string, EventSource>();
 // Set so an error-triggered reconnect timeout can tell an intentional close
@@ -39,12 +39,12 @@ const inFlightSnapshotBuffersByAgent = new Map<string, TranscriptEvent[]>();
 // snapshot retry), multiplying attempts for as long as the backend stays down.
 const pendingReconnectTimersByAgent = new Map<string, ReturnType<typeof setTimeout>>();
 
-// Claude auth is mind-global, so an auth-error on any agent's stream
-// opens the single shared login modal (see models/ClaudeAuth.ts) -- no
-// per-agent routing needed.
-function openLoginModalIfAuthError(event: TranscriptEvent): void {
+// An auth-error on an agent's stream opens that agent's harness-declared
+// auth surface: the shared managed login modal for claude (its auth is
+// mind-global), the terminal instructions notice for the others.
+function openAgentAuthIfAuthError(agentId: string, event: TranscriptEvent): void {
   if (event.type === "assistant_message" && event.is_auth_error === true) {
-    openLoginModal();
+    openAgentAuth(agentId);
   }
 }
 
@@ -87,7 +87,7 @@ export function connectToStream(agentId: string): void {
     } else {
       appendEvents(agentId, [event]);
     }
-    openLoginModalIfAuthError(event);
+    openAgentAuthIfAuthError(agentId, event);
   };
 
   eventSource.onerror = () => {
