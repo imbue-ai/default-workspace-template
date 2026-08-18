@@ -605,6 +605,32 @@ def test_dependency_refresh_survives_a_tool_with_no_receipt() -> None:
     assert len(runner.argvs_starting("uv", "tool", "install")) == 2
 
 
+def test_dependency_refresh_reports_a_receipt_it_cannot_read(
+    tmp_path: Path, capsys
+) -> None:
+    # A receipt that is present but garbled is not the fresh-install case: we had
+    # a tool and lost the record of what it was installed with, so the reinstall
+    # below rebuilds it without its plugins. Degrading silently would hand back
+    # exactly the plugin-less CLI this refresh exists to prevent, and report
+    # success while doing it.
+    runner = _runner_with_diff("M\tuv.lock\n")
+    _with_receipt(runner, tmp_path / "tools", "imbue-mngr", "[tool]\nrequirements = [")
+
+    code = _reveal(runner, _FakeHttp(_all_healthy), _FakeSpawner())
+
+    assert code == 0
+    assert runner.argvs_starting("uv", "tool", "install")[0] == [
+        "uv",
+        "tool",
+        "install",
+        "-e",
+        "system/vendor/mngr/libs/mngr",
+        "--reinstall",
+    ]
+    reported = capsys.readouterr().err
+    assert "imbue-mngr" in reported and "drops any plugins" in reported
+
+
 def test_failed_preflight_reports_why_the_backend_did_not_boot(capsys) -> None:
     # The whole point of the pre-flight is that the merged code never reaches the
     # live service -- so its output is the only evidence of *why* it was rejected.
