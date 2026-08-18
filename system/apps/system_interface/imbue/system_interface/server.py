@@ -265,8 +265,10 @@ def _index_catch_all(path: str) -> Response:
     # An /api path reaching the catch-all matched no API route. Falling through to
     # the app shell would answer it 200 with index.html, so a mistyped API fetch
     # "succeeds" and its caller parses a web page as data -- and probing whether a
-    # route exists yet reports that every route already does.
-    if path.startswith(_API_PATH_PREFIX):
+    # route exists yet reports that every route already does. The bare prefix
+    # (``/api``, no trailing slash) is API-shaped for the same reason, so it gets
+    # the same answer.
+    if path.startswith(_API_PATH_PREFIX) or path == _API_PATH_PREFIX.rstrip("/"):
         error = ErrorResponse(detail=f"No such API route: /{path}")
         return _json_response(error.model_dump(), status_code=404)
     # An agent-authored file is addressed by its absolute on-disk path, which

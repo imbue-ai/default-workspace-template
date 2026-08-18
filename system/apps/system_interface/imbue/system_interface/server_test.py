@@ -146,6 +146,12 @@ def test_an_unknown_api_path_is_a_json_404_not_the_app_shell(client: FlaskClient
     assert response.status_code == 404
     assert response.get_json()["detail"] == "No such API route: /api/definitely-not-a-route-xyz"
 
+    # The bare prefix is just as API-shaped: /api itself must not render the shell.
+    bare_response = client.get("/api")
+
+    assert bare_response.status_code == 404
+    assert bare_response.get_json()["detail"] == "No such API route: /api"
+
 
 def test_a_client_side_route_still_renders_the_app_shell(client: FlaskClient) -> None:
     """Only /api paths change: everything else the catch-all handles is a UI route."""
