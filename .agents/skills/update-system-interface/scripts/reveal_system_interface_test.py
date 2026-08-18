@@ -13,7 +13,9 @@ never regress, because a broken backend takes down the user's whole UI.
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Sequence
@@ -90,22 +92,39 @@ class _FakeHttp(reveal_mod.HttpClient):
 
 @dataclass
 class _FakeSpawned:
+    output: str = ""
+    exited: bool = False
     terminated: bool = False
 
     def terminate(self) -> None:
         self.terminated = True
 
+    def has_exited(self) -> bool:
+        return self.exited
+
+    def read_output(self) -> str:
+        return self.output
+
 
 @dataclass
 class _FakeSpawner(reveal_mod.Spawner):
-    """Records the pre-flight throwaway boot ``reveal`` runs before a live restart."""
+    """Records the pre-flight throwaway boot ``reveal`` runs before a live restart.
 
+    ``output`` is what the throwaway backend "wrote" while failing to boot.
+    """
+
+    output: str = ""
+    exited: bool = False
     spawns: list[list[str]] = field(default_factory=list)
+    output_paths: list[Path] = field(default_factory=list)
     last: _FakeSpawned | None = None
 
-    def spawn(self, argv: Sequence[str], cwd: str, env: dict) -> _FakeSpawned:
+    def spawn(
+        self, argv: Sequence[str], cwd: str, env: dict, output_path: Path
+    ) -> _FakeSpawned:
         self.spawns.append(list(argv))
-        self.last = _FakeSpawned()
+        self.output_paths.append(output_path)
+        self.last = _FakeSpawned(output=self.output, exited=self.exited)
         return self.last
 
 
@@ -370,6 +389,104 @@ def test_failed_preflight_never_restarts_live_service_and_rolls_back() -> None:
     # An added file is removed on rollback (not checked out).
     assert runner.ran("git", "rm", "--force", "--ignore-unmatch")
     assert not runner.ran("git", "checkout", _ROLLBACK)
+
+
+def test_failed_preflight_reports_why_the_backend_did_not_boot(capsys) -> None:
+    # The whole point of the pre-flight is that the merged code never reaches the
+    # live service -- so its output is the only evidence of *why* it was rejected.
+    # Without it a reveal exit 2 is indistinguishable from a slow boot, and whoever
+    # picks it up diagnoses a cause they cannot see.
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/imbue/system_interface/server.py\n"
+    )
+    spawner = _FakeSpawner(
+        output="Traceback (most recent call last):\nModuleNotFoundError: No module named 'frontmatter'\n"
+    )
+
+    code = _reveal(runner, _FakeHttp(lambda url: 200 if _is_live(url) else None), spawner)
+
+    assert code == 2
+    reported = capsys.readouterr().err
+    assert "ModuleNotFoundError: No module named 'frontmatter'" in reported
+    # The rollback commit carries it too, so the reason survives in git history
+    # after the terminal that ran the reveal is gone.
+    commits = runner.argvs_starting("git", "commit")
+    assert commits and any("frontmatter" in arg for arg in commits[0])
+
+
+def test_failed_preflight_that_produced_no_output_says_so(capsys) -> None:
+    # A silent failure is itself a finding (the tool never got far enough to log),
+    # and must not read as "the output was dropped again".
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/imbue/system_interface/server.py\n"
+    )
+
+    _reveal(runner, _FakeHttp(lambda url: 200 if _is_live(url) else None), _FakeSpawner())
+
+    assert "wrote nothing at all" in capsys.readouterr().err
+
+
+def test_preflight_output_is_tailed_to_the_interesting_end() -> None:
+    # A backend that logs its way to a crash would otherwise bury the traceback
+    # under startup chatter, so we keep the end and say what was dropped.
+    limit = reveal_mod._PREFLIGHT_OUTPUT_TAIL_LINES
+    tailed = reveal_mod._tail(
+        "\n".join([f"chatter {i}" for i in range(limit + 10)] + ["the actual error"]),
+        limit,
+    )
+
+    assert tailed.splitlines()[-1] == "the actual error"
+    assert len(tailed.splitlines()) == limit + 1  # the omission notice
+    assert "11 earlier line(s) omitted" in tailed
+    assert "chatter 0" not in tailed
+
+
+def test_spawner_captures_both_streams_of_a_real_child(tmp_path: Path) -> None:
+    # The capture has to survive a real Popen: stderr is redirected onto stdout's
+    # file, and the parent closes its handle while the child keeps writing. Models
+    # the case that matters -- a backend that dies on import, whose traceback is
+    # the whole reason the pre-flight rejected the merge.
+    output_path = tmp_path / "boot.log"
+    spawned = reveal_mod.Spawner().spawn(
+        [
+            sys.executable,
+            "-c",
+            "import sys; print('on stdout'); print('on stderr', file=sys.stderr)",
+        ],
+        cwd=str(tmp_path),
+        env=dict(os.environ),
+        output_path=output_path,
+    )
+    for _ in range(500):
+        if spawned.has_exited():
+            break
+        time.sleep(0.01)
+    assert spawned.has_exited()
+    spawned.terminate()
+
+    captured = spawned.read_output()
+    assert "on stdout" in captured
+    assert "on stderr" in captured
+
+
+def test_preflight_stops_polling_once_the_backend_has_died() -> None:
+    # A backend that died on import will not become healthy, so the reveal must
+    # not sit out the rest of the deadline before rolling back.
+    probes: list[str] = []
+
+    def _record(url: str) -> int | None:
+        probes.append(url)
+        return 200 if _is_live(url) else None
+
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/imbue/system_interface/server.py\n"
+    )
+
+    code = _reveal(runner, _FakeHttp(_record), _FakeSpawner(exited=True))
+
+    assert code == 2
+    # One pre-flight probe, not _PREFLIGHT_ATTEMPTS of them.
+    assert len([u for u in probes if not _is_live(u)]) == 1
 
 
 def test_failed_preflight_with_manifest_refreshes_deps_but_does_not_restart() -> None:
