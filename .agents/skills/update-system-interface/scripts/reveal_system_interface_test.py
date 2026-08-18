@@ -652,7 +652,10 @@ def test_failed_preflight_reports_why_the_backend_did_not_boot(capsys) -> None:
         "M\tsystem/apps/system_interface/imbue/system_interface/server.py\n"
     )
     spawner = _FakeSpawner(
-        output="Traceback (most recent call last):\nModuleNotFoundError: No module named 'frontmatter'\n"
+        output=(
+            "starting up\nDEBUG loading agents\nTraceback (most recent call last):\n"
+            "ModuleNotFoundError: No module named 'frontmatter'\n"
+        )
     )
 
     code = _reveal(
@@ -661,11 +664,18 @@ def test_failed_preflight_reports_why_the_backend_did_not_boot(capsys) -> None:
 
     assert code == 2
     reported = capsys.readouterr().err
+    # stderr gets all of it -- whoever ran the reveal is looking right now.
     assert "ModuleNotFoundError: No module named 'frontmatter'" in reported
-    # The rollback commit carries it too, so the reason survives in git history
-    # after the terminal that ran the reveal is gone.
+    assert "DEBUG loading agents" in reported
+    # The rollback commit carries the cause, so the reason survives in git history
+    # after the terminal that ran the reveal is gone -- but only the line that
+    # names it. A commit body is read by everyone who ever looks at this file's
+    # history, and a backend's startup log is a poor thing to write into git.
     commits = runner.argvs_starting("git", "commit")
-    assert commits and any("frontmatter" in arg for arg in commits[0])
+    message = next(arg for arg in commits[0] if "auto-reverted" in arg)
+    assert "ModuleNotFoundError: No module named 'frontmatter'" in message
+    assert "DEBUG loading agents" not in message
+    assert "starting up" not in message
 
 
 def test_failed_preflight_that_produced_no_output_says_so(capsys) -> None:
