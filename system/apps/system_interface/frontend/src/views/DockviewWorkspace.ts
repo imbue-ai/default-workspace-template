@@ -1499,6 +1499,19 @@ function retireLauncher(panelId: string | null): void {
   if (panel) dockview.removePanel(panel);
 }
 
+/**
+ * The one focus change that must NOT fold launchers away: revealing an object
+ * the view already had open.
+ *
+ * Clicking a launcher row for something already open is "show me that one",
+ * not "not this, not now" -- so the launcher stays put and the revealed tab
+ * flashes instead, and the user keeps the list they were reading. Consumed by
+ * ``retireLaunchersOnFocusLeaving``, the only place launchers retire, and
+ * cleared at the top of every reveal so a focus event that never arrives (the
+ * panel was already active) cannot suppress a later, legitimate retire.
+ */
+let revealedOpenPanelId: string | null = null;
+
 /** A launcher is a question -- "what goes in this pane?" -- and clicking off
  *  to some other tab is an answer: not this, not now. Every launcher folds up
  *  the moment a real panel takes focus, rather than lingering as a tab the
@@ -1508,6 +1521,10 @@ function retireLauncher(panelId: string | null): void {
  *  away with it. */
 function retireLaunchersOnFocusLeaving(activePanelId: string): void {
   if (!dockview) return;
+  if (revealedOpenPanelId === activePanelId) {
+    revealedOpenPanelId = null;
+    return;
+  }
   if (panelParams.get(activePanelId)?.panelType === "launcher") return;
   for (const panel of [...dockview.panels]) {
     if (panel.id !== activePanelId && panelParams.get(panel.id)?.panelType === "launcher") {
@@ -1829,7 +1846,9 @@ export function getSidebarRows(): SidebarTabRow[] {
 function openMemberRef(ref: string, targetGroup: DockviewGroupPanel | null): string | null {
   if (!dockview) return null;
   const openPanelId = panelIdForMemberRef(ref);
+  revealedOpenPanelId = null;
   if (openPanelId !== null) {
+    revealedOpenPanelId = openPanelId;
     const panel = dockview.panels.find((candidate) => candidate.id === openPanelId);
     if (panel) dockview.setActivePanel(panel);
     flashPanelTab(openPanelId);
@@ -3001,7 +3020,9 @@ export function openAppTab(app: AppEntry): void {
   if (!dockview) return;
   const openPanelId = findIframePanelIdForService(app.name);
   const openPanel = openPanelId === null ? undefined : dockview.panels.find((p) => p.id === openPanelId);
+  revealedOpenPanelId = null;
   if (openPanel !== undefined) {
+    revealedOpenPanelId = openPanel.id;
     dockview.setActivePanel(openPanel);
     flashPanelTab(openPanel.id);
     return;

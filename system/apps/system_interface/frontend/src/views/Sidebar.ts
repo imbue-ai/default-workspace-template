@@ -667,7 +667,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
         // Static, not the current project's name: the header's own label
         // already says which view is mounted, so the tooltip's job is to say
         // what the button does, not repeat that.
-        ...hoverTooltipAttrs("Switch projects"),
+        ...hoverTooltipAttrs("Switch projects", "right"),
         onclick: (event: MouseEvent) => {
           if (openMenu?.kind === "switcher") {
             openMenu = null;
@@ -710,10 +710,14 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     tooltip: string;
     onclick: (() => void) | null;
   }): m.Vnode {
+    // Beside the row rather than beneath it: the rail is a vertical list, and a
+    // tooltip centered under one row covers the next one down -- which is
+    // usually the row being decided against. Every other surface keeps the
+    // shell-matched default (see hoverTooltip.ts).
     const isDisabled = options.onclick === null;
     return m(
       "span",
-      { key: options.key, class: "flex w-full shrink-0", ...hoverTooltipAttrs(options.tooltip) },
+      { key: options.key, class: "flex w-full shrink-0", ...hoverTooltipAttrs(options.tooltip, "right") },
       m(
         "button",
         {
@@ -745,7 +749,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     const label = displayNameForMember(memberRef("app", app.name), app.name);
     return m(
       "span",
-      { key: `app:${app.name}`, class: "flex w-full shrink-0", ...hoverTooltipAttrs(label) },
+      { key: `app:${app.name}`, class: "flex w-full shrink-0", ...hoverTooltipAttrs(label, "right") },
       m(
         "div",
         {
@@ -771,6 +775,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
                   "aria-label": `Unpin ${app.name}`,
                   ...hoverTooltipAttrs(
                     "Unpins it here only. It keeps running, and stays in every other project showing it.",
+                    "right",
                   ),
                   onclick: (event: MouseEvent) => {
                     // The row underneath opens the app; the pin toggle must not.
