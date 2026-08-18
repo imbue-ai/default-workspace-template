@@ -178,6 +178,26 @@ _CODEX_DECLINED_COMMANDS: Final[tuple[str, ...]] = (
     "/vim",
 )
 
+# Pi slash commands the chat declines to send. pi is driven through its lifecycle
+# extension's inbox rather than by typing into the pane, so these would reach the
+# model as literal prose; the ones that switch or discard a session (/new, /resume,
+# /fork, /clone, /compact, /quit) would also strand the chat's view of the
+# conversation if they ever did run. The notice points them at the terminal.
+_PI_DECLINED_COMMANDS: Final[tuple[str, ...]] = (
+    "/clone",
+    "/compact",
+    "/fork",
+    "/llama",
+    "/model",
+    "/name",
+    "/new",
+    "/quit",
+    "/resume",
+    "/scoped-models",
+    "/session",
+    "/tree",
+)
+
 # The auth-intercept commands every auth-declaring harness shares: typing either opens
 # the harness's agent-auth surface instead of sending.
 _AUTH_COMMANDS: Final[tuple[str, ...]] = ("/login", "/logout")
@@ -320,6 +340,9 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         auth_check=PI_AUTH_CHECK,
         popups=(
             HarnessPopup(trigger=PopupTrigger.COMPOSER_COMMAND, commands=("/login",), action=PopupAction.OPEN_AUTH),
+            HarnessPopup(
+                trigger=PopupTrigger.COMPOSER_COMMAND, commands=_PI_DECLINED_COMMANDS, action=PopupAction.NOTICE
+            ),
         ),
         auth_instructions="Open the agent's terminal and run /login to add accounts or keys.",
     ),
