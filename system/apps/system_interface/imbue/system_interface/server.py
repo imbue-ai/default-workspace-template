@@ -2517,11 +2517,15 @@ def _requester_view_id(layout_dir: Path | None, agent_id: str) -> str | None:
     """The view a layout op's requesting agent belongs to, or None if there is none.
 
     Two signals, in order: the view the requester was looking at when it last
-    messaged this agent (recorded per message, so it names where the request came
-    from rather than wherever that client has moved since), then the agent's own
-    ``project`` label -- the only signal an agent that was never messaged directly
-    (a spawned child, a scheduled task) has. A view that no longer exists is
-    skipped: a project can be deleted after the message that named it.
+    messaged this agent -- ask from project A and switch to B, and the work
+    still lands in A -- then the agent's own ``project`` label, the only signal
+    an agent nobody messaged directly (a spawned child, a scheduled task) has.
+
+    Both are validated against the registry, which matters more than it looks:
+    ``project`` is also mngr's own label for the repo an agent works on, so an
+    agent can carry ``project=default-workspace-template``. That is not a view
+    id and is skipped here rather than misread as one. A view that genuinely
+    existed and was later deleted is skipped the same way.
     """
     events_path = _client_activity_events_path()
     events = client_activity.read_client_activity_events(events_path) if events_path is not None else []

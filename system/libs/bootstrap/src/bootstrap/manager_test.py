@@ -193,16 +193,26 @@ def test_build_create_chat_command_tags_user_created() -> None:
     assert "user_created=true" in labels
 
 
-def test_build_create_chat_command_passes_project_label_when_present() -> None:
-    cmd = _build_create_chat_command({"workspace": "ws", "project": "my-project"})
+def test_build_create_chat_command_files_the_chat_in_the_starter_project() -> None:
+    """The first chat is filed in the workspace's starter project, never in the
+    services agent's inherited ``project`` label.
+
+    That label is mngr's own -- the repo the agent works on, e.g.
+    ``default-workspace-template`` -- and names no view. Inheriting it left the
+    first chat belonging to no project, so work it started landed in whichever
+    view the user happened to be looking at.
+    """
+    cmd = _build_create_chat_command({"workspace": "ws", "project": "default-workspace-template"})
     labels = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "--label"]
-    assert "project=my-project" in labels
+
+    assert "project=project-1" in labels
+    assert "project=default-workspace-template" not in labels
 
 
-def test_build_create_chat_command_omits_project_label_when_missing() -> None:
+def test_build_create_chat_command_files_the_chat_even_with_no_inherited_label() -> None:
     cmd = _build_create_chat_command({"workspace": "ws"})
     labels = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "--label"]
-    assert all(not label.startswith("project=") for label in labels)
+    assert "project=project-1" in labels
 
 
 def test_build_create_chat_command_argv_accepted_by_live_cli() -> None:
