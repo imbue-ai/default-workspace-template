@@ -1043,8 +1043,8 @@ def _neighbors_in_direction(
 # ---------- Subcommand handlers ----------
 
 
-def _layout_query_args(layout_name: str | None, device: str | None = None) -> dict[str, Any]:
-    query_args: dict[str, Any] = {"layout": layout_name} if layout_name else {}
+def _layout_query_args(layout_name: str | None, device: str | None = None) -> dict[str, str]:
+    query_args: dict[str, str] = {"layout": layout_name} if layout_name else {}
     if device:
         query_args["device"] = device
     return query_args

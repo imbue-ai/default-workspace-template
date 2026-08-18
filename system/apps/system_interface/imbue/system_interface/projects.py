@@ -37,15 +37,14 @@ import json
 import re
 import threading
 import urllib.parse
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
-from typing import Final
-
-from loguru import logger as _loguru_logger
-from pydantic import Field
+from typing import Any, Final, TypedDict
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
+from loguru import logger as _loguru_logger
+from pydantic import Field
 
 # The project every workspace starts on: the one a fresh machine seeds, and the
 # one a pre-projects machine's arrangement migrates into. Its name follows the
@@ -226,7 +225,21 @@ def validated_member_ref(ref: str) -> str:
 
 
 @pure
-def _project_entry(name: str, color: str, glyph: int, members: list[str]) -> dict[str, Any]:
+class _ProjectEntry(TypedDict):
+    """One registry entry as this module writes it.
+
+    Typing covers only the write side: entries read back from disk stay
+    tolerant ``dict[str, Any]``, since the registry is hand-editable and every
+    reader defends against missing or mistyped fields.
+    """
+
+    name: str
+    color: str
+    glyph: int
+    members: list[str]
+
+
+def _project_entry(name: str, color: str, glyph: int, members: list[str]) -> _ProjectEntry:
     """Build one registry entry from validated display metadata plus its members."""
     return {
         "name": _validated_name(name),
@@ -237,7 +250,7 @@ def _project_entry(name: str, color: str, glyph: int, members: list[str]) -> dic
 
 
 @pure
-def _entry_members(entry: dict[str, Any]) -> list[str]:
+def _entry_members(entry: Mapping[str, Any]) -> list[str]:
     """The member refs of one registry entry, tolerating a hand-edit that lost them.
 
     Returns a fresh list, so callers mutate membership by assigning back to
@@ -275,7 +288,7 @@ def project_content_path(layout_dir: Path, project_id: str, device: str = DEFAUL
 
 
 @pure
-def _browser_session_suffix(url: Any) -> str:
+def _browser_session_suffix(url: object) -> str:
     """Return ``?session=<id>`` for a browser-fleet iframe URL, else ``""``.
 
     Mirrors the identical parse in ``layout_ops``: the browser viewer is served
@@ -452,7 +465,7 @@ def _read_meta_unlocked(layout_dir: Path) -> dict[str, Any]:
     return meta
 
 
-def _project_info(layout_dir: Path, project_id: str, entry: dict[str, Any]) -> ProjectInfo:
+def _project_info(layout_dir: Path, project_id: str, entry: Mapping[str, Any]) -> ProjectInfo:
     """Present one registry entry, tolerating fields a hand-edit left off."""
     glyph = entry.get("glyph")
     return ProjectInfo(

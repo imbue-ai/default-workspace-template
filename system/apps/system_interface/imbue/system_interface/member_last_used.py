@@ -37,13 +37,11 @@ import json
 import threading
 import time
 from pathlib import Path
-from typing import Any
 from typing import Final
-
-from loguru import logger as _loguru_logger
 
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.projects import validated_member_ref
+from loguru import logger as _loguru_logger
 
 _LAST_USED_FILENAME: Final[str] = "member_last_used.json"
 
@@ -106,7 +104,7 @@ def _read_unlocked(layout_dir: Path) -> dict[str, int]:
     except (json.JSONDecodeError, OSError) as e:
         _loguru_logger.opt(exception=e).warning("Failed to read {}; treating every object as unused", last_used_path)
         return {}
-    last_used_ms_by_ref: Any = stored.get("last_used_ms_by_ref") if isinstance(stored, dict) else None
+    last_used_ms_by_ref: object = stored.get("last_used_ms_by_ref") if isinstance(stored, dict) else None
     if not isinstance(last_used_ms_by_ref, dict):
         return {}
     return {
