@@ -6,7 +6,7 @@
 import m from "mithril";
 import { apiUrl } from "../base-path";
 import { reportMessaged } from "./activityReporter";
-import { getActiveLayoutSlug, getClientId, getDeviceKind } from "./ClientIdentity";
+import { getActiveProjectId, getClientId, getDeviceKind } from "./ClientIdentity";
 import { noteBackendArrivals } from "./OutgoingMessages";
 
 export interface SubagentMetadata {
@@ -727,7 +727,7 @@ export async function sendMessage(agentId: string, message: string, messageId?: 
       message: trimmed,
       message_id: id,
       client_id: getClientId(),
-      active_layout: getActiveLayoutSlug(),
+      active_layout: getActiveProjectId(),
       device_kind: getDeviceKind(),
     },
   });

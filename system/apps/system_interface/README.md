@@ -60,8 +60,9 @@ python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.p
 ```
 
 It classifies what changed and does only what is needed: refreshes dependencies
-if a manifest changed (`npm ci` / `uv tool install -e system/apps/system_interface
---reinstall`), rebuilds the gitignored `static/` bundle (frontend), and/or
+if a manifest changed (`npm ci`, plus the vendored mngr tool, the backend tool
+and the workspace venv -- the same environments `build_workspace.sh` builds),
+rebuilds the gitignored `static/` bundle (frontend), and/or
 pre-flights the merged code on a throwaway port before restarting the services
 agent so the editable backend re-imports the merged `.py` (backend). It then
 polls the loopback endpoint to confirm health and checks that the frontend
@@ -126,30 +127,143 @@ without it asset requests fall through to the SPA catch-all and come back as
 script -- a blank screen instead of the placeholder. A genuinely missing asset
 gets a plain 404.
 
-## Named layouts
+## Projects
 
-The dockview state is persisted as *named layouts* -- one JSON file per
-layout under the primary agent's `workspace_layout/layouts/` directory,
-with a `layouts_meta.json` registry (display names + last-active slug).
-Two defaults, `desktop` and `mobile`, always exist as names; a layout
-with no saved content renders as the fresh welcome-chat state. A
-pre-existing single `layout.json` is migrated into `desktop` on first
-access.
+The workspace shows one *view* at a time: a project, or Everything. The
+machine holds a single pool of objects -- chat agents, terminal
+sessions, browsers, registered apps, and ad-hoc URL pages -- and a
+project is a filter over that pool plus its own dockview arrangement.
+Membership is an explicit list of member refs (`chat:<agent-id>`,
+`terminal:<name>`, `service:<name>`, `service:browser?session=<name>`,
+`url:<hash>`) kept separately from the layout, and it is many-to-many:
+the same object can be in any number of projects at once, nothing owns
+anything, and there is no "move". A member with no panel is
+*backgrounded* -- still running, still listed in the rail -- so closing
+a tab never stops the underlying object or changes membership. "Remove
+from project" hides an object in that one view only; only the
+destructive per-kind verbs (below) actually end something, and they
+take it out of every project at once.
 
-Each browser client picks its layout on first connect by user agent
-(mobile browsers get `mobile`, everything else `desktop`), remembers
-the choice in localStorage, and can switch via the "+" menu's
-"Save layout... / Load layout... / Delete layout..." dialogs. Autosaves
-target the client's active layout; when one client saves a layout,
-other clients with it active re-apply it live. The REST surface is
-`GET /api/layouts`, `GET|POST /api/layouts/<slug>`,
-`POST /api/layouts` (save-as, server-side slugification), and
-`POST /api/layouts/<slug>/delete` (the last layout cannot be deleted).
+Everything is the unfiltered view, and the home. It is not a project --
+it has no registry entry and no member list, and cannot be renamed or
+deleted -- but it keeps its own arrangement like any other view. Its
+tab list enumerates the machine, so an object in no project at all
+still appears there.
 
-Chat messages sent through the UI (and every layout switch) are logged
+There is one live page per object, machine-wide: an app open in three
+projects is one iframe and one document, not three. Switching views,
+closing a tab, or re-arranging panes never reloads or duplicates
+anything; a page is torn down only when the object behind it is
+destroyed.
+
+Each view keeps one arrangement file per device kind under the primary
+agent's `workspace_layout/projects/` directory -- `<id>.json` for
+desktop, `<id>.mobile.json` for mobile -- with a `projects_meta.json`
+registry (per-project name, color, glyph, and member list, plus the
+last-active id). Membership is shared across devices; only tab
+placement differs, and each client loads and autosaves its own UA-derived
+kind's file. A view with no saved content on this device renders as the
+New Tab launcher. A machine upgrading from before projects folds its old
+`desktop` arrangement into one starter project ("Project 1") with each
+panel filed as a member -- and its old `mobile` layout into that
+project's mobile arrangement -- so nothing moves and nothing is lost.
+
+Names and last-used timestamps belong to the object, not to any one
+view. Every object is named the way the minds app names hosts: a
+human-readable display name paired with a canonical true name that is a
+deterministic transform of it. New chats, terminals, and browsers are
+named automatically -- "Chat 1", "Terminal 2", "Browser 1", taking the
+lowest free number -- and nothing asks for a name. A chat's display
+name lives on its mngr agent (its `display_name` label, whose canonical
+form -- `Chat-1` -- is the agent's mngr name), so `mngr list` and the
+tab always agree; renaming a chat (double-click its tab title, or its
+tab menu's Rename, or `layout.py rename`) goes through `mngr rename`
+and keeps the pair matched, refusing a name whose canonical form
+collides with another agent's. Terminals and browsers derive their
+display names from their identities ("Terminal 3" from the `terminal-3`
+tmux session, "Browser 1" from the daemon-minted `browser-1`) and have
+no rename gesture; an agent's `layout.py rename` for those kinds writes
+the machine-wide title registry
+(`workspace_layout/member_titles.json`), which every surface reads
+before falling back to the derived name. Last-used timestamps are keyed
+by member ref in `member_last_used.json` the same way, so recency ranks
+the same in every launcher. Destroying an object drops its name and
+recency with it.
+
+Each browser client remembers its active view in localStorage
+(`si-active-project-id`) and reopens it on the next connect, falling
+back to the first project when the stored one is gone. Autosaves target
+the active view; project, membership, title, and last-used changes
+broadcast over the WebSocket so every connected client catches up live,
+and a deletion moves clients sitting in the deleted project onto the
+fallback. The REST surface is `GET /api/projects`, `POST /api/projects`
+(create, server-side slugification of the name into the id),
+`GET|POST /api/projects/<id>` (read and autosave),
+`POST /api/projects/<id>/settings`, `POST /api/projects/<id>/delete`,
+`POST /api/projects/<id>/members` and
+`POST /api/projects/<id>/members/remove`,
+`POST /api/projects/members/share` (add one member to several projects),
+`GET /api/projects/members`, `POST /api/projects/panels/<panel_id>/delete`
+(drop one panel from every project that holds it),
+`GET|POST /api/member-titles`, and `GET|POST /api/member-last-used`.
+
+Down the left edge is a 37px project rail that expands on hover to
+float over the dock. Top to bottom: the active view's squiggle -- one
+of the ten glyphs in `frontend/src/views/squiggles.ts` -- and name (the
+row opens the view switcher, with "New project" and Everything;
+right-clicking it opens project settings: name, color, glyph, and
+delete); shortcut rows for Chat, File Viewer, Browser, and Terminal,
+which go to what the view already shows and create only when it shows
+none (every project is created with one chat of its own, and its Chat
+shortcut goes to that chat; File Viewer renders disabled until an app
+backs it); the project's pinned apps and an "All apps" popover --
+pinning an app in a project *is* its membership, so the popover's
+"Pinned in <project>" and "Unpinned" halves toggle the app's member ref
+and nothing else, and Everything pins nothing because it already lists
+every app; a search pill that filters rows by label and kind; and the
+view's tab list, open members as primary text and backgrounded ones as
+tertiary, each row with a hover kebab offering the verbs for its kind
+(Remove from project, Share app, Delete from this machine for chats,
+terminals, and browsers).
+
+New tabs come from a full-page New Tab launcher that opens as a real
+tab: tiles to start a chat, browser, or terminal from scratch, an "In
+this project" table of the view's members, and an "On this machine"
+table of everything else, each with a kind-filter menu and a
+last-active column ordered by the machine-wide recency store. Opening a
+row from the machine table *adds* it to the project on screen; nothing
+leaves the projects it was already in. The dock never goes empty --
+closing the last tab opens a launcher -- and a launcher folds up on its
+own once another panel takes focus.
+
+Every tab carries a minus that closes the tab and nothing else, plus a
+menu offering Refresh (reloads what the tab is showing -- service-wide
+for a service-backed iframe, the transcript and stream for a chat;
+terminals have none), Share for app tabs, Rename for chats (the one
+kind whose name is chosen rather than derived), Close tab, and one
+confirm-gated destructive verb per kind: Shut down agent, Shut down
+terminal, Shut down browser, or Unregister app. The shut-downs tear
+down the object itself, so it leaves *every* project, including ones no
+client currently has open; a destroyed chat's transcript stays
+accessible. Unregister app is deliberately weaker: it removes the app
+from the registry (`POST /api/apps/<name>/deregister`) and from every
+project, but nothing in the workspace supervises the program answering
+on the port, so the program keeps running.
+
+Chat messages sent through the UI (and every view switch) are logged
 to `workspace_layout/events/client_activity/events.jsonl` with the
-sending client's id, device kind, and active layout, so agents can
+sending client's id, device kind, and active view, so agents can
 attribute a request to a client via `layout.py context`.
+
+The named-layout store that projects replace is retired: its API is
+gone and only the on-disk files remain (`workspace_layout/layouts/`,
+read once as the migration source). The agent-facing layout ops below
+resolve their `--view` against the projects registry (including
+`Everything`), and an op naming no view goes to the one the connected
+client is looking at. A view is arranged per device -- desktop and
+mobile clients each save their own arrangement of the same view,
+sharing its members -- and the read ops take `--device` to pick which
+arrangement to read (default desktop).
 
 ## Driving the workspace layout from an agent
 
@@ -164,31 +278,37 @@ replace-url / refresh`.
 # with open/running flags. YAML by default, ``--json`` to switch.
 python3 system/scripts/layout.py list
 
-# See which browser clients exist, their device kind, current layout,
-# and recent messages (to attribute a request to a client/layout).
+# See which browser clients exist, their device kind, current project,
+# and recent messages (to attribute a request to a client/project).
 python3 system/scripts/layout.py context
+
+# List the views themselves: every project plus Everything, with members,
+# per-device content presence, and which clients are on each.
+python3 system/scripts/layout.py views
 
 # Surface the given service in a tab split alongside the primary chat
 # (reports a no-op if one is already open; use ``focus`` to bring it
-# to the foreground). Mutating ops always name their target layout.
-python3 system/scripts/layout.py open web --layout desktop
+# to the foreground). With no ``--view``, the op goes to the view the
+# connected client is looking at; name one to address another view.
+python3 system/scripts/layout.py open web --view Everything
 
 # Reload one tab (or, for ``service:<name>``, every iframe tied to
 # that service).
 python3 system/scripts/layout.py refresh web
 
 # Inspect the grid tree -- arrangements, sizes, active panel,
-# ref-resolved panel list -- of the last-active (or named) layout.
-python3 system/scripts/layout.py inspect --layout mobile
+# ref-resolved panel list -- of the named view (a project, or
+# ``Everything``); ``--device mobile`` reads its mobile arrangement.
+python3 system/scripts/layout.py inspect --view Everything
 ```
 
 Every op POSTs `{op, args, agent_id}` to the loopback-only
 `/api/layout/broadcast` endpoint on the system interface. Mutating ops
-require a target layout, are delivered only to connected clients with
-that layout active (HTTP 412 when there are none -- `load` a layout
-onto a client first), and acquire an in-process advisory mutex (HTTP
-409 with the in-flight holder's metadata on contention); reads bypass
-both. Panels are addressed by stable, type-prefixed refs:
+target a view (the connected client's own when unnamed), are delivered
+only to connected clients that have it active (HTTP 412 when there are
+none -- the error lists each connected client and what it is on), and
+acquire an in-process advisory mutex (HTTP 409 with the in-flight
+holder's metadata on contention); reads bypass both. Panels are addressed by stable, type-prefixed refs:
 `service:<name>`, `chat:<agent-name>`, `subagent:<session-id>`,
 `terminal:<short-hash>`, `url:<short-hash>`. Subcommands that take a
 "service or ref" argument also accept a bare service name (e.g. `web`

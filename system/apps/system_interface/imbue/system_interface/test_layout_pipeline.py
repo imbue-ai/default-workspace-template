@@ -51,18 +51,18 @@ _LAYOUT_SCRIPT = _REPO_ROOT / "system" / "scripts" / "layout.py"
 
 
 def _server_is_up(url: str) -> bool:
-    """Probe ``/api/layouts`` and treat any HTTP response as "lifespan finished".
+    """Probe ``/api/projects`` and treat any HTTP response as "lifespan finished".
 
-    Hits ``/api/layouts`` rather than ``/api/agents`` because the latter
+    Hits ``/api/projects`` rather than ``/api/agents`` because the latter
     calls ``discover_agents``, which reads the real mngr config and can
-    fail with HTTP 500 in dev environments. ``/api/layouts`` is a pure
+    fail with HTTP 500 in dev environments. ``/api/projects`` is a pure
     file-system read against the redirected ``MNGR_HOST_DIR``. Any HTTP
     response means the lifespan has run (so ``app.state.broadcaster`` /
     ``app.state.layout_mutex`` are set), which is what later assertions
     actually depend on.
     """
     try:
-        urllib.request.urlopen(f"{url}/api/layouts", timeout=0.5)
+        urllib.request.urlopen(f"{url}/api/projects", timeout=0.5)
         return True
     except urllib.error.HTTPError:
         return True
@@ -213,7 +213,7 @@ def test_mutating_op_without_client_on_layout_fails_with_412(
     sandbox.mkdir()
 
     result = _run_layout_script(
-        ["close", f"chat:{_AGENT_NAME}", "--layout", "desktop"], base_url=base_url, cwd=sandbox
+        ["close", f"chat:{_AGENT_NAME}", "--layout", "Project 1"], base_url=base_url, cwd=sandbox
     )
 
     assert result.returncode == 1
@@ -262,9 +262,9 @@ def test_open_terminal_returns_ref_via_stdout_and_broadcasts_panel_id(
     )
 
     client_queue = broadcaster.register()
-    broadcaster.set_client_info(client_queue, "client-1", "desktop", "desktop")
+    broadcaster.set_client_info(client_queue, "client-1", "project-1", "desktop")
     try:
-        result = _run_layout_script(["open", "terminal", "--layout", "desktop"], base_url=base_url, cwd=sandbox)
+        result = _run_layout_script(["open", "terminal", "--layout", "Project 1"], base_url=base_url, cwd=sandbox)
         assert result.returncode == 0, f"stderr={result.stderr!r}"
         printed_ref = result.stdout.strip()
         assert printed_ref.startswith("terminal:"), printed_ref
@@ -291,10 +291,10 @@ def test_open_close_chat_ref_broadcasts_layout_ops(
     sandbox.mkdir()
 
     client_queue = broadcaster.register()
-    broadcaster.set_client_info(client_queue, "client-1", "desktop", "desktop")
+    broadcaster.set_client_info(client_queue, "client-1", "project-1", "desktop")
     try:
         open_result = _run_layout_script(
-            ["open", f"chat:{_AGENT_NAME}", "--layout", "desktop"], base_url=base_url, cwd=sandbox
+            ["open", f"chat:{_AGENT_NAME}", "--layout", "Project 1"], base_url=base_url, cwd=sandbox
         )
         assert open_result.returncode == 0, f"stderr={open_result.stderr!r}"
         open_msg = _await_layout_op(client_queue, timeout=2.0)
@@ -304,7 +304,7 @@ def test_open_close_chat_ref_broadcasts_layout_ops(
         assert open_msg["args"] == {"ref": f"chat:{_AGENT_NAME}", "new_group": False}
 
         close_result = _run_layout_script(
-            ["close", f"chat:{_AGENT_NAME}", "--layout", "desktop"], base_url=base_url, cwd=sandbox
+            ["close", f"chat:{_AGENT_NAME}", "--layout", "Project 1"], base_url=base_url, cwd=sandbox
         )
         assert close_result.returncode == 0, f"stderr={close_result.stderr!r}"
         close_msg = _await_layout_op(client_queue, timeout=2.0)
@@ -331,10 +331,10 @@ def test_open_chat_terminal_ref_broadcasts_through_pipeline(
     sandbox.mkdir()
 
     client_queue = broadcaster.register()
-    broadcaster.set_client_info(client_queue, "client-1", "desktop", "desktop")
+    broadcaster.set_client_info(client_queue, "client-1", "project-1", "desktop")
     try:
         result = _run_layout_script(
-            ["open", f"chat-terminal:{_AGENT_NAME}", "--layout", "desktop"], base_url=base_url, cwd=sandbox
+            ["open", f"chat-terminal:{_AGENT_NAME}", "--layout", "Project 1"], base_url=base_url, cwd=sandbox
         )
         assert result.returncode == 0, f"stderr={result.stderr!r}"
         msg = _await_layout_op(client_queue, timeout=2.0)

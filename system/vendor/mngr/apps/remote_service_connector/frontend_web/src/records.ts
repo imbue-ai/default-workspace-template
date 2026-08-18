@@ -4,13 +4,41 @@
 
 import {
   type WireRecord,
+  ApiError,
   RevisionConflictError,
   listRecords,
   putRecord,
 } from "./api";
 import { openStore } from "./idb";
 
+function isRecordFormatConflict(error: ApiError): boolean {
+  const detail = error.detail as { code?: unknown } | null;
+  return (
+    typeof detail === "object" &&
+    detail !== null &&
+    detail.code === "record_format_too_new"
+  );
+}
+
 const MAX_CAS_RETRIES = 3;
+
+// The newest record semantics this bundle understands; a record whose wire
+// record_format exceeds it is read-only here (a stale open tab must not
+// rewrite meaning a newer deploy introduced). Absent means 1.
+export const SUPPORTED_RECORD_FORMAT = 1;
+
+export function isRecordTooNew(record: WireRecord | null): boolean {
+  return (record?.record_format ?? 1) > SUPPORTED_RECORD_FORMAT;
+}
+
+export class RecordTooNewError extends Error {
+  constructor() {
+    super(
+      "This machine was changed by a newer version of the app; reload the page to manage it.",
+    );
+    this.name = "RecordTooNewError";
+  }
+}
 
 // Push one record with CAS retry. `mutate` receives the freshest stored row
 // (or null when the record does not exist yet) and returns the desired
@@ -23,6 +51,7 @@ export async function pushRecordWithCas(
 ): Promise<WireRecord> {
   let stored: WireRecord | null = null;
   for (let attempt = 0; attempt < MAX_CAS_RETRIES; attempt++) {
+    if (isRecordTooNew(stored)) throw new RecordTooNewError();
     const desired = mutate(stored);
     const record: WireRecord = {
       ...desired,
@@ -35,6 +64,10 @@ export async function pushRecordWithCas(
       if (error instanceof RevisionConflictError && error.stored !== null) {
         stored = error.stored;
         continue;
+      }
+      // The server's record_format guard: terminal, surface the remedy.
+      if (error instanceof ApiError && isRecordFormatConflict(error)) {
+        throw new RecordTooNewError();
       }
       if (error instanceof RevisionConflictError) {
         // A conflict without the stored row: re-read the collection.
