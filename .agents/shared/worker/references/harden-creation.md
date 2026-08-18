@@ -22,29 +22,15 @@ it the normal way and commit the manifest changes so they appear in the merge.
 
 **The worktree isolates code, not data.** `data/` is gitignored, so a fresh
 worktree starts with an *empty* one while the user's real records stay in the
-live tree. That cuts both ways, and only one direction is obvious:
-
-- **Do not verify against the live store when the exercise writes.** The rules
-  and the tooling are in the `update-app` skill under "Protect the user's data
-  while you verify" -- read that section rather than improvising. In short:
-  reading live (including to render a preview) is fine; anything that writes,
-  mutates, or deletes goes to a copy outside `data/`, booted on a spare port via
-  `.agents/shared/scripts/serve_isolated_instance.py`, and the copy is what gets
-  deleted afterwards.
-- **An empty `data/` is not a safe default -- it is a silent false green.** A
-  test whose result depends on ambient on-disk state passes trivially when there
-  is no state: the code path that reads real records never runs, so nothing
-  exercises it and the suite reports success. This has already shipped a
-  "449 passed" hand-off from a worker whose `data/` was empty; the same suite
-  failed immediately when run from the live tree. Before believing a green run,
-  ask what the creation would have read and whether it was actually there.
-
-So: decide, per check, whether it needs real data. If it does, give it real data
--- a copy with the regenerable bulk excluded (caches, vendored repos), or the
-live store when the check only reads. Do not conclude a creation works with the
-user's data from where the files happen to sit; exercise it and observe. For an
-app that means driving it (Playwright is available -- see
-`web-frontend-testing.md`) and confirming the user's own records render.
+live tree, and that cuts both ways: a check that writes can still reach the live
+store, and a check that *reads* it passes vacuously against an empty one. So
+check whether anything under test reads `data/`. Anything that does needs data
+given to it deliberately -- a copy of the store with the regenerable bulk
+excluded (caches, vendored repos), or the live store when the check only reads --
+and you confirm the user's own records actually come back rather than inferring
+it from where the files sit. For an app that means driving it (Playwright is
+available -- see `web-frontend-testing.md`). The full contract and the tooling
+are in `.agents/shared/references/data-isolation.md`.
 
 ## Reporting back to the lead
 
