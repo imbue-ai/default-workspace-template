@@ -28,6 +28,6 @@ The composer guard matches on the first token for auth commands too, so `/login 
 
 `HarnessSpec.auth_modal` declares what "agent auth" opens: `managed` (claude) is the existing in-app login modal, unchanged; `terminal` (codex, pi) is a new shared notice rendering the harness's `auth_instructions` ("open the agent's terminal and run /logout then /login", etc). Every auth entry point routes through one dispatch — the composer's auth intercept, the chat footer's "Agent auth" entry, and the stream/snapshot auth-error hooks.
 
-## First-chat launchers
+## Introductory-chat launchers
 
-Behind `FEATURE_FLAG_ENABLE_OTHER_HARNESSES`, the new-tab menu gains "New first Claude chat" and "New first Codex chat", which create a chat with the `first` template stacked (`CreateChatRequest.first`), so the first-chat flow — fast launch, `/welcome`, the grace-period prompt — can be exercised without re-creating a workspace.
+Behind `FEATURE_FLAG_ENABLE_OTHER_HARNESSES`, the new-tab menu gains "New introductory Claude chat", "New introductory Codex chat" and "New introductory Pi chat", which create a chat with the `first` template stacked (`CreateChatRequest.first`), so the introductory-chat flow — fast launch where the harness supports it, `/welcome`, the grace-period prompt — can be exercised without re-creating a workspace.
