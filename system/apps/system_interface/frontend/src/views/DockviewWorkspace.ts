@@ -30,7 +30,7 @@ import { reloadInterface } from "../reload";
 import { reportActivity } from "../models/activityReporter";
 import { icon } from "./icons";
 import type { IconName } from "./icons";
-import { apiUrl, getPrimaryAgentId, areOtherHarnessesEnabled } from "../base-path";
+import { apiUrl, getPrimaryAgentId, areIntroductoryAgentsEnabled, areOtherHarnessesEnabled } from "../base-path";
 import { deriveServiceOrigin } from "../origin";
 import {
   addAgentsUpdatedListener,
@@ -859,6 +859,14 @@ function buildDropdownItems(
     // Introductory chats: the same launchers with the `first` create template
     // stacked on top (fast launch, /welcome, the first=true label), so the
     // first-chat flow can be exercised without re-creating a workspace.
+  }
+
+  // The introductory-chat launchers, on their own flag
+  // (FEATURE_FLAG_ENABLE_INTRODUCTORY_AGENTS_IN_OTHER_HARNESSES). Each stacks the
+  // `first` create template on the same chat role, so the introductory flow -- fast
+  // launch where the harness supports it, /welcome, the grace-period prompt -- can be
+  // exercised without re-creating a workspace.
+  if (areIntroductoryAgentsEnabled()) {
     items.push({
       label: "New introductory Claude chat",
       action: () => {
