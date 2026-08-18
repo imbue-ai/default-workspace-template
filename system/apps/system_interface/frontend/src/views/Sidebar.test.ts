@@ -23,8 +23,18 @@ vi.mock("../models/AgentManager", () => ({
   getApps: vi.fn(() => []),
 }));
 
+// Only the primary-agent id is faked: it is read from a meta tag the server
+// injects and cached on first call, so a test cannot set it by touching the
+// DOM. Everything else in the module (apiUrl, the feature flags) stays real,
+// since the rail's own project calls go through it.
+vi.mock("../base-path", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../base-path")>()),
+  getPrimaryAgentId: vi.fn(() => ""),
+}));
+
 import m from "mithril";
 
+import { getPrimaryAgentId } from "../base-path";
 import type { AppEntry } from "../models/AgentManager";
 import { getApps } from "../models/AgentManager";
 import type { ProjectInfo } from "../models/Projects";
@@ -487,6 +497,45 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
     expect(menuItemLabels(menu)).toEqual(["Refresh", "Rename", "Hide tab", "Quit Chat 1"]);
     expect(menu?.textContent).not.toContain("Remove from project");
     expect(menu?.textContent).not.toContain("Delete from this machine");
+  });
+
+  it("withholds Quit from the primary agent's own chat, as the tab menu does", () => {
+    // That agent runs the workspace's services, so quitting it would take the
+    // machine down with it. The tab's build has always withheld the verb; the
+    // rail renders the same shared set, so it has to withhold it too -- and by
+    // id, since a chat can be renamed to anything.
+    vi.mocked(getPrimaryAgentId).mockReturnValue("agent-primary");
+    try {
+      const rows: SidebarTabRow[] = [
+        { ref: "chat:agent-primary", kind: "chat", label: "Chat 1", isOpen: true },
+        { ref: "chat:agent-2", kind: "chat", label: "Chat 2", isOpen: true },
+      ];
+      const { root, redraw } = mountSidebar(makeAttrs({ rows }));
+      root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+      redraw();
+
+      expect(menuItemLabels(openRowMenuByContextClick(root, redraw, "Chat 1"))).toEqual([
+        "Refresh",
+        "Rename",
+        "Hide tab",
+      ]);
+    } finally {
+      vi.mocked(getPrimaryAgentId).mockReturnValue("");
+    }
+  });
+
+  it("still offers Quit on any other chat row", () => {
+    vi.mocked(getPrimaryAgentId).mockReturnValue("agent-primary");
+    try {
+      const rows: SidebarTabRow[] = [{ ref: "chat:agent-2", kind: "chat", label: "Chat 2", isOpen: true }];
+      const { root, redraw } = mountSidebar(makeAttrs({ rows }));
+      root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+      redraw();
+
+      expect(menuItemLabels(openRowMenuByContextClick(root, redraw, "Chat 2"))).toContain("Quit Chat 2");
+    } finally {
+      vi.mocked(getPrimaryAgentId).mockReturnValue("");
+    }
   });
 
   it("omits Hide tab for a backgrounded row, since it has no open tab to hide", () => {

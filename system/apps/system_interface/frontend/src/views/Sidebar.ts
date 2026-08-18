@@ -27,11 +27,13 @@
  */
 
 import m from "mithril";
+import { getPrimaryAgentId } from "../base-path";
 import type { AppEntry } from "../models/AgentManager";
 import { displayNameForMember } from "../models/MemberTitles";
 import {
   EVERYTHING_VIEW_ID,
   EVERYTHING_VIEW_NAME,
+  chatAgentIdFromRef,
   createProject,
   isEverythingView,
   memberRef,
@@ -589,6 +591,12 @@ export function Sidebar(): m.Component<SidebarAttrs> {
    * currently has a tab (the rename is filed by ref, not by panel), so it
    * always opens the rail's own inline editor.
    */
+  /** Whether a row is the primary agent's own chat, which has no destroy verb. */
+  function isPrimaryAgentRow(row: SidebarTabRow): boolean {
+    const agentId = chatAgentIdFromRef(row.ref);
+    return agentId !== null && agentId === getPrimaryAgentId();
+  }
+
   function railMenuActions(row: SidebarTabRow, attrs: SidebarAttrs): ObjectMenuActions {
     return {
       refresh: () => attrs.onRefreshRow(row),
@@ -600,7 +608,11 @@ export function Sidebar(): m.Component<SidebarAttrs> {
         renamingRef = row.ref;
       },
       hideTab: row.isOpen ? () => attrs.onHideRowTab(row) : null,
-      quit: { label: `Quit ${row.label}`, run: () => attrs.onDeleteFromMachine(row) },
+      // Withheld for the primary agent, exactly as the tab's own build
+      // withholds it: that agent runs the workspace's services, so quitting it
+      // would take the machine down. Both surfaces recognize it by id rather
+      // than by name, since a chat can be renamed to anything.
+      quit: isPrimaryAgentRow(row) ? null : { label: `Quit ${row.label}`, run: () => attrs.onDeleteFromMachine(row) },
     };
   }
 
