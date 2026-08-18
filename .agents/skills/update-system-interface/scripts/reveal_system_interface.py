@@ -808,6 +808,13 @@ def snapshot_bundle(repo_root: Path) -> Path | None:
     """
     bundle = repo_root / STATIC_DIR
     if not (bundle / "index.html").exists():
+        # Said out loud for the same reason the copy failure below is: the
+        # emergency path tells its reader to check the stderr for why there is
+        # no snapshot to hand over, so both reasons have to leave a line here.
+        sys.stderr.write(
+            "note: no built bundle to copy aside (none has been built yet); a "
+            "failed reveal will have to build one to recover.\n"
+        )
         return None
     # Deliberately outside the repo: a stray directory inside it would dirty the
     # tree and trip the next reveal's clean-tree precondition.
