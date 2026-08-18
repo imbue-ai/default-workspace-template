@@ -254,3 +254,31 @@ export function computeTranscriptSlices(input: TranscriptSlicesInput): Transcrip
 
   return { segments, totalHeight };
 }
+
+/**
+ * Resolve the scrollTop that lands `anchorKey` at `offsetInViewport` pixels below
+ * the top of its row, given the *current* keys/heights. Used to restore a reading
+ * position across a mutation that shifted row indices (e.g. an older-page backfill
+ * prepending rows), where the pre-mutation and post-mutation height functions can
+ * disagree (measured vs. estimated) enough that scrollTop alone can't be carried
+ * over unchanged. Returns null if `anchorKey` is no longer present (e.g. evicted),
+ * so the caller can fall back to its normal scroll handling.
+ */
+export function resolveAnchorScrollTop(input: {
+  keyToIndex: Map<string, number>;
+  getHeight: (index: number) => number;
+  phantomTopHeight: number;
+  anchorKey: string;
+  offsetInViewport: number;
+}): number | null {
+  const { keyToIndex, getHeight, phantomTopHeight, anchorKey, offsetInViewport } = input;
+  const index = keyToIndex.get(anchorKey);
+  if (index === undefined) {
+    return null;
+  }
+  let topPad = phantomTopHeight;
+  for (let i = 0; i < index; i++) {
+    topPad += getHeight(i);
+  }
+  return topPad + offsetInViewport;
+}
