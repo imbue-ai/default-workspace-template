@@ -1698,7 +1698,16 @@ function derivedLabelForMemberRef(ref: string): string {
     case "chat": {
       const agent = getAgentById(body);
       if (agent !== undefined) return chatDisplayName(agent);
-      return getProtoAgents().find((proto) => proto.agent_id === body)?.name ?? body;
+      const protoName = getProtoAgents().find((proto) => proto.agent_id === body)?.name;
+      if (protoName !== undefined) return protoName;
+      // A chat the machine does not know yet: a create whose proto broadcast
+      // was missed, or a restored panel for an agent still resolving. The open
+      // tab's current title -- the display name the create handed back, or a
+      // saved layout's -- beats the bare agent id, which must never reach a
+      // surface the user reads.
+      const panelTitle =
+        openPanelId === null ? undefined : dockview?.panels.find((panel) => panel.id === openPanelId)?.title;
+      return panelTitle !== undefined && panelTitle !== "" ? panelTitle : body;
     }
     case "terminal":
       return terminalDisplayName(body);
