@@ -23,6 +23,7 @@ from loguru import logger as _loguru_logger
 from pydantic import Field
 from simple_websocket import ConnectionClosed
 from werkzeug.exceptions import HTTPException
+from werkzeug.exceptions import NotFound
 
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -403,12 +404,17 @@ def _favicon() -> Response:
 def _serve_asset(filename: str) -> Response:
     assets_directory = STATIC_DIRECTORY / "assets"
     # A missing asset is a plain 404, as for the favicon above, rather than the
-    # HTML error page ``send_from_directory`` would raise. What keeps an asset
-    # request off the SPA catch-all is the route itself, registered
-    # unconditionally in ``create_application``; nothing here decides that.
-    if not (assets_directory / filename).is_file():
+    # HTML error page ``send_from_directory`` would raise. Existence and safety
+    # are both left to ``send_from_directory``: ``filename`` arrives with any
+    # ``..`` segments intact, so joining it onto the directory ourselves would
+    # stat paths outside it -- an existence oracle for the whole filesystem.
+    # What keeps an asset request off the SPA catch-all is the route itself,
+    # registered unconditionally in ``create_application``; nothing here
+    # decides that.
+    try:
+        return send_from_directory(assets_directory, filename)
+    except NotFound:
         return Response(status=404)
-    return send_from_directory(assets_directory, filename)
 
 
 def _discover_with_filters() -> list[AgentInfo]:

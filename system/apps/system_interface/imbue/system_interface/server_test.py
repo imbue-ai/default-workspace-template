@@ -172,6 +172,29 @@ def test_assets_404_rather_than_falling_through_to_the_spa_shell(tmp_path: Path)
     assert FRONTEND_BUILT_HEADER not in response.headers
 
 
+def test_assets_do_not_reveal_whether_files_outside_the_directory_exist(tmp_path: Path) -> None:
+    """A ``..`` path must get the same plain 404 whether or not its target exists.
+
+    Flask's ``<path:>`` converter passes ``..`` segments through unnormalized, so
+    any pre-check that joins the raw filename onto the assets directory stats
+    paths outside it -- and a response that differs between an existing and a
+    missing target is an existence oracle for the whole filesystem.
+    """
+    static_dir = tmp_path / "static"
+    (static_dir / "assets").mkdir(parents=True)
+    (static_dir / "index.html").write_text("<html>app</html>")
+
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
+        test_client = create_application(build_test_state()).test_client()
+        # index.html exists one level above assets/; a file two levels up does not.
+        exists_outside = test_client.get("/assets/../index.html")
+        missing_outside = test_client.get("/assets/../../no-such-file")
+
+    for response in (exists_outside, missing_outside):
+        assert response.status_code == 404
+        assert response.data == b""
+
+
 def test_assets_serve_a_bundle_that_appeared_after_startup(tmp_path: Path) -> None:
     """The route must survive being constructed before the bundle exists.
 
