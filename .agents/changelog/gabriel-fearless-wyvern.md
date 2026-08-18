@@ -1,6 +1,6 @@
 Fixes for issues surfaced by migrating a real pre-declutter workspace.
 
-`migrate-workspace`'s `detect-layout` now resolves its roots through any symlink before returning them. On a pre-declutter source `/mngr` is a symlink, and `find` will not descend a symlinked start path -- so the session scan matched nothing and exited 0, reporting a workspace full of agents as having none. `list-agents` resolves its own `--host-dir` too, so it is correct when run on its own, and an empty scan now says so explicitly rather than passing for "this source has no agents."
+`migrate-workspace`'s `detect-layout` now resolves its roots through any symlink before returning them. On a pre-declutter source `/mngr` is a symlink, and `find` will not descend a symlinked start path -- so the session scan matched nothing and exited 0, and every agent came back with no transcript to adopt (the `ls` that enumerates the agents follows the symlink fine; only the transcript scan is rooted at it). `list-agents` resolves its own `--host-dir` too, so it is correct when run on its own, and an empty scan now says so explicitly rather than passing for "this source has no agents."
 
 `migrate-workspace` reads `host-backup-now`'s exit code instead of matching its printed text, so a tick that prints nothing is no longer mistaken for a successful backup. It also distinguishes the two sides: the destination is the side the migration writes to, so a missing restore point there now stops and asks, where previously only the source was checked.
 
