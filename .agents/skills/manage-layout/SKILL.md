@@ -81,6 +81,11 @@ Consequences for you:
 | Put a new terminal in the same tab group as your chat | `python3 system/scripts/layout.py split terminal --relative-to=self --direction=within` |
 | Close a tab | `python3 system/scripts/layout.py close <ref>` |
 
+A tab you open is filed into **your own project** -- the one named by
+your `project` label -- when you have one; otherwise it is filed into
+the view it opened in. Either way the tab appears in the view the user
+is looking at.
+
 `open` is the opinionated default. It puts the new tab to the right
 of your chat, joining whatever group already lives there if one is
 open. This *joining-existing-group* rule applies uniformly to every

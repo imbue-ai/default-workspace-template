@@ -288,6 +288,19 @@ export function chooseInitialViewId(projects: readonly ProjectInfo[], storedId: 
  * project that has been deleted since the id was recorded -- callers that need
  * a project's name, color, glyph or members have to handle both the same way.
  */
+/** The project an agent-driven open should file its object into: the
+ *  requesting agent's own project (its ``project`` label) when that project
+ *  is actually registered, else null -- the caller falls back to the view the
+ *  tab opened in. Keeps agent-opened tabs landing in the agent's project
+ *  rather than whichever view the user happened to be looking at. */
+export function filingProjectForAgentOp(
+  requesterProject: string | null | undefined,
+  projects: readonly ProjectInfo[],
+): string | null {
+  if (!requesterProject) return null;
+  return projects.some((project) => project.project_id === requesterProject) ? requesterProject : null;
+}
+
 export function projectForViewId(projects: readonly ProjectInfo[], viewId: string): ProjectInfo | null {
   return projects.find((project) => project.project_id === viewId) ?? null;
 }
