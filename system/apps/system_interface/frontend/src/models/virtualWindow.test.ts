@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { computeVisibleWindow, computeTranscriptSlices, type WindowSegment } from "./virtualWindow";
+import {
+  computeVisibleWindow,
+  computeTranscriptSlices,
+  resolveAnchorScrollTop,
+  type WindowSegment,
+} from "./virtualWindow";
 
 const uniform =
   (height: number) =>
@@ -255,5 +260,79 @@ describe("computeTranscriptSlices", () => {
       expect(i).toBeGreaterThanOrEqual(0);
       expect(i).toBeLessThan(10);
     }
+  });
+});
+
+describe("resolveAnchorScrollTop", () => {
+  it("sums the heights of every row above the anchor plus its in-row offset", () => {
+    const top = resolveAnchorScrollTop({
+      keyToIndex: new Map([
+        ["a", 0],
+        ["b", 1],
+        ["c", 2],
+      ]),
+      getHeight: uniform(100),
+      phantomTopHeight: 0,
+      anchorKey: "c",
+      offsetInViewport: 15,
+    });
+    expect(top).toBe(2 * 100 + 15);
+  });
+
+  it("folds in the phantom top height", () => {
+    const top = resolveAnchorScrollTop({
+      keyToIndex: new Map([["a", 0]]),
+      getHeight: uniform(100),
+      phantomTopHeight: 400,
+      anchorKey: "a",
+      offsetInViewport: 0,
+    });
+    expect(top).toBe(400);
+  });
+
+  it("returns null when the anchor key is no longer present", () => {
+    const top = resolveAnchorScrollTop({
+      keyToIndex: new Map([["a", 0]]),
+      getHeight: uniform(100),
+      phantomTopHeight: 0,
+      anchorKey: "missing",
+      offsetInViewport: 0,
+    });
+    expect(top).toBeNull();
+  });
+
+  it("resolves the same key to a different position after rows are prepended -- the core backfill fix", () => {
+    // Before a backfill: "anchor" is the first loaded row (index 0), read 20px into it.
+    const before = resolveAnchorScrollTop({
+      keyToIndex: new Map([["anchor", 0]]),
+      getHeight: uniform(100),
+      phantomTopHeight: 400, // 4 unloaded events reserved at the flat estimate
+      anchorKey: "anchor",
+      offsetInViewport: 20,
+    });
+    expect(before).toBe(420);
+
+    // After backfilling 4 older events (mismatched estimate: they measure 240px
+    // each, not the flat 160px/event the phantom region assumed): "anchor" is now
+    // at index 4, phantomTopHeight dropped to 0 (nothing left unloaded).
+    const afterHeights = [240, 240, 240, 240, 100]; // 4 new rows + the original "anchor" row
+    const after = resolveAnchorScrollTop({
+      keyToIndex: new Map([
+        ["new0", 0],
+        ["new1", 1],
+        ["new2", 2],
+        ["new3", 3],
+        ["anchor", 4],
+      ]),
+      getHeight: (i) => afterHeights[i],
+      phantomTopHeight: 0,
+      anchorKey: "anchor",
+      offsetInViewport: 20,
+    });
+    // Despite the estimate mismatch (4 * 240 = 960, not the 400 the phantom region
+    // reserved), the anchor still lands at the same 20px-into-the-row offset --
+    // just at a scrollTop that reflects the real prepended height, not the stale one.
+    expect(after).toBe(4 * 240 + 20);
+    expect(after).not.toBe(before);
   });
 });

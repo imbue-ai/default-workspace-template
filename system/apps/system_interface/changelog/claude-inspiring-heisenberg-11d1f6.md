@@ -1,0 +1,3 @@
+Fix a chat transcript scroll bug: scrolling up to read older history could disturb the reader's position when the next page of history loaded in.
+
+The virtualized transcript sizes the not-yet-loaded history region with a flat per-event estimate, while a freshly loaded page's rows report their own per-role estimate before they've been measured. Those two estimates can diverge enough, over a full page, to push the windowing math out of sync with what native scroll anchoring alone can smooth over. ChatPanel now explicitly captures the row at the top of the viewport before an older-page fetch fires and restores it to its exact prior on-screen offset once the page lands, instead of relying solely on the estimate happening to line up.

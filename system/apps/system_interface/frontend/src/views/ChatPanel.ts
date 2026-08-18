@@ -24,7 +24,7 @@ import {
   isConversationNotFound,
   MAX_HELD_EVENTS,
 } from "../models/Response";
-import { computeTranscriptSlices } from "../models/virtualWindow";
+import { computeTranscriptSlices, computeVisibleWindow, resolveAnchorScrollTop } from "../models/virtualWindow";
 import { isSelectionActiveWithin } from "../models/scrollFollow";
 import { OVERSCAN_PX } from "./row-measurement";
 import { resolveSelectionRowRange, selectionStateWithin } from "./scroll-selection";
@@ -154,6 +154,17 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   // reserved heights now sized by a stable constant, the top of the loaded window
   // doesn't drift as rows measure, so a single pin suffices -- no timed settle.
   let pendingPinToWindowTop = false;
+  // Captured just before an older-page backfill fires: the row sitting at the top
+  // of the viewport (by stable key) and its exact pixel offset within it. Restored
+  // by applyScrollPosition once the page lands, because native scroll anchoring
+  // alone isn't reliable here -- phantomTopHeight shrinks by the flat
+  // ESTIMATED_EVENT_HEIGHT_PX per newly loaded event, while those same events
+  // report their own windowing height via the per-role ESTIMATED_*_HEIGHT_PX
+  // fallback (row-measurement.ts) once loaded, and the two estimates routinely
+  // diverge by more than OVERSCAN_PX across a 50-event page. When they do, the
+  // windowing math picks a different render window on this very redraw and can
+  // evict the row the user was reading before the browser gets a say.
+  let pendingBackfillAnchor: { key: string; offsetInViewport: number } | null = null;
 
   // File drag-and-drop: dropping a file anywhere over the chat stages it as a
   // composer attachment. ``dragDepth`` counts dragenter minus dragleave across
@@ -306,8 +317,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
 
     logWs.onmessage = (event: MessageEvent) => {
       const data = JSON.parse(event.data as string) as
-        | { line: string }
-        | { done: true; success: boolean; error: string | null };
+        { line: string } | { done: true; success: boolean; error: string | null };
 
       if ("line" in data) {
         logLines.push(data.line);
@@ -404,6 +414,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     currentAgentId = agentId;
     scroll.reset();
     backfillInFlight = false;
+    pendingBackfillAnchor = null;
     loadAgent(agentId);
   }
 
@@ -442,6 +453,14 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       notFoundRetryInFlight = false;
       m.redraw();
     });
+  }
+
+  // Measured height of the row currently at ``cachedRows[index]``, falling back to
+  // its per-role estimate before it has ever been mounted. Shared between the
+  // render-time windowing math and the backfill-anchor bookkeeping below so both
+  // agree on the same heights.
+  function rowHeightAt(index: number): number {
+    return scroll.rowMeasurer.getHeight(cachedRows[index].key) ?? cachedRows[index].estimate;
   }
 
   /**
@@ -507,9 +526,25 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       return;
     }
 
-    // Near the top of the loaded rows -> page older. Native scroll anchoring keeps
-    // the viewport fixed on the content being read when the older page lands above.
+    // Near the top of the loaded rows -> page older. Capture the row currently at
+    // the top of the viewport (by key) and its exact pixel offset, so
+    // applyScrollPosition can restore it once the page lands: native scroll
+    // anchoring alone can't be trusted across this transition (see
+    // pendingBackfillAnchor's declaration for why).
     if (hasMoreBefore(agentId) && element.scrollTop - phantomTopHeight < BACKFILL_TRIGGER_PX) {
+      const anchorWindow = computeVisibleWindow({
+        count: cachedRows.length,
+        getHeight: rowHeightAt,
+        scrollTop: Math.max(0, element.scrollTop - phantomTopHeight),
+        viewportHeight: element.clientHeight,
+        overscanPx: 0,
+      });
+      if (anchorWindow.startIndex < cachedRows.length) {
+        pendingBackfillAnchor = {
+          key: cachedRows[anchorWindow.startIndex].key,
+          offsetInViewport: element.scrollTop - phantomTopHeight - anchorWindow.topPad,
+        };
+      }
       backfillInFlight = true;
       fetchBackfillEvents(agentId).finally(() => {
         backfillInFlight = false;
@@ -532,9 +567,33 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
 
   function applyScrollPosition(element: HTMLElement): void {
     // Hidden panels and the tail-follow pin are handled by the shared controller;
-    // this wrapper only adds the offset-jump pin that is specific to the main chat.
+    // this wrapper only adds the offset-jump and backfill-anchor pins that are
+    // specific to the main chat.
     if (!panelVisible) {
       return;
+    }
+    // An older-page backfill just landed (or was discarded/deduped -- either way
+    // maybePage's .finally() redraws): restore the captured anchor row to its
+    // exact prior on-screen offset, recomputed from the now-current rows/heights.
+    // This overrides whatever window native scroll anchoring produced, so it does
+    // not matter whether that mismatched the corrected position.
+    if (pendingBackfillAnchor !== null) {
+      const anchor = pendingBackfillAnchor;
+      pendingBackfillAnchor = null;
+      const newTop = resolveAnchorScrollTop({
+        keyToIndex: cachedKeyToIndex,
+        getHeight: rowHeightAt,
+        phantomTopHeight,
+        anchorKey: anchor.key,
+        offsetInViewport: anchor.offsetInViewport,
+      });
+      if (newTop !== null) {
+        scroll.pinTo(element, newTop);
+        return;
+      }
+      // The anchor row is no longer loaded (e.g. evicted, or a jump replaced the
+      // window while the backfill was in flight) -- fall through to the normal
+      // path below.
     }
     // After an offset jump, pin the viewport once to the top of the freshly loaded
     // rows (just below the top reserved spacer) so the user lands on the jumped-to
@@ -697,7 +756,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     }
     const rows = cachedRows;
 
-    const getHeight = (index: number): number => scroll.rowMeasurer.getHeight(rows[index].key) ?? rows[index].estimate;
+    const getHeight = rowHeightAt;
 
     // Reserve space above and below the loaded window for history that exists on
     // the server but isn't loaded yet, so the scrollbar reflects the whole
