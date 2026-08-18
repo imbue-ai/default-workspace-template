@@ -56,9 +56,9 @@ INITIAL_CHAT_SIGNAL = STATE_DIR / "initial_chat_created"
 # Basename (under $MNGR_HOST_DIR) of the file holding the initial chat agent's id,
 # read by system_interface's welcome_resend to address the resend by id.
 INITIAL_CHAT_AGENT_ID_FILENAME = "initial_chat_agent_id"
-# The human-readable name the workspace's first chat is created under. mngr
-# canonicalizes it to the true name `Chat-1` and keeps this as the agent's
-# `display_name` label; the New Tab launcher numbers its own chats from here.
+# The human-readable name the workspace's first chat is created under, carried
+# as the agent's `display_name` label. The system interface reads the label as
+# the chat's display name and numbers later chats against it ("Chat 2", ...).
 _INITIAL_CHAT_DISPLAY_NAME = "Chat 1"
 # The agent name that display name canonicalizes to. Passed literally rather
 # than letting mngr derive it: a workspace's vendored mngr may predate
@@ -260,48 +260,6 @@ def _persist_initial_chat_agent_id(agent_id: str) -> None:
     logger.info("Persisted initial chat agent id {} for welcome resend", agent_id)
 
 
-def _file_initial_chat_title(agent_id: str) -> None:
-    """Name the initial chat "Chat 1" in the workspace's machine-wide title store.
-
-    mngr now carries the typed name itself (the create above labels the agent
-    `display_name=Chat 1`), but nothing lifts that label into the serialized
-    AgentState the way `project` is lifted, and the frontend resolves a chat's
-    name through this store, falling back to the agent's true name (`Chat-1`).
-    So this store is still the frontend's source for the name the tab shows, and
-    it stays until the label is plumbed through -- at which point this whole
-    function goes away. Filing it here also matches the New Tab launcher, which
-    files "Chat N" for the chats it creates and numbers them off this store.
-    The store is system_interface's `member_titles.json` under the services
-    agent's workspace_layout; its format is repeated here (not imported) to
-    keep bootstrap's dependencies minimal, the same trade
-    `FAST_MODE_DECISION_FILE` makes above. Bootstrap runs before supervisord
-    starts the system interface, so nothing else is touching the file yet.
-    Best-effort: the chat works fine under its derived name.
-    """
-    host_dir = os.environ.get(_HOST_DIR_ENV_VAR, "")
-    services_agent_id = os.environ.get(_AGENT_ID_ENV_VAR, "")
-    if not host_dir or not services_agent_id:
-        logger.warning("Host dir or agent id unset; leaving the initial chat under its derived name")
-        return
-    layout_dir = Path(host_dir) / "agents" / services_agent_id / "workspace_layout"
-    titles_path = layout_dir / "member_titles.json"
-    try:
-        stored = json.loads(titles_path.read_text()) if titles_path.exists() else {}
-    except (json.JSONDecodeError, OSError):
-        stored = {}
-    title_by_ref = stored.get("title_by_ref") if isinstance(stored, dict) else None
-    if not isinstance(title_by_ref, dict):
-        title_by_ref = {}
-    title_by_ref[f"chat:{agent_id}"] = _INITIAL_CHAT_DISPLAY_NAME
-    try:
-        layout_dir.mkdir(parents=True, exist_ok=True)
-        titles_path.write_text(json.dumps({"title_by_ref": title_by_ref}, indent=2))
-    except OSError as e:
-        logger.warning("Failed to file the initial chat's title: {}", e)
-        return
-    logger.info("Filed the initial chat's display name as 'Chat 1'")
-
-
 def _create_initial_chat_agent(labels: dict[str, str]) -> bool:
     """Invoke `mngr create` for the initial chat agent; persist its id. Returns success."""
     cmd = _build_create_chat_command(labels)
@@ -318,7 +276,6 @@ def _create_initial_chat_agent(labels: dict[str, str]) -> bool:
     agent_id = _parse_created_agent_id(result.stdout)
     if agent_id is not None:
         _persist_initial_chat_agent_id(agent_id)
-        _file_initial_chat_title(agent_id)
     else:
         logger.error(
             "Initial chat agent created but could not parse agent_id from output: {!r}",

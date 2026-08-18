@@ -1,23 +1,22 @@
-"""Random ~2-word english browser names + server-side name validation.
+"""Numbered browser names + server-side name validation.
 
-Browsers are addressed by NAME, not a sequential int -- like mngr agent names
-(e.g. ``alex-smith``). The name is the addressing key everywhere: the CLI
-``<name>`` arg, ``service:browser?session=<name>``, the cast WS path
+Browsers are addressed by NAME. The name is the addressing key everywhere: the
+CLI ``<name>`` arg, ``service:browser?session=<name>``, the cast WS path
 ``/browsers/<name>/cast``, the manifest ``id``, and the persistent profile dir
 ``browser-use-user-data-dir-<name>``. :func:`is_valid_browser_name` therefore
 guarantees a name is safe as a URL path segment, a query value, and a filesystem
 path component.
 
-The generator reuses mngr's own agent-name generator
-(``imbue.mngr.utils.name_generator.generate_agent_name`` with
-``AgentNameStyle.ENGLISH`` -- dash-joined first-last, e.g. ``alex-smith``) when
-it is importable, so a daemon-picked name and a frontend-prefilled name look
-alike. The import is attempted ONCE at module load (a ``_generate`` callable is
-bound), so the importability check costs nothing per call; a small local
-first/last word-pair generator is the fallback when mngr is unavailable.
+A daemon-minted name is the first free ``browser-<N>`` -- the canonical form of
+the human-readable "Browser N" the workspace UI shows for it, mirroring how
+chats pair "Chat 2" with the agent name ``Chat-2``. "First free" fills gaps:
+closing "Browser 1" deletes its profile and frees the slot for the next create
+(see ``session.py``, whose taken set also spans the manifest and the on-disk
+profiles so a pending restore or an orphaned profile can never be collided
+with). Browsers created under older builds keep their random english names --
+every name stays valid, only the minting changed.
 """
 
-import random
 import re
 
 # Lowercase alnum words joined by single dashes, 1..40 chars, no leading/trailing/
@@ -27,47 +26,23 @@ import re
 NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _MAX_NAME_LEN = 40
 
-# Local fallback word lists (~20 each), lifted verbatim from mngr's
-# resources/data/name_lists/agent/english.txt + english_last.txt. Only used when the
-# mngr name generator cannot be imported (e.g. a standalone browser-lib install).
-_FALLBACK_FIRST = (
-    "alex", "blake", "casey", "drew", "elliot", "finn", "harper", "jamie",
-    "jordan", "kai", "logan", "morgan", "parker", "quinn", "reese", "riley",
-    "sage", "taylor", "tory", "tyler",
-)
-_FALLBACK_LAST = (
-    "smith", "johnson", "williams", "brown", "jones", "davis", "miller",
-    "wilson", "moore", "taylor", "anderson", "thomas", "jackson", "white",
-    "harris", "martin", "thompson", "garcia", "martinez", "robinson",
-)
+# The stem daemon-minted names are numbered under. ``browser-<N>`` is the
+# canonical form of the "Browser N" display name the workspace UI derives from
+# it (see the system interface's ``derivedLabelForMemberRef``).
+NUMBERED_NAME_STEM = "browser"
 
+def first_free_numbered_browser_name(taken_names: set[str]) -> str:
+    """The first free ``browser-<N>`` name (N counts from 1).
 
-def _local_generate() -> str:
-    """A tiny english first-last name pair (the fallback when mngr isn't importable)."""
-    return f"{random.choice(_FALLBACK_FIRST)}-{random.choice(_FALLBACK_LAST)}"
-
-
-try:
-    from imbue.mngr.primitives import AgentNameStyle
-    from imbue.mngr.utils.name_generator import generate_agent_name
-
-    def _mngr_generate() -> str:
-        # ENGLISH = dash-joined first-last (e.g. "alex-smith"); the SAME source the
-        # frontend modal pre-fills from, so a typed name and a generated one look alike.
-        return str(generate_agent_name(AgentNameStyle.ENGLISH))
-
-    _generate = _mngr_generate
-except ImportError:
-    _generate = _local_generate
-
-
-def generate_browser_name() -> str:
-    """Return a random ~2-word english name (e.g. ``alex-smith``).
-
-    Uniqueness within the live fleet is the manager's responsibility (it regenerates
-    on collision under its create lock); this just produces a syntactically-valid name.
+    ``taken_names`` is every name the caller must not collide with -- the live
+    registry, the manifest's pending-restore entries, and the on-disk profile
+    dirs. Uniqueness within the live fleet is the manager's responsibility (it
+    allocates under its create lock); this just picks the number.
     """
-    return _generate()
+    n = 1
+    while f"{NUMBERED_NAME_STEM}-{n}" in taken_names:
+        n += 1
+    return f"{NUMBERED_NAME_STEM}-{n}"
 
 
 def is_valid_browser_name(name: str) -> bool:

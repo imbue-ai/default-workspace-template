@@ -13,10 +13,10 @@ uv run agentic-browser-fleet <command> ...
 
 ## First: there are no browsers until you make one
 
-The fleet starts **empty** -- there is no default browser. Run `new` first; it prints a **name** (a random ~2-word name like `alex-smith`), and you drive that browser by its name. Browsers are addressed by name everywhere, **not by number**.
+The fleet starts **empty** -- there is no default browser. Run `new` first; it prints a **name** (numbered `browser-<N>`, e.g. `browser-1` -- shown as "Browser N" in the workspace UI), and you drive that browser by its name. Browsers are addressed by name everywhere, **not by number**.
 
 ```text
-uv run agentic-browser-fleet new          -> started browser alex-smith
+uv run agentic-browser-fleet new          -> started browser browser-1
 ```
 
 (Or `new my-browser` to choose the name yourself.)
@@ -28,18 +28,18 @@ uv run agentic-browser-fleet new          -> started browser alex-smith
 3. Act: `click <name> <index>` (or `input` / `select` / `scroll` / `keys` / `open`).
 4. `state <name>` again to see what changed. Repeat.
 
-Worked end to end (after `new` printed the name `alex-smith`):
+Worked end to end (after `new` printed the name `browser-1`):
 
 ```text
-uv run agentic-browser-fleet open alex-smith https://example.com      -> ok: navigate
-uv run agentic-browser-fleet state alex-smith
-  browser alex-smith @ https://example.com/  (Example Domain)
+uv run agentic-browser-fleet open browser-1 https://example.com      -> ok: navigate
+uv run agentic-browser-fleet state browser-1
+  browser browser-1 @ https://example.com/  (Example Domain)
   Example Domain
   This domain is for use in illustrative examples...
   [18]<a /> Learn more
-uv run agentic-browser-fleet click alex-smith 18                      -> ok: click
-uv run agentic-browser-fleet state alex-smith     # re-state: page is now iana.org
-  browser alex-smith @ https://www.iana.org/help/example-domains  (Example Domains)
+uv run agentic-browser-fleet click browser-1 18                      -> ok: click
+uv run agentic-browser-fleet state browser-1     # re-state: page is now iana.org
+  browser browser-1 @ https://www.iana.org/help/example-domains  (Example Domains)
   ...
 ```
 
@@ -55,11 +55,11 @@ The `[number]` indices come from the **latest** `state` and are **ephemeral** --
 If you click against a stale index the CLI refuses rather than mis-clicking:
 
 ```text
-uv run agentic-browser-fleet click alex-smith 18
-  that element index is stale -- run `state alex-smith` again first      (exit 1)
+uv run agentic-browser-fleet click browser-1 18
+  that element index is stale -- run `state browser-1` again first      (exit 1)
 ```
 
-Treat that as "look first": run `state alex-smith`, find the element under its new number, click that.
+Treat that as "look first": run `state browser-1`, find the element under its new number, click that.
 
 ### No API key needed
 
@@ -76,7 +76,7 @@ uv run agentic-browser-fleet ls
 ```
 
 ```text
-browser alex-smith: you -- 2 tab(s), active: https://example.com/invoices
+browser browser-1: you -- 2 tab(s), active: https://example.com/invoices
 browser riley-jones: agent alice -- 1 tab(s), active: https://news.example.com
 browser morgan-lee: human (took control) -- 1 tab(s), active: https://bank.example.com
 ```
@@ -90,7 +90,7 @@ browser morgan-lee: human (took control) -- 1 tab(s), active: https://bank.examp
       [1]  Dashboard           https://example.com/home
   ```
 
-- `new` starts a browser with a random name and prints it (`-> started browser alex-smith`). Pass `new <name>` to choose the name yourself (e.g. `new my-browser`); a **duplicate** name is rejected (pick another -- note a *crashed* browser still holds its name until you `close` it), and an invalid name (anything other than lowercase letters/digits joined by single dashes) is rejected too. `new` returns the name **immediately**; the browser's Chromium launches in the background (serialized, so back-to-back `new`s come up one at a time). If your very next command lands while it's still launching it returns `still starting up (Chromium is launching) -- try again in a few seconds` (exit 3) -- just wait a moment and retry the same command; it is **not** an error.
+- `new` starts a browser with a random name and prints it (`-> started browser browser-1`). Pass `new <name>` to choose the name yourself (e.g. `new my-browser`); a **duplicate** name is rejected (pick another -- note a *crashed* browser still holds its name until you `close` it), and an invalid name (anything other than lowercase letters/digits joined by single dashes) is rejected too. `new` returns the name **immediately**; the browser's Chromium launches in the background (serialized, so back-to-back `new`s come up one at a time). If your very next command lands while it's still launching it returns `still starting up (Chromium is launching) -- try again in a few seconds` (exit 3) -- just wait a moment and retry the same command; it is **not** an error.
 - `close <name>` closes an entire browser (all its tabs) and retires its name (never reused). Use when permanently done with a browser. For a single tab, use `tab <name> close`.
 - The fleet is **capped (2 by default)**. `new` past the cap returns `2/2 browsers open -- close one first` -- `release` or `close` one you're done with first.
 - If there are no browsers yet, `ls` says so. There is **no default browser**: run `new` first (it prints a name), then drive by that name.
@@ -100,13 +100,13 @@ browser morgan-lee: human (took control) -- 1 tab(s), active: https://bank.examp
 ### Looking at the page
 
 ```bash
-uv run agentic-browser-fleet state alex-smith
+uv run agentic-browser-fleet state browser-1
 ```
 
-Prints `browser alex-smith @ <url>  (<title>)`, a `tabs:` line if more than one tab is open, then the numbered interactive elements. A page with none prints `(no interactive elements -- try screenshot)`. This is your eyes -- run it constantly.
+Prints `browser browser-1 @ <url>  (<title>)`, a `tabs:` line if more than one tab is open, then the numbered interactive elements. A page with none prints `(no interactive elements -- try screenshot)`. This is your eyes -- run it constantly.
 
 ```bash
-uv run agentic-browser-fleet screenshot alex-smith
+uv run agentic-browser-fleet screenshot browser-1
 # -> screenshot saved: /path/to/shot.png  (Read it to view)
 ```
 
@@ -126,22 +126,22 @@ uv run agentic-browser-fleet screenshot alex-smith
 A typical fill-and-submit:
 
 ```bash
-uv run agentic-browser-fleet state alex-smith                          # find the field indices
-uv run agentic-browser-fleet input alex-smith 5 "alice@example.com"    # email field
-uv run agentic-browser-fleet input alex-smith 6 "hunter2"              # password field
-uv run agentic-browser-fleet click alex-smith 7                        # the "Log in" button
-uv run agentic-browser-fleet state alex-smith                          # re-state: landed on the dashboard?
+uv run agentic-browser-fleet state browser-1                          # find the field indices
+uv run agentic-browser-fleet input browser-1 5 "alice@example.com"    # email field
+uv run agentic-browser-fleet input browser-1 6 "hunter2"              # password field
+uv run agentic-browser-fleet click browser-1 7                        # the "Log in" button
+uv run agentic-browser-fleet state browser-1                          # re-state: landed on the dashboard?
 ```
 
-(Or `keys alex-smith "Enter"` to submit the focused form instead of clicking the button.)
+(Or `keys browser-1 "Enter"` to submit the focused form instead of clicking the button.)
 
 ### Tabs within one browser
 
 ```bash
-uv run agentic-browser-fleet tab alex-smith list           # list this browser's tabs
-uv run agentic-browser-fleet tab alex-smith new --url https://example.com/help
-uv run agentic-browser-fleet tab alex-smith switch 1       # make tab index 1 active
-uv run agentic-browser-fleet tab alex-smith close 2        # close tab index 2
+uv run agentic-browser-fleet tab browser-1 list           # list this browser's tabs
+uv run agentic-browser-fleet tab browser-1 new --url https://example.com/help
+uv run agentic-browser-fleet tab browser-1 switch 1       # make tab index 1 active
+uv run agentic-browser-fleet tab browser-1 close 2        # close tab index 2
 ```
 
 `tab` with no action defaults to `list`. After `switch` / `new` / `close` the active page changed, so **`state <name>` again** before clicking.
@@ -149,10 +149,10 @@ uv run agentic-browser-fleet tab alex-smith close 2        # close tab index 2
 ### Ownership commands
 
 ```bash
-uv run agentic-browser-fleet acquire alex-smith            # reserve browser alex-smith across commands
-uv run agentic-browser-fleet acquire alex-smith --reclaim  # take control back from a human -- ONLY after you ask and they explicitly confirm
-uv run agentic-browser-fleet release alex-smith            # let it go (alias: unlock alex-smith)
-uv run agentic-browser-fleet handoff alex-smith "solve the CAPTCHA"  # hand to the human (alias: request-human)
+uv run agentic-browser-fleet acquire browser-1            # reserve browser browser-1 across commands
+uv run agentic-browser-fleet acquire browser-1 --reclaim  # take control back from a human -- ONLY after you ask and they explicitly confirm
+uv run agentic-browser-fleet release browser-1            # let it go (alias: unlock browser-1)
+uv run agentic-browser-fleet handoff browser-1 "solve the CAPTCHA"  # hand to the human (alias: request-human)
 ```
 
 You usually don't need `acquire`: your first command on a browser auto-acquires it and you keep a sticky lease across the commands that follow. Use `acquire` to explicitly reserve a browser, or to queue behind / reclaim one that's held. `release` (alias `unlock`) hands it back; releasing one that wasn't yours prints `browser <name> was not yours to release` and still exits `0`.
@@ -179,7 +179,7 @@ Every browser has exactly one controller; every command's output names the owner
 - **A browser can crash.** If Chromium is killed, your next command on it returns (exit 1):
 
   ```text
-  browser alex-smith crashed (Chromium was killed -- e.g. out of memory) and is gone.
+  browser browser-1 crashed (Chromium was killed -- e.g. out of memory) and is gone.
   Start a fresh one with `new` (it gets a new name).
   ```
 
@@ -197,10 +197,10 @@ Every browser has exactly one controller; every command's output names the owner
 When you hit a CAPTCHA, reCAPTCHA / hCaptcha / Cloudflare "verify you're human" challenge, an "I'm not a robot" checkbox, an SMS / 2FA / OTP code you don't have, or a login needing the user's own credentials -- **do not try to solve it yourself** (you'll fail and may get the account flagged). Hand it off:
 
 ```bash
-uv run agentic-browser-fleet handoff alex-smith "solve the CAPTCHA on the sign-in page"
+uv run agentic-browser-fleet handoff browser-1 "solve the CAPTCHA on the sign-in page"
 ```
 
-`handoff` (alias `request-human`) puts you at the **front** of that browser's resume queue, hands control to the human (pinned -- won't pass to another agent), and surfaces the pane so they can see it. In the **same turn**: tell the user exactly what to do and on which page, then **end your turn** (exit 2). You're woken first when they hand control back -- **re-run `state alex-smith`** to confirm the challenge cleared, then carry on.
+`handoff` (alias `request-human`) puts you at the **front** of that browser's resume queue, hands control to the human (pinned -- won't pass to another agent), and surfaces the pane so they can see it. In the **same turn**: tell the user exactly what to do and on which page, then **end your turn** (exit 2). You're woken first when they hand control back -- **re-run `state browser-1`** to confirm the challenge cleared, then carry on.
 
 ## Live view vs. your output
 
@@ -229,33 +229,33 @@ The pane is **viewer only** -- your real output (`state` listings, `ok:`/error l
 ## Quick recipes
 
 ```bash
-# Make a browser, then look and act (assume `new` printed `alex-smith`).
+# Make a browser, then look and act (assume `new` printed `browser-1`).
 uv run agentic-browser-fleet new
-uv run agentic-browser-fleet state alex-smith
-uv run agentic-browser-fleet click alex-smith 12
-uv run agentic-browser-fleet state alex-smith            # always re-state after acting
+uv run agentic-browser-fleet state browser-1
+uv run agentic-browser-fleet click browser-1 12
+uv run agentic-browser-fleet state browser-1            # always re-state after acting
 
 # Read a page by eye when the text list isn't enough.
-uv run agentic-browser-fleet open alex-smith https://example.com/pricing
-uv run agentic-browser-fleet screenshot alex-smith       # then Read the printed PNG path
+uv run agentic-browser-fleet open browser-1 https://example.com/pricing
+uv run agentic-browser-fleet screenshot browser-1       # then Read the printed PNG path
 
 # Search and submit with the keyboard.
-uv run agentic-browser-fleet open alex-smith https://news.ycombinator.com
-uv run agentic-browser-fleet state alex-smith
-uv run agentic-browser-fleet input alex-smith 3 "browser automation"
-uv run agentic-browser-fleet keys alex-smith "Enter"
-uv run agentic-browser-fleet state alex-smith
+uv run agentic-browser-fleet open browser-1 https://news.ycombinator.com
+uv run agentic-browser-fleet state browser-1
+uv run agentic-browser-fleet input browser-1 3 "browser automation"
+uv run agentic-browser-fleet keys browser-1 "Enter"
+uv run agentic-browser-fleet state browser-1
 
 # Two browsers, independently (no queueing -- different names).
-uv run agentic-browser-fleet new                          # -> started browser alex-smith
+uv run agentic-browser-fleet new                          # -> started browser browser-1
 uv run agentic-browser-fleet new                          # -> started browser riley-jones
-uv run agentic-browser-fleet open alex-smith https://site-a.com
+uv run agentic-browser-fleet open browser-1 https://site-a.com
 uv run agentic-browser-fleet open riley-jones https://site-b.com
 
 # Hit a CAPTCHA -- hand it to the user, then STOP.
-uv run agentic-browser-fleet handoff alex-smith "solve the CAPTCHA on the sign-in page"
+uv run agentic-browser-fleet handoff browser-1 "solve the CAPTCHA on the sign-in page"
 # -> tell the user what to do, end your turn; you resume first when they hand back.
-uv run agentic-browser-fleet state alex-smith            # (on resume) confirm the challenge cleared
+uv run agentic-browser-fleet state browser-1            # (on resume) confirm the challenge cleared
 
 # Human took over. To resume BEFORE they hand it back, ask first and end your turn;
 # reclaim ONLY after they explicitly confirm (a "keep going" counts):
@@ -268,7 +268,7 @@ uv run agentic-browser-fleet state riley-jones            # re-state after regai
 When a page is genuinely beyond step-by-step control -- a `<canvas>` app, a drag-heavy visual editor, a flow where `state` shows nothing useful even with a screenshot -- you can hand the whole goal to an autonomous browser-use agent instead of driving it yourself:
 
 ```bash
-uv run agentic-browser-fleet task alex-smith "log into example.com and download last month's invoice"
+uv run agentic-browser-fleet task browser-1 "log into example.com and download last month's invoice"
 ```
 
 This streams the agent's `[thinking]`/`[action]` trace into your output and ends with a `done:` line you relay. It **uses an LLM and needs an API key**, and it takes the wheel away from your direct control for its duration. Flags: `--reclaim` (resume a human-held browser, same rules as above), `--no-wait` (fail fast instead of queueing behind another agent), `--max-wait S` (bound the queue wait, then exit `4`), `--no-pane` (don't pull it into a UI pane). **Prefer driving it yourself** -- reach for `task` only when direct control truly can't see or manipulate the page.
