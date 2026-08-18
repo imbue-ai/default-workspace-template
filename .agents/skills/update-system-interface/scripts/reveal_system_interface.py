@@ -351,7 +351,7 @@ def classify_changes(paths: Sequence[str]) -> ChangeSet:
             frontend_manifest = True
         elif path.startswith(f"{FRONTEND_DIR}/src/"):
             frontend_src = True
-        elif path == f"{APP_DIR}/pyproject.toml" or path == "uv.lock":
+        elif _is_backend_manifest(path):
             backend_manifest = True
         elif (
             path.startswith(f"{APP_DIR}/imbue/")
@@ -364,6 +364,29 @@ def classify_changes(paths: Sequence[str]) -> ChangeSet:
         frontend_manifest=frontend_manifest,
         backend_src=backend_src,
         backend_manifest=backend_manifest,
+    )
+
+
+def _is_backend_manifest(path: str) -> bool:
+    """Whether ``path`` can change what the backend's environment resolves to.
+
+    Not just the app's own manifest: the backend imports the vendored mngr and
+    shells out to it, both as editable installs, so a vendored package's
+    ``pyproject.toml`` moves their dependency closure exactly as the app's own
+    does -- and is the change that actually ships in a release. Every
+    ``system/vendor/mngr: refresh`` commit in this repo's history leaves
+    ``uv.lock`` untouched, so keying only off the lock would miss the case this
+    refresh exists for. The root manifest counts too: it holds the
+    ``[tool.uv.sources]`` those installs resolve through.
+    """
+    if path in (f"{APP_DIR}/pyproject.toml", "uv.lock", "pyproject.toml"):
+        return True
+    parts = path.split("/")
+    return (
+        len(parts) == 6
+        and parts[:3] == ["system", "vendor", "mngr"]
+        and parts[3] == "libs"
+        and parts[5] == "pyproject.toml"
     )
 
 
@@ -561,7 +584,7 @@ def _refresh_workspace_view(repo_root: Path, runner: Runner) -> None:
         sys.stderr.write(completed.stderr)
 
 
-def _tool_location(script: Path) -> tuple[Path, Path] | None:
+def _tool_location(script: Path, tool_name: str) -> tuple[Path, Path] | None:
     """Return ``(tool_dir, bin_dir)`` for the tool that owns console ``script``.
 
     We have to ask rather than let uv default, because uv's tool directory
@@ -576,7 +599,13 @@ def _tool_location(script: Path) -> tuple[Path, Path] | None:
     that tool's own environment
     (``#!/root/.local/share/uv/tools/imbue-mngr/bin/python3``), so the script we
     are about to re-resolve tells us precisely which installation it belongs to.
-    ``None`` means we could not read that, and the caller lets uv default.
+    ``None`` means we could not confirm one, and the caller lets uv default.
+    Confirming matters as much as finding: these names also exist in the
+    workspace venv (both are ``uv sync --all-packages`` members), and a venv
+    console script would yield a "tool directory" inside the repo tree -- so we
+    would build a tool environment into the served checkout, dirty the tree that
+    the next reveal refuses to run on, and overwrite the venv's own entrypoint.
+    The receipt is what makes it a uv tool, so we require it.
     """
     try:
         shebang = script.read_text(errors="replace").split("\n", 1)[0]
@@ -591,18 +620,32 @@ def _tool_location(script: Path) -> tuple[Path, Path] | None:
     parents = Path(interpreter).parents
     if len(parents) < 3:
         return None
-    return parents[2], script.parent
+    tool_dir = parents[2]
+    if not (tool_dir / tool_name / _RECEIPT).is_file():
+        return None
+    return tool_dir, script.parent
 
 
-def _uv_tool_env(executable: str, runner: Runner) -> dict:
+def _uv_tool_env(executable: str, tool_name: str, runner: Runner) -> dict:
     """The environment for a ``uv tool`` call, aimed at ``executable``'s own
-    installation when we can tell which that is."""
+    installation when we can confirm which that is.
+
+    Falling back to uv's default is the safe answer but not a good outcome --
+    it is how the refresh came to rebuild a copy nothing runs -- so say so
+    rather than let it pass silently.
+    """
     env = dict(os.environ)
     found = runner.which(executable)
-    location = _tool_location(Path(found)) if found is not None else None
-    if location is not None:
-        env["UV_TOOL_DIR"] = str(location[0])
-        env["UV_TOOL_BIN_DIR"] = str(location[1])
+    location = _tool_location(Path(found), tool_name) if found is not None else None
+    if location is None:
+        sys.stderr.write(
+            f"refresh: could not identify the uv tool behind '{executable}'"
+            f" ({found or 'not on PATH'}); letting uv choose the tool directory,"
+            " which may rebuild a copy that is not the one being run.\n"
+        )
+        return env
+    env["UV_TOOL_DIR"] = str(location[0])
+    env["UV_TOOL_BIN_DIR"] = str(location[1])
     return env
 
 
@@ -644,7 +687,14 @@ def _tool_extras(tool_name: str, repo_root: Path, runner: Runner, env: dict) -> 
         if _canonical(name) == _canonical(tool_name):
             continue  # the base package, which we re-pin to its in-tree source
         editable = requirement.get("editable") or requirement.get("directory")
-        extras.extend(["--with-editable", editable] if editable else ["--with", name])
+        if editable:
+            extras.extend(["--with-editable", editable])
+        elif requirement.get("git"):
+            extras.extend(["--with", f"{name} @ git+{requirement['git']}"])
+        elif requirement.get("specifier"):
+            extras.extend(["--with", f"{name}{requirement['specifier']}"])
+        else:
+            extras.extend(["--with", name])
     return extras
 
 
@@ -664,7 +714,7 @@ def _reinstall_tool(
     from the index, quietly swapping the workspace's own vendored code for a
     published release.
     """
-    env = _uv_tool_env(executable, runner)
+    env = _uv_tool_env(executable, tool_name, runner)
     _run_checked(
         runner,
         [
@@ -700,9 +750,9 @@ def _refresh_dependencies(changes: ChangeSet, repo_root: Path, runner: Runner) -
         _reinstall_tool(TOOL_NAME, TOOL_NAME, APP_DIR, repo_root, runner)
         _run_checked(
             runner,
-            ["uv", "sync", "--all-packages"],
+            ["uv", "sync", "--all-packages", "--frozen"],
             repo_root,
-            "uv sync --all-packages",
+            "uv sync --all-packages --frozen",
         )
 
 

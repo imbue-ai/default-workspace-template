@@ -265,10 +265,14 @@ motion -- you do not run `npm`/`uv`/`mngr` by hand. It:
 - **Classifies** what the merge changed (frontend source, frontend manifest,
   backend source, backend manifest).
 - **Refreshes dependencies only if a manifest changed** -- `npm ci` for the
-  frontend, `uv tool install -e system/apps/system_interface --reinstall` for the
-  backend. This is essential: a plain restart does *not* re-resolve the
-  editable-installed tool's dependencies, so a backend dependency addition would
-  otherwise crash the service on restart.
+  frontend, and for the backend the same environments `build_workspace.sh`
+  builds: the vendored mngr tool, the backend tool, and the workspace venv. This
+  is essential: a plain restart does *not* re-resolve an editable install's
+  dependencies, so a dependency addition would otherwise crash the service on
+  restart. An editable install pins only the *source path*, so a merge that
+  advances `system/vendor/mngr` stales the `mngr` CLI's closure the same way --
+  which is why a vendored package's `pyproject.toml` counts as a backend
+  manifest, alongside the app's own and the root `pyproject.toml` / `uv.lock`.
 - **Pre-flights a backend change** by booting the merged code on a throwaway port
   before touching the live service. If it can't boot, the live service is never
   restarted -- the UI never goes down.
