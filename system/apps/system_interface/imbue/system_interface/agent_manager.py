@@ -54,9 +54,6 @@ from imbue.system_interface.agent_discovery import read_claude_config_dir_from_e
 from imbue.system_interface.harnesses.activity import HarnessActivityTracker
 from imbue.system_interface.harnesses.auth_check import HarnessAuthCheck
 from imbue.system_interface.harnesses.auth_check import find_unauthenticated_harness_reason
-from imbue.system_interface.harnesses.claude.launch_defaults import FAST_MODE_BEFORE_DECISION
-from imbue.system_interface.harnesses.claude.launch_defaults import get_workspace_fast_mode_decision_path
-from imbue.system_interface.harnesses.claude.launch_defaults import read_workspace_fast_mode_decision
 from imbue.system_interface.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.system_interface.harnesses.harness_type import DEFAULT_HARNESS
 from imbue.system_interface.harnesses.harness_type import HarnessType
@@ -157,7 +154,6 @@ def _build_chat_create_command(
     agent_id: str,
     primary_labels: dict[str, str],
     harness: HarnessType,
-    is_fast_mode_enabled: bool,
     extra_role_templates: tuple[str, ...] = (),
     project_id: str = "",
 ) -> list[str]:
@@ -192,11 +188,11 @@ def _build_chat_create_command(
         "user_created=true",
         "--no-connect",
     ]
-    # Per-harness launch settings (e.g. claude's fast-mode override; empty for the others).
-    cmd.extend(get_harness_spec(harness).launch_settings_overrides(is_fast_mode_enabled))
     # The project the chat starts out filed in: the one it was created inside
     # when there is one, else whatever the primary agent carries. The chat agent
-    # belongs to its workspace by sharing the host; it carries no workspace label.
+    # belongs to its workspace by sharing the host; it carries no workspace
+    # label. (Fast-mode launch settings ride the ``first`` create template now,
+    # so the builder no longer takes a fast-mode flag.)
     project_label = _chat_project_label(primary_labels, project_id)
     if project_label:
         cmd.extend(["--label", f"project={project_label}"])
@@ -818,17 +814,12 @@ class AgentManager:
             msg = f"Cannot determine work directory for primary agent {self._own_agent_id}"
             raise AgentCreationError(msg)
 
-        # New chats launch at the workspace's fast-mode setting: fast until the
-        # user answers the prompt, then whatever they chose. Only claude reads it.
-        decision = read_workspace_fast_mode_decision(get_workspace_fast_mode_decision_path(Path(work_dir)))
-        is_fast_mode_enabled = FAST_MODE_BEFORE_DECISION if decision is None else decision
         cmd = _build_chat_create_command(
             self._mngr_binary,
             name,
             agent_id,
             primary_labels,
             harness,
-            is_fast_mode_enabled,
             extra_role_templates,
             project_id,
         )

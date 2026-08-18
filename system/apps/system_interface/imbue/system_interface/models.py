@@ -101,18 +101,10 @@ class PoweredByResponse(FrozenModel):
     label: str = Field(description="The agent's harness product name, shown as a 'Powered by <label>' credit")
 
 
-class WorkspaceFastModeResponse(FrozenModel):
-    """Response from GET|POST /api/workspace/fast-mode."""
+class FastModePromptAnsweredResponse(FrozenModel):
+    """Response from POST /api/agents/<id>/fast-mode-answered."""
 
-    fast_mode: bool | None = Field(
-        description="The fast-mode setting new chat agents launch with, or null if the user has not answered yet"
-    )
-
-
-class SetWorkspaceFastModeRequest(FrozenModel):
-    """Request body for POST /api/workspace/fast-mode."""
-
-    enabled: bool = Field(description="True to keep fast mode on for this workspace, False to turn it off")
+    status: str = Field(description="'ok' when the answered label was recorded")
 
 
 class AttachmentUploadResponse(FrozenModel):
@@ -303,6 +295,10 @@ class CreateChatRequest(FrozenModel):
 
     name: str = Field(description="Name for the new chat agent")
     harness: HarnessType = Field(default=HarnessType.CLAUDE, description="Harness to run the agent on")
+    first: bool = Field(
+        default=False,
+        description="Stack the `first` create template: /welcome, the first=true label, and a fast-mode launch",
+    )
 
 
 class CreateAgentResponse(FrozenModel):

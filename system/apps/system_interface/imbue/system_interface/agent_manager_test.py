@@ -1089,7 +1089,6 @@ def test_chat_create_argv_selects_harness_by_type_and_role_by_template() -> None
         agent_id="agent-123",
         primary_labels={},
         harness=HarnessType.CLAUDE,
-        is_fast_mode_enabled=True,
     )
     assert argv[argv.index("--type") + 1] == HarnessType.CLAUDE
     templates = [argv[i + 1] for i, tok in enumerate(argv) if tok == "--template"]
@@ -1104,14 +1103,11 @@ def test_codex_chat_create_argv_accepted_by_live_cli() -> None:
         agent_id="agent-123",
         primary_labels={"project": "proj"},
         harness=HarnessType.CODEX,
-        is_fast_mode_enabled=True,
     )
     assert_mngr_argv_valid(argv)
     assert argv[argv.index("--type") + 1] == HarnessType.CODEX
     templates = [argv[i + 1] for i, tok in enumerate(argv) if tok == "--template"]
     assert templates == ["chat"]
-    # fastMode is a claude setting, so it must not ride a codex create.
-    assert not any("fastMode" in token for token in argv)
 
 
 def test_chat_create_argv_accepted_by_live_cli() -> None:
@@ -1121,7 +1117,6 @@ def test_chat_create_argv_accepted_by_live_cli() -> None:
         agent_id="agent-123",
         primary_labels={"workspace": "ws", "project": "proj"},
         harness=HarnessType.CLAUDE,
-        is_fast_mode_enabled=True,
     )
     assert_mngr_argv_valid(argv)
     # The chat carries user_created so the OOM launch wrapper puts it in the
@@ -1129,30 +1124,35 @@ def test_chat_create_argv_accepted_by_live_cli() -> None:
     assert "user_created=true" in argv
 
 
-def test_chat_create_argv_carries_the_workspace_fast_mode_setting() -> None:
-    """Chat is the only type that starts fast, so its create must say which way."""
-    enabled_argv = _build_chat_create_command(
+def test_chat_create_argv_carries_no_launch_settings() -> None:
+    """Plain chats launch at the harness defaults: no `-S` overrides at all. Fast
+    mode rides only the `first` create template (see .mngr/settings.toml), never
+    the argv, so every non-first chat starts at standard speed."""
+    argv = _build_chat_create_command(
         mngr_binary="mngr",
         name="demo",
         agent_id="agent-123",
         primary_labels={},
         harness=HarnessType.CLAUDE,
-        is_fast_mode_enabled=True,
     )
-    disabled_argv = _build_chat_create_command(
+    assert "-S" not in argv
+    assert not any("fastMode" in token for token in argv)
+
+
+def test_chat_create_argv_stacks_extra_role_templates_after_chat() -> None:
+    """The `first` launcher stacks its template via extra_role_templates; the
+    resulting argv must resolve against the live CLI."""
+    argv = _build_chat_create_command(
         mngr_binary="mngr",
         name="demo",
         agent_id="agent-123",
         primary_labels={},
-        harness=HarnessType.CLAUDE,
-        is_fast_mode_enabled=False,
+        harness=HarnessType.CODEX,
+        extra_role_templates=("first",),
     )
-    assert "agent_types.claude.settings_overrides.fastMode=true" in enabled_argv
-    assert "agent_types.claude.settings_overrides.fastMode=false" in disabled_argv
-    # Both forms must resolve against the live mngr config model, not just parse
-    # as CLI tokens: an unresolvable -S key path fails the create outright.
-    assert_mngr_argv_valid(enabled_argv)
-    assert_mngr_argv_valid(disabled_argv)
+    assert_mngr_argv_valid(argv)
+    templates = [argv[i + 1] for i, tok in enumerate(argv) if tok == "--template"]
+    assert templates == ["chat", "first"]
 
 
 # --- the chat's originating project (the mngr ``project`` label) ---
@@ -1182,7 +1182,6 @@ def test_chat_create_argv_labels_the_project_the_chat_was_created_in() -> None:
         agent_id="agent-123",
         primary_labels={"workspace": "ws", "project": "taxes"},
         harness=HarnessType.CLAUDE,
-        is_fast_mode_enabled=True,
         project_id="website-redesign",
     )
     assert "project=website-redesign" in argv
@@ -1197,7 +1196,6 @@ def test_chat_create_argv_omits_the_project_label_when_there_is_no_project() -> 
         agent_id="agent-123",
         primary_labels={"workspace": "ws"},
         harness=HarnessType.CLAUDE,
-        is_fast_mode_enabled=True,
     )
     assert not any(token.startswith("project=") for token in argv)
     assert_mngr_argv_valid(argv)

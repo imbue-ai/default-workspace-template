@@ -2377,13 +2377,14 @@ async function openNewChat(
   targetGroup: DockviewGroupPanel | null,
   launcherPanelId: string | null,
   harness: ChatHarness = "claude",
+  isFirst: boolean = false,
 ): Promise<void> {
   const agentName = await fetchRandomAgentName();
   const viewId = mountedViewId;
   const projectId = viewId !== null && !isEverythingView(viewId) ? viewId : "";
   let agentId: string;
   try {
-    agentId = await createChatAgent(agentName, projectId, harness);
+    agentId = await createChatAgent(agentName, projectId, harness, isFirst);
   } catch (e) {
     alert(`Failed to create chat: ${(e as Error).message}`);
     return;
@@ -2837,12 +2838,23 @@ function openTabOfTypeInGroup(
   targetGroup: DockviewGroupPanel | null,
   launcherPanelId: string | null,
 ): void {
-  if (tabType === "chat" || tabType === "codex" || tabType === "pi") {
+  if (
+    tabType === "chat" ||
+    tabType === "codex" ||
+    tabType === "pi" ||
+    tabType === "intro-chat" ||
+    tabType === "intro-codex" ||
+    tabType === "intro-pi"
+  ) {
     // The harness tiles are the same create as Chat -- the same `chat` role in
-    // the primary's work dir -- stacked on a different harness template. No
-    // dialog for any of them: the name is auto-minted like every other create.
-    const harness: ChatHarness = tabType === "chat" ? "claude" : tabType;
-    void openNewChat(targetGroup, launcherPanelId, harness).then(() => {
+    // the primary's work dir -- stacked on a different harness template. The
+    // intro- variants additionally stack the `first` create template (fast
+    // launch where the harness supports it, /welcome, the first=true label).
+    // No dialog for any of them: the name is auto-minted like every other create.
+    const isFirst = tabType.startsWith("intro-");
+    const bareKind = isFirst ? tabType.slice("intro-".length) : tabType;
+    const harness: ChatHarness = bareKind === "chat" ? "claude" : (bareKind as ChatHarness);
+    void openNewChat(targetGroup, launcherPanelId, harness, isFirst).then(() => {
       m.redraw();
     });
     return;

@@ -34,14 +34,23 @@ import m from "mithril";
 import { buildEverythingMembers, partitionByMembership, serviceNameFromRef } from "../models/Projects";
 import type { MachineInventory, MemberKind } from "../models/Projects";
 import { serviceIconMarkup } from "./appIcon";
-import { areOtherHarnessesEnabled } from "../base-path";
+import { areIntroductoryAgentsEnabled, areOtherHarnessesEnabled } from "../base-path";
 import { hoverTooltipAttrs } from "./hoverTooltip";
 import { icon } from "./icons";
 
 /** The kinds of object the "Open new" tiles can start from scratch. Distinct
  *  from MemberKind: "files" has no member ref yet (nothing backs it), and the
  *  tiles never start a URL tab. */
-export type LaunchKind = "chat" | "codex" | "pi" | "files" | "browser" | "terminal";
+export type LaunchKind =
+  | "chat"
+  | "codex"
+  | "pi"
+  | "intro-chat"
+  | "intro-codex"
+  | "intro-pi"
+  | "files"
+  | "browser"
+  | "terminal";
 
 /** One object the launcher can open. */
 export interface LauncherRow {
@@ -244,10 +253,14 @@ const LAUNCHER_PATHS = {
 } as const;
 
 /** Full <svg> string for one launcher glyph. */
-function launcherIcon(name: keyof typeof LAUNCHER_PATHS | "codex" | "pi", size: number): string {
-  // The harness kinds are chats on another harness, so they wear the chat
-  // bubble rather than getting glyphs of their own.
-  const glyph: keyof typeof LAUNCHER_PATHS = name === "codex" || name === "pi" ? "chat" : name;
+function launcherIcon(name: keyof typeof LAUNCHER_PATHS | LaunchKind, size: number): string {
+  // The harness and introductory kinds are chats on another harness or
+  // template, so they wear the chat bubble rather than getting glyphs of
+  // their own.
+  const glyph: keyof typeof LAUNCHER_PATHS =
+    name === "codex" || name === "pi" || name === "intro-chat" || name === "intro-codex" || name === "intro-pi"
+      ? "chat"
+      : name;
   return (
     `<svg xmlns="${XMLNS}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" ` +
     `stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">` +
@@ -291,6 +304,17 @@ function openNewTiles(): readonly { kind: LaunchKind; label: string }[] {
   const tiles: { kind: LaunchKind; label: string }[] = [{ kind: "chat", label: "Chat" }];
   if (areOtherHarnessesEnabled()) {
     tiles.push({ kind: "codex", label: "Codex agent" }, { kind: "pi", label: "Pi agent" });
+  }
+  // Introductory chats: the same create with the `first` template stacked on
+  // top (fast launch where the harness supports it, /welcome, the first=true
+  // label), so the first-chat flow can be exercised without re-creating a
+  // workspace. Gated separately from the alt harnesses above.
+  if (areIntroductoryAgentsEnabled()) {
+    tiles.push(
+      { kind: "intro-chat", label: "Introductory Claude chat" },
+      { kind: "intro-codex", label: "Introductory Codex chat" },
+      { kind: "intro-pi", label: "Introductory Pi chat" },
+    );
   }
   tiles.push(
     { kind: "files", label: "File viewer" },

@@ -1,17 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TranscriptEvent, UserMessageEvent } from "../models/Response";
+import type { AgentState } from "../models/AgentManager";
 import { countUserTurns, isFastModePromptOwed } from "./fast-mode-prompt";
 import { getAgentFastMode } from "../models/ModelSettings";
-import { getWorkspaceFastMode } from "../models/WorkspaceFastMode";
+import { hasFastModePrompt } from "../models/HarnessCatalog";
+import { isFastModePromptAnswered } from "../models/FastModePrompt";
 
 vi.mock("../models/ModelSettings", () => ({ getAgentFastMode: vi.fn() }));
-vi.mock("../models/WorkspaceFastMode", () => ({
-  getWorkspaceFastMode: vi.fn(),
+vi.mock("../models/HarnessCatalog", () => ({ hasFastModePrompt: vi.fn() }));
+vi.mock("../models/FastModePrompt", () => ({
+  isFastModePromptAnswered: vi.fn(),
   openFastModePrompt: vi.fn(),
 }));
 
 const getAgentFastModeMock = vi.mocked(getAgentFastMode);
-const getWorkspaceFastModeMock = vi.mocked(getWorkspaceFastMode);
+const hasFastModePromptMock = vi.mocked(hasFastModePrompt);
+const isFastModePromptAnsweredMock = vi.mocked(isFastModePromptAnswered);
 
 function userMsg(content: string, id: string, extra: Partial<UserMessageEvent> = {}): UserMessageEvent {
   return {
@@ -53,6 +57,18 @@ function conversation(count: number): TranscriptEvent[] {
   return events;
 }
 
+/** A first-labelled agent on a prompt-declaring harness -- the one the prompt is for. */
+function firstAgent(labels: Record<string, string> = { first: "true" }): AgentState {
+  return {
+    id: "agent-1",
+    name: "demo",
+    state: "started",
+    labels,
+    work_dir: null,
+    harness: "claude",
+  } as AgentState;
+}
+
 describe("countUserTurns", () => {
   it("counts the exchanges the user can actually see", () => {
     expect(countUserTurns(conversation(0))).toBe(0);
@@ -85,36 +101,44 @@ describe("countUserTurns", () => {
 
 describe("isFastModePromptOwed", () => {
   beforeEach(() => {
-    getWorkspaceFastModeMock.mockReturnValue({ fast_mode: null });
+    hasFastModePromptMock.mockReturnValue(true);
+    isFastModePromptAnsweredMock.mockReturnValue(false);
     getAgentFastModeMock.mockReturnValue(true);
   });
 
   it("waits for the grace period to be used up", () => {
-    expect(isFastModePromptOwed("agent-1", conversation(4), true)).toBe(false);
-    expect(isFastModePromptOwed("agent-1", conversation(5), true)).toBe(true);
-    expect(isFastModePromptOwed("agent-1", conversation(9), true)).toBe(true);
+    expect(isFastModePromptOwed(firstAgent(), conversation(4), true)).toBe(false);
+    expect(isFastModePromptOwed(firstAgent(), conversation(5), true)).toBe(true);
+    expect(isFastModePromptOwed(firstAgent(), conversation(9), true)).toBe(true);
   });
 
   it("waits for the agent to finish replying", () => {
-    expect(isFastModePromptOwed("agent-1", conversation(5), false)).toBe(false);
+    expect(isFastModePromptOwed(firstAgent(), conversation(5), false)).toBe(false);
   });
 
-  it("never asks again once the workspace has answered", () => {
-    getWorkspaceFastModeMock.mockReturnValue({ fast_mode: true });
-    expect(isFastModePromptOwed("agent-1", conversation(9), true)).toBe(false);
+  it("fires only for the first-labelled chat", () => {
+    // Plain chats never launch fast, so the prompt would ask about a speed
+    // nobody got; the first=true label scopes it to the one chat that did.
+    expect(isFastModePromptOwed(firstAgent({}), conversation(9), true)).toBe(false);
+    expect(isFastModePromptOwed(firstAgent({ first: "false" }), conversation(9), true)).toBe(false);
+  });
+
+  it("fires only when the harness declared the prompt", () => {
+    hasFastModePromptMock.mockReturnValue(false);
+    expect(isFastModePromptOwed(firstAgent(), conversation(9), true)).toBe(false);
+  });
+
+  it("never asks the same agent twice", () => {
+    isFastModePromptAnsweredMock.mockReturnValue(true);
+    expect(isFastModePromptOwed(firstAgent(), conversation(9), true)).toBe(false);
   });
 
   it("stays quiet when the user already turned fast mode off themselves", () => {
     getAgentFastModeMock.mockReturnValue(false);
-    expect(isFastModePromptOwed("agent-1", conversation(9), true)).toBe(false);
+    expect(isFastModePromptOwed(firstAgent(), conversation(9), true)).toBe(false);
   });
 
-  it("stays quiet until the workspace decision and the agent's settings are known", () => {
-    getWorkspaceFastModeMock.mockReturnValue(null);
-    expect(isFastModePromptOwed("agent-1", conversation(9), true)).toBe(false);
-
-    getWorkspaceFastModeMock.mockReturnValue({ fast_mode: null });
-    getAgentFastModeMock.mockReturnValue(false);
-    expect(isFastModePromptOwed("agent-1", conversation(9), true)).toBe(false);
+  it("stays quiet for an unknown agent", () => {
+    expect(isFastModePromptOwed(undefined, conversation(9), true)).toBe(false);
   });
 });
