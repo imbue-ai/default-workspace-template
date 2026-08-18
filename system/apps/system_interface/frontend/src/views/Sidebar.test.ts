@@ -16,14 +16,17 @@ vi.hoisted(() => {
     setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
 });
 
-// The rail reaches the live workspace only through the app list, which the
-// helpers under test never consult.
+// The rail reaches the live workspace only through the app list. Most tests
+// never consult it (empty by default); the pin-icon suite below overrides the
+// mock's return value per test to exercise a rail carrying a pinned app.
 vi.mock("../models/AgentManager", () => ({
-  getApps: () => [],
+  getApps: vi.fn(() => []),
 }));
 
 import m from "mithril";
 
+import type { AppEntry } from "../models/AgentManager";
+import { getApps } from "../models/AgentManager";
 import type { ProjectInfo } from "../models/Projects";
 import { EVERYTHING_VIEW_ID } from "../models/Projects";
 import type { SidebarAttrs, SidebarTabRow } from "./Sidebar";
@@ -206,29 +209,35 @@ function switcherRow(root: HTMLElement, label: string): HTMLElement {
 }
 
 describe("Sidebar switcher dropdown", () => {
-  it("opens on a header click and gives every project row its own edit pencil", () => {
+  it("opens on a header click and gives every project row its own rename pencil", () => {
     const { root, redraw } = mountSidebar(makeAttrs());
     click(root.querySelector(".project-rail-header"));
     redraw();
-    expect(root.querySelector('[aria-label="Project settings for Alpha"]')).not.toBeNull();
-    expect(root.querySelector('[aria-label="Project settings for Beta"]')).not.toBeNull();
+    expect(root.querySelector('[aria-label="Edit Alpha"]')).not.toBeNull();
+    expect(root.querySelector('[aria-label="Edit Beta"]')).not.toBeNull();
   });
 
-  it("marks only the current project's row with the plain background -- no checkmark, no swapped icon", () => {
+  it("marks only the current project's row with a checkmark, not a background fill", () => {
     const { root, redraw } = mountSidebar(makeAttrs({ activeViewId: PROJECT_A.project_id }));
     click(root.querySelector(".project-rail-header"));
     redraw();
-    expect(switcherRow(root, "Alpha").className).toContain("bg-bg-sidebar");
-    expect(switcherRow(root, "Beta").className).not.toContain("bg-bg-sidebar");
+    expect(switcherRow(root, "Alpha").querySelector(".project-rail-check")).not.toBeNull();
+    expect(switcherRow(root, "Beta").querySelector(".project-rail-check")).toBeNull();
+    expect(switcherRow(root, "Alpha").className).not.toContain("bg-bg-sidebar");
+    // The active row's pencil is still there (revealed on hover, swapping
+    // places with the checkmark) -- rendered in the DOM either way, since the
+    // swap is pure CSS opacity, not conditional rendering.
+    expect(switcherRow(root, "Alpha").querySelector('[aria-label="Edit Alpha"]')).not.toBeNull();
   });
 
-  it("marks Everything the same way when it is the active view, but gives it no edit pencil", () => {
+  it("marks Everything the same way when it is the active view, but gives it no rename pencil", () => {
     const { root, redraw } = mountSidebar(makeAttrs({ activeViewId: EVERYTHING_VIEW_ID }));
     click(root.querySelector(".project-rail-header"));
     redraw();
     const everythingRow = switcherRow(root, "Everything");
-    expect(everythingRow.className).toContain("bg-bg-sidebar");
-    expect(everythingRow.querySelector('[aria-label^="Project settings"]')).toBeNull();
+    expect(everythingRow.querySelector(".project-rail-check")).not.toBeNull();
+    expect(everythingRow.className).not.toContain("bg-bg-sidebar");
+    expect(everythingRow.querySelector('[aria-label^="Edit"]')).toBeNull();
   });
 
   it("switches to a non-current row on a plain click", () => {
@@ -254,19 +263,19 @@ describe("Sidebar switcher dropdown", () => {
     const { root, redraw } = mountSidebar(attrs);
     click(root.querySelector(".project-rail-header"));
     redraw();
-    click(root.querySelector('[aria-label="Project settings for Beta"]'));
+    click(root.querySelector('[aria-label="Edit Beta"]'));
     redraw();
     expect(attrs.onSelectView).not.toHaveBeenCalled();
     const nameField = root.querySelector("input.custom-url-dialog-input") as HTMLInputElement | null;
     expect(nameField?.value).toBe("Beta");
   });
 
-  it("sizes the dropdown to its own fixed width rather than the header's", () => {
+  it("sizes the dropdown to its own fixed width rather than the header's -- a touch wider than the rail", () => {
     const { root, redraw } = mountSidebar(makeAttrs());
     click(root.querySelector(".project-rail-header"));
     redraw();
     const menu = root.querySelector('.project-rail-menu[role="menu"]') as HTMLElement | null;
-    expect(menu?.style.width).toBe("280px");
+    expect(menu?.style.width).toBe("256px");
   });
 
   it("collapses the rail on a completed view switch, even with no mouseleave", () => {
@@ -294,6 +303,144 @@ describe("Sidebar switcher dropdown", () => {
 
     render(PROJECT_B.project_id);
     expect(root.querySelector(".project-rail-search")).toBeNull();
+  });
+
+  it("goes primary on hover for the tertiary 'New project' row", () => {
+    const { root, redraw } = mountSidebar(makeAttrs());
+    click(root.querySelector(".project-rail-header"));
+    redraw();
+    const newProjectRow = switcherRow(root, "New project");
+    expect(newProjectRow.className).toContain("text-text-faint");
+    expect(newProjectRow.className).toContain("hover:text-text-primary");
+  });
+});
+
+describe("Sidebar menus hold the rail open", () => {
+  it("keeps the rail expanded through a mouseleave while any menu is open, not just All apps", () => {
+    const { root, redraw } = mountSidebar(makeAttrs());
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+    click(root.querySelector(".project-rail-header"));
+    redraw();
+    expect(root.querySelector('.project-rail-menu[role="menu"]')).not.toBeNull();
+
+    // Reaching the menu means the pointer has to leave the 37-240px rail box
+    // first -- that must not fold the rail (and the switcher hanging off it)
+    // back up from under the pointer.
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseleave"));
+    redraw();
+    expect(root.querySelector('.project-rail-menu[role="menu"]')).not.toBeNull();
+    expect(root.querySelector(".project-rail-search")).not.toBeNull();
+  });
+
+  it("still collapses on a mouseleave once nothing is open", () => {
+    const { root, redraw } = mountSidebar(makeAttrs());
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+    expect(root.querySelector(".project-rail-search")).not.toBeNull();
+
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseleave"));
+    redraw();
+    expect(root.querySelector(".project-rail-search")).toBeNull();
+  });
+});
+
+describe("Sidebar menu scrim", () => {
+  it("renders no scrim when nothing is open", () => {
+    const { root } = mountSidebar(makeAttrs());
+    expect(root.querySelector(".fixed.inset-0.z-40")).toBeNull();
+  });
+
+  it("renders a scrim behind an open menu, and a press on it closes the menu and collapses the rail", () => {
+    const { root, redraw } = mountSidebar(makeAttrs());
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+    click(root.querySelector(".project-rail-header"));
+    redraw();
+    const scrim = root.querySelector(".fixed.inset-0.z-40");
+    expect(scrim).not.toBeNull();
+
+    scrim?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+    redraw();
+    // The scrim itself closed the menu (rather than the press falling through
+    // to whatever sits underneath it) -- a definitive dismissal, so the rail
+    // folds up with it just as an outside click or Escape already did.
+    expect(root.querySelector('.project-rail-menu[role="menu"]')).toBeNull();
+    expect(root.querySelector(".project-rail-search")).toBeNull();
+  });
+});
+
+describe("Sidebar row clicks", () => {
+  it("collapses the rail when the clicked row is already open, and leaves it expanded otherwise", () => {
+    const rows: SidebarTabRow[] = [
+      { ref: "chat:agent-1", kind: "chat", label: "Chat 1", isOpen: true },
+      { ref: "chat:agent-2", kind: "chat", label: "Chat 2", isOpen: false },
+    ];
+    const attrs = makeAttrs({ rows });
+    const { root, redraw } = mountSidebar(attrs);
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+    expect(root.querySelector(".project-rail-search")).not.toBeNull();
+
+    const closedRow = Array.from(root.querySelectorAll(".project-rail-tab")).find((element) =>
+      element.textContent?.includes("Chat 2"),
+    );
+    click(closedRow ?? null);
+    redraw();
+    expect(attrs.onOpenRow).toHaveBeenCalledWith(rows[1]);
+    // Not already open: focusing it is a real, visible change, so the rail
+    // stays put the way it always has.
+    expect(root.querySelector(".project-rail-search")).not.toBeNull();
+
+    const openRow = Array.from(root.querySelectorAll(".project-rail-tab")).find((element) =>
+      element.textContent?.includes("Chat 1"),
+    );
+    click(openRow ?? null);
+    redraw();
+    expect(attrs.onOpenRow).toHaveBeenCalledWith(rows[0]);
+    // Already open: the click could not have changed anything on screen, so
+    // it would otherwise look like it did nothing -- collapse the rail
+    // instead of leaving it sitting over the tab the click just focused.
+    expect(root.querySelector(".project-rail-search")).toBeNull();
+  });
+});
+
+describe("Sidebar pinned-app rows", () => {
+  const DEMO_APP: AppEntry = { name: "grafana", url: "http://example.test", label: "grafana-abc123" };
+
+  it("unpins a pinned app in one click, without opening it", () => {
+    vi.mocked(getApps).mockReturnValue([DEMO_APP]);
+    try {
+      const attrs = makeAttrs({
+        rows: [{ ref: "service:grafana", kind: "app", label: "grafana", isOpen: false }],
+      });
+      const { root, redraw } = mountSidebar(attrs);
+      root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+      redraw();
+
+      const pinButton = root.querySelector(".project-rail-pin");
+      expect(pinButton).not.toBeNull();
+      click(pinButton);
+      redraw();
+
+      expect(attrs.onSetAppPinned).toHaveBeenCalledWith(DEMO_APP, false);
+      expect(attrs.onOpenApp).not.toHaveBeenCalled();
+    } finally {
+      vi.mocked(getApps).mockReturnValue([]);
+    }
+  });
+
+  it("shows no pin toggle while the rail is collapsed", () => {
+    vi.mocked(getApps).mockReturnValue([DEMO_APP]);
+    try {
+      const attrs = makeAttrs({
+        rows: [{ ref: "service:grafana", kind: "app", label: "grafana", isOpen: false }],
+      });
+      const { root } = mountSidebar(attrs);
+      expect(root.querySelector(".project-rail-pin")).toBeNull();
+    } finally {
+      vi.mocked(getApps).mockReturnValue([]);
+    }
   });
 });
 
