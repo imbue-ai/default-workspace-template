@@ -164,12 +164,11 @@ up, `preview` refuses rather than hijacking it -- surface that to the user and
 coordinate with the other pass (its stderr says how to tear down an abandoned
 one).
 
-Open it as a tab and ask the user to explore. `open` requires `--layout` and
-only applies on clients with that layout active, so try both named layouts --
-the one the user is not on fails fast and harmlessly:
+Open it as a tab and ask the user to explore. With no `--view`, the op goes
+to the view the connected client is looking at:
 
 ```bash
-for L in desktop mobile; do python3 system/scripts/layout.py open --layout "$L" si-preview; done
+python3 system/scripts/layout.py open si-preview
 ```
 
 **Self-verify against the real scenario before you ask the user.** The preview's
@@ -271,10 +270,16 @@ motion -- you do not run `npm`/`uv`/`mngr` by hand. It:
   bundle directory before writing, so a failure part-way leaves nothing to
   serve; the copy is what the rollback restores from.
 - **Refreshes dependencies only if a manifest changed** -- `npm ci` for the
-  frontend, `uv tool install -e system/apps/system_interface --reinstall` for the
-  backend. This is essential: a plain restart does *not* re-resolve the
-  editable-installed tool's dependencies, so a backend dependency addition would
-  otherwise crash the service on restart.
+  frontend, and for the backend the same environments `build_workspace.sh`
+  builds: the vendored mngr tool, the backend tool, and the workspace venv. This
+  is essential: a plain restart does *not* re-resolve an editable install's
+  dependencies, so a dependency addition would otherwise crash the service on
+  restart. An editable install pins only the *source path*, so a merge that
+  advances `system/vendor/mngr` stales the `mngr` CLI's closure the same way --
+  which is why a vendored package's `pyproject.toml` counts as a backend
+  manifest -- as does `system/vendor/mngr/pyproject.toml`, the workspace root
+  that install resolves through -- alongside the app's own and the repo root
+  `pyproject.toml` / `uv.lock`.
 - **Rebuilds the gitignored `static/` bundle** for a frontend change. A build that
   exits 0 without producing a bundle counts as a failure. This runs before the
   pre-flight below, so a change that does not compile is rejected without also
@@ -342,10 +347,10 @@ way to clean up after a `preview` that failed partway.
 layout. The `si-preview` tab you opened earlier with `layout.py open` is a
 separate concern (a layout panel, not a service), so you must close it yourself
 -- otherwise the user is left with a stale tab pointing at a now-deregistered
-service (again once per named layout, since `close` requires `--layout`):
+service:
 
 ```bash
-for L in desktop mobile; do python3 system/scripts/layout.py close --layout "$L" si-preview; done
+python3 system/scripts/layout.py close si-preview
 ```
 
 Do this whenever you tear the preview down -- after a successful reveal *or*
