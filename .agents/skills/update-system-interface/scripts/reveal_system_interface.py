@@ -117,7 +117,8 @@ FRONTEND_DIR = f"{APP_DIR}/frontend"
 # against whatever was resolved for the old code. build_workspace.sh re-resolves
 # it; a reveal that did not would leave ``mngr`` broken (and with it ``mngr
 # start --restart``, and the ``mngr observe`` the backend spawns).
-MNGR_DIR = "system/vendor/mngr/libs/mngr"
+MNGR_VENDOR_DIR = "system/vendor/mngr"
+MNGR_DIR = f"{MNGR_VENDOR_DIR}/libs/mngr"
 MNGR_TOOL_NAME = "imbue-mngr"
 # The console script that tool installs; the reveal resolves it on PATH to find
 # which of the possibly-several installations is the one actually being run.
@@ -376,10 +377,24 @@ def _is_backend_manifest(path: str) -> bool:
     does -- and is the change that actually ships in a release. Every
     ``system/vendor/mngr: refresh`` commit in this repo's history leaves
     ``uv.lock`` untouched, so keying only off the lock would miss the case this
-    refresh exists for. The root manifest counts too: it holds the
-    ``[tool.uv.sources]`` those installs resolve through.
+    refresh exists for.
+
+    Both workspace roots count, because each holds the ``[tool.uv.sources]`` and
+    resolver settings its own installs go through. The repo root governs ``uv
+    sync``. The *vendored* root is the one ``uv tool install -e
+    system/vendor/mngr/libs/mngr`` walks up to (it declares the ``libs/*``
+    workspace that package belongs to), and nothing else in this set stands in
+    for it: it maps ``imbue-common`` and ``overlay`` -- which ``libs/mngr`` pins
+    exactly and which resolve nowhere else -- and carries the ``exclude-newer``
+    cooldown that mngr advances before each release plus its dependency
+    overrides, any of which moves what the tool resolves to.
     """
-    if path in (f"{APP_DIR}/pyproject.toml", "uv.lock", "pyproject.toml"):
+    if path in (
+        f"{APP_DIR}/pyproject.toml",
+        "uv.lock",
+        "pyproject.toml",
+        f"{MNGR_VENDOR_DIR}/pyproject.toml",
+    ):
         return True
     parts = path.split("/")
     return (

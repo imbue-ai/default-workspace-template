@@ -272,7 +272,9 @@ motion -- you do not run `npm`/`uv`/`mngr` by hand. It:
   restart. An editable install pins only the *source path*, so a merge that
   advances `system/vendor/mngr` stales the `mngr` CLI's closure the same way --
   which is why a vendored package's `pyproject.toml` counts as a backend
-  manifest, alongside the app's own and the root `pyproject.toml` / `uv.lock`.
+  manifest -- as does `system/vendor/mngr/pyproject.toml`, the workspace root
+  that install resolves through -- alongside the app's own and the repo root
+  `pyproject.toml` / `uv.lock`.
 - **Pre-flights a backend change** by booting the merged code on a throwaway port
   before touching the live service. If it can't boot, the live service is never
   restarted -- the UI never goes down.
