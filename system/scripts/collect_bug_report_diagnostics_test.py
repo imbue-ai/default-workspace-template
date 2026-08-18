@@ -15,8 +15,9 @@ import json
 import os
 import shlex
 import time
+from datetime import datetime, timezone
 import zipfile
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -63,11 +64,10 @@ def _rebind(namespace: dict[str, Any], name: str, value: object) -> None:
 def _load_collector(
     *,
     supervisor_log_dir: Path | None = None,
-    mngr_home_dirs: Sequence[Path] | None = None,
+    mngr_binary: Path | None = None,
     supervisord_conf: Path | None = None,
     workspace_dir: Path | None = None,
     scan_gate_dir: Path | None = None,
-    max_encoded_zip_bytes: int | None = None,
 ) -> ModuleType:
     """Load a fresh copy of the collector with its container paths redirected."""
     spec = importlib.util.spec_from_file_location(
@@ -79,18 +79,14 @@ def _load_collector(
     namespace = module.__dict__
     if supervisor_log_dir is not None:
         _rebind(namespace, "SUPERVISOR_LOG_DIR", str(supervisor_log_dir))
-    if mngr_home_dirs is not None:
-        _rebind(
-            namespace, "MNGR_HOME_CANDIDATES", [str(path) for path in mngr_home_dirs]
-        )
+    if mngr_binary is not None:
+        _rebind(namespace, "MNGR_BINARY", str(mngr_binary))
     if supervisord_conf is not None:
         _rebind(namespace, "SUPERVISORD_CONF", str(supervisord_conf))
     if workspace_dir is not None:
         _rebind(namespace, "WORKSPACE_DIR", str(workspace_dir))
     if scan_gate_dir is not None:
         _rebind(namespace, "SCAN_GATE_DIR", str(scan_gate_dir))
-    if max_encoded_zip_bytes is not None:
-        _rebind(namespace, "MAX_ENCODED_ZIP_BYTES", max_encoded_zip_bytes)
     return module
 
 
@@ -102,32 +98,101 @@ def _write_log(log_dir: Path, name: str, *, mtime: float, content: str = "") -> 
     return path
 
 
-def _write_transcript(
-    mngr_home: Path,
-    agent_id: str,
-    *,
-    mtime: float,
-    content: str,
-    source: str = "claude",
-    labels: dict[str, str] | None = None,
-) -> Path:
-    path = (
-        mngr_home
-        / "agents"
-        / agent_id
-        / "events"
-        / source
-        / "common_transcript"
-        / "events.jsonl"
+def _chat_events(marker: str, *, age_seconds: float = 60.0, source: str = "claude") -> str:
+    """One conversation's JSONL, carrying ``marker`` and a timestamp of that age.
+
+    The timestamp is what the collector reads for recency (mngr's
+    user_activity_time is unpopulated on real agents), and ``marker`` is what a
+    content assertion looks for inside the archived member.
+    """
+    stamp = (
+        datetime.fromtimestamp(time.time() - age_seconds, tz=timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
     )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
-    os.utime(path, (mtime, mtime))
-    if labels is not None:
-        (mngr_home / "agents" / agent_id / "data.json").write_text(
-            json.dumps({"labels": labels}), encoding="utf-8"
+    return (
+        json.dumps(
+            {
+                "timestamp": stamp,
+                "type": "user_message",
+                "source": f"{source}/common_transcript",
+                "seq": marker,
+            }
         )
-    return path
+        + "\n"
+    )
+
+
+def _mngr_stub_for_chats(tmp_path: Path, chats: Mapping[str, str]) -> Path:
+    """An mngr stub answering for exactly these ``agent name -> events`` chats."""
+    return _write_mngr_stub(
+        tmp_path,
+        agents=tuple((name, "", "") for name in chats),
+        events_by_agent=chats,
+    )
+
+
+def _write_mngr_stub(
+    tmp_path: Path,
+    *,
+    agents: Sequence[tuple[str, str, str]] = (),
+    events_by_agent: Mapping[str, str] | None = None,
+    exit_code: int = 0,
+) -> Path:
+    """Write a stub standing in for the workspace's mngr.
+
+    The collector asks mngr two things -- which agents are chats, and what was
+    said in one -- so the stub answers exactly those two shapes: the pipe
+    template ``{name}|{type}|{labels.is_primary}|{labels.agent_created}`` for
+    ``list``, and raw JSONL for ``event``. ``agents`` entries are
+    ``(name, is_primary, agent_created)`` rendered into that template.
+    """
+    events_dir = tmp_path / "stub-events"
+    events_dir.mkdir(parents=True, exist_ok=True)
+    for agent_name, events in (events_by_agent or {}).items():
+        (events_dir / agent_name).write_text(events, encoding="utf-8")
+    listing = "".join(
+        f"{name}|chat|{is_primary}|{agent_created}\n"
+        for name, is_primary, agent_created in agents
+    )
+    listing_path = tmp_path / "stub-listing.txt"
+    listing_path.write_text(listing, encoding="utf-8")
+    argv_log = tmp_path / "stub-argv.log"
+    script = tmp_path / "mngr-stub"
+    script.write_text(
+        "#!/bin/sh\n"
+        f'printf "%s\\n" "$*" >> "{argv_log}"\n'
+        f"if [ {exit_code} -ne 0 ]; then exit {exit_code}; fi\n"
+        'if [ "$1" = "list" ]; then\n'
+        f'  cat "{listing_path}"\n'
+        "  exit 0\n"
+        "fi\n"
+        'if [ "$1" = "event" ]; then\n'
+        f'  f="{events_dir}/$2"\n'
+        '  if [ -f "$f" ]; then cat "$f"; fi\n'
+        "  exit 0\n"
+        "fi\n"
+        "exit 1\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    return script
+
+
+def _transcript_events(*messages: str, source: str = "claude", timestamp: str = "2026-08-17T12:00:00Z") -> str:
+    """JSONL in the shape ``mngr event`` returns, one event per message."""
+    return "".join(
+        json.dumps(
+            {
+                "timestamp": timestamp,
+                "type": "user_message",
+                "source": f"{source}/common_transcript",
+                "message": message,
+            }
+        )
+        + "\n"
+        for message in messages
+    )
 
 
 def _user_message_line(timestamp: str) -> str:
@@ -209,7 +274,6 @@ def test_collector_caps_match_the_documented_limits() -> None:
     assert module.CONTRACT_VERSION == 1
     assert module.MAX_LOG_FILES == 100
     assert module.MAX_LINES_PER_LOG == 200
-    assert module.MAX_ENCODED_ZIP_BYTES == 8 * 1024 * 1024
 
 
 def test_select_log_files_caps_at_the_newest_hundred_files(tmp_path: Path) -> None:
@@ -298,132 +362,151 @@ def test_select_log_files_keeps_every_log_when_the_classification_is_unavailable
 # --- Chat selection ---
 
 
-def test_select_transcript_paths_includes_every_chat_written_to_inside_the_window(
+def test_chat_agents_exclude_the_services_agent_and_agent_spawned_workers(
     tmp_path: Path,
 ) -> None:
-    """A bug is rarely about exactly one conversation: every recently written chat
-    rides along, newest first, while chats idle past the window stay out."""
-    now = time.time()
-    mngr_home = tmp_path / "mngr-home"
-    older_recent = _write_transcript(
-        mngr_home, "agent-a", mtime=now - 3_000, content='{"seq": 1}\n'
-    )
-    newest_recent = _write_transcript(
-        mngr_home, "agent-b", mtime=now - 60, content='{"seq": 2}\n'
-    )
-    _write_transcript(
-        mngr_home, "agent-idle", mtime=now - 10_000, content='{"seq": 3}\n'
-    )
-    # The first candidate root is one that does not exist in this layout,
-    # mirroring how the script probes several homes in order.
-    module = _load_collector(mngr_home_dirs=(tmp_path / "absent-home", mngr_home))
+    """The workspace's own marks decide what a chat is, mirroring system_interface.
 
-    assert module.select_transcript_paths() == [str(newest_recent), str(older_recent)]
-
-
-def test_select_transcript_paths_prefers_the_chat_the_user_last_wrote_in(
-    tmp_path: Path,
-) -> None:
-    """Fallback path (no chat inside the recency window): when the user last spoke
-    beats the file mtime, since a background chat's assistant can keep appending
-    (and bumping the mtime) long after the user moved on."""
-    mngr_home = tmp_path / "mngr-home"
-    _write_transcript(
-        mngr_home,
-        "agent-churning",
-        mtime=2_000_000,
-        content=_user_message_line("2026-08-01T10:00:00.000Z"),
-    )
-    quiet = _write_transcript(
-        mngr_home,
-        "agent-quiet",
-        mtime=1_000_000,
-        content=_user_message_line("2026-08-02T10:00:00.000Z"),
-    )
-    module = _load_collector(mngr_home_dirs=(mngr_home,))
-
-    assert module.select_transcript_paths() == [str(quiet)]
-
-
-def test_select_transcript_paths_skips_background_agents(tmp_path: Path) -> None:
-    """Workers and the services agent are the workspace's own background marks.
-
-    Mirrors system_interface's chat definition: ``agent_created=true`` is a
-    worker another agent spawned, ``is_primary=true`` the services agent. Both
-    can hold newer activity than the chat the user was actually in.
+    is_primary is the services agent; agent_created is a worker another agent
+    spawned (caretaker runs, automations). Neither is a conversation a person
+    had, and an agent carrying neither mark is one.
     """
-    mngr_home = tmp_path / "mngr-home"
-    _write_transcript(
-        mngr_home,
-        "agent-worker",
-        mtime=3_000_000,
-        content=_user_message_line("2026-08-03T10:00:00.000Z"),
-        labels={"agent_created": "true"},
+    stub = _write_mngr_stub(
+        tmp_path,
+        agents=(("chatty", "", ""), ("system-services", "true", ""), ("worker", "", "true")),
     )
-    _write_transcript(
-        mngr_home,
-        "agent-services",
-        mtime=3_000_000,
-        content=_user_message_line("2026-08-03T10:00:00.000Z"),
-        labels={"is_primary": "true"},
-    )
-    chat = _write_transcript(
-        mngr_home,
-        "agent-chat",
-        mtime=1_000_000,
-        content=_user_message_line("2026-08-01T10:00:00.000Z"),
-        labels={"user_created": "true"},
-    )
-    module = _load_collector(mngr_home_dirs=(mngr_home,))
+    collector = _load_collector(mngr_binary=stub)
 
-    assert module.select_transcript_paths() == [str(chat)]
+    assert collector.list_chat_agents(5.0) == ["chatty"]
 
 
-def test_select_transcript_paths_ignores_the_converters_own_log_stream(
+def test_a_transcript_is_named_for_the_harness_that_wrote_it_not_the_agent_type(
     tmp_path: Path,
 ) -> None:
-    """``events/logs/common_transcript`` records that a conversion happened, not
-    what was said, and is always newer than the transcript it just wrote."""
-    mngr_home = tmp_path / "mngr-home"
-    conversation = _write_transcript(
-        mngr_home, "agent-chat", mtime=1_000_000, content='{"role": "user"}\n'
+    """An agent of type ``chat`` writes its events under ``claude/``.
+
+    The two do not map onto each other, so the harness is read from the events'
+    own source rather than derived from the type -- deriving it produced a
+    source that does not exist and silently collected nothing.
+    """
+    stub = _write_mngr_stub(
+        tmp_path,
+        agents=(("chatty", "", ""),),
+        events_by_agent={"chatty": _transcript_events("hello", source="claude")},
     )
-    _write_transcript(
-        mngr_home,
-        "agent-chat",
-        mtime=2_000_000,
-        content='{"message": "Converted 3 new event(s)"}\n',
-        source="logs",
-    )
-    module = _load_collector(mngr_home_dirs=(mngr_home,))
+    collector = _load_collector(mngr_binary=stub)
 
-    assert module.select_transcript_paths() == [str(conversation)]
+    members = collector.collect_transcript_members(5.0)
+
+    assert [name for name, _, _ in members] == ["chats/chatty-claude.jsonl"]
 
 
-def test_select_transcript_paths_is_empty_when_no_agent_has_a_transcript(
+def test_the_transcript_query_asks_for_conversations_and_excludes_the_converter_log(
     tmp_path: Path,
 ) -> None:
-    mngr_home = tmp_path / "mngr-home"
-    (mngr_home / "agents" / "agent-empty" / "events").mkdir(parents=True)
-    module = _load_collector(mngr_home_dirs=(mngr_home,))
+    """What the collector ASKS mngr for is the contract, and it is easy to get wrong.
 
-    assert module.select_transcript_paths() == []
+    The harness cannot be derived from the agent type (a ``chat`` agent writes
+    under ``claude/``), so the query filters on the source each event carries.
+    Everything under ``logs/`` is the converter's own stdout -- it records *that*
+    it converted, not what was said -- so including it would attach a log of
+    conversions in place of the conversation. Asserting the arguments is what
+    catches a wrong filter: a stub that answered regardless of them let a
+    deliberately broken source stay green.
+    """
+    chats = {"chatty": _chat_events("hello")}
+    stub = _mngr_stub_for_chats(tmp_path, chats)
+    module = _load_collector(mngr_binary=stub)
+
+    module.collect_transcript_members(5.0)
+
+    invocations = (tmp_path / "stub-argv.log").read_text(encoding="utf-8")
+    event_calls = [line for line in invocations.splitlines() if line.startswith("event ")]
+    assert len(event_calls) == 1, invocations
+    assert 'source.endsWith("common_transcript")' in event_calls[0]
+    assert 'source.startsWith("logs/")' in event_calls[0]
+    assert "--format jsonl" in event_calls[0]
 
 
-# --- Member naming ---
+def test_an_agent_with_no_conversation_contributes_no_member(tmp_path: Path) -> None:
+    stub = _write_mngr_stub(tmp_path, agents=(("chatty", "", ""),))
+    collector = _load_collector(mngr_binary=stub)
+
+    assert collector.collect_transcript_members(5.0) == []
+
+
+def test_every_chat_written_to_inside_the_window_rides_along_newest_first(
+    tmp_path: Path,
+) -> None:
+    """A bug is rarely about exactly one conversation."""
+    now = time.time()
+
+    def stamp(offset: float) -> str:
+        return (
+            datetime.fromtimestamp(now - offset, tz=timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+
+    stub = _write_mngr_stub(
+        tmp_path,
+        agents=(("older", "", ""), ("newer", "", ""), ("idle", "", "")),
+        events_by_agent={
+            "older": _transcript_events("a", timestamp=stamp(3_000)),
+            "newer": _transcript_events("b", timestamp=stamp(60)),
+            "idle": _transcript_events("c", timestamp=stamp(10_000)),
+        },
+    )
+    collector = _load_collector(mngr_binary=stub)
+
+    members = collector.collect_transcript_members(5.0)
+
+    assert [name for name, _, _ in members] == [
+        "chats/newer-claude.jsonl",
+        "chats/older-claude.jsonl",
+    ]
+
+
+def test_an_idle_workspace_still_carries_its_single_most_recent_chat(
+    tmp_path: Path,
+) -> None:
+    """Nothing was touched in the window, and a stale workspace is exactly where
+    the conversation is hardest to reconstruct from anything else."""
+    stub = _write_mngr_stub(
+        tmp_path,
+        agents=(("stale", "", ""), ("staler", "", "")),
+        events_by_agent={
+            "stale": _transcript_events("recent-ish", timestamp="2026-08-01T12:00:00Z"),
+            "staler": _transcript_events("ancient", timestamp="2025-01-01T12:00:00Z"),
+        },
+    )
+    collector = _load_collector(mngr_binary=stub)
+
+    members = collector.collect_transcript_members(5.0)
+
+    assert [name for name, _, _ in members] == ["chats/stale-claude.jsonl"]
+
+
+def test_a_workspace_whose_mngr_cannot_be_asked_reports_no_chats(
+    tmp_path: Path,
+) -> None:
+    """A failing mngr must read as no transcript, never as a crash: the collector
+    asks mngr precisely so it does not re-derive this from the files itself."""
+    stub = _write_mngr_stub(tmp_path, agents=(("chatty", "", ""),), exit_code=3)
+    collector = _load_collector(mngr_binary=stub)
+
+    assert collector.list_chat_agents(5.0) == []
+    assert collector.collect_transcript_members(5.0) == []
 
 
 def test_transcript_member_names_live_under_chats_and_cannot_escape_an_extraction_directory() -> (
     None
 ):
-    """Member names are built from directory names inside the workspace, so they
-    are sanitized before they can reach a reader's filesystem on extraction."""
+    """Member names are built from names mngr reports, so they are sanitized
+    before they can reach a reader's filesystem on extraction."""
     module = _load_collector()
-    traversing_path = (
-        "/mngr/agents/../../../etc/events/claude/common_transcript/events.jsonl"
-    )
 
-    name = module.transcript_member_name(traversing_path, set())
+    name = module.transcript_member_name("../../../etc/passwd", "claude", set())
 
     assert name.startswith("chats/"), name
     remainder = name[len("chats/") :]
@@ -436,11 +519,10 @@ def test_transcript_member_names_stay_unique_within_one_archive() -> None:
     """Two chats that resolve to the same agent and harness must not collide: a
     zip member silently overwriting another would drop a whole conversation."""
     module = _load_collector()
-    path = "/mngr/agents/agent-a/events/claude/common_transcript/events.jsonl"
     used: set[str] = set()
 
-    first = module.transcript_member_name(path, used)
-    second = module.transcript_member_name(path, used)
+    first = module.transcript_member_name("agent-a", "claude", used)
+    second = module.transcript_member_name("agent-a", "claude", used)
 
     assert first == "chats/agent-a-claude.jsonl"
     assert second != first
@@ -641,24 +723,14 @@ def test_main_prints_only_the_contract_json_line_with_all_content_on_a_clean_sca
     conf = tmp_path / "supervisord.conf"
     conf.write_text(_FIXTURE_SUPERVISORD_CONF, encoding="utf-8")
     now = time.time()
-    mngr_home = tmp_path / "mngr-home"
-    _write_transcript(
-        mngr_home,
-        "agent-older",
-        mtime=now - 600,
-        content='{"seq": "older"}\n',
-        source="claude",
-    )
-    _write_transcript(
-        mngr_home,
-        "agent-newer",
-        mtime=now - 60,
-        content='{"seq": "newer"}\n',
-        source="codex",
-    )
+    chats = {
+        "agent-older": _chat_events("agent-older", age_seconds=600, source="claude"),
+        "agent-newer": _chat_events("agent-newer", age_seconds=60, source="codex"),
+    }
+    mngr_stub = _mngr_stub_for_chats(tmp_path, chats)
     module = _load_collector(
         supervisor_log_dir=log_dir,
-        mngr_home_dirs=(mngr_home,),
+        mngr_binary=mngr_stub,
         supervisord_conf=conf,
         workspace_dir=tmp_path / "workspace",
         scan_gate_dir=gate,
@@ -676,21 +748,25 @@ def test_main_prints_only_the_contract_json_line_with_all_content_on_a_clean_sca
     with _zip_from_payload(payload) as archive:
         assert archive.testzip() is None
         assert archive.namelist() == [
-            "workspace-logs.log",
+            "metadata.json",
+            "logs/system_interface.log",
             "chats/agent-newer-codex.jsonl",
             "chats/agent-older-claude.jsonl",
         ]
-        logs = archive.read("workspace-logs.log").decode("utf-8")
-        assert "interface started" in logs
-        assert "=== workspace version ===" in logs
+        # The service log is its own member; the structured context is json.
         assert (
-            archive.read("chats/agent-newer-codex.jsonl").decode("utf-8")
-            == '{"seq": "newer"}\n'
+            "interface started"
+            in archive.read("logs/system_interface.log").decode("utf-8")
         )
-        assert (
-            archive.read("chats/agent-older-claude.jsonl").decode("utf-8")
-            == '{"seq": "older"}\n'
-        )
+        metadata = json.loads(archive.read("metadata.json").decode("utf-8"))
+        assert set(metadata) == {"workspace", "host_health", "services"}
+        assert metadata["services"]["are_user_services_identified"] is True
+        assert '"seq": "agent-newer"' in archive.read(
+            "chats/agent-newer-codex.jsonl"
+        ).decode("utf-8")
+        assert '"seq": "agent-older"' in archive.read(
+            "chats/agent-older-claude.jsonl"
+        ).decode("utf-8")
         # Each chat's own last-modified time rides on its member.
         modified_year_by_name = {
             info.filename: info.date_time[0] for info in archive.infolist()
@@ -704,9 +780,7 @@ def test_main_prints_only_the_contract_json_line_with_all_content_on_a_clean_sca
 def test_main_reports_no_chat_transcript_when_the_agent_tree_is_empty(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    mngr_home = tmp_path / "mngr-home"
-    mngr_home.mkdir()
-    module = _load_collector(mngr_home_dirs=(mngr_home,))
+    module = _load_collector(mngr_binary=_mngr_stub_for_chats(tmp_path, {}))
 
     module.main(["--transcript"])
 
@@ -734,13 +808,10 @@ def test_main_omits_an_unrequested_content_type_from_both_zip_and_omissions(
     )
     conf = tmp_path / "supervisord.conf"
     conf.write_text(_FIXTURE_SUPERVISORD_CONF, encoding="utf-8")
-    mngr_home = tmp_path / "mngr-home"
-    _write_transcript(
-        mngr_home, "agent-chat", mtime=time.time() - 60, content='{"seq": 1}\n'
-    )
+    chats = {"agent-a": _chat_events("chatty")}
     module = _load_collector(
         supervisor_log_dir=log_dir,
-        mngr_home_dirs=(mngr_home,),
+        mngr_binary=_mngr_stub_for_chats(tmp_path, chats),
         supervisord_conf=conf,
         workspace_dir=tmp_path / "workspace",
         scan_gate_dir=gate,
@@ -751,7 +822,8 @@ def test_main_omits_an_unrequested_content_type_from_both_zip_and_omissions(
     payload = json.loads(capsys.readouterr().out)
     assert payload["omissions"] == {}
     with _zip_from_payload(payload) as archive:
-        assert archive.namelist() == ["workspace-logs.log"]
+        # Logs only: metadata plus the service logs, and no chats member at all.
+        assert archive.namelist() == ["metadata.json", "logs/system_interface.log"]
 
 
 def test_main_withholds_the_whole_archive_when_one_chat_carries_a_secret(
@@ -767,18 +839,13 @@ def test_main_withholds_the_whole_archive_when_one_chat_carries_a_secret(
     secret = "AKIAIOSFODNN7EXAMPLE"
     gate = tmp_path / "gate"
     _write_content_matching_stub_scan_gate(gate, secret=secret)
-    now = time.time()
-    mngr_home = tmp_path / "mngr-home"
-    _write_transcript(
-        mngr_home, "agent-clean", mtime=now - 60, content='{"seq": "clean"}\n'
+    chats = {
+        "agent-clean": _chat_events("agent-clean"),
+        "agent-leaky": _chat_events("agent-leaky") + f'{{"note": "{secret}"}}\n',
+    }
+    module = _load_collector(
+        mngr_binary=_mngr_stub_for_chats(tmp_path, chats), scan_gate_dir=gate
     )
-    _write_transcript(
-        mngr_home,
-        "agent-dirty",
-        mtime=now - 600,
-        content=json.dumps({"key": secret}) + "\n",
-    )
-    module = _load_collector(mngr_home_dirs=(mngr_home,), scan_gate_dir=gate)
 
     module.main(["--transcript"])
 
@@ -802,14 +869,10 @@ def test_main_scans_the_member_name_a_chat_will_be_archived_under(
     secret = "AKIAIOSFODNN7EXAMPLE"
     gate = tmp_path / "gate"
     _write_content_matching_stub_scan_gate(gate, secret=secret)
-    mngr_home = tmp_path / "mngr-home"
-    _write_transcript(
-        mngr_home,
-        f"agent-{secret}",
-        mtime=time.time() - 60,
-        content='{"seq": "clean"}\n',
+    chats = {f"agent-{secret}": _chat_events("clean")}
+    module = _load_collector(
+        mngr_binary=_mngr_stub_for_chats(tmp_path, chats), scan_gate_dir=gate
     )
-    module = _load_collector(mngr_home_dirs=(mngr_home,), scan_gate_dir=gate)
 
     module.main(["--transcript"])
 
@@ -838,13 +901,10 @@ def test_main_withholds_only_the_logs_when_the_finding_is_in_the_logs(
     )
     conf = tmp_path / "supervisord.conf"
     conf.write_text(_FIXTURE_SUPERVISORD_CONF, encoding="utf-8")
-    mngr_home = tmp_path / "mngr-home"
-    _write_transcript(
-        mngr_home, "agent-clean", mtime=time.time() - 60, content='{"seq": "clean"}\n'
-    )
+    chats = {"agent-clean": _chat_events("clean")}
     module = _load_collector(
         supervisor_log_dir=log_dir,
-        mngr_home_dirs=(mngr_home,),
+        mngr_binary=_mngr_stub_for_chats(tmp_path, chats),
         supervisord_conf=conf,
         workspace_dir=tmp_path / "workspace",
         scan_gate_dir=gate,
@@ -855,6 +915,7 @@ def test_main_withholds_only_the_logs_when_the_finding_is_in_the_logs(
     payload = json.loads(capsys.readouterr().out)
     assert payload["omissions"] == {"workspace_logs": "secrets_found"}
     with _zip_from_payload(payload) as archive:
+        # Every logs member goes, metadata included; the clean chat still ships.
         assert archive.namelist() == ["chats/agent-clean-claude.jsonl"]
 
 
@@ -871,16 +932,13 @@ def test_main_reports_everything_scanner_unavailable_when_the_gate_is_missing(
     )
     conf = tmp_path / "supervisord.conf"
     conf.write_text(_FIXTURE_SUPERVISORD_CONF, encoding="utf-8")
-    mngr_home = tmp_path / "mngr-home"
-    _write_transcript(
-        mngr_home, "agent-chat", mtime=time.time() - 60, content='{"seq": 1}\n'
-    )
+    chats = {"agent-a": _chat_events("chatty")}
     module = _load_collector(
         supervisor_log_dir=log_dir,
-        mngr_home_dirs=(mngr_home,),
+        mngr_binary=_mngr_stub_for_chats(tmp_path, chats),
         supervisord_conf=conf,
         workspace_dir=tmp_path / "workspace",
-        scan_gate_dir=tmp_path / "no-such-gate",
+        scan_gate_dir=tmp_path / "absent-gate",
     )
 
     module.main(["--logs", "--transcript"])
@@ -899,24 +957,28 @@ def test_main_reports_everything_scanner_unavailable_when_the_gate_is_missing(
 # --- The size cap ---
 
 
-def test_main_drops_oldest_chats_first_when_the_payload_exceeds_the_cap(
+def test_main_packs_every_collected_chat_with_no_size_cap(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Over the cap, the oldest chats go first and the drop is recorded inside
-    the zip -- a silently trimmed set would be indistinguishable from a complete
-    one. The cap constant is rebound small so the fixture chats stay small; the
-    real value is pinned by test_collector_caps_match_the_documented_limits.
+    """Nothing is trimmed to fit: every chat that was collected and scanned clean
+    is packed.
+
+    The payload returns on stdout, which carries it whole, so there is no
+    transport ceiling to stay under. A collection that grows past what the
+    host's budget allows fails loudly as a timeout instead of quietly shipping a
+    subset a reader could not tell from the complete set.
     """
     gate = tmp_path / "gate"
     _write_stub_scan_gate(gate, exit_code=0)
-    now = time.time()
-    mngr_home = tmp_path / "mngr-home"
     # Hex of random bytes barely deflates, so each chat stays ~2KB in the zip.
-    for agent_id, age in (("agent-a", 180), ("agent-b", 120), ("agent-c", 60)):
-        content = json.dumps({"blob": os.urandom(2048).hex()}) + "\n"
-        _write_transcript(mngr_home, agent_id, mtime=now - age, content=content)
+    chats = {
+        agent_id: _chat_events(agent_id, age_seconds=age)
+        + json.dumps({"blob": os.urandom(2048).hex()})
+        + "\n"
+        for agent_id, age in (("agent-a", 180), ("agent-b", 120), ("agent-c", 60))
+    }
     module = _load_collector(
-        mngr_home_dirs=(mngr_home,), scan_gate_dir=gate, max_encoded_zip_bytes=5_000
+        mngr_binary=_mngr_stub_for_chats(tmp_path, chats), scan_gate_dir=gate
     )
 
     module.main(["--transcript"])
@@ -924,10 +986,8 @@ def test_main_drops_oldest_chats_first_when_the_payload_exceeds_the_cap(
     payload = json.loads(capsys.readouterr().out)
     assert payload["omissions"] == {}
     with _zip_from_payload(payload) as archive:
-        assert archive.namelist() == ["chats/agent-c-claude.jsonl", "DROPPED-CHATS.txt"]
-        note = archive.read("DROPPED-CHATS.txt").decode("utf-8")
-        # Oldest dropped first, and both drops are on the record.
-        assert note.index("chats/agent-a-claude.jsonl") < note.index(
-            "chats/agent-b-claude.jsonl"
-        )
-    assert len(payload["zip"]) <= 5_000
+        assert archive.namelist() == [
+            "chats/agent-c-claude.jsonl",
+            "chats/agent-b-claude.jsonl",
+            "chats/agent-a-claude.jsonl",
+        ]
