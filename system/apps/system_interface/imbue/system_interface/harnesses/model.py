@@ -73,9 +73,9 @@ class ModelOption(FrozenModel):
     in_picker: bool = True
     # The raw model id the harness reports in its live state file, matched against a
     # live read (:func:`match_option`). ``None`` means "same as ``id``" -- for a harness
-    # whose reported id equals its switch id (codex, pi). Claude reports a suffix-free
-    # API id (``claude-opus-4-8``) that differs from the ``[1m]``-suffixed switch id, so
-    # its options set this explicitly.
+    # whose reported id equals its switch id (codex, pi). Claude reports an API id
+    # (``claude-opus-5``) that differs from the ``[1m]``-suffixed switch id, so its
+    # options set this explicitly.
     harness_reported_model_id: str | None = None
 
 
