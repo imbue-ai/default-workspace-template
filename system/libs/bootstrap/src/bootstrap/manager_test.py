@@ -147,10 +147,10 @@ def test_read_main_agent_labels_returns_empty_when_labels_field_absent(
 
 
 def test_build_create_chat_command_stacks_first_and_chat_templates() -> None:
-    cmd = _build_create_chat_command("my-workspace", {"workspace": "my-workspace"})
+    cmd = _build_create_chat_command({"workspace": "my-workspace"})
     # `NAME@HOST`: the first chat is created as the human-readable "Chat 1" *on*
     # the workspace's host, not under the host's own name.
-    assert cmd[:3] == ["mngr", "create", "Chat-1@my-workspace"]
+    assert cmd[:3] == ["mngr", "create", "Chat-1"]
     # The harness rides `--type claude`; the roles ride the template stack. The
     # `first` template owns everything unique to the opening chat (/welcome,
     # the first=true label, fast-mode launch settings), so the argv itself must
@@ -172,12 +172,12 @@ def test_build_create_chat_command_leaves_transfer_to_the_chat_role() -> None:
     worktree so the chat reuses the services agent's work_dir. Without it, mngr
     collides with the services agent's existing `mngr/<host>` branch.
     """
-    cmd = _build_create_chat_command("my-workspace", {"workspace": "my-workspace"})
+    cmd = _build_create_chat_command({"workspace": "my-workspace"})
     assert "--transfer" not in cmd
 
 
 def test_build_create_chat_command_carries_no_workspace_label() -> None:
-    cmd = _build_create_chat_command("my-workspace", {"workspace": "my-workspace"})
+    cmd = _build_create_chat_command({"workspace": "my-workspace"})
     # The chat agent belongs to its workspace by sharing the host; it carries no
     # workspace label (the label was removed from the naming model).
     labels = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "--label"]
@@ -188,19 +188,19 @@ def test_build_create_chat_command_tags_user_created() -> None:
     """The initial chat agent is tagged ``user_created=true`` so the OOM
     agent-tagging hook places it in the protected user-agent band (shed only as a
     last resort)."""
-    cmd = _build_create_chat_command("my-workspace", {"workspace": "my-workspace"})
+    cmd = _build_create_chat_command({"workspace": "my-workspace"})
     labels = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "--label"]
     assert "user_created=true" in labels
 
 
 def test_build_create_chat_command_passes_project_label_when_present() -> None:
-    cmd = _build_create_chat_command("ws", {"workspace": "ws", "project": "my-project"})
+    cmd = _build_create_chat_command({"workspace": "ws", "project": "my-project"})
     labels = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "--label"]
     assert "project=my-project" in labels
 
 
 def test_build_create_chat_command_omits_project_label_when_missing() -> None:
-    cmd = _build_create_chat_command("ws", {"workspace": "ws"})
+    cmd = _build_create_chat_command({"workspace": "ws"})
     labels = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "--label"]
     assert all(not label.startswith("project=") for label in labels)
 
@@ -210,33 +210,33 @@ def test_build_create_chat_command_argv_accepted_by_live_cli() -> None:
     a system/vendor/mngr rename of ``create``/its flags fails here at merge time rather
     than only at host boot. A ``workspace`` label is supplied so the builder's
     label resolution short-circuits without reading host files."""
-    argv = _build_create_chat_command("host-1", {"workspace": "ws", "project": "proj"})
+    argv = _build_create_chat_command({"workspace": "ws", "project": "proj"})
     assert_mngr_argv_valid(argv)
 
 
-def test_build_create_chat_command_positional_names_the_chat_on_the_host() -> None:
+def test_build_create_chat_command_positional_is_the_agent_name_not_a_host() -> None:
     """The CLI contract check above is shape-only -- click sees the positional as
-    an opaque string. This runs it through mngr's own address parser, which is
-    what decides the positional names `Chat-1` on `host-1`. A create whose
-    positional mngr rejects leaves a booting workspace with no chat at all, so
-    the semantics are pinned here and not just the token count.
+    an opaque string. This runs it through mngr's own address parser to pin
+    what the positional MEANS: the new agent's name, with no host part. The
+    host is implicit (the bootstrap runs inside it); naming one here asks mngr
+    to look up a host by that name and fails with "Could not find host", which
+    leaves a booting workspace with no chat at all.
 
-    The positional carries the CANONICAL name, and the human one rides as a
-    label: any vendored mngr parses it, including one that predates free-form
-    names. Parsing the spaced form instead would tie first boot to the vendored
-    mngr's version.
+    The positional also carries the CANONICAL name, with the human one riding
+    as a label, so any vendored mngr parses it -- including one predating
+    free-form names.
     """
-    argv = _build_create_chat_command("host-1", {"workspace": "ws"})
+    argv = _build_create_chat_command({"workspace": "ws"})
     location = parse_new_agent_location(argv[2])
 
     assert location.name == "Chat-1"
-    assert location.host_name == "host-1"
+    assert location.host_name is None
 
 
 def test_build_create_chat_command_labels_the_chats_human_readable_name() -> None:
     """The name the user sees rides as the ``display_name`` label, whose
     canonical form is the agent name above -- the invariant newer mngr enforces."""
-    cmd = _build_create_chat_command("host-1", {"workspace": "ws"})
+    cmd = _build_create_chat_command({"workspace": "ws"})
     labels = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "--label"]
 
     assert "display_name=Chat 1" in labels
@@ -244,7 +244,7 @@ def test_build_create_chat_command_labels_the_chats_human_readable_name() -> Non
 
 def test_build_create_chat_command_requests_json_output() -> None:
     """`--format json` lets the create step read back the new agent's id."""
-    cmd = _build_create_chat_command("ws", {"workspace": "ws"})
+    cmd = _build_create_chat_command({"workspace": "ws"})
     assert "--format" in cmd
     assert cmd[cmd.index("--format") + 1] == "json"
 
@@ -253,7 +253,7 @@ def test_build_create_chat_command_never_pins_claude_config_dir() -> None:
     """Every claude in the workspace must resolve claude's own default
     ~/.claude, so the create argv must not export CLAUDE_CONFIG_DIR (the old
     services-agent-owned shared dir was removed in the ~/.claude cutover)."""
-    cmd = _build_create_chat_command("ws", {"workspace": "ws"})
+    cmd = _build_create_chat_command({"workspace": "ws"})
     assert all("CLAUDE_CONFIG_DIR" not in arg for arg in cmd)
 
 
