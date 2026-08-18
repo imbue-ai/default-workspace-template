@@ -193,7 +193,7 @@ in any committed staging/production file. A unit test in
 `local_store_test.py` asserts this end-to-end.
 
 Secret values (API keys, DSNs, connection URIs) live in HCP Vault --
-see `apps/minds/docs/vault-setup.md`.
+see `apps/minds/docs/deploy/vault-setup.md`.
 
 ## Deploy mode
 

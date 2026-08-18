@@ -49,7 +49,7 @@ fast path.
 cd <repo-root>
 
 # The release whose slices you are baking. Both mngr and default-workspace-template
-# are tagged minds-v<version> (see apps/minds/docs/release.md). Example: 0.3.6.
+# are tagged minds-v<version> (see apps/minds/docs/deploy/release.md). Example: 0.3.6.
 # NOTE: this tag pins the *desktop* binary and the DEFAULT_WORKSPACE_TEMPLATE slice bake (Step 6) -- NOT
 # the server. The connector/proxy deploy (Step 1) tracks `main`, which is normally
 # ahead of the tag.

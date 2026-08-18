@@ -363,7 +363,7 @@ default-workspace-template-worktree branch="" base="origin/main":
 # HEAD / the verified release SHA, NOT blindly `main`, which can drift past it
 # between verification and merge. The recipe archives HEAD, replaces system/vendor/mngr/
 # with that snapshot, and commits in DEFAULT_WORKSPACE_TEMPLATE. Does not push. Aborts if DEFAULT_WORKSPACE_TEMPLATE is dirty.
-# Full release flow: apps/minds/docs/release.md.
+# Full release flow: apps/minds/docs/deploy/release.md.
 [group("minds dev")]
 sync-vendor-mngr default_workspace_template="":
     #!/bin/bash
@@ -769,6 +769,10 @@ minds-start-cloud debug_port="":
     # Put apps/minds's pinned Node (.nvmrc) first on PATH so pnpm's
     # engine-strict check passes regardless of the shell's default node.
     . apps/minds/scripts/select_node_version.sh || exit 2
+    # Build the SPA the app server actually serves, same as minds-start:
+    # `pnpm start` only launches electron, and static/ui/ is gitignored
+    # (produced at wheel-build time), so a fresh worktree would 404 without this.
+    (cd apps/minds/frontend && pnpm install --silent && pnpm run generate && pnpm run build) || exit 2
     cd apps/minds && pnpm start
 
 # Stop the minds desktop client started in this worktree by `just minds-start`
@@ -1300,7 +1304,7 @@ prep-server server_id *extra_args:
 
 # Backfill the volume-gated minds-autostart units onto every existing slice VM
 # of the activated env's fleet (reboot-resilience rollout Step 2; see
-# apps/minds/docs/reboot-resilience-rollout.md). Idempotent and safe on running
+# apps/minds/docs/deploy/reboot-resilience-rollout.md). Idempotent and safe on running
 # workspaces. Pass --dry-run to list the per-VM plan first, or
 # --server-id <id> (repeatable) to scope to specific boxes.
 #   just backfill-autostart --dry-run

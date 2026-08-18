@@ -63,7 +63,7 @@ time. You no longer pass the public key to the bake by hand.
 ## Step 3: Populate the tier's Vault entries
 
 Secrets live in HCP Vault now (not `.minds/<env>/` shell files); see
-`apps/minds/docs/vault-setup.md` for prerequisites. For the host-pool
+`apps/minds/docs/deploy/vault-setup.md` for prerequisites. For the host-pool
 flow specifically:
 
 ### secrets/minds/production/neon

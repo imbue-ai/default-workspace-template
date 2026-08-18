@@ -26,7 +26,7 @@ The VM's contents are Linux and irrelevant here. What matters is that something 
 | `desync` | macOS host | assembles the image from the chunk store |
 | `uv`, `git`, `restic` | macOS host | Python env, cloning, backups |
 
-None of these runs inside the VM. See [desktop-app.md](./desktop-app.md) for how they are staged and signed.
+None of these runs inside the VM. See [desktop-app.md](../desktop-app.md) for how they are staged and signed.
 
 Lima can drive a VM with either QEMU or **vz** (Apple's Virtualization.framework). On Apple Silicon it defaults to vz, so no QEMU is involved in running the VM -- `limactl` links `Virtualization.framework` directly.
 
