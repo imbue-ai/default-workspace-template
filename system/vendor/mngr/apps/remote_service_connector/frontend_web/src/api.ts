@@ -7,6 +7,21 @@ import type { KeyBundle } from "./crypto/secretbox";
 
 const REFRESH_PATH = "/accounts/auth/session/refresh";
 
+// Injected by vite at build time (see vite.config.ts); "dev" outside a
+// `minds env deploy` build.
+declare const __MINDS_DEPLOY_ID__: string;
+
+// The bundle's build stamp: the deploy id this chrome was built for.
+export const BUILD_DEPLOY_ID = __MINDS_DEPLOY_ID__;
+
+// Canonical client self-identification, recorded in the connector's access
+// log (browsers own User-Agent, so a custom header carries it instead).
+export const CLIENT_ID_HEADER_VALUE = `web/${BUILD_DEPLOY_ID}`;
+
+function clientIdHeaders(): Record<string, string> {
+  return { "X-Imbue-Client": CLIENT_ID_HEADER_VALUE };
+}
+
 export interface Identity {
   signed_in: boolean;
   user_id?: string;
@@ -55,6 +70,10 @@ export interface WireRecord {
   restored_from_host_id: string | null;
   encrypted_secrets: string | null;
   revision: number;
+  // Semantic format of the record (absent = 1). Above SUPPORTED_RECORD_FORMAT
+  // (records.ts) the record is read-only in this bundle: a stale open tab
+  // must not rewrite semantics a newer deploy introduced.
+  record_format?: number;
 }
 
 export interface ShareStatus {
@@ -104,6 +123,7 @@ async function tryRefreshSession(): Promise<boolean> {
     const resp = await fetch(REFRESH_PATH, {
       method: "POST",
       credentials: "same-origin",
+      headers: clientIdHeaders(),
     });
     return resp.ok;
   } catch {
@@ -115,7 +135,12 @@ async function request(
   path: string,
   init: RequestInit = {},
 ): Promise<Response> {
-  const doFetch = () => fetch(path, { credentials: "same-origin", ...init });
+  const doFetch = () =>
+    fetch(path, {
+      credentials: "same-origin",
+      ...init,
+      headers: { ...clientIdHeaders(), ...(init.headers ?? {}) },
+    });
   const first = await doFetch();
   if (first.status !== 401) return first;
   const refreshed = await tryRefreshSession();
@@ -148,6 +173,21 @@ function jsonInit(method: string, payload: unknown): RequestInit {
 
 export async function fetchIdentity(): Promise<Identity> {
   return requestJson<Identity>("/accounts/api/me");
+}
+
+export interface ServerVersion {
+  version?: string;
+  deploy_id?: string;
+}
+
+// The live deploy's identity, for the stale-open-tab reload nudge: when the
+// server's deploy_id no longer matches BUILD_DEPLOY_ID, a newer chrome exists.
+export async function fetchServerVersion(): Promise<ServerVersion | null> {
+  try {
+    return await requestJson<ServerVersion>("/version");
+  } catch {
+    return null;
+  }
 }
 
 export function loginUrl(): string {
@@ -206,9 +246,14 @@ export async function putRecord(record: WireRecord): Promise<WireRecord> {
   const body = await resp.json().catch(() => null);
   if (resp.status === 409) {
     // The connector shapes conflicts as {"detail": {"message", "stored"}}.
-    const detail = (body as { detail?: { stored?: WireRecord } } | null)
-      ?.detail;
-    throw new RevisionConflictError(detail?.stored ?? null);
+    // A record_format_too_new 409 is terminal (not a retryable CAS race),
+    // so it falls through to the ApiError path for the caller to map.
+    const detail = (
+      body as { detail?: { code?: string; stored?: WireRecord } } | null
+    )?.detail;
+    if (detail?.code !== "record_format_too_new") {
+      throw new RevisionConflictError(detail?.stored ?? null);
+    }
   }
   if (!resp.ok) {
     throw new ApiError(

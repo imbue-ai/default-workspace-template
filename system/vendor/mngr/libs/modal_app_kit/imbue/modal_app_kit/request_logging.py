@@ -80,6 +80,11 @@ def format_request_log_line(scope: dict[str, Any], status_code: int | None, dura
     fields or entire lines in the very log abuse investigations rely on.
     """
     user_agent = _first_header_value(scope.get("headers") or [], b"user-agent")[:_USER_AGENT_MAX_LENGTH]
+    # The canonical client self-identification header (e.g.
+    # "minds/0.3.16 imbue-cloud-plugin/0.1.6" or "web/<deploy-id>"): browsers
+    # own User-Agent, so the fleet-version picture -- the input for
+    # support-window and deprecation decisions -- reads from this field.
+    imbue_client = _first_header_value(scope.get("headers") or [], b"x-imbue-client")[:_USER_AGENT_MAX_LENGTH]
     return (
         "Handled request"
         f" method={scope.get('method', '-')}"
@@ -88,6 +93,7 @@ def format_request_log_line(scope: dict[str, Any], status_code: int | None, dura
         f" duration_ms={duration_ms:.1f}"
         f" client_ip={client_ip_from_asgi_scope(scope)}"
         f" user_agent={_quoted_log_value(user_agent)}"
+        f" imbue_client={_quoted_log_value(imbue_client)}"
     )
 
 

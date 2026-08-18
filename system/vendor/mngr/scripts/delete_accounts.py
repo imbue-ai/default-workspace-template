@@ -203,11 +203,20 @@ def _delete_db_rows_for_user(connection: Any, user_id: str, existing_tables: set
 
 
 def _count_leased_hosts_for_user(connection: Any, user_id: str) -> int:
-    """Return how many pool hosts the account still holds (leased or mid-release)."""
+    """Return how many pool hosts still name the account (a released host leaves no row).
+
+    The guard deliberately matches on ``leased_to_user`` alone, with no status
+    filter: a full release DELETEs the pool_hosts row and an available row
+    carries ``leased_to_user = NULL``, so any surviving row naming the user means
+    the release has not completed, in ANY lifecycle status. An earlier
+    ``status IN ('leased', 'removing')`` filter silently under-matched the
+    ``stopping``/``starting``/``stopped``/``crashed`` states added later, which
+    would let a delete strand a row (and a live or restorable VM).
+    """
     prefix = user_id.replace("-", "")[:16]
     with connection.cursor() as cursor:
         cursor.execute(
-            "SELECT COUNT(*) FROM pool_hosts WHERE leased_to_user = %s AND status IN ('leased', 'removing')",
+            "SELECT COUNT(*) FROM pool_hosts WHERE leased_to_user = %s",
             (prefix,),
         )
         return int(cursor.fetchone()[0])

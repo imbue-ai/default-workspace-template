@@ -161,3 +161,48 @@ def test_delete_db_rows_skips_tables_absent_from_the_database() -> None:
     assert "relay_tokens" not in counts
     assert counts["account_entitlements"] == 1
     assert counts["workspace_records"] == 2
+
+
+class _CountingCursor:
+    """Fake psycopg2 cursor whose fetchone reports a fixed count, recording the SQL run."""
+
+    def __init__(self, count: int) -> None:
+        self._count = count
+        self.executed: list[tuple[str, tuple[Any, ...]]] = []
+
+    def __enter__(self) -> "_CountingCursor":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+    def execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
+        self.executed.append((sql, params))
+
+    def fetchone(self) -> tuple[int]:
+        return (self._count,)
+
+
+class _CountingConnection:
+    """Fake psycopg2 connection handing out a single counting cursor."""
+
+    def __init__(self, cursor: _CountingCursor) -> None:
+        self._cursor = cursor
+
+    def cursor(self) -> _CountingCursor:
+        return self._cursor
+
+
+def test_count_leased_hosts_matches_on_prefix_alone_with_no_status_filter() -> None:
+    """The lease guard must match every row naming the user, in any status (fail-safe)."""
+    cursor = _CountingCursor(count=3)
+    held = delete_accounts_module._count_leased_hosts_for_user(
+        _CountingConnection(cursor), "e055efda-494d-4b0d-90e6-2eb4e0d4949b"
+    )
+    assert held == 3
+    (sql, params) = cursor.executed[0]
+    assert params == ("e055efda494d4b0d",)
+    # No status filter: a released host leaves no row, so any surviving row means
+    # an incomplete release. Filtering on status would under-match newly-added
+    # held statuses and let a delete strand a live VM.
+    assert "status" not in sql.lower()
