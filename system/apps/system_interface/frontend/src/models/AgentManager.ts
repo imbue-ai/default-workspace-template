@@ -24,6 +24,12 @@ export interface AgentState {
   // shows is its member list, not this -- so it is a starting point for filing
   // a chat, never an owner.
   project?: string | null;
+  // The mngr ``display_name`` label, lifted out of ``labels`` by the backend:
+  // the human-readable name mngr holds for this agent, as the user typed it.
+  // Its canonical form (specials dropped, space runs collapsed to dashes) is
+  // the true ``name`` above, which stays the only way to address the agent.
+  // Null when mngr holds no such label, in which case ``name`` is all there is.
+  display_name?: string | null;
   work_dir: string | null;
   // The agent's harness ("claude", "codex", ...), from the backend. Used only as
   // a lookup key into the per-harness catalog (GET /api/harnesses): ModelBar picks

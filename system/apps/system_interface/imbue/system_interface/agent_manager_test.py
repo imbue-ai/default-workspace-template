@@ -1219,6 +1219,27 @@ def test_serialized_agents_expose_the_project_label(broadcaster: WebSocketBroadc
         manager.stop()
 
 
+def test_serialized_agents_expose_the_display_name_label(broadcaster: WebSocketBroadcaster) -> None:
+    """The human-readable name mngr holds rides along; ``name`` stays the true mngr name."""
+    manager = AgentManager.build(broadcaster)
+    try:
+        with manager._lock:
+            for agent_id, name, labels in (
+                ("named", "Chat-1", {"user_created": "true", "display_name": "Chat 1"}),
+                ("unnamed", "brave-otter", {"user_created": "true"}),
+            ):
+                manager._agents[agent_id] = AgentStateItem(
+                    id=agent_id, name=name, state="RUNNING", labels=labels, work_dir=None
+                )
+        by_id = {agent["id"]: agent for agent in manager.get_agents_serialized()}
+        assert by_id["named"]["display_name"] == "Chat 1"
+        assert by_id["unnamed"]["display_name"] is None
+        assert by_id["named"]["name"] == "Chat-1"
+        assert by_id["unnamed"]["name"] == "brave-otter"
+    finally:
+        manager.stop()
+
+
 def test_get_chat_agent_ids_excludes_workers_and_primary(broadcaster: WebSocketBroadcaster) -> None:
     """Only chats are OOM-managed: workers and the primary keep their launch bands."""
     manager = AgentManager.build(broadcaster)

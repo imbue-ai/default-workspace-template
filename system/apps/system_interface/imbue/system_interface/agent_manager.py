@@ -723,6 +723,11 @@ class AgentManager:
         linkage the workspace UI reads on every agent it lists (see
         ``_chat_project_label``); null means the chat was created inside no
         project, which Everything lists all the same.
+
+        ``display_name`` is lifted for the same reason: it is the human-readable
+        name mngr holds for the agent, and ``name`` is its canonical form, so the
+        UI can show what the user typed while still addressing the agent by
+        ``name``. Null means mngr has no such label and ``name`` is all there is.
         """
         with self._lock:
             return [
@@ -732,6 +737,7 @@ class AgentManager:
                     "state": a.state,
                     "labels": a.labels,
                     "project": a.labels.get("project"),
+                    "display_name": a.labels.get("display_name"),
                     "work_dir": a.work_dir,
                     "harness": a.harness,
                     "activity_state": a.activity_state,
