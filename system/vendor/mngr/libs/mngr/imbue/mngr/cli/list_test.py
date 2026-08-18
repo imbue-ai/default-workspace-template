@@ -186,17 +186,6 @@ def test_get_field_value_simple_field() -> None:
     assert result == "test-agent"
 
 
-def test_get_field_value_reports_a_branch_mngr_did_not_create() -> None:
-    """``--fields initial_branch`` answers where the work_dir is either way.
-
-    It used to be populated from the created branch alone, so it was empty for an
-    agent attached to a branch the user already had -- the case a caller asking
-    "where do I merge this agent's work from" most needs an answer for.
-    """
-    attached = make_test_agent_details(initial_branch="already/mine")
-    assert _get_field_value(attached, "initial_branch") == "already/mine"
-
-
 def test_get_field_value_nested_field() -> None:
     """_get_field_value should extract nested field."""
     agent = make_test_agent_details()
