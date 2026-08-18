@@ -1,0 +1,1 @@
+The bootstrap no longer writes the initial chat's "Chat 1" into the workspace's member-title store: the system interface now reads a chat's display name from the agent's own `display_name` label (which the bootstrap's `mngr create` already sets), so the second copy -- and the drift it allowed -- is gone.
