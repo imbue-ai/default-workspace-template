@@ -73,3 +73,5 @@ The agent surface speaks projects: `layout.py` documents `--view` (with `--layou
 A new read op, `views`, enumerates the views themselves -- every registered project plus Everything, each with its member refs, per-device content presence, and which connected clients have it in front, plus the last-active view id -- so an agent can discover the machine's projects directly instead of inferring them from an error message.
 
 Typing got tighter where the types are real: the ``views`` op's entries are a pydantic model rather than a hand-built dict, the registry-entry builder's shape is a TypedDict (reads stay tolerant, since the registry is hand-editable), the layout script's query args are ``dict[str, str]``, and the deliberately-tolerant inputs (a saved panel's ``url``, the title and recency stores' raw reads) are ``object`` instead of ``Any`` so their isinstance narrowing stays checked.
+
+Registry and arrangement writes are atomic now (same-directory temp file + rename), so a concurrent reader -- another process, an agent inspecting the file, a crash mid-write -- sees either the old or the new content in full, never a truncated or empty file.
