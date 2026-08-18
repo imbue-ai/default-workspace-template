@@ -14,6 +14,7 @@ service registration routes the live UI at a dead port.
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import signal
 import sys
@@ -345,6 +346,24 @@ def test_a_boot_excerpt_never_quotes_an_earlier_boot(tmp_path: Path) -> None:
 
     assert "ModuleNotFoundError" not in excerpt
     assert "no output from this boot" in excerpt
+
+
+def test_body_excerpt_marks_truncation_by_bytes_not_characters() -> None:
+    """The read cap is in bytes, so truncation must be judged in bytes too.
+
+    A multi-byte body can be over the byte budget while under it in characters;
+    comparing the decoded character count would then silently drop the "..."
+    marker and pass off a partial body as the whole diagnosis.
+    """
+    # Two bytes per character: over the byte budget, under it in characters.
+    multibyte_body = ("é" * mod._HEALTH_BODY_EXCERPT_BYTES).encode("utf-8")
+
+    excerpt = mod._read_body_excerpt(io.BytesIO(multibyte_body))
+
+    assert excerpt.endswith("...")
+
+    # A short body -- trailing newline and all -- comes back whole, unmarked.
+    assert mod._read_body_excerpt(io.BytesIO(b'{"detail":"fine"}\n')) == '{"detail":"fine"}'
 
 
 def _install_oom_tagger(repo_root: Path) -> Path:

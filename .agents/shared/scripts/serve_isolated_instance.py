@@ -244,10 +244,16 @@ def _read_body_excerpt(response) -> str:
         raw = response.read(_HEALTH_BODY_EXCERPT_BYTES + 1)
     except OSError:
         return ""
-    text = raw.decode("utf-8", errors="replace").strip()
-    if len(text) > _HEALTH_BODY_EXCERPT_BYTES:
-        return text[:_HEALTH_BODY_EXCERPT_BYTES] + "..."
-    return text
+    # Truncation is judged on the raw bytes, before decoding: the read cap is in
+    # bytes, and a multi-byte body can be over the byte budget while under it in
+    # characters -- which would silently drop the "..." marker and pass off a
+    # partial body as the whole diagnosis. Stripping bytes is UTF-8-safe (no
+    # multi-byte sequence contains an ASCII whitespace byte), and slicing may
+    # split a trailing multi-byte character, which ``errors="replace"`` absorbs.
+    stripped = raw.strip()
+    is_truncated = len(stripped) > _HEALTH_BODY_EXCERPT_BYTES
+    text = stripped[:_HEALTH_BODY_EXCERPT_BYTES].decode("utf-8", errors="replace")
+    return text + "..." if is_truncated else text
 
 
 class HttpClient:
