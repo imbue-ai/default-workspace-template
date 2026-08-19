@@ -77,9 +77,11 @@ function findByClass(tree: unknown, className: string): VnodeLike | undefined {
   return undefined;
 }
 
-/** Every `button` vnode whose rendered text (once trusted markup is stripped
- *  away) contains `text`. */
-function buttonsByText(tree: unknown, text: string): VnodeLike[] {
+/** Every clickable `button` vnode whose `aria-label` contains `label`. The
+ *  member rows carry no text of their own -- the name is a sibling span and
+ *  the button holds only a trusted icon -- so the accessible name is what
+ *  identifies one. */
+function buttonsByAriaLabel(tree: unknown, label: string): VnodeLike[] {
   const matches: VnodeLike[] = [];
   for (const vnode of walk(tree)) {
     if (
@@ -87,8 +89,8 @@ function buttonsByText(tree: unknown, text: string): VnodeLike[] {
       vnode.tag.startsWith("button") &&
       typeof vnode.attrs?.onclick === "function"
     ) {
-      const label = vnode.attrs["aria-label"];
-      if (typeof label === "string" && label.includes(text)) matches.push(vnode);
+      const ariaLabel = vnode.attrs["aria-label"];
+      if (typeof ariaLabel === "string" && ariaLabel.includes(label)) matches.push(vnode);
     }
   }
   return matches;
@@ -190,10 +192,9 @@ describe("ProjectSettingsModal member list", () => {
     });
     expect(JSON.stringify(modal.render())).toContain("service:docs");
 
-    const removeButtons = buttonsByText(modal.render(), "Remove");
-    const docsRemoveButton = removeButtons.find((button) => (button.attrs?.["aria-label"] as string).includes("docs"));
+    const [docsRemoveButton] = buttonsByAriaLabel(modal.render(), "Remove docs");
     expect(docsRemoveButton).toBeDefined();
-    clickVnode(docsRemoveButton!);
+    clickVnode(docsRemoveButton);
     await flush();
 
     expect(mockFetch).toHaveBeenCalledWith("/api/projects/research/members/remove", {
@@ -215,9 +216,9 @@ describe("ProjectSettingsModal member list", () => {
       onMemberRemoved: () => {},
     });
 
-    const removeButtons = buttonsByText(modal.render(), "Remove");
-    const docsRemoveButton = removeButtons.find((button) => (button.attrs?.["aria-label"] as string).includes("docs"));
-    clickVnode(docsRemoveButton!);
+    const [docsRemoveButton] = buttonsByAriaLabel(modal.render(), "Remove docs");
+    expect(docsRemoveButton).toBeDefined();
+    clickVnode(docsRemoveButton);
     await flush();
 
     const tree = JSON.stringify(modal.render());
