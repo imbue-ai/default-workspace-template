@@ -15,6 +15,20 @@ agent_ready_timeout = 45.0
 # Default create command settings -- apply to all mngr create from this repo
 [commands.create]
 type = "claude"
+# Pin every agent window to its own geometry instead of letting it follow whoever attaches.
+#
+# tmux's default policy re-sizes a window to the attaching client, so a human opening the
+# terminal panel in a short browser window shrinks the agent's pane -- and claude then draws
+# only what fits. Observed on a live agent: the /model picker rendered its heading, options
+# and effort row, and silently dropped the "Esc to cancel" footer off the bottom. mngr reads
+# that same pane to decide what is holding the input at send time, so a pane sized by a
+# bystander is a pane mngr cannot reason about.
+#
+# "manual" keeps the window at tmux_width x tmux_height for its whole life; the
+# client-attached hook then only repaints rather than re-fitting. An attached terminal
+# smaller than this scrolls instead of reflowing, which is the right trade: the agent's
+# geometry is mngr's, not whoever happens to be looking.
+tmux_window_size = "manual"
 connect = false
 ensure_clean = false
 pass_env__extend = ["REMOTE_SERVICE_CONNECTOR_URL", "LATCHKEY_GATEWAY"]
