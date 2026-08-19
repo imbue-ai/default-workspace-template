@@ -891,7 +891,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                       "Agent auth",
                     ),
                   ]),
-                  // The centered "Powered by <harness>" credit, overlaid on the bar.
+                  // The centered harness credit (may render nothing), overlaid on the bar.
                   m(PoweredByCredit, { agentId }),
                 ]),
               ]),

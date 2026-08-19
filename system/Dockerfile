@@ -7,7 +7,7 @@ ENV PATH="/root/.local/bin:$PATH"
 # Pin Claude Code; passed to setup_system.sh and recorded for the runtime version
 # check. Keep in sync with agent_types.claude.version in .mngr/settings.toml and
 # the default in system/scripts/setup_system.sh. Bump deliberately, not by accident.
-ARG CLAUDE_CODE_VERSION=2.1.226
+ARG CLAUDE_CODE_VERSION=2.1.227
 ENV CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION}
 
 # Pin Codex CLI; passed to setup_system.sh. Keep in sync with the default in

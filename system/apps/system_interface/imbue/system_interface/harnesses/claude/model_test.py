@@ -34,7 +34,7 @@ def test_catalog_options_carry_suffix_free_reported_ids() -> None:
 
 
 def test_live_statusline_model_ids_match_their_catalog_option() -> None:
-    # The model ids claude 2.1.226's statusline actually reports, captured from a live
+    # The model ids claude 2.1.227's statusline actually reports, captured from a live
     # binary launched exactly as the workspace launches it (settings.json model="opus[1m]",
     # then /model sonnet, /model haiku). Only sonnet reports the bare catalog key: opus keeps
     # its [1m] launch suffix and haiku reports a dated id, so two of the three reach their

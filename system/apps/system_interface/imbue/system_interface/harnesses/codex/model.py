@@ -68,7 +68,7 @@ CODEX_CATALOG: HarnessCatalog = HarnessCatalog(
     switch_mode=SwitchMode.ON_CHANGE,
     # DYNAMIC: the picker's options are per-agent (from model/list), re-fetched on every open.
     picker_mode=PickerMode.DYNAMIC,
-    powered_by_label="Codex",
+    powered_by_text="Powered by Codex",
     # Codex's patched binary watches shoulder_tap_atomic.jsonl and merges parked steer
     # messages into the live turn (ABA-gated on the turn id), so the "Shoulder tap" button
     # can flush atomically without a restart. Only codex supports this today.

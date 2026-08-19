@@ -660,18 +660,19 @@ def _get_model_options_endpoint(agent_id: str) -> Response:
 
 
 def _get_powered_by_endpoint(agent_id: str) -> Response:
-    """The agent's "Powered by" credit label -- a per-agent path decoupled from the model bar.
+    """The agent's credit text -- a per-agent path decoupled from the model bar.
 
-    The label is a pure function of the agent's harness, so it must never blink with the live
+    The text is a pure function of the agent's harness, so it must never blink with the live
     model choice or wait on the catalog fetch. This resolves the harness backend-side and
-    returns its product name directly, so the frontend can render the credit from ``agentId``
-    alone, independent of ``model_choice`` and of ``GET /api/harnesses``. 404 for an unknown
-    agent (e.g. a proto-agent), which the frontend treats as "don't show the credit yet".
+    returns the harness's verbatim credit string, so the frontend can render it from ``agentId``
+    alone, independent of ``model_choice`` and of ``GET /api/harnesses``. A harness that shows
+    no credit (claude) declares "", which the frontend renders as nothing. 404 for an unknown
+    agent (e.g. a proto-agent), which the frontend also treats as "no credit".
     """
     agent_info = _find_agent(agent_id)
     if agent_info is None:
         return _agent_not_found_response(agent_id)
-    return _json_response(PoweredByResponse(label=get_catalog(agent_info.harness).powered_by_label).model_dump())
+    return _json_response(PoweredByResponse(label=get_catalog(agent_info.harness).powered_by_text).model_dump())
 
 
 def _build_fast_mode_answered_label_command(agent_name: str) -> list[str]:

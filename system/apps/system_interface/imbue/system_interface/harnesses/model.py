@@ -162,9 +162,11 @@ class HarnessCatalog(FrozenModel):
     switch_mode: SwitchMode
     # How the model picker renders (list vs search); orthogonal to switch_mode.
     picker_mode: PickerMode
-    # The harness's product name, shown as a non-clickable "Powered by <label>" credit beside
-    # the composer's "Open agent terminal" button (e.g. "Claude Code", "Codex", "Pi Coding").
-    powered_by_label: str
+    # The exact, non-clickable credit text shown beside the composer's "Open agent terminal"
+    # button (e.g. "Powered by Codex", "Powered by Pi Coding"). The harness declares the WHOLE
+    # string, prefix included, so a harness that wants no credit at all declares "" -- the
+    # frontend then renders nothing. Claude does this today.
+    powered_by_text: str
     # Whether this harness can flush a queued "shoulder tap" atomically -- merging the parked
     # messages into the currently-running turn without a restart. True only for codex, whose
     # patched binary watches shoulder_tap_atomic.jsonl and ABA-gates the flush on the live turn

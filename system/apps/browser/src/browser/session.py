@@ -732,6 +732,17 @@ class LiveBrowser(MutableModel):
             executable_path=chromium_path,
             user_data_dir=str(profile_dir),
             args=[
+                # Chromium blocklists --no-sandbox (which we must pass as root: see
+                # _should_disable_sandbox) and pins a permanent "You are using an
+                # unsupported command-line flag" infobar above every page for it. We film
+                # Chrome's real window, so the human sees that bar for the life of the
+                # browser. --test-type is the only supported suppression that does not
+                # break stealth: infobar_utils.cc skips the whole bad-flags prompt when it
+                # (or --enable-automation, which sets navigator.webdriver -- not an option
+                # for Fortress) is present. It also disables Chrome's own background
+                # *component* extensions; unpacked ones (browser-use's uBlock/ClearURLs)
+                # are unaffected, and nothing about it is visible to page JS.
+                "--test-type",
                 "--disable-gpu-compositing",
                 "--disable-smooth-scrolling",
                 "--wm-window-animations-disabled",
