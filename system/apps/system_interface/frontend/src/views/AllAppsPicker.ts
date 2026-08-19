@@ -42,6 +42,8 @@
 import m from "mithril";
 import type { AppEntry } from "../models/AgentManager";
 import { getApps } from "../models/AgentManager";
+import { displayNameForMember } from "../models/MemberTitles";
+import { memberRef } from "../models/Projects";
 import { appIconMarkup } from "./appIcon";
 import { hoverTooltipAttrs } from "./hoverTooltip";
 import { icon } from "./icons";
@@ -97,12 +99,25 @@ export function pickableApps(): AppEntry[] {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-/** Case-insensitive substring match on the app name. An empty query matches
+/** What one app is called: the name the user gave it if it has one, else the
+ *  name it registered under. Read through the machine-wide title store like
+ *  every other surface that names an object (see models/MemberTitles), so an
+ *  app renamed on its tab or in the rail reads the same here. */
+export function appDisplayName(app: AppEntry): string {
+  return displayNameForMember(memberRef("app", app.name), app.name);
+}
+
+/** Case-insensitive substring match on either name an app answers to: the one
+ *  it is displayed under, and the one it is registered under. Both, because a
+ *  renamed app has to be findable by the name on its row -- and by the service
+ *  name the rest of the machine still addresses it by. An empty query matches
  *  everything, so the unfiltered list is just the query-less case. */
 export function filterApps(apps: readonly AppEntry[], query: string): AppEntry[] {
   const needle = query.trim().toLowerCase();
   if (needle === "") return [...apps];
-  return apps.filter((app) => app.name.toLowerCase().includes(needle));
+  return apps.filter(
+    (app) => app.name.toLowerCase().includes(needle) || appDisplayName(app).toLowerCase().includes(needle),
+  );
 }
 
 /**
@@ -155,6 +170,11 @@ export function AllAppsPicker(): m.Component<AllAppsPickerAttrs> {
    *  outright (see `fadingNames`); it is only ever true when `isPinnable` is,
    *  since Everything's rows never leave this popover's list to begin with. */
   function appRow(app: AppEntry, isPinnable: boolean, isFadingOut: boolean, attrs: AllAppsPickerAttrs): m.Vnode {
+    // What the row reads, and what its control is labeled after: an app named
+    // by the user is named that here too, or this popover would be the one
+    // surface still calling it by its registration. The row's `key` stays the
+    // service name -- that is its identity, and a rename must not remount it.
+    const label = appDisplayName(app);
     return m(
       "div",
       {
@@ -173,7 +193,7 @@ export function AllAppsPicker(): m.Component<AllAppsPickerAttrs> {
           // keeps the generic "opens somewhere" glyph this list has always used.
           m.trust(appIconMarkup(app.icon, ROW_GLYPH_SIZE, icon("external-link", { size: ROW_GLYPH_SIZE }), app.name)),
         ),
-        m("span", { class: "min-w-0 flex-1 truncate" }, app.name),
+        m("span", { class: "min-w-0 flex-1 truncate" }, label),
         !isPinnable || isFadingOut
           ? null
           : m(
@@ -184,7 +204,7 @@ export function AllAppsPicker(): m.Component<AllAppsPickerAttrs> {
                   "project-rail-pin flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded " +
                   "text-text-faint opacity-0 hover:text-text-primary focus-visible:opacity-100 " +
                   "group-hover:opacity-100",
-                "aria-label": `Pin ${app.name}`,
+                "aria-label": `Pin ${label}`,
                 ...hoverTooltipAttrs("Pin it to this project. It joins this project's tabs and its rail shortcuts."),
                 onclick: (event: MouseEvent) => {
                   // The row underneath opens the app; the pin toggle must not.

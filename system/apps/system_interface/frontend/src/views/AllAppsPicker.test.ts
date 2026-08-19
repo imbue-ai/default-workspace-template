@@ -18,6 +18,7 @@ vi.mock("../models/AgentManager", () => ({
 }));
 
 import type { AppEntry } from "../models/AgentManager";
+import { applyMemberTitleChange } from "../models/MemberTitles";
 import { AllAppsPicker, filterApps, pickableApps, unpinnedApps } from "./AllAppsPicker";
 
 // Deliberately unsorted, and deliberately including the chrome UI plus the two
@@ -363,5 +364,46 @@ describe("AllAppsPicker", () => {
     expect(texts(render({ pinnedAppNames: allPinnedNames }))).toContain(
       "Every app on this machine is already pinned here.",
     );
+  });
+});
+
+describe("AllAppsPicker names an app the way the rest of the workspace does", () => {
+  /** Name "docs" for the length of one case, then put it back: the title store
+   *  is module state shared by every test in this file. */
+  function withRenamedDocs(chosenName: string, body: () => void): void {
+    applyMemberTitleChange("service:docs", chosenName);
+    try {
+      body();
+    } finally {
+      applyMemberTitleChange("service:docs", null);
+    }
+  }
+
+  it("shows the name the user gave an app, not the one it registered under", () => {
+    // Rename is a verb on every kind now, apps included, and a name is filed by
+    // ref machine-wide -- so this popover has to read the same store the rail,
+    // the tab and the launcher read, or it is the one surface still calling the
+    // app "docs".
+    appState.apps = APPS;
+    withRenamedDocs("Handbook", () => {
+      const tree = render();
+      expect(texts(tree)).toContain("Handbook");
+      expect(texts(tree)).not.toContain("docs");
+      const docsRow = rowsOf(tree).find((row) => row.attrs?.key === "docs");
+      // The row is still keyed (and pinned) by the service name underneath.
+      expect(docsRow).not.toBeUndefined();
+      expect(buttonsOf(docsRow?.children)[0].attrs?.["aria-label"]).toBe("Pin Handbook");
+    });
+  });
+
+  it("finds a renamed app by either name it answers to", () => {
+    appState.apps = APPS;
+    withRenamedDocs("Handbook", () => {
+      const machineApps = pickableApps();
+      // The name on the row, which is the only one the user can see here...
+      expect(filterApps(machineApps, "handbook").map((app) => app.name)).toEqual(["docs"]);
+      // ... and the registration the rest of the machine still addresses it by.
+      expect(filterApps(machineApps, "docs").map((app) => app.name)).toEqual(["docs"]);
+    });
   });
 });
