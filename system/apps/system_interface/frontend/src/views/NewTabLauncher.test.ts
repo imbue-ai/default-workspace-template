@@ -46,7 +46,6 @@ const EMPTY_INVENTORY: MachineInventory = {
   terminals: [],
   browsers: [],
   apps: [],
-  urlTabs: [],
 };
 
 describe("buildLauncherRows", () => {

@@ -430,15 +430,20 @@ export interface MachineObject {
 /**
  * Everything the machine currently holds, gathered per kind from the source
  * that knows about it: chat agents from the agent list, terminals from the
- * tmux fleet, browsers from the browser fleet, apps from the registered
- * service list, and ad-hoc URL tabs from the layouts that host them.
+ * tmux fleet, browsers from the browser fleet, and apps from the registered
+ * service list.
+ *
+ * Those four kinds are the whole of it, because they are the four the machine
+ * can enumerate: an ad-hoc URL page exists only as a panel in some view's
+ * arrangement (see `memberRefForPanelParams` in DockviewWorkspace, which files
+ * none), so nothing here can report one and a `url:` ref only ever reaches a
+ * tab list through a migrated project's own member list.
  */
 export interface MachineInventory {
   chatAgents: readonly MachineObject[];
   terminals: readonly MachineObject[];
   browsers: readonly MachineObject[];
   apps: readonly MachineObject[];
-  urlTabs: readonly MachineObject[];
 }
 
 /** One row of a tab list: the object, what it is called, and which projects
@@ -456,7 +461,6 @@ const INVENTORY_KINDS: readonly { kind: MemberKind; key: keyof MachineInventory 
   { kind: "terminal", key: "terminals" },
   { kind: "browser", key: "browsers" },
   { kind: "app", key: "apps" },
-  { kind: "url", key: "urlTabs" },
 ];
 
 /**
@@ -470,10 +474,10 @@ const INVENTORY_KINDS: readonly { kind: MemberKind; key: keyof MachineInventory 
  * projects showing it, for the row menu; a ref missing from it is filed
  * nowhere, not hidden.
  *
- * Kinds come out in inventory order (chats, terminals, browsers, apps, URL
- * tabs) and objects within a kind in the order their source listed them.
- * Duplicate refs collapse onto the first row for them, so a URL tab that the
- * layouts report twice does not list twice.
+ * Kinds come out in inventory order (chats, terminals, browsers, apps) and
+ * objects within a kind in the order their source listed them. Duplicate refs
+ * collapse onto the first row for them, so an object a source reports twice
+ * does not list twice.
  */
 export function buildEverythingMembers(
   inventory: MachineInventory,
