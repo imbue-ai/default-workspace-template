@@ -38,7 +38,7 @@ def test_prevent_global_keyword() -> None:
 
 
 def test_prevent_bare_print() -> None:
-    rc.check_bare_print(_DIR, snapshot(7))
+    rc.check_bare_print(_DIR, snapshot(3))
 
 
 # --- Exception handling ---
@@ -111,7 +111,7 @@ def test_prevent_namedtuple() -> None:
 
 
 def test_prevent_yaml_usage() -> None:
-    rc.check_yaml_usage(_DIR, snapshot(2))
+    rc.check_yaml_usage(_DIR, snapshot(0))
 
 
 def test_prevent_functools_partial() -> None:
@@ -123,7 +123,7 @@ def test_prevent_exit_stack() -> None:
 
 
 def test_prevent_async_await() -> None:
-    rc.check_async_await(_DIR, snapshot(160))
+    rc.check_async_await(_DIR, snapshot(102))
 
 
 # --- Hardcoded paths ---
@@ -141,7 +141,7 @@ def test_prevent_hardcoded_guarded_binary() -> None:
 
 
 def test_prevent_num_prefix() -> None:
-    rc.check_num_prefix(_DIR, snapshot(7))
+    rc.check_num_prefix(_DIR, snapshot(5))
 
 
 # --- Documentation ---
