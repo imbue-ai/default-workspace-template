@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
+from loguru import logger as _loguru_logger
 
 from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.api.message import MessageResult
@@ -14,6 +15,7 @@ from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import HostName
 from imbue.mngr.primitives import ProviderInstanceName
 from imbue.system_interface.agent_discovery import MngrMessenger
+from imbue.system_interface.agent_discovery import discover_agents
 from imbue.system_interface.agent_discovery import read_claude_config_dir_from_env_file
 
 
@@ -222,10 +224,6 @@ def test_unknown_config_field_degrades_to_a_warning_not_a_failure(
     update. The live read is therefore non-strict: the unknown field is dropped
     with a logged warning and agents still list.
     """
-    from loguru import logger as loguru_logger
-
-    from imbue.system_interface.agent_discovery import discover_agents
-
     config_dir = tmp_path / "cfg"
     config_dir.mkdir()
     (config_dir / "settings.toml").write_text(
@@ -235,7 +233,7 @@ def test_unknown_config_field_degrades_to_a_warning_not_a_failure(
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path / "host"))
 
     warnings: list[str] = []
-    sink_id = loguru_logger.add(
+    sink_id = _loguru_logger.add(
         lambda message: warnings.append(str(message)), level="WARNING"
     )
     try:
@@ -243,7 +241,7 @@ def test_unknown_config_field_degrades_to_a_warning_not_a_failure(
         # goes through, not remote-provider discovery.
         agents = discover_agents(provider_names=("local",))
     finally:
-        loguru_logger.remove(sink_id)
+        _loguru_logger.remove(sink_id)
 
     # The listing survived (a fresh empty host dir simply has no agents), and
     # the unknown field was reported rather than swallowed silently.

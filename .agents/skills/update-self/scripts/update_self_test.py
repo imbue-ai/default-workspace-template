@@ -11,13 +11,21 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
+import sys
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable, Sequence
+
+import pytest
 
 _MODULE_PATH = Path(__file__).with_name("update_self.py")
 _spec = importlib.util.spec_from_file_location("update_self", _MODULE_PATH)
 assert _spec is not None and _spec.loader is not None
 update_self = importlib.util.module_from_spec(_spec)
+# Register before exec so the module's own dataclasses can resolve __module__.
+sys.modules[_spec.name] = update_self
 _spec.loader.exec_module(update_self)
 
 
@@ -1105,3 +1113,1264 @@ def test_skill_md_task_template_carries_the_lead_agent_and_report_fields() -> No
     frontmatter_template = skill_md[start:end]
     assert "lead_agent: $MNGR_AGENT_NAME" in frontmatter_template
     assert "finish_report_path: " in frontmatter_template
+
+
+# ==== The atomic apply =========================================================
+#
+# The orchestration tests inject a recording ``Runner`` (so no real
+# ``git``/``npm``/``uv``/``mngr`` runs), a programmable ``HttpClient``, a fake
+# ``Spawner``, and a no-op sleeper, and run against a real temporary repo
+# directory. The recording runner emulates the build tool's destructive
+# behaviour (emptying the bundle directory before writing), so a working
+# rollback is distinguishable from one that never deleted anything.
+
+_ROLLBACK = "abc123def456"
+_MERGE_REF = "mngr/update-self"
+_LIVE_BASE = "http://test-live"
+_ASSET_NAME = "index-abc123.js"
+_TODAY = "2026-08-19"
+
+
+def _write_bundle(repo_root: Path) -> None:
+    static = repo_root / update_self.STATIC_DIR
+    (static / "assets").mkdir(parents=True, exist_ok=True)
+    (static / "index.html").write_text(
+        f'<!doctype html><html><head><script type="module" src="/assets/{_ASSET_NAME}">'
+        "</script></head><body></body></html>"
+    )
+    (static / "assets" / _ASSET_NAME).write_text("console.log('app');")
+
+
+def _bundle_exists(repo_root: Path) -> bool:
+    return (repo_root / update_self.FRONTEND_BUILD_INDEX).exists()
+
+
+def _make_apply_repo(tmp_path: Path) -> Path:
+    repo_root = tmp_path / "repo"
+    (repo_root / update_self.FRONTEND_DIR).mkdir(parents=True)
+    return repo_root
+
+
+@pytest.fixture
+def apply_repo(tmp_path: Path) -> Path:
+    """A repo root that already serves a built bundle, as a live workspace does."""
+    repo_root = _make_apply_repo(tmp_path)
+    _write_bundle(repo_root)
+    return repo_root
+
+
+@pytest.fixture
+def unbuilt_apply_repo(tmp_path: Path) -> Path:
+    """A repo root that has never built a bundle, so there is none to snapshot."""
+    return _make_apply_repo(tmp_path)
+
+
+def _unwrap_expendable(argv: list[str]) -> list[str]:
+    """Strip the ``sh -c <tag> sh <argv...>`` wrapper the hungry steps carry."""
+    if argv[:2] == ["sh", "-c"] and argv[3:4] == ["sh"]:
+        return argv[4:]
+    return argv
+
+
+def _tagging_expend(argv: Sequence[str]) -> list[str]:
+    """A recognizable stand-in for ``as_expendable`` (the real one is inert when
+    the tree carries no oom_priority package, as these temp repos do not)."""
+    return ["sh", "-c", "expendable-tag", "sh", *argv]
+
+
+@dataclass
+class _Result:
+    returncode: int = 0
+    stdout: str = ""
+    stderr: str = ""
+
+
+@dataclass
+class _RecordingRunner(update_self.Runner):
+    """Records every ``run`` call; returns canned results keyed by argv prefix.
+
+    A response may be a single ``_Result`` or a list consumed in order (the
+    last entry repeats). When ``repo_root`` is set, ``npm run build`` also
+    *behaves* like the real build tool: it empties the bundle directory first
+    and only writes a new bundle if the canned result is a success.
+    ``on_command`` (when set) observes every unwrapped argv as it runs -- used
+    to capture mid-flight state like the marker's existence at merge time.
+    """
+
+    calls: list[list[str]] = field(default_factory=list)
+    raw_calls: list[list[str]] = field(default_factory=list)
+    envs: list[dict | None] = field(default_factory=list)
+    executables: dict[str, str] = field(default_factory=dict)
+    repo_root: Path | None = None
+    is_build_output_written: bool = True
+    on_command: Callable[[list[str]], None] | None = None
+    _responses: dict[tuple[str, ...], object] = field(default_factory=dict)
+
+    def respond(self, prefix: tuple[str, ...], result: object) -> None:
+        self._responses[prefix] = result
+
+    def which(self, executable: str) -> str | None:
+        return self.executables.get(executable)
+
+    def run(self, argv: Sequence[str], **kwargs) -> _Result:
+        self.raw_calls.append(list(argv))
+        argv_list = _unwrap_expendable(list(argv))
+        self.calls.append(argv_list)
+        self.envs.append(kwargs.get("env"))
+        if self.on_command is not None:
+            self.on_command(argv_list)
+        result = self._canned_result(argv_list)
+        if argv_list[:3] == ["npm", "run", "build"] and self.repo_root is not None:
+            self._emulate_build(result.returncode == 0)
+        return result
+
+    def _canned_result(self, argv_list: list[str]) -> _Result:
+        for prefix, result in self._responses.items():
+            if tuple(argv_list[: len(prefix)]) == prefix:
+                if isinstance(result, list):
+                    result = result.pop(0) if len(result) > 1 else result[0]
+                if isinstance(result, BaseException):
+                    raise result
+                assert isinstance(result, _Result)
+                return result
+        return _Result()
+
+    def _emulate_build(self, is_successful: bool) -> None:
+        assert self.repo_root is not None
+        static = self.repo_root / update_self.STATIC_DIR
+        # vite's `emptyOutDir: true` -- the output is destroyed before any new
+        # output is written, so a failure part-way through leaves nothing.
+        shutil.rmtree(static, ignore_errors=True)
+        if is_successful and self.is_build_output_written:
+            _write_bundle(self.repo_root)
+
+    def argvs_starting(self, *prefix: str) -> list[list[str]]:
+        return [c for c in self.calls if tuple(c[: len(prefix)]) == prefix]
+
+    def ran(self, *prefix: str) -> bool:
+        return bool(self.argvs_starting(*prefix))
+
+
+class _FakeHttp(update_self.HttpClient):
+    """Returns whatever ``responder(url)`` yields for the health-probe GETs;
+    ``page_responder`` drives the frontend probe and defaults to a healthy
+    built app shell."""
+
+    def __init__(
+        self,
+        responder: Callable[[str], int | None],
+        page_responder: Callable[[str], update_self.FetchedPage | None] | None = None,
+    ) -> None:
+        self._responder = responder
+        self._page_responder = page_responder or _built_app_page
+        self.get_urls: list[str] = []
+        self.page_urls: list[str] = []
+
+    def get_status(self, url: str, timeout: float) -> int | None:
+        self.get_urls.append(url)
+        return self._responder(url)
+
+    def get_page(self, url: str, timeout: float) -> update_self.FetchedPage | None:
+        self.page_urls.append(url)
+        return self._page_responder(url)
+
+
+def _built_app_page(url: str) -> update_self.FetchedPage:
+    if url.endswith(".js"):
+        return update_self.FetchedPage(
+            status=200,
+            body="console.log('app');",
+            headers={"content-type": "text/javascript"},
+        )
+    return update_self.FetchedPage(
+        status=200,
+        body=f'<!doctype html><script type="module" src="/assets/{_ASSET_NAME}"></script>',
+        headers={
+            "content-type": "text/html",
+            update_self.FRONTEND_BUILT_HEADER: "true",
+        },
+    )
+
+
+def _placeholder_page(url: str) -> update_self.FetchedPage:
+    return update_self.FetchedPage(
+        status=200,
+        body="<!doctype html><p>Frontend not built</p>",
+        headers={
+            "content-type": "text/html",
+            update_self.FRONTEND_BUILT_HEADER: "false",
+        },
+    )
+
+
+@dataclass
+class _FakeSpawned:
+    output: str = ""
+    exited: bool = False
+    terminated: bool = False
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+    def has_exited(self) -> bool:
+        return self.exited
+
+    def read_output(self) -> str:
+        return self.output
+
+
+@dataclass
+class _FakeSpawner(update_self.Spawner):
+    output: str = ""
+    exited: bool = False
+    spawns: list[list[str]] = field(default_factory=list)
+    raw_spawns: list[list[str]] = field(default_factory=list)
+    last: _FakeSpawned | None = None
+
+    def spawn(
+        self, argv: Sequence[str], cwd: str, env: dict, output_path: Path
+    ) -> _FakeSpawned:
+        self.raw_spawns.append(list(argv))
+        self.spawns.append(_unwrap_expendable(list(argv)))
+        self.last = _FakeSpawned(output=self.output, exited=self.exited)
+        return self.last
+
+
+class _Clock:
+    """A deterministic stand-in for ``time.time`` the tests can advance."""
+
+    def __init__(self, start: float = 1000.0) -> None:
+        self.value = start
+
+    def __call__(self) -> float:
+        self.value += 1.0
+        return self.value
+
+
+def _apply_runner(name_status: str, repo_root: Path) -> _RecordingRunner:
+    runner = _RecordingRunner(repo_root=repo_root)
+    # Clean for the precondition check; any later status call is the rollback's
+    # "is there anything staged to commit" question, and by then the restore
+    # has staged the reverted paths.
+    runner.respond(
+        ("git", "status", "--porcelain"),
+        [_Result(stdout=""), _Result(stdout="M  restored-path")],
+    )
+    # Not yet merged: the merge-base ancestor check answers "no".
+    runner.respond(("git", "merge-base", "--is-ancestor"), _Result(returncode=1))
+    runner.respond(("git", "rev-parse", "--short=7"), _Result(stdout="abc1234"))
+    runner.respond(("git", "rev-parse", "HEAD"), _Result(stdout=_ROLLBACK))
+    runner.respond(("git", "rev-parse", _MERGE_REF), _Result(stdout="fedcba9876543"))
+    runner.respond(("git", "diff"), _Result(stdout=name_status))
+    runner.respond(
+        ("git", "log"), _Result(stdout=f"{_ROLLBACK} Initial workspace commit")
+    )
+    runner.respond(("git", "rev-list"), _Result(stdout=_ROLLBACK))
+    runner.respond(("git", "describe"), _Result(returncode=128))
+    return runner
+
+
+def _apply(
+    runner: _RecordingRunner,
+    http: _FakeHttp,
+    spawner: _FakeSpawner,
+    repo_root: Path,
+    *,
+    merge_ref: str = _MERGE_REF,
+    ff_only: bool = True,
+    worker_bundle: str | None = None,
+    target_ref: str | None = None,
+    is_pid_live: Callable[[int], bool] = lambda pid: False,
+    expend: Callable[[Sequence[str]], list[str]] = _tagging_expend,
+) -> int:
+    return update_self.apply_update(
+        merge_ref,
+        repo_root,
+        ff_only=ff_only,
+        worker_bundle=worker_bundle,
+        target_ref=target_ref,
+        runner=runner,
+        http=http,
+        spawner=spawner,
+        sleeper=lambda _seconds: None,
+        base_url=_LIVE_BASE,
+        now=_Clock(),
+        today=_TODAY,
+        is_pid_live=is_pid_live,
+        expend=expend,
+    )
+
+
+def _all_healthy(_url: str) -> int:
+    return 200
+
+
+def _is_live(url: str) -> bool:
+    return url.startswith(_LIVE_BASE)
+
+
+def _refreshed_the_view(runner: _RecordingRunner, repo_root: Path) -> bool:
+    return runner.ran(
+        sys.executable, str(repo_root / "system/scripts/refresh_workspace_view.py")
+    )
+
+
+def _marker_exists(repo_root: Path) -> bool:
+    return update_self.marker_path(repo_root).exists()
+
+
+_RESTART = ("mngr", "start", "--restart", "system-services")
+_PROVISION = ("bash", update_self.PROVISIONER_SCRIPT)
+
+_FRONTEND_DIFF = "M\tsystem/apps/system_interface/frontend/src/views/Chat.ts\n"
+_BACKEND_DIFF = "M\tsystem/apps/system_interface/imbue/system_interface/server.py\n"
+_VENDORED_DIFF = "M\tsystem/vendor/mngr/libs/mngr/imbue/mngr/api/list.py\n"
+_SETTINGS_DIFF = "M\t.mngr/settings.toml\n"
+_BACKEND_MANIFEST_DIFF = "M\tsystem/apps/system_interface/pyproject.toml\n"
+_FRONTEND_MANIFEST_DIFF = "M\tsystem/apps/system_interface/frontend/package.json\n"
+_DOCS_DIFF = "M\tREADME.md\nM\t.agents/changelog/some-entry.md\n"
+
+
+# --- plan_apply ---------------------------------------------------------------
+
+
+def test_plan_apply_maps_each_change_class() -> None:
+    plan = update_self.plan_apply(
+        [
+            "system/apps/system_interface/frontend/src/views/Chat.ts",
+            "system/apps/system_interface/imbue/system_interface/server.py",
+            "system/apps/system_interface/frontend/package.json",
+            "system/apps/system_interface/pyproject.toml",
+            "system/scripts/setup_system.sh",
+        ]
+    )
+    assert plan.frontend_src and plan.frontend_manifest
+    assert plan.backend_src and plan.backend_manifest
+    assert plan.provisioner
+    assert plan.needs_restart  # the backend implies it
+
+
+def test_plan_apply_vendored_source_and_settings_require_restart() -> None:
+    vendored = update_self.plan_apply(["system/vendor/mngr/libs/mngr/imbue/x.py"])
+    assert vendored.requires_restart and vendored.needs_restart
+    assert not vendored.backend  # not a system-interface change
+    settings = update_self.plan_apply([".mngr/settings.toml"])
+    assert settings.requires_restart and settings.provisioner
+
+
+def test_plan_apply_docs_only_needs_nothing() -> None:
+    plan = update_self.plan_apply(["README.md", ".agents/changelog/entry.md"])
+    assert not plan.any
+
+
+# --- apply: happy paths per change class ---------------------------------------
+
+
+def test_apply_frontend_only_builds_and_refreshes_without_restart(
+    apply_repo: Path,
+) -> None:
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+    http = _FakeHttp(_all_healthy)
+
+    code = _apply(runner, http, _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    assert runner.ran("npm", "run", "build")
+    assert not runner.ran(*_RESTART)
+    assert not runner.ran(*_PROVISION)
+    assert _refreshed_the_view(runner, apply_repo)
+    assert runner.ran("git", "merge", "--ff-only", _MERGE_REF)
+    assert _bundle_exists(apply_repo)
+    # Every exit path clears the marker; success also discards the snapshots.
+    assert not _marker_exists(apply_repo)
+    assert not (apply_repo / update_self.STATE_DIR_REL / "snapshots").exists()
+
+
+def test_apply_backend_change_preflights_restarts_and_probes(
+    apply_repo: Path,
+) -> None:
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    http = _FakeHttp(_all_healthy)
+    spawner = _FakeSpawner()
+
+    code = _apply(runner, http, spawner, apply_repo)
+
+    assert code == 0
+    # Pre-flight boots the bare tool on a throwaway port before the restart.
+    assert spawner.spawns == [[update_self.TOOL_NAME]]
+    assert runner.ran(*_RESTART)
+    assert any(_is_live(url) and update_self.HEALTH_PATH in url for url in http.get_urls)
+    assert not runner.ran("npm", "run", "build")
+
+
+def test_apply_vendored_source_change_restarts_without_building(
+    apply_repo: Path,
+) -> None:
+    # The geebspace lesson: vendored-mngr source is imported in-process by the
+    # live system interface, so "picked up live" was never true -- it restarts.
+    runner = _apply_runner(_VENDORED_DIFF, apply_repo)
+    spawner = _FakeSpawner()
+
+    code = _apply(runner, _FakeHttp(_all_healthy), spawner, apply_repo)
+
+    assert code == 0
+    assert runner.ran(*_RESTART)
+    assert spawner.spawns  # pre-flighted before the restart
+    assert not runner.ran("npm", "run", "build")
+    assert not runner.ran("uv", "tool", "install")  # source-only: no env refresh
+
+
+def test_apply_settings_change_provisions_before_any_restart(
+    apply_repo: Path,
+) -> None:
+    runner = _apply_runner(_SETTINGS_DIFF + _BACKEND_DIFF, apply_repo)
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    provision_index = runner.calls.index(list(_PROVISION))
+    restart_index = runner.calls.index(list(_RESTART))
+    assert provision_index < restart_index
+
+
+def test_apply_backend_manifest_refreshes_all_three_environments(
+    apply_repo: Path,
+) -> None:
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    installs = runner.argvs_starting("uv", "tool", "install")
+    assert len(installs) == 2  # the vendored mngr tool and the app tool
+    assert runner.ran("uv", "sync", "--all-packages", "--frozen")
+    assert runner.ran(*_RESTART)
+
+
+def test_apply_docs_only_lands_with_nothing_live_to_change(apply_repo: Path) -> None:
+    runner = _apply_runner(_DOCS_DIFF, apply_repo)
+    http = _FakeHttp(_all_healthy)
+
+    code = _apply(runner, http, _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    assert runner.ran("git", "merge", "--ff-only", _MERGE_REF)
+    # Nothing live: no build, no restart, no probes, no snapshots.
+    assert not runner.ran("npm")
+    assert not runner.ran(*_RESTART)
+    assert http.get_urls == [] and http.page_urls == []
+    assert not _marker_exists(apply_repo)
+
+
+def test_apply_ordinary_merge_mode_uses_no_ff(apply_repo: Path) -> None:
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+
+    code = _apply(
+        runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo, ff_only=False
+    )
+
+    assert code == 0
+    assert runner.ran("git", "merge", "--no-ff", "--no-edit", _MERGE_REF)
+    assert not runner.ran("git", "merge", "--ff-only")
+
+
+def test_apply_refused_merge_changes_nothing_and_exits_1(apply_repo: Path) -> None:
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+    runner.respond(
+        ("git", "merge", "--ff-only"), _Result(returncode=128, stderr="not possible")
+    )
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 1
+    assert runner.ran("git", "merge", "--abort")
+    assert not runner.ran("npm")
+    assert not runner.ran(*_RESTART)
+    assert not _marker_exists(apply_repo)
+
+
+def test_apply_dirty_tree_refuses_before_touching_anything(apply_repo: Path) -> None:
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+    runner.respond(("git", "status", "--porcelain"), _Result(stdout=" M foo\n"))
+
+    with pytest.raises(update_self.ApplyPreconditionError):
+        _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert not runner.ran("git", "merge")
+
+
+# --- apply: worker bundle -------------------------------------------------------
+
+
+def test_apply_installs_the_workers_bundle_instead_of_building(
+    apply_repo: Path, tmp_path: Path
+) -> None:
+    worker_bundle = tmp_path / "worker-static"
+    (worker_bundle / "assets").mkdir(parents=True)
+    (worker_bundle / "index.html").write_text(
+        f'<!doctype html><script type="module" src="/assets/{_ASSET_NAME}"></script>'
+    )
+    (worker_bundle / "assets" / _ASSET_NAME).write_text("console.log('worker');")
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+
+    code = _apply(
+        runner,
+        _FakeHttp(_all_healthy),
+        _FakeSpawner(),
+        apply_repo,
+        worker_bundle=str(worker_bundle),
+    )
+
+    assert code == 0
+    # The previewed artifact is installed as-is; no live build runs.
+    assert not runner.ran("npm", "run", "build")
+    installed = (
+        apply_repo / update_self.STATIC_DIR / "assets" / _ASSET_NAME
+    ).read_text()
+    assert installed == "console.log('worker');"
+
+
+def test_apply_falls_back_to_a_live_build_when_the_bundle_path_is_empty(
+    apply_repo: Path, tmp_path: Path
+) -> None:
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+
+    code = _apply(
+        runner,
+        _FakeHttp(_all_healthy),
+        _FakeSpawner(),
+        apply_repo,
+        worker_bundle=str(tmp_path / "not-built"),
+    )
+
+    assert code == 0
+    assert runner.ran("npm", "run", "build")
+
+
+# --- apply: failure -> rollback --------------------------------------------------
+
+
+def test_failed_build_rolls_back_the_merge_and_restores_the_bundle(
+    apply_repo: Path,
+) -> None:
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+    runner.respond(("npm", "run", "build"), _Result(returncode=1, stderr="boom"))
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 2
+    # The entire merge is reverted as a forward revert commit...
+    assert runner.ran("git", "checkout", _ROLLBACK, "--")
+    assert runner.ran("git", "commit", "--no-verify")
+    # ...and the emptied bundle is back, restored from the pre-apply copy
+    # (the emulated build destroyed it before failing).
+    assert _bundle_exists(apply_repo)
+    # No restart happened forward or during recovery: the live service never
+    # stopped serving known-good code.
+    assert not runner.ran(*_RESTART)
+    assert not _marker_exists(apply_repo)
+
+
+def test_failed_preflight_never_restarts_the_live_service(apply_repo: Path) -> None:
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    spawner = _FakeSpawner(output="Traceback: ImportError boom", exited=True)
+
+    def only_live_healthy(url: str) -> int | None:
+        return 200 if _is_live(url) else None
+
+    code = _apply(runner, _FakeHttp(only_live_healthy), spawner, apply_repo)
+
+    assert code == 2
+    assert not runner.ran(*_RESTART)
+    assert runner.ran("git", "checkout", _ROLLBACK, "--")
+
+
+def test_failed_post_restart_health_rolls_back_and_restarts_into_known_good(
+    apply_repo: Path,
+) -> None:
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    health_by_phase = {"restarts_seen": 0}
+
+    def responder(url: str) -> int | None:
+        if not _is_live(url):
+            return 200  # the pre-flight throwaway boot is healthy
+        # The live service is unhealthy after the forward restart, healthy
+        # again once recovery has restarted it into known-good code.
+        return 200 if health_by_phase["restarts_seen"] >= 2 else 500
+
+    def count_restarts(argv: list[str]) -> None:
+        if tuple(argv[:4]) == _RESTART:
+            health_by_phase["restarts_seen"] += 1
+
+    runner.on_command = count_restarts
+
+    code = _apply(runner, _FakeHttp(responder), _FakeSpawner(), apply_repo)
+
+    assert code == 2
+    assert len(runner.argvs_starting(*_RESTART)) == 2  # forward, then recovery
+
+
+def test_emergency_when_rollback_cannot_restore_health(apply_repo: Path, capsys) -> None:
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+    runner.respond(("npm", "run", "build"), _Result(returncode=1, stderr="boom"))
+
+    def never_healthy(url: str) -> int | None:
+        return 500
+
+    code = _apply(runner, _FakeHttp(never_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 3
+    # The pre-apply copies are the operator's way back: kept, and named.
+    bundle_copy = apply_repo / update_self.STATE_DIR_REL / "snapshots" / "bundle"
+    assert bundle_copy.exists()
+    assert str(bundle_copy) in capsys.readouterr().err
+    assert not _marker_exists(apply_repo)
+
+
+def test_a_regressed_frontend_is_rolled_back(apply_repo: Path) -> None:
+    # The app-shell probe answers, in order: built (the pre-apply baseline),
+    # the placeholder (the apply regressed it), built again (the rollback
+    # restored it) -- so the apply must roll back and confirm recovery.
+    shell_answers = [_built_app_page, _placeholder_page, _built_app_page]
+
+    def page_responder(url: str) -> update_self.FetchedPage:
+        if url.endswith(".js"):
+            return _built_app_page(url)
+        answer = shell_answers.pop(0) if len(shell_answers) > 1 else shell_answers[0]
+        return answer(url)
+
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+
+    code = _apply(
+        runner,
+        _FakeHttp(_all_healthy, page_responder=page_responder),
+        _FakeSpawner(),
+        apply_repo,
+    )
+
+    assert code == 2
+    assert runner.ran("git", "checkout", _ROLLBACK, "--")
+    assert _bundle_exists(apply_repo)  # restored from the pre-apply copy
+
+
+# --- apply: marker lifecycle ------------------------------------------------------
+
+
+def test_marker_is_written_before_the_merge_lands(apply_repo: Path) -> None:
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+    seen: dict[str, bool] = {}
+
+    def capture(argv: list[str]) -> None:
+        if argv[:2] == ["git", "merge"]:
+            seen["marker_at_merge"] = _marker_exists(apply_repo)
+
+    runner.on_command = capture
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    assert seen["marker_at_merge"] is True
+    assert not _marker_exists(apply_repo)  # cleared on the way out
+
+
+def test_marker_records_the_dri_agent_and_phases(apply_repo: Path) -> None:
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    phases: list[str] = []
+    dri: list[str] = []
+
+    def capture(argv: list[str]) -> None:
+        marker = update_self.read_marker(apply_repo)
+        if marker is not None:
+            phases.append(marker.phase)
+            dri.append(marker.dri_agent)
+
+    runner.on_command = capture
+    os.environ["MNGR_AGENT_NAME"] = "test-lead-agent"
+    try:
+        code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+    finally:
+        del os.environ["MNGR_AGENT_NAME"]
+
+    assert code == 0
+    assert "test-lead-agent" in dri
+    # The phase advanced monotonically through the apply.
+    assert update_self.PHASE_MERGED in phases
+    assert update_self.PHASE_RESTARTED in phases
+
+
+def test_a_live_marker_blocks_a_concurrent_apply(apply_repo: Path) -> None:
+    marker = update_self.ApplyMarker(
+        dri_agent="other-agent",
+        rollback_to=_ROLLBACK,
+        merge_ref=_MERGE_REF,
+        target_ref=None,
+        ff_only=True,
+        worker_bundle=None,
+        phase=update_self.PHASE_MERGED,
+        pid=12345,
+        started_at=1.0,
+        updated_at=1.0,
+    )
+    update_self.write_marker(marker, apply_repo, now=lambda: 2.0)
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+
+    code = _apply(
+        runner,
+        _FakeHttp(_all_healthy),
+        _FakeSpawner(),
+        apply_repo,
+        is_pid_live=lambda pid: True,
+    )
+
+    assert code == 1
+    assert runner.calls == []  # refused before touching anything
+    assert _marker_exists(apply_repo)  # the running apply's marker is untouched
+
+
+def test_a_dead_marker_for_the_same_merge_is_resumed(apply_repo: Path) -> None:
+    marker = update_self.ApplyMarker(
+        dri_agent="earlier-run",
+        rollback_to=_ROLLBACK,
+        merge_ref=_MERGE_REF,
+        target_ref=None,
+        ff_only=True,
+        worker_bundle=None,
+        phase=update_self.PHASE_MERGED,
+        pid=12345,
+        started_at=1.0,
+        updated_at=1.0,
+    )
+    update_self.write_marker(marker, apply_repo, now=lambda: 2.0)
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+    # The interrupted run already landed the merge.
+    runner.respond(("git", "merge-base", "--is-ancestor"), _Result(returncode=0))
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    # Resumed, not re-merged: the recorded rollback point is used for the diff
+    # and no second merge runs.
+    assert not runner.ran("git", "merge", "--ff-only")
+    assert runner.ran("git", "diff", "--no-renames", "--name-status", _ROLLBACK)
+    assert not _marker_exists(apply_repo)
+
+
+def test_a_dead_marker_for_a_different_merge_refuses_and_points_at_recover(
+    apply_repo: Path, capsys
+) -> None:
+    marker = update_self.ApplyMarker(
+        dri_agent="earlier-run",
+        rollback_to=_ROLLBACK,
+        merge_ref="mngr/update-other",
+        target_ref=None,
+        ff_only=True,
+        worker_bundle=None,
+        phase=update_self.PHASE_MERGED,
+        pid=12345,
+        started_at=1.0,
+        updated_at=1.0,
+    )
+    update_self.write_marker(marker, apply_repo, now=lambda: 2.0)
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 1
+    assert "recover" in capsys.readouterr().err
+    assert _marker_exists(apply_repo)  # left for recover to consume
+
+
+# --- apply: memory bands ----------------------------------------------------------
+
+
+def test_only_the_hungry_forward_steps_are_expendable_and_recovery_is_not(
+    unbuilt_apply_repo: Path,
+) -> None:
+    # Frontend manifest + backend manifest + backend source, failing after the
+    # restart, so both the forward steps and the recovery rebuild run. No
+    # bundle existed to snapshot, so recovery takes the rebuild branch.
+    diff = _FRONTEND_MANIFEST_DIFF + _FRONTEND_DIFF + _BACKEND_MANIFEST_DIFF + _BACKEND_DIFF
+    runner = _apply_runner(diff, unbuilt_apply_repo)
+    restarts = {"seen": 0}
+
+    def responder(url: str) -> int | None:
+        if not _is_live(url):
+            return 200
+        return 200 if restarts["seen"] >= 2 else 500
+
+    def count(argv: list[str]) -> None:
+        if tuple(argv[:4]) == _RESTART:
+            restarts["seen"] += 1
+
+    runner.on_command = count
+    spawner = _FakeSpawner()
+
+    code = _apply(runner, _FakeHttp(responder), spawner, unbuilt_apply_repo)
+
+    assert code == 2
+    wrapped = [c for c in runner.raw_calls if c[:2] == ["sh", "-c"]]
+    unwrapped = [c for c in runner.raw_calls if c[:2] != ["sh", "-c"]]
+    wrapped_cmds = [_unwrap_expendable(c) for c in wrapped]
+    # Forward hungry steps are tagged: npm ci, the uv installs, uv sync, the
+    # build -- and the pre-flight boot.
+    assert ["npm", "ci"] in wrapped_cmds
+    assert ["npm", "run", "build"] in wrapped_cmds
+    assert any(c[:3] == ["uv", "tool", "install"] for c in wrapped_cmds)
+    assert any(c[:2] == ["uv", "sync"] for c in wrapped_cmds)
+    assert spawner.raw_spawns and spawner.raw_spawns[0][:2] == ["sh", "-c"]
+    # git and the restarts never are.
+    assert all(c[0] != "git" for c in wrapped_cmds if c)
+    assert list(_RESTART) in unwrapped
+    # And during recovery nothing is tagged: the recovery-phase npm/uv calls
+    # (the rebuild after the rollback) run under the orchestrator's protection.
+    # Forward ran exactly one npm ci + one build wrapped; any further ones are
+    # recovery's and must be unwrapped.
+    recovery_npm = [c for c in unwrapped if c[:2] == ["npm", "ci"] or c[:3] == ["npm", "run", "build"]]
+    assert recovery_npm, "recovery should have rebuilt without the expendable tag"
+    recovery_uv = [c for c in unwrapped if c[:1] == ["uv"]]
+    assert recovery_uv, "recovery should have refreshed the envs without the tag"
+
+
+# --- snapshots (real directories) --------------------------------------------------
+
+
+def test_snapshots_roundtrip_bundle_envs_and_node_modules(tmp_path: Path) -> None:
+    repo_root = _make_apply_repo(tmp_path)
+    _write_bundle(repo_root)
+    (repo_root / update_self.FRONTEND_DIR / "node_modules").mkdir(parents=True)
+    (repo_root / update_self.FRONTEND_DIR / "node_modules" / "left-pad.js").write_text("old")
+    (repo_root / ".venv").mkdir()
+    (repo_root / ".venv" / "marker.txt").write_text("old-venv")
+    plan = update_self.plan_apply(
+        [
+            "system/apps/system_interface/frontend/src/App.ts",
+            "system/apps/system_interface/frontend/package.json",
+            "system/apps/system_interface/pyproject.toml",
+        ]
+    )
+    runner = _RecordingRunner()  # no tools on PATH -> no tool-env targets
+
+    snapshots = update_self.take_snapshots(plan, repo_root, runner, [])
+
+    assert {record.name for record in snapshots} == {"bundle", "node_modules", "venv"}
+    # Destroy the originals, as the failed forward steps would.
+    shutil.rmtree(repo_root / update_self.STATIC_DIR)
+    (repo_root / ".venv" / "marker.txt").write_text("wrecked")
+    shutil.rmtree(repo_root / update_self.FRONTEND_DIR / "node_modules")
+
+    failed = update_self.restore_snapshots(snapshots)
+
+    assert failed == []
+    assert _bundle_exists(repo_root)
+    assert (repo_root / ".venv" / "marker.txt").read_text() == "old-venv"
+    assert (
+        repo_root / update_self.FRONTEND_DIR / "node_modules" / "left-pad.js"
+    ).read_text() == "old"
+
+
+def test_existing_snapshot_copies_are_reused_not_overwritten(tmp_path: Path) -> None:
+    # A resumed apply must not re-copy: by then the live state may already be
+    # part-destroyed, and re-copying would overwrite the good copy with wreckage.
+    repo_root = _make_apply_repo(tmp_path)
+    _write_bundle(repo_root)
+    plan = update_self.plan_apply(["system/apps/system_interface/frontend/src/App.ts"])
+    runner = _RecordingRunner()
+    first = update_self.take_snapshots(plan, repo_root, runner, [])
+    (repo_root / update_self.FRONTEND_BUILD_INDEX).write_text("wrecked mid-apply")
+
+    second = update_self.take_snapshots(plan, repo_root, runner, first)
+
+    assert [record.copy for record in second] == [record.copy for record in first]
+    copy_index = Path(first[0].copy) / "index.html"
+    assert "wrecked" not in copy_index.read_text()
+
+
+def test_a_missing_snapshot_target_degrades_to_a_note(tmp_path: Path, capsys) -> None:
+    repo_root = _make_apply_repo(tmp_path)  # no bundle was ever built
+    plan = update_self.plan_apply(["system/apps/system_interface/frontend/src/App.ts"])
+
+    snapshots = update_self.take_snapshots(plan, repo_root, _RecordingRunner(), [])
+
+    assert snapshots == []
+    assert "nothing to copy aside" in capsys.readouterr().err
+
+
+# --- the version-history ledger (real git) ------------------------------------
+
+
+def _make_real_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "real-repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "commit", "--allow-empty", "-q", "-m", "Initial workspace commit"],
+        cwd=repo,
+        check=True,
+    )
+    return repo
+
+
+def _head_sha(repo: Path) -> str:
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+def _commit_count(repo: Path) -> int:
+    out = subprocess.run(
+        ["git", "rev-list", "--count", "HEAD"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    return int(out)
+
+
+def test_ledger_creates_starter_seeds_origin_and_appends_idempotently(
+    tmp_path: Path,
+) -> None:
+    repo = _make_real_repo(tmp_path)
+    merge_sha = _head_sha(repo)
+    runner = update_self.Runner()
+
+    update_self.write_version_history_entry(
+        repo, runner, "minds-v0.4.2", merge_sha, _TODAY
+    )
+
+    text = (repo / "docs/VERSION_HISTORY.md").read_text()
+    lines = text.splitlines()
+    workspace_at = lines.index("## Workspace")
+    entries = [
+        line
+        for line in lines[workspace_at + 1 : lines.index("## Migrations")]
+        if line.strip()
+    ]
+    # The origin seed is the FIRST line (the oldest event); the update follows.
+    assert entries[0].startswith("- ") and "created from" in entries[0]
+    assert "updated to minds-v0.4.2" in entries[1]
+    short = merge_sha[:7]
+    # Note padded to width 26 ("updated to minds-v0.4.2" is 23 chars -> 3 pad).
+    assert entries[1] == f"- {_TODAY}  updated to minds-v0.4.2   {short}"
+    # Committed as exactly one file, with the non-marker subject.
+    subject = subprocess.run(
+        ["git", "log", "-1", "--format=%s"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert subject == "version history: updated to minds-v0.4.2"
+    assert not subject.startswith("update-self:")
+
+    # A retried landing is a no-op: same note + same sha appends nothing and
+    # commits nothing.
+    commits_before = _commit_count(repo)
+    update_self.write_version_history_entry(
+        repo, runner, "minds-v0.4.2", merge_sha, _TODAY
+    )
+    assert (repo / "docs/VERSION_HISTORY.md").read_text() == text
+    assert _commit_count(repo) == commits_before
+
+
+def test_ledger_origin_names_the_release_when_one_is_reachable(tmp_path: Path) -> None:
+    repo = _make_real_repo(tmp_path)
+    subprocess.run(["git", "tag", "minds-v0.1.0"], cwd=repo, check=True)
+    # A later commit ON TOP of the tagged base -- describe (reachability) must
+    # still resolve the tag; a --points-at lookup would come up empty.
+    subprocess.run(
+        ["git", "commit", "--allow-empty", "-q", "-m", "some ordinary work"],
+        cwd=repo,
+        check=True,
+    )
+    merge_sha = _head_sha(repo)
+
+    update_self.write_version_history_entry(
+        repo, update_self.Runner(), "minds-v0.2.0", merge_sha, _TODAY
+    )
+
+    text = (repo / "docs/VERSION_HISTORY.md").read_text()
+    assert "created from minds-v0.1.0" in text
+
+
+def test_apply_writes_the_ledger_and_runs_env_converge_post_success(
+    apply_repo: Path,
+) -> None:
+    runner = _apply_runner(_DOCS_DIFF, apply_repo)
+
+    code = _apply(
+        runner,
+        _FakeHttp(_all_healthy),
+        _FakeSpawner(),
+        apply_repo,
+        target_ref="minds-v0.4.2",
+    )
+
+    assert code == 0
+    ledger = apply_repo / "docs/VERSION_HISTORY.md"
+    assert ledger.exists()
+    assert "updated to minds-v0.4.2" in ledger.read_text()
+    assert runner.ran("git", "add", "docs/VERSION_HISTORY.md")
+    assert runner.ran("uv", "run", "env-converge", "upgrade")
+    # The converge comes after the ledger commit: it is post-success bookkeeping.
+    add_index = runner.calls.index(["git", "add", "docs/VERSION_HISTORY.md"])
+    converge_index = runner.calls.index(["uv", "run", "env-converge", "upgrade"])
+    assert add_index < converge_index
+
+
+def test_a_failed_apply_never_writes_the_ledger_or_moves_apt_state(
+    apply_repo: Path,
+) -> None:
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+    runner.respond(("npm", "run", "build"), _Result(returncode=1, stderr="boom"))
+
+    code = _apply(
+        runner,
+        _FakeHttp(_all_healthy),
+        _FakeSpawner(),
+        apply_repo,
+        target_ref="minds-v0.4.2",
+    )
+
+    assert code == 2
+    assert not (apply_repo / "docs/VERSION_HISTORY.md").exists()
+    assert not runner.ran("uv", "run", "env-converge")
+
+
+def test_env_converge_failure_is_a_warning_not_a_rollback(
+    apply_repo: Path, capsys
+) -> None:
+    runner = _apply_runner(_DOCS_DIFF, apply_repo)
+    runner.respond(
+        ("uv", "run", "env-converge"), _Result(returncode=1, stderr="no network")
+    )
+
+    code = _apply(
+        runner,
+        _FakeHttp(_all_healthy),
+        _FakeSpawner(),
+        apply_repo,
+        target_ref="minds-v0.4.2",
+    )
+
+    assert code == 0
+    err = capsys.readouterr().err
+    assert "env-converge upgrade` failed" in err
+    assert not runner.ran("git", "checkout", _ROLLBACK, "--")
+
+
+# --- recover -------------------------------------------------------------------
+
+
+def _write_recover_marker(
+    repo_root: Path,
+    *,
+    merge_ref: str = _MERGE_REF,
+    phase: str = "frontend_built",
+    pid: int = 12345,
+    updated_at: float = 1000.0,
+    live_service_restarted: bool = False,
+    provisioner_ran: bool = False,
+    snapshots: list | None = None,
+    frontend_expected: bool = True,
+) -> "update_self.ApplyMarker":
+    marker = update_self.ApplyMarker(
+        dri_agent="the-lead",
+        rollback_to=_ROLLBACK,
+        merge_ref=merge_ref,
+        target_ref=None,
+        ff_only=True,
+        worker_bundle=None,
+        phase=phase,
+        pid=pid,
+        started_at=updated_at - 10,
+        updated_at=updated_at,
+        provisioner_ran=provisioner_ran,
+        live_service_restarted=live_service_restarted,
+        frontend_expected=frontend_expected,
+        snapshots=snapshots or [],
+    )
+    update_self.write_marker(marker, repo_root, now=lambda: updated_at)
+    return marker
+
+
+def _recover(
+    runner: _RecordingRunner,
+    http: _FakeHttp,
+    repo_root: Path,
+    *,
+    if_stale: bool = False,
+    grace_seconds: float = 600.0,
+    no_restart: bool = False,
+    now: Callable[[], float] = lambda: 10_000.0,
+    is_pid_live: Callable[[int], bool] = lambda pid: False,
+) -> int:
+    # recover runs no precondition status check; its one status call is the
+    # rollback commit's, and the restore has staged the reverted paths by then.
+    runner.respond(("git", "status", "--porcelain"), _Result(stdout="M  restored"))
+    return update_self.recover(
+        repo_root,
+        if_stale=if_stale,
+        grace_seconds=grace_seconds,
+        no_restart=no_restart,
+        runner=runner,
+        http=http,
+        sleeper=lambda _s: None,
+        base_url=_LIVE_BASE,
+        now=now,
+        is_pid_live=is_pid_live,
+    )
+
+
+def test_recover_if_stale_truth_table(apply_repo: Path) -> None:
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+    http = _FakeHttp(_all_healthy)
+
+    # No marker: silent no-op.
+    assert _recover(runner, http, apply_repo, if_stale=True) == 0
+    assert runner.calls == []
+
+    # Marker with a live process: silent no-op.
+    _write_recover_marker(apply_repo)
+    assert (
+        _recover(runner, http, apply_repo, if_stale=True, is_pid_live=lambda pid: True)
+        == 0
+    )
+    assert runner.calls == []
+    assert _marker_exists(apply_repo)
+
+    # Dead process but within the grace period: still a no-op -- the DRI agent
+    # gets its window to simply re-run the idempotent apply.
+    assert (
+        _recover(
+            runner, http, apply_repo, if_stale=True, now=lambda: 1000.0 + 60.0
+        )
+        == 0
+    )
+    assert runner.calls == []
+    assert _marker_exists(apply_repo)
+
+    # Dead and past the grace period: the rollback runs and the marker clears.
+    assert _recover(runner, http, apply_repo, if_stale=True) == 0
+    assert runner.ran("git", "checkout", _ROLLBACK, "--")
+    assert runner.ran("git", "commit", "--no-verify")
+    assert not _marker_exists(apply_repo)
+
+
+def test_explicit_recover_refuses_a_live_apply(apply_repo: Path, capsys) -> None:
+    _write_recover_marker(apply_repo)
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+
+    code = _recover(
+        runner, _FakeHttp(_all_healthy), apply_repo, is_pid_live=lambda pid: True
+    )
+
+    assert code == 1
+    assert "still running" in capsys.readouterr().err
+    assert runner.calls == []
+
+
+def test_recover_restores_snapshots_and_restarts_when_the_apply_had(
+    apply_repo: Path,
+) -> None:
+    # Take a real snapshot, then wreck the bundle, as a kill mid-build leaves it.
+    plan = update_self.plan_apply(["system/apps/system_interface/frontend/src/App.ts"])
+    snapshots = update_self.take_snapshots(plan, apply_repo, _RecordingRunner(), [])
+    shutil.rmtree(apply_repo / update_self.STATIC_DIR)
+    _write_recover_marker(
+        apply_repo, snapshots=snapshots, live_service_restarted=True
+    )
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+
+    code = _recover(runner, _FakeHttp(_all_healthy), apply_repo)
+
+    assert code == 0
+    assert _bundle_exists(apply_repo)  # restored by copy, not rebuilt
+    assert not runner.ran("npm")
+    assert runner.ran(*_RESTART)  # the apply had restarted, so recovery must
+    assert not _marker_exists(apply_repo)
+
+
+def test_recover_no_restart_restores_disk_state_only(apply_repo: Path) -> None:
+    plan = update_self.plan_apply(["system/apps/system_interface/frontend/src/App.ts"])
+    snapshots = update_self.take_snapshots(plan, apply_repo, _RecordingRunner(), [])
+    shutil.rmtree(apply_repo / update_self.STATIC_DIR)
+    _write_recover_marker(
+        apply_repo,
+        snapshots=snapshots,
+        live_service_restarted=True,
+        provisioner_ran=True,
+    )
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+    http = _FakeHttp(_all_healthy)
+
+    code = _recover(runner, http, apply_repo, no_restart=True)
+
+    assert code == 0
+    assert _bundle_exists(apply_repo)
+    # Boot path: no restarts, no probes -- nothing is running yet. The
+    # provisioner re-run still happens (it repairs the global toolchain).
+    assert not runner.ran("mngr")
+    assert http.get_urls == [] and http.page_urls == []
+    assert runner.ran(*_PROVISION)
+    assert not _marker_exists(apply_repo)
+
+
+def test_recover_reaches_the_same_end_state_as_the_in_process_rollback(
+    tmp_path: Path,
+) -> None:
+    def _restore_relevant(calls: list[list[str]]) -> list[list[str]]:
+        # The rollback commit's *message* names why (build failure vs
+        # interruption) and legitimately differs; the motions must not.
+        return [
+            c[:3] if c[:3] == ["git", "commit", "--no-verify"] else c
+            for c in calls
+            if c[:2] in (["git", "checkout"], ["git", "rm"])
+            or c[:3] == ["git", "commit", "--no-verify"]
+            or c[:1] == ["mngr"]
+        ]
+
+    # In-process: a frontend apply whose build fails and rolls back.
+    repo_a = tmp_path / "a" / "repo"
+    (repo_a / update_self.FRONTEND_DIR).mkdir(parents=True)
+    _write_bundle(repo_a)
+    runner_a = _apply_runner(_FRONTEND_DIFF, repo_a)
+    runner_a.respond(("npm", "run", "build"), _Result(returncode=1, stderr="boom"))
+    assert _apply(runner_a, _FakeHttp(_all_healthy), _FakeSpawner(), repo_a) == 2
+
+    # Interrupted: the same apply killed right after its build destroyed the
+    # bundle, recovered by `recover` from the marker instead.
+    repo_b = tmp_path / "b" / "repo"
+    (repo_b / update_self.FRONTEND_DIR).mkdir(parents=True)
+    _write_bundle(repo_b)
+    plan = update_self.plan_apply(["system/apps/system_interface/frontend/src/views/Chat.ts"])
+    snapshots = update_self.take_snapshots(plan, repo_b, _RecordingRunner(), [])
+    shutil.rmtree(repo_b / update_self.STATIC_DIR)
+    _write_recover_marker(repo_b, snapshots=snapshots, phase="snapshotted")
+    runner_b = _apply_runner(_FRONTEND_DIFF, repo_b)
+    assert _recover(runner_b, _FakeHttp(_all_healthy), repo_b) == 0
+
+    # Same restore motions, same served bundle back on disk.
+    assert _restore_relevant(runner_a.calls) == _restore_relevant(runner_b.calls)
+    index_a = (repo_a / update_self.FRONTEND_BUILD_INDEX).read_text()
+    index_b = (repo_b / update_self.FRONTEND_BUILD_INDEX).read_text()
+    assert index_a == index_b
+
+
+def test_recover_provisioner_failure_still_counts_as_recovered(
+    apply_repo: Path, capsys
+) -> None:
+    plan = update_self.plan_apply(["system/apps/system_interface/frontend/src/App.ts"])
+    snapshots = update_self.take_snapshots(plan, apply_repo, _RecordingRunner(), [])
+    _write_recover_marker(apply_repo, snapshots=snapshots, provisioner_ran=True)
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+    runner.respond(("bash",), _Result(returncode=1, stderr="no network"))
+
+    code = _recover(runner, _FakeHttp(_all_healthy), apply_repo)
+
+    assert code == 0
+    err = capsys.readouterr().err
+    assert "still counts as recovered" in err
+    assert not _marker_exists(apply_repo)
