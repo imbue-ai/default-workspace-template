@@ -66,24 +66,36 @@ export type ObjectMenuEntry = ObjectMenuItem | typeof OBJECT_MENU_DIVIDER;
  * knows what that is right now.
  */
 /**
- * Whether a kind's name is the user's to choose.
+ * Whether a kind's name is the user's to choose. Only a chat's is.
  *
- * A chat is: it is an mngr agent, whose ref is its stable agent id and whose
- * name is separate metadata, so a rename moves the name everywhere the agent
- * is known -- ``mngr`` included -- and no reference to it has to move.
+ * A chat is an mngr agent: its ref is a stable agent id and its name is
+ * separate metadata, so ``mngr rename`` moves the name everywhere the agent is
+ * known -- ``mngr list`` included -- without any reference to it moving. Ask
+ * an agent to act on the chat by the name you gave it and the name resolves.
  *
- * A terminal and a browser are NOT. Neither has an identity apart from its
- * name: a terminal is filed as ``terminal:<tmux session name>`` and a browser
- * as ``service:browser?session=<name>``, where that name is also a live tmux
- * session and a Chromium profile directory on disk. A rename could only ever
- * have been a display name laid over the top, leaving ``tmux ls``, the profile
- * directory, and every stored ref still saying the old one -- so the two are
- * left to their derived numbering instead of being offered a rename that
- * stops at the surface. Giving them a stable id of their own, so the name is
- * free to move like a chat's, is the real fix and is its own piece of work.
+ * No other kind has that. A terminal is filed under its live tmux session name
+ * and a browser under a Chromium profile directory, so for those the name IS
+ * the identity and a rename could only be a display name laid over the top,
+ * leaving ``tmux ls``, the profile on disk and every stored ref still saying
+ * the old one.
+ *
+ * An app fails for the opposite reason and just as surely. Its registered
+ * service name is a perfectly good stable id -- it keys the member ref,
+ * ``apps.toml``, the supervisord program and the ``uv run <name>`` entry point
+ * -- so a chosen name laid over it displays fine. But that name is also the
+ * only handle anything else on the machine accepts: ``layout.py`` expands a
+ * bare word to ``service:<word>``, so an agent told to open the app by the
+ * name the user gave it looks up a service that does not exist. A rename the
+ * user can read but cannot then refer to is worse than no rename, so apps keep
+ * their registered name too.
+ *
+ * Fixing this properly means teaching ref resolution to accept a display name
+ * (and deciding what to do when two objects share one, which nothing currently
+ * prevents). That is its own piece of work, and it is the same work that would
+ * let terminals and browsers be renamed.
  */
 export function isRenameableKind(kind: ObjectMenuKind): boolean {
-  return kind === "chat" || kind === "app";
+  return kind === "chat";
 }
 
 export interface ObjectMenuActions {
