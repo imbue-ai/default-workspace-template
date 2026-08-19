@@ -180,6 +180,7 @@ function makeAttrs(overrides: Partial<SidebarAttrs> = {}): SidebarAttrs {
     onOpenTabType: vi.fn(),
     onOpenApp: vi.fn(),
     onSetAppPinned: vi.fn(),
+    onUndockMember: vi.fn(),
     onOpenRow: vi.fn(),
     onRefreshRow: vi.fn(),
     onRenameRow: vi.fn(),

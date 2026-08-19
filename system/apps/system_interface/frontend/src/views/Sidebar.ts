@@ -105,6 +105,9 @@ export interface SidebarAttrs {
   // stops the app and touches no other project. Never called on Everything,
   // which pins nothing.
   onSetAppPinned: (app: AppEntry, isPinned: boolean) => void;
+  // Drop a just-removed member's panel from the dock, when the project it was
+  // removed from is the one on screen (project settings can edit any project).
+  onUndockMember: (projectId: string, ref: string) => void;
   // Focus this row's existing tab, or open the object into the active pane.
   onOpenRow: (row: SidebarTabRow) => void;
   // Reload what this row is showing when it has an open tab; opens it fresh
@@ -1325,6 +1328,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
         attrs.onProjectsChanged();
       },
       onCancel: close,
+      onMemberRemoved: (ref: string) => attrs.onUndockMember(project.project_id, ref),
     });
   }
 

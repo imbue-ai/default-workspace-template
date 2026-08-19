@@ -10,9 +10,11 @@
  * reaches here either -- it is a view rather than a project, with no name,
  * color, glyph or member list of its own and nothing to delete.
  *
- * This is the new home for removing a member from a project (the rail row's
- * own "Remove from project" verb is going away in a later pass), so the list
- * here has to be reachable and usable standalone rather than depending on
+ * This is the home for removing a member from a project -- the rail row's menu
+ * no longer carries that verb, since it now renders the same per-kind verb set
+ * the dock tab does, where every verb acts on the object rather than on one
+ * view of it. So the list here has to be reachable and usable standalone
+ * rather than depending on
  * anything that surface already resolved: it looks up each member's display
  * name and kind itself, through the same shared stores and helpers every other
  * naming surface reads (member-titles for a chosen name, the agent list for a
@@ -67,6 +69,11 @@ export interface ProjectSettingsModalAttrs {
   // broadcast, the same path another client's delete takes.
   onDeleted: (projectId: string) => void;
   onCancel: () => void;
+  // Drop the ref's panel from the dock, for the case where the project being
+  // edited is the one on screen. Removing a member has to undock its tab just
+  // as the rail's old removal verb did, or the view keeps showing a panel for
+  // an object it no longer lists.
+  onMemberRemoved: (ref: string) => void;
 }
 
 // The palette is exactly the glyphs' own signature colors, so every project
@@ -249,6 +256,7 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
     try {
       await removeMember(attrs.project.project_id, ref);
       members = members.filter((member) => member !== ref);
+      attrs.onMemberRemoved(ref);
     } catch (e) {
       memberError = (e as Error).message ?? "Could not remove this member.";
     }
@@ -305,7 +313,7 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
       "div",
       {
         key: ref,
-        class: "group flex h-8 w-full items-center gap-2 px-1 text-text-primary",
+        class: "project-settings-member group flex h-8 w-full items-center gap-2 px-1 text-text-primary",
       },
       [
         m(
