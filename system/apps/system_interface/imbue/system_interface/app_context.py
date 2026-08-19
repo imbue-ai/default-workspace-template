@@ -60,7 +60,7 @@ class SystemInterfaceState(MutableModel):
     # say when the served tree has moved under it (see update_staleness.py).
     # A factory (not a shared default): the HEAD read happens per state build,
     # not at import.
-    update_staleness: UpdateStalenessTracker = Field(default_factory=UpdateStalenessTracker)
+    update_staleness: UpdateStalenessTracker = Field(default_factory=UpdateStalenessTracker.capture)
 
     _watchers_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     _latchkey_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)

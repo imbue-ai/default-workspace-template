@@ -558,7 +558,7 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
 
 When the worker's report names its **built system-interface bundle** (it built
 the frontend for the preview), append `--worker-bundle <that path>` -- the
-apply then installs the exact artifact the user previewed instead of spending
+apply then installs the exact build the user previewed instead of spending
 a live build (which remains the fallback).
 
 That one command is the whole landing: there is no agent-prose pause between
