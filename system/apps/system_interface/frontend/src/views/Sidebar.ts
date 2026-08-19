@@ -582,6 +582,12 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     attrs.onRenameRow(row, title);
   }
 
+  /** Whether a row is the primary agent's own chat, which has no destroy verb. */
+  function isPrimaryAgentRow(row: SidebarTabRow): boolean {
+    const agentId = chatAgentIdFromRef(row.ref);
+    return agentId !== null && agentId === getPrimaryAgentId();
+  }
+
   /**
    * The rail's own ``ObjectMenuActions`` for one row -- the half of the shared
    * verb set (objectMenu.ts) that varies by caller.
@@ -594,12 +600,6 @@ export function Sidebar(): m.Component<SidebarAttrs> {
    * currently has a tab (the rename is filed by ref, not by panel), so it
    * always opens the rail's own inline editor.
    */
-  /** Whether a row is the primary agent's own chat, which has no destroy verb. */
-  function isPrimaryAgentRow(row: SidebarTabRow): boolean {
-    const agentId = chatAgentIdFromRef(row.ref);
-    return agentId !== null && agentId === getPrimaryAgentId();
-  }
-
   function railMenuActions(row: SidebarTabRow, attrs: SidebarAttrs): ObjectMenuActions {
     return {
       refresh: () => attrs.onRefreshRow(row),
