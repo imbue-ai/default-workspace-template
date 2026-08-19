@@ -798,6 +798,15 @@ export async function allocateTerminalName(): Promise<string> {
   return data.session_name;
 }
 
+/** The chat harnesses a create can stack.
+ *
+ *  These are mngr's own agent type names -- what ``mngr create --type`` resolves
+ *  and what the create endpoint validates ``harness`` against. Pi's is
+ *  ``pi-coding``; ``pi`` is only an mngr-side alias the endpoint's enum does not
+ *  accept. Declared here, beside the request that carries it, so no view has to
+ *  restate the set. */
+export type ChatHarness = "claude" | "codex" | "pi-coding";
+
 /** A freshly-created chat agent's identity: its id and its name pair (the
  *  canonical true name plus the human-readable display name the server minted
  *  or accepted). */
@@ -823,7 +832,7 @@ export interface CreatedChatAgent {
  */
 export async function createChatAgent(
   projectId: string,
-  harness: "claude" | "codex" | "pi-coding" = "claude",
+  harness: ChatHarness = "claude",
   isFirst: boolean = false,
 ): Promise<CreatedChatAgent> {
   const response = await fetch(apiUrl("/api/agents/create-chat"), {
