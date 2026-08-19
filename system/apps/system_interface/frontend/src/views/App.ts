@@ -19,6 +19,7 @@ import { ClaudeLoginModal } from "./ClaudeLoginModal";
 import { AgentAuthInstructionsModal } from "./AgentAuthInstructionsModal";
 import { FastModeModal } from "./FastModeModal";
 import { Sidebar } from "./Sidebar";
+import { UpdateStalenessBanner } from "./UpdateStalenessBanner";
 import type { QuickAddTabType, SidebarTabRow } from "./Sidebar";
 import type { AppEntry } from "../models/AgentManager";
 import { checkAuthStatusOnLoad, isLoginModalOpen, closeLoginModal } from "../models/ClaudeAuth";
@@ -39,6 +40,9 @@ export function App(): m.Component {
         { class: "app-layout flex flex-col", style: "height: calc(100vh - var(--minds-titlebar-height, 0px))" },
         [
           m("div", { class: "minds-titlebar-spacer" }),
+          // Present only when the served tree has moved under this interface
+          // (an interrupted or not-yet-activated update); see the component.
+          m(UpdateStalenessBanner),
           // The whole content area is one grey surface with the rail sitting on
           // it, directly left of the dock. Which view you are in is said by the
           // rail's own header now, so there is no bar above this row.

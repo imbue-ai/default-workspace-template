@@ -50,6 +50,16 @@ RUNTIME_CRON_DIR = STATE_DIR / "cron.d"
 # names; install only names it will accept and warn about the rest.
 _CRON_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
+# The in-flight update-apply marker and the script that rolls a stale one
+# back (see the update-self skill's apply/recover). The marker persists with
+# the container volume, so an apply the previous container run left mid-motion
+# is visible here at the next boot.
+UPDATE_APPLY_MARKER = STATE_DIR / "update-apply" / "marker.json"
+UPDATE_APPLY_SCRIPT = Path(".agents/skills/update-self/scripts/update_self.py")
+# Bound on the boot-time rollback: git restores plus plain file copies of the
+# pre-apply snapshots (the venv copy is the big one).
+_UPDATE_RECOVER_TIMEOUT_SECONDS = 900.0
+
 # Signal file gating exactly-once creation of the initial chat agent. Lives
 # under data/.state/, which persists with the container volume.
 INITIAL_CHAT_SIGNAL = STATE_DIR / "initial_chat_created"
@@ -732,6 +742,103 @@ def _run_env_converge_fast_phase() -> None:
         )
 
 
+def _read_update_marker_dri_agent() -> str:
+    """The DRI agent recorded in the update-apply marker, or "" when unreadable."""
+    try:
+        raw = json.loads(UPDATE_APPLY_MARKER.read_text())
+    except (OSError, json.JSONDecodeError):
+        return ""
+    dri_agent = raw.get("dri_agent") if isinstance(raw, dict) else None
+    return dri_agent if isinstance(dri_agent, str) else ""
+
+
+def _wake_update_dri_agent(agent_name: str) -> None:
+    """Re-engage the agent that was driving the rolled-back update. Best-effort.
+
+    The recovered workspace is back on its pre-update revision, but only an
+    agent can verify state and talk to the user about retrying -- so start the
+    DRI agent the marker named and hand it the finding. Failures are logged and
+    swallowed: the rollback already restored the workspace, and the system
+    interface's interrupted-update banner is the fallback channel to the user.
+    """
+    message = (
+        "A workspace update you were applying was interrupted (the container "
+        "restarted mid-apply), and the boot-time recovery rolled it back to the "
+        "pre-update state. Verify the workspace is healthy, then follow the "
+        "update-self skill's post-rollback guidance to tell the user and offer "
+        "the retry (the worker branch and report are kept)."
+    )
+    for argv in (
+        ["mngr", "start", agent_name],
+        ["mngr", "message", agent_name, "-m", message],
+    ):
+        result = subprocess.run(argv, capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            logger.warning(
+                "{} failed (rc={}): {}",
+                " ".join(argv[:2]),
+                result.returncode,
+                (result.stderr or result.stdout).strip()[-300:],
+            )
+            return
+    logger.info("Re-engaged update DRI agent {}", agent_name)
+
+
+def _recover_interrupted_update() -> None:
+    """Roll back an update apply the previous container run left mid-motion.
+
+    The apply's marker persisting across a boot means the container stopped (or
+    died) between the merge landing and the apply finishing -- the half-applied
+    state the update flow exists to prevent. The rollback is dependency-free by
+    design (git restores + snapshot copies), so it runs right here, before the
+    venv converge (which must converge against the *restored* tree, not the
+    half-applied one) and before any service or agent starts. ``--no-restart``
+    because nothing is running yet -- services boot fresh from the restored
+    state -- and ``--if-stale --grace-seconds 0`` so the script's own dead-
+    process guard still applies. Best-effort: a failure is logged loudly but
+    never blocks boot.
+    """
+    if not UPDATE_APPLY_MARKER.exists():
+        return
+    dri_agent = _read_update_marker_dri_agent()
+    logger.warning(
+        "An interrupted update apply left a marker at {}; rolling it back",
+        UPDATE_APPLY_MARKER,
+    )
+    try:
+        result = subprocess.run(
+            [
+                "python3",
+                str(UPDATE_APPLY_SCRIPT),
+                "recover",
+                "--if-stale",
+                "--grace-seconds",
+                "0",
+                "--no-restart",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_UPDATE_RECOVER_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        logger.error("update-apply recovery could not run ({}); continuing boot", e)
+        return
+    if result.stderr.strip():
+        logger.info("update-apply recovery output: {}", result.stderr.strip()[-1000:])
+    if result.returncode != 0:
+        logger.error(
+            "update-apply recovery failed (rc={}); continuing boot with the "
+            "workspace as the rollback left it",
+            result.returncode,
+        )
+        return
+    # A cleared marker is what distinguishes "rolled back" from the guard's
+    # silent no-op; only a real rollback warrants re-engaging the DRI agent.
+    if not UPDATE_APPLY_MARKER.exists() and dri_agent:
+        _wake_update_dri_agent(dri_agent)
+
+
 def _migrate_legacy_claude_state_best_effort() -> None:
     """Heal pre-/home/user-layout workspaces whose claude state is root-homed.
 
@@ -759,6 +866,11 @@ def main() -> None:
     # Apply the global git config (https rewrites) before any service or
     # agent runs git.
     _configure_git_global()
+
+    # Roll back any update apply the previous container run left mid-motion,
+    # BEFORE the venv converge (which must run against the restored tree) and
+    # before any service or agent starts from half-applied state.
+    _recover_interrupted_update()
 
     # Converge the workspace venv BEFORE the initial chat agent is created
     # (below) and before supervisord's `uv run` services start, so nothing
