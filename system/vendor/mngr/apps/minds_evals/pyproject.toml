@@ -23,6 +23,11 @@ dependencies = [
     "loguru>=0.7",
     "pydantic>=2.11",
     "imbue-common",
+    # Token -> USD pricing for the workspace agent's transcript usage. Reusing
+    # this table rather than copying it keeps the eval's cost numbers bound to
+    # the same prices the LiteLLM proxy bills at (enforced by
+    # apps/modal_litellm/mngr_usage_pricing_drift_test.py).
+    "imbue-mngr-usage",
 ]
 
 [project.scripts]
@@ -32,6 +37,7 @@ minds-evals-harbor = "imbue.minds_evals.generate:main"
 # PyPI harbor 0.21.0 postdates the workspace's supply-chain cooldown cutoff;
 # the upstream git tag is the same release without the registry timestamp.
 harbor = { git = "https://github.com/harbor-framework/harbor", tag = "v0.21.0" }
+imbue-mngr-usage = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]
