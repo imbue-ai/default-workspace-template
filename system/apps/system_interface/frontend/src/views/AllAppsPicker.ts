@@ -245,14 +245,20 @@ export function AllAppsPicker(): m.Component<AllAppsPickerAttrs> {
 
       // Three distinct reasons the list can be empty, each with its own fix:
       // the machine runs nothing, the query matched nothing, or (new now that
-      // a pinned app's row is excluded rather than merely marked) the project
-      // already pins everything the machine offers.
+      // a pinned app's row is excluded rather than merely marked) everything
+      // the query left is already pinned here. Told apart by what the filter
+      // itself returned rather than by whether a query was typed -- a query
+      // that matches only pinned apps HAS matched, and saying otherwise sends
+      // the user looking for an app already sitting in the rail.
+      const query = filterText.trim();
       const emptyMessage =
         apps.length === 0
           ? "No apps are running on this machine."
-          : filterText.trim() !== ""
-            ? `No apps match "${filterText.trim()}".`
-            : "Every app on this machine is already pinned here.";
+          : visibleApps.length === 0
+            ? `No apps match "${query}".`
+            : query === ""
+              ? "Every app on this machine is already pinned here."
+              : `Every app matching "${query}" is already pinned here.`;
 
       return m("div", { class: "flex max-h-[60vh] w-[240px] flex-col" }, [
         apps.length > FILTER_ROW_THRESHOLD
