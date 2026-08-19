@@ -9,8 +9,8 @@
  * backgrounded, still running, just not docked -- would have nowhere to keep a
  * name at all. Keying by ref makes both of those go away, which is why every
  * surface that names an object (the dock tab, the rail's tab list and its app
- * shortcuts, the New Tab launcher, the project settings list, and Everything)
- * reads its label through here.
+ * shortcuts, the All apps popover, the New Tab launcher, the project settings
+ * list, and Everything) reads its label through here.
  *
  * This is a sibling of Projects rather than another export inside it, mirroring
  * the backend's split: a title belongs to the machine and a member list belongs
