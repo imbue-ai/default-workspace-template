@@ -20,13 +20,35 @@ function labels(entries: ReturnType<typeof objectMenuEntries>): (string | typeof
 }
 
 describe("objectMenuEntries", () => {
-  it("offers Refresh and Rename to all four kinds", () => {
+  it("offers Refresh to all four kinds", () => {
     const kinds: ObjectMenuKind[] = ["chat", "terminal", "browser", "app"];
     for (const kind of kinds) {
       const entries = objectMenuEntries(kind, fullActions());
       expect(entries.some((entry) => entry !== OBJECT_MENU_DIVIDER && entry.label === "Refresh")).toBe(true);
-      expect(entries.some((entry) => entry !== OBJECT_MENU_DIVIDER && entry.label === "Rename")).toBe(true);
     }
+  });
+
+  it("offers Rename only where the name is the user's to choose", () => {
+    // A chat's ref is its stable agent id, so its name is free to move. A
+    // terminal and a browser ARE their names -- a tmux session and a Chromium
+    // profile directory -- so a rename there could only ever be a display name
+    // laid over the top, and the verb is withheld rather than half-kept.
+    const renameable = (kind: ObjectMenuKind): boolean =>
+      objectMenuEntries(kind, fullActions()).some(
+        (entry) => entry !== OBJECT_MENU_DIVIDER && entry.label === "Rename",
+      );
+    expect(renameable("chat")).toBe(true);
+    expect(renameable("app")).toBe(true);
+    expect(renameable("terminal")).toBe(false);
+    expect(renameable("browser")).toBe(false);
+  });
+
+  it("drops the divider when nothing would follow it", () => {
+    // A backgrounded terminal still allocating its session has no rename, no
+    // tab to hide and no destroy, so the menu must not end on a rule.
+    const entries = objectMenuEntries("terminal", { ...fullActions(), hideTab: null, quit: null });
+    expect(entries).not.toContain(OBJECT_MENU_DIVIDER);
+    expect(entries.map((entry) => (entry === OBJECT_MENU_DIVIDER ? "--" : entry.label))).toEqual(["Refresh"]);
   });
 
   it("offers Refresh to a terminal -- reattach, not reload, but still offered", () => {

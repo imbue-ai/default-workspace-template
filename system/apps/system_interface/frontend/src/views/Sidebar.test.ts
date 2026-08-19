@@ -570,7 +570,9 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
     redraw();
 
     const menu = openRowMenuByContextClick(root, redraw, "Terminal 1");
-    expect(menuItemLabels(menu)).toEqual(["Refresh", "Rename", "Quit Terminal 1"]);
+    // No Rename either: a terminal IS its tmux session name, so the verb is
+    // withheld rather than offered as a display name over the top.
+    expect(menuItemLabels(menu)).toEqual(["Refresh", "Quit Terminal 1"]);
   });
 
   it("adds Share, keyed off the service name, for an app row -- and offers Quit too", () => {
@@ -726,14 +728,14 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
     // blur, so the field's own exit never runs -- and a `renamingRef` left set
     // makes every later mouseleave early-return.
     const attrs = makeAttrs({
-      rows: [{ ref: "terminal:terminal-4", kind: "terminal", label: "Terminal 4", isOpen: true }],
+      rows: [{ ref: "chat:agent-4", kind: "chat", label: "Chat 4", isOpen: true }],
     });
     const { root, redraw } = mountSidebar(attrs);
     const slot = root.firstElementChild;
     slot?.dispatchEvent(new MouseEvent("mouseenter"));
     redraw();
 
-    typeIntoRenameField(root, redraw, "Terminal 4", "Renamed");
+    typeIntoRenameField(root, redraw, "Chat 4", "Renamed");
     slot?.dispatchEvent(new MouseEvent("mouseleave"));
     redraw();
     expect(root.querySelector(".project-rail-search")).not.toBeNull();
