@@ -6,8 +6,8 @@
  * up off the tail, the drag flag) and the row measurer, and encapsulates:
  *  - tail following: while at the bottom, pin to the tail on each redraw (deferred
  *    while a drag/selection is in progress, and yielding to an in-flight wheel-up);
- *  - scroll-event handling: update the follow state, distinguishing a real
- *    scroll-up from a browser shrink-clamp (see scrollFollow);
+ *  - scroll-event handling: update the follow state from user-evidenced
+ *    movement only (see scrollFollow);
  *  - the pointer-drag and viewport-resize lifecycle.
  *
  * Viewport stability while scrolled up is view-specific and lives outside this
@@ -29,8 +29,17 @@ import m from "mithril";
 import { createRowMeasurer, type RowMeasurer } from "./row-measurement";
 import { nextUserScrolledUp } from "../models/scrollFollow";
 
-// Within this many pixels of the bottom counts as "at the tail".
-const SCROLL_BOTTOM_THRESHOLD_PX = 40;
+// Touching the bottom, allowing for fractional scrollTop against integer
+// scrollHeight/clientHeight. A tolerance, not a proximity band: following is
+// only ever engaged while actually at the tail.
+const SCROLL_BOTTOM_TOUCH_PX = 2;
+// A scroll event is attributed to the user only while a matching-direction
+// input (wheel) was seen within this window, or a pointer drag is in flight.
+// Covers the gap between an input event and its coalesced scroll event, and
+// macOS momentum keeps emitting wheel events, so a fling stays attributed.
+const USER_INPUT_ATTRIBUTION_MS = 250;
+// Ignore scroll deltas at or below this as sub-pixel layout wobble.
+const SCROLL_DELTA_EPSILON_PX = 1;
 
 export interface TranscriptScrollConfig {
   /** Whether the scroll element is really visible and sized (dockview collapses an
@@ -88,24 +97,41 @@ export function createTranscriptScroll(config: TranscriptScrollConfig = {}): Tra
   let previousScrollTop = 0;
   let viewportHeight = 0;
   let userScrolledUp = false;
-  // Last observed scrollHeight, to tell a browser shrink-clamp from a real scroll-up.
-  let lastScrollHeight = 0;
   // A pointer button is held over the transcript (a drag, likely a selection): the
   // tail pin defers so streaming output doesn't scroll content out from under it.
   let isPointerDown = false;
+  // When the user last expressed scroll intent in each direction (wheel events;
+  // a held pointer counts as both, covering scrollbar drags). Scroll events
+  // without matching recent input are machinery -- pin echoes, clamps, native
+  // anchoring, layout wobble -- and never change the follow state.
+  let lastUpInputAt = Number.NEGATIVE_INFINITY;
+  let lastDownInputAt = Number.NEGATIVE_INFINITY;
   let viewportResizeObserver: ResizeObserver | null = null;
+  let wheelListener: ((event: WheelEvent) => void) | null = null;
   let pointerReleaseListener: (() => void) | null = null;
+
+  function hasRecentUpInput(): boolean {
+    return isPointerDown || performance.now() - lastUpInputAt < USER_INPUT_ATTRIBUTION_MS;
+  }
+
+  function hasRecentDownInput(): boolean {
+    return isPointerDown || performance.now() - lastDownInputAt < USER_INPUT_ATTRIBUTION_MS;
+  }
 
   function applyTailFollow(element: HTMLElement): void {
     if (isPointerDown) {
       return;
     }
-    // Honor an unprocessed user wheel-up whose scroll event hasn't fired yet: if the
-    // live scrollTop is above where we last pinned, the user is scrolling up, so stop
-    // pinning. `min(scrollTop, maxScroll)` distinguishes this from the browser
-    // clamping scrollTop after the content shrank, which is still-at-bottom.
+    // Honor an unprocessed user wheel-up whose scroll event hasn't fired yet: if
+    // the live scrollTop is above where we last pinned AND the user recently
+    // wheeled up, they are scrolling up, so stop pinning. The input check is what
+    // separates a real wheel-up from machinery that also lowers scrollTop with no
+    // user involved (a shrink-clamp, or the clamp-then-regrow wobble of rows
+    // re-measuring at the tail) -- without it, streaming at the tail detaches
+    // itself within seconds. `min(scrollTop, maxScroll)` additionally excludes
+    // the plain clamp-to-new-maximum case.
     const maxScroll = element.scrollHeight - element.clientHeight;
-    if (element.scrollTop < Math.min(scrollTop, maxScroll) - 1) {
+    if (hasRecentUpInput() && element.scrollTop < Math.min(scrollTop, maxScroll) - 1) {
       userScrolledUp = true;
       scrollTop = element.scrollTop;
       previousScrollTop = element.scrollTop;
@@ -139,24 +165,21 @@ export function createTranscriptScroll(config: TranscriptScrollConfig = {}): Tra
     onScroll(event: Event): void {
       const element = event.target as HTMLElement;
       // applyScrollPosition keeps previousScrollTop in lockstep with its own
-      // programmatic pins, so only a genuine user scroll registers as movement.
-      const didScrollUp = element.scrollTop < previousScrollTop;
-      const didScrollDown = element.scrollTop > previousScrollTop;
-      const atBottom = element.scrollHeight - element.scrollTop - element.clientHeight < SCROLL_BOTTOM_THRESHOLD_PX;
-      // A shrink-clamp looks like a scroll-up but carries no user intent; the follow
-      // state must be preserved rather than re-derived (see scrollFollow).
-      const isClamp = didScrollUp && element.scrollHeight < lastScrollHeight && atBottom;
+      // programmatic pins, so only a genuine scroll registers as movement -- and
+      // movement counts as the USER's only with matching recent input, so pin
+      // echoes, clamps, native anchoring adjustments and layout wobble can never
+      // flip the follow state (see scrollFollow).
+      const delta = element.scrollTop - previousScrollTop;
+      const isAtBottom = element.scrollHeight - element.scrollTop - element.clientHeight <= SCROLL_BOTTOM_TOUCH_PX;
       previousScrollTop = element.scrollTop;
       scrollTop = element.scrollTop;
       userScrolledUp = nextUserScrolledUp({
-        didScrollUp,
-        didScrollDown,
-        isNearBottom: atBottom,
+        userMovedUp: delta < -SCROLL_DELTA_EPSILON_PX && hasRecentUpInput(),
+        userMovedDown: delta > SCROLL_DELTA_EPSILON_PX && hasRecentDownInput(),
+        isAtBottom,
         hasMoreAfter: getHasMoreAfter(),
-        isClamp,
         wasUserScrolledUp: userScrolledUp,
       });
-      lastScrollHeight = element.scrollHeight;
       onUserScroll(element);
     },
 
@@ -183,6 +206,14 @@ export function createTranscriptScroll(config: TranscriptScrollConfig = {}): Tra
       };
       window.addEventListener("pointerup", pointerReleaseListener);
       window.addEventListener("pointercancel", pointerReleaseListener);
+      wheelListener = (event: WheelEvent) => {
+        if (event.deltaY < 0) {
+          lastUpInputAt = performance.now();
+        } else if (event.deltaY > 0) {
+          lastDownInputAt = performance.now();
+        }
+      };
+      element.addEventListener("wheel", wheelListener, { passive: true });
       viewportResizeObserver = new ResizeObserver(() => {
         if (scrollEl === null || !isVisible()) {
           return;
@@ -205,6 +236,10 @@ export function createTranscriptScroll(config: TranscriptScrollConfig = {}): Tra
         window.removeEventListener("pointercancel", pointerReleaseListener);
         pointerReleaseListener = null;
       }
+      if (wheelListener !== null && scrollEl !== null) {
+        scrollEl.removeEventListener("wheel", wheelListener);
+        wheelListener = null;
+      }
       scrollEl = null;
     },
 
@@ -221,14 +256,12 @@ export function createTranscriptScroll(config: TranscriptScrollConfig = {}): Tra
       if (!userScrolledUp) {
         applyTailFollow(element);
       }
-      lastScrollHeight = element.scrollHeight;
     },
 
     pinTo(element: HTMLElement, top: number): void {
       element.scrollTop = top;
       scrollTop = element.scrollTop;
       previousScrollTop = element.scrollTop;
-      lastScrollHeight = element.scrollHeight;
     },
 
     scheduleMeasure(): void {
@@ -242,7 +275,6 @@ export function createTranscriptScroll(config: TranscriptScrollConfig = {}): Tra
       scrollTop = 0;
       previousScrollTop = 0;
       userScrolledUp = false;
-      lastScrollHeight = 0;
       isPointerDown = false;
       rowMeasurer.reset();
     },

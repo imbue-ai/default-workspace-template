@@ -2,52 +2,44 @@
  * Pure decision for whether a virtualized transcript should follow the live tail
  * (auto-scroll to the bottom on each redraw) or stay put.
  *
- * It keys off scroll *direction*, not position: deciding purely from position
- * re-arms following whenever the viewport sits within the bottom band, so a
- * streaming redraw yanks a small upward scroll back down before it can clear the
- * band -- the "can't scroll up while streaming" jitter. DOM-free so it is
- * unit-testable.
+ * It keys off USER-EVIDENCED movement only: the caller classifies a scroll event
+ * as user movement when a matching-direction input (wheel, scrollbar drag) was
+ * seen recently, so machinery-generated events -- programmatic pin echoes,
+ * browser shrink-clamps, native anchoring adjustments, sub-pixel layout wobble
+ * -- can never change the state. Any genuine upward movement detaches
+ * immediately; following resumes only when a genuine downward movement lands
+ * touching the bottom (within a couple px for fractional scrollTop -- a
+ * position band is deliberately NOT used: position alone is not intent, and a
+ * band both re-arms readers who merely pass near the tail and holds hostage
+ * ones who stop just inside it). DOM-free so it is unit-testable.
  */
 
 export interface FollowStateInput {
-  didScrollUp: boolean;
-  // scrollTop increased. Both direction flags false means a zero-delta event:
-  // the browser reporting a scroll it performed itself (a programmatic pin's
-  // echo -- the pin already synced the previous position -- or a native
-  // scroll-anchoring adjustment), which carries no user intent.
-  didScrollDown: boolean;
-  isNearBottom: boolean;
+  // The scroll event moved the viewport up/down AND the caller attributes the
+  // movement to the user (recent matching-direction input, or a held pointer
+  // drag). Both false means machinery: preserve the state.
+  userMovedUp: boolean;
+  userMovedDown: boolean;
+  // Touching the bottom (within the caller's fractional-pixel tolerance).
+  isAtBottom: boolean;
   // Newer history exists on the server but isn't loaded (only after a jump moved
   // the window off the live tail), so the bottom of the window isn't the tail.
   hasMoreAfter: boolean;
-  // This observation is a browser shrink-clamp, not a user scroll: the content
-  // got shorter (eviction, a turn collapsing into one row) and the browser pushed
-  // scrollTop up to the new maximum. Detected as scrollTop-decreased AND
-  // scrollHeight-decreased AND now at the bottom. Such a move carries no user
-  // intent, so the follow state must be preserved rather than re-derived from it.
-  isClamp: boolean;
-  // The current follow state (true == not following), preserved on a clamp.
+  // The current follow state (true == not following).
   wasUserScrolledUp: boolean;
 }
 
 /**
  * Returns the next value of ``userScrolledUp`` (true == do not follow the tail).
- * Any upward movement disengages immediately; following resumes only on downward
- * movement that reaches the true tail (near the bottom with no newer history
- * unloaded). Everything else preserves the current state: a shrink-clamp (no
- * user intent, see isClamp) and a zero-delta event (a programmatic pin's echo or
- * a native anchoring adjustment). Position alone never re-arms following -- a
- * page landing can clamp a reading user to the bottom, and re-arming there
- * hard-snaps them to the tail they never asked for.
+ * A user scrolling down past the end is clamped by the browser exactly onto the
+ * bottom, so touch-to-reattach engages naturally from a wheel fling without the
+ * user having to aim.
  */
 export function nextUserScrolledUp(input: FollowStateInput): boolean {
-  if (input.isClamp) {
-    return input.wasUserScrolledUp;
-  }
-  if (input.didScrollUp) {
+  if (input.userMovedUp) {
     return true;
   }
-  if (input.didScrollDown && input.isNearBottom && !input.hasMoreAfter) {
+  if (input.userMovedDown && input.isAtBottom && !input.hasMoreAfter) {
     return false;
   }
   return input.wasUserScrolledUp;
