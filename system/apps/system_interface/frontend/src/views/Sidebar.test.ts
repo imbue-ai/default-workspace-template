@@ -575,16 +575,19 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
     expect(menuItemLabels(menu)).toEqual(["Refresh", "Quit Terminal 1"]);
   });
 
-  it("adds Share, keyed off the service name, for an app row -- and offers Quit too", () => {
+  it("adds Share for an app row, named the way the row is -- and offers Quit too", () => {
     const rows: SidebarTabRow[] = [{ ref: "service:grafana", kind: "app", label: "Grafana", isOpen: false }];
     const { root, redraw } = mountSidebar(makeAttrs({ rows }));
     root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
     redraw();
 
     const menu = openRowMenuByContextClick(root, redraw, "Grafana");
-    // "Grafana" is the row's chosen display label; the share verb names the
-    // underlying service instead, matching the tab's own wording.
-    expect(menuItemLabels(menu)).toEqual(["Refresh", "Share grafana", "Rename", "Quit Grafana"]);
+    // Every verb names the app the way the row does. The registered service
+    // name ("grafana") is the app's stable id -- it keys the ref, apps.toml and
+    // the supervisord program -- and the share is still keyed by it; it just no
+    // longer surfaces, which is what let "Share grafana" sit under "Quit
+    // Grafana" for a renamed app.
+    expect(menuItemLabels(menu)).toEqual(["Refresh", "Share Grafana", "Rename", "Quit Grafana"]);
   });
 
   it("offers no row menu at all for a legacy url member", () => {

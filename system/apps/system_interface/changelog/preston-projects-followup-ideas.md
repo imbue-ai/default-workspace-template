@@ -6,6 +6,8 @@ Follow-up work on projects, from a design review of the shipped build and a pass
 
 **Rename now covers apps as well as chats, and is withheld from terminals and browsers.** A chat's ref is its stable agent id and an app's is its registered service name, so a chosen name is free to move and does. A terminal and a browser have no identity apart from their names — a terminal is filed under its tmux session name, a browser under a Chromium profile directory — so a rename there could only ever be a display name laid over the top, leaving `tmux ls`, the profile on disk, and every stored reference still saying the old one. Rather than offer a rename that stops at the surface, both keep their derived numbering. Renaming needs no open tab, and a chat's rename also moves the agent's own canonical name.
 
+An app's rename now reaches every surface, including its Share verb. The registered service name is the app's stable id — it keys the member ref, `apps.toml` and the supervisord program — and the share is still keyed by it, but it no longer surfaces: a renamed app used to read "Share web" directly above "Quit Docs" in its own menu.
+
 **Quit is the single destructive verb** for all four kinds, and is withheld for the primary agent, which runs the workspace's own services. It stays deliberately weaker for an app: the app leaves the registry and every project, but the program answering on its port keeps serving.
 
 **Deleting a project deletes only the view.** Nothing is shut down. Every object it showed keeps running and stays in Everything and in any other project already showing it. The guard refusing to delete the last project is gone with it — a machine may sit at zero projects and fall back to Everything.
