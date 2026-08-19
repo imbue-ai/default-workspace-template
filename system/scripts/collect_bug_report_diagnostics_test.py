@@ -269,6 +269,24 @@ def _zip_from_payload(payload: dict[str, Any]) -> zipfile.ZipFile:
 # --- Caps and contract constants ---
 
 
+def test_the_scan_gate_path_points_at_a_gate_that_exists_in_this_repo() -> None:
+    """The gate is addressed by a hardcoded path, so a rename silently disables it.
+
+    Failing closed means a missing gate costs the report every attachment rather
+    than leaking anything -- correct, but indistinguishable from a workspace
+    that simply has no scanner. This caught exactly that: the skill was renamed
+    publish-inspiration -> publish-template in the template, and the collector
+    kept pointing at the old path, so every CI collection reported
+    scanner_unavailable.
+    """
+    module = _load_collector()
+    repo_root = Path(__file__).resolve().parents[2]
+    gate_dir = repo_root / Path(module.SCAN_GATE_DIR).relative_to(module.WORKSPACE_DIR)
+
+    assert (gate_dir / "scan_secrets.sh").is_file(), f"no scan gate at {gate_dir}"
+    assert (gate_dir / "betterleaks.toml").is_file(), f"no scanner config at {gate_dir}"
+
+
 def test_collector_caps_match_the_documented_limits() -> None:
     module = _load_collector()
     assert module.CONTRACT_VERSION == 1

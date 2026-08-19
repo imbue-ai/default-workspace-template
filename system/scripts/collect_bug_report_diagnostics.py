@@ -51,9 +51,9 @@ SHED_LEDGER = WORKSPACE_DIR + "/data/.state/oom_priority/events/shed.jsonl"
 SUPERVISOR_LOG_DIR = "/var/log/supervisor"
 
 # The template's own secret-scan gate (scan_secrets.sh + its sibling
-# betterleaks.toml), shared with the publish-inspiration flow. The scanner
+# betterleaks.toml), shared with the publish-template flow. The scanner
 # binaries it drives are baked into the image by install_secret_scanners.sh.
-SCAN_GATE_DIR = WORKSPACE_DIR + "/.agents/skills/publish-inspiration/scripts"
+SCAN_GATE_DIR = WORKSPACE_DIR + "/.agents/skills/publish-template/scripts"
 
 # The workspace's own mngr, asked for what agents exist and what was said in
 # them. Named here rather than inline so a test can point it at a stub.
