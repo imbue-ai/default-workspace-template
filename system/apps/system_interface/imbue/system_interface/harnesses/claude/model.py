@@ -13,9 +13,10 @@ maintained by hand to match the aliases ``claude --model`` accepts. Opus uses th
 ``[1m]`` variant to keep the 1M-token context window the workspace provisions; fast
 mode is an Opus-only capability. The ``ultra`` effort (ultracode) is declared but
 hidden from the picker -- valid and matchable if a live read reports it, never
-offered. Each option's ``harness_reported_model_id`` is the suffix-free API id the
-statusline reports (``claude-sonnet-5``), matched against a live read; the ``[1m]``
-context suffix is a launch alias, not a runtime id, so it never appears there.
+offered. Each option's ``harness_reported_model_id`` is the suffix-free API id
+(``claude-opus-5``), matched against a live read. Opus launched as ``opus[1m]`` reports
+the suffix too (``claude-opus-5[1m]``), which reaches the same option through
+:func:`match_option`'s prefix pass.
 """
 
 import json
@@ -53,10 +54,10 @@ CLAUDE_CATALOG: HarnessCatalog = HarnessCatalog(
     options=(
         ModelOption(
             id="opus[1m]",
-            label="Opus 4.8 (1M)",
+            label="Opus 5 (1M)",
             efforts=_CLAUDE_EFFORTS,
             supports_fast=True,
-            harness_reported_model_id="claude-opus-4-8",
+            harness_reported_model_id="claude-opus-5",
         ),
         ModelOption(
             id="sonnet",

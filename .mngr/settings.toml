@@ -139,7 +139,7 @@ command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/cl
 # Pin Claude Code to a specific version; the provisioning-time version check
 # refuses to start the agent if the installed binary diverges. Bump this in
 # sync with CLAUDE_CODE_VERSION in the Dockerfile.
-version = "2.1.207"
+version = "2.1.227"
 # Do not provision a per-agent Claude config dir: every claude in the workspace
 # shares one config dir so auth, plugins, marketplaces, and sessions are
 # configured exactly once. CLAUDE_CONFIG_DIR is deliberately left UNSET
