@@ -121,7 +121,9 @@ class ModelOptionsResponse(FrozenModel):
 class PoweredByResponse(FrozenModel):
     """Response from GET /api/agents/{id}/powered-by."""
 
-    label: str = Field(description="The agent's harness product name, shown as a 'Powered by <label>' credit")
+    label: str = Field(
+        description="The agent harness's verbatim credit text, or '' when that harness shows no credit"
+    )
 
 
 class FastModePromptAnsweredResponse(FrozenModel):
