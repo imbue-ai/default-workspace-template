@@ -221,3 +221,39 @@ describe("prune and reset", () => {
     expect(measurer.getHeight("a")).toBeUndefined();
   });
 });
+
+describe("estimateFor (learned per-kind estimates)", () => {
+  it("falls back to the static estimate until enough rows of that kind have measured", () => {
+    const measurer = createRowMeasurer();
+    const rows = [fakeRow("a", 40), fakeRow("b", 44), fakeRow("c", 38)];
+    for (const row of rows) measurer.noteKind(row.element.id, 240);
+    measurer.measureRows(fakeScrollEl(rows));
+    // Three samples are below the learning threshold: still the static guess.
+    expect(measurer.estimateFor(240)).toBe(240);
+  });
+
+  it("learns the median measured height of rows sharing a static estimate", () => {
+    const measurer = createRowMeasurer();
+    const rows = [fakeRow("a", 40), fakeRow("b", 44), fakeRow("c", 38), fakeRow("d", 900)];
+    for (const row of rows) measurer.noteKind(row.element.id, 240);
+    measurer.measureRows(fakeScrollEl(rows));
+    // Median, not mean: the one huge row does not drag the guess toward it.
+    expect(measurer.estimateFor(240)).toBe(44);
+    // A different kind is unaffected.
+    expect(measurer.estimateFor(90)).toBe(90);
+  });
+
+  it("refreshes the learned value when a row of that kind re-measures, and forgets on reset", () => {
+    const measurer = createRowMeasurer();
+    const rows = [fakeRow("a", 40), fakeRow("b", 40), fakeRow("c", 40), fakeRow("d", 40)];
+    for (const row of rows) measurer.noteKind(row.element.id, 240);
+    const scrollEl = fakeScrollEl(rows);
+    measurer.measureRows(scrollEl);
+    expect(measurer.estimateFor(240)).toBe(40);
+    for (const row of rows) row.setHeight(100);
+    measurer.measureRows(scrollEl);
+    expect(measurer.estimateFor(240)).toBe(100);
+    measurer.reset();
+    expect(measurer.estimateFor(240)).toBe(240);
+  });
+});

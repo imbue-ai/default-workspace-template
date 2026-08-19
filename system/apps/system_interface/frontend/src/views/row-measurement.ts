@@ -48,6 +48,20 @@ export interface RowMeasurer {
   /** Measured height of the row with this key, or undefined if not yet measured. */
   getHeight(key: string): number | undefined;
   /**
+   * Height to assume for an unmeasured row whose static estimate is
+   * `staticEstimate`: the median of this list's measured rows that share that
+   * static estimate (i.e. the same kind of row), once a few have measured, else
+   * the static estimate. Static estimates are generic guesses (a user message is
+   * 90px, an assistant reply 240px) and a real transcript's rows cluster far from
+   * them -- tool-heavy assistant rows render at 35-55px. Every row that enters
+   * the window mounts at its estimate and then measures, and the difference
+   * moves the spacer above the reader; learning from the transcript itself
+   * shrinks that error from hundreds of px to a handful.
+   */
+  estimateFor(staticEstimate: number): number;
+  /** Record a measured row under its static estimate so estimateFor can learn. */
+  noteKind(key: string, staticEstimate: number): void;
+  /**
    * Drop cached heights for keys no longer present once the cache drifts well
    * past the live row count, bounding its size as rows are evicted.
    */
@@ -56,9 +70,43 @@ export interface RowMeasurer {
   reset(): void;
 }
 
+// Learn a per-kind estimate only once this many rows of that kind have measured,
+// so one atypical row cannot skew the guess for the rest.
+const MIN_SAMPLES_FOR_LEARNED_ESTIMATE = 4;
+
 export function createRowMeasurer(): RowMeasurer {
   let rowHeights = new Map<string, number>();
+  // Row key -> the static estimate it was declared with, so measured heights can
+  // be pooled per kind.
+  let kindByKey = new Map<string, number>();
+  // Static estimate -> cached learned median (invalidated when a row of that
+  // kind measures).
+  let learned = new Map<string, number>();
   let measureScheduled = false;
+
+  function learnedEstimate(staticEstimate: number): number | undefined {
+    const cacheKey = String(staticEstimate);
+    const cached = learned.get(cacheKey);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const samples: number[] = [];
+    for (const [key, kind] of kindByKey) {
+      if (kind === staticEstimate) {
+        const height = rowHeights.get(key);
+        if (height !== undefined) {
+          samples.push(height);
+        }
+      }
+    }
+    if (samples.length < MIN_SAMPLES_FOR_LEARNED_ESTIMATE) {
+      return undefined;
+    }
+    samples.sort((a, b) => a - b);
+    const median = samples[Math.floor(samples.length / 2)];
+    learned.set(cacheKey, median);
+    return median;
+  }
 
   function measureRows(scrollEl: HTMLElement): boolean {
     const list = scrollEl.querySelector(".message-list");
@@ -88,6 +136,10 @@ export function createRowMeasurer(): RowMeasurer {
       if (cached === undefined || Math.abs(height - cached) > MEASURE_HYSTERESIS_PX) {
         rowHeights.set(key, height);
         changed = true;
+        const kind = kindByKey.get(key);
+        if (kind !== undefined) {
+          learned.delete(String(kind));
+        }
       }
     }
     return changed;
@@ -114,17 +166,27 @@ export function createRowMeasurer(): RowMeasurer {
     for (const key of rowHeights.keys()) {
       if (!keys.has(key)) {
         rowHeights.delete(key);
+        kindByKey.delete(key);
       }
     }
+    learned.clear();
   }
 
   return {
     measureRows,
     scheduleMeasure,
     getHeight: (key) => rowHeights.get(key),
+    estimateFor: (staticEstimate) => learnedEstimate(staticEstimate) ?? staticEstimate,
+    noteKind: (key, staticEstimate) => {
+      if (kindByKey.get(key) !== staticEstimate) {
+        kindByKey.set(key, staticEstimate);
+      }
+    },
     prune,
     reset: () => {
       rowHeights = new Map<string, number>();
+      kindByKey = new Map<string, number>();
+      learned = new Map<string, number>();
     },
   };
 }

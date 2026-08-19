@@ -202,6 +202,41 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     return element.querySelector<HTMLElement>(`.message-list > [id="${CSS.escape(key)}"]`);
   }
 
+  /**
+   * Re-size the top spacer in place from freshly measured rows, so a row that
+   * just mounted at its estimate does not leave this frame's spacer wrong by its
+   * estimate error. The spacer stands in for the loaded rows above the window
+   * plus the phantom region; its rendered height is whatever the last render
+   * computed from the heights known THEN -- recomputing from the heights known
+   * NOW (post-measure) lands the same number the next render will.
+   */
+  function settleTopSpacer(element: HTMLElement): void {
+    const list = element.querySelector(".message-list");
+    if (list === null || list.firstElementChild === null) {
+      return;
+    }
+    const spacer = list.firstElementChild as HTMLElement;
+    if (spacer.id !== "") {
+      return; // no leading spacer (window starts at row 0 with no phantom)
+    }
+    const firstRow = spacer.nextElementSibling as HTMLElement | null;
+    if (firstRow === null || firstRow.id === "") {
+      return;
+    }
+    const firstIndex = cachedKeyToIndex.get(firstRow.id);
+    if (firstIndex === undefined) {
+      return;
+    }
+    let above = phantomTopHeight;
+    for (let i = 0; i < firstIndex; i++) {
+      above += rowHeightAt(i);
+    }
+    const current = spacer.getBoundingClientRect().height;
+    if (Math.abs(current - above) > 1) {
+      spacer.style.height = `${above}px`;
+    }
+  }
+
   /** Content-space top of the anchor row (viewport-relative rect plus live
    *  scrollTop), or null while unmounted. */
   function anchorDocTop(element: HTMLElement, key: string): number | null {
@@ -506,7 +541,8 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   // render-time windowing math and the reading-anchor bookkeeping below so both
   // agree on the same heights.
   function rowHeightAt(index: number): number {
-    return scroll.rowMeasurer.getHeight(cachedRows[index].key) ?? cachedRows[index].estimate;
+    const row = cachedRows[index];
+    return scroll.rowMeasurer.getHeight(row.key) ?? scroll.rowMeasurer.estimateFor(row.estimate);
   }
 
   /**
@@ -865,6 +901,9 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       cachedRows = buildConversationRows(agentId, events, agentIsIdle);
       cachedKeyToIndex = new Map(cachedRows.map((row, index) => [row.key, index]));
       scroll.rowMeasurer.prune(new Set(cachedRows.map((row) => row.key)));
+      for (const row of cachedRows) {
+        scroll.rowMeasurer.noteKind(row.key, row.estimate);
+      }
       rowsCacheKey = renderKey;
     }
     const rows = cachedRows;
@@ -898,10 +937,16 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     // unmount their DOM and collapse the selection. A disjoint run mounts only the
     // selected rows -- not the arbitrarily many between them and the viewport -- so
     // there is no gap cap: the selection survives at any scroll distance.
+    // Window off the LIVE scrollTop, not the last scroll event's: during a
+    // trackpad gesture (120Hz wheel input) the event value lags the position the
+    // browser has already painted, and windowing for a stale position makes the
+    // start index thrash back and forth between redraws -- with rows at the
+    // frontier flipping between their estimate and measured height, which moves
+    // the top spacer by hundreds of px per frame under the reader.
     const { segments } = computeTranscriptSlices({
       count: rows.length,
       getHeight,
-      scrollTop: scroll.scrollTop,
+      scrollTop: scroll.scrollEl !== null && panelVisible ? scroll.scrollEl.scrollTop : scroll.scrollTop,
       viewportHeight: effectiveViewportHeight,
       overscanPx: OVERSCAN_PX,
       phantomTopHeight,
@@ -1004,6 +1049,17 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
               onupdate: (mainVnode: m.VnodeDOM) => {
                 const element = mainVnode.dom as HTMLElement;
                 scroll.attach(element);
+                // Measure what this patch just mounted, synchronously and before
+                // paint. A row entering the window renders at its estimate; if that
+                // differs from the truth, this frame's top spacer is wrong by the
+                // difference and the content above the reader shifts. A redraw can't
+                // run from inside a render hook, so correct the spacer imperatively
+                // in the DOM right here (Mithril reconciles to the same value on the
+                // next redraw): the spacer's true size is the sum of the rows above
+                // the window, which is exactly what the next render will compute.
+                if (panelVisible && scroll.rowMeasurer.measureRows(element)) {
+                  settleTopSpacer(element);
+                }
                 applyScrollPosition(element);
                 scroll.scheduleMeasure();
                 // Drive paging from the render loop, not only from scroll events, so
