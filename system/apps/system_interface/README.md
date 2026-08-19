@@ -215,16 +215,16 @@ the object is showing -- service-wide for a service-backed iframe, the
 transcript and stream for a chat, a reattach for a terminal, whose tmux
 session outlives the panel and keeps its scrollback across one. Share is
 an app affordance, since the share surface is per registered service.
-Rename is offered for a chat and an app, whose names are theirs to
-choose: a chat is filed under its stable agent id and an app under its
-registered service name, so a chosen name moves without any reference to
-it moving. A terminal and a browser are not offered it, because neither
-has an identity apart from its name -- a terminal is filed under its live
-tmux session name, a browser under a Chromium profile directory -- so a
-rename could only be a display name over the top, with `tmux ls` and the
-profile on disk still saying the old one. Both keep their derived
-numbering instead. A chat's rename also moves the agent's own canonical
-name. Hide tab closes the panel and preserves membership, and is offered
+Rename is offered for a chat and nothing else. A chat is an mngr agent:
+its ref is a stable agent id and `mngr rename` moves the name everywhere
+the agent is known, so the name the user gives it is the name anything
+else -- an agent included -- can address it by. A terminal and a browser
+have no identity apart from their names (a live tmux session, a Chromium
+profile directory), so a rename there could only be a display name over
+the top. An app does have a stable id in its registered service name, but
+that name is also the only handle anything else accepts -- `layout.py`
+expands a bare word to `service:<word>` -- so a renamed app could be read
+and not addressed. All three keep their registered or derived names. Hide tab closes the panel and preserves membership, and is offered
 only when there is a live tab to close. Quit <name> is the single
 confirm-gated destructive verb: one act with one wording whether it is
 an agent, a terminal, a browser, or an app. It tears the object off the

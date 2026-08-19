@@ -575,7 +575,7 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
     expect(menuItemLabels(menu)).toEqual(["Refresh", "Quit Terminal 1"]);
   });
 
-  it("adds Share for an app row, named the way the row is -- and offers Quit too", () => {
+  it("adds Share for an app row, named the way the row is -- but no Rename", () => {
     const rows: SidebarTabRow[] = [{ ref: "service:grafana", kind: "app", label: "Grafana", isOpen: false }];
     const { root, redraw } = mountSidebar(makeAttrs({ rows }));
     root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
@@ -587,7 +587,7 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
     // the supervisord program -- and the share is still keyed by it; it just no
     // longer surfaces, which is what let "Share grafana" sit under "Quit
     // Grafana" for a renamed app.
-    expect(menuItemLabels(menu)).toEqual(["Refresh", "Share Grafana", "Rename", "Quit Grafana"]);
+    expect(menuItemLabels(menu)).toEqual(["Refresh", "Share Grafana", "Quit Grafana"]);
   });
 
   it("offers no row menu at all for a legacy url member", () => {

@@ -28,17 +28,20 @@ describe("objectMenuEntries", () => {
     }
   });
 
-  it("offers Rename only where the name is the user's to choose", () => {
-    // A chat's ref is its stable agent id, so its name is free to move. A
-    // terminal and a browser ARE their names -- a tmux session and a Chromium
-    // profile directory -- so a rename there could only ever be a display name
-    // laid over the top, and the verb is withheld rather than half-kept.
+  it("offers Rename only to a chat, whose name is the user's to choose", () => {
+    // A chat's ref is its stable agent id and `mngr rename` moves the name
+    // everywhere the agent is known, so the name the user gives it is the name
+    // anything else -- an agent included -- can refer to it by. No other kind
+    // manages that: a terminal and a browser ARE their names (a tmux session, a
+    // Chromium profile), and an app's registered service name is the only
+    // handle `layout.py` accepts, so a renamed app could be read but not
+    // addressed. See isRenameableKind.
     const renameable = (kind: ObjectMenuKind): boolean =>
       objectMenuEntries(kind, fullActions()).some(
         (entry) => entry !== OBJECT_MENU_DIVIDER && entry.label === "Rename",
       );
     expect(renameable("chat")).toBe(true);
-    expect(renameable("app")).toBe(true);
+    expect(renameable("app")).toBe(false);
     expect(renameable("terminal")).toBe(false);
     expect(renameable("browser")).toBe(false);
   });
@@ -108,7 +111,7 @@ describe("objectMenuEntries", () => {
     const entries = objectMenuEntries("app", fullActions());
     expect(entries.filter((entry) => entry === OBJECT_MENU_DIVIDER)).toHaveLength(1);
     const dividerIndex = entries.indexOf(OBJECT_MENU_DIVIDER);
-    // Refresh and Share come before it; Rename comes right after.
+    // Refresh and Share come before it; the hide/destroy group follows.
     expect(labels(entries.slice(0, dividerIndex))).toEqual(["Refresh", "Share web"]);
     expect(entries[dividerIndex + 1]).not.toBe(OBJECT_MENU_DIVIDER);
   });
@@ -125,7 +128,6 @@ describe("objectMenuEntries", () => {
       "Refresh",
       "Share web",
       OBJECT_MENU_DIVIDER,
-      "Rename",
       "Hide tab",
       "Quit Chat 1",
     ]);
