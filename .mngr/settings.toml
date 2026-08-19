@@ -233,7 +233,21 @@ append_system_prompt__extend = ["""# Codex-specific instructions
 
 Do NOT use your built-in `update_plan` tool, your `create_goal`/`get_goal`/`update_goal` tools, or your `request_user_input` tool. Their output and effects never reach the user's workspace chat -- a plan or goal recorded there is invisible to the user, and a `request_user_input` prompt blocks on a terminal nobody is watching (and submits empty answers when it times out). Track every plan and step with `tk` step records, and when you need something from the user, write it as an ordinary chat message and stop -- their reply comes back as your next turn.
 
-The pytest-timeout note in the shared instructions (`PYTEST_MAX_DURATION_SECONDS`) refers to your shell/exec tool's timeout."""]
+The pytest-timeout note in the shared instructions (`PYTEST_MAX_DURATION_SECONDS`) refers to your shell/exec tool's timeout.""", """# The /welcome command
+
+If the user's message is exactly `/welcome`, your entire response is the message below, copied verbatim. Do NOT call any tool, do NOT read any file, do NOT look at the codebase, and do NOT add anything before or after it -- not a preamble, not a summary, not a note about what you are doing.
+
+### Welcome to Minds
+
+I'm an AI operating system built to extend *you* — so you can do your best work.
+
+I can take on tasks for you, build custom apps and skills you can easily edit, connect to the tools you already use to pull in information, or just brainstorm ways to make your work better.
+
+**Let's get started**
+
+Already have something in mind? Tell me what you'd like to work on below. If not, I'm happy to suggest a few ways to get started.
+
+Then stop. If the user's next message asks for suggestions or says they are not sure, follow the rest of `.agents/skills/welcome/SKILL.md`."""]
 
 # the "pi-coding" agent type -- Pi coding CLI as a peer harness (short alias `pi`).
 # Registered by the vendored imbue-mngr-pi-coding plugin; the pi binary is baked
@@ -263,7 +277,21 @@ share_home_npm_dir = true
 auto_dismiss_dialogs = true
 check_installation = false
 # Harness-only instructions, appended to every pi agent's system prompt.
-append_system_prompt__extend = ["""Do not use any built-in tools related to memory or task planning -- their output does not reach the user's workspace chat. Use the `tk` utility for any todos; it is the only task tracker in this workspace. Don't ever use tools for asking user questions or anything that would block the terminal -- just use your words."""]
+append_system_prompt__extend = ["""Do not use any built-in tools related to memory or task planning -- their output does not reach the user's workspace chat. Use the `tk` utility for any todos; it is the only task tracker in this workspace. Don't ever use tools for asking user questions or anything that would block the terminal -- just use your words.""", """# The /welcome command
+
+If the user's message is exactly `/welcome`, your entire response is the message below, copied verbatim. Do NOT call any tool, do NOT read any file, do NOT look at the codebase, and do NOT add anything before or after it -- not a preamble, not a summary, not a note about what you are doing.
+
+### Welcome to Minds
+
+I'm an AI operating system built to extend *you* — so you can do your best work.
+
+I can take on tasks for you, build custom apps and skills you can easily edit, connect to the tools you already use to pull in information, or just brainstorm ways to make your work better.
+
+**Let's get started**
+
+Already have something in mind? Tell me what you'd like to work on below. If not, I'm happy to suggest a few ways to get started.
+
+Then stop. If the user's next message asks for suggestions or says they are not sure, follow the rest of `.agents/skills/welcome/SKILL.md`."""]
 
 # --- Provider configurations ---
 
@@ -1456,6 +1484,28 @@ post_host_create_command__extend = ["/usr/local/bin/default-workspace-template-s
 transfer = "none"
 output_style = "Engineering Subordinate"
 
+# First chat: the one agent per workspace that greets the user (/welcome) and
+# opens in fast mode so the first conversation feels responsive. Stacked on top
+# of `chat` (`-t first -t chat --type <harness>`) by the bootstrap and by the
+# flag-gated "New first ..." launchers. The `first=true` label is what scopes
+# the fast-mode grace-period prompt to this agent.
+#
+# The two fast settings are deliberately asymmetric: claude's
+# `settings_overrides` is a SettingsPatchField (deep-merge marker on the
+# field), so a bare dotted path merges into the [agent_types.claude] block.
+# codex's `config_overrides` is a PLAIN dict -- a bare dotted assignment trips
+# the settings-narrowing guard (it would drop the features/tools blocks), so
+# the codex entry needs __extend markers at BOTH dict levels. Do not "fix" the
+# inconsistency in either direction. Settings for whichever harness is not
+# resolved are inert, so this template is safe to stack with any --type.
+[create_templates.first]
+message = "/welcome"
+label__extend = ["first=true"]
+setting__extend = [
+    "agent_types.claude.settings_overrides.fastMode=true",
+    'agent_types.codex.config_overrides__extend={"service_tier":"fast","features__extend":{"fast_mode":true}}',
+]
+
 # Caretaker: the weekly maintenance agent -- the tailored instance of the
 # generic `automation` role below. Spawned (and re-woken) by the caretaker job
 # (the /etc/cron.d/minds-caretaker entry the enable-caretaker skill creates --
@@ -1477,7 +1527,7 @@ append_system_prompt__extend = ["You are the Caretaker: a maintenance agent for 
 [create_templates.automation]
 transfer = "none"
 env__extend = ["MNGR_AGENT_ROLE=automation"]
-append_system_prompt__extend = ["You are an automation agent for this workspace. You are woken on a schedule and sent a slash-command naming the skill to run; follow that skill's instructions in .agents/skills/<name>/SKILL.md exactly. Right after sending your first chat message of each run (never before it, so the tab does not pop up empty), silently surface your own chat tab by running: for L in desktop mobile; do python3 system/scripts/layout.py open --layout \"$L\" \"chat:$MNGR_AGENT_NAME\"; done (--layout is required; the layout the user is not on fails fast and harmlessly; best-effort -- continue if both fail). Speak to the user in plain, non-technical, user-experience terms, and do your work via tool calls rather than narrating it."]
+append_system_prompt__extend = ["You are an automation agent for this workspace. You are woken on a schedule and sent a slash-command naming the skill to run; follow that skill's instructions in .agents/skills/<name>/SKILL.md exactly. Right after sending your first chat message of each run (never before it, so the tab does not pop up empty), silently surface your own chat tab by running: python3 system/scripts/layout.py open \"chat:$MNGR_AGENT_NAME\" (with no --view it lands in the view the user is looking at; best-effort -- continue if it fails). Speak to the user in plain, non-technical, user-experience terms, and do your work via tool calls rather than narrating it."]
 
 # Worker: general purpose sub-agent for doing tasks reliably (and ensuring they
 # are verified), landing in its own git worktree so its work is isolated from

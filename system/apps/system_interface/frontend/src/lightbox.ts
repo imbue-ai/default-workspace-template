@@ -10,6 +10,8 @@
  * applies to are not part of mithril's vnode tree.
  */
 
+import { attachHoverTooltip } from "./views/hoverTooltip";
+import type { HoverTooltip } from "./views/hoverTooltip";
 import { icon } from "./views/icons";
 
 function filenameFromUrl(imageUrl: string): string {
@@ -23,6 +25,16 @@ function filenameFromUrl(imageUrl: string): string {
 }
 
 let activeOverlay: HTMLElement | null = null;
+// The header buttons' tooltips, disposed with the overlay so a bubble that is
+// up when the lightbox closes (via Escape, say) goes with it.
+let activeTooltips: HoverTooltip[] = [];
+
+// Native `title` is not used anywhere in the workspace -- see views/hoverTooltip.ts.
+function addTooltip(element: HTMLElement, label: string): void {
+  const tooltip = attachHoverTooltip(element);
+  tooltip.setText(label);
+  activeTooltips.push(tooltip);
+}
 
 function onKeydown(event: KeyboardEvent): void {
   if (event.key === "Escape") {
@@ -44,6 +56,8 @@ export function closeImageLightbox(): void {
   }
   activeOverlay.remove();
   activeOverlay = null;
+  activeTooltips.forEach((tooltip) => tooltip.dispose());
+  activeTooltips = [];
   document.removeEventListener("keydown", onKeydown);
 }
 
@@ -77,17 +91,18 @@ export function openImageLightbox(imageUrl: string, altText: string): void {
   // browser refuses to download opens in a new tab rather than navigating away.
   downloadLink.target = "_blank";
   downloadLink.rel = "noopener noreferrer";
-  downloadLink.title = "Download";
   downloadLink.setAttribute("aria-label", "Download image");
   downloadLink.innerHTML = icon("download", { size: 20 });
 
   const closeButton = document.createElement("button");
   closeButton.className = "image-lightbox-iconbtn";
   closeButton.type = "button";
-  closeButton.title = "Close";
   closeButton.setAttribute("aria-label", "Close image viewer");
   closeButton.innerHTML = icon("close", { size: 20 });
   closeButton.addEventListener("click", closeImageLightbox);
+
+  addTooltip(downloadLink, "Download");
+  addTooltip(closeButton, "Close");
 
   actions.appendChild(downloadLink);
   actions.appendChild(closeButton);

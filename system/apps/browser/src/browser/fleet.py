@@ -16,7 +16,7 @@ Ownership rules (enforced by the daemon, surfaced here):
 * A browser a human took control of is locked to the human. Resume only when the
   human tells you to ("keep going") -- then, and only then, pass ``--reclaim``.
 
-Browsers are addressed by NAME (a random ~2-word english name like ``alex-smith``),
+Browsers are addressed by NAME (numbered ``browser-<N>`` for daemon-minted ones),
 not a number. There is no default browser: run ``new`` first (it prints a name),
 then drive that browser by its name.
 
@@ -304,7 +304,7 @@ def cmd_ls(args: argparse.Namespace) -> int:
 
 
 def cmd_new(args: argparse.Namespace) -> int:
-    # `new` picks a random name; pass `new <name>` to choose one. A duplicate or invalid
+    # `new` mints the first free `browser-<N>`; pass `new <name>` to choose one. A duplicate or invalid
     # name is rejected by the daemon (409 / 400) with a clear message.
     body: dict[str, Any] = {"name": args.name} if args.name else {}
     status, payload = _request("POST", "/browsers", body)
@@ -323,7 +323,8 @@ def cmd_new(args: argparse.Namespace) -> int:
 
 def cmd_close(args: argparse.Namespace) -> int:
     """Close an entire browser (all its tabs) and free its resources -- not just one tab.
-    Use this when you're permanently done with a browser; the name is retired (never reused)."""
+    Use this when you're permanently done with a browser; its name is retired and its
+    profile (cookies, logins) is deleted with it."""
     status, payload = _request("DELETE", f"/browsers/{args.name}")
     if status != 200:
         _err(payload.get("error", f"close failed ({status})"))
@@ -615,7 +616,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_ls.add_argument("--include-tabs", action="store_true", help="List every open tab per browser, not just the active one.")
     p_ls.set_defaults(func=cmd_ls)
     p_new = sub.add_parser("new", help="Start a new browser and print its name. Pass an optional name to choose one.")
-    p_new.add_argument("name", nargs="?", default=None, help="Optional name (lowercase letters/digits/dashes, e.g. 'alex-smith'); a duplicate is rejected.")
+    p_new.add_argument("name", nargs="?", default=None, help="Optional name (lowercase letters/digits/dashes, e.g. 'research-1'); a duplicate is rejected.")
     p_new.set_defaults(func=cmd_new)
 
     p_close = sub.add_parser("close", help="Close an entire browser (all tabs) and retire its name. For one tab, use `tab <name> close`.")

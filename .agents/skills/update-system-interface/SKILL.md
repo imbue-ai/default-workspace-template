@@ -164,10 +164,12 @@ exit, fix the build and re-run; do not open the tab on a broken boot. It also
 reports, on stderr, the instance name (`si-preview-update-$SLUG`) you address for
 every refresh and teardown below.
 
-Only once it is up, open the tab:
+Only once it is up, open the tab (with no `--view`, the op goes to the view the
+connected client is looking at, which is where the user expects it; the same
+holds for every `close` below):
 
 ```bash
-for L in desktop mobile; do python3 system/scripts/layout.py open --layout "$L" si-preview; done
+python3 system/scripts/layout.py open si-preview
 ```
 
 **That `open` is the hand-off, not setup.** It puts the tab on the user's screen
@@ -176,15 +178,9 @@ by telling the user what changed and waiting. Do not drive the preview yourself
 after this point (`update-app` step 4 above), and never tell the user to "open
 si-preview" -- you already did, and they have been looking at it.
 
-The `for L in desktop mobile` loop is the same `--layout` handling `update-app`
-describes, and it applies to every `close` below too. (`refresh` is the
-exception: it takes no `--layout`.)
-
-**If no layout accepted the `open`, the hand-off did not happen.** A layout with
-no connected client reports `has no client to apply it (HTTP 412)`; one layout
-refusing while another succeeds is normal and harmless (a workspace usually has
-no mobile client). What matters is whether *any* of them applied. If none did,
-there is no tab on anyone's screen -- the user is not looking at your change, and
+**If the `open` was refused, the hand-off did not happen.** With no connected
+client it reports `has no client to apply it (HTTP 412)` and exits non-zero --
+there is no tab on anyone's screen, the user is not looking at your change, and
 proceeding as though they were is the one mistake this step cannot recover from.
 
 What to do instead: drive the preview privately (Playwright against its port, as
@@ -270,7 +266,7 @@ worktrees, so before creating the worker you must release the lead's hold on
 ```bash
 # tear the live preview down and close its tab (it boots from the worktree)
 python3 .agents/shared/scripts/serve_isolated_instance.py down --name "si-preview-update-$SLUG"
-for L in desktop mobile; do python3 system/scripts/layout.py close --layout "$L" si-preview; done
+python3 system/scripts/layout.py close si-preview
 # then remove the lead's worktree, freeing the branch for the worker
 git worktree remove data/.tasks/si-live/update-$SLUG
 ```
@@ -341,13 +337,13 @@ Same hand-off rule as the first round: check the boot's exit code, *then* open -
 so this is a second command, not the next line of that one. Only once it is up:
 
 ```bash
-for L in desktop mobile; do python3 system/scripts/layout.py open --layout "$L" si-preview; done
+python3 system/scripts/layout.py open si-preview
 ```
 
-And once it is open it is the user's to judge -- you do not drive it. If no
-layout accepted the `open`, Step 2's undelivered-hand-off branch applies here
-too: the screenshot fallback, said out loud as a fallback, and a re-attempt when
-a client connects.
+And once it is open it is the user's to judge -- you do not drive it. If the
+`open` was refused (no connected client), Step 2's undelivered-hand-off branch
+applies here too: the screenshot fallback, said out loud as a fallback, and a
+re-attempt when a client connects.
 
 **Two things must both hold**, and the second is a real judgment, not a
 formality:
@@ -417,9 +413,16 @@ interleave.
 
    That single command owns the whole reveal as one deterministic, self-healing
    motion (you do not run `npm`/`uv`/`mngr` by hand). It classifies what changed;
-   refreshes dependencies only if a manifest changed (`npm ci` / `uv tool install
-   -e system/apps/system_interface --reinstall`); pre-flights a backend change on a
-   throwaway port before touching the live service; rebuilds `static/` (frontend)
+   refreshes dependencies only if a manifest changed -- `npm ci` for the
+   frontend, and for the backend the same environments `build_workspace.sh`
+   builds (the vendored mngr tool, the backend tool, and the workspace venv),
+   where a vendored mngr `pyproject.toml` counts as a backend manifest alongside
+   the app's own and the repo root's, since an editable install pins only the
+   source path and a merge that advances `system/vendor/mngr` stales the `mngr`
+   CLI's closure; pre-flights a backend change on a
+   throwaway port before touching the live service, and on a failed boot quotes
+   the throwaway process's own output so the cause rides back with the error;
+   rebuilds `static/` (frontend)
    and/or restarts the `system_interface` service alone (backend --
    `supervisorctl restart system_interface`, not the services agent, so nothing
    else in the workspace is bounced); rebuilds the user's view
@@ -449,7 +452,7 @@ interleave.
 
    ```bash
    python3 .agents/shared/scripts/serve_isolated_instance.py down --name "si-preview-update-$SLUG"
-   for L in desktop mobile; do python3 system/scripts/layout.py close --layout "$L" si-preview; done
+   python3 system/scripts/layout.py close si-preview
    ```
 
    `down` is idempotent (a missing instance is a no-op success), so it is safe

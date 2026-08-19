@@ -1,0 +1,3 @@
+Daemon-minted browser names are now the first free `browser-<N>` (shown as "Browser N" in the workspace UI -- the same display-name/canonical-name pairing chats and minds hosts use) instead of a random english pair like `alex-smith`. Browsers created by older builds keep their random names; every name stays valid.
+
+The taken set for a new name spans the live fleet, the manifest's pending-restore entries, and the on-disk profile dirs, so a create can never adopt an existing profile (and its cookies): closing a browser deletes its profile, which is what frees the number for a later create, and an orphaned profile holds its name until the next boot's sweep removes it.

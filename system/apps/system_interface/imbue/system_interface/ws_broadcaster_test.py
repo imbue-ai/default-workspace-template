@@ -401,27 +401,16 @@ def test_broadcast_layout_op_without_target_reaches_everyone() -> None:
     assert json.loads(_get_message(unregistered_queue))["op"] == "refresh"
 
 
-def test_layout_registry_broadcasts_reach_all_clients() -> None:
+def test_load_layout_broadcast_reaches_all_clients() -> None:
     broadcaster = WebSocketBroadcaster()
     client_queue = broadcaster.register()
 
-    broadcaster.broadcast_layout_saved("desktop", "desktop", "client-1")
-    broadcaster.broadcast_layout_deleted("mobile", "desktop")
-    broadcaster.broadcast_load_layout("desktop", "desktop", None)
+    broadcaster.broadcast_load_layout("project-1", "Project 1", None)
 
-    saved = json.loads(_get_message(client_queue))
-    assert saved == {
-        "type": "layout_saved",
-        "layout_slug": "desktop",
-        "display_name": "desktop",
-        "saved_by_client_id": "client-1",
-    }
-    deleted = json.loads(_get_message(client_queue))
-    assert deleted == {"type": "layout_deleted", "layout_slug": "mobile", "fallback_layout_slug": "desktop"}
     load = json.loads(_get_message(client_queue))
     assert load == {
         "type": "load_layout",
-        "layout_slug": "desktop",
-        "display_name": "desktop",
+        "layout_slug": "project-1",
+        "display_name": "Project 1",
         "target_client_id": None,
     }
