@@ -52,6 +52,7 @@ members = [
     "imbue-mngr-vps",
     "imbue-mngr-vultr",
     "imbue-mngr-wait",
+    "imbue-observability",
     "minds",
     "minds-evals",
     "mngr-minds-eval",
@@ -2643,6 +2644,7 @@ dependencies = [
     { name = "paramiko" },
     { name = "pluggy" },
     { name = "pydantic" },
+    { name = "starlette" },
     { name = "websockets" },
 ]
 
@@ -2663,6 +2665,7 @@ requires-dist = [
     { name = "paramiko", specifier = ">=3.0" },
     { name = "pluggy" },
     { name = "pydantic", specifier = ">=2.0" },
+    { name = "starlette" },
     { name = "websockets", specifier = ">=13" },
 ]
 
@@ -3112,6 +3115,33 @@ dependencies = [
 requires-dist = [
     { name = "click-option-group", specifier = ">=0.5.6" },
     { name = "imbue-mngr", editable = "libs/mngr" },
+]
+
+[[package]]
+name = "imbue-observability"
+version = "0.1.0"
+source = { editable = "apps/observability" }
+dependencies = [
+    { name = "click" },
+    { name = "concurrency-group" },
+    { name = "httpx" },
+    { name = "imbue-common" },
+    { name = "loguru" },
+    { name = "pydantic" },
+    { name = "share-relay" },
+    { name = "tenacity" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "click", specifier = ">=8.1" },
+    { name = "concurrency-group", editable = "libs/concurrency_group" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "imbue-common", editable = "libs/imbue_common" },
+    { name = "loguru", specifier = ">=0.7" },
+    { name = "pydantic", specifier = ">=2.0" },
+    { name = "share-relay", editable = "apps/share_relay" },
+    { name = "tenacity", specifier = ">=8.0" },
 ]
 
 [[package]]

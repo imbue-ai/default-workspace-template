@@ -171,7 +171,7 @@ def build_catalog(data_dir: Path) -> HarnessCatalog:
         # that cannot apply is rare.
         switch_mode=SwitchMode.EAGER_THEN_RECONCILE,
         picker_mode=PickerMode.SEARCH,
-        powered_by_label="Pi Coding",
+        powered_by_text="Powered by Pi Coding",
         # pi interrupts natively via the lifecycle extension (interrupt + resubmit).
         native_atomic_shoulder_tap_possible=True,
     )
@@ -187,7 +187,7 @@ def get_catalog() -> HarnessCatalog:
             options=(),
             switch_mode=SwitchMode.EAGER_THEN_RECONCILE,
             picker_mode=PickerMode.SEARCH,
-            powered_by_label="Pi Coding",
+            powered_by_text="Powered by Pi Coding",
             # pi interrupts natively via the lifecycle extension (interrupt + resubmit).
             native_atomic_shoulder_tap_possible=True,
         )

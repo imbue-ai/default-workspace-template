@@ -136,6 +136,20 @@ If instructed not to commit:
 - do not commit anything! Simply leave the git state as it is at the end of your response.
 - NEVER run git commands like git reset, git checkout, etc that might change the git state (when instructed not to commit you are collaborating with others in the same directory, so should not change other files or the git state).
 
+# Vendored mngr in the default-workspace-template worktree
+
+Only applies if you have a default-workspace-template worktree (`just dwt-worktree` creates one). Its `system/vendor/mngr/` is a generated copy of this checkout, so it is dirty on purpose and the stop hook exempts it from the commit check. Git ignores that exemption and refuses to merge over it; the stop hook reports that case as `Merge blocked by uncommitted changes under an exempt path`. Drop and regenerate it -- never commit it, never resolve it as a conflict:
+
+```
+cd .external_worktrees/default-workspace-template
+git checkout HEAD -- system/vendor/mngr && git clean -fd -- system/vendor/mngr
+git merge origin/main --no-edit
+cd -
+just sync-vendor-mngr-live
+```
+
+Only for paths the hook names as exempt; anything else is a real conflict. Background: `apps/minds/docs/vendor-mngr-sync.md`.
+
 # Changelog
 
 Every PR must include one changelog entry file **per project it touches**. CI will fail if any are missing.
