@@ -339,7 +339,7 @@ tests, or exercise its scripts -- and called out in the report.
   preview, then drive it per
   `.agents/shared/worker/references/web-frontend-testing.md`. That built bundle
   is also what the lead's apply installs live (`--worker-bundle`), so the exact
-  artifact the user previewed is what ships -- name its location in your report
+  build the user previewed is what ships -- name its location in your report
   (see §6). Your `npm ci` / `uv sync` runs here also pre-warm the shared uv and
   npm caches, which the live apply's own refresh then reuses, so the live
   motion is faster and less network-dependent than a cold one.
@@ -433,7 +433,7 @@ Per `.agents/shared/references/worker-reporting.md` (`<TASK_FILE_GLOB>` ->
     (for validation or the preview), the absolute path of the built bundle in
     your worktree
     (`<your work_dir>/system/apps/system_interface/imbue/system_interface/static`).
-    The lead passes it to the apply as `--worker-bundle`, so the artifact the
+    The lead passes it to the apply as `--worker-bundle`, so the build the
     user previewed is the one installed live. Omit the field when you did not
     build (the apply falls back to a live build).
   - **Impact analysis** -- the impacted services and skills from 4a, what you

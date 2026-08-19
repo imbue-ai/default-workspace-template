@@ -239,7 +239,7 @@ judgment, not an automatic loop.
 Note: the built `static/` bundle is gitignored, so the merge brings only source
 and dependency-manifest (`pyproject.toml` / `package.json` / lockfile) changes,
 not the worker's build output. The apply installs the worker's already-built
-bundle (the artifact the user just previewed), falling back to a live build.
+bundle (the very build the user just previewed), falling back to a live build.
 
 ## 5. Apply the change, then tear down the preview
 

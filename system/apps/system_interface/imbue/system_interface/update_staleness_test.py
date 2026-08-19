@@ -2,8 +2,8 @@
 
 import subprocess
 from pathlib import Path
-from unittest.mock import patch
 
+from imbue.system_interface.server import _inject_update_staleness_meta_tag
 from imbue.system_interface.server import create_application
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.update_staleness import STALENESS_TREE_MOVED
@@ -38,13 +38,13 @@ def _write_marker(repo: Path) -> None:
 
 def test_tracker_reports_nothing_while_the_tree_is_unmoved(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
-    tracker = UpdateStalenessTracker(repo_root=repo)
+    tracker = UpdateStalenessTracker.capture(repo_root=repo)
     assert tracker.staleness() is None
 
 
 def test_tracker_reports_a_tree_that_moved_under_the_server(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
-    tracker = UpdateStalenessTracker(repo_root=repo)
+    tracker = UpdateStalenessTracker.capture(repo_root=repo)
     _commit(repo, "an update landed after this server started")
     assert tracker.staleness() == STALENESS_TREE_MOVED
 
@@ -53,66 +53,63 @@ def test_tracker_reports_an_interrupted_apply_over_a_moved_tree(tmp_path: Path) 
     # The marker outranks the HEAD comparison: while it exists the honest
     # description is "an update was interrupted", not merely "the tree moved".
     repo = _make_repo(tmp_path)
-    tracker = UpdateStalenessTracker(repo_root=repo)
+    tracker = UpdateStalenessTracker.capture(repo_root=repo)
     _commit(repo, "the interrupted apply's merge")
     _write_marker(repo)
     assert tracker.staleness() == STALENESS_UPDATE_INTERRUPTED
 
 
 def test_tracker_degrades_to_not_stale_outside_a_repo(tmp_path: Path) -> None:
-    tracker = UpdateStalenessTracker(repo_root=tmp_path / "not-a-repo")
+    tracker = UpdateStalenessTracker.capture(repo_root=tmp_path / "not-a-repo")
+    assert tracker.startup_head is None
     assert tracker.staleness() is None
 
 
-def test_app_shell_carries_the_staleness_header_and_meta_tag(tmp_path: Path) -> None:
+def test_app_shell_carries_the_staleness_header(tmp_path: Path) -> None:
+    # The header rides on every app-shell response -- the built app and the
+    # not-built placeholder alike -- so this needs no particular bundle state.
     repo = _make_repo(tmp_path)
-    static_dir = tmp_path / "static"
-    static_dir.mkdir()
-    (static_dir / "index.html").write_text("<html><head></head><body>app</body></html>")
     state = build_test_state()
-    state.update_staleness = UpdateStalenessTracker(repo_root=repo)
+    state.update_staleness = UpdateStalenessTracker.capture(repo_root=repo)
     _commit(repo, "moved after startup")
 
-    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
-        client = create_application(state).test_client()
-        response = client.get("/")
+    client = create_application(state).test_client()
+    response = client.get("/")
 
     assert response.status_code == 200
     assert response.headers[UPDATE_STALENESS_HEADER] == STALENESS_TREE_MOVED
-    assert (
-        f'<meta name="{UPDATE_STALENESS_META_TAG}" content="{STALENESS_TREE_MOVED}">'
-        in response.text
-    )
 
 
 def test_app_shell_names_the_interrupted_variant_from_the_marker(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
-    static_dir = tmp_path / "static"
-    static_dir.mkdir()
-    (static_dir / "index.html").write_text("<html><head></head><body>app</body></html>")
     state = build_test_state()
-    state.update_staleness = UpdateStalenessTracker(repo_root=repo)
+    state.update_staleness = UpdateStalenessTracker.capture(repo_root=repo)
     _write_marker(repo)
 
-    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
-        client = create_application(state).test_client()
-        response = client.get("/")
+    client = create_application(state).test_client()
+    response = client.get("/")
 
     assert response.headers[UPDATE_STALENESS_HEADER] == STALENESS_UPDATE_INTERRUPTED
-    assert STALENESS_UPDATE_INTERRUPTED in response.text
 
 
-def test_a_consistent_workspace_gets_no_header_and_no_tag(tmp_path: Path) -> None:
+def test_a_consistent_workspace_gets_no_header(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
-    static_dir = tmp_path / "static"
-    static_dir.mkdir()
-    (static_dir / "index.html").write_text("<html><head></head><body>app</body></html>")
     state = build_test_state()
-    state.update_staleness = UpdateStalenessTracker(repo_root=repo)
+    state.update_staleness = UpdateStalenessTracker.capture(repo_root=repo)
 
-    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
-        client = create_application(state).test_client()
-        response = client.get("/")
+    client = create_application(state).test_client()
+    response = client.get("/")
 
     assert UPDATE_STALENESS_HEADER not in response.headers
-    assert UPDATE_STALENESS_META_TAG not in response.text
+
+
+def test_meta_tag_injection_names_the_variant_and_skips_when_consistent() -> None:
+    shell = "<html><head></head><body>app</body></html>"
+    injected = _inject_update_staleness_meta_tag(shell, STALENESS_TREE_MOVED)
+    assert (
+        f'<meta name="{UPDATE_STALENESS_META_TAG}" content="{STALENESS_TREE_MOVED}">'
+        in injected
+    )
+    # A consistent workspace's shell carries no tag at all -- the frontend
+    # banner keys off the tag's presence.
+    assert _inject_update_staleness_meta_tag(shell, None) == shell

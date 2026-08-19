@@ -15,10 +15,14 @@ agent.
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 from loguru import logger as _loguru_logger
+from pydantic import Field
+
+from imbue.concurrency_group.errors import ProcessError
+from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
+from imbue.imbue_common.frozen_model import FrozenModel
 
 logger = _loguru_logger
 
@@ -47,41 +51,52 @@ UPDATE_STALENESS_META_TAG = "system-interface-update-staleness"
 _GIT_TIMEOUT_SECONDS = 10.0
 
 
-class UpdateStalenessTracker:
-    """Remembers the tree HEAD this server started from and compares later.
+def _read_head(repo_root: Path) -> str | None:
+    """The tree HEAD at ``repo_root``, or ``None`` when it cannot be read.
 
-    Built once per process (a field on ``SystemInterfaceState``); ``staleness``
-    is asked per app-shell request, which is a page load -- infrequent enough
-    that a bounded ``git rev-parse`` per call costs nothing noticeable.
-    Everything degrades to "not stale": a workspace where HEAD cannot be read
-    (no git, a corrupt repo) has bigger problems than a missing banner, and a
+    Everything degrades to ``None``: a workspace where HEAD cannot be read (no
+    git, a corrupt repo) has bigger problems than a missing banner, and a
     false banner would erode the trust the real one needs.
     """
+    try:
+        result = run_local_command_modern_version(
+            command=["git", "rev-parse", "HEAD"],
+            cwd=repo_root,
+            is_checked=False,
+            timeout=_GIT_TIMEOUT_SECONDS,
+        )
+    except (ProcessError, OSError):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
 
-    def __init__(self, repo_root: Path = _WORKSPACE_ROOT_DIRECTORY) -> None:
-        self._repo_root = repo_root
-        self._startup_head = self._read_head()
-        if self._startup_head is None:
+
+class UpdateStalenessTracker(FrozenModel):
+    """Remembers the tree HEAD this server started from and compares later.
+
+    Built once per process via :meth:`capture` (a field on
+    ``SystemInterfaceState``); ``staleness`` is asked per app-shell request,
+    which is a page load -- infrequent enough that a bounded ``git rev-parse``
+    per call costs nothing noticeable.
+    """
+
+    repo_root: Path = Field(description="The workspace root this server serves from")
+    startup_head: str | None = Field(
+        description="The tree HEAD when this process started; None disables the "
+        "moved-tree comparison (the marker check still applies)"
+    )
+
+    @classmethod
+    def capture(cls, repo_root: Path = _WORKSPACE_ROOT_DIRECTORY) -> "UpdateStalenessTracker":
+        """Snapshot the current tree HEAD as this process's startup baseline."""
+        startup_head = _read_head(repo_root)
+        if startup_head is None:
             logger.warning(
                 "Could not read the tree HEAD at startup; update-staleness "
                 "detection is disabled for this process."
             )
-
-    def _read_head(self) -> str | None:
-        try:
-            result = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=self._repo_root,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=_GIT_TIMEOUT_SECONDS,
-            )
-        except (OSError, subprocess.SubprocessError):
-            return None
-        if result.returncode != 0:
-            return None
-        return result.stdout.strip() or None
+        return cls(repo_root=repo_root, startup_head=startup_head)
 
     def staleness(self) -> str | None:
         """The staleness variant to surface, or ``None`` when consistent.
@@ -90,11 +105,11 @@ class UpdateStalenessTracker:
         honest description is "an update was interrupted" (recovery is coming,
         or the same apply is being resumed), not merely "the tree moved".
         """
-        if (self._repo_root / UPDATE_APPLY_MARKER_REL).exists():
+        if (self.repo_root / UPDATE_APPLY_MARKER_REL).exists():
             return STALENESS_UPDATE_INTERRUPTED
-        if self._startup_head is None:
+        if self.startup_head is None:
             return None
-        current = self._read_head()
-        if current is not None and current != self._startup_head:
+        current = _read_head(self.repo_root)
+        if current is not None and current != self.startup_head:
             return STALENESS_TREE_MOVED
         return None
