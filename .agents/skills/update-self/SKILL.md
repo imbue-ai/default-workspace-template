@@ -17,9 +17,10 @@ unverified state: an isolated **worker** does the merge and validation on its ow
 branch, and only a known-good, user-approved result is landed and applied.
 
 You are the **lead**: resolve the target, dispatch the worker, proxy its one
-gate, present the approval gate, and -- on approval -- land the merge and reveal
-each change by its class. The worker owns the merge, the conflict triage, and the
-validation; you own going live.
+gate, present the approval gate, and -- on approval -- run the one-command
+**apply** that lands the merge and makes the live workspace consistent with it
+(Step 5b). The worker owns the merge, the conflict triage, and the validation;
+the apply script owns going live.
 
 The default target is the **latest stable `minds-v*` tag** (released,
 already-tested), not `origin/main` -- and never newer than the Minds app driving
@@ -29,7 +30,7 @@ override to a specific tag or to `main`.
 Because the update flow itself evolves, once the target is resolved this pass
 **re-points itself at the target version's own copy of the update-self skill**
 (Step 2a) and runs the rest -- lead *and* worker -- from there. So a fix to the
-conflict triage, validation, or reveal logic that shipped in the release is
+conflict triage, validation, or apply logic that shipped in the release is
 applied on the way *in*, instead of staying a release behind in the local copy.
 That copy is staged at one fixed path --
 `data/.tasks/update-self/skill-at-target/.agents/skills/update-self` -- which the lead
@@ -39,8 +40,9 @@ each bash invocation starts a fresh shell).
 ## 1. Preconditions
 
 **Back up first.** Before dispatching anything, capture a restore point of the
-whole workspace so the pass is recoverable -- the reveal re-runs provisioners and
-restarts services, and a backup is the recovery path if one of those goes wrong:
+whole workspace so the pass is recoverable -- the apply re-runs provisioners and
+restarts services, and a backup is the last-resort recovery path if everything
+else (the apply's own rollback, `recover`) fails:
 
 ```bash
 uv run host-backup-now
@@ -56,16 +58,28 @@ outcome could not be observed at all (the tick may still be running, or the
 service is not writing events) -- neither confirms a restore point, so treat both
 the same way as exit 3.
 
-**Single-flight.** One pass at a time (its worker name, branch, and runtime dir
-are fixed). Check for a live one:
+**Take the "updating workspace" lease.** One update flow at a time (its worker
+name, branch, and runtime dir are fixed, and two applies must never
+interleave). This is a lease like the other flows' editing leases, held from
+here through the worker, the approval gate, and the apply, and released in
+Step 6. First check for a foreign one:
 
 ```bash
 tk ready > /tmp/update-self-inflight.txt
-grep "update-self" /tmp/update-self-inflight.txt
+grep "updating workspace" /tmp/update-self-inflight.txt
 ```
 
-If a live `update-self` ticket exists, stop and tell the user; if it looks
-abandoned, take it over per `.agents/shared/references/harden-contention.md`.
+If another agent holds a live `updating workspace` lease, stop and tell the
+user; if it looks abandoned, take it over per
+`.agents/shared/references/harden-contention.md`. Otherwise take it (each `tk`
+call as its own command, never chained):
+
+```bash
+UPDATE_LEASE_ID=$(tk create "updating workspace" -t chore \
+    -d "Held by $MNGR_AGENT_NAME across the update-self pass; released at teardown.")
+```
+
+then `tk start "$UPDATE_LEASE_ID"`.
 
 **Clean tree.** The worker branches off your `HEAD` and the rollback captures it.
 If `git status --porcelain` is non-empty, surface it and stop.
@@ -201,11 +215,18 @@ both dispatch against the correct version.
 **The handoff contract (keep this boundary stable when editing this skill).**
 Steps 1-2 -- preconditions and target resolution -- always run from the *local*
 copy: they are what decide `$REF`, so by construction they cannot come from the
-target. The target's flow is entered at **Step 3**. So an edit to this skill must
-preserve that boundary: a future version's Steps 1-2 must stay "capture a backup,
-the single-flight/clean-tree checks, then resolve a ref into `$REF`", and its
-Step 3 must stay the worker dispatch -- otherwise an older initiator handing off
-into a newer copy (or vice versa) lands at the wrong step. The version ceiling is
+target. The target's flow is entered at **Step 3**, and everything from there
+on -- the worker dispatch, the approval gate, **and the apply** (Step 5b runs
+the staged copy's `update_self.py apply`) -- is the target version's. So an
+edit to this skill must preserve that boundary: a future version's Steps 1-2
+must stay "capture a backup, the lease/clean-tree checks, then resolve a ref
+into `$REF`", and its Step 3 must stay the worker dispatch -- otherwise an
+older initiator handing off into a newer copy (or vice versa) lands at the
+wrong step. Because the apply runs from the staged skill-at-target copy, an
+old workspace updating in runs the *target's* apply -- fixes to the apply flow
+take effect for the very update that ships them, which also means the apply
+must keep tolerating older pre-merge trees (guarded imports, no assumptions
+about pre-merge layout). The version ceiling is
 part of resolving `$REF`, so Step 2 computes it from the *local* copy -- which on
 a workspace whose template predates the ceiling does not compute one at all.
 Step 3a therefore re-checks it from the staged target copy before the dispatch,
@@ -270,7 +291,7 @@ machinery, and background-poll.
 ```bash
 mkdir -p data/.tasks/update-self
 tk create "update-self" -t task \
-    --acceptance "worker launched; conflicts triaged; validated; branch merged; revealed"
+    --acceptance "worker launched; conflicts triaged; validated; branch applied"
 ```
 
 Note the ticket id it prints, then start it. The tk hook requires `tk start` /
@@ -376,7 +397,7 @@ Reassure that nothing has been applied and the workspace is untouched.
 
 - **`stuck`** or a dead-worker timeout -> surface via
   `.agents/skills/launch-task/references/worker-failure.md`. Nothing is merged or
-  revealed; the live workspace is untouched. **Don't relay the raw failure, but
+  applied; the live workspace is untouched. **Don't relay the raw failure, but
   don't strip the specifics either** -- this is the one message type where
   technical detail is *preserved, not dropped*, because the user often forwards a
   failure into a bug report and it must stand on its own to whoever reads it next.
@@ -506,334 +527,163 @@ worker's worktree via `.agents/shared/scripts/serve_isolated_instance.py` as its
 own preview tab -- or, when the system interface is also being previewed, link
 it from inside that preview. Skip previews for services that came in clean.
 
-### 5b. Land the merge
+### 5b. Apply the update (one atomic motion)
 
-**When the update touches `system/apps/system_interface/` at all** (merged *or* pulled
-in -- anything that makes 5c run the safe-reveal), first take the
-`editing service system_interface` lease and hold it through the end of 5c,
-exactly as `update-system-interface` Step 4 does: the reveal's auto-rollback
-restores a captured revision, so a foreign merge landing between here and the
-reveal could be swept away by it. Check `tk ready` for another agent's lease
-and surface instead of proceeding if one is held; then `tk create "editing
-service system_interface" -t chore` and `tk start` it (each as its own
-command). Release it (tk close) after 5c.
+**Surface rebuild-only findings before applying.** The apply is deterministic:
+it re-runs the provisioner whenever a provisioner-classified file changed. So
+if the worker's report flags a global-dependency bump coupled to a
+**user-created** dependent (unsafe to hot-apply -- upstream never tested that
+pairing), or a container build/launch parameter a running container cannot
+adopt, stop and put that to the user first: they can take the update knowing
+that piece needs a workspace recreate, defer the whole update, or -- for a
+genuinely breaking case -- take the migration path below. Do not run the apply
+over an unresolved rebuild-only warning.
 
-Capture the rollback revision, then fast-forward the worker branch. It branched
-off this exact `HEAD`, so the merge fast-forwards and **preserves the worker's
-`update-self:` merge commit verbatim** (the marker `assist` relies on):
+**When the update touches `system/apps/system_interface/` at all** (merged
+*or* pulled in), additionally take the `editing service system_interface`
+lease and hold it through the apply, exactly as `update-system-interface`
+Step 4 does -- the apply's auto-rollback restores a captured revision, so a
+foreign system-interface merge landing mid-motion could be swept away by it.
+Check `tk ready` for another agent's lease and surface instead of proceeding
+if one is held; then `tk create "editing service system_interface" -t chore`
+and `tk start` it (each as its own command). Release it after the apply.
 
-```bash
-ROLLBACK_TO=$(git rev-parse HEAD)
-git merge --ff-only mngr/update-self
-```
-
-No fetch is needed first: the worker runs in a linked worktree of this same
-repository, so `mngr/update-self` already exists in the shared ref store (and a
-`git fetch . mngr/update-self:mngr/update-self` would be refused anyway while
-the worker's worktree has the branch checked out).
-
-If the fast-forward is refused, `HEAD` moved under the pass: treat it as stale
-per `.agents/shared/references/harden-contention.md` and re-dispatch off the
-current `HEAD` -- do not hand-resolve.
-
-**Record the version, in the same landing.** Landing an update is what makes the
-workspace a new version, so the entry belongs in the git tree, right here --
-never left to a later turn. The merge sha only exists once the merge has landed,
-so this is a follow-up commit of exactly one file (the worker never writes it --
-only the lead knows the merge sha).
-
-Capture the merge sha **right here** -- immediately after the fast-forward, while
-`HEAD` still is the merge and before the ledger commit moves it:
+Then run the **general apply** -- from the staged skill-at-target copy, so the
+target version's apply logic lands its own release:
 
 ```bash
-MERGE_SHA=$(git rev-parse HEAD)
+python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py apply \
+    --merge-ref mngr/update-self --ff-only --target-ref "$REF"
 ```
 
-Then write the entry directly into `docs/VERSION_HISTORY.md`. There is no helper
-skill -- this block is the whole recording contract, and it owns the format so
-`update-self`, `publish-template`, and `update-published-template` all write
-identical lines. The rules: append-only (existing lines are copied through
-verbatim, never re-flowed); every `## Workspace` line ends in a commit; and a
-retried landing must be a no-op, never a duplicate. Do the three parts below in
-order.
+When the worker's report names its **built system-interface bundle** (it built
+the frontend for the preview), append `--worker-bundle <that path>` -- the
+apply then installs the exact artifact the user previewed instead of spending
+a live build (which remains the fallback).
 
-**Part 1 -- if `docs/VERSION_HISTORY.md` is missing** (deleted since creation),
-recreate the shipped starter first, then append. This heredoc is the canonical
-starter that `publish-template` and `update-published-template` recreate by reference
-to here:
+That one command is the whole landing: there is no agent-prose pause between
+the merge landing and the workspace being consistent with it. It fast-forwards
+the worker's `update-self:` merge commit (preserved verbatim -- the marker
+`assist` relies on), snapshots the pre-apply state (built bundle, root
+`.venv`, both uv tool environments, `node_modules`), refreshes the affected
+environments, re-runs `system/scripts/setup_system.sh` when
+provisioner-classified paths changed (before any restart), installs or builds
+the frontend bundle, pre-flights, restarts the services agent when anything
+restart-requiring changed (system-interface backend, vendored-mngr source,
+`.mngr/settings.toml`, supervisord/bootstrap), probes the live UI to the
+frontend standard, refreshes every open view, writes the
+`docs/VERSION_HISTORY.md` ledger entry, and runs `uv run env-converge upgrade`
+-- all inside a single near-OOM-exempt process that reverts the entire merge
+and restores the snapshots on any failure.
 
-```bash
-[ -f docs/VERSION_HISTORY.md ] || cat > docs/VERSION_HISTORY.md <<'VERSION_HISTORY_EOF'
-# Version history
+Interpret the exit code and report it per the §5a composition rules:
 
-Where this workspace came from, what it has migrated in, what it has published,
-and the templates it has adopted. Entries are appended automatically -- by
-`update-self` when it lands a template update, by `migrate-workspace` when it
-pulls another workspace in, by `publish-template` and
-`update-published-template` when they publish, and by
-`update-installed-template` when it pulls a newer version of an adopted
-template -- and earlier lines are never rewritten. Each Workspace, Migrations,
-and Templates line ends in the commit it was cut from.
+- **`0` -- applied.** The update is landed, recorded in the version history,
+  and the live workspace confirmed healthy; the environment advanced to the
+  merged apt snapshot (summarize the env-converge delta count in plain
+  language). **Read the closing stderr line before signing off**: a workspace
+  whose frontend was already broken beforehand still lands and still exits
+  `0`, but the final line names the breakage instead of confirming health --
+  pass that on as a separate problem, never repackage it as success. A
+  non-fatal warning (the ledger could not be committed, or env-converge
+  failed) also rides on stderr with its own follow-up; carry it out or
+  surface it.
+- **`2` -- automatically rolled back.** The apply reverted the **entire
+  landed merge -- every class, not just the failing one** -- and restored the
+  pre-apply state; the live workspace is confirmed healthy on the previous
+  revision. The requested update did NOT land. See "If the apply rolled back"
+  below for what to tell the user. The same already-broken-frontend variant
+  applies here.
+- **`3` -- emergency.** Even the rollback could not restore a healthy
+  workspace. Escalate immediately; the stderr names the kept pre-apply copies
+  under `data/.state/update-apply/snapshots/` (putting the bundle copy back is
+  a plain file copy needing neither npm nor a registry).
+- **`1` -- precondition; nothing changed.** A dirty tree, a refused
+  fast-forward (`HEAD` moved under the pass -- treat as stale per
+  `.agents/shared/references/harden-contention.md` and re-dispatch off the
+  current `HEAD`, never hand-resolve), another apply in flight, or an
+  interrupted apply of a *different* merge that needs `recover` first.
 
-## Workspace
+**If the apply is interrupted** (your chat crashes, the process is killed):
+nothing is stranded. The apply writes a marker under
+`data/.state/update-apply/` before the merge and updates it per phase, and
+every step tolerates re-entry -- so when you come back, simply **re-run the
+exact same `apply` command**; it resumes from the recorded state. If nobody
+comes back, the workspace heals itself: bootstrap rolls a stale marker back at
+the next container start, and a recovery cron (`recover --if-stale`) does the
+same within minutes for a kill without a restart -- both then leave the
+workspace on the pre-update revision with the worker branch intact.
 
-## Migrations
+### 5c. Carry out the report-driven remainder
 
-## Templates
+The apply covers everything deterministic. What is left is exactly what needs
+the worker's impact analysis, so work the report:
 
-## Adopted templates
-
-Each template this mind has adopted and the version it is on;
-`update-installed-template` appends here when it pulls a newer version.
-VERSION_HISTORY_EOF
-```
-
-`## Migrations` is `migrate-workspace`'s section (one line per workspace pulled
-in); this starter ships it empty so a recreated file already has it, and
-`update-self` never writes there.
-
-**Part 2 -- seed the `## Workspace` origin line if it is absent** -- exactly
-once per workspace, inserted as the FIRST line under `## Workspace` (the oldest
-event, so it never appends at the end). Resolve the template base as the
-**OLDEST** first-parent template-state marker (`^update-self:` or `Initial
-workspace commit`), and resolve its date/version/sha **from that commit itself**
-so seeding late still records when the workspace was actually created:
-
-```bash
-if ! grep -q "created from" docs/VERSION_HISTORY.md; then
-    CREATION=$(git log --first-parent --format='%H %s' HEAD \
-        | awk '{h=$1; sub(/^[^ ]+ /,""); if ($0 ~ /^update-self:/ || $0 == "Initial workspace commit") last=h} END {if (last) print last}')
-    # Fallback (a hand-made or pre-bootstrap repo with no marker): the FIRST-PARENT
-    # root -- never `git rev-list --max-parents=0 HEAD`, whose parallel subtree roots
-    # are not the seed.
-    [ -n "$CREATION" ] || CREATION=$(git rev-list --first-parent HEAD | tail -1)
-    C_DATE=$(git log -1 --format=%ad --date=short "$CREATION")
-    C_SHA=$(git rev-parse --short=7 "$CREATION")
-    C_VERSION=$(git describe --tags --abbrev=0 --match 'minds-v*' "$CREATION" 2>/dev/null)
-    # Then insert `- <C_DATE>  created from <C_VERSION or "the workspace template">
-    # <C_SHA>` as the FIRST line under the `## Workspace` heading, note padded
-    # per Part 3's rule (width 26, but never fewer than two spaces before the
-    # sha -- `created from minds-v0.3.NN` is exactly 26 chars, so a bare
-    # pad-to-26 would land the sha flush against the version).
-fi
-```
-
-**Use `git describe` (reachability), NEVER `git tag --points-at`.** No tag is ever
-*on* a template base: `Initial workspace commit` is an `--allow-empty` commit
-bootstrap writes ON TOP of the cloned template commit, and an `update-self:`
-marker is a merge commit -- in both cases the `minds-v*` tag is on an ancestor, so
-a pointing-at lookup always comes up empty and every origin line would silently
-degrade to the unnamed `created from the workspace template` fallback. (This walk
-takes the **OLDEST** marker -- where the mind *started*. `publish-template`
-§2's `BASE_REF` walk uses the same markers but takes the **NEWEST**; the
-difference is load-bearing.)
-
-**Part 3 -- append the update line.** Under `## Workspace`, after its last
-existing line, append exactly one line of the form:
-
-```
-- <today, YYYY-MM-DD>  updated to <$REF>  <7-char $MERGE_SHA>
-```
-
-Pad the note (`updated to <$REF>`) to width 26 so the sha lines up, and always
-keep at least two spaces between the note and the sha: a note of 26 characters
-or more takes a two-space gap and pushes its own sha right rather than landing
-flush against it. Earlier lines are never re-flowed. Compute the
-sha as `git rev-parse --short=7 "$MERGE_SHA"`. **Idempotence:** if a `##
-Workspace` line already carries this exact note AND this exact 7-char sha, it is
-already recorded -- change nothing and skip the commit below.
-
-Then commit exactly this one file:
-
-```bash
-git add docs/VERSION_HISTORY.md
-git commit -m "version history: updated to $REF"
-```
-
-Stage `docs/VERSION_HISTORY.md` **by name** -- NEVER `git add -A` (it would sweep
-up the mind's unrelated working state), and never a merge, checkout, or reset as
-part of recording. If the idempotence check found the entry already recorded,
-nothing is staged and you skip the commit.
-
-**Pass `$MERGE_SHA`, never `HEAD`.** The append de-duplicates on note + sha, and
-the `git commit` above moves `HEAD` onto the version-history commit: a re-run
-that reaches for `HEAD` would pass a different sha, defeat the no-op, and append
-a second line pointing at the ledger commit instead of the merge. On a re-run,
-re-derive the merge sha rather than re-reading `HEAD`:
-
-```bash
-MERGE_SHA=$(git log --first-parent --grep '^update-self:' -1 --format=%H)
-```
-
-That prints the newest template-state marker -- the merge you just landed -- and
-keeps printing it afterwards, so the whole block is safe to re-run.
-
-**Never give this commit an `update-self:` subject**: that prefix is the
-template-state marker `assist` and `publish-template` §2 resolve `BASE_REF`
-from, it belongs to the merge commit alone, and `$MERGE_SHA` above depends on it
-staying that way.
-
-### 5c. Reveal by change class
-
-The report says which classes merged. Apply each; a clean pull-in is still
-*applied* (its dependent service restarted), only its validation was skipped.
-
-- **`system_interface`** -- reveal via the safe-reveal script (rebuilds `static/`,
-  refreshes deps on a manifest change, pre-flights, health-checks,
-  auto-rolls-back), then tear down any preview:
-
-  ```bash
-  python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py reveal \
-      --rollback-to "$ROLLBACK_TO"
-  python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py unpreview --slug update-self
-  python3 system/scripts/layout.py close si-preview
-  ```
-
-  Exit codes per `update-system-interface` Step 5 (`0` revealed; `2`
-  auto-rolled-back; `3` emergency; `1` precondition). **On exit 2 the rollback
-  reverts `$ROLLBACK_TO..HEAD` -- the entire landed merge, every class, not
-  just the system interface.** Stop here: apply no other class (the tree no
-  longer contains the update), surface the failure, and re-dispatch once the
-  cause is fixed. Exit 3 means the restore itself failed -- surface immediately.
-
-- **`service` / `system/supervisord.conf` / `bootstrap`** -- restart the whole services
-  agent (do not use `supervisorctl reread && update` here), then rebuild the
-  user's view of the workspace, then refresh any affected tab
-  (`python3 system/scripts/layout.py refresh <name>`):
-
-  ```bash
-  mngr start --restart system-services
-  python3 system/scripts/refresh_workspace_view.py
-  ```
-
-  The refresh is not optional. Restarting the services agent bounces the system
-  interface underneath whatever the user has open, and nothing reloads that view
-  on its own: the Minds app only steps in when a workspace looks unreachable for
-  a sustained stretch, which a quick restart never does. Without this the user
-  keeps reading the page the *previous* build rendered. The helper is
-  fire-and-forget and always exits 0 -- it names any channel that did not land
-  on stderr and is never a reason to stop.
-
-- **`editable_tool` (`system/vendor/mngr/**`)** -- `.py` is picked up live; a manifest
-  change needs an env refresh of **both** mngr installs a standard workspace
-  carries: the root venv `uv run mngr` uses (`uv sync --all-packages`) and the
-  uv-managed tool the bare `mngr` on PATH is, which
-  `system/scripts/build_workspace.sh` installs (`uv tool install -e
-  system/vendor/mngr/libs/mngr --reinstall`; check with `uv tool list`). The
-  vendored tree is the whole mngr monorepo, whose root `pyproject.toml` is not
-  installable, so the tool package is its `libs/mngr`. **Re-register the tool's
-  plugins right after that reinstall** -- note them first with `mngr plugin list`,
-  then `mngr plugin add --path system/vendor/mngr/libs/mngr_claude --path
-  system/vendor/mngr/libs/mngr_wait` (plus any others the list showed) --
-  because a reinstall rebuilds the tool environment from the base package alone
-  and drops the plugin packages `build_workspace.sh` registered, leaving an
-  `mngr` that cannot parse its own plugin config and so cannot create agents.
-  Any other `is_manifest` change
-  the report flags (a root-workspace `pyproject.toml` / `uv.lock`) likewise needs
-  `uv sync --all-packages` so the new dependencies resolve.
-
+- **`shared_runtime` live consumers** -- a changed `system/scripts/**`,
+  `system/libs/**`, `system/services/**`, `system/apps/**`, or `.agents/**`
+  file applies to future agents automatically, but the report's impact
+  analysis names any *live* service depending on it that the apply did not
+  already restart. Restart that service (usually `mngr start --restart
+  system-services`, then `python3 system/scripts/refresh_workspace_view.py` so
+  open views reload; skip both when the apply already restarted).
 - **`Dockerfile`** -- apply the live-applicable hunks the report calls out
   (canonically a `CLAUDE_CODE_VERSION` bump -> `CLAUDE_CODE_VERSION=<v> bash
   system/scripts/setup_system.sh`, keeping `agent_types.claude.version` in
   `.mngr/settings.toml` in sync). Tell the user any image-level hunk (base
-  `FROM`, `apt-get` packages, build-time layout) needs a manual workspace rebuild.
+  `FROM`, `apt-get` packages, build-time layout) needs a manual workspace
+  rebuild.
+- **Rebuild-only flags** -- anything the report classified rebuild-only (a
+  `build_arg` / `start_arg` / runtime flag, a user-created dependent of a
+  global bump) is surfaced to the user as needing a workspace recreate; never
+  imply it is already live.
 
-- **`provisioner` (`system/scripts/setup_system.sh`,
-  `system/scripts/install_secret_scanners.sh`, `system/scripts/_provision_guard.sh`,
-  `.mngr/**`)** -- shapes how the workspace image and agents are *provisioned*,
-  not live runtime code, so it doesn't reveal by merely restarting a dependent
-  service the way `shared_runtime` does. Work the report's apply plan by sub-case:
+### If the apply rolled back
 
-  - A **pinned-toolchain bump** in `setup_system.sh` /
-    `install_secret_scanners.sh` (canonically `LATCHKEY_VERSION`, but also `UV_`,
-    `MODAL_`, `TTYD_`, `CADDY_`, `FRP_`, scanner pins) does **not** reach the live
-    workspace on its own -- the globally-installed CLI stays at the old version
-    until a rebuild. Apply it live by re-running the provisioner:
+An exit-2 rollback restored the workspace, but the user still asked for an
+update they did not get -- so the message you compose (per the §5a rules)
+must carry three things, in this order: **the workspace is safe** ("the update
+hit a problem while being applied, so I automatically undid it -- everything
+is back exactly as it was, and nothing is broken"); **what failed**, in plain
+terms, at whatever level of cause the stderr established; and **the way
+forward**. The retry path survives every rollback by design: the worker's
+branch, worktree, and report are all kept, so once the failure is diagnosed
+the re-land is quick -- offer exactly that ("I can look into what went wrong
+and try again once it's fixed"), and never make the user feel the whole pass
+must be redone from scratch. If the closing line said the frontend was already
+broken beforehand, report that as its own problem alongside.
 
-    ```bash
-    bash system/scripts/setup_system.sh
-    ```
+## Migration-required updates
 
-    This now actually runs (rather than skipping): the merge changed the repo
-    tree, so the content-addressed provision guard's marker no longer matches,
-    and the script re-installs the pinned tools idempotently. The report names
-    which pins moved.
+Some updates cannot be applied in place -- the judgment is yours, standardized
+here rather than by any mechanical marker: the release restructures something
+this workspace's live state was built on (a changed data layout with no
+in-place migration, a provisioning change only a fresh container can adopt
+that the workspace genuinely needs), or the worker's `stuck` report shows the
+merge cannot land without breaking the running workspace.
 
-    **Exception -- a bump the report flags as coupled to a *user-created*
-    dependent.** The report says who depends on the bumped dep and classifies it
-    by origin (not directory). If the dependent is **built-in** (its code is in the
-    upstream template -- the same release tested it against the new dep),
-    hot-running the provisioner is safe; apply it live as above. If the dependent
-    is **user-created** (built in this workspace, absent from upstream -- e.g. a
-    `build-app` app under `system/apps/`), do **not** hot-run
-    the provisioner: upstream never tested that code against the new dep and the
-    worker couldn't validate it either, so treat it as **rebuild-only** -- surface
-    it to the user for a workspace recreate (which provisions the new substrate and
-    re-runs the user code against it), exactly as an image-level hunk below.
-  - A hunk that only affects a **fresh image build** -- something the idempotent
-    re-run does not reproduce -- needs a **manual workspace rebuild**; tell the
-    user, exactly as for an image-level `Dockerfile` hunk.
-  - **`.mngr/**` create config** governs `mngr create`, so the merged file
-    governs every *future* create automatically (a fresh workspace, and the
-    sub-agents `launch-task` spawns) -- but the *current* workspace was built and
-    launched under the **old** settings, so a create-time change does not reach it
-    on its own. The worker's report carries a **per-change apply plan** (it
-    best-effort mirrors each change into a live counterpart within the merge);
-    carry it out:
+When that is the verdict, keep the user-facing message high-level -- no path
+tables, no hand-rolled migration plans:
 
-    - **Live-applicable** (most changes, including env vars and agent behavior) --
-      the worker already made the in-repo edits mirroring the change into its live
-      counterpart (an env var into a `profile.d` entry / a supervisord program's
-      `environment=`; a `settings_overrides` / `disable_plugin` change into what
-      the running agent reads; a Claude/toolchain version pin into `setup_system.sh`
-      / the Dockerfile). You run the restart the report names to make them take
-      effect: re-run the provisioner for a mirrored toolchain pin, and/or `mngr
-      start --restart system-services` (or a relaunch of the affected agent) so the
-      next process start reads it. Keep lockstep pins (`agent_types.claude.version`
-      vs the Dockerfile `CLAUDE_CODE_VERSION` and the installed binary) consistent.
-    - **Rebuild-only for the current workspace** (the narrow remainder) -- only a
-      container build/launch parameter an already-running container can't adopt: a
-      `[create_templates.*]` / `[providers.*]` `build_arg`, `start_arg`
-      (`--security-opt`, `--tmpfs`, `--cpus`, …), or runtime flag (`runsc` /
-      `docker_runtime`). Flag it to the user as needing a workspace recreate,
-      exactly as an image-level `Dockerfile` hunk; don't imply it is already live.
+> This update contains fundamental changes that can't be directly applied to a
+> running workspace. To take it: (1) create a new workspace, then (2) message
+> its agent `/migrate-workspace <this workspace's name>` -- it will pull your
+> work, apps, and settings across.
 
-    (A change the worker judged neither live-applicable nor safe to defer to a
-    rebuild comes back as `stuck`, handled in Step 5's terminal status -- nothing
-    is landed.)
-
-- **`shared_runtime` (`system/scripts/**` other than the provisioning scripts above,
-  `system/libs/**`, `system/services/**`, `system/apps/**`, `.agents/**`)** -- applies to
-  future agents automatically unless a live service depends on the file. The
-  report's impact analysis names any live consumer; restart that service
-  (usually `mngr start --restart system-services`, followed by
-  `python3 system/scripts/refresh_workspace_view.py` for the same reason as
-  above). Only "nothing to reveal" when the analysis found none.
-
-## 5c. Advance the environment (bundled, not optional)
-
-update-self is the one moment package versions are allowed to move: the merged
-template carries a (possibly newer) committed apt snapshot timestamp in
-`.mngr/apt-snapshot-timestamp`, and the environment stays pinned to the OLD
-timestamp until explicitly advanced. After the merge has landed and revealed,
-run:
-
-```bash
-uv run env-converge upgrade
-```
-
-This re-renders the pinned apt sources at the new timestamp, `apt-get
-full-upgrade`s against that frozen universe, re-runs the `system/scripts/env.d/`
-units (whose pins may have advanced with the template), re-captures the
-environment record, and prints the package-version deltas as JSON. Summarize
-the delta count for the user in plain language ("system packages moved to the
-newer pinned snapshot; N changed"). If the timestamp did not change, the
-command is a cheap no-op pass -- run it anyway so unit-pin bumps still apply.
+If a newer in-place-compatible release **also** exists (the incompatibility
+starts at some later version), offer both in the same breath: "I can apply
+<X> now; <Y> needs the fresh-workspace migration." Resolve targets with
+`--override` to land the compatible one if the user takes that option.
 
 ## 6. Teardown
 
-If you previewed a non-system_interface service in 5a, tear that preview down
-too: stop its isolated instance and close its tab
+**Only after a successful apply (exit 0).** After a rollback the retry path is
+the worker: its branch, worktree, and report are what make a diagnosed retry a
+quick re-land, so do not destroy the worker or consume the report until the
+retry is resolved with the user (release the leases either way, so another
+pass is not blocked while you wait).
+
+If you tore into a preview in 5a (the system interface, or another service),
+tear it down: `unpreview` / stop its isolated instance and close its tab
 (`python3 system/scripts/layout.py close <name>`).
 Then:
 
@@ -849,10 +699,13 @@ launch` refuses to start a worker while a leftover report sits at the report
 path (a stale one would satisfy the next pass's `await` instantly), so skipping
 this breaks the next update-self pass until someone cleans it up.
 
-Close the tracking ticket last (its own tool call, nothing chained):
+Release the leases and close the tracking ticket last (each its own tool call,
+nothing chained): `tk close` the `editing service system_interface` lease if
+5b took one, then the `updating workspace` lease
+(`tk close "$UPDATE_LEASE_ID" "Update pass finished."`), then:
 
 ```bash
-tk close <ticket-id> "Updated to <ref> -- worker branch merged and revealed."
+tk close <ticket-id> "Updated to <ref> -- worker branch merged and applied."
 ```
 
 ## To push local improvements back upstream

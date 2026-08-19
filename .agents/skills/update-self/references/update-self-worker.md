@@ -123,9 +123,9 @@ the merge.
 
 **Do not touch `docs/VERSION_HISTORY.md`.** The workspace's version entry records the
 *merge commit sha*, which does not exist until the lead fast-forwards onto your
-branch, so the lead appends it (per its own inlined recording block) as part of
-landing -- see the `update-self` skill's Step 5b. A line written here would carry
-the wrong sha and would conflict with the lead's.
+branch, so the apply script (`update_self.py apply`, run by the lead) writes it
+as part of landing -- see the `update-self` skill's Step 5b. A line written here
+would carry the wrong sha and would conflict with the apply's.
 
 ## 4. Classify and validate the merged set
 
@@ -337,7 +337,12 @@ tests, or exercise its scripts -- and called out in the report.
   system interface, build it in your worktree (`cd system/apps/system_interface && uv
   sync && npm run build`) so your work_dir is a built instance the lead can
   preview, then drive it per
-  `.agents/shared/worker/references/web-frontend-testing.md`.
+  `.agents/shared/worker/references/web-frontend-testing.md`. That built bundle
+  is also what the lead's apply installs live (`--worker-bundle`), so the exact
+  artifact the user previewed is what ships -- name its location in your report
+  (see §6). Your `npm ci` / `uv sync` runs here also pre-warm the shared uv and
+  npm caches, which the live apply's own refresh then reuses, so the live
+  motion is faster and less network-dependent than a cold one.
 
 ### 4c. Review gates
 
@@ -424,6 +429,13 @@ Per `.agents/shared/references/worker-reporting.md` (`<TASK_FILE_GLOB>` ->
     service: "none" (upstream strictly newer, clean pull) or "nontrivial" with a
     sentence on what had to be reconciled. The lead previews a surface if and
     only if you judged its merge work nontrivial, so judge this explicitly.
+  - **Built system-interface bundle** -- when you built the system interface
+    (for validation or the preview), the absolute path of the built bundle in
+    your worktree
+    (`<your work_dir>/system/apps/system_interface/imbue/system_interface/static`).
+    The lead passes it to the apply as `--worker-bundle`, so the artifact the
+    user previewed is the one installed live. Omit the field when you did not
+    build (the apply falls back to a live build).
   - **Impact analysis** -- the impacted services and skills from 4a, what you
     checked and how, and which services the lead must restart.
   - **Dockerfile split** (if it merged) -- each hunk as live-applicable (e.g. a
