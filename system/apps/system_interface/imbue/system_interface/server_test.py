@@ -63,6 +63,7 @@ from imbue.system_interface.server import _DEFAULT_TAIL_COUNT
 from imbue.system_interface.server import _FORWARD_PORT_SCRIPT
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_ARGV
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_COMMAND
+from imbue.system_interface.server import _NOT_BUILT_REPAIR_MNGR_COMMAND
 from imbue.system_interface.server import _agent_switch_options
 from imbue.system_interface.server import _build_destroy_command
 from imbue.system_interface.server import _build_fast_mode_answered_label_command
@@ -258,19 +259,29 @@ def test_not_built_repair_command_is_the_one_the_app_runs_for_a_chat() -> None:
         assert argv[argv.index(flag) + 1] == real[real.index(flag) + 1]
     assert "user_created=true" in real
 
-    # ``--no-connect`` is the one flag deliberately dropped: it exists to stop a
+    # ``--no-connect`` is the one flag deliberately inverted: it exists to stop a
     # headless caller attaching, and a reader typing this wants to land in the
     # conversation.
     assert "--no-connect" in real
+    assert "--connect" in argv
     assert "--no-connect" not in argv
 
-    # The name is fixed, so a second run must rejoin the first agent rather than
-    # fail on the name -- the page can be reloaded, or open in two tabs at once.
-    assert "--reuse" in argv
+    # No agent name, so mngr mints one and nothing collides with an earlier run.
+    # The whole line has to stay flags-only for that: a stray bare word would be
+    # read as the name and put the collision back.
+    assert argv[:2] == ["mngr", "create"]
+
+    # The message is what makes the created agent useful without the reader
+    # having to describe anything, so it has to survive the shell as one word of
+    # plain prose -- an escape dropped from the line above splits it into several
+    # words, or leaves the escapes themselves in what the agent is told.
+    assert argv[argv.index("--message") + 1] == (
+        "i'm seeing \"this workspace's interface needs to be rebuilt, can you fix it?\""
+    )
 
     # The shell prefix is not part of the argv the CLI validates, but it is what
     # makes the connect half work from the workspace's own tmux-backed terminals.
-    assert _NOT_BUILT_REPAIR_COMMAND == "env -u TMUX " + " ".join(argv)
+    assert _NOT_BUILT_REPAIR_COMMAND == "env -u TMUX " + _NOT_BUILT_REPAIR_MNGR_COMMAND
 
 
 def test_assets_404_rather_than_falling_through_to_the_spa_shell(tmp_path: Path) -> None:

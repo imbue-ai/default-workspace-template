@@ -1,6 +1,7 @@
 import json
 import os
 import queue
+import shlex
 import socket
 import threading
 import time
@@ -121,33 +122,38 @@ _NOT_BUILT_POLL_SECONDS = 10
 # runs for a chat -- ``--transfer none`` so the agent works in the workspace tree
 # rather than a worktree of it, ``--template chat`` for the shared work directory
 # and output style, and the ``user_created`` label that puts it in the dynamic
-# chat memory band. It deliberately omits that builder's ``--no-connect``, whose
-# whole purpose is to keep a headless caller from attaching: someone typing this
-# wants the opposite, and connecting (the CLI default) is what turns the create
-# into a conversation.
+# chat memory band. Where it differs from that builder:
 #
-# ``--reuse`` because the name is fixed. A second run -- after a reload, from a
-# second tab, or just because the first attempt did not finish -- should return
-# to the same repair conversation rather than fail on the name or start over
-# beside it with none of the context.
+# ``--connect`` instead of its ``--no-connect``, which exists to keep a headless
+# caller from attaching. Someone typing this wants the opposite, and connecting
+# is what turns the create into a conversation. Spelled out rather than left to
+# the CLI default so the line says what it does to a reader who has no interface
+# to check it against.
+#
+# ``--message`` so the agent opens already knowing what the reader is looking at.
+# It quotes the page's own heading, which is the one detail a reader on this page
+# can be certain of and the one the agent can act on without being told anything
+# else.
+#
+# No name, so mngr mints one. A reload, a second tab, or a first attempt that did
+# not finish therefore starts a fresh conversation rather than rejoining an
+# earlier one.
+#
+# Written as the shell line a reader sees and copies, because that string is the
+# artifact; the argv is derived from it by the same parse a shell performs, so
+# what is offered cannot drift from what runs. Quoted with ``"`` rather than as
+# ``shlex.join`` would (``'i'"'"'m ...``): the message carries apostrophes, and
+# this is the one line on the page a reader has to be able to read in full.
 #
 # Kept in sync with that builder by ``server_test.py``, which also validates it
 # against the live CLI. It is a suggestion, not a dispatch: the server never
 # runs it, so an agent is created only if the reader decides to.
-_NOT_BUILT_REPAIR_ARGV: Final[tuple[str, ...]] = (
-    "mngr",
-    "create",
-    "repair",
-    "--reuse",
-    "--type",
-    "claude",
-    "--template",
-    "chat",
-    "--transfer",
-    "none",
-    "--label",
-    "user_created=true",
+_NOT_BUILT_REPAIR_MNGR_COMMAND: Final[str] = (
+    "mngr create --connect --type claude --template chat --transfer none --label user_created=true "
+    '--message "i\'m seeing \\"this workspace\'s interface needs to be rebuilt, can you fix it?\\""'
 )
+
+_NOT_BUILT_REPAIR_ARGV: Final[tuple[str, ...]] = tuple(shlex.split(_NOT_BUILT_REPAIR_MNGR_COMMAND))
 
 # ``mngr connect`` refuses to attach from inside tmux unless ``is_nested_tmux_allowed``
 # is set (see ``mngr.api.connect``, which gates purely on ``$TMUX``), and it is the
@@ -156,7 +162,7 @@ _NOT_BUILT_REPAIR_ARGV: Final[tuple[str, ...]] = (
 # an error instead of a conversation. Dropping ``TMUX`` for this one command is
 # exactly what mngr does for itself once the check passes, and scoping it with
 # ``env -u`` leaves the reader's own shell alone.
-_NOT_BUILT_REPAIR_COMMAND = "env -u TMUX " + " ".join(_NOT_BUILT_REPAIR_ARGV)
+_NOT_BUILT_REPAIR_COMMAND: Final[str] = "env -u TMUX " + _NOT_BUILT_REPAIR_MNGR_COMMAND
 
 # Served in place of the app whenever the compiled bundle is missing. The bundle
 # is gitignored build output, so a code refresh that replaces the tree can leave
@@ -225,8 +231,8 @@ _FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
   <p>The compiled interface is missing, so there is nothing to show yet. Your
      work and your agents are untouched -- only the interface itself is gone,
      and this page returns to the interface on its own once it is back.</p>
-  <p>If you would rather not work the repair out yourself, create an agent and
-     tell it what you see here:</p>
+  <p>If you would rather not work the repair out yourself, this creates an agent
+     and tells it what you are looking at:</p>
   <div id="repair">
     <pre id="repair-command">__REPAIR_COMMAND__</pre>
     <!-- Hidden until the script confirms it can actually copy, so the page
