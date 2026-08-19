@@ -35,7 +35,11 @@ invariants itself.
   newline-terminated lines (a snapshot exceeding the atomic-append size can leave
   a half-written tail, which is left in place and picked up once the writer
   finishes it), re-seeds at the newest snapshot if the file is truncated or
-  replaced, and refuses to start at all when no process holds the lock --
+  replaced, and seeds from a single scan of the file -- the snapshot lookup and
+  the tail boundary must describe the same file state, or a snapshot the live
+  writer appends between two separate lookups is silently skipped and the
+  follower drops everything until the next one. It refuses to start at all when
+  no process holds the lock --
   silently tailing a dormant file is the failure it exists to prevent. It is
   single-use, and says so: starting a follower that is already running would
   forward every line twice, and starting a stopped one would leave a thread that

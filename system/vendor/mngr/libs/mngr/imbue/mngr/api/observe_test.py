@@ -39,6 +39,7 @@ from imbue.mngr.api.observe import ObserveStreamUnavailableError
 from imbue.mngr.api.observe import _TrackedState
 from imbue.mngr.api.observe import _details_instance_key
 from imbue.mngr.api.observe import _make_unknown_agent_details
+from imbue.mngr.api.observe import _scan_last_snapshot_and_boundary
 from imbue.mngr.api.observe import acquire_observe_lock
 from imbue.mngr.api.observe import append_agent_state_change_event
 from imbue.mngr.api.observe import append_observe_event
@@ -1539,6 +1540,29 @@ def test_offset_scan_ignores_a_half_written_snapshot(temp_host_dir: Path) -> Non
         f.write(torn[: len(torn) // 2])
 
     assert find_last_full_state_offset(events_path) == complete_offset
+
+
+def test_seed_scan_answers_snapshot_and_boundary_from_one_pass(temp_host_dir: Path) -> None:
+    """The seed's two answers must describe the same file state.
+
+    The file has a live writer, so looking up "is there a snapshot?" and "where
+    does the tail start?" separately loses any snapshot appended between the two
+    lookups: the boundary lands past it, and a follower seeded that way drops
+    every event until the writer's next snapshot. One scan answers both, with the
+    boundary at the end of the last complete line -- not inside a torn tail.
+    """
+    events_path = get_observe_events_path(temp_host_dir)
+    agent = make_test_agent_details(name="scan-agent", state=AgentLifecycleState.RUNNING)
+    append_observe_event(temp_host_dir, make_agent_state_event(agent))
+    snapshot_offset = events_path.stat().st_size
+    append_observe_event(temp_host_dir, make_full_agent_state_event([agent]))
+    append_observe_event(temp_host_dir, make_agent_state_event(agent))
+    boundary = events_path.stat().st_size
+    torn = json.dumps(make_full_agent_state_event([agent]).model_dump(mode="json"), separators=(",", ":"))
+    with open(events_path, "a") as f:
+        f.write(torn[: len(torn) // 2])
+
+    assert _scan_last_snapshot_and_boundary(events_path) == (snapshot_offset, boundary)
 
 
 def test_follower_forwards_events_appended_after_it_caught_up(temp_host_dir: Path) -> None:

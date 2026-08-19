@@ -74,9 +74,6 @@ _WATCH_POLL_SECONDS: Final[float] = 1.0
 # line through ``json.loads``. Only lines containing the literal type token are
 # parsed to confirm they really are full-state snapshots.
 _FULL_STATE_MARKER: Final[bytes] = b'"AGENTS_FULL_STATE"'
-# Block size for the backwards scan that finds the last complete line. One block
-# covers a typical event line many times over, so the scan almost always reads once.
-_LINE_SCAN_BLOCK_BYTES: Final[int] = 65536
 # How often a follower re-reads the tail of the event file (and re-checks that the
 # writing observer is still alive). The observer emits on agent activity and every
 # FULL_STATE_INTERVAL_SECONDS otherwise, so this is far finer-grained than the
@@ -370,51 +367,43 @@ def find_last_full_state_offset(events_path: Path) -> int | None:
     distinct from None, which says the file is there and holds no snapshot yet: a
     caller may reasonably wait for the second and not the first.
     """
-    last_offset: int | None = None
+    return _scan_last_snapshot_and_boundary(events_path)[0]
+
+
+def _scan_last_snapshot_and_boundary(events_path: Path) -> tuple[int | None, int]:
+    """One pass over ``events_path``: the last complete snapshot's offset (or
+    None), and the offset just past the last complete line.
+
+    One pass rather than two lookups because the file has a live writer: with
+    separate scans, a snapshot appended between "is there a snapshot?" (no) and
+    "where does the tail start?" lands *before* the answered boundary and is
+    silently skipped -- and a follower seeded that way drops every event until the
+    writer's next snapshot. A single pass cannot see the file in two different
+    states, so whatever it misses is at or past the boundary it answers.
+    """
+    last_snapshot_offset: int | None = None
     offset = 0
+    end_of_last_complete_line = 0
     with open(events_path, "rb") as handle:
         for raw_line in handle:
             # Only a newline-terminated line is complete. Iterating a file yields
             # a concurrent writer's half-written tail as a final unterminated
             # "line", which a snapshot exceeding the atomic-append size hits
             # routinely (see ``_append_event_to_file``). Skipping it leaves
-            # ``last_offset`` on the previous snapshot -- where a fold should start
-            # anyway, since replaying forward reaches this line once the writer
-            # has finished it.
+            # ``last_snapshot_offset`` on the previous snapshot -- where a fold
+            # should start anyway, since replaying forward reaches this line once
+            # the writer has finished it.
             #
             # The byte-level marker test keeps this whole-file scan from running
             # every line through ``json.loads``; only candidates are decoded.
-            if (
-                raw_line.endswith(b"\n")
-                and _FULL_STATE_MARKER in raw_line
-                and _is_full_state_line(raw_line.decode("utf-8", errors="replace"))
-            ):
-                last_offset = offset
-            offset += len(raw_line)
-    return last_offset
-
-
-def _find_last_line_boundary(events_path: Path) -> int:
-    """Byte offset just past the last newline, or 0 if the file has none.
-
-    Where to start reading when only *new* lines are wanted: seeking to the raw
-    file size can land inside a line the writer has not finished, and the
-    remainder would then be read as though it were a whole line.
-
-    Scans backwards a block at a time, so the common case (a newline within the
-    last few hundred bytes) reads one block rather than the whole history.
-    """
-    with open(events_path, "rb") as handle:
-        position = handle.seek(0, os.SEEK_END)
-        while position > 0:
-            block_start = max(0, position - _LINE_SCAN_BLOCK_BYTES)
-            handle.seek(block_start)
-            block = handle.read(position - block_start)
-            newline_index = block.rfind(b"\n")
-            if newline_index != -1:
-                return block_start + newline_index + 1
-            position = block_start
-    return 0
+            if raw_line.endswith(b"\n"):
+                if _FULL_STATE_MARKER in raw_line and _is_full_state_line(raw_line.decode("utf-8", errors="replace")):
+                    last_snapshot_offset = offset
+                offset += len(raw_line)
+                end_of_last_complete_line = offset
+            else:
+                offset += len(raw_line)
+    return last_snapshot_offset, end_of_last_complete_line
 
 
 def load_base_state_from_history(
@@ -828,7 +817,11 @@ class ObserveEventFollower(MutableModel):
         if not events_path.exists():
             self._offset = 0
             return
-        snapshot_offset = find_last_full_state_offset(events_path)
+        # Both answers come from one scan (see ``_scan_last_snapshot_and_boundary``):
+        # a snapshot the live writer appends after that scan sits at or past the
+        # boundary, so the drain below -- or the next tick's -- picks it up rather
+        # than losing it in the gap between two separate lookups.
+        snapshot_offset, boundary = _scan_last_snapshot_and_boundary(events_path)
         if snapshot_offset is None:
             # No snapshot has ever been written. Skip the existing history (it
             # cannot be folded from) and wait at the tail; ``_has_seen_snapshot``
@@ -840,7 +833,7 @@ class ObserveEventFollower(MutableModel):
             # as corruption -- the one thing ``_is_full_state_line`` promises not to
             # cry wolf about. Every other offset this class sets is already on a
             # boundary, so this was the lone exception.
-            self._offset = _find_last_line_boundary(events_path)
+            self._offset = boundary
             return
         self._offset = snapshot_offset
         self._drain()
