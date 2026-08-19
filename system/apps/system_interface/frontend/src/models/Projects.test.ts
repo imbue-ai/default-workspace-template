@@ -78,7 +78,6 @@ const EMPTY_INVENTORY: MachineInventory = {
   terminals: [],
   browsers: [],
   apps: [],
-  urlTabs: [],
 };
 
 afterEach(() => {
@@ -544,7 +543,6 @@ describe("buildEverythingMembers", () => {
       terminals: [{ name: "build", label: "build" }],
       browsers: [{ name: "quiet-otter", label: "Browser quiet-otter" }],
       apps: [{ name: "web", label: "web" }],
-      urlTabs: [{ name: "9f86d081", label: "Release notes" }],
     };
 
     expect(buildEverythingMembers(inventory, {})).toEqual([
@@ -552,7 +550,6 @@ describe("buildEverythingMembers", () => {
       { ref: "terminal:build", kind: "terminal", label: "build", projectIds: [] },
       { ref: "service:browser?session=quiet-otter", kind: "browser", label: "Browser quiet-otter", projectIds: [] },
       { ref: "service:web", kind: "app", label: "web", projectIds: [] },
-      { ref: "url:9f86d081", kind: "url", label: "Release notes", projectIds: [] },
     ]);
   });
 
@@ -601,20 +598,20 @@ describe("buildEverythingMembers", () => {
   });
 
   it("collapses a duplicate onto the first row for it", () => {
-    // Two layouts can host a tab for the same ad-hoc URL; Everything lists it
-    // once.
+    // A source that reports the same object twice -- a fleet listing mid-
+    // refresh, say -- must not make Everything list it twice.
     const rows = buildEverythingMembers(
       {
         ...EMPTY_INVENTORY,
-        urlTabs: [
-          { name: "9f86d081", label: "Release notes" },
-          { name: "9f86d081", label: "Release notes (other pane)" },
+        terminals: [
+          { name: "build", label: "build" },
+          { name: "build", label: "build (again)" },
         ],
       },
       {},
     );
 
-    expect(rows).toEqual([{ ref: "url:9f86d081", kind: "url", label: "Release notes", projectIds: [] }]);
+    expect(rows).toEqual([{ ref: "terminal:build", kind: "terminal", label: "build", projectIds: [] }]);
   });
 
   it("skips an object the machine reported with no name", () => {

@@ -154,7 +154,6 @@ import {
   removePanelFromAllProjects,
   shareMember,
   type MachineInventory,
-  type MachineObject,
   type ProjectInfo,
 } from "../models/Projects";
 
@@ -1699,13 +1698,13 @@ function refreshMachineInventory(): void {
  * project at all still shows up. Names are the identity each kind's ref is
  * built from -- a chat's stable agent id, a tmux session, a fleet browser's
  * session name, a service name -- and never the display label.
+ *
+ * Every source here is a fleet or a registry, which is why the four kinds
+ * below are all of them: an ad-hoc URL page has no such source to be
+ * enumerated from, only the panel showing it, and is not a member at all (see
+ * ``memberRefForPanelParams``).
  */
 function machineInventory(): MachineInventory {
-  const urlTabs: MachineObject[] = [];
-  for (const [panelId, ref] of memberRefByPanelId) {
-    if (memberKindFromRef(ref) !== "url") continue;
-    urlTabs.push({ name: memberRefBody(ref), label: panelParams.get(panelId)?.title ?? "Page" });
-  }
   return {
     chatAgents: getAgents().map((agent) => ({ name: agent.id, label: chatDisplayName(agent) })),
     terminals: terminalFleet.map((terminal) => ({
@@ -1714,7 +1713,6 @@ function machineInventory(): MachineInventory {
     })),
     browsers: browserFleet.map((browser) => ({ name: browser.id, label: browserDisplayName(browser.id) })),
     apps: pickableApps().map((app) => ({ name: app.name, label: app.name })),
-    urlTabs,
   };
 }
 
