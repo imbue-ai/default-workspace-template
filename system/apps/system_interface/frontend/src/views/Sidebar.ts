@@ -29,19 +29,17 @@
 import m from "mithril";
 import { getPrimaryAgentId } from "../base-path";
 import type { AppEntry } from "../models/AgentManager";
-import { displayNameForMember } from "../models/MemberTitles";
 import {
   EVERYTHING_VIEW_ID,
   EVERYTHING_VIEW_NAME,
   chatAgentIdFromRef,
   createProject,
   isEverythingView,
-  memberRef,
   searchMembers,
   serviceNameFromRef,
 } from "../models/Projects";
 import type { MatchRange, MemberKind, ProjectInfo } from "../models/Projects";
-import { AllAppsPicker, pickableApps } from "./AllAppsPicker";
+import { AllAppsPicker, appDisplayName, pickableApps } from "./AllAppsPicker";
 import { appIconMarkup, serviceIconMarkup } from "./appIcon";
 import { hoverTooltipAttrs } from "./hoverTooltip";
 import { icon } from "./icons";
@@ -767,10 +765,10 @@ export function Sidebar(): m.Component<SidebarAttrs> {
    *  `expanded` the same as the tab list's own trailing controls: collapsed,
    *  the row is icon-only and has nothing to reveal a control onto. */
   function pinnedAppRow(app: AppEntry, attrs: SidebarAttrs): m.Vnode {
-    // An app renamed anywhere is renamed here too: the shortcut and the tab
-    // list are two views of one object, so they must not disagree about what
-    // it is called.
-    const label = displayNameForMember(memberRef("app", app.name), app.name);
+    // An app renamed anywhere is renamed here too: the shortcut, the tab list
+    // and the All apps popover are three views of one object, so they read the
+    // one definition of what it is called rather than each keeping its own.
+    const label = appDisplayName(app);
     return m(
       "span",
       { key: `app:${app.name}`, class: "flex w-full shrink-0", ...hoverTooltipAttrs(label, "right") },
@@ -796,7 +794,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
                     "project-rail-pin flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded " +
                     "text-text-faint opacity-0 hover:bg-bg-hover hover:text-text-primary " +
                     "focus-visible:opacity-100 group-hover:opacity-100",
-                  "aria-label": `Unpin ${app.name}`,
+                  "aria-label": `Unpin ${label}`,
                   ...hoverTooltipAttrs(
                     "Unpins it here only. It keeps running, and stays in every other project showing it.",
                     "right",
