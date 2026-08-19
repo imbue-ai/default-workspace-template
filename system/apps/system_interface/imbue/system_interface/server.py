@@ -98,6 +98,8 @@ from imbue.system_interface.models import ShoulderTapAtomicResponse
 from imbue.system_interface.models import StartAgentResponse
 from imbue.system_interface.models import TerminalSessionInfo
 from imbue.system_interface.plugins import get_plugin_manager
+from imbue.system_interface.update_staleness import UPDATE_STALENESS_HEADER
+from imbue.system_interface.update_staleness import UPDATE_STALENESS_META_TAG
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 _LOOPBACK_CLIENT_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
@@ -356,8 +358,29 @@ def _inject_feature_flag_meta_tags(html_content: str) -> str:
     return html_content.replace("</head>", f"{meta_tags}\n</head>")
 
 
+def _inject_update_staleness_meta_tag(html_content: str, staleness: str | None) -> str:
+    """Inject the update-staleness variant so the frontend can render its banner.
+
+    Injected only when stale: the banner keys off the tag's presence, and a
+    consistent workspace's shell carries no tag at all.
+    """
+    if staleness is None:
+        return html_content
+    meta_tag = f'<meta name="{UPDATE_STALENESS_META_TAG}" content="{staleness}">'
+    return html_content.replace("</head>", f"{meta_tag}\n</head>")
+
+
+def _stamp_update_staleness(response: Response, staleness: str | None) -> Response:
+    if staleness is not None:
+        response.headers[UPDATE_STALENESS_HEADER] = staleness
+    return response
+
+
 def _index() -> Response:
     index_path = STATIC_DIRECTORY / "index.html"
+    # Asked per shell request (a page load), so a tree that moved -- or an
+    # apply marker that appeared -- after this process started is still seen.
+    staleness = get_state().update_staleness.staleness()
     if index_path.exists():
         config: Config = get_state().config
         root_path = (request.script_root or "").rstrip("/")
@@ -366,10 +389,13 @@ def _index() -> Response:
         html_content = _inject_hostname_meta_tag(html_content)
         html_content = _inject_agent_id_meta_tag(html_content)
         html_content = _inject_feature_flag_meta_tags(html_content)
+        html_content = _inject_update_staleness_meta_tag(html_content, staleness)
         if config.javascript_plugin_basenames:
             html_content = _inject_plugin_script_tags(html_content, config.javascript_plugin_basenames, root_path)
-        return _shell_response(html_content, is_frontend_built=True)
-    return _frontend_not_built_response()
+        return _stamp_update_staleness(
+            _shell_response(html_content, is_frontend_built=True), staleness
+        )
+    return _stamp_update_staleness(_frontend_not_built_response(), staleness)
 
 
 def _frontend_not_built_response() -> Response:

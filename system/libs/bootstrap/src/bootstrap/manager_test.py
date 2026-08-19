@@ -16,6 +16,8 @@ from mngr_cli_contract.contract import assert_mngr_argv_valid
 
 from bootstrap.manager import (
     INITIAL_CHAT_AGENT_ID_FILENAME,
+    UPDATE_APPLY_MARKER,
+    UPDATE_APPLY_SCRIPT,
     TimezoneFetchError,
     _apply_container_timezone,
     _build_create_chat_command,
@@ -29,6 +31,8 @@ from bootstrap.manager import (
     _persist_initial_chat_agent_id,
     _read_host_name,
     _read_main_agent_labels,
+    _read_update_marker_dri_agent,
+    _recover_interrupted_update,
 )
 
 # --- _configure_git_global ---
@@ -716,3 +720,107 @@ def test_parse_timezone_response_rejects_wrong_shapes(body: bytes) -> None:
 def test_parse_timezone_response_rejects_a_non_json_body() -> None:
     with pytest.raises(ValueError):
         _parse_timezone_response(b"<html>bad gateway</html>")
+
+
+# --- _recover_interrupted_update ---
+
+
+class _RecordingSubprocess:
+    """Capture-and-replay double for subprocess.run used by the recovery path.
+
+    ``on_recover`` (when set) runs when the recover invocation is seen -- used
+    to model the script clearing the marker on a successful rollback.
+    """
+
+    def __init__(self, returncode: int = 0) -> None:
+        self.returncode = returncode
+        self.calls: list[list[str]] = []
+        self.on_recover = None
+
+    def run(self, cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        del kwargs
+        self.calls.append(cmd)
+        if "recover" in cmd and self.on_recover is not None:
+            self.on_recover()
+        return subprocess.CompletedProcess(
+            args=cmd, returncode=self.returncode, stdout="", stderr=""
+        )
+
+
+def _write_apply_marker(dri_agent: str = "the-lead") -> None:
+    UPDATE_APPLY_MARKER.parent.mkdir(parents=True, exist_ok=True)
+    UPDATE_APPLY_MARKER.write_text(json.dumps({"dri_agent": dri_agent, "phase": "merged"}))
+
+
+def test_read_update_marker_dri_agent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert _read_update_marker_dri_agent() == ""  # no marker
+    _write_apply_marker("agent-omega")
+    assert _read_update_marker_dri_agent() == "agent-omega"
+    UPDATE_APPLY_MARKER.write_text("not json {")
+    assert _read_update_marker_dri_agent() == ""  # corrupt marker degrades
+
+
+def test_recover_skips_entirely_without_a_marker(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    stub = _RecordingSubprocess()
+    monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
+
+    _recover_interrupted_update()
+
+    assert stub.calls == []
+
+
+def test_recover_rolls_back_and_wakes_the_dri_agent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_apply_marker("agent-omega")
+    stub = _RecordingSubprocess()
+    # A successful recovery clears the marker; that clearing is what tells the
+    # bootstrap a rollback really happened (vs the guard's silent no-op).
+    stub.on_recover = lambda: UPDATE_APPLY_MARKER.unlink()
+    monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
+
+    _recover_interrupted_update()
+
+    recover_call = stub.calls[0]
+    assert recover_call[:2] == ["python3", str(UPDATE_APPLY_SCRIPT)]
+    assert "recover" in recover_call
+    # The boot path: disk state only, with the script's own staleness guard.
+    assert "--no-restart" in recover_call
+    assert "--if-stale" in recover_call
+    # The DRI agent named in the marker is started and handed the finding.
+    assert ["mngr", "start", "agent-omega"] == stub.calls[1]
+    assert stub.calls[2][:3] == ["mngr", "message", "agent-omega"]
+
+
+def test_recover_does_not_wake_anyone_when_the_guard_noops(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The marker surviving the recover call means the guard declined to act
+    # (e.g. the apply is live again); nothing was rolled back, so nobody is
+    # messaged about a rollback.
+    monkeypatch.chdir(tmp_path)
+    _write_apply_marker("agent-omega")
+    stub = _RecordingSubprocess()
+    monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
+
+    _recover_interrupted_update()
+
+    assert len(stub.calls) == 1  # only the recover invocation, no mngr calls
+
+
+def test_recover_failure_does_not_wake_or_raise(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_apply_marker("agent-omega")
+    stub = _RecordingSubprocess(returncode=1)
+    monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
+
+    _recover_interrupted_update()  # must not raise: boot continues regardless
+
+    assert len(stub.calls) == 1
