@@ -93,18 +93,22 @@ iframe/panel for arranging the workspace.
 
 The workspace shows one _view_ at a time: a project, or Everything. The
 machine holds a single pool of objects -- chat agents, terminal
-sessions, browsers, registered apps, and ad-hoc URL pages -- and a
-project is a filter over that pool plus its own dockview arrangement.
-Membership is an explicit list of member refs (`chat:<agent-id>`,
-`terminal:<name>`, `service:<name>`, `service:browser?session=<name>`,
-`url:<hash>`) kept separately from the layout, and it is many-to-many:
-the same object can be in any number of projects at once, nothing owns
-anything, and there is no "move". A member with no panel is
-_backgrounded_ -- still running, still listed in the rail -- so closing
-a tab never stops the underlying object or changes membership. "Remove
-from project" hides an object in that one view only; only the
-destructive per-kind verbs (below) actually end something, and they
-take it out of every project at once.
+sessions, browsers, and registered apps -- and a project is a filter
+over that pool plus its own dockview arrangement. Membership is an
+explicit list of member refs (`chat:<agent-id>`, `terminal:<name>`,
+`service:<name>`, `service:browser?session=<name>`) kept separately from
+the layout, and it is many-to-many: the same object can be in any number
+of projects at once, nothing owns anything, and there is no "move". An
+ad-hoc URL page is _not_ a member: it has no identity beyond the panel
+showing it, so it is only ever a tab in one view's arrangement. (A
+machine that migrated from before projects may still carry
+`url:<hash>` members, filed by the migration from panels it could not
+otherwise name; project settings is where such a leftover is removed.)
+A member with no panel is _backgrounded_ -- still running, still listed
+in the rail -- so closing a tab never stops the underlying object or
+changes membership. "Remove from project" hides an object in that one
+view only; only the destructive per-kind verbs (below) actually end
+something, and they take it out of every project at once.
 
 Everything is the unfiltered view, and the home. It is not a project --
 it has no registry entry and no member list, and cannot be renamed or
