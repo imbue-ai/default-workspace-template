@@ -186,10 +186,8 @@ python3 system/scripts/layout.py refresh <name>
 ```
 
 `refresh` reloads every iframe for the service. If no tab is open yet and
-the change is ready to show, surface it instead by opening it on each named
-layout -- `open` requires `--layout` and only applies on clients with that
-layout active, so the layout the user is not on fails fast and harmlessly:
-`for L in desktop mobile; do python3 system/scripts/layout.py open --layout "$L" <name>; done`.
+the change is ready to show, surface it instead by opening it:
+`python3 system/scripts/layout.py open <name>`.
 **That `open` puts the tab on the user's screen the moment it returns** -- it is
 the act of showing them, so only run it on something you are ready for them to
 see, and never follow it by telling them to open the tab. What makes you ready
@@ -309,7 +307,7 @@ where the data dies. Encode these, cheapest first:
   add `--service-name <name>-preview-app --preview-service-name <name>-preview
   --preview-title "<change>"` to the `up` call to surface it as a labeled
   "preview" tab (open it with
-  `for L in desktop mobile; do python3 system/scripts/layout.py open --layout "$L" <name>-preview; done`);
+  `python3 system/scripts/layout.py open <name>-preview`);
   that is the same machinery the system-interface flow uses. Use judgment on
   when that is worth it.
 

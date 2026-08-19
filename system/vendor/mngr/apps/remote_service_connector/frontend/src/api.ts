@@ -4,6 +4,18 @@
 
 const REFRESH_PATH = "/accounts/auth/session/refresh";
 
+// Injected by vite at build time (see vite.config.ts); "dev" outside a
+// `minds env deploy` build.
+declare const __MINDS_DEPLOY_ID__: string;
+
+// Canonical client self-identification, recorded in the connector's access
+// log (browsers own User-Agent, so a custom header carries it instead).
+const CLIENT_ID_HEADER_VALUE = `web/${__MINDS_DEPLOY_ID__}`;
+
+function clientIdHeaders(): Record<string, string> {
+  return { "X-Imbue-Client": CLIENT_ID_HEADER_VALUE };
+}
+
 export interface AccountsConfig {
   turnstile_site_key: string;
   google_enabled: boolean;
@@ -27,6 +39,7 @@ async function tryRefreshSession(): Promise<boolean> {
     const resp = await fetch(REFRESH_PATH, {
       method: "POST",
       credentials: "same-origin",
+      headers: clientIdHeaders(),
     });
     return resp.ok;
   } catch {
@@ -35,7 +48,11 @@ async function tryRefreshSession(): Promise<boolean> {
 }
 
 async function requestOnce(path: string, init: RequestInit): Promise<Response> {
-  return fetch(path, { credentials: "same-origin", ...init });
+  return fetch(path, {
+    credentials: "same-origin",
+    ...init,
+    headers: { ...clientIdHeaders(), ...(init.headers ?? {}) },
+  });
 }
 
 // Perform a request; on a 401, refresh the browser session once and retry.

@@ -100,7 +100,10 @@ def test_auth_signup_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     assert body["user"]["email"] == "new@example.com"
     assert body["tokens"]["access_token"].startswith("at-")
     assert body["needs_email_verification"] is False
-    assert body["is_new_account"] is True
+    # is_new_account is deliberately kept OFF the wire (the pre-tolerant fleet's
+    # strict models reject unknown response fields); it lives on the in-process
+    # AuthResponse object only. See the CLEANUP note on the route decorator.
+    assert "is_new_account" not in body
     assert backend.sent_verification_emails == []
     assert "new@example.com" in backend.accounts_by_email
     assert backend.accounts_by_email["new@example.com"].is_verified is False
@@ -357,7 +360,6 @@ def test_auth_signup_returns_error_on_sdk_outage(monkeypatch: pytest.MonkeyPatch
         "user": None,
         "tokens": None,
         "needs_email_verification": False,
-        "is_new_account": False,
     }
 
 

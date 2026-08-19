@@ -306,7 +306,7 @@ def build_root_authorized_keys_block(root_authorized_public_key: str | None) -> 
     the VM as new and replays every per-instance module. A truncating write here
     therefore silently dropped the owner's key on the first restart after their
     lease, leaving the VM reachable but rejecting them -- with no way back except
-    recreating the machine (see apps/minds/docs/slice-restart-wipes-owner-ssh-key.md).
+    recreating the machine (see apps/minds/docs/deploy/slice-restart-wipes-owner-ssh-key.md).
 
     Public (not ``_``-prefixed) because the imbue_cloud ``admin repair-keys``
     sweep renders this same block when patching existing slices' lima.yaml.
@@ -491,7 +491,22 @@ def _build_host_key_block(
     host_private_key_pem: str | None,
     host_public_key_openssh: str | None,
 ) -> str:
-    """Return a bash block that installs the given keypair as the guest's ed25519 sshd host key, or an inert comment when either argument is ``None``."""
+    """Return a bash block that installs the given keypair as the guest's ed25519 sshd host key, or an inert comment when either argument is ``None``.
+
+    The install deliberately reruns on EVERY boot, never at most once. Lima
+    regenerates cidata with a fresh instance-id on every ``limactl start``, so
+    cloud-init replays every per-instance module on every boot -- including its
+    ``ssh`` module (cc_ssh), whose default ``ssh_deletekeys: true`` deletes
+    ``/etc/ssh/ssh_host_*key*`` and regenerates random keys early in each boot
+    (the Debian genericcloud images ship no override). This block runs in the
+    final stage, after cc_ssh, and is what puts the pinned key back; guarding it
+    with a run-once marker leaves the VM serving an unpinned random key from its
+    second start on, which mngr's strict host-key pinning (correctly) refuses.
+    A host key the VM's owner rotated after first boot (e.g. imbue_cloud slice
+    adoption's user-origin key) is NOT this block's concern: cc_ssh has already
+    deleted it by the time this runs, and the adoption reconciler -- ordered
+    after cloud-final -- reinstalls it at the end of every boot.
+    """
     if host_private_key_pem is None or host_public_key_openssh is None:
         return "# (no pre-injected host key)"
     return f"""\

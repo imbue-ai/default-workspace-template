@@ -32,7 +32,7 @@ A separate `shell.html` page handles the loading spinner, the quitting screen, a
 
 ### Shutdown
 
-Closing an individual window just tears down that window's views -- the backend keeps running while any window is open. When the last window closes (or the user issues `Cmd+Q` / `Ctrl+Q`), Electron sends SIGTERM to the backend process and waits up to 5 seconds. If the process doesn't exit, SIGKILL is sent.
+Closing an individual window just tears down that window's views -- the backend keeps running while any window is open. **On macOS, closing the last window does not quit the app**: it keeps running with no windows (the dock icon stays), matching standard macOS apps. Re-open a window by clicking the dock icon (or `Cmd+N`) -- the `activate` handler lands it on the home page -- and quit explicitly with `Cmd+Q`. On Windows/Linux the last window's close quits, per those platforms' convention. When a quit is *committed* (`Cmd+Q` / `Ctrl+Q`, a SIGTERM/SIGINT, or the last window closing off macOS), Electron sends SIGTERM to the backend process and waits up to 5 seconds. If the process doesn't exit, SIGKILL is sent.
 
 #### Quitting page
 
@@ -42,13 +42,13 @@ The flip happens *after* the mind shutdown prompt below (it is gated on the same
 
 #### Mind shutdown prompt
 
-Agent containers run independently of the backend, so quitting the app would otherwise leave any **shutdown-capable** minds (those on a provider whose host minds can stop/start -- the local `docker` / `lima` backends today; the single `provider_backend_supports_shutdown` predicate is the one place that gate lives) running and consuming machine resources. Before tearing the backend down, Electron asks the backend which such minds are still running (`GET /api/minds/running`, which reads each mind's container state straight from the discovery snapshot the single discovery observer keeps fresh -- the same `host.state` that drives the landing-page Start/Stop controls -- so the dialog appears instantly without shelling out). When the last window is closed via the macOS close button, the close is intercepted so this prompt appears *before* the window disappears. If the running-minds check itself fails, the user is asked to **Quit anyway** or **Cancel** rather than silently quitting. If any minds are running:
+Agent containers run independently of the backend, so quitting the app would otherwise leave any **local** minds (those on the `docker` / `lima` backends; the single `provider_backend_is_local` predicate is the one place that gate lives) running and consuming the user's own machine. Cloud minds (`aws` / `gcp` / `azure` / `imbue_cloud`) are deliberately out of scope even though they *are* shutdown-capable: they keep running their agents with the app closed, which is the point of running one, so they are stopped from their own Start/Stop control instead of at quit. Before tearing the backend down, Electron asks the backend which local minds are still running (`GET /api/minds/running`, which reads each mind's container state straight from the discovery snapshot the single discovery observer keeps fresh -- the same `host.state` that drives the landing-page Start/Stop controls -- so the dialog appears instantly without shelling out). This prompt is tied to an actual quit, not to closing windows. On macOS, closing windows never quits (the app keeps running with no windows), so the prompt appears only on an explicit `Cmd+Q` / menu Quit. On Windows/Linux, closing the last window *is* a quit, so that window's close button is intercepted and the prompt appears *before* the window disappears. If the running-minds check itself fails, the user is asked to **Quit anyway** or **Cancel** rather than silently quitting. If any minds are running:
 
 - A dialog lists how many and which minds are running, with three choices: **Cancel** (stay open), **Leave running** (quit now; containers keep running), or **Shut down all**. This prompt runs *first*, before any window flips to the quitting page; **Cancel** leaves the app untouched.
 - **Leave running** and **Shut down all** both commit the quit, flipping every window to the quitting page (above).
 - **Shut down all** stops all the running minds with a single synchronous `POST /api/minds/stop-hosts` (the ids passed as repeated `agent_id` query params), which runs one `mngr stop <ids…> --stop-host` server-side -- mngr stops every named host concurrently via its own executor, so it is one subprocess, not one per mind. Progress shows *in-page on the quitting screen* (`Stopping N minds…`). The endpoint returns the minds still running after the attempt; if any remain (or the request failed), it offers **Retry** / **Quit anyway** / **Cancel quit** via a native dialog (choosing **Cancel quit** reverses the flip and returns the app to its normal running state). Once every mind is down it also stops this env's mngr docker **state container** (`<MNGR_PREFIX>docker-state-<user_id>`, the provider's bookkeeping container that `mngr stop --stop-host` leaves running) via `POST /api/minds/stop-state-container`, so no minds-related container is left running. The state container is stopped, not removed -- its volume (host records) is preserved and it restarts on next use. Only this env's prefix is targeted, so a differently-prefixed state container (e.g. your own `mngr-` docker usage) is never touched.
 
-Programmatic shutdowns (SIGTERM / SIGINT, e.g. `just minds-stop`) skip the prompt and shut down directly. Minds on providers that don't support host shutdown are never counted or stopped -- they don't use local resources.
+Programmatic shutdowns (SIGTERM / SIGINT, e.g. `just minds-stop`) skip the prompt and shut down directly. Minds that are not local are never counted or stopped -- they don't use the user's machine.
 
 ### Crash recovery
 
@@ -58,8 +58,8 @@ If the backend exits unexpectedly, every open window switches to the error scree
 
 - **Open DevTools**: `Ctrl+Shift+C` (Windows/Linux) or `Cmd+Option+I` (macOS)
 - **New Window**: `Ctrl+N` / `Cmd+N` -- opens a fresh window on the home page. Also available on macOS via `File > New Window` and the dock icon's right-click menu.
-- **Close Window**: `Ctrl+W` / `Cmd+W` -- closes the focused window; the backend keeps running until the last window closes.
-- **Quit**: `Ctrl+Q` / `Cmd+Q` -- closes every window and shuts the backend down.
+- **Close Window**: `Ctrl+W` / `Cmd+W` -- closes the focused window. On macOS the app (and backend) keep running even after the last window closes -- re-open from the dock icon or `Cmd+N`. On Windows/Linux the backend shuts down when the last window closes.
+- **Quit**: `Ctrl+Q` / `Cmd+Q` -- closes every window and shuts the backend down. On macOS this is the only way to quit (closing windows does not).
 
 ### Multi-window behavior
 
@@ -134,7 +134,7 @@ Dev mode reaches the same pinned binaries: it prepends the `git` and `lima` dire
 
 `uv` is the deliberate exception. Dev runs the monorepo workspace through `uv run --package minds`, against the same `.venv` and `uv.lock` the developer's shell drives, so it uses *their* uv rather than risking lockfile-format skew against shared state from a second pinned one. It is therefore the one bundled binary dev neither downloads nor resolves (`BINARIES[].usedInDev`).
 
-There is deliberately no bundled `qemu-img`. The pre-baked image is published, downloaded, and consumed as a **raw** image end to end, so nothing converts it. See [lima-image.md](./lima-image.md) for the whole pipeline, and "Why the image is raw" below.
+There is deliberately no bundled `qemu-img`. The pre-baked image is published, downloaded, and consumed as a **raw** image end to end, so nothing converts it. See [lima-image.md](./deploy/lima-image.md) for the whole pipeline, and "Why the image is raw" below.
 
 ### How the shipped binaries are chosen
 
@@ -227,8 +227,8 @@ The packaged Electron app embeds a `client.toml` + `MINDS_ROOT_NAME`
 pair at build time via `MINDS_CLIENT_CONFIG_BUNDLE` and
 `MINDS_ROOT_NAME_BUNDLE`, and the Electron startup exports the env
 vars + passes `--config-file` explicitly -- end users never have to
-activate anything. See `apps/minds/docs/environments.md` for the full
-operator workflow and `apps/minds/docs/vault-setup.md` for how
+activate anything. See `apps/minds/docs/deploy/environments.md` for the full
+operator workflow and `apps/minds/docs/deploy/vault-setup.md` for how
 deploy-time secrets flow through HCP Vault.
 
 ### Configuration file

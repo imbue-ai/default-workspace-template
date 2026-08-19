@@ -14,13 +14,17 @@ What it does, given the pre-merge revision (``--rollback-to``):
 1. Refuse to run on a dirty tree (so a rollback can never clobber unrelated work).
 2. Classify what changed since the known-good revision (frontend src / frontend
    manifest / backend src / backend manifest).
-3. Refresh dependencies only if a manifest changed (``npm ci`` / ``uv tool
-   install -e system/apps/system_interface --reinstall``). A plain restart does NOT
-   re-resolve the editable tool's dependencies, so a backend dependency add
-   would otherwise crash the service on restart.
+3. Refresh dependencies only if a manifest changed (``npm ci``, then the same
+   tool installs and ``uv sync`` that ``build_workspace.sh`` does). A plain
+   restart does NOT re-resolve an editable install's dependencies, so a
+   dependency add would otherwise crash the service on restart -- and an
+   editable install pins only the source path, so this bites the vendored mngr
+   the backend shells out to just as hard as the backend itself.
 4. For a backend change, *pre-flight* the merged code on a throwaway port before
    touching the live service -- if it cannot boot, the live service is never
-   restarted and we go straight to rollback (the UI never went down).
+   restarted and we go straight to rollback (the UI never went down). The
+   throwaway boot's output rides back on the failure, because "it did not boot"
+   without the traceback sends whoever reads it guessing at a cause.
 5. Build the frontend bundle and restart the backend, as applicable (the
    ``system_interface`` supervisord program alone -- see ``SUPERVISOR_PROGRAM``),
    then ask every open view of the workspace to reload, via
@@ -108,10 +112,13 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
+import tomllib
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -127,6 +134,20 @@ ENV_MNGR_AGENT_ID = "MNGR_AGENT_ID"
 # how the served environment is constructed.
 APP_DIR = "system/apps/system_interface"
 FRONTEND_DIR = f"{APP_DIR}/frontend"
+# The vendored mngr the workspace runs on, and the uv tool built from it. An
+# editable install pins the *source path*, not the dependency closure -- so the
+# moment a merge advances this tree, the ``mngr`` CLI starts running new code
+# against whatever was resolved for the old code. build_workspace.sh re-resolves
+# it; a reveal that did not would leave ``mngr`` broken (and with it ``mngr
+# observe``, which the backend spawns to source its agent lifecycle events).
+MNGR_VENDOR_DIR = "system/vendor/mngr"
+MNGR_DIR = f"{MNGR_VENDOR_DIR}/libs/mngr"
+MNGR_TOOL_NAME = "imbue-mngr"
+# The console script that tool installs; the reveal resolves it on PATH to find
+# which of the possibly-several installations is the one actually being run.
+MNGR_EXECUTABLE = "mngr"
+# uv records how a tool was installed here, inside the tool's own directory.
+_RECEIPT = "uv-receipt.toml"
 # The frontend build output the backend serves at ``/``. Both ``node_modules``
 # and this ``static/`` bundle are gitignored, so a fresh worktree has neither
 # until the worker builds it. The preview serves the worker's app dir as-is and
@@ -221,12 +242,12 @@ SERVE_PATH = "/"
 # The supervisord program that runs the live system interface, and the client
 # used to bounce it. Restarting only this program -- rather than the whole
 # services agent, which is supervisord's parent and so bounces every program in
-# the workspace -- is what makes the reveal's own health budget meaningful: a
-# dependency-only change touches this service's venv and node_modules and nothing
-# else consumes them, so nothing else needs to come back for the verdict to be
-# true. (A change to ``bootstrap`` or ``supervisord.conf`` *would* need the full
-# services-agent restart, but this script only ever reveals changes under
-# ``system/apps/system_interface`` -- see ``classify_changes``.)
+# the workspace -- is what makes the reveal's own health budget meaningful. The
+# environments a dependency refresh rebuilds (this service's venv/tool installs,
+# node_modules, and the mngr tool) are consumed at process start or per
+# invocation: this service -- and the ``mngr observe`` child it spawns -- reloads
+# them on this restart, and everything else that shells out to ``mngr`` picks up
+# the refreshed install on its next call without needing a bounce.
 SUPERVISOR_PROGRAM = "system_interface"
 _SUPERVISORCTL = "supervisorctl"
 
@@ -245,6 +266,10 @@ _SETTLED_HEALTHY_PROBES = 3
 # Pre-flight boot is a fresh process on a throwaway port; give it the same grace.
 _PREFLIGHT_ATTEMPTS = 30
 _PREFLIGHT_INTERVAL_SECONDS = 1.0
+# How much of a failed pre-flight boot's output rides back on the error. Enough
+# for a Python traceback plus the log lines leading into it; the rest is startup
+# chatter that pushed the interesting part off the top.
+_PREFLIGHT_OUTPUT_TAIL_LINES = 40
 
 
 class RevealError(Exception):
@@ -264,11 +289,42 @@ class RevealFailed(RevealError):
     in which case the live service is untouched and still serving known-good
     code, so recovery must NOT restart it -- and ``True`` once the restart has
     been attempted, where recovery must restart to reload known-good code.
+
+    ``detail`` is captured output explaining the failure (the pre-flight boot's
+    own log). It is kept apart from the message because the two readers want
+    different amounts of it: stderr gets all of it, while the rollback commit
+    gets only :meth:`headline` -- a commit body is read by everyone who ever
+    looks at this file's history, and a backend's startup log is a poor thing to
+    write into git and push, since it holds whatever the process chose to print.
     """
 
-    def __init__(self, message: str, *, live_service_restarted: bool = False) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        live_service_restarted: bool = False,
+        detail: str = "",
+    ) -> None:
         super().__init__(message)
         self.live_service_restarted = live_service_restarted
+        self.detail = detail
+
+    def headline(self) -> str:
+        """The message plus only the last line of ``detail``.
+
+        That last line is the payload -- a traceback ends on the exception, which
+        is the part that names the cause -- while everything above it is the
+        startup chatter that led there, already on stderr for whoever is looking.
+        """
+        last = next(
+            (
+                line
+                for line in reversed(self.detail.strip().splitlines())
+                if line.strip()
+            ),
+            "",
+        )
+        return f"{self}: {last}" if last else str(self)
 
 
 @dataclass(frozen=True)
@@ -303,6 +359,10 @@ class Runner:
     def run(self, argv: Sequence[str], **kwargs) -> subprocess.CompletedProcess:
         return subprocess.run(list(argv), **kwargs)
 
+    def which(self, executable: str) -> str | None:
+        """Resolve ``executable`` on PATH, as the shell running us would."""
+        return shutil.which(executable)
+
 
 class HttpClient:
     """Indirection over the loopback health probes (live service + pre-flight boot)."""
@@ -323,6 +383,7 @@ class Spawned:
     """A handle to a spawned throwaway server process."""
 
     _process: subprocess.Popen
+    _output_path: Path
 
     def terminate(self) -> None:
         self._process.terminate()
@@ -331,23 +392,49 @@ class Spawned:
         except subprocess.TimeoutExpired:
             self._process.kill()
 
+    def has_exited(self) -> bool:
+        """True once the child is gone, and so can never answer another probe."""
+        return self._process.poll() is not None
+
+    def read_output(self) -> str:
+        """Return what the child wrote to stdout and stderr, interleaved.
+
+        Read after ``terminate``, so a child that died on its own has already
+        flushed. An unreadable file yields ``""``: the caller is already
+        reporting a failure and must not fail again while explaining it.
+        """
+        try:
+            return self._output_path.read_text(errors="replace")
+        except OSError:
+            return ""
+
 
 class Spawner:
     """Indirection over ``subprocess.Popen`` for the pre-flight throwaway boot.
 
     ``spawn`` returns a managed child (terminated in a ``finally``) used to boot
     the merged backend on a throwaway port before touching the live service.
+
+    The child's stdout and stderr go to ``output_path`` rather than a pipe: it is
+    a chatty server nobody is reading from while we poll, and a pipe whose buffer
+    filled would block the very boot we are timing -- turning a healthy backend
+    into a pre-flight failure. A file has no such backpressure.
     """
 
-    def spawn(self, argv: Sequence[str], cwd: str, env: dict) -> Spawned:
-        process = subprocess.Popen(
-            list(argv),
-            cwd=cwd,
-            env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        return Spawned(_process=process)
+    def spawn(
+        self, argv: Sequence[str], cwd: str, env: dict, output_path: Path
+    ) -> Spawned:
+        # The child dups the fd, so closing our handle right after the spawn
+        # leaves it writing to the still-open file.
+        with output_path.open("wb") as output_file:
+            process = subprocess.Popen(
+                list(argv),
+                cwd=cwd,
+                env=env,
+                stdout=output_file,
+                stderr=subprocess.STDOUT,
+            )
+        return Spawned(_process=process, _output_path=output_path)
 
 
 def classify_changes(paths: Sequence[str]) -> ChangeSet:
@@ -368,7 +455,7 @@ def classify_changes(paths: Sequence[str]) -> ChangeSet:
             frontend_manifest = True
         elif path.startswith(f"{FRONTEND_DIR}/src/"):
             frontend_src = True
-        elif path == f"{APP_DIR}/pyproject.toml" or path == "uv.lock":
+        elif _is_backend_manifest(path):
             backend_manifest = True
         elif (
             path.startswith(f"{APP_DIR}/imbue/")
@@ -381,6 +468,43 @@ def classify_changes(paths: Sequence[str]) -> ChangeSet:
         frontend_manifest=frontend_manifest,
         backend_src=backend_src,
         backend_manifest=backend_manifest,
+    )
+
+
+def _is_backend_manifest(path: str) -> bool:
+    """Whether ``path`` can change what the backend's environment resolves to.
+
+    Not just the app's own manifest: the backend imports the vendored mngr and
+    shells out to it, both as editable installs, so a vendored package's
+    ``pyproject.toml`` moves their dependency closure exactly as the app's own
+    does -- and is the change that actually ships in a release. Every
+    ``system/vendor/mngr: refresh`` commit in this repo's history leaves
+    ``uv.lock`` untouched, so keying only off the lock would miss the case this
+    refresh exists for.
+
+    Both workspace roots count, because each holds the ``[tool.uv.sources]`` and
+    resolver settings its own installs go through. The repo root governs ``uv
+    sync``. The *vendored* root is the one ``uv tool install -e
+    system/vendor/mngr/libs/mngr`` walks up to (it declares the ``libs/*``
+    workspace that package belongs to), and nothing else in this set stands in
+    for it: it maps ``imbue-common`` and ``overlay`` -- which ``libs/mngr`` pins
+    exactly and which resolve nowhere else -- and carries the ``exclude-newer``
+    cooldown that mngr advances before each release plus its dependency
+    overrides, any of which moves what the tool resolves to.
+    """
+    if path in (
+        f"{APP_DIR}/pyproject.toml",
+        "uv.lock",
+        "pyproject.toml",
+        f"{MNGR_VENDOR_DIR}/pyproject.toml",
+    ):
+        return True
+    parts = path.split("/")
+    return (
+        len(parts) == 6
+        and parts[:3] == ["system", "vendor", "mngr"]
+        and parts[3] == "libs"
+        and parts[5] == "pyproject.toml"
     )
 
 
@@ -444,6 +568,7 @@ def _run_checked(
     what: str,
     *,
     live_service_restarted: bool = False,
+    env: dict | None = None,
 ) -> None:
     """Run a reveal command; raise :class:`RevealFailed` on a non-zero exit.
 
@@ -451,7 +576,7 @@ def _run_checked(
     that run the live restart can record that recovery must restart (see
     :class:`RevealFailed`)."""
     result = runner.run(
-        list(argv), cwd=str(cwd), capture_output=True, text=True, check=False
+        list(argv), cwd=str(cwd), capture_output=True, text=True, check=False, env=env
     )
     if getattr(result, "returncode", 0) != 0:
         stderr = (getattr(result, "stderr", "") or "").strip()
@@ -467,11 +592,20 @@ def wait_healthy(
     attempts: int,
     interval: float,
     sleeper: Callable[[float], None],
+    should_stop: Callable[[], bool] | None = None,
 ) -> bool:
-    """Poll ``url`` until it returns HTTP 200, up to ``attempts`` times."""
+    """Poll ``url`` until it returns HTTP 200, up to ``attempts`` times.
+
+    ``should_stop`` (the pre-flight passes its child's liveness) ends the poll
+    early once there is nothing left that could turn healthy. Sitting out the
+    remaining deadline would not change the verdict, and on a failed reveal every
+    second of it is a second before the rollback starts.
+    """
     for index in range(attempts):
         if http.get_status(url, timeout=5.0) == 200:
             return True
+        if should_stop is not None and should_stop():
+            return False
         if index < attempts - 1:
             sleeper(interval)
     return False
@@ -550,14 +684,35 @@ def wait_settled(
     return False
 
 
-def _preflight_ok(
+def _detail_block(detail: str) -> str:
+    """Render captured failure output for stderr, or nothing when there is none."""
+    return f"--- pre-flight boot output ---\n{detail}\n" if detail else ""
+
+
+def _tail(text: str, limit: int) -> str:
+    """Return the last ``limit`` lines of ``text``, noting anything dropped."""
+    lines = text.strip().splitlines()
+    if len(lines) <= limit:
+        return "\n".join(lines)
+    dropped = len(lines) - limit
+    return "\n".join([f"[{dropped} earlier line(s) omitted]", *lines[-limit:]])
+
+
+def _preflight(
     repo_root: Path,
     http: HttpClient,
     spawner: Spawner,
     sleeper: Callable[[float], None],
-) -> bool:
+) -> str | None:
     """Boot the merged backend on a throwaway port and probe it, without touching
-    the live service. Returns True iff it serves a healthy response.
+    the live service.
+
+    Returns ``None`` iff it serves a healthy response. Otherwise returns the tail
+    of what the throwaway boot wrote -- the traceback for a backend that died on
+    import, or how far it got before the deadline. That output is the only record
+    of *why* the merged code did not come up, and the process and its scratch
+    file are both gone by the time anyone reads the failure, so it has to travel
+    back with the error rather than be left somewhere to look up.
 
     Runs in FOLLOW mode: this boots *alongside* the still-running live service,
     which holds the single-writer observe lock, so a pre-flight that tried to run
@@ -572,17 +727,27 @@ def _preflight_ok(
     env["SYSTEM_INTERFACE_HOST"] = "127.0.0.1"
     env["SYSTEM_INTERFACE_PORT"] = str(port)
     env[PREVIEW_AGENT_EVENTS_MODE_ENV] = FOLLOW_AGENT_EVENTS_MODE
-    spawned = spawner.spawn([TOOL_NAME], cwd=str(repo_root / APP_DIR), env=env)
-    try:
-        return wait_healthy(
-            http,
-            f"http://127.0.0.1:{port}{STRICT_HEALTH_PATH}",
-            _PREFLIGHT_ATTEMPTS,
-            _PREFLIGHT_INTERVAL_SECONDS,
-            sleeper,
+    with tempfile.TemporaryDirectory() as scratch:
+        output_path = Path(scratch) / "preflight-boot.log"
+        spawned = spawner.spawn(
+            [TOOL_NAME],
+            cwd=str(repo_root / APP_DIR),
+            env=env,
+            output_path=output_path,
         )
-    finally:
-        spawned.terminate()
+        try:
+            if wait_healthy(
+                http,
+                f"http://127.0.0.1:{port}{STRICT_HEALTH_PATH}",
+                _PREFLIGHT_ATTEMPTS,
+                _PREFLIGHT_INTERVAL_SECONDS,
+                sleeper,
+                should_stop=spawned.has_exited,
+            ):
+                return None
+        finally:
+            spawned.terminate()
+        return _tail(spawned.read_output(), _PREFLIGHT_OUTPUT_TAIL_LINES)
 
 
 def _refresh_workspace_view(repo_root: Path, runner: Runner) -> None:
@@ -624,15 +789,192 @@ def _refresh_workspace_view(repo_root: Path, runner: Runner) -> None:
         sys.stderr.write(completed.stderr)
 
 
+def _tool_location(script: Path, tool_name: str) -> tuple[Path, Path] | None:
+    """Return ``(tool_dir, bin_dir)`` for the tool that owns console ``script``.
+
+    We have to ask rather than let uv default, because uv's tool directory
+    follows ``$HOME`` and the workspace runs with a ``$HOME`` that is not the one
+    ``build_workspace.sh`` installed under (it runs as root at image build; the
+    workspace then runs as root with ``HOME=/home/user``). Defaulting therefore
+    rebuilds a *second*, shadow installation that nothing on PATH executes --
+    leaving the tool everyone actually runs exactly as stale as before, while
+    every command reports success.
+
+    uv writes each console script with a shebang naming the interpreter inside
+    that tool's own environment
+    (``#!/root/.local/share/uv/tools/imbue-mngr/bin/python3``), so the script we
+    are about to re-resolve tells us precisely which installation it belongs to.
+    ``None`` means we could not confirm one, and the caller lets uv default.
+    Confirming matters as much as finding: these names also exist in the
+    workspace venv (both are ``uv sync --all-packages`` members), and a venv
+    console script would yield a "tool directory" inside the repo tree -- so we
+    would build a tool environment into the served checkout, dirty the tree that
+    the next reveal refuses to run on, and overwrite the venv's own entrypoint.
+    The receipt is what makes it a uv tool, so we require it.
+    """
+    try:
+        shebang = script.read_text(errors="replace").split("\n", 1)[0]
+    except OSError:
+        return None
+    if not shebang.startswith("#!"):
+        return None
+    interpreter = shebang[2:].strip().split(" ", 1)[0]
+    if not interpreter:
+        return None
+    # <tool_dir>/<tool_name>/bin/python -> <tool_dir>
+    parents = Path(interpreter).parents
+    if len(parents) < 3:
+        return None
+    tool_dir = parents[2]
+    if not (tool_dir / tool_name / _RECEIPT).is_file():
+        return None
+    return tool_dir, script.parent
+
+
+def _uv_tool_env(executable: str, tool_name: str, runner: Runner) -> dict:
+    """The environment for a ``uv tool`` call, aimed at ``executable``'s own
+    installation when we can confirm which that is.
+
+    Falling back to uv's default is the safe answer but not a good outcome --
+    it is how the refresh came to rebuild a copy nothing runs -- so say so
+    rather than let it pass silently.
+    """
+    env = dict(os.environ)
+    found = runner.which(executable)
+    location = _tool_location(Path(found), tool_name) if found is not None else None
+    if location is None:
+        sys.stderr.write(
+            f"refresh: could not identify the uv tool behind '{executable}'"
+            f" ({found or 'not on PATH'}); letting uv choose the tool directory,"
+            " which may rebuild a copy that is not the one being run.\n"
+        )
+        return env
+    env["UV_TOOL_DIR"] = str(location[0])
+    env["UV_TOOL_BIN_DIR"] = str(location[1])
+    return env
+
+
+def _tool_extras(
+    tool_name: str, repo_root: Path, runner: Runner, env: dict
+) -> list[str]:
+    """Return the ``--with``/``--with-editable`` args a tool was installed with.
+
+    A ``uv tool install --reinstall`` rebuilds the environment from the base
+    package alone, dropping every extra -- for the mngr tool those extras *are*
+    its plugins, so dropping them leaves a CLI that cannot parse its own plugin
+    config. uv records them in the tool's ``uv-receipt.toml``, so we read them
+    back and pass them through rather than keeping a second copy of the plugin
+    list here for build_workspace.sh's to drift away from.
+
+    A tool with no receipt at all contributes no extras: it is not installed (or
+    predates the receipt), and the reinstall below is then the plain install it
+    would have gotten anyway. A receipt we cannot *read* is a different story --
+    we had a tool and lost the record of it -- so that degrades to the same empty
+    answer but says so, because the silent version of it hands back exactly the
+    plugin-less CLI this refresh exists to prevent, while reporting success.
+    """
+    tool_dir = env.get("UV_TOOL_DIR")
+    if tool_dir is None:
+        result = runner.run(
+            ["uv", "tool", "dir"],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            check=False,
+            env=env,
+        )
+        if getattr(result, "returncode", 0) != 0:
+            _warn_extras_lost(tool_name, f"'uv tool dir' exited {result.returncode}")
+            return []
+        tool_dir = (getattr(result, "stdout", "") or "").strip()
+    receipt = Path(tool_dir) / tool_name / _RECEIPT
+    try:
+        parsed = tomllib.loads(receipt.read_text())
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        if receipt.is_file():
+            _warn_extras_lost(tool_name, f"{receipt} is unreadable ({exc})")
+        return []
+    extras: list[str] = []
+    for requirement in parsed.get("tool", {}).get("requirements", []):
+        name = requirement.get("name", "")
+        if _canonical(name) == _canonical(tool_name):
+            continue  # the base package, which we re-pin to its in-tree source
+        editable = requirement.get("editable") or requirement.get("directory")
+        if editable:
+            extras.extend(["--with-editable", editable])
+        elif requirement.get("git"):
+            extras.extend(["--with", f"{name} @ git+{requirement['git']}"])
+        elif requirement.get("specifier"):
+            extras.extend(["--with", f"{name}{requirement['specifier']}"])
+        else:
+            extras.extend(["--with", name])
+    return extras
+
+
+def _warn_extras_lost(tool_name: str, why: str) -> None:
+    """Report that ``tool_name`` is about to be rebuilt without its extras."""
+    sys.stderr.write(
+        f"refresh: cannot read what '{tool_name}' was installed with ({why}); "
+        "reinstalling from the base package alone, which drops any plugins it "
+        "had registered.\n"
+    )
+
+
+def _canonical(name: str) -> str:
+    """Normalize a package name the way packaging does, for comparison."""
+    return name.replace("_", "-").lower()
+
+
+def _reinstall_tool(
+    tool_name: str, executable: str, source_dir: str, repo_root: Path, runner: Runner
+) -> None:
+    """Re-resolve the installed ``executable``'s tool from its in-tree source,
+    keeping the extras it was installed with.
+
+    The base is re-pinned to ``source_dir`` rather than left to the receipt: a
+    receipt that has lost its editable marker would otherwise resolve the base
+    from the index, quietly swapping the workspace's own vendored code for a
+    published release.
+    """
+    env = _uv_tool_env(executable, tool_name, runner)
+    _run_checked(
+        runner,
+        [
+            "uv",
+            "tool",
+            "install",
+            "-e",
+            source_dir,
+            *_tool_extras(tool_name, repo_root, runner, env),
+            "--reinstall",
+        ],
+        repo_root,
+        f"uv tool install {tool_name} --reinstall",
+        env=env,
+    )
+
+
 def _refresh_dependencies(changes: ChangeSet, repo_root: Path, runner: Runner) -> None:
+    """Rebuild the environments the served backend runs from, mirroring
+    ``system/scripts/build_workspace.sh`` -- which is the source of truth for how
+    they are constructed, and which refreshes all three.
+
+    All three, because ``supervisord`` starts the backend as a bare
+    ``system-interface`` off PATH: which of the tool install and the workspace
+    venv answers that is a PATH question, and the backend shells out to ``mngr``
+    besides. Refreshing only one of them leaves a merge half-applied in a way
+    that surfaces as a crash somewhere else entirely.
+    """
     if changes.frontend_manifest:
         _run_checked(runner, ["npm", "ci"], repo_root / FRONTEND_DIR, "npm ci")
     if changes.backend_manifest:
+        _reinstall_tool(MNGR_TOOL_NAME, MNGR_EXECUTABLE, MNGR_DIR, repo_root, runner)
+        _reinstall_tool(TOOL_NAME, TOOL_NAME, APP_DIR, repo_root, runner)
         _run_checked(
             runner,
-            ["uv", "tool", "install", "-e", APP_DIR, "--reinstall"],
+            ["uv", "sync", "--all-packages", "--frozen"],
             repo_root,
-            "uv tool install --reinstall",
+            "uv sync --all-packages --frozen",
         )
 
 
@@ -653,11 +995,14 @@ def _apply_reveal(
             runner, ["npm", "run", "build"], repo_root / FRONTEND_DIR, "npm run build"
         )
     if changes.backend:
-        if not _preflight_ok(repo_root, http, spawner, sleeper):
+        preflight_output = _preflight(repo_root, http, spawner, sleeper)
+        if preflight_output is not None:
             # Live service was never restarted, so it is still serving known-good
             # code -- recovery must not restart it (live_service_restarted=False).
             raise RevealFailed(
-                "merged backend failed to boot in a pre-flight check; live service not restarted"
+                "merged backend failed to boot in a pre-flight check; live service "
+                "not restarted",
+                detail=preflight_output or "(the pre-flight boot wrote nothing at all)",
             )
         # From here on the live service has been (or is being) restarted, so any
         # failure leaves it potentially running broken code: recovery must restart.
@@ -832,14 +1177,15 @@ def reveal(
         _apply_reveal(changes, repo_root, resolved_base, runner, http, spawner, sleeper)
     except RevealFailed as exc:
         sys.stderr.write(
-            f"reveal failed: {exc}\nrolling back to {rollback_to[:12]} and restoring the live UI...\n"
+            f"reveal failed: {exc}\n{_detail_block(exc.detail)}"
+            f"rolling back to {rollback_to[:12]} and restoring the live UI...\n"
         )
         _restore_tree(name_status, rollback_to, repo_root, runner)
         _commit_rollback(
             repo_root,
             runner,
             rollback_to,
-            f"Reveal failed and was auto-reverted: {exc}",
+            f"Reveal failed and was auto-reverted: {exc.headline()}",
         )
         if _recover_running_state(
             changes,

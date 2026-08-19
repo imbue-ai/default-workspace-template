@@ -285,8 +285,9 @@ minds-test-electron *args:
 # It also needs the DEFAULT_WORKSPACE_TEMPLATE external worktree's system/vendor/mngr synced to this checkout
 # (otherwise the initial chat agent fails to create on settings the vendored mngr
 # doesn't recognize, and the chat step hangs on "Waiting for initial chat
-# agent..."); run `just sync-vendor-mngr .external_worktrees/default-workspace-template`
-# first (the minds-dev-workflow does this on every startup).
+# agent..."); run `just sync-vendor-mngr-live` first -- the same sync
+# `just minds-start` does on every startup, carrying uncommitted changes and
+# committing nothing.
 # Screenshots of each step land in /tmp/minds-electron-flow/.
 [group("minds test")]
 minds-test-electron-flow *args:
@@ -363,7 +364,7 @@ default-workspace-template-worktree branch="" base="origin/main":
 # HEAD / the verified release SHA, NOT blindly `main`, which can drift past it
 # between verification and merge. The recipe archives HEAD, replaces system/vendor/mngr/
 # with that snapshot, and commits in DEFAULT_WORKSPACE_TEMPLATE. Does not push. Aborts if DEFAULT_WORKSPACE_TEMPLATE is dirty.
-# Full release flow: apps/minds/docs/release.md.
+# Full release flow: apps/minds/docs/deploy/release.md.
 [group("minds dev")]
 sync-vendor-mngr default_workspace_template="":
     #!/bin/bash
@@ -413,6 +414,69 @@ sync-vendor-mngr default_workspace_template="":
     git commit -m "Sync system/vendor/mngr to ${branch} (${short})" -m "Tracks ${full} in mngr."
     echo "Synced system/vendor/mngr to ${branch} (${short}). To publish: (cd $default_workspace_template && git push origin ${branch})"
 
+# Sync this checkout's LIVE working tree (uncommitted changes included) into a
+# DEFAULT_WORKSPACE_TEMPLATE worktree's system/vendor/mngr/, leaving it as an
+# ordinary uncommitted diff there. This is the dev-loop counterpart to
+# `just sync-vendor-mngr`, which vendors `git archive HEAD` and commits: use
+# that one for a release, this one to iterate.
+#
+# `just minds-start` runs this at launch so the first Create picks up your local
+# mngr code. Run it directly to re-sync without relaunching the app -- notably
+# after dropping system/vendor/mngr to let a base-branch merge through (see
+# CLAUDE.md, "Vendored mngr in the default-workspace-template worktree").
+#
+# `default_workspace_template` defaults to
+# .external_worktrees/default-workspace-template; an absolute path is used
+# as-is, a relative one is resolved against the mngr root. Unlike
+# `sync-vendor-mngr`, this does NOT fall back to DEFAULT_WORKSPACE_TEMPLATE_DIR:
+# it has to target whatever worktree `minds-start` launches against, and that is
+# the nested one. DEFAULT_WORKSPACE_TEMPLATE_DIR names a standalone clone, which
+# is the right default for a release sync and the wrong one for the dev loop.
+#
+# Sync the LIVE mngr working tree into DEFAULT_WORKSPACE_TEMPLATE's system/vendor/mngr (no commit)
+[group("minds dev")]
+sync-vendor-mngr-live default_workspace_template="":
+    #!/bin/bash
+    set -ueo pipefail
+    if [ -n "{{default_workspace_template}}" ]; then
+        case "{{default_workspace_template}}" in
+            /*) default_workspace_template_wt="{{default_workspace_template}}" ;;
+            *)  default_workspace_template_wt="$(pwd)/{{default_workspace_template}}" ;;
+        esac
+    else
+        default_workspace_template_wt="$(pwd)/.external_worktrees/default-workspace-template"
+    fi
+    if [ ! -e "$default_workspace_template_wt/.git" ]; then
+        echo "error: no DEFAULT_WORKSPACE_TEMPLATE worktree at $default_workspace_template_wt" >&2
+        echo "       run \`just default-workspace-template-worktree\` to create it," >&2
+        echo "       or pass a custom default_workspace_template path." >&2
+        exit 2
+    fi
+    vendor_mngr="$default_workspace_template_wt/system/vendor/mngr"
+    mkdir -p "$vendor_mngr"
+    # The system/vendor/mngr sync below uses `rsync --filter=':- .gitignore'`, a GNU
+    # rsync feature. Recent macOS ships Apple's openrsync at /usr/bin/rsync,
+    # which doesn't support it and fails the sync with a confusing error --
+    # fail fast here with the fix. See apps/minds/docs/dev-setup.md.
+    if rsync --version 2>&1 | grep -qi openrsync; then
+        echo "error: your 'rsync' is Apple's openrsync, which lacks the" >&2
+        echo "       --filter=':- .gitignore' support this sync needs." >&2
+        echo "       Install GNU rsync and put it ahead of /usr/bin on PATH:" >&2
+        echo "         brew install rsync" >&2
+        echo "         rsync --version | head -1   # must NOT say 'openrsync'" >&2
+        exit 2
+    fi
+    echo "Syncing $(pwd) -> $vendor_mngr (rsync, uncommitted-friendly, no DEFAULT_WORKSPACE_TEMPLATE commit)"
+    # Exclusions must match _VENDOR_RSYNC_MANUAL_EXCLUDES + _GITIGNORE_RSYNC_FILTER
+    # in libs/mngr_imbue_cloud/.../bake/pool_bake.py and the RSYNC_EXCLUDES array
+    # in apps/minds/scripts/propagate_changes -- all three paths populate the same
+    # system/vendor/mngr/ destination. apps/minds/docs/vendor-mngr-sync.md is the
+    # canonical account of the form and why each exclude is there.
+    rsync -a --delete \
+        --filter=':- .gitignore' \
+        --exclude=.git \
+        --exclude=uv.lock \
+        ./ "$vendor_mngr/"
 
 # === Modal deploy / minds iteration helpers ===
 #
@@ -491,11 +555,145 @@ provision-dev-relay ovh_region="US-EAST-VA-1" ordinal="1":
     # full region set from the relays table right after.
     uv run share-relay dns --region "$region" --content-domain "$content_domain" --ip "$ip"
 
+    # Install the observability collector on the fresh relay; skips gracefully
+    # (exit 3 from collector-env) while the shared dev instance is not
+    # provisioned yet or its relays credential is still empty.
+    set +e
+    uv run python scripts/provision_observability_config.py collector-env dev relays "$tmp"
+    observability_status=$?
+    set -e
+    if [ "$observability_status" -eq 0 ]; then
+        set -a; . "$tmp/collector.env"; set +a
+        echo "Installing the observability collector on $ip"
+        ssh-agent bash -c "ssh-add '$tmp/relay_key' 2>/dev/null && \
+            uv run observability install-collector --host '$ip' --role relay --tier dev \
+                --ingest-url \"$OBSERVABILITY_INGEST_URL\" --credential-env-var OBSERVABILITY_INGEST_CREDENTIAL"
+    elif [ "$observability_status" -ne 3 ]; then
+        exit "$observability_status"
+    fi
+
     echo
     echo "Relay ready for env '$env_name':"
     echo "  relay_id:  $relay_id (registered; workspaces learn the endpoint via GET /shares/assignment)"
     echo "  wildcard:  *.$region.$content_domain -> $ip"
     echo "Re-enable sharing on any workspace whose share was created against another region."
+
+# Shared shell block for the observability recipes: derive the tier
+# (production / staging / dev) served by the activated env's instance --
+# dev-*/ci-* envs all map to the single shared `dev` instance.
+_derive_observability_tier := '''
+root_name="${MINDS_ROOT_NAME:?activate a minds env first: eval \"\$(uv run minds env activate <env>)\"}"
+if [ "$root_name" = "minds" ]; then env_name="production"; else env_name="${root_name#minds-}"; fi
+case "$env_name" in
+    production|staging) tier="$env_name" ;;
+    dev-*|ci-*) tier="dev" ;;
+    *) echo "error: cannot derive a tier from env '$env_name'" >&2; exit 2 ;;
+esac
+'''
+
+# Shared shell block for the observability recipes (requires `$tier` from
+# `_derive_observability_tier`): resolve the tier's Vault entries into a
+# self-cleaning temp work dir and source the resulting environment.
+_resolve_observability_config := '''
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+uv run python scripts/provision_observability_config.py resolve "$tier" "$tmp"
+set -a; . "$tmp/observability.env"; set +a
+'''
+
+# Stand up the activated tier's observability instance: provision an OVH VPS,
+# install the pinned OpenObserve + caddy ingest gate + self-monitoring
+# collector, mint the per-sender-class ingest credentials (written back to
+# Vault), and point the Cloudflare-proxied `telemetry.<domain>` record at it.
+# dev-*/ci-* envs all map to the single shared `dev` instance. Reads the
+# tier's `observability`, `ovh`, and
+# `cloudflare` Vault entries (requires a vault login); see
+# .minds/template/observability.sh for the schema and
+# specs/minds-openobserve-telemetry.md for the design. Idempotent-ish:
+# re-running provisions a NEW instance (bump `ordinal` for a replacement
+# generation). For a replacement, FIRST quiesce the old instance (stop caddy +
+# openobserve there and wait out the ~2 minute WAL window, per the spec's
+# "Replacing an instance") -- the deploy below starts openobserve immediately,
+# and only one writer may ever run against the tier's storage -- THEN run this,
+# then destroy the old one via `just list-observability-instances` /
+# `just destroy-observability-instance`.
+[group("minds ops")]
+provision-observability ovh_region="US-EAST-VA-1" ordinal="1":
+    #!/bin/bash
+    set -ueo pipefail
+    {{_derive_observability_tier}}
+    {{_resolve_observability_config}}
+    hostname="$(jq -r .telemetry_hostname "$tmp/params.json")"
+
+    echo "Provisioning observability instance for tier '$tier' (hostname $hostname, OVH {{ovh_region}})"
+    provision_json="$(uv run observability provision --tier "$tier" --ordinal "{{ordinal}}" \
+        --ovh-region "{{ovh_region}}" --ssh-public-key-file "$tmp/ssh_key.pub" | tail -n 1)"
+    ip="$(jq -r .ip <<<"$provision_json")"
+
+    echo "Instance up at $ip; installing OpenObserve + ingest gate + self collector"
+    ssh-agent bash -c "ssh-add '$tmp/ssh_key' 2>/dev/null && \
+        uv run observability deploy --host '$ip' --tier '$tier' --telemetry-hostname '$hostname' \
+            --work-dir '$tmp/deploy'"
+
+    echo "Minting ingest credentials + applying log-stream retention"
+    accounts_json="$(ssh-agent bash -c "ssh-add '$tmp/ssh_key' 2>/dev/null && \
+        uv run observability provision-accounts --ssh-host '$ip'" | tail -n 1)"
+    printf '%s\n' "$accounts_json" | uv run python scripts/provision_observability_config.py store-credentials "$tier"
+
+    uv run observability dns --hostname "$hostname" --ip "$ip"
+
+    echo
+    echo "Observability instance ready for tier '$tier':"
+    echo "  ingest:   https://$hostname (OTLP routes + /healthz only)"
+    echo "  UI:       ssh -L 5080:127.0.0.1:5080 debian@$ip  ->  http://localhost:5080"
+    echo "Manual follow-ups:"
+    echo "  1. Create the workspace OTel secret and configure the integration by hand:"
+    echo "     see 'Configure the Modal workspace integration' in the bring-up runbook"
+    echo "     (endpoint https://$hostname -- the BARE base URL; secret observability-otel-ingest"
+    echo "     carrying only OTEL_HEADER_Authorization; the ingest gate stamps stream-name)."
+    echo "  2. Roll the fleet collectors: re-run \`just prep-server <id>\` per box; relays pick it up on provision."
+    echo "  3. Once data flows, run \`just provision-observability-accounts $ip\` to apply the"
+    echo "     log-stream retention overrides (do NOT re-run this recipe: it provisions a new VPS)."
+
+# Re-run the account/retention pass against an EXISTING instance (IP from
+# `just list-observability-instances` or the provisioning output): mint any
+# ingest credential whose Vault leaf is empty (writing it back to Vault) and
+# re-apply the log-stream retention overrides. Idempotent, and the right tool
+# once data flows (streams only exist after first ingest) or after clearing a
+# credential leaf for rotation -- unlike `just provision-observability`, which
+# always provisions a NEW VPS.
+[group("minds ops")]
+provision-observability-accounts ip:
+    #!/bin/bash
+    set -ueo pipefail
+    {{_derive_observability_tier}}
+    {{_resolve_observability_config}}
+    echo "Minting ingest credentials + applying log-stream retention on {{ip}} (tier '$tier')"
+    accounts_json="$(ssh-agent bash -c "ssh-add '$tmp/ssh_key' 2>/dev/null && \
+        uv run observability provision-accounts --ssh-host '{{ip}}'" | tail -n 1)"
+    printf '%s\n' "$accounts_json" | uv run python scripts/provision_observability_config.py store-credentials "$tier"
+
+# List the OVH instances backing observability (all tiers share the OVH
+# project of the creds you source; run with the tier activated).
+[group("minds ops")]
+list-observability-instances:
+    #!/bin/bash
+    set -ueo pipefail
+    {{_derive_observability_tier}}
+    {{_resolve_observability_config}}
+    uv run observability list
+
+# Destroy one observability instance VPS by OVH instance id (from
+# `just list-observability-instances`). Follow the spec's "Replacing an
+# instance": stop caddy + openobserve on the old host and wait out the WAL
+# quiesce window (~2 minutes) BEFORE destroying, so the tail flushes to R2.
+[group("minds ops")]
+destroy-observability-instance instance_id:
+    #!/bin/bash
+    set -ueo pipefail
+    {{_derive_observability_tier}}
+    {{_resolve_observability_config}}
+    uv run observability destroy --instance-id "{{instance_id}}"
 
 # Start the minds desktop client (electron) in dev mode against the
 # activated env. Sources .env if present, scrubs any ambient
@@ -517,11 +715,13 @@ provision-dev-relay ovh_region="US-EAST-VA-1" ordinal="1":
 # including staging / production -- instead of only on per-developer dev envs.
 #
 # Always re-syncs the live mngr working tree into the DEFAULT_WORKSPACE_TEMPLATE worktree's
-# system/vendor/mngr/ first, so the very first Create after starting the app
-# picks up your local mngr code rather than whatever stale snapshot the
-# DEFAULT_WORKSPACE_TEMPLATE worktree was created from. Uses rsync (vs `just sync-vendor-mngr`'s
-# git archive) so uncommitted mngr changes flow through and the DEFAULT_WORKSPACE_TEMPLATE
-# worktree's git state stays as a normal diff.
+# system/vendor/mngr/ first (via `just sync-vendor-mngr-live`), so the very first
+# Create after starting the app picks up your local mngr code rather than
+# whatever stale snapshot the DEFAULT_WORKSPACE_TEMPLATE worktree was created
+# from. That recipe uses rsync (vs `just sync-vendor-mngr`'s git archive) so
+# uncommitted mngr changes flow through and the DEFAULT_WORKSPACE_TEMPLATE
+# worktree's git state stays as a normal diff. Run it on its own to re-sync
+# without relaunching the app.
 #
 # Requires that you've activated a minds env in this shell first --
 # `eval "$(uv run minds env activate dev-<your-user>)"` is the typical
@@ -601,38 +801,7 @@ minds-start branch="" default_workspace_template="" debug_port="":
         echo "       then re-run minds-start." >&2
         exit 2
     fi
-    vendor_mngr="$default_workspace_template_wt/system/vendor/mngr"
-    mkdir -p "$vendor_mngr"
-    # The system/vendor/mngr sync below uses `rsync --filter=':- .gitignore'`, a GNU
-    # rsync feature. Recent macOS ships Apple's openrsync at /usr/bin/rsync,
-    # which doesn't support it and fails the sync with a confusing error --
-    # fail fast here with the fix. See apps/minds/README.md (Getting started).
-    if rsync --version 2>&1 | grep -qi openrsync; then
-        echo "error: your 'rsync' is Apple's openrsync, which lacks the" >&2
-        echo "       --filter=':- .gitignore' support minds-start needs." >&2
-        echo "       Install GNU rsync and put it ahead of /usr/bin on PATH:" >&2
-        echo "         brew install rsync" >&2
-        echo "         rsync --version | head -1   # must NOT say 'openrsync'" >&2
-        exit 2
-    fi
-    echo "Syncing $(pwd) -> $vendor_mngr (rsync, uncommitted-friendly, no DEFAULT_WORKSPACE_TEMPLATE commit)"
-    # Exclusions must match _RSYNC_MANUAL_EXCLUDES + _GITIGNORE_RSYNC_FILTER
-    # in libs/mngr_imbue_cloud/.../cli/admin.py and apps/minds/.../cli/pool.py,
-    # and the RSYNC_EXCLUDES array in apps/minds/scripts/propagate_changes --
-    # all four paths populate the same system/vendor/mngr/ destination.
-    #
-    # `--filter=:- .gitignore` reads .gitignore at each directory level under
-    # the source and applies its exclude rules, so __pycache__, .venv,
-    # node_modules, .test_output, .mypy_cache, .ruff_cache, .pytest_cache,
-    # .external_worktrees, etc. are all covered without listing them here.
-    # `.git` and `uv.lock` aren't in .gitignore (`.git` is git's internal
-    # dir; `uv.lock` is intentionally committed but each install context
-    # regenerates its own), so we exclude those manually.
-    rsync -a --delete \
-        --filter=':- .gitignore' \
-        --exclude=.git \
-        --exclude=uv.lock \
-        ./ "$vendor_mngr/"
+    just sync-vendor-mngr-live "$default_workspace_template_wt"
     pid_file="/tmp/minds-start-$(echo -n "$PWD" | sha1sum | cut -c1-12).pid"
     if [ -f "$pid_file" ]; then
         existing=$(cat "$pid_file" 2>/dev/null || echo "")
@@ -769,6 +938,10 @@ minds-start-cloud debug_port="":
     # Put apps/minds's pinned Node (.nvmrc) first on PATH so pnpm's
     # engine-strict check passes regardless of the shell's default node.
     . apps/minds/scripts/select_node_version.sh || exit 2
+    # Build the SPA the app server actually serves, same as minds-start:
+    # `pnpm start` only launches electron, and static/ui/ is gitignored
+    # (produced at wheel-build time), so a fresh worktree would 404 without this.
+    (cd apps/minds/frontend && pnpm install --silent && pnpm run generate && pnpm run build) || exit 2
     cd apps/minds && pnpm start
 
 # Stop the minds desktop client started in this worktree by `just minds-start`
@@ -1292,15 +1465,40 @@ audit-boxes:
 # the activated tier's Vault entry / env secrets, so no manual exports. Idempotent.
 # The cache-lock path also `mkdir -p`s the cache dir on demand, so boxes prepped
 # under the old dir name do not need a re-prep for production --from-tag bakes.
+# When the tier's observability Vault entry carries a boxes ingest credential,
+# the prep also installs/refreshes the pinned OpenTelemetry Collector on the box
+# (rendered here, appended via --extra-prep-script); absent credential = clean skip,
+# so re-prepping is also how the collector rolls out to the existing fleet.
 #
 #   just prep-server <bare-metal-server-id>
 [group("minds ops")]
 prep-server server_id *extra_args:
-    uv run minds server prep --server-id "{{server_id}}" {{extra_args}}
+    #!/bin/bash
+    set -ueo pipefail
+    {{_derive_observability_tier}}
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+    collector_args=()
+    set +e
+    uv run python scripts/provision_observability_config.py collector-env "$tier" boxes "$tmp"
+    observability_status=$?
+    set -e
+    if [ "$observability_status" -eq 0 ]; then
+        set -a; . "$tmp/collector.env"; set +a
+        uv run observability render-collector-install --role box --tier "$tier" \
+            --ingest-url "$OBSERVABILITY_INGEST_URL" --credential-env-var OBSERVABILITY_INGEST_CREDENTIAL \
+            --out "$tmp/install_collector.sh"
+        collector_args=(--extra-prep-script "$tmp/install_collector.sh")
+    elif [ "$observability_status" -eq 3 ]; then
+        echo "note: observability not configured for tier '$tier'; prepping without the collector"
+    else
+        exit "$observability_status"
+    fi
+    uv run minds server prep --server-id "{{server_id}}" ${collector_args[@]+"${collector_args[@]}"} {{extra_args}}
 
 # Backfill the volume-gated minds-autostart units onto every existing slice VM
 # of the activated env's fleet (reboot-resilience rollout Step 2; see
-# apps/minds/docs/reboot-resilience-rollout.md). Idempotent and safe on running
+# apps/minds/docs/deploy/reboot-resilience-rollout.md). Idempotent and safe on running
 # workspaces. Pass --dry-run to list the per-VM plan first, or
 # --server-id <id> (repeatable) to scope to specific boxes.
 #   just backfill-autostart --dry-run

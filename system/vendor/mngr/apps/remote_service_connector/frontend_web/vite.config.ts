@@ -9,6 +9,12 @@ import tailwindcss from "@tailwindcss/vite";
 export default defineConfig({
   plugins: [tailwindcss()],
   base: "/web/",
+  // Bakes the deploy id into the bundle as its X-Imbue-Client build stamp
+  // ("web/<deploy-id>"), directly comparable to the connector's /version
+  // deploy_id. "dev" outside a `minds env deploy` build.
+  define: {
+    __MINDS_DEPLOY_ID__: JSON.stringify(process.env.MINDS_DEPLOY_ID ?? "dev"),
+  },
   build: {
     outDir: "dist",
     emptyOutDir: true,

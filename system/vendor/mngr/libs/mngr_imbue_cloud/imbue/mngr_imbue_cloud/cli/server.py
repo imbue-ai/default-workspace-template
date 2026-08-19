@@ -268,6 +268,18 @@ def _run_root_script_over_ssh(
         )
 
 
+def _compose_prep_script(base_script: str, extra_prep_script: Path | None) -> str:
+    """Append the optional extra prep script after the standard prep steps.
+
+    The extra script (idempotent, root, rendered by its owner -- e.g. the
+    observability collector install) then runs in the same pinned-host-key
+    SSH session as the base prep.
+    """
+    if extra_prep_script is None:
+        return base_script
+    return base_script + "\n" + extra_prep_script.read_text()
+
+
 @server.command(name="prep")
 @click.option(
     "--server-id", required=True, help="bare_metal_servers row id (from `register`/`order`) of the box to prep."
@@ -282,6 +294,17 @@ def _run_root_script_over_ssh(
     help="Guest OS image to stage on the box once (slices boot from this via file://, never the mirror).",
 )
 @click.option("--database-url", default=None, help="Neon pool DB DSN (defaults to the activated env's secrets).")
+@click.option(
+    "--extra-prep-script",
+    "extra_prep_script",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help=(
+        "Path to an additional idempotent root bash script appended to the box prep script "
+        "(e.g. the observability collector install rendered by `observability render-collector-install`). "
+        "Runs on the box after the standard prep steps, under the same `sudo bash` invocation."
+    ),
+)
 def prep_box(
     server_id: str,
     ssh_user: str,
@@ -289,6 +312,7 @@ def prep_box(
     lima_version: str,
     slice_base_image_url: str,
     database_url: str | None,
+    extra_prep_script: Path | None,
 ) -> None:
     """Install QEMU + lima + tooling on a delivered box, create the lima user, stage the OS image.
 
@@ -314,12 +338,13 @@ def prep_box(
     server_address = server.public_address
     with pool_private_key_path() as private_key_path:
         pool_public_key = _derive_public_key(private_key_path)
-        script = build_box_prep_script(
+        base_script = build_box_prep_script(
             pool_public_key=pool_public_key,
             lima_service_user=lima_service_user,
             lima_version=lima_version,
             slice_base_image_url=slice_base_image_url,
         )
+        script = _compose_prep_script(base_script, extra_prep_script)
         logger.info(
             "Prepping box {} as {} (lima user {}, lima {})", server_address, ssh_user, lima_service_user, lima_version
         )
@@ -506,7 +531,7 @@ def backfill_autostart(database_url: str | None, server_ids: tuple[str, ...], is
     """Backfill the volume-gated minds-autostart units onto existing slice VMs.
 
     The fleet half of the reboot-resilience rollout (minds
-    docs/reboot-resilience-rollout.md Step 2): slices baked before the merged
+    docs/deploy/reboot-resilience-rollout.md Step 2): slices baked before the merged
     installer keep the old racy oneshot until this sweep re-applies it. The
     installer is idempotent and safe on running workspaces, fires the
     workspace start immediately, and the sweep only reports a VM as
@@ -1621,7 +1646,7 @@ def assert_box_is_exclusive_to_tier(
 ) -> None:
     """Refuse to bake unless this box belongs solely to the activated env's tier.
 
-    Tier isolation is a stated invariant (``apps/minds/docs/environments.md``:
+    Tier isolation is a stated invariant (``apps/minds/docs/deploy/environments.md``:
     "There is zero cross-tier reach"), but nothing used to enforce it at the moment
     it matters. Two independent ways a box drifts across tiers, both caught here
     before a single slice is carved:
