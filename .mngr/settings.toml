@@ -98,6 +98,27 @@ yes = true
 auto_dismiss_dialogs = true
 auto_allow_permissions = true
 auto_disable_questions = true
+# Dismiss a dialog that is holding the TUI's input, in the two places mngr looks.
+#
+# Both of these default to 0 -- "press Enter zero times" -- which is why sends have been
+# failing outright whenever a dialog owns the pane: mngr detects the dialog, does nothing
+# about it, and reports the send as failed. That is the bug these two lines fix.
+#
+# preflight  = a dialog was already up when the send started.
+# post-submit = the message itself opened one. Sending `/model` delivers fine and THEN
+#              renders the picker, so preflight cannot have seen it.
+#
+# 2, not 1, because the /model flow is two dialogs deep: the picker, then a confirmation
+# that switching mid-session invalidates the prompt cache. A depth of 1 clears the picker
+# and leaves the confirmation holding the input.
+#
+# This presses Enter on whatever option is HIGHLIGHTED, which is blunt: on a dialog whose
+# default is not the answer you want, it takes the wrong one. It is the mechanism mngr
+# ships today, and it is strictly better than the current behaviour of doing nothing. The
+# replacement -- a registry that recognises each dialog and cycles onto a named option
+# before pressing Enter -- is mngr_claude.dialogs, landing behind this.
+auto_accept_preflight_prompt_depth = 2
+auto_accept_prompt_depth = 2
 cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode,TodoWrite,TaskCreate,TaskList,TaskUpdate"""
 # fastMode defaults OFF here so every NON-interactive agent runs at standard
 # speed -- every claude role (caretaker, automation, worker) resolves to this
@@ -122,7 +143,14 @@ cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode,Tod
 # It must ride the mngr-managed --settings overlay because nothing provisions the
 # shared ~/.claude/settings.json: in shared config-dir mode mngr writes nothing
 # into the shared dir, and claude itself only creates it lazily.
-settings_overrides__extend = {model = "opus[1m]", fastMode = false, skipDangerousModePermissionPrompt = true}
+# tui = "fullscreen" keeps the input bar and any dialog pinned to the pane instead of
+# scrolling away, so what mngr captures is what is actually holding the input. Note it
+# puts claude in the alternate screen, where tmux stops accumulating scrollback -- history
+# is then scrolled inside claude rather than through tmux. Revert this key alone if the
+# workspace terminal panel loses its scroll-back.
+# autoUpdates = false stops claude offering to change its update channel; the version is
+# pinned below and by the image, so that prompt could only ever be noise.
+settings_overrides__extend = {model = "opus[1m]", fastMode = false, skipDangerousModePermissionPrompt = true, tui = "fullscreen", autoUpdates = false}
 # Launch every claude agent through the OOM band wrapper instead of `claude`
 # directly. The wrapper (system/services/oom_priority/bin/claude_oom_launch.py) sets its own
 # oom_score_adj to the user- or worker-agent band, records its pid in the
