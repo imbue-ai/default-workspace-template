@@ -67,8 +67,8 @@ PUBLIC_FILES = glob(
         "libs/resource_guards/**",
         "libs/skitwright/**",
         # Product apps are public. Deployment/infra apps (modal_litellm,
-        # remote_service_connector) and internal tools (slack_exporter) are
-        # absent by design.
+        # remote_service_connector, observability, share_relay) and internal
+        # tools (slack_exporter) are absent by design.
         "apps/minds/**",
         # scripts/ public subset: each entry is referenced by public code,
         # docs, or the shipped wheel (see the spec's boundary table). The

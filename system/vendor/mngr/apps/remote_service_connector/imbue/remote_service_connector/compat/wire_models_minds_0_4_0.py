@@ -47,6 +47,9 @@ RELEASE_DATE = date(2026, 8, 18)
 # this date deliberately). Set to the release date + the ~1 month support
 # window; later releases that share this strictly-parsed surface extend this
 # date instead of adding a new snapshot (see docs: apps/minds/docs/release.md).
+# Also covers minds 0.4.1 (released 2026-08-18): its strictly-parsed connector
+# surface is identical to 0.4.0's (no wire_types or connector response changes
+# between the two tags), and its support window ends the same date.
 SUPPORT_ENDS = date(2026, 9, 18)
 
 
