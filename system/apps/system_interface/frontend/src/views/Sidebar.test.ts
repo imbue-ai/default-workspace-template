@@ -37,6 +37,7 @@ import m from "mithril";
 import { getPrimaryAgentId } from "../base-path";
 import type { AppEntry } from "../models/AgentManager";
 import { getApps } from "../models/AgentManager";
+import { applyMemberTitleChange } from "../models/MemberTitles";
 import type { ProjectInfo } from "../models/Projects";
 import { EVERYTHING_VIEW_ID } from "../models/Projects";
 import type { SidebarAttrs, SidebarTabRow } from "./Sidebar";
@@ -452,6 +453,29 @@ describe("Sidebar pinned-app rows", () => {
       const { root } = mountSidebar(attrs);
       expect(root.querySelector(".project-rail-pin")).toBeNull();
     } finally {
+      vi.mocked(getApps).mockReturnValue([]);
+    }
+  });
+
+  it("calls a renamed app what the user named it, the unpin button included", () => {
+    // The shortcut and the tab list are two views of one object, so a rename
+    // has to reach the row's own control too -- announcing the registration
+    // name there would leave the row and its button disagreeing.
+    vi.mocked(getApps).mockReturnValue([DEMO_APP]);
+    applyMemberTitleChange("service:grafana", "Dashboards");
+    try {
+      const attrs = makeAttrs({
+        rows: [{ ref: "service:grafana", kind: "app", label: "Dashboards", isOpen: false }],
+      });
+      const { root, redraw } = mountSidebar(attrs);
+      root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+      redraw();
+
+      const shortcut = root.querySelector(".project-rail-shortcut.group");
+      expect(shortcut?.textContent).toContain("Dashboards");
+      expect(root.querySelector('[aria-label="Unpin Dashboards"]')).not.toBeNull();
+    } finally {
+      applyMemberTitleChange("service:grafana", null);
       vi.mocked(getApps).mockReturnValue([]);
     }
   });
