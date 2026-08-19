@@ -1,11 +1,15 @@
 /**
- * The per-agent "Powered by <harness>" credit -- a plain, non-clickable label.
+ * The per-agent harness credit -- a plain, non-clickable label.
+ *
+ * The harness declares the WHOLE credit string ("Powered by Codex", "Powered by Pi Coding"),
+ * prefix included; this renders it verbatim and adds nothing. A harness that wants no credit
+ * declares "" (claude does), and then nothing renders at all.
  *
  * The credit is a pure function of the agent's harness, so it must never blink with the live
  * model choice, never wait on the `/api/harnesses` catalog fetch, and never vanish when the
  * model bar returns null. It is fetched once per agent from `/api/agents/:id/powered-by` and
  * cached; nothing renders until that endpoint answers -- which is exactly when the agent is
- * real (a proto-agent 404s, so no credit shows for it). Once we have the label it never
+ * real (a proto-agent 404s, so no credit shows for it). Once we have the text it never
  * changes for that agent.
  */
 
@@ -44,8 +48,14 @@ export const PoweredByCredit: m.Component<{ agentId: string }> = {
       void loadLabel(agentId);
       return null;
     }
+    // "" is a real, cached answer -- the harness declaring "show no credit" -- not a missing
+    // one, so this renders nothing WITHOUT re-fetching (the `undefined` check above already
+    // handled "not loaded yet").
+    if (label === "") {
+      return null;
+    }
     // A static span (not a button): same font as the neighbouring action buttons, but not
-    // interactive and not focusable.
-    return m("span", { class: "composer-under-bar-credit" }, `Powered by ${label}`);
+    // interactive and not focusable. The text is the harness's verbatim string.
+    return m("span", { class: "composer-under-bar-credit" }, label);
   },
 };
