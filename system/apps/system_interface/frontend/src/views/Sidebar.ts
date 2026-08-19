@@ -493,6 +493,13 @@ export function Sidebar(): m.Component<SidebarAttrs> {
   // not track what was typed would have each keystroke reverted on the next
   // frame.
   let renameDraft = "";
+  // Whether the pointer is inside the rail's slot -- which is to say over the
+  // rail card or over any floating card hanging off it, since every one of
+  // those is a descendant of the slot. Only read when a rename ends: the
+  // `mouseleave` that would have collapsed the rail is swallowed while a
+  // rename field is up, and the browser sends exactly one per crossing, so
+  // ending the edit has to make good on it (see `endRename`).
+  let isPointerOverRail = false;
   let searchQuery = "";
   let menuError: string | null = null;
   let rootElement: HTMLElement | null = null;
@@ -584,8 +591,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
    *  gives a blank field, so canceling a half-typed edit can never blank a
    *  chosen name out. */
   function commitRename(row: SidebarTabRow, typed: string, attrs: SidebarAttrs): void {
-    renamingRef = null;
-    renameDraft = "";
+    endRename();
     const title = typed.trim();
     if (title === "" || title === row.label) return;
     attrs.onRenameRow(row, title);
@@ -597,10 +603,23 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     renameDraft = row.label;
   }
 
-  /** Leave the rename field without committing what was typed. */
-  function cancelRename(): void {
+  /** Leave a row's inline rename field, whether what was typed is being
+   *  committed or dropped.
+   *
+   *  Folds the rail up when the pointer has already gone. A rename field holds
+   *  the rail open through the `mouseleave` that would otherwise collapse it
+   *  (see the slot's own handler -- collapsing mid-edit removes the input, and
+   *  the native blur-on-removal would file a half-typed name nobody asked to
+   *  file), and the browser sends exactly one leave per crossing, so there is
+   *  none left to fold the rail up once the edit is over. Conditional on
+   *  `isPointerOverRail` rather than unconditional, because a rename just as
+   *  easily ends with the pointer still resting on the rail -- Enter without
+   *  having moved -- and collapsing there would snap it shut with no
+   *  `mouseenter` coming to bring it back. */
+  function endRename(): void {
     renamingRef = null;
     renameDraft = "";
+    if (!isPointerOverRail) expanded = false;
   }
 
   /** Whether a row is the primary agent's own chat, which has no destroy verb. */
@@ -919,7 +938,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
         },
         onkeydown: (event: KeyboardEvent) => {
           if (event.key === "Enter") (event.target as HTMLInputElement).blur();
-          else if (event.key === "Escape") cancelRename();
+          else if (event.key === "Escape") endRename();
         },
       }),
     ]);
@@ -1361,7 +1380,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
         closeMenus();
         // The row being renamed does not survive the switch either: it is not
         // even necessarily still in the destination view's own row list.
-        cancelRename();
+        endRename();
       }
       lastRenderedViewId = attrs.activeViewId;
       const isEverything = isEverythingView(attrs.activeViewId);
@@ -1404,6 +1423,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
             window.removeEventListener("blur", handleWindowBlur);
           },
           onmouseenter: () => {
+            isPointerOverRail = true;
             expanded = true;
           },
           onmouseleave: () => {
@@ -1421,6 +1441,12 @@ export function Sidebar(): m.Component<SidebarAttrs> {
             // the rail's own card, and collapsing out from under a half-typed
             // name would commit whatever was typed so far (native blur-on-
             // removal) without the user having asked to.
+            //
+            // Recorded before either exception takes it, since this is the
+            // only leave the browser sends for this crossing: an edit that
+            // ends after it has to know the pointer is gone to fold the rail
+            // up in its place (see `endRename`).
+            isPointerOverRail = false;
             if (openMenu !== null || renamingRef !== null) return;
             closeMenus();
           },

@@ -681,6 +681,44 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
     // The row reads as plain text again, not a field.
     expect(root.querySelector('input[value="Should not stick"]')).toBeNull();
   });
+
+  it("folds the rail back up when a rename ends after the pointer has already gone", () => {
+    const rows: SidebarTabRow[] = [{ ref: "chat:agent-1", kind: "chat", label: "Chat 1", isOpen: true }];
+    const attrs = makeAttrs({ rows });
+    const { root, redraw } = mountSidebar(attrs);
+    const slot = root.firstElementChild;
+    slot?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    const input = typeIntoRenameField(root, redraw, "Chat 1", "Renamed Chat");
+    // The pointer leaves while the field is up. That leave is deliberately
+    // swallowed -- collapsing mid-edit would commit a half-typed name -- and
+    // it is the only one the browser sends, so nothing is left to fold the
+    // rail up once the edit is over.
+    slot?.dispatchEvent(new MouseEvent("mouseleave"));
+    redraw();
+    expect(root.querySelector(".project-rail-search")).not.toBeNull();
+
+    input.dispatchEvent(new Event("blur"));
+    redraw();
+    expect(attrs.onRenameRow).toHaveBeenCalledWith(rows[0], "Renamed Chat");
+    expect(root.querySelector(".project-rail-search")).toBeNull();
+  });
+
+  it("leaves the rail open when a rename ends with the pointer still on it", () => {
+    const rows: SidebarTabRow[] = [{ ref: "chat:agent-1", kind: "chat", label: "Chat 1", isOpen: true }];
+    const attrs = makeAttrs({ rows });
+    const { root, redraw } = mountSidebar(attrs);
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    const input = typeIntoRenameField(root, redraw, "Chat 1", "Renamed Chat");
+    input.dispatchEvent(new Event("blur"));
+    redraw();
+    // No mouseleave yet: the pointer is still resting on the rail, and a real
+    // one is still coming to collapse it whenever it goes.
+    expect(root.querySelector(".project-rail-search")).not.toBeNull();
+  });
 });
 
 describe("Sidebar tooltips", () => {
