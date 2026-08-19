@@ -1756,6 +1756,11 @@ body {
   --si-pane-surface: #ffffff;
   --si-pane-border: rgba(0, 0, 0, 0.09);
   --si-pane-radius: 12px;
+  /* A tab's own insets. Named because the drag ghost has to restate them from
+     outside the theme root -- see `body > .dv-tab.dv-dragged .dv-default-tab`
+     -- and the two must not drift. */
+  --si-tab-padding: 6px 12px;
+  --si-tab-gap: 4px;
   /* Half of the 4px separator: each of the two neighbours contributes its own
      inset, and the outermost panes get the same half against the canvas edge. */
   --si-pane-inset: 2px;
@@ -1934,6 +1939,20 @@ body > .dv-tab.dv-dragged {
   border-radius: var(--si-pane-radius) !important;
 }
 
+/* The ghost's INSIDE, for the same reason and with a sharper edge to it: the
+   clone carries the outer `.dv-tab`'s computed style as inline styles, but
+   only that element's -- its descendants keep their classes and lose every
+   rule that was scoped under `.dockview-theme-light`, because the clone hangs
+   off `<body>` and no longer has that ancestor. `padding` and `gap` are not
+   inherited, so the inner `.dv-default-tab` rendered with neither: the icon
+   sat flush against the ghost's left edge with the title against it. Restated
+   here from the same variables the live tab uses, so a dragged tab looks like
+   the tab it came from. */
+body > .dv-tab.dv-dragged .dv-default-tab {
+  padding: var(--si-tab-padding);
+  gap: var(--si-tab-gap);
+}
+
 .dockview-theme-light .dv-tab.dv-active-tab {
   border-color: var(--si-pane-border);
 }
@@ -2029,7 +2048,7 @@ body > .dv-tab.dv-dragged {
   font-family: var(--font-family-base);
   font-size: 13px;
   font-weight: 500;
-  padding: 6px 12px;
+  padding: var(--si-tab-padding);
   gap: 8px;
 }
 
@@ -2276,7 +2295,7 @@ body > .dv-tab.dv-dragged {
    `.dockview-theme-light .dv-default-tab`'s own `gap: 8px` above -- which is
    what left this at 8px despite this rule. */
 .dockview-theme-light .dv-default-tab.dv-custom-tab {
-  gap: 4px;
+  gap: var(--si-tab-gap);
 }
 
 /* Per-agent liveness dot on chat tabs, reflecting the agent's mngr lifecycle
