@@ -645,7 +645,9 @@ export function Sidebar(): m.Component<SidebarAttrs> {
       refresh: () => attrs.onRefreshRow(row),
       share:
         row.kind === "app"
-          ? { label: `Share ${serviceNameFromRef(row.ref) ?? row.label}`, run: () => attrs.onShareApp(row) }
+          ? // The row already carries the chosen name; the share label follows it
+            // rather than the registered service name (see the tab's own build).
+            { label: `Share ${row.label}`, run: () => attrs.onShareApp(row) }
           : null,
       rename: () => beginRename(row),
       hideTab: row.isOpen ? () => attrs.onHideRowTab(row) : null,

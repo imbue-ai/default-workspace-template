@@ -735,7 +735,14 @@ function tabMenuEntries(panelId: string): ObjectMenuEntry[] {
     share:
       kind === "app" && params.serviceName !== undefined
         ? {
-            label: `Share ${params.serviceName}`,
+            // Named the way the tab is, not the way the registry is. The
+            // service name is the app's stable id (it keys apps.toml, the
+            // supervisord program and the ref), and every other surface
+            // already shows the chosen name over it -- this label was the one
+            // place the id still reached the user, reading "Share web"
+            // directly above "Quit Docs" for a renamed app. The share itself
+            // is still keyed by the service name below.
+            label: `Share ${displayNameForMember(memberRef("app", params.serviceName), params.serviceName)}`,
             run: () => {
               shareServiceName = params.serviceName ?? null;
               showShareModal = true;
