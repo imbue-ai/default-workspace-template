@@ -662,7 +662,7 @@ def test_get_harnesses_lists_the_claude_catalog(client: FlaskClient) -> None:
     # Each option carries the suffix-free reported id the matcher keys on.
     assert claude["options"][0]["harness_reported_model_id"] == "claude-opus-5"
     assert claude["switch_mode"] == "eager_then_reconcile"
-    assert claude["powered_by_label"] == "Claude Code"
+    assert claude["powered_by_text"] == ""
 
 
 def test_get_harnesses_includes_every_harness_regardless_of_the_flag(
@@ -684,24 +684,24 @@ def test_get_harnesses_includes_every_harness_regardless_of_the_flag(
     assert client.get("/api/harnesses").get_json() == without_flag
 
 
-def test_powered_by_returns_the_harness_product_name(client: FlaskClient, tmp_path: Path) -> None:
-    """The per-agent powered-by endpoint returns the agent harness's product-name label."""
+def test_powered_by_is_empty_for_a_harness_that_declares_no_credit(client: FlaskClient, tmp_path: Path) -> None:
+    """Claude declares "" as its credit text, so the endpoint returns it and nothing renders."""
     agent_id = "agent-00000000000000000000000000000010"
     agent_info = _model_agent_info(agent_id, tmp_path)
     with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
         response = client.get(f"/api/agents/{agent_id}/powered-by")
     assert response.status_code == 200
-    assert response.get_json() == {"label": "Claude Code"}
+    assert response.get_json() == {"label": ""}
 
 
-def test_powered_by_resolves_the_label_per_harness(client: FlaskClient, tmp_path: Path) -> None:
-    """The label is a pure function of the agent's harness (codex -> "Codex")."""
+def test_powered_by_resolves_the_text_per_harness(client: FlaskClient, tmp_path: Path) -> None:
+    """The text is a pure function of the agent's harness, prefix included."""
     agent_id = "agent-00000000000000000000000000000011"
     agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
     with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
         response = client.get(f"/api/agents/{agent_id}/powered-by")
     assert response.status_code == 200
-    assert response.get_json() == {"label": "Codex"}
+    assert response.get_json() == {"label": "Powered by Codex"}
 
 
 def test_powered_by_unknown_agent_returns_404(client: FlaskClient) -> None:
