@@ -65,7 +65,7 @@ import { pickableApps } from "./AllAppsPicker";
 import { serviceIconMarkup } from "./appIcon";
 import { NewTabLauncher, buildLauncherRows } from "./NewTabLauncher";
 import type { LaunchKind, LauncherRow } from "./NewTabLauncher";
-import { OBJECT_MENU_DIVIDER, objectMenuEntries } from "./objectMenu";
+import { OBJECT_MENU_DIVIDER, isRenameableKind, objectMenuEntries } from "./objectMenu";
 import type { ObjectMenuActions, ObjectMenuEntry, ObjectMenuKind } from "./objectMenu";
 import { placeMenu } from "./Sidebar";
 import type { MenuAnchor, QuickAddTabType, SidebarTabRow } from "./Sidebar";
@@ -953,12 +953,17 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
     refreshTitleFade();
   };
 
-  /** Whether this tab's object can be renamed at all: chat, terminal,
-   *  browser and app all can (see ``objectMenuKindForPanel``); a launcher, a
-   *  subagent view or an ad-hoc URL page has no object behind it to name. */
+  /** Whether this tab's object can be renamed at all. Two things have to hold:
+   *  it must be one of the four consolidated kinds (a launcher, a subagent view
+   *  or an ad-hoc URL page has no object behind it to name), and that kind's
+   *  name must be the user's to choose rather than its own identity -- which is
+   *  ``isRenameableKind``, the same predicate the menu gates its Rename entry
+   *  on, so the double-click and the menu can never disagree. */
   const isRenameable = (): boolean => {
     const params = panelParams.get(options.id);
-    return params !== undefined && objectMenuKindForPanel(params) !== null;
+    if (params === undefined) return false;
+    const kind = objectMenuKindForPanel(params);
+    return kind !== null && isRenameableKind(kind);
   };
 
   /** The ``.dv-tab`` dockview wraps this renderer in. That element, not this
@@ -1020,10 +1025,9 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
   content.addEventListener("dblclick", (event) => {
     // A dropdown row only focuses; renaming happens on the strip.
     if (isOverflowRow) return;
-    // Only one of the four consolidated kinds is editable (see
-    // ``isRenameable``). For everything else the event still propagates -- to
-    // dockview a double-click on a tab is just a click, and the tab should
-    // keep behaving like one.
+    // Not every tab is editable (see ``isRenameable``). For the rest the event
+    // still propagates -- to dockview a double-click on a tab is just a click,
+    // and the tab should keep behaving like one.
     if (!isRenameable()) return;
     event.preventDefault();
     event.stopPropagation();

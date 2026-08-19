@@ -4,7 +4,7 @@ Follow-up work on projects, from a design review of the shipped build and a pass
 
 **Refresh works on terminals**, where it means reattaching the tmux session. The session outlives the panel, so a refresh keeps its scrollback.
 
-**Rename works on every kind**, not just chats. Names are filed by ref in the machine-wide title store, so renaming needs no open tab and touches no identity: a renamed terminal keeps its tmux session name and a renamed browser keeps its profile. A chat stays the one kind whose rename also moves the agent's own canonical name.
+**Rename now covers apps as well as chats, and is withheld from terminals and browsers.** A chat's ref is its stable agent id and an app's is its registered service name, so a chosen name is free to move and does. A terminal and a browser have no identity apart from their names — a terminal is filed under its tmux session name, a browser under a Chromium profile directory — so a rename there could only ever be a display name laid over the top, leaving `tmux ls`, the profile on disk, and every stored reference still saying the old one. Rather than offer a rename that stops at the surface, both keep their derived numbering. Renaming needs no open tab, and a chat's rename also moves the agent's own canonical name.
 
 **Quit is the single destructive verb** for all four kinds, and is withheld for the primary agent, which runs the workspace's own services. It stays deliberately weaker for an app: the app leaves the registry and every project, but the program answering on its port keeps serving.
 

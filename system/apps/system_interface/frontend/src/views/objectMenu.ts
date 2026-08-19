@@ -65,6 +65,27 @@ export type ObjectMenuEntry = ObjectMenuItem | typeof OBJECT_MENU_DIVIDER;
  * way the surface calling this currently displays it, and only the caller
  * knows what that is right now.
  */
+/**
+ * Whether a kind's name is the user's to choose.
+ *
+ * A chat is: it is an mngr agent, whose ref is its stable agent id and whose
+ * name is separate metadata, so a rename moves the name everywhere the agent
+ * is known -- ``mngr`` included -- and no reference to it has to move.
+ *
+ * A terminal and a browser are NOT. Neither has an identity apart from its
+ * name: a terminal is filed as ``terminal:<tmux session name>`` and a browser
+ * as ``service:browser?session=<name>``, where that name is also a live tmux
+ * session and a Chromium profile directory on disk. A rename could only ever
+ * have been a display name laid over the top, leaving ``tmux ls``, the profile
+ * directory, and every stored ref still saying the old one -- so the two are
+ * left to their derived numbering instead of being offered a rename that
+ * stops at the surface. Giving them a stable id of their own, so the name is
+ * free to move like a chat's, is the real fix and is its own piece of work.
+ */
+export function isRenameableKind(kind: ObjectMenuKind): boolean {
+  return kind === "chat" || kind === "app";
+}
+
 export interface ObjectMenuActions {
   refresh: () => void;
   share: { label: string; run: () => void } | null;
@@ -76,15 +97,13 @@ export interface ObjectMenuActions {
 /**
  * The verb list for one object, in display order.
  *
- * Refresh and Rename apply to all four kinds unconditionally. Refresh means
- * "reload what the tab is showing" for chat/browser/app, and "reattach the
- * object's persistent session" for a terminal (see ``refreshPanelContent`` in
- * DockviewWorkspace, which is where that distinction actually lives -- this
- * module only fixes that the verb is offered, not what it does). Rename opens
- * the same inline editor for every kind; what committing it does server-side
- * differs by kind (a chat's name pair moves with it, the other three are
- * display-only) -- see MemberTitles.ts and ``createCustomTab``'s docstring in
- * DockviewWorkspace, where that asymmetry is spelled out in full.
+ * Refresh applies to all four kinds. It means "reload what the tab is
+ * showing" for chat/browser/app, and "reattach the object's persistent
+ * session" for a terminal (see ``refreshPanelContent`` in DockviewWorkspace,
+ * which is where that distinction actually lives -- this module only fixes
+ * that the verb is offered, not what it does).
+ * Rename is offered for the kinds whose name is theirs to choose, which is
+ * what ``isRenameableKind`` decides and why.
  * Share is an app-only affordance: the share surface is per registered
  * service, and the other three kinds have none. Hide tab and the destructive
  * verb are each omitted per-OBJECT rather than per-kind, through ``actions``,
@@ -92,17 +111,22 @@ export interface ObjectMenuActions {
  * (open or backgrounded, allocated or not) rather than on its kind alone.
  */
 export function objectMenuEntries(kind: ObjectMenuKind, actions: ObjectMenuActions): ObjectMenuEntry[] {
-  const entries: ObjectMenuEntry[] = [{ label: "Refresh", iconName: "refresh", run: actions.refresh }];
+  const opening: ObjectMenuEntry[] = [{ label: "Refresh", iconName: "refresh", run: actions.refresh }];
   if (kind === "app" && actions.share !== null) {
-    entries.push({ label: actions.share.label, iconName: "share", run: actions.share.run });
+    opening.push({ label: actions.share.label, iconName: "share", run: actions.share.run });
   }
-  entries.push(OBJECT_MENU_DIVIDER);
-  entries.push({ label: "Rename", iconName: "edit", run: actions.rename });
+  const closing: ObjectMenuEntry[] = [];
+  if (isRenameableKind(kind)) {
+    closing.push({ label: "Rename", iconName: "edit", run: actions.rename });
+  }
   if (actions.hideTab !== null) {
-    entries.push({ label: "Hide tab", iconName: "minus", run: actions.hideTab });
+    closing.push({ label: "Hide tab", iconName: "minus", run: actions.hideTab });
   }
   if (actions.quit !== null) {
-    entries.push({ label: actions.quit.label, iconName: "power", isDestructive: true, run: actions.quit.run });
+    closing.push({ label: actions.quit.label, iconName: "power", isDestructive: true, run: actions.quit.run });
   }
-  return entries;
+  // The divider earns its place only when it has something on both sides: a
+  // backgrounded terminal still allocating its session has neither a rename,
+  // a tab to hide, nor a destroy, and a menu must not end on a rule.
+  return closing.length === 0 ? opening : [...opening, OBJECT_MENU_DIVIDER, ...closing];
 }
