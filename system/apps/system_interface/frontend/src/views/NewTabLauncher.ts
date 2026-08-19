@@ -333,6 +333,12 @@ function openNewTiles(): readonly { kind: LaunchKind; label: string }[] {
 // hover that explains why it does nothing.
 const FILE_VIEWER_TOOLTIP = "A file viewer is coming — no app backs it yet";
 
+// Replaces the "Open new" heading while a create this pane asked for is in
+// flight. The heading carries it rather than a spinner over the tiles: the
+// tiles are already visibly stood down, and what the user needs to know is
+// that the click landed.
+const STARTING_TITLE = "Starting…";
+
 export interface NewTabLauncherAttrs {
   // Everything the machine holds, already flattened (see buildLauncherRows).
   rows: readonly LauncherRow[];
@@ -347,6 +353,10 @@ export interface NewTabLauncherAttrs {
   // "Now" for the recency column. Defaults to the wall clock; passed in by
   // tests so the rendered ages are deterministic.
   nowMs?: number;
+  // Whether this pane is waiting on a create it already asked for. The tiles
+  // stand down and say so: `mngr create` takes seconds, and a launcher that
+  // looked untouched invited a second click that started a second object.
+  isAwaitingCreate?: boolean;
   // Start a new object of this kind in this pane. Never fired for "files".
   onOpenNew: (kind: LaunchKind) => void;
   // Open an object the active view already shows. Membership does not change.
@@ -547,12 +557,19 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
 
       return m("div", { class: "new-tab-launcher bg-surface h-full w-full overflow-y-auto px-6 py-5" }, [
         m("div", { class: "mx-auto w-full max-w-4xl" }, [
-          m("h2", { class: `${SECTION_HEADING_CLASS} mb-2 px-2` }, OPEN_NEW_TITLE),
+          m(
+            "h2",
+            { class: `${SECTION_HEADING_CLASS} mb-2 px-2` },
+            attrs.isAwaitingCreate === true ? STARTING_TITLE : OPEN_NEW_TITLE,
+          ),
           m(
             "div",
             { class: "flex gap-2 px-2" },
             openNewTiles().map((tile) => {
-              const isDisabled = tile.kind === "files";
+              // A tile stands down while this pane is starting something --
+              // both so a second click cannot start a second object, and so
+              // the wait is visible at all.
+              const isDisabled = tile.kind === "files" || attrs.isAwaitingCreate === true;
               return m(
                 "button",
                 {
@@ -566,7 +583,9 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
                       ? "text-text-faint cursor-not-allowed"
                       : "text-text-primary hover:bg-bg-hover cursor-pointer"),
                   onclick: isDisabled ? undefined : () => attrs.onOpenNew(tile.kind),
-                  ...(isDisabled ? hoverTooltipAttrs(FILE_VIEWER_TOOLTIP) : {}),
+                  ...(tile.kind === "files" && attrs.isAwaitingCreate !== true
+                    ? hoverTooltipAttrs(FILE_VIEWER_TOOLTIP)
+                    : {}),
                 },
                 [
                   m(
