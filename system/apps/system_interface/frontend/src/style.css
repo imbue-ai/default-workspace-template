@@ -1761,6 +1761,9 @@ body {
      -- and the two must not drift. */
   --si-tab-padding: 6px 12px;
   --si-tab-gap: 4px;
+  /* The attention flash (see `si-tab-flash`). Amber is deliberately not in the
+     palette's working set: it can only mean "look here for a moment". */
+  --si-tab-flash-color: #fde68a;
   /* Half of the 4px separator: each of the two neighbours contributes its own
      inset, and the outermost panes get the same half against the canvas edge. */
   --si-pane-inset: 2px;
@@ -1921,6 +1924,45 @@ body {
   border: 1px solid transparent;
   border-bottom: none;
   border-radius: var(--si-pane-radius) var(--si-pane-radius) 0 0;
+}
+
+/* The attention flash: what a tab does when it is opened again while already
+   open. The click has to answer for itself, and the answer cannot be "the tab
+   is now active" -- it usually already was, which is the whole reason nothing
+   appeared to happen.
+
+   A wash of colour rather than the opacity blink this used to be: fading the
+   tab out and back read as the tab going away, which is the opposite of "here
+   it is". Amber because it is the one hue this workspace does not otherwise
+   use -- the accent means active and green, and grey is every resting state --
+   so the flash cannot be mistaken for a state the tab has entered and stayed
+   in. It paints ONLY for the animation's length, so the standing rule that an
+   inactive tab carries no background is untouched.
+
+   Driven by a class rather than the Web Animations API so the keyframes sit
+   with the rest of the tab's appearance, and so `prefers-reduced-motion` can
+   reach it. */
+@keyframes si-tab-flash {
+  0%,
+  100% {
+    background-color: transparent;
+  }
+  25%,
+  75% {
+    background-color: var(--si-tab-flash-color);
+  }
+}
+
+.dockview-theme-light .dv-tab.si-tab-flash {
+  animation: si-tab-flash 320ms ease-in-out 2;
+}
+
+/* Reduced motion still needs the acknowledgement, just not the pulsing: one
+   hold and release rather than two round trips. */
+@media (prefers-reduced-motion: reduce) {
+  .dockview-theme-light .dv-tab.si-tab-flash {
+    animation: si-tab-flash 320ms ease-in-out 1;
+  }
 }
 
 /* The drag ghost: dockview-core clones the dragged `.dv-tab` (tab.js,

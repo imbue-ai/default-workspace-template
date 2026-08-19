@@ -1465,9 +1465,50 @@ function launcherPanelIdInGroup(group: DockviewGroupPanel | null): string | null
  *  a tab, an app already open from the rail or the all-apps popover -- so the
  *  click visibly does something ("it is right there") instead of appearing to
  *  do nothing. */
+/**
+ * Launchers whose "Open new" tile is waiting on a create.
+ *
+ * Keyed by launcher panel id rather than being a single flag, because each
+ * pane's launcher is its own question -- two panes may each be starting
+ * something, and one waiting must not disable the other.
+ *
+ * An entry is dropped in a `finally`, so a create that FAILS releases the
+ * launcher too: the alert says what went wrong and the tiles have to be usable
+ * to try again.
+ */
+const launchersAwaitingCreate = new Set<string>();
+
+/** Whether this launcher is waiting on a create it asked for. Read by the
+ *  launcher renderer to show its pending state and stand its tiles down. */
+export function isLauncherAwaitingCreate(panelId: string): boolean {
+  return launchersAwaitingCreate.has(panelId);
+}
+
+function releaseLauncherCreate(launcherPanelId: string | null): void {
+  if (launcherPanelId !== null) launchersAwaitingCreate.delete(launcherPanelId);
+}
+
+const TAB_FLASH_CLASS = "si-tab-flash";
+
+/**
+ * Flash a tab to answer a click that would otherwise look like nothing.
+ *
+ * The class goes on the `.dv-tab` (the card), not on the renderer's own
+ * element inside it, so the wash covers the whole tab shape. It is removed
+ * when the animation ends, and removed BEFORE being re-added so a second
+ * click on the same tab restarts the animation rather than landing on an
+ * element that already carries the class and so plays nothing.
+ *
+ * Reflow between the two is what makes the restart take: without it the
+ * browser coalesces the remove and the add into no change at all.
+ */
 function flashPanelTab(panelId: string): void {
-  const handle = tabHandlesByPanelId.get(panelId);
-  handle?.element.animate([{ opacity: 1 }, { opacity: 0.3 }, { opacity: 1 }], { duration: 240, iterations: 2 });
+  const tab = tabHandlesByPanelId.get(panelId)?.element.closest(".dv-tab");
+  if (!(tab instanceof HTMLElement)) return;
+  tab.classList.remove(TAB_FLASH_CLASS);
+  void tab.offsetWidth;
+  tab.classList.add(TAB_FLASH_CLASS);
+  tab.addEventListener("animationend", () => tab.classList.remove(TAB_FLASH_CLASS), { once: true });
 }
 
 /**
@@ -1603,11 +1644,20 @@ function createLauncherRenderer(panelId: string): IContentRenderer {
             rows: launcherRows(),
             memberRows: launcherMemberRows(),
             isEverything: mountedViewId !== null && isEverythingView(mountedViewId),
+            isAwaitingCreate: isLauncherAwaitingCreate(panelId),
             onOpenNew: (kind: LaunchKind) => {
               openTabOfTypeInGroup(kind, groupForPanel(panelId), panelId);
             },
             onOpenMember: (row: LauncherRow) => {
-              if (openMemberRef(row.ref, groupForPanel(panelId)) !== null) retireLauncher(panelId);
+              // A row for something ALREADY open is "show me that one", not
+              // "put something in this pane" -- so the launcher stays and the
+              // revealed tab flashes instead. Asked before the open, since
+              // openMemberRef answers with a panel id either way and cannot be
+              // read afterwards to tell a reveal from a creation.
+              const wasAlreadyOpen = panelIdForMemberRef(row.ref) !== null;
+              if (openMemberRef(row.ref, groupForPanel(panelId)) !== null && !wasAlreadyOpen) {
+                retireLauncher(panelId);
+              }
             },
             onOpenFromMachine: (row: LauncherRow) => {
               openFromMachine(row.ref, panelId);
@@ -1642,7 +1692,11 @@ function openFromMachine(ref: string, launcherPanelId: string): void {
         // Opening it is still worth doing; the next open files it again.
       }
     }
-    if (openMemberRef(ref, targetGroup) !== null) retireLauncher(launcherPanelId);
+    // Same rule as the "in this project" table above: an object this view did
+    // not show can still be open in another one, and revealing it is not a
+    // reason to take the list away.
+    const wasAlreadyOpen = panelIdForMemberRef(ref) !== null;
+    if (openMemberRef(ref, targetGroup) !== null && !wasAlreadyOpen) retireLauncher(launcherPanelId);
     m.redraw();
   })();
 }
@@ -2888,6 +2942,13 @@ export function openSubagentTab(agentId: string, subagentSessionId: string, desc
  * The launcher that asked is only retired once the object actually exists,
  * which is why each create path retires it in its own completion handler
  * rather than it being closed here.
+ *
+ * A create in flight holds the launcher that asked for it, and a second ask
+ * from that launcher is dropped. Creating a chat runs `mngr create`, which
+ * takes seconds -- long enough that a launcher sitting there unchanged reads
+ * as a click that missed, and clicking again used to start a SECOND object.
+ * The launcher renders its pending state from the same set (see
+ * `isLauncherAwaitingCreate`), so the wait is visible rather than silent.
  */
 function openTabOfTypeInGroup(
   // LaunchKind rather than QuickAddTabType: the launcher's tiles include the
@@ -2897,6 +2958,11 @@ function openTabOfTypeInGroup(
   targetGroup: DockviewGroupPanel | null,
   launcherPanelId: string | null,
 ): void {
+  if (launcherPanelId !== null) {
+    if (launchersAwaitingCreate.has(launcherPanelId)) return;
+    launchersAwaitingCreate.add(launcherPanelId);
+    m.redraw();
+  }
   if (
     tabType === "chat" ||
     tabType === "codex" ||
@@ -2913,20 +2979,26 @@ function openTabOfTypeInGroup(
     const isFirst = tabType.startsWith("intro-");
     const bareKind = isFirst ? tabType.slice("intro-".length) : tabType;
     const harness: ChatHarness = bareKind === "chat" ? "claude" : (bareKind as ChatHarness);
-    void openNewChat(targetGroup, launcherPanelId, harness, isFirst).then(() => {
+    void openNewChat(targetGroup, launcherPanelId, harness, isFirst).finally(() => {
+      releaseLauncherCreate(launcherPanelId);
       m.redraw();
     });
     return;
   }
   if (tabType === "terminal") {
-    void openNewTerminal(targetGroup).then((panelId) => {
-      if (panelId !== null) retireLauncher(launcherPanelId);
-      m.redraw();
-    });
+    void openNewTerminal(targetGroup)
+      .then((panelId) => {
+        if (panelId !== null) retireLauncher(launcherPanelId);
+      })
+      .finally(() => {
+        releaseLauncherCreate(launcherPanelId);
+        m.redraw();
+      });
     return;
   }
   if (tabType === "browser") {
-    void openNewBrowser(targetGroup, launcherPanelId).then(() => {
+    void openNewBrowser(targetGroup, launcherPanelId).finally(() => {
+      releaseLauncherCreate(launcherPanelId);
       m.redraw();
     });
     return;
@@ -2935,9 +3007,13 @@ function openTabOfTypeInGroup(
   // is whichever app of that name the machine runs, so it opens through the
   // same path as the rail's app rows, and opens nothing where none runs.
   const backingApp = getApps().find((app) => app.name === tabType);
-  if (backingApp === undefined) return;
+  if (backingApp === undefined) {
+    releaseLauncherCreate(launcherPanelId);
+    return;
+  }
   openAppTab(backingApp);
   retireLauncher(launcherPanelId);
+  releaseLauncherCreate(launcherPanelId);
 }
 
 /** The shortcuts that go to an object the active view already shows instead of
