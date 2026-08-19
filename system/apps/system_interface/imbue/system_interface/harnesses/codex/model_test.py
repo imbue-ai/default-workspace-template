@@ -84,7 +84,7 @@ def test_catalog_is_on_change_and_dynamic_with_no_static_options() -> None:
     assert CODEX_CATALOG.switch_mode == SwitchMode.ON_CHANGE
     assert CODEX_CATALOG.picker_mode == PickerMode.DYNAMIC
     assert CODEX_CATALOG.options == ()
-    assert CODEX_CATALOG.powered_by_label == "Codex"
+    assert CODEX_CATALOG.powered_by_text == "Powered by Codex"
     assert CODEX_CATALOG.native_atomic_shoulder_tap_possible is True
 
 
