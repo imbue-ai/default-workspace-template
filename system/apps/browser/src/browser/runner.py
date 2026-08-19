@@ -295,7 +295,8 @@ def create_browser() -> Response:
     background launch persists the manifest itself once the browser is ``running``. The
     only hard pre-check is that Chromium is installed (else nothing to launch -> 503).
 
-    Body ``{"name": "<name>"}`` is optional; omitted -> a random name is generated.
+    Body ``{"name": "<name>"}`` is optional; omitted -> the first free ``browser-<N>``
+    is minted (the canonical form of the "Browser N" display name the UI derives).
     Response ``{"name": <chosen-name>, "key_available": <bool>}``. Errors: 400 invalid
     name, 409 duplicate name or fleet full, 503 Chromium installing."""
     ready, reason = deferred_install_ready()
