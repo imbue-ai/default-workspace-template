@@ -99,6 +99,7 @@ Desktop client / dev loop:
 - `just minds-start` / `just minds-stop` / `just minds-build`
 - `just propagate-changes <agent>` -- sync local mngr into a running Docker agent.
 - `just forward-system-interface <agent>` -- Cloudflare tunnel for an agent.
+- `just sync-vendor-mngr-live [default_workspace_template]` -- rsync the live mngr working tree into `system/vendor/mngr` in default-workspace-template (uncommitted, dev loop). `just minds-start` runs this at launch; run it directly to re-sync without relaunching.
 - `just sync-vendor-mngr [default_workspace_template]` -- sync `system/vendor/mngr` in default-workspace-template via `git archive` (committed snapshot; release flow). See `apps/minds/docs/vendor-mngr-sync.md`.
 - `just create-new-mind-repo <name> [parent_dir]` -- new private DEFAULT_WORKSPACE_TEMPLATE clone.
 
