@@ -936,6 +936,18 @@ def _switch_view_via_rail(page: Page, view_name: str) -> None:
     page.locator(".project-rail-menu [role='menuitem']", has_text=view_name).first.click()
 
 
+def _open_project_settings(page: Page, project_name: str) -> None:
+    """Open one project's settings modal through the rail's switcher.
+
+    The switcher marks the mounted project with a checkmark that becomes the
+    edit pencil under the pointer, so reaching settings is: hover the rail,
+    open the switcher, click that row's pencil.
+    """
+    _open_rail_switcher(page)
+    page.locator(f'button[aria-label="Edit {project_name}"]').click()
+    expect(page.locator(".project-settings-member").first).to_be_visible(timeout=5000)
+
+
 def _collapse_rail(page: Page) -> None:
     """Fold the hover-expanded rail back up, so the dock underneath is clickable.
 
@@ -1746,9 +1758,7 @@ def test_shut_down_terminal_leaves_no_resurrected_tab_in_everything(tmp_path: Pa
             )
             expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=15000)
             page.locator(".new-tab-launcher-row:visible", has_text=terminal_title).first.click()
-            expect(page.locator(".dv-default-tab-content", has_text=terminal_title).first).to_be_visible(
-                timeout=15000
-            )
+            expect(page.locator(".dv-default-tab-content", has_text=terminal_title).first).to_be_visible(timeout=15000)
             wait_for(
                 lambda: everything_file.exists() and session_name in everything_file.read_text(),
                 timeout=15.0,
@@ -1847,14 +1857,16 @@ def _project_members(layout_dir: Path) -> list[str]:
 
 @pytest.mark.timeout(120, func_only=False)
 def test_removing_a_row_from_the_project_unfiles_it_without_destroying_it(tmp_path: Path, page: Page) -> None:
-    """The tab list's row menu unfiles a member from the project rather than destroying it.
+    """Project settings unfiles a member from the project rather than destroying it.
 
-    "Remove from project" is `removalItemsForRow`'s safe verb (see Sidebar.ts):
-    it takes the ref out of the mounted project's member list and undocks its
-    tab, but the object itself is untouched. The removal is asserted against
-    the registry on disk, same as any other membership change; "kept running"
-    is asserted against Everything, which lists every object on the machine
-    regardless of membership and so still has to show this one afterwards.
+    Removing an object from a view is the safe verb, and it lives in the
+    project settings modal's member list -- the rail row's menu no longer
+    carries it, since that menu now renders the same per-kind verb set the dock
+    tab does (objectMenu.ts), where every verb acts on the object rather than
+    on one view of it. The removal is asserted against the registry on disk,
+    same as any other membership change; "kept running" is asserted against
+    Everything, which lists every object on the machine regardless of
+    membership and so still has to show this one afterwards.
     """
     primary_agent_id = "primary-services-agent"
     with _running_e2e_server(tmp_path, _ROW_REMOVAL_PORT, primary_agent_id=primary_agent_id) as (
@@ -1877,13 +1889,20 @@ def test_removing_a_row_from_the_project_unfiles_it_without_destroying_it(tmp_pa
             error_message="the fixture chat was never filed as a member of the starter project",
         )
 
-        # Right-click the chat's row in the rail's tab list, exactly as the
-        # design's row menu offers it, and remove it from the project.
+        # The rail row's own menu must NOT offer it any more: that menu is the
+        # object's verbs, and removal is a property of the view.
         page.locator(".machine-sidebar").hover()
         chat_row = page.locator(".project-rail-tab", has_text="test-agent")
         expect(chat_row).to_have_count(1)
         chat_row.click(button="right")
-        page.locator(".project-rail-menu [role='menuitem']", has_text="Remove from project").click()
+        expect(page.locator(".project-rail-menu")).to_be_visible(timeout=5000)
+        expect(page.locator(".project-rail-menu [role='menuitem']", has_text="Remove from project")).to_have_count(0)
+        page.keyboard.press("Escape")
+
+        # Remove it where the verb actually lives now.
+        _open_project_settings(page, DEFAULT_PROJECT_NAME)
+        page.locator('button[aria-label^="Remove test-agent"]').click()
+        page.locator(".custom-url-dialog-cancel").first.click()
 
         # The tab leaves the mounted project's dock ...
         expect(page.locator(".dv-default-tab-content", has_text="test-agent")).to_have_count(0, timeout=10000)
@@ -1892,7 +1911,7 @@ def test_removing_a_row_from_the_project_unfiles_it_without_destroying_it(tmp_pa
             lambda: _FIXTURE_CHAT_REF not in _project_members(layout_dir),
             timeout=15.0,
             poll_interval=0.1,
-            error_message="Remove from project never took the member out of the registry",
+            error_message="removing the member in project settings never took it out of the registry",
         )
 
         # It kept running rather than being destroyed: nothing was ever docked
@@ -1917,26 +1936,10 @@ _PINNABLE_APP_NAME = "docs-viewer"
 _PINNABLE_APP_REF = f"service:{_PINNABLE_APP_NAME}"
 _PINNABLE_APP_LABEL = f"{_PINNABLE_APP_NAME}-e2elabel"
 
-# The "All apps" heading an app's row currently sits under, read by walking back
-# up the list to the nearest thing that is not a row. The grouping is what the
-# two headings MEAN, so asserting on the heading above the row is what proves an
-# app moved between them -- a heading's mere presence would not. The row is found
-# by its label span rather than its whole textContent, because the row's glyph
-# may be a monogram whose SVG <text> initial leaks into the latter.
-_HEADING_ABOVE_APP_JS = """
-(appName) => {
-  const rows = Array.from(document.querySelectorAll('.project-rail-app'));
-  const row = rows.find((candidate) => {
-    const label = candidate.querySelector('.truncate');
-    return label !== null && label.textContent.trim() === appName;
-  });
-  if (row === undefined) return null;
-  for (let node = row.previousElementSibling; node !== null; node = node.previousElementSibling) {
-    if (!node.classList.contains('project-rail-app')) return node.textContent.trim();
-  }
-  return null;
-}
-"""
+# One app's row inside the "All apps" popover. Matched on its label span
+# rather than the row's whole textContent, because the row's glyph may be a
+# monogram whose SVG <text> initial leaks into the latter.
+_APP_ROW_SELECTOR = ".project-rail-app:has(.truncate:text-is('{name}'))"
 
 
 def _open_all_apps(page: Page) -> None:
@@ -1956,11 +1959,12 @@ def test_pinning_an_app_to_a_project_is_the_same_as_its_membership(tmp_path: Pat
     """Pinning an app IS filing it in the project, and unpinning is unfiling it.
 
     There is one concept here, not two: an app is pinned exactly when the
-    project's member list holds its ``service:<name>`` ref. So "All apps" has
-    exactly two headings -- "Pinned in <Project>" and "Unpinned" -- and the round
-    trip through them has to move the app on the server, not in this browser:
-    pinning puts the ref in the registry on disk and grows a rail shortcut,
-    unpinning takes both away again.
+    project's member list holds its ``service:<name>`` ref. So "All apps" lists
+    exactly the apps the view has NOT pinned -- the pinned ones are already in
+    the rail -- and the round trip has to move the app on the server, not in
+    this browser: pinning puts the ref in the registry on disk, grows a rail
+    shortcut and drops the row from the popover; unpinning, which the rail row's
+    own pin icon does in one click, undoes all three.
 
     The last assertion is the one the design turns on. Unpinning is removing an
     object from a view and nothing more, so the app must still be RUNNING
@@ -1993,23 +1997,20 @@ def test_pinning_an_app_to_a_project_is_the_same_as_its_membership(tmp_path: Pat
         )
         page.evaluate(_WATCH_SURFACE_REMOVALS_JS)
 
-        # Nothing has pinned this app, so it starts under "Unpinned" -- there is
-        # no pinned group at all yet -- and the rail carries no shortcut for it.
+        # Nothing has pinned this app, so the popover -- which lists only what
+        # the view has not pinned -- offers it, and the rail carries no shortcut.
         _open_all_apps(page)
-        assert page.evaluate(_HEADING_ABOVE_APP_JS, _PINNABLE_APP_NAME) == "Unpinned"
-        expect(page.locator(f"text=Pinned in {DEFAULT_PROJECT_NAME}")).to_have_count(0)
+        app_row = page.locator(_APP_ROW_SELECTOR.format(name=_PINNABLE_APP_NAME))
+        expect(app_row).to_have_count(1)
         expect(page.locator(".project-rail-shortcut", has_text=_PINNABLE_APP_NAME)).to_have_count(0)
         assert _PINNABLE_APP_REF not in _project_members(layout_dir)
 
-        # Pin it. The row moves under the project's own heading, the rail grows
-        # a shortcut for it, and -- because pinning IS membership -- the ref
-        # lands in the project's member list on disk.
+        # Pin it. The row leaves the popover -- a pinned app lives in the rail a
+        # few pixels away, so listing it twice is what the filtering removes --
+        # the rail grows a shortcut for it, and, because pinning IS membership,
+        # the ref lands in the project's member list on disk.
         page.locator(f'button[aria-label="Pin {_PINNABLE_APP_NAME}"]').click()
-        page.wait_for_function(
-            f"() => ({_HEADING_ABOVE_APP_JS})({json.dumps(_PINNABLE_APP_NAME)}) === "
-            f"{json.dumps(f'Pinned in {DEFAULT_PROJECT_NAME}')}",
-            timeout=15000,
-        )
+        expect(app_row).to_have_count(0, timeout=15000)
         expect(page.locator(".project-rail-shortcut", has_text=_PINNABLE_APP_NAME)).to_have_count(1)
         wait_for(
             lambda: _PINNABLE_APP_REF in _project_members(layout_dir),
@@ -2021,6 +2022,8 @@ def test_pinning_an_app_to_a_project_is_the_same_as_its_membership(tmp_path: Pat
         # Open it from that shortcut, so there is a live page to lose. Stamp the
         # element holding it: nothing serializes the property, so a surface that
         # answers to it later is necessarily this same element.
+        page.keyboard.press("Escape")
+        expect(page.locator(".project-rail-app")).to_have_count(0, timeout=5000)
         page.locator(".project-rail-shortcut", has_text=_PINNABLE_APP_NAME).click()
         expect(page.locator(app_frame_selector)).to_have_count(1, timeout=_TRIGGER_TIMEOUT_MS)
         page.evaluate(
@@ -2032,15 +2035,21 @@ def test_pinning_an_app_to_a_project_is_the_same_as_its_membership(tmp_path: Pat
             """
         )
 
-        # Unpin it. It goes back under "Unpinned", the shortcut goes with it,
-        # and the ref leaves the project's member list.
-        _open_all_apps(page)
+        # Unpin it from the rail row itself, which is the one-click path now the
+        # popover no longer lists a pinned app. The shortcut goes, the ref leaves
+        # the project's member list, and the app returns to the popover it was
+        # filtered out of.
+        #
+        # The popover has to be dismissed first: an open menu sits on a scrim
+        # that swallows the click dismissing it, precisely so that click does not
+        # also land on whatever was underneath -- the rail included.
+        page.keyboard.press("Escape")
+        expect(page.locator(".project-rail-app")).to_have_count(0, timeout=5000)
+        page.locator(".machine-sidebar").hover()
         page.locator(f'button[aria-label="Unpin {_PINNABLE_APP_NAME}"]').click()
-        page.wait_for_function(
-            f'() => ({_HEADING_ABOVE_APP_JS})({json.dumps(_PINNABLE_APP_NAME)}) === "Unpinned"',
-            timeout=15000,
-        )
-        expect(page.locator(".project-rail-shortcut", has_text=_PINNABLE_APP_NAME)).to_have_count(0)
+        expect(page.locator(".project-rail-shortcut", has_text=_PINNABLE_APP_NAME)).to_have_count(0, timeout=15000)
+        _open_all_apps(page)
+        expect(page.locator(_APP_ROW_SELECTOR.format(name=_PINNABLE_APP_NAME))).to_have_count(1, timeout=15000)
         wait_for(
             lambda: _PINNABLE_APP_REF not in _project_members(layout_dir),
             timeout=15.0,
@@ -2514,6 +2523,8 @@ def test_rail_hover_expansion_holds_a_fixed_layout_and_only_a_pointer_leave_clos
         # Only the pointer actually leaving closes it.
         page.mouse.move(600, 400)
         expect(page.locator(".project-rail-search")).to_have_count(0, timeout=5000)
+
+
 # A conversation whose transcript ends with an unresolved queue-operation/enqueue,
 # so the Claude queue populator surfaces one currently-queued message. Shaped like
 # the real records (a normal exchange, then an enqueue line the watcher feeds to
@@ -2713,9 +2724,9 @@ def test_mobile_client_saves_its_own_arrangement(tmp_path: Path, page: Page) -> 
 
             # The fixture chat auto-opens in the starter project; the debounced
             # autosave then writes the arrangement out -- into the mobile file.
-            expect(
-                mobile_page.locator(".dv-default-tab-content", has_text="test-agent").first
-            ).to_be_visible(timeout=15000)
+            expect(mobile_page.locator(".dv-default-tab-content", has_text="test-agent").first).to_be_visible(
+                timeout=15000
+            )
             wait_for(
                 lambda: (layout_dir / "projects" / f"{DEFAULT_PROJECT_ID}.mobile.json").exists(),
                 timeout=15.0,

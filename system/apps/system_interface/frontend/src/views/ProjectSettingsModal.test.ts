@@ -138,6 +138,7 @@ describe("ProjectSettingsModal member list", () => {
       onSaved: () => {},
       onDeleted: () => {},
       onCancel: () => {},
+      onMemberRemoved: () => {},
     });
 
     expect(JSON.stringify(modal.render())).toContain("No members yet.");
@@ -146,7 +147,13 @@ describe("ProjectSettingsModal member list", () => {
   it("labels each member with its derived name when it was never renamed", () => {
     agentManagerState.agentById["agent-9"] = { name: "Chat-9", display_name: "Chat 9" };
 
-    const modal = makeModal({ project: PROJECT, onSaved: () => {}, onDeleted: () => {}, onCancel: () => {} });
+    const modal = makeModal({
+      project: PROJECT,
+      onSaved: () => {},
+      onDeleted: () => {},
+      onCancel: () => {},
+      onMemberRemoved: () => {},
+    });
     const tree = JSON.stringify(modal.render());
 
     expect(tree).toContain("Chat 9");
@@ -159,7 +166,13 @@ describe("ProjectSettingsModal member list", () => {
   it("prefers a chosen member-titles name over the derived one", () => {
     applyMemberTitleChange("terminal:terminal-4", "Build Server");
 
-    const modal = makeModal({ project: PROJECT, onSaved: () => {}, onDeleted: () => {}, onCancel: () => {} });
+    const modal = makeModal({
+      project: PROJECT,
+      onSaved: () => {},
+      onDeleted: () => {},
+      onCancel: () => {},
+      onMemberRemoved: () => {},
+    });
     const tree = JSON.stringify(modal.render());
 
     expect(tree).toContain("Build Server");
@@ -168,7 +181,13 @@ describe("ProjectSettingsModal member list", () => {
 
   it("removes a member from the working list once the server confirms it", async () => {
     const mockFetch = stubFetch({ ok: true, json: () => Promise.resolve({ project_id: "research", members: [] }) });
-    const modal = makeModal({ project: PROJECT, onSaved: () => {}, onDeleted: () => {}, onCancel: () => {} });
+    const modal = makeModal({
+      project: PROJECT,
+      onSaved: () => {},
+      onDeleted: () => {},
+      onCancel: () => {},
+      onMemberRemoved: () => {},
+    });
     expect(JSON.stringify(modal.render())).toContain("service:docs");
 
     const removeButtons = buttonsByText(modal.render(), "Remove");
@@ -188,7 +207,13 @@ describe("ProjectSettingsModal member list", () => {
 
   it("keeps the member and surfaces an error when the server refuses the removal", async () => {
     stubFetch({ ok: false, status: 404, json: () => Promise.resolve({ detail: "Project 'research' not found" }) });
-    const modal = makeModal({ project: PROJECT, onSaved: () => {}, onDeleted: () => {}, onCancel: () => {} });
+    const modal = makeModal({
+      project: PROJECT,
+      onSaved: () => {},
+      onDeleted: () => {},
+      onCancel: () => {},
+      onMemberRemoved: () => {},
+    });
 
     const removeButtons = buttonsByText(modal.render(), "Remove");
     const docsRemoveButton = removeButtons.find((button) => (button.attrs?.["aria-label"] as string).includes("docs"));
@@ -203,7 +228,13 @@ describe("ProjectSettingsModal member list", () => {
 
 describe("ProjectSettingsModal delete confirmation", () => {
   it("describes deleting as removing the view only, with members left running", () => {
-    const modal = makeModal({ project: PROJECT, onSaved: () => {}, onDeleted: () => {}, onCancel: () => {} });
+    const modal = makeModal({
+      project: PROJECT,
+      onSaved: () => {},
+      onDeleted: () => {},
+      onCancel: () => {},
+      onMemberRemoved: () => {},
+    });
     const deleteButton = findByClass(modal.render(), "destroy-dialog-btn-cancel");
     expect(deleteButton).toBeDefined();
     clickVnode(deleteButton!);
