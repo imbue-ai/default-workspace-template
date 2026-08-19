@@ -80,6 +80,11 @@ export interface TranscriptScroll {
   /** Pin scrollTop to an exact position once (ChatPanel: land an offset jump at the
    *  top of the freshly loaded rows), syncing the follow bookkeeping. */
   pinTo(element: HTMLElement, top: number): void;
+  /** Whether a user scroll gesture (wheel activity or a held pointer) is in
+   *  flight. Restorative writes must wait for a quiet window: a write mid-gesture
+   *  fights the compositor and, sampled against an oscillating layout, rectifies
+   *  into systematic drift. */
+  isGestureActive(): boolean;
   /** Refresh the cached viewport height and schedule a measure pass. */
   scheduleMeasure(): void;
   /** Reset scroll + follow state (e.g. switching to a different agent). */
@@ -116,6 +121,14 @@ export function createTranscriptScroll(config: TranscriptScrollConfig = {}): Tra
 
   function hasRecentDownInput(): boolean {
     return isPointerDown || performance.now() - lastDownInputAt < USER_INPUT_ATTRIBUTION_MS;
+  }
+
+  function isGestureActive(): boolean {
+    return (
+      isPointerDown ||
+      performance.now() - lastUpInputAt < USER_INPUT_ATTRIBUTION_MS ||
+      performance.now() - lastDownInputAt < USER_INPUT_ATTRIBUTION_MS
+    );
   }
 
   function applyTailFollow(element: HTMLElement): void {
@@ -186,6 +199,8 @@ export function createTranscriptScroll(config: TranscriptScrollConfig = {}): Tra
     onPointerDown(): void {
       isPointerDown = true;
     },
+
+    isGestureActive,
 
     attach(element: HTMLElement): void {
       scrollEl = element;
