@@ -128,13 +128,22 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       if (currentAgentId !== null) {
         maybePage(currentAgentId, element);
       }
-      // The user's own scrolling is what moves the reading anchor; re-derive it
-      // here (after maybePage, whose jump path replaces the window) so the next
-      // redraw compensates relative to where they actually are.
+      // The user's own scrolling moves which row is at the viewport top, so the
+      // anchor is re-selected here (after maybePage, whose jump path replaces the
+      // window) -- but first any content drift of the OLD anchor since its last
+      // observation is banked, so a correction pending across a gesture is not
+      // lost when the anchor hops rows.
       if (scroll.userScrolledUp) {
+        if (readingAnchor !== null && readingAnchor.docTop !== null) {
+          const observed = anchorDocTop(element, readingAnchor.key);
+          if (observed !== null) {
+            pendingCorrection += observed - readingAnchor.docTop;
+          }
+        }
         captureReadingAnchor(element);
       } else {
         readingAnchor = null;
+        pendingCorrection = 0;
       }
     },
   });
@@ -177,7 +186,31 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   // that reason -- it must not double-compensate the frames it does survive).
   // Captured on every user scroll; cleared when following the tail, on an offset
   // jump, and on agent switch.
-  let readingAnchor: { key: string; offsetIntoRow: number; capturedScrollTop: number } | null = null;
+  let readingAnchor: { key: string; offsetIntoRow: number; capturedScrollTop: number; docTop: number | null } | null =
+    null;
+  // Content drift owed to the reader, in px: every observation of the anchor
+  // row's DOM position accrues (observed - last observed) here, and the sum is
+  // written to scrollTop only in a gesture-quiet frame. Writing mid-gesture
+  // fights the compositor, and -- sampled at wheel-event cadence against an
+  // oscillating layout -- rectifies a symmetric wobble into systematic drift
+  // that can cancel the user's scrolling outright.
+  let pendingCorrection = 0;
+
+  /** The anchor row's DOM node, scoped to this panel's list so an identical key
+   *  in another panel can never match. Null while unmounted. */
+  function anchorRowElement(element: HTMLElement, key: string): HTMLElement | null {
+    return element.querySelector<HTMLElement>(`.message-list > [id="${CSS.escape(key)}"]`);
+  }
+
+  /** Content-space top of the anchor row (viewport-relative rect plus live
+   *  scrollTop), or null while unmounted. */
+  function anchorDocTop(element: HTMLElement, key: string): number | null {
+    const row = anchorRowElement(element, key);
+    if (row === null) {
+      return null;
+    }
+    return row.getBoundingClientRect().top - element.getBoundingClientRect().top + element.scrollTop;
+  }
 
   // File drag-and-drop: dropping a file anywhere over the chat stages it as a
   // composer attachment. ``dragDepth`` counts dragenter minus dragleave across
@@ -508,7 +541,14 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       minIndex: currentAgentId !== null && hasMoreBefore(currentAgentId) ? 1 : 0,
     });
     readingAnchor =
-      anchor === null ? null : { key: anchor.key, offsetIntoRow: anchor.offsetIntoRow, capturedScrollTop: scrollTop };
+      anchor === null
+        ? null
+        : {
+            key: anchor.key,
+            offsetIntoRow: anchor.offsetIntoRow,
+            capturedScrollTop: scrollTop,
+            docTop: anchorDocTop(element, anchor.key),
+          };
   }
 
   /**
@@ -616,6 +656,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       pendingPinToWindowTop = false;
       scroll.pinTo(element, phantomTopHeight);
       readingAnchor = null;
+      pendingCorrection = 0;
       return;
     }
     // While scrolled up, hold the reader on their anchor: recompute where the
@@ -627,32 +668,47 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     // the next redraw arrives before the pin's own scroll event does.
     if (scroll.userScrolledUp) {
       if (readingAnchor !== null) {
-        // Where the anchored content sits under the current geometry, resolved in
-        // the same data space it was captured in: with nothing changed this is
-        // exactly capturedScrollTop (no write); after a change the difference is
-        // the pure geometry shift. Heights of rows that have never measured are
-        // estimates, so a landing's correction can be off by their estimate
-        // error for a frame -- the measure pass then feeds the residual back
-        // through this same path, converging without ever reading scroll
-        // positions out of the DOM (which would loop the render lag back in).
-        const target = resolveAnchorScrollTop({
-          keyToIndex: cachedKeyToIndex,
-          getHeight: rowHeightAt,
-          phantomTopHeight,
-          anchorKey: readingAnchor.key,
-          offsetInViewport: readingAnchor.offsetIntoRow,
-        });
-        if (target === null) {
-          // The anchor row left the loaded window (evicted, or a reconnect
-          // snapshot replaced the window); re-derive from wherever the reader is.
-          readingAnchor = null;
+        const observed = anchorDocTop(element, readingAnchor.key);
+        if (observed !== null) {
+          // The anchor is mounted: accrue its content drift since the last
+          // observation (a mounting row's estimate error, a page landing, a
+          // turn regrouping -- all read from the DOM after the patch, before
+          // paint). The measurement cache catching up later is bookkeeping,
+          // not movement: while the anchor is mounted, the DOM is the only
+          // authority.
+          pendingCorrection += observed - (readingAnchor.docTop ?? observed);
+          readingAnchor.docTop = observed;
         } else {
-          const geometryShift = target - readingAnchor.capturedScrollTop;
-          if (Math.abs(geometryShift) > 1) {
-            scroll.pinTo(element, element.scrollTop + geometryShift);
-            captureReadingAnchor(element);
-            return;
+          // The patch unmounted the anchor row (a page landing remapped the
+          // window past the overscan). The DOM cannot answer where the content
+          // went, so accrue the estimate-based resolution against the capture
+          // baseline once; the row remounts after the correction applies and
+          // the DOM refines any estimate error from there.
+          const target = resolveAnchorScrollTop({
+            keyToIndex: cachedKeyToIndex,
+            getHeight: rowHeightAt,
+            phantomTopHeight,
+            anchorKey: readingAnchor.key,
+            offsetInViewport: readingAnchor.offsetIntoRow,
+          });
+          if (target === null) {
+            // The anchor row left the loaded window entirely (evicted, or a
+            // reconnect snapshot replaced the window); re-derive from wherever
+            // the reader is now and drop what was owed against the old anchor.
+            readingAnchor = null;
+            pendingCorrection = 0;
+          } else {
+            pendingCorrection += target - readingAnchor.capturedScrollTop;
+            readingAnchor.capturedScrollTop = target;
           }
+        }
+        // Apply what is owed only in a gesture-quiet frame; during a gesture the
+        // wheel owns scrollTop and the debt carries forward.
+        if (!scroll.isGestureActive() && Math.abs(pendingCorrection) > 1) {
+          scroll.pinTo(element, element.scrollTop + pendingCorrection);
+          pendingCorrection = 0;
+          captureReadingAnchor(element);
+          return;
         }
       }
       if (readingAnchor === null) {
@@ -660,6 +716,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       }
     } else {
       readingAnchor = null;
+      pendingCorrection = 0;
     }
     scroll.applyScrollPosition(element);
   }
