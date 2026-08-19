@@ -116,22 +116,47 @@ FRONTEND_BUILT_HEADER = "X-Frontend-Built"
 # of the scriptless fallback below, so both routes behave the same.
 _NOT_BUILT_POLL_SECONDS = 10
 
-# The command the placeholder offers for standing up an agent to repair the
-# workspace. It mirrors what ``agent_manager._build_chat_create_command`` runs
-# for a chat -- ``--transfer none`` so the agent works in the workspace tree
-# rather than a worktree of it, ``--template chat`` for the shared work
-# directory and output style, and the ``user_created`` label that puts it in
-# the dynamic chat memory band. It deliberately omits that builder's
-# ``--no-connect``, whose whole purpose is to keep a headless caller from
-# attaching: someone typing this into the terminal below wants the opposite,
-# and connecting is what turns the create into a conversation.
+# The ``mngr`` invocation the placeholder offers for standing up an agent to
+# repair the workspace. It mirrors what ``agent_manager._build_chat_create_command``
+# runs for a chat -- ``--transfer none`` so the agent works in the workspace tree
+# rather than a worktree of it, ``--template chat`` for the shared work directory
+# and output style, and the ``user_created`` label that puts it in the dynamic
+# chat memory band. It deliberately omits that builder's ``--no-connect``, whose
+# whole purpose is to keep a headless caller from attaching: someone typing this
+# wants the opposite, and connecting (the CLI default) is what turns the create
+# into a conversation.
 #
-# Kept in sync with that builder by ``server_test.py``, which asserts the flags
-# here are the ones it emits. It is a suggestion, not a dispatch: the server
-# never runs it, so an agent is created only if the reader decides to.
-_NOT_BUILT_REPAIR_COMMAND = (
-    "mngr create repair --type claude --template chat --transfer none --label user_created=true"
+# ``--reuse`` because the name is fixed. A second run -- after a reload, from a
+# second tab, or just because the first attempt did not finish -- should return
+# to the same repair conversation rather than fail on the name or start over
+# beside it with none of the context.
+#
+# Kept in sync with that builder by ``server_test.py``, which also validates it
+# against the live CLI. It is a suggestion, not a dispatch: the server never
+# runs it, so an agent is created only if the reader decides to.
+_NOT_BUILT_REPAIR_ARGV: Final[tuple[str, ...]] = (
+    "mngr",
+    "create",
+    "repair",
+    "--reuse",
+    "--type",
+    "claude",
+    "--template",
+    "chat",
+    "--transfer",
+    "none",
+    "--label",
+    "user_created=true",
 )
+
+# ``mngr connect`` refuses to attach from inside tmux unless ``is_nested_tmux_allowed``
+# is set (see ``mngr.api.connect``, which gates purely on ``$TMUX``), and it is the
+# connect half of the create above that would hit it. The workspace's own terminal
+# tabs are tmux sessions, so a reader who runs this in one gets a created agent and
+# an error instead of a conversation. Dropping ``TMUX`` for this one command is
+# exactly what mngr does for itself once the check passes, and scoping it with
+# ``env -u`` leaves the reader's own shell alone.
+_NOT_BUILT_REPAIR_COMMAND = "env -u TMUX " + " ".join(_NOT_BUILT_REPAIR_ARGV)
 
 # Served in place of the app whenever the compiled bundle is missing. The bundle
 # is gitignored build output, so a code refresh that replaces the tree can leave
@@ -169,8 +194,21 @@ _FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
   p { line-height: 1.5; margin: 0 0 1rem; color: #b6bcc4; max-width: 34rem; }
   code { background: #1d2026; border-radius: 4px; padding: 0.1rem 0.3rem;
          font-size: 0.9em; }
+  /* The command wraps rather than scrolling: a horizontal scrollbar hides
+     most of it behind a control nobody looks for, and this is the one line on
+     the page a reader has to be able to read in full. */
+  #repair { position: relative; }
   pre { background: #1d2026; border-radius: 6px; padding: 0.75rem 1rem;
-        overflow-x: auto; font-size: 0.85em; color: #e6e8eb; max-width: 34rem; }
+        margin: 0 0 1rem; font-size: 0.85em; color: #e6e8eb;
+        white-space: pre-wrap; overflow-wrap: anywhere; }
+  /* Room for the copy button, so the last line never runs underneath it. */
+  #repair-command { padding-right: 5.5rem; }
+  #copy-repair { position: absolute; top: 0.5rem; right: 0.5rem;
+                 font: inherit; font-size: 0.8em; padding: 0.25rem 0.6rem;
+                 color: #e6e8eb; background: #2a2f37; border: 1px solid #3a414b;
+                 border-radius: 4px; cursor: pointer; }
+  #copy-repair:hover { background: #333a44; }
+  #copy-repair[hidden] { display: none; }
   #terminal-slot[hidden] { display: none; }
   #terminal { width: 100%; height: 24rem; border: 1px solid #2a2f37;
               border-radius: 6px; background: #000; }
@@ -189,7 +227,12 @@ _FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
      and this page returns to the interface on its own once it is back.</p>
   <p>If you would rather not work the repair out yourself, create an agent and
      tell it what you see here:</p>
-  <pre id="repair-command">__REPAIR_COMMAND__</pre>
+  <div id="repair">
+    <pre id="repair-command">__REPAIR_COMMAND__</pre>
+    <!-- Hidden until the script confirms it can actually copy, so the page
+         never shows a button that does nothing. -->
+    <button id="copy-repair" type="button" hidden>Copy</button>
+  </div>
   <!-- The lead-in belongs to the terminal, not to the command: the command
        stands on its own wherever the reader finds a shell, so it keeps its own
        introduction above and is never left orphaned when there is no terminal
@@ -230,6 +273,33 @@ _FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
       }
     }
     return null;
+  }
+
+  // The command is long enough to be worth not retyping, and the reader may be
+  // copying it into a terminal on the far side of a share. Shown only when the
+  // clipboard is actually reachable: it needs a secure context, which every
+  // workspace origin is (``*.localhost`` locally, https on a share) but which a
+  // direct hit on the loopback port is not.
+  var copyButton = document.getElementById("copy-repair");
+  if (navigator.clipboard && window.isSecureContext) {
+    copyButton.hidden = false;
+    copyButton.addEventListener("click", function () {
+      navigator.clipboard
+        .writeText(document.getElementById("repair-command").textContent)
+        .then(function () {
+          copyButton.textContent = "Copied";
+          setTimeout(function () {
+            copyButton.textContent = "Copy";
+          }, 2000);
+        })
+        // A denied permission is the realistic failure. Selecting the text puts
+        // the reader one keystroke from the same result rather than leaving a
+        // button that silently did nothing.
+        .catch(function () {
+          window.getSelection().selectAllChildren(document.getElementById("repair-command"));
+          copyButton.textContent = "Press to copy";
+        });
+    });
   }
 
   var origin = terminalLabel ? serviceOrigin(terminalLabel) : null;

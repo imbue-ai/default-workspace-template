@@ -61,6 +61,7 @@ from imbue.system_interface.projects import write_project_content
 from imbue.system_interface.server import FRONTEND_BUILT_HEADER
 from imbue.system_interface.server import _DEFAULT_TAIL_COUNT
 from imbue.system_interface.server import _FORWARD_PORT_SCRIPT
+from imbue.system_interface.server import _NOT_BUILT_REPAIR_ARGV
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_COMMAND
 from imbue.system_interface.server import _agent_switch_options
 from imbue.system_interface.server import _build_destroy_command
@@ -243,7 +244,7 @@ def test_not_built_repair_command_is_the_one_the_app_runs_for_a_chat() -> None:
     role. So every flag the page suggests must be one the app itself passes
     when it creates a chat, and the command must be one the live CLI accepts.
     """
-    argv = _NOT_BUILT_REPAIR_COMMAND.split()
+    argv = list(_NOT_BUILT_REPAIR_ARGV)
     assert_mngr_argv_valid(argv)
 
     real = _build_chat_create_command(
@@ -262,6 +263,14 @@ def test_not_built_repair_command_is_the_one_the_app_runs_for_a_chat() -> None:
     # conversation.
     assert "--no-connect" in real
     assert "--no-connect" not in argv
+
+    # The name is fixed, so a second run must rejoin the first agent rather than
+    # fail on the name -- the page can be reloaded, or open in two tabs at once.
+    assert "--reuse" in argv
+
+    # The shell prefix is not part of the argv the CLI validates, but it is what
+    # makes the connect half work from the workspace's own tmux-backed terminals.
+    assert _NOT_BUILT_REPAIR_COMMAND == "env -u TMUX " + " ".join(argv)
 
 
 def test_assets_404_rather_than_falling_through_to_the_spa_shell(tmp_path: Path) -> None:
