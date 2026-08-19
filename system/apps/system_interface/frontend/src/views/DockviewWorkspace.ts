@@ -1505,10 +1505,14 @@ function retireLauncher(panelId: string | null): void {
  *
  * Clicking a launcher row for something already open is "show me that one",
  * not "not this, not now" -- so the launcher stays put and the revealed tab
- * flashes instead, and the user keeps the list they were reading. Consumed by
- * ``retireLaunchersOnFocusLeaving``, the only place launchers retire, and
- * cleared at the top of every reveal so a focus event that never arrives (the
- * panel was already active) cannot suppress a later, legitimate retire.
+ * flashes instead, and the user keeps the list they were reading.
+ *
+ * One-shot: ``retireLaunchersOnFocusLeaving``, the only place launchers
+ * retire, clears this on the very next focus change whether or not that change
+ * is the reveal's own. Revealing a panel that was ALREADY the active one fires
+ * no focus event at all, so an armed flag that only cleared on a match would
+ * sit here until the next reveal and then suppress an ordinary, legitimate
+ * retire -- the first click back onto that same panel.
  */
 let revealedOpenPanelId: string | null = null;
 
@@ -1521,10 +1525,9 @@ let revealedOpenPanelId: string | null = null;
  *  away with it. */
 function retireLaunchersOnFocusLeaving(activePanelId: string): void {
   if (!dockview) return;
-  if (revealedOpenPanelId === activePanelId) {
-    revealedOpenPanelId = null;
-    return;
-  }
+  const revealedPanelId = revealedOpenPanelId;
+  revealedOpenPanelId = null;
+  if (revealedPanelId === activePanelId) return;
   if (panelParams.get(activePanelId)?.panelType === "launcher") return;
   for (const panel of [...dockview.panels]) {
     if (panel.id !== activePanelId && panelParams.get(panel.id)?.panelType === "launcher") {
