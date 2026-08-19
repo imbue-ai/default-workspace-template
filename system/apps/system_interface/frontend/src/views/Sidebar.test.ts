@@ -719,6 +719,40 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
     // one is still coming to collapse it whenever it goes.
     expect(root.querySelector(".project-rail-search")).not.toBeNull();
   });
+
+  it("ends a rename whose row stops being listed, rather than wedging the rail open", () => {
+    // The object behind the row can be destroyed from another surface while
+    // the field is up. Mithril then removes the focused input, which fires no
+    // blur, so the field's own exit never runs -- and a `renamingRef` left set
+    // makes every later mouseleave early-return.
+    const attrs = makeAttrs({
+      rows: [{ ref: "terminal:terminal-4", kind: "terminal", label: "Terminal 4", isOpen: true }],
+    });
+    const { root, redraw } = mountSidebar(attrs);
+    const slot = root.firstElementChild;
+    slot?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    typeIntoRenameField(root, redraw, "Terminal 4", "Renamed");
+    slot?.dispatchEvent(new MouseEvent("mouseleave"));
+    redraw();
+    expect(root.querySelector(".project-rail-search")).not.toBeNull();
+
+    attrs.rows = [];
+    redraw();
+    // Nothing to name any more, so nothing is filed -- and the rail folds up
+    // in place of the leave the edit swallowed on the way in.
+    expect(attrs.onRenameRow).not.toHaveBeenCalled();
+    expect(root.querySelector(".project-rail-search")).toBeNull();
+
+    // Refs are handed out again (the terminal allocator reuses `terminal-N`),
+    // so the next row answering to this one reads as plain text rather than a
+    // field still holding the abandoned draft.
+    attrs.rows = [{ ref: "terminal:terminal-4", kind: "terminal", label: "Terminal 4", isOpen: true }];
+    slot?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+    expect(Array.from(root.querySelectorAll("input")).some((element) => element.value === "Renamed")).toBe(false);
+  });
 });
 
 describe("Sidebar tooltips", () => {

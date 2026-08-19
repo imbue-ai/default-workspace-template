@@ -1383,6 +1383,15 @@ export function Sidebar(): m.Component<SidebarAttrs> {
         endRename();
       }
       lastRenderedViewId = attrs.activeViewId;
+      // A rename also ends when its row simply stops being listed: the object
+      // behind it can be destroyed from another surface (or drop off a fleet
+      // refresh) while the field is up, and removing a focused input fires no
+      // blur, so the field's own exit never runs. Left set, `renamingRef`
+      // holds the rail open against every future mouseleave -- and refs are
+      // handed out again (the terminal allocator reuses `terminal-N`), so the
+      // next row to answer to this one would come back wearing the abandoned
+      // draft.
+      if (renamingRef !== null && !attrs.rows.some((row) => row.ref === renamingRef)) endRename();
       const isEverything = isEverythingView(attrs.activeViewId);
       const project = attrs.projects.find((candidate) => candidate.project_id === attrs.activeViewId) ?? null;
       const viewName = isEverything ? EVERYTHING_VIEW_NAME : (project?.name ?? "");
