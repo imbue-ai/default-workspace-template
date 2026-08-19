@@ -319,6 +319,50 @@ describe("Sidebar switcher dropdown", () => {
     expect(root.querySelector(".project-rail-search")).toBeNull();
   });
 
+  it("folds up when the pointer leaves the window without a leave reaching the rail", () => {
+    // The slot's own mouseleave handles every crossing inside the page, but a
+    // cursor exiting the WINDOW does not reliably produce one (Electron, which
+    // is what minds is, can let it out silently) -- and the rail was then left
+    // expanded over the dock with the pointer on another app. A `mouseout`
+    // naming no related target is what says "gone from this document".
+    const { root, redraw } = mountSidebar(makeAttrs());
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+    expect(root.querySelector(".project-rail-search")).not.toBeNull();
+
+    document.dispatchEvent(new MouseEvent("mouseout", { relatedTarget: null, bubbles: true }));
+    redraw();
+    expect(root.querySelector(".project-rail-search")).toBeNull();
+  });
+
+  it("stays open when the pointer merely moves between elements in the page", () => {
+    // Every ordinary crossing names the element being entered, including into
+    // an iframe pane; only a true exit from the document names nothing. Acting
+    // on those would collapse the rail while the pointer is still on it.
+    const { root, redraw } = mountSidebar(makeAttrs());
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    document.dispatchEvent(
+      new MouseEvent("mouseout", { relatedTarget: document.createElement("iframe"), bubbles: true }),
+    );
+    redraw();
+    expect(root.querySelector(".project-rail-search")).not.toBeNull();
+  });
+
+  it("leaves an open menu alone when the pointer leaves the window", () => {
+    // The menu is the thing the user is working and extends past the rail, so
+    // it holds the rail open exactly as it does for the slot's own leave.
+    const { root, redraw } = mountSidebar(makeAttrs());
+    click(root.querySelector(".project-rail-header"));
+    redraw();
+    expect(root.querySelector('.project-rail-menu[role="menu"]')).not.toBeNull();
+
+    document.dispatchEvent(new MouseEvent("mouseout", { relatedTarget: null, bubbles: true }));
+    redraw();
+    expect(root.querySelector('.project-rail-menu[role="menu"]')).not.toBeNull();
+  });
+
   it("goes primary on hover for the tertiary 'New project' row", () => {
     const { root, redraw } = mountSidebar(makeAttrs());
     click(root.querySelector(".project-rail-header"));
