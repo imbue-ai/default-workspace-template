@@ -3557,7 +3557,9 @@ def test_update_project_settings_keeps_id_content_and_members(
     assert unknown.status_code == 404
 
 
-def test_delete_project_reports_the_fallback(client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_delete_project_reports_the_fallback(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Deleting reports the fallback project clients should switch to."""
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
@@ -3592,12 +3594,12 @@ def test_deleting_the_last_project_leaves_the_machine_with_zero(
     # A read after the delete does not resurrect the starter project.
     assert client.get("/api/projects").get_json()["projects"] == []
     # The rail's "New project" path still works from zero.
-    assert client.post("/api/projects", json={"name": "Fresh Start", "color": "#3B82F6", "glyph": 1}).status_code == 200
+    assert (
+        client.post("/api/projects", json={"name": "Fresh Start", "color": "#3B82F6", "glyph": 1}).status_code == 200
+    )
 
 
-def test_delete_project_never_touches_its_members(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_delete_project_never_touches_its_members(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Deleting a project is a pure view operation: nothing it showed is stopped.
 
     A terminal's tmux session is never killed and a fleet browser is never
