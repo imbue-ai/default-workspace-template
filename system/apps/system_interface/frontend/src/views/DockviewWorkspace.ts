@@ -1024,7 +1024,12 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
       try {
         await renameMemberRef(ref, title);
       } catch (e) {
-        alert(`Failed to rename: ${(e as Error).message}`);
+        // The name on screen has already been put back by the time this runs
+        // (see setMemberTitle), so the message says so rather than leaving the
+        // user to work out whether any of it took.
+        alert(
+          `Could not rename to "${title}", so it is still called "${content.textContent}".\n\n${(e as Error).message}`,
+        );
       }
     })();
   };
@@ -2066,8 +2071,10 @@ export function hideMemberRowTab(row: SidebarTabRow): void {
  *  click-and-forget half of ``renameMemberRef``, matching how the tab's own
  *  inline editor reports the same rejection. */
 export function renameMemberRowWithAlert(row: SidebarTabRow, title: string): void {
+  // ``row.label`` is what it was called before this call optimistically renamed
+  // it, and what setMemberTitle has already restored by the time this runs.
   void renameMemberRef(row.ref, title).catch((e: Error) => {
-    alert(`Failed to rename: ${e.message}`);
+    alert(`Could not rename to "${title}", so it is still called "${row.label}".\n\n${e.message}`);
   });
 }
 
