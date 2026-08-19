@@ -209,16 +209,19 @@ export function AllAppsPicker(): m.Component<AllAppsPickerAttrs> {
       const apps = pickableApps();
       const visibleApps = filterApps(apps, filterText);
       const projectName = attrs.projectName;
-      const pinnedNames = new Set(attrs.pinnedAppNames);
       // What actually renders: every match under Everything (nothing pinned
-      // there to exclude), and under a project every match not already
-      // pinned -- plus, briefly, one just clicked to pin (`fadingNames`),
-      // still fading out at its own row rather than gone the instant the
-      // project's member list catches up.
+      // there to exclude), and under a project every match the project has not
+      // pinned. A name just clicked to pin is held back out of that exclusion
+      // for one transition's worth of time (`fadingNames`), so its row stays
+      // put and fades rather than going the instant the project's member list
+      // catches up.
       const rows =
         projectName === null
           ? visibleApps
-          : visibleApps.filter((app) => !pinnedNames.has(app.name) || fadingNames.has(app.name));
+          : unpinnedApps(
+              visibleApps,
+              attrs.pinnedAppNames.filter((name) => !fadingNames.has(name)),
+            );
 
       // Three distinct reasons the list can be empty, each with its own fix:
       // the machine runs nothing, the query matched nothing, or (new now that
