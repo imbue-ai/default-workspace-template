@@ -316,7 +316,7 @@ function chatTile(harness: ChatHarness, label: string, first: boolean = false): 
 export function openNewTiles(): readonly LaunchTile[] {
   const tiles: LaunchTile[] = [chatTile("claude", "Chat")];
   if (areOtherHarnessesEnabled()) {
-    tiles.push(chatTile("codex", "Codex agent"), chatTile("pi-coding", "Pi agent"));
+    tiles.push(chatTile("codex", "Codex chat"), chatTile("pi-coding", "Pi chat"));
   }
   // Introductory chats: the same create with the `first` template stacked on
   // top (fast launch where the harness supports it, /welcome, the first=true

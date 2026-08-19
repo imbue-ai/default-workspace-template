@@ -324,7 +324,7 @@ describe("NewTabLauncher", () => {
     otherHarnessesEnabled = true;
     try {
       const labels = buttonsOf(render()).map((tile) => texts(tile.children)[1]);
-      expect(labels.slice(0, 3)).toEqual(["Chat", "Codex agent", "Pi agent"]);
+      expect(labels.slice(0, 3)).toEqual(["Chat", "Codex chat", "Pi chat"]);
     } finally {
       otherHarnessesEnabled = false;
     }
@@ -359,7 +359,7 @@ describe("NewTabLauncher", () => {
       const tiles = buttonsOf(
         render({ onOpenNew: (target) => started.push(target.kind === "chat" ? target.harness : target.kind) }),
       );
-      // Chat, Codex agent, Pi agent, then the non-chat tiles.
+      // Chat, Codex chat, Pi chat, then the non-chat tiles.
       (tiles[2].attrs?.onclick as () => void)();
       expect(started).toEqual(["pi-coding"]);
     } finally {
@@ -471,8 +471,8 @@ describe("openNewTiles", () => {
     otherHarnessesEnabled = true;
     try {
       expect(harnessOf("Chat")).toBe("claude");
-      expect(harnessOf("Codex agent")).toBe("codex");
-      expect(harnessOf("Pi agent")).toBe("pi-coding");
+      expect(harnessOf("Codex chat")).toBe("codex");
+      expect(harnessOf("Pi chat")).toBe("pi-coding");
     } finally {
       otherHarnessesEnabled = false;
     }
