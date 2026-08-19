@@ -1835,9 +1835,12 @@ export function getSidebarRows(): SidebarTabRow[] {
  * Focus the tab a member already has, or open one for it in the active pane.
  *
  * Returns the panel id, or null when the object cannot be opened from its ref
- * alone: an ad-hoc page is addressed by a hash of its panel, so once its tab is
- * closed the URL it pointed at is gone and only "Remove from project" is left
- * for it.
+ * alone: a ``url:`` ref is a hash of the panel that once showed the page, not
+ * of the page, so the address does not survive the tab. Only a legacy member
+ * still on an older project's list can be one -- an ad-hoc page is no longer
+ * filed as a member at all (see ``memberRefForPanelParams``) -- and such a row
+ * is dropped from the project settings modal's member list, which is where
+ * removing a member lives now.
  *
  * Flashes the tab when it was already open: every caller here is a click on a
  * row that ASKS to open something (a rail row, a launcher's member/machine
