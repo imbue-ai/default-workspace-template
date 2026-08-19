@@ -1721,9 +1721,34 @@ function derivedLabelForMemberRef(ref: string): string {
 }
 
 // The chat harnesses a create can stack (see ``CreateChatRequest.harness``).
-// The display name each create wears ("Chat N", "Codex N", "Pi N") is minted
-// server-side, so no numbering lives here.
-type ChatHarness = "claude" | "codex" | "pi";
+// These are mngr's own agent type names, which is what the backend validates
+// against -- NOT the launcher's tile kinds. The display name each create wears
+// ("Chat N", "Codex N", "Pi N") is minted server-side, so no numbering lives here.
+type ChatHarness = "claude" | "codex" | "pi-coding";
+
+/**
+ * The harness each chat-launching tile creates on, or undefined for a tile that
+ * makes something other than a chat (files/browser/terminal).
+ *
+ * A launcher kind is a label on a tile; a harness is mngr's agent type. They are
+ * separate namespaces that happen to agree for codex and disagree for pi (whose
+ * type is ``pi-coding``; ``pi`` is only an mngr-side alias the backend's enum does
+ * not accept), so the translation is a table rather than a cast -- a cast reads as
+ * correct and silently ships ``pi``, which the create endpoint rejects outright.
+ *
+ * The intro- kinds map to the same harness as their bare form: they differ only by
+ * additionally stacking the `first` create template, which rides ``isFirst``.
+ * Membership in this table is also what makes a tile a chat tile, so a new harness
+ * is one row here and nothing else.
+ */
+export const HARNESS_BY_LAUNCH_KIND: Readonly<Partial<Record<LaunchKind, ChatHarness>>> = {
+  chat: "claude",
+  codex: "codex",
+  pi: "pi-coding",
+  "intro-chat": "claude",
+  "intro-codex": "codex",
+  "intro-pi": "pi-coding",
+};
 
 /** The project registry, for the sidebar's switcher and its member lists.
  *  Everything is never in it. */
@@ -2762,23 +2787,14 @@ function openTabOfTypeInGroup(
   targetGroup: DockviewGroupPanel | null,
   launcherPanelId: string | null,
 ): void {
-  if (
-    tabType === "chat" ||
-    tabType === "codex" ||
-    tabType === "pi" ||
-    tabType === "intro-chat" ||
-    tabType === "intro-codex" ||
-    tabType === "intro-pi"
-  ) {
-    // The harness tiles are the same create as Chat -- the same `chat` role in
-    // the primary's work dir -- stacked on a different harness template. The
-    // intro- variants additionally stack the `first` create template (fast
-    // launch where the harness supports it, /welcome, the first=true label).
-    // No dialog for any of them: the name is auto-minted like every other create.
-    const isFirst = tabType.startsWith("intro-");
-    const bareKind = isFirst ? tabType.slice("intro-".length) : tabType;
-    const harness: ChatHarness = bareKind === "chat" ? "claude" : (bareKind as ChatHarness);
-    void openNewChat(targetGroup, launcherPanelId, harness, isFirst).then(() => {
+  // The harness tiles are the same create as Chat -- the same `chat` role in the
+  // primary's work dir -- stacked on a different harness template. The intro-
+  // variants additionally stack the `first` create template (fast launch where the
+  // harness supports it, /welcome, the first=true label). No dialog for any of
+  // them: the name is auto-minted like every other create.
+  const harness = HARNESS_BY_LAUNCH_KIND[tabType];
+  if (harness !== undefined) {
+    void openNewChat(targetGroup, launcherPanelId, harness, tabType.startsWith("intro-")).then(() => {
       m.redraw();
     });
     return;
