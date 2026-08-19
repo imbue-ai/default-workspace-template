@@ -8,7 +8,13 @@ vi.hoisted(() => {
     setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
 });
 
-import { equalTabWidth, isTitleTruncated, preferredChatRefForView, refForShortcutFocus } from "./DockviewWorkspace";
+import {
+  HARNESS_BY_LAUNCH_KIND,
+  equalTabWidth,
+  isTitleTruncated,
+  preferredChatRefForView,
+  refForShortcutFocus,
+} from "./DockviewWorkspace";
 
 describe("equalTabWidth", () => {
   it("shares what is left of a strip once the '+' is accounted for", () => {
@@ -175,5 +181,32 @@ describe("preferredChatRefForView", () => {
     // it is not this project's chat.
     const refs = [`chat:${PRIMARY}`];
     expect(preferredChatRefForView(refs, "project-1", ORIGINS, PRIMARY)).toBeNull();
+  });
+});
+
+describe("HARNESS_BY_LAUNCH_KIND", () => {
+  // The launcher's tile kinds and mngr's agent types are separate namespaces.
+  // They agree for codex and disagree for pi, so a tile kind used as a harness
+  // ships "pi", which the create endpoint's HarnessType enum rejects with a 400
+  // before any `mngr create` runs. That is the bug this table exists to prevent.
+  it("sends mngr's agent type, not the tile's kind", () => {
+    expect(HARNESS_BY_LAUNCH_KIND["chat"]).toBe("claude");
+    expect(HARNESS_BY_LAUNCH_KIND["codex"]).toBe("codex");
+    expect(HARNESS_BY_LAUNCH_KIND["pi"]).toBe("pi-coding");
+  });
+
+  it("puts an intro- tile on the same harness as its bare form", () => {
+    // The intro- variants differ only by stacking the `first` create template.
+    expect(HARNESS_BY_LAUNCH_KIND["intro-chat"]).toBe("claude");
+    expect(HARNESS_BY_LAUNCH_KIND["intro-codex"]).toBe("codex");
+    expect(HARNESS_BY_LAUNCH_KIND["intro-pi"]).toBe("pi-coding");
+  });
+
+  it("claims no tile that does not create a chat", () => {
+    // Membership is what routes a tile to the chat create, so a non-chat tile
+    // listed here would try to start an agent instead of its own object.
+    expect(HARNESS_BY_LAUNCH_KIND["files"]).toBeUndefined();
+    expect(HARNESS_BY_LAUNCH_KIND["browser"]).toBeUndefined();
+    expect(HARNESS_BY_LAUNCH_KIND["terminal"]).toBeUndefined();
   });
 });

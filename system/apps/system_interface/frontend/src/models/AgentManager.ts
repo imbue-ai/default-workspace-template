@@ -823,7 +823,7 @@ export interface CreatedChatAgent {
  */
 export async function createChatAgent(
   projectId: string,
-  harness: "claude" | "codex" | "pi" = "claude",
+  harness: "claude" | "codex" | "pi-coding" = "claude",
   isFirst: boolean = false,
 ): Promise<CreatedChatAgent> {
   const response = await fetch(apiUrl("/api/agents/create-chat"), {
