@@ -33,11 +33,11 @@ changes are not applied in place. The canonical flow is the
 `update-system-interface` agent skill: a change is delegated to a worker, tested
 in isolation (including Playwright against an isolated instance) and run through
 the review gates; then **previewed** to the user as a tab before merging; and,
-once approved, merged and revealed. See
+once approved, applied. See
 `.agents/skills/update-system-interface/SKILL.md`.
 
-The same `reveal_system_interface.py` script owns the deterministic setup/teardown
-on both sides of that user gate, as sub-commands:
+`reveal_system_interface.py` owns the deterministic preview setup/teardown, as
+sub-commands:
 
 - `preview --slug <name> --work-dir <worker-work-dir>` boots the worker's
   already-built work_dir (a local worktree-agent folder in this same container)
@@ -50,43 +50,49 @@ on both sides of that user gate, as sub-commands:
   `mngr ls --include 'name=="<name>"' --format json` -> `agents[0].work_dir`.)
 - `unpreview --slug <name>` tears that down -- kill both servers, deregister both
   services (idempotent).
-- `reveal --rollback-to <sha>` reveals the merged change (below).
 
-The reveal, after merge, is a single self-healing command. With the known-good
-revision captured before the merge (`ROLLBACK_TO=$(git rev-parse HEAD)`):
+Going live, after approval, is the general **update apply** -- shared with the
+`update-self` flow:
 
 ```bash
-python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py reveal --rollback-to "$ROLLBACK_TO"
+python3 .agents/skills/update-self/scripts/update_self.py apply \
+    --merge-ref "mngr/update-<slug>" \
+    --worker-bundle "<work_dir>/system/apps/system_interface/imbue/system_interface/static"
 ```
 
-It classifies what changed and does only what is needed: refreshes dependencies
+It merges the worker's branch (capturing the rollback point internally),
+classifies what changed and does only what is needed: refreshes dependencies
 if a manifest changed (`npm ci`, plus the vendored mngr tool, the backend tool
 and the workspace venv -- the same environments `build_workspace.sh` builds),
-rebuilds the gitignored `static/` bundle (frontend), and/or
-pre-flights the merged code on a throwaway port before restarting the services
-agent so the editable backend re-imports the merged `.py` (backend). It then
-polls the loopback endpoint to confirm health and checks that the frontend
-really serves, and only after those does it ask every open view of the workspace
-to reload -- unconditionally, since a backend-only change leaves the open page
-rendering what it had already fetched, but last, so a reveal that regressed the
-frontend rolls back instead of asking every open view to reload into it. If
-anything fails, it restores the tree to `--rollback-to` as a forward revert
-commit, restores the bundle, restarts only if the failed reveal had already
-restarted the service, and re-confirms the UI is healthy -- so the served
-interface can never be left broken. The exit code reports the outcome (`0`
-revealed, `2` rolled back, `3` emergency, `1` precondition error).
+installs the worker's already-built `static/` bundle (live build as fallback),
+and/or pre-flights the merged code on a throwaway port before restarting the
+services agent so the editable backend re-imports the merged `.py` (backend).
+It then polls the loopback endpoint to confirm health and checks that the
+frontend really serves, and only after those does it ask every open view of the
+workspace to reload -- unconditionally, since a backend-only change leaves the
+open page rendering what it had already fetched, but last, so an apply that
+regressed the frontend rolls back instead of asking every open view to reload
+into it. If anything fails, it reverts the entire merge as a forward revert
+commit, restores the pre-apply snapshots, restarts only if the failed apply had
+already restarted the service, and re-confirms the UI is healthy -- so the
+served interface can never be left broken. The exit code reports the outcome
+(`0` applied, `2` rolled back, `3` emergency, `1` precondition error). A
+persistent marker under `data/.state/update-apply/` makes even a hard kill
+mid-apply recoverable (`update_self.py recover`, run automatically at boot and
+from a recovery cron).
 
-Two properties are load-bearing there. It **snapshots `static/` before anything
-destructive runs**, because both steps delete before they produce (`npm ci`
-removes `node_modules`; the build empties the bundle directory) -- so a rollback
-restores a *copy* rather than re-running the build that just failed, and a broken
-build environment cannot take the UI down with it. And it **checks that the
-frontend actually serves**, not just that the backend answers: the "not built"
-placeholder and an unserved `/assets` path are both HTTP 200s to `/api/agents`,
-so the probe confirms the app shell is the real app and that its module script
-comes back as JavaScript.
+Two properties are load-bearing there. It **snapshots `static/` (and the
+affected environments) before anything destructive runs**, because the
+destructive steps delete before they produce (`npm ci` removes `node_modules`;
+the build empties the bundle directory; the env refreshes rebuild the venv and
+tool environments) -- so a rollback restores a *copy* rather than re-running
+the build that just failed, and a broken build environment cannot take the UI
+down with it. And it **checks that the frontend actually serves**, not just
+that the backend answers: the "not built" placeholder and an unserved
+`/assets` path are both HTTP 200s to `/api/agents`, so the probe confirms the
+app shell is the real app and that its module script comes back as JavaScript.
 
-The reveal's reload of every open view is delegated to
+The apply's reload of every open view is delegated to
 `system/scripts/refresh_workspace_view.py`, the shared
 helper every flow that restarts the services agent uses. It fires two channels,
 because neither reaches every viewer: a `reload_system_interface` op, and the Minds
@@ -105,12 +111,12 @@ iframe/panel for arranging the workspace.
 ## When the bundle is missing
 
 `static/` is gitignored build output, produced at workspace creation
-(`system/scripts/build_workspace.sh`) and by the reveal above. Nothing rebuilds
+(`system/scripts/build_workspace.sh`) and by the apply above. Nothing rebuilds
 it at service start, so a code refresh that replaces the tree can leave the
 backend with nothing to serve. In that state `/` serves a placeholder naming the
 one repair that works from there -- build in a checkout of this app and copy the
 bundle in -- and refreshing itself, so a bundle restored by anything else (most
-often the reveal's rollback) brings an open tab back on its own. The placeholder
+often the apply's rollback) brings an open tab back on its own. The placeholder
 deliberately does not offer to run the build: the states that strand a workspace
 here are dominated by the ones where a build would fail too, and a build the
 server dispatched would inherit the server's memory band and be protected ahead
