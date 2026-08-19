@@ -3479,8 +3479,13 @@ function setActiveView(viewId: string): void {
 
 /**
  * Pick this client's initial view (its stored per-browser choice, else the
- * first project), register it with the server, and mount its content. Runs once
- * at startup, after the dockview exists.
+ * first project, else Everything), register it with the server, and mount its
+ * content. Runs once at startup, after the dockview exists.
+ *
+ * There is always a view to mount: Everything has no registry entry that could
+ * be missing, so a machine holding zero projects -- and a client that could not
+ * read the registry at all, which looks the same from here -- lands there and
+ * simply finds no saved content, which renders as the New Tab launcher.
  */
 async function initializeActiveView(): Promise<void> {
   // Before anything is mounted: the names and recencies are machine-wide, so
@@ -3491,13 +3496,6 @@ async function initializeActiveView(): Promise<void> {
   const listResponse = await fetchProjectsList();
   availableProjects = listResponse.projects;
   const chosenId = chooseInitialViewId(availableProjects, getStoredProjectId());
-  if (chosenId === null) {
-    // No projects at all (server unreachable / no primary agent): run with the
-    // fresh-workspace state; nothing persists.
-    await applyLayoutContent(null, true);
-    m.redraw();
-    return;
-  }
   setActiveView(chosenId);
   reportClientState();
   refreshMachineInventory();

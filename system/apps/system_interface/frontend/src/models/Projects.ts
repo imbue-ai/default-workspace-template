@@ -273,14 +273,13 @@ export async function fetchMemberMap(): Promise<Record<string, string[]>> {
  * A machine may genuinely have zero projects now that deleting one is a pure
  * view operation with no undeletable project left, and a registry that could
  * not be read (server unreachable) looks the same as one holding none --
- * either way Everything is always there to land on. This keeps its nullable
- * return type for callers written against it, but no longer actually returns
- * null.
+ * either way Everything is always there to land on, so there is always a view
+ * to name and this never comes back empty-handed.
  *
  * A client last looking at Everything lands back on Everything: it is the home
  * and has a layout of its own, so there is nothing to fall back from.
  */
-export function chooseInitialViewId(projects: readonly ProjectInfo[], storedId: string): string | null {
+export function chooseInitialViewId(projects: readonly ProjectInfo[], storedId: string): string {
   if (isEverythingView(storedId)) return EVERYTHING_VIEW_ID;
   const stored = projects.find((project) => project.project_id === storedId);
   if (stored) return stored.project_id;
