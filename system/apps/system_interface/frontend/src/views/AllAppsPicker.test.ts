@@ -365,6 +365,21 @@ describe("AllAppsPicker", () => {
       "Every app on this machine is already pinned here.",
     );
   });
+
+  it("says a query matched only pinned apps rather than calling it a miss", () => {
+    // "docs" is a real app the machine offers -- it is just already pinned, and
+    // so sitting in the rail rather than in this list. Reporting that as "no
+    // apps match" would send the user looking for something already on screen.
+    appState.apps = [...APPS, ...EXTRA_APPS];
+    const component = AllAppsPicker();
+    const vnode = makeVnode({ pinnedAppNames: ["docs"] });
+    const input = inputsOf(component.view(vnode))[0];
+    (input.attrs?.oninput as (e: unknown) => void)({ target: { value: "docs" } });
+
+    const rendered = texts(component.view(vnode));
+    expect(rendered).toContain('Every app matching "docs" is already pinned here.');
+    expect(rendered).not.toContain('No apps match "docs".');
+  });
 });
 
 describe("AllAppsPicker names an app the way the rest of the workspace does", () => {
