@@ -348,6 +348,19 @@ def test_should_disable_sandbox_when_running_as_root(monkeypatch: pytest.MonkeyP
     assert bsession._should_disable_sandbox() is False
 
 
+def test_launch_args_suppress_the_bad_flag_infobar() -> None:
+    # As root we must pass --no-sandbox, which is on Chromium's kBadFlags list, so
+    # without --test-type Chromium pins an "unsupported command-line flag" infobar over
+    # every page -- and we film that window. --test-type is what suppresses it (see
+    # chrome/browser/ui/startup/infobar_utils.cc); --enable-automation would too, but it
+    # sets navigator.webdriver, which defeats Fortress's whole point.
+    browser = bsession.LiveBrowser(browser_id="b0")
+    session = browser._build_bu_session(Path("/tmp/args-check"), "/usr/bin/chromium", chromium_sandbox=False)
+    args = session.browser_profile.get_args()
+    assert "--test-type" in args
+    assert "--enable-automation" not in args
+
+
 class _FakeBuSession:
     """A stand-in for browser-use's BrowserSession: its ``start`` fails when the sandbox
     is on (mimicking a runtime that can't sandbox), so we can exercise the launch paths."""
