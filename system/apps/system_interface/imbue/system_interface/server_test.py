@@ -5,6 +5,7 @@ import io
 import json
 import os
 import queue
+import re
 import time
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -29,6 +30,7 @@ from imbue.system_interface import client_activity
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_manager import AgentManager
+from imbue.system_interface.agent_manager import _build_chat_create_command
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.config import Config
@@ -59,6 +61,7 @@ from imbue.system_interface.projects import write_project_content
 from imbue.system_interface.server import FRONTEND_BUILT_HEADER
 from imbue.system_interface.server import _DEFAULT_TAIL_COUNT
 from imbue.system_interface.server import _FORWARD_PORT_SCRIPT
+from imbue.system_interface.server import _NOT_BUILT_REPAIR_COMMAND
 from imbue.system_interface.server import _agent_switch_options
 from imbue.system_interface.server import _build_destroy_command
 from imbue.system_interface.server import _build_fast_mode_answered_label_command
@@ -147,10 +150,117 @@ def test_index_marks_the_not_built_placeholder_as_not_the_app(tmp_path: Path) ->
 
     assert response.status_code == 200
     assert response.headers[FRONTEND_BUILT_HEADER] == "false"
-    # The page re-requests itself, which is the only thing that returns an open
-    # tab to the interface once something else restores the bundle -- nothing on
-    # the page can produce one, and nothing notifies it.
+    # The page keeps asking whether the bundle is back, which is the only thing
+    # that returns an open tab to the interface once something else restores it
+    # -- nothing on the page can produce one, and nothing notifies it.
+    assert FRONTEND_BUILT_HEADER in response.text
+
+
+def test_not_built_placeholder_polls_rather_than_refreshing_the_whole_page(tmp_path: Path) -> None:
+    """The reader's terminal must survive the wait for a bundle.
+
+    Returning to the interface unattended and hosting a live shell pull against
+    each other: a whole-page refresh on a timer would tear down the terminal
+    session every few seconds, right while it is being typed into. So the
+    scripted page asks for the app-shell marker and reloads only once it says
+    the bundle is back. A page-level ``http-equiv="refresh"`` may therefore
+    appear only inside ``<noscript>``, where there is no terminal to protect.
+    """
+    empty_dir = tmp_path / "static"
+    empty_dir.mkdir()
+
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", empty_dir):
+        test_client = create_application(build_test_state()).test_client()
+        response = test_client.get("/")
+
+    scriptless_only = re.sub(r"<noscript>.*?</noscript>", "", response.text, flags=re.DOTALL)
+    assert 'http-equiv="refresh"' not in scriptless_only
     assert 'http-equiv="refresh"' in response.text
+    # HEAD, because the marker is a header: the poll must not pull the page's
+    # own body down every tick for the lifetime of the outage.
+    assert '"HEAD"' in response.text
+
+
+def test_not_built_placeholder_offers_the_registered_terminal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The way out of a missing interface is a shell, and the page has to name it.
+
+    The terminal's origin label is minted per workspace, so the page cannot
+    carry it -- it is read from the app registry at render time and handed to
+    the script, which derives the origin from the browser's own location. If
+    the label never reaches the page there is no frame to open, and the reader
+    is back to prose about a repair they cannot perform here.
+    """
+    apps_file = tmp_path / "apps.toml"
+    apps_file.write_text('[[apps]]\nname = "terminal"\nurl = "http://localhost:7681"\nlabel = "terminal-x7k9q2w1"\n')
+    monkeypatch.setenv("MINDS_APPS_FILE", str(apps_file))
+    empty_dir = tmp_path / "static"
+    empty_dir.mkdir()
+
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", empty_dir):
+        test_client = create_application(build_test_state()).test_client()
+        response = test_client.get("/")
+
+    assert '"terminal-x7k9q2w1"' in response.text
+    assert 'id="terminal"' in response.text
+
+
+def test_not_built_placeholder_renders_without_a_terminal_to_offer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A workspace with no registered terminal still gets a usable page.
+
+    ttyd registers itself alongside the other services rather than before them,
+    so the placeholder can be served in the window where there is nothing to
+    offer -- and this page exists precisely for states where things are missing.
+    It must degrade to the prose rather than fail to render or show an empty
+    frame pointed at nowhere.
+    """
+    apps_file = tmp_path / "apps.toml"
+    apps_file.write_text('[[apps]]\nname = "browser"\nurl = "http://localhost:8081"\nlabel = "browser-aaaa1111"\n')
+    monkeypatch.setenv("MINDS_APPS_FILE", str(apps_file))
+    empty_dir = tmp_path / "static"
+    empty_dir.mkdir()
+
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", empty_dir):
+        test_client = create_application(build_test_state()).test_client()
+        response = test_client.get("/")
+
+    assert response.status_code == 200
+    assert response.headers[FRONTEND_BUILT_HEADER] == "false"
+    # The empty label is what the script reads as "no terminal", so the frame
+    # stays hidden instead of loading a made-up origin.
+    assert 'var terminalLabel = "";' in response.text
+    assert "needs to be rebuilt" in response.text
+
+
+def test_not_built_repair_command_is_the_one_the_app_runs_for_a_chat() -> None:
+    """The suggested agent has to come up as a chat, or the suggestion misleads.
+
+    The page tells a reader to create an agent to repair the workspace, and an
+    agent created with the wrong flags is a different thing: a worktree of the
+    tree instead of the tree itself, in the wrong memory band, without the chat
+    role. So every flag the page suggests must be one the app itself passes
+    when it creates a chat, and the command must be one the live CLI accepts.
+    """
+    argv = _NOT_BUILT_REPAIR_COMMAND.split()
+    assert_mngr_argv_valid(argv)
+
+    real = _build_chat_create_command(
+        mngr_binary="mngr",
+        name="repair",
+        agent_id="agent-123",
+        primary_labels={},
+        harness=HarnessType.CLAUDE,
+    )
+    for flag in ("--type", "--template", "--transfer"):
+        assert argv[argv.index(flag) + 1] == real[real.index(flag) + 1]
+    assert "user_created=true" in real
+
+    # ``--no-connect`` is the one flag deliberately dropped: it exists to stop a
+    # headless caller attaching, and a reader typing this wants to land in the
+    # conversation.
+    assert "--no-connect" in real
+    assert "--no-connect" not in argv
 
 
 def test_assets_404_rather_than_falling_through_to_the_spa_shell(tmp_path: Path) -> None:

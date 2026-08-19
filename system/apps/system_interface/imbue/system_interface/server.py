@@ -72,6 +72,7 @@ from imbue.system_interface.layout_ops import is_sessionless_browser_ref
 from imbue.system_interface.layout_ops import layout_inspect
 from imbue.system_interface.layout_ops import layout_list
 from imbue.system_interface.layout_ops import parse_tmux_sessions_output
+from imbue.system_interface.layout_ops import terminal_origin_label
 from imbue.system_interface.models import ActivityRequest
 from imbue.system_interface.models import ActivityResponse
 from imbue.system_interface.models import AgentCreationError
@@ -111,18 +112,50 @@ STATIC_DIRECTORY = Path(__file__).parent / "static"
 # response. The reveal flow's frontend health check reads it.
 FRONTEND_BUILT_HEADER = "X-Frontend-Built"
 
+# How often the placeholder asks whether the bundle is back. Also the interval
+# of the scriptless fallback below, so both routes behave the same.
+_NOT_BUILT_POLL_SECONDS = 10
+
+# The command the placeholder offers for standing up an agent to repair the
+# workspace. It mirrors what ``agent_manager._build_chat_create_command`` runs
+# for a chat -- ``--transfer none`` so the agent works in the workspace tree
+# rather than a worktree of it, ``--template chat`` for the shared work
+# directory and output style, and the ``user_created`` label that puts it in
+# the dynamic chat memory band. It deliberately omits that builder's
+# ``--no-connect``, whose whole purpose is to keep a headless caller from
+# attaching: someone typing this into the terminal below wants the opposite,
+# and connecting is what turns the create into a conversation.
+#
+# Kept in sync with that builder by ``server_test.py``, which asserts the flags
+# here are the ones it emits. It is a suggestion, not a dispatch: the server
+# never runs it, so an agent is created only if the reader decides to.
+_NOT_BUILT_REPAIR_COMMAND = (
+    "mngr create repair --type claude --template chat --transfer none --label user_created=true"
+)
+
 # Served in place of the app whenever the compiled bundle is missing. The bundle
 # is gitignored build output, so a code refresh that replaces the tree can leave
-# the workspace here. The page names the one recovery that works from this state
-# and reloads itself, so a bundle restored by anything else -- most often the
-# reveal flow's rollback -- brings the interface back without the reader having
-# to know to try again.
+# the workspace here. The page offers a way out and returns to the interface on
+# its own once there is one, so a bundle restored by anything else -- most often
+# the reveal flow's rollback -- brings the reader back without them having to
+# know to retry.
 #
-# It deliberately does not offer to run the build itself. The situations that
-# strand a workspace here are dominated by the ones where a build dispatched
-# from the server would fail too, and the server's own memory band would put
-# that build ahead of the user's chats and agents in a memory shed.
-_FRONTEND_NOT_BUILT_HTML = """<!doctype html>
+# The way out is a terminal, not a "rebuild" button. A button has to be right
+# about what went wrong; the states that strand a workspace here are dominated
+# by ones where a build dispatched from the server would fail too (no registry,
+# no memory, a lockfile that does not resolve), and it would fail with nowhere
+# to say so, on a page with no application to render the failure. It would also
+# inherit the server's memory band, which puts it ahead of the user's chats and
+# agents in a shed. A shell is the general case of every repair rather than one
+# of them, and ttyd is already running and already *more* protected than this
+# server, so the page is pointing at something that outlives it rather than
+# starting anything.
+#
+# Nothing here is part of the compiled bundle -- this is a string in the
+# backend -- so the script below ships whether or not the frontend has ever
+# been built. That is what lets the page be more than static text in exactly
+# the state where the frontend is missing.
+_FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
@@ -131,30 +164,99 @@ _FRONTEND_NOT_BUILT_HTML = """<!doctype html>
   body { font-family: system-ui, sans-serif; margin: 0; display: flex;
          align-items: center; justify-content: center; min-height: 100vh;
          background: #14161a; color: #e6e8eb; }
-  main { max-width: 34rem; padding: 2rem; }
+  main { max-width: 48rem; padding: 2rem; width: 100%; box-sizing: border-box; }
   h1 { font-size: 1.25rem; font-weight: 600; margin: 0 0 0.75rem; }
-  p { line-height: 1.5; margin: 0 0 1rem; color: #b6bcc4; }
+  p { line-height: 1.5; margin: 0 0 1rem; color: #b6bcc4; max-width: 34rem; }
   code { background: #1d2026; border-radius: 4px; padding: 0.1rem 0.3rem;
          font-size: 0.9em; }
+  pre { background: #1d2026; border-radius: 6px; padding: 0.75rem 1rem;
+        overflow-x: auto; font-size: 0.85em; color: #e6e8eb; max-width: 34rem; }
+  #terminal-slot[hidden] { display: none; }
+  #terminal { width: 100%; height: 24rem; border: 1px solid #2a2f37;
+              border-radius: 6px; background: #000; }
 </style>
-<!-- Nothing on this page can produce the bundle, so the only thing left to do
-     is notice when something else has. A plain refresh needs no script and no
-     endpoint, and it is what brings an open tab back once the reveal flow's
-     rollback restores the bundle. -->
-<meta http-equiv="refresh" content="10">
+<!-- The scriptless fallback for the poll at the end of the body. Whole-page
+     reloads and a live terminal cannot coexist -- a refresh every ten seconds
+     would destroy the session the reader is typing into -- so this runs only
+     where there is no script to poll with, and therefore no terminal either. -->
+<noscript><meta http-equiv="refresh" content="__POLL_SECONDS__"></noscript>
 </head>
 <body>
 <main>
   <h1>This workspace's interface needs to be rebuilt</h1>
   <p>The compiled interface is missing, so there is nothing to show yet. Your
-     work and your agents are untouched -- only the interface itself is gone.</p>
-  <p>Build it from a checkout of this app: run
-     <code>npm ci &amp;&amp; npm run build</code> in that checkout's
-     <code>frontend/</code> directory, and copy the bundle it writes into this
-     installation's <code>imbue/system_interface/static/</code>. The bundle is
-     picked up as soon as it exists, so there is nothing to restart -- this page
-     returns to the interface on its own.</p>
+     work and your agents are untouched -- only the interface itself is gone,
+     and this page returns to the interface on its own once it is back.</p>
+  <p>If you would rather not work the repair out yourself, create an agent and
+     tell it what you see here:</p>
+  <pre id="repair-command">__REPAIR_COMMAND__</pre>
+  <!-- The lead-in belongs to the terminal, not to the command: the command
+       stands on its own wherever the reader finds a shell, so it keeps its own
+       introduction above and is never left orphaned when there is no terminal
+       to offer. -->
+  <p id="terminal-intro" hidden>You can run that -- or do the repair yourself --
+     in this workspace's terminal, below.</p>
+  <div id="terminal-slot" hidden>
+    <iframe id="terminal" title="Workspace terminal"></iframe>
+  </div>
 </main>
+<script>
+(function () {
+  // The terminal's hostname label, minted per workspace, or "" when there is
+  // no terminal registered to offer.
+  var terminalLabel = __TERMINAL_LABEL__;
+
+  // Mirrors deriveServiceOrigin/workspaceHostCoordinate in
+  // frontend/src/origin.ts, which is canonical: a service origin is its label
+  // prefixed onto the workspace host COORDINATE -- the host-<hex> label and
+  // everything after it -- and never onto this page's host verbatim, which
+  // would nest the service under the shell's own label and route back here.
+  //
+  // It differs from origin.ts in one way, deliberately: no coordinate label
+  // means no origin, rather than falling back to the host unchanged. The shell
+  // can assume it is running inside a workspace; this page cannot (a direct
+  // hit on the loopback port has no coordinate), and a made-up origin would
+  // show the reader a broken frame instead of the prose that still helps them.
+  function serviceOrigin(label) {
+    var labels = window.location.host.split(".");
+    for (var index = 0; index < labels.length; index++) {
+      // The port rides on whichever label is last, so it is stripped before
+      // matching -- otherwise a coordinate that happens to BE the last label
+      // reads as an ordinary one and the terminal is silently not offered.
+      // The slice below keeps it, which is what the origin needs.
+      if (/^(?:host|agent)-[a-f0-9]+$/i.test(labels[index].split(":")[0])) {
+        return window.location.protocol + "//" + label + "." +
+               labels.slice(index).join(".") + "/";
+      }
+    }
+    return null;
+  }
+
+  var origin = terminalLabel ? serviceOrigin(terminalLabel) : null;
+  if (origin) {
+    document.getElementById("terminal").src = origin;
+    document.getElementById("terminal-slot").hidden = false;
+    document.getElementById("terminal-intro").hidden = false;
+  }
+
+  // Ask whether the bundle is back rather than reloading blind. The reply
+  // carries the same header the reveal flow's own health check reads, so a
+  // rebuild by ANY route -- a rollback, a build run in the terminal above --
+  // brings the interface back with no further action. Asking (rather than
+  // refreshing) is what lets the terminal stay alive between checks.
+  setInterval(function () {
+    fetch(window.location.pathname, { method: "HEAD", cache: "no-store" })
+      .then(function (response) {
+        if (response.headers.get("__BUILT_HEADER__") === "true") {
+          window.location.reload();
+        }
+      })
+      // The backend restarting is the expected way for this to fail, and it is
+      // also a moment when the bundle may be arriving. Say nothing and ask again.
+      .catch(function () {});
+  }, __POLL_SECONDS__ * 1000);
+})();
+</script>
 </body>
 </html>
 """
@@ -372,6 +474,28 @@ def _index() -> Response:
     return _frontend_not_built_response()
 
 
+def render_frontend_not_built_page(terminal_label: str | None) -> str:
+    """Fill the not-built placeholder in, given the terminal's origin label.
+
+    Takes the label rather than reading the registry itself so the page can be
+    rendered for a workspace with no terminal (pass ``None``) without touching
+    the filesystem, which is the case worth testing and the one hardest to
+    arrange for real.
+
+    The label is substituted as a JSON literal, so the script receives a string
+    however it is spelled, and ``""`` -- which the script treats as "no
+    terminal" -- when there is none. ``layout_ops.terminal_origin_label``
+    has already rejected anything that is not a single DNS label, so no value
+    that reaches here can close the script element.
+    """
+    return (
+        _FRONTEND_NOT_BUILT_TEMPLATE.replace("__TERMINAL_LABEL__", json.dumps(terminal_label or ""))
+        .replace("__REPAIR_COMMAND__", _NOT_BUILT_REPAIR_COMMAND)
+        .replace("__BUILT_HEADER__", FRONTEND_BUILT_HEADER)
+        .replace("__POLL_SECONDS__", str(_NOT_BUILT_POLL_SECONDS))
+    )
+
+
 def _frontend_not_built_response() -> Response:
     """Render the placeholder shown when there is no compiled bundle to serve."""
     # Logged with the resolved directory because the usual cause is that the
@@ -380,7 +504,7 @@ def _frontend_not_built_response() -> Response:
     _loguru_logger.warning(
         "Served the not-built placeholder: no frontend bundle at {}", STATIC_DIRECTORY / "index.html"
     )
-    return _shell_response(_FRONTEND_NOT_BUILT_HTML, is_frontend_built=False)
+    return _shell_response(render_frontend_not_built_page(terminal_origin_label()), is_frontend_built=False)
 
 
 def _index_catch_all(path: str) -> Response:
@@ -2644,9 +2768,7 @@ def _default_view_id(layout_dir: Path | None) -> str | None:
     the best single answer there is. None only without a registry to fall back
     on (dev/test with no layout dir and no agreeing client).
     """
-    distinct_views = {
-        info["active_layout_slug"] for info in get_state().broadcaster.get_connected_client_infos()
-    }
+    distinct_views = {info["active_layout_slug"] for info in get_state().broadcaster.get_connected_client_infos()}
     if len(distinct_views) == 1:
         return next(iter(distinct_views))
     if layout_dir is None:
