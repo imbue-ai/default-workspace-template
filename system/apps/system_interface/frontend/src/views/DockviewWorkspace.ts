@@ -1964,7 +1964,8 @@ export async function removeMemberRefFromView(ref: string): Promise<void> {
  * project id of its choosing.
  */
 export function undockMemberRefIfMounted(projectId: string, ref: string): void {
-  if (mountedViewId === null || mountedViewId !== projectId) return;
+  // Covers a null `mountedViewId` too, since `projectId` is always a real one.
+  if (mountedViewId !== projectId) return;
   const panelId = panelIdForMemberRef(ref);
   if (panelId === null || !dockview) return;
   const panel = dockview.panels.find((candidate) => candidate.id === panelId);
