@@ -68,6 +68,7 @@ from imbue.system_interface.server import _build_fast_mode_answered_label_comman
 from imbue.system_interface.server import _handle_client_state_message
 from imbue.system_interface.server import _stream_filtered_events
 from imbue.system_interface.server import create_application
+from imbue.system_interface.server import render_frontend_not_built_page
 from imbue.system_interface.testing import RecordingMngrMessenger
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import close_ws
@@ -4898,3 +4899,50 @@ def test_websocket_snapshot_exposes_each_agent_project_label(app: Flask) -> None
     assert first["type"] == "agents_updated"
     project_by_agent_id = {agent["id"]: agent["project"] for agent in first["agents"]}
     assert project_by_agent_id == {"chat-1": "alpha", "chat-2": None}
+
+
+def test_not_built_page_coordinate_regex_matches_the_canonical_one() -> None:
+    """The placeholder derives a service origin, so it carries a copy of the rule.
+
+    ``frontend/src/origin.ts`` is canonical and two mirrors already exist
+    (``layout_ops.py`` and ``system/scripts/layout.py``, pinned to each other by
+    ``layout_ops_test``). The placeholder cannot import any of them -- it runs in
+    the browser, in the one state where the bundle those live in is missing -- so
+    it holds a fourth copy, and this pins it to the source of truth the way the
+    others are pinned. Without it the rule can be corrected in one place and
+    silently rot in the page that only renders when everything else is broken.
+    """
+    origin_ts = Path(__file__).parents[2] / "frontend" / "src" / "origin.ts"
+    canonical = re.search(r"WORKSPACE_COORDINATE_LABEL = (/.+/i);", origin_ts.read_text())
+    assert canonical is not None, f"the canonical regex is no longer declared in {origin_ts}"
+
+    page = render_frontend_not_built_page("terminal-x7k9q2w1")
+    in_page = re.findall(r"(/\^\(\?:host\|agent\).+?/i)\.test\(", page)
+    assert in_page == [canonical.group(1)], (
+        f"the placeholder's coordinate regex has drifted from {origin_ts}: "
+        f"page has {in_page}, origin.ts has {canonical.group(1)!r}"
+    )
+
+
+def test_not_built_placeholder_answers_its_own_poll_cheaply(tmp_path: Path) -> None:
+    """The poll reads a header, so HEAD must still carry it -- and nothing else.
+
+    This is the page's only route back to the interface, so a HEAD that stopped
+    reporting the marker would strand every open tab until someone reloaded by
+    hand. It is also the request the page makes every ten seconds per tab for
+    the length of an outage, so it must not re-render the page or re-read the
+    app registry to answer.
+    """
+    empty_dir = tmp_path / "static"
+    empty_dir.mkdir()
+
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", empty_dir):
+        test_client = create_application(build_test_state()).test_client()
+        head = test_client.head("/")
+        get = test_client.get("/")
+
+    assert head.headers[FRONTEND_BUILT_HEADER] == "false"
+    assert get.headers[FRONTEND_BUILT_HEADER] == "false"
+    # The GET is the one that renders; the HEAD carries no page to render.
+    assert "needs to be rebuilt" in get.text
+    assert head.text == ""

@@ -497,7 +497,17 @@ def render_frontend_not_built_page(terminal_label: str | None) -> str:
 
 
 def _frontend_not_built_response() -> Response:
-    """Render the placeholder shown when there is no compiled bundle to serve."""
+    """Render the placeholder shown when there is no compiled bundle to serve.
+
+    A ``HEAD`` gets the header and nothing else. That is the placeholder's own
+    poll asking whether the bundle is back yet -- every ten seconds, for every
+    open tab, for as long as the outage lasts -- and answering it in full would
+    re-read the app registry and re-render the page each time, and bury the one
+    diagnostic below in six repetitions a minute of itself. Werkzeug drops the
+    body of a HEAD response anyway, so the caller sees no difference.
+    """
+    if request.method == "HEAD":
+        return _shell_response("", is_frontend_built=False)
     # Logged with the resolved directory because the usual cause is that the
     # served tree was replaced under a running service, which is otherwise
     # invisible from the supervisor logs.
