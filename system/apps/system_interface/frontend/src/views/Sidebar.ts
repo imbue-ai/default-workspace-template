@@ -529,9 +529,9 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     expanded = false;
   }
 
-  // The two document listeners are registered once for the rail's life rather
-  // than per menu, so a menu closing cannot unregister the handler another one
-  // still needs.
+  // The document listeners are registered once for the rail's life rather than
+  // per menu, so a menu closing cannot unregister the handler another one still
+  // needs.
   function handleOutsideMousedown(event: MouseEvent): void {
     if (!isAnyMenuOpen()) return;
     // Every floating card is rendered inside the rail's slot, so one
@@ -555,6 +555,35 @@ export function Sidebar(): m.Component<SidebarAttrs> {
    */
   function handleWindowBlur(): void {
     if (!isAnyMenuOpen()) return;
+    closeMenus();
+    m.redraw();
+  }
+
+  /**
+   * Fold the rail up when the pointer leaves the window altogether.
+   *
+   * The slot's own `onmouseleave` is the normal path and handles every
+   * crossing that stays inside the page. It is not guaranteed to arrive when
+   * the cursor exits the WINDOW, though -- a fast exit, or an Electron shell
+   * (which is what minds is) letting the cursor out without telling the page
+   * -- and the rail was then left expanded over the dock with the pointer on
+   * another app entirely.
+   *
+   * `mouseout` with a null `relatedTarget` is what says "gone from this
+   * document": moving between two elements always names the one being
+   * entered, and entering an iframe names the frame. So this fires only for
+   * the case the slot's own handler can miss.
+   *
+   * The exceptions are the slot's, for the same reasons: an open menu extends
+   * past the rail and is still the thing the user is working, and a row
+   * mid-rename would commit a half-typed name on the input's removal. Both
+   * still record that the pointer has gone, so whatever ends the edit folds
+   * the rail up in place of the leave this swallowed (see `endRename`).
+   */
+  function handlePointerLeftWindow(event: MouseEvent): void {
+    if (event.relatedTarget !== null) return;
+    isPointerOverRail = false;
+    if (openMenu !== null || renamingRef !== null) return;
     closeMenus();
     m.redraw();
   }
@@ -1425,12 +1454,14 @@ export function Sidebar(): m.Component<SidebarAttrs> {
             rootElement = slot.dom as HTMLElement;
             document.addEventListener("mousedown", handleOutsideMousedown);
             document.addEventListener("keydown", handleKeydown);
+            document.addEventListener("mouseout", handlePointerLeftWindow);
             window.addEventListener("blur", handleWindowBlur);
           },
           onremove: () => {
             rootElement = null;
             document.removeEventListener("mousedown", handleOutsideMousedown);
             document.removeEventListener("keydown", handleKeydown);
+            document.removeEventListener("mouseout", handlePointerLeftWindow);
             window.removeEventListener("blur", handleWindowBlur);
           },
           onmouseenter: () => {
