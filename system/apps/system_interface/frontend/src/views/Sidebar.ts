@@ -485,6 +485,16 @@ export function Sidebar(): m.Component<SidebarAttrs> {
   // its label, or null while every row reads as plain text. At most one row
   // renames at a time, the same way at most one menu is ever open.
   let renamingRef: string | null = null;
+  // What has been typed into that field so far. Only meaningful while
+  // `renamingRef` is set, and cleared with it. The field cannot simply render
+  // `row.label` and read the DOM back on commit: mithril reapplies an input's
+  // `value` on every redraw (form attributes skip its unchanged-attribute
+  // short-circuit, and the input-specific skip only applies when the DOM
+  // already holds that exact value), and it auto-redraws after every handler
+  // it binds -- this field's own `onkeydown` included. A field whose value did
+  // not track what was typed would have each keystroke reverted on the next
+  // frame.
+  let renameDraft = "";
   let searchQuery = "";
   let menuError: string | null = null;
   let rootElement: HTMLElement | null = null;
@@ -577,9 +587,22 @@ export function Sidebar(): m.Component<SidebarAttrs> {
    *  chosen name out. */
   function commitRename(row: SidebarTabRow, typed: string, attrs: SidebarAttrs): void {
     renamingRef = null;
+    renameDraft = "";
     const title = typed.trim();
     if (title === "" || title === row.label) return;
     attrs.onRenameRow(row, title);
+  }
+
+  /** Put a row into its inline rename field, seeded with its current name. */
+  function beginRename(row: SidebarTabRow): void {
+    renamingRef = row.ref;
+    renameDraft = row.label;
+  }
+
+  /** Leave the rename field without committing what was typed. */
+  function cancelRename(): void {
+    renamingRef = null;
+    renameDraft = "";
   }
 
   /** Whether a row is the primary agent's own chat, which has no destroy verb. */
@@ -607,9 +630,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
         row.kind === "app"
           ? { label: `Share ${serviceNameFromRef(row.ref) ?? row.label}`, run: () => attrs.onShareApp(row) }
           : null,
-      rename: () => {
-        renamingRef = row.ref;
-      },
+      rename: () => beginRename(row),
       hideTab: row.isOpen ? () => attrs.onHideRowTab(row) : null,
       // Withheld for the primary agent, exactly as the tab's own build
       // withholds it: that agent runs the workspace's services, so quitting it
@@ -884,20 +905,23 @@ export function Sidebar(): m.Component<SidebarAttrs> {
         class:
           `min-w-0 flex-1 rounded border border-border bg-bg-sidebar px-1 ${ROW_TEXT_CLASS} ` +
           "text-text-primary outline-none",
-        value: row.label,
+        value: renameDraft,
         oncreate: (vnode: m.VnodeDOM) => {
           const input = vnode.dom as HTMLInputElement;
           input.focus();
           input.select();
         },
         onclick: (event: MouseEvent) => event.stopPropagation(),
-        onblur: (event: FocusEvent) => {
+        oninput: (event: InputEvent) => {
+          renameDraft = (event.target as HTMLInputElement).value;
+        },
+        onblur: () => {
           if (renamingRef !== row.ref) return;
-          commitRename(row, (event.target as HTMLInputElement).value, attrs);
+          commitRename(row, renameDraft, attrs);
         },
         onkeydown: (event: KeyboardEvent) => {
           if (event.key === "Enter") (event.target as HTMLInputElement).blur();
-          else if (event.key === "Escape") renamingRef = null;
+          else if (event.key === "Escape") cancelRename();
         },
       }),
     ]);
@@ -1339,7 +1363,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
         closeMenus();
         // The row being renamed does not survive the switch either: it is not
         // even necessarily still in the destination view's own row list.
-        renamingRef = null;
+        cancelRename();
       }
       lastRenderedViewId = attrs.activeViewId;
       const isEverything = isEverythingView(attrs.activeViewId);

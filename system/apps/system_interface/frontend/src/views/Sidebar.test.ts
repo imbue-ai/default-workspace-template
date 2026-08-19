@@ -593,14 +593,18 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
     expect(root.querySelector('.project-rail-menu[role="menu"]')).toBeNull();
   });
 
-  it("opens an inline rename field from the menu's Rename item, and commits it on blur", () => {
-    const rows: SidebarTabRow[] = [{ ref: "chat:agent-1", kind: "chat", label: "Chat 1", isOpen: true }];
-    const attrs = makeAttrs({ rows });
-    const { root, redraw } = mountSidebar(attrs);
-    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
-    redraw();
-
-    const menu = openRowMenuByContextClick(root, redraw, "Chat 1");
+  /** Open a row's rename field through its menu and type into it the way a
+   *  browser does -- the DOM value changes and an `input` event follows -- with
+   *  a redraw after, since the rail redraws constantly under a live workspace
+   *  (every WebSocket event ends in one, and mithril schedules its own after
+   *  each handler it binds, this field's `onkeydown` included). */
+  function typeIntoRenameField(
+    root: HTMLElement,
+    redraw: () => void,
+    rowLabel: string,
+    typed: string,
+  ): HTMLInputElement {
+    const menu = openRowMenuByContextClick(root, redraw, rowLabel);
     const renameItem = Array.from(menu?.querySelectorAll('[role="menuitem"]') ?? []).find(
       (element) => element.textContent === "Rename",
     );
@@ -608,12 +612,29 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
     redraw();
 
     const input = Array.from(root.querySelectorAll("input")).find(
-      (element) => (element as HTMLInputElement).value === "Chat 1",
+      (element) => (element as HTMLInputElement).value === rowLabel,
     ) as HTMLInputElement | undefined;
-    expect(input).not.toBeUndefined();
+    if (input === undefined) throw new Error("the row never became a rename field");
+    input.value = typed;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    redraw();
+    return input;
+  }
 
-    if (input) input.value = "Renamed Chat";
-    input?.dispatchEvent(new Event("blur"));
+  it("opens an inline rename field from the menu's Rename item, and commits it on blur", () => {
+    const rows: SidebarTabRow[] = [{ ref: "chat:agent-1", kind: "chat", label: "Chat 1", isOpen: true }];
+    const attrs = makeAttrs({ rows });
+    const { root, redraw } = mountSidebar(attrs);
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    const input = typeIntoRenameField(root, redraw, "Chat 1", "Renamed Chat");
+    // The redraw inside the helper must not have put the row's stored label
+    // back: mithril rewrites an input's `value` on every redraw unless the DOM
+    // already holds exactly what the vnode declares.
+    expect(input.value).toBe("Renamed Chat");
+
+    input.dispatchEvent(new Event("blur"));
     redraw();
     expect(attrs.onRenameRow).toHaveBeenCalledWith(rows[0], "Renamed Chat");
   });
@@ -625,18 +646,11 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
     root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
     redraw();
 
-    const menu = openRowMenuByContextClick(root, redraw, "Chat 1");
-    const renameItem = Array.from(menu?.querySelectorAll('[role="menuitem"]') ?? []).find(
-      (element) => element.textContent === "Rename",
-    );
-    click(renameItem ?? null);
+    const input = typeIntoRenameField(root, redraw, "Chat 1", "Should not stick");
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     redraw();
-
-    const input = Array.from(root.querySelectorAll("input")).find(
-      (element) => (element as HTMLInputElement).value === "Chat 1",
-    ) as HTMLInputElement | undefined;
-    if (input) input.value = "Should not stick";
-    input?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    // The blur the field's own removal triggers must not resurrect the edit.
+    input.dispatchEvent(new Event("blur"));
     redraw();
 
     expect(attrs.onRenameRow).not.toHaveBeenCalled();
