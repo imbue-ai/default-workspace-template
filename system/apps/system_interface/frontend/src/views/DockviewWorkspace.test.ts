@@ -9,12 +9,14 @@ vi.hoisted(() => {
 });
 
 import {
+  displayNameForView,
   equalTabWidth,
   isTitleTruncated,
   memberRefForPanelParams,
   preferredChatRefForView,
   refForShortcutFocus,
 } from "./DockviewWorkspace";
+import type { ProjectInfo } from "../models/Projects";
 import type { PanelParams } from "./liveSurfaces";
 
 describe("equalTabWidth", () => {
@@ -254,5 +256,26 @@ describe("memberRefForPanelParams", () => {
     // service:terminal branch, which re-files the panel once it does).
     const params: PanelParams = { panelType: "iframe", agentId: "agent-primary", terminalId: "term-abc", url: "" };
     expect(memberRefForPanelParams(params)).toBeNull();
+  });
+});
+
+describe("displayNameForView", () => {
+  const PROJECTS: ProjectInfo[] = [
+    { project_id: "project-1", name: "Alpha", color: "#3B82F6", glyph: 0, has_content: true, members: [] },
+  ];
+
+  it("names a project in the registry", () => {
+    expect(displayNameForView("project-1", PROJECTS)).toBe("Alpha");
+  });
+
+  it("names Everything without looking it up -- it has no registry entry to find", () => {
+    // The fallback a delete reports once the last project goes, so the one
+    // message announcing zero projects must not read `switched to "everything"`.
+    expect(displayNameForView("everything", PROJECTS)).toBe("Everything");
+    expect(displayNameForView("everything", [])).toBe("Everything");
+  });
+
+  it("falls back to the bare id for a project the registry no longer holds", () => {
+    expect(displayNameForView("gone", PROJECTS)).toBe("gone");
   });
 });
