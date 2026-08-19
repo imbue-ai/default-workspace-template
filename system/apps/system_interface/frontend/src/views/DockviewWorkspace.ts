@@ -145,6 +145,7 @@ import {
   fetchProjectContent,
   fetchProjectsList,
   isEverythingView,
+  EVERYTHING_VIEW_NAME,
   memberKindFromRef,
   memberRef,
   filingProjectForAgentOp,
@@ -3317,8 +3318,18 @@ async function refreshProjectsList(): Promise<void> {
   m.redraw();
 }
 
-function displayNameForProject(projectId: string): string {
-  return availableProjects.find((project) => project.project_id === projectId)?.name ?? projectId;
+/**
+ * What to call a view in a message to the user.
+ *
+ * Everything answers by name without being looked up: it has no registry entry
+ * to find, and it is what a delete falls back to once the last project goes, so
+ * a lookup would leave the one message announcing that state naming the view
+ * ``everything``. A project the registry no longer holds falls back to its own
+ * id, which is still better than an empty pair of quotes.
+ */
+export function displayNameForView(viewId: string, projects: readonly ProjectInfo[]): string {
+  if (isEverythingView(viewId)) return EVERYTHING_VIEW_NAME;
+  return projects.find((project) => project.project_id === viewId)?.name ?? viewId;
 }
 
 /**
@@ -3572,7 +3583,7 @@ export async function startProjectChat(projectId: string): Promise<void> {
     await refreshProjectsList();
   } catch (error) {
     alert(
-      `Project "${displayNameForProject(projectId)}" was created, but its chat could not be set up: ` +
+      `Project "${displayNameForView(projectId, availableProjects)}" was created, but its chat could not be set up: ` +
         `${(error as Error).message}. Use the rail's Chat shortcut to start one.`,
     );
     return;
@@ -3654,11 +3665,16 @@ export function handleProjectSyncEvent(event: ProjectSyncEvent): void {
   if (event.kind === "deleted") {
     // Read the deleted project's name before the (async) refresh drops it
     // from the cache.
-    const deletedName = displayNameForProject(event.projectId);
+    const deletedName = displayNameForView(event.projectId, availableProjects);
     void refreshProjectsList();
     if (event.projectId === mountedViewId) {
       void switchToView(event.fallbackId).then(() => {
-        alert(`Project "${deletedName}" was deleted; switched to "${displayNameForProject(event.fallbackId)}".`);
+        // The fallback is Everything once the last project goes, which is
+        // exactly why this reads through ``displayNameForView``.
+        alert(
+          `Project "${deletedName}" was deleted; switched to ` +
+            `"${displayNameForView(event.fallbackId, availableProjects)}".`,
+        );
       });
     }
     return;
