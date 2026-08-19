@@ -20,9 +20,10 @@ the local origin, just with a longer base.
   running in this container. Skimming service logs will not surface a
   URL.
 - **The public URL is *not* written into `data/.state/apps.toml`.**
-  `forward_port.py` only stores `name` and `url` (the local
-  `http://localhost:<port>` backend address). Do not grep that file
-  for a public URL.
+  `forward_port.py` stores `name`, `url` (the local
+  `http://localhost:<port>` backend address), the service's `label`,
+  and any registered `icon` markup -- never a public URL. Do not grep
+  that file for one.
 
 The reliable way to get the public URL is through the desktop client
 itself: the tab's origin is derived from the service name and the

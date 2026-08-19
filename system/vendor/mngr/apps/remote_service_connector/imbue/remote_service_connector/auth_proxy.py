@@ -558,7 +558,13 @@ def signup_field_rejection(email: str, password: str) -> AuthResponse | None:
     return None
 
 
-@router.post("/auth/signup", response_model=AuthResponse)
+# CLEANUP: drop the response_model_exclude (serving is_new_account on the
+# wire again) once the pre-tolerant desktop fleet (minds <= 0.3.17, whose
+# extra="forbid" AuthRawResponse rejects any new response field) has left
+# the support window per the access log's imbue_client field. The field
+# stays on the in-process AuthResponse object (accounts_web reads it for
+# signup attribution); no client reads it from these two JSON responses.
+@router.post("/auth/signup", response_model=AuthResponse, response_model_exclude={"is_new_account"})
 def auth_signup(body: SignUpRequest) -> AuthResponse:
     """Create a new email/password account and return a session + user info.
 
@@ -632,7 +638,8 @@ def auth_signup(body: SignUpRequest) -> AuthResponse:
         )
 
 
-@router.post("/auth/signin", response_model=AuthResponse)
+# CLEANUP: drop the response_model_exclude alongside the signup one above.
+@router.post("/auth/signin", response_model=AuthResponse, response_model_exclude={"is_new_account"})
 def auth_signin(body: SignInRequest) -> AuthResponse:
     """Authenticate with email/password and return a session + user info.
 

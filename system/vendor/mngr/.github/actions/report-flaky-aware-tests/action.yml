@@ -142,7 +142,7 @@ runs:
         # characters in $CHECK_NAME / $TITLE / $SUMMARY (quotes,
         # backslashes, etc.) are properly escaped rather than
         # interpolated raw into a JSON string literal.
-        jq -n \
+        PAYLOAD=$(jq -n \
           --arg name "$CHECK_NAME" \
           --arg head_sha "$HEAD_SHA" \
           --arg conclusion "$CONCLUSION" \
@@ -157,4 +157,20 @@ runs:
               title: $title,
               summary: $summary
             }
-          }' | gh api --method POST "repos/$REPO/check-runs" --input -
+          }')
+        # This check-run is a cosmetic summary: the job's own status (and the
+        # junit-report annotations above) already carry the test verdict. A
+        # transient GitHub API outage here must not fail a green test run --
+        # a full 503 outage once turned three all-passing jobs red at exactly
+        # this call. Retry with backoff, then degrade to a warning.
+        for delay in 5 15 30 60; do
+          if gh api --method POST "repos/$REPO/check-runs" --input - <<<"$PAYLOAD"; then
+            exit 0
+          fi
+          echo "Posting the '$CHECK_NAME' check-run failed; retrying in ${delay}s..." >&2
+          sleep "$delay"
+        done
+        if gh api --method POST "repos/$REPO/check-runs" --input - <<<"$PAYLOAD"; then
+          exit 0
+        fi
+        echo "::warning title=Check-run post failed::Could not post the '$CHECK_NAME' check-run (GitHub API unavailable). The test verdict above is unaffected: $TITLE"

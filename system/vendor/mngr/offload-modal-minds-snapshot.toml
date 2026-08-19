@@ -21,7 +21,7 @@
 # exceed it, offload reuses sandboxes, and test_snapshot_resume's
 # stopped-container-state check is order-dependent against the resume
 # tests (a reused sandbox has the baked containers already started).
-# 14 tests today; headroom for a few more.
+# 15 tests today; headroom for a few more.
 max_parallel = 20
 # The sync e2e lifecycle tests (test_sync_e2e.py) are the longest in this
 # suite: each drives the real Electron app through workspace creation, a real
@@ -66,7 +66,7 @@ type = "pytest"
 # `minds_snapshot_resume` mark. Without this, offload's local
 # `pytest --collect-only` collects the ENTIRE monorepo (~90s on the CI
 # runner) just to find the ~12 marked tests; scoped paths bring that down
-# to a few seconds. The mark is only ever applied in these two files, and
+# to a few seconds. The mark is only ever applied in these files, and
 # scripts/snapshot_minds_e2e_state_test.py asserts this list stays in sync
 # with reality -- if you add a snapshot-resume test in a new file, that
 # test fails until you add the file here (otherwise the new test would
@@ -85,7 +85,11 @@ type = "pytest"
 # ids, exactly as unscoped discovery did. offload 0.9.12 (OFFLOAD-9) makes
 # single-pass discovery honor discovery_args, so this rootdir pin lives in
 # the proper knob now instead of being smuggled into the group filters.
-paths = ["apps/minds/test_snapshot_resume.py", "apps/minds/test_sync_e2e.py"]
+paths = [
+    "apps/minds/test_bundled_agent_types.py",
+    "apps/minds/test_snapshot_resume.py",
+    "apps/minds/test_sync_e2e.py",
+]
 # Bash-wrapped command with a conditional cd so the same string works in
 # both offload contexts:
 # - Local discovery: offload's pytest framework `shell_words::split`s the

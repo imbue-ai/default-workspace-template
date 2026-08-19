@@ -340,13 +340,14 @@ new tab. Without this step the user would have to discover it via the
 (pure JSON APIs, webhook receivers, etc.).
 
 ```bash
-for L in desktop mobile; do python3 system/scripts/layout.py open --layout "$L" <name>; done
+python3 system/scripts/layout.py open <name>
 ```
 
-Mutating `layout.py` ops require `--layout` (the named layouts are
-`desktop` and `mobile`) and only apply on connected clients that have
-that layout active, so the loop tries both: the call for the layout
-the user is on succeeds, and the other fails fast and harmlessly.
+With no `--view`, the op goes to the view the connected client is
+looking at, which is where the user expects the new tab. (Pass
+`--view <name>` -- a project's name, or `Everything` -- to surface it
+in a different view instead; the op then applies only on connected
+clients that have that view active.)
 `layout.py` POSTs to a loopback-only workspace_server endpoint that
 broadcasts a `layout_op` message over its WebSocket. The frontend
 focuses the panel if a tab for `<name>` is already open, otherwise
@@ -499,6 +500,32 @@ Flags:
   loudly on an invalid name.
 - `--url`: full URL where the app is reachable from inside the
   container (e.g. `http://localhost:8090`).
+- `--icon` / `--icon-file`: optional SVG icon for the app, so the
+  workspace draws its glyph instead of the generic one. `--icon` takes
+  the markup itself; `--icon-file` takes a path whose *contents* are
+  read now and stored (the path is not recorded). Either way the
+  registry holds the markup, which must be a single `<svg>` element
+  with no script, style, event handler, or external reference, and at
+  most 16384 characters -- registration fails loudly otherwise.
+  Omitting both leaves any icon already registered for the app in
+  place, so a service that re-registers on restart keeps its icon.
+
+  **Draw the icon in the workspace's house style**: monochrome line
+  art on a transparent background, exactly like the built-in glyphs.
+  The frame to author in is
+
+  ```svg
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="..."/>
+  </svg>
+  ```
+
+  -- strokes only, no `fill` on the shapes, no hardcoded colors.
+  `currentColor` is what lets the workspace ink the glyph to match the
+  text beside it, and a transparent background is what keeps it from
+  reading as a sticker in a row of line icons. Only use color if the
+  user explicitly asks for a colored icon.
 - `--remove`: remove the named entry from
   `data/.state/apps.toml`. Use this when tearing down a service.
 

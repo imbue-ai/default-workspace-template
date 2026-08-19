@@ -305,7 +305,9 @@ def compute_account_usage(ops: CloudflareOps, user_id_prefix: str, user_id: str)
 
 
 # CLEANUP: remove these compatibility fields (and both helpers) once the
-# desktop fleet is on the first post-v0.3.11 minds release. v0.3.11 desktop
+# access log's imbue_client field shows no in-window strict-model client
+# (any minds release predating the tolerant WireModel parsing) -- the support
+# window is ~1 month after the first tolerant release ships. v0.3.11 desktop
 # clients parse the /account and plan responses into models that REQUIRE the
 # Cloudflare-tunnel-era fields (max_tunnels / max_services_per_tunnel in
 # entitlements, tunnels in usage) with no defaults, so the first deploy after

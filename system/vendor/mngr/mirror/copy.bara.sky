@@ -67,8 +67,8 @@ PUBLIC_FILES = glob(
         "libs/resource_guards/**",
         "libs/skitwright/**",
         # Product apps are public. Deployment/infra apps (modal_litellm,
-        # remote_service_connector) and internal tools (slack_exporter) are
-        # absent by design.
+        # remote_service_connector, observability, share_relay) and internal
+        # tools (slack_exporter) are absent by design.
         "apps/minds/**",
         # scripts/ public subset: each entry is referenced by public code,
         # docs, or the shipped wheel (see the spec's boundary table). The
@@ -101,6 +101,11 @@ PUBLIC_FILES = glob(
         # helper package stay public: the app conftest and collectable
         # tests import them.
         "apps/minds/CLAUDE.md",
+        # Deployment/operations docs: tier runbooks, Vault layout, box/pool
+        # operations, release procedure, per-release deploy history. The
+        # whole folder is excluded so future operator docs are private by
+        # default -- see apps/minds/docs/deploy/README.md.
+        "apps/minds/docs/deploy/**",
         "apps/minds/deployment_tests/**",
         "apps/minds/test_aws_workspace_release.py",
         # The behavior-corpus guard test dev-depends on imbue-mngr-behaviors,

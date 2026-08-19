@@ -29,6 +29,17 @@ export interface CatalogModelOption {
   harness_reported_model_id: string | null;
 }
 
+// A popup the harness declared for the chat UI (see HarnessSpec.popups on the
+// backend). `composer_command` popups match a typed message's first token against
+// `commands` at send time; the `turn_check` popup is the fast-mode grace-period
+// check ChatPanel runs per render. The frontend acts on whatever the agent's
+// harness declared -- it never branches on the harness name.
+export interface HarnessPopup {
+  trigger: "composer_command" | "turn_check";
+  commands: string[];
+  action: "notice" | "open_auth" | "fast_mode_prompt";
+}
+
 export interface HarnessCatalog {
   // The static catalog options. EMPTY for a "dynamic" picker (codex): its options are per-agent,
   // fetched from /model-options on open, not carried here.
@@ -40,11 +51,19 @@ export interface HarnessCatalog {
   // pi via its inbox sentinel, codex via its live ledger); a false harness would fall back
   // to the restart-based flush.
   native_atomic_shoulder_tap_possible: boolean;
+  // The harness's declared popups plus its agent-auth surface, merged into the
+  // payload from the backend HarnessSpec. Optional so a stale backend without
+  // them degrades to "no popups" rather than a parse failure.
+  popups?: HarnessPopup[];
+  auth_modal?: "managed" | "terminal";
+  auth_instructions?: string | null;
 }
 
 const catalogByHarness = new Map<string, HarnessCatalog>();
-let hasLoaded = false;
-let isLoading = false;
+// Single-flight load: the in-flight (or completed) fetch, or null before the first
+// attempt and after a failure -- so callers can genuinely await the load and a
+// failed fetch is retried by the next caller rather than wedging the session.
+let loadPromise: Promise<void> | null = null;
 
 /** The catalog for a harness, or null when unknown / not yet loaded. */
 export function getHarnessCatalog(harness: string | undefined): HarnessCatalog | null {
@@ -54,25 +73,55 @@ export function getHarnessCatalog(harness: string | undefined): HarnessCatalog |
   return catalogByHarness.get(harness) ?? null;
 }
 
-/** Load the catalogs once (idempotent). Safe to call on every agent switch. */
-export async function ensureHarnessCatalogs(): Promise<void> {
-  if (hasLoaded || isLoading) {
-    return;
+/** Load the catalogs once (single-flight). Awaiting this while a load is in
+ *  flight resolves when THAT load lands, so a caller that needs the data (the
+ *  composer's slash-command guard) can block on it. Safe to call on every
+ *  agent switch. */
+export function ensureHarnessCatalogs(): Promise<void> {
+  if (loadPromise === null) {
+    loadPromise = m
+      .request<Record<string, HarnessCatalog>>({
+        method: "GET",
+        url: apiUrl("/api/harnesses"),
+      })
+      .then((data) => {
+        for (const [harness, catalog] of Object.entries(data)) {
+          catalogByHarness.set(harness, catalog);
+        }
+        m.redraw();
+      })
+      .catch((error) => {
+        console.warn("Failed to load harness catalogs", error);
+        loadPromise = null;
+      });
   }
-  isLoading = true;
-  try {
-    const data = await m.request<Record<string, HarnessCatalog>>({
-      method: "GET",
-      url: apiUrl("/api/harnesses"),
-    });
-    for (const [harness, catalog] of Object.entries(data)) {
-      catalogByHarness.set(harness, catalog);
+  return loadPromise;
+}
+
+/** The composer_command popup of `harness` matching `text`'s first token, or null.
+ *  Matched on the command name (first whitespace token, lowercased, exact), so
+ *  every argument form matches with its command -- deliberately over-matching,
+ *  because a declined form that would have worked costs one trip to the terminal
+ *  while an allowed one can take over the agent's pane or run the wrong auth flow. */
+export function findComposerPopup(
+  harness: string | undefined,
+  text: string,
+): { popup: HarnessPopup; command: string } | null {
+  const firstToken = text.trim().toLowerCase().split(/\s+/, 1)[0] ?? "";
+  if (!firstToken.startsWith("/")) {
+    return null;
+  }
+  for (const popup of getHarnessCatalog(harness)?.popups ?? []) {
+    if (popup.trigger === "composer_command" && popup.commands.includes(firstToken)) {
+      return { popup, command: firstToken };
     }
-    hasLoaded = true;
-    m.redraw();
-  } catch (error) {
-    console.warn("Failed to load harness catalogs", error);
-  } finally {
-    isLoading = false;
   }
+  return null;
+}
+
+/** Whether `harness` declared the fast-mode grace-period prompt. */
+export function hasFastModePrompt(harness: string | undefined): boolean {
+  return (getHarnessCatalog(harness)?.popups ?? []).some(
+    (popup) => popup.trigger === "turn_check" && popup.action === "fast_mode_prompt",
+  );
 }

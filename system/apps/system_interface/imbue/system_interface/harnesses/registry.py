@@ -16,6 +16,7 @@ would mean two places to edit for one harness, which is how the split drifts.
 """
 
 from collections.abc import Callable
+from enum import StrEnum
 from pathlib import Path
 from typing import Final
 
@@ -59,6 +60,154 @@ from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.harnesses.session_watcher import OnEventsCallback
 
 
+class PopupTrigger(StrEnum):
+    """When a declared popup fires. Values are the wire strings the frontend matches."""
+
+    # Matches a typed message's first token against the popup's commands at send time.
+    COMPOSER_COMMAND = "composer_command"
+    # Runs on every chat render -- the fast-mode grace-period check.
+    TURN_CHECK = "turn_check"
+
+
+class PopupAction(StrEnum):
+    """What the frontend does when a declared popup fires. Values are wire strings."""
+
+    # The can't-send-from-chat notice.
+    NOTICE = "notice"
+    # Open the harness's agent-auth surface (see ``HarnessSpec.auth_modal``).
+    OPEN_AUTH = "open_auth"
+    # The keep-fast-mode prompt flow.
+    FAST_MODE_PROMPT = "fast_mode_prompt"
+
+
+class AuthModalKind(StrEnum):
+    """Which agent-auth surface a harness's ``open_auth`` popups open. Wire strings."""
+
+    # The in-app login modal (claude -- its auth is mind-global).
+    MANAGED = "managed"
+    # A notice showing the harness's ``auth_instructions``, for harnesses whose
+    # sign-in runs in their own TUI.
+    TERMINAL = "terminal"
+
+
+class HarnessPopup(FrozenModel):
+    """One popup a harness declares for the chat UI.
+
+    Shipped to the frontend inside the ``/api/harnesses`` payload, so the composer and
+    chat panel act on whatever the agent's harness declared instead of branching on the
+    harness name.
+    """
+
+    trigger: PopupTrigger
+    commands: tuple[str, ...] = ()
+    action: PopupAction
+
+
+# Claude Code slash commands the chat declines to send (action="notice").
+#
+# A chat message reaches a claude agent by being typed into its terminal, so a command
+# that changes the terminal rather than starting a turn does something the chat cannot
+# undo. Most of these replace Claude Code's input box with a full-pane view, after which
+# the agent cannot accept any further message until the view is dismissed; /exit (and
+# its alias /quit) shuts the session down outright. Either way the command still works
+# from the agent's terminal, which is what the notice points the user at.
+#
+# Every entry was measured against claude 2.1.220 by sending it to a live agent and
+# confirming both that the input box was gone afterwards and that a following message
+# failed to send. Alias spellings sit alongside the command they resolve to (/cost and
+# /stats are /usage, /settings is /config, /allowed-tools is /permissions, /bashes is
+# /tasks, /quit is /exit) -- not duplicates. Matching is by first token, so every
+# argument form is declined with its command: deliberately over-declining, because a
+# declined form that would have worked costs one trip to the terminal while an allowed
+# form that takes over the pane leaves the agent unable to answer in chat.
+_CLAUDE_DECLINED_COMMANDS: Final[tuple[str, ...]] = (
+    "/add-dir",
+    "/allowed-tools",
+    "/bashes",
+    "/config",
+    "/cost",
+    "/diff",
+    "/exit",
+    "/extra-usage",
+    "/goal",
+    "/help",
+    "/hooks",
+    "/ide",
+    "/mcp",
+    "/permissions",
+    "/powerup",
+    "/privacy-settings",
+    "/quit",
+    "/release-notes",
+    "/settings",
+    "/skills",
+    "/stats",
+    "/status",
+    "/tasks",
+    # Here for its argument form only: bare /theme sends fine, /theme dark takes over.
+    "/theme",
+    "/usage",
+    "/usage-credits",
+    "/workflows",
+)
+
+# Codex slash commands the chat declines to send. Codex messages are delivered
+# programmatically over the app-server (turn/start), never typed into the pane, so a
+# slash command sent from chat would reach the model as literal prose -- and /model,
+# /fast, and /effort are additionally stamped hidden by the shared display rules (they
+# are the claude model bar's typed commands), so the user's message would silently
+# vanish from the transcript. The notice points every one of these at the terminal,
+# where codex's own TUI handles them.
+_CODEX_DECLINED_COMMANDS: Final[tuple[str, ...]] = (
+    "/archive",
+    "/btw",
+    "/clear",
+    "/delete",
+    "/effort",
+    "/exit",
+    "/experimental",
+    "/fast",
+    "/fork",
+    "/keymap",
+    "/model",
+    "/new",
+    "/plan",
+    "/quit",
+    "/resume",
+    "/side",
+    "/vim",
+)
+
+# Pi slash commands the chat declines to send. pi is driven through its lifecycle
+# extension's inbox rather than by typing into the pane, so these would reach the
+# model as literal prose; the ones that switch or discard a session (/new, /resume,
+# /fork, /clone, /compact, /quit) would also strand the chat's view of the
+# conversation if they ever did run. The notice points them at the terminal.
+_PI_DECLINED_COMMANDS: Final[tuple[str, ...]] = (
+    "/clone",
+    "/compact",
+    "/fork",
+    "/llama",
+    "/model",
+    "/name",
+    "/new",
+    "/quit",
+    "/resume",
+    "/scoped-models",
+    "/session",
+    "/tree",
+)
+
+# The auth-intercept commands every auth-declaring harness shares: typing either opens
+# the harness's agent-auth surface instead of sending.
+_AUTH_COMMANDS: Final[tuple[str, ...]] = ("/login", "/logout")
+
+# The fast-mode grace-period prompt, declared by the harnesses that can launch fast.
+_FAST_MODE_PROMPT_POPUP: Final[HarnessPopup] = HarnessPopup(
+    trigger=PopupTrigger.TURN_CHECK, action=PopupAction.FAST_MODE_PROMPT
+)
+
+
 class HarnessSpec(FrozenModel):
     """Everything the system interface needs to run one harness."""
 
@@ -99,13 +248,17 @@ class HarnessSpec(FrozenModel):
     # that taps through its live connection (codex) registers none and overrides
     # ``shoulder_tap`` on its session directly.
     shoulder_tap_class: type[AtomicShoulderTap] | None = None
-    # Extra ``mngr create`` args for this harness, given whether fast mode is enabled. Chat is
-    # the one interactive agent type, so it is the only one that starts fast; fast mode is a
-    # claude setting, so every other harness contributes nothing.
-    launch_settings_overrides: Callable[[bool], tuple[str, ...]] = lambda _is_fast: ()
     # How to tell whether this harness's CLI is signed in before creating an agent on it.
     # ``None`` = no auth gate (claude's auth lives in the shared ``~/.claude``).
     auth_check: HarnessAuthCheck | None = None
+    # The popups this harness declares for the chat UI, shipped on the wire with the
+    # catalog. An empty tuple is the honest statement that a harness has none (pi's
+    # composer sends everything as-is and it never launches fast).
+    popups: tuple[HarnessPopup, ...] = ()
+    # The user-facing agent-auth surface the ``open_auth`` popup action (and the stream
+    # auth-error hook) opens; ``terminal`` surfaces show ``auth_instructions``.
+    auth_modal: AuthModalKind = AuthModalKind.TERMINAL
+    auth_instructions: str | None = None
 
 
 HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
@@ -124,10 +277,14 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         # the base restart-drain. See harnesses/claude/tap.py.
         interrupt_to_composer_class=ClaudeInterruptToComposer,
         shoulder_tap_class=ClaudeAtomicShoulderTap,
-        launch_settings_overrides=lambda is_fast: (
-            "-S",
-            f"agent_types.claude.settings_overrides.fastMode={str(is_fast).lower()}",
+        popups=(
+            HarnessPopup(trigger=PopupTrigger.COMPOSER_COMMAND, commands=_AUTH_COMMANDS, action=PopupAction.OPEN_AUTH),
+            HarnessPopup(
+                trigger=PopupTrigger.COMPOSER_COMMAND, commands=_CLAUDE_DECLINED_COMMANDS, action=PopupAction.NOTICE
+            ),
+            _FAST_MODE_PROMPT_POPUP,
         ),
+        auth_modal=AuthModalKind.MANAGED,
     ),
     HarnessType.CODEX: HarnessSpec(
         name=HarnessType.CODEX,
@@ -154,6 +311,16 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         # interrupter default is inert and no shoulder_tap_class is needed.
         session_class=CodexHarnessSession,
         auth_check=CODEX_AUTH_CHECK,
+        popups=(
+            HarnessPopup(trigger=PopupTrigger.COMPOSER_COMMAND, commands=_AUTH_COMMANDS, action=PopupAction.OPEN_AUTH),
+            HarnessPopup(
+                trigger=PopupTrigger.COMPOSER_COMMAND, commands=_CODEX_DECLINED_COMMANDS, action=PopupAction.NOTICE
+            ),
+            _FAST_MODE_PROMPT_POPUP,
+        ),
+        auth_instructions=(
+            "Open the agent's terminal and run /logout, then /login, to sign in or switch accounts."
+        ),
     ),
     HarnessType.PI_CODING: HarnessSpec(
         name=HarnessType.PI_CODING,
@@ -171,6 +338,13 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         interrupt_to_composer_class=PiInterruptToComposer,
         shoulder_tap_class=PiAtomicShoulderTap,
         auth_check=PI_AUTH_CHECK,
+        popups=(
+            HarnessPopup(trigger=PopupTrigger.COMPOSER_COMMAND, commands=("/login",), action=PopupAction.OPEN_AUTH),
+            HarnessPopup(
+                trigger=PopupTrigger.COMPOSER_COMMAND, commands=_PI_DECLINED_COMMANDS, action=PopupAction.NOTICE
+            ),
+        ),
+        auth_instructions="Open the agent's terminal and run /login to add accounts or keys.",
     ),
 }
 
