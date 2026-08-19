@@ -571,6 +571,39 @@ def test_classify_path_manifest_flag() -> None:
     assert not update_self.classify_path("system/scripts/forward_port.py").is_manifest
 
 
+def test_classify_path_restart_flag() -> None:
+    # The classes whose change leaves a live process inconsistent with the
+    # merged tree until the services agent restarts. Vendored-mngr *source* is
+    # the geebspace lesson: the running system interface imports it in-process,
+    # so "picked up live" only ever held for a fresh process.
+    requires = [
+        "system/supervisord.conf",
+        "system/libs/bootstrap/src/bootstrap/manager.py",
+        "system/vendor/mngr/libs/mngr/imbue/mngr/config/loader.py",
+        "system/vendor/mngr/libs/mngr/pyproject.toml",
+        # The one provisioner path a live process re-reads on every request.
+        ".mngr/settings.toml",
+    ]
+    for path in requires:
+        assert update_self.classify_path(path).requires_restart, path
+    does_not = [
+        # The system interface's own restart decision stays with the apply's
+        # finer frontend/backend split, not this flag.
+        "system/apps/system_interface/imbue/system_interface/server.py",
+        # Other provisioner paths shape create/build time, not a live reader.
+        "system/scripts/setup_system.sh",
+        ".mngr/apt-snapshot-timestamp",
+        "system/scripts/forward_port.py",
+        ".agents/skills/update-self/SKILL.md",
+        # Docs never restart anything, even under a restart-requiring prefix.
+        "system/vendor/mngr/README.md",
+        "system/libs/bootstrap/changelog/some-entry.md",
+        "CLAUDE.md",
+    ]
+    for path in does_not:
+        assert not update_self.classify_path(path).requires_restart, path
+
+
 # --- classify_merge --------------------------------------------------------
 
 

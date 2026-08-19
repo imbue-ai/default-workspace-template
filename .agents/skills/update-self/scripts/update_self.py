@@ -490,12 +490,15 @@ class PathClass(NamedTuple):
     ``reveal_class`` selects the go-live action; ``project`` is the pytest
     project whose suite covers the path (``.`` = the root workspace,
     ``system/apps/system_interface`` and ``system/vendor/mngr`` run their own suites);
-    ``is_manifest`` flags a dependency-manifest change that needs an env refresh.
+    ``is_manifest`` flags a dependency-manifest change that needs an env refresh;
+    ``requires_restart`` flags a path whose change must bounce the services agent
+    before the workspace is consistent with the merged tree.
     """
 
     reveal_class: str
     project: str
     is_manifest: bool
+    requires_restart: bool
 
 
 def _project_for_path(path: str) -> str:
@@ -540,6 +543,17 @@ def classify_path(path: str) -> PathClass:
       ``SKILL.md`` under ``.agents/`` is *not* docs: a skill's prose is what an
       agent runs, so it stays ``shared_runtime``.
     - ``other`` -- anything else.
+
+    ``requires_restart`` is orthogonal to the class: it names the paths whose
+    change leaves a *live* process inconsistent with the merged tree until the
+    services agent restarts. ``service`` always does. ``editable_tool`` does
+    too: the vendored mngr is an editable install, so the moment the tree
+    advances, the running system interface (which imports it in-process) is old
+    code operating on new on-disk state -- "picked up live" only ever held for
+    a fresh process. And ``.mngr/settings.toml`` alone among the provisioner
+    paths: the running system interface re-reads it on every request, so a
+    settings file newer than the code reading it must be paired with a restart
+    or nothing live stops speaking the old schema.
     """
     is_manifest = Path(path).name in _MANIFEST_BASENAMES
     project = _project_for_path(path)
@@ -553,22 +567,24 @@ def classify_path(path: str) -> PathClass:
     # keeps its own class.
     is_changelog_entry = Path(path).parent.name == "changelog" and path.endswith(".md")
     if Path(path).name == "README.md" or is_changelog_entry:
-        return PathClass(CLASS_DOCS, project, is_manifest)
+        return PathClass(CLASS_DOCS, project, is_manifest, False)
     # Provisioning files are matched before the generic ``system/scripts/`` and
     # catch-all rules below: a toolchain script lives under ``system/scripts/`` (would
     # otherwise read as ``shared_runtime``) and ``.mngr/settings.toml`` would
     # otherwise fall through to ``other`` -- either way the reveal would miss its
     # build/create-time impact.
     if _is_provisioner(path):
-        return PathClass(CLASS_PROVISIONER, project, is_manifest)
+        return PathClass(
+            CLASS_PROVISIONER, project, is_manifest, path == ".mngr/settings.toml"
+        )
     if path.startswith("system/apps/system_interface/"):
-        return PathClass(CLASS_SYSTEM_INTERFACE, project, is_manifest)
+        return PathClass(CLASS_SYSTEM_INTERFACE, project, is_manifest, False)
     if path == "system/supervisord.conf" or path.startswith("system/libs/bootstrap/"):
-        return PathClass(CLASS_SERVICE, project, is_manifest)
+        return PathClass(CLASS_SERVICE, project, is_manifest, True)
     if path.startswith("system/vendor/mngr/"):
-        return PathClass(CLASS_EDITABLE_TOOL, project, is_manifest)
+        return PathClass(CLASS_EDITABLE_TOOL, project, is_manifest, True)
     if path == "system/Dockerfile":
-        return PathClass(CLASS_DOCKERFILE, project, is_manifest)
+        return PathClass(CLASS_DOCKERFILE, project, is_manifest, False)
     if (
         path.startswith("system/scripts/")
         or path.startswith(".agents/")
@@ -576,10 +592,10 @@ def classify_path(path: str) -> PathClass:
         or path.startswith("system/services/")
         or path.startswith("system/apps/")
     ):
-        return PathClass(CLASS_SHARED_RUNTIME, project, is_manifest)
+        return PathClass(CLASS_SHARED_RUNTIME, project, is_manifest, False)
     if path == "CLAUDE.md" or "/changelog/" in path or path.endswith(".md"):
-        return PathClass(CLASS_DOCS, project, is_manifest)
-    return PathClass(CLASS_OTHER, project, is_manifest)
+        return PathClass(CLASS_DOCS, project, is_manifest, False)
+    return PathClass(CLASS_OTHER, project, is_manifest, False)
 
 
 class MergeClassification(NamedTuple):
@@ -588,7 +604,8 @@ class MergeClassification(NamedTuple):
     ``merged`` are files where local also diverged (reconcile + validate);
     ``pulled_in`` are clean upstream arrivals local left untouched (trust, but
     still apply). Each entry is a dict with ``path``, ``reveal_class``,
-    ``project``, ``is_manifest``, ``disposition``. The summary fields collect the
+    ``project``, ``is_manifest``, ``requires_restart``, ``disposition``. The
+    summary fields collect the
     distinct reveal classes and the projects whose suites the merged set implies.
 
     ``has_merge_work`` is true whenever the merged set is non-empty: any file
@@ -617,6 +634,7 @@ def _entry(path: str, disposition: str) -> dict[str, object]:
         "reveal_class": info.reveal_class,
         "project": info.project,
         "is_manifest": info.is_manifest,
+        "requires_restart": info.requires_restart,
         "disposition": disposition,
     }
 
