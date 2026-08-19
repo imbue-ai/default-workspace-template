@@ -7,3 +7,7 @@ The test asserts the ids a live claude actually reports resolve to the options t
 It needs no credentials and runs no model turn: claude writes its statusline before it ever calls the API, so a syntactically-valid but non-functional key reaches the whole chain. Fast mode is deliberately not asserted -- `/fast on` is a no-op under an unusable key, and the reported value is not stable across a real turn.
 
 CI now installs tmux and the pinned Claude Code before the system_interface suite, reading the version from `[agent_types.claude].version` rather than repeating it, so the test actually runs instead of skipping.
+
+A second, release-marked test (`harnesses/claude/test_error_contract.py`) covers the API-error path the same way. `session_parser` classifies an outage by reading the text of a synthetic assistant record through `classify_api_error`, whose patterns key on the literal form `API Error: <status>`; the frontend styles the message from that and adds a "not Minds' fault" note when `is_provider_fault` agrees. Every other test of those patterns feeds them a hand-written string, so nothing would notice if claude rephrased the error.
+
+This one makes the real binary produce the text, by pointing it at a local stub that answers every request with a 529. It needs no credentials and costs nothing -- the stub is the API -- but claude retries a failing request for about three minutes before writing the record, which is why it is release-marked rather than per-PR.
