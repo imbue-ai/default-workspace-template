@@ -22,6 +22,7 @@ from imbue.system_interface.layout_ops import is_sessionless_browser_ref
 from imbue.system_interface.layout_ops import layout_inspect
 from imbue.system_interface.layout_ops import layout_list
 from imbue.system_interface.layout_ops import parse_tmux_sessions_output
+from imbue.system_interface.layout_ops import terminal_origin_label
 
 # A workspace host as the frontend sees it: the ``host-<32hex>`` coordinate
 # label plus the local base. Service URLs prefix the service name as one more
@@ -653,9 +654,7 @@ def test_service_name_from_url_agrees_with_layout_script_parser() -> None:
         assert _service_name_from_url(url) == (coordinates[0] if coordinates else None), url
 
 
-def test_labeled_service_origin_round_trips_to_service_name(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_labeled_service_origin_round_trips_to_service_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A ``<name>-<rand>`` origin label maps back to its registered service name.
 
     Panel origins are built from the unguessable ``<name>-<rand>`` label, so the
@@ -664,10 +663,7 @@ def test_labeled_service_origin_round_trips_to_service_name(
     and the ``layout.py`` mirror agrees on both.
     """
     apps_file = tmp_path / "apps.toml"
-    apps_file.write_text(
-        '[[apps]]\nname = "terminal"\nurl = "http://localhost:7681"\n'
-        'label = "terminal-x7k9q2w1"\n'
-    )
+    apps_file.write_text('[[apps]]\nname = "terminal"\nurl = "http://localhost:7681"\nlabel = "terminal-x7k9q2w1"\n')
     monkeypatch.setenv("MINDS_APPS_FILE", str(apps_file))
 
     labeled_url = f"http://terminal-x7k9q2w1.{_LOCAL_WORKSPACE_HOST}/?arg=_&arg=agent&arg=main"
@@ -687,3 +683,35 @@ def test_labeled_service_origin_round_trips_to_service_name(
         coordinates = layout_script._service_coordinates_from_url(url)
         assert coordinates is not None
         assert coordinates[0] == _service_name_from_url(url), url
+
+
+def test_terminal_origin_label_reads_the_registry_and_degrades_to_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The label is the only way to address the terminal, and it is read, not assumed.
+
+    Callers use it to offer a terminal from a surface that has no application
+    to open one with, so every way of not finding it has to answer "no terminal
+    to offer" rather than raise: the registry can be absent (a workspace that
+    has not registered its services yet), unparseable, or carry no terminal row
+    at all, and a row whose label could not be a hostname could not name an
+    origin either.
+    """
+    apps_file = tmp_path / "apps.toml"
+    monkeypatch.setenv("MINDS_APPS_FILE", str(apps_file))
+
+    assert terminal_origin_label() is None, "a registry that does not exist yet"
+
+    apps_file.write_text('[[apps]]\nname = "browser"\nurl = "http://localhost:8081"\nlabel = "browser-aaaa1111"\n')
+    assert terminal_origin_label() is None, "a registry with no terminal row"
+
+    apps_file.write_text("this is not toml [[[")
+    assert terminal_origin_label() is None, "a registry that cannot be parsed"
+
+    apps_file.write_text('[[apps]]\nname = "terminal"\nurl = "http://localhost:7681"\nlabel = "terminal-x7k9q2w1"\n')
+    assert terminal_origin_label() == "terminal-x7k9q2w1"
+
+    # Not a hostname label, so it cannot be prefixed onto the workspace
+    # coordinate -- and it is untrusted input to whatever renders it.
+    apps_file.write_text('[[apps]]\nname = "terminal"\nurl = "http://localhost:7681"\nlabel = "not/a<label>"\n')
+    assert terminal_origin_label() is None

@@ -107,14 +107,47 @@ iframe/panel for arranging the workspace.
 `static/` is gitignored build output, produced at workspace creation
 (`system/scripts/build_workspace.sh`) and by the reveal above. Nothing rebuilds
 it at service start, so a code refresh that replaces the tree can leave the
-backend with nothing to serve. In that state `/` serves a placeholder naming the
-one repair that works from there -- build in a checkout of this app and copy the
-bundle in -- and refreshing itself, so a bundle restored by anything else (most
-often the reveal's rollback) brings an open tab back on its own. The placeholder
-deliberately does not offer to run the build: the states that strand a workspace
-here are dominated by the ones where a build would fail too, and a build the
-server dispatched would inherit the server's memory band and be protected ahead
-of the user's chats and agents.
+backend with nothing to serve. In that state `/` serves a placeholder, and
+because the placeholder is a string in the backend rather than part of the
+bundle, it still works when nothing else does.
+
+The placeholder is the workspace's general recovery surface, so it hands over a
+**terminal** rather than a repair. It embeds the already-running `terminal`
+service (ttyd) in a frame, and suggests creating an agent to do the work if the
+reader would rather not:
+
+```
+mngr create repair --type claude --template chat --transfer none --label user_created=true
+```
+
+Those flags mirror what `agent_manager._build_chat_create_command` passes for a
+chat, minus its `--no-connect` -- someone typing this wants to land in the
+conversation. A test pins them together so the suggestion cannot drift into
+creating something that is not a chat.
+
+A shell rather than a "rebuild" button because a button has to be right about
+what went wrong: the states that strand a workspace here are dominated by ones
+where a build dispatched from the server would fail too (no registry, no
+memory, a lockfile that does not resolve), and it would fail with nowhere to
+report it, on a page with no application to render the failure. It would also
+inherit the server's memory band and be protected ahead of the user's chats and
+agents. Nothing is spawned either way: ttyd is supervised, always running, and
+sits at a *lower* (more protected) memory band than this server, so the page
+points at something that outlives it.
+
+The terminal's origin label is minted per workspace, so the page cannot carry
+it; the server reads it from the app registry (`data/.state/apps.toml`) at
+render time and the page's own script derives the origin from the browser's
+location, mirroring `frontend/src/origin.ts`. When there is no terminal
+registered -- ttyd starts alongside the other services, not before them -- the
+frame stays hidden and the prose stands alone.
+
+The page returns to the interface on its own once a bundle exists, so a
+rollback (or a build run in that terminal) needs no further action. It polls the
+`X-Frontend-Built` header rather than reloading on a timer: a whole-page refresh
+would destroy the terminal session every few seconds, right while it is being
+typed into. The timer-based reload survives only inside `<noscript>`, where
+there is no terminal to protect.
 
 Two things make that state recoverable rather than terminal. Every app-shell
 response carries an `X-Frontend-Built` header, so the placeholder is
