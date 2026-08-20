@@ -60,12 +60,12 @@ Already done (during incident response and verification):
 - mngr-internal#268 merged, and you are running from a checkout at or after it
   (the sweep uses your local `build_box_prep_script`).
 - Production Vault token loaded and the env activated:
-  `eval "$(uv run minds env activate production)"` (see
+  `eval "$(uv run minds-admin env activate production)"` (see
   [vault-setup.md](./vault-setup.md)). No OVH supplier creds needed.
 
 ## Step 1: box sweep (box unit + apt pin)
 
-For every `ready` box in `uv run minds server list`:
+For every `ready` box in `uv run minds-admin server list`:
 
 ```bash
 just prep-server <server-id>
@@ -102,7 +102,7 @@ never re-runs a service the old installer's boot-time oneshot left latched
 active, which is exactly the state of a wedge-recovered VM.
 
 Run the sweep (`just backfill-autostart`, wrapping
-`mngr imbue_cloud admin server backfill-autostart`; start with `--dry-run`
+`minds-admin server backfill-autostart`; start with `--dry-run`
 to see the per-VM plan). Do not hand-loop over the fleet; the sweep
 handles:
 
@@ -117,7 +117,7 @@ handles:
   relaunch via `mngr start` / the desktop client.
 - **Reach.** VMs are only reachable via each box's lima user with the pool
   key (`limactl shell <instance> sudo ...`); the script should sweep
-  box-by-box from `minds server list` / `minds pool list` data.
+  box-by-box from `minds-admin server list` / `minds-admin pool list` data.
 - **Idempotence and liveness.** Applying to a healthy running workspace must
   be a no-op for the user (`docker start` / `mngr start` are no-ops); the
   installer's own `mountpoint` guard makes it refuse to run on a VM whose

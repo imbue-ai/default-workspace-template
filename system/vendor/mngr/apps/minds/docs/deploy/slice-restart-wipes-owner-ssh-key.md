@@ -18,7 +18,7 @@ them, are now closed:
 - **Fixed.** `build_root_authorized_keys_block` appends if absent instead of
   truncating, so a VM carved from here on keeps every key it was given. A VM
   carved *before* that change keeps the truncating script in its stored
-  `lima.yaml` until the `mngr imbue_cloud admin repair-keys` sweep patches it
+  `lima.yaml` until the `minds-admin repair-keys` sweep patches it
   (see below).
 - **Fixed.** The outer `authorized_keys` now has a standing writer, but a
   client-side one rather than the server-side reconcile cron this investigation
@@ -29,7 +29,7 @@ them, are now closed:
   `authorized_keys` on every boot, after cloud-init's replay -- so a restart
   can no longer orphan an adopted host's owner. For hosts already wiped (whose
   owner cannot SSH in to adopt), the operator-run
-  `mngr imbue_cloud admin repair-keys` sweep patches each slice's stored
+  `minds-admin repair-keys` sweep patches each slice's stored
   `lima.yaml` provision block and restores the VM root's `authorized_keys`
   from the container's own copy.
 - **Fixed.** `LatchkeyDiscoveryHandler` warns on `UNAUTHENTICATED` instead of
@@ -219,7 +219,7 @@ machines that most need it are exactly the ones it skips.
 
 ## Repairing an affected machine (no recreate needed)
 
-The supported repair is now `mngr imbue_cloud admin repair-keys` (fleet-wide, or
+The supported repair is now `minds-admin repair-keys` (fleet-wide, or
 scoped to one box/VM for break-glass): it patches the slice's stored `lima.yaml`
 provision block so future restarts stop truncating, and restores the VM root's
 `authorized_keys` from the container's own copy. The manual procedure below is
@@ -234,7 +234,7 @@ from the user.
    `vault kv get -format=json secrets/minds/<tier>/pool-ssh/POOL_SSH_PRIVATE_KEY`
 2. Get the owner's fingerprint from their machine:
    `ssh-keygen -lf ~/.minds/mngr/profiles/<profile>/providers/imbue_cloud/<provider>/hosts/<host_id>/ssh_key.pub`
-3. Get the outer port and box address from `minds pool list` (`ssh_port`, not
+3. Get the outer port and box address from `minds-admin pool list` (`ssh_port`, not
    `container_ssh_port`).
 4. SSH the VM as root with the pool key, find the line in
    `docker exec <cid> cat /root/.ssh/authorized_keys` whose fingerprint matches,

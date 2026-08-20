@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 import threading
 import urllib.request
 from collections.abc import Callable
@@ -215,7 +216,11 @@ def _create_chat_through_ui(page: Page, base_url: str) -> None:
     page.wait_for_selector(".dockview-add-tab-button", timeout=_RECOVERY_TIMEOUT_MS)
     page.locator(".dockview-add-tab-button").first.click()
     page.wait_for_selector(".new-tab-launcher", timeout=_RECOVERY_TIMEOUT_MS)
-    page.locator(".new-tab-launcher-tile:visible", has_text="Chat").click()
+    # Anchored: ``has_text`` is a case-insensitive substring match, and the
+    # flag-gated harness tiles are called "Codex chat" / "Pi chat", so a bare
+    # "Chat" would match three tiles (and fail strict mode) the moment this
+    # fixture turns those flags on.
+    page.locator(".new-tab-launcher-tile:visible", has_text=re.compile(r"^Chat$")).click()
 
 
 @pytest.mark.tmux

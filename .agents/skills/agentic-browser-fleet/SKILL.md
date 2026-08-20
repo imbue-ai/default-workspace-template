@@ -1,6 +1,8 @@
 ---
 name: agentic-browser-fleet
 description: Drive a fleet of shared Chromium browsers yourself, one command at a time, from your shell. Use when the user wants you to do something on the web (log in somewhere, fill a form, click through a flow, read a page that needs interaction) rather than just fetch a URL. YOU run the `agentic-browser-fleet` commands, look at the page, decide what to click, and click it -- in this same chat, with your own reasoning.
+metadata:
+  author: imbue
 ---
 
 # Driving the browser fleet

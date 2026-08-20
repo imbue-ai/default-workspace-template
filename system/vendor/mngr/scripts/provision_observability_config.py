@@ -14,10 +14,14 @@ Three modes (argv[1]):
   - ``params.json`` -- ``{tier, telemetry_hostname}``.
 
 - ``collector-env <tier> <sender> <work_dir>`` -- fleet collector inputs for
-  one sender class (``boxes`` / ``relays``): writes ``collector.env`` with
+  one sender class: writes ``collector.env`` with
   ``OBSERVABILITY_INGEST_URL`` + ``OBSERVABILITY_INGEST_CREDENTIAL``. Exits 3
   (distinct from failure) when the tier has no observability Vault entry or
   the sender's credential is still empty, so recipes can skip gracefully.
+  Only the RELAY recipes still use this mode: the ``boxes`` sender path is
+  served in-process by ``minds-admin server prep`` / ``setup`` (see
+  ``imbue.minds_admin.cli._tier_secrets``), which resolve the same Vault
+  entry with the same clean-skip semantics.
 
 - ``store-credentials <tier>`` -- reads ``observability provision-accounts``
   JSON on stdin and writes each newly minted ``INGEST_CREDENTIAL_*`` back to

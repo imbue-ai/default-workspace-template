@@ -19,11 +19,11 @@ import sys
 import tomllib
 from pathlib import Path
 
-from imbue.minds.cli.paid import admin_key_from_supertokens_secret
 from imbue.minds.envs.primitives import DevEnvName
-from imbue.minds.envs.provisioning import relay_region_for_env
 from imbue.minds.envs.vault_reader import VaultPath
+from imbue.minds.envs.vault_reader import admin_key_from_supertokens_secret
 from imbue.minds.envs.vault_reader import read_vault_kv
+from imbue.minds_admin.envs.provisioning import relay_region_for_env
 
 
 def _shell_quoted(value: str) -> str:

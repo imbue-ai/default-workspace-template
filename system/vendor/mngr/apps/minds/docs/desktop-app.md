@@ -32,7 +32,9 @@ A separate `shell.html` page handles the loading spinner, the quitting screen, a
 
 ### Shutdown
 
-Closing an individual window just tears down that window's views -- the backend keeps running while any window is open. **On macOS, closing the last window does not quit the app**: it keeps running with no windows (the dock icon stays), matching standard macOS apps. Re-open a window by clicking the dock icon (or `Cmd+N`) -- the `activate` handler lands it on the home page -- and quit explicitly with `Cmd+Q`. On Windows/Linux the last window's close quits, per those platforms' convention. When a quit is *committed* (`Cmd+Q` / `Ctrl+Q`, a SIGTERM/SIGINT, or the last window closing off macOS), Electron sends SIGTERM to the backend process and waits up to 5 seconds. If the process doesn't exit, SIGKILL is sent.
+Closing an individual window just tears down that window's views -- the backend keeps running while any window is open. **On macOS, closing the last window does not quit the app**: it keeps running with no windows (the dock icon stays), matching standard macOS apps. Re-open a window by clicking the dock icon (or `Cmd+N`), and quit explicitly with `Cmd+Q`. On Windows/Linux the last window's close quits, per those platforms' convention.
+
+A re-opened window always shows the app's *current* state, not just the home page: the backend's home page when it is serving, the loading screen while it is still coming up, and the error screen -- carrying the **Retry** button that restarts the backend -- when startup failed or the backend died while nothing was open. Every entry point that asks for a window shares this: `activate`, `Cmd+N`, `File > New Window`, the dock menu, launching the app again, and a `minds://` deeplink arriving with nothing open. This matters because a windowless app has no other way back: if a request could resolve to no window, the app would sit in the dock unusable until `Cmd+Q`. Closing the window *during* startup is likewise not a cancellation -- the backend finishes coming up and authenticates, and the launch's landing (session restore, or the welcome / consent screens) is still owed: it is applied to the next window you open rather than opening windows unprompted, and is recomputed at that moment, so a session restored long afterwards reflects the machines that exist then. When a quit is *committed* (`Cmd+Q` / `Ctrl+Q`, a SIGTERM/SIGINT, or the last window closing off macOS), Electron sends SIGTERM to the backend process and waits up to 5 seconds. If the process doesn't exit, SIGKILL is sent.
 
 #### Quitting page
 
@@ -107,8 +109,8 @@ The accent is a **pure function of the window's current route**, not a remembere
 ### Environment variables
 
 - `MINDS_HIDE_MENU=1`: Hides the application menu bar (macOS only; Linux/Windows frameless windows have no menu bar).
-- `MINDS_ROOT_NAME`: Selects the data root for the running backend. Default `minds` (i.e. production at `~/.minds/`). Must match `minds(-<env-name>)?`. Activated by `minds env activate <name>`; legacy values like `devminds` are silently treated as unset with a warning.
-- `MINDS_CLIENT_CONFIG_PATH`: Path to the per-env `client.toml` the backend should load. Set by `minds env activate`; passing `--config-file` to `minds run` overrides it. The backend refuses to start when neither is set.
+- `MINDS_ROOT_NAME`: Selects the data root for the running backend. Default `minds` (i.e. production at `~/.minds/`). Must match `minds(-<env-name>)?`. Activated by `minds-admin env activate <name>`; legacy values like `devminds` are silently treated as unset with a warning.
+- `MINDS_CLIENT_CONFIG_PATH`: Path to the per-env `client.toml` the backend should load. Set by `minds-admin env activate`; passing `--config-file` to `minds run` overrides it. The backend refuses to start when neither is set.
 
 ## Output and logging conventions
 
@@ -202,7 +204,7 @@ same shape:
 ```
 
 `MINDS_ROOT_NAME` selects which data root the backend uses. Activation
-(`minds env activate <name>`) sets it to `minds-<env-name>` (or just
+(`minds-admin env activate <name>`) sets it to `minds-<env-name>` (or just
 `minds` for production) and exports the derived `MNGR_HOST_DIR` /
 `MNGR_PREFIX` / `MINDS_CLIENT_CONFIG_PATH` alongside. Two envs
 activated in parallel shells (or by two Electron instances pointed at
@@ -214,7 +216,7 @@ invocations ignore `MINDS_ROOT_NAME`.
 The desktop client picks the env it talks to via shell activation:
 
 ```bash
-eval "$(uv run minds env activate <name>)"
+eval "$(uv run minds-admin env activate <name>)"
 minds run                                  # or `just minds-start`
 ```
 
