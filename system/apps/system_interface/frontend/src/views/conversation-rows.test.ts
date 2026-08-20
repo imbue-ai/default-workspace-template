@@ -65,21 +65,32 @@ function result(callId: string, output: string): ToolResultEvent {
   };
 }
 
+/**
+ * One user message and a turn that opens and closes a tk step, which is what
+ * makes the grouping walk emit a ProgressBlock. The tool-result strings are the
+ * transcript the walk actually parses -- the ``Updated <id> -> <status>`` and
+ * ``tk-step <id> title:/summary:`` lines -- so they live in one place: a typo in
+ * a second copy would quietly yield a turn with no steps at all.
+ */
+function turnWithATkStep(): TranscriptEvent[] {
+  return [
+    userMsg("t1", "do the thing"),
+    tkMsg("t2", "tk start cod-step-aaa", "c1"),
+    result("c1", "Updated cod-step-aaa -> in_progress\ntk-step cod-step-aaa title: Look into it"),
+    tkMsg("t3", 'tk close cod-step-aaa "looked into it"', "c2"),
+    result(
+      "c2",
+      "Updated cod-step-aaa -> closed\ntk-step cod-step-aaa title: Look into it\ntk-step cod-step-aaa summary: looked into it",
+    ),
+  ];
+}
+
 describe("buildConversationRows", () => {
   // The point of the shared builder: a subagent's transcript runs the same
   // section -> rows pipeline as the main chat, so a turn that declares tk steps
   // renders as a single ProgressBlock (the timeline), not raw tk Bash calls.
   it("renders a turn with tk steps as one progress block", () => {
-    const events: TranscriptEvent[] = [
-      userMsg("t1", "do the thing"),
-      tkMsg("t2", "tk start cod-step-aaa", "c1"),
-      result("c1", "Updated cod-step-aaa -> in_progress\ntk-step cod-step-aaa title: Look into it"),
-      tkMsg("t3", 'tk close cod-step-aaa "looked into it"', "c2"),
-      result(
-        "c2",
-        "Updated cod-step-aaa -> closed\ntk-step cod-step-aaa title: Look into it\ntk-step cod-step-aaa summary: looked into it",
-      ),
-    ];
+    const events = turnWithATkStep();
 
     const rows = buildConversationRows("agent-1", events, /* agentIsIdle */ true);
 
@@ -131,16 +142,7 @@ describe("buildConversationRows event ranges", () => {
     // The collapse the old arithmetic got wrong: four events render as a single
     // ProgressBlock, so the reservation for those four events is that one row's
     // measured height -- not four times a per-event constant.
-    const events: TranscriptEvent[] = [
-      userMsg("t1", "do the thing"),
-      tkMsg("t2", "tk start cod-step-aaa", "c1"),
-      result("c1", "Updated cod-step-aaa -> in_progress\ntk-step cod-step-aaa title: Look into it"),
-      tkMsg("t3", 'tk close cod-step-aaa "looked into it"', "c2"),
-      result(
-        "c2",
-        "Updated cod-step-aaa -> closed\ntk-step cod-step-aaa title: Look into it\ntk-step cod-step-aaa summary: looked into it",
-      ),
-    ];
+    const events = turnWithATkStep();
 
     const rows = buildConversationRows("agent-1", events, true);
 
