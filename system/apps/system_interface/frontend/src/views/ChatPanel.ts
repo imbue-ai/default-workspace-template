@@ -25,12 +25,8 @@ import {
   MAX_HELD_EVENTS,
 } from "../models/Response";
 import { isSelectionActiveWithin } from "../models/scrollFollow";
-import {
-  DEFAULT_EVENT_HEIGHT_PX,
-  RowGeometryIndex,
-  geometryFromSnapshot,
-  type GeometrySnapshot,
-} from "../models/rowGeometry";
+import { RowGeometryIndex, geometryFromSnapshot, type GeometrySnapshot } from "../models/rowGeometry";
+import { COLD_RESERVE_RATE, nextReserveRate, type ReserveRate } from "../models/reserveRate";
 import { sharedGeometryCache, widthBucketFor } from "../models/geometryCache";
 import { loadWorkspaceGeometry, saveWorkspaceGeometry } from "../models/workspaceGeometry";
 import { resolveSelectionRowIndices, selectionStateWithin } from "./scroll-selection";
@@ -95,18 +91,6 @@ const JUMP_GAP_EVENTS = 120;
 // Coalescing window for persisting geometry, so a burst of rows settling after a
 // paint costs one write rather than one per row.
 const GEOMETRY_SAVE_DEBOUNCE_MS = 2000;
-// How far the observed per-event rate must move, relative to the rate in use,
-// before the reserve adopts it. Stops the reserved height churning once it has
-// converged, while still letting the cold default be replaced by reality.
-const RESERVE_RATE_CHANGE_THRESHOLD = 0.1;
-// How many measured rows are enough to fix the reserve rate for good. The reserve
-// prices history this client has never seen, so being approximately right and
-// STABLE beats being precise and moving: every later refinement would resize the
-// scroll container under a reader, and a shrink that pulls the bottom up to the
-// viewport re-arms tail-following underneath them. Twenty rows is a
-// representative sample of a transcript's mix, and is reached within the first
-// screens.
-const RESERVE_RATE_SAMPLE_ROWS = 20;
 
 function isProtoAgent(agentId: string): boolean {
   return getProtoAgents().some((p) => p.agent_id === agentId);
@@ -197,8 +181,8 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       // deliberately scrolled away from it -- which re-armed tail-following and
       // dragged them back down.
       const events = row.end_offset - row.start_offset;
-      if (isReserveRateSettled && events > 0) {
-        return Math.max(1, reserveRate * events);
+      if (reserveRate.is_settled && events > 0) {
+        return Math.max(1, reserveRate.rate * events);
       }
       return row.estimate;
     },
@@ -488,8 +472,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     cancelGeometrySave();
     geometry = new RowGeometryIndex();
     geometryWidthBucket = -1;
-    reserveRate = DEFAULT_EVENT_HEIGHT_PX;
-    isReserveRateSettled = false;
+    reserveRate = COLD_RESERVE_RATE;
     virtualizer.reset();
     rowsCacheKey = null;
     backfillInFlight = false;
@@ -576,13 +559,13 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     if (phantomTopHeight > 0 && element.scrollTop < phantomTopHeight) {
       // The exact inverse of the function that sized the reserved space, so the
       // position the thumb is at and the offset it resolves to cannot disagree.
-      targetIndex = geometry.offsetAtHeight(element.scrollTop, firstOffset, reserveRate);
+      targetIndex = geometry.offsetAtHeight(element.scrollTop, firstOffset, reserveRate.rate);
     } else if (phantomBottomHeight > 0 && element.scrollTop + element.clientHeight > loadedBottom) {
       const intoBottomRegion = element.scrollTop + element.clientHeight - loadedBottom;
       targetIndex = geometry.offsetAtHeight(
-        geometry.heightBefore(windowEnd, reserveRate) + intoBottomRegion,
+        geometry.heightBefore(windowEnd, reserveRate.rate) + intoBottomRegion,
         total,
-        reserveRate,
+        reserveRate.rate,
       );
     }
 
@@ -883,9 +866,9 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     const firstOffset = getFirstOffset(agentId);
     const windowEnd = firstOffset + events.length;
     updateReserveRate(rows);
-    phantomTopHeight = Math.round(geometry.heightBefore(firstOffset, reserveRate));
+    phantomTopHeight = Math.round(geometry.heightBefore(firstOffset, reserveRate.rate));
     phantomBottomHeight = Math.round(
-      Math.max(0, geometry.heightBefore(total, reserveRate) - geometry.heightBefore(windowEnd, reserveRate)),
+      Math.max(0, geometry.heightBefore(total, reserveRate.rate) - geometry.heightBefore(windowEnd, reserveRate.rate)),
     );
 
     // Rows a live selection touches, kept mounted by the virtualizer's range
@@ -910,73 +893,32 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   }
 
   /**
-   * Pixels per event used to price history this client has never rendered.
-   *
-   * Deliberately not read off the geometry index, which only admits rows that
-   * have *settled* -- half a second after paint, and only folded in on whatever
-   * redraw happens next. Pricing the reserve off that meant it sat at the cold
-   * default until the first settle landed and then collapsed several-fold in one
-   * step, and that step routinely fell on the user's own scroll: the shorter
-   * content clamped scrollTop, which re-armed tail-following underneath them.
-   *
-   * Taking the rate from every row that has been measured at all converges it
-   * within a frame of first paint, while the viewport is still pinned to the
-   * tail and the change is invisible.
+   * Pixels per event used to price history this client has never rendered, and
+   * whether that rate has stopped moving. The rule itself lives in
+   * `models/reserveRate`; this holds the answer for one conversation.
    */
-  let reserveRate = DEFAULT_EVENT_HEIGHT_PX;
-  // Set once enough rows have been measured to trust the rate; from then on the
-  // reserved height only changes when the window itself does.
-  let isReserveRateSettled = false;
+  let reserveRate: ReserveRate = COLD_RESERVE_RATE;
 
-  /**
-   * Re-learn the reserve rate, but only when it has really moved.
-   *
-   * The relative threshold is what stops the reserve churning: once converged,
-   * ordinary measurement noise leaves it alone, so the scroll height stays put
-   * and the scrollbar does not crawl. A genuine change -- the cold default
-   * meeting reality, or a conversation whose character shifts -- clears it
-   * easily.
-   */
+  /** Re-learn the reserve rate from what the loaded window currently looks like. */
   function updateReserveRate(rows: RowDescriptor[]): void {
-    // Weighted across the WHOLE loaded window, counting a row's estimate when it
-    // has not been measured yet. Taking a median over only the measured rows
-    // instead made the rate lurch as different kinds of row settled at different
-    // times -- short user bubbles first, taller assistant rows after -- which
-    // moved the reserve by thousands of pixels seconds after load. Including
-    // every row keeps the mix representative from the first frame, so the rate
-    // only tightens as estimates are replaced by measurements rather than
-    // swinging.
     // A hidden panel has nothing laid out, so it can learn nothing -- and
     // re-pricing the reserve then would move the content behind a tab the reader
     // is not looking at, so it would come back somewhere else than they left it.
-    if (!panelVisible || isReserveRateSettled) {
+    // A settled rate needs no sample either, so neither case builds one.
+    if (!panelVisible || reserveRate.is_settled) {
       return;
     }
-    let totalHeight = 0;
-    let totalEvents = 0;
-    let measuredRows = 0;
-    for (const row of rows) {
-      const events = row.end_offset - row.start_offset;
-      if (events <= 0) {
-        continue;
-      }
-      const measured = measurements.heightFor(row.key);
-      if (measured !== undefined) {
-        measuredRows += 1;
-      }
-      totalHeight += measured ?? row.estimate;
-      totalEvents += events;
-    }
-    if (totalEvents <= 0 || totalHeight <= 0) {
-      return;
-    }
-    const observed = totalHeight / totalEvents;
-    if (Math.abs(observed - reserveRate) / reserveRate > RESERVE_RATE_CHANGE_THRESHOLD) {
-      reserveRate = observed;
-    }
-    if (measuredRows >= RESERVE_RATE_SAMPLE_ROWS) {
-      isReserveRateSettled = true;
-    }
+    reserveRate = nextReserveRate(
+      rows.map((row) => {
+        const measured = measurements.heightFor(row.key);
+        return {
+          events: row.end_offset - row.start_offset,
+          height: measured ?? row.estimate,
+          is_measured: measured !== undefined,
+        };
+      }),
+      reserveRate,
+    );
   }
 
   /**
@@ -1026,8 +968,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     measurements.reset();
     geometry = new RowGeometryIndex();
     virtualizer.reset();
-    reserveRate = DEFAULT_EVENT_HEIGHT_PX;
-    isReserveRateSettled = false;
+    reserveRate = COLD_RESERVE_RATE;
     const requestedAgentId = agentId;
     const requestedBucket = bucket;
     loadGeometrySnapshot(agentId, bucket)
