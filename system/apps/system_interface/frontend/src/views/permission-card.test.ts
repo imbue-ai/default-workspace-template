@@ -1,5 +1,5 @@
 import m from "mithril";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as embedContract from "@minds/embed-contract";
 import { resetEmbedEndpointForTesting } from "../embed";
 import type { ToolCall, ToolResultEvent } from "../models/Response";
@@ -478,14 +478,12 @@ const LOCK_RECT = '<rect x="3" y="11"';
 const UNBUNDLED_SERVICE_OUTPUT =
   '{"request_id":"x1","request_type":"predefined","rationale":"look something up","payload":{"scope":"madeup-api"}}';
 
-// A predefined request naming a service the workspace DOES bundle artwork for.
-// Deliberately not slack, which the other mark cases use: the failed-mark
-// fallback is remembered per URL for the life of the module, so poisoning this
-// one must not reach them.
-const GITHUB_SERVICE_OUTPUT =
-  '{"request_id":"x2","request_type":"predefined","rationale":"read the repo","payload":{"scope":"github-rest-api"}}';
-
 describe("renderPermissionCard", () => {
+  // A mark that failed to load is remembered for the life of the module, so it
+  // has to be cleared between tests that would otherwise inherit each other's
+  // retired marks.
+  beforeEach(forgetFailedServiceMarks);
+
   it("shows the eyebrow, title, rationale, and review button on a pending card", () => {
     const vnode = renderCardFor(makeToolCall(PERMISSION_INPUT, "permission_request"), makeResult(PERMISSION_OUTPUT));
 
@@ -815,11 +813,10 @@ describe("renderPermissionCard", () => {
     // The file is a build asset, so a load failure is the asset not reaching
     // the page. Without this the browser's broken-image glyph stands in for the
     // logo permanently, since nothing re-requests it.
-    forgetFailedServiceMarks();
     const render = () =>
-      renderCardFor(makeToolCall(PERMISSION_INPUT, "permission_request"), makeResult(GITHUB_SERVICE_OUTPUT));
+      renderCardFor(makeToolCall(PERMISSION_INPUT, "permission_request"), makeResult(PERMISSION_OUTPUT));
     const badge = findByClass(render(), "permission-request-badge");
-    expect(markSrc(badge)).toContain("github");
+    expect(markSrc(badge)).toContain("slack");
 
     const image = findVnode(badge, (v) => v.tag === "img") as { attrs?: { onerror?: () => void } } | null;
     expect(typeof image?.attrs?.onerror).toBe("function");
