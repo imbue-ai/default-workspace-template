@@ -1,7 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// Mithril is mocked so the measure -> redraw scheduling can be asserted without
+// a real DOM or render cycle.
+const { mockRedraw } = vi.hoisted(() => ({ mockRedraw: vi.fn() }));
+vi.mock("mithril", () => ({ default: { redraw: mockRedraw } }));
+
 import {
   MEASURE_HYSTERESIS_PX,
   SETTLE_QUIET_MS,
+  createRowMeasureScheduler,
   createRowMeasurementStore,
   measureMountedRows,
 } from "./rowMeasurement";
@@ -142,17 +149,17 @@ describe("createRowMeasurementStore bookkeeping", () => {
   });
 });
 
-describe("measureMountedRows", () => {
-  /** A minimal stand-in for the rendered list: children with ids and heights. */
-  function listWith(rows: Array<{ id: string; height: number }>): Element {
-    return {
-      children: rows.map((row) => ({
-        id: row.id,
-        getBoundingClientRect: () => ({ height: row.height }) as DOMRect,
-      })),
-    } as unknown as Element;
-  }
+/** A minimal stand-in for the rendered list: children with ids and heights. */
+function listWith(rows: Array<{ id: string; height: number }>): Element {
+  return {
+    children: rows.map((row) => ({
+      id: row.id,
+      getBoundingClientRect: () => ({ height: row.height }) as DOMRect,
+    })),
+  } as unknown as Element;
+}
 
+describe("measureMountedRows", () => {
   it("measures every identified row and reports the changes", () => {
     const { store } = storeWithClock();
     const changed = measureMountedRows(
@@ -201,5 +208,123 @@ describe("measureMountedRows", () => {
     const changed = measureMountedRows(listWith([{ id: "a", height: 0 }]), store);
     expect(changed.size).toBe(0);
     expect(store.heightFor("a")).toBeUndefined();
+  });
+});
+
+describe("createRowMeasureScheduler", () => {
+  let frames: Array<() => void>;
+
+  beforeEach(() => {
+    frames = [];
+    mockRedraw.mockReset();
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      frames.push(() => callback(0));
+      return frames.length;
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /** A scheduler over one row whose measured height the test can move. */
+  function schedulerOverRow(): {
+    scheduler: ReturnType<typeof createRowMeasureScheduler>;
+    store: ReturnType<typeof createRowMeasurementStore>;
+    reported: Array<[string, number]>;
+    setHeight: (height: number) => void;
+    hideList: () => void;
+  } {
+    const { store } = storeWithClock();
+    const reported: Array<[string, number]> = [];
+    let height = 100;
+    let hasList = true;
+    return {
+      store,
+      reported,
+      setHeight: (next: number) => (height = next),
+      hideList: () => (hasList = false),
+      scheduler: createRowMeasureScheduler({
+        store,
+        getListElement: () => (hasList ? listWith([{ id: "a", height }]) : null),
+        reportHeight: (rowKey, measured) => reported.push([rowKey, measured]),
+      }),
+    };
+  }
+
+  it("defers the pass to the next frame, then reports and redraws once", () => {
+    const { scheduler, reported } = schedulerOverRow();
+
+    scheduler.schedule();
+    expect(mockRedraw).not.toHaveBeenCalled();
+    frames.forEach((run) => run());
+
+    expect(reported).toEqual([["a", 100]]);
+    expect(mockRedraw).toHaveBeenCalledTimes(1);
+  });
+
+  it("debounces repeated calls into a single frame", () => {
+    // A global redraw fires on every scroll tick and every streamed event, and
+    // reading layout is not free; one pass per frame is the whole point.
+    const { scheduler } = schedulerOverRow();
+
+    scheduler.schedule();
+    scheduler.schedule();
+    scheduler.schedule();
+
+    expect(frames).toHaveLength(1);
+  });
+
+  it("schedules again once the frame has run", () => {
+    // The flag has to clear before the frame's early returns, or one pass with
+    // nothing to measure would wedge every later schedule.
+    const { scheduler, hideList } = schedulerOverRow();
+    hideList();
+
+    scheduler.schedule();
+    frames.forEach((run) => run());
+    scheduler.schedule();
+
+    expect(frames).toHaveLength(2);
+  });
+
+  it("neither reports nor redraws when no height moved", () => {
+    const { scheduler, reported } = schedulerOverRow();
+    scheduler.schedule();
+    frames.forEach((run) => run());
+    mockRedraw.mockReset();
+
+    scheduler.schedule();
+    frames[1]();
+
+    expect(reported).toEqual([["a", 100]]);
+    expect(mockRedraw).not.toHaveBeenCalled();
+  });
+
+  it("neither reports nor redraws for sub-threshold drift", () => {
+    // The end-to-end guarantee: even while the view keeps scheduling passes, a
+    // row wobbling sub-pixel never triggers the redraw that would move it again.
+    const { scheduler, setHeight } = schedulerOverRow();
+    scheduler.schedule();
+    frames.forEach((run) => run());
+    mockRedraw.mockReset();
+
+    setHeight(100 + MEASURE_HYSTERESIS_PX);
+    scheduler.schedule();
+    frames[1]();
+
+    expect(mockRedraw).not.toHaveBeenCalled();
+  });
+
+  it("reads nothing when there is no list to measure", () => {
+    // Not mounted yet, or a hidden panel whose rows are not laid out.
+    const { scheduler, reported, hideList } = schedulerOverRow();
+    hideList();
+
+    scheduler.schedule();
+    frames.forEach((run) => run());
+
+    expect(reported).toEqual([]);
+    expect(mockRedraw).not.toHaveBeenCalled();
   });
 });

@@ -26,7 +26,15 @@
  * first paint, so the height at mount is routinely not the final height.
  * Persisting eagerly would poison the cache with a placeholder height that then
  * survives reloads.
+ *
+ * The frame-debounced pass that drives all of this lives here too
+ * (``createRowMeasureScheduler``), shared by both transcript views, so the two
+ * rules that keep the measure -> redraw -> reflow -> measure loop from
+ * sustaining itself -- one pass per frame, and no redraw unless a height
+ * actually moved -- have a single implementation.
  */
+
+import m from "mithril";
 
 /** A height must differ from the accepted value by MORE than this to count. */
 export const MEASURE_HYSTERESIS_PX = 1;
@@ -140,4 +148,60 @@ export function measureMountedRows(listElement: Element, store: RowMeasurementSt
     }
   }
   return changed;
+}
+
+export interface RowMeasureSchedulerConfig {
+  /** Where accepted heights are kept. */
+  store: RowMeasurementStore;
+  /**
+   * The rendered list to read, or null when there is nothing to measure -- not
+   * mounted yet, or a hidden panel whose rows are not laid out. Expressed as a
+   * lookup rather than a flag so each view keeps its own notion of "nothing to
+   * read" at its own call site.
+   */
+  getListElement: () => Element | null;
+  /** Hand one row's newly accepted height to the virtualizer. */
+  reportHeight: (rowKey: string, height: number) => void;
+}
+
+export interface RowMeasureScheduler {
+  /** Read every mounted row on the next frame. Idempotent within a frame. */
+  schedule(): void;
+}
+
+/**
+ * Read every mounted row's height on the next frame, report the changes and
+ * redraw once if anything moved.
+ *
+ * Debounced to one pass per frame because a global redraw fires on every scroll
+ * tick and every streamed event, and reading ``getBoundingClientRect`` forces
+ * layout. Reporting sizes through the caller (rather than letting the
+ * virtualizer read the DOM) is what keeps the hysteresis above in the loop.
+ */
+export function createRowMeasureScheduler(config: RowMeasureSchedulerConfig): RowMeasureScheduler {
+  let isScheduled = false;
+
+  return {
+    schedule(): void {
+      if (isScheduled) {
+        return;
+      }
+      isScheduled = true;
+      requestAnimationFrame(() => {
+        isScheduled = false;
+        const list = config.getListElement();
+        if (list === null) {
+          return;
+        }
+        const changed = measureMountedRows(list, config.store);
+        if (changed.size === 0) {
+          return;
+        }
+        for (const [rowKey, height] of changed) {
+          config.reportHeight(rowKey, height);
+        }
+        m.redraw();
+      });
+    },
+  };
 }

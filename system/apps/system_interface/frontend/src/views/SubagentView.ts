@@ -6,7 +6,7 @@ import { buildConversationRows, isSubagentRunning, renderVirtualRows, type RowDe
 import { resolveSelectionRowRange } from "./scroll-selection";
 import { createTranscriptScroll } from "./transcript-scroll";
 import { createTranscriptVirtualizer } from "./transcriptVirtualizer";
-import { createRowMeasurementStore, measureMountedRows } from "./rowMeasurement";
+import { createRowMeasureScheduler, createRowMeasurementStore } from "./rowMeasurement";
 
 interface SubagentViewAttrs {
   agentId: string;
@@ -62,34 +62,17 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
     isEnabled: () => true,
   });
 
-  let measureScheduled = false;
-
-  /** Measure mounted rows on the next frame and report the changes, debounced to
-   *  one pass per frame because reading layout is not free. */
-  function scheduleRowMeasure(): void {
-    if (measureScheduled) {
-      return;
-    }
-    measureScheduled = true;
-    requestAnimationFrame(() => {
-      measureScheduled = false;
-      const list = scroll.scrollEl?.querySelector(".message-list") ?? null;
-      if (list === null) {
-        return;
+  // The frame-debounced measure pass, shared with the main chat.
+  const measureScheduler = createRowMeasureScheduler({
+    store: measurements,
+    getListElement: () => scroll.scrollEl?.querySelector(".message-list") ?? null,
+    reportHeight: (rowKey, height) => {
+      const index = cachedKeyToIndex.get(rowKey);
+      if (index !== undefined) {
+        virtualizer.resizeRow(index, height);
       }
-      const changed = measureMountedRows(list, measurements);
-      if (changed.size === 0) {
-        return;
-      }
-      for (const [rowKey, height] of changed) {
-        const index = cachedKeyToIndex.get(rowKey);
-        if (index !== undefined) {
-          virtualizer.resizeRow(index, height);
-        }
-      }
-      m.redraw();
-    });
-  }
+    },
+  });
 
   function addEvents(incoming: TranscriptEvent[]): boolean {
     let added = false;
@@ -265,14 +248,14 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
               scroll.attach(element);
               virtualizer.mount();
               scroll.applyScrollPosition(element);
-              scheduleRowMeasure();
+              measureScheduler.schedule();
             },
             onupdate: (mainVnode: m.VnodeDOM) => {
               const element = mainVnode.dom as HTMLElement;
               scroll.attach(element);
               virtualizer.mount();
               scroll.applyScrollPosition(element);
-              scheduleRowMeasure();
+              measureScheduler.schedule();
             },
           },
           content,

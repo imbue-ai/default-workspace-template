@@ -36,7 +36,7 @@ import { loadWorkspaceGeometry, saveWorkspaceGeometry } from "../models/workspac
 import { resolveSelectionRowRange, selectionStateWithin } from "./scroll-selection";
 import { createTranscriptScroll } from "./transcript-scroll";
 import { createTranscriptVirtualizer } from "./transcriptVirtualizer";
-import { createRowMeasurementStore, measureMountedRows } from "./rowMeasurement";
+import { createRowMeasureScheduler, createRowMeasurementStore } from "./rowMeasurement";
 import { connectToStream, disconnectFromStream, loadSnapshotWithStream } from "../models/StreamingMessage";
 import {
   addAgentsUpdatedListener,
@@ -219,6 +219,18 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   // Row indices a live text selection touches, recomputed each render and read
   // by the virtualizer's range extractor.
   let pinnedRowIndices: number[] = [];
+  // The frame-debounced measure pass. A hidden panel has nothing laid out, so it
+  // reports no list and the frame reads nothing.
+  const measureScheduler = createRowMeasureScheduler({
+    store: measurements,
+    getListElement: () => (panelVisible ? (scroll.scrollEl?.querySelector(".message-list") ?? null) : null),
+    reportHeight: (rowKey, height) => {
+      const index = cachedKeyToIndex.get(rowKey);
+      if (index !== undefined) {
+        virtualizer.resizeRow(index, height);
+      }
+    },
+  });
   // Paging (scroll-driven fetch) in-flight guard. Covers older/newer pages and
   // offset jumps -- only one is outstanding at a time.
   let backfillInFlight = false;
@@ -983,47 +995,6 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     }
   }
 
-  // A measure pass is already queued for the next frame.
-  let measureScheduled = false;
-
-  /**
-   * Read every mounted row's height on the next frame and hand the changes to the
-   * virtualizer, redrawing once if anything moved.
-   *
-   * Debounced to one pass per frame because a global redraw fires on every scroll
-   * tick and every streamed event, and reading `getBoundingClientRect` forces
-   * layout. Reporting sizes through `resizeItem` (rather than letting the library
-   * read the DOM) is what keeps our hysteresis in the loop -- see rowMeasurement.
-   */
-  function scheduleRowMeasure(): void {
-    if (measureScheduled) {
-      return;
-    }
-    measureScheduled = true;
-    requestAnimationFrame(() => {
-      measureScheduled = false;
-      const scrollEl = scroll.scrollEl;
-      if (scrollEl === null || !panelVisible) {
-        return;
-      }
-      const list = scrollEl.querySelector(".message-list");
-      if (list === null) {
-        return;
-      }
-      const changed = measureMountedRows(list, measurements);
-      if (changed.size === 0) {
-        return;
-      }
-      for (const [rowKey, height] of changed) {
-        const index = cachedKeyToIndex.get(rowKey);
-        if (index !== undefined) {
-          virtualizer.resizeRow(index, height);
-        }
-      }
-      m.redraw();
-    });
-  }
-
   /**
    * The geometry stored for this conversation at this width, from whichever tier
    * has it.
@@ -1233,7 +1204,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                 virtualizer.mount();
                 restoreReadingAnchor(element);
                 applyScrollPosition(element);
-                scheduleRowMeasure();
+                measureScheduler.schedule();
                 if (currentAgentId !== null) {
                   maybePage(currentAgentId, element);
                 }
@@ -1244,7 +1215,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                 virtualizer.mount();
                 restoreReadingAnchor(element);
                 applyScrollPosition(element);
-                scheduleRowMeasure();
+                measureScheduler.schedule();
                 // Drive paging from the render loop, not only from scroll events, so
                 // the viewport sitting over a reserved region always triggers (or
                 // already has in flight) the fetch to cover it. Without this a drag
