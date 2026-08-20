@@ -13,11 +13,7 @@ vi.hoisted(() => {
 
 import m from "mithril";
 
-import {
-  STALENESS_MESSAGES,
-  UpdateStalenessBanner,
-  getUpdateStalenessVariant,
-} from "./UpdateStalenessBanner";
+import { STALENESS_MESSAGES, UpdateStalenessBanner, getUpdateStalenessVariant } from "./UpdateStalenessBanner";
 
 const META_TAG_NAME = "system-interface-update-staleness";
 
