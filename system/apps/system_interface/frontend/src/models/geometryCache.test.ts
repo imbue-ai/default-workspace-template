@@ -9,10 +9,10 @@ import {
 import type { RowGeometry } from "./rowGeometry";
 
 /**
- * jsdom ships no IndexedDB, so these exercise the in-memory fallback. That is
- * the path a browser denying storage takes, and it is deliberately behaviourally
- * identical to the database path -- a caller cannot tell which one it got, which
- * is the property worth locking in.
+ * These run in vitest's node environment, which ships no IndexedDB, so they
+ * exercise the in-memory fallback. That is the path a browser denying storage
+ * takes, and it is deliberately behaviourally identical to the database path --
+ * a caller cannot tell which one it got, which is the property worth locking in.
  */
 function cacheWithClock(): { cache: ReturnType<typeof createGeometryCache>; advance: (ms: number) => void } {
   let clock = 1_000_000;
@@ -55,8 +55,9 @@ function respond(result: unknown, outcome: "success" | "error" = "success"): Fak
 /**
  * A connection that opens and hands out an object store, but refuses every
  * write -- which is what a denied quota looks like on a database that was
- * usable a moment ago. The narrowest surface the cache actually drives; jsdom
- * has no IndexedDB, so this is the only way to reach the database path.
+ * usable a moment ago. The narrowest surface the cache actually drives; there is
+ * no IndexedDB in this environment, so this is the only way to reach the
+ * database path.
  */
 function stubIndexedDbRefusingWrites(): void {
   const store = {
