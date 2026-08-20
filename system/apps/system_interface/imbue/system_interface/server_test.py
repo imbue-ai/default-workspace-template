@@ -4497,6 +4497,35 @@ def test_a_refused_destroy_leaves_the_transcripts_geometry_alone(
     assert client.get("/api/agents/agent-unknown/geometry?width=760").get_json() == {"rows": measured_rows}
 
 
+def test_a_destroy_drops_the_transcripts_geometry(
+    client: FlaskClient, app: Flask, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A destroyed transcript's measurements go with it.
+
+    The transcript can never be rendered again, so holding its rows would only
+    cost a slot in a bounded store against a transcript someone is still
+    reading. The refused case above is the other half: only a destroy that
+    actually happened drops them.
+    """
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    _register_agent(app, "agent-doomed", "doomed-agent", "RUNNING")
+    measured_rows = [{"row_key": "turn-1", "start_offset": 0, "end_offset": 3, "height": 160.0}]
+    assert client.put("/api/agents/agent-doomed/geometry", json={"width": 760, "rows": measured_rows}).status_code == 200
+
+    destroyed = FinishedProcess(
+        returncode=0,
+        stdout="Destroyed agent: doomed-agent",
+        stderr="",
+        command=("mngr", "destroy", "doomed-agent"),
+        is_output_already_logged=False,
+    )
+    with patch("imbue.system_interface.server.run_local_command_modern_version", return_value=destroyed):
+        assert client.post("/api/agents/agent-doomed/destroy").status_code == 200
+
+    assert client.get("/api/agents/agent-doomed/geometry?width=760").get_json() == {"rows": []}
+
+
 def test_delete_project_panel_drops_the_objects_recency(
     client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
