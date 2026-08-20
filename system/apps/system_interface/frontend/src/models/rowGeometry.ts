@@ -42,11 +42,9 @@ export interface GeometrySnapshot {
 }
 
 /**
- * Fallback height per event, used only when a conversation has no measured rows
- * at all (a genuinely cold first paint). Every later estimate comes from
- * `learnedEventHeight`, which reflects what this transcript actually renders at.
- * The old code used this number for *everything*, which is the bug this module
- * exists to remove.
+ * Height per event to start from, for a conversation with no measured rows at
+ * all (a genuinely cold first paint). Every later rate is the caller's, learned
+ * from what this transcript actually renders at.
  */
 export const DEFAULT_EVENT_HEIGHT_PX = 160;
 
@@ -72,13 +70,6 @@ function lowerBound(rows: RowGeometry[], offset: number): number {
     }
   }
   return low;
-}
-
-/** The median of a non-empty list, averaging the middle pair when even. */
-function median(values: number[]): number {
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = sorted.length >> 1;
-  return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
 /**
@@ -179,34 +170,15 @@ export class RowGeometryIndex {
   }
 
   /**
-   * Pixels per event, learned from the rows actually measured.
-   *
-   * The median rather than the mean: one enormous row (a long pasted file, a
-   * wide tool output) would drag a mean far above what typical history renders
-   * at, and the estimate is used to size ranges that are mostly ordinary turns.
-   * Falls back to the cold default only when nothing has been measured yet.
-   */
-  learnedEventHeight(): number {
-    const perEvent: number[] = [];
-    for (const row of this.#rows) {
-      const events = row.end_offset - row.start_offset;
-      if (events > 0 && row.height > 0) {
-        perEvent.push(row.height / events);
-      }
-    }
-    return perEvent.length === 0 ? DEFAULT_EVENT_HEIGHT_PX : median(perEvent);
-  }
-
-  /**
    * Scroll space occupied by everything above the row containing `offset`.
    *
    * This is the number the transcript reserves for unloaded history, and the
    * whole point of the module. Measured rows contribute their real heights;
-   * event ranges no row covers contribute `gap events * learnedEventHeight`.
-   * A row straddling `offset` is excluded, so the result always lands on a row
+   * event ranges no row covers contribute `gap events * gapRate`. A row
+   * straddling `offset` is excluded, so the result always lands on a row
    * boundary -- there is no position inside a rendered row to scroll to.
    */
-  heightBefore(offset: number, gapRate?: number): number {
+  heightBefore(offset: number, gapRate: number): number {
     if (offset <= 0) {
       return 0;
     }
@@ -223,14 +195,14 @@ export class RowGeometryIndex {
     // boundary's own offset rather than from `offset` directly, so a straddling
     // row does not have its events counted as an unmeasured gap as well.
     const gapEvents = Math.max(0, Math.min(offset, boundaryOffset) - measuredEvents);
-    // The caller may supply the rate to price gaps at. It has a better one: this
-    // index only holds rows that have *settled*, which lags first paint by half
-    // a second, while the caller can see every row that has been measured at all.
-    // Pricing gaps off settled rows alone means the reserve stays at its cold
-    // default until the first settle lands and then collapses in one step -- and
-    // that step falls on whichever redraw happens next, which is routinely the
-    // user's own scroll.
-    return measuredHeight + gapEvents * (gapRate ?? this.learnedEventHeight());
+    // The rate is the caller's rather than derived here, because this index only
+    // holds rows that have *settled* -- half a second behind first paint, and
+    // folded in on whatever redraw happens next -- while the caller sees every
+    // row that has been measured at all. A rate off settled rows alone leaves
+    // the reserve at its cold value until the first settle lands and then
+    // collapses it in one step, on whichever redraw comes next, which is
+    // routinely the user's own scroll.
+    return measuredHeight + gapEvents * gapRate;
   }
 
   /**
@@ -239,12 +211,12 @@ export class RowGeometryIndex {
    *
    * This is what maps a scrollbar position back to a place in the transcript, so
    * it must be the *exact* inverse of the function that sized the space -- if the
-   * two disagree, a drag can resolve to an offset far from where the thumb is,
-   * which is how the old code fired jumps the user never asked for. Rather than
-   * invert the arithmetic by hand (which sparse coverage makes fiddly), this
-   * binary-searches `heightBefore` itself, so the two cannot drift apart.
+   * two disagree, a drag resolves to an offset far from where the thumb is, and
+   * fires a jump the user never asked for. Rather than invert the arithmetic by
+   * hand (which sparse coverage makes fiddly), this binary-searches
+   * `heightBefore` itself, at the same `gapRate`, so the two cannot drift apart.
    */
-  offsetAtHeight(height: number, maxOffset: number, gapRate?: number): number {
+  offsetAtHeight(height: number, maxOffset: number, gapRate: number): number {
     if (height <= 0 || maxOffset <= 0) {
       return 0;
     }
