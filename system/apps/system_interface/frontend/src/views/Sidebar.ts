@@ -847,11 +847,18 @@ export function Sidebar(): m.Component<SidebarAttrs> {
       "span",
       {
         key: options.key,
-        // The unpin is a SIBLING of the shortcut rather than a child: both are
-        // real buttons, and a button inside a button is not markup a browser
-        // will keep. (`pinnedAppRow` below solves the same problem the other
-        // way -- a clickable div -- because there the whole row is the target.)
-        class: "project-rail-shortcut-slot group flex w-full shrink-0 items-center",
+        // The unpin reads as the right end of the row, not as a control beside
+        // it, so the shortcut button keeps the full width and the unpin is laid
+        // OVER its right edge. A sibling rather than a child because both are
+        // real buttons and a button inside a button is not markup a browser
+        // will keep. (`pinnedAppRow` below reaches the same look from the other
+        // side -- a clickable div -- because there the row itself is the
+        // target.) The row's hover fill therefore lives on this slot: the
+        // button is not an ancestor of the unpin, so its own `:hover` would
+        // drop the fill the moment the pointer reached the pin.
+        class:
+          "project-rail-shortcut-slot group relative flex w-full shrink-0 items-center rounded-md " +
+          (options.onclick === null ? "" : "hover:bg-bg-hover"),
         ...hoverTooltipAttrs(options.tooltip, "right"),
       },
       [
@@ -861,8 +868,11 @@ export function Sidebar(): m.Component<SidebarAttrs> {
             type: "button",
             disabled: isDisabled,
             class:
-              `project-rail-shortcut ${ROW_CLASS} min-w-0 flex-1 ` +
-              (isDisabled ? "cursor-default text-text-faint opacity-60" : "text-text-primary hover:bg-bg-hover"),
+              `project-rail-shortcut ${ROW_CLASS} ` +
+              // Padded so a long label fades out before it reaches the unpin
+              // rather than running underneath it.
+              (options.onUnpin === null ? "" : "pr-7 ") +
+              (isDisabled ? "cursor-default text-text-faint opacity-60" : "text-text-primary"),
             onclick: options.onclick ?? undefined,
           },
           [m("span", { class: ICON_BOX_CLASS }, m.trust(options.iconMarkup)), railLabel(options.label, "")],
@@ -874,8 +884,8 @@ export function Sidebar(): m.Component<SidebarAttrs> {
               {
                 type: "button",
                 class:
-                  "project-rail-shortcut-unpin mr-1 flex h-5 w-5 shrink-0 cursor-pointer items-center " +
-                  "justify-center rounded text-text-faint opacity-0 hover:bg-bg-hover hover:text-text-primary " +
+                  "project-rail-shortcut-unpin absolute right-1 flex h-5 w-5 shrink-0 cursor-pointer " +
+                  "items-center justify-center rounded text-text-faint opacity-0 hover:text-text-primary " +
                   "focus-visible:opacity-100 group-hover:opacity-100",
                 "aria-label": `Unpin ${options.label} from this project`,
                 onclick: (event: MouseEvent) => {
