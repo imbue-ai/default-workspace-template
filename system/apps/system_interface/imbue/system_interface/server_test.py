@@ -658,9 +658,16 @@ def test_get_harnesses_lists_the_claude_catalog(client: FlaskClient) -> None:
     data = response.get_json()
     assert "claude" in data
     claude = data["claude"]
-    assert [option["id"] for option in claude["options"]] == ["opus[1m]", "sonnet", "haiku"]
-    # Each option carries the suffix-free reported id the matcher keys on.
-    assert claude["options"][0]["harness_reported_model_id"] == "claude-opus-5"
+    offered = [option["id"] for option in claude["options"] if option["in_picker"]]
+    assert offered == ["fable[1m]", "opus[1m]", "sonnet[1m]", "haiku"]
+    # The rest are display-only: served so a live read still resolves, never offered.
+    assert any(not option["in_picker"] for option in claude["options"])
+    # Each option carries the suffix-free reported id the matcher keys on. Keyed by id
+    # rather than by position, so reordering the picker does not break this.
+    reported = {option["id"]: option["harness_reported_model_id"] for option in claude["options"]}
+    assert reported["fable[1m]"] == "claude-fable-5"
+    assert reported["opus[1m]"] == "claude-opus-5"
+    assert reported["sonnet[1m]"] == "claude-sonnet-5"
     assert claude["switch_mode"] == "eager_then_reconcile"
     assert claude["powered_by_text"] == ""
 
@@ -724,11 +731,16 @@ def test_set_model_switch_sends_claude_commands(tmp_path: Path) -> None:
     with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
         response = client.post(
             f"/api/agents/{agent_id}/model",
-            json={"model_id": "sonnet", "effort": "high", "fast": False, "axes": ["model", "effort"]},
+            json={
+                "model_id": "sonnet[1m]",
+                "effort": "high",
+                "fast": False,
+                "axes": ["model", "effort"],
+            },
         )
 
     assert response.status_code == 200
-    assert messenger.sent == [(agent_id, "/model sonnet"), (agent_id, "/effort high")]
+    assert messenger.sent == [(agent_id, "/model sonnet[1m]"), (agent_id, "/effort high")]
 
 
 def test_set_model_rejects_unknown_model(tmp_path: Path) -> None:
