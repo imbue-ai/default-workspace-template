@@ -40,7 +40,9 @@ from tk_command_parsing.parser import CommandSegment, parse_command
 # misses -- is still gated. Erring wide is the right direction here: a filing the
 # gate waves through is a request the user may never get to answer.
 _PERMISSION_REQUEST_HOST = "latchkey-self.invalid/permission-requests"
-_METHOD_FLAGS = ("-X", "--request")
+# Lowercased, because the flag is matched case-insensitively -- as the parser's
+# regex and the joined form below both are.
+_METHOD_FLAGS = ("-x", "--request")
 _POST_FLAG_RE = re.compile(r"(?:-X|--request)=?POST", re.IGNORECASE)
 
 # curl's own ways of writing the response body to a file instead of echoing it on
@@ -81,11 +83,13 @@ def _is_request_url(word: str) -> bool:
 
 def _sets_post_method(words: tuple[str, ...]) -> bool:
     """True when `words` carry curl's POST flag, joined (`-XPOST`,
-    `--request=POST`) or separated (`-X POST`)."""
+    `--request=POST`) or separated (`-X POST`). Flag and value are both matched
+    case-insensitively, so no spelling the parser's `re.IGNORECASE` regex reads
+    as a filing is missed here."""
     for i, word in enumerate(words):
         if _POST_FLAG_RE.fullmatch(word):
             return True
-        if word in _METHOD_FLAGS and i + 1 < len(words):
+        if word.lower() in _METHOD_FLAGS and i + 1 < len(words):
             if words[i + 1].upper() == "POST":
                 return True
     return False
