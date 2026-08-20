@@ -982,7 +982,11 @@ SNAPSHOTS_DIRNAME = "snapshots"
 
 # The apply's phases, recorded in the marker as each completes so an
 # interrupted apply can be read (by recovery, and by the system interface's
-# "an update was interrupted" banner) without guessing.
+# "an update was interrupted" banner) without guessing. The marker comes down
+# at the apply's last rollback point -- once the live workspace is confirmed
+# healthy on the merged tree -- so there is no phase past the restart: the
+# post-success bookkeeping (ledger, env-converge) runs marker-free, because an
+# interruption there must never read as an update worth rolling back.
 PHASE_STARTED = "started"
 PHASE_MERGED = "merged"
 PHASE_SNAPSHOTTED = "snapshotted"
@@ -990,8 +994,6 @@ PHASE_REFRESHED = "environments_refreshed"
 PHASE_PROVISIONED = "provisioned"
 PHASE_BUILT = "frontend_built"
 PHASE_RESTARTED = "restarted"
-PHASE_REVEALED = "revealed"
-PHASE_RECORDED = "recorded"
 
 # The shared post-change refresh motion, repo-relative (see the reveal flow's
 # original: it owns *how* a changed interface is revealed to whoever is
@@ -2725,9 +2727,17 @@ def apply_update(
                         "not before this apply either, so it was not rolled back for it: "
                         f"{unresolved_frontend_failure}\n"
                     )
+            # Past the last rollback point: nothing after the probes can raise
+            # ApplyFailed, so the interruption marker and the snapshots come
+            # down NOW -- before the view refresh (a shell reloading into a
+            # lingering marker would render the "update was interrupted"
+            # banner over an apply that just succeeded) and before the
+            # post-success bookkeeping (so an unattended ``recover`` can never
+            # roll back an update that already went live; the ledger append
+            # and env-converge are both safely re-runnable without a marker).
+            clear_marker(repo_root)
+            discard_snapshots(repo_root)
             _refresh_workspace_view(repo_root, runner)
-            marker.phase = PHASE_REVEALED
-            write_marker(marker, repo_root, now)
         except ApplyFailed as exc:
             sys.stderr.write(
                 f"apply failed: {exc}\n{_detail_block(exc.detail)}"
@@ -2772,6 +2782,12 @@ def apply_update(
             return 3
     else:
         sys.stderr.write("nothing live needed to change for this merge.\n")
+        # Same reasoning as the live-plan clear above: the merge is landed and
+        # nothing live was (or will be) touched, so a kill during the
+        # bookkeeping below must not leave a marker that reads as an update
+        # worth rolling back.
+        clear_marker(repo_root)
+        discard_snapshots(repo_root)
 
     # --- Post-success bookkeeping (update-self mode only). -----------------------
     if target_ref is not None:
@@ -2792,8 +2808,6 @@ def apply_update(
                 f"warning: the update landed but the version-history entry could not "
                 f"be recorded ({exc}); record it manually per the update-self skill.\n"
             )
-        marker.phase = PHASE_RECORDED
-        write_marker(marker, repo_root, now)
         # The one moment package versions are allowed to move. Post-success
         # only, so a failed apply never moved apt state; a failure here is
         # reported but does not un-apply the update.
@@ -2814,8 +2828,6 @@ def apply_update(
         elif getattr(converge, "stdout", ""):
             sys.stdout.write(converge.stdout)
 
-    clear_marker(repo_root)
-    discard_snapshots(repo_root)
     if unresolved_frontend_failure is not None:
         sys.stderr.write(
             "applied: the update landed and the backend is healthy, but the live UI is "

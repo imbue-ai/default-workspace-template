@@ -1836,23 +1836,86 @@ def test_marker_records_the_dri_agent_and_phases(
     phases: list[str] = []
     dri: list[str] = []
 
-    def capture(argv: list[str]) -> None:
+    def observe_marker() -> None:
         marker = update_self.read_marker(apply_repo)
         if marker is not None:
             phases.append(marker.phase)
             dri.append(marker.dri_agent)
 
+    def capture(argv: list[str]) -> None:
+        observe_marker()
+
+    # Sampled at every command AND every health probe: the restarted phase is
+    # only observable at the post-restart probe, because the marker comes down
+    # at the last rollback point -- before any further command runs.
+    def probing_responder(url: str) -> int:
+        observe_marker()
+        return 200
+
     runner.on_command = capture
     # monkeypatch (not a bare os.environ write): in a real agent workspace
     # MNGR_AGENT_NAME is already set, and it must be restored, not deleted.
     monkeypatch.setenv("MNGR_AGENT_NAME", "test-lead-agent")
-    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+    code = _apply(runner, _FakeHttp(probing_responder), _FakeSpawner(), apply_repo)
 
     assert code == 0
     assert "test-lead-agent" in dri
     # The phase advanced monotonically through the apply.
     assert update_self.PHASE_MERGED in phases
     assert update_self.PHASE_RESTARTED in phases
+
+
+def test_marker_comes_down_before_the_view_refresh(apply_repo: Path) -> None:
+    # The refresh reloads every open view, and the reloaded shell renders the
+    # "update was interrupted" banner off the marker's mere presence -- so a
+    # successful apply must clear the marker BEFORE asking the views to reload,
+    # or every successful update greets the user with a false interruption
+    # banner until they reload again by hand.
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    seen: dict[str, bool] = {}
+
+    def capture(argv: list[str]) -> None:
+        if argv[:1] == [sys.executable] and argv[1].endswith(
+            "refresh_workspace_view.py"
+        ):
+            seen["marker_at_refresh"] = _marker_exists(apply_repo)
+
+    runner.on_command = capture
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    assert seen["marker_at_refresh"] is False
+
+
+def test_marker_is_gone_before_the_post_success_bookkeeping(apply_repo: Path) -> None:
+    # env-converge is an apt full-upgrade that can run for minutes, and the
+    # update is fully applied, probed healthy, and ledger-recorded before it
+    # starts. A marker surviving into that window would make a kill there look
+    # like an interrupted apply -- and the unattended recover (boot, cron)
+    # would roll back an update that already went live.
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    seen: dict[str, bool] = {}
+
+    def capture(argv: list[str]) -> None:
+        if argv[:3] == ["uv", "run", "env-converge"]:
+            seen["marker_at_converge"] = _marker_exists(apply_repo)
+        if argv[:2] == ["git", "add"]:
+            seen["marker_at_ledger"] = _marker_exists(apply_repo)
+
+    runner.on_command = capture
+
+    code = _apply(
+        runner,
+        _FakeHttp(_all_healthy),
+        _FakeSpawner(),
+        apply_repo,
+        target_ref="minds-v0.4.2",
+    )
+
+    assert code == 0
+    assert seen["marker_at_ledger"] is False
+    assert seen["marker_at_converge"] is False
 
 
 def test_a_live_marker_blocks_a_concurrent_apply(apply_repo: Path) -> None:
