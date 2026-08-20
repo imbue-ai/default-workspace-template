@@ -370,12 +370,17 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       if (agentId === currentAgentId) {
         checkLatestAssistantForAuthError(agentId);
       }
-    } catch {
+    } catch (error) {
       // Where the load got to is recorded against the agent by `fetchEvents` and
       // read back in the view, so that a later attempt -- from any caller,
       // including the stream's own reconnect -- supersedes it. Nothing to hold
       // here, and nothing to guard on the agent having been switched away from:
       // the record is per-agent, so a stale load cannot speak for the new one.
+      // Still logged, as the paging and reconnect paths do: the view suppresses
+      // the error when a transcript is already on screen, and an attempt a newer
+      // one has superseded is recorded nowhere at all, so without this a
+      // persistently failing load leaves no trace.
+      console.warn(`Failed to load the transcript for agent ${agentId}`, error);
     }
   }
 
