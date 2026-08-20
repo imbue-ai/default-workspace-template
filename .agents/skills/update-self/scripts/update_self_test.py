@@ -1728,6 +1728,24 @@ def test_a_failed_provisioner_only_apply_reports_the_healthy_rollback_variant(
     assert "was not serving a working frontend" not in err
 
 
+def test_a_failed_provisioner_run_is_rerun_best_effort_during_recovery(
+    apply_repo: Path, capsys
+) -> None:
+    # The marker's provisioner flag is recorded before the run is attempted: a
+    # provisioner that failed part-way may already have moved global tool
+    # state, so recovery re-runs it from the restored tree even though the
+    # forward run never succeeded (best-effort -- its failure is a warning,
+    # not an emergency).
+    runner = _apply_runner("M\tsystem/scripts/setup_system.sh\n", apply_repo)
+    runner.respond(("bash",), _Result(returncode=1, stderr="no network"))
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 2
+    assert len(runner.argvs_starting(*_PROVISION)) == 2  # forward, then recovery
+    assert "still counts as recovered" in capsys.readouterr().err
+
+
 def test_emergency_when_rollback_cannot_restore_health(apply_repo: Path, capsys) -> None:
     runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
     runner.respond(("npm", "run", "build"), _Result(returncode=1, stderr="boom"))
