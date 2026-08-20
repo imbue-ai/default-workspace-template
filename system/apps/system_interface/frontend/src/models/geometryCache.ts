@@ -103,6 +103,24 @@ function awaitRequest<T>(request: IDBRequest<T>): Promise<T | null> {
 }
 
 /**
+ * The object store for one transaction, or null when the database will not open
+ * one.
+ *
+ * A connection that opened successfully can still refuse a transaction later --
+ * it throws (rather than erroring a request) once it is closing, or if the store
+ * is missing. Caught here so that lands in the in-memory fallback like every
+ * other way IndexedDB can be unusable, instead of rejecting out of a cache whose
+ * whole contract is that it degrades.
+ */
+function objectStore(database: IDBDatabase, mode: IDBTransactionMode): IDBObjectStore | null {
+  try {
+    return database.transaction(STORE_NAME, mode).objectStore(STORE_NAME);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * The keys to drop: everything past the TTL, then the least recently updated of
  * what is left once it exceeds the cap.
  *
@@ -133,8 +151,10 @@ function keysToEvict(entries: CachedGeometry[], now: number): string[] {
  * sweep and without blocking the read path.
  */
 async function evictIfNeeded(database: IDBDatabase, now: number): Promise<void> {
-  const transaction = database.transaction(STORE_NAME, "readwrite");
-  const store = transaction.objectStore(STORE_NAME);
+  const store = objectStore(database, "readwrite");
+  if (store === null) {
+    return;
+  }
   const all = await awaitRequest<CachedGeometry[]>(store.getAll() as IDBRequest<CachedGeometry[]>);
   if (all === null) {
     return;
@@ -160,20 +180,33 @@ export function createGeometryCache(now: () => number = () => Date.now()): Geome
     return databasePromise;
   }
 
+  // The fallback expires entries on the same terms as the database, so a caller
+  // cannot tell the two apart by their behaviour.
+  function loadFromMemory(key: string): GeometrySnapshot | null {
+    const entry = memory.get(key);
+    if (entry === undefined || now() - entry.updated_at > ENTRY_TTL_MS) {
+      return null;
+    }
+    return { rows: entry.rows };
+  }
+
+  // Bounded on the same terms as the database, so a session that never gets one
+  // does not accumulate a row table per conversation and width.
+  function saveToMemory(entry: CachedGeometry): void {
+    memory.set(entry.key, entry);
+    for (const key of keysToEvict([...memory.values()], now())) {
+      memory.delete(key);
+    }
+  }
+
   return {
     async load(agentId: string, widthBucket: number): Promise<GeometrySnapshot | null> {
       const key = cacheKey(agentId, widthBucket);
       const db = await database();
-      if (db === null) {
-        const entry = memory.get(key);
-        // The fallback expires entries on the same terms as the database, so a
-        // caller cannot tell the two apart by their behaviour.
-        if (entry === undefined || now() - entry.updated_at > ENTRY_TTL_MS) {
-          return null;
-        }
-        return { rows: entry.rows };
+      const store = db === null ? null : objectStore(db, "readonly");
+      if (store === null) {
+        return loadFromMemory(key);
       }
-      const store = db.transaction(STORE_NAME, "readonly").objectStore(STORE_NAME);
       const entry = await awaitRequest<CachedGeometry>(store.get(key) as IDBRequest<CachedGeometry>);
       if (entry === null || entry === undefined) {
         return null;
@@ -194,16 +227,11 @@ export function createGeometryCache(now: () => number = () => Date.now()): Geome
         updated_at: now(),
       };
       const db = await database();
-      if (db === null) {
-        memory.set(entry.key, entry);
-        // Bounded on the same terms as the database, so a session that never
-        // gets one does not accumulate a row table per conversation and width.
-        for (const key of keysToEvict([...memory.values()], now())) {
-          memory.delete(key);
-        }
+      const store = db === null ? null : objectStore(db, "readwrite");
+      if (db === null || store === null) {
+        saveToMemory(entry);
         return;
       }
-      const store = db.transaction(STORE_NAME, "readwrite").objectStore(STORE_NAME);
       await awaitRequest(store.put(entry) as IDBRequest<IDBValidKey>);
       await evictIfNeeded(db, now());
     },

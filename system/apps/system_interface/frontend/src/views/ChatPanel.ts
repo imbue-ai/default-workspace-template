@@ -1062,7 +1062,11 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
         return;
       }
       const snapshot = geometry.toSnapshot();
-      void geometryCache.save(agentId, geometryWidthBucket, snapshot).catch(() => {});
+      void geometryCache.save(agentId, geometryWidthBucket, snapshot).catch(() => {
+        // Both tiers are fire-and-forget for the same reason: geometry is an
+        // optimisation, so a write that does not land costs one settling pass on
+        // the next visit and nothing a reader can see.
+      });
       // The workspace's copy, so the next window to open this conversation --
       // this browser or another -- does not have to measure it again.
       void saveWorkspaceGeometry(agentId, geometryWidthBucket, snapshot);
