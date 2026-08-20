@@ -44,7 +44,8 @@ NOT shipped to GitHub -- the restic `host-backup` service covers it.
    for the permission-request mechanics). GitHub exposes two latchkey scopes
    and a permission request carries exactly one scope, so this is two
    requests. A request must be the **only** command in its tool call, so these
-   are two calls: file the first, wait for its verdict, then file the second.
+   are two calls -- send them back to back; you do not have to wait for the
+   first verdict to file the second.
    Do both **before any other GitHub call**, and say up front that two
    approvals are coming so the user is not surprised by the second. Never
    dribble out further requests later in the flow.
@@ -57,7 +58,7 @@ NOT shipped to GitHub -- the restic `host-backup` service covers it.
      -d '{"agent_id": "'"$MNGR_AGENT_ID"'", "type": "predefined", "payload": {"scope": "github-git", "permissions": ["github-git-read", "github-git-write"]}, "rationale": "GitHub sync: push this workspace'"'"'s branches to your private sync repo."}'
    ```
 
-   Then, once that verdict arrives, the second call, on its own:
+   Then the second call, on its own:
 
    ```bash
    latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \

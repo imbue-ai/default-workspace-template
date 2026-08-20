@@ -858,8 +858,8 @@ For whichever is missing, initiate the permission request YOURSELF (each
 request opens the approval/login flow in the minds app; the body must be
 exactly the four fields shown -- `agent_id`, `type`, `payload`, `rationale`).
 A request has to be the **only** command in its tool call, so when both are
-missing this is two calls: file the REST-API one, wait for its verdict, then
-file the git one.
+missing this is two calls, one after the other -- no waiting for the first
+verdict in between.
 
 ```bash
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \

@@ -93,11 +93,12 @@ so pass the body inline with `-d '{...}'` rather than through a heredoc or
 (`run_in_background: true`) returns a shell id instead of the echo, which leaves
 the card just as buttonless, so the hook blocks that as well.
 
-Need permissions for two scopes? Post the first one, wait for its verdict, then post
-the second.
+Need permissions for two scopes? That is two tool calls, and you can send them
+back to back -- there is no need to wait for the first verdict before filing the
+second. The rule is one request per call, not one request at a time.
 
-After posting, wait for an automated system message indicating whether the user
-approved or denied the permission request.
+Once you have filed everything you need, wait for the automated system messages
+carrying the user's decisions before using the APIs you asked for.
 
 
 ### Git operations on GitHub (clone / fetch / push)
