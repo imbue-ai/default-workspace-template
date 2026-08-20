@@ -9,6 +9,7 @@ import queue
 import re
 import subprocess
 import time
+import tomllib
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
@@ -66,6 +67,7 @@ from imbue.system_interface.server import _FORWARD_PORT_SCRIPT
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_ARGV
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_COMMAND
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_MNGR_COMMAND
+from imbue.system_interface.server import _WORKSPACE_ROOT_DIRECTORY
 from imbue.system_interface.server import _agent_switch_options
 from imbue.system_interface.server import _build_destroy_command
 from imbue.system_interface.server import _build_fast_mode_answered_label_command
@@ -238,6 +240,18 @@ def test_not_built_placeholder_renders_without_a_terminal_to_offer(
     assert "needs to be rebuilt" in response.text
 
 
+def _chat_create_template() -> dict[str, object]:
+    """The workspace's own ``[create_templates.chat]`` block, read from its settings.
+
+    Parsed straight out of the TOML rather than through mngr's config loader: the
+    question is what this repo ships, not what a particular machine resolves, and
+    the loader would fold in user and local layers that a workspace being repaired
+    may not have. ``server.py`` resolves the workspace root the same way.
+    """
+    settings = tomllib.loads((_WORKSPACE_ROOT_DIRECTORY / ".mngr" / "settings.toml").read_text())
+    return settings["create_templates"]["chat"]
+
+
 def test_not_built_repair_command_is_the_one_the_app_runs_for_a_chat() -> None:
     """The suggested agent has to come up as a chat, or the suggestion misleads.
 
@@ -257,8 +271,7 @@ def test_not_built_repair_command_is_the_one_the_app_runs_for_a_chat() -> None:
         primary_labels={},
         harness=HarnessType.CLAUDE,
     )
-    for flag in ("--template", "--transfer"):
-        assert argv[argv.index(flag) + 1] == real[real.index(flag) + 1]
+    assert argv[argv.index("--template") + 1] == real[real.index("--template") + 1]
     assert "user_created=true" in real
 
     # ``--no-connect`` is the one flag deliberately inverted: it exists to stop a
@@ -276,6 +289,16 @@ def test_not_built_repair_command_is_the_one_the_app_runs_for_a_chat() -> None:
     # workspace opens chats as.
     assert "--type" in real
     assert "--type" not in argv
+
+    # ``--transfer`` is left out for a different reason, and a weaker one: the
+    # ``chat`` template already sets it, so the line does not have to. Unlike the
+    # harness this is not the reader's to choose -- an agent in a worktree would
+    # repair a copy of the workspace instead of the workspace -- so the template
+    # is read rather than assumed. Losing that setting has to fail here and not
+    # in a workspace that has already lost its interface.
+    assert "--transfer" in real
+    assert "--transfer" not in argv
+    assert _chat_create_template()["transfer"] == "none"
 
     # No agent name, so mngr mints one and nothing collides with an earlier run.
     # The whole line has to stay flags-only for that: ``mngr create`` reads bare
@@ -305,6 +328,25 @@ def test_not_built_repair_command_is_the_one_the_app_runs_for_a_chat() -> None:
     # The shell prefix is not part of the argv the CLI validates, but it is what
     # makes the connect half work from the workspace's own tmux-backed terminals.
     assert _NOT_BUILT_REPAIR_COMMAND == "env -u TMUX " + _NOT_BUILT_REPAIR_MNGR_COMMAND
+
+
+def test_not_built_repair_message_quotes_the_heading_the_reader_is_looking_at() -> None:
+    """What the message quotes has to be what the page says, or it quotes nothing.
+
+    The message's whole claim on the agent's attention is that it repeats the
+    line the reader is looking at, so the two are one statement written twice.
+    Nothing else notices when they part: reword the heading and the message still
+    parses, still validates against the CLI, and still reads as a quotation --
+    of a sentence that now appears nowhere. The comparison is case-insensitive
+    because the message is in the reader's voice and the heading is a title.
+    """
+    message = _NOT_BUILT_REPAIR_ARGV[_NOT_BUILT_REPAIR_ARGV.index("--message") + 1]
+    quoted = re.search(r'"(.*?)[,.?!]?"', message)
+    assert quoted is not None, f"the message no longer quotes anything: {message}"
+
+    heading = re.search(r"<h1>(.*?)</h1>", render_frontend_not_built_page(None), re.DOTALL)
+    assert heading is not None, "the page no longer carries a heading"
+    assert quoted.group(1).lower().startswith(heading.group(1).strip().lower())
 
 
 def _repair_line_shown_on(page: str) -> str:

@@ -120,10 +120,10 @@ _NOT_BUILT_POLL_SECONDS = 10
 
 # The ``mngr`` invocation the placeholder offers for standing up an agent to
 # repair the workspace. It mirrors what ``agent_manager._build_chat_create_command``
-# runs for a chat -- ``--transfer none`` so the agent works in the workspace tree
-# rather than a worktree of it, ``--template chat`` for the shared work directory
-# and output style, and the ``user_created`` label that puts it in the dynamic
-# chat memory band. Where it differs from that builder:
+# runs for a chat -- ``--template chat`` for the shared work directory, the output
+# style, and running in the workspace tree rather than a worktree of it, plus the
+# ``user_created`` label that puts the agent in the dynamic chat memory band.
+# Where it differs from that builder:
 #
 # No ``--type``, which is the one thing that builder cannot leave out: it is
 # serving a menu entry, so the harness is a choice the user already made. This
@@ -133,6 +133,13 @@ _NOT_BUILT_POLL_SECONDS = 10
 # written. ``--template chat`` supplies the rest either way: it is harness-
 # agnostic (``output_style`` is honored by the claude, codex and pi plugins
 # alike), so it does not pick one and must not be relied on to.
+#
+# No ``--transfer none`` either, for a different reason: the ``chat`` template
+# already sets it, and the builder spells it out only because it is assembling
+# an argv rather than a line for a reader. It is not optional the way the harness
+# is -- an agent in a worktree would repair a copy of the workspace instead of
+# the workspace -- so ``server_test.py`` reads the template and fails if that
+# setting ever leaves it, rather than trusting this comment.
 #
 # ``--connect`` instead of its ``--no-connect``, which exists to keep a headless
 # caller from attaching. Someone typing this wants the opposite, and connecting
@@ -159,7 +166,7 @@ _NOT_BUILT_POLL_SECONDS = 10
 # against the live CLI. It is a suggestion, not a dispatch: the server never
 # runs it, so an agent is created only if the reader decides to.
 _NOT_BUILT_REPAIR_MNGR_COMMAND: Final[str] = (
-    "mngr create --connect --template chat --transfer none --label user_created=true "
+    "mngr create --connect --template chat --label user_created=true "
     '--message "i\'m seeing \\"this workspace\'s interface needs to be rebuilt, can you fix it?\\""'
 )
 
