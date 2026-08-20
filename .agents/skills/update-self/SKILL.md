@@ -203,8 +203,9 @@ regardless**. `differs` decides only which `SKILL.md` prose *you* follow next:
   # read and follow "data/.tasks/update-self/skill-at-target/.agents/skills/update-self/SKILL.md" from Step 3
   ```
 
-  You have already completed Steps 1-2 (backup, single-flight, clean tree, target
-  resolved), so do **not** re-run the staged doc's Step 2 or re-stage -- just carry
+  You have already completed Steps 1-2 (backup, the updating-workspace lease,
+  clean tree, target resolved), so do **not** re-run the staged doc's Step 2 or
+  re-stage -- just carry
   `$REF` forward into its Step 3.
 
 Either way, `data/.tasks/update-self/skill-at-target/.agents/skills/update-self` now
