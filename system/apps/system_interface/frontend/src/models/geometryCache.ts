@@ -51,7 +51,8 @@ export interface CachedGeometry {
   updated_at: number;
 }
 
-/** Quantize a viewport width into the bucket its geometry is cached under. */
+/** Quantize the width rows are laid out at into the bucket geometry measured
+ *  there is cached under. */
 export function widthBucketFor(width: number): number {
   return Math.max(0, Math.round(width / WIDTH_BUCKET_PX));
 }

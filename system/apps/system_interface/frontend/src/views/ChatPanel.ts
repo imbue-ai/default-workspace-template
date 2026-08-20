@@ -204,11 +204,25 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   // Row indices a live text selection touches, recomputed each render and read
   // by the virtualizer's range extractor.
   let pinnedRowIndices: number[] = [];
+  /**
+   * The rendered message column, or null when there is nothing laid out -- not
+   * mounted yet, or a hidden panel.
+   *
+   * This is the element rows are measured in *and* the one whose width they wrap
+   * at, which is why both the measure pass and the geometry width bucket read it
+   * rather than the scroll container. The container is wider by its own padding
+   * and the column is capped (`max-w-(--width-message-column)`), so on any panel
+   * past that cap the container's width moves while the width every row is laid
+   * out at does not.
+   */
+  function messageListElement(): Element | null {
+    return panelVisible ? (scroll.scrollEl?.querySelector(".message-list") ?? null) : null;
+  }
   // The frame-debounced measure pass. A hidden panel has nothing laid out, so it
   // reports no list and the frame reads nothing.
   const measureScheduler = createRowMeasureScheduler({
     store: measurements,
-    getListElement: () => (panelVisible ? (scroll.scrollEl?.querySelector(".message-list") ?? null) : null),
+    getListElement: messageListElement,
     reportHeight: (rowKey, height) => {
       const index = cachedKeyToIndex.get(rowKey);
       if (index !== undefined) {
@@ -876,7 +890,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     // space below reflects real heights. Only settled rows are admitted: a height
     // read before markdown and highlighting land is a placeholder, and persisting
     // it would make the estimate permanently wrong.
-    syncGeometryToWidth(agentId, scroll.scrollEl?.clientWidth ?? 0);
+    syncGeometryToWidth(agentId, messageListElement()?.clientWidth ?? 0);
     if (recordSettledGeometry(rows)) {
       scheduleGeometrySave(agentId);
     }
@@ -957,7 +971,8 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   }
 
   /**
-   * Adopt the persisted geometry for this agent at this viewport width.
+   * Adopt the persisted geometry for this agent at the width its rows wrap at
+   * (see messageListElement).
    *
    * Heights are a function of width, so a width change is a genuine cache miss:
    * the measurements in hand describe a layout that no longer exists, and are
