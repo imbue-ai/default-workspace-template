@@ -31,7 +31,7 @@ import {
   geometryFromSnapshot,
   type GeometrySnapshot,
 } from "../models/rowGeometry";
-import { createGeometryCache, widthBucketFor } from "../models/geometryCache";
+import { sharedGeometryCache, widthBucketFor } from "../models/geometryCache";
 import { loadWorkspaceGeometry, saveWorkspaceGeometry } from "../models/workspaceGeometry";
 import { resolveSelectionRowIndices, selectionStateWithin } from "./scroll-selection";
 import { createTranscriptScroll } from "./transcript-scroll";
@@ -168,10 +168,6 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   // Whether the panel was visible on the previous render, so becoming visible
   // again can be treated as a resume rather than as a shift to correct.
   let wasPanelVisible = true;
-  // Persisted geometry, so a conversation opened again is accurate immediately
-  // instead of settling in from an estimate. This browser's own copy; the
-  // workspace keeps a second one (see loadGeometrySnapshot).
-  const geometryCache = createGeometryCache();
   // Which width bucket the held geometry describes; -1 until the first measure,
   // so the first real width always counts as a change and triggers a load.
   let geometryWidthBucket = -1;
@@ -994,7 +990,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
    * the difference between landing on accurate geometry and settling into it.
    */
   async function loadGeometrySnapshot(agentId: string, bucket: number): Promise<GeometrySnapshot | null> {
-    const cached = await geometryCache.load(agentId, bucket);
+    const cached = await sharedGeometryCache.load(agentId, bucket);
     if (cached !== null) {
       return cached;
     }
@@ -1062,7 +1058,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
         return;
       }
       const snapshot = geometry.toSnapshot();
-      void geometryCache.save(agentId, geometryWidthBucket, snapshot).catch(() => {
+      void sharedGeometryCache.save(agentId, geometryWidthBucket, snapshot).catch(() => {
         // Both tiers are fire-and-forget for the same reason: geometry is an
         // optimisation, so a write that does not land costs one settling pass on
         // the next visit and nothing a reader can see.

@@ -237,3 +237,19 @@ export function createGeometryCache(now: () => number = () => Date.now()): Geome
     },
   };
 }
+
+/**
+ * The one cache this page uses, shared by every transcript that reads or writes
+ * geometry.
+ *
+ * There is one database per page and the caps above are caps on *it*: entries
+ * are keyed by agent and width, so nothing about a key names the panel that
+ * measured it. A cache per panel would open a connection per panel and count
+ * its fifty conversations separately, which is not the bound either comment
+ * claims. The connection opens lazily on the first read or write and lives as
+ * long as the page, so there is nothing to tear down when a panel closes.
+ *
+ * `createGeometryCache` stays exported for the unit tests, which drive their own
+ * instance with an injected clock.
+ */
+export const sharedGeometryCache: GeometryCache = createGeometryCache();
