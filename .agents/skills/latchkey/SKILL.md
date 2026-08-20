@@ -18,7 +18,7 @@ Usage:
 2. **Pass through all regular curl arguments** - latchkey is a transparent wrapper.
 3. **Check for `latchkey services list`** to get a list of supported services. Use `--viable` to only show the currently configured ones.
 4. **Use `latchkey services info <service_name>`** to get information about a specific service (auth options, credentials status, API docs links, special requirements, etc.).
-5. **Submit a permission request to the user if necessary** by calling `latchkey curl -XPOST http://latchkey-self.invalid/permission-requests` (see the "Ask for user permission" example below) when either there are no valid credentials for the given service or the curl requests come back with the "request not permitted by the user" message.
+5. **Submit a permission request to the user if necessary** by calling `latchkey curl -XPOST http://latchkey-self.invalid/permission-requests` (see the "Ask for user permission" example below) when either there are no valid credentials for the given service or the curl requests come back with the "request not permitted by the user" message. One request per tool call, on its own, output untouched.
 6. **Look for the newest documentation of the desired public API online.** Avoid bot-only endpoints.
 
 
@@ -58,7 +58,7 @@ latchkey curl http://latchkey-self.invalid/permissions/available/discord
 latchkey curl http://latchkey-self.invalid/permissions/self | jq .rules
 
 # 3. Ask for the necessary missing permissions.
-# (Never pipe the output through jq because frontend rendering depends on seeing the full output from your tool.)
+# (This one command, alone in its tool call, with its output untouched -- see the rule below.)
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
   -H 'Content-Type: application/json' \
   -d '{"agent_id": "'"$MNGR_AGENT_ID"'", "type": "predefined", "payload": {"scope": "discord-api", "permissions": ["discord-read-all"]}, "rationale": "I'"'"'d like to access your Discord account to read server and channel information so I can help you summarize conversations."}'
@@ -74,6 +74,18 @@ specify the optional third field on the `payload`: `account` (which should be a 
 For example: `-d '{... "payload": {"scope": ..., "permissions": ..., "account": "bob@example.com"}}'.
 
 When not sure (and if applicable), prefer the `*-read-all` permission variants as they are relatively safe and obvious.
+
+**File exactly one permission request per tool call, as the only command in that
+call, and leave its output alone.** The chat turns the call into the card the user
+approves or denies, and builds it out of that single call: what to show comes from
+the command, and the button that opens the approval dialog comes from the request
+object the gateway echoes on stdout. So a second request batched into the same call
+is never shown to the user, and `> /tmp/req.json`, `| jq .request_id`, or
+`| tee ...` takes the echoed object away and leaves the card with no button. A
+PreToolUse hook blocks all of those forms.
+
+Need permissions for two scopes? Post the first one, wait for its verdict, then post
+the second.
 
 After posting, wait for an automated system message indicating whether the user
 approved or denied the permission request.

@@ -47,16 +47,21 @@ class CommandSegment(NamedTuple):
 
     ``words`` are the segment's word tokens (operators excluded). ``has_redirect``
     is true when an output/input redirect (``>``, ``>>``, ``2>``, ``&>``,
-    ``<``, ...) decorates the segment. When the segment is a ``tk``/``ticket``
-    invocation, ``tk_verb`` is its subcommand (``start``, ``close``, ``create``,
-    ...) and ``tk_args`` are the tokens that follow the verb; otherwise
-    ``tk_verb`` is ``None`` and ``tk_args`` is empty.
+    ``<``, ...) decorates the segment. ``terminator`` is the control operator
+    that ended it (``;``, ``&&``, ``||``, ``|``, ``&``, ...), or ``None`` for the
+    last segment -- it is what tells a harmless trailing ``;`` (whose empty tail
+    segment is not a second command) from a trailing ``&`` (which backgrounds
+    the segment itself). When the segment is a ``tk``/``ticket`` invocation,
+    ``tk_verb`` is its subcommand (``start``, ``close``, ``create``, ...) and
+    ``tk_args`` are the tokens that follow the verb; otherwise ``tk_verb`` is
+    ``None`` and ``tk_args`` is empty.
     """
 
     words: tuple[str, ...]
     has_redirect: bool
     tk_verb: str | None
     tk_args: tuple[str, ...]
+    terminator: str | None
 
 
 class ParsedCommand(NamedTuple):
@@ -81,7 +86,7 @@ def parse_command(command: str) -> ParsedCommand | None:
     has_redirect = False
     for tok in tokens:
         if _is_control(tok):
-            segments.append(_classify_segment(tuple(words), has_redirect))
+            segments.append(_classify_segment(tuple(words), has_redirect, tok))
             words = []
             has_redirect = False
         elif _is_redirect(tok):
@@ -90,7 +95,7 @@ def parse_command(command: str) -> ParsedCommand | None:
             has_redirect = True
         else:
             words.append(tok)
-    segments.append(_classify_segment(tuple(words), has_redirect))
+    segments.append(_classify_segment(tuple(words), has_redirect, None))
     return ParsedCommand(segments=tuple(segments))
 
 
@@ -225,7 +230,9 @@ def _is_control(tok: str) -> bool:
     return _is_punct(tok) and not _is_redirect(tok)
 
 
-def _classify_segment(words: tuple[str, ...], has_redirect: bool) -> CommandSegment:
+def _classify_segment(
+    words: tuple[str, ...], has_redirect: bool, terminator: str | None
+) -> CommandSegment:
     """Build a :class:`CommandSegment`, recognizing a tk/ticket invocation.
 
     Skips a leading run of ``VAR=value`` env assignments, accepts an explicit
@@ -247,5 +254,9 @@ def _classify_segment(words: tuple[str, ...], has_redirect: bool) -> CommandSegm
                 tk_verb = words[j]
                 tk_args = words[j + 1 :]
     return CommandSegment(
-        words=words, has_redirect=has_redirect, tk_verb=tk_verb, tk_args=tk_args
+        words=words,
+        has_redirect=has_redirect,
+        tk_verb=tk_verb,
+        tk_args=tk_args,
+        terminator=terminator,
     )

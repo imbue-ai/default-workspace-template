@@ -39,6 +39,10 @@
           },
           {
             "type": "command",
+            "command": "${MNGR_AGENT_WORK_DIR:-.}/system/scripts/claude_latchkey_request_standalone.sh"
+          },
+          {
+            "type": "command",
             "command": "${MNGR_AGENT_WORK_DIR:-.}/system/scripts/claude_tk_standalone.sh"
           },
           {
