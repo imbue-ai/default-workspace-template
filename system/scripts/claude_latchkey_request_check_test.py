@@ -59,6 +59,13 @@ _BLOCKED = [
     f"{_REQUEST}\n{_REQUEST}",  # ... via a newline
     f"{_REQUEST} > /tmp/request.json",  # the echoed object never reaches the chat
     f"{_REQUEST} 2>/dev/null",
+    # curl writes the body to a file itself, which takes the echoed object away
+    # just as `> file` does -- separated, joined, and the valueless forms.
+    f"{_REQUEST} -o /tmp/request.json",
+    f"{_REQUEST} --output /tmp/request.json",
+    f"{_REQUEST} --output=/tmp/request.json",
+    f"{_REQUEST} -o/tmp/request.json",
+    f"{_REQUEST} -O",
     # An input redirect is blocked too: the parser records only *that* a segment
     # is redirected, and a heredoc body re-enters the parse as further commands.
     f"{_REQUEST} -d @- <<EOF\n{{}}\nEOF",
@@ -96,6 +103,7 @@ def test_routes_to_the_right_block_reason() -> None:
     """Each violation kind maps to its distinct reason (not just any block)."""
     assert checker.classify(f"{_REQUEST} && {_REQUEST}") == checker._MULTIPLE
     assert checker.classify(f"{_REQUEST} > /tmp/out.json") == checker._REDIRECT
+    assert checker.classify(f"{_REQUEST} -o /tmp/out.json") == checker._REDIRECT
     assert checker.classify(f"{_REQUEST} | jq .") == checker._CHAIN
 
 

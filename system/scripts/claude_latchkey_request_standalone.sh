@@ -12,9 +12,9 @@
 #   * two requests in one call -> the second one is never shown, and the user
 #     cannot answer a request they cannot see (it just sits in the minds inbox);
 #     the verdict messages that come back then line up against the wrong card.
-#   * `> /tmp/out.json`, `| jq .request_id`, `| tee ...` -> the echoed object
-#     never reaches the transcript, so the card has nothing to open the dialog
-#     with.
+#   * `> /tmp/out.json`, `-o /tmp/out.json`, `| jq .request_id`, `| tee ...` ->
+#     the echoed object never reaches the transcript, so the card has nothing to
+#     open the dialog with.
 # Forbidding the batched/chained/redirected form makes that class of bug
 # structurally impossible at the source.
 #
