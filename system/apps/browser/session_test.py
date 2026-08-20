@@ -40,6 +40,19 @@ def test_navigation_to_an_unregistered_loopback_port_stays_blocked(
     assert session._unsafe_navigation_reason("http://evil.localhost:4000/") == "loopback host is not allowed"
 
 
+def test_an_ipv4_mapped_loopback_literal_is_treated_as_loopback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # ``::ffff:127.0.0.1`` reaches the same socket as ``127.0.0.1`` but reports neither is_loopback
+    # nor is_link_local in its mapped form, so without normalisation it slips through as an
+    # ordinary address -- the metadata IP included.
+    _registry(tmp_path, monkeypatch, _TODO_APP_REGISTRY)
+
+    assert session._unsafe_navigation_reason("http://[::ffff:127.0.0.1]:4000/") is not None
+    assert session._unsafe_navigation_reason("http://[::ffff:169.254.169.254]/") is not None
+    assert session._unsafe_navigation_reason("http://[::ffff:127.0.0.1]:8080/") is None
+
+
 def test_navigation_to_the_metadata_address_stays_blocked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # Link-local is not loopback, so no registration can ever whitelist it -- even one that
     # (nonsensically) named the metadata port.
