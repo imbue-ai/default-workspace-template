@@ -40,9 +40,9 @@ from imbue.mngr_antigravity.antigravity_config import ROOT_CONVERSATION_FILENAME
 from imbue.mngr_antigravity.antigravity_config import STATUSLINE_SCRIPT_NAME
 from imbue.mngr_antigravity.antigravity_config import build_onboarding_seed
 from imbue.mngr_antigravity.antigravity_config import get_antigravity_conversations_dir
+from imbue.mngr_antigravity.antigravity_config import get_antigravity_global_rules_path
 from imbue.mngr_antigravity.antigravity_config import get_antigravity_hooks_config_path
 from imbue.mngr_antigravity.antigravity_config import get_antigravity_oauth_token_path
-from imbue.mngr_antigravity.antigravity_config import get_antigravity_global_rules_path
 from imbue.mngr_antigravity.antigravity_config import get_antigravity_onboarding_cache_path
 from imbue.mngr_antigravity.antigravity_config import get_antigravity_settings_path
 from imbue.mngr_antigravity.plugin import AntigravityAgent
@@ -1748,9 +1748,7 @@ def test_rules_text_is_none_when_no_role_contributed_anything(antigravity_agent:
     assert antigravity_agent._build_agent_rules_text(antigravity_agent.host) is None
 
 
-def test_provision_writes_the_rules_file_from_a_role(
-    local_provider: LocalProviderInstance, tmp_path: Path
-) -> None:
+def test_provision_writes_the_rules_file_from_a_role(local_provider: LocalProviderInstance, tmp_path: Path) -> None:
     """A role's appended prompt lands in the per-agent GEMINI.md rule."""
     agent = _make_antigravity_agent(
         local_provider,

@@ -108,6 +108,8 @@ from imbue.mngr.agents.common_transcript import maybe_provision_common_transcrip
 from imbue.mngr.agents.common_transcript import provision_raw_transcript_scripts
 from imbue.mngr.agents.common_transcript import provision_scripts_to_commands_dir
 from imbue.mngr.agents.installation import ensure_cli_installed
+from imbue.mngr.agents.output_styles import read_output_style_files
+from imbue.mngr.agents.output_styles import resolve_output_style
 from imbue.mngr.agents.tui_agent import InteractiveTuiAgent
 from imbue.mngr.agents.tui_utils import SubmissionConfirmationPolicy
 from imbue.mngr.agents.tui_utils import SubmissionEvidenceProbe
@@ -126,8 +128,6 @@ from imbue.mngr.api.preservation import preserve_host_agents_on_destroy
 from imbue.mngr.api.preservation import require_unique_match
 from imbue.mngr.api.preservation import run_adopt_session_preflight
 from imbue.mngr.api.preservation import transfer_cloned_agent_session_store
-from imbue.mngr.agents.output_styles import read_output_style_files
-from imbue.mngr.agents.output_styles import resolve_output_style
 from imbue.mngr.config.data_types import AgentTypeConfig
 from imbue.mngr.config.data_types import MngrContext
 from imbue.mngr.errors import UserInputError
