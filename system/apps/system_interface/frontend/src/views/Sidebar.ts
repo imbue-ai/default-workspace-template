@@ -554,7 +554,34 @@ export function Sidebar(): m.Component<SidebarAttrs> {
    * window going to the background).
    */
   function handleWindowBlur(): void {
-    if (!isAnyMenuOpen()) return;
+    // The rail folds up too, not just the menus. It is a hover affordance, and
+    // a window that is not focused is not one the pointer is working -- leaving
+    // a 240px card over the dock while the user is in another app is the same
+    // wrong as leaving a menu there. `isPointerOverRail` is deliberately NOT
+    // consulted: this fires exactly when the pointer's whereabouts stopped
+    // being knowable, so a `true` left over from the last crossing means
+    // nothing here.
+    isPointerOverRail = false;
+    if (renamingRef !== null) return;
+    if (!isAnyMenuOpen() && !expanded) return;
+    closeMenus();
+    m.redraw();
+  }
+
+  /**
+   * The other half of "the pointer has left", for the crossing `mouseout`
+   * can miss.
+   *
+   * This UI runs inside a cross-origin iframe in the minds chrome, and a
+   * cursor leaving the OUTER window does not reliably raise a boundary event
+   * in here at all -- the OS simply stops delivering mouse events to the
+   * window, and nothing synthesizes the crossing. Both listeners are cheap and
+   * neither can fire wrongly (each demands the pointer be leaving the document
+   * itself), so both are registered rather than betting on one.
+   */
+  function handleDocumentPointerLeave(): void {
+    isPointerOverRail = false;
+    if (openMenu !== null || renamingRef !== null) return;
     closeMenus();
     m.redraw();
   }
@@ -1455,6 +1482,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
             document.addEventListener("mousedown", handleOutsideMousedown);
             document.addEventListener("keydown", handleKeydown);
             document.addEventListener("mouseout", handlePointerLeftWindow);
+            document.documentElement.addEventListener("mouseleave", handleDocumentPointerLeave);
             window.addEventListener("blur", handleWindowBlur);
           },
           onremove: () => {
@@ -1462,6 +1490,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
             document.removeEventListener("mousedown", handleOutsideMousedown);
             document.removeEventListener("keydown", handleKeydown);
             document.removeEventListener("mouseout", handlePointerLeftWindow);
+            document.documentElement.removeEventListener("mouseleave", handleDocumentPointerLeave);
             window.removeEventListener("blur", handleWindowBlur);
           },
           onmouseenter: () => {
