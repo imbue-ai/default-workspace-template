@@ -3,13 +3,22 @@
 # another request, chained with another command, has its output redirected, or is
 # filed by a backgrounded tool call.
 #
-# Why: a permission request is the one tool call the USER has to act on. The chat
-# turns it into a card (see the permission-request handling in
-# system/apps/system_interface/.../harnesses/tool_output.py) built from that
-# single call -- the request is recognized from the command, and the button that
-# opens the approval dialog comes from the request object the gateway echoes on
-# stdout. Only the FIRST such object in the result is read, and only one card is
-# rendered per call, so:
+# Why: a permission request is the one tool call the USER has to act on. This gate
+# exists for one reader, and every rule below is that reader's shape rather than
+# anything latchkey requires -- keep the two in step:
+#
+#   system/apps/system_interface/imbue/system_interface/harnesses/tool_output.py
+#     is_permission_request_call()  -- recognizes the card from the call's INPUT
+#                                      (whole raw text), one card per tool call
+#     find_permission_request()     -- lifts the gateway's echoed object out of
+#                                      that call's RESULT, first match only
+#   system/apps/system_interface/frontend/src/views/permission-card.ts
+#     parsePermissionRequest()      -- reads the request_id the card's
+#                                      "Review & respond" button opens the dialog with
+#
+# The chat builds the card from that single call -- the request is recognized
+# from the command, the button comes from the echoed object. Only the FIRST such
+# object in the result is read, and only one card is rendered per call, so:
 #   * two requests in one call -> the second one is never shown, and the user
 #     cannot answer a request they cannot see (it just sits in the minds inbox);
 #     the verdict messages that come back then line up against the wrong card.

@@ -171,6 +171,15 @@ function detailsFromResponseObject(obj: Record<string, unknown>): PermissionRequ
  * succeeded and carries a request_id; otherwise null (the request is still
  * pending, errored, or nothing could be read -- the caller then shows a
  * pending card and keeps the raw output available).
+ *
+ * The `request_id` this reads is what the "Review & respond" button opens the
+ * approval dialog with, so a filing whose echo never reaches its own tool
+ * result renders a card the user cannot act on. That is the whole reason the
+ * PreToolUse gate in `system/scripts/claude_latchkey_request_standalone.sh`
+ * (checker: `claude_latchkey_request_check.py`) blocks a request that is
+ * batched, chained, redirected, or backgrounded. If this parser ever learns to
+ * read a filing the gate refuses -- or stops reading one it allows -- the two
+ * need updating together.
  */
 export function parsePermissionRequest(
   toolCall: ToolCall,
