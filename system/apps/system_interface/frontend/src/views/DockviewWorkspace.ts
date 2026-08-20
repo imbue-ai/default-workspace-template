@@ -2850,16 +2850,22 @@ function handleOpenPanelRequest(
 ): void {
   if (!dockview) return;
 
-  const chatPanelId = findAnchorChatPanelId(requesterAgentId);
-  if (chatPanelId === null) {
+  // What the new pane opens to the right OF. The requester's own chat when it
+  // is docked, since that is the conversation the open belongs to. Otherwise
+  // whatever the user is looking at -- an agent whose chat is backgrounded, or
+  // in another view, still means "put this beside my work", and falling through
+  // to dockview's default instead tabbed the pane INTO the active group, which
+  // is the one place it should never land.
+  const anchorPanelId = findAnchorChatPanelId(requesterAgentId) ?? dockview.activePanel?.id ?? null;
+  if (anchorPanelId === null) {
+    // An empty dock: nothing to be to the right of.
     addPanelForRef(ref, requesterAgentId, { panelIdHint });
     return;
   }
-  // Default: tab into an existing group to the right of the anchor chat
-  // if one is open. Callers pass ``forceNewGroup`` to demand a fresh
-  // column instead. See ``findSiblingGroupInDirection`` for the
-  // adjacency rule.
-  const anchorPanel = dockview.panels.find((p) => p.id === chatPanelId);
+  // Default: tab into an existing group to the right of the anchor if one is
+  // open. Callers pass ``forceNewGroup`` to demand a fresh column instead. See
+  // ``findSiblingGroupInDirection`` for the adjacency rule.
+  const anchorPanel = dockview.panels.find((p) => p.id === anchorPanelId);
   const anchorGroupId = anchorPanel?.api.group.id ?? null;
   const sibling =
     !forceNewGroup && anchorGroupId !== null ? findSiblingGroupInDirection(anchorGroupId, "right") : null;
@@ -2870,7 +2876,7 @@ function handleOpenPanelRequest(
   const containerWidth = dockviewContainer?.getBoundingClientRect().width ?? 0;
   const initialWidth = containerWidth > 0 ? Math.round(containerWidth * OPEN_TAB_SPLIT_FRACTION) : undefined;
   addPanelForRef(ref, requesterAgentId, {
-    position: { referencePanel: chatPanelId, direction: "right" },
+    position: { referencePanel: anchorPanelId, direction: "right" },
     initialWidth,
     panelIdHint,
   });
