@@ -255,7 +255,7 @@ def test_not_built_repair_command_is_the_one_the_app_runs_for_a_chat() -> None:
         primary_labels={},
         harness=HarnessType.CLAUDE,
     )
-    for flag in ("--type", "--template", "--transfer"):
+    for flag in ("--template", "--transfer"):
         assert argv[argv.index(flag) + 1] == real[real.index(flag) + 1]
     assert "user_created=true" in real
 
@@ -265,6 +265,15 @@ def test_not_built_repair_command_is_the_one_the_app_runs_for_a_chat() -> None:
     assert "--no-connect" in real
     assert "--connect" in argv
     assert "--no-connect" not in argv
+
+    # ``--type`` is the one the builder must pass and the page must not: the app
+    # is serving a harness the user picked from a menu, while the page has no
+    # such choice to carry and would be pinning every reader to whichever harness
+    # was current when this string was written. Omitted, mngr resolves it from
+    # ``[commands.create] type``, so the repair agent comes up on whatever this
+    # workspace opens chats as.
+    assert "--type" in real
+    assert "--type" not in argv
 
     # No agent name, so mngr mints one and nothing collides with an earlier run.
     # The whole line has to stay flags-only for that: a stray bare word would be
