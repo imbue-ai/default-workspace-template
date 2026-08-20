@@ -1599,6 +1599,26 @@ def test_apply_dirty_tree_refuses_before_touching_anything(apply_repo: Path) -> 
     assert not runner.ran("git", "merge")
 
 
+def test_apply_unresolvable_merge_ref_leaves_no_marker_behind(
+    apply_repo: Path,
+) -> None:
+    # A ref merge-base cannot resolve (a typo'd --merge-ref) is a precondition
+    # failure -- and "nothing changed" must include the marker: one left behind
+    # would show the "update interrupted" banner and block other applies until
+    # a needless recover.
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+    runner.respond(
+        ("git", "merge-base", "--is-ancestor"),
+        _Result(returncode=128, stderr="fatal: not a valid object name"),
+    )
+
+    with pytest.raises(update_self.ApplyPreconditionError):
+        _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert not runner.ran("git", "merge", "--ff-only")
+    assert not _marker_exists(apply_repo)
+
+
 # --- apply: worker bundle -------------------------------------------------------
 
 
