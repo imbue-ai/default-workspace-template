@@ -251,8 +251,9 @@ export function createTranscriptVirtualizer(config: TranscriptVirtualizerConfig)
     },
 
     reset(): void {
-      virtualizer.itemSizeCache.clear();
-      virtualizer.measurementsCache = [];
+      // The library's own "forget every measurement": it clears the size cache
+      // and bumps the version the measurements are memoized on, so the whole
+      // table is rebuilt from estimates on the next read.
       virtualizer.measure();
     },
   };
