@@ -293,6 +293,63 @@ Already have something in mind? Tell me what you'd like to work on below. If not
 
 Then stop. If the user's next message asks for suggestions or says they are not sure, follow the rest of `.agents/skills/welcome/SKILL.md`."""]
 
+# the "opencode" agent type -- OpenCode CLI as a peer harness to claude/codex. It
+# is its own base type (registered by the vendored imbue-mngr-opencode plugin via
+# `mngr plugin add` in system/scripts/build_workspace.sh), so no parent_type. The
+# opencode binary is baked into the image (system/scripts/setup_system.sh,
+# OPENCODE_VERSION), so check_installation is off -- do not reinstall/verify at
+# provision.
+#
+# No model is pinned (unlike agent_types.codex's gpt-5.6-sol). OpenCode is a
+# many-provider, many-auth harness: its model is a `provider/model` slug that comes
+# from the user's own opencode.json (synced from ~/.config/opencode by the plugin)
+# or the authenticated provider's default -- forcing a slug here could name a
+# provider the user has not authenticated. The chat model bar reads the live value
+# from the harness's own model_state.json instead. "Effort" for opencode is its
+# variant system (provider.<p>.models.<m>.variants.<name>), likewise user-config
+# driven, so it is not pinned here either.
+#
+# auto_allow_permissions injects a wildcard permission-allow into the per-agent
+# opencode.json so the container agent runs unattended, matching
+# agent_types.codex's auto_allow_permissions posture.
+[agent_types.opencode]
+auto_allow_permissions = true
+check_installation = false
+# Harness-only instructions, appended to every opencode agent's system prompt.
+append_system_prompt__extend = ["""Do not use any built-in tools related to memory or task planning -- their output does not reach the user's workspace chat. Use the `tk` utility for any todos; it is the only task tracker in this workspace. Don't ever use tools for asking user questions or anything that would block the terminal -- just use your words."""]
+
+# the "antigravity" agent type -- Google's Antigravity CLI (agy) as a peer harness to
+# claude/codex. Its own base type (registered by the vendored imbue-mngr-antigravity
+# plugin via `mngr plugin add` in system/scripts/build_workspace.sh), so no parent_type.
+# The agy binary is baked into the image (system/scripts/setup_system.sh, which runs the
+# version-locked system/scripts/agy_install-1.1.16.sh), so check_installation is off.
+# auto_allow_permissions + auto_dismiss_dialogs run the container agent unattended,
+# matching agent_types.codex (auto_allow adds agy's --dangerously-skip-permissions;
+# auto_dismiss silently trusts the source repo). update_policy = NEVER freezes the baked
+# build -- agy has no version field of its own, so NEVER sets AGY_CLI_DISABLE_AUTO_UPDATE
+# in the agent env and the pin in the installer script stays the only version authority.
+#
+# NO model is pinned, deliberately. agy is single-auth, so a slug WOULD be safe to force,
+# but the model bar is uniform across harnesses now: the harness writes its live model to
+# model_state.json over the session and the harness-agnostic code matches that against the
+# catalog. Pinning a slug here would add a second, competing source of truth that goes
+# stale the moment someone runs /model in the agent's terminal.
+#
+# settings_overrides is folded (last) into the per-agent settings.json -- the agy analog of
+# agent_types.codex's config_overrides. These turn off surfaces a headless chat does not
+# use: enableTerminalSandbox=false keeps run_command unrestricted (the container is already
+# the isolation boundary, same intent as codex's danger-full-access; agy's terminal sandbox
+# is opt-in anyway, so this is belt-and-suspenders), and telemetry / tips / feedback-survey
+# / notifications off keep the surface quiet.
+[agent_types.antigravity]
+auto_allow_permissions = true
+auto_dismiss_dialogs = true
+check_installation = false
+update_policy = "NEVER"
+settings_overrides = { enableTerminalSandbox = false, enableTelemetry = false, showTips = false, showFeedbackSurvey = false, notifications = false }
+# Harness-only instructions, appended to every antigravity agent's system prompt.
+append_system_prompt__extend = ["""Do not use any built-in tools related to memory or task planning -- their output does not reach the user's workspace chat. Use the `tk` utility for any todos; it is the only task tracker in this workspace. Don't ever use tools for asking user questions or anything that would block the terminal -- just use your words."""]
+
 # --- Provider configurations ---
 
 # all disabled for now, since we don't want the agents to be able to launch mngr agents anywhere except within their own containers

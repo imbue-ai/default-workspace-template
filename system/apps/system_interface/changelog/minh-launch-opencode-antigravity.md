@@ -1,0 +1,5 @@
+The harness registry knows about `opencode` and `antigravity`, so an agent created on either is treated as itself rather than mistaken for Claude. Both appear in the New Tab launcher.
+
+Registering them was not optional. An unregistered harness is not neutral: `parse_harness` falls an unknown agent type back to Claude, which would have pointed Claude's transcript watcher at another harness's state directory. But a `HarnessSpec` requires a watcher, an activity tracker, a model resolver and a model catalog, and neither harness has any of those yet -- so both name a shared set of deliberately inert placeholders instead. The placeholder transcript is empty, the placeholder catalog offers nothing, and switching a model does nothing. The one live signal is the activity dot, which follows mngr's `active` marker: both plugins already maintain it, so a turn in flight shows as "Thinking…" even with no transcript behind it.
+
+Each harness drops its own placeholder when it lands a real implementation, one harness at a time; when the last one does, the shared placeholder module goes with it.
