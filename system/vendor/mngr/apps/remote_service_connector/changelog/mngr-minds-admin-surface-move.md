@@ -1,1 +1,0 @@
-Docs and operator-hint strings updated for the operator-CLI consolidation: `minds env deploy` is now `minds-admin env deploy`, and the `mngr imbue_cloud admin ...` commands (relays add, the host-key backfill, pool create) are now `minds-admin ...`. No behavior change.

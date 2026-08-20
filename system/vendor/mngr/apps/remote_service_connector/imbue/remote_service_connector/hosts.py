@@ -335,7 +335,7 @@ def clean_up_slice_on_box(
     if not box_host_public_key:
         raise PoolHostCleanupError(
             f"slice pool host {host_db_id}: bare_metal_servers row {bare_metal_server_id} has no box_host_public_key "
-            "(run the one-time `minds-admin pool backfill-host-keys`)"
+            "(run the one-time `mngr imbue_cloud admin` host-key backfill)"
         )
     management_key_pem = os.environ["POOL_SSH_PRIVATE_KEY"]
     commands = build_slice_teardown_commands(lima_instance_name, lima_disk_name)
@@ -707,7 +707,7 @@ def _lease_pool_host(
                     if not outer_host_public_key or not container_host_public_key:
                         no_host_keys_detail = (
                             f"Pool host {host_db_id} has no pinned SSH host keys yet; "
-                            "run the one-time `minds-admin pool backfill-host-keys`."
+                            "run the one-time `mngr imbue_cloud admin` host-key backfill."
                         )
                         break
 
@@ -1325,7 +1325,7 @@ def _enable_sharing_core(
 _KNOWN_WORKSPACE_HOST_DIRS: Final = ("/home/user/.mngr", "/mngr")
 
 # Env vars carrying the tier's pinned web-create template + blessed compute
-# shape, pushed into the connector's Modal secret by ``minds-admin env deploy`` from
+# shape, pushed into the connector's Modal secret by ``minds env deploy`` from
 # the tier's ``deploy.toml`` ``[web_workspaces]`` block. The repo value is the
 # canonical ``host/org/repo`` key the pool bake stamps into row attributes.
 _WEB_TEMPLATE_REPO_ENV_VAR: Final = "MINDS_WEB_TEMPLATE_REPO"

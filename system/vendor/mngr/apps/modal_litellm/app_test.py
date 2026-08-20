@@ -31,36 +31,3 @@ def test_entrypoint_imports_only_shipped_dependencies() -> None:
             continue
         violations.append(module_name)
     assert violations == []
-
-
-def test_litellm_sentry_env_updates_are_empty_without_a_dsn(app_module: ModuleType) -> None:
-    # No DSN (unprovisioned tier) must leave the env untouched so LiteLLM's
-    # native sentry callback re-init never activates.
-    assert app_module._litellm_sentry_env_updates({}) == {}
-    assert app_module._litellm_sentry_env_updates({"LITELLM_SENTRY_DSN": ""}) == {}
-
-
-def test_litellm_sentry_env_updates_respect_the_kill_switch(app_module: ModuleType) -> None:
-    environ = {"LITELLM_SENTRY_DSN": "https://k@bugsink.invalid/2", "MINDS_SENTRY_DISABLED": "1"}
-    assert app_module._litellm_sentry_env_updates(environ) == {}
-
-
-def test_litellm_sentry_env_updates_pin_dsn_trace_rate_and_environment(app_module: ModuleType) -> None:
-    # LiteLLM's re-init defaults to traces_sample_rate=1.0 and
-    # environment="production"; both must be pinned via its own env vars.
-    environ = {"LITELLM_SENTRY_DSN": "https://k@bugsink.invalid/2", "MNGR_DEPLOY_ENV": "staging"}
-    assert app_module._litellm_sentry_env_updates(environ) == {
-        "SENTRY_DSN": "https://k@bugsink.invalid/2",
-        "SENTRY_API_TRACE_RATE": "0.0",
-        "SENTRY_ENVIRONMENT": "staging",
-    }
-
-
-def test_litellm_sentry_env_updates_preserve_operator_supplied_knobs(app_module: ModuleType) -> None:
-    # Values already in the environment (e.g. from the stamped secret) win.
-    environ = {
-        "LITELLM_SENTRY_DSN": "https://k@bugsink.invalid/2",
-        "SENTRY_API_TRACE_RATE": "0.5",
-        "SENTRY_ENVIRONMENT": "custom-env",
-    }
-    assert app_module._litellm_sentry_env_updates(environ) == {"SENTRY_DSN": "https://k@bugsink.invalid/2"}

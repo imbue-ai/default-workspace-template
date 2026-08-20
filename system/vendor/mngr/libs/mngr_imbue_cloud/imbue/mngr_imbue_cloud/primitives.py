@@ -65,7 +65,7 @@ def tier_for_env_name(env_name: str) -> str:
     ``production`` and ``staging`` are each their own tier; a ``ci-`` prefix marks
     the CI orchestrator's ephemeral envs; every other name (by convention
     ``dev-<user>``) is a dev env. This is the canonical definition --
-    the minds operator CLI re-exports it rather than keeping a second
+    ``imbue.minds.cli._activated_env`` re-exports it rather than keeping a second
     copy, so the box-exclusivity guard and the minds CLI can never disagree about
     which tier an env belongs to.
     """
@@ -84,7 +84,7 @@ def is_box_exclusive_to_tier(*, authorized_key_count: int, foreign_tier_slice_co
 
     The one definition of the rule, so the bake-time guard
     (``assert_box_is_exclusive_to_tier``) and the read-only audit
-    (``minds-admin server list --verify-occupancy``, which tells operators a bake would
+    (``admin server list --verify-occupancy``, which tells operators a bake would
     refuse) can never disagree. A box is exclusive when it authorizes exactly the
     owning tier's pool key and carries no slice stamped for an env in another tier.
     """
@@ -145,11 +145,11 @@ class ImbueCloudKeyType(UpperCaseStrEnum):
 
 
 class PoolHostDestroyOutcomeStatus(LowerCaseStrEnum):
-    """Per-host outcome of an operator pool destroy, as emitted in the JSON report.
+    """Per-host outcome of an admin pool destroy, as emitted in the JSON report.
 
     Lowercase wire values (``destroyed`` / ``skipped_leased`` / ``already_gone`` /
-    ``failed``) -- the format operators and scripts read from
-    ``minds-admin pool destroy`` and ``teardown-slices``.
+    ``failed``) -- the format operators and scripts read from ``admin pool destroy``
+    and ``teardown-slices``.
     """
 
     DESTROYED = auto()
@@ -159,7 +159,7 @@ class PoolHostDestroyOutcomeStatus(LowerCaseStrEnum):
 
 
 class SliceBakeOutcomeStatus(LowerCaseStrEnum):
-    """Per-slice outcome of an operator pool bake (``minds-admin pool create``), as emitted in the JSON report."""
+    """Per-slice outcome of an admin pool create (bake), as emitted in the JSON report."""
 
     SUCCEEDED = auto()
     FAILED = auto()

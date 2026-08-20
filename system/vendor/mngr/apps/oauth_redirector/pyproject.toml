@@ -20,7 +20,6 @@ license-files = [
 [dependency-groups]
 image = [
     "fastapi[standard]==0.139.2",
-    "sentry-sdk==2.66.0",
 ]
 
 [build-system]

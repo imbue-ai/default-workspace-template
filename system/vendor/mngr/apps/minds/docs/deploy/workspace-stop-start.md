@@ -19,7 +19,7 @@ running (leased) -> stopping -> stopped -> starting -> running
   slot still held; a restart in this window cancels the stop in place.
 - `stopped`: artifact verified in the bucket, VM deleted, slot freed.
 - `starting`: a connector supervisor is restoring/booting it.
-- `crashed`: operator-abandoned (`minds-admin workspaces abandon`);
+- `crashed`: operator-abandoned (`mngr imbue_cloud admin workspaces abandon`);
   the user recovers by restoring the workspace's backup.
 
 ## Moving parts
@@ -69,8 +69,8 @@ cp .minds/template/storage.sh /tmp/storage-<tier>.sh
 $EDITOR /tmp/storage-<tier>.sh
 uv run scripts/push_vault_from_file.py <tier> storage /tmp/storage-<tier>.sh
 shred -u /tmp/storage-<tier>.sh
-eval "$(uv run minds-admin env activate <tier>)"
-uv run minds-admin env deploy --yes-i-mean-<tier>
+eval "$(uv run minds env activate <tier>)"
+uv run minds env deploy --yes-i-mean-<tier>
 ```
 
 `storage` is in every tier's `deploy.toml` services list, so the deploy
@@ -86,7 +86,7 @@ disabled). The dev tier's entry is populated (bucket
 
 ## Operations
 
-- `minds-admin workspaces abandon <host-db-id> --reason ...`
+- `mngr imbue_cloud admin workspaces abandon <host-db-id> --reason ...`
   marks a row on a permanently dead box `crashed` (retries stop; the user
   restores from backup; artifacts are reclaimed at release). Releasing a
   crashed row attempts the VM teardown best-effort: an unreachable box is

@@ -23,10 +23,9 @@ services = [
     "supertokens",
     "sharing",
     "storage",
-    "sentry",
 ]
 
-# Tier-shape flags consumed by `minds-admin env deploy` / `destroy`. Production
+# Tier-shape flags consumed by `minds env deploy` / `destroy`. Production
 # tracks generation for parity with staging (production destroy is hard-
 # refused at the CLI today, so the id is effectively immutable for the
 # lifetime of the tier).
@@ -52,7 +51,7 @@ domains = ["imbue.com"]
 # every deploy -- git is the source of truth for plan defaults. Existing
 # per-user entitlement rows (copied from a plan at assignment) are never
 # touched by this; adjust individual users via
-# `minds-admin account set-plan / set-quota`. The same values are
+# `mngr imbue_cloud admin account set-plan / set-quota`. The same values are
 # committed for every tier; tests that need small limits override per-user
 # via the admin API.
 [plans.explorer]

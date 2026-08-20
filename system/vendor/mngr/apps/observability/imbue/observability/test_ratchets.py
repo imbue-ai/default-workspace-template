@@ -60,11 +60,7 @@ def test_prevent_base_exception_catch() -> None:
 
 
 def test_prevent_builtin_exception_raises() -> None:
-    # Both hits are in deploy_assets/bugsink_conf.py, upstream bugsink's own
-    # docker conf template vendored verbatim (see its module docstring); we
-    # keep the vendored text byte-identical to upstream outside the
-    # documented deltas.
-    rc.check_builtin_exception_raises(_DIR, snapshot(2))
+    rc.check_builtin_exception_raises(_DIR, snapshot(0))
 
 
 def test_prevent_silent_decode_error_catches() -> None:
@@ -120,11 +116,10 @@ def test_prevent_namedtuple() -> None:
 def test_prevent_yaml_usage() -> None:
     # Justified matches: references to config file names of third-party tools
     # that REQUIRE YAML (the OpenTelemetry Collector's config.yaml and
-    # cloud-init.yaml and cloud-init-bugsink.yaml), plus the
-    # ``_yaml_double_quoted`` escaping helper (and its call site) that embeds
-    # the ingest credential safely in the collector's mandated format -- none
-    # of our own configuration is YAML.
-    rc.check_yaml_usage(_DIR, snapshot(7))
+    # cloud-init.yaml), plus the ``_yaml_double_quoted`` escaping helper (and
+    # its call site) that embeds the ingest credential safely in the
+    # collector's mandated format -- none of our own configuration is YAML.
+    rc.check_yaml_usage(_DIR, snapshot(5))
 
 
 def test_prevent_functools_partial() -> None:
@@ -146,10 +141,7 @@ def test_prevent_num_prefix() -> None:
 
 
 def test_prevent_trailing_comments() -> None:
-    # All in deploy_assets/bugsink_conf.py: upstream bugsink's own conf
-    # template, vendored verbatim outside the documented deltas -- rewriting
-    # its comment style would defeat the re-diff-on-version-bump workflow.
-    rc.check_trailing_comments(_DIR, snapshot(12))
+    rc.check_trailing_comments(_DIR, snapshot(0))
 
 
 def test_prevent_init_docstrings() -> None:

@@ -13,21 +13,16 @@ dependencies = [
     #   - The [modal] extra is exactly {modal, dockerfile-parse}, but its modal
     #     floor (>=1.5.1) conflicts with the workspace-wide modal==1.4.3 pin
     #     (imbue-mngr-modal), so we depend on bare harbor and supply the
-    #     extra's packages ourselves: modal (floored >=1.4.3 to match the
-    #     workspace pin) and dockerfile-parse explicitly.
+    #     extra's packages ourselves: modal from the workspace pin,
+    #     dockerfile-parse explicitly.
     "harbor==0.21.0",
-    "modal>=1.4.3",
+    "modal",
     "dockerfile-parse>=2.0.1",
     "anthropic>=0.40",
     "click>=8.0.0",
     "loguru>=0.7",
     "pydantic>=2.11",
     "imbue-common",
-    # Token -> USD pricing for the workspace agent's transcript usage. Reusing
-    # this table rather than copying it keeps the eval's cost numbers bound to
-    # the same prices the LiteLLM proxy bills at (enforced by
-    # apps/modal_litellm/mngr_usage_pricing_drift_test.py).
-    "imbue-mngr-usage",
 ]
 
 [project.scripts]
@@ -37,7 +32,6 @@ minds-evals-harbor = "imbue.minds_evals.generate:main"
 # PyPI harbor 0.21.0 postdates the workspace's supply-chain cooldown cutoff;
 # the upstream git tag is the same release without the registry timestamp.
 harbor = { git = "https://github.com/harbor-framework/harbor", tag = "v0.21.0" }
-imbue-mngr-usage = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

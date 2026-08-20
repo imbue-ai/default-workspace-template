@@ -8,7 +8,7 @@ Five fixtures, mirroring the spec:
 * ``verified_user`` -- function-scoped, pre-verified user created via the
   shared env's SuperTokens admin API and deleted in teardown.
 * ``ephemeral_env`` -- function-scoped, mints a fresh ``ci-...`` env
-  via ``minds-admin env deploy`` and unconditionally tears it down in finally.
+  via ``minds env deploy`` and unconditionally tears it down in finally.
 * ``signup_email`` -- function-scoped, fresh ``+<uuid>`` address against
   the per-run shared mail.tm account plus poll helpers.
 
@@ -207,8 +207,8 @@ def verified_user(
 def ephemeral_env(deployment_envs_config: DeploymentEnvsConfig) -> Generator[EphemeralEnvHandle, None, None]:
     """Function-scoped fresh ``ci-<timestamp>-<uuid>`` env for ``minds_deployment`` tests.
 
-    Shells out to ``minds-admin env deploy`` (matching how an operator would
-    invoke it) and unconditionally tears down via ``minds-admin env destroy``
+    Shells out to ``minds env deploy`` (matching how an operator would
+    invoke it) and unconditionally tears down via ``minds env destroy``
     in finally. The orchestrator-side name+age sweep is the leak safety
     net if both this teardown AND the orchestrator's per-run cleanup
     fail.
@@ -266,8 +266,8 @@ _STALE_TEST_USER_MAX_AGE_SECONDS = 30 * 60
 # CLIs (``vault``, ``modal``) find their auth files at the expected
 # paths under the redirected HOME.
 #
-# - ``.vault-token``: HashiCorp Vault CLI auth token. ``minds-admin
-#   env deploy`` calls ``_load_dev_credentials_from_vault`` which shells out
+# - ``.vault-token``: HashiCorp Vault CLI auth token. ``minds env
+#   deploy`` calls ``_load_dev_credentials_from_vault`` which shells out
 #   to ``vault`` and expects this file.
 # - ``.modal.toml``: Modal CLI auth tokens per workspace.
 #   ``modal deploy`` / ``modal app history`` / ``modal app rollback``
@@ -291,7 +291,7 @@ def _copy_operator_credentials_into_test_home(
     per-test tmpdir for filesystem isolation, which we generally want
     -- it keeps any test-driven file writes from landing in the
     operator's real home. The downside is that the in-test subprocess
-    ``minds-admin env deploy`` shells out to ``vault`` (reads
+    ``minds env deploy`` shells out to ``vault`` (reads
     ``$HOME/.vault-token``) and ``modal`` (reads ``$HOME/.modal.toml``)
     which then find empty / missing auth files and fail with 403s.
 
@@ -401,7 +401,7 @@ def _mint_ephemeral_env_name() -> DevEnvName:
 
 _MINDS_DEPLOY_TIMEOUT_SECONDS = 15 * 60
 _MINDS_DESTROY_TIMEOUT_SECONDS = 10 * 60
-# ``minds-admin env deploy/destroy`` validate that they're being run from
+# ``minds env deploy/destroy`` validate that they're being run from
 # inside the monorepo (they write a ``.minds-deploy-recover-target-<env>.json``
 # at the repo root). Pytest changes cwd to a tmpdir for each test, so
 # the subprocess inherits that tmpdir and would fail the check. Pin
@@ -410,9 +410,9 @@ _REPO_ROOT_FOR_SUBPROCESS = Path(__file__).resolve().parents[3]
 
 
 def _deploy_ephemeral_env(*, name: DevEnvName, run_id: str) -> EphemeralEnvHandle:
-    """``mkdir -p <env-root>`` + ``uv run minds-admin env deploy``; parse client.toml; return handle.
+    """``mkdir -p <env-root>`` + ``uv run minds env deploy``; parse client.toml; return handle.
 
-    Shells out to the same ``minds-admin env deploy`` CLI an operator would
+    Shells out to the same ``minds env deploy`` CLI an operator would
     run, with the activation env vars set (so the subprocess targets
     ``<name>`` without needing a prior ``eval activate``). Captures
     output to the test's stdout via ``check_output``. On failure,
@@ -430,7 +430,7 @@ def _deploy_ephemeral_env(*, name: DevEnvName, run_id: str) -> EphemeralEnvHandl
     sub_env = build_minds_env_subprocess_env(name)
     logger.info("ephemeral_env: deploying {!r}", name)
     completed = subprocess.run(
-        ["uv", "run", "minds-admin", "env", "deploy"],
+        ["uv", "run", "minds", "env", "deploy"],
         env=sub_env,
         cwd=str(_REPO_ROOT_FOR_SUBPROCESS),
         capture_output=True,
@@ -440,13 +440,13 @@ def _deploy_ephemeral_env(*, name: DevEnvName, run_id: str) -> EphemeralEnvHandl
     )
     if completed.returncode != 0:
         raise MindError(
-            f"`minds-admin env deploy` for {name!r} exited {completed.returncode}.\n"
+            f"`minds env deploy` for {name!r} exited {completed.returncode}.\n"
             f"--- stdout ---\n{completed.stdout}\n--- stderr ---\n{completed.stderr}"
         )
     client_toml = client_config_file(name)
     if not client_toml.is_file():
         raise MindError(
-            f"`minds-admin env deploy` for {name!r} completed but did not write {client_toml}. "
+            f"`minds env deploy` for {name!r} completed but did not write {client_toml}. "
             "This usually means the deploy succeeded the modal side but failed the local-state write step."
         )
     client_config = load_client_config(client_toml)
@@ -458,10 +458,10 @@ def _deploy_ephemeral_env(*, name: DevEnvName, run_id: str) -> EphemeralEnvHandl
 
 
 def _destroy_ephemeral_env(*, name: DevEnvName) -> None:
-    """``uv run minds-admin env destroy`` for ``name``. Idempotent against missing env root.
+    """``uv run minds env destroy`` for ``name``. Idempotent against missing env root.
 
     Returns silently if the env root doesn't exist (already destroyed
-    or never created). Otherwise shells out to ``minds-admin env destroy``
+    or never created). Otherwise shells out to ``minds env destroy``
     which is itself idempotent per-resource. Any non-zero exit raises
     so the caller can log + log a leak warning.
     """
@@ -471,7 +471,7 @@ def _destroy_ephemeral_env(*, name: DevEnvName) -> None:
     sub_env = build_minds_env_subprocess_env(name)
     logger.info("ephemeral_env: destroying {!r}", name)
     completed = subprocess.run(
-        ["uv", "run", "minds-admin", "env", "destroy"],
+        ["uv", "run", "minds", "env", "destroy"],
         env=sub_env,
         cwd=str(_REPO_ROOT_FOR_SUBPROCESS),
         capture_output=True,
@@ -481,6 +481,6 @@ def _destroy_ephemeral_env(*, name: DevEnvName) -> None:
     )
     if completed.returncode != 0:
         raise MindError(
-            f"`minds-admin env destroy` for {name!r} exited {completed.returncode}.\n"
+            f"`minds env destroy` for {name!r} exited {completed.returncode}.\n"
             f"--- stdout ---\n{completed.stdout}\n--- stderr ---\n{completed.stderr}"
         )

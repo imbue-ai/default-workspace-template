@@ -266,7 +266,7 @@ def register(
 
 @main.command()
 @click.option("--connector-url", required=True, help="The tier's connector base URL")
-@click.option("--relay-id", required=True, help="The relay id to retire (from `minds-admin relays list`)")
+@click.option("--relay-id", required=True, help="The relay id to retire (from `mngr imbue_cloud admin relays list`)")
 def deregister(connector_url: str, relay_id: str) -> None:
     """Retire this relay from the connector's fleet inventory (reads MINDS_ADMIN_KEY from the environment)."""
     record = deregister_relay(

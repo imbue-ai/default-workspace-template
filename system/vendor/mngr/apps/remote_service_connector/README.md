@@ -48,25 +48,17 @@ export CLOUDFLARE_ACCOUNT_ID=
 Push everything to Modal and deploy in one shot:
 
 ```bash
-eval "$(uv run minds-admin env activate production)"
-uv run minds-admin env deploy --yes-i-mean-production
+eval "$(uv run minds env activate production)"
+uv run minds env deploy --yes-i-mean-production
 ```
 
-`minds-admin env deploy` reads `apps/minds/imbue/minds/config/envs/production/deploy.toml`
+`minds env deploy` reads `apps/minds/imbue/minds/config/envs/production/deploy.toml`
 for the list of services to push from Vault, creates/updates Modal
 secrets named `<service>-<env>` (e.g. `cloudflare-production` and
-`supertokens-production`), then runs `modal deploy` for the
+`supertokens-production`), then runs `modal deploy` for both the
 connector and the LiteLLM proxy. The push aborts with a diagnostic if
 any Vault entry is missing a key declared by the template (empty
 values are fine -- the deploy skips them when pushing to Modal).
-
-The connector reports errors (unhandled request exceptions, stdlib
-`logger.error` events, and failures in every cron/spawned function) to
-the tier's self-hosted Bugsink instance (an operator-lifecycle VPS,
-provisioned via `apps/observability`) through
-`imbue.modal_app_kit.sentry` -- a no-op until the tier's `sentry`
-Vault entry carries `RSC_SENTRY_DSN`, and disabled entirely by
-`MINDS_SENTRY_DISABLED=1` (see `specs/minds-bugsink-error-tracking.md`).
 
 **cloudflare.sh** holds the Cloudflare API credentials (R2 buckets + ACME DNS-01 TXT records; the tunnel/Access stack is gone):
 
@@ -82,14 +74,14 @@ Vault entry carries `RSC_SENTRY_DSN`, and disabled entirely by
 - `AUTH_WEBSITE_DOMAIN` (required whenever `SUPERTOKENS_CONNECTION_URI` is set): Public base URL embedded in password-reset and email-verification links. Must match the URL Modal assigns to the deployed function. There is no derived fallback: if unset, `init_supertokens()` raises `MissingAuthWebsiteDomainError` at container startup, so populate it in the per-tier `supertokens-<env>-<deploy-id>` Modal secret (the deploy script pushes it from the tier's Vault entry).
 - `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` (optional): override Google OAuth client credentials. Leave blank to inherit from the SuperTokens core's dashboard.
 - `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` (optional): override GitHub OAuth client credentials. Leave blank to inherit from the SuperTokens core's dashboard.
-- `MINDS_ADMIN_KEY` (optional): fixed API key authenticating the operator admin endpoints -- the paid-list CRUD (`/paid/*`), the account admin API (`/admin/accounts/*`), and the on-demand sweeps (`/admin/sweep/*`). Distinct from every other auth path -- the connector accepts it ONLY on those routes and rejects SuperTokens tokens there, and rejects this key on every other route. Leave empty to disable the admin API. The `minds-admin ...` CLI reads the same value from `$MINDS_ADMIN_KEY`. The deprecated `MINDS_PAID_ADMIN_KEY` spelling is still accepted (with a warning) while Vault entries and operator environments migrate.
+- `MINDS_ADMIN_KEY` (optional): fixed API key authenticating the operator admin endpoints -- the paid-list CRUD (`/paid/*`), the account admin API (`/admin/accounts/*`), and the on-demand sweeps (`/admin/sweep/*`). Distinct from every other auth path -- the connector accepts it ONLY on those routes and rejects SuperTokens tokens there, and rejects this key on every other route. Leave empty to disable the admin API. The `mngr imbue_cloud admin ...` CLI reads the same value from `$MINDS_ADMIN_KEY`. The deprecated `MINDS_PAID_ADMIN_KEY` spelling is still accepted (with a warning) while Vault entries and operator environments migrate.
 - `MINDS_PAID_LIST_CACHE_TTL_SECONDS` (optional): how long (seconds) the connector caches a per-email paid-status lookup before re-querying the tables. Unset uses the built-in default (60s); `0` disables caching. Each container caches independently, so a paid-list change propagates within this window.
 
 ### Plans and entitlements (quotas)
 
 Resource access is governed by per-account quotas ("entitlements"), not by a paid/unpaid gate:
 
-- The `plans` table holds the plan definitions ("explorer" and "ally" today). It is **git-owned**: `minds-admin env deploy` writes (overwriting) the `[plans]` blocks from the tier's `deploy.toml` after migrations, so deploy.toml is the source of truth for plan defaults.
+- The `plans` table holds the plan definitions ("explorer" and "ally" today). It is **git-owned**: `minds env deploy` writes (overwriting) the `[plans]` blocks from the tier's `deploy.toml` after migrations, so deploy.toml is the source of truth for plan defaults.
 - The `account_entitlements` table holds one row per account, created lazily on the account's first quota-relevant request. The row's values are copied wholesale from the plan at assignment and are the adjustable source of truth thereafter -- changing a plan's defaults never retroactively changes existing rows.
 - Lazy-creation backfill rule: accounts whose SuperTokens `time_joined` predates the feature-ship cutoff get "ally" when their email is paid-listed; every newer account starts as "explorer".
 - Quota rejections are HTTP 403 with structured detail: `{"code": "quota_exceeded", "entitlement": "<name>", "limit": N, "current": N, "message": "..."}`.
@@ -104,9 +96,9 @@ The paid lists remain, but only as the eligibility input for selecting the "ally
 - `paid_emails` -- exact, full-email matches (e.g. `bob@gmail.com`).
 - `paid_domains` -- exact domain matches on the part after `@` (e.g. `imbue.com` matches `alice@imbue.com` but NOT `alice@eng.imbue.com`).
 
-An email is "paid-listed" when it (or its exact domain) has an active (`is_paid = true`) row in either table. Both tables are managed via the `/paid/*` CRUD endpoints (admin-key authenticated) or the `minds-admin paid` CLI. Rows are never hard-deleted -- "remove" sets `is_paid = false`. Removing an email from the list does NOT automatically demote an existing ally; that is an operator action via the account admin API. The schema is created by `migrations/005_paid_lists.sql`.
+An email is "paid-listed" when it (or its exact domain) has an active (`is_paid = true`) row in either table. Both tables are managed via the `/paid/*` CRUD endpoints (admin-key authenticated) or the `mngr imbue_cloud admin paid` CLI. Rows are never hard-deleted -- "remove" sets `is_paid = false`. Removing an email from the list does NOT automatically demote an existing ally; that is an operator action via the account admin API. The schema is created by `migrations/005_paid_lists.sql`.
 
-On deploy, `minds-admin env deploy` seeds each tier's configured default entries (the `[paid]` block in that tier's `deploy.toml`) into these tables right after migrations. Every tier currently defaults `domains = ["imbue.com"]`. Seeding is **seed-if-absent** (`INSERT ... ON CONFLICT DO NOTHING`), so it sets the initial default but never re-activates an entry an operator soft-removed.
+On deploy, `minds env deploy` seeds each tier's configured default entries (the `[paid]` block in that tier's `deploy.toml`) into these tables right after migrations. Every tier currently defaults `domains = ["imbue.com"]`. Seeding is **seed-if-absent** (`INSERT ... ON CONFLICT DO NOTHING`), so it sets the initial default but never re-activates an entry an operator soft-removed.
 
 ### Cloudflare token requirements for R2
 
@@ -121,7 +113,7 @@ The R2 bucket routes require `CLOUDFLARE_API_TOKEN` to be an **account-owned** t
 
 ### 2. Deploy the Modal app
 
-The previous step (`minds-admin env deploy --yes-i-mean-production`) already
+The previous step (`minds env deploy --yes-i-mean-production`) already
 runs `modal deploy` for the connector as part of the unified deploy
 flow. If you want to re-deploy just the connector (e.g. after editing
 `app.py` without changing any Vault secrets), invoke `modal deploy`
@@ -234,7 +226,7 @@ Destroyed workspaces' backups (bucket + workspace record) are retained for 30 da
 
 ### Account admin API (`/admin/accounts/*`)
 
-Email-addressed operator management of per-account entitlements, authenticated by the same fixed `MINDS_ADMIN_KEY` as the paid-list CRUD (and exposed as `minds-admin account ...`):
+Email-addressed operator management of per-account entitlements, authenticated by the same fixed `MINDS_ADMIN_KEY` as the paid-list CRUD (and exposed as `mngr imbue_cloud admin account ...`):
 
 - `GET /admin/accounts/{email}` -- One account's plan, entitlements, and live usage (lazily creates the row).
 - `POST /admin/accounts/{email}/plan` -- Body `{"plan": "..."}`; always resets to the plan's defaults (the operator's way to wipe manual bumps; skips the ally eligibility check).
