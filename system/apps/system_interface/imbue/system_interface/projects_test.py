@@ -27,7 +27,10 @@ from imbue.system_interface.projects import member_refs_from_content
 from imbue.system_interface.projects import project_content_path
 from imbue.system_interface.projects import projects_showing
 from imbue.system_interface.projects import read_project_content
+from imbue.system_interface.projects import ProjectShortcutError
+from imbue.system_interface.projects import list_projects
 from imbue.system_interface.projects import remove_member
+from imbue.system_interface.projects import set_shortcut_pinned
 from imbue.system_interface.projects import remove_panel_from_all_projects
 from imbue.system_interface.projects import set_last_active_id
 from imbue.system_interface.projects import slugify_project_name
@@ -400,6 +403,62 @@ def test_refs_in_no_project_are_filed_nowhere(tmp_path: Path) -> None:
     assert all_members(tmp_path) == {}
 
 
+def _unpinned(layout_dir: Path, project_id: str) -> tuple[str, ...]:
+    return next(p.unpinned_shortcuts for p in list_projects(layout_dir) if p.project_id == project_id)
+
+
+def test_a_project_shows_every_shortcut_until_one_is_unpinned(tmp_path: Path) -> None:
+    """Absence has to mean the default, or every project written before this would lose its rail."""
+    create_project(tmp_path, "Research", "#12B5A5", 4)
+    assert _unpinned(tmp_path, "research") == ()
+
+
+def test_unpinning_a_shortcut_records_it_against_that_project_only(tmp_path: Path) -> None:
+    # Which starting points a project keeps to hand is a property of THAT
+    # project, which is the whole reason this is stored per project.
+    create_project(tmp_path, "Research", "#12B5A5", 4)
+    create_project(tmp_path, "Coding", "#16A34A", 1)
+
+    set_shortcut_pinned(tmp_path, "research", "terminal", False)
+
+    assert _unpinned(tmp_path, "research") == ("terminal",)
+    assert _unpinned(tmp_path, "coding") == ()
+
+
+def test_pinning_a_shortcut_back_returns_it_to_the_rail(tmp_path: Path) -> None:
+    create_project(tmp_path, "Research", "#12B5A5", 4)
+    set_shortcut_pinned(tmp_path, "research", "files", False)
+    set_shortcut_pinned(tmp_path, "research", "files", True)
+    assert _unpinned(tmp_path, "research") == ()
+
+
+def test_setting_a_shortcut_to_what_it_already_is_changes_nothing(tmp_path: Path) -> None:
+    create_project(tmp_path, "Research", "#12B5A5", 4)
+    set_shortcut_pinned(tmp_path, "research", "chat", False)
+    assert set_shortcut_pinned(tmp_path, "research", "chat", False) == ["chat"]
+    assert _unpinned(tmp_path, "research") == ("chat",)
+
+
+def test_an_unknown_shortcut_is_refused_rather_than_stored(tmp_path: Path) -> None:
+    # Storing one would hide nothing while riding every list response forever.
+    create_project(tmp_path, "Research", "#12B5A5", 4)
+    with pytest.raises(ProjectShortcutError):
+        set_shortcut_pinned(tmp_path, "research", "not-a-shortcut", False)
+    assert _unpinned(tmp_path, "research") == ()
+
+
+def test_a_hand_edited_shortcut_name_is_ignored_on_read(tmp_path: Path) -> None:
+    """The registry is hand-editable, so a name that is not a shortcut must not survive a read."""
+    create_project(tmp_path, "Research", "#12B5A5", 4)
+    set_shortcut_pinned(tmp_path, "research", "browser", False)
+    meta_path = tmp_path / "projects_meta.json"
+    meta = json.loads(meta_path.read_text())
+    meta["project_by_id"]["research"]["unpinned_shortcuts"] = ["browser", "made-up", 7]
+    meta_path.write_text(json.dumps(meta))
+
+    assert _unpinned(tmp_path, "research") == ("browser",)
+
+
 def test_remove_member_leaves_other_projects_alone(tmp_path: Path) -> None:
     create_project(tmp_path, "Research", "#12B5A5", 4)
     create_project(tmp_path, "Coding", "#16A34A", 1)
@@ -661,9 +720,7 @@ def test_remove_panel_matches_both_the_given_id_and_the_ref(tmp_path: Path) -> N
     # panel id catches the first and the ref-resolution catches the second,
     # without double-stripping a panel that matches both.
     ref = "terminal:terminal-1"
-    write_project_content(
-        tmp_path, DEFAULT_PROJECT_ID, _content_with_panels("terminal-session-terminal-1", "chat-a")
-    )
+    write_project_content(tmp_path, DEFAULT_PROJECT_ID, _content_with_panels("terminal-session-terminal-1", "chat-a"))
     everything_content = _content_with_panels("iframe-terminal-1755000000003", "chat-a")
     everything_content["panelParams"]["iframe-terminal-1755000000003"] = {"terminalSessionName": "terminal-1"}
     write_project_content(tmp_path, EVERYTHING_VIEW_ID, everything_content)

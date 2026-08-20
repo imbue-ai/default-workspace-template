@@ -3415,6 +3415,7 @@ def test_create_project_slugifies_and_registers(
         "glyph": 6,
         "has_content": False,
         "members": [],
+        "unpinned_shortcuts": [],
     }
     list_response = client.get("/api/projects")
     assert [project["project_id"] for project in list_response.get_json()["projects"]] == [
@@ -3551,6 +3552,7 @@ def test_update_project_settings_keeps_id_content_and_members(
         "glyph": 7,
         "has_content": True,
         "members": ["terminal:terminal-1"],
+        "unpinned_shortcuts": [],
     }
     assert client.get("/api/projects/alpha").get_json()["layout"] == layout_data
     unknown = client.post("/api/projects/gone/settings", json={"name": "Gone", "color": "#F0603A", "glyph": 0})
@@ -3737,6 +3739,46 @@ def test_add_member_files_a_ref_another_project_already_shows(
         project["project_id"]: project["members"] for project in client.get("/api/projects").get_json()["projects"]
     }
     assert members_by_id == {"project-1": ["service:web"], "alpha": ["service:web"]}
+
+
+def test_set_project_shortcut_moves_it_between_the_rail_and_all_apps(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unpinning records the shortcut; pinning it back clears it. Idempotent either way."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+
+    unpin = client.post("/api/projects/project-1/shortcuts", json={"shortcut": "terminal", "is_pinned": False})
+    assert unpin.status_code == 200
+    assert unpin.get_json() == {"project_id": "project-1", "unpinned_shortcuts": ["terminal"]}
+
+    listed = next(p for p in client.get("/api/projects").get_json()["projects"] if p["project_id"] == "project-1")
+    assert listed["unpinned_shortcuts"] == ["terminal"]
+
+    again = client.post("/api/projects/project-1/shortcuts", json={"shortcut": "terminal", "is_pinned": False})
+    assert again.get_json()["unpinned_shortcuts"] == ["terminal"]
+
+    repin = client.post("/api/projects/project-1/shortcuts", json={"shortcut": "terminal", "is_pinned": True})
+    assert repin.get_json() == {"project_id": "project-1", "unpinned_shortcuts": []}
+
+
+def test_set_project_shortcut_refuses_a_bad_body_or_an_unknown_target(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    url = "/api/projects/project-1/shortcuts"
+
+    assert client.post(url, json={"shortcut": "", "is_pinned": False}).status_code == 400
+    assert client.post(url, json={"shortcut": "terminal"}).status_code == 400
+    assert client.post(url, json={"shortcut": "terminal", "is_pinned": "no"}).status_code == 400
+    # Not a shortcut: refused rather than stored, since it would hide nothing
+    # while riding every list response.
+    assert client.post(url, json={"shortcut": "made-up", "is_pinned": False}).status_code == 400
+    assert (
+        client.post("/api/projects/gone/shortcuts", json={"shortcut": "terminal", "is_pinned": False}).status_code
+        == 404
+    )
 
 
 def test_remove_member_unfiles_it_without_touching_the_object(
@@ -4456,6 +4498,7 @@ def test_project_mutations_broadcast_to_every_client(app: Flask) -> None:
         "glyph": 2,
         "has_content": False,
         "members": [],
+        "unpinned_shortcuts": [],
     }
 
     assert client.post("/api/projects/alpha", json={"layout": {}, "client_id": "client-1"}).status_code == 200

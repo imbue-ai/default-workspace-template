@@ -1273,6 +1273,44 @@ def _broadcast_members_changed(project_ids: list[str]) -> None:
     get_state().broadcaster.broadcast({"type": "project_members_changed", "project_ids": project_ids})
 
 
+def _set_project_shortcut_endpoint(project_id: str) -> Response:
+    """Pin one of the rail's built-in shortcut rows into this project, or unpin it.
+
+    Which starting points a project keeps to hand is a property of that
+    project, so this is stored per project rather than per user. It moves where
+    the row is offered -- the rail when pinned, the All apps menu when not --
+    and changes nothing about what clicking it does.
+
+    Not a member call: none of the four is an object with a ref. "chat" is a
+    create, and the terminal and browser services are fleets reached by making
+    a session rather than by opening the service, so there is no membership
+    here to add or drop and this rides its own field instead.
+    """
+    layout_dir = _primary_agent_layout_dir()
+    if layout_dir is None:
+        error = ErrorResponse(detail="No primary agent configured for this workspace")
+        return _json_response(error.model_dump(), status_code=500)
+    body = _parse_json_object_body()
+    if isinstance(body, Response):
+        return body
+    shortcut = body.get("shortcut")
+    is_pinned = body.get("is_pinned")
+    if not isinstance(shortcut, str) or not shortcut.strip():
+        return _json_response(ErrorResponse(detail="'shortcut' must be a non-empty string").model_dump(), 400)
+    if not isinstance(is_pinned, bool):
+        return _json_response(ErrorResponse(detail="'is_pinned' must be a boolean").model_dump(), 400)
+    try:
+        unpinned = projects.set_shortcut_pinned(layout_dir, project_id, shortcut.strip(), is_pinned)
+    except projects.ProjectNotFoundError:
+        return _project_not_found_response(project_id)
+    except projects.ProjectShortcutError as e:
+        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
+    # The same broadcast a membership change rides: both move what a project's
+    # rail shows, and a client with the project unmounted still has to catch up.
+    _broadcast_members_changed([project_id])
+    return _json_response({"project_id": project_id, "unpinned_shortcuts": unpinned})
+
+
 def _add_project_member_endpoint(project_id: str) -> Response:
     """Add one ref to this project's member list.
 
@@ -2414,9 +2452,7 @@ def _default_view_id(layout_dir: Path | None) -> str | None:
     the best single answer there is. None only without a registry to fall back
     on (dev/test with no layout dir and no agreeing client).
     """
-    distinct_views = {
-        info["active_layout_slug"] for info in get_state().broadcaster.get_connected_client_infos()
-    }
+    distinct_views = {info["active_layout_slug"] for info in get_state().broadcaster.get_connected_client_infos()}
     if len(distinct_views) == 1:
         return next(iter(distinct_views))
     if layout_dir is None:
@@ -2818,6 +2854,9 @@ def create_application(state: SystemInterfaceState) -> Flask:
     )
     application.add_url_rule(
         "/api/projects/<project_id>/members/remove", view_func=_remove_project_member_endpoint, methods=["POST"]
+    )
+    application.add_url_rule(
+        "/api/projects/<project_id>/shortcuts", view_func=_set_project_shortcut_endpoint, methods=["POST"]
     )
     application.add_url_rule("/api/projects/<project_id>/delete", view_func=_delete_project_endpoint, methods=["POST"])
     application.add_url_rule(

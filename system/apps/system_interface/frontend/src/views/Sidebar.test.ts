@@ -181,6 +181,7 @@ function makeAttrs(overrides: Partial<SidebarAttrs> = {}): SidebarAttrs {
     onOpenTabType: vi.fn(),
     onOpenApp: vi.fn(),
     onSetAppPinned: vi.fn(),
+    onSetShortcutPinned: vi.fn(),
     onOpenRow: vi.fn(),
     onRefreshRow: vi.fn(),
     onRenameRow: vi.fn(),
@@ -654,6 +655,51 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
     redraw();
 
     expect(root.querySelector(".project-rail-remove")).toBeNull();
+  });
+
+  it("drops a shortcut this project unpinned, and keeps the rest", () => {
+    const unpinned: ProjectInfo = { ...PROJECT_A, unpinned_shortcuts: ["terminal"] };
+    const { root, redraw } = mountSidebar(
+      makeAttrs({ projects: [unpinned, PROJECT_B], activeViewId: unpinned.project_id }),
+    );
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    const labels = Array.from(root.querySelectorAll(".project-rail-shortcut")).map((el) => el.textContent);
+    expect(labels).not.toContain("Terminal");
+    expect(labels).toContain("Chat");
+  });
+
+  it("shows all four until a project unpins one", () => {
+    // Absence has to mean the default: every project shows the full set until
+    // it says otherwise.
+    const { root, redraw } = mountSidebar(makeAttrs());
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    const labels = Array.from(root.querySelectorAll(".project-rail-shortcut")).map((el) => el.textContent);
+    expect(labels).toEqual(["Chat", "File Viewer", "Browser", "Terminal"]);
+  });
+
+  it("reports an unpin without starting the shortcut", () => {
+    const attrs = makeAttrs();
+    const { root, redraw } = mountSidebar(attrs);
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    click(root.querySelector('button[aria-label="Unpin Chat from this project"]'));
+    expect(attrs.onSetShortcutPinned).toHaveBeenCalledWith("chat", false);
+    expect(attrs.onOpenTabType).not.toHaveBeenCalled();
+  });
+
+  it("offers no unpin in Everything, which has nowhere to record one", () => {
+    const { root, redraw } = mountSidebar(makeAttrs({ activeViewId: EVERYTHING_VIEW_ID }));
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    expect(root.querySelector(".project-rail-shortcut-unpin")).toBeNull();
+    const labels = Array.from(root.querySelectorAll(".project-rail-shortcut")).map((el) => el.textContent);
+    expect(labels).toEqual(["Chat", "File Viewer", "Browser", "Terminal"]);
   });
 
   it("offers no Remove from project in Everything, which is the home", () => {

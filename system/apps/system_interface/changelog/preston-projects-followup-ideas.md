@@ -41,3 +41,9 @@ One gap is known and deliberate: in the desktop app the rail does not fold when 
 **Project settings is display metadata only** — name, colour, squiggle, and the delete button. Removing an object from a project is a verb on the object, so it lives in the object's own menu on both surfaces.
 
 **A workspace that is not answering says so.** A 502, 503 or 504 comes from the tunnel in front of the workspace, not from the workspace itself: the request reached no endpoint and nothing changed. That used to surface as a bare "HTTP 503" on whatever had just been clicked, which read as that feature being broken rather than the workspace being briefly away.
+
+**The rail's four built-in rows can be put away, per project.** Chat, File Viewer, Browser and Terminal now carry the same pin affordance a pinned app does: unpin one and it moves into the All apps menu, pin it back and it returns to the rail. What each row does is unchanged — this moves where it is offered, nothing else.
+
+Which starting points a project keeps to hand belongs to that project, so it is stored per project rather than per user, and recorded as the rows taken out rather than the rows kept: a project that has never touched this shows all four, which is every project until it says otherwise. Everything has no project entry to record against and always shows the full set.
+
+Unlike an app, none of these four is an object with a member ref — a chat is a create, and the terminal and browser services are fleets reached by making a session rather than by opening the service — so this rides its own field rather than the member list.

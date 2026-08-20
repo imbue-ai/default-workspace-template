@@ -44,6 +44,7 @@ import type { AppEntry } from "../models/AgentManager";
 import { getApps } from "../models/AgentManager";
 import { displayNameForMember } from "../models/MemberTitles";
 import { memberRef } from "../models/Projects";
+import type { ShortcutName } from "../models/Projects";
 import { appIconMarkup } from "./appIcon";
 import { hoverTooltipAttrs } from "./hoverTooltip";
 import { icon } from "./icons";
@@ -131,6 +132,18 @@ export function unpinnedApps(apps: readonly AppEntry[], pinnedAppNames: readonly
   return apps.filter((app) => !pinnedNames.has(app.name));
 }
 
+/** One unpinned built-in shortcut, as the rail hands it over to be listed. */
+export interface UnpinnedShortcutRow {
+  shortcut: ShortcutName;
+  label: string;
+  // Trusted markup, built by the rail from its own glyph table.
+  iconMarkup: string;
+  // Null for a shortcut with nothing to start (the file viewer, which no app
+  // backs yet): the row still lists, so it can be pinned back, but it does not
+  // pretend to open anything.
+  isOpenable: boolean;
+}
+
 export interface AllAppsPickerAttrs {
   // The active project's display name. Only read to tell whether there is a
   // project to pin into at all (null under Everything, which pins nothing and
@@ -152,6 +165,16 @@ export interface AllAppsPickerAttrs {
   // it lines up with the rail's own `onSetAppPinned`, which this ultimately
   // reaches.
   onTogglePin: (app: AppEntry, wanted: boolean) => void;
+  // The rail's built-in shortcut rows this project has unpinned, ready to
+  // render here. Their labels and glyphs are the rail's own vocabulary, so the
+  // rail hands them over already resolved rather than this file learning what
+  // a "chat" row looks like. Empty under Everything, which unpins nothing.
+  unpinnedShortcuts: readonly UnpinnedShortcutRow[];
+  // Start whatever this shortcut starts -- exactly what its rail row does, the
+  // point being that unpinning moves where the row lives and not what it does.
+  onOpenShortcut: (shortcut: ShortcutName) => void;
+  // Put this shortcut back in the rail.
+  onPinShortcut: (shortcut: ShortcutName) => void;
 }
 
 export function AllAppsPicker(): m.Component<AllAppsPickerAttrs> {
@@ -169,6 +192,45 @@ export function AllAppsPicker(): m.Component<AllAppsPickerAttrs> {
    *  collapses an already-pinned row out of the list instead of dropping it
    *  outright (see `fadingNames`); it is only ever true when `isPinnable` is,
    *  since Everything's rows never leave this popover's list to begin with. */
+  /** One unpinned built-in shortcut. Same shape as an app row on purpose: from
+   *  here they are both "a starting point this project does not keep in its
+   *  rail", and the only difference is which callback the pin goes to. */
+  function shortcutRow(row: UnpinnedShortcutRow, attrs: AllAppsPickerAttrs): m.Vnode {
+    return m(
+      "div",
+      {
+        key: `shortcut:${row.shortcut}`,
+        class:
+          "project-rail-app project-rail-app-shortcut group flex h-8 w-full items-center gap-2 px-3 text-left " +
+          "transition-all duration-150 " +
+          (row.isOpenable ? "cursor-pointer text-text-primary hover:bg-bg-hover" : "text-text-faint"),
+        onclick: row.isOpenable ? () => attrs.onOpenShortcut(row.shortcut) : undefined,
+      },
+      [
+        m("span", { class: "flex shrink-0 items-center text-text-faint" }, m.trust(row.iconMarkup)),
+        m("span", { class: "min-w-0 flex-1 truncate" }, row.label),
+        m(
+          "button",
+          {
+            type: "button",
+            class:
+              "project-rail-pin flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded " +
+              "text-text-faint opacity-0 hover:text-text-primary focus-visible:opacity-100 " +
+              "group-hover:opacity-100",
+            "aria-label": `Pin ${row.label}`,
+            ...hoverTooltipAttrs("Pin it back to this project's rail. What it opens does not change."),
+            onclick: (event: MouseEvent) => {
+              // The row underneath starts the thing; the pin toggle must not.
+              event.stopPropagation();
+              attrs.onPinShortcut(row.shortcut);
+            },
+          },
+          m.trust(pinIcon()),
+        ),
+      ],
+    );
+  }
+
   function appRow(app: AppEntry, isPinnable: boolean, isFadingOut: boolean, attrs: AllAppsPickerAttrs): m.Vnode {
     // What the row reads, and what its control is labeled after: an app named
     // by the user is named that here too, or this popover would be the one
@@ -242,6 +304,14 @@ export function AllAppsPicker(): m.Component<AllAppsPickerAttrs> {
               visibleApps,
               attrs.pinnedAppNames.filter((name) => !fadingNames.has(name)),
             );
+      // The unpinned built-in rows list above the apps: they are the machine's
+      // own starting points, and they are what a visit here is for when one of
+      // them has been put away. Filtered on the same query, so a search reaches
+      // everything the popover offers rather than only half of it.
+      const needle = filterText.trim().toLowerCase();
+      const shortcutRows = attrs.unpinnedShortcuts.filter(
+        (row) => needle === "" || row.label.toLowerCase().includes(needle),
+      );
 
       // Three distinct reasons the list can be empty, each with its own fix:
       // the machine runs nothing, the query matched nothing, or (new now that
@@ -279,17 +349,24 @@ export function AllAppsPicker(): m.Component<AllAppsPickerAttrs> {
                 // `visibleApps`: a pinned app's row is not shown here (it
                 // already has one in the rail), so Enter must not reach past
                 // what is actually on screen to open it.
-                if (event.key === "Enter" && rows.length > 0) attrs.onOpenApp(rows[0]);
+                if (event.key !== "Enter") return;
+                // The top row on screen, which may be a built-in one now that
+                // those list here too -- Enter must open what the eye is on.
+                const topShortcut = shortcutRows[0];
+                if (topShortcut !== undefined) {
+                  if (topShortcut.isOpenable) attrs.onOpenShortcut(topShortcut.shortcut);
+                  return;
+                }
+                if (rows.length > 0) attrs.onOpenApp(rows[0]);
               },
             })
           : null,
-        rows.length === 0
+        rows.length === 0 && shortcutRows.length === 0
           ? m("div", { class: "px-3 py-2 text-[13px] text-text-faint" }, emptyMessage)
-          : m(
-              "div",
-              { class: "min-h-0 flex-1 overflow-y-auto" },
-              rows.map((app) => appRow(app, projectName !== null, fadingNames.has(app.name), attrs)),
-            ),
+          : m("div", { class: "min-h-0 flex-1 overflow-y-auto" }, [
+              ...shortcutRows.map((row) => shortcutRow(row, attrs)),
+              ...rows.map((app) => appRow(app, projectName !== null, fadingNames.has(app.name), attrs)),
+            ]),
       ]);
     },
   };
