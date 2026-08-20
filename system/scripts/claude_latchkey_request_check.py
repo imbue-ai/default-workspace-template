@@ -35,7 +35,9 @@ from tk_command_parsing.parser import CommandSegment, parse_command
 # action, and the POST method flag that distinguishes filing a request from
 # reading the queue. The host is the transcript parser's constant verbatim
 # (`PERMISSION_REQUEST_HOST` in
-# system/apps/system_interface/.../harnesses/tool_output.py). The method match is
+# system/apps/system_interface/imbue/system_interface/harnesses/tool_output.py --
+# the reader this gate exists for; the wrapper names the rest of that seam). The
+# method match is
 # deliberately a SUPERSET of that parser's (`-X\s*POST|--request\s*POST` over the
 # raw input): it is matched token-wise and also accepts the `=` form, so a
 # spelling like `--request=POST` -- which curl honors and the parser's regex

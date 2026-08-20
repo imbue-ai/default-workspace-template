@@ -13,6 +13,17 @@ needed the identical behavior):
   ``permission_request`` field), because the object routinely runs past the output cap and
   a mid-object cut would leave the card nothing to read.
 
+  Both readers assume a SHAPE the agent has to hold up its end of: one filing per tool
+  call (only the first echoed object here is read, and one card is rendered per call),
+  with the echo actually in that call's own result. A PreToolUse gate is what holds the
+  agent to it -- ``system/scripts/claude_latchkey_request_standalone.sh`` and its checker
+  ``claude_latchkey_request_check.py``, which every harness runs (see
+  ``system/scripts/POLICY_HOOKS.md``, hook 3). The gate exists FOR these two functions and
+  copies ``PERMISSION_REQUEST_HOST`` from here, so a change to what counts as a request
+  call, or to how many of them a result can carry, means revisiting the gate in the same
+  breath -- otherwise it goes on blocking a shape this file now handles, or waving through
+  one it does not.
+
 - **tk step decoration.** tk lifecycle commands print machine-readable decoration on
   stdout (``Updated <id> -> <status>``, ``tk-step <id> title|summary: ...``) that the chat
   progress view reads back from the transcript. Those lines must survive truncation (a tk
