@@ -35,11 +35,14 @@ import {
   chatAgentIdFromRef,
   createProject,
   isEverythingView,
+  isShortcutPinned,
+  projectForViewId,
   searchMembers,
   serviceNameFromRef,
 } from "../models/Projects";
 import type { MatchRange, MemberKind, ProjectInfo } from "../models/Projects";
 import { AllAppsPicker, appDisplayName, pickableApps } from "./AllAppsPicker";
+import type { UnpinnedShortcutRow } from "./AllAppsPicker";
 import { appIconMarkup, serviceIconMarkup } from "./appIcon";
 import { hoverTooltipAttrs } from "./hoverTooltip";
 import { icon } from "./icons";
@@ -103,6 +106,9 @@ export interface SidebarAttrs {
   // stops the app and touches no other project. Never called on Everything,
   // which pins nothing.
   onSetAppPinned: (app: AppEntry, isPinned: boolean) => void;
+  // Move one built-in shortcut row between this project's rail and its All apps
+  // menu. Project-scoped, so it is stored against the project rather than here.
+  onSetShortcutPinned: (shortcut: QuickAddTabType, isPinned: boolean) => void;
   // Focus this row's existing tab, or open the object into the active pane.
   onOpenRow: (row: SidebarTabRow) => void;
   // Reload what this row is showing when it has an open tab; opens it fresh
@@ -828,6 +834,9 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     label: string;
     tooltip: string;
     onclick: (() => void) | null;
+    // Move this row into the All apps menu. Null where there is nowhere to
+    // record that: Everything has no project entry to store it against.
+    onUnpin: (() => void) | null;
   }): m.Vnode {
     // Beside the row rather than beneath it: the rail is a vertical list, and a
     // tooltip centered under one row covers the next one down -- which is
@@ -836,19 +845,47 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     const isDisabled = options.onclick === null;
     return m(
       "span",
-      { key: options.key, class: "flex w-full shrink-0", ...hoverTooltipAttrs(options.tooltip, "right") },
-      m(
-        "button",
-        {
-          type: "button",
-          disabled: isDisabled,
-          class:
-            `project-rail-shortcut ${ROW_CLASS} ` +
-            (isDisabled ? "cursor-default text-text-faint opacity-60" : "text-text-primary hover:bg-bg-hover"),
-          onclick: options.onclick ?? undefined,
-        },
-        [m("span", { class: ICON_BOX_CLASS }, m.trust(options.iconMarkup)), railLabel(options.label, "")],
-      ),
+      {
+        key: options.key,
+        // The unpin is a SIBLING of the shortcut rather than a child: both are
+        // real buttons, and a button inside a button is not markup a browser
+        // will keep. (`pinnedAppRow` below solves the same problem the other
+        // way -- a clickable div -- because there the whole row is the target.)
+        class: "project-rail-shortcut-slot group flex w-full shrink-0 items-center",
+        ...hoverTooltipAttrs(options.tooltip, "right"),
+      },
+      [
+        m(
+          "button",
+          {
+            type: "button",
+            disabled: isDisabled,
+            class:
+              `project-rail-shortcut ${ROW_CLASS} min-w-0 flex-1 ` +
+              (isDisabled ? "cursor-default text-text-faint opacity-60" : "text-text-primary hover:bg-bg-hover"),
+            onclick: options.onclick ?? undefined,
+          },
+          [m("span", { class: ICON_BOX_CLASS }, m.trust(options.iconMarkup)), railLabel(options.label, "")],
+        ),
+        options.onUnpin === null
+          ? null
+          : m(
+              "button",
+              {
+                type: "button",
+                class:
+                  "project-rail-shortcut-unpin mr-1 flex h-5 w-5 shrink-0 cursor-pointer items-center " +
+                  "justify-center rounded text-text-faint opacity-0 hover:bg-bg-hover hover:text-text-primary " +
+                  "focus-visible:opacity-100 group-hover:opacity-100",
+                "aria-label": `Unpin ${options.label} from this project`,
+                onclick: (event: MouseEvent) => {
+                  event.stopPropagation();
+                  options.onUnpin?.();
+                },
+              },
+              m.trust(railIcon("pin", ACTION_ICON_SIZE)),
+            ),
+      ],
     );
   }
 
@@ -910,15 +947,37 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     );
   }
 
+  /** The built-in rows this project has put away, ready for the All apps menu.
+   *  Empty under Everything, which has no project entry to unpin against. */
+  function unpinnedShortcutRows(attrs: SidebarAttrs): UnpinnedShortcutRow[] {
+    if (isEverythingView(attrs.activeViewId)) return [];
+    const project = projectForViewId(attrs.projects, attrs.activeViewId);
+    if (project === null) return [];
+    return SHORTCUT_ROWS.filter((row) => !isShortcutPinned(project, row.tabType)).map((row) => ({
+      shortcut: row.tabType,
+      label: row.label,
+      iconMarkup: railIcon(row.tabType, ROW_ICON_SIZE),
+      // The file viewer has nothing to open yet, so its row lists (to be pinned
+      // back) without pretending otherwise.
+      isOpenable: row.tabType !== "files",
+    }));
+  }
+
   function shortcuts(attrs: SidebarAttrs, shortcutApps: readonly AppEntry[]): m.Vnode {
+    // Everything has no project entry, so there is nowhere to record an unpin
+    // and all four rows stay: it is the home, and it shows every starting point
+    // the machine has.
+    const project = projectForViewId(attrs.projects, attrs.activeViewId);
+    const canUnpin = !isEverythingView(attrs.activeViewId) && project !== null;
     return m("div", { class: "min-h-0 shrink overflow-x-hidden overflow-y-auto" }, [
-      ...SHORTCUT_ROWS.map((row) =>
+      ...SHORTCUT_ROWS.filter((row) => !canUnpin || isShortcutPinned(project, row.tabType)).map((row) =>
         shortcutRow({
           key: `tab-type:${row.tabType}`,
           iconMarkup: railIcon(row.tabType, ROW_ICON_SIZE),
           label: row.label,
           tooltip: row.tabType === "files" ? FILE_VIEWER_TOOLTIP : SHORTCUT_TOOLTIPS[row.tabType],
           onclick: row.tabType === "files" ? null : () => pick(() => attrs.onOpenTabType(row.tabType)),
+          onUnpin: canUnpin ? () => attrs.onSetShortcutPinned(row.tabType, false) : null,
         }),
       ),
       ...shortcutApps.map((app) => pinnedAppRow(app, attrs)),
@@ -1442,7 +1501,17 @@ export function Sidebar(): m.Component<SidebarAttrs> {
       children: m(AllAppsPicker, {
         projectName,
         pinnedAppNames,
+        // The rail owns what a built-in row is called and what it looks like,
+        // so it hands those over resolved rather than the popover learning a
+        // second copy of the vocabulary.
+        unpinnedShortcuts: unpinnedShortcutRows(attrs),
         onOpenApp: (app: AppEntry) => pick(() => attrs.onOpenApp(app)),
+        onOpenShortcut: (shortcut) => pick(() => attrs.onOpenTabType(shortcut)),
+        onPinShortcut: (shortcut) => {
+          // Pinning is not picking, as with an app: the popover stays open so
+          // several rows can be put back in one visit.
+          attrs.onSetShortcutPinned(shortcut, true);
+        },
         onTogglePin: (app: AppEntry, wanted: boolean) => {
           // Pinning is not picking: the popover stays open so several apps can
           // be pinned in one visit.

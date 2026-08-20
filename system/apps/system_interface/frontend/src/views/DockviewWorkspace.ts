@@ -151,11 +151,13 @@ import {
   filingProjectForAgentOp,
   projectForViewId,
   removeMember,
+  setShortcutPinned,
   removePanelFromAllProjects,
   shareMember,
   type MachineInventory,
   type ProjectInfo,
 } from "../models/Projects";
+import type { ShortcutName } from "../models/Projects";
 
 const AUTOSAVE_DEBOUNCE_MS = 1500;
 
@@ -1995,6 +1997,33 @@ function removeMemberRefWithAlert(ref: string): void {
  * app keeps running, it stays in every other project showing it, and it stays
  * in Everything. Everything itself pins nothing, so neither verb applies there.
  */
+/**
+ * Move one of the rail's built-in shortcut rows between the active project's
+ * rail and its All apps menu.
+ *
+ * The sibling of ``setAppPinnedInView`` for the four rows that are NOT apps:
+ * none of them has a member ref -- "chat" is a create, and the terminal and
+ * browser services are fleets reached by making a session rather than by
+ * opening the service -- so this rides the project's own stored field instead
+ * of its member list. What the row DOES is unchanged either way; only where it
+ * is offered moves.
+ */
+export function setShortcutPinnedInView(shortcut: ShortcutName, isPinned: boolean): void {
+  const viewId = mountedViewId;
+  // Everything has no project entry to record this against, and shows every
+  // starting point the machine has.
+  if (viewId === null || isEverythingView(viewId)) return;
+  void (async () => {
+    try {
+      await setShortcutPinned(viewId, shortcut, isPinned);
+      await refreshProjectsList();
+    } catch (e) {
+      alert(`Failed to ${isPinned ? "pin" : "unpin"} ${shortcut}: ${(e as Error).message}`);
+    }
+    m.redraw();
+  })();
+}
+
 export function setAppPinnedInView(app: AppEntry, isPinned: boolean): void {
   const ref = memberRef("app", app.name);
   if (!isPinned) {

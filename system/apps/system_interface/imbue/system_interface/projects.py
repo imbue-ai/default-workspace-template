@@ -134,6 +134,12 @@ class ProjectMemberRefError(ValueError):
     ...
 
 
+class ProjectShortcutError(ValueError):
+    """Raised when a shortcut name is not one of the rail's built-in rows."""
+
+    ...
+
+
 class ProjectDeviceError(ValueError):
     """Raised when a device kind is not one of DEVICE_KINDS."""
 
@@ -148,6 +154,14 @@ def validate_device(device: str) -> str:
     return device
 
 
+# The rail's four built-in shortcut rows. Unlike an app, none of these is an
+# object with a member ref -- "chat" is a create, and the terminal and browser
+# services are fleets reached by making a session rather than by opening the
+# service -- so which of them a project shows cannot be membership and is
+# recorded here instead.
+SHORTCUT_NAMES: Final[frozenset[str]] = frozenset({"chat", "files", "browser", "terminal"})
+
+
 class ProjectInfo(FrozenModel):
     """One project as listed to clients."""
 
@@ -157,6 +171,13 @@ class ProjectInfo(FrozenModel):
     glyph: int = Field(description="Index into the frontend's squiggle glyph table")
     has_content: bool = Field(description="Whether a saved content file exists yet")
     members: tuple[str, ...] = Field(description="Panel refs this project shows, open or backgrounded")
+    # Recorded as the ones taken OUT rather than the ones kept, so that an entry
+    # with no such field -- every project written before this existed, and every
+    # one created since -- shows all four. The default is the whole set, and
+    # absence has to mean the default or the registry would need migrating.
+    unpinned_shortcuts: tuple[str, ...] = Field(
+        default=(), description="Built-in shortcut rows this project has unpinned into its All apps menu"
+    )
 
 
 @pure
@@ -246,6 +267,21 @@ def _project_entry(name: str, color: str, glyph: int, members: list[str]) -> _Pr
         "glyph": _validated_glyph(glyph),
         "members": list(members),
     }
+
+
+@pure
+def _entry_unpinned_shortcuts(entry: Mapping[str, Any]) -> list[str]:
+    """The shortcut rows one entry has unpinned, tolerating a hand-edit.
+
+    Filtered against ``SHORTCUT_NAMES`` rather than trusted: a name that is not
+    a shortcut could otherwise hide nothing while still riding every list
+    response, and a shortcut renamed in a later version would strand its old
+    name here forever.
+    """
+    unpinned = entry.get("unpinned_shortcuts")
+    if not isinstance(unpinned, list):
+        return []
+    return [name for name in unpinned if isinstance(name, str) and name in SHORTCUT_NAMES]
 
 
 @pure
@@ -489,6 +525,7 @@ def _project_info(layout_dir: Path, project_id: str, entry: Mapping[str, Any]) -
         glyph=glyph if isinstance(glyph, int) else DEFAULT_PROJECT_GLYPH,
         has_content=any(project_content_path(layout_dir, project_id, device).exists() for device in DEVICE_KINDS),
         members=tuple(_entry_members(entry)),
+        unpinned_shortcuts=tuple(_entry_unpinned_shortcuts(entry)),
     )
 
 
@@ -637,6 +674,40 @@ def add_member(layout_dir: Path, project_id: str, ref: str) -> None:
             return
         entry["members"] = [*members, member_ref]
         _write_meta_unlocked(layout_dir, meta)
+
+
+def set_shortcut_pinned(layout_dir: Path, project_id: str, shortcut: str, is_pinned: bool) -> list[str]:
+    """Pin one built-in shortcut row into ``project_id``'s rail, or unpin it out.
+
+    This moves where the row is offered and changes nothing about what it does:
+    pinned it sits in the rail, unpinned it moves into the All apps menu, and
+    clicking it starts the same thing either way.
+
+    It is project-scoped on purpose -- which starting points a project keeps to
+    hand is a property of that project -- and stored as the unpinned set, so a
+    project that has never touched this shows all four. Idempotent; returns the
+    resulting unpinned set. An unknown project id raises ProjectNotFoundError,
+    an unknown shortcut ProjectShortcutError.
+    """
+    if shortcut not in SHORTCUT_NAMES:
+        known = ", ".join(sorted(SHORTCUT_NAMES))
+        raise ProjectShortcutError(f"Unknown shortcut {shortcut!r} (known shortcuts: {known})")
+    with _projects_lock:
+        meta = _read_meta_unlocked(layout_dir)
+        entry = meta["project_by_id"].get(project_id)
+        if entry is None:
+            raise ProjectNotFoundError(project_id)
+        unpinned = _entry_unpinned_shortcuts(entry)
+        is_currently_pinned = shortcut not in unpinned
+        if is_currently_pinned == is_pinned:
+            return unpinned
+        if is_pinned:
+            unpinned = [name for name in unpinned if name != shortcut]
+        else:
+            unpinned = [*unpinned, shortcut]
+        entry["unpinned_shortcuts"] = unpinned
+        _write_meta_unlocked(layout_dir, meta)
+        return unpinned
 
 
 def remove_member(layout_dir: Path, project_id: str, ref: str) -> None:

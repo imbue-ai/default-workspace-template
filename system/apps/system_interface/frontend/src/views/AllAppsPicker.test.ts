@@ -20,6 +20,8 @@ vi.mock("../models/AgentManager", () => ({
 import type { AppEntry } from "../models/AgentManager";
 import { applyMemberTitleChange } from "../models/MemberTitles";
 import { AllAppsPicker, filterApps, pickableApps, unpinnedApps } from "./AllAppsPicker";
+import type { UnpinnedShortcutRow } from "./AllAppsPicker";
+import type { ShortcutName } from "../models/Projects";
 
 // Deliberately unsorted, and deliberately including the chrome UI plus the two
 // fleet services, all three of which the popover hides.
@@ -99,8 +101,11 @@ interface RenderOptions {
   // poses Everything, which pins nothing.
   projectName?: string | null;
   pinnedAppNames?: string[];
+  unpinnedShortcuts?: UnpinnedShortcutRow[];
   onOpenApp?: (app: AppEntry) => void;
   onTogglePin?: (app: AppEntry, wanted: boolean) => void;
+  onOpenShortcut?: (shortcut: ShortcutName) => void;
+  onPinShortcut?: (shortcut: ShortcutName) => void;
 }
 
 /** A stand-in vnode carrying just the attrs. The view reads nothing else off
@@ -110,8 +115,11 @@ function makeVnode(options: RenderOptions): Parameters<PickerView>[0] {
     attrs: {
       projectName: options.projectName === undefined ? "Newsreader" : options.projectName,
       pinnedAppNames: options.pinnedAppNames ?? [],
+      unpinnedShortcuts: options.unpinnedShortcuts ?? [],
       onOpenApp: options.onOpenApp ?? (() => {}),
       onTogglePin: options.onTogglePin ?? (() => {}),
+      onOpenShortcut: options.onOpenShortcut ?? (() => {}),
+      onPinShortcut: options.onPinShortcut ?? (() => {}),
     },
   } as unknown as Parameters<PickerView>[0];
 }
@@ -119,6 +127,105 @@ function makeVnode(options: RenderOptions): Parameters<PickerView>[0] {
 function render(options: RenderOptions = {}): unknown {
   return AllAppsPicker().view(makeVnode(options));
 }
+
+const CHAT_ROW: UnpinnedShortcutRow = {
+  shortcut: "chat",
+  label: "Chat",
+  iconMarkup: "<svg></svg>",
+  isOpenable: true,
+};
+
+describe("AllAppsPicker unpinned shortcuts", () => {
+  it("lists a shortcut this project put away, above the apps", () => {
+    appState.apps = APPS;
+    const shown = texts(render({ unpinnedShortcuts: [CHAT_ROW] }));
+    // Above, because the built-in rows are the machine's own starting points
+    // and are what a visit here is for once one has been put away.
+    expect(shown).toContain("Chat");
+    expect(shown.indexOf("Chat")).toBeLessThan(shown.indexOf("docs"));
+  });
+
+  it("reports a pin without starting the thing", () => {
+    appState.apps = APPS;
+    const onPinShortcut = vi.fn();
+    const onOpenShortcut = vi.fn();
+    const tree = render({ unpinnedShortcuts: [CHAT_ROW], onPinShortcut, onOpenShortcut });
+    const pin = buttonsOf(tree).find((button) => button.attrs?.["aria-label"] === "Pin Chat");
+    (pin?.attrs?.onclick as (event: MouseEvent) => void)({ stopPropagation: () => {} } as MouseEvent);
+    expect(onPinShortcut).toHaveBeenCalledWith("chat");
+    expect(onOpenShortcut).not.toHaveBeenCalled();
+  });
+
+  it("starts the shortcut when its row is clicked", () => {
+    appState.apps = APPS;
+    const onOpenShortcut = vi.fn();
+    const tree = render({ unpinnedShortcuts: [CHAT_ROW], onOpenShortcut });
+    const row = rowsOf(tree).find((candidate) => candidate.attrs?.key === "shortcut:chat");
+    (row?.attrs?.onclick as () => void)();
+    expect(onOpenShortcut).toHaveBeenCalledWith("chat");
+  });
+
+  it("offers no click for a shortcut with nothing to start", () => {
+    // The file viewer still lists, so it can be pinned back, but it does not
+    // pretend to open anything.
+    appState.apps = APPS;
+    const files: UnpinnedShortcutRow = {
+      shortcut: "files",
+      label: "File Viewer",
+      iconMarkup: "<svg></svg>",
+      isOpenable: false,
+    };
+    const row = rowsOf(render({ unpinnedShortcuts: [files] })).find(
+      (candidate) => candidate.attrs?.key === "shortcut:files",
+    );
+    expect(row?.attrs?.onclick).toBeUndefined();
+  });
+
+  it("filters built-in rows on the same query as the apps", () => {
+    // One component instance, since the query is its own state -- a fresh
+    // render would start with an empty filter.
+    appState.apps = [...APPS, ...EXTRA_APPS];
+    const component = AllAppsPicker();
+    const vnode = makeVnode({ unpinnedShortcuts: [CHAT_ROW] });
+
+    expect(texts(component.view(vnode))).toContain("Chat");
+    const input = inputsOf(component.view(vnode))[0];
+    (input.attrs?.oninput as (e: unknown) => void)({ target: { value: "graf" } });
+    // A search has to reach everything the popover offers, not only half of it.
+    expect(texts(component.view(vnode))).not.toContain("Chat");
+  });
+
+  it("opens a built-in row with Enter when it is the top match", () => {
+    appState.apps = [...APPS, ...EXTRA_APPS];
+    const opened: string[] = [];
+    const component = AllAppsPicker();
+    const vnode = makeVnode({
+      unpinnedShortcuts: [CHAT_ROW],
+      onOpenShortcut: (shortcut) => {
+        opened.push(shortcut);
+      },
+    });
+
+    const input = inputsOf(component.view(vnode))[0];
+    (input.attrs?.oninput as (e: unknown) => void)({ target: { value: "cha" } });
+    (inputsOf(component.view(vnode))[0].attrs?.onkeydown as (e: unknown) => void)({ key: "Enter" });
+    // Enter opens what the eye is on, which is a built-in row now that those
+    // list here too.
+    expect(opened).toEqual(["chat"]);
+  });
+
+  it("is not empty when only a built-in row is left", () => {
+    // Every app pinned but a shortcut put away is still a list with something
+    // in it, so the "everything is already pinned" wording must not win.
+    appState.apps = APPS;
+    const tree = render({
+      unpinnedShortcuts: [CHAT_ROW],
+      pinnedAppNames: APPS.map((app) => app.name),
+    });
+    expect(texts(tree)).toContain("Chat");
+    expect(texts(tree).join(" ")).not.toContain("already pinned here");
+  });
+});
 
 describe("pickableApps", () => {
   it("hides the chrome UI and the fleet services, ordering the rest by name", () => {

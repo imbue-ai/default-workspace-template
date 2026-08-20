@@ -59,6 +59,25 @@ export interface ProjectInfo {
   // added. Not derived from the layout: a member with no panel is still here.
   // The same ref may appear in other projects' lists too.
   members: string[];
+  // Which of the rail's four built-in shortcut rows this project has moved into
+  // its All apps menu. Recorded as the ones taken OUT rather than the ones
+  // kept, so a project that has never touched this -- which is every project
+  // until it does -- shows all four. Optional here for the same reason: a
+  // server that predates the field is a server where none are unpinned.
+  unpinned_shortcuts?: string[];
+}
+
+/** The rail's built-in shortcut rows, in the order the rail offers them.
+ *  Unlike an app, none of these is an object with a member ref, so which of
+ *  them a project shows is its own stored field rather than membership. */
+export const SHORTCUT_NAMES = ["chat", "files", "browser", "terminal"] as const;
+
+export type ShortcutName = (typeof SHORTCUT_NAMES)[number];
+
+/** Whether this project keeps ``shortcut`` in its rail. Absent means all four,
+ *  so a project the server told us nothing about shows the full set. */
+export function isShortcutPinned(project: ProjectInfo | null, shortcut: ShortcutName): boolean {
+  return !(project?.unpinned_shortcuts ?? []).includes(shortcut);
 }
 
 export interface ProjectsListResponse {
@@ -169,6 +188,31 @@ export async function updateProjectSettings(
     throw new Error(await errorDetailFromResponse(response));
   }
   return (await response.json()) as ProjectInfo;
+}
+
+/**
+ * Move one built-in shortcut row between this project's rail and its All apps
+ * menu. Project-scoped: which starting points a project keeps to hand belongs
+ * to that project, not to the user or the device.
+ *
+ * Returns the project's resulting unpinned set. Throws with the server's
+ * detail on rejection (an unknown project, a name that is not a shortcut).
+ */
+export async function setShortcutPinned(
+  projectId: string,
+  shortcut: ShortcutName,
+  isPinned: boolean,
+): Promise<string[]> {
+  const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(projectId)}/shortcuts`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ shortcut, is_pinned: isPinned }),
+  });
+  if (!response.ok) {
+    throw new Error(await errorDetailFromResponse(response));
+  }
+  const data = (await response.json()) as { unpinned_shortcuts?: string[] };
+  return data.unpinned_shortcuts ?? [];
 }
 
 /** Delete a project. This is a pure view operation: only the project's
