@@ -1,19 +1,36 @@
 #!/usr/bin/env python3
-"""Agent launch wrapper: tag this process's memory-shedding band, then exec claude.
+"""Agent launch wrapper: tag this process's memory-shedding band, then exec the harness.
 
-Set as the claude agent type's ``command`` in ``.mngr/settings.toml`` so it
-becomes the process mngr runs in the agent's tmux pane. It sets its *own*
-``oom_score_adj`` to its priority band and records its pid in the agent-pid
-registry, then ``exec``s the real ``claude`` with the exact arguments mngr
-appended (``--settings``, ``--resume`` / ``--session-id``, etc.).
+Set as an agent type's ``command`` in ``.mngr/settings.toml`` so it becomes the
+process mngr runs in the agent's tmux pane. The harness binary to run is this
+script's FIRST argument (``claude``, ``codex``, ``pi``); everything after it is
+passed through untouched. So the config reads::
 
-Because it execs in place, the band-tagged process *is* the claude process (same
+    command = "python3 .../agent_oom_launch.py claude"
+
+and mngr splices its own flags (``--settings``, ``--resume`` / ``--session-id``,
+...) after that base, exactly as it would after a bare binary name.
+
+It sets its *own* ``oom_score_adj`` to its priority band and records its pid in
+the agent-pid registry, then ``exec``s the real harness.
+
+Because it execs in place, the band-tagged process *is* the harness process (same
 pid -- ``oom_score_adj`` and the pid both survive ``execve``), so every
-subprocess claude later spawns inherits the agent band by default; the PreToolUse
-hook raises those subprocesses the rest of the way to the most-expendable band.
-Because the process tags itself at launch, the band is set before any subprocess
-exists -- the process that needs tagging is known directly, with no process tree
-to inspect.
+subprocess the harness later spawns inherits the agent band by default; the
+PreToolUse hook raises those subprocesses the rest of the way to the
+most-expendable band. Because the process tags itself at launch, the band is set
+before any subprocess exists -- the process that needs tagging is known directly,
+with no process tree to inspect.
+
+Harness-agnostic by construction: the band comes from the agent's label
+(``MNGR_AGENT_NAME`` + the host records), never from which binary is being run.
+
+ponytail: codex uses its ``command`` as the prefix for BOTH its visible ``--remote``
+TUI and its ``app-server`` daemon, so a codex agent registers two pids under one
+agent id. Both get the correct band at launch, which is the protection that
+matters. ``lookup_pid_by_agent_id`` returns the first match, so the prioritizer's
+engagement re-tag reaches only one of the two -- fix by having it return every
+live match and re-tagging each.
 
 The band comes from the agent's label, resolved from ``MNGR_AGENT_NAME`` + the
 host records (see ``agent_identity``): a chat starts maximally expendable and is
@@ -82,13 +99,19 @@ def _tag_self() -> None:
 
 def main() -> None:
     # Tag before exec so the band (and registry entry) are in place the instant
-    # claude -- and any child it spawns -- exists. A tagging failure must never
-    # stop the agent from launching: the band is an optimization, claude is not.
+    # the harness -- and any child it spawns -- exists. A tagging failure must never
+    # stop the agent from launching: the band is an optimization, the harness is not.
+    if len(sys.argv) < 2:
+        # A misconfigured ``command`` (wrapper with no binary after it). Die loudly
+        # rather than exec whatever flag mngr spliced first. SystemExit prints to
+        # stderr itself, so this needs no print of its own.
+        raise SystemExit("agent_oom_launch: missing harness binary argument")
+    binary = sys.argv[1]
     try:
         _tag_self()
     except Exception as error:
-        print(f"claude_oom_launch: tagging skipped: {error}", file=sys.stderr)
-    os.execvp("claude", ["claude", *sys.argv[1:]])
+        print(f"agent_oom_launch: tagging skipped: {error}", file=sys.stderr)
+    os.execvp(binary, [binary, *sys.argv[2:]])
 
 
 if __name__ == "__main__":
