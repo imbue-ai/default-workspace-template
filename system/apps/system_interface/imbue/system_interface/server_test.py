@@ -1,6 +1,7 @@
 """Tests for the Flask server."""
 
 import fcntl
+import html
 import io
 import json
 import os
@@ -306,6 +307,18 @@ def test_not_built_repair_command_is_the_one_the_app_runs_for_a_chat() -> None:
     assert _NOT_BUILT_REPAIR_COMMAND == "env -u TMUX " + _NOT_BUILT_REPAIR_MNGR_COMMAND
 
 
+def _repair_line_shown_on(page: str) -> str:
+    """The repair line as the page's own markup hands it to the reader.
+
+    Undoing the escaping is what the browser does to fill ``textContent``, which
+    is both what a reader sees in the block and what the copy button puts on the
+    clipboard, so this is the line the page actually offers.
+    """
+    shown = re.search(r'<pre id="repair-command">(.*?)</pre>', page, re.DOTALL)
+    assert shown is not None, "the page no longer carries a repair-command block"
+    return html.unescape(shown.group(1))
+
+
 def test_not_built_repair_command_reaches_the_page_as_text_not_markup() -> None:
     """The suggested line is prose, so the page has to render it as written.
 
@@ -320,6 +333,14 @@ def test_not_built_repair_command_reaches_the_page_as_text_not_markup() -> None:
 
     assert 'mngr create --message "a &amp; b &lt;c&gt;"' in page
     assert "<c>" not in page
+
+    # And the escaping has to be transparent to the line that ships: undoing it
+    # is what the browser does to fill ``textContent``, so this is the line the
+    # reader reads and copies, and it has to be the one the CLI check and the
+    # shell split validated. The assertions above only show that escaping
+    # happens; this is what says the real command survives it.
+    shown = _repair_line_shown_on(render_frontend_not_built_page(None))
+    assert shown == _NOT_BUILT_REPAIR_COMMAND
 
 
 def test_not_built_repair_line_splits_the_way_a_shell_splits_it() -> None:
