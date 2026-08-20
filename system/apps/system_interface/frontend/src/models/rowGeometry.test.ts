@@ -30,7 +30,7 @@ describe("RowGeometryIndex", () => {
     // Re-measured taller: replaced in place, not appended.
     expect(index.recordRow(row(0, 10, 250))).toBe(true);
     expect(index.rowCount).toBe(1);
-    expect(index.totalMeasuredHeight()).toBe(250);
+    expect(index.heightBefore(10)).toBe(250);
   });
 
   it("replaces a row re-recorded at a different range instead of keeping both", () => {
@@ -60,7 +60,6 @@ describe("RowGeometryIndex", () => {
     const index = new RowGeometryIndex([row(0, 10, 340), row(10, 20, 340)]);
     expect(index.heightBefore(10)).toBe(340);
     expect(index.heightBefore(20)).toBe(680);
-    expect(index.totalMeasuredHeight()).toBe(680);
   });
 
   it("resolves an offset inside a row to the boundary above it", () => {
@@ -106,39 +105,6 @@ describe("RowGeometryIndex", () => {
     // A mean would land near 132px/event; the median stays with the typical row.
     const index = new RowGeometryIndex([row(0, 10, 100), row(10, 20, 100), row(20, 30, 100), row(30, 40, 5000)]);
     expect(index.learnedEventHeight()).toBe(10);
-  });
-
-  it("finds the row containing an offset and reports a gap as uncovered", () => {
-    const index = new RowGeometryIndex([row(0, 10, 100), row(100, 110, 100)]);
-    expect(index.rowAtOffset(0)?.row_key).toBe("row-0");
-    expect(index.rowAtOffset(9)?.row_key).toBe("row-0");
-    expect(index.rowAtOffset(100)?.row_key).toBe("row-100");
-    expect(index.rowAtOffset(10)).toBeNull();
-    expect(index.rowAtOffset(50)).toBeNull();
-  });
-
-  it("drops rows at and after the invalidation point, keeping those above", () => {
-    // A subagent card upgrading, or a harness re-serialising an event, changes
-    // that row's height and shifts everything below it. Above it is untouched.
-    const index = new RowGeometryIndex([row(0, 10, 100), row(10, 20, 100), row(20, 30, 100)]);
-    expect(index.invalidateFrom(10)).toBe(2);
-    expect(index.rowCount).toBe(1);
-    expect(index.totalMeasuredHeight()).toBe(100);
-  });
-
-  it("treats invalidation past the last row as a no-op", () => {
-    const index = new RowGeometryIndex([row(0, 10, 100)]);
-    expect(index.invalidateFrom(999)).toBe(0);
-    expect(index.rowCount).toBe(1);
-  });
-
-  it("falls back to estimating a range that was invalidated", () => {
-    const index = new RowGeometryIndex([row(0, 10, 100), row(10, 20, 100)]);
-    expect(index.heightBefore(20)).toBe(200);
-    index.invalidateFrom(10);
-    // The dropped range reverts to the learned rate (10px/event) rather than
-    // vanishing from the reserved space entirely.
-    expect(index.heightBefore(20)).toBe(100 + 10 * 10);
   });
 
   it("never reports negative height for a non-positive offset", () => {

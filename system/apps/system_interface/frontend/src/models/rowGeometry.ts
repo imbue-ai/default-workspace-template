@@ -179,26 +179,6 @@ export class RowGeometryIndex {
   }
 
   /**
-   * Drop every row starting at or after `offset`.
-   *
-   * Called when a row's height changes retroactively -- a subagent card
-   * upgrading once its late linkage lands, or a harness re-serialising an event
-   * in place. Everything below such a row shifts, so the measured heights below
-   * it are no longer trustworthy; everything above is untouched and stays. The
-   * dropped range reverts to the learned estimate until it is rendered again.
-   */
-  invalidateFrom(offset: number): number {
-    const index = lowerBound(this.#rows, offset);
-    if (index >= this.#rows.length) {
-      return 0;
-    }
-    const removed = this.#rows.length - index;
-    this.#rows.length = index;
-    this.#sumsAreStale = true;
-    return removed;
-  }
-
-  /**
    * Pixels per event, learned from the rows actually measured.
    *
    * The median rather than the mean: one enormous row (a long pasted file, a
@@ -215,27 +195,6 @@ export class RowGeometryIndex {
       }
     }
     return perEvent.length === 0 ? DEFAULT_EVENT_HEIGHT_PX : median(perEvent);
-  }
-
-  /**
-   * The row containing `offset`, or null when no measured row covers it.
-   *
-   * Used to land a jump on a real row rather than partway inside one, and to
-   * decide whether a query lands in measured space or in a gap.
-   */
-  rowAtOffset(offset: number): RowGeometry | null {
-    const index = lowerBound(this.#rows, offset);
-    // lowerBound lands on the first row starting at or after `offset`; an exact
-    // hit is that row, otherwise the only candidate is the one before it.
-    const exact = this.#rows[index];
-    if (exact !== undefined && exact.start_offset === offset) {
-      return exact;
-    }
-    const previous = this.#rows[index - 1];
-    if (previous !== undefined && offset < previous.end_offset) {
-      return previous;
-    }
-    return null;
   }
 
   /**
@@ -300,12 +259,6 @@ export class RowGeometryIndex {
       }
     }
     return low;
-  }
-
-  /** Total measured height of every recorded row. */
-  totalMeasuredHeight(): number {
-    this.#sums();
-    return this.#heightBefore[this.#rows.length];
   }
 
   /** The JSON-able form for persistence. */

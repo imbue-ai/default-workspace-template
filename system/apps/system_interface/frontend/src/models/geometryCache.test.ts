@@ -93,17 +93,6 @@ describe("createGeometryCache", () => {
     expect(await cache.load("agent-a", 10)).not.toBeNull();
   });
 
-  it("clears every width bucket for one conversation, leaving others alone", async () => {
-    const { cache } = cacheWithClock();
-    await cache.save("agent-a", 10, { rows: [row(0, 10, 100)] });
-    await cache.save("agent-a", 20, { rows: [row(0, 10, 100)] });
-    await cache.save("agent-b", 10, { rows: [row(0, 10, 100)] });
-    await cache.clear("agent-a");
-    expect(await cache.load("agent-a", 10)).toBeNull();
-    expect(await cache.load("agent-a", 20)).toBeNull();
-    expect(await cache.load("agent-b", 10)).not.toBeNull();
-  });
-
   it("evicts the least recently written conversation once over the cap", async () => {
     // The bound has to hold on this path too, or a session that never gets a
     // database accumulates a row table per conversation and width for as long as
@@ -119,15 +108,5 @@ describe("createGeometryCache", () => {
     expect(await cache.load("agent-0", 10)).toBeNull();
     expect(await cache.load("agent-1", 10)).not.toBeNull();
     expect(await cache.load("agent-new", 10)).not.toBeNull();
-  });
-
-  it("does not confuse agents whose ids share a prefix", async () => {
-    // Keys are `${agentId}:${bucket}`, so a prefix match when clearing would
-    // wipe an unrelated conversation.
-    const { cache } = cacheWithClock();
-    await cache.save("agent-a", 10, { rows: [row(0, 10, 100)] });
-    await cache.save("agent-a-2", 10, { rows: [row(0, 10, 100)] });
-    await cache.clear("agent-a");
-    expect(await cache.load("agent-a-2", 10)).not.toBeNull();
   });
 });

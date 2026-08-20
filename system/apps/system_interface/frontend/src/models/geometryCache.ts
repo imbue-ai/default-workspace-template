@@ -61,7 +61,6 @@ function cacheKey(agentId: string, widthBucket: number): string {
 export interface GeometryCache {
   load(agentId: string, widthBucket: number): Promise<GeometrySnapshot | null>;
   save(agentId: string, widthBucket: number, snapshot: GeometrySnapshot): Promise<void>;
-  clear(agentId: string): Promise<void>;
 }
 
 /**
@@ -207,25 +206,6 @@ export function createGeometryCache(now: () => number = () => Date.now()): Geome
       const store = db.transaction(STORE_NAME, "readwrite").objectStore(STORE_NAME);
       await awaitRequest(store.put(entry) as IDBRequest<IDBValidKey>);
       await evictIfNeeded(db, now());
-    },
-
-    async clear(agentId: string): Promise<void> {
-      const db = await database();
-      if (db === null) {
-        for (const key of [...memory.keys()]) {
-          if (key.startsWith(`${agentId}:`)) {
-            memory.delete(key);
-          }
-        }
-        return;
-      }
-      const store = db.transaction(STORE_NAME, "readwrite").objectStore(STORE_NAME);
-      const all = await awaitRequest<CachedGeometry[]>(store.getAll() as IDBRequest<CachedGeometry[]>);
-      for (const entry of all ?? []) {
-        if (entry.key.startsWith(`${agentId}:`)) {
-          store.delete(entry.key);
-        }
-      }
     },
   };
 }

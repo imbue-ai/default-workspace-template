@@ -50,8 +50,6 @@ export interface RowMeasurementStore {
   heightFor(rowKey: string): number | undefined;
   /** Whether a row's height has gone quiet long enough to persist. */
   isSettled(rowKey: string, now: number): boolean;
-  /** Every row that is settled, for handing to the geometry cache. */
-  settledRows(now: number): Map<string, number>;
   /** Drop rows no longer present once the store drifts past the live set. */
   prune(liveKeys: Set<string>): void;
   /** Forget everything (switching to a different agent, or a width change). */
@@ -93,16 +91,6 @@ export function createRowMeasurementStore(now: () => number = () => Date.now()):
     isSettled(rowKey: string, at: number): boolean {
       const entry = entries.get(rowKey);
       return entry !== undefined && at - entry.changed_at >= SETTLE_QUIET_MS;
-    },
-
-    settledRows(at: number): Map<string, number> {
-      const settled = new Map<string, number>();
-      for (const [key, entry] of entries) {
-        if (at - entry.changed_at >= SETTLE_QUIET_MS) {
-          settled.set(key, entry.height);
-        }
-      }
-      return settled;
     },
 
     prune(liveKeys: Set<string>): void {

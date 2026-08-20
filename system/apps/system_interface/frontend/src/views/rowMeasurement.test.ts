@@ -110,16 +110,6 @@ describe("createRowMeasurementStore settling", () => {
     advance(1);
     expect(store.isSettled("a", 1000 + SETTLE_QUIET_MS)).toBe(true);
   });
-
-  it("reports only the settled rows", () => {
-    const { store, advance } = storeWithClock();
-    store.observe("settled", 100);
-    advance(SETTLE_QUIET_MS);
-    store.observe("fresh", 200);
-    const settled = store.settledRows(1000 + SETTLE_QUIET_MS);
-    expect([...settled.keys()]).toEqual(["settled"]);
-    expect(settled.get("settled")).toBe(100);
-  });
 });
 
 describe("createRowMeasurementStore bookkeeping", () => {
