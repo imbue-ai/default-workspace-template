@@ -4447,6 +4447,24 @@ def test_transcript_geometry_endpoints_reject_a_request_that_names_no_width(
     assert client.get("/api/agents/agent-7/geometry?width=760").get_json() == {"rows": []}
 
 
+def test_transcript_geometry_endpoints_reject_a_request_that_names_no_transcript(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A blank agent id is a malformed request, not a server fault.
+
+    The store refuses to file under one -- geometry kept there would be handed
+    to every other blank-keyed caller -- so without a check here its raise
+    reaches Flask's catch-all and a request the server understood perfectly well
+    is logged with a traceback and answered with a 500.
+    """
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    measured_rows = [{"row_key": "turn-1", "start_offset": 0, "end_offset": 3, "height": 160.0}]
+
+    assert client.get("/api/agents/%20/geometry?width=760").status_code == 400
+    assert client.put("/api/agents/%20/geometry", json={"width": 760, "rows": measured_rows}).status_code == 400
+
+
 def test_a_geometry_request_naming_no_width_is_refused_with_nowhere_to_store_it_either(
     client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

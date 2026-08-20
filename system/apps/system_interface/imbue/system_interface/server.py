@@ -1544,6 +1544,19 @@ def _parsed_width_bucket(raw_width: str | None) -> int | None:
     return width_bucket
 
 
+def _names_a_transcript(agent_id: str) -> bool:
+    """Whether a path agent id names a transcript geometry could be filed under.
+
+    ``transcript_geometry`` refuses a blank one outright -- filing under it would
+    hand one caller's measurements to every other blank-keyed caller -- so
+    without this the store's raise reaches Flask's catch-all and a request the
+    server understood perfectly well is logged as an unhandled exception and
+    answered with a 500. Checked here, as ``_touch_member_last_used_endpoint``
+    checks its ref, so a malformed request reads as one.
+    """
+    return bool(agent_id.strip())
+
+
 def _get_transcript_geometry_endpoint(agent_id: str) -> Response:
     """The rows a client last measured for this transcript at one viewport width.
 
@@ -1554,6 +1567,9 @@ def _get_transcript_geometry_endpoint(agent_id: str) -> Response:
     """
     # Before the workspace check, so the same malformed request gets the same
     # answer whether or not this workspace happens to have a primary agent.
+    if not _names_a_transcript(agent_id):
+        error = ErrorResponse(detail="Agent id is empty")
+        return _json_response(error.model_dump(), status_code=400)
     width_bucket = _parsed_width_bucket(request.args.get("width"))
     if width_bucket is None:
         error = ErrorResponse(detail="'width' must be a positive integer")
@@ -1577,6 +1593,9 @@ def _store_transcript_geometry_endpoint(agent_id: str) -> Response:
     # Before the workspace check, as on the read side, so the same malformed
     # request gets the same answer whether or not this workspace happens to have
     # a primary agent.
+    if not _names_a_transcript(agent_id):
+        error = ErrorResponse(detail="Agent id is empty")
+        return _json_response(error.model_dump(), status_code=400)
     body = _parse_json_object_body()
     if isinstance(body, Response):
         return body
