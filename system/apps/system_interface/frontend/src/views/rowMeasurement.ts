@@ -42,12 +42,6 @@ export const MEASURE_HYSTERESIS_PX = 1;
 /** How long a row must go unchanged before its height is considered final. */
 export const SETTLE_QUIET_MS = 500;
 
-export interface MeasuredRow {
-  height: number;
-  /** Whether the row has gone quiet long enough to be worth persisting. */
-  is_settled: boolean;
-}
-
 export interface RowMeasurementStore {
   /**
    * Record an observed height. Returns the accepted height, which is the prior
