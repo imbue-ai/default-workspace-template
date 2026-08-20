@@ -494,11 +494,9 @@ const loadStateByAgent = new Map<string, TranscriptLoadState>();
 let loadAttemptCounter = 0;
 const newestLoadAttemptByAgent = new Map<string, number>();
 
-/** Record an attempt's outcome, unless a newer attempt for this agent has superseded it. */
-function recordLoadOutcome(agentId: string, attempt: number, state: TranscriptLoadState): void {
-  if (newestLoadAttemptByAgent.get(agentId) === attempt) {
-    loadStateByAgent.set(agentId, state);
-  }
+/** Whether this attempt is still the agent's newest, i.e. whether its outcome still counts. */
+function isNewestLoadAttempt(agentId: string, attempt: number): boolean {
+  return newestLoadAttemptByAgent.get(agentId) === attempt;
 }
 
 function storeFor(agentId: string): TranscriptStore {
@@ -650,14 +648,22 @@ export async function fetchEvents(agentId: string): Promise<TranscriptEvent[]> {
       config: applyEventsRequestTimeout,
     });
     placeWindow(agentId, result);
-    recordLoadOutcome(agentId, attempt, IDLE_LOAD_STATE);
+    if (isNewestLoadAttempt(agentId, attempt)) {
+      loadStateByAgent.set(agentId, IDLE_LOAD_STATE);
+    }
     return result.events;
   } catch (error) {
-    const requestError = error as { code?: number; message?: string };
-    if (requestError.code === 404) {
-      notFoundAgentIds.add(agentId);
+    // The not-found latch is fenced alongside the state because the panel acts on
+    // it harder: it renders "No conversation data" ahead of (and unlike) the load
+    // state, ungated by whether a transcript is already on screen, and disconnects
+    // the stream. A superseded attempt's 404 would blank a live chat.
+    if (isNewestLoadAttempt(agentId, attempt)) {
+      const requestError = error as { code?: number; message?: string };
+      if (requestError.code === 404) {
+        notFoundAgentIds.add(agentId);
+      }
+      loadStateByAgent.set(agentId, { phase: "error", error: describeRequestError(error) });
     }
-    recordLoadOutcome(agentId, attempt, { phase: "error", error: describeRequestError(error) });
     throw error;
   }
 }
