@@ -4511,7 +4511,9 @@ def test_a_destroy_drops_the_transcripts_geometry(
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
     _register_agent(app, "agent-doomed", "doomed-agent", "RUNNING")
     measured_rows = [{"row_key": "turn-1", "start_offset": 0, "end_offset": 3, "height": 160.0}]
-    assert client.put("/api/agents/agent-doomed/geometry", json={"width": 760, "rows": measured_rows}).status_code == 200
+    assert (
+        client.put("/api/agents/agent-doomed/geometry", json={"width": 760, "rows": measured_rows}).status_code == 200
+    )
 
     destroyed = FinishedProcess(
         returncode=0,
