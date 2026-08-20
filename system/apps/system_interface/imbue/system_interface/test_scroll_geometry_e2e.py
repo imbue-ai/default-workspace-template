@@ -26,10 +26,12 @@ class of regression reaching main again.
 """
 
 import json
+import time
 from pathlib import Path
 from typing import Any
 
 import pytest
+from playwright.sync_api import Browser
 from playwright.sync_api import Page
 
 from imbue.system_interface.test_e2e import _frontend_built
@@ -58,6 +60,9 @@ _PORT = 18795
 _STREAM_DELIVERY_MS = 3000
 # Settling time after a scroll, for measurement and any triggered fetch to land.
 _SETTLE_MS = 1200
+# Longest wait for measured geometry to reach the workspace: rows settle half a
+# second after they stop changing and the save is coalesced over two more.
+_GEOMETRY_PERSIST_TIMEOUT_S = 20
 
 # Reading the row at the top of the viewport and how far the viewport has cut
 # into it. This is the reader's actual position; scrollTop is not.
@@ -285,6 +290,64 @@ def test_tail_follow_attaches_and_detaches(tmp_path: Path, page: Page) -> None:
             " return el.scrollHeight - el.scrollTop - el.clientHeight >= 40; }"
         )
         assert still_detached, "streaming yanked a scrolled-up reader back to the tail"
+
+
+@pytest.mark.timeout(180, func_only=False)
+def test_measured_geometry_is_kept_by_the_workspace(tmp_path: Path, page: Page, browser: Browser) -> None:
+    """What one browser measures, the next one reserves its space from.
+
+    The client's half of this is deliberately silent -- every failure path
+    degrades to "nothing measured yet" -- so a mismatched request shape or a
+    rejected width bucket would look exactly like a cold cache. Only driving
+    both ends together says whether the measurements make the trip.
+
+    The second browser context is the point: a fresh profile has an empty
+    IndexedDB, so it cannot have measured this conversation itself, and the only
+    way its geometry request comes back with rows is if the first browser's
+    measurements reached the workspace.
+    """
+    # Unlike the tests above, this one needs a primary agent: without one there
+    # is no workspace layout dir, and geometry has nowhere to be filed.
+    events = _tool_heavy_events(60)
+    with _running_e2e_server(tmp_path, _PORT + 3, session_events=events, primary_agent_id="primary-agent") as (
+        base_url,
+        _,
+        _,
+    ):
+        page.goto(base_url)
+        _wait_for_transcript(page)
+
+        # Scroll so rows above the first screen mount and measure too.
+        for _ in range(4):
+            page.evaluate("() => { document.querySelector('.app-content').scrollBy(0, -700); }")
+            page.wait_for_timeout(_SETTLE_MS)
+
+        geometry_file = tmp_path / "agents" / "primary-agent" / "workspace_layout" / "transcript_geometry.json"
+        deadline = time.monotonic() + _GEOMETRY_PERSIST_TIMEOUT_S
+        while not geometry_file.exists() and time.monotonic() < deadline:
+            page.wait_for_timeout(500)
+        assert geometry_file.exists(), "the transcript's measured rows never reached the workspace"
+        stored = json.loads(geometry_file.read_text())["geometry_by_agent_id"]
+        assert stored, f"the geometry file names no transcript: {stored}"
+
+        served_row_counts: list[int] = []
+        cold_context = browser.new_context()
+        try:
+            cold_page = cold_context.new_page()
+            cold_page.on(
+                "response",
+                lambda response: served_row_counts.append(len(response.json().get("rows", [])))
+                if "/geometry?width=" in response.url
+                else None,
+            )
+            cold_page.goto(base_url)
+            cold_page.wait_for_selector(".message-list", timeout=15000)
+            cold_page.wait_for_timeout(_SETTLE_MS)
+        finally:
+            cold_context.close()
+        assert any(count > 0 for count in served_row_counts), (
+            f"a browser that never rendered this conversation got no stored geometry: {served_row_counts}"
+        )
 
 
 @pytest.mark.timeout(180, func_only=False)
