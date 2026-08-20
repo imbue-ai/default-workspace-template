@@ -1,6 +1,8 @@
 ---
 name: publish-template
 description: Publish a clean, shareable snapshot of the apps/features this mind built to a new GitHub repo (an "template" another mind can adapt). Use when the user asks to publish, share, or export what they built as a reusable template.
+metadata:
+  author: imbue
 ---
 
 # Publish a template

@@ -1,6 +1,8 @@
 ---
 name: check-app-errors
 description: Survey the health of the supervised apps and services on this host and find errors in their logs. Use after building or editing any app/service to confirm it is actually running cleanly, when something seems broken, or when you want a quick read on what (if anything) is currently failing. The Caretaker agent reuses this as its log-scan step.
+metadata:
+  author: imbue
 ---
 
 # Checking apps for errors
