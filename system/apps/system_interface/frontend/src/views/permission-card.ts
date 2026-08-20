@@ -257,13 +257,13 @@ function renderKeyIcon(): m.Vnode {
  *  moves every card for that service to the cube instead of each retrying the
  *  same dead URL. The minds chrome's own ServiceMark probes its marks the same
  *  way. */
-const FAILED_MARK_URLS = new Set<string>();
+const failedMarkUrls = new Set<string>();
 
 /** Forget which marks failed to load. For tests only: the set is module-global
  *  on purpose, so without this a test that fails one mark would retire it for
  *  every test that follows in the same file. */
 export function forgetFailedServiceMarks(): void {
-  FAILED_MARK_URLS.clear();
+  failedMarkUrls.clear();
 }
 
 /**
@@ -278,7 +278,7 @@ export function forgetFailedServiceMarks(): void {
  */
 function renderSubjectMark(details: PermissionRequestDetails | null, size: number): m.Vnode {
   const markUrl = details?.scope ? serviceMarkUrl(details.scope) : null;
-  if (markUrl === null || FAILED_MARK_URLS.has(markUrl)) {
+  if (markUrl === null || failedMarkUrls.has(markUrl)) {
     return m.trust(icon("box", { size, className: "permission-request-icon" }));
   }
   return m("img", {
@@ -290,7 +290,7 @@ function renderSubjectMark(details: PermissionRequestDetails | null, size: numbe
     // Mithril redraws after a handler it bound, so the cube replaces the
     // broken image on this failure rather than on the next unrelated redraw.
     onerror: () => {
-      FAILED_MARK_URLS.add(markUrl);
+      failedMarkUrls.add(markUrl);
     },
   });
 }
