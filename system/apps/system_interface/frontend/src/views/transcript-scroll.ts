@@ -48,8 +48,10 @@ export interface TranscriptScrollConfig {
 export interface TranscriptScroll {
   /** Current scrollTop (in the scroll container's own coordinates). */
   readonly scrollTop: number;
-  /** Cached viewport height, refreshed when the container is attached and by the
-   *  resize observer registered there. */
+  /** Cached viewport height, refreshed by the resize observer registered when the
+   *  container is attached. Zero until the container has reported a height, which
+   *  is what a hidden dockview tab reports; callers read the live `clientHeight`
+   *  in that case. */
   readonly viewportHeight: number;
   /** True when the user has scrolled up off the live tail (do not follow). */
   userScrolledUp: boolean;
@@ -163,7 +165,9 @@ export function createTranscriptScroll(config: TranscriptScrollConfig = {}): Tra
       if (pointerReleaseListener !== null) {
         return; // already registered
       }
-      if (isVisible()) {
+      // Same test as the observer below, for the same reason: a height of zero
+      // is a tab that is not on screen, not a viewport worth caching.
+      if (element.clientHeight > 0) {
         viewportHeight = element.clientHeight;
       }
       // Clear the drag flag on release. Listen on window, not the panel, because the
@@ -177,14 +181,25 @@ export function createTranscriptScroll(config: TranscriptScrollConfig = {}): Tra
       };
       window.addEventListener("pointerup", pointerReleaseListener);
       window.addEventListener("pointercancel", pointerReleaseListener);
+      // Judged on the measurement rather than on visibility, for the reason
+      // transcriptVirtualizer's rect filter spells out: a panel mounted as an
+      // inactive tab gets exactly one notification -- the resize when the tab is
+      // shown -- and that lands after layout, while the visibility attr only
+      // reaches the component on the next redraw. Rejecting it on visibility
+      // would throw away the panel's only chance at a viewport size, and nothing
+      // re-delivers it. A zero height IS what a hidden tab reports, so rejecting
+      // zero keeps the cache from being poisoned while hidden, which is what the
+      // visibility test was really for.
       viewportResizeObserver = new ResizeObserver(() => {
-        if (scrollEl === null || !isVisible()) {
+        if (scrollEl === null) {
           return;
         }
-        if (scrollEl.clientHeight !== viewportHeight) {
-          viewportHeight = scrollEl.clientHeight;
-          m.redraw();
+        const height = scrollEl.clientHeight;
+        if (height <= 0 || height === viewportHeight) {
+          return;
         }
+        viewportHeight = height;
+        m.redraw();
       });
       viewportResizeObserver.observe(element);
     },
