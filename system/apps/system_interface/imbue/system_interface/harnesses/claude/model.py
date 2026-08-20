@@ -146,14 +146,6 @@ _OFFERED_MODELS: tuple[ModelOption, ...] = (
 # catch-alls are what absorb the dated Opus 4 / Sonnet 4 ids (claude-opus-4-20250514),
 # whose alias form (claude-opus-4-0) is not a prefix of them.
 #
-# FOR FUTURE MAINTAINERS (human or AI): never hand-write the model/alias/fast table into
-# a doc, changelog, or PR body. It goes stale silently and the stale copy is what people
-# then trust. Generate it from CLAUDE_CATALOG instead -- every field below is readable at
-# runtime, and test_every_binary_model_id_resolves pins the id list it must cover:
-#
-#     for option in CLAUDE_CATALOG.options:
-#         key = option.harness_reported_model_id or option.id
-#         print(option.label, option.id, key, option.in_picker, option.supports_fast)
 _HIDDEN_MODELS: tuple[ModelOption, ...] = tuple(
     ModelOption(
         id=model_id,
@@ -184,6 +176,18 @@ _HIDDEN_MODELS: tuple[ModelOption, ...] = tuple(
     )
 )
 
+# FOR FUTURE MAINTAINERS (human or AI): this object is the ONLY source of truth for which
+# models exist, what each is called, which alias switches to it, and which can go fast.
+# Never hand-write that table into a doc, changelog, PR body or review comment -- it goes
+# stale the first time anyone edits this tuple, and the stale copy is what people then
+# trust. Read it out of here instead; every field is available at runtime:
+#
+#     for option in CLAUDE_CATALOG.options:
+#         key = option.harness_reported_model_id or option.id
+#         print(option.label, option.id, key, option.in_picker, option.supports_fast)
+#
+# test_every_binary_model_id_resolves pins the id list this has to cover, so regenerate
+# that list against the pinned binary whenever CLAUDE_CODE_VERSION moves.
 CLAUDE_CATALOG: HarnessCatalog = HarnessCatalog(
     options=_OFFERED_MODELS + _HIDDEN_MODELS,
     switch_mode=SwitchMode.EAGER_THEN_RECONCILE,
