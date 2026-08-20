@@ -52,6 +52,11 @@ _ALLOWED = [
     f"""git commit -m "document -XPOST {_HOST} usage" && git push""",
     f"""grep -rn "curl -XPOST {_HOST}" system/ > /tmp/hits.txt""",
     "git push origin main",
+    # Ordinary curl flags are not mistaken for the write-to-a-file ones. `-XPOST`
+    # is the case that matters: it is a single-dash letter cluster containing an
+    # `O`, and only "the flag is the LAST letter" keeps it out.
+    _REQUEST.replace("-XPOST", "-XPOST -sSL"),
+    _REQUEST.replace("-XPOST", "-XPOST --oauth2-bearer tok"),
 ]
 
 # Commands that must be BLOCKED (classify returns a reason string).
@@ -64,12 +69,16 @@ _BLOCKED = [
     f"{_REQUEST} > /tmp/request.json",  # the echoed object never reaches the chat
     f"{_REQUEST} 2>/dev/null",
     # curl writes the body to a file itself, which takes the echoed object away
-    # just as `> file` does -- separated, joined, and the valueless forms.
+    # just as `> file` does -- separated, joined, valueless, and bundled with
+    # other short flags (`curl -so out.json` is the everyday spelling).
     f"{_REQUEST} -o /tmp/request.json",
     f"{_REQUEST} --output /tmp/request.json",
     f"{_REQUEST} --output=/tmp/request.json",
     f"{_REQUEST} -o/tmp/request.json",
     f"{_REQUEST} -O",
+    f"{_REQUEST} -so /tmp/request.json",
+    f"{_REQUEST} -fsSLo /tmp/request.json",
+    f"{_REQUEST} -sO",
     # An input redirect is blocked too: the parser records only *that* a segment
     # is redirected, and a heredoc body re-enters the parse as further commands.
     f"{_REQUEST} -d @- <<EOF\n{{}}\nEOF",
@@ -110,6 +119,7 @@ def test_routes_to_the_right_block_reason() -> None:
     assert checker.classify(f"{_REQUEST} {_HOST}") == checker._MULTIPLE
     assert checker.classify(f"{_REQUEST} > /tmp/out.json") == checker._REDIRECT
     assert checker.classify(f"{_REQUEST} -o /tmp/out.json") == checker._REDIRECT
+    assert checker.classify(f"{_REQUEST} -so /tmp/out.json") == checker._REDIRECT
     assert checker.classify(f"{_REQUEST} | jq .") == checker._CHAIN
 
 

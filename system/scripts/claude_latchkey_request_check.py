@@ -45,10 +45,16 @@ _POST_FLAG_RE = re.compile(r"(?:-X|--request)=?POST", re.IGNORECASE)
 
 # curl's own ways of writing the response body to a file instead of echoing it on
 # stdout. They take the gateway's echoed object out of the tool result exactly as
-# `> file` does, so the gate reads them as a redirect. `-O` / `--remote-name` take
-# no value; `-o` / `--output` take the next token or a joined one.
-_OUTPUT_FLAGS = ("-o", "--output", "-O", "--remote-name")
-_OUTPUT_FLAG_RE = re.compile(r"-o.+|--output=.+")
+# `> file` does, so the gate reads them as a redirect. Matched with `fullmatch`:
+#   * `-[A-Za-z]*[oO]` -- a single-dash cluster of letters ending in the flag, so
+#     the bundled forms count too (`-o`, `-O`, `-so /tmp/x`, `-fsSLo out.json`).
+#     Requiring the flag to be the LAST letter is what keeps `-XPOST` out; that
+#     is also why the bundled joined-value form (`-soout.json`) is left alone --
+#     no pattern separates it from `-XPOST` without modelling which short flags
+#     consume a value.
+#   * `-o.+` -- the joined-value form of the flag on its own (`-oout.json`).
+#   * the long forms, with or without a joined value.
+_OUTPUT_FLAG_RE = re.compile(r"-[A-Za-z]*[oO]|-o.+|--output(?:=.+)?|--remote-name")
 
 _MULTIPLE = "the call files more than one permission request"
 _REDIRECT = (
@@ -87,12 +93,9 @@ def _sets_post_method(words: tuple[str, ...]) -> bool:
 
 def _writes_body_to_file(words: tuple[str, ...]) -> bool:
     """True when `words` carry one of curl's write-the-body-to-a-file flags,
-    separated (`-o out.json`), joined (`-oout.json`, `--output=out.json`), or
-    valueless (`-O`)."""
-    return any(
-        word in _OUTPUT_FLAGS or _OUTPUT_FLAG_RE.fullmatch(word) is not None
-        for word in words
-    )
+    separated (`-o out.json`), joined (`-oout.json`, `--output=out.json`),
+    valueless (`-O`), or bundled with other short flags (`-so out.json`)."""
+    return any(_OUTPUT_FLAG_RE.fullmatch(word) is not None for word in words)
 
 
 def _request_count(segment: CommandSegment) -> int:
