@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # PreToolUse hook: HARD-BLOCK a latchkey permission request that is batched with
-# another request, chained with another command, or has its output redirected.
+# another request, chained with another command, has its output redirected, or is
+# filed by a backgrounded tool call.
 #
 # Why: a permission request is the one tool call the USER has to act on. The chat
 # turns it into a card (see the permission-request handling in
@@ -15,6 +16,9 @@
 #   * `> /tmp/out.json`, `-o /tmp/out.json`, `| jq .request_id` -> the echoed
 #     object never reaches the transcript, so the card has nothing to open the
 #     dialog with.
+#   * `run_in_background: true` -> same thing through the tool's own flag rather
+#     than the command: the result is a shell id, and the output the agent later
+#     polls belongs to a different tool call than the card.
 # Forbidding the batched/chained/redirected form makes that class of bug
 # structurally impossible at the source. The chaining half of the rule is
 # deliberately blunt: a chained command that happens to preserve the echo
@@ -46,4 +50,15 @@ command=$(echo "$input" | jq -r '.tool_input.command // empty')
 [[ "$command" == *"permission-requests"* ]] || exit 0
 
 script_dir=$(cd "$(dirname "$0")" && pwd)
-exec python3 "$script_dir/claude_latchkey_request_check.py" "$command"
+checker="$script_dir/claude_latchkey_request_check.py"
+
+# Whether the call runs the command in the background is a property of the tool
+# input, not of the command text, so it is read here and handed to the checker.
+# A harness whose payload has no such field never sets it. (Two `exec` lines
+# rather than an optional-flag array: `"${arr[@]}"` on an empty array is an
+# unbound-variable error under `set -u` on bash 3.2.)
+is_backgrounded=$(echo "$input" | jq -r '.tool_input.run_in_background // false')
+if [[ "$is_backgrounded" == "true" ]]; then
+    exec python3 "$checker" --backgrounded "$command"
+fi
+exec python3 "$checker" "$command"
