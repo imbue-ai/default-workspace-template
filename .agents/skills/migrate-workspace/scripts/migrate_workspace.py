@@ -399,9 +399,10 @@ def find_template_base(first_parent_log: Sequence[str]) -> str | None:
     newest first. The newest marker is the template state the source last
     updated itself to, so diffing the working tree against it yields what the
     user authored *since* that state -- and excludes template-version drift by
-    construction. (``update-self`` §5b walks the same markers but takes the
-    OLDEST, because it wants where the mind started; the difference is
-    load-bearing.) Returns ``None`` when no marker exists, which means the source
+    construction. (The update apply's origin seed -- ``_origin_line`` in
+    ``update-self``'s ``scripts/update_self.py`` -- walks the same markers but
+    takes the OLDEST, because it wants where the mind started; the difference
+    is load-bearing.) Returns ``None`` when no marker exists, which means the source
     cannot be migrated automatically.
     """
     for line in first_parent_log:
