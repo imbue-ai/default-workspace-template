@@ -185,7 +185,7 @@ listing them so the agent reconciles before acting.
 
 ### 8. Nudge on stop with open steps — `claude_open_tickets_stop_nudge.sh`
 A non-blocking, log-only note (exit 0 always) when the agent stops with steps still open.
-Real follow-up is handled by hook 6 on the next turn.
+Real follow-up is handled by hook 7 on the next turn.
 - **claude**: Stop, writes to stderr, `exit 0`.
 - **codex**: the **same** script — stderr only, `exit 0`, no stdout. Codex accepts an
   empty-stdout, exit-0 Stop hook as a clean no-op (confirmed live on 0.146.0 and against the
