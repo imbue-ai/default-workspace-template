@@ -249,7 +249,11 @@ def _geometry_path(layout_dir: Path) -> Path:
 
 
 def _parsed_entry(raw_entry: object) -> _StoredTranscriptGeometry | None:
-    """One stored entry, or None when it is not one this store wrote."""
+    """One stored entry, or None when it is not one this store wrote.
+
+    Reported by the caller, which is the loop that knows how many entries a read
+    lost in total.
+    """
     try:
         stored_shape = _StoredEntryShape.model_validate(raw_entry)
     except ValidationError:
@@ -281,16 +285,30 @@ def _read_unlocked(layout_dir: Path) -> dict[str, dict[str, _StoredTranscriptGeo
     if not isinstance(geometry_by_agent_id, dict):
         return {}
     parsed_by_agent_id: dict[str, dict[str, _StoredTranscriptGeometry]] = {}
+    # Counted across the whole read and reported once, as _validated_rows reports
+    # the rows it skips within one entry. Losing a whole entry is the larger of
+    # the two events, so it must not be the quieter one -- a drift in the stored
+    # shape would otherwise send every affected transcript back to measuring from
+    # scratch with nothing to point at.
+    dropped_entry_count = 0
     for agent_id, raw_buckets in geometry_by_agent_id.items():
         if not isinstance(agent_id, str) or not isinstance(raw_buckets, dict):
             continue
         parsed_buckets: dict[str, _StoredTranscriptGeometry] = {}
         for bucket_key, raw_entry in raw_buckets.items():
             parsed_entry = _parsed_entry(raw_entry) if isinstance(bucket_key, str) else None
-            if parsed_entry is not None:
-                parsed_buckets[bucket_key] = parsed_entry
+            if parsed_entry is None:
+                dropped_entry_count += 1
+                continue
+            parsed_buckets[bucket_key] = parsed_entry
         if parsed_buckets:
             parsed_by_agent_id[agent_id] = parsed_buckets
+    if dropped_entry_count > 0:
+        _loguru_logger.warning(
+            "Dropped {} transcript geometry entries in {} that this store did not write",
+            dropped_entry_count,
+            geometry_path,
+        )
     return parsed_by_agent_id
 
 

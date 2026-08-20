@@ -332,7 +332,10 @@ def test_a_corrupt_file_reads_as_nothing_measured(tmp_path: Path) -> None:
     assert read_geometry(tmp_path, "agent-7", 760) == stored_rows
 
 
-def test_a_hand_edited_file_keeps_only_the_entries_that_are_measurements(tmp_path: Path) -> None:
+def test_a_hand_edited_file_keeps_only_the_entries_that_are_measurements(
+    tmp_path: Path,
+    loguru_records: list[str],
+) -> None:
     (tmp_path / _GEOMETRY_FILENAME).write_text(
         json.dumps(
             {
@@ -360,6 +363,9 @@ def test_a_hand_edited_file_keeps_only_the_entries_that_are_measurements(tmp_pat
     assert read_geometry(tmp_path, "agent-7", 1200) == ()
     assert read_geometry(tmp_path, "agent-7", 480) == ()
     assert read_geometry(tmp_path, "agent-9", 760) == ()
+    # Losing a whole entry says more than losing a row within one, so it must not
+    # be the quieter of the two: both widths that went are reported.
+    assert [r for r in loguru_records if r.startswith("WARNING") and "Dropped 2 transcript geometry entries" in r]
 
 
 def test_a_file_that_is_not_this_store_reads_as_nothing_measured(tmp_path: Path) -> None:
