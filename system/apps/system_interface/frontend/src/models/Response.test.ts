@@ -19,6 +19,7 @@ import {
   fetchBackfillEvents,
   fetchForwardEvents,
   fetchWindowAtOffset,
+  getConversationLoadError,
   getEventsForAgent,
   getEventCount,
   getFirstEventId,
@@ -505,5 +506,59 @@ describe("total event count", () => {
     mockRequest.mockResolvedValueOnce({ events: [makeEvent("a"), makeEvent("b")] });
     await fetchEvents(agent);
     expect(getTotalEventCount(agent)).toBe(2);
+  });
+});
+
+// The snapshot's failure is recorded against the agent rather than held by the
+// panel that asked for it, so that a reload from anywhere -- the tab's Refresh,
+// the stream's background reconnect -- clears the panel's error state.
+describe("snapshot load error", () => {
+  // What mithril rejects with when the proxy answers a 503 whose body is not
+  // JSON: `responseType: "json"` leaves `response` null, reading `responseText`
+  // throws, so mithril builds `new Error(null)` -- whose `.message` is the
+  // string "null". That is the shape that used to reach the user as
+  // "Error: null".
+  function proxyUnavailableError(): Error {
+    return Object.assign(new Error(String(null)), { code: 503, response: null });
+  }
+
+  it("records a message naming the status when the body carries no detail", async () => {
+    const agent = freshAgent();
+    mockRequest.mockRejectedValueOnce(proxyUnavailableError());
+    await expect(fetchEvents(agent)).rejects.toThrow();
+    expect(getConversationLoadError(agent)).toBe("request failed (HTTP 503)");
+  });
+
+  it("prefers the server's own detail when the body has one", async () => {
+    const agent = freshAgent();
+    mockRequest.mockRejectedValueOnce(
+      Object.assign(new Error("{}"), { code: 404, response: { detail: "Agent 'x' not found" } }),
+    );
+    await expect(fetchEvents(agent)).rejects.toThrow();
+    expect(getConversationLoadError(agent)).toBe("Agent 'x' not found");
+  });
+
+  it("clears on the next successful fetch, whoever makes it", async () => {
+    const agent = freshAgent();
+    mockRequest.mockRejectedValueOnce(proxyUnavailableError());
+    await expect(fetchEvents(agent)).rejects.toThrow();
+    expect(getConversationLoadError(agent)).not.toBeNull();
+
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("a")] });
+    await fetchEvents(agent);
+    expect(getConversationLoadError(agent)).toBeNull();
+  });
+
+  it("is not raised by a failed backfill page, which leaves the window readable", async () => {
+    const agent = freshAgent();
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("b")], offset: 1, total: 2 });
+    await fetchEvents(agent);
+
+    // Paging failures are deliberately non-fatal: the older history just is not
+    // loaded. Recording one would blank a transcript the user can still read.
+    mockRequest.mockRejectedValueOnce(proxyUnavailableError());
+    await fetchBackfillEvents(agent);
+    expect(getConversationLoadError(agent)).toBeNull();
+    expect(ids(agent)).toEqual(["b"]);
   });
 });
