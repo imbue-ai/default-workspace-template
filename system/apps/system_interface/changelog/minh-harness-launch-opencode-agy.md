@@ -5,3 +5,5 @@ Registering them was not optional. An unregistered harness is not neutral: `pars
 Each harness drops its own placeholder when it lands a real implementation, one harness at a time; when the last one does, the shared placeholder module goes with it.
 
 Both harnesses launch through the shared OOM band wrapper. A test now reads `.mngr/settings.toml` and fails if any registered harness has no wrapper in its launch command -- an unbanded harness is silent (nothing errors, the agent is just disproportionately likely to be killed under memory pressure), which is how Codex and Pi went unbanded unnoticed.
+
+OpenCode gets no New Tab tile. The harness stays registered -- so an opencode agent created from a terminal is identified as itself rather than mistaken for Claude, and its mngr plugin stays on the same launch contract as the others -- but it is not planned to get a transcript watcher, and a tile would promise a chat that always renders blank.
