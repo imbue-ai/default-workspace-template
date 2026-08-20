@@ -163,13 +163,25 @@ export function createTranscriptVirtualizer(config: TranscriptVirtualizerConfig)
       //
       // Note this is NOT the library's `enabled` option: that empties the range
       // outright, which is the same lost-place failure by a different route.
+      //
+      // The rect is filtered on the measurement itself rather than on visibility,
+      // because a zero-height rect IS what a hidden tab reports and the two are
+      // not interchangeable at the edges. A panel mounted hidden has no rect at
+      // all, and the one notification it gets is the resize when the tab is shown
+      // -- delivered after layout, while the visibility attr only reaches the
+      // component on the next redraw. Rejecting that on visibility would discard
+      // the panel's only chance at a viewport size: nothing re-delivers it, and a
+      // virtualizer with no rect renders no rows and no spacers at all.
       observeElementRect: (instance: Virtualizer<HTMLElement, Element>, cb: (rect: Rect) => void) =>
         observeElementRect(instance, (rect) => {
-          if (!config.isEnabled() || rect.height <= 0) {
+          if (rect.height <= 0) {
             return;
           }
           cb(rect);
         }),
+      // The offset has no such self-describing degenerate value -- a hidden
+      // element simply reports zero, which is indistinguishable from the top of
+      // the transcript -- so this one does gate on visibility.
       observeElementOffset: (
         instance: Virtualizer<HTMLElement, Element>,
         cb: (offset: number, isScrolling: boolean) => void,
