@@ -1843,7 +1843,7 @@ requires-dist = [
     { name = "inline-snapshot", marker = "extra == 'dev'", specifier = ">=0.13" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "pydantic", specifier = ">=2.0" },
-    { name = "sentry-sdk", specifier = ">=2.63.0" },
+    { name = "sentry-sdk", specifier = ">=2.59.0" },
     { name = "tenacity", specifier = ">=8.0" },
     { name = "traceback-with-variables", specifier = ">=2.0" },
 ]
