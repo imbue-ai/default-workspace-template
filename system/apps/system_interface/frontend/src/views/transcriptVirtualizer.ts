@@ -77,24 +77,14 @@ export interface TranscriptVirtualizer {
   /** Push the options that change each render, then recompute. Call from the
    *  view before reading items. */
   sync(): void;
-  /** The rows to render, each carrying its offset and size. */
+  /** The rows to render, each carrying its offset and size. The leading spacer is
+   *  the first item's own `start`, so the renderer reads it from here rather than
+   *  from a second accessor that could disagree. */
   getVirtualItems(): VirtualItem[];
-  /** Total scroll height, including the reserved regions. */
-  getTotalSize(): number;
-  /** Spacer height standing in for everything above the first rendered row. */
-  getLeadingSpace(): number;
   /** Spacer height standing in for everything below the last rendered row. */
   getTrailingSpace(): number;
   /** Report a row's newly measured height. */
   resizeRow(index: number, height: number): void;
-  /** Scroll so the given row index is at the top of the viewport. */
-  scrollToIndex(index: number): void;
-  /** Scroll to an exact offset. */
-  scrollToOffset(offset: number): void;
-  /** Whether a scroll gesture is currently in flight. */
-  isScrolling(): boolean;
-  /** Current scroll offset as the virtualizer sees it. */
-  scrollOffset(): number;
   /** Register with the DOM; call once the scroll element exists. */
   mount(): void;
   /** Tear down observers. */
@@ -224,15 +214,6 @@ export function createTranscriptVirtualizer(config: TranscriptVirtualizerConfig)
 
     getVirtualItems: () => virtualizer.getVirtualItems(),
 
-    getTotalSize: () => virtualizer.getTotalSize(),
-
-    getLeadingSpace(): number {
-      const items = virtualizer.getVirtualItems();
-      // `start` already includes paddingStart, so the leading spacer is exactly
-      // the first rendered row's offset.
-      return items.length === 0 ? config.getPaddingStart() : items[0].start;
-    },
-
     getTrailingSpace(): number {
       const items = virtualizer.getVirtualItems();
       if (items.length === 0) {
@@ -244,18 +225,6 @@ export function createTranscriptVirtualizer(config: TranscriptVirtualizerConfig)
     resizeRow(index: number, height: number): void {
       virtualizer.resizeItem(index, height);
     },
-
-    scrollToIndex(index: number): void {
-      virtualizer.scrollToIndex(index, { align: "start" });
-    },
-
-    scrollToOffset(offset: number): void {
-      virtualizer.scrollToOffset(offset, { align: "start" });
-    },
-
-    isScrolling: () => virtualizer.isScrolling,
-
-    scrollOffset: () => virtualizer.scrollOffset ?? 0,
 
     mount(): void {
       if (cleanup !== null) {
