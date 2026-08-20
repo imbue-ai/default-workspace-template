@@ -153,7 +153,8 @@ virtualization), [chat-scroll-selection-fixes](../chat-scroll-selection-fixes/pl
    still ships.
 2. **Verification harness.** New acceptance-marked Playwright test exercising real scroll geometry
    against a tool-heavy transcript fixture. Built before the swap so every later phase is measurably
-   non-regressing. Records the pre-change behavior as the baseline.
+   non-regressing. It asserts content-relative stability outright rather than recording a baseline to
+   compare against.
 3. **Virtualizer swap.** Add the dependency, write the Mithril adapter, move `ChatPanel` onto it,
    delete `virtualWindow.ts` / `row-measurement.ts`. Behavior parity is the bar here — phantoms
    still sized by the old constant. Port the retired invariants.
@@ -174,10 +175,12 @@ Each phase leaves a working system; all six land as one branch (`preston/improve
   coverage with a hole between measured islands. `geometryCache.ts`: width bucketing, TTL, LRU
   eviction, IndexedDB-unavailable fallback.
 - **Ported invariants.** From `virtualWindow.test.ts`: pad/total consistency, the disjoint pinned run
-  (a far-off selection must not mount the rows between), phantoms folded into outer spacers, backward
-  fill when scrolled past the end, caller-supplied pin ranges clamped internally. From
-  `row-measurement.test.ts`: sub-pixel wobble must never ratchet a cached height across the
-  threshold, and measurement must debounce to a single frame.
+  (a far-off selection must not mount the rows between), phantoms folded into outer spacers,
+  caller-supplied pin ranges clamped internally. Its backward fill when scrolled past the end is not
+  ported: the range calculation is the library's now, and it reads the live `scrollTop` rather than a
+  cached one, so there is no longer a window of ours that can be asked about a position the browser
+  has already clamped away. From `row-measurement.test.ts`: sub-pixel wobble must never ratchet a
+  cached height across the threshold, and measurement must debounce to a single frame.
 - **Acceptance (Playwright, in CI).** The new harness, marked `@pytest.mark.acceptance`:
   - Content-relative viewport position is stable while paging history — tracked as *row id at
     viewport top + offset*, not `scrollTop`. The earlier investigation found 4 of 6 real jumps had a
@@ -186,9 +189,9 @@ Each phase leaves a working system; all six land as one branch (`preston/improve
     detaches and stays detached through streaming. This is the specific regression that killed #448.
   - Selection survives streaming and scroll.
   - Correctness assertions hard-fail the build.
-- **Frame time.** Measured in the same harness during streaming against a 16.7ms budget, recorded
-  against a committed baseline and **reported only — never fails the build**, since shared CI
-  hardware is too noisy for a hard perf gate.
+- **Frame time.** Not measured. It belongs with the render-cost work the Overview puts out of scope,
+  and a budget reported against a committed baseline is worth little on shared CI hardware too noisy
+  to gate on. Smoothness here comes from correct geometry, which the assertions above do cover.
 - **Existing gate, untouched.** `test_e2e.py::test_hidden_tab_preserves_scroll_window` stays exactly
   as written. Its value is that it was authored independently of this rewrite — it is what caught
   #448's regression, and it must stay green.
