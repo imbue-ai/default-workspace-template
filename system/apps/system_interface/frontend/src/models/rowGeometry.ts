@@ -235,7 +235,7 @@ export class RowGeometryIndex {
    * A row straddling `offset` is excluded, so the result always lands on a row
    * boundary -- there is no position inside a rendered row to scroll to.
    */
-  heightBefore(offset: number): number {
+  heightBefore(offset: number, gapRate?: number): number {
     if (offset <= 0) {
       return 0;
     }
@@ -252,7 +252,14 @@ export class RowGeometryIndex {
     // boundary's own offset rather than from `offset` directly, so a straddling
     // row does not have its events counted as an unmeasured gap as well.
     const gapEvents = Math.max(0, Math.min(offset, boundaryOffset) - measuredEvents);
-    return measuredHeight + gapEvents * this.learnedEventHeight();
+    // The caller may supply the rate to price gaps at. It has a better one: this
+    // index only holds rows that have *settled*, which lags first paint by half
+    // a second, while the caller can see every row that has been measured at all.
+    // Pricing gaps off settled rows alone means the reserve stays at its cold
+    // default until the first settle lands and then collapses in one step -- and
+    // that step falls on whichever redraw happens next, which is routinely the
+    // user's own scroll.
+    return measuredHeight + gapEvents * (gapRate ?? this.learnedEventHeight());
   }
 
   /**
@@ -266,7 +273,7 @@ export class RowGeometryIndex {
    * invert the arithmetic by hand (which sparse coverage makes fiddly), this
    * binary-searches `heightBefore` itself, so the two cannot drift apart.
    */
-  offsetAtHeight(height: number, maxOffset: number): number {
+  offsetAtHeight(height: number, maxOffset: number, gapRate?: number): number {
     if (height <= 0 || maxOffset <= 0) {
       return 0;
     }
@@ -274,7 +281,7 @@ export class RowGeometryIndex {
     let high = maxOffset;
     while (low < high) {
       const mid = Math.ceil((low + high) / 2);
-      if (this.heightBefore(mid) <= height) {
+      if (this.heightBefore(mid, gapRate) <= height) {
         low = mid;
       } else {
         high = mid - 1;

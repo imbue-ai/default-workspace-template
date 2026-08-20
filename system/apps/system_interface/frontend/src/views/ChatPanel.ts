@@ -25,7 +25,7 @@ import {
   MAX_HELD_EVENTS,
 } from "../models/Response";
 import { isSelectionActiveWithin } from "../models/scrollFollow";
-import { RowGeometryIndex, geometryFromSnapshot } from "../models/rowGeometry";
+import { DEFAULT_EVENT_HEIGHT_PX, RowGeometryIndex, geometryFromSnapshot } from "../models/rowGeometry";
 import { createGeometryCache, widthBucketFor } from "../models/geometryCache";
 import { resolveSelectionRowRange, selectionStateWithin } from "./scroll-selection";
 import { createTranscriptScroll } from "./transcript-scroll";
@@ -89,6 +89,18 @@ const JUMP_GAP_EVENTS = 120;
 // Coalescing window for persisting geometry, so a burst of rows settling after a
 // paint costs one write rather than one per row.
 const GEOMETRY_SAVE_DEBOUNCE_MS = 2000;
+// How far the observed per-event rate must move, relative to the rate in use,
+// before the reserve adopts it. Stops the reserved height churning once it has
+// converged, while still letting the cold default be replaced by reality.
+const RESERVE_RATE_CHANGE_THRESHOLD = 0.1;
+// How many measured rows are enough to fix the reserve rate for good. The reserve
+// prices history this client has never seen, so being approximately right and
+// STABLE beats being precise and moving: every later refinement would resize the
+// scroll container under a reader, and a shrink that pulls the bottom up to the
+// viewport re-arms tail-following underneath them. Twenty rows is a
+// representative sample of a transcript's mix, and is reached within the first
+// screens.
+const RESERVE_RATE_SAMPLE_ROWS = 20;
 // Reserved space for history the server has but this client has not loaded is
 // sized from measured geometry (see models/rowGeometry), not from a per-event
 // constant. The constant was the bug: the renderer groups a whole turn into one
@@ -173,7 +185,24 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       if (row === undefined) {
         return 0;
       }
-      return measurements.heightFor(row.key) ?? row.estimate;
+      const measured = measurements.heightFor(row.key);
+      if (measured !== undefined) {
+        return measured;
+      }
+      // Estimate an unmeasured row from what this transcript actually renders
+      // at, not from a per-kind constant. The constants are necessarily generic
+      // -- an assistant row is 240px whether it holds three words or a screenful
+      // -- and on a transcript of short messages every newly rendered row then
+      // shrank by a couple of hundred pixels the moment it was measured.
+      // Scrolling up rendered a screenful of them at once, the content collapsed
+      // by thousands of pixels, and the bottom rose to meet a reader who had
+      // deliberately scrolled away from it -- which re-armed tail-following and
+      // dragged them back down.
+      const events = row.end_offset - row.start_offset;
+      if (isReserveRateSettled && events > 0) {
+        return Math.max(1, reserveRate * events);
+      }
+      return row.estimate;
     },
     getPaddingStart: () => phantomTopHeight,
     getPaddingEnd: () => phantomBottomHeight,
@@ -447,6 +476,8 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     measurements.reset();
     geometry = new RowGeometryIndex();
     geometryWidthBucket = -1;
+    reserveRate = DEFAULT_EVENT_HEIGHT_PX;
+    isReserveRateSettled = false;
     virtualizer.reset();
     rowsCacheKey = null;
     backfillInFlight = false;
@@ -533,10 +564,14 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     if (phantomTopHeight > 0 && element.scrollTop < phantomTopHeight) {
       // The exact inverse of the function that sized the reserved space, so the
       // position the thumb is at and the offset it resolves to cannot disagree.
-      targetIndex = geometry.offsetAtHeight(element.scrollTop, firstOffset);
+      targetIndex = geometry.offsetAtHeight(element.scrollTop, firstOffset, reserveRate);
     } else if (phantomBottomHeight > 0 && element.scrollTop + element.clientHeight > loadedBottom) {
       const intoBottomRegion = element.scrollTop + element.clientHeight - loadedBottom;
-      targetIndex = geometry.offsetAtHeight(geometry.heightBefore(windowEnd) + intoBottomRegion, total);
+      targetIndex = geometry.offsetAtHeight(
+        geometry.heightBefore(windowEnd, reserveRate) + intoBottomRegion,
+        total,
+        reserveRate,
+      );
     }
 
     // Far from the loaded window in either direction -> jump.
@@ -835,8 +870,11 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     const total = getTotalEventCount(agentId);
     const firstOffset = getFirstOffset(agentId);
     const windowEnd = firstOffset + events.length;
-    phantomTopHeight = Math.round(geometry.heightBefore(firstOffset));
-    phantomBottomHeight = Math.round(Math.max(0, geometry.heightBefore(total) - geometry.heightBefore(windowEnd)));
+    updateReserveRate(rows);
+    phantomTopHeight = Math.round(geometry.heightBefore(firstOffset, reserveRate));
+    phantomBottomHeight = Math.round(
+      Math.max(0, geometry.heightBefore(total, reserveRate) - geometry.heightBefore(windowEnd, reserveRate)),
+    );
 
     // Rows a live selection touches, kept mounted by the virtualizer's range
     // extractor even when the viewport has moved far away -- removing a
@@ -863,6 +901,76 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
         ...renderOutgoingMessages(agentId),
       ]),
     ]);
+  }
+
+  /**
+   * Pixels per event used to price history this client has never rendered.
+   *
+   * Deliberately not read off the geometry index, which only admits rows that
+   * have *settled* -- half a second after paint, and only folded in on whatever
+   * redraw happens next. Pricing the reserve off that meant it sat at the cold
+   * default until the first settle landed and then collapsed several-fold in one
+   * step, and that step routinely fell on the user's own scroll: the shorter
+   * content clamped scrollTop, which re-armed tail-following underneath them.
+   *
+   * Taking the rate from every row that has been measured at all converges it
+   * within a frame of first paint, while the viewport is still pinned to the
+   * tail and the change is invisible.
+   */
+  let reserveRate = DEFAULT_EVENT_HEIGHT_PX;
+  // Set once enough rows have been measured to trust the rate; from then on the
+  // reserved height only changes when the window itself does.
+  let isReserveRateSettled = false;
+
+  /**
+   * Re-learn the reserve rate, but only when it has really moved.
+   *
+   * The relative threshold is what stops the reserve churning: once converged,
+   * ordinary measurement noise leaves it alone, so the scroll height stays put
+   * and the scrollbar does not crawl. A genuine change -- the cold default
+   * meeting reality, or a conversation whose character shifts -- clears it
+   * easily.
+   */
+  function updateReserveRate(rows: RowDescriptor[]): void {
+    // Weighted across the WHOLE loaded window, counting a row's estimate when it
+    // has not been measured yet. Taking a median over only the measured rows
+    // instead made the rate lurch as different kinds of row settled at different
+    // times -- short user bubbles first, taller assistant rows after -- which
+    // moved the reserve by thousands of pixels seconds after load. Including
+    // every row keeps the mix representative from the first frame, so the rate
+    // only tightens as estimates are replaced by measurements rather than
+    // swinging.
+    // A hidden panel has nothing laid out, so it can learn nothing -- and
+    // re-pricing the reserve then would move the content behind a tab the reader
+    // is not looking at, so it would come back somewhere else than they left it.
+    if (!panelVisible || isReserveRateSettled) {
+      return;
+    }
+    let totalHeight = 0;
+    let totalEvents = 0;
+    let measuredRows = 0;
+    for (const row of rows) {
+      const events = row.end_offset - row.start_offset;
+      if (events <= 0) {
+        continue;
+      }
+      const measured = measurements.heightFor(row.key);
+      if (measured !== undefined) {
+        measuredRows += 1;
+      }
+      totalHeight += measured ?? row.estimate;
+      totalEvents += events;
+    }
+    if (totalEvents <= 0 || totalHeight <= 0) {
+      return;
+    }
+    const observed = totalHeight / totalEvents;
+    if (Math.abs(observed - reserveRate) / reserveRate > RESERVE_RATE_CHANGE_THRESHOLD) {
+      reserveRate = observed;
+    }
+    if (measuredRows >= RESERVE_RATE_SAMPLE_ROWS) {
+      isReserveRateSettled = true;
+    }
   }
 
   // A measure pass is already queued for the next frame.
