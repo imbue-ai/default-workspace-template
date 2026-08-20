@@ -335,6 +335,34 @@ describe("Sidebar switcher dropdown", () => {
     expect(root.querySelector(".project-rail-search")).toBeNull();
   });
 
+  it("folds up when the window loses focus, not just its menus", () => {
+    // The UI is a cross-origin iframe inside the minds chrome, so a cursor
+    // leaving the outer window may raise no boundary event in here at all.
+    // Blur is the one signal that always arrives for the click-away case, and
+    // a rail left expanded over the dock while the user is in another app is
+    // the same wrong as a menu left there.
+    const { root, redraw } = mountSidebar(makeAttrs());
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+    expect(root.querySelector(".project-rail-search")).not.toBeNull();
+
+    window.dispatchEvent(new Event("blur"));
+    redraw();
+    expect(root.querySelector(".project-rail-search")).toBeNull();
+  });
+
+  it("folds up on a document-level pointer leave", () => {
+    // The companion to the `mouseout` path: registered as well as, not instead
+    // of, since neither is reliable on its own inside an embedded frame.
+    const { root, redraw } = mountSidebar(makeAttrs());
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    document.documentElement.dispatchEvent(new MouseEvent("mouseleave"));
+    redraw();
+    expect(root.querySelector(".project-rail-search")).toBeNull();
+  });
+
   it("stays open when the pointer merely moves between elements in the page", () => {
     // Every ordinary crossing names the element being entered, including into
     // an iframe pane; only a true exit from the document names nothing. Acting
@@ -766,6 +794,22 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
     redraw();
     // No mouseleave yet: the pointer is still resting on the rail, and a real
     // one is still coming to collapse it whenever it goes.
+    expect(root.querySelector(".project-rail-search")).not.toBeNull();
+  });
+
+  it("does not discard a rename in progress when the window blurs", () => {
+    // Collapsing removes the input, and its removal commits what was typed --
+    // so a blur mid-edit must leave the rail alone.
+    const attrs = makeAttrs({
+      rows: [{ ref: "chat:agent-9", kind: "chat", label: "Chat 9", isOpen: true }],
+    });
+    const { root, redraw } = mountSidebar(attrs);
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+    typeIntoRenameField(root, redraw, "Chat 9", "Renamed");
+
+    window.dispatchEvent(new Event("blur"));
+    redraw();
     expect(root.querySelector(".project-rail-search")).not.toBeNull();
   });
 
