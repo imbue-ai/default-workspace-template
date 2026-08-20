@@ -33,9 +33,9 @@ import type { VirtualItem } from "@tanstack/virtual-core";
 // Fallback heights, used only until a row has been measured. Rough is fine: they
 // affect spacer sizing for off-screen rows, which is corrected the moment a row
 // scrolls into view and is measured.
-export const ESTIMATED_USER_HEIGHT_PX = 90;
-export const ESTIMATED_ASSISTANT_HEIGHT_PX = 240;
-export const ESTIMATED_PROGRESS_HEIGHT_PX = 360;
+const ESTIMATED_USER_HEIGHT_PX = 90;
+const ESTIMATED_ASSISTANT_HEIGHT_PX = 240;
+const ESTIMATED_PROGRESS_HEIGHT_PX = 360;
 
 export interface RowDescriptor {
   key: string;
