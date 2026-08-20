@@ -516,6 +516,13 @@ def _render_action(payload: dict[str, Any], browser_name: str, kind: str) -> int
     if status == "stale_index":
         _err(payload.get("error") or f"that element index is stale -- run `state {browser_name}` again first")
         return _EXIT_ERROR
+    if status == "blocked":
+        # Retrying is pointless and there is no other browser to try, so say what would make the
+        # URL navigable instead of leaving the caller to guess from a bare error line.
+        _err(f"{payload.get('error') or 'navigation blocked'} -- the fleet only opens the public web and this "
+             "workspace's own registered app origins (the `url` values in data/.state/apps.toml). If this is an "
+             "app you just built, register its port with system/scripts/forward_port.py first.")
+        return _EXIT_ERROR
     if status == "timed_out":
         _err(f"browser {browser_name} stayed busy; gave up.")
         return _EXIT_TIMEOUT

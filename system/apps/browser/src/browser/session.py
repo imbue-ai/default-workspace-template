@@ -51,8 +51,9 @@ import shutil
 import subprocess
 import threading
 import time
+import tomllib
 from collections import deque
-from urllib.parse import urlparse
+from urllib.parse import ParseResult, urlparse
 from collections.abc import Awaitable, Callable, Coroutine
 from pathlib import Path
 from typing import Any, Literal
@@ -287,6 +288,66 @@ _MAX_SESSIONS = int(os.environ.get("BROWSER_MAX_SESSIONS", "2"))
 
 _ALLOWED_NAV_SCHEMES = frozenset({"http", "https"})
 
+_DEFAULT_PORT_BY_SCHEME = {"http": 80, "https": 443}
+
+# The workspace's own service registry (``forward_port.py`` writes it; ``layout.py`` and the fleet
+# CLI read it the same way). Relative paths resolve against the workspace root, so the daemon finds
+# it wherever it was started from.
+_APPS_REGISTRY_ENV = "MINDS_APPS_FILE"
+_APPS_REGISTRY_DEFAULT = "data/.state/apps.toml"
+
+
+def _apps_registry_path() -> Path:
+    path = Path(os.environ.get(_APPS_REGISTRY_ENV, _APPS_REGISTRY_DEFAULT))
+    return path if path.is_absolute() else _repo_root() / path
+
+
+def _effective_port(parsed: ParseResult) -> "int | None":
+    """A URL's port, defaulted from its scheme. None when the authority names a port that is not a
+    number at all, which must never be treated as matching anything."""
+    try:
+        port = parsed.port
+    except ValueError:
+        return None
+    if port is not None:
+        return port
+    return _DEFAULT_PORT_BY_SCHEME.get(parsed.scheme.lower())
+
+
+def _is_loopback_host(host: str) -> bool:
+    """Whether a host name or literal resolves to this machine. ``*.localhost`` counts: RFC 6761
+    reserves the whole subtree for loopback, so ``anything.localhost:8080`` reaches the very same
+    socket as ``localhost:8080``."""
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _registered_service_ports() -> frozenset[int]:
+    """Loopback ports the workspace's own apps have registered as their served origins.
+
+    Read on every check rather than cached: a workspace registers apps as they are built, and a
+    port that became legitimate a second ago must be navigable now.
+    """
+    try:
+        registry = tomllib.loads(_apps_registry_path().read_text())
+    except (OSError, tomllib.TOMLDecodeError):
+        return frozenset()
+    ports: set[int] = set()
+    for app in registry.get("apps") or []:
+        if not isinstance(app, dict):
+            continue
+        registered = urlparse(str(app.get("url") or "").strip())
+        if not _is_loopback_host((registered.hostname or "").lower()):
+            continue
+        port = _effective_port(registered)
+        if port is not None:
+            ports.add(port)
+    return frozenset(ports)
+
 
 def _unsafe_navigation_reason(url: str) -> "str | None":
     """Reason a caller-supplied URL must not be navigated to (SSRF guard), or None if allowed.
@@ -295,7 +356,15 @@ def _unsafe_navigation_reason(url: str) -> "str | None":
     (including the cloud-metadata IP 169.254.169.254), so a caller can't make the browser read a
     local file -- e.g. the Anthropic key at ``file:///home/user/.mngr/env`` -- or hit an internal
     service and exfiltrate it back through the state/screenshot channel. Literal-IP based; a
-    hostname that DNS-rebinds to a blocked IP is a residual this minimal guard does not resolve."""
+    hostname that DNS-rebinds to a blocked IP is a residual this minimal guard does not resolve.
+
+    The one loopback exception is the workspace's OWN registered service origins -- the ports in
+    ``data/.state/apps.toml``. Those are already published to the outside world by the host-side
+    forwarder and are already reachable from any shell in this container, so pointing the fleet at
+    one exposes nothing the caller could not reach anyway; what the guard exists to stop -- local
+    files, unregistered internal ports, the metadata IP -- stays blocked. This is what lets an app
+    built in the workspace be exercised in the same browser the human watches.
+    """
     parsed = urlparse((url or "").strip())
     scheme = parsed.scheme.lower()
     if scheme not in _ALLOWED_NAV_SCHEMES:
@@ -303,12 +372,17 @@ def _unsafe_navigation_reason(url: str) -> "str | None":
     host = (parsed.hostname or "").lower()
     if not host:
         return "URL has no host"
+    is_registered_origin = _is_loopback_host(host) and _effective_port(parsed) in _registered_service_ports()
     if host == "localhost" or host.endswith(".localhost"):
+        if is_registered_origin:
+            return None
         return "loopback host is not allowed"
     try:
         address = ipaddress.ip_address(host)
     except ValueError:
         return None  # a regular hostname
+    if address.is_loopback and is_registered_origin:
+        return None
     if address.is_loopback or address.is_link_local:
         return f"internal address {host} is not allowed"
     return None
@@ -1836,6 +1910,14 @@ class LiveBrowser(MutableModel):
         return await self.run_action(agent_id, agent_name, _do)
 
     async def act_tab(self, agent_id: str, agent_name: str | None, action: str, index: int | None, url: str | None) -> dict[str, Any]:
+        # `tab new --url` reaches the same page load as `open`, so it answers to the same SSRF
+        # guard. Without this the guard would only ever be a speed bump: a caller told "navigation
+        # blocked" here has an unguarded second door two subcommands away.
+        if action == "new" and url:
+            reason = _unsafe_navigation_reason(url)
+            if reason is not None:
+                return {"ok": False, "status": "blocked", "error": f"navigation blocked: {reason}"}
+
         async def _do(_handler: ActionHandler) -> dict[str, Any]:
             # ONE tab model: browser-use. switch/new move the REAL tab AND foreground it
             # (via _focus_and_foreground), so state/click and the pane all follow. "list"

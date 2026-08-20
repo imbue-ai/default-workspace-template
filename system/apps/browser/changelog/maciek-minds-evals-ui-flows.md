@@ -1,0 +1,5 @@
+The browser fleet can now open the workspace's own apps. `open` (and `tab new --url`) accept a `localhost` / `127.0.0.1` URL whose port is registered in `data/.state/apps.toml` -- the same origins the workspace already serves to the human's app tabs -- so an app built in the workspace can be clicked through in the shared browser the human is watching, instead of only in a private Playwright instance. The registry is consulted per navigation, so an app becomes navigable the moment `forward_port.py` registers it, with no restart.
+
+The SSRF guard is otherwise unchanged and now covers more: `file:`/`chrome:`/`data:` URLs, unregistered local ports, and the cloud-metadata address stay blocked, and `tab new --url` -- which previously bypassed the guard entirely -- is now checked the same way `open` is.
+
+A blocked navigation now explains itself instead of printing a bare error: the CLI names the registry and points at `forward_port.py`, and the `agentic-browser-fleet` skill documents what the fleet will and will not open (it said nothing about the guard before).

@@ -1421,3 +1421,38 @@ def test_broadcast_drops_oldest_frame_when_a_slow_client_queue_is_full(monkeypat
         assert survivors == ["3", "4"]
 
     asyncio.run(go())
+
+
+def _apps_registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, port: int) -> None:
+    """Register one loopback app, the way forward_port.py would, for the navigation guard."""
+    registry_path = tmp_path / "apps.toml"
+    registry_path.write_text(f'[[apps]]\nname = "todo"\nurl = "http://localhost:{port}"\nlabel = "todo-x1"\n')
+    monkeypatch.setenv("MINDS_APPS_FILE", str(registry_path))
+
+
+def test_navigate_refuses_an_unregistered_loopback_url(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _apps_registry(tmp_path, monkeypatch, port=8080)
+    browser = _running_browser(browser_id="b1")
+
+    async def go() -> None:
+        result = await browser.act_navigate("A", "Alice", "http://localhost:4000/")
+        assert result["ok"] is False
+        assert result["status"] == "blocked"
+        assert "loopback host is not allowed" in result["error"]
+
+    asyncio.run(go())
+
+
+def test_tab_new_refuses_what_navigate_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # `tab new --url` loads a page just like `open` does, so it must answer to the same guard --
+    # otherwise a caller refused by `open` has an unguarded second door two subcommands away.
+    _apps_registry(tmp_path, monkeypatch, port=8080)
+    browser = _running_browser(browser_id="b1")
+
+    async def go() -> None:
+        for blocked_url in ("file:///home/user/.mngr/env", "http://169.254.169.254/", "http://localhost:4000/"):
+            result = await browser.act_tab("A", "Alice", "new", None, blocked_url)
+            assert result["ok"] is False, blocked_url
+            assert result["status"] == "blocked", blocked_url
+
+    asyncio.run(go())

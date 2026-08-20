@@ -104,6 +104,13 @@ def test_parser_accepts_task_flags() -> None:
         ({"ok": False, "status": "lost_control", "enqueued": False}, "state", fleet._EXIT_BUSY),
         ({"ok": False, "status": "stale_index", "error": "run state"}, "click", fleet._EXIT_ERROR),
         ({"ok": False, "status": "timed_out"}, "state", fleet._EXIT_TIMEOUT),
+        # a URL the SSRF guard refuses: a hard error, since retrying or switching browsers
+        # changes nothing about the URL.
+        (
+            {"ok": False, "status": "blocked", "error": "navigation blocked: loopback host is not allowed"},
+            "navigate",
+            fleet._EXIT_ERROR,
+        ),
         ({"ok": False, "status": "error", "error": "boom"}, "click", fleet._EXIT_ERROR),
     ],
 )
