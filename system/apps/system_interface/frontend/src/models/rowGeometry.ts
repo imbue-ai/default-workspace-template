@@ -207,8 +207,8 @@ export class RowGeometryIndex {
   }
 
   /**
-   * The inverse of `heightBefore`: the largest offset whose reserved space is
-   * still at or above `height`, searched within `[0, maxOffset]`.
+   * The inverse of `heightBefore`: the largest offset within `[0, maxOffset]`
+   * whose reserved space is still at or below `height`.
    *
    * This is what maps a scrollbar position back to a place in the transcript, so
    * it must be the *exact* inverse of the function that sized the space -- if the
