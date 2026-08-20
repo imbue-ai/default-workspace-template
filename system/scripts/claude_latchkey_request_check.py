@@ -31,10 +31,14 @@ from tk_command_parsing.parser import CommandSegment, parse_command
 
 # The reserved latchkey host an agent POSTs to when asking the user to approve an
 # action, and the POST method flag that distinguishes filing a request from
-# reading the queue. Both come from the transcript parser's detector
-# (`PERMISSION_REQUEST_HOST` / `is_permission_request_call` in
-# system/apps/system_interface/.../harnesses/tool_output.py), so a call this gate
-# blocks is a call that renders as a permission card.
+# reading the queue. The host is the transcript parser's constant verbatim
+# (`PERMISSION_REQUEST_HOST` in
+# system/apps/system_interface/.../harnesses/tool_output.py). The method match is
+# deliberately a SUPERSET of that parser's (`-X\s*POST|--request\s*POST` over the
+# raw input): it is matched token-wise and also accepts the `=` form, so a
+# spelling like `--request=POST` -- which curl honors and the parser's regex
+# misses -- is still gated. Erring wide is the right direction here: a filing the
+# gate waves through is a request the user may never get to answer.
 _PERMISSION_REQUEST_HOST = "latchkey-self.invalid/permission-requests"
 _METHOD_FLAGS = ("-X", "--request")
 _POST_FLAG_RE = re.compile(r"(?:-X|--request)=?POST", re.IGNORECASE)
