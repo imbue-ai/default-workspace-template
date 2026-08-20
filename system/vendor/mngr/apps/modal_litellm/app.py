@@ -74,76 +74,31 @@ _MIN_CONTAINERS = read_min_containers("MINDS_LITELLM_PROXY_MIN_CONTAINERS")
 # means "don't pin it" -- Modal uses its own default.
 _SCALEDOWN_WINDOW = read_scaledown_window("MINDS_LITELLM_PROXY_SCALEDOWN_WINDOW")
 
-# Per-token USD pricing for each Anthropic model, mirrored verbatim from
-# litellm's model_prices_and_context_window map. We register pricing inline
-# (via litellm_params) rather than relying on litellm's bundled price map so
-# cost tracking stays correct even on litellm versions whose bundled map
-# predates a model (e.g. claude-opus-4-8 only landed in litellm's price map
-# in the 1.88.0 pre-release line). MUST stay in sync with
-# litellm_proxy/config.yaml -- config_drift_test.py enforces this.
-_FABLE_PRICING = {
-    "input_cost_per_token": 0.00001,
-    "output_cost_per_token": 0.00005,
-    "cache_creation_input_token_cost": 0.0000125,
-    "cache_read_input_token_cost": 0.000001,
-}
-_OPUS_PRICING = {
-    "input_cost_per_token": 0.000005,
-    "output_cost_per_token": 0.000025,
-    "cache_creation_input_token_cost": 0.00000625,
-    "cache_read_input_token_cost": 0.0000005,
-}
-# Opus 4.1 and the original Opus 4 (claude-opus-4-20250514) predate the Opus
-# price drop and cost 3x the newer Opus models.
-_OPUS_LEGACY_PRICING = {
-    "input_cost_per_token": 0.000015,
-    "output_cost_per_token": 0.000075,
-    "cache_creation_input_token_cost": 0.00001875,
-    "cache_read_input_token_cost": 0.0000015,
-}
-_SONNET_PRICING = {
-    "input_cost_per_token": 0.000003,
-    "output_cost_per_token": 0.000015,
-    "cache_creation_input_token_cost": 0.00000375,
-    "cache_read_input_token_cost": 0.0000003,
-}
-_HAIKU_PRICING = {
-    "input_cost_per_token": 0.000001,
-    "output_cost_per_token": 0.000005,
-    "cache_creation_input_token_cost": 0.00000125,
-    "cache_read_input_token_cost": 0.0000001,
-}
-
-
-def _model_entry(model_name: str, pricing: dict[str, float]) -> dict[str, object]:
-    """Build a litellm model_list entry that forwards to the Anthropic API with inline pricing."""
-    litellm_params: dict[str, object] = {
-        "model": f"anthropic/{model_name}",
-        "api_key": "os.environ/ANTHROPIC_API_KEY",
-    }
-    litellm_params.update(pricing)
-    return {"model_name": model_name, "litellm_params": litellm_params}
-
-
+# Every Claude model is routable through one pattern entry: a client's bare model
+# name (``claude-opus-5``) matches ``claude-*`` and is forwarded upstream as
+# ``anthropic/claude-<rest>``. The pattern is deliberately ``claude-*`` rather
+# than a bare ``*``: this proxy holds only an Anthropic credential, so a non-Claude
+# name should fail here as an unknown model rather than be forwarded to Anthropic
+# and come back as a confusing upstream error. (An Anthropic model that does not
+# start with ``claude-`` would need this pattern widened.) Pricing comes from litellm's own model-cost map, fetched
+# remotely at startup (``LITELLM_LOCAL_MODEL_COST_MAP`` is deliberately unset), so
+# a new Anthropic model is routable and priced the day litellm's map carries it,
+# with no entry to add here.
+#
+# The map also carries dimensions an inline per-token price cannot express, and
+# which the previous enumerated config therefore got wrong: the fast-mode premium
+# (``provider_specific_entry.fast``, 2x on Opus 5 / 4.8), the regional uplift, and
+# the 1-hour cache-write rate (``cache_creation_input_token_cost_above_1hr``, 2x
+# base against the 1.25x 5-minute rate that a single inline field assumes).
 LITELLM_CONFIG = {
     "model_list": [
-        # Fable line.
-        _model_entry("claude-fable-5", _FABLE_PRICING),
-        # Current Opus line.
-        _model_entry("claude-opus-4-8", _OPUS_PRICING),
-        _model_entry("claude-opus-4-7", _OPUS_PRICING),
-        _model_entry("claude-opus-4-6", _OPUS_PRICING),
-        _model_entry("claude-opus-4-5", _OPUS_PRICING),
-        # Older Opus (higher price tier), still active on the Anthropic API.
-        _model_entry("claude-opus-4-1", _OPUS_LEGACY_PRICING),
-        _model_entry("claude-opus-4-20250514", _OPUS_LEGACY_PRICING),
-        # Sonnet line.
-        _model_entry("claude-sonnet-4-6", _SONNET_PRICING),
-        _model_entry("claude-sonnet-4-5", _SONNET_PRICING),
-        _model_entry("claude-sonnet-4-20250514", _SONNET_PRICING),
-        # Haiku line (bare alias + dated id both routable).
-        _model_entry("claude-haiku-4-5", _HAIKU_PRICING),
-        _model_entry("claude-haiku-4-5-20251001", _HAIKU_PRICING),
+        {
+            "model_name": "claude-*",
+            "litellm_params": {
+                "model": "anthropic/claude-*",
+                "api_key": "os.environ/ANTHROPIC_API_KEY",
+            },
+        },
     ],
     "general_settings": {
         "database_url": "os.environ/DATABASE_URL",

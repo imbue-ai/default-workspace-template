@@ -28,6 +28,7 @@ from harbor.agents.base import BaseAgent
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 from harbor.models.trajectories import Agent as TrajectoryAgent
+from harbor.models.trajectories import FinalMetrics
 from harbor.models.trajectories import Step
 from harbor.models.trajectories import Trajectory
 from loguru import logger
@@ -39,6 +40,8 @@ from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 from imbue.minds_evals import decider
 from imbue.minds_evals import minds_bridge
+from imbue.minds_evals import proxy_config
+from imbue.minds_evals import usage as usage_accounting
 from imbue.minds_evals.data_types import CaseConfig
 from imbue.minds_evals.data_types import DECIDE_SENTINEL
 from imbue.minds_evals.data_types import DeciderResult
@@ -52,11 +55,30 @@ TRANSCRIPT_FILENAME: Final[str] = "full_transcript.jsonl"
 # conversation so far.
 CONVERSATION_FILENAME: Final[str] = "conversation.jsonl"
 STATE_FILENAME: Final[str] = "state.json"
+# Token and cost accounting, written host-side beside the trajectory (the verifier does not grade
+# it, so unlike the transcript files it is not mirrored into the box).
+USAGE_FILENAME: Final[str] = "usage.json"
 MINDS_ENV: Final[str] = "staging"
 
 # Electron plus the backend need several minutes on first boot; the agent-level
 # override_setup_timeout_sec in the run recipe must cover this.
 BACKEND_BOOT_TIMEOUT_SECONDS: Final[float] = 600.0
+
+# The box-local port an in-box LLM proxy would listen on, reverse-forwarded to the same port inside
+# the workspace so Claude Code can reach it as a loopback address.
+PROXY_PORT: Final[int] = 4000
+# Long enough to cover the probe's own fetch without leaving a tunnel open for the whole trial; the
+# probe tears itself down when it elapses, so a failure cannot leak a long-lived process.
+PROXY_PROBE_HOLD_SECONDS: Final[float] = 180.0
+PROXY_PROBE_READY_TIMEOUT_SECONDS: Final[float] = 120.0
+PROXY_PROBE_TOKEN: Final[str] = "minds-evals-reverse-tunnel-ok"
+# litellm imports its callbacks and starts a uvicorn worker; a cold box takes appreciably longer
+# than the ~3s it takes locally.
+PROXY_BOOT_TIMEOUT_SECONDS: Final[float] = 180.0
+PROXY_TUNNEL_READY_TIMEOUT_SECONDS: Final[float] = 120.0
+PROXY_TUNNEL_GRACE_SECONDS: Final[float] = 600.0
+# The proxy's per-request metering record, written host-side beside usage.json.
+PROXY_USAGE_FILENAME: Final[str] = "usage_proxy.jsonl"
 
 # Each bridge poll is a Modal exec round trip; a run of consecutive failures
 # means the bridge is broken, not just a transient blip. Log every few and give
@@ -91,6 +113,19 @@ class SnapshotMode(UpperCaseStrEnum):
     PER_TURN = auto()
     FINAL = auto()
     OFF = auto()
+
+
+@pure
+def parse_agent_flag(raw_value: bool | str) -> bool:
+    """A boolean agent kwarg, however harbor delivered it.
+
+    Harbor JSON-parses `--ak key=value`, so `key=true` arrives as a bool while `key=yes` stays a
+    string. Accepting both keeps the CLI spellings interchangeable instead of failing in __init__,
+    which surfaces as a trial that dies before writing any log.
+    """
+    if isinstance(raw_value, bool):
+        return raw_value
+    return raw_value.strip().lower() in ("1", "true", "yes")
 
 
 @pure
@@ -238,9 +273,19 @@ class MindsPersonaDriver(BaseAgent):
         snapshot_mode: str = "per-turn",
         modal_config_path: str = "",
         poll_seconds: float = 5.0,
+        proxy_probe: bool | str = False,
+        proxy: bool | str = False,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
+        # Opt-in check that a box-local port is reachable from inside the workspace, which is what
+        # an in-box LLM proxy would depend on. Off by default: it costs an extra bridge round trip.
+        self._is_proxy_probe_enabled = parse_agent_flag(proxy_probe)
+        # Route the workspace's model traffic through a proxy in the box, so every call -- including
+        # any the agent delegates -- is metered where the agent cannot reach it.
+        self._is_proxy_enabled = parse_agent_flag(proxy)
+        self._proxy_key: str = ""
+        self._proxy_usage_records: tuple[dict[str, Any], ...] = ()
         self._snapshot_mode = parse_snapshot_mode(snapshot_mode)
         self._modal_config_path = modal_config_path
         self._poll_seconds = float(poll_seconds)
@@ -293,7 +338,6 @@ class MindsPersonaDriver(BaseAgent):
         self._box_env = minds_bridge.build_box_env(
             activation_env=await minds_bridge.fetch_minds_activation_env(environment, MINDS_ENV),
             modal_token_env=minds_bridge.load_modal_token_env(modal_config_path),
-            anthropic_api_key=self._get_env("ANTHROPIC_API_KEY") or "",
             user_id=self._user_id,
             mngr_sha=self._mngr_sha,
             minds_env=MINDS_ENV,
@@ -311,6 +355,8 @@ class MindsPersonaDriver(BaseAgent):
         try:
             await self._run_conversation(case, environment, deadline)
         finally:
+            if self._is_proxy_enabled:
+                await self._collect_proxy_usage(environment)
             self._populate_context_metadata(context)
             # Written here rather than in populate_context_post_run: harbor only
             # calls that hook when the agent context is still empty, and this
@@ -355,6 +401,19 @@ class MindsPersonaDriver(BaseAgent):
             await self._mark_timed_out(environment, "could not resolve the workspace chat agent id")
             return
         self._chat_agent_id = chat_agent_id
+
+        if self._is_proxy_probe_enabled:
+            await self._probe_reverse_tunnel(environment)
+        if self._is_proxy_enabled:
+            is_proxy_up = await self._start_proxy(environment, case)
+            if not is_proxy_up:
+                await self._mark_timed_out(environment, "the in-box LLM proxy did not come up")
+                return
+
+        is_authenticated = await self._authenticate_workspace(environment, deadline)
+        if not is_authenticated:
+            await self._mark_timed_out(environment, "could not authenticate the workspace")
+            return
 
         sources = resolve_turn_sources(case, self._decider_model, self._get_env("ANTHROPIC_API_KEY") or "")
         self._persona_source = next((source for source in sources if isinstance(source, PersonaLLMTurnSource)), None)
@@ -425,8 +484,186 @@ class MindsPersonaDriver(BaseAgent):
                 )
 
         self._test_state = "finished"
+        # The agent can keep working after it reports WAITING -- the workspace's own turn-end flow
+        # runs then -- so pull once more before the transcript is written for the last time. Without
+        # this the transcript ends at the final reply while the proxy keeps metering, which shows up
+        # as the proxy accounting for requests the transcript has no messages for.
+        await self._refresh_events(environment)
         await self._sync_trial_files(environment)
         logger.info("Finished after {} turns", len(sources))
+
+    async def _probe_reverse_tunnel(self, environment: BaseEnvironment) -> None:
+        """Check that a box-local port is reachable from inside the workspace.
+
+        An in-box LLM proxy depends on this and on nothing else: the workspace would reach it at a
+        loopback address, so LLM traffic never leaves the sandbox. Reported rather than enforced --
+        this is a measurement, not a gate.
+        """
+        assert self._box_env is not None
+        ssh_info = await minds_bridge.fetch_agent_ssh_info(environment, self._box_env, self._workspace_agent_id)
+        if ssh_info is None:
+            logger.error("Reverse-tunnel probe: no SSH endpoint for the workspace in `mngr list`")
+            return
+        logger.info("Reverse-tunnel probe: workspace ssh {}@{}", ssh_info["user"], ssh_info["host"])
+        await minds_bridge.start_reverse_tunnel(
+            environment,
+            self._box_env,
+            self._workspace_agent_id,
+            ssh_info,
+            PROXY_PORT,
+            PROXY_PROBE_HOLD_SECONDS,
+            is_probe_token_served=True,
+        )
+        tunnel_log = "{}/{}".format(minds_bridge.BOX_LOGS_DIR, minds_bridge.TUNNEL_LOG_FILENAME)
+        deadline = time.time() + PROXY_PROBE_READY_TIMEOUT_SECONDS
+        while time.time() < deadline:
+            if "TUNNEL_READY" in await minds_bridge.read_box_file(environment, self._box_env, tunnel_log):
+                break
+            await asyncio.sleep(self._poll_seconds)
+        else:
+            logger.error(
+                "Reverse-tunnel probe: the tunnel never came up:\n{}",
+                await minds_bridge.read_box_file(environment, self._box_env, tunnel_log),
+            )
+            return
+        observed = await minds_bridge.fetch_from_workspace(
+            environment, self._box_env, self._workspace_agent_id, "http://127.0.0.1:{}/".format(PROXY_PORT)
+        )
+        is_reachable = PROXY_PROBE_TOKEN in observed
+        logger.info(
+            "Reverse-tunnel probe: workspace fetched {!r} -- box-local port {} is {}",
+            observed[:120],
+            PROXY_PORT,
+            "reachable" if is_reachable else "NOT reachable",
+        )
+
+    @property
+    def _proxy_base_url(self) -> str:
+        """The loopback address the workspace reaches the box's proxy at, once one is running."""
+        return "http://127.0.0.1:{}".format(PROXY_PORT) if self._is_proxy_enabled else ""
+
+    async def _start_proxy(self, environment: BaseEnvironment, case: CaseConfig) -> bool:
+        """Bring up the in-box proxy and the tunnel that exposes it inside the workspace.
+
+        Ordered before sign-in because the workspace is handed the proxy's address as its base URL:
+        a workspace signed in against a proxy that is not listening cannot take a turn.
+        """
+        assert self._box_env is not None
+        upstream_key = self._get_env("ANTHROPIC_API_KEY") or ""
+        if not upstream_key:
+            logger.error("No ANTHROPIC_API_KEY for the proxy to call the model with")
+            return False
+        self._proxy_key = "sk-eval-{}".format(uuid.uuid4().hex)
+        await minds_bridge.start_proxy(
+            environment,
+            self._box_env,
+            proxy_config.render_proxy_config(),
+            upstream_key,
+            self._proxy_key,
+            PROXY_PORT,
+        )
+        is_up = await minds_bridge.wait_for_proxy(
+            environment,
+            self._box_env,
+            PROXY_PORT,
+            time.time() + PROXY_BOOT_TIMEOUT_SECONDS,
+            self._poll_seconds,
+        )
+        if not is_up:
+            logger.error(
+                "The proxy never answered:\n{}",
+                await minds_bridge.read_box_file(
+                    environment,
+                    self._box_env,
+                    "{}/{}".format(minds_bridge.BOX_LOGS_DIR, minds_bridge.PROXY_LOG_FILENAME),
+                ),
+            )
+            return False
+        ssh_info = await minds_bridge.fetch_agent_ssh_info(environment, self._box_env, self._workspace_agent_id)
+        if ssh_info is None:
+            logger.error("No SSH endpoint for the workspace, so the proxy cannot be exposed to it")
+            return False
+        await minds_bridge.start_reverse_tunnel(
+            environment,
+            self._box_env,
+            self._workspace_agent_id,
+            ssh_info,
+            PROXY_PORT,
+            # Outlive the case, so the tunnel never closes under a running conversation, but stay
+            # bounded so a driver that dies without tearing it down cannot leave it up.
+            case.timeout_seconds + PROXY_TUNNEL_GRACE_SECONDS,
+            is_probe_token_served=False,
+        )
+        tunnel_deadline = time.time() + PROXY_TUNNEL_READY_TIMEOUT_SECONDS
+        tunnel_log = "{}/{}".format(minds_bridge.BOX_LOGS_DIR, minds_bridge.TUNNEL_LOG_FILENAME)
+        while time.time() < tunnel_deadline:
+            if "TUNNEL_READY" in await minds_bridge.read_box_file(environment, self._box_env, tunnel_log):
+                logger.info("The proxy is up and reachable inside the workspace on port {}", PROXY_PORT)
+                return True
+            await asyncio.sleep(self._poll_seconds)
+        logger.error(
+            "The tunnel to the workspace never came up:\n{}",
+            await minds_bridge.read_box_file(environment, self._box_env, tunnel_log),
+        )
+        return False
+
+    async def _collect_proxy_usage(self, environment: BaseEnvironment) -> None:
+        """Pull the proxy's per-request log into the trial artifacts.
+
+        This is the metering record: every model call the workspace made, including any the agent
+        delegated to a subagent or a worker, since all of them share the workspace's credential.
+        """
+        assert self._box_env is not None
+        contents = await minds_bridge.read_box_file(environment, self._box_env, minds_bridge.BOX_PROXY_USAGE_LOG_PATH)
+        if not contents:
+            logger.warning("The proxy recorded no requests")
+            return
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
+        (self.logs_dir / PROXY_USAGE_FILENAME).write_text(contents + "\n")
+        self._proxy_usage_records = usage_accounting.parse_proxy_usage_log(contents)
+
+    async def _authenticate_workspace(self, environment: BaseEnvironment, deadline: float) -> bool:
+        """Sign the workspace in after create, the way a user does.
+
+        A workspace boots unauthenticated -- the product's create path supplies no AI credentials --
+        so without this the chat agent can never take a turn. Doing it through the sign-in endpoint
+        rather than the create-time host env is what keeps the graded agent in production's shared
+        config-dir regime.
+        """
+        assert self._box_env is not None
+        # Behind the proxy the workspace gets the trial's own key, never the upstream one: it is
+        # scoped to this trial, and the credential the agent can see buys nothing anywhere else.
+        api_key = self._proxy_key or self._get_env("ANTHROPIC_API_KEY") or ""
+        if not api_key:
+            logger.error("No ANTHROPIC_API_KEY to sign the workspace in with")
+            return False
+        is_endpoint_ready = await minds_bridge.wait_for_auth_endpoint(
+            environment, self._box_env, self._workspace_agent_id, deadline, self._poll_seconds
+        )
+        if not is_endpoint_ready:
+            logger.error("The workspace's claude-auth endpoint never came up")
+            return False
+        logger.info("Signing the workspace in through the claude-auth endpoint")
+        is_submitted = await minds_bridge.authenticate_workspace(
+            environment,
+            self._box_env,
+            self._workspace_agent_id,
+            api_key,
+            self._proxy_base_url or self._get_env("ANTHROPIC_BASE_URL") or "",
+        )
+        if not is_submitted:
+            return False
+        # Submitting restarts the claude agents, so the chat agent is briefly gone; the turn loop's
+        # own WAITING gate covers the rest.
+        return await minds_bridge.wait_for_chat_state(
+            environment,
+            self._box_env,
+            self._workspace_agent_id,
+            self._chat_agent_id,
+            is_waiting_desired=True,
+            deadline=deadline,
+            poll_seconds=self._poll_seconds,
+        )
 
     async def _wait_for_reply(self, environment: BaseEnvironment, deadline: float, baseline_event_count: int) -> bool:
         """Wait until the agent has produced a reply to the just-sent message AND is WAITING again.
@@ -454,6 +691,11 @@ class MindsPersonaDriver(BaseAgent):
                     environment, self._box_env, self._workspace_agent_id, self._chat_agent_id
                 )
                 if state == "WAITING":
+                    # One more pull before handing back. The state check races the refresh above, so
+                    # messages the agent emitted between the two would otherwise never be fetched --
+                    # and once the workspace is destroyed they are gone. Cheap: a no-op when the
+                    # event total has not moved.
+                    await self._refresh_events(environment)
                     return True
             await asyncio.sleep(self._poll_seconds)
         return False
@@ -577,8 +819,51 @@ class MindsPersonaDriver(BaseAgent):
         turn_word_counts = _words_per_agent_turn(self._conversation)
         message_word_counts = self._agent_message_word_counts
         decider_results = self._persona_source.results if self._persona_source is not None else []
-        context.n_input_tokens = sum(result.input_token_count for result in decider_results) or None
-        context.n_output_tokens = sum(result.output_token_count for result in decider_results) or None
+        # Harbor's token/cost fields describe the agent under test, so they carry the workspace
+        # agent's consumption. The decider is the harness's own spend and goes to metadata; putting
+        # it here would report the simulated user's tokens as the agent's.
+        transcript_usage = usage_accounting.summarize_workspace_usage(self._latest_events)
+        proxy_usage = (
+            usage_accounting.summarize_proxy_usage(self._proxy_usage_records) if self._proxy_usage_records else None
+        )
+        # The proxy is the complete account when one ran: it is the boundary every call crosses, so
+        # it includes delegated work the transcript never sees. On a delegating case the two differ
+        # by that work -- measured at 45% of the real cost -- so preferring the transcript here would
+        # publish the understated figure.
+        workspace_usage = proxy_usage if proxy_usage is not None else transcript_usage
+        decider_usage = usage_accounting.summarize_decider_usage(decider_results, self._decider_model)
+        if workspace_usage.message_count:
+            context.n_input_tokens = workspace_usage.n_input_tokens
+            context.n_cache_tokens = workspace_usage.n_cache_tokens
+            context.n_output_tokens = workspace_usage.tokens.output
+            context.cost_usd = workspace_usage.cost_usd
+        if workspace_usage.unpriced_models:
+            logger.warning(
+                "No pricing for {}; the trial's cost is reported as unknown rather than partial",
+                ", ".join(workspace_usage.unpriced_models),
+            )
+        if not workspace_usage.is_cost_complete:
+            logger.warning(
+                "This trial delegated ({} subagent call(s), {} worker launch(es)), so its reported cost is a "
+                "lower bound: delegated work is served on streams this driver does not read",
+                workspace_usage.delegated_call_count,
+                workspace_usage.worker_launch_count,
+            )
+        if workspace_usage.message_count:
+            if not workspace_usage.is_speed_observed:
+                logger.warning(
+                    "Speed tier unobserved, so every request is priced at the standard rate. Minds runs fast mode "
+                    "by default and fast mode bills at twice that, so treat this cost as a floor; run with "
+                    "--ak proxy=true to price it exactly"
+                )
+            elif workspace_usage.fast_message_count:
+                logger.info(
+                    "{} of {} request(s) were served in fast mode and are priced at the fast-mode rate",
+                    workspace_usage.fast_message_count,
+                    workspace_usage.message_count,
+                )
+            else:
+                logger.debug("Every request was served at standard speed")
         context.metadata = {
             "case_id": self._case.case_id if self._case is not None else "",
             "turns_completed": self._waits_done,
@@ -597,7 +882,26 @@ class MindsPersonaDriver(BaseAgent):
             "decider_model": self._decider_model,
             "modal_user_id": self._user_id,
             "mngr_sha": self._mngr_sha,
+            "workspace_usage": usage_accounting.workspace_usage_metadata(workspace_usage),
+            # Both sources, so the two can be reconciled after the fact: they agree exactly when the
+            # agent delegates nothing, and differ by the delegated spend when it does.
+            "usage_source": "proxy" if proxy_usage is not None else "transcript",
+            "transcript_usage": usage_accounting.workspace_usage_metadata(transcript_usage),
+            "decider_usage": usage_accounting.decider_usage_metadata(decider_usage),
         }
+        self._write_usage(workspace_usage, decider_usage)
+
+    def _write_usage(
+        self, workspace_usage: usage_accounting.TrialUsage, decider_usage: usage_accounting.DeciderUsage
+    ) -> None:
+        """Write the usage breakdown as its own trial artifact, so cost and cache behaviour can be
+        read (and diffed across runs) without parsing the whole transcript."""
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "workspace_agent": usage_accounting.workspace_usage_metadata(workspace_usage),
+            "decider": usage_accounting.decider_usage_metadata(decider_usage),
+        }
+        (self.logs_dir / USAGE_FILENAME).write_text(json.dumps(payload, indent=2))
 
     def _write_trajectory(self) -> None:
         """Write the ATIF trajectory (for `harbor view`) from the clean per-turn conversation."""
@@ -616,6 +920,7 @@ class MindsPersonaDriver(BaseAgent):
             # ATIF requires at least one step; a trial that died before any
             # exchange has no conversation to render.
             return
+        workspace_usage = usage_accounting.summarize_workspace_usage(self._latest_events)
         trajectory = Trajectory(
             schema_version="ATIF-v1.7",
             session_id=self.session_id,
@@ -623,6 +928,17 @@ class MindsPersonaDriver(BaseAgent):
                 name=self.name(), version=self.version() or "unknown", model_name=self._decider_model
             ),
             steps=steps,
+            # The workspace agent's totals, not the decider's: the trajectory describes the
+            # conversation being graded. total_steps counts conversation turns, not LLM calls.
+            final_metrics=FinalMetrics(
+                total_prompt_tokens=workspace_usage.n_input_tokens,
+                total_completion_tokens=workspace_usage.tokens.output,
+                total_cached_tokens=workspace_usage.n_cache_tokens,
+                total_cost_usd=workspace_usage.cost_usd,
+                total_steps=len(steps),
+            )
+            if workspace_usage.message_count
+            else None,
         )
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         (self.logs_dir / "trajectory.json").write_text(json.dumps(trajectory.to_json_dict(), indent=2))

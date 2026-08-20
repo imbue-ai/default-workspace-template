@@ -356,8 +356,7 @@ def _await_ready(sandbox, tries: int = 100) -> None:
 
 
 def write_file(sandbox, path: str, content: str) -> None:
-    with sandbox.open(path, "w") as handle:
-        handle.write(content)
+    sandbox.filesystem.write_text(content, path)
 
 
 def run_in_box(sandbox, argv: list[str], extra_env: dict[str, str] | None = None) -> int:
