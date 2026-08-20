@@ -144,6 +144,12 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   // viewport is over a reserved region and page/jump/overlay accordingly.
   let phantomTopHeight = 0;
   let phantomBottomHeight = 0;
+  // The reserved top height the currently laid-out DOM was built with. Reserved
+  // space above the window is not constant: measuring a row inside the window
+  // refines the learned per-event rate, which re-estimates the *unloaded* range
+  // above it. Any change there moves every rendered row, so the difference has to
+  // be given back to scrollTop or the reader drifts (see compensateForReservedShift).
+  let appliedPhantomTopHeight = 0;
   // Windowing. Reads the memoized rows and the reserved heights above; owns the
   // visible range, the selection pin and scroll compensation.
   const virtualizer = createTranscriptVirtualizer({
@@ -560,6 +566,31 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     }
   }
 
+  /**
+   * Give back to scrollTop any change in the space reserved above the window.
+   *
+   * That reserve is an estimate of history this client has not rendered, and it
+   * moves whenever the estimate improves -- measuring a row inside the window
+   * refines the learned per-event rate, which re-sizes the unloaded range above
+   * it. Every rendered row moves with it, so without this the content the reader
+   * is looking at slides away underneath them.
+   *
+   * Deliberately narrow, which is what makes it safe where a DOM-anchored
+   * correction was not: the adjustment is one exactly-known quantity (the change
+   * in a number this component computed), not a measured guess at where content
+   * ought to be. It is applied only while scrolled up -- a follower is pinned to
+   * the tail anyway -- and never mid-gesture, since writing scrollTop while the
+   * user is scrolling fights the compositor.
+   */
+  function compensateForReservedShift(element: HTMLElement): void {
+    const delta = phantomTopHeight - appliedPhantomTopHeight;
+    appliedPhantomTopHeight = phantomTopHeight;
+    if (delta === 0 || !panelVisible || !scroll.userScrolledUp || virtualizer.isScrolling()) {
+      return;
+    }
+    scroll.pinTo(element, element.scrollTop + delta);
+  }
+
   function applyScrollPosition(element: HTMLElement): void {
     // Hidden panels and the tail-follow pin are handled by the shared controller;
     // this wrapper only adds the offset-jump pin that is specific to the main chat.
@@ -909,6 +940,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                 const element = mainVnode.dom as HTMLElement;
                 scroll.attach(element);
                 virtualizer.mount();
+                compensateForReservedShift(element);
                 applyScrollPosition(element);
                 scheduleRowMeasure();
                 if (currentAgentId !== null) {
@@ -919,6 +951,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                 const element = mainVnode.dom as HTMLElement;
                 scroll.attach(element);
                 virtualizer.mount();
+                compensateForReservedShift(element);
                 applyScrollPosition(element);
                 scheduleRowMeasure();
                 // Drive paging from the render loop, not only from scroll events, so

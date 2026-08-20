@@ -36,7 +36,7 @@ import {
   observeElementOffset,
   observeElementRect,
 } from "@tanstack/virtual-core";
-import type { Range, VirtualItem } from "@tanstack/virtual-core";
+import type { Range, Rect, VirtualItem } from "@tanstack/virtual-core";
 
 /**
  * Pixels rendered above and below the viewport so scrolling does not flash blank
@@ -162,10 +162,34 @@ export function createTranscriptVirtualizer(config: TranscriptVirtualizerConfig)
       paddingStart: config.getPaddingStart(),
       paddingEnd: config.getPaddingEnd(),
       rangeExtractor: extractRange,
-      enabled: config.isEnabled(),
       scrollToFn: elementScroll,
-      observeElementRect,
-      observeElementOffset,
+      // While the view is hidden (an inactive dockview tab) the scroll element is
+      // collapsed to zero and reports zero for its size and offset. Feeding that
+      // through would recompute the window against a zero-height viewport and
+      // unmount every row, so the tab would lose the place the user had scrolled
+      // to. Both observers are filtered instead, freezing the last good geometry
+      // for the duration -- the browser preserves the real scrollTop across
+      // hide/show, so the frozen window is still correct when it comes back.
+      //
+      // Note this is NOT the library's `enabled` option: that empties the range
+      // outright, which is the same lost-place failure by a different route.
+      observeElementRect: (instance: Virtualizer<HTMLElement, Element>, cb: (rect: Rect) => void) =>
+        observeElementRect(instance, (rect) => {
+          if (!config.isEnabled() || rect.height <= 0) {
+            return;
+          }
+          cb(rect);
+        }),
+      observeElementOffset: (
+        instance: Virtualizer<HTMLElement, Element>,
+        cb: (offset: number, isScrolling: boolean) => void,
+      ) =>
+        observeElementOffset(instance, (offset, isScrolling) => {
+          if (!config.isEnabled()) {
+            return;
+          }
+          cb(offset, isScrolling);
+        }),
       onChange: (_instance: Virtualizer<HTMLElement, Element>, sync: boolean) => {
         // A synchronous change is one the library made while already inside an
         // event it is handling; redrawing then would re-enter mithril's render
