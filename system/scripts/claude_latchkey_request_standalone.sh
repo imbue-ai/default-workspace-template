@@ -12,11 +12,15 @@
 #   * two requests in one call -> the second one is never shown, and the user
 #     cannot answer a request they cannot see (it just sits in the minds inbox);
 #     the verdict messages that come back then line up against the wrong card.
-#   * `> /tmp/out.json`, `-o /tmp/out.json`, `| jq .request_id`, `| tee ...` ->
-#     the echoed object never reaches the transcript, so the card has nothing to
-#     open the dialog with.
+#   * `> /tmp/out.json`, `-o /tmp/out.json`, `| jq .request_id` -> the echoed
+#     object never reaches the transcript, so the card has nothing to open the
+#     dialog with.
 # Forbidding the batched/chained/redirected form makes that class of bug
-# structurally impossible at the source.
+# structurally impossible at the source. The chaining half of the rule is
+# deliberately blunt: a chained command that happens to preserve the echo
+# (`| tee out.json`) is blocked with the rest, because "the request is the whole
+# tool call" is the property the card depends on, and it is the one an agent can
+# check without knowing which commands pass stdout through.
 #
 # Scope: ONLY a POST to the reserved `latchkey-self.invalid/permission-requests`
 # host -- the call that FILES a request. Reading the queue or any other latchkey

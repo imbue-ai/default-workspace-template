@@ -80,9 +80,11 @@ call, and leave its output alone.** The chat turns the call into the card the us
 approves or denies, and builds it out of that single call: what to show comes from
 the command, and the button that opens the approval dialog comes from the request
 object the gateway echoes on stdout. So a second request batched into the same call
-is never shown to the user, and `> /tmp/req.json`, `| jq .request_id`, or
-`| tee ...` takes the echoed object away and leaves the card with no button. A
-PreToolUse hook blocks all of those forms.
+is never shown to the user, and `> /tmp/req.json` or `| jq .request_id` takes the
+echoed object away and leaves the card with no button. A PreToolUse hook blocks
+those forms, and every other way of putting a second command in the call
+(`| tee ...`, `&& echo done`, a leading `cd`) along with them -- the request has to
+be the whole tool call.
 
 Need permissions for two scopes? Post the first one, wait for its verdict, then post
 the second.
