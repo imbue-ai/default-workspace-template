@@ -482,6 +482,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     // geometry is indexed on its own transcript offsets, so both are dropped
     // rather than carried across.
     measurements.reset();
+    cancelGeometrySave();
     geometry = new RowGeometryIndex();
     geometryWidthBucket = -1;
     reserveRate = DEFAULT_EVENT_HEIGHT_PX;
@@ -1099,6 +1100,16 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     }, GEOMETRY_SAVE_DEBOUNCE_MS);
   }
 
+  /** Drop a pending save. The conversation it was armed for is going away, so its
+   *  snapshot is about to be replaced by an empty index anyway, and leaving the
+   *  timer armed would hold the "already scheduled" slot against the next one. */
+  function cancelGeometrySave(): void {
+    if (geometrySaveTimer !== null) {
+      clearTimeout(geometrySaveTimer);
+      geometrySaveTimer = null;
+    }
+  }
+
   /**
    * Fold settled row measurements into the conversation's geometry.
    *
@@ -1151,6 +1162,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       disconnectLogWs();
       scroll.detach();
       virtualizer.unmount();
+      cancelGeometrySave();
       if (currentAgentId !== null) {
         disconnectFromStream(currentAgentId);
       }
