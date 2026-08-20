@@ -117,28 +117,48 @@ service (ttyd) in a frame, and suggests creating an agent to do the work if the
 reader would rather not:
 
 ```
-env -u TMUX mngr create --connect --template chat --transfer none --label user_created=true --message "i'm seeing \"this workspace's interface needs to be rebuilt, can you fix it?\""
+env -u TMUX mngr create --connect --template chat --label user_created=true --message "i'm seeing \"this workspace's interface needs to be rebuilt, can you fix it?\""
 ```
 
-Those flags mirror what `agent_manager._build_chat_create_command` passes for a
-chat, with two deliberate departures. Its `--no-connect` is inverted -- someone
-typing this wants to land in the conversation, and `--connect` is what overrides
-this workspace's own `[commands.create] connect = false`. And its `--type` is
-dropped: the app is serving a harness the user picked from a menu, while this
-page has no such choice to carry, so leaving the flag off lets mngr resolve the
-harness from `[commands.create] type` instead of pinning every reader to
-whichever one was current when the string was written. `--template chat` is
-harness-agnostic (`output_style` is honored by the claude, codex and pi plugins
-alike), so it supplies the rest either way.
+`--template chat` is what makes the result a chat, and it carries everything
+that is not a choice: the shared work directory, the output style, and running
+in the workspace tree rather than a worktree of it. It is harness-agnostic --
+`output_style` is honored by the claude, codex and pi plugins alike -- so it
+neither picks a harness nor can be relied on to.
 
-A `--message` carries the page's own heading, so the agent opens already knowing
-what the reader is looking at. The line names no agent, so mngr mints one and a
-second run starts a fresh conversation rather than colliding with the first.
-`env -u TMUX` is what lets the connect half work from the workspace's tmux-backed
-terminal tabs, which `mngr connect` otherwise refuses to attach from. A test pins
-the flags to the builder, parses the line back into an argv, and validates that
-argv against the live mngr CLI, so the suggestion cannot drift into creating
-something that is not a chat -- or into a line that does not run.
+The rest is where the line departs from what
+`agent_manager._build_chat_create_command` passes for the same chat, in four
+places:
+
+- **`--connect`, against its `--no-connect`.** Someone typing this wants to land
+  in the conversation. It is load-bearing rather than decorative: this
+  workspace's own `[commands.create] connect = false` is the default it
+  overrides.
+- **No `--type`, which the builder must pass.** The app is serving a harness the
+  user picked from a menu; this page has no such choice to carry, so hardcoding
+  one would hand a codex or pi workspace a line that quietly opens claude.
+  Omitted, mngr resolves it from `[commands.create] type`.
+- **No `--transfer none`, which the builder spells out.** The `chat` template
+  already sets it. Unlike the harness this is not the reader's to choose -- an
+  agent in a worktree would repair a copy of the workspace instead of the
+  workspace -- so a test reads the template and fails if that setting ever
+  leaves it.
+- **A `--message` carrying the page's own heading**, so the agent opens already
+  knowing what the reader is looking at. A test ties the two together, since a
+  reworded heading would otherwise leave the message quoting a sentence that
+  appears nowhere.
+
+The line also names no agent, so mngr mints one and a second run starts a fresh
+conversation rather than colliding with the first. `env -u TMUX` is what lets the
+connect half work from the workspace's tmux-backed terminal tabs, which `mngr
+connect` otherwise refuses to attach from.
+
+Tests pin the whole of it: the flags against the builder, the line parsed back
+into an argv and resolved against the live mngr CLI, the same line word-split by
+a real `sh` (because `shlex` expands nothing and a shell does), and the rendered
+page's own repair block -- so the suggestion cannot drift into creating something
+that is not a chat, into a line that does not run, or into a line other than the
+one a reader copies.
 
 A shell rather than a "rebuild" button because a button has to be right about
 what went wrong: the states that strand a workspace here are dominated by ones
