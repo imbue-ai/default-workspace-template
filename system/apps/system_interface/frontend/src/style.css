@@ -3678,6 +3678,13 @@ body > .dv-tab.dv-dragged {
   color: var(--color-text-secondary);
   line-height: 1.5;
   margin: 8px 0 4px;
+  /* The send-failure notice puts a server's own words in here, and those are not always the one
+     tidy sentence the other users of this class pass. A proxy or an unhandled route answers with
+     a whole HTML page, and an unbroken token (a URL, a traceback line) would otherwise widen the
+     dialog past the viewport or push its OK button off the bottom. Harmless for fixed text. */
+  overflow-wrap: anywhere;
+  max-height: 40vh;
+  overflow-y: auto;
 }
 
 /* Step checklist shown while the background agent restart runs */
