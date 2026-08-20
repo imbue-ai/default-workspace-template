@@ -314,16 +314,31 @@ def _effective_port(parsed: ParseResult) -> "int | None":
     return _DEFAULT_PORT_BY_SCHEME.get(parsed.scheme.lower())
 
 
+def _host_address(host: str) -> "ipaddress.IPv4Address | ipaddress.IPv6Address | None":
+    """A host's IP literal, or None when it is a name rather than a literal.
+
+    An IPv4-mapped IPv6 literal is reduced to the IPv4 address it carries: ``::ffff:127.0.0.1``
+    reaches the very same socket as ``127.0.0.1``, but reports neither ``is_loopback`` nor
+    ``is_link_local`` in its mapped form, so without this it would slip through as an ordinary
+    address.
+    """
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return None
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        return address.ipv4_mapped
+    return address
+
+
 def _is_loopback_host(host: str) -> bool:
     """Whether a host name or literal resolves to this machine. ``*.localhost`` counts: RFC 6761
     reserves the whole subtree for loopback, so ``anything.localhost:8080`` reaches the very same
     socket as ``localhost:8080``."""
     if host == "localhost" or host.endswith(".localhost"):
         return True
-    try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return False
+    address = _host_address(host)
+    return address is not None and address.is_loopback
 
 
 def _registered_service_ports() -> frozenset[int]:
@@ -377,9 +392,8 @@ def _unsafe_navigation_reason(url: str) -> "str | None":
         if is_registered_origin:
             return None
         return "loopback host is not allowed"
-    try:
-        address = ipaddress.ip_address(host)
-    except ValueError:
+    address = _host_address(host)
+    if address is None:
         return None  # a regular hostname
     if address.is_loopback and is_registered_origin:
         return None
