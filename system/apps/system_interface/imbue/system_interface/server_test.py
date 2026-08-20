@@ -276,9 +276,21 @@ def test_not_built_repair_command_is_the_one_the_app_runs_for_a_chat() -> None:
     assert "--type" not in argv
 
     # No agent name, so mngr mints one and nothing collides with an earlier run.
-    # The whole line has to stay flags-only for that: a stray bare word would be
-    # read as the name and put the collision back.
+    # The whole line has to stay flags-only for that: ``mngr create`` reads bare
+    # words as positionals (the name, then the agent type), so one anywhere past
+    # the subcommand -- not just directly after it -- puts the collision back.
+    # ``assert_mngr_argv_valid`` does not catch that: it checks option shape and
+    # throws the positionals away. A value-taking flag added to the line without
+    # being named here reports its value as a positional, which fails in the
+    # direction that gets looked at.
     assert argv[:2] == ["mngr", "create"]
+    flags_taking_a_value = {"--template", "--transfer", "--label", "--message"}
+    positionals = [
+        token
+        for index, token in enumerate(argv[2:], start=2)
+        if not token.startswith("--") and argv[index - 1] not in flags_taking_a_value
+    ]
+    assert positionals == [], f"the suggested line passes positional arguments: {positionals}"
 
     # The message is what makes the created agent useful without the reader
     # having to describe anything, so it has to survive the shell as one word of
