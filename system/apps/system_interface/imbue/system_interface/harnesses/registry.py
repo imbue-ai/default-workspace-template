@@ -23,6 +23,7 @@ from typing import Final
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.activity import HarnessActivityTracker
+from imbue.system_interface.harnesses.antigravity.placeholder import AntigravityPlaceholderActivityTracker
 from imbue.system_interface.harnesses.auth_check import CODEX_AUTH_CHECK
 from imbue.system_interface.harnesses.auth_check import HarnessAuthCheck
 from imbue.system_interface.harnesses.auth_check import PI_AUTH_CHECK
@@ -46,6 +47,10 @@ from imbue.system_interface.harnesses.interrupt import RestartDrainInterruptToCo
 from imbue.system_interface.harnesses.model import HarnessCatalog
 from imbue.system_interface.harnesses.model import HarnessModelResolver
 from imbue.system_interface.harnesses.model import model_state_path
+from imbue.system_interface.harnesses.opencode.placeholder import OpenCodePlaceholderActivityTracker
+from imbue.system_interface.harnesses.placeholder import EMPTY_CATALOG
+from imbue.system_interface.harnesses.placeholder import PlaceholderModelResolver
+from imbue.system_interface.harnesses.placeholder import PlaceholderSessionWatcher
 from imbue.system_interface.harnesses.pi_coding.activity import PiActivityTracker
 from imbue.system_interface.harnesses.pi_coding.model import PI_STATE_RELATIVE_PATH
 from imbue.system_interface.harnesses.pi_coding.model import PiAtomicShoulderTap
@@ -345,6 +350,38 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
             ),
         ),
         auth_instructions="Open the agent's terminal and run /login to add accounts or keys.",
+    ),
+    # opencode and antigravity are LAUNCH-ONLY so far: their mngr plugins can create and run
+    # an agent, but neither has a transcript watcher, activity tracker, model resolver or
+    # catalog of its own yet. They are registered anyway, because an UNregistered harness is
+    # not neutral -- ``parse_harness`` would fall it back to claude and point claude's watcher
+    # at another harness's state dir. So each names the shared placeholders (see
+    # ``harnesses/placeholder.py``) until its own implementation lands, one harness at a time.
+    #
+    # ``auth_check`` is deliberately None for both. ``find_unauthenticated_harness_reason`` is
+    # FAIL-CLOSED: an auth probe whose command or output pattern is wrong refuses every create
+    # on that harness. Neither CLI's sign-in probe has been verified here, so a guessed one
+    # would block the very thing this registration exists to enable. Each harness adds its own
+    # (to ``auth_check.py``, with its popups) alongside its real implementation.
+    HarnessType.OPENCODE: HarnessSpec(
+        name=HarnessType.OPENCODE,
+        watcher_class=PlaceholderSessionWatcher,
+        tracker_class=OpenCodePlaceholderActivityTracker,
+        resolver_class=PlaceholderModelResolver,
+        catalog_factory=lambda: EMPTY_CATALOG,
+        # No model_state.json is written for opencode yet; the path is the state-dir root
+        # (claude/pi's value) so the shared reader looks somewhere harmless until it is.
+        model_state_relative_path=Path("."),
+        special_kinds=frozenset(),
+    ),
+    HarnessType.ANTIGRAVITY: HarnessSpec(
+        name=HarnessType.ANTIGRAVITY,
+        watcher_class=PlaceholderSessionWatcher,
+        tracker_class=AntigravityPlaceholderActivityTracker,
+        resolver_class=PlaceholderModelResolver,
+        catalog_factory=lambda: EMPTY_CATALOG,
+        model_state_relative_path=Path("."),
+        special_kinds=frozenset(),
     ),
 }
 

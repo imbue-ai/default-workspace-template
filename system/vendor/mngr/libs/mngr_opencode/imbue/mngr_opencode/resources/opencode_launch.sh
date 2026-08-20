@@ -39,6 +39,11 @@ READY_SENTINEL="$STATE/opencode_ready"
 SERVER_LOG="$STATE/logs/opencode_server.log"
 mkdir -p "$STATE/logs"
 
+# TMPDIR (set by assemble_command) is a per-agent exec-capable dir: opencode is a Bun
+# binary that extracts its OpenTUI native library to TMPDIR and maps it executable, which
+# the image's noexec /tmp rejects. Ensure it exists before launching serve/attach.
+mkdir -p "${TMPDIR:-/tmp}"
+
 # Clear any stale readiness sentinel from a prior run before we (re)start, so
 # wait_for_ready_signal can't return early against an old marker.
 rm -f "$READY_SENTINEL"
