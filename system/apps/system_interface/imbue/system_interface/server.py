@@ -1,3 +1,4 @@
+import html
 import json
 import os
 import queue
@@ -572,10 +573,17 @@ def render_frontend_not_built_page(terminal_label: str | None) -> str:
     terminal" -- when there is none. ``layout_ops.terminal_origin_label``
     has already rejected anything that is not a single DNS label, so no value
     that reaches here can close the script element.
+
+    The repair command goes in as HTML text rather than markup. It is a shell
+    line written for a reader, so ``&`` and ``<`` are ordinary characters in it
+    that the browser would otherwise take as an entity reference or a tag --
+    which would show something other than the command, and hand the copy button
+    (which reads ``textContent``) something other than what the tests validated.
+    Quotes are left alone: this is text content, and the line is full of them.
     """
     return (
         _FRONTEND_NOT_BUILT_TEMPLATE.replace("__TERMINAL_LABEL__", json.dumps(terminal_label or ""))
-        .replace("__REPAIR_COMMAND__", _NOT_BUILT_REPAIR_COMMAND)
+        .replace("__REPAIR_COMMAND__", html.escape(_NOT_BUILT_REPAIR_COMMAND, quote=False))
         .replace("__BUILT_HEADER__", FRONTEND_BUILT_HEADER)
         .replace("__POLL_SECONDS__", str(_NOT_BUILT_POLL_SECONDS))
     )
