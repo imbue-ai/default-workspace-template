@@ -1,6 +1,8 @@
 ---
 name: disable-caretaker
 description: Switch off the weekly Caretaker. Use when the user asks to turn off, pause, or get rid of the Caretaker.
+metadata:
+  author: imbue
 ---
 
 # Disable the Caretaker

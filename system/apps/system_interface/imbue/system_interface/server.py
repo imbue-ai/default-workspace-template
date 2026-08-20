@@ -273,7 +273,7 @@ def _is_feature_flag_enabled(env_var: str) -> bool:
 # for what they create is never gated, so an agent made while a flag was on keeps
 # working with it off.
 _FEATURE_FLAG_META_TAGS: Final[dict[str, str]] = {
-    # The "New Codex agent" / "New Pi agent" launchers. Claude is the workspace default
+    # The "Codex chat" / "Pi chat" launchers. Claude is the workspace default
     # and is never gated.
     "FEATURE_FLAG_ENABLE_OTHER_HARNESSES": "system-interface-enable-other-harnesses",
     # The "New introductory <harness> chat" launchers, which stack the `first` create
