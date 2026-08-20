@@ -97,8 +97,13 @@ export function renderVirtualRows(rows: RowDescriptor[], items: VirtualItem[], t
 /**
  * Spacers carry `overflow-anchor: none` so the browser's scroll anchoring never
  * picks one -- their heights change as rows page in and measure -- and anchors
- * to a real message row instead. Keyed by role so the key stays stable as a
- * middle spacer appears and disappears with a disjoint selection pin.
+ * to a real message row instead.
+ *
+ * The two that always exist are keyed by role, so they are patched in place
+ * rather than rebuilt. A gap bridging a disjoint selection pin is keyed by its
+ * position in the rendered set instead, so two gaps in one render cannot
+ * collide; that key moves as the window scrolls, which costs nothing because
+ * the node it keys is an empty div.
  */
 function spacer(role: string, height: number): m.Children {
   return m("div", { key: `__spacer_${role}`, style: `height: ${Math.max(0, height)}px; overflow-anchor: none` });
