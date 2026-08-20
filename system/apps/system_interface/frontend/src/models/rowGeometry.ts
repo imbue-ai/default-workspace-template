@@ -255,6 +255,34 @@ export class RowGeometryIndex {
     return measuredHeight + gapEvents * this.learnedEventHeight();
   }
 
+  /**
+   * The inverse of `heightBefore`: the largest offset whose reserved space is
+   * still at or above `height`, searched within `[0, maxOffset]`.
+   *
+   * This is what maps a scrollbar position back to a place in the transcript, so
+   * it must be the *exact* inverse of the function that sized the space -- if the
+   * two disagree, a drag can resolve to an offset far from where the thumb is,
+   * which is how the old code fired jumps the user never asked for. Rather than
+   * invert the arithmetic by hand (which sparse coverage makes fiddly), this
+   * binary-searches `heightBefore` itself, so the two cannot drift apart.
+   */
+  offsetAtHeight(height: number, maxOffset: number): number {
+    if (height <= 0 || maxOffset <= 0) {
+      return 0;
+    }
+    let low = 0;
+    let high = maxOffset;
+    while (low < high) {
+      const mid = Math.ceil((low + high) / 2);
+      if (this.heightBefore(mid) <= height) {
+        low = mid;
+      } else {
+        high = mid - 1;
+      }
+    }
+    return low;
+  }
+
   /** Total measured height of every recorded row. */
   totalMeasuredHeight(): number {
     this.#sums();

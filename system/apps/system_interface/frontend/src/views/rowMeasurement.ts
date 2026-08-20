@@ -133,10 +133,7 @@ export function createRowMeasurementStore(now: () => number = () => Date.now()):
  *
  * Spacers carry no ``id`` and are skipped.
  */
-export function measureMountedRows(
-  listElement: Element,
-  store: RowMeasurementStore,
-): Map<string, number> {
+export function measureMountedRows(listElement: Element, store: RowMeasurementStore): Map<string, number> {
   const changed = new Map<string, number>();
   for (const child of Array.from(listElement.children)) {
     const element = child as HTMLElement;

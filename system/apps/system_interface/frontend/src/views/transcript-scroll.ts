@@ -3,7 +3,7 @@
  * SubagentView), which otherwise duplicated this machinery.
  *
  * It owns the scroll-follow state (scroll position, whether the user has scrolled
- * up off the tail, the drag flag) and the row measurer, and encapsulates:
+ * up off the tail, the drag flag) and encapsulates:
  *  - tail following: while at the bottom, pin to the tail on each redraw (deferred
  *    while a drag/selection is in progress, and yielding to an in-flight wheel-up);
  *  - scroll-event handling: update the follow state, distinguishing a real
@@ -18,11 +18,13 @@
  * visibility gating, whether newer history exists below the loaded window, and any
  * extra work to run after a user scroll (ChatPanel's paging). Everything else --
  * including the phantom regions, paging, eviction and jump logic -- stays in
- * ChatPanel; this controller is deliberately unaware of it.
+ * ChatPanel; this controller is deliberately unaware of it. Windowing and row
+ * measurement belong to the virtualizer (see transcriptVirtualizer), so the one
+ * decision that repeatedly went wrong here -- whether to follow the tail -- has a
+ * single owner.
  */
 
 import m from "mithril";
-import { createRowMeasurer, type RowMeasurer } from "./row-measurement";
 import { nextUserScrolledUp } from "../models/scrollFollow";
 
 // Within this many pixels of the bottom counts as "at the tail".
@@ -42,7 +44,6 @@ export interface TranscriptScrollConfig {
 }
 
 export interface TranscriptScroll {
-  readonly rowMeasurer: RowMeasurer;
   /** Current scrollTop (in the scroll container's own coordinates). */
   readonly scrollTop: number;
   /** Cached viewport height, refreshed on measure/resize. */
@@ -67,8 +68,8 @@ export interface TranscriptScroll {
   /** Pin scrollTop to an exact position once (ChatPanel: land an offset jump at the
    *  top of the freshly loaded rows), syncing the follow bookkeeping. */
   pinTo(element: HTMLElement, top: number): void;
-  /** Refresh the cached viewport height and schedule a measure pass. */
-  scheduleMeasure(): void;
+  /** Refresh the cached viewport height. */
+  refreshViewportHeight(): void;
   /** Reset scroll + follow state (e.g. switching to a different agent). */
   reset(): void;
 }
@@ -78,7 +79,6 @@ export function createTranscriptScroll(config: TranscriptScrollConfig = {}): Tra
   const getHasMoreAfter = config.getHasMoreAfter ?? (() => false);
   const onUserScroll = config.onUserScroll ?? (() => {});
 
-  const rowMeasurer = createRowMeasurer();
   let scrollEl: HTMLElement | null = null;
   let scrollTop = 0;
   let previousScrollTop = 0;
@@ -113,9 +113,6 @@ export function createTranscriptScroll(config: TranscriptScrollConfig = {}): Tra
   }
 
   return {
-    get rowMeasurer() {
-      return rowMeasurer;
-    },
     get scrollTop() {
       return scrollTop;
     },
@@ -224,11 +221,10 @@ export function createTranscriptScroll(config: TranscriptScrollConfig = {}): Tra
       lastScrollHeight = element.scrollHeight;
     },
 
-    scheduleMeasure(): void {
+    refreshViewportHeight(): void {
       if (scrollEl !== null && isVisible()) {
         viewportHeight = scrollEl.clientHeight;
       }
-      rowMeasurer.scheduleMeasure(() => scrollEl);
     },
 
     reset(): void {
@@ -237,7 +233,6 @@ export function createTranscriptScroll(config: TranscriptScrollConfig = {}): Tra
       userScrolledUp = false;
       lastScrollHeight = 0;
       isPointerDown = false;
-      rowMeasurer.reset();
     },
   };
 }

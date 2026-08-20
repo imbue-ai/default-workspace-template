@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  DEFAULT_EVENT_HEIGHT_PX,
-  RowGeometryIndex,
-  geometryFromSnapshot,
-  type RowGeometry,
-} from "./rowGeometry";
+import { DEFAULT_EVENT_HEIGHT_PX, RowGeometryIndex, geometryFromSnapshot, type RowGeometry } from "./rowGeometry";
 
 function row(start: number, end: number, height: number, key = `row-${start}`): RowGeometry {
   return { row_key: key, start_offset: start, end_offset: end, height };
@@ -86,12 +81,7 @@ describe("RowGeometryIndex", () => {
   it("learns a median per-event height that one huge row cannot drag upward", () => {
     // Three ordinary rows at 10px/event and one enormous outlier at 500px/event.
     // A mean would land near 132px/event; the median stays with the typical row.
-    const index = new RowGeometryIndex([
-      row(0, 10, 100),
-      row(10, 20, 100),
-      row(20, 30, 100),
-      row(30, 40, 5000),
-    ]);
+    const index = new RowGeometryIndex([row(0, 10, 100), row(10, 20, 100), row(20, 30, 100), row(30, 40, 5000)]);
     expect(index.learnedEventHeight()).toBe(10);
   });
 

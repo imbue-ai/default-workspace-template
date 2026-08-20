@@ -2,16 +2,11 @@ import m from "mithril";
 import { apiUrl } from "../base-path";
 import type { TranscriptEvent, SubagentMetadata } from "../models/Response";
 import { parseJsonMessage } from "../models/ws-json";
-import { computeTranscriptSlices } from "../models/virtualWindow";
-import { OVERSCAN_PX } from "./row-measurement";
-import {
-  buildConversationRows,
-  isSubagentRunning,
-  renderTranscriptSegments,
-  type RowDescriptor,
-} from "./conversation-rows";
+import { buildConversationRows, isSubagentRunning, renderVirtualRows, type RowDescriptor } from "./conversation-rows";
 import { resolveSelectionRowRange } from "./scroll-selection";
 import { createTranscriptScroll } from "./transcript-scroll";
+import { createTranscriptVirtualizer } from "./transcriptVirtualizer";
+import { createRowMeasurementStore, measureMountedRows } from "./rowMeasurement";
 
 interface SubagentViewAttrs {
   agentId: string;
@@ -33,9 +28,10 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
   let eventSource: EventSource | null = null;
 
   // Virtualization: only the viewport window (plus any selected rows) is rendered.
-  // The scroll-follow machinery -- tail following, native-anchoring stability, the
-  // drag/resize lifecycle and the row measurer -- lives in the shared controller.
+  // The scroll-follow machinery -- tail following, native-anchoring stability and
+  // the drag/resize lifecycle -- lives in the shared controller.
   const scroll = createTranscriptScroll();
+  const measurements = createRowMeasurementStore();
   // Memoized rows. buildConversationRows walks the whole subagent transcript, so
   // it is recomputed only when the event set or idleness changes -- not on every
   // scroll redraw. The transcript is append-only here (no in-place upgrades, no
@@ -44,6 +40,56 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
   let cachedRows: RowDescriptor[] = [];
   // Row key -> index in cachedRows, for resolving a selection's DOM rows to pin.
   let cachedKeyToIndex = new Map<string, number>();
+  // Row indices a live selection touches, read by the virtualizer's range extractor.
+  let pinnedRowIndices: number[] = [];
+  // The whole subagent transcript is loaded at once, so there is no unloaded
+  // history to reserve space for -- both reserves stay zero and the arrangement is
+  // otherwise identical to the main chat, which is what keeps the two from drifting.
+  const virtualizer = createTranscriptVirtualizer({
+    getScrollElement: () => scroll.scrollEl,
+    getCount: () => cachedRows.length,
+    getRowKey: (index) => cachedRows[index]?.key ?? String(index),
+    estimateSize: (index) => {
+      const row = cachedRows[index];
+      if (row === undefined) {
+        return 0;
+      }
+      return measurements.heightFor(row.key) ?? row.estimate;
+    },
+    getPaddingStart: () => 0,
+    getPaddingEnd: () => 0,
+    getPinnedIndices: () => pinnedRowIndices,
+    isEnabled: () => true,
+  });
+
+  let measureScheduled = false;
+
+  /** Measure mounted rows on the next frame and report the changes, debounced to
+   *  one pass per frame because reading layout is not free. */
+  function scheduleRowMeasure(): void {
+    if (measureScheduled) {
+      return;
+    }
+    measureScheduled = true;
+    requestAnimationFrame(() => {
+      measureScheduled = false;
+      const list = scroll.scrollEl?.querySelector(".message-list") ?? null;
+      if (list === null) {
+        return;
+      }
+      const changed = measureMountedRows(list, measurements);
+      if (changed.size === 0) {
+        return;
+      }
+      for (const [rowKey, height] of changed) {
+        const index = cachedKeyToIndex.get(rowKey);
+        if (index !== undefined) {
+          virtualizer.resizeRow(index, height);
+        }
+      }
+      m.redraw();
+    });
+  }
 
   function addEvents(incoming: TranscriptEvent[]): boolean {
     let added = false;
@@ -130,30 +176,30 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
       // idle source differs (derived here rather than from activity_state).
       cachedRows = buildConversationRows(agentId, events, agentIsIdle);
       cachedKeyToIndex = new Map(cachedRows.map((row, index) => [row.key, index]));
-      scroll.rowMeasurer.prune(new Set(cachedRows.map((row) => row.key)));
+      measurements.prune(new Set(cachedRows.map((row) => row.key)));
       rowsCacheKey = renderKey;
     }
     const rows = cachedRows;
-    const getHeight = (index: number): number => scroll.rowMeasurer.getHeight(rows[index].key) ?? rows[index].estimate;
-    const effectiveViewportHeight =
-      scroll.viewportHeight > 0 ? scroll.viewportHeight : (scroll.scrollEl?.clientHeight ?? 2000);
-    // A live selection's rows are kept mounted as a (possibly disjoint) run so
-    // scrolling/streaming past them doesn't collapse the selection -- with no gap
-    // cap, since a disjoint run mounts only the selected rows, not those in between.
-    const { segments } = computeTranscriptSlices({
-      count: rows.length,
-      getHeight,
-      scrollTop: scroll.scrollTop,
-      viewportHeight: effectiveViewportHeight,
-      overscanPx: OVERSCAN_PX,
-      pinnedRange: resolveSelectionRowRange(scroll.scrollEl, cachedKeyToIndex),
-    });
+
+    // A live selection's rows stay mounted even when the viewport moves far away,
+    // so scrolling or streaming past them does not collapse the selection. Only
+    // those rows are held, not the ones in between, so there is no distance cap.
+    const pinnedRange = resolveSelectionRowRange(scroll.scrollEl, cachedKeyToIndex);
+    pinnedRowIndices = [];
+    if (pinnedRange !== null) {
+      for (let i = pinnedRange.start; i <= pinnedRange.end; i++) {
+        pinnedRowIndices.push(i);
+      }
+    }
+
+    virtualizer.sync();
+    const items = virtualizer.getVirtualItems();
 
     return m("div", { class: "message-list-wrapper" }, [
       m(
         "div",
         { class: "message-list mx-auto w-full max-w-(--width-message-column) flex flex-col py-6" },
-        renderTranscriptSegments(rows, segments),
+        renderVirtualRows(rows, items, virtualizer.getTrailingSpace()),
       ),
     ]);
   }
@@ -169,6 +215,7 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
     onremove() {
       disconnectFromStream();
       scroll.detach();
+      virtualizer.unmount();
     },
 
     view(vnode) {
@@ -216,14 +263,16 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
             oncreate: (mainVnode: m.VnodeDOM) => {
               const element = mainVnode.dom as HTMLElement;
               scroll.attach(element);
+              virtualizer.mount();
               scroll.applyScrollPosition(element);
-              scroll.scheduleMeasure();
+              scheduleRowMeasure();
             },
             onupdate: (mainVnode: m.VnodeDOM) => {
               const element = mainVnode.dom as HTMLElement;
               scroll.attach(element);
+              virtualizer.mount();
               scroll.applyScrollPosition(element);
-              scroll.scheduleMeasure();
+              scheduleRowMeasure();
             },
           },
           content,

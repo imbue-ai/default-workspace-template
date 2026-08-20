@@ -24,11 +24,12 @@ import {
   isConversationNotFound,
   MAX_HELD_EVENTS,
 } from "../models/Response";
-import { computeTranscriptSlices } from "../models/virtualWindow";
 import { isSelectionActiveWithin } from "../models/scrollFollow";
-import { OVERSCAN_PX } from "./row-measurement";
+import { RowGeometryIndex } from "../models/rowGeometry";
 import { resolveSelectionRowRange, selectionStateWithin } from "./scroll-selection";
 import { createTranscriptScroll } from "./transcript-scroll";
+import { createTranscriptVirtualizer } from "./transcriptVirtualizer";
+import { createRowMeasurementStore, measureMountedRows } from "./rowMeasurement";
 import { connectToStream, disconnectFromStream, loadSnapshotWithStream } from "../models/StreamingMessage";
 import {
   addAgentsUpdatedListener,
@@ -45,7 +46,7 @@ import { MessageInput } from "./MessageInput";
 import { PoweredByCredit } from "./PoweredByCredit";
 import { ModelBar } from "./ModelBar";
 import { buildAgentTerminalUrl, getTerminalUrl, openIframeTabForAgent } from "./DockviewWorkspace";
-import { buildConversationRows, renderTranscriptSegments, type RowDescriptor } from "./conversation-rows";
+import { buildConversationRows, renderVirtualRows, type RowDescriptor } from "./conversation-rows";
 import { ActivityIndicator } from "./ActivityIndicator";
 import { renderQueuedMessages } from "./QueuedMessageView";
 import { renderOutgoingMessages } from "./OutgoingMessageView";
@@ -84,18 +85,11 @@ const BACKFILL_TRIGGER_PX = 600;
 // there incrementally. Small enough that ordinary scrolling keeps paging; large
 // enough that a couple of pages' overshoot doesn't trigger a disruptive reload.
 const JUMP_GAP_EVENTS = 120;
-// Stable per-event height used to size the reserved (phantom) regions for history
-// that exists on the server but isn't loaded yet. It is deliberately a constant
-// rather than the measured average of the loaded window: the loaded window is a
-// tiny fraction of a long transcript (e.g. 50 of 5000+ events), so its measured
-// average -- which shifts every frame as rows measure -- would be amplified by the
-// large unloaded count into wild scrollbar jumps. A constant keeps the total
-// scroll height (~ total * this) stable, so the scrollbar thumb doesn't churn and
-// an offset jump lands at a fixed position. Its exact value isn't UX-critical:
-// the drag fraction -> event index mapping and the post-jump thumb position both
-// scale with it and so are independent of it; only the loaded window's small
-// residual (measured height vs count * this) is affected.
-const ESTIMATED_EVENT_HEIGHT_PX = 160;
+// Reserved space for history the server has but this client has not loaded is
+// sized from measured geometry (see models/rowGeometry), not from a per-event
+// constant. The constant was the bug: the renderer groups a whole turn into one
+// row, so a tool-heavy page landed at a fraction of its reservation and
+// collapsed the scroll height in a single frame.
 
 function isProtoAgent(agentId: string): boolean {
   return getProtoAgents().some((p) => p.agent_id === agentId);
@@ -115,12 +109,10 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   // createMithrilRenderer); the scroll hooks below skip while it is false.
   // Defaults to true so the panel works before the first render sets it.
   let panelVisible = true;
-  // Shared scroll controller: owns the scroll position, follow state, drag flag and
-  // row measurer, plus the tail-follow / native-anchoring / pointer / resize
-  // machinery. Everything specific to the main chat -- the phantom regions, paging,
-  // eviction and the offset-jump pin below -- stays here; the controller is fed this
-  // panel's visibility, whether newer history exists below the window, and the
-  // after-scroll paging hook.
+  // Shared scroll controller: owns the scroll position, follow state, drag flag
+  // and the tail-follow / native-anchoring / pointer / resize machinery. Windowing
+  // is the virtualizer's job; this remains the single owner of the follow decision,
+  // which is the part every previous attempt at this got wrong.
   const scroll = createTranscriptScroll({
     isVisible: () => panelVisible,
     getHasMoreAfter: () => hasMoreAfter(currentAgentId ?? ""),
@@ -139,12 +131,40 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   // selection's DOM rows to virtualization indices so they can be pinned into the
   // window (see renderMessages).
   let cachedKeyToIndex = new Map<string, number>();
+  // Accepted row heights, with the hysteresis and settle tracking that keep a
+  // sub-pixel reflow from looping and a pre-markdown placeholder from being
+  // remembered as final.
+  const measurements = createRowMeasurementStore();
+  // Measured geometry for this conversation: which rows cover which events and
+  // how tall each is. Reserved space above and below the loaded window is read
+  // straight out of this, so it reflects what the transcript actually renders.
+  let geometry = new RowGeometryIndex();
   // Heights reserved above/below the loaded window for history that exists on the
-  // server but isn't loaded yet (see renderMessages). Shared so the scroll handler
-  // can tell when the viewport is over a reserved region and page/jump/overlay
-  // accordingly.
+  // server but isn't loaded yet. Shared so the scroll handler can tell when the
+  // viewport is over a reserved region and page/jump/overlay accordingly.
   let phantomTopHeight = 0;
   let phantomBottomHeight = 0;
+  // Windowing. Reads the memoized rows and the reserved heights above; owns the
+  // visible range, the selection pin and scroll compensation.
+  const virtualizer = createTranscriptVirtualizer({
+    getScrollElement: () => scroll.scrollEl,
+    getCount: () => cachedRows.length,
+    getRowKey: (index) => cachedRows[index]?.key ?? String(index),
+    estimateSize: (index) => {
+      const row = cachedRows[index];
+      if (row === undefined) {
+        return 0;
+      }
+      return measurements.heightFor(row.key) ?? row.estimate;
+    },
+    getPaddingStart: () => phantomTopHeight,
+    getPaddingEnd: () => phantomBottomHeight,
+    getPinnedIndices: () => pinnedRowIndices,
+    isEnabled: () => panelVisible,
+  });
+  // Row indices a live text selection touches, recomputed each render and read
+  // by the virtualizer's range extractor.
+  let pinnedRowIndices: number[] = [];
   // Paging (scroll-driven fetch) in-flight guard. Covers older/newer pages and
   // offset jumps -- only one is outstanding at a time.
   let backfillInFlight = false;
@@ -403,6 +423,13 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
 
     currentAgentId = agentId;
     scroll.reset();
+    // A different conversation's rows share no keys with this one's, and its
+    // geometry is indexed on its own transcript offsets, so both are dropped
+    // rather than carried across.
+    measurements.reset();
+    geometry = new RowGeometryIndex();
+    virtualizer.reset();
+    rowsCacheKey = null;
     backfillInFlight = false;
     loadAgent(agentId);
   }
@@ -481,13 +508,16 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     // so measured-height divergence in the loaded window could push the estimate
     // across the jump threshold and fire a spurious window reset (which unmounts
     // every row -- the most violent scroll jolt, and a guaranteed selection kill).
+    const total = getTotalEventCount(agentId);
     const loadedBottom = element.scrollHeight - phantomBottomHeight;
     let targetIndex: number | null = null;
     if (phantomTopHeight > 0 && element.scrollTop < phantomTopHeight) {
-      targetIndex = Math.round(element.scrollTop / ESTIMATED_EVENT_HEIGHT_PX);
+      // The exact inverse of the function that sized the reserved space, so the
+      // position the thumb is at and the offset it resolves to cannot disagree.
+      targetIndex = geometry.offsetAtHeight(element.scrollTop, firstOffset);
     } else if (phantomBottomHeight > 0 && element.scrollTop + element.clientHeight > loadedBottom) {
       const intoBottomRegion = element.scrollTop + element.clientHeight - loadedBottom;
-      targetIndex = windowEnd + Math.round(intoBottomRegion / ESTIMATED_EVENT_HEIGHT_PX);
+      targetIndex = geometry.offsetAtHeight(geometry.heightBefore(windowEnd) + intoBottomRegion, total);
     }
 
     // Far from the loaded window in either direction -> jump.
@@ -690,63 +720,123 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       // Both structure and decoration come from the transcript walk; there is no
       // side-channel enrichment. The same pipeline feeds the subagent view, so a
       // subagent's "View conversation" renders an identical progress timeline.
-      cachedRows = buildConversationRows(agentId, events, agentIsIdle);
+      cachedRows = buildConversationRows(agentId, events, agentIsIdle, getFirstOffset(agentId));
       cachedKeyToIndex = new Map(cachedRows.map((row, index) => [row.key, index]));
-      scroll.rowMeasurer.prune(new Set(cachedRows.map((row) => row.key)));
+      measurements.prune(new Set(cachedRows.map((row) => row.key)));
       rowsCacheKey = renderKey;
     }
     const rows = cachedRows;
 
-    const getHeight = (index: number): number => scroll.rowMeasurer.getHeight(rows[index].key) ?? rows[index].estimate;
+    // Fold every settled row into the conversation's geometry, so the reserved
+    // space below reflects real heights. Only settled rows are admitted: a height
+    // read before markdown and highlighting land is a placeholder, and persisting
+    // it would make the estimate permanently wrong.
+    recordSettledGeometry(rows);
 
     // Reserve space above and below the loaded window for history that exists on
     // the server but isn't loaded yet, so the scrollbar reflects the whole
-    // conversation rather than just the loaded window -- and so paging more in
-    // doesn't make it jump. Each reserve is the count of not-yet-loaded events on
-    // that side times a stable per-event constant (see ESTIMATED_EVENT_HEIGHT_PX).
-    // Using a constant (not the loaded window's measured average) is what keeps the
-    // total scroll height stable: deriving it from the small loaded window would
-    // make every row measurement, amplified by the large unloaded count, jolt the
-    // scrollbar. As events page in, the reserve shrinks by ~the height they add, so
-    // existing content stays put.
+    // conversation rather than just the loaded window. Both numbers come from
+    // measured geometry, falling back to a rate learned from this transcript's own
+    // rows for ranges never rendered -- so what a page reserves and what it lands
+    // at are the same quantity, and paging one in does not shift the scrollbar.
     const total = getTotalEventCount(agentId);
     const firstOffset = getFirstOffset(agentId);
-    const olderUnloaded = Math.max(0, firstOffset);
-    const newerUnloaded = Math.max(0, total - (firstOffset + events.length));
-    phantomTopHeight = Math.round(olderUnloaded * ESTIMATED_EVENT_HEIGHT_PX);
-    phantomBottomHeight = Math.round(newerUnloaded * ESTIMATED_EVENT_HEIGHT_PX);
+    const windowEnd = firstOffset + events.length;
+    phantomTopHeight = Math.round(geometry.heightBefore(firstOffset));
+    phantomBottomHeight = Math.round(Math.max(0, geometry.heightBefore(total) - geometry.heightBefore(windowEnd)));
 
-    // Before the first measure viewportHeight is 0; fall back to the live
-    // clientHeight (or a large value) so the initial render is not a 1-row sliver
-    // that the post-mount measure then has to expand.
-    const effectiveViewportHeight =
-      scroll.viewportHeight > 0 ? scroll.viewportHeight : (scroll.scrollEl?.clientHeight ?? 2000);
-    // Windowed slice for the viewport, plus a (possibly disjoint) run holding the
-    // rows a live selection touches so scrolling/streaming past them doesn't
-    // unmount their DOM and collapse the selection. A disjoint run mounts only the
-    // selected rows -- not the arbitrarily many between them and the viewport -- so
-    // there is no gap cap: the selection survives at any scroll distance.
-    const { segments } = computeTranscriptSlices({
-      count: rows.length,
-      getHeight,
-      scrollTop: scroll.scrollTop,
-      viewportHeight: effectiveViewportHeight,
-      overscanPx: OVERSCAN_PX,
-      phantomTopHeight,
-      phantomBottomHeight,
-      pinnedRange: selectionActive ? resolveSelectionRowRange(scroll.scrollEl, cachedKeyToIndex) : null,
-    });
+    // Rows a live selection touches, kept mounted by the virtualizer's range
+    // extractor even when the viewport has moved far away -- removing a
+    // selection endpoint's node collapses the selection.
+    const pinnedRange = selectionActive ? resolveSelectionRowRange(scroll.scrollEl, cachedKeyToIndex) : null;
+    pinnedRowIndices = [];
+    if (pinnedRange !== null) {
+      for (let i = pinnedRange.start; i <= pinnedRange.end; i++) {
+        pinnedRowIndices.push(i);
+      }
+    }
+
+    virtualizer.sync();
+    const items = virtualizer.getVirtualItems();
 
     return m("div", { class: "message-list-wrapper" }, [
       // The queued-message group renders after the virtualized rows so it sits at
       // the live tail, below the last committed turn. It is a full snapshot from
       // the harness, replaced wholesale on each push.
       m("div", { class: MESSAGE_LIST_CLASS }, [
-        ...renderTranscriptSegments(rows, segments),
+        ...renderVirtualRows(rows, items, virtualizer.getTrailingSpace()),
         ...renderQueuedMessages(agentId),
         ...renderOutgoingMessages(agentId),
       ]),
     ]);
+  }
+
+  // A measure pass is already queued for the next frame.
+  let measureScheduled = false;
+
+  /**
+   * Read every mounted row's height on the next frame and hand the changes to the
+   * virtualizer, redrawing once if anything moved.
+   *
+   * Debounced to one pass per frame because a global redraw fires on every scroll
+   * tick and every streamed event, and reading `getBoundingClientRect` forces
+   * layout. Reporting sizes through `resizeItem` (rather than letting the library
+   * read the DOM) is what keeps our hysteresis in the loop -- see rowMeasurement.
+   */
+  function scheduleRowMeasure(): void {
+    if (measureScheduled) {
+      return;
+    }
+    measureScheduled = true;
+    requestAnimationFrame(() => {
+      measureScheduled = false;
+      const scrollEl = scroll.scrollEl;
+      if (scrollEl === null || !panelVisible) {
+        return;
+      }
+      const list = scrollEl.querySelector(".message-list");
+      if (list === null) {
+        return;
+      }
+      const changed = measureMountedRows(list, measurements);
+      if (changed.size === 0) {
+        return;
+      }
+      for (const [rowKey, height] of changed) {
+        const index = cachedKeyToIndex.get(rowKey);
+        if (index !== undefined) {
+          virtualizer.resizeRow(index, height);
+        }
+      }
+      m.redraw();
+    });
+  }
+
+  /**
+   * Fold settled row measurements into the conversation's geometry.
+   *
+   * A row is admitted only once its height has gone quiet, so a placeholder
+   * measured before markdown or syntax highlighting lands is never recorded as
+   * the real height. Rows whose range is degenerate are skipped: they carry no
+   * events of their own and would corrupt the prefix sums.
+   */
+  function recordSettledGeometry(rows: RowDescriptor[]): void {
+    const now = Date.now();
+    for (const row of rows) {
+      if (row.end_offset <= row.start_offset) {
+        continue;
+      }
+      const height = measurements.heightFor(row.key);
+      if (height === undefined || !measurements.isSettled(row.key, now)) {
+        continue;
+      }
+      geometry.recordRow({
+        row_key: row.key,
+        start_offset: row.start_offset,
+        end_offset: row.end_offset,
+        height,
+      });
+    }
   }
 
   const handleAgentsUpdated = (): void => retryAfterAgentResolved();
@@ -760,6 +850,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       removeAgentsUpdatedListener(handleAgentsUpdated);
       disconnectLogWs();
       scroll.detach();
+      virtualizer.unmount();
       if (currentAgentId !== null) {
         disconnectFromStream(currentAgentId);
       }
@@ -817,8 +908,9 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
               oncreate: (mainVnode: m.VnodeDOM) => {
                 const element = mainVnode.dom as HTMLElement;
                 scroll.attach(element);
+                virtualizer.mount();
                 applyScrollPosition(element);
-                scroll.scheduleMeasure();
+                scheduleRowMeasure();
                 if (currentAgentId !== null) {
                   maybePage(currentAgentId, element);
                 }
@@ -826,8 +918,9 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
               onupdate: (mainVnode: m.VnodeDOM) => {
                 const element = mainVnode.dom as HTMLElement;
                 scroll.attach(element);
+                virtualizer.mount();
                 applyScrollPosition(element);
-                scroll.scheduleMeasure();
+                scheduleRowMeasure();
                 // Drive paging from the render loop, not only from scroll events, so
                 // the viewport sitting over a reserved region always triggers (or
                 // already has in flight) the fetch to cover it. Without this a drag
