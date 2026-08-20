@@ -33,6 +33,29 @@ describe("RowGeometryIndex", () => {
     expect(index.totalMeasuredHeight()).toBe(250);
   });
 
+  it("replaces a row re-recorded at a different range instead of keeping both", () => {
+    // The renderer clamps its first row's start to the loaded window's start, so
+    // the same row claims [100, 110) while the window begins at 100 and [103, 110)
+    // once a backfill puts older rows above it. Keeping both would count that
+    // row's height twice and hide its events from the gap below.
+    const index = new RowGeometryIndex();
+    index.recordRow(row(100, 110, 340, "turn-a"));
+    expect(index.recordRow(row(103, 110, 340, "turn-a"))).toBe(true);
+    expect(index.rowCount).toBe(1);
+    expect(index.rows[0].start_offset).toBe(103);
+    // 340px for the row itself; the 103 events above it were never measured.
+    expect(index.heightBefore(110, 10)).toBe(340 + 103 * 10);
+  });
+
+  it("replaces every row a re-measured range swallows", () => {
+    // Turn grouping can merge what used to render as several rows into one (a
+    // skill expansion, a late subagent link). The merged row owns the range now.
+    const index = new RowGeometryIndex([row(0, 10, 100), row(10, 20, 100), row(20, 30, 100)]);
+    expect(index.recordRow(row(10, 30, 400, "merged"))).toBe(true);
+    expect(index.rows.map((r) => r.row_key)).toEqual(["row-0", "merged"]);
+    expect(index.heightBefore(30)).toBe(500);
+  });
+
   it("sums measured heights for a fully measured prefix", () => {
     const index = new RowGeometryIndex([row(0, 10, 340), row(10, 20, 340)]);
     expect(index.heightBefore(10)).toBe(340);

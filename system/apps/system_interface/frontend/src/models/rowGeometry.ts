@@ -139,29 +139,41 @@ export class RowGeometryIndex {
   }
 
   /**
-   * Record (or replace) one row's measured geometry.
+   * Record one row's measured geometry, replacing every row it overlaps.
    *
-   * Replacement is by `start_offset` rather than by `row_key`, because the same
-   * key can be re-measured at a different height and because the offset is what
-   * the sums are indexed on. Returns whether anything changed, so a caller can
-   * skip persisting a no-op.
+   * Replacement is by *range* rather than by `row_key` or by `start_offset`
+   * alone. The same rendered row is legitimately recorded under different
+   * offsets as the loaded window moves -- the renderer clamps its first row's
+   * start to the window start, so that row claims a different range once a
+   * backfill or an eviction moves the window -- and matching on the start alone
+   * would file the second description alongside the first. Two rows covering
+   * the same events break the non-overlap invariant the prefix sums are built
+   * on: the range's height would be counted twice and its events would be
+   * missing from the unmeasured gap below it.
+   *
+   * Returns whether anything changed, so a caller can skip persisting a no-op.
    */
   recordRow(row: RowGeometry): boolean {
-    const index = lowerBound(this.#rows, row.start_offset);
-    const existing = this.#rows[index];
-    if (existing !== undefined && existing.start_offset === row.start_offset) {
-      if (
-        existing.height === row.height &&
-        existing.end_offset === row.end_offset &&
-        existing.row_key === row.row_key
-      ) {
-        return false;
-      }
-      this.#rows[index] = row;
-      this.#sumsAreStale = true;
-      return true;
+    const insertAt = lowerBound(this.#rows, row.start_offset);
+    // Rows above this point start before the new one, and the invariant leaves
+    // at most one of them able to reach into it.
+    const previous = this.#rows[insertAt - 1];
+    const first = previous !== undefined && previous.end_offset > row.start_offset ? insertAt - 1 : insertAt;
+    let end = first;
+    while (end < this.#rows.length && this.#rows[end].start_offset < row.end_offset) {
+      end += 1;
     }
-    this.#rows.splice(index, 0, row);
+    const replaced = this.#rows[first];
+    if (
+      end - first === 1 &&
+      replaced.row_key === row.row_key &&
+      replaced.start_offset === row.start_offset &&
+      replaced.end_offset === row.end_offset &&
+      replaced.height === row.height
+    ) {
+      return false;
+    }
+    this.#rows.splice(first, end - first, row);
     this.#sumsAreStale = true;
     return true;
   }
