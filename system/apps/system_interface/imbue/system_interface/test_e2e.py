@@ -41,7 +41,6 @@ from imbue.system_interface.wsgi import make_threaded_server
 
 try:
     from playwright.sync_api import Page
-    from playwright.sync_api import Route
     from playwright.sync_api import expect
 
     _PLAYWRIGHT_IMPORTABLE = True
@@ -2754,19 +2753,15 @@ def test_chat_recovers_from_a_failed_transcript_load(tmp_path: Path, page: Page)
     with _running_e2e_server(tmp_path, _TRANSCRIPT_RECOVERY_PORT) as (base_url, _agent_info, _session_file):
         # Stand in for the proxy's 503. The plain-text body matters: it is not
         # JSON, so the request layer has no detail to report and must fall back
-        # to the status rather than to mithril's stringified empty body.
-        is_backend_reachable = False
-
-        def _serve_events(route: Route) -> None:
-            if is_backend_reachable:
-                route.continue_()
-            else:
-                route.fulfill(status=503, content_type="text/plain", body="Backend not yet available")
-
-        # Only the transcript snapshot; the SSE stream beside it stays healthy,
-        # so nothing retries in the background and Refresh is the sole recovery
-        # path under test.
-        page.route("**/api/agents/*/events", _serve_events)
+        # to the status rather than to mithril's stringified empty body. Only
+        # the transcript snapshot is intercepted; the SSE stream beside it stays
+        # healthy, so nothing retries in the background and Refresh is the sole
+        # recovery path under test.
+        events_url = "**/api/agents/*/events"
+        page.route(
+            events_url,
+            lambda route: route.fulfill(status=503, content_type="text/plain", body="Backend not yet available"),
+        )
         page.goto(base_url)
 
         error = page.locator(".message-list-error")
@@ -2774,7 +2769,7 @@ def test_chat_recovers_from_a_failed_transcript_load(tmp_path: Path, page: Page)
         expect(error).to_have_text("Error: request failed (HTTP 503)")
 
         # The workspace becomes reachable again. Nothing tells the panel.
-        is_backend_reachable = True
+        page.unroute(events_url)
 
         chat_tab = page.locator(".dv-tab", has=page.locator(".dv-default-tab-content", has_text="test-agent")).first
         chat_tab.hover()
