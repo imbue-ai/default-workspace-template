@@ -249,6 +249,12 @@ const RAIL_PATHS = {
   pin:
     '<path d="M9 4h6l-1 5 3 3v2H7v-2l3-3-1-5z" fill="currentColor" stroke="currentColor"/>' +
     '<line x1="12" y1="14" x2="12" y2="20" fill="none" stroke="currentColor"/>',
+  // The tab list's one-click "remove from project", matching the glyph the same
+  // verb wears in the row menu (icons.ts's `minus-circle`). Deliberately NOT
+  // the pushpin above: a pinned app sits in the shortcut strip and reads as
+  // pinned, while a tab-list row is simply filed here, and calling that
+  // "unpinning" would name a state the row never showed.
+  "remove-from-view": '<circle cx="12" cy="12" r="9"/><path d="M8 12h8"/>',
 } as const;
 
 type RailIconName = keyof typeof RAIL_PATHS;
@@ -1053,6 +1059,35 @@ export function Sidebar(): m.Component<SidebarAttrs> {
           { class: `min-w-0 flex-1 truncate ${ROW_TEXT_CLASS} whitespace-nowrap` },
           matchedLabel(row.label, ranges),
         ),
+        // One click for the verb people reach for most, beside the menu that
+        // also carries it. Absent in Everything, which is the home: an object
+        // leaves it only by being destroyed. An open app therefore has two of
+        // these -- this one and its shortcut's pushpin -- which is the same act
+        // reached from the two places the rail shows it.
+        isEverythingView(attrs.activeViewId)
+          ? null
+          : m(
+              "button",
+              {
+                type: "button",
+                class:
+                  "project-rail-remove flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded " +
+                  "text-text-faint hover:bg-bg-hover hover:text-text-primary " +
+                  "focus-visible:opacity-100 group-hover:opacity-100 opacity-0",
+                "aria-label": `Remove ${row.label} from this project`,
+                ...hoverTooltipAttrs(
+                  "Removes it from this project only. It keeps running, and stays in Everything and in any " +
+                    "other project showing it.",
+                  "right",
+                ),
+                onclick: (event: MouseEvent) => {
+                  // The row underneath opens the object; this must not.
+                  event.stopPropagation();
+                  attrs.onRemoveFromView(row);
+                },
+              },
+              m.trust(railIcon("remove-from-view", ACTION_ICON_SIZE)),
+            ),
         hasMenu
           ? m(
               "button",
