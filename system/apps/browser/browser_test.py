@@ -348,6 +348,19 @@ def test_should_disable_sandbox_when_running_as_root(monkeypatch: pytest.MonkeyP
     assert bsession._should_disable_sandbox() is False
 
 
+def test_launch_args_suppress_the_bad_flag_infobar() -> None:
+    # As root we must pass --no-sandbox, which is on Chromium's kBadFlags list, so
+    # without --test-type Chromium pins an "unsupported command-line flag" infobar over
+    # every page -- and we film that window. --test-type is what suppresses it (see
+    # chrome/browser/ui/startup/infobar_utils.cc); --enable-automation would too, but it
+    # sets navigator.webdriver, which defeats Fortress's whole point.
+    browser = bsession.LiveBrowser(browser_id="b0")
+    session = browser._build_bu_session(Path("/tmp/args-check"), "/usr/bin/chromium", chromium_sandbox=False)
+    args = session.browser_profile.get_args()
+    assert "--test-type" in args
+    assert "--enable-automation" not in args
+
+
 class _FakeBuSession:
     """A stand-in for browser-use's BrowserSession: its ``start`` fails when the sandbox
     is on (mimicking a runtime that can't sandbox), so we can exercise the launch paths."""
@@ -961,24 +974,46 @@ def test_create_rejects_when_fleet_full(monkeypatch: pytest.MonkeyPatch) -> None
     asyncio.run(go())
 
 
-def test_create_generates_unique_names_and_regenerates_on_collision(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Two create()s with no name yield two DISTINCT registered names; a generator that
-    # returns a duplicate first is retried (regenerate-on-collision under the lock).
-    # create() now registers init + kicks the launch off in the background; stub the
-    # launch to a no-op so the test only exercises (synchronous) name registration.
+def test_create_mints_the_first_free_numbered_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Two create()s with no name mint browser-1 then browser-2 -- the canonical
+    # forms of the "Browser N" display names the UI derives. create() registers
+    # init + kicks the launch off in the background; stub the launch to a no-op
+    # so the test only exercises (synchronous) name registration.
     monkeypatch.setattr(bsession.BrowserSessionManager, "_spawn_launch", lambda self, *a, **k: None)
+    monkeypatch.setattr(bsession, "_MAX_SESSIONS", 5)
     mgr = bsession.BrowserSessionManager()
-
-    # Inject a deterministic generator: returns "alex-smith", then "alex-smith" AGAIN
-    # (a collision the manager must reject), then "riley-jones".
-    scripted = iter(["alex-smith", "alex-smith", "riley-jones"])
-    monkeypatch.setattr(bsession, "generate_browser_name", lambda: next(scripted))
 
     async def go() -> None:
         first = await mgr.create()
         second = await mgr.create()
-        assert {first.browser_id, second.browser_id} == {"alex-smith", "riley-jones"}
-        assert set(mgr._browsers) == {"alex-smith", "riley-jones"}
+        assert (first.browser_id, second.browser_id) == ("browser-1", "browser-2")
+        # A legacy random-named browser holds its own name without shifting the
+        # numbering, and closing browser-1 frees its slot for the next create.
+        mgr._browsers["alex-smith"] = bsession.LiveBrowser(browser_id="alex-smith")
+        await mgr.close("browser-1")
+        third = await mgr.create()
+        assert third.browser_id == "browser-1"
+
+    asyncio.run(go())
+
+
+def test_create_counts_manifest_entries_and_profiles_as_taken(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A saved browser that has not been restored yet (a manifest entry), and a
+    # profile dir a crash orphaned, both hold their names: a minted name never
+    # lands on either (which is what keeps a new browser from adopting an old
+    # profile's cookies), and an explicit create naming one is refused.
+    monkeypatch.setattr(bsession.BrowserSessionManager, "_spawn_launch", lambda self, *a, **k: None)
+    mgr = bsession.BrowserSessionManager()
+    manifest.write_manifest(manifest.Manifest(browsers=[manifest.ManifestEntry(id="browser-1", tabs=[])]))
+    (bsession._PROFILE_ROOT / "browser-use-user-data-dir-browser-2").mkdir(parents=True)
+
+    async def go() -> None:
+        minted = await mgr.create()
+        assert minted.browser_id == "browser-3"
+        with pytest.raises(bsession.DuplicateBrowserNameError, match="saved browser"):
+            await mgr.create("browser-1")
+        with pytest.raises(bsession.DuplicateBrowserNameError, match="saved browser"):
+            await mgr.create("browser-2")
 
     asyncio.run(go())
 
@@ -1003,7 +1038,7 @@ def test_create_rejects_invalid_and_duplicate_user_names(monkeypatch: pytest.Mon
     asyncio.run(go())
 
 
-def test_names_are_never_reused_after_close(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_closed_name_is_gone_until_recreated(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(bsession.BrowserSessionManager, "_spawn_launch", lambda self, *a, **k: None)
     mgr = bsession.BrowserSessionManager()
 

@@ -36,12 +36,14 @@ const WORKSPACE_PACKAGES = {
   'imbue-mngr':             'libs/mngr',
   'imbue-mngr-aws':         'libs/mngr_aws',
   'imbue-mngr-claude':      'libs/mngr_claude',
+  'imbue-mngr-codex':       'libs/mngr_codex',
   'imbue-mngr-forward':     'libs/mngr_forward',
   'imbue-mngr-imbue-cloud': 'libs/mngr_imbue_cloud',
   'imbue-mngr-latchkey':    'libs/mngr_latchkey',
   'imbue-mngr-lima':        'libs/mngr_lima',
   'imbue-mngr-modal':       'libs/mngr_modal',
   'imbue-mngr-ovh':         'libs/mngr_ovh',
+  'imbue-mngr-pi-coding':   'libs/mngr_pi_coding',
   'imbue-mngr-vps':         'libs/mngr_vps',
   'imbue-common':           'libs/imbue_common',
   'concurrency-group':      'libs/concurrency_group',
@@ -333,7 +335,7 @@ function bakeBuildInfo() {
  *
  * When both are unset, leaves _bundled/ empty -- this is the
  * `uv run minds run` / dev-mode case where the user is expected to
- * activate an env in their shell (`minds env activate <name>`) before
+ * activate an env in their shell (`minds-admin env activate <name>`) before
  * invoking the backend. The packaged Electron startup refuses to run
  * without a bundled config if it was built without these vars set,
  * which surfaces the missing build-time config loudly instead of

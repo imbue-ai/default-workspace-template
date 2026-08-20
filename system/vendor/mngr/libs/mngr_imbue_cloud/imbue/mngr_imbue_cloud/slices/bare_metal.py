@@ -68,7 +68,7 @@ DEFAULT_MEMORY_PER_SLICE_GB: Final[int] = 8
 SLICE_CONTAINER_MEMORY_RESERVE_MIB: Final[int] = 1024
 
 # Default CPU overcommit factor used to size each slice's vCPUs (vCPUs/slice =
-# floor(threads * ratio / slots)). Overridable per box at ``admin server
+# floor(threads * ratio / slots)). Overridable per box at ``minds-admin server
 # register --cpu-overcommit``; RAM is never overcommitted.
 DEFAULT_SLICE_CPU_OVERCOMMIT_RATIO: Final[float] = 2.0
 
@@ -398,7 +398,7 @@ def foreign_tier_slice_names(box_names: AbstractSet[str], env_name: str) -> set[
     box rather than from one env's rows. It is never legitimate *across* tiers,
     and the reason is the pool keypair, not the database: a box carrying two
     tiers' slices is a box both tiers' pool keys can SSH, which is precisely the
-    "zero cross-tier reach" boundary (see ``apps/minds/docs/environments.md``) --
+    "zero cross-tier reach" boundary (see ``apps/minds/docs/deploy/environments.md``) --
     each tier's operators and connector gain limactl, and so root, over the
     other's workspaces. Separate ``host_pool`` databases do not distinguish the
     two cases: every dev env has its own database too, and the orphan reap is
@@ -516,5 +516,5 @@ def find_server_capacity_by_id(
         if capacity.server.id == server_id:
             return capacity
     raise SliceCapacityError(
-        f"no bare-metal server with id {server_id}; run `mngr imbue_cloud admin server list` to see the fleet"
+        f"no bare-metal server with id {server_id}; run the operator CLI's `minds-admin server list` to see the fleet"
     )

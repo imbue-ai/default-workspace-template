@@ -7,6 +7,7 @@ import re
 import secrets
 import uuid
 from collections.abc import Iterator
+from collections.abc import Set as AbstractSet
 from datetime import datetime
 from datetime import timezone
 from types import SimpleNamespace
@@ -77,7 +78,9 @@ from imbue.remote_service_connector.errors import R2BucketNotFoundError
 # _WORKSPACE_RECORD_COLUMNS below).
 from imbue.remote_service_connector.shares import _SHARE_COLUMN_NAMES
 from imbue.remote_service_connector.sync import SyncActiveAgentConflictError
+from imbue.remote_service_connector.sync import SyncRecordFormatTooNewError
 from imbue.remote_service_connector.sync import SyncRevisionConflictError
+from imbue.remote_service_connector.sync import UPDATABLE_RECORD_COLUMNS
 from imbue.remote_service_connector.sync import _ONE_ACTIVE_PER_AGENT_INDEX_NAME
 from imbue.remote_service_connector.sync import _WORKSPACE_RECORD_COLUMNS
 from imbue.remote_service_connector.web import web_app
@@ -1044,7 +1047,8 @@ def _row_attributes(row: "FakePoolRow") -> dict[str, Any]:
 
     Existing tests pass ``version="v…"`` for ergonomics; we synthesise a
     matching attributes dict from that here so the fake's behaviour mirrors
-    what production does once admin pool create writes attributes directly.
+    what production does once the operator pool bake (``minds-admin pool
+    create``) writes attributes directly.
     """
     if isinstance(row.attributes, dict):
         return dict(row.attributes)
@@ -1551,7 +1555,7 @@ class FakeCursor:
             self.rowcount = self._backend.scrub_sync_secrets(params[0])
 
         elif query_lower.startswith("update workspace_records"):
-            updated_row = self._backend.update_sync_record(params)
+            updated_row = self._backend.update_sync_record(query, params)
             if updated_row is not None:
                 self._results = [self._backend.sync_record_tuple(updated_row)]
 
@@ -1912,6 +1916,31 @@ def make_relay_row(
         "health": health,
         "consecutive_probe_failures": consecutive_probe_failures,
     }
+
+
+def _split_sql_set_clauses(query: str) -> list[str]:
+    """Split an UPDATE statement's SET clause on top-level commas (parenthesized commas kept intact)."""
+    lowered = query.lower()
+    set_start = lowered.index(" set ") + len(" set ")
+    set_end = lowered.index(" where ")
+    set_part = query[set_start:set_end]
+    clauses: list[str] = []
+    depth = 0
+    current: list[str] = []
+    for char in set_part:
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        else:
+            pass
+        if char == "," and depth == 0:
+            clauses.append("".join(current).strip())
+            current = []
+        else:
+            current.append(char)
+    clauses.append("".join(current).strip())
+    return clauses
 
 
 class FakePoolBackend:
@@ -2329,7 +2358,11 @@ class FakePoolBackend:
 
     def sync_record_tuple(self, row: dict[str, Any]) -> tuple[Any, ...]:
         """Project a stored row into the SELECT column order PostgresSyncStore uses."""
-        return tuple(row.get(name) for name in _WORKSPACE_RECORD_COLUMN_NAMES)
+        # record_format mirrors the migration's NOT NULL DEFAULT 1: rows seeded
+        # by older fixtures (no explicit value) read back as format 1.
+        return tuple(
+            row.get(name, 1) if name == "record_format" else row.get(name) for name in _WORKSPACE_RECORD_COLUMN_NAMES
+        )
 
     def check_one_active_sync_record_per_agent(self, user_id: str, host_id: str, agent_id: str, state: str) -> None:
         """Enforce the partial unique index on (user_id, agent_id) WHERE state = 'active'."""
@@ -2359,6 +2392,7 @@ class FakePoolBackend:
             restored_from_host_id,
             encrypted_secrets,
             revision,
+            record_format,
             # The trailing state param feeds the destroyed_at CASE expression.
             _state_for_destroyed_at,
         ) = params
@@ -2385,6 +2419,7 @@ class FakePoolBackend:
             "restored_from_host_id": restored_from_host_id,
             "encrypted_secrets": _adapted_bytes(encrypted_secrets),
             "revision": revision,
+            "record_format": record_format,
             "created_at": _SYNC_ROW_CREATED_AT,
             "updated_at": _SYNC_ROW_CREATED_AT,
             "destroyed_at": datetime.now(timezone.utc) if state == "destroyed" else None,
@@ -2392,47 +2427,46 @@ class FakePoolBackend:
         self.sync_record_rows.append(row)
         return row
 
-    def update_sync_record(self, params: tuple[Any, ...]) -> dict[str, Any] | None:
-        """Simulate the workspace_records CAS UPDATE; returns the updated row or None."""
-        (
-            agent_id,
-            display_name,
-            color,
-            provider_kind,
-            hosting_device_id,
-            device_label,
-            state,
-            restored_from_host_id,
-            encrypted_secrets,
-            revision,
-            # The extra state param feeds the destroyed_at CASE expression.
-            _state_for_destroyed_at,
-            user_id,
-            host_id,
-        ) = params
+    def update_sync_record(self, query: str, params: tuple[Any, ...]) -> dict[str, Any] | None:
+        """Simulate the workspace_records preserve-on-absent UPDATE; returns the updated row or None.
+
+        The real statement's SET clause is dynamic (only the columns the push
+        named appear), so this parses the clause list from the query instead
+        of destructuring a fixed parameter tuple.
+        """
+        clauses = _split_sql_set_clauses(query)
+        column_updates: dict[str, Any] = {}
+        state_for_destroyed_at: Any = None
+        param_idx = 0
+        for clause in clauses:
+            column = clause.split("=", 1)[0].strip()
+            placeholder_count = clause.count("%s")
+            clause_values = params[param_idx : param_idx + placeholder_count]
+            param_idx += placeholder_count
+            if column == "updated_at":
+                column_updates["updated_at"] = _SYNC_ROW_UPDATED_AT
+            elif column == "destroyed_at":
+                state_for_destroyed_at = clause_values[0]
+            elif column == "encrypted_secrets":
+                column_updates["encrypted_secrets"] = _adapted_bytes(clause_values[0])
+            else:
+                column_updates[column] = clause_values[0]
+        user_id, host_id = params[param_idx], params[param_idx + 1]
         if self.sync_update_returns_no_row:
             return None
         row = self.find_sync_record(user_id, host_id)
         if row is None:
             return None
+        state = column_updates.get("state", row["state"])
+        agent_id = column_updates.get("agent_id", row["agent_id"])
         self.check_one_active_sync_record_per_agent(user_id, host_id, agent_id, state)
         # Mirror the SQL CASE: stamp on the destroyed transition (keeping an
         # existing stamp), clear on resurrection to active.
-        destroyed_at = (row.get("destroyed_at") or datetime.now(timezone.utc)) if state == "destroyed" else None
-        row.update(
-            agent_id=agent_id,
-            display_name=display_name,
-            color=color,
-            provider_kind=provider_kind,
-            hosting_device_id=hosting_device_id,
-            device_label=device_label,
-            state=state,
-            restored_from_host_id=restored_from_host_id,
-            encrypted_secrets=_adapted_bytes(encrypted_secrets),
-            revision=revision,
-            updated_at=_SYNC_ROW_UPDATED_AT,
-            destroyed_at=destroyed_at,
+        destroyed_at = (
+            (row.get("destroyed_at") or datetime.now(timezone.utc)) if state_for_destroyed_at == "destroyed" else None
         )
+        row.update(column_updates)
+        row["destroyed_at"] = destroyed_at
         return row
 
     def scrub_sync_secrets(self, user_id: str) -> int:
@@ -2717,9 +2751,11 @@ class InMemorySyncStore:
         rows = [self._encode_secrets(record) for (uid, _), record in self.records_by_key.items() if uid == user_id]
         return sorted(rows, key=lambda record: record["created_at"])
 
-    def put_record(self, user_id: str, record: dict[str, Any]) -> dict[str, Any]:
+    def put_record(self, user_id: str, record: dict[str, Any], sent_fields: AbstractSet[str]) -> dict[str, Any]:
         key = (user_id, record["host_id"])
         existing = self.records_by_key.get(key)
+        if existing is not None and record.get("record_format", 1) < existing.get("record_format", 1):
+            raise SyncRecordFormatTooNewError(self._encode_secrets(existing))
         if existing is not None and record["revision"] != existing["revision"] + 1:
             raise SyncRevisionConflictError(self._encode_secrets(existing))
         if record["state"] == "active":
@@ -2729,7 +2765,17 @@ class InMemorySyncStore:
                     raise SyncActiveAgentConflictError(
                         f"another ACTIVE record already exists for agent {record['agent_id']}"
                     )
-        stored = dict(record)
+        # Preserve-on-absent, mirroring PostgresSyncStore: an update writes
+        # only the updatable fields the push named; absent fields keep their
+        # stored values.
+        if existing is not None:
+            stored = dict(existing)
+            for field_name in UPDATABLE_RECORD_COLUMNS:
+                if field_name in sent_fields:
+                    stored[field_name] = record[field_name]
+            stored["revision"] = record["revision"]
+        else:
+            stored = dict(record)
         stored["created_at"] = existing["created_at"] if existing is not None else self._next_timestamp()
         stored["updated_at"] = self._next_timestamp()
         # Mirror the server-side destroyed_at stamping: set on the destroyed
@@ -3308,6 +3354,12 @@ def _make_sync_test_client(
     return client, store, caller
 
 
+# What a current client's full-record push names: every updatable column plus
+# the row key and CAS revision. Tests that exercise put_record directly pass
+# this so the preserve-on-absent UPDATE behaves like a full-record write.
+ALL_RECORD_FIELDS_SENT: frozenset[str] = frozenset(UPDATABLE_RECORD_COLUMNS) | {"host_id", "revision"}
+
+
 def _store_record(
     host_id: str = "host-aaa111",
     agent_id: str = "agent-1",
@@ -3329,6 +3381,7 @@ def _store_record(
         "restored_from_host_id": None,
         "encrypted_secrets": encrypted_secrets,
         "revision": revision,
+        "record_format": 1,
     }
 
 

@@ -1,0 +1,229 @@
+# Next deployment: running checklist
+
+A scratchpad collecting everything the next staging / production deployment
+must get right. Add to this doc as work lands; fold the items into the release
+runbook ([release.md](./release.md)) when the release is actually cut, then
+reset this doc.
+
+Last reset: 2026-08-18, after minds-v0.3.17 was deployed to staging and
+production (connector + LiteLLM, migrations 018-026, relay fleets in both
+tiers, fleet-wide box sweeps, pool re-bake at the release tag, desktop
+release published).
+
+## Code that must land before the next release is cut
+
+(nothing yet)
+
+## Checklist for the next deployment
+
+- [ ] **Observability bring-up** (OpenObserve; needs PR mngr-internal#465
+  merged): dev-tier pass with its validation gates FIRST (it confirms the
+  pinned OpenObserve API shapes and the Modal OpenTelemetry integration),
+  then staging + production. Full runbook:
+  [observability-bringup.md](./observability-bringup.md).
+  - Dev pass COMPLETE 2026-08-18 (branch `mngr/deploy-otel`): instance
+    `observability-dev-2` at 40.160.4.126 (`telemetry.minds-dev.com`),
+    all validation gates green including the full replacement drill and
+    the Modal integration (workspace secret `observability-otel-ingest`,
+    bare base endpoint URL; function logs arrive in `modal_logs` with
+    app/function/environment attribution, container metrics as `modal_*`
+    metric streams); collectors on the dev box + all three dev relays;
+    90-day retention on all four log streams. Three pinned shapes
+    corrected in code (sender role `service_account`, password
+    complexity, gate-stamped `stream-name` for Modal's bare paths).
+    Not yet observed: Modal audit-log events (nothing audit-shaped has
+    arrived; watch for them under `modal_logs` service names).
+  - Staging pass done 2026-08-18 (same branch): instance
+    `observability-staging-1` at 51.81.153.89
+    (`telemetry.minds-staging.com`, OVH US-WEST-OR-1 -- near the staging
+    Neon project in aws-us-west-2), ingress checks green, both ingest
+    paths verified, collectors on the staging box + all four staging
+    relays (metrics + logs from all six hosts confirmed, including
+    per-qemu process metrics), 90-day retention on all four log
+    streams, workspace secret `observability-otel-ingest` created in
+    `minds-staging`. Outstanding: the manual Modal workspace
+    OpenTelemetry integration (endpoint
+    `https://telemetry.minds-staging.com`, select the secret), then
+    confirm `modal_logs` traffic -- DONE, real Modal function logs and
+    `modal_*` metric streams confirmed arriving.
+  - Production pass done 2026-08-18 (same branch): instance
+    `observability-production-1` at 15.204.75.104
+    (`telemetry.imbueminds.com`, OVH US-WEST-OR-1), ingress checks
+    green, both ingest paths verified, collectors on all 21 production
+    boxes (full `just prep-server` sweep, zero failures) + all four
+    production relays (metrics from all 26 hosts confirmed, including
+    per-qemu process metrics on every box), 90-day retention on all
+    four log streams, workspace secret `observability-otel-ingest`
+    created in `minds-production`. Two more fresh-boot races found and
+    fixed in code (deploy now waits for sshd; collector install rides
+    out the dpkg lock held by unattended-upgrades) plus a root-password
+    complexity warning in the template/runbook. Modal workspace
+    integration configured and confirmed: real function logs and
+    `modal_*` metric streams arriving. ALL THREE TIERS COMPLETE;
+    remaining follow-ups are the runbook's post-bring-up items
+    (connector `/healthz` probe after Bugsink, the deployment test,
+    dashboards).
+- [ ] **Fleet collector rollout** (same runbook, procedure step 5): one
+  `just prep-server <id>` pass per existing box and an
+  `observability install-collector` per existing relay, then re-run
+  `just provision-observability-accounts <instance-ip>` once data flows so
+  the log-stream retention overrides land. (Done for the dev fleet
+  2026-08-18; staging/production fleets pending their tier bring-up.)
+- [ ] **Bugsink error tracking bring-up** (per-tier OVH VPS, converging on
+  the OpenObserve hosting pattern; needs the observability bring-up's
+  Cloudflare/OVH plumbing familiarity but no code dependency): dev-tier
+  pass with its validation gates FIRST, then staging + production. Full
+  runbook: [bugsink-bringup.md](./bugsink-bringup.md). Note the tier
+  deploy now hard-fails unless `secrets/minds/<tier>/sentry` exists with
+  every template-declared key (`.minds/template/sentry.sh`; all-empty is
+  fine and simply disables reporting), so push the empty `sentry` entries
+  (staging, production) before the next deploy even if the instances come
+  later. After each tier's bring-up, re-deploy so the reporting services
+  pick up the stamped `sentry-<tier>-<deploy-id>` Secret.
+  - Dev pass COMPLETE 2026-08-18 (branch `mngr/env-tier-sentry`):
+    instance `bugsink-dev-2` at 15.204.75.190 (`errors.minds-dev.com`,
+    OVH US-WEST-OR-1; dedicated Neon project `minds-bugsink-dev`,
+    database `bugsink`), all validation gates green: ingress (login 404 /
+    ingest GET **405**, the pinned public health signal / origin
+    unreachable around Cloudflare), tunneled UI, end-to-end test event
+    through the public DSN, SIGKILL recovery, and the full replacement
+    drill (`bugsink-dev-1` quiesced, `-2` adopted the database with
+    history intact, `-1` destroyed). DSNs + API token written to the
+    `dev` and `ci` Vault entries; `dev-josh-1` re-deployed with the
+    stamped `sentry-dev-<id>` Secret and a real LiteLLM failure event
+    confirmed arriving in the `llm` project via the native sentry
+    callback. Measured VPS->Neon TCP RTT ~10ms => ~1.4 events/s
+    sustained capacity (recorded in the spec). The origin certificate
+    was minted via the Origin CA API using a temporary SSL-Edit token
+    (created with the dev token's Account-API-Tokens permission,
+    deleted immediately after).
+  - Staging pass COMPLETE 2026-08-18 (same branch): instance
+    `bugsink-staging-1` at 15.204.75.154 (`errors.minds-staging.com`,
+    OVH US-WEST-OR-1; `bugsink` database created inside the staging
+    Neon project `icy-wave-22861573`, aws-us-west-2), ingress gates
+    green (login 404 / ingest GET 405 / origin unreachable), tunneled
+    UI, end-to-end test event digested in `rsc`, staging tier
+    re-deployed (`sentry-staging-<id>` stamped, ROLLOVER,
+    MINDS_WEB_TEMPLATE_REF=minds-v0.4.0 matching the pool's newest
+    bake) and a real LiteLLM failure event confirmed in `llm` via the
+    native callback. Only `rsc` + `llm` projects exist on this tier
+    (no oauth-redirector, by design); the all-empty `sentry` entry was
+    pre-created directly (the push script refuses all-empty files) so
+    the template key set stays complete around the two written DSNs.
+    Origin cert again minted via a temporary SSL-Edit token (deleted
+    after). Break-glass account: `josh_staging@imbue.com` (password in
+    the tier's `bugsink` Vault entry) -- no invite step needed.
+  - Staging incident + fix 2026-08-19 (same branch): the staging deploy
+    uncovered mngr-internal#493 -- sentry-sdk 2.59.0's FastAPI
+    integration re-wraps `dependant.call` in place on every request to a
+    sync endpoint served through FastAPI's lazy router inclusion, so a
+    warm connector container 500s with RecursionError after ~990
+    requests to one endpoint (`GET /workspaces` died first, breaking
+    client discovery and destroy; staging was rolled back to `main`,
+    which carries no connector sentry code). Fixed by bumping
+    `sentry-sdk` to 2.66.0 (upstream guard landed in 2.63.0; 2.66.0 is
+    the newest release inside the supply-chain cooldown) in all three
+    consumer apps -- the bump also covers the LiteLLM container, whose
+    native sentry callback re-inits the SDK outside our control -- plus
+    a connector regression test (`test_sentry_wrapper_leak.py`, verified
+    to fail on 2.59.0). Proven live on dev-josh-1: before the fix,
+    hammering the public sync endpoint `GET
+    /policies/destroyed-workspace-backups` flipped to 500 at request 992
+    of 1200 (the RecursionError x2 in the `rsc` Bugsink project is that
+    repro, collapsed from 209 raw 500s by the dedup limiter); after
+    re-deploying (deploy id `20260819T015714Z`,
+    MINDS_WEB_TEMPLATE_REF=minds-v0.3.16), 1500/1500 requests answered
+    200 and a fresh invalid-model event arrived in the `llm` project via
+    the tunneled REST API, proving reporting works on 2.66.0.
+    Staging re-deployed from this branch 2026-08-19 with the fix (deploy
+    id `20260819T140924Z`, ROLLOVER,
+    MINDS_WEB_TEMPLATE_REF=minds-v0.4.1 matching the pool's
+    newest/majority bake; mirror overlay lock regenerated, PR #444 CI
+    fully green first): 1500/1500 requests to the public sync endpoint
+    answered 200 on the warm min_containers=1 container, and a fresh
+    invalid-model event arrived in the staging `llm` project via the
+    tunneled REST API. The staging `rsc` project retains the incident's
+    RecursionError issues (resolvable noise) and additionally surfaced a
+    real infrastructure finding: repeated "md array degraded (a RAID
+    member has failed)" box-health errors from the old staging box
+    `21ae4720` (15.204.52.75) -- the known single-disk state from OVH
+    ticket #721263. RESOLVED 2026-08-19/20: OVH replaced the failed NVMe
+    (intervention ticket #722470, new drive S/N S63CNX0TB24496,
+    completed 09:32 PDT); we then replicated the partition table to the
+    new disk, re-added it to `md2`/`md3` (resync completed, both arrays
+    `[2/2] [UU]`), copied the ESP for boot redundancy, and confirmed the
+    box's 3 slice VMs auto-started after the intervention reboot.
+  - Production pass: INSTANCE LIVE 2026-08-20 (same branch), tier
+    re-deploy DELIBERATELY DEFERRED. Instance `bugsink-production-1` at
+    15.204.28.63 (`errors.imbueminds.com`, OVH US-WEST-OR-1; `bugsink`
+    database created inside the production Neon project, aws-us-west-2,
+    direct host). All instance-level validation gates green: ingress
+    (login 404 / ingest GET 405 / canonical 404 / origin unreachable
+    around Cloudflare), tunneled UI 200, end-to-end test event through
+    the public DSN digested in `rsc` and confirmed via the REST API,
+    SIGKILL drill (auto-restart in ~4s, event intact). Only `rsc` +
+    `llm` projects (no oauth-redirector, by design); DSNs + API token
+    in Vault (`production/sentry` pre-created all-empty first, so the
+    template key set is complete around the two written DSNs). Origin
+    cert again minted via a temporary SSL-Edit token (deleted after).
+    Break-glass account: `josh_production@imbue.com` (password in the
+    tier's `bugsink` Vault entry).
+    NOT done, on purpose (to avoid deploying branch code to production
+    apps): the tier re-deploy that stamps the
+    `sentry-production-<deploy-id>` Modal Secret. Running production
+    services predate the sentry wiring and are untouched. **After the
+    next production deploy** (from a release containing this branch):
+    confirm reporting works end to end -- trigger an invalid-model
+    request through the production LiteLLM proxy (expect 400) and
+    verify the `ProxyModelNotFoundError` event lands in the `llm`
+    project via the tunneled REST API, mirroring the dev/staging
+    passes. The bring-up test message in `rsc` is resolvable noise.
+
+## Carried-over post-deploy cleanup (from the 0.3.17 deployment)
+
+- [ ] **Old `dev1` relay.** Destroy the instance (`just list-share-relays` /
+  `just destroy-share-relay`), remove the `dev1` DNS records, and re-enable
+  sharing on any workspace whose share row was created with region `dev1`.
+- [ ] **Cloudflare account cleanup.** Delete the orphaned tunnel-era
+  resources for previously shared workspaces: tunnels, DNS CNAMEs, Access
+  applications, service tokens, and Workers KV entries. No product code can
+  tear these down anymore, and a not-yet-updated workspace's cloudflared
+  keeps its tunnel alive until this cleanup (or its `update-self`) severs it.
+- [ ] **Remove the `/account` compat fields** (`max_tunnels`,
+  `max_services_per_tunnel`, `tunnels`) once the desktop fleet is on
+  minds-v0.3.17 or later (see `_DEPRECATED_TUNNEL_ENTITLEMENT_FIELDS` in the
+  connector's `accounts.py`; the removal is connector-side only -- the client
+  wire models in `libs/mngr_imbue_cloud`'s `wire_types.py` no longer declare
+  these fields, since tolerant parsing ignores unknown fields).
+- [ ] Consider dropping the orphaned tunnel-era DB tables in a later
+  migration (harmless meanwhile).
+- PSL entries for the content domains remain DEFERRED (decided 2026-08-15:
+  not worth it until we have more users) -- each region runs on its wildcard
+  DNS record set alone, so cross-user cookie isolation between shared
+  workspaces is weaker until the PSL entries are eventually submitted (PSL
+  propagation is slow; revisit when user volume justifies it).
+
+## Known mixed-fleet states (accepted, no action)
+
+These hold while pre-0.3.17 workspaces and clients remain in the fleet; each
+retires on its own as workspaces `update-self` and clients update.
+
+- Pool slices baked from old tags accept blind grants writes (no CAS) until
+  re-baked; the contract is backward compatible.
+- Old workspaces keep their label-less service registrations until
+  `update-self` restarts their services, at which point `forward_port.py`
+  mints origin labels for legacy rows automatically; meanwhile the forwarder
+  and desktop route them by service name.
+- Old workspaces' system_interface still renders service panels as iframes on
+  its own origin behind a service-worker bootstrap whose `document.cookie`
+  write the partitioned content embedding rejects; the forward proxy
+  307-redirects those navigations to the service's own origin
+  (CLEANUP-marked in `mngr_forward/server.py`) so pre-update workspaces keep
+  working terminals. `update-self` retires the mechanism per workspace.
+- v0.3.11 installs can only materialize RSA client keys, so a multi-device
+  user with one un-updated device cannot open a workspace created from an
+  updated device until that device updates (client-side limitation; fixed by
+  updating).
+- v0.3.11 clients: the account page's plan section shows "unavailable"
+  against the current connector, their sharing surface 404s until they
+  update, and they must be restarted after a host-machine reboot.

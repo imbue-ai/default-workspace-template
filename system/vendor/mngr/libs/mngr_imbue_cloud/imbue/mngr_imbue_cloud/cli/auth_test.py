@@ -36,13 +36,13 @@ from imbue.mngr_imbue_cloud.cli.auth import _write_login_url_file
 from imbue.mngr_imbue_cloud.cli.auth import build_login_url
 from imbue.mngr_imbue_cloud.cli.auth import compute_pkce_challenge
 from imbue.mngr_imbue_cloud.cli.auth import make_pkce_verifier
-from imbue.mngr_imbue_cloud.connector.client import AuthRawResponse
 from imbue.mngr_imbue_cloud.connector.client import ImbueCloudConnectorClient
 from imbue.mngr_imbue_cloud.connector.session_store import ImbueCloudSessionStore
 from imbue.mngr_imbue_cloud.connector.session_store import make_session_from_tokens
 from imbue.mngr_imbue_cloud.errors import ImbueCloudAuthError
 from imbue.mngr_imbue_cloud.primitives import ImbueCloudAccount
 from imbue.mngr_imbue_cloud.primitives import SuperTokensUserId
+from imbue.mngr_imbue_cloud.wire_types import AuthRawResponse
 
 
 def _get(port: int, path: str) -> int:
@@ -244,7 +244,7 @@ def test_login_fails_fast_against_a_connector_without_the_accounts_surface(
         _ensure_connector_supports_browser_login(client)
     stderr = capsys.readouterr().err
     assert "too old" in stderr
-    assert "minds env deploy" in stderr
+    assert "minds-admin env deploy" in stderr
 
 
 def _store_with_stale_session(tmp_path: Path) -> tuple[ImbueCloudSessionStore, ImbueCloudAccount]:

@@ -171,6 +171,8 @@ from imbue.minds.desktop_client.workspace_operations import WorkspaceOperationKi
 from imbue.minds.desktop_client.workspace_operations import WorkspaceOperationRecord
 from imbue.minds.desktop_client.workspace_operations import WorkspaceOperationRegistryInterface
 from imbue.minds.desktop_client.workspace_operations import WorkspaceOperationStatus
+from imbue.minds.desktop_client.workspace_record_store import RECORD_TOO_NEW_MESSAGE
+from imbue.minds.desktop_client.workspace_record_store import is_record_too_new
 from imbue.minds.desktop_client.workspace_recovery import RestartDispatchOutcome
 from imbue.minds.desktop_client.workspace_recovery import dispatch_host_restart
 from imbue.minds.desktop_client.workspace_recovery import probe_workspace_health
@@ -1161,6 +1163,15 @@ def _handle_destroy_workspace(agent_id: str) -> tuple[OperationHandleResponse, i
     except ValueError:
         return _json_error(f"Cannot resolve a host to destroy for {agent_id}", 409)
 
+    # A record written by a newer app version is read-only here: destroying
+    # the workspace would require tombstoning semantics this version cannot
+    # interpret, so refuse with the remedy before touching the host.
+    session_store = get_state().session_store
+    if session_store is not None and session_store.record_store is not None:
+        found = session_store.record_store.find_active_record(str(parsed_id))
+        if found is not None and is_record_too_new(found[1]):
+            return _json_error(RECORD_TOO_NEW_MESSAGE, 409)
+
     # A destroy makes the machine unreachable on purpose, exactly as a stop
     # does: its interface dies within seconds and the probe loop reads that as a
     # wedge, so without the mark the unattended dispatch runs ``mngr start``
@@ -1173,7 +1184,13 @@ def _handle_destroy_workspace(agent_id: str) -> tuple[OperationHandleResponse, i
     tracker = get_state().system_interface_health_tracker
     if tracker is not None:
         tracker.suppress_unattended_recovery(parsed_id, is_stop_in_flight=True)
-    destroying.start_destroy(parsed_id, paths, host_id, mngr_binary=get_state().mngr_binary)
+    destroying.start_destroy(
+        parsed_id,
+        paths,
+        host_id,
+        provider_name=info.provider_name,
+        mngr_binary=get_state().mngr_binary,
+    )
     return OperationHandleResponse(operation_id=str(parsed_id), kind="destroy"), 202
 
 
@@ -1548,8 +1565,10 @@ def _handle_destroy_operation_status(operation_id: str) -> DestroyOperationStatu
     # A destroy is only DONE once the workspace's *host* is gone (not merely the
     # workspace agent): a destroy that tore down only the agent while the host's
     # ``system-services`` kept it alive must read as FAILED, not a false DONE.
-    # ``destroying.is_host_still_active`` answers that (active-set membership OR a
-    # host not yet in ``DESTROYED``); see :func:`destroying.read_destroying`.
+    # ``destroying.is_host_still_active`` answers that: the host counts as still
+    # up on active-set membership, a known non-DESTROYED state, or -- when its
+    # state is unknown -- the lack of positive absence evidence from its owning
+    # provider (see its docstring and :func:`destroying.read_destroying`).
     record = destroying.read_destroying(
         parsed_id, paths, destroying.is_host_still_active(backend_resolver, paths, parsed_id)
     )
@@ -2971,8 +2990,13 @@ def _handle_delete_cloud_account(account_name: str) -> OkResponse | Response:
 
 @require_api_or_cookie_auth
 def _handle_running_workspaces() -> Response:
-    """Return the shutdown-capable workspaces whose containers are currently running."""
-    running = desktop_control.running_workspace_entries(get_state().backend_resolver)
+    """Return the local (docker / lima) workspaces whose containers are currently running.
+
+    Scoped to local workspaces because the sole caller is the quit-time shutdown
+    prompt, and quitting the app is only a reason to stop the workspaces running
+    on the user's own machine (see ``running_local_workspace_entries``).
+    """
+    running = desktop_control.running_local_workspace_entries(get_state().backend_resolver)
     logger.info("running-workspaces query (quit-time shutdown prompt): {}", running)
     return _json_response({"running": running})
 

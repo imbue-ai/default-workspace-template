@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Flags: FEATURE_FLAG_ENABLE_OTHER_HARNESSES
+# Flags: FEATURE_FLAG_ENABLE_OTHER_HARNESSES, FEATURE_FLAG_ENABLE_INTRODUCTORY_AGENTS_IN_OTHER_HARNESSES
 set -euo pipefail
 
 CONF=/home/user/workspace/system/supervisord.conf

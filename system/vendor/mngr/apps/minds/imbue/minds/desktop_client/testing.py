@@ -11,6 +11,8 @@ from collections.abc import Callable
 from collections.abc import Iterator
 from collections.abc import Mapping
 from contextlib import contextmanager
+from datetime import datetime
+from datetime import timezone
 from http.server import BaseHTTPRequestHandler
 from http.server import HTTPServer
 from pathlib import Path
@@ -24,6 +26,7 @@ from imbue.minds.desktop_client.backend_resolver import MngrCliBackendResolver
 from imbue.minds.desktop_client.backend_resolver import ParsedAgentsResult
 from imbue.minds.desktop_client.restic_cli import _get_restic_binary
 from imbue.minds.desktop_client.system_interface_health import SystemInterfaceHealthTracker
+from imbue.mngr.api.discovery_events import DiscoveryError
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import AgentName
 from imbue.mngr.primitives import DiscoveredAgent
@@ -64,6 +67,22 @@ def workspace_options_pane_html(html: str, pane: str) -> str:
     assert start != -1, f"no {pane!r} pane in the rendered options panel"
     next_pane = html.find("data-wsopt-panel=", start + 1)
     return html[start:] if next_pane == -1 else html[start:next_pane]
+
+
+def tamper_session_cookie_signed_content(cookie_value: str) -> str:
+    """Return a copy of a session cookie altered so it can never re-verify.
+
+    A session cookie is an itsdangerous ``signed-content.signature`` token whose
+    signature is an HMAC over the signed-content string; the signature is the
+    only segment a verifier base64-decodes, so a flip in its base64 tail can be
+    absorbed by the tail's spare bits and still verify. Altering the signed
+    content instead -- anything left of the final "." -- always changes the HMAC
+    input, so it is rejected whatever the payload.
+    """
+    signed_content, separator, signature = cookie_value.rpartition(".")
+    assert separator, f"not a signed token: {cookie_value!r}"
+    flipped_head = ("A" if signed_content[0] != "A" else "B") + signed_content[1:]
+    return flipped_head + separator + signature
 
 
 @contextmanager
@@ -153,6 +172,29 @@ def build_resolver_with_system_services(
         )
     )
     return resolver
+
+
+def record_provider_discovery_error(
+    resolver: MngrCliBackendResolver, provider_name: str, message: str, last_snapshot_at: datetime | None = None
+) -> None:
+    """Surface a discovery error for ``provider_name``, as an errored poll would.
+
+    The snapshot time defaults to now, so the reading is fresh enough for the
+    freshness-gated recovery verdicts. Pass ``last_snapshot_at`` to place the
+    errored poll at a particular moment relative to an outage onset -- it must be
+    set here rather than afterwards, because a later clean snapshot is what
+    *clears* the error.
+    """
+    resolver.update_providers(
+        ProviderInstanceName(provider_name),
+        provider=None,
+        error=DiscoveryError(
+            type_name="ProviderUnavailableError",
+            message=message,
+            provider_name=ProviderInstanceName(provider_name),
+        ),
+        last_snapshot_at=last_snapshot_at if last_snapshot_at is not None else datetime.now(timezone.utc),
+    )
 
 
 # -- Stub mngr binaries, for the host lifecycle helpers that shell out --

@@ -35,11 +35,11 @@ ask your agent to run it, or read it directly -- for the build/run loop.
       `just default-workspace-template-worktree` clones it. Authenticate with
       `gh auth login` or a git credential helper (agents use `GH_TOKEN`).
 
-- [ ] **Vault CLI + login** -- `minds env deploy` reads dev-tier provisioning
+- [ ] **Vault CLI + login** -- `minds-admin env deploy` reads dev-tier provisioning
       credentials (Neon, SuperTokens, ...) from HCP Vault at command time. Run
       `vault login -method=oidc` once per session; the deploy CLI applies the
       imbue HCP `VAULT_ADDR` / `VAULT_NAMESPACE` defaults itself, so login is
-      all you need. Install + layout: [vault-setup.md](./vault-setup.md).
+      all you need. Install + layout: [vault-setup.md](./deploy/vault-setup.md).
 
 - [ ] **Membership in the `minds-dev` Modal workspace + a matching
       `~/.modal.toml` profile.** `minds-dev` is a *separate*, workspace-bound
@@ -48,9 +48,9 @@ ask your agent to run it, or read it directly -- for the build/run loop.
       `modal token new --profile minds-dev` and select that workspace in the
       browser. Verify with `modal profile list`: the `minds-dev` profile must
       show workspace `minds-dev` -- a profile *named* `minds-dev` that holds a
-      token for another workspace passes `minds env activate --deploy` but is
-      caught (with a clear error) by `minds env deploy`'s preflight. Full
-      detail: [environments.md](./environments.md).
+      token for another workspace passes `minds-admin env activate --deploy` but is
+      caught (with a clear error) by `minds-admin env deploy`'s preflight. Full
+      detail: [environments.md](./deploy/environments.md).
 
 ## Then: build and run
 
@@ -60,7 +60,7 @@ the actual commands (ask your agent to run it, or read
 
 - **First time** -- stand up a default-workspace-template worktree, then
   `vault login` and bootstrap + deploy your dev env
-  (`minds env activate --create --deploy dev-<your-user>` -> `minds env deploy`).
+  (`minds-admin env activate --create --deploy dev-<your-user>` -> `minds-admin env deploy`).
 - **Every startup** (fresh shell) -- activate the env, then `just minds-start`,
   which re-syncs your live mngr into the worktree's `system/vendor/mngr/` and launches
   Electron. You create your first agent from the login URL it prints.
