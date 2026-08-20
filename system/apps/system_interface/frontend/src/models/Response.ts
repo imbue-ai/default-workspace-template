@@ -484,6 +484,23 @@ const IDLE_LOAD_STATE: TranscriptLoadState = { phase: "idle", error: null };
 // same three paths, so a reload nobody started still reads as loading.
 const loadStateByAgent = new Map<string, TranscriptLoadState>();
 
+// Which snapshot attempt an agent's state belongs to. Those same three paths can
+// have two fetches outstanding at once, and they settle in whatever order the
+// network allows: a request hung on a dead tunnel settles up to
+// EVENTS_REQUEST_TIMEOUT_MS after a later one has already landed. Only the newest
+// attempt speaks for the agent, so an older one's failure cannot put the panel
+// back on an error screen for a transcript that has since loaded. Same staleness
+// fence the paging fetches below apply to their window.
+let loadAttemptCounter = 0;
+const newestLoadAttemptByAgent = new Map<string, number>();
+
+/** Record an attempt's outcome, unless a newer attempt for this agent has superseded it. */
+function recordLoadOutcome(agentId: string, attempt: number, state: TranscriptLoadState): void {
+  if (newestLoadAttemptByAgent.get(agentId) === attempt) {
+    loadStateByAgent.set(agentId, state);
+  }
+}
+
 function storeFor(agentId: string): TranscriptStore {
   let store = storeByAgent[agentId];
   if (store === undefined) {
@@ -618,7 +635,11 @@ export async function fetchEvents(agentId: string): Promise<TranscriptEvent[]> {
   // Moved on the attempt, not on its outcome: whoever is about to learn the
   // outcome must not be shown the previous one. Only the snapshot tracks this --
   // a failed page or jump below leaves the loaded window intact and is
-  // deliberately non-fatal, so it must not blank a readable transcript.
+  // deliberately non-fatal, so it must not blank a readable transcript. Starting
+  // an attempt always supersedes any outstanding one, so this write needs no
+  // fence; only the outcomes below do.
+  const attempt = ++loadAttemptCounter;
+  newestLoadAttemptByAgent.set(agentId, attempt);
   loadStateByAgent.set(agentId, { phase: "loading", error: null });
 
   try {
@@ -629,14 +650,14 @@ export async function fetchEvents(agentId: string): Promise<TranscriptEvent[]> {
       config: applyEventsRequestTimeout,
     });
     placeWindow(agentId, result);
-    loadStateByAgent.set(agentId, IDLE_LOAD_STATE);
+    recordLoadOutcome(agentId, attempt, IDLE_LOAD_STATE);
     return result.events;
   } catch (error) {
     const requestError = error as { code?: number; message?: string };
     if (requestError.code === 404) {
       notFoundAgentIds.add(agentId);
     }
-    loadStateByAgent.set(agentId, { phase: "error", error: describeRequestError(error) });
+    recordLoadOutcome(agentId, attempt, { phase: "error", error: describeRequestError(error) });
     throw error;
   }
 }

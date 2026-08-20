@@ -91,13 +91,19 @@ function freshAgent(): string {
   return `agent-${counter++}`;
 }
 
-/** A request whose resolution the test controls, for observing the in-flight state. */
-function deferredResponse(): { promise: Promise<unknown>; resolve: (value: unknown) => void } {
+/** A request whose settling the test controls, for observing the in-flight state and ordering two fetches. */
+function deferredResponse(): {
+  promise: Promise<unknown>;
+  resolve: (value: unknown) => void;
+  reject: (reason: unknown) => void;
+} {
   let resolve!: (value: unknown) => void;
-  const promise = new Promise<unknown>((res) => {
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<unknown>((res, rej) => {
     resolve = res;
+    reject = rej;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 beforeEach(() => {
@@ -569,6 +575,26 @@ describe("snapshot load state", () => {
 
     mockRequest.mockResolvedValueOnce({ events: [makeEvent("a")] });
     await fetchEvents(agent);
+    expect(getConversationLoadState(agent)).toEqual({ phase: "idle", error: null });
+  });
+
+  it("keeps the newest attempt's outcome when an older one settles after it", async () => {
+    // Three callers fetch the same snapshot -- the panel's load, the tab's
+    // Refresh, the stream's reconnect -- so two can be in flight at once, and a
+    // request hung on a dead tunnel settles up to the 30s timeout after a later
+    // one already landed. Its failure must not put the panel back on an error
+    // screen for a transcript that has since loaded.
+    const agent = freshAgent();
+    const hung = deferredResponse();
+    mockRequest.mockReturnValueOnce(hung.promise);
+    const stale = fetchEvents(agent);
+
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("a")] });
+    await fetchEvents(agent);
+    expect(getConversationLoadState(agent)).toEqual({ phase: "idle", error: null });
+
+    hung.reject(proxyUnavailableError());
+    await expect(stale).rejects.toThrow();
     expect(getConversationLoadState(agent)).toEqual({ phase: "idle", error: null });
   });
 
