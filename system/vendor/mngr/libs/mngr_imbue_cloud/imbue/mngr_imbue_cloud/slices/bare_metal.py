@@ -68,7 +68,7 @@ DEFAULT_MEMORY_PER_SLICE_GB: Final[int] = 8
 SLICE_CONTAINER_MEMORY_RESERVE_MIB: Final[int] = 1024
 
 # Default CPU overcommit factor used to size each slice's vCPUs (vCPUs/slice =
-# floor(threads * ratio / slots)). Overridable per box at ``minds-admin server
+# floor(threads * ratio / slots)). Overridable per box at ``admin server
 # register --cpu-overcommit``; RAM is never overcommitted.
 DEFAULT_SLICE_CPU_OVERCOMMIT_RATIO: Final[float] = 2.0
 
@@ -516,5 +516,5 @@ def find_server_capacity_by_id(
         if capacity.server.id == server_id:
             return capacity
     raise SliceCapacityError(
-        f"no bare-metal server with id {server_id}; run the operator CLI's `minds-admin server list` to see the fleet"
+        f"no bare-metal server with id {server_id}; run `mngr imbue_cloud admin server list` to see the fleet"
     )

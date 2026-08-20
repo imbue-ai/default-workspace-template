@@ -1,0 +1,12 @@
+Claude agents now deal with a dialog that is holding the TUI's input at send time, instead of failing the send.
+
+`sensibly_deal_with_dialogs` lists the confirmations mngr may answer on the user's behalf. It is set to the model bar's own two: picking a model or an effort level sends `/model <slug>` or `/effort <level>`, and claude then asks to confirm that switching mid-session re-reads the whole history. The user already made that choice in the picker, so mngr completes it — by cycling the selector onto the named option, never by pressing Enter on whatever happens to be highlighted. Anything else that needs a real answer refuses the send with an error naming what is in the way; anything Esc closes harmlessly is dismissed regardless of the list.
+
+`auto_dismiss_dialogs` is renamed `auto_dismiss_dialogs_at_startup` for claude, codex and pi-coding. Same behaviour; the name now says when it applies, which matters more now that a second dialog setting exists.
+
+Claude also runs with `tui = "fullscreen"`, which pins the input bar and any dialog to the pane rather than letting them scroll out of view — so what mngr captures at send time is what is actually holding the input. tmux here runs with `alternate-screen off`, so the workspace terminal panel keeps its scrollback either way.
+
+Claude agents now answer every dialog mngr knows a sensible answer for (`sensibly_deal_with_dialogs = ["*"]`), rather than the two named model and effort switch confirmations. A dialog only becomes answerable by being given a specific option to land on, and mngr reaches it by cycling the selector onto that option rather than pressing Enter on whatever is highlighted, so opting into all of them grants no power to guess: a usage-limit prompt is answered "stop and wait for the limit to reset" and an LSP-install prompt is declined. Anything with no sensible answer still refuses to send, and anything Esc closes harmlessly is still just dismissed. The previous explicit list silently stopped covering each dialog added upstream -- a usage-limit or LSP-install prompt blocked sends outright until someone noticed.
+
+
+The claude agent now opts into answering dialogs with `ALL_RECOGNIZED_NONBENIGN` rather than a wildcard: every dialog mngr can name, each answered on the option named for it, growing with the catalogue without ever becoming a guess. Surfaces mngr cannot name still refuse the send rather than being guessed at; opting into that is a separate, deliberately blunt token.

@@ -280,20 +280,18 @@ _MODEL_PICKER_COMMAND = "/model"
 _MODEL_PICKER_OBSERVE_SECONDS = 4.0
 
 
-def _setup_ctx_with_auto_accept_depth(
-    profile: _ClaudeReleaseProfile, tmp_path: Path, auto_accept_prompt_depth: int
-) -> AgentReleaseContext:
-    """Set up a release ctx whose project config enables (or disables) post-submit auto-accept.
+def _setup_ctx_that_answers_dialogs(profile: _ClaudeReleaseProfile, tmp_path: Path) -> AgentReleaseContext:
+    """Set up a release ctx whose agent answers every dialog mngr has a sensible answer for.
 
-    Reuses the profile's standard setup, then appends an ``[agent_types.claude]`` section so the
-    created agent's config carries the requested depth and a slightly widened observe window.
+    Reuses the profile's standard setup, then appends an ``[agent_types.claude]`` section opting
+    into that, with a slightly widened observe window.
     """
     ctx = profile.setup(tmp_path)
     settings_path = Path(ctx.env["MNGR_PROJECT_CONFIG_DIR"]) / "settings.local.toml"
     with settings_path.open("a") as settings_file:
         settings_file.write(
             f"\n[agent_types.claude]\n"
-            f"auto_accept_prompt_depth = {auto_accept_prompt_depth}\n"
+            f'sensibly_deal_with_dialogs = ["ALL_RECOGNIZED_NONBENIGN"]\n'
             f"post_submit_dialog_observe_seconds = {_MODEL_PICKER_OBSERVE_SECONDS}\n"
         )
     return ctx
@@ -346,16 +344,16 @@ def test_claude_model_picker_does_not_leave_agent_stuck(tmp_path: Path) -> None:
 
     Note on scope: mngr's send-confirmation retry already clears an Enter-dismissable selector like
     the picker, so this exercises the end-to-end "``/model`` does not wedge the agent" outcome
-    rather than the post-submit auto-accept path specifically. The auto-accept mechanics and the
-    delivered-but-blocked (exit 7) surfacing are covered deterministically by the plugin unit tests
-    (see ``plugin_test.py``), which script a selector that persists.
+    rather than the dialog-clearing path specifically. That path -- a dialog present when the NEXT
+    send starts, cleared at preflight or refused -- is covered deterministically by the plugin unit
+    tests (see ``plugin_test.py``), which script a selector that persists.
     """
     profile = _ClaudeReleaseProfile()
     reason = profile.unavailable_reason()
     if reason is not None:
         pytest.skip(reason)
 
-    ctx = _setup_ctx_with_auto_accept_depth(profile, tmp_path, auto_accept_prompt_depth=5)
+    ctx = _setup_ctx_that_answers_dialogs(profile, tmp_path)
     agent_name = _create_model_picker_agent(profile, ctx)
     run_id = get_short_random_string()
     try:

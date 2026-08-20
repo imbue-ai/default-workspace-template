@@ -1,15 +1,14 @@
 # modal_app_kit
 
-Shared deploy-time conventions for our Modal apps (`apps/remote_service_connector`, `apps/modal_litellm`, `apps/oauth_redirector`), and the canonical documentation for **how our Modal services are structured and deployed, and why**.
+Shared deploy-time conventions for our Modal apps (`apps/remote_service_connector`, `apps/modal_litellm`), and the canonical documentation for **how our Modal services are structured and deployed, and why**.
 
-The library itself is small and stdlib+modal only (with one documented exception, `sentry.py`, below):
+The library itself is small and stdlib+modal only:
 
 - `deploy.py` -- readers for the deploy-time env vars (`MNGR_DEPLOY_ENV`, `MINDS_DEPLOY_ID`, warm-pool / scaledown knobs), the stamped Modal Secret naming (`<service>-<tier>-<deploy_id>`), and the inline deploy-metadata secret.
-- `image.py` -- the pinned image inputs: the digest-pinned base image, the pinned in-build uv version, and `pinned_image` (the base + hash-locked install every service image starts from). The pure export machinery (the canonical `uv export` command, the pinned-app registry, and paths) lives in `imbue.imbue_common.modal_image_requirements`, kept in the public `imbue_common` (this package is not public) even though its remaining consumers are private, so the mirror's `imbue_common` stays self-contained.
+- `image.py` -- the pinned image inputs: the digest-pinned base image, the pinned in-build uv version, and `pinned_image` (the base + hash-locked install every service image starts from). The pure export machinery (the canonical `uv export` command, the pinned-app registry, and paths) lives in `imbue.imbue_common.modal_image_requirements`, because the public mirror's `minds env deploy` preflight needs it and this package is not public.
 - `source_mount.py` -- the rule for which local Python files ship into containers (`shipped_python_source_ignore`).
 - `database.py` -- `direct_database_url` (strips Neon's `-pooler` suffix for schema operations that are unsafe through transaction pooling).
 - `request_logging.py` -- `RequestLoggingMiddleware`, a pure-ASGI middleware every app adds outermost: one structured access-log line per HTTP request (method, path without the query string -- it can carry one-time tokens -- status, duration, client IP from the first `x-forwarded-for` hop, user agent), so Modal function logs carry a per-request record for abuse investigations. The client-controlled fields (path, user agent, forwarded client IP) are quoted/sanitized so a crafted request cannot forge fields or lines in the log.
-- `sentry.py` -- shared sentry-sdk initialization for the apps reporting to the per-tier self-hosted Bugsink instances (see `specs/minds-bugsink-error-tracking.md`): `init_sentry` (idempotent per container; a no-op without a DSN or with `MINDS_SENTRY_DISABLED=1`), a client-side dedup/rate-limit `before_send` hook, and `capture_and_reraise` for Modal cron/spawned functions. The one exception to the stdlib+modal rule: this module imports `sentry_sdk`, so any app importing it MUST pin `sentry-sdk` in its image dependency group (enforced by the per-module allowance in `test_project_ratchets.py`).
 
 ## The deployment model
 
@@ -19,7 +18,7 @@ Every service here is a plain Modal app deployed **by file path**:
 MNGR_DEPLOY_ENV=<tier> MINDS_DEPLOY_ID=<id> uv run modal deploy --name <app> --env <modal-env> path/to/app.py
 ```
 
-(normally driven by `minds-admin env deploy`, which threads the env vars and picks the Modal environment; see `apps/minds/docs/deploy/environments.md`).
+(normally driven by `minds env deploy`, which threads the env vars and picks the Modal environment; see `apps/minds/docs/deploy/environments.md`).
 
 What ends up in the container is exactly three things:
 
@@ -58,7 +57,7 @@ This cannot be prevented structurally, so it is enforced by tests in each app (s
 - shipped modules import only stdlib + the pip set (the allowed import roots live in the app's `deploy_constants.py`, and a drift test ties them to the pyproject image group the image installs, so the two cannot drift) + shipped packages;
 - no shipped module imports the `app` entrypoint;
 - only the entrypoint imports `modal` (Modal injects its client into containers, but deployment concerns stay in one file);
-- this library stays stdlib+modal only, since it ships into every consumer's container -- with the single per-module allowance for `sentry.py`'s `sentry_sdk` import described above (consumers of that module pin `sentry-sdk` in their image groups).
+- this library stays stdlib+modal only, since it ships into every consumer's container.
 
 ### Every image input is pinned
 
@@ -68,21 +67,21 @@ A rebuilt image must be a pure function of the repo state, never of when the bui
 - **The base is digest-pinned**: `PINNED_BASE_IMAGE` names `python:3.12-slim-trixie` by digest (same base family as the workspace template, same Python minor as the repo). Digest pins freeze security patches too -- bump the digest deliberately during dependency maintenance.
 - **The installer is pinned**: `uv_pip_install(uv_version=...)` so Modal's default uv can't drift under us.
 
-Enforcement: per-app drift tests fail when a committed export no longer matches `uv.lock` (or when the group and the allowed import roots disagree), `minds-admin env deploy` refuses to deploy a stale export, and the `test_prevent_unpinned_modal_pip_install` ratchet flags any new bare-package `pip_install`/`uv_pip_install`.
+Enforcement: per-app drift tests fail when a committed export no longer matches `uv.lock` (or when the group and the allowed import roots disagree), `minds env deploy` refuses to deploy a stale export, and the `test_prevent_unpinned_modal_pip_install` ratchet flags any new bare-package `pip_install`/`uv_pip_install`.
 
 Known residual gap: the litellm image's `prisma generate` build step downloads Prisma engine binaries (and a Node runtime) from Prisma's CDN. The pinned `prisma` version determines *which* versions are fetched, but the downloads themselves are not hash-verified by us.
 
 ### Module-load env reads are deploy-time configuration
 
-Values read from `os.environ` at the app module's top level (`read_deploy_env()`, `read_deploy_id()`, min-containers, scaledown) are evaluated when `modal deploy` imports the module and are **baked into the deployed function spec**. That is the mechanism `minds-admin env deploy` uses to configure a deploy, and it is why `modal app rollback` restores not just code but the previous deploy's configuration -- including which stamped Secrets it pins.
+Values read from `os.environ` at the app module's top level (`read_deploy_env()`, `read_deploy_id()`, min-containers, scaledown) are evaluated when `modal deploy` imports the module and are **baked into the deployed function spec**. That is the mechanism `minds env deploy` uses to configure a deploy, and it is why `modal app rollback` restores not just code but the previous deploy's configuration -- including which stamped Secrets it pins.
 
 ### Stamped secrets
 
-Every Vault-backed secret is pushed as `<service>-<tier>-<deploy_id>` and the app pins the exact stamped names at deploy time (`stamped_secret`). When `MINDS_DEPLOY_ID` is unset, `read_deploy_id` returns a sentinel that matches no real secret, so a bare `modal deploy` outside `minds-admin env deploy` fails with "Secret not found" instead of silently attaching to stale secrets -- the property the rollback model relies on.
+Every Vault-backed secret is pushed as `<service>-<tier>-<deploy_id>` and the app pins the exact stamped names at deploy time (`stamped_secret`). When `MINDS_DEPLOY_ID` is unset, `read_deploy_id` returns a sentinel that matches no real secret, so a bare `modal deploy` outside `minds env deploy` fails with "Secret not found" instead of silently attaching to stale secrets -- the property the rollback model relies on.
 
 ## Operational caveats
 
-- **Rolling deploys drain old containers**: immediately after a redeploy, a warm container from the previous version may serve a few more requests. `minds-admin env deploy` manages this with deploy strategies, and `minds-admin env recover` force-terminates containers after a rollback.
+- **Rolling deploys drain old containers**: immediately after a redeploy, a warm container from the previous version may serve a few more requests. `minds env deploy` manages this with deploy strategies, and `minds env recover` force-terminates containers after a rollback.
 - **First deploy builds the image** (~10s for the connector); subsequent code-only deploys skip the build entirely.
 
 ## Adding a new Modal service

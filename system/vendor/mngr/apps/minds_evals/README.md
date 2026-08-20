@@ -12,20 +12,14 @@ comparison and removal PRs land).
    staged shallow clone of mngr-internal at an exact SHA), built on Modal's builders and
    layer-cached per mngr SHA.
 2. The **driver** (`MindsPersonaDriver`, a host-side harbor agent) starts the Minds backend inside
-   the box with per-trial env: the Modal token pair parsed from your `~/.modal.toml` and a salted
-   per-trial `MNGR__PROVIDERS__MODAL__USER_ID` scope. No AI credentials go in that env.
+   the box with per-trial env: the Modal token pair parsed from your `~/.modal.toml`, a salted
+   per-trial `MNGR__PROVIDERS__MODAL__USER_ID` scope, and `ANTHROPIC_API_KEY`.
 3. The driver creates one **nested workspace** through the production path (Minds API ->
-   `mngr create` -> Modal provider) and then **signs it in the way a user does**, by posting the
-   credentials to the workspace's own `/api/claude-auth/submit-credentials` once
-   `/api/claude-auth/status` answers. A workspace boots unauthenticated -- the product's create path
-   supplies no AI credentials -- so this is the designed step, not a workaround, and it keeps the
-   graded agent in the same shared config-dir regime real workspaces run in. The endpoint restarts
-   the claude agents, so the driver waits for WAITING again before turn 1.
-4. It then drives the case's turns: wait until the workspace chat agent is WAITING, send the turn
-   (literal, or role-played by the decider model on `DECIDE_FROM_PERSONA`), wait for the reply,
-   snapshot the workspace, and keep `/logs/agent/full_transcript.jsonl` + `state.json` current in
-   the box.
-5. The **verifier** (pure rewardkit, separate container) scores the transcript: three 1-10 likert
+   `mngr create` -> Modal provider), then drives the case's turns: wait until the workspace chat
+   agent is WAITING, send the turn (literal, or role-played by the decider model on
+   `DECIDE_FROM_PERSONA`), wait for the reply, snapshot the workspace, and keep
+   `/logs/agent/full_transcript.jsonl` + `state.json` current in the box.
+4. The **verifier** (pure rewardkit, separate container) scores the transcript: three 1-10 likert
    judge criteria (conciseness, nontechnical_language, proactive), a binary wordiness guard, and
    structural gates (transcript parses, the agent engaged with distinct non-stub replies, all turns
    completed, not timed out) that zero the reward when they fail. The judge grades a **message-by-
@@ -39,14 +33,10 @@ comparison and removal PRs land).
 ## Setup
 
 - `~/.modal.toml` (run `modal token new` once) -- everything runs on Modal.
-- `export ANTHROPIC_API_KEY=sk-ant-...` -- the decider (simulated user), the judge, and the
-  credential the driver signs each workspace in with. Set `ANTHROPIC_BASE_URL` alongside it to sign
-  workspaces in against a proxy instead of the Anthropic API directly.
+- `export ANTHROPIC_API_KEY=sk-ant-...` -- the decider (simulated user) and the judge.
 - Always invoke harbor as `uv run harbor` from the monorepo root: harbor is a pinned dependency of
   this app, which both fixes the version and makes the driver import path resolvable. A bare
   `uvx harbor` runs in an isolated env that cannot import the monorepo packages.
-- The `minds-evals-*` recipes below live in `private.just`, which the root `justfile` imports, so
-  grepping `justfile` alone will not find them.
 
 ## Usage
 
@@ -79,83 +69,6 @@ not a per-PR gate**. Handy knobs:
 
 Results land in `apps/minds_evals/jobs/<job>/` (per-trial dirs with `result.json`, the transcript,
 snapshots, and `verifier/reward-details.json`).
-
-## Token and cost accounting
-
-Every agent message in the workspace event stream carries its own `usage` block and `model`, so a
-trial's cost is derived from the transcript the driver already collects -- nothing extra is read out
-of the workspace, and a trial that timed out still accounts for what it spent.
-
-The **workspace agent** (the thing under test) fills harbor's own fields: `n_input_tokens` (cache
-inclusive), `n_cache_tokens` (tokens served from cache), `n_output_tokens` and `cost_usd` on the
-trial's `agent_result`, and the matching `final_metrics` on the ATIF trajectory. The **decider** (the
-simulated user) is the harness's own spend rather than a property of the agent, so it is reported
-separately under `metadata.decider_usage` and never folded into those fields.
-
-**Delegated work is not in the transcript.** The events endpoint serves main-session events only: a
-subagent's turns go to a separate per-subagent stream, and work handed to a newly created worker
-agent belongs to that agent's stream entirely. Neither reaches the transcript totals, so an agent
-that delegates looks cheaper than one doing the same work inline. Trials that delegate are marked
-`is_cost_complete: false`, with `delegated_call_count` (exact -- `Agent` tool calls) and
-`worker_launch_count` (heuristic -- Bash commands that look like a worker launch) alongside. Treat a
-flagged trial's transcript cost as a lower bound and do not compare it against an unflagged one.
-
-**`--ak proxy=true` removes that gap.** The driver runs a LiteLLM proxy inside the box, reverse-
-tunnels it so the workspace reaches it as a loopback address, and signs the workspace in against it
-with a per-trial key rather than the upstream credential. Because the workspace's claude agents share
-one credential, every call crosses that boundary -- including delegated ones -- so `usage_proxy.jsonl`
-is the complete account and becomes the source for harbor's fields, with the transcript's figures
-kept in `metadata.transcript_usage` for comparison. Measured on the small dataset: the two agree to
-the cent on cases that delegate nothing, and on one that launched a worker the transcript saw 44
-responses and $2.86 while the proxy saw 69 requests and $5.23. Both of those are standard-rate
-figures from before fast-mode pricing landed, so the same trials would report about twice that today;
-what the comparison is about -- the gap between the two sources -- is unaffected by the rate.
-
-The driver keeps reading the event stream after the agent reports WAITING, and once more before the
-transcript is written for the last time. The agent can still be working then -- the workspace's own
-turn-end flow runs after the reply -- and those messages exist only in the workspace, so a driver
-that stopped at the reply would lose them for good when the workspace is destroyed, leaving the
-proxy metering requests the transcript has no messages for.
-
-The proxy is also where the box's egress can be narrowed later: LLM traffic becomes one loopback
-address, so nothing needs to reach `api.anthropic.com` from the workspace at all.
-
-**Fast mode changes the price, not the token counts.** Minds runs its chat agent in fast mode by
-default (it buys latency at a premium, which is worth it when a human is waiting), and fast mode
-bills the same tokens at twice the standard rate -- $10/$50 per MTok against $5/$25 on Opus 5 and
-Opus 4.8, with the cache multipliers stacking on top. It is chosen per request, so a model id alone
-does not determine a price. The proxy records the tier per request and each tier's tokens are priced
-at its own rate:
-
-| `is_speed_observed` | `fast_message_count` | What the cost means |
-|---|---|---|
-| `true` | `0` | Exact: every request ran standard and is priced standard. |
-| `true` | `> 0` | Exact: that many requests are priced at the fast-mode rate. |
-| `false` | `0` | A floor. The tier was never observed, so everything is priced standard -- which is half the truth if the workspace was in fast mode, as by default it is. |
-
-Only the proxy can see this (`--ak proxy=true`); the event stream carries token counts but no tier,
-so a transcript-sourced total always reports the tier as unknown. The tier is read from the request
-parameter litellm actually sent upstream rather than from `usage.speed` in the response: litellm
-blanks that field when it normalizes the response, and the raw body survives only for non-streaming
-calls, while workspace traffic streams. Note also that **fast mode is Opus-only** -- the API rejects
-`speed` outright on Sonnet and Haiku -- so a per-model comparison that leaves it on is not comparing
-like with like, and switching tier invalidates the prompt cache.
-
-`agent/usage.json` carries the full breakdown: the four non-overlapping token buckets (uncached
-input, output, cache read, cache write), per model, with costs. The buckets stay separate because
-Anthropic prices them differently -- a cache write costs 1.25x a plain input token and a cache read
-0.1x -- so a single "input tokens" number can neither produce a correct cost nor show cache
-behaviour. Prices come from `mngr_usage`'s table, which a drift test binds to the LiteLLM proxy's,
-and an unpriced model reports `cost_usd: null` rather than a misleading `0`. A LiteLLM model entry
-carries a single price, which has two consequences: the drift test covers the standard rates only,
-because the proxy has no fast-mode price to compare against, and the per-request `cost_usd` inside
-`usage_proxy.jsonl` is LiteLLM's own figure and always standard-rate. The trial's totals are the
-tier-aware ones.
-
-The cache-write rate above is the one for a 5-minute cache; Anthropic bills a 1-hour write at 2x an
-input token instead of 1.25x. Nothing in the chain carries the TTL, so every write here is priced as
-if it were 5-minute, and a trial whose agent asks for the longer cache understates that bucket by
-37.5%.
 
 ## Eval config
 

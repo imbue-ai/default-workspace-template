@@ -101,7 +101,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # Where the built accounts frontend bundle lives inside the deployed image
-# (added as an image directory by app.py; ``minds-admin env deploy`` builds it
+# (added as an image directory by app.py; ``minds env deploy`` builds it
 # before ``modal deploy``). Overridable for local development and tests.
 _FRONTEND_DIST_ENV: Final[str] = "ACCOUNTS_FRONTEND_DIST"
 _DEFAULT_FRONTEND_DIST: Final[str] = "/root/accounts_frontend_dist"
@@ -312,7 +312,7 @@ _PLACEHOLDER_PAGE = (
     "<h1>Accounts UI is not built</h1>"
     "<p>The accounts frontend bundle was not found on this server. Build it with "
     "<code>pnpm -C apps/remote_service_connector/frontend build</code> (normally done "
-    "by <code>minds-admin env deploy</code>) or point ACCOUNTS_FRONTEND_DIST at a build.</p>"
+    "by <code>minds env deploy</code>) or point ACCOUNTS_FRONTEND_DIST at a build.</p>"
     "</body></html>"
 )
 
@@ -397,7 +397,7 @@ _WEB_CHROME_PLACEHOLDER_PAGE = (
     "<h1>The minds web client is not built</h1>"
     "<p>The web-chrome bundle was not found on this server. Build it with "
     "<code>pnpm -C apps/remote_service_connector/frontend_web build</code> (normally done "
-    "by <code>minds-admin env deploy</code>) or point WEB_CHROME_FRONTEND_DIST at a build.</p>"
+    "by <code>minds env deploy</code>) or point WEB_CHROME_FRONTEND_DIST at a build.</p>"
     "</body></html>"
 )
 

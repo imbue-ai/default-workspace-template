@@ -169,18 +169,6 @@ def test_no_import_layer_violations() -> None:
 
 @pytest.mark.flaky
 @pytest.mark.timeout(60)
-def test_no_import_layer_violations_minds_admin() -> None:
-    """Ensure minds_admin production code has zero import layer violations.
-
-    Enforces the ``minds_admin layers contract`` (main > cli > envs > bake >
-    slices). See ``test_no_import_layer_violations`` for the flaky/timeout
-    rationale.
-    """
-    check_no_import_lint_errors(_REPO_ROOT, contract_name="minds_admin layers contract")
-
-
-@pytest.mark.flaky
-@pytest.mark.timeout(60)
 def test_no_import_layer_violations_mngr_imbue_cloud() -> None:
     """Ensure mngr_imbue_cloud production code has zero import layer violations.
 
@@ -276,7 +264,7 @@ def test_prevent_bash_without_strict_mode() -> None:
     The secret-file templates at ``.minds/template/*.sh`` are excluded entirely
     by ``find_bash_scripts_without_strict_mode`` (not merely accommodated in the
     count): they are shell-sourceable env declarations (commented ``export KEY=``
-    files consumed by ``scripts/push_vault_from_file.py`` and ``minds-admin env
+    files consumed by ``scripts/push_vault_from_file.py`` and ``minds env
     deploy`` when seeding HCP Vault / Modal secrets), not executable scripts, so
     ``set -euo pipefail`` is meaningless for them and would only leak strict mode
     into whatever shell sources them.

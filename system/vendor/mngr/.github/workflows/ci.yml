@@ -793,7 +793,7 @@ jobs:
           sudo mv /tmp/vault-bin/vault /usr/local/bin/vault
           vault --version
       # Exchange the GitHub OIDC token for a Vault token (role minds_ci_env_gh,
-      # gated on the minds-ci-env environment). `minds-admin env deploy` and the
+      # gated on the minds-ci-env environment). `minds env deploy` and the
       # per-run secret publish both shell out to the `vault` CLI, which reads
       # ~/.vault-token, so we need a real token here -- not just exported values.
       - name: Authenticate to Vault via GitHub OIDC
@@ -814,7 +814,7 @@ jobs:
           echo "::add-mask::$MODAL_TOKEN_SECRET"
           printf 'MODAL_TOKEN_ID<<__EOF__\n%s\n__EOF__\n' "$MODAL_TOKEN_ID" >> "$GITHUB_ENV"
           printf 'MODAL_TOKEN_SECRET<<__EOF__\n%s\n__EOF__\n' "$MODAL_TOKEN_SECRET" >> "$GITHUB_ENV"
-      # `minds-admin env deploy` for the ci tier requires deploy-mode activation, which
+      # `minds env deploy` for the ci tier requires deploy-mode activation, which
       # pins MODAL_PROFILE to the tier's modal_workspace (minds-dev) and
       # validates it against ~/.modal.toml. CI has no ~/.modal.toml, so synthesize
       # a throwaway one from the Modal token env.
@@ -827,7 +827,7 @@ jobs:
           active = true
           EOF
       - name: Deploy the per-run ci env
-        run: uv run python apps/minds_admin/scripts/test_deployments.py up
+        run: uv run python apps/minds/scripts/test_deployments.py up
       - name: Upload deployment env config
         uses: actions/upload-artifact@v7
         with:
@@ -906,7 +906,7 @@ jobs:
           active = true
           EOF
       - name: Sweep leaked ci-* envs older than 1 hour
-        run: uv run python apps/minds_admin/scripts/test_deployments.py sweep --max-age-hours 1
+        run: uv run python apps/minds/scripts/test_deployments.py sweep --max-age-hours 1
 
   test-minds-snapshot:
     runs-on: ubuntu-latest
@@ -1227,7 +1227,7 @@ jobs:
           name: minds-ci-env-config
           path: .minds
       - name: Destroy the per-run ci env
-        run: uv run python apps/minds_admin/scripts/test_deployments.py down
+        run: uv run python apps/minds/scripts/test_deployments.py down
 
   # Release tier (manual). The home for *all* minds release tests, gated to a
   # manual run rather than every push (the minds release procedure is a manual
@@ -1313,7 +1313,7 @@ jobs:
           active = true
           EOF
       - name: Run minds release-tier tests (minds_deployment)
-        run: uv run python apps/minds_admin/scripts/test_deployments.py deployment-only
+        run: uv run python apps/minds/scripts/test_deployments.py deployment-only
       # The plain minds @release tests need no ci env, so run them here too
       # (folded into the minds release job rather than the mngr release
       # workflow). `!cancelled()` so they still run if the deployment group

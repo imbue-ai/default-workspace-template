@@ -255,7 +255,7 @@ Setup is one script, `scripts/lima_image/setup_tier.py`. It is idempotent (re-ru
    lima_image_base_url = "https://lima-images-production.minds.example"
    lima_image_minisign_public_key = "RW...."                          # contents of minds-lima-<env>.pub line 2
    ```
-   These are public (a URL + a public key), so they belong in the committed `client.toml` next to the other URLs. A dev env can set the same two keys in `~/.minds-<name>/client.toml` (the `minds-admin env deploy` writer round-trips them when present on the `ClientEnvConfig`).
+   These are public (a URL + a public key), so they belong in the committed `client.toml` next to the other URLs. A dev env can set the same two keys in `~/.minds-<name>/client.toml` (the `minds env deploy` writer round-trips them when present on the `ClientEnvConfig`).
 
 #### Per-release publish
 

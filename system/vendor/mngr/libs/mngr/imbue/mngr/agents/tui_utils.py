@@ -21,6 +21,7 @@ import re
 import shlex
 from enum import auto
 from typing import Any
+from typing import Callable
 from typing import Final
 
 from loguru import logger
@@ -39,7 +40,7 @@ from imbue.mngr.utils.polling import poll_until
 _SEND_MESSAGE_TIMEOUT_SECONDS: Final[float] = 15.0
 # This can take a while, especially on Modal -- the process needs to actually
 # start and render the TUI before the indicator appears.
-_TUI_READY_TIMEOUT_SECONDS: Final[float] = 30.0
+TUI_READY_TIMEOUT_SECONDS: Final[float] = 30.0
 # Default confirmation window: how long to poll for durable evidence that the
 # agent accepted the message. Needs to be fairly long: a message sent to a busy
 # codex/antigravity agent leaves no evidence until the prompt is dequeued at
@@ -186,31 +187,47 @@ def _check_paste_content(pane_content: str, message: str) -> bool:
     return probe in normalized_pane
 
 
-def _pane_matches(agent: BaseAgent[Any], tmux_target: TmuxWindowTarget, indicator: str | re.Pattern[str]) -> bool:
+def _pane_matches(
+    agent: BaseAgent[Any],
+    tmux_target: TmuxWindowTarget,
+    indicator: str | re.Pattern[str] | Callable[[str], bool],
+) -> bool:
     content = agent._capture_pane_content(tmux_target)
     if content is None:
         return False
     if isinstance(indicator, re.Pattern):
         return indicator.search(content) is not None
-    return indicator in content
+    if isinstance(indicator, str):
+        return indicator in content
+    return indicator(content)
 
 
 def wait_for_tui_ready(
     agent: BaseAgent[Any],
     tmux_target: TmuxWindowTarget,
-    indicator: str | re.Pattern[str],
-    timeout_seconds: float = _TUI_READY_TIMEOUT_SECONDS,
+    indicator: str | re.Pattern[str] | Callable[[str], bool],
+    timeout_seconds: float = TUI_READY_TIMEOUT_SECONDS,
 ) -> None:
     """Wait until the TUI is ready by polling the pane for ``indicator``.
 
-    ``indicator`` is either a plain ``str`` (matched as an exact substring) or a
-    compiled ``re.Pattern`` (matched with ``re.search``) -- the type chooses the
-    matching mode. Raises ``SendMessageError`` on timeout. Without this check,
+    ``indicator`` is a plain ``str`` (matched as an exact substring), a compiled
+    ``re.Pattern`` (matched with ``re.search``), or a predicate taking the pane
+    content -- the type chooses the matching mode. A predicate is what a harness
+    needs when readiness depends on WHERE something appears rather than whether
+    it appears at all. Raises ``SendMessageError`` on timeout. Without this check,
     input sent before the TUI finishes rendering -- or while a resumed transcript
     is still replaying -- may be lost or appear as raw text. Returns immediately
     when the indicator already matches, so it is a cheap no-op once ready.
     """
-    label = indicator.pattern if isinstance(indicator, re.Pattern) else indicator
+    if isinstance(indicator, re.Pattern):
+        label = indicator.pattern
+    elif isinstance(indicator, str):
+        label = indicator
+    else:
+        # A predicate is described rather than named: `Callable` declares no `__name__`, and
+        # the alternatives (a Protocol carrying one, or getattr) buy a function name that says
+        # no more here than this does.
+        label = "a readiness predicate over the pane"
     with log_span("Waiting for TUI to be ready (looking for: {})", label):
         if poll_until(
             lambda: _pane_matches(agent, tmux_target, indicator),
@@ -222,10 +239,11 @@ def wait_for_tui_ready(
             logger.error("TUI ready timeout -- remote pane content:\n{}", pane_content)
         else:
             logger.error("TUI ready timeout -- failed to capture remote pane content")
+        # The pane is logged just above but deliberately kept OUT of the raised message: it is
+        # unbounded and can carry the user's own code or a diff, and this message is surfaced.
         raise SendMessageError(
             str(agent.name),
-            f"Timeout waiting for TUI to be ready (waited {timeout_seconds:.1f}s)"
-            + (f"\nPane content:\n{pane_content}" if pane_content else ""),
+            f"Timeout waiting for TUI to be ready (waited {timeout_seconds:.1f}s)",
         )
 
 

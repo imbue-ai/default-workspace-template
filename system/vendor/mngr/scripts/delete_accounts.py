@@ -15,7 +15,7 @@ R2 backup buckets are intentionally NOT deleted here: removing an account's
 ``workspace_records`` orphans its ``host-<hex>`` backup buckets, and the
 connector's existing backup-retention reaper empties, deletes, and de-keys
 those orphans on its schedule (force it sooner with
-``minds-admin sweep r2`` if needed). Leaving them to that purpose-built
+``mngr imbue_cloud admin sweep`` if needed). Leaving them to that purpose-built
 path keeps this tool from duplicating bounded S3 object deletion.
 
 The tool is **dry-run by default**: it prints exactly what it would delete and

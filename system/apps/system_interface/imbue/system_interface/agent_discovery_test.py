@@ -150,7 +150,7 @@ def test_known_location_is_messaged_without_discovery() -> None:
         return MessageResult(successful_agents=[str(m.agent_id) for m in matches])
 
     messenger = MngrMessenger(discover=_discover, send=_send)
-    assert messenger.send_to_agent(_AGENT_ID, "hi", (match,))
+    assert messenger.send_to_agent(_AGENT_ID, "hi", (match,)) is None
     assert discover_calls == []
     assert send_calls == [(match,)]
 
@@ -170,7 +170,7 @@ def test_empty_known_locations_falls_back_to_discovery() -> None:
         return MessageResult(successful_agents=[str(m.agent_id) for m in matches])
 
     messenger = MngrMessenger(discover=_discover, send=_send)
-    assert messenger.send_to_agent(_AGENT_ID, "hi", ())
+    assert messenger.send_to_agent(_AGENT_ID, "hi", ()) is None
     assert discover_calls == [_AGENT_ID]
     assert send_calls == [(discovered,)]
 
@@ -193,13 +193,15 @@ def test_stale_known_location_falls_back_to_discovery() -> None:
         return MessageResult(successful_agents=reached)
 
     messenger = MngrMessenger(discover=_discover, send=_send)
-    assert messenger.send_to_agent(_AGENT_ID, "hi", (stale,))
+    assert messenger.send_to_agent(_AGENT_ID, "hi", (stale,)) is None
     assert discover_calls == [_AGENT_ID]
     assert send_calls == [(stale,), (fresh,)]
 
 
 @pytest.mark.usefixtures("isolated_mngr_env")
-def test_returns_false_when_nothing_reachable() -> None:
+def test_returns_a_reason_when_nothing_reachable() -> None:
+    """A send that reaches no agent reports why, since the reason is what the user can act on."""
+
     def _discover(agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
         return ()
 
@@ -207,4 +209,24 @@ def test_returns_false_when_nothing_reachable() -> None:
         return MessageResult(successful_agents=[])
 
     messenger = MngrMessenger(discover=_discover, send=_send)
-    assert messenger.send_to_agent(_AGENT_ID, "hi", ()) is False
+    assert messenger.send_to_agent(_AGENT_ID, "hi", ()) == "The agent could not be reached."
+
+
+@pytest.mark.usefixtures("isolated_mngr_env")
+def test_reports_the_harness_reason_for_a_refused_send() -> None:
+    """mngr's own words are what come back, not a generic failure.
+
+    The harness knows what it is blocked on and says so in terms the user can act on -- which
+    key resolves the dialog holding its input, say. Reducing that to a bool here would leave
+    the chat with nothing to report but the fact that something went wrong.
+    """
+    refusal = "The agent is in shell mode with an unsubmitted command."
+
+    def _discover(agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
+        return (_make_match(),)
+
+    def _send(matches: Sequence[AgentMatch], message: str, ctx: MngrContext) -> MessageResult:
+        return MessageResult(successful_agents=[], failed_agents=[("alpha", refusal)])
+
+    messenger = MngrMessenger(discover=_discover, send=_send)
+    assert messenger.send_to_agent(_AGENT_ID, "hi", ()) == refusal

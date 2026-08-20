@@ -14,11 +14,11 @@ A serverless [LiteLLM](https://github.com/BerriAI/litellm) proxy deployed as a M
 ### 1. Deploy (pushes secrets + runs `modal deploy`)
 
 ```bash
-eval "$(uv run minds-admin env activate production)"
-uv run minds-admin env deploy --yes-i-mean-production
+eval "$(uv run minds env activate production)"
+uv run minds env deploy --yes-i-mean-production
 ```
 
-`minds-admin env deploy` reads `apps/minds/imbue/minds/config/envs/production/deploy.toml`
+`minds env deploy` reads `apps/minds/imbue/minds/config/envs/production/deploy.toml`
 for the Modal workspace + the list of services to push from Vault,
 creates the `litellm-production` Modal secret with:
 
@@ -36,7 +36,7 @@ the mandatory safety bar; substitute `--yes-i-mean-staging` (and
 On the first cold start, LiteLLM runs ~118 Prisma migrations against the database. This takes ~14 minutes. Subsequent container starts take ~6 seconds.
 
 The `min_containers` setting keeps containers warm to avoid cold
-starts. ``minds-admin env deploy`` reads the value from the tier's
+starts. ``minds env deploy`` reads the value from the tier's
 ``apps/minds/imbue/minds/config/envs/<tier>/deploy.toml``
 (``[min_containers].litellm_proxy``, default ``0``; staging and
 production ship with ``1``) and threads it into ``modal deploy`` as
@@ -85,34 +85,38 @@ See `litellm_proxy/start.sh` output for virtual key creation instructions.
 
 ## Supported models
 
-Every Claude model, automatically. The proxy registers a single pattern entry --
-`model_name: "claude-*"` forwarding to `anthropic/claude-*` -- so a client's bare
-model name (`claude-opus-5`) is routed upstream as `anthropic/claude-opus-5`
-without an entry per model. A newly released Claude model is routable the day it
-ships, with no config change and no deploy.
+The proxy registers each model with inline per-token pricing (mirrored from
+litellm's `model_prices_and_context_window` map) so cost tracking is accurate
+even on litellm versions whose bundled price map predates a model. The model
+list lives in `apps/modal_litellm/app.py` (`LITELLM_CONFIG`) and is mirrored in
+`litellm_proxy/config.yaml`; `config_drift_test.py` fails if the two diverge.
 
-The pattern is scoped to `claude-*` rather than a bare `*` on purpose: this proxy
-carries only an Anthropic credential, so a non-Claude model name (`gpt-5.2-codex`,
-or a typo) returns an unknown-model error here instead of being forwarded to
-Anthropic and coming back as a confusing upstream failure.
+Fable ($10 / $50 per 1M input / output):
 
-Pricing is not pinned here. litellm fetches its
-`model_prices_and_context_window` map remotely at startup
-(`LITELLM_LOCAL_MODEL_COST_MAP` is deliberately unset), and that map is what the
-proxy bills from. It carries dimensions a single inline per-token price cannot
-express:
+- `claude-fable-5`
 
-- the fast-mode premium (`provider_specific_entry.fast` -- 2x on Opus 5 and Opus 4.8)
-- the regional-processing uplift (`provider_specific_entry.<region>`)
-- the 1-hour cache-write rate (`cache_creation_input_token_cost_above_1hr`, 2x
-  base, against the 1.25x 5-minute rate a lone inline field assumes)
+Opus (current price tier, $5 / $25 per 1M input / output):
 
-If litellm's map ever lags a brand-new model, the fix is a cost-map reload
-(`POST /reload/model_cost_map` as proxy admin) rather than a code change.
+- `claude-opus-4-8` (latest Opus)
+- `claude-opus-4-7`
+- `claude-opus-4-6`
+- `claude-opus-4-5`
 
-`mngr_usage` keeps its own copy of these prices, because it runs on agent
-machines that never import litellm; `litellm_pricing_test` pins that copy against
-this same map so the two cannot drift.
+Opus (older, $15 / $75 per 1M):
+
+- `claude-opus-4-1`
+- `claude-opus-4-20250514` (Opus 4)
+
+Sonnet ($3 / $15 per 1M):
+
+- `claude-sonnet-4-6` (latest Sonnet)
+- `claude-sonnet-4-5`
+- `claude-sonnet-4-20250514` (Sonnet 4)
+
+Haiku ($1 / $5 per 1M):
+
+- `claude-haiku-4-5`
+- `claude-haiku-4-5-20251001`
 
 ## Checking spend
 
