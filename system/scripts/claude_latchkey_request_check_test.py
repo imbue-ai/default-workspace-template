@@ -45,6 +45,11 @@ _ALLOWED = [
     "latchkey curl http://latchkey-self.invalid/permissions/available/discord",
     # A non-latchkey command that merely mentions the request in a quoted string.
     f"""echo "post -XPOST {_HOST} next" """,
+    # ... including when it is chained or redirected: the quotes are gone by the
+    # time the segment is tokenized, so only the segment's own command tells a
+    # filing from a mention of one.
+    f"""git commit -m "document -XPOST {_HOST} usage" && git push""",
+    f"""grep -rn "curl -XPOST {_HOST}" system/ > /tmp/hits.txt""",
     "git push origin main",
 ]
 
