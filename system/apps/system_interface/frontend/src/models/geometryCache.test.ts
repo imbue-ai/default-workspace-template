@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ENTRY_TTL_MS,
   MAX_CACHED_ENTRIES,
@@ -22,6 +22,59 @@ function cacheWithClock(): { cache: ReturnType<typeof createGeometryCache>; adva
 function row(start: number, end: number, height: number): RowGeometry {
   return { row_key: `row-${start}`, start_offset: start, end_offset: end, height };
 }
+
+/** The handlers an IndexedDB request hands its result back through. */
+interface FakeRequest {
+  result: unknown;
+  onsuccess: (() => void) | null;
+  onerror: (() => void) | null;
+  onupgradeneeded: (() => void) | null;
+  onblocked: (() => void) | null;
+}
+
+/** Answer a request once the caller has had a turn to attach its handlers. */
+function respond(result: unknown, outcome: "success" | "error" = "success"): FakeRequest {
+  const request: FakeRequest = {
+    result: undefined,
+    onsuccess: null,
+    onerror: null,
+    onupgradeneeded: null,
+    onblocked: null,
+  };
+  queueMicrotask(() => {
+    request.result = result;
+    if (outcome === "success") {
+      request.onsuccess?.();
+    } else {
+      request.onerror?.();
+    }
+  });
+  return request;
+}
+
+/**
+ * A connection that opens and hands out an object store, but refuses every
+ * write -- which is what a denied quota looks like on a database that was
+ * usable a moment ago. The narrowest surface the cache actually drives; jsdom
+ * has no IndexedDB, so this is the only way to reach the database path.
+ */
+function stubIndexedDbRefusingWrites(): void {
+  const store = {
+    put: () => respond(undefined, "error"),
+    get: () => respond(undefined),
+    getAll: () => respond([]),
+    delete: () => respond(undefined),
+  };
+  const database = {
+    objectStoreNames: { contains: () => true },
+    transaction: () => ({ objectStore: () => store }),
+  };
+  vi.stubGlobal("indexedDB", { open: () => respond(database) });
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("widthBucketFor", () => {
   it("quantizes nearby widths into the same bucket", () => {
@@ -108,6 +161,20 @@ describe("createGeometryCache", () => {
     expect(await cache.load("agent-0", 10)).toBeNull();
     expect(await cache.load("agent-1", 10)).not.toBeNull();
     expect(await cache.load("agent-new", 10)).not.toBeNull();
+  });
+
+  it("keeps a write the database refuses, rather than losing it between the two tiers", async () => {
+    // A denied quota shows up as a rejected write on a connection that opened
+    // fine, and the whole contract here is that a caller cannot tell the
+    // database apart from the fallback. Dropping it would leave the entry in
+    // neither while save() still resolved, so the next visit measures again for
+    // no reason a reader could see.
+    stubIndexedDbRefusingWrites();
+    const { cache } = cacheWithClock();
+
+    await cache.save("agent-a", 10, { rows: [row(0, 10, 100)] });
+
+    expect((await cache.load("agent-a", 10))?.rows[0].height).toBe(100);
   });
 
   it("spends one slot per width a conversation was measured at", async () => {

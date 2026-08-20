@@ -239,7 +239,16 @@ export function createGeometryCache(now: () => number = () => Date.now()): Geome
         saveToMemory(entry);
         return;
       }
-      await awaitRequest(store.put(entry) as IDBRequest<IDBValidKey>);
+      // A write the database refuses -- quota denied being the usual way a
+      // connection that opened fine stops accepting one -- degrades exactly like a
+      // transaction it would not open at all. `put` resolves the record's key on
+      // success, so null is unambiguously a refusal, and dropping it here would
+      // leave the entry in neither tier while `save` still resolved.
+      const storedKey = await awaitRequest(store.put(entry) as IDBRequest<IDBValidKey>);
+      if (storedKey === null) {
+        saveToMemory(entry);
+        return;
+      }
       await evictIfNeeded(db, now());
     },
   };
