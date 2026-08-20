@@ -467,8 +467,16 @@ const notFoundAgentIds = new Set<string>();
 
 /** Where an agent's transcript snapshot stands: in flight, failed, or settled. */
 export interface TranscriptLoadState {
+  /** What the load is doing right now. */
   readonly phase: "idle" | "loading" | "error";
-  /** Why it failed. Set when `phase` is "error", null otherwise. */
+  /**
+   * The most recent failure that has not been resolved by a later success, or
+   * null. Deliberately NOT cleared when the following retry starts, so it
+   * outlives the "loading" phase: a failed reload schedules a retry, and a
+   * caller that read only `phase` would see the failure blink out for the whole
+   * of each attempt -- which, against a dead tunnel that takes the full request
+   * timeout to fail, reads as "it recovered". Only a successful load clears it.
+   */
   readonly error: string | null;
 }
 
@@ -638,7 +646,13 @@ export async function fetchEvents(agentId: string): Promise<TranscriptEvent[]> {
   // fence; only the outcomes below do.
   const attempt = ++loadAttemptCounter;
   newestLoadAttemptByAgent.set(agentId, attempt);
-  loadStateByAgent.set(agentId, { phase: "loading", error: null });
+  // Carries any unresolved failure into the attempt rather than clearing it (see
+  // TranscriptLoadState.error): a retry is not evidence that the last failure is
+  // over, only a success is.
+  loadStateByAgent.set(agentId, {
+    phase: "loading",
+    error: loadStateByAgent.get(agentId)?.error ?? null,
+  });
 
   try {
     const result = await m.request<EventsResponse>({
@@ -647,10 +661,18 @@ export async function fetchEvents(agentId: string): Promise<TranscriptEvent[]> {
       params: { agentId },
       config: applyEventsRequestTimeout,
     });
-    placeWindow(agentId, result);
-    if (isNewestLoadAttempt(agentId, attempt)) {
-      loadStateByAgent.set(agentId, IDLE_LOAD_STATE);
+    // Fenced for the same reason the outcome writes below are, and it matters
+    // more here: a superseded attempt can still *succeed*, just late, and
+    // `placeWindow` replaces the window wholesale. Letting an older snapshot land
+    // on top of a newer one reverts the transcript and drops whatever the stream
+    // appended in between, with no way back -- placeWindow also resets
+    // firstOffset and hasMoreAfter, so neither backfill nor forward paging can
+    // reach the lost events again.
+    if (!isNewestLoadAttempt(agentId, attempt)) {
+      return result.events;
     }
+    placeWindow(agentId, result);
+    loadStateByAgent.set(agentId, IDLE_LOAD_STATE);
     return result.events;
   } catch (error) {
     // The not-found latch is fenced alongside the state because the panel acts on
