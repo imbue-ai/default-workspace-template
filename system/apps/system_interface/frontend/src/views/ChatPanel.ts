@@ -140,6 +140,16 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   // how tall each is. Reserved space above and below the loaded window is read
   // straight out of this, so it reflects what the transcript actually renders.
   let geometry = new RowGeometryIndex();
+  /**
+   * Pixels per event used to price history this client has never rendered, and
+   * whether that rate has stopped moving. The rule itself lives in
+   * `models/reserveRate`; this holds the answer for one conversation.
+   *
+   * Declared here rather than beside `updateReserveRate` because the virtualizer
+   * below is constructed with a closure that reads it, so it has to be
+   * initialized first.
+   */
+  let reserveRate: ReserveRate = COLD_RESERVE_RATE;
   // Heights reserved above/below the loaded window for history that exists on the
   // server but isn't loaded yet. Shared so the scroll handler can tell when the
   // viewport is over a reserved region and page/jump/overlay accordingly.
@@ -905,13 +915,6 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       ]),
     ]);
   }
-
-  /**
-   * Pixels per event used to price history this client has never rendered, and
-   * whether that rate has stopped moving. The rule itself lives in
-   * `models/reserveRate`; this holds the answer for one conversation.
-   */
-  let reserveRate: ReserveRate = COLD_RESERVE_RATE;
 
   /** Re-learn the reserve rate from what the loaded window currently looks like. */
   function updateReserveRate(rows: RowDescriptor[]): void {
