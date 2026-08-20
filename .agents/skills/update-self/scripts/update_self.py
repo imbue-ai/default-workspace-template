@@ -2848,7 +2848,11 @@ def recover(
     ``--no-restart`` is the boot path: nothing is running yet, so disk state is
     the whole job (bootstrap starts the services fresh from the restored tree)
     and the health probes would only time out against a server that has not
-    booted. The marker survives a *failed* recovery so the next pass retries.
+    booted. The marker survives a failed *tree restore* so the next pass
+    retries it; a rollback that restored the tree but could not confirm a
+    healthy workspace clears the marker before reporting the emergency, like
+    the apply's own emergency path -- re-running the same failed rollback from
+    cron would not help.
     """
     resolved_base = (
         base_url or os.environ.get(ENV_WORKSPACE_URL, DEFAULT_WORKSPACE_URL)
