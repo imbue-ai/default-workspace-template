@@ -25,11 +25,13 @@ from imbue.system_interface.harnesses.registry import get_harness_spec
 # stale tail. Covering them here would mean weakening these assertions for the harnesses that
 # CAN meet them; they get their own test instead. Move a harness up to this tuple when it lands
 # a real transcript watcher.
-_TRACKER_HARNESSES = (HarnessType.CLAUDE, HarnessType.CODEX, HarnessType.PI_CODING)
+_TRACKER_HARNESSES = (HarnessType.CLAUDE, HarnessType.CODEX, HarnessType.PI_CODING, HarnessType.ANTIGRAVITY)
 
-# The harnesses registered on the shared placeholders -- launchable, but with no transcript
-# behind them yet. Emptying this tuple is what retires ``harnesses/placeholder.py``.
-_PLACEHOLDER_HARNESSES = (HarnessType.OPENCODE, HarnessType.ANTIGRAVITY)
+# The harnesses on the shared placeholder watcher/tracker -- launchable, with no transcript
+# behind them. Emptying this tuple is what retires ``harnesses/placeholder.py``. antigravity
+# graduated out of it once its real watcher landed; it still uses the placeholder RESOLVER,
+# which is why its catalog is asserted empty below rather than here.
+_PLACEHOLDER_HARNESSES = (HarnessType.OPENCODE,)
 
 
 def _turn_started_marker() -> dict[str, Any]:
