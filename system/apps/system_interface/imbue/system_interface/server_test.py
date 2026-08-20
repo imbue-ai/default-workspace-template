@@ -6,6 +6,7 @@ import json
 import os
 import queue
 import re
+import subprocess
 import time
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -303,6 +304,30 @@ def test_not_built_repair_command_is_the_one_the_app_runs_for_a_chat() -> None:
     # The shell prefix is not part of the argv the CLI validates, but it is what
     # makes the connect half work from the workspace's own tmux-backed terminals.
     assert _NOT_BUILT_REPAIR_COMMAND == "env -u TMUX " + _NOT_BUILT_REPAIR_MNGR_COMMAND
+
+
+def test_not_built_repair_line_splits_the_way_a_shell_splits_it() -> None:
+    """The argv the CLI validates has to be the argv the reader's shell builds.
+
+    The readable line is the source of truth and the argv is parsed back out of
+    it, which is only sound while the parse agrees with a shell's. ``shlex.split``
+    quotes and splits but expands nothing, so a ``$`` or a backtick worded into
+    the message -- prose, and prose gets reworded -- would reach the argv as
+    itself, leaving the sentence assertion and the live-CLI check above both
+    green while the line a reader copies tells the agent something else.
+
+    So the split is checked against a real shell rather than assumed to match
+    one. ``set --`` ends option processing, so the flags are ordinary words to
+    it and nothing in the line is run.
+    """
+    printed_words = subprocess.run(
+        ["sh", "-c", f'set -- {_NOT_BUILT_REPAIR_MNGR_COMMAND}\nprintf "%s\\n" "$@"'],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=30,
+    )
+    assert printed_words.stdout.splitlines() == list(_NOT_BUILT_REPAIR_ARGV)
 
 
 def test_assets_404_rather_than_falling_through_to_the_spa_shell(tmp_path: Path) -> None:
