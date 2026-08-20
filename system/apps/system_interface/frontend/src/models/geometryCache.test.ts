@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { ENTRY_TTL_MS, WIDTH_BUCKET_PX, createGeometryCache, widthBucketFor } from "./geometryCache";
+import {
+  ENTRY_TTL_MS,
+  MAX_CACHED_CONVERSATIONS,
+  WIDTH_BUCKET_PX,
+  createGeometryCache,
+  widthBucketFor,
+} from "./geometryCache";
 import type { RowGeometry } from "./rowGeometry";
 
 /**
@@ -96,6 +102,23 @@ describe("createGeometryCache", () => {
     expect(await cache.load("agent-a", 10)).toBeNull();
     expect(await cache.load("agent-a", 20)).toBeNull();
     expect(await cache.load("agent-b", 10)).not.toBeNull();
+  });
+
+  it("evicts the least recently written conversation once over the cap", async () => {
+    // The bound has to hold on this path too, or a session that never gets a
+    // database accumulates a row table per conversation and width for as long as
+    // it lasts.
+    const { cache, advance } = cacheWithClock();
+    for (let i = 0; i < MAX_CACHED_CONVERSATIONS; i++) {
+      await cache.save(`agent-${i}`, 10, { rows: [row(0, 10, 100)] });
+      advance(1);
+    }
+    // Reading does not count as use; the oldest *write* is what goes.
+    expect(await cache.load("agent-0", 10)).not.toBeNull();
+    await cache.save("agent-new", 10, { rows: [row(0, 10, 100)] });
+    expect(await cache.load("agent-0", 10)).toBeNull();
+    expect(await cache.load("agent-1", 10)).not.toBeNull();
+    expect(await cache.load("agent-new", 10)).not.toBeNull();
   });
 
   it("does not confuse agents whose ids share a prefix", async () => {

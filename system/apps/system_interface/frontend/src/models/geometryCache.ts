@@ -104,6 +104,31 @@ function awaitRequest<T>(request: IDBRequest<T>): Promise<T | null> {
 }
 
 /**
+ * The keys to drop: everything past the TTL, then the least recently updated of
+ * what is left once it exceeds the cap.
+ *
+ * Shared by both backends rather than written twice, because retention is the
+ * one respect in which a caller could otherwise tell the database path from the
+ * in-memory fallback -- and the fallback is meant to be indistinguishable.
+ */
+function keysToEvict(entries: CachedGeometry[], now: number): string[] {
+  const expired: string[] = [];
+  const live: CachedGeometry[] = [];
+  for (const entry of entries) {
+    if (now - entry.updated_at > ENTRY_TTL_MS) {
+      expired.push(entry.key);
+    } else {
+      live.push(entry);
+    }
+  }
+  if (live.length <= MAX_CACHED_CONVERSATIONS) {
+    return expired;
+  }
+  live.sort((a, b) => a.updated_at - b.updated_at);
+  return [...expired, ...live.slice(0, live.length - MAX_CACHED_CONVERSATIONS).map((entry) => entry.key)];
+}
+
+/**
  * Drop expired entries and, if still over the cap, the least recently updated
  * ones. Runs after a write, so the bound is maintained without a separate
  * sweep and without blocking the read path.
@@ -115,20 +140,8 @@ async function evictIfNeeded(database: IDBDatabase, now: number): Promise<void> 
   if (all === null) {
     return;
   }
-  const live: CachedGeometry[] = [];
-  for (const entry of all) {
-    if (now - entry.updated_at > ENTRY_TTL_MS) {
-      store.delete(entry.key);
-    } else {
-      live.push(entry);
-    }
-  }
-  if (live.length <= MAX_CACHED_CONVERSATIONS) {
-    return;
-  }
-  live.sort((a, b) => a.updated_at - b.updated_at);
-  for (const entry of live.slice(0, live.length - MAX_CACHED_CONVERSATIONS)) {
-    store.delete(entry.key);
+  for (const key of keysToEvict(all, now)) {
+    store.delete(key);
   }
 }
 
@@ -184,6 +197,11 @@ export function createGeometryCache(now: () => number = () => Date.now()): Geome
       const db = await database();
       if (db === null) {
         memory.set(entry.key, entry);
+        // Bounded on the same terms as the database, so a session that never
+        // gets one does not accumulate a row table per conversation and width.
+        for (const key of keysToEvict([...memory.values()], now())) {
+          memory.delete(key);
+        }
         return;
       }
       const store = db.transaction(STORE_NAME, "readwrite").objectStore(STORE_NAME);
