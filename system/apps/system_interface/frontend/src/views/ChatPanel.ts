@@ -224,9 +224,10 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   let backfillInFlight = false;
   // After an offset jump replaces the window, pin the viewport once to the top of
   // the freshly loaded rows (just below the top reserved spacer) so the user lands
-  // on the jumped-to content rather than in the reserved region above it. With the
-  // reserved heights now sized by a stable constant, the top of the loaded window
-  // doesn't drift as rows measure, so a single pin suffices -- no timed settle.
+  // on the jumped-to content rather than in the reserved region above it. A single
+  // pin suffices -- no timed settle -- because the space above those rows is priced
+  // off geometry that has already settled and a per-event rate that has stopped
+  // moving (see updateReserveRate), so it does not drift as the new rows measure.
   let pendingPinToWindowTop = false;
 
   // File drag-and-drop: dropping a file anywhere over the chat stages it as a
@@ -700,9 +701,10 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     }
     // After an offset jump, pin the viewport once to the top of the freshly loaded
     // rows (just below the top reserved spacer) so the user lands on the jumped-to
-    // content rather than in the reserved (blank) region above it. The reserved
-    // top height is a stable constant * offset, so it doesn't drift as the loaded
-    // rows measure -- a single pin lands correctly without a timed settle.
+    // content rather than in the reserved (blank) region above it. The reserved top
+    // height covers history that is not loaded, priced off settled geometry and a
+    // rate that has stopped moving, so it doesn't drift as the loaded rows measure
+    // -- a single pin lands correctly without a timed settle.
     if (pendingPinToWindowTop) {
       pendingPinToWindowTop = false;
       scroll.pinTo(element, phantomTopHeight);
