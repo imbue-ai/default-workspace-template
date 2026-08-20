@@ -333,9 +333,18 @@ def test_not_built_repair_line_splits_the_way_a_shell_splits_it() -> None:
     green while the line a reader copies tells the agent something else.
 
     So the split is checked against a real shell rather than assumed to match
-    one. ``set --`` ends option processing, so the flags are ordinary words to
-    it and nothing in the line is run.
+    one. ``set --`` keeps the flags from being read as options to ``set`` and
+    keeps the line's first word from being run as a command -- but the words are
+    still expanded on the way in, which is how a ``$`` is caught here. Command
+    substitution is an expansion too, and that one would be *run* rather than
+    reported, so it is refused before a shell ever sees the line.
     """
+    for substitution in ("`", "$("):
+        assert substitution not in _NOT_BUILT_REPAIR_MNGR_COMMAND, (
+            f"the suggested line contains a command substitution ({substitution}), which the shell below "
+            "would execute rather than report: word it out of the message"
+        )
+
     printed_words = subprocess.run(
         ["sh", "-c", f'set -- {_NOT_BUILT_REPAIR_MNGR_COMMAND}\nprintf "%s\\n" "$@"'],
         capture_output=True,
