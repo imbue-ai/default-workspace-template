@@ -56,7 +56,7 @@ Pick one production box with free slots (`just list-servers`,
 `just list-pool-hosts`), then:
 
 ```bash
-eval "$(uv run minds env activate production)"
+eval "$(uv run minds-admin env activate production)"
 just prep-server <canary-box-id>
 ```
 
@@ -232,8 +232,8 @@ Boxes whose images predate the docker preinstall (2026-06-16) are unaffected
   168h, so expect to re-login). Deploys additionally need the
   `minds-staging` Modal profile (see
   [staging-bringup.md](./staging-bringup.md)).
-- Redeploy the tier services first (`minds env activate --deploy staging` +
-  `minds env deploy --yes-i-mean-staging`, from `main`), then run steps 2-5:
+- Redeploy the tier services first (`minds-admin env activate --deploy staging` +
+  `minds-admin env deploy --yes-i-mean-staging`, from `main`), then run steps 2-5:
   canary-prep one box, bake one slice at the release tag, run all four canary
   checks -- including destroying one old-generation `available` row with the
   2.2.0 CLI (`just destroy-pool-hosts <old-row-id>`), which is the
@@ -242,9 +242,10 @@ Boxes whose images predate the docker preinstall (2026-06-16) are unaffected
   minds build used to fail every bake at the outer `mngr create` with
   `Cannot merge AgentTypeConfig with ClaudeAgentConfig`: the stale seeded
   `[agent_types.main] parent_type = "claude"` conflicts with the template's
-  command-parented `main`. `minds pool create` now runs the seed migration
-  itself before invoking the admin bake, so this fixes itself on the first
-  bake from a current checkout; only an *older* checkout still needs the
+  command-parented `main`. `minds-admin pool create` now runs every bake's
+  inner `mngr` subprocesses in an ephemeral mngr namespace (a fresh
+  `MNGR_HOST_DIR`), so a bake never reads the laptop profile and cannot hit
+  this from a current checkout; only an *older* checkout still needs the
   manual remedy (launch the current minds.app once against the tier).
 - Only after the staging canary passes all checks, prep the remaining staging
   boxes, bake the new generation to capacity, and retire the old `available`

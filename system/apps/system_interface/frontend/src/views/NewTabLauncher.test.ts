@@ -26,6 +26,7 @@ import {
   filterRowsByKind,
   formatRecency,
   kindsInRows,
+  openNewTiles,
   resetHiddenKinds,
   sortRowsByRecency,
   type LauncherRow,
@@ -331,7 +332,7 @@ describe("NewTabLauncher", () => {
     otherHarnessesEnabled = true;
     try {
       const labels = buttonsOf(render()).map((tile) => texts(tile.children)[1]);
-      expect(labels.slice(0, 3)).toEqual(["Chat", "Codex agent", "Pi agent"]);
+      expect(labels.slice(0, 3)).toEqual(["Chat", "Codex chat", "Pi chat"]);
     } finally {
       otherHarnessesEnabled = false;
     }
@@ -354,9 +355,24 @@ describe("NewTabLauncher", () => {
 
   it("starts a new object of the tile's kind", () => {
     const started: string[] = [];
-    const tiles = buttonsOf(render({ onOpenNew: (kind) => started.push(kind) }));
+    const tiles = buttonsOf(render({ onOpenNew: (target) => started.push(target.kind) }));
     (tiles[3].attrs?.onclick as () => void)();
     expect(started).toEqual(["terminal"]);
+  });
+
+  it("hands the clicked tile's harness straight through", () => {
+    otherHarnessesEnabled = true;
+    try {
+      const started: string[] = [];
+      const tiles = buttonsOf(
+        render({ onOpenNew: (target) => started.push(target.kind === "chat" ? target.harness : target.kind) }),
+      );
+      // Chat, Codex chat, Pi chat, then the non-chat tiles.
+      (tiles[2].attrs?.onclick as () => void)();
+      expect(started).toEqual(["pi-coding"]);
+    } finally {
+      otherHarnessesEnabled = false;
+    }
   });
 
   it("stands every tile down while this pane is starting something", () => {
@@ -472,5 +488,52 @@ describe("NewTabLauncher", () => {
     const checkbox = inputsOf(component.view(vnode))[0];
     (checkbox.attrs?.onchange as () => void)();
     expect(texts(component.view(vnode))).toContain("No tabs match this filter.");
+  });
+});
+
+describe("openNewTiles", () => {
+  // A chat tile's harness reaches `mngr create --type` verbatim. The tile's own
+  // word for pi is "Pi"; mngr's agent type is "pi-coding" ("pi" is only an
+  // mngr-side alias, which the create endpoint's enum rejects outright), so a
+  // tile carrying its own word instead of the agent type could not create at all.
+  const harnessOf = (label: string) => {
+    const target = openNewTiles().find((tile) => tile.label === label)?.target;
+    return target?.kind === "chat" ? target.harness : undefined;
+  };
+
+  it("names mngr's agent type on every chat tile", () => {
+    otherHarnessesEnabled = true;
+    try {
+      expect(harnessOf("Chat")).toBe("claude");
+      expect(harnessOf("Codex chat")).toBe("codex");
+      expect(harnessOf("Pi chat")).toBe("pi-coding");
+    } finally {
+      otherHarnessesEnabled = false;
+    }
+  });
+
+  it("puts an introductory tile on its harness, asking only for the `first` template", () => {
+    introductoryAgentsEnabled = true;
+    try {
+      expect(harnessOf("Introductory Pi chat")).toBe("pi-coding");
+      const intro = openNewTiles().find((tile) => tile.label === "Introductory Pi chat")?.target;
+      expect(intro).toEqual({ kind: "chat", harness: "pi-coding", first: true });
+      // The plain tiles are the same create without that template.
+      expect(openNewTiles().find((tile) => tile.label === "Chat")?.target).toEqual({
+        kind: "chat",
+        harness: "claude",
+        first: false,
+      });
+    } finally {
+      introductoryAgentsEnabled = false;
+    }
+  });
+
+  it("gives the non-chat tiles no harness to send", () => {
+    // Their kinds are the launcher's own vocabulary and never reach mngr.
+    const kinds = openNewTiles()
+      .filter((tile) => tile.target.kind !== "chat")
+      .map((tile) => tile.target.kind);
+    expect(kinds).toEqual(["files", "browser", "terminal"]);
   });
 });

@@ -42,7 +42,7 @@ def cf_check(response: httpx.Response) -> dict[str, Any]:
 
 
 # Env var the deployed connector reads at startup to identify which
-# minds env it belongs to. The value is pushed by ``minds env deploy``
+# minds env it belongs to. The value is pushed by ``minds-admin env deploy``
 # into the per-tier ``litellm-connector-<tier>`` Modal Secret. For
 # dev-tier deploys this is the per-developer dev env name (e.g.
 # ``josh-3``); for tier deploys it's the tier itself (``staging`` /

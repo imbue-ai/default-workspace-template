@@ -1,6 +1,8 @@
 ---
 name: file-sharing
 description: Use to read and write files and directories on the user's local filesystem.
+metadata:
+  author: imbue
 ---
 
 # File sharing

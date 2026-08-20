@@ -29,6 +29,10 @@ THIRD_PARTY_IMPORT_ROOTS: Final[frozenset[str]] = frozenset(
         "psycopg2",
         "paramiko",
         "pydantic",
+        # Consumed via imbue.modal_app_kit.sentry (error reporting to the
+        # tier's Bugsink instance), not imported by the shipped modules
+        # directly.
+        "sentry_sdk",
         "tenacity",
     }
 )

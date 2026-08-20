@@ -32,25 +32,34 @@
 
 import m from "mithril";
 import { buildEverythingMembers, partitionByMembership, serviceNameFromRef } from "../models/Projects";
+import type { ChatHarness } from "../models/AgentManager";
 import type { MachineInventory, MemberKind } from "../models/Projects";
 import { serviceIconMarkup } from "./appIcon";
 import { areIntroductoryAgentsEnabled, areOtherHarnessesEnabled } from "../base-path";
 import { hoverTooltipAttrs } from "./hoverTooltip";
 import { icon } from "./icons";
 
-/** The kinds of object the "Open new" tiles can start from scratch. Distinct
- *  from MemberKind: "files" has no member ref yet (nothing backs it), and the
- *  tiles never start a URL tab. */
-export type LaunchKind =
-  | "chat"
-  | "codex"
-  | "pi"
-  | "intro-chat"
-  | "intro-codex"
-  | "intro-pi"
-  | "files"
-  | "browser"
-  | "terminal";
+/** What one "Open new" tile starts, as data rather than as an encoded name.
+ *
+ *  A chat tile carries the two facts that vary between chat tiles -- which
+ *  harness it runs on, and whether the `first` create template is stacked on top
+ *  -- as their own fields. They used to be spelled into the kind ("intro-pi"),
+ *  which meant every consumer had to decode that name back into a harness and a
+ *  flag, and one decoder shipped the tile's own word (`pi`) as the harness
+ *  instead of mngr's agent type (`pi-coding`), which the create endpoint rejects.
+ *  Carrying them as fields means there is nothing to decode.
+ *
+ *  Distinct from MemberKind: "files" has no member ref yet (nothing backs it),
+ *  and the tiles never start a URL tab. */
+export type LaunchTarget =
+  | { kind: "chat"; harness: ChatHarness; first: boolean }
+  | { kind: "files" | "browser" | "terminal" };
+
+/** One "Open new" tile: what it starts, and what it is called. */
+export interface LaunchTile {
+  target: LaunchTarget;
+  label: string;
+}
 
 /** One object the launcher can open. */
 export interface LauncherRow {
@@ -253,14 +262,9 @@ const LAUNCHER_PATHS = {
 } as const;
 
 /** Full <svg> string for one launcher glyph. */
-function launcherIcon(name: keyof typeof LAUNCHER_PATHS | LaunchKind, size: number): string {
-  // The harness and introductory kinds are chats on another harness or
-  // template, so they wear the chat bubble rather than getting glyphs of
-  // their own.
-  const glyph: keyof typeof LAUNCHER_PATHS =
-    name === "codex" || name === "pi" || name === "intro-chat" || name === "intro-codex" || name === "intro-pi"
-      ? "chat"
-      : name;
+function launcherIcon(glyph: keyof typeof LAUNCHER_PATHS, size: number): string {
+  // Every chat tile wears the chat bubble whatever harness it starts, which is
+  // free now that they all share the "chat" kind.
   return (
     `<svg xmlns="${XMLNS}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" ` +
     `stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">` +
@@ -296,14 +300,23 @@ function rowIconMarkup(row: LauncherRow): string {
   return serviceIconMarkup(serviceNameFromRef(row.ref), GLYPH_SIZE, fallback);
 }
 
+/** One chat tile: the harness it starts, and whether it stacks `first`. */
+function chatTile(harness: ChatHarness, label: string, first: boolean = false): LaunchTile {
+  return { target: { kind: "chat", harness, first }, label };
+}
+
 /** The tile list, built per render because the harness tiles are feature-
- *  flagged: codex and pi are the same create as Chat (the same `chat` role,
- *  stacked on a different harness template) and appear only where the host
- *  enables the alt harnesses. */
-function openNewTiles(): readonly { kind: LaunchKind; label: string }[] {
-  const tiles: { kind: LaunchKind; label: string }[] = [{ kind: "chat", label: "Chat" }];
+ *  flagged: every chat tile is the same create (the same `chat` role in the
+ *  primary's work dir), differing only in the harness it names and whether it
+ *  stacks the `first` template, so a new harness is one row here.
+ *
+ *  Exported so the harness a tile names can be asserted without a DOM: it is
+ *  the value that reaches ``mngr create --type``, and a tile naming something
+ *  mngr does not call itself is rejected before the create ever runs. */
+export function openNewTiles(): readonly LaunchTile[] {
+  const tiles: LaunchTile[] = [chatTile("claude", "Chat")];
   if (areOtherHarnessesEnabled()) {
-    tiles.push({ kind: "codex", label: "Codex agent" }, { kind: "pi", label: "Pi agent" });
+    tiles.push(chatTile("codex", "Codex chat"), chatTile("pi-coding", "Pi chat"));
   }
   // Introductory chats: the same create with the `first` template stacked on
   // top (fast launch where the harness supports it, /welcome, the first=true
@@ -311,18 +324,15 @@ function openNewTiles(): readonly { kind: LaunchKind; label: string }[] {
   // workspace. Gated separately from the alt harnesses above.
   if (areIntroductoryAgentsEnabled()) {
     tiles.push(
-      { kind: "intro-chat", label: "Introductory Claude chat" },
-      { kind: "intro-codex", label: "Introductory Codex chat" },
-      { kind: "intro-pi", label: "Introductory Pi chat" },
+      chatTile("claude", "Introductory Claude chat", true),
+      chatTile("codex", "Introductory Codex chat", true),
+      chatTile("pi-coding", "Introductory Pi chat", true),
     );
   }
   tiles.push(
-    { kind: "files", label: "File viewer" },
-    { kind: "browser", label: "Browser" },
-    {
-      kind: "terminal",
-      label: "Terminal",
-    },
+    { target: { kind: "files" }, label: "File viewer" },
+    { target: { kind: "browser" }, label: "Browser" },
+    { target: { kind: "terminal" }, label: "Terminal" },
   );
   return tiles;
 }
@@ -358,7 +368,7 @@ export interface NewTabLauncherAttrs {
   // looked untouched invited a second click that started a second object.
   isAwaitingCreate?: boolean;
   // Start a new object of this kind in this pane. Never fired for "files".
-  onOpenNew: (kind: LaunchKind) => void;
+  onOpenNew: (target: LaunchTarget) => void;
   // Open an object the active view already shows. Membership does not change.
   onOpenMember: (row: LauncherRow) => void;
   // Open an object the active view does not show yet. The caller shares it into
@@ -569,11 +579,13 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
               // A tile stands down while this pane is starting something --
               // both so a second click cannot start a second object, and so
               // the wait is visible at all.
-              const isDisabled = tile.kind === "files" || attrs.isAwaitingCreate === true;
+              const isDisabled = tile.target.kind === "files" || attrs.isAwaitingCreate === true;
               return m(
                 "button",
                 {
-                  key: tile.kind,
+                  // Keyed by label: several tiles share the "chat" kind, and the
+                  // label is what tells them apart on screen.
+                  key: tile.label,
                   type: "button",
                   "aria-disabled": isDisabled ? "true" : undefined,
                   class:
@@ -582,8 +594,12 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
                     (isDisabled
                       ? "text-text-faint cursor-not-allowed"
                       : "text-text-primary hover:bg-bg-hover cursor-pointer"),
-                  onclick: isDisabled ? undefined : () => attrs.onOpenNew(tile.kind),
-                  ...(tile.kind === "files" && attrs.isAwaitingCreate !== true
+                  onclick: isDisabled ? undefined : () => attrs.onOpenNew(tile.target),
+                  // Keyed on the file viewer itself rather than on `isDisabled`:
+                  // every tile is disabled while a create is in flight, and
+                  // "a file viewer is coming" is not the reason for any of the
+                  // others.
+                  ...(tile.target.kind === "files" && attrs.isAwaitingCreate !== true
                     ? hoverTooltipAttrs(FILE_VIEWER_TOOLTIP)
                     : {}),
                 },
@@ -591,7 +607,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
                   m(
                     "span",
                     { class: "text-text-faint flex shrink-0 items-center" },
-                    m.trust(launcherIcon(tile.kind, GLYPH_SIZE)),
+                    m.trust(launcherIcon(tile.target.kind, GLYPH_SIZE)),
                   ),
                   // Truncates rather than wrapping: a second line would change
                   // the tile's height and break the row of tiles out of its

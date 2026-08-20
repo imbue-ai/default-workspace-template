@@ -1047,7 +1047,8 @@ def _row_attributes(row: "FakePoolRow") -> dict[str, Any]:
 
     Existing tests pass ``version="v…"`` for ergonomics; we synthesise a
     matching attributes dict from that here so the fake's behaviour mirrors
-    what production does once admin pool create writes attributes directly.
+    what production does once the operator pool bake (``minds-admin pool
+    create``) writes attributes directly.
     """
     if isinstance(row.attributes, dict):
         return dict(row.attributes)
