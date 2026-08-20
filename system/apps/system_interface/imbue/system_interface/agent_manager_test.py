@@ -4,6 +4,7 @@ import json
 import os
 import queue
 import shutil
+import tomllib
 import threading
 import time
 from datetime import datetime
@@ -1119,6 +1120,26 @@ def test_chat_create_argv_accepted_by_live_cli() -> None:
     # The chat carries user_created so the OOM launch wrapper puts it in the
     # dynamic chat band rather than the least-protected worker/unclassified band.
     assert "user_created=true" in argv
+
+
+def test_every_harness_launches_through_the_oom_band_wrapper() -> None:
+    """Each harness's ``[agent_types.<harness>]`` sends its launch through the OOM band
+    wrapper, naming its own binary.
+
+    A harness with no ``command`` runs unbanded: earlyoom then sheds it by raw kernel
+    score instead of the user/worker tiering, so it can take a user's chat before a
+    worker's build subprocess. That is not loud -- nothing fails, the agent just becomes
+    disproportionately likely to be killed -- so it is pinned here rather than left to be
+    noticed. Driven off ``HarnessType`` so a newly registered harness fails this until it
+    is wired up, which is exactly how codex and pi went unbanded.
+    """
+    settings = tomllib.loads((Path(__file__).parents[5] / ".mngr" / "settings.toml").read_text())
+    agent_types = settings["agent_types"]
+    for harness in HarnessType:
+        command = agent_types[harness.value].get("command", "")
+        assert "oom_priority/bin/agent_oom_launch.py" in command, f"{harness} launches unbanded"
+        # The wrapper consumes argv[1] as the binary to exec, so it must actually be there.
+        assert command.split()[-1], f"{harness} names the wrapper with no binary to exec"
 
 
 def test_chat_create_argv_carries_no_launch_settings() -> None:

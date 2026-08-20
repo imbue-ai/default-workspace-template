@@ -3,7 +3,7 @@
 Those inserted paths are invisible to the venv-backed pytest runs (the same
 packages are installed in the workspace venv), so a stale path only explodes
 at runtime under a bare ``python3`` -- which is exactly how every claude
-launch runs ``claude_oom_launch.py``. Assert that every inserted path in
+launch runs ``agent_oom_launch.py``. Assert that every inserted path in
 every plain-python3 script -- the oom_priority entry points here in ``bin/``
 and the remaining hook scripts in ``system/scripts/`` -- resolves to a real
 directory, so a package move cannot silently break agent startup again.
@@ -40,7 +40,7 @@ def test_every_script_sys_path_insert_points_at_an_existing_directory() -> None:
     assert not missing, "sys.path inserts pointing at missing directories:\n" + "\n".join(
         f"  - {m}" for m in missing
     )
-    # The convention is load-bearing (claude_oom_launch, the oom tag scripts,
+    # The convention is load-bearing (agent_oom_launch, the oom tag scripts,
     # the tk-standalone hook); if this ever matches nothing the regex has
     # rotted, not the scripts.
     assert checked_count >= 5

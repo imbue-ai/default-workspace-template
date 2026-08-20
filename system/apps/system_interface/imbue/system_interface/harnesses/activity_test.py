@@ -219,3 +219,26 @@ def test_placeholder_harness_reports_an_empty_transcript(harness: HarnessType) -
     assert spec.special_kinds == frozenset()
     # No auth gate: a fail-closed probe that has not been verified would refuse every create.
     assert spec.auth_check is None
+@pytest.mark.parametrize(
+    ("harness", "expected"),
+    [
+        (HarnessType.CLAUDE, "claude_process_started"),
+        (HarnessType.CODEX, "codex_process_started"),
+        (HarnessType.PI_CODING, "pi_process_started"),
+    ],
+)
+def test_process_started_marker_is_declared_on_the_spec(harness: HarnessType, expected: str) -> None:
+    """The OOM prioritizer resolves this filename knowing only an agent id, so it must come
+    from harness IDENTITY -- available the moment the agent is known -- and not from a live
+    tracker instance, which ``_ensure_activity_tracking`` only registers for agents with a
+    local state dir. Pinned to the literal mngr touches, since a drift here silently costs
+    the prioritizer its aging rather than raising."""
+    assert get_harness_spec(harness).process_started_marker_filename == expected
+
+
+def test_spec_process_started_marker_matches_its_tracker() -> None:
+    """The spec field and the tracker ClassVar name the same file for every harness: the
+    tracker still uses it to bound transcript staleness, so the two must not drift."""
+    for harness in HarnessType:
+        spec = get_harness_spec(harness)
+        assert spec.process_started_marker_filename == spec.tracker_class.marker_filename

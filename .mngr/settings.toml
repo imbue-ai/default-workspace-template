@@ -124,7 +124,7 @@ cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode,Tod
 # into the shared dir, and claude itself only creates it lazily.
 settings_overrides__extend = {model = "opus[1m]", fastMode = false, skipDangerousModePermissionPrompt = true}
 # Launch every claude agent through the OOM band wrapper instead of `claude`
-# directly. The wrapper (system/services/oom_priority/bin/claude_oom_launch.py) sets its own
+# directly. The wrapper (system/services/oom_priority/bin/agent_oom_launch.py) sets its own
 # oom_score_adj to the user- or worker-agent band, records its pid in the
 # agent-pid registry, then execs the real claude with the args mngr appends
 # (assemble_command splices --settings / --resume / --session-id after this
@@ -135,7 +135,7 @@ settings_overrides__extend = {model = "opus[1m]", fastMode = false, skipDangerou
 # spawned. ${MNGR_AGENT_WORK_DIR:-.} mirrors
 # the OOM Claude hooks' path form; the "main" type overrides command below so
 # its sleeping window-0 is unaffected.
-command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/claude_oom_launch.py"
+command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/agent_oom_launch.py claude"
 # Pin Claude Code to a specific version; the provisioning-time version check
 # refuses to start the agent if the installed binary diverges. Bump this in
 # sync with CLAUDE_CODE_VERSION in the Dockerfile.
@@ -203,6 +203,13 @@ command = "sleep infinity"
 # --dangerously-skip-permissions -- so codex's nested sandbox is both redundant and
 # broken here. Turning it off lets exec actually run.
 [agent_types.codex]
+# Launch through the OOM band wrapper, exactly as claude does above -- without it an
+# agent runs unbanded and earlyoom sheds it by kernel score instead of by our tiering.
+# The wrapper execs `codex` in place, so process detection still matches `codex`.
+# Note codex uses this base for BOTH its visible `--remote` TUI and its `app-server`
+# daemon, so both are banded (the daemon is where turns run, so it is the one that
+# matters for memory).
+command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/agent_oom_launch.py codex"
 auto_dismiss_dialogs = true
 auto_allow_permissions = true
 model = "gpt-5.6-sol"
@@ -264,6 +271,9 @@ Then stop. If the user's next message asks for suggestions or says they are not 
 # project-local files for the run) so an unattended agent is not blocked on the
 # first-run trust dialog, matching agent_types.codex's auto_dismiss_dialogs.
 [agent_types.pi-coding]
+# Launch through the OOM band wrapper -- see the codex block above. The wrapper execs
+# `pi` in place, and mngr's own prelude/`-e <extension>` splice after this base.
+command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/agent_oom_launch.py pi"
 auto_allow_permissions = true
 # Share the one ~/.pi/agent/npm dir (symlink) instead of copying it per agent. pi loads
 # its extensions as TypeScript through jiti, whose transpile cache is keyed by absolute
@@ -315,6 +325,12 @@ Then stop. If the user's next message asks for suggestions or says they are not 
 [agent_types.opencode]
 auto_allow_permissions = true
 check_installation = false
+# Launch through the OOM band wrapper, like every other harness. opencode is the one
+# harness whose `command` is not a launch PREFIX but the binary itself: the plugin passes
+# it through as MNGR_OPENCODE_BIN and opencode_launch.sh invokes it for BOTH the server
+# and the attached TUI, so both Bun processes land in the band (the same two-pids-per-agent
+# shape codex has). That script word-splits the value for exactly this reason.
+command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/agent_oom_launch.py opencode"
 # Harness-only instructions, appended to every opencode agent's system prompt.
 append_system_prompt__extend = ["""Do not use any built-in tools related to memory or task planning -- their output does not reach the user's workspace chat. Use the `tk` utility for any todos; it is the only task tracker in this workspace. Don't ever use tools for asking user questions or anything that would block the terminal -- just use your words."""]
 
@@ -346,6 +362,10 @@ auto_allow_permissions = true
 auto_dismiss_dialogs = true
 check_installation = false
 update_policy = "NEVER"
+# Launch through the OOM band wrapper, like every other harness. agy takes it as a plain
+# prefix (its `command` is the base of assemble_command, which the plugin then wraps in
+# `env HOME=<per-agent>`), so this is the same shape as claude and pi -- one exec, one pid.
+command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/agent_oom_launch.py agy"
 settings_overrides = { enableTerminalSandbox = false, enableTelemetry = false, showTips = false, showFeedbackSurvey = false, notifications = false }
 # Harness-only instructions, appended to every antigravity agent's system prompt.
 append_system_prompt__extend = ["""Do not use any built-in tools related to memory or task planning -- their output does not reach the user's workspace chat. Use the `tk` utility for any todos; it is the only task tracker in this workspace. Don't ever use tools for asking user questions or anything that would block the terminal -- just use your words."""]

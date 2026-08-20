@@ -236,6 +236,12 @@ class HarnessSpec(FrozenModel):
     # disk -- too much for import time, and importing this module must not fail on an image
     # where a harness's data is absent. claude/codex just return their hand-written constant.
     catalog_factory: Callable[[], HarnessCatalog]
+    # The harness's ``*_process_started`` marker filename, touched by mngr on every
+    # launch/resume. Harness IDENTITY, so it is declared here rather than read off a live
+    # tracker instance: the OOM prioritizer resolves it knowing only an agent id, and an
+    # agent that has been discovered but not yet wired up has no tracker to ask -- which
+    # silently cost the prioritizer its aging for exactly the agents it most needs to age.
+    process_started_marker_filename: str
     # The special-event kinds this harness may emit. A parser emitting a kind outside its
     # own declaration is a bug; an empty set is the honest statement that a harness's
     # transcript carries no markers, not an omission.
@@ -271,6 +277,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         name=HarnessType.CLAUDE,
         watcher_class=ClaudeSessionWatcher,
         tracker_class=ClaudeActivityTracker,
+        process_started_marker_filename=ClaudeActivityTracker.marker_filename,
         resolver_class=ClaudeModelResolver,
         catalog_factory=lambda: CLAUDE_CATALOG,
         model_state_relative_path=CLAUDE_STATE_RELATIVE_PATH,
@@ -301,6 +308,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         # emits those, only thread/status/changed, so the dot got stuck. The ledger stays as the
         # queue/message-lifecycle authority; it does not drive the dot.)
         tracker_class=CodexActivityTracker,
+        process_started_marker_filename=CodexActivityTracker.marker_filename,
         resolver_class=CodexModelResolver,
         catalog_factory=lambda: CODEX_CATALOG,
         model_state_relative_path=CODEX_STATE_RELATIVE_PATH,
@@ -334,6 +342,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         # so activity is the lifecycle-plus-tail heuristic.
         watcher_class=PiSessionWatcher,
         tracker_class=PiActivityTracker,
+        process_started_marker_filename=PiActivityTracker.marker_filename,
         resolver_class=PiModelResolver,
         catalog_factory=get_pi_catalog,
         model_state_relative_path=PI_STATE_RELATIVE_PATH,
@@ -367,6 +376,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         name=HarnessType.OPENCODE,
         watcher_class=PlaceholderSessionWatcher,
         tracker_class=OpenCodePlaceholderActivityTracker,
+        process_started_marker_filename=OpenCodePlaceholderActivityTracker.marker_filename,
         resolver_class=PlaceholderModelResolver,
         catalog_factory=lambda: EMPTY_CATALOG,
         # No model_state.json is written for opencode yet; the path is the state-dir root
@@ -378,6 +388,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         name=HarnessType.ANTIGRAVITY,
         watcher_class=PlaceholderSessionWatcher,
         tracker_class=AntigravityPlaceholderActivityTracker,
+        process_started_marker_filename=AntigravityPlaceholderActivityTracker.marker_filename,
         resolver_class=PlaceholderModelResolver,
         catalog_factory=lambda: EMPTY_CATALOG,
         model_state_relative_path=Path("."),
