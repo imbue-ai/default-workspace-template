@@ -306,6 +306,22 @@ def test_not_built_repair_command_is_the_one_the_app_runs_for_a_chat() -> None:
     assert _NOT_BUILT_REPAIR_COMMAND == "env -u TMUX " + _NOT_BUILT_REPAIR_MNGR_COMMAND
 
 
+def test_not_built_repair_command_reaches_the_page_as_text_not_markup() -> None:
+    """The suggested line is prose, so the page has to render it as written.
+
+    It carries a ``--message`` a maintainer will reword, and a browser reads an
+    ``&`` in it as the start of an entity reference and a ``<`` as the start of
+    a tag. Either would show a line other than the one the tests validated, and
+    the copy button reads ``textContent``, so it would put that other line on
+    the reader's clipboard.
+    """
+    with patch("imbue.system_interface.server._NOT_BUILT_REPAIR_COMMAND", 'mngr create --message "a & b <c>"'):
+        page = render_frontend_not_built_page(None)
+
+    assert 'mngr create --message "a &amp; b &lt;c&gt;"' in page
+    assert "<c>" not in page
+
+
 def test_not_built_repair_line_splits_the_way_a_shell_splits_it() -> None:
     """The argv the CLI validates has to be the argv the reader's shell builds.
 
