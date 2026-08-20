@@ -562,11 +562,11 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     // Map the viewport to a target event index using the SAME phantom-region
     // geometry the renderer uses to size the reserved spacers, so it is the exact
     // inverse. Only the reserved regions above/below the loaded window can imply a
-    // jump; over the loaded rows the edge-paging branches below handle it. The old
-    // global-fraction mapping assumed scrollHeight ~= total * ESTIMATED_EVENT_HEIGHT_PX,
-    // so measured-height divergence in the loaded window could push the estimate
-    // across the jump threshold and fire a spurious window reset (which unmounts
-    // every row -- the most violent scroll jolt, and a guaranteed selection kill).
+    // jump; over the loaded rows the edge-paging branches below handle it. Deriving
+    // the target from the scroll height as a whole instead would drift as the loaded
+    // rows measure, and could cross the jump threshold on its own -- firing a window
+    // reset nobody asked for, which unmounts every row: the most violent scroll jolt
+    // there is, and a guaranteed selection kill.
     const total = getTotalEventCount(agentId);
     const loadedBottom = element.scrollHeight - phantomBottomHeight;
     let targetIndex: number | null = null;
