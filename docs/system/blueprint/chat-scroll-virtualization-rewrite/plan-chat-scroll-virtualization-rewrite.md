@@ -53,36 +53,46 @@ virtualization), [chat-scroll-selection-fixes](../chat-scroll-selection-fixes/pl
 ### New frontend modules
 
 - **`frontend/src/models/rowGeometry.ts`** — pure, DOM-free geometry model.
-  - `RowGeometry { rowKey, startOffset, endOffset, height }` — a row plus the global event range it
-    covers.
-  - `ConversationGeometry` — rows sorted by `startOffset`, a derived cumulative prefix-sum, and
-    `measuredThrough` (highest offset with trustworthy data).
-  - `heightBefore(offset)` — binary search + prefix-sum; falls back to the learned px/event for
-    offsets past `measuredThrough`.
+  - `RowGeometry { row_key, start_offset, end_offset, height }` — a row plus the global event range
+    it covers.
+  - `RowGeometryIndex` — rows sorted by `start_offset` and never overlapping, with cumulative sums
+    over both height and event count maintained alongside.
+  - `heightBefore(offset)` — binary search + prefix-sum; event ranges no row covers are priced at a
+    per-event rate, and coverage is allowed to be sparse (reading the head and jumping to the tail
+    leaves a genuine hole, which is a normal state rather than one to repair).
+  - `offsetAtHeight(height, maxOffset)` — the exact inverse, binary-searched over `heightBefore`
+    itself so the two cannot drift apart.
   - `learnedEventHeight()` — median px/event across measured rows, replacing the fixed `160`.
-  - `recordRow(row)` / `invalidateFrom(offset)` — the latter truncates the prefix-sum forward when a
-    row's height changes retroactively.
+  - `recordRow(row)` — replaces every row whose range the new one overlaps, so the same rendered row
+    re-recorded at a different range (the loaded window moved) cannot be filed twice.
 - **`frontend/src/models/geometryCache.ts`** — IndexedDB persistence ("measure once").
-  - Store `orbit`-style: keyed `agentId:widthBucket`, value is the `RowGeometry[]` plus a timestamp.
-  - Viewport width recorded per entry, invalidated outside a 16px tolerance.
+  - Keyed `agentId:widthBucket`, value is the `RowGeometry[]` plus a timestamp.
+  - Viewport width quantized into 64px buckets, so a scrollbar appearing keeps the cache warm and a
+    real layout change misses.
   - Bounded to ~50 conversations, 30-day TTL, least-recently-used eviction.
   - Degrades to in-memory when IndexedDB is unavailable (private browsing, quota).
-- **`frontend/src/models/geometryStore.ts`** — server sync for the cold-start seed.
-  - `fetchGeometry(agentId, widthBucket)` / `putGeometry(...)`.
+- **`frontend/src/models/workspaceGeometry.ts`** — server sync for the cold-start seed.
+  - `loadWorkspaceGeometry(agentId, widthBucket)` / `saveWorkspaceGeometry(...)`.
   - Local always wins; the server is read only when there is no local entry.
 - **`frontend/src/views/transcriptVirtualizer.ts`** — the Mithril↔TanStack adapter.
   - Supplies `observeElementRect`, `observeElementOffset`, `scrollToFn` (the three things a framework
     adapter must provide) and wires the virtualizer's `onChange` to `m.redraw()`.
   - Options: `count` from rows; `getItemKey` returning `rows[i].key` (prepend-safe); `estimateSize`
-    reading the geometry cache then the learned estimate; `measureElement` feeding the settle gate;
-    `paddingStart`/`paddingEnd` from `heightBefore()`; `rangeExtractor` unioning the visible range
-    with the selection's row indices; `initialMeasurementsCache` seeded from cache/server.
-  - `shouldAdjustScrollPositionOnItemSizeChange` enabled, suppressed while a gesture is in flight
-    (~250ms scroll guard) so compensation never fights the compositor.
-- **`frontend/src/views/rowSettle.ts`** — trustworthiness gate.
-  - Per-row `ResizeObserver`; a row becomes trustworthy after a quiet window (~500ms) *and* its turn
-    has a terminal `stop_reason`.
-  - Streaming tail rows are measured live and never admitted to the cache until settled.
+    reading the measured height then the learned estimate; `paddingStart`/`paddingEnd` from
+    `heightBefore()`; `rangeExtractor` unioning the visible range with the selection's row indices.
+  - Items stay in normal flow between two spacers rather than absolutely positioned, because the
+    transcript relies on the browser's own scroll anchoring, and overscan is expressed in pixels
+    rather than in items.
+  - `shouldAdjustScrollPositionOnItemSizeChange` **disabled**: the reserved space for unloaded
+    history moves at the same time as the rows do and the two routinely cancel, so the view holds
+    the reader's place by anchoring on the row being read instead. Two writers of `scrollTop` for
+    overlapping reasons double-correct.
+  - Sizes are reported by index rather than read from the DOM by the library, so the measurement
+    hysteresis below stays in the loop.
+- **`frontend/src/views/rowMeasurement.ts`** — measurement and its trustworthiness gate.
+  - One frame-debounced pass over the mounted rows, reading `getBoundingClientRect().height` (not
+    `offsetHeight`, which is device-pixel-snapped and so flips by a pixel as a row drifts).
+  - A row becomes trustworthy — and only then is persisted — after a quiet window (~500ms).
   - Retains a hysteresis threshold around measured deltas (see Open questions — this is what fixed
     the #264 1px jitter and TanStack does not provide it).
 
@@ -96,17 +106,19 @@ virtualization), [chat-scroll-selection-fixes](../chat-scroll-selection-fixes/pl
     the exact inverse of the reservation.
   - Keep eviction, the `panelVisible` gating, drag-and-drop, and the 404 retry untouched.
 - **`frontend/src/views/SubagentView.ts`** — same virtualizer, zero reserved space.
-- **`frontend/src/views/conversation-rows.ts`** — `buildConversationRows` unchanged;
-  `renderTranscriptSegments` replaced by a virtualizer-driven renderer. Rows keep their DOM `id`.
+- **`frontend/src/views/conversation-rows.ts`** — `buildConversationRows` gains the event range each
+  row covers; `renderTranscriptSegments` replaced by `renderVirtualRows`. Rows keep their DOM `id`.
 - **`frontend/package.json`** — add `@tanstack/virtual-core`.
 
 ### Deleted frontend files
 
 - `frontend/src/models/virtualWindow.ts` and `virtualWindow.test.ts` — superseded; invariants ported.
-- `frontend/src/views/row-measurement.ts` and `row-measurement.test.ts` — superseded by TanStack
-  measurement plus `rowSettle.ts`.
-- `frontend/src/views/transcript-scroll.ts` — replaced by the virtualizer adapter; its follow-state
-  and drag/resize responsibilities move there.
+- `frontend/src/views/row-measurement.ts` and `row-measurement.test.ts` — superseded by
+  `views/rowMeasurement.ts`, which keeps measurement in-house rather than letting the library read
+  the DOM.
+- **Retained**: `views/transcript-scroll.ts`. Windowing and measurement move out of it, but it stays
+  the single owner of the one decision every previous attempt got wrong — whether to follow the tail
+  — along with the pointer-drag and resize lifecycle.
 - **Retained**: `models/scrollFollow.ts` unchanged. `nextUserScrolledUp` is a locked contract with 11
   tests that four merged PRs depend on; the virtualizer feeds it rather than replacing it.
 - **Retained**: `views/scroll-selection.ts`, feeding row indices to `rangeExtractor`.
@@ -118,7 +130,9 @@ virtualization), [chat-scroll-selection-fixes](../chat-scroll-selection-fixes/pl
   lock, created on first touch.
   - Dumb store only. The server never derives heights or row counts — turn grouping lives in
     `turn-grouping.ts` and must not be reimplemented in Python.
-  - Keyed `chat:<agent-id>` plus width bucket; value is the client-computed row/height table.
+  - Keyed by agent id plus width bucket; value is the client-computed row/height table. Bounded on
+    every axis it can grow along — stored transcripts, width buckets per transcript, rows per entry
+    — and an agent's entry is dropped when the agent is destroyed.
 - **`imbue/system_interface/server.py`** — two routes via `add_url_rule`:
   - `GET /api/agents/<agent_id>/geometry`
   - `PUT /api/agents/<agent_id>/geometry`
@@ -135,13 +149,13 @@ virtualization), [chat-scroll-selection-fixes](../chat-scroll-selection-fixes/pl
    against a tool-heavy transcript fixture. Built before the swap so every later phase is measurably
    non-regressing. Records the pre-change behavior as the baseline.
 3. **Virtualizer swap.** Add the dependency, write the Mithril adapter, move `ChatPanel` onto it,
-   delete `virtualWindow.ts` / `row-measurement.ts` / `transcript-scroll.ts`. Behavior parity is the
-   bar here — phantoms still sized by the old constant. Port the retired invariants.
+   delete `virtualWindow.ts` / `row-measurement.ts`. Behavior parity is the bar here — phantoms
+   still sized by the old constant. Port the retired invariants.
 4. **Prefix-sum reservation.** Replace `ESTIMATED_EVENT_HEIGHT_PX` with `heightBefore()`, and make
    `maybePage`'s mapping its exact inverse. **This is the jump fix**; the harness should show the
    jump disappear here.
 5. **Persistence.** `geometryCache.ts` (IndexedDB, settle gate, width buckets, TTL/LRU), then
-   `geometryStore.ts` and the backend module/routes for the cold-start seed.
+   `workspaceGeometry.ts` and the backend module/routes for the cold-start seed.
 6. **SubagentView migration and cleanup.** Move the second view across, remove now-dead code,
    changelog.
 
@@ -150,8 +164,8 @@ Each phase leaves a working system; all six land as one branch (`preston/improve
 ## Testing strategy
 
 - **Unit (vitest).** `rowGeometry.ts`: prefix-sum correctness, binary search on row boundaries,
-  `invalidateFrom` truncation, learned-estimate derivation, offsets past `measuredThrough`.
-  `geometryCache.ts`: width tolerance, TTL, LRU eviction, IndexedDB-unavailable fallback.
+  replacement by range, learned-estimate derivation, sparse coverage with a hole between measured
+  islands. `geometryCache.ts`: width bucketing, TTL, LRU eviction, IndexedDB-unavailable fallback.
 - **Ported invariants.** From `virtualWindow.test.ts`: pad/total consistency, the disjoint pinned run
   (a far-off selection must not mount the rows between), phantoms folded into outer spacers, backward
   fill when scrolled past the end, caller-supplied pin ranges clamped internally. From
@@ -179,16 +193,20 @@ Each phase leaves a working system; all six land as one branch (`preston/improve
 
 ## Open questions
 
+These are the questions as they stood when the plan was written, kept as the record of what was
+uncertain going in. Several were settled by building it — see the module list above for what the
+answers turned out to be.
+
 - **Measurement hysteresis.** `MEASURE_HYSTERESIS_PX = 1` plus `getBoundingClientRect` fixed a real
   self-sustaining ~1px jitter loop (#264). TanStack's `measureElement` has no equivalent threshold.
-  Does wrapping it in `rowSettle.ts` fully preserve that fix, or does the library's internal
-  remeasure path bypass the wrapper?
+  Does wrapping it preserve that fix, or does the library's internal remeasure path bypass the
+  wrapper?
 - **Two writers of `scrollTop`.** `shouldAdjustScrollPositionOnItemSizeChange` and our follow-state
-  can both want to move the viewport. The 250ms gesture guard is the intended arbitration, but the
+  can both want to move the viewport. A gesture guard is the intended arbitration, but the
   interaction needs proving — every prior attempt failed at exactly this seam.
 - **Row-boundary stability.** Skill-expansion merging and late subagent linkage can change *which
   events map to which row* retroactively, not just a row's height. Does the stored boundary set need
-  versioning, or is `invalidateFrom` sufficient?
+  versioning, or is invalidating the affected range sufficient?
 - **Width bucket boundaries.** Which exact widths? Needs to stay compatible with the open mobile
   design PR (#271).
 - **Server-side pruning.** Bounds on the geometry file for very long conversations, and whether the
