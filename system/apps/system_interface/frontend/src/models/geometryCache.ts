@@ -210,14 +210,19 @@ export function createGeometryCache(now: () => number = () => Date.now()): Geome
         return loadFromMemory(key);
       }
       const entry = await awaitRequest<CachedGeometry>(store.get(key) as IDBRequest<CachedGeometry>);
+      // A miss here still asks the fallback, because a save degrades into it
+      // whenever a transaction is refused -- which a connection that opened
+      // successfully can do at any point afterwards. Reading only the database
+      // once one is available would strand that write and let a caller tell the
+      // two backends apart, which is the one thing this cache promises it cannot.
       if (entry === null || entry === undefined) {
-        return null;
+        return loadFromMemory(key);
       }
       // Expired entries are treated as absent rather than deleted here, so the
       // read path stays a single read-only transaction; the write path's
       // eviction removes them.
       if (now() - entry.updated_at > ENTRY_TTL_MS) {
-        return null;
+        return loadFromMemory(key);
       }
       return { rows: entry.rows };
     },
