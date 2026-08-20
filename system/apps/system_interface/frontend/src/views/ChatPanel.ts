@@ -25,8 +25,14 @@ import {
   MAX_HELD_EVENTS,
 } from "../models/Response";
 import { isSelectionActiveWithin } from "../models/scrollFollow";
-import { DEFAULT_EVENT_HEIGHT_PX, RowGeometryIndex, geometryFromSnapshot } from "../models/rowGeometry";
+import {
+  DEFAULT_EVENT_HEIGHT_PX,
+  RowGeometryIndex,
+  geometryFromSnapshot,
+  type GeometrySnapshot,
+} from "../models/rowGeometry";
 import { createGeometryCache, widthBucketFor } from "../models/geometryCache";
+import { loadWorkspaceGeometry, saveWorkspaceGeometry } from "../models/workspaceGeometry";
 import { resolveSelectionRowRange, selectionStateWithin } from "./scroll-selection";
 import { createTranscriptScroll } from "./transcript-scroll";
 import { createTranscriptVirtualizer } from "./transcriptVirtualizer";
@@ -168,7 +174,8 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   // again can be treated as a resume rather than as a shift to correct.
   let wasPanelVisible = true;
   // Persisted geometry, so a conversation opened again is accurate immediately
-  // instead of settling in from an estimate.
+  // instead of settling in from an estimate. This browser's own copy; the
+  // workspace keeps a second one (see loadGeometrySnapshot).
   const geometryCache = createGeometryCache();
   // Which width bucket the held geometry describes; -1 until the first measure,
   // so the first real width always counts as a change and triggers a load.
@@ -1015,6 +1022,24 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   }
 
   /**
+   * The geometry stored for this conversation at this width, from whichever tier
+   * has it.
+   *
+   * Two tiers because they answer different questions. IndexedDB is what *this*
+   * browser measured and costs no request, so it is asked first. The workspace's
+   * copy covers a conversation this browser has never rendered but another
+   * window -- or another device at the same width -- already measured, which is
+   * the difference between landing on accurate geometry and settling into it.
+   */
+  async function loadGeometrySnapshot(agentId: string, bucket: number): Promise<GeometrySnapshot | null> {
+    const cached = await geometryCache.load(agentId, bucket);
+    if (cached !== null) {
+      return cached;
+    }
+    return loadWorkspaceGeometry(agentId, bucket);
+  }
+
+  /**
    * Adopt the persisted geometry for this agent at this viewport width.
    *
    * Heights are a function of width, so a width change is a genuine cache miss:
@@ -1023,9 +1048,9 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
    * scrollbar appearing, a few pixels of panel resize) stay warm.
    *
    * The load is async and may land after the user has already scrolled. That is
-   * safe: adopting it changes the reserved height, and compensateForReservedShift
-   * hands the difference back to scrollTop, so the content in front of the reader
-   * does not move.
+   * safe: adopting it changes the reserved height, and restoreReadingAnchor puts
+   * the reader back on the row they were reading, so the content in front of
+   * them does not move.
    */
   function syncGeometryToWidth(agentId: string, width: number): void {
     const bucket = widthBucketFor(width);
@@ -1037,8 +1062,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     geometry = new RowGeometryIndex();
     const requestedAgentId = agentId;
     const requestedBucket = bucket;
-    geometryCache
-      .load(agentId, bucket)
+    loadGeometrySnapshot(agentId, bucket)
       .then((snapshot) => {
         // Discard a load that lost a race with an agent switch or another
         // resize; its numbers describe a layout or conversation we left.
@@ -1054,8 +1078,8 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       });
   }
 
-  /** Persist the conversation's geometry, coalesced so a burst of settling rows
-   *  costs one write rather than one per row. */
+  /** Persist the conversation's geometry to both tiers, coalesced so a burst of
+   *  settling rows costs one write rather than one per row. */
   function scheduleGeometrySave(agentId: string): void {
     if (geometrySaveTimer !== null) {
       return;
@@ -1065,7 +1089,11 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       if (currentAgentId !== agentId || geometry.rowCount === 0) {
         return;
       }
-      void geometryCache.save(agentId, geometryWidthBucket, geometry.toSnapshot()).catch(() => {});
+      const snapshot = geometry.toSnapshot();
+      void geometryCache.save(agentId, geometryWidthBucket, snapshot).catch(() => {});
+      // The workspace's copy, so the next window to open this conversation --
+      // this browser or another -- does not have to measure it again.
+      void saveWorkspaceGeometry(agentId, geometryWidthBucket, snapshot);
     }, GEOMETRY_SAVE_DEBOUNCE_MS);
   }
 
