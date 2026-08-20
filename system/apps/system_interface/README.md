@@ -117,20 +117,28 @@ service (ttyd) in a frame, and suggests creating an agent to do the work if the
 reader would rather not:
 
 ```
-env -u TMUX mngr create --connect --type claude --template chat --transfer none --label user_created=true --message "i'm seeing \"this workspace's interface needs to be rebuilt, can you fix it?\""
+env -u TMUX mngr create --connect --template chat --transfer none --label user_created=true --message "i'm seeing \"this workspace's interface needs to be rebuilt, can you fix it?\""
 ```
 
 Those flags mirror what `agent_manager._build_chat_create_command` passes for a
-chat, with its `--no-connect` inverted -- someone typing this wants to land in
-the conversation -- and a `--message` carrying the page's own heading, so the
-agent opens already knowing what the reader is looking at. It names no agent, so
-mngr mints one and a second run starts a fresh conversation rather than colliding
-with the first. `env -u TMUX` is what lets the connect half work from the
-workspace's tmux-backed terminal tabs, which `mngr connect` otherwise refuses to
-attach from. A test pins the flags to the builder, parses the line back into an
-argv, and validates that argv against the live mngr CLI, so the suggestion cannot
-drift into creating something that is not a chat -- or into a line that does not
-run.
+chat, with two deliberate departures. Its `--no-connect` is inverted -- someone
+typing this wants to land in the conversation, and `--connect` is what overrides
+this workspace's own `[commands.create] connect = false`. And its `--type` is
+dropped: the app is serving a harness the user picked from a menu, while this
+page has no such choice to carry, so leaving the flag off lets mngr resolve the
+harness from `[commands.create] type` instead of pinning every reader to
+whichever one was current when the string was written. `--template chat` is
+harness-agnostic (`output_style` is honored by the claude, codex and pi plugins
+alike), so it supplies the rest either way.
+
+A `--message` carries the page's own heading, so the agent opens already knowing
+what the reader is looking at. The line names no agent, so mngr mints one and a
+second run starts a fresh conversation rather than colliding with the first.
+`env -u TMUX` is what lets the connect half work from the workspace's tmux-backed
+terminal tabs, which `mngr connect` otherwise refuses to attach from. A test pins
+the flags to the builder, parses the line back into an argv, and validates that
+argv against the live mngr CLI, so the suggestion cannot drift into creating
+something that is not a chat -- or into a line that does not run.
 
 A shell rather than a "rebuild" button because a button has to be right about
 what went wrong: the states that strand a workspace here are dominated by ones

@@ -124,11 +124,20 @@ _NOT_BUILT_POLL_SECONDS = 10
 # and output style, and the ``user_created`` label that puts it in the dynamic
 # chat memory band. Where it differs from that builder:
 #
+# No ``--type``, which is the one thing that builder cannot leave out: it is
+# serving a menu entry, so the harness is a choice the user already made. This
+# page has no such choice to carry, so leaving the flag off lets ``mngr`` resolve
+# the harness from ``[commands.create] type`` -- whatever this workspace is
+# configured to open chats as, rather than whatever it was when this string was
+# written. ``--template chat`` supplies the rest either way: it is harness-
+# agnostic (``output_style`` is honored by the claude, codex and pi plugins
+# alike), so it does not pick one and must not be relied on to.
+#
 # ``--connect`` instead of its ``--no-connect``, which exists to keep a headless
 # caller from attaching. Someone typing this wants the opposite, and connecting
-# is what turns the create into a conversation. Spelled out rather than left to
-# the CLI default so the line says what it does to a reader who has no interface
-# to check it against.
+# is what turns the create into a conversation. Not merely explicit for the
+# reader's sake: the workspace's own ``[commands.create] connect = false`` is
+# the default this overrides.
 #
 # ``--message`` so the agent opens already knowing what the reader is looking at.
 # It quotes the page's own heading, which is the one detail a reader on this page
@@ -149,7 +158,7 @@ _NOT_BUILT_POLL_SECONDS = 10
 # against the live CLI. It is a suggestion, not a dispatch: the server never
 # runs it, so an agent is created only if the reader decides to.
 _NOT_BUILT_REPAIR_MNGR_COMMAND: Final[str] = (
-    "mngr create --connect --type claude --template chat --transfer none --label user_created=true "
+    "mngr create --connect --template chat --transfer none --label user_created=true "
     '--message "i\'m seeing \\"this workspace\'s interface needs to be rebuilt, can you fix it?\\""'
 )
 
