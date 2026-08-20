@@ -81,6 +81,11 @@ export interface AppEntry {
   // origin uses (see ``system/scripts/forward_port.py``). Empty for legacy
   // rows written before labels existed; ``labelForService`` falls back to the
   // name in that case.
+  // CLEANUP: treat an empty label as an error (and drop labelForService's
+  // legacy-row fallback) once no supported workspace's apps.toml predates
+  // minds-v0.3.12, the first release whose forward_port.py mints labels --
+  // services re-register (and mint) on boot, so any workspace booted on
+  // >=0.3.12 has labeled rows.
   label: string;
   // The app's own icon as SVG markup (a single ``<svg>`` element), registered
   // by the app via ``forward_port.py --icon`` and validated there and again by
@@ -645,6 +650,9 @@ export function labelForService(name: string): string {
   // is genuinely unregistered (the shell itself, or a legacy row). Either way
   // the only fallback is the bare name, which routes locally but not on a
   // share -- so this is a last resort, not a silent default.
+  // CLEANUP: narrow case (2) to the shell / unregistered names only (no
+  // legacy label-less rows) once no supported workspace's apps.toml predates
+  // minds-v0.3.12, the first release whose forward_port.py mints labels.
   if (!appsLoaded) {
     console.warn(
       `[si] labelForService("${name}") fell back to the bare name because the app list has not loaded yet; ` +
