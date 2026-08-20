@@ -25,7 +25,8 @@ import {
   MAX_HELD_EVENTS,
 } from "../models/Response";
 import { isSelectionActiveWithin } from "../models/scrollFollow";
-import { RowGeometryIndex } from "../models/rowGeometry";
+import { RowGeometryIndex, geometryFromSnapshot } from "../models/rowGeometry";
+import { createGeometryCache, widthBucketFor } from "../models/geometryCache";
 import { resolveSelectionRowRange, selectionStateWithin } from "./scroll-selection";
 import { createTranscriptScroll } from "./transcript-scroll";
 import { createTranscriptVirtualizer } from "./transcriptVirtualizer";
@@ -85,6 +86,9 @@ const BACKFILL_TRIGGER_PX = 600;
 // there incrementally. Small enough that ordinary scrolling keeps paging; large
 // enough that a couple of pages' overshoot doesn't trigger a disruptive reload.
 const JUMP_GAP_EVENTS = 120;
+// Coalescing window for persisting geometry, so a burst of rows settling after a
+// paint costs one write rather than one per row.
+const GEOMETRY_SAVE_DEBOUNCE_MS = 2000;
 // Reserved space for history the server has but this client has not loaded is
 // sized from measured geometry (see models/rowGeometry), not from a per-event
 // constant. The constant was the bug: the renderer groups a whole turn into one
@@ -150,6 +154,13 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   // above it. Any change there moves every rendered row, so the difference has to
   // be given back to scrollTop or the reader drifts (see compensateForReservedShift).
   let appliedPhantomTopHeight = 0;
+  // Persisted geometry, so a conversation opened again is accurate immediately
+  // instead of settling in from an estimate.
+  const geometryCache = createGeometryCache();
+  // Which width bucket the held geometry describes; -1 until the first measure,
+  // so the first real width always counts as a change and triggers a load.
+  let geometryWidthBucket = -1;
+  let geometrySaveTimer: ReturnType<typeof setTimeout> | null = null;
   // Windowing. Reads the memoized rows and the reserved heights above; owns the
   // visible range, the selection pin and scroll compensation.
   const virtualizer = createTranscriptVirtualizer({
@@ -434,6 +445,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     // rather than carried across.
     measurements.reset();
     geometry = new RowGeometryIndex();
+    geometryWidthBucket = -1;
     virtualizer.reset();
     rowsCacheKey = null;
     backfillInFlight = false;
@@ -762,7 +774,10 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     // space below reflects real heights. Only settled rows are admitted: a height
     // read before markdown and highlighting land is a placeholder, and persisting
     // it would make the estimate permanently wrong.
-    recordSettledGeometry(rows);
+    syncGeometryToWidth(agentId, scroll.scrollEl?.clientWidth ?? 0);
+    if (recordSettledGeometry(rows)) {
+      scheduleGeometrySave(agentId);
+    }
 
     // Reserve space above and below the loaded window for history that exists on
     // the server but isn't loaded yet, so the scrollbar reflects the whole
@@ -844,6 +859,61 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   }
 
   /**
+   * Adopt the persisted geometry for this agent at this viewport width.
+   *
+   * Heights are a function of width, so a width change is a genuine cache miss:
+   * the measurements in hand describe a layout that no longer exists, and are
+   * dropped rather than reused. Bucketing means the common small changes (a
+   * scrollbar appearing, a few pixels of panel resize) stay warm.
+   *
+   * The load is async and may land after the user has already scrolled. That is
+   * safe: adopting it changes the reserved height, and compensateForReservedShift
+   * hands the difference back to scrollTop, so the content in front of the reader
+   * does not move.
+   */
+  function syncGeometryToWidth(agentId: string, width: number): void {
+    const bucket = widthBucketFor(width);
+    if (bucket === geometryWidthBucket || width <= 0) {
+      return;
+    }
+    geometryWidthBucket = bucket;
+    measurements.reset();
+    geometry = new RowGeometryIndex();
+    const requestedAgentId = agentId;
+    const requestedBucket = bucket;
+    geometryCache
+      .load(agentId, bucket)
+      .then((snapshot) => {
+        // Discard a load that lost a race with an agent switch or another
+        // resize; its numbers describe a layout or conversation we left.
+        if (snapshot === null || currentAgentId !== requestedAgentId || geometryWidthBucket !== requestedBucket) {
+          return;
+        }
+        geometry = geometryFromSnapshot(snapshot);
+        m.redraw();
+      })
+      .catch(() => {
+        // A cache miss is not a failure worth surfacing: the transcript renders
+        // from estimates and re-measures as it goes.
+      });
+  }
+
+  /** Persist the conversation's geometry, coalesced so a burst of settling rows
+   *  costs one write rather than one per row. */
+  function scheduleGeometrySave(agentId: string): void {
+    if (geometrySaveTimer !== null) {
+      return;
+    }
+    geometrySaveTimer = setTimeout(() => {
+      geometrySaveTimer = null;
+      if (currentAgentId !== agentId || geometry.rowCount === 0) {
+        return;
+      }
+      void geometryCache.save(agentId, geometryWidthBucket, geometry.toSnapshot()).catch(() => {});
+    }, GEOMETRY_SAVE_DEBOUNCE_MS);
+  }
+
+  /**
    * Fold settled row measurements into the conversation's geometry.
    *
    * A row is admitted only once its height has gone quiet, so a placeholder
@@ -851,8 +921,9 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
    * the real height. Rows whose range is degenerate are skipped: they carry no
    * events of their own and would corrupt the prefix sums.
    */
-  function recordSettledGeometry(rows: RowDescriptor[]): void {
+  function recordSettledGeometry(rows: RowDescriptor[]): boolean {
     const now = Date.now();
+    let changed = false;
     for (const row of rows) {
       if (row.end_offset <= row.start_offset) {
         continue;
@@ -861,13 +932,18 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       if (height === undefined || !measurements.isSettled(row.key, now)) {
         continue;
       }
-      geometry.recordRow({
-        row_key: row.key,
-        start_offset: row.start_offset,
-        end_offset: row.end_offset,
-        height,
-      });
+      if (
+        geometry.recordRow({
+          row_key: row.key,
+          start_offset: row.start_offset,
+          end_offset: row.end_offset,
+          height,
+        })
+      ) {
+        changed = true;
+      }
     }
+    return changed;
   }
 
   const handleAgentsUpdated = (): void => retryAfterAgentResolved();

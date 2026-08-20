@@ -1,0 +1,213 @@
+/**
+ * Persistent store for measured transcript geometry, so a conversation opened
+ * again is accurate immediately rather than settling in from an estimate.
+ *
+ * A completed row's height at a given viewport width is a fact, not a guess: the
+ * content is immutable once the turn is done, and the layout is deterministic.
+ * Measuring it on every visit is wasted work whose only effect is a visible
+ * settle. So it is measured once and remembered.
+ *
+ * Entries are keyed by agent *and* width bucket, because height is a function of
+ * both. Width is bucketed rather than exact so the common layout changes -- a
+ * sidebar opening, a panel resizing by a few pixels -- do not throw away a
+ * conversation's whole geometry; a genuine change to a different bucket
+ * correctly misses and re-measures.
+ *
+ * IndexedDB rather than localStorage: the tables run to thousands of numbers for
+ * a long conversation, and localStorage is synchronous, so reading one would
+ * block the main thread during a paint. Every operation here degrades to an
+ * in-memory map if IndexedDB is unavailable (private browsing, denied quota) --
+ * the transcript must still render, just without the cross-reload benefit.
+ */
+
+import type { GeometrySnapshot, RowGeometry } from "./rowGeometry";
+
+const DATABASE_NAME = "si-transcript-geometry";
+const DATABASE_VERSION = 1;
+const STORE_NAME = "geometry";
+
+/**
+ * Width is quantized to this many pixels. Wide enough that a scrollbar
+ * appearing or a few pixels of panel resize keeps the cache warm, narrow enough
+ * that a real layout change (sidebar open/closed, desktop to mobile) lands in a
+ * different bucket and re-measures rather than reusing wrong heights.
+ */
+export const WIDTH_BUCKET_PX = 64;
+
+/** Entries older than this are discarded on read; a conversation not opened in a
+ *  month is not worth the space, and its rendering may well have changed. */
+export const ENTRY_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+/** Cap on stored conversations, evicted least-recently-used. Bounds the database
+ *  for someone who opens a great many chats. */
+export const MAX_CACHED_CONVERSATIONS = 50;
+
+export interface CachedGeometry {
+  /** `${agentId}:${widthBucket}` */
+  key: string;
+  rows: RowGeometry[];
+  updated_at: number;
+}
+
+/** Quantize a viewport width into the bucket its geometry is cached under. */
+export function widthBucketFor(width: number): number {
+  return Math.max(0, Math.round(width / WIDTH_BUCKET_PX));
+}
+
+function cacheKey(agentId: string, widthBucket: number): string {
+  return `${agentId}:${widthBucket}`;
+}
+
+export interface GeometryCache {
+  load(agentId: string, widthBucket: number): Promise<GeometrySnapshot | null>;
+  save(agentId: string, widthBucket: number, snapshot: GeometrySnapshot): Promise<void>;
+  clear(agentId: string): Promise<void>;
+}
+
+/**
+ * Open the database, or resolve null when IndexedDB is unusable.
+ *
+ * Never rejects: a browser that denies storage must degrade to an in-memory
+ * cache, not break the transcript.
+ */
+function openDatabase(): Promise<IDBDatabase | null> {
+  return new Promise((resolve) => {
+    if (typeof indexedDB === "undefined") {
+      resolve(null);
+      return;
+    }
+    let request: IDBOpenDBRequest;
+    try {
+      request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
+    } catch {
+      resolve(null);
+      return;
+    }
+    request.onupgradeneeded = () => {
+      const database = request.result;
+      if (!database.objectStoreNames.contains(STORE_NAME)) {
+        database.createObjectStore(STORE_NAME, { keyPath: "key" });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => resolve(null);
+    request.onblocked = () => resolve(null);
+  });
+}
+
+/** Await one IndexedDB request, resolving to null on any failure. */
+function awaitRequest<T>(request: IDBRequest<T>): Promise<T | null> {
+  return new Promise((resolve) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => resolve(null);
+  });
+}
+
+/**
+ * Drop expired entries and, if still over the cap, the least recently updated
+ * ones. Runs after a write, so the bound is maintained without a separate
+ * sweep and without blocking the read path.
+ */
+async function evictIfNeeded(database: IDBDatabase, now: number): Promise<void> {
+  const transaction = database.transaction(STORE_NAME, "readwrite");
+  const store = transaction.objectStore(STORE_NAME);
+  const all = await awaitRequest<CachedGeometry[]>(store.getAll() as IDBRequest<CachedGeometry[]>);
+  if (all === null) {
+    return;
+  }
+  const live: CachedGeometry[] = [];
+  for (const entry of all) {
+    if (now - entry.updated_at > ENTRY_TTL_MS) {
+      store.delete(entry.key);
+    } else {
+      live.push(entry);
+    }
+  }
+  if (live.length <= MAX_CACHED_CONVERSATIONS) {
+    return;
+  }
+  live.sort((a, b) => a.updated_at - b.updated_at);
+  for (const entry of live.slice(0, live.length - MAX_CACHED_CONVERSATIONS)) {
+    store.delete(entry.key);
+  }
+}
+
+/**
+ * The cache, backed by IndexedDB where available and by a plain map otherwise.
+ *
+ * The in-memory fallback is not a degraded special case to reason about at the
+ * call site: the interface is identical, and a caller cannot tell which it got.
+ */
+export function createGeometryCache(now: () => number = () => Date.now()): GeometryCache {
+  const memory = new Map<string, CachedGeometry>();
+  // Opened once and shared; null once we know IndexedDB is unusable.
+  let databasePromise: Promise<IDBDatabase | null> | null = null;
+
+  function database(): Promise<IDBDatabase | null> {
+    databasePromise ??= openDatabase();
+    return databasePromise;
+  }
+
+  return {
+    async load(agentId: string, widthBucket: number): Promise<GeometrySnapshot | null> {
+      const key = cacheKey(agentId, widthBucket);
+      const db = await database();
+      if (db === null) {
+        const entry = memory.get(key);
+        // The fallback expires entries on the same terms as the database, so a
+        // caller cannot tell the two apart by their behaviour.
+        if (entry === undefined || now() - entry.updated_at > ENTRY_TTL_MS) {
+          return null;
+        }
+        return { rows: entry.rows };
+      }
+      const store = db.transaction(STORE_NAME, "readonly").objectStore(STORE_NAME);
+      const entry = await awaitRequest<CachedGeometry>(store.get(key) as IDBRequest<CachedGeometry>);
+      if (entry === null || entry === undefined) {
+        return null;
+      }
+      // Expired entries are treated as absent rather than deleted here, so the
+      // read path stays a single read-only transaction; the write path's
+      // eviction removes them.
+      if (now() - entry.updated_at > ENTRY_TTL_MS) {
+        return null;
+      }
+      return { rows: entry.rows };
+    },
+
+    async save(agentId: string, widthBucket: number, snapshot: GeometrySnapshot): Promise<void> {
+      const entry: CachedGeometry = {
+        key: cacheKey(agentId, widthBucket),
+        rows: snapshot.rows,
+        updated_at: now(),
+      };
+      const db = await database();
+      if (db === null) {
+        memory.set(entry.key, entry);
+        return;
+      }
+      const store = db.transaction(STORE_NAME, "readwrite").objectStore(STORE_NAME);
+      await awaitRequest(store.put(entry) as IDBRequest<IDBValidKey>);
+      await evictIfNeeded(db, now());
+    },
+
+    async clear(agentId: string): Promise<void> {
+      const db = await database();
+      if (db === null) {
+        for (const key of [...memory.keys()]) {
+          if (key.startsWith(`${agentId}:`)) {
+            memory.delete(key);
+          }
+        }
+        return;
+      }
+      const store = db.transaction(STORE_NAME, "readwrite").objectStore(STORE_NAME);
+      const all = await awaitRequest<CachedGeometry[]>(store.getAll() as IDBRequest<CachedGeometry[]>);
+      for (const entry of all ?? []) {
+        if (entry.key.startsWith(`${agentId}:`)) {
+          store.delete(entry.key);
+        }
+      }
+    },
+  };
+}
