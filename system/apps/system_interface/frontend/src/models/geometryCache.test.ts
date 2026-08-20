@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ENTRY_TTL_MS,
-  MAX_CACHED_CONVERSATIONS,
+  MAX_CACHED_ENTRIES,
   WIDTH_BUCKET_PX,
   createGeometryCache,
   widthBucketFor,
@@ -93,12 +93,12 @@ describe("createGeometryCache", () => {
     expect(await cache.load("agent-a", 10)).not.toBeNull();
   });
 
-  it("evicts the least recently written conversation once over the cap", async () => {
+  it("evicts the least recently written entry once over the cap", async () => {
     // The bound has to hold on this path too, or a session that never gets a
     // database accumulates a row table per conversation and width for as long as
     // it lasts.
     const { cache, advance } = cacheWithClock();
-    for (let i = 0; i < MAX_CACHED_CONVERSATIONS; i++) {
+    for (let i = 0; i < MAX_CACHED_ENTRIES; i++) {
       await cache.save(`agent-${i}`, 10, { rows: [row(0, 10, 100)] });
       advance(1);
     }
@@ -108,5 +108,20 @@ describe("createGeometryCache", () => {
     expect(await cache.load("agent-0", 10)).toBeNull();
     expect(await cache.load("agent-1", 10)).not.toBeNull();
     expect(await cache.load("agent-new", 10)).not.toBeNull();
+  });
+
+  it("spends one slot per width a conversation was measured at", async () => {
+    // Heights are a function of width, so one chat read at several widths is
+    // several entries -- which is why the cap is a bound on the database rather
+    // than on how many distinct conversations survive in it.
+    const { cache, advance } = cacheWithClock();
+    for (let bucket = 1; bucket <= MAX_CACHED_ENTRIES; bucket++) {
+      await cache.save("agent-a", bucket, { rows: [row(0, 10, 100)] });
+      advance(1);
+    }
+    await cache.save("agent-a", MAX_CACHED_ENTRIES + 1, { rows: [row(0, 10, 100)] });
+
+    expect(await cache.load("agent-a", 1)).toBeNull();
+    expect(await cache.load("agent-a", 2)).not.toBeNull();
   });
 });

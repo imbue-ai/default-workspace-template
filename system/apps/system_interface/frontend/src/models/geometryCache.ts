@@ -38,9 +38,11 @@ export const WIDTH_BUCKET_PX = 64;
  *  month is not worth the space, and its rendering may well have changed. */
 export const ENTRY_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
-/** Cap on stored conversations, evicted least-recently-used. Bounds the database
- *  for someone who opens a great many chats. */
-export const MAX_CACHED_CONVERSATIONS = 50;
+/** Cap on stored entries, evicted least-recently-used. An entry is one
+ *  conversation at one width bucket, so a chat read at several widths costs
+ *  several -- the number is a bound on the database, not on how many distinct
+ *  conversations survive in it. */
+export const MAX_CACHED_ENTRIES = 50;
 
 export interface CachedGeometry {
   /** `${agentId}:${widthBucket}` */
@@ -138,11 +140,11 @@ function keysToEvict(entries: CachedGeometry[], now: number): string[] {
       live.push(entry);
     }
   }
-  if (live.length <= MAX_CACHED_CONVERSATIONS) {
+  if (live.length <= MAX_CACHED_ENTRIES) {
     return expired;
   }
   live.sort((a, b) => a.updated_at - b.updated_at);
-  return [...expired, ...live.slice(0, live.length - MAX_CACHED_CONVERSATIONS).map((entry) => entry.key)];
+  return [...expired, ...live.slice(0, live.length - MAX_CACHED_ENTRIES).map((entry) => entry.key)];
 }
 
 /**
@@ -244,10 +246,10 @@ export function createGeometryCache(now: () => number = () => Date.now()): Geome
  *
  * There is one database per page and the caps above are caps on *it*: entries
  * are keyed by agent and width, so nothing about a key names the panel that
- * measured it. A cache per panel would open a connection per panel and count
- * its fifty conversations separately, which is not the bound either comment
- * claims. The connection opens lazily on the first read or write and lives as
- * long as the page, so there is nothing to tear down when a panel closes.
+ * measured it. A cache per panel would open a connection per panel and run its
+ * own entry budget, which is not the bound either comment claims. The
+ * connection opens lazily on the first read or write and lives as long as the
+ * page, so there is nothing to tear down when a panel closes.
  *
  * `createGeometryCache` stays exported for the unit tests, which drive their own
  * instance with an injected clock.
