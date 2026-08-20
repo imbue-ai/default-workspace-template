@@ -98,7 +98,6 @@ describe("RowGeometryIndex", () => {
     // page lands.
     const index = new RowGeometryIndex([row(0, 50, 340)]);
     expect(index.heightBefore(50, DEFAULT_EVENT_HEIGHT_PX)).toBe(340);
-    expect(index.heightBefore(50, DEFAULT_EVENT_HEIGHT_PX)).not.toBe(50 * DEFAULT_EVENT_HEIGHT_PX);
   });
 
   it("never reports negative height for a non-positive offset", () => {
