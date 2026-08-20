@@ -107,11 +107,6 @@ const RESERVE_RATE_CHANGE_THRESHOLD = 0.1;
 // representative sample of a transcript's mix, and is reached within the first
 // screens.
 const RESERVE_RATE_SAMPLE_ROWS = 20;
-// Reserved space for history the server has but this client has not loaded is
-// sized from measured geometry (see models/rowGeometry), not from a per-event
-// constant. The constant was the bug: the renderer groups a whole turn into one
-// row, so a tool-heavy page landed at a fraction of its reservation and
-// collapsed the scroll height in a single frame.
 
 function isProtoAgent(agentId: string): boolean {
   return getProtoAgents().some((p) => p.agent_id === agentId);
