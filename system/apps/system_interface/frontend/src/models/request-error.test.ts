@@ -22,9 +22,18 @@ describe("describeRequestError", () => {
     expect(describeRequestError(error)).toBe("Backend not yet available");
   });
 
+  it("names the unreachable workspace when the request never got a response", () => {
+    // Code 0 is the other half of a dead tunnel, and the more common one: nothing
+    // answers at all, so there is no status to report. Both the message and the
+    // status are uninformative here, and "unknown error" would throw away the
+    // one thing that is known.
+    const error = Object.assign(new Error(String(null)), { code: 0, response: null });
+    expect(describeRequestError(error)).toBe("could not reach the workspace");
+  });
+
   it("never returns an empty string, whatever it is handed", () => {
     expect(describeRequestError(undefined)).not.toBe("");
     expect(describeRequestError({})).not.toBe("");
-    expect(describeRequestError(Object.assign(new Error(String(null)), { code: 0 }))).not.toBe("");
+    expect(describeRequestError("   ")).not.toBe("");
   });
 });

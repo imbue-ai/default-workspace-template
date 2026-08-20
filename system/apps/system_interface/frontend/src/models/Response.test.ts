@@ -19,7 +19,7 @@ import {
   fetchBackfillEvents,
   fetchForwardEvents,
   fetchWindowAtOffset,
-  getConversationLoadError,
+  getConversationLoadState,
   getEventsForAgent,
   getEventCount,
   getFirstEventId,
@@ -89,6 +89,15 @@ function toolCallsOf(event: TranscriptEvent): ToolCall[] {
 let counter = 0;
 function freshAgent(): string {
   return `agent-${counter++}`;
+}
+
+/** A request whose resolution the test controls, for observing the in-flight state. */
+function deferredResponse(): { promise: Promise<unknown>; resolve: (value: unknown) => void } {
+  let resolve!: (value: unknown) => void;
+  const promise = new Promise<unknown>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
 }
 
 beforeEach(() => {
@@ -509,10 +518,11 @@ describe("total event count", () => {
   });
 });
 
-// The snapshot's failure is recorded against the agent rather than held by the
-// panel that asked for it, so that a reload from anywhere -- the tab's Refresh,
-// the stream's background reconnect -- clears the panel's error state.
-describe("snapshot load error", () => {
+// Where the snapshot load stands is recorded against the agent rather than held
+// by the panel that asked for it, so that a reload from anywhere -- the tab's
+// Refresh, the stream's background reconnect -- moves the panel out of whatever
+// state the last attempt left it in.
+describe("snapshot load state", () => {
   // What mithril rejects with when the proxy answers a 503 whose body is not
   // JSON: `responseType: "json"` leaves `response` null, reading `responseText`
   // throws, so mithril builds `new Error(null)` -- whose `.message` is the
@@ -526,7 +536,7 @@ describe("snapshot load error", () => {
     const agent = freshAgent();
     mockRequest.mockRejectedValueOnce(proxyUnavailableError());
     await expect(fetchEvents(agent)).rejects.toThrow();
-    expect(getConversationLoadError(agent)).toBe("request failed (HTTP 503)");
+    expect(getConversationLoadState(agent)).toEqual({ phase: "error", error: "request failed (HTTP 503)" });
   });
 
   it("prefers the server's own detail when the body has one", async () => {
@@ -535,21 +545,34 @@ describe("snapshot load error", () => {
       Object.assign(new Error("{}"), { code: 404, response: { detail: "Agent 'x' not found" } }),
     );
     await expect(fetchEvents(agent)).rejects.toThrow();
-    expect(getConversationLoadError(agent)).toBe("Agent 'x' not found");
+    expect(getConversationLoadState(agent).error).toBe("Agent 'x' not found");
   });
 
-  it("clears on the next successful fetch, whoever makes it", async () => {
+  it("reads as loading while the fetch is in flight, so nothing reports an empty transcript", async () => {
+    const agent = freshAgent();
+    const pending = deferredResponse();
+    mockRequest.mockReturnValueOnce(pending.promise);
+
+    const inFlight = fetchEvents(agent);
+    expect(getConversationLoadState(agent).phase).toBe("loading");
+
+    pending.resolve({ events: [makeEvent("a")] });
+    await inFlight;
+    expect(getConversationLoadState(agent)).toEqual({ phase: "idle", error: null });
+  });
+
+  it("settles on the next successful fetch, whoever makes it", async () => {
     const agent = freshAgent();
     mockRequest.mockRejectedValueOnce(proxyUnavailableError());
     await expect(fetchEvents(agent)).rejects.toThrow();
-    expect(getConversationLoadError(agent)).not.toBeNull();
+    expect(getConversationLoadState(agent).phase).toBe("error");
 
     mockRequest.mockResolvedValueOnce({ events: [makeEvent("a")] });
     await fetchEvents(agent);
-    expect(getConversationLoadError(agent)).toBeNull();
+    expect(getConversationLoadState(agent)).toEqual({ phase: "idle", error: null });
   });
 
-  it("is not raised by a failed backfill page, which leaves the window readable", async () => {
+  it("is not moved by a failed backfill page, which leaves the window readable", async () => {
     const agent = freshAgent();
     mockRequest.mockResolvedValueOnce({ events: [makeEvent("b")], offset: 1, total: 2 });
     await fetchEvents(agent);
@@ -558,7 +581,7 @@ describe("snapshot load error", () => {
     // loaded. Recording one would blank a transcript the user can still read.
     mockRequest.mockRejectedValueOnce(proxyUnavailableError());
     await fetchBackfillEvents(agent);
-    expect(getConversationLoadError(agent)).toBeNull();
+    expect(getConversationLoadState(agent)).toEqual({ phase: "idle", error: null });
     expect(ids(agent)).toEqual(["b"]);
   });
 });
