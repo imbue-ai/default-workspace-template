@@ -11,20 +11,42 @@ const ROW_ESTIMATE_PX = 100;
 
 /**
  * A stand-in for the scroll container, exposing exactly the surface the library
- * reads: its size (from ``offsetHeight``, which jsdom always reports as zero for
- * a real element), the window it belongs to, listener registration, and its
- * scroll position. jsdom ships no ResizeObserver, so the rect arrives once --
+ * reads. These run in vitest's node environment, where there is no DOM at all,
+ * so the element is described rather than built: its size (which the library
+ * takes from ``offsetWidth``/``offsetHeight``), the window it belongs to,
+ * listener registration, and its scroll position.
+ *
+ * Two of those are load-bearing rather than incidental. ``scrollTo`` is the
+ * library's *only* way of writing a scroll position -- it never assigns
+ * ``scrollTop`` -- so an element without one cannot be moved, and a test
+ * asserting that nothing moved it would pass on any code at all. And the scroll
+ * listener is how an offset reaches the virtualizer, so capturing it is what
+ * lets a test put the viewport anywhere but the top.
+ *
+ * There is no ResizeObserver here either, so the rect arrives once --
  * synchronously, when the element is first seen -- which is all these need.
  */
-function fakeScrollElement(offsetHeight: number): HTMLElement {
-  return {
+function fakeScrollElement(offsetHeight: number): { element: HTMLElement; fireScroll: () => void } {
+  const scrollListeners: (() => void)[] = [];
+  const element = {
     offsetWidth: 800,
     offsetHeight,
     scrollTop: 0,
     ownerDocument: { defaultView: { setTimeout: () => 0, clearTimeout: () => {} } },
-    addEventListener: () => {},
+    addEventListener: (type: string, handler: () => void) => {
+      if (type === "scroll") {
+        scrollListeners.push(handler);
+      }
+    },
     removeEventListener: () => {},
-  } as unknown as HTMLElement;
+    scrollTo: ({ top }: { top: number }) => {
+      element.scrollTop = top;
+    },
+  };
+  return {
+    element: element as unknown as HTMLElement,
+    fireScroll: () => scrollListeners.forEach((handler) => handler()),
+  };
 }
 
 interface Harness {
@@ -33,6 +55,9 @@ interface Harness {
   /** Push the current options and read the resulting window. */
   render: () => ReturnType<TranscriptVirtualizer["getVirtualItems"]>;
   setPinned: (indices: number[]) => void;
+  /** Move the viewport as the user would: set the position, then let the
+   *  element's own scroll event carry it to the virtualizer. */
+  scrollTo: (top: number) => void;
 }
 
 function harness(
@@ -45,7 +70,7 @@ function harness(
   } = {},
 ): Harness {
   const rowCount = options.rowCount ?? 50;
-  const element = fakeScrollElement(options.viewportHeight ?? VIEWPORT_HEIGHT);
+  const { element, fireScroll } = fakeScrollElement(options.viewportHeight ?? VIEWPORT_HEIGHT);
   let pinned: number[] = [];
   const virtualizer = createTranscriptVirtualizer({
     getScrollElement: () => element,
@@ -62,6 +87,10 @@ function harness(
     virtualizer,
     element,
     setPinned: (indices: number[]) => (pinned = indices),
+    scrollTo: (top: number) => {
+      element.scrollTop = top;
+      fireScroll();
+    },
     render: () => {
       virtualizer.sync();
       return virtualizer.getVirtualItems();
@@ -181,13 +210,17 @@ describe("createTranscriptVirtualizer measurements", () => {
   it("never moves the scroll position when a measurement replaces an estimate", () => {
     // The view holds the reader's place by anchoring on the row being read,
     // which also covers the reserved space moving; a second writer of scrollTop
-    // would double-correct.
+    // would double-correct. The row grown here sits entirely above the fold,
+    // which is exactly the case the library compensates by default -- left
+    // alone, it would push the viewport down by the 800px the estimate was out.
     const harnessed = harness({ rowCount: 50 });
+    harnessed.render();
+    harnessed.scrollTo(2000);
     harnessed.render();
 
     harnessed.virtualizer.resizeRow(0, 900);
 
-    expect(harnessed.element.scrollTop).toBe(0);
+    expect(harnessed.element.scrollTop).toBe(2000);
   });
 
   it("uses a measured height in place of the estimate", () => {
