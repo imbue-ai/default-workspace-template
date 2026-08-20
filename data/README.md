@@ -27,3 +27,7 @@ Hidden folders (dot-prefixed; workspace machinery, safe to ignore):
 - `.state/` - Machine state: service registries, markers, and ledgers.
 - `.secrets/` - Credentials injected by the minds app (backup and tunnel
   tokens). Never committed, never synced to GitHub.
+- `.imbue/analytics/` - Appears only in imbue-hosted workspaces of
+  explorer-plan accounts: the analytics collection script (injected on each
+  run so you can always read what ran) and its run audit. See
+  `docs/system/analytics-collection.md`.
