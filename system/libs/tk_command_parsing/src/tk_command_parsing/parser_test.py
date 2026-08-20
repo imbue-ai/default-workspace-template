@@ -10,12 +10,7 @@ argument, and the ``--flag=value`` form -- are covered explicitly.
 
 from __future__ import annotations
 
-from tk_command_parsing.parser import (
-    command_basename,
-    extract_create_titles,
-    flag_values,
-    parse_command,
-)
+from tk_command_parsing.parser import extract_create_titles, flag_values, parse_command
 
 
 def _verbs(command: str) -> list[str | None]:
@@ -85,25 +80,6 @@ def test_a_mentioned_verb_inside_a_quote_is_not_an_invocation() -> None:
 
 def test_unbalanced_quotes_return_none() -> None:
     assert parse_command('tk close cod-step-x "unterminated') is None
-
-
-# --- command_basename ---
-
-
-def _basenames(command: str) -> list[str | None]:
-    parsed = parse_command(command)
-    assert parsed is not None
-    return [command_basename(seg) for seg in parsed.segments]
-
-
-def test_command_basename_names_the_invoked_command() -> None:
-    """The command word, not a mention of one: an argument that quotes a command
-    name belongs to whatever command actually runs."""
-    assert _basenames("cd /x && latchkey curl -XPOST http://host") == ["cd", "latchkey"]
-    assert _basenames('git commit -m "latchkey curl -XPOST http://host"') == ["git"]
-    assert _basenames("A=1 B=2 /usr/local/bin/latchkey curl") == ["latchkey"]
-    # A trailing separator leaves an empty tail segment, which runs no command.
-    assert _basenames("tk start cod-step-x;") == ["tk", None]
 
 
 # --- flag_values ---

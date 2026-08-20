@@ -99,19 +99,6 @@ def parse_command(command: str) -> ParsedCommand | None:
     return ParsedCommand(segments=tuple(segments))
 
 
-def command_basename(segment: CommandSegment) -> str | None:
-    """The command ``segment`` invokes, with any path prefix stripped
-    (``system/vendor/tk/ticket`` -> ``ticket``), or ``None`` when it runs no
-    command (an empty segment).
-
-    It is what tells an invocation from a mention: the lexer has already
-    stripped quotes, so a URL or a verb inside another command's quoted
-    argument is otherwise indistinguishable from the real thing.
-    """
-    index = _command_index(segment.words)
-    return None if index is None else segment.words[index].rsplit("/", 1)[-1]
-
-
 def flag_values(args: Sequence[str], flag: str) -> list[str]:
     """Every value passed to ``flag`` within ``args``, in order.
 
@@ -243,18 +230,6 @@ def _is_control(tok: str) -> bool:
     return _is_punct(tok) and not _is_redirect(tok)
 
 
-def _command_index(words: tuple[str, ...]) -> int | None:
-    """Index of the word that names the command, or ``None`` for an empty segment.
-
-    A leading run of ``VAR=value`` env assignments is skipped: it is benign
-    before a command (the shell still runs the command in place).
-    """
-    for i, word in enumerate(words):
-        if not _ENV_ASSIGN.match(word):
-            return i
-    return None
-
-
 def _classify_segment(
     words: tuple[str, ...], has_redirect: bool, terminator: str | None
 ) -> CommandSegment:
@@ -264,10 +239,12 @@ def _classify_segment(
     path prefix (``system/vendor/tk/ticket``) and the ``super`` plugin-bypass form, and
     records the subcommand verb plus the tokens that follow it.
     """
-    i = _command_index(words)
+    i = 0
+    while i < len(words) and _ENV_ASSIGN.match(words[i]):
+        i += 1
     tk_verb: str | None = None
     tk_args: tuple[str, ...] = ()
-    if i is not None:
+    if i < len(words):
         base = words[i].rsplit("/", 1)[-1]
         if base in _TK_BASENAMES:
             j = i + 1

@@ -27,23 +27,17 @@ sys.path.insert(
     0, str(Path(__file__).resolve().parents[1] / "libs" / "tk_command_parsing" / "src")
 )
 
-from tk_command_parsing.parser import CommandSegment, command_basename, parse_command
+from tk_command_parsing.parser import CommandSegment, parse_command
 
 # The reserved latchkey host an agent POSTs to when asking the user to approve an
-# action, and the POST flag that distinguishes filing a request from reading the
-# queue. Both are taken from the transcript parser's detector
+# action, and the POST method flag that distinguishes filing a request from
+# reading the queue. Both come from the transcript parser's detector
 # (`PERMISSION_REQUEST_HOST` / `is_permission_request_call` in
-# system/apps/system_interface/.../harnesses/tool_output.py) so the calls this
-# gate governs are the calls that render as a permission card.
+# system/apps/system_interface/.../harnesses/tool_output.py), so a call this gate
+# blocks is a call that renders as a permission card.
 _PERMISSION_REQUEST_HOST = "latchkey-self.invalid/permission-requests"
-_POST_RE = re.compile(r"-X\s*POST|--request\s*POST", re.IGNORECASE)
-
-# The commands that can actually FILE a request. The gate is deliberately
-# narrower than the transcript parser's whole-input match: quotes are gone by the
-# time a segment is tokenized, so without this an unrelated command that merely
-# quotes the request (a commit message, a grep pattern, a doc snippet) would read
-# as a filing and be blocked for chaining or redirecting.
-_REQUEST_COMMANDS = ("latchkey", "curl")
+_METHOD_FLAGS = ("-X", "--request")
+_POST_FLAG_RE = re.compile(r"(?:-X|--request)=?POST", re.IGNORECASE)
 
 _MULTIPLE = "the call files more than one permission request"
 _REDIRECT = (
@@ -56,13 +50,43 @@ _CHAIN = (
 )
 
 
+def _is_argument(word: str) -> bool:
+    """True when `word` is a single shell argument rather than a quoted run of
+    prose. The lexer has already stripped the quotes, so whitespace inside a
+    token is what is left of them."""
+    return not any(char.isspace() for char in word)
+
+
+def _targets_request_host(words: tuple[str, ...]) -> bool:
+    """True when one of `words` is the permission-requests URL itself."""
+    return any(
+        _PERMISSION_REQUEST_HOST in word and _is_argument(word) for word in words
+    )
+
+
+def _sets_post_method(words: tuple[str, ...]) -> bool:
+    """True when `words` carry curl's POST flag, joined (`-XPOST`,
+    `--request=POST`) or separated (`-X POST`)."""
+    for i, word in enumerate(words):
+        if _POST_FLAG_RE.fullmatch(word):
+            return True
+        if word in _METHOD_FLAGS and i + 1 < len(words):
+            if words[i + 1].upper() == "POST":
+                return True
+    return False
+
+
 def _is_permission_request(segment: CommandSegment) -> bool:
-    """True when this one command POSTs to the permission-requests host."""
-    if command_basename(segment) not in _REQUEST_COMMANDS:
-        return False
-    if not any(_PERMISSION_REQUEST_HOST in word for word in segment.words):
-        return False
-    return _POST_RE.search(" ".join(segment.words)) is not None
+    """True when this one command POSTs to the permission-requests host.
+
+    It has to FILE a request, not merely quote one: the host must be passed as
+    its own argument (the URL curl receives) and the method as its own flag
+    token. A commit message, grep pattern, or doc snippet that spells out the
+    canonical request keeps both inside a single token, along with the prose
+    around them. The transcript parser's looser whole-input match cannot tell
+    those apart; this gate must, because it blocks.
+    """
+    return _targets_request_host(segment.words) and _sets_post_method(segment.words)
 
 
 def classify(cmd: str) -> str | None:

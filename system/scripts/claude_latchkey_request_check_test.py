@@ -45,9 +45,9 @@ _ALLOWED = [
     "latchkey curl http://latchkey-self.invalid/permissions/available/discord",
     # A non-latchkey command that merely mentions the request in a quoted string.
     f"""echo "post -XPOST {_HOST} next" """,
-    # ... including when it is chained or redirected: the quotes are gone by the
-    # time the segment is tokenized, so only the segment's own command tells a
-    # filing from a mention of one.
+    # ... including when it is chained or redirected. The lexer strips the quotes,
+    # so what marks these as mentions is that the host and the flag arrive inside
+    # one token, wrapped in the prose around them, rather than as arguments.
     f"""git commit -m "document -XPOST {_HOST} usage" && git push""",
     f"""grep -rn "curl -XPOST {_HOST}" system/ > /tmp/hits.txt""",
     "git push origin main",
@@ -70,6 +70,15 @@ _BLOCKED = [
     # A `#` comment ends at the newline in a real shell, so the request on the
     # next line still runs -- the comment must not hide it.
     f"echo hi # note\n{_REQUEST}",
+    # A wrapper in front of the request does not change what reaches the chat:
+    # the echoed object is still piped away, still backgrounded, still doubled.
+    f"timeout 30 {_REQUEST} | jq .request_id",
+    f"nohup {_REQUEST} &",
+    f"timeout 30 {_REQUEST} && timeout 30 {_REQUEST}",
+    # Grouping does not either -- both bash forms, though only `(` and `)` are
+    # operators to the lexer.
+    f"( {_REQUEST} ) > /tmp/request.json",
+    f"{{ {_REQUEST} ; }} | jq .request_id",
 ]
 
 
