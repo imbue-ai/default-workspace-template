@@ -189,16 +189,17 @@ def test_a_row_measured_at_a_whole_number_of_pixels_is_a_measurement(tmp_path: P
 
 
 def test_only_the_rows_up_to_the_cap_are_kept(tmp_path: Path) -> None:
-    # The whole file is read and rewritten on every write, so a conversation
-    # long enough to exceed the cap keeps the leading rows rather than growing
-    # that cost without limit.
+    # The whole file is read and rewritten on every write, so a conversation long
+    # enough to exceed the cap gives up its oldest turns rather than growing that
+    # cost without limit -- the newest are kept, since a transcript opens at its
+    # tail and that is what the next visit renders first.
     measured_rows = [_measured_row(f"turn-{index}", index, index + 1, 160.0) for index in range(5_001)]
 
     stored_rows = write_geometry(tmp_path, "agent-7", 760, measured_rows)
 
     assert len(stored_rows) == 5_000
-    assert stored_rows[0].row_key == "turn-0"
-    assert stored_rows[-1].row_key == "turn-4999"
+    assert stored_rows[0].row_key == "turn-1"
+    assert stored_rows[-1].row_key == "turn-5000"
     assert len(read_geometry(tmp_path, "agent-7", 760)) == 5_000
 
 

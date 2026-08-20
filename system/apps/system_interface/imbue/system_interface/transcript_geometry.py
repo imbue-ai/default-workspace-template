@@ -175,22 +175,24 @@ def _validated_rows(raw_rows: Sequence[object]) -> tuple[TranscriptRowGeometry, 
 
     Rows are validated one at a time so that a single unusable row -- from an
     older client, or a hand-edited file -- costs only itself rather than the
-    whole transcript's geometry. Only the leading rows are kept once the cap is
-    reached: nothing here reads the offsets, so there is no basis for choosing
-    among them beyond the order the client sent them in.
+    whole transcript's geometry.
+
+    Past the cap it is the *trailing* rows that are kept. Nothing here reads the
+    offsets, but the client sends its rows in transcript order and a transcript
+    opens at its tail, so the end of that sequence is the part a reader arrives
+    on. Keeping the front would drop geometry for exactly the turns the next
+    visit renders first and hold onto history far above them.
     """
     validated_rows: list[TranscriptRowGeometry] = []
     skipped_row_count = 0
     for raw_row in raw_rows:
-        if len(validated_rows) >= _MAX_STORED_ROWS_PER_ENTRY:
-            break
         try:
             validated_rows.append(TranscriptRowGeometry.model_validate(raw_row))
         except ValidationError:
             skipped_row_count += 1
     if skipped_row_count > 0:
         _loguru_logger.warning("Skipped {} transcript geometry rows that are not measurements", skipped_row_count)
-    return tuple(validated_rows)
+    return tuple(validated_rows[-_MAX_STORED_ROWS_PER_ENTRY:])
 
 
 @pure
