@@ -1,7 +1,9 @@
 """Unit tests for the shell-aware tk command parser.
 
-These pin the behaviour the gate hook (``system/scripts/claude_tk_standalone_check.py``)
-relies on, plus the ``extract_create_titles`` / ``flag_values`` surface the
+These pin the behaviour the gate hooks in ``system/scripts/`` rely on --
+``claude_tk_standalone_check.py`` (segments and verbs) and
+``claude_latchkey_request_check.py`` (segment words and ``terminator``) --
+plus the ``extract_create_titles`` / ``flag_values`` surface the
 package exposes for callers that need step titles out of a ``tk create --step``
 command. The cases that motivated moving off regexes -- quoted operators, escaped
 quotes inside titles, a tk verb merely mentioned inside another command's
