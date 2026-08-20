@@ -1,4 +1,5 @@
 import json
+import threading
 from pathlib import Path
 
 import pytest
@@ -247,6 +248,33 @@ def test_a_width_bucket_that_is_no_viewport_is_rejected(tmp_path: Path) -> None:
         read_geometry(tmp_path, "agent-7", -760)
 
     assert not (tmp_path / _GEOMETRY_FILENAME).exists()
+
+
+def test_writes_from_several_threads_do_not_lose_each_other(tmp_path: Path) -> None:
+    # A write is a read-modify-write of the whole file, and the WSGI server is
+    # threaded, so without the lock two clients measuring at once would each
+    # rewrite the file from the copy they read and drop the other's rows.
+    writer_count = 8
+    writes_per_writer = 5
+
+    def measure(writer_index: int) -> None:
+        for write_index in range(writes_per_writer):
+            write_geometry(
+                tmp_path,
+                f"agent-{writer_index}-{write_index}",
+                760,
+                [_measured_row("turn-1", 0, 3, 160.0)],
+            )
+
+    writers = [threading.Thread(target=measure, args=(index,), daemon=True) for index in range(writer_count)]
+    for writer in writers:
+        writer.start()
+    for writer in writers:
+        writer.join(timeout=30.0)
+        assert not writer.is_alive(), "a geometry write never finished"
+
+    stored = json.loads((tmp_path / _GEOMETRY_FILENAME).read_text())["geometry_by_agent_id"]
+    assert len(stored) == writer_count * writes_per_writer
 
 
 def test_a_corrupt_file_reads_as_nothing_measured(tmp_path: Path) -> None:
