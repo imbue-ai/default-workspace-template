@@ -46,7 +46,8 @@ export interface TranscriptScrollConfig {
 export interface TranscriptScroll {
   /** Current scrollTop (in the scroll container's own coordinates). */
   readonly scrollTop: number;
-  /** Cached viewport height, refreshed on measure/resize. */
+  /** Cached viewport height, refreshed when the container is attached and by the
+   *  resize observer registered there. */
   readonly viewportHeight: number;
   /** True when the user has scrolled up off the live tail (do not follow). */
   userScrolledUp: boolean;
@@ -68,8 +69,6 @@ export interface TranscriptScroll {
   /** Pin scrollTop to an exact position once (ChatPanel: land an offset jump at the
    *  top of the freshly loaded rows), syncing the follow bookkeeping. */
   pinTo(element: HTMLElement, top: number): void;
-  /** Refresh the cached viewport height. */
-  refreshViewportHeight(): void;
   /** Reset scroll + follow state (e.g. switching to a different agent). */
   reset(): void;
 }
@@ -219,12 +218,6 @@ export function createTranscriptScroll(config: TranscriptScrollConfig = {}): Tra
       scrollTop = element.scrollTop;
       previousScrollTop = element.scrollTop;
       lastScrollHeight = element.scrollHeight;
-    },
-
-    refreshViewportHeight(): void {
-      if (scrollEl !== null && isVisible()) {
-        viewportHeight = scrollEl.clientHeight;
-      }
     },
 
     reset(): void {
