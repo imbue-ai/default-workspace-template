@@ -585,7 +585,11 @@ def classify_path(path: str) -> PathClass:
     a fresh process. And ``.mngr/settings.toml`` alone among the provisioner
     paths: the running system interface re-reads it on every request, so a
     settings file newer than the code reading it must be paired with a restart
-    or nothing live stops speaking the old schema.
+    or nothing live stops speaking the old schema. A ``.md`` file under either
+    restart-requiring prefix keeps its prefix's class but never the restart:
+    no live process holds documentation in memory (mngr's own help topics are
+    read from disk per request through the editable install), and bouncing the
+    services agent blips the user's UI.
     """
     is_manifest = Path(path).name in _MANIFEST_BASENAMES
     project = _project_for_path(path)
@@ -611,10 +615,14 @@ def classify_path(path: str) -> PathClass:
         )
     if path.startswith("system/apps/system_interface/"):
         return PathClass(CLASS_SYSTEM_INTERFACE, project, is_manifest, False)
+    # Docs under a restart-requiring prefix (a non-README ``docs/*.md``, which
+    # the README/changelog rule above does not catch) keep the class but not
+    # the restart: nothing live holds ``.md`` content in memory.
+    is_doc_file = path.endswith(".md")
     if path == "system/supervisord.conf" or path.startswith("system/libs/bootstrap/"):
-        return PathClass(CLASS_SERVICE, project, is_manifest, True)
+        return PathClass(CLASS_SERVICE, project, is_manifest, not is_doc_file)
     if path.startswith("system/vendor/mngr/"):
-        return PathClass(CLASS_EDITABLE_TOOL, project, is_manifest, True)
+        return PathClass(CLASS_EDITABLE_TOOL, project, is_manifest, not is_doc_file)
     if path == "system/Dockerfile":
         return PathClass(CLASS_DOCKERFILE, project, is_manifest, False)
     if (

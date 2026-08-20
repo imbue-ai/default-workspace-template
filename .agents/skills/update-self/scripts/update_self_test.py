@@ -603,9 +603,12 @@ def test_classify_path_restart_flag() -> None:
         ".mngr/apt-snapshot-timestamp",
         "system/scripts/forward_port.py",
         ".agents/skills/update-self/SKILL.md",
-        # Docs never restart anything, even under a restart-requiring prefix.
+        # Docs never restart anything, even under a restart-requiring prefix --
+        # including the non-README docs the README/changelog rule cannot catch.
         "system/vendor/mngr/README.md",
+        "system/vendor/mngr/apps/minds/docs/desktop-app.md",
         "system/libs/bootstrap/changelog/some-entry.md",
+        "system/libs/bootstrap/docs/notes.md",
         "CLAUDE.md",
     ]
     for path in does_not:
