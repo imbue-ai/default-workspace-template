@@ -320,6 +320,24 @@ def read_geometry(layout_dir: Path, agent_id: str, width_bucket: int) -> tuple[T
     return entry.rows
 
 
+def _drop_bucket(layout_dir: Path, stored_agent_id: str, bucket_key: str) -> None:
+    """Forget one transcript's geometry at one width, writing only if it had any.
+
+    Staying silent when there was nothing to remove is what keeps a workspace
+    nobody has measured from acquiring a geometry file on the strength of a
+    write that measured nothing.
+    """
+    with _geometry_lock:
+        geometry_by_agent_id = _read_unlocked(layout_dir)
+        buckets = geometry_by_agent_id.get(stored_agent_id)
+        if buckets is None or bucket_key not in buckets:
+            return
+        del buckets[bucket_key]
+        if not buckets:
+            del geometry_by_agent_id[stored_agent_id]
+        _write_unlocked(layout_dir, geometry_by_agent_id)
+
+
 def write_geometry(
     layout_dir: Path,
     agent_id: str,
@@ -334,10 +352,20 @@ def write_geometry(
     is precisely the judgement this store does not make. What comes back is
     what was actually kept, so a caller sees the rows that were dropped as
     unusable without this end having to explain them.
+
+    A write naming no usable row stores nothing and drops whatever was held at
+    that width, because that is what replacement means when the replacement is
+    empty. Keeping it would file an entry that reads back the same as one that
+    was never written while still holding a slot in both caps below, so a run of
+    them would evict the transcripts someone is actually reading.
     """
     stored_agent_id = _validated_agent_id(agent_id)
     bucket_key = _validated_width_bucket_key(width_bucket)
-    entry = _StoredTranscriptGeometry(rows=_validated_rows(rows), updated_at_ms=_now_ms())
+    validated_rows = _validated_rows(rows)
+    if not validated_rows:
+        _drop_bucket(layout_dir, stored_agent_id, bucket_key)
+        return ()
+    entry = _StoredTranscriptGeometry(rows=validated_rows, updated_at_ms=_now_ms())
     with _geometry_lock:
         geometry_by_agent_id = _read_unlocked(layout_dir)
         # What was just written is re-filed at the end of both maps, so that

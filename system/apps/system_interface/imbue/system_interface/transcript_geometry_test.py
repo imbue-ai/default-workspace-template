@@ -131,6 +131,49 @@ def test_a_row_that_is_not_a_measurement_is_skipped_rather_than_failing_the_writ
     assert read_geometry(tmp_path, "agent-7", 760) == stored_rows
 
 
+@pytest.mark.parametrize("rows_naming_no_measurement", [[], ["not a row at all"], [None, {"row_key": "turn-1"}]])
+def test_a_write_that_names_no_measurement_stores_nothing(
+    tmp_path: Path,
+    rows_naming_no_measurement: list[object],
+) -> None:
+    # A workspace nobody has measured keeps no file, so a write that measured
+    # nothing must not give it one.
+    stored_rows = write_geometry(tmp_path, "agent-7", 760, rows_naming_no_measurement)
+
+    assert stored_rows == ()
+    assert read_geometry(tmp_path, "agent-7", 760) == ()
+    assert not (tmp_path / _GEOMETRY_FILENAME).exists()
+
+
+def test_a_write_that_names_no_measurement_evicts_nothing(tmp_path: Path) -> None:
+    # An entry with no rows reads back the same as one that was never written,
+    # so keeping it would hold a slot in both caps against the transcripts
+    # someone is actually reading -- and a run of them would empty the store.
+    write_geometry(tmp_path, "agent-measured", 760, [_measured_row("turn-1", 0, 3, 160.0)])
+
+    for index in range(51):
+        write_geometry(tmp_path, f"agent-{index}", 760, [])
+
+    assert read_geometry(tmp_path, "agent-measured", 760) == (
+        TranscriptRowGeometry(row_key="turn-1", start_offset=0, end_offset=3, height=160.0),
+    )
+
+
+def test_a_write_that_names_no_measurement_drops_what_that_width_held(tmp_path: Path) -> None:
+    # The rows a client sends replace what was stored for that width, and an
+    # empty pass is still a replacement: the client is saying what it measured.
+    write_geometry(tmp_path, "agent-7", 480, [_measured_row("turn-1", 0, 3, 320.0)])
+    write_geometry(tmp_path, "agent-7", 1200, [_measured_row("turn-1", 0, 3, 160.0)])
+
+    write_geometry(tmp_path, "agent-7", 480, [])
+
+    assert read_geometry(tmp_path, "agent-7", 480) == ()
+    # The other width is a separate measurement and is left alone.
+    assert read_geometry(tmp_path, "agent-7", 1200) == (
+        TranscriptRowGeometry(row_key="turn-1", start_offset=0, end_offset=3, height=160.0),
+    )
+
+
 def test_a_row_measured_at_a_whole_number_of_pixels_is_a_measurement(tmp_path: Path) -> None:
     # JSON has one number type, so a row that happened to settle on an exact
     # pixel arrives as an integer and is still a height.
