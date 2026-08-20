@@ -11,6 +11,7 @@ import {
   openTabOfType,
   refreshMemberRow,
   refreshProjects,
+  removeMemberRow,
   renameMemberRowWithAlert,
   setAppPinnedInView,
   shareMemberRow,
@@ -90,6 +91,9 @@ export function App(): m.Component {
               },
               onHideRowTab: (row: SidebarTabRow) => {
                 hideMemberRowTab(row);
+              },
+              onRemoveFromView: (row: SidebarTabRow) => {
+                removeMemberRow(row);
               },
               onShareApp: (row: SidebarTabRow) => {
                 shareMemberRow(row);

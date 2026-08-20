@@ -103,6 +103,7 @@ export interface ObjectMenuActions {
   share: { label: string; run: () => void } | null;
   rename: () => void;
   hideTab: (() => void) | null;
+  removeFromProject: (() => void) | null;
   quit: { label: string; run: () => void } | null;
 }
 
@@ -117,10 +118,11 @@ export interface ObjectMenuActions {
  * Rename is offered for the kinds whose name is theirs to choose, which is
  * what ``isRenameableKind`` decides and why.
  * Share is an app-only affordance: the share surface is per registered
- * service, and the other three kinds have none. Hide tab and the destructive
- * verb are each omitted per-OBJECT rather than per-kind, through ``actions``,
- * because whether they apply depends on this particular object's state
- * (open or backgrounded, allocated or not) rather than on its kind alone.
+ * service, and the other three kinds have none. Hide tab, Remove from project
+ * and the destructive verb are each omitted per-OBJECT rather than per-kind,
+ * through ``actions``, because whether they apply depends on this particular
+ * object's state (open or backgrounded, allocated or not, in a project or in
+ * Everything) rather than on its kind alone.
  */
 export function objectMenuEntries(kind: ObjectMenuKind, actions: ObjectMenuActions): ObjectMenuEntry[] {
   const opening: ObjectMenuEntry[] = [{ label: "Refresh", iconName: "refresh", run: actions.refresh }];
@@ -133,6 +135,14 @@ export function objectMenuEntries(kind: ObjectMenuKind, actions: ObjectMenuActio
   }
   if (actions.hideTab !== null) {
     closing.push({ label: "Hide tab", iconName: "minus", run: actions.hideTab });
+  }
+  // Sits between the two it is easily confused with, which is the clearest
+  // place for it: above, "Hide tab" drops the panel and leaves the object filed
+  // here; below, the destroy takes it off the machine entirely. This one is in
+  // between -- the object keeps running and stays in Everything and in any
+  // other project showing it, it just stops showing in this view.
+  if (actions.removeFromProject !== null) {
+    closing.push({ label: "Remove from project", iconName: "minus-circle", run: actions.removeFromProject });
   }
   if (actions.quit !== null) {
     closing.push({ label: actions.quit.label, iconName: "power", isDestructive: true, run: actions.quit.run });

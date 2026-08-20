@@ -750,6 +750,18 @@ function tabMenuEntries(panelId: string): ObjectMenuEntry[] {
             },
           }
         : null,
+    // Null in Everything, which is the home: an object leaves it only by being
+    // destroyed. Elsewhere the ref is resolved at click time rather than now,
+    // since a tab opened a moment ago may not have been filed yet.
+    removeFromProject:
+      mountedViewId === null || isEverythingView(mountedViewId)
+        ? null
+        : () => {
+            void (async () => {
+              const ref = memberRefByPanelId.get(panelId) ?? (await rememberMemberRef(panelId));
+              if (ref !== null) removeMemberRefWithAlert(ref);
+            })();
+          },
     rename: () => {
       // The same inline editor the double-click opens, reached through the
       // tab's handle so the menu and the gesture stay one mechanism.
@@ -1960,6 +1972,13 @@ export function openMemberRow(row: SidebarTabRow): void {
  *  The click-and-forget half of ``removeMemberRefFromView``, used by the
  *  rail's pin-icon unpin toggle: unpinning an app IS removing it from the
  *  view. */
+/** Stop showing one rail row's object in the active view. The rail's half of
+ *  the shared Remove-from-project verb; the tab's half resolves its own ref and
+ *  lands in the same place. */
+export function removeMemberRow(row: SidebarTabRow): void {
+  removeMemberRefWithAlert(row.ref);
+}
+
 function removeMemberRefWithAlert(ref: string): void {
   void removeMemberRefFromView(ref).catch((e: Error) => {
     alert(`Failed to remove from project: ${e.message}`);

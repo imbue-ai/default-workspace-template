@@ -117,6 +117,9 @@ export interface SidebarAttrs {
   // no tab to close.
   onHideRowTab: (row: SidebarTabRow) => void;
   // Open the machine's share surface with this app pre-selected.
+  // Stop showing one object in the active view. The object keeps running and
+  // stays in Everything and in any other project showing it.
+  onRemoveFromView: (row: SidebarTabRow) => void;
   onShareApp: (row: SidebarTabRow) => void;
   // Destroy the object behind this row, machine-wide (weaker for an app: see
   // objectMenu.ts). The workspace confirms first -- it is the half that knows
@@ -714,6 +717,10 @@ export function Sidebar(): m.Component<SidebarAttrs> {
           : null,
       rename: () => beginRename(row),
       hideTab: row.isOpen ? () => attrs.onHideRowTab(row) : null,
+      // Null in Everything, which is the home: an object leaves it only by
+      // being destroyed. For an app this is the same act as the row's own pin
+      // icon -- pinning IS membership -- so the two agree by construction.
+      removeFromProject: isEverythingView(attrs.activeViewId) ? null : () => attrs.onRemoveFromView(row),
       // Withheld for the primary agent, exactly as the tab's own build
       // withholds it: that agent runs the workspace's services, so quitting it
       // would take the machine down. Both surfaces recognize it by id rather
