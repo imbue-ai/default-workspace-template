@@ -55,9 +55,9 @@ export function selectionStateWithin(scrollEl: HTMLElement | null): SelectionSta
  * The inclusive row-index range spanned by the live selection's endpoints within
  * this view, or null when there is no active selection here or its endpoints
  * don't map to known rows (e.g. a selection anchored above `.message-list`, like
- * Cmd+A). Used to pin those rows into the virtualization window.
+ * Cmd+A).
  */
-export function resolveSelectionRowRange(
+function resolveSelectionRowRange(
   scrollEl: HTMLElement | null,
   keyToIndex: Map<string, number>,
 ): { start: number; end: number } | null {
@@ -90,4 +90,25 @@ export function resolveSelectionRowRange(
     return null;
   }
   return { start: Math.min(...indices), end: Math.max(...indices) };
+}
+
+/**
+ * Every row index the live selection spans, for the virtualizer to pin into the
+ * rendered set. Empty when there is nothing to hold.
+ *
+ * The expansion lives here rather than at each view's call site because the
+ * virtualizer wants indices while the resolution above produces a range, and both
+ * transcript views need the same bridge -- including the inclusive end, which is
+ * the selection's last row and the one whose unmounting would collapse it.
+ */
+export function resolveSelectionRowIndices(scrollEl: HTMLElement | null, keyToIndex: Map<string, number>): number[] {
+  const range = resolveSelectionRowRange(scrollEl, keyToIndex);
+  if (range === null) {
+    return [];
+  }
+  const indices: number[] = [];
+  for (let index = range.start; index <= range.end; index++) {
+    indices.push(index);
+  }
+  return indices;
 }

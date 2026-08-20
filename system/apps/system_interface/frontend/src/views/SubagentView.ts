@@ -3,7 +3,7 @@ import { apiUrl } from "../base-path";
 import type { TranscriptEvent, SubagentMetadata } from "../models/Response";
 import { parseJsonMessage } from "../models/ws-json";
 import { buildConversationRows, isSubagentRunning, renderVirtualRows, type RowDescriptor } from "./conversation-rows";
-import { resolveSelectionRowRange } from "./scroll-selection";
+import { resolveSelectionRowIndices } from "./scroll-selection";
 import { createTranscriptScroll } from "./transcript-scroll";
 import { createTranscriptVirtualizer } from "./transcriptVirtualizer";
 import { createRowMeasureScheduler, createRowMeasurementStore } from "./rowMeasurement";
@@ -167,13 +167,7 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
     // A live selection's rows stay mounted even when the viewport moves far away,
     // so scrolling or streaming past them does not collapse the selection. Only
     // those rows are held, not the ones in between, so there is no distance cap.
-    const pinnedRange = resolveSelectionRowRange(scroll.scrollEl, cachedKeyToIndex);
-    pinnedRowIndices = [];
-    if (pinnedRange !== null) {
-      for (let i = pinnedRange.start; i <= pinnedRange.end; i++) {
-        pinnedRowIndices.push(i);
-      }
-    }
+    pinnedRowIndices = resolveSelectionRowIndices(scroll.scrollEl, cachedKeyToIndex);
 
     virtualizer.sync();
     const items = virtualizer.getVirtualItems();

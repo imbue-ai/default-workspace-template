@@ -33,7 +33,7 @@ import {
 } from "../models/rowGeometry";
 import { createGeometryCache, widthBucketFor } from "../models/geometryCache";
 import { loadWorkspaceGeometry, saveWorkspaceGeometry } from "../models/workspaceGeometry";
-import { resolveSelectionRowRange, selectionStateWithin } from "./scroll-selection";
+import { resolveSelectionRowIndices, selectionStateWithin } from "./scroll-selection";
 import { createTranscriptScroll } from "./transcript-scroll";
 import { createTranscriptVirtualizer } from "./transcriptVirtualizer";
 import { createRowMeasureScheduler, createRowMeasurementStore } from "./rowMeasurement";
@@ -901,13 +901,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     // Rows a live selection touches, kept mounted by the virtualizer's range
     // extractor even when the viewport has moved far away -- removing a
     // selection endpoint's node collapses the selection.
-    const pinnedRange = selectionActive ? resolveSelectionRowRange(scroll.scrollEl, cachedKeyToIndex) : null;
-    pinnedRowIndices = [];
-    if (pinnedRange !== null) {
-      for (let i = pinnedRange.start; i <= pinnedRange.end; i++) {
-        pinnedRowIndices.push(i);
-      }
-    }
+    pinnedRowIndices = selectionActive ? resolveSelectionRowIndices(scroll.scrollEl, cachedKeyToIndex) : [];
 
     captureReadingAnchor();
     virtualizer.sync();
