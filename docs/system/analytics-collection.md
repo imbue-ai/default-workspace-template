@@ -22,9 +22,12 @@ process is auditable from in here:
   sources, how much data, which script version. The service keeps a matching
   server-side audit record for every attempt.
 
-Collection is revocable at any time: remove the pool key from the
-workspace's `authorized_keys` and collection simply fails and the workspace
-is skipped (this may affect explorer-plan benefits). Leaving the explorer
+Collection is revocable at any time: remove the pool key's line from BOTH of
+the workspace's authorized_keys files -- this workspace's sshd reads
+`~/.ssh/authorized_keys` and `/root/.ssh/authorized_keys` (see
+`/etc/ssh/sshd_config.d/60-workspace-root-keys.conf`), and the pool key is
+listed in each -- and collection simply fails and the workspace is skipped
+(this may affect explorer-plan benefits). Leaving the explorer
 plan stops collection at the next poll; workspaces on other plans, local
 workspaces, and self-hosted workspaces are never touched.
 
