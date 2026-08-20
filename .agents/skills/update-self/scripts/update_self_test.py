@@ -1710,6 +1710,24 @@ def test_failed_post_restart_health_rolls_back_and_restarts_into_known_good(
     assert len(runner.argvs_starting(*_RESTART)) == 2  # forward, then recovery
 
 
+def test_a_failed_provisioner_only_apply_reports_the_healthy_rollback_variant(
+    apply_repo: Path, capsys
+) -> None:
+    # A provisioner-only plan has no frontend or restart work, but the frontend
+    # baseline is still measured up front: the rollback's recovery and report
+    # are held to it, so a healthy UI must yield the ordinary "confirmed
+    # healthy" message -- never the already-broken variant.
+    runner = _apply_runner("M\tsystem/scripts/setup_system.sh\n", apply_repo)
+    runner.respond(("bash",), _Result(returncode=1, stderr="no network"))
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 2
+    err = capsys.readouterr().err
+    assert "confirmed healthy" in err
+    assert "was not serving a working frontend" not in err
+
+
 def test_emergency_when_rollback_cannot_restore_health(apply_repo: Path, capsys) -> None:
     runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
     runner.respond(("npm", "run", "build"), _Result(returncode=1, stderr="boom"))

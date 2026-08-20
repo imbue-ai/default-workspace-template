@@ -2615,8 +2615,11 @@ def apply_update(
         # The regression baseline: whether a working frontend is owed afterwards
         # is decided by what was being served *before* the apply -- measured
         # once and persisted, so a resumed apply is not judged against the
-        # wreckage its own interrupted run left.
-        if marker.frontend_expected is None and (plan.frontend or plan.needs_restart):
+        # wreckage its own interrupted run left. Measured for every live plan
+        # (a provisioner-only apply too): the rollback's recovery and its
+        # report are held to this baseline, so leaving it unmeasured would
+        # falsely report a healthy UI as already-broken after a rollback.
+        if marker.frontend_expected is None:
             marker.frontend_expected = (
                 describe_frontend_failure(http, resolved_base, sleeper) is None
             )
