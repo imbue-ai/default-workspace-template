@@ -99,9 +99,27 @@ export async function fetchProjectContent(viewId: string): Promise<unknown | nul
   }
 }
 
+// What the tunnel in front of this server answers when the server itself is
+// not up: a workspace still provisioning, restarting, or shutting down. The
+// request never reached an endpoint, so nothing was read and nothing changed.
+const UNREACHABLE_STATUSES: ReadonlySet<number> = new Set([502, 503, 504]);
+
+/**
+ * Why a request failed, in terms the user can act on.
+ *
+ * The server's own ``detail`` when it gave one -- it knows best. Otherwise the
+ * bare status was being shown, and "HTTP 503" reads as a bug in the thing you
+ * just clicked when it actually means the workspace was not answering at all.
+ * Saying so, and saying that nothing changed, is the difference between "this
+ * feature is broken" and "try again in a moment".
+ */
 async function errorDetailFromResponse(response: Response): Promise<string> {
   const data = (await response.json().catch(() => ({}))) as { detail?: string };
-  return data.detail ?? `HTTP ${response.status}`;
+  if (data.detail) return data.detail;
+  if (UNREACHABLE_STATUSES.has(response.status)) {
+    return "the workspace is not responding right now, so nothing was changed — try again in a moment";
+  }
+  return `HTTP ${response.status}`;
 }
 
 /** Autosave the active view's content, EVERYTHING_VIEW_ID included, into this

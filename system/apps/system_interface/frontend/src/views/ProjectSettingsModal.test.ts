@@ -32,7 +32,7 @@ vi.mock("../models/AgentManager", () => ({
   getProtoAgents: () => agentManagerState.protoAgents,
 }));
 
-import { applyMemberTitleChange, loadMemberTitles } from "../models/MemberTitles";
+import { loadMemberTitles } from "../models/MemberTitles";
 import type { ProjectInfo } from "../models/Projects";
 import { ProjectSettingsModal } from "./ProjectSettingsModal";
 import type { ProjectSettingsModalAttrs } from "./ProjectSettingsModal";
@@ -77,25 +77,6 @@ function findByClass(tree: unknown, className: string): VnodeLike | undefined {
   return undefined;
 }
 
-/** Every clickable `button` vnode whose `aria-label` contains `label`. The
- *  member rows carry no text of their own -- the name is a sibling span and
- *  the button holds only a trusted icon -- so the accessible name is what
- *  identifies one. */
-function buttonsByAriaLabel(tree: unknown, label: string): VnodeLike[] {
-  const matches: VnodeLike[] = [];
-  for (const vnode of walk(tree)) {
-    if (
-      typeof vnode.tag === "string" &&
-      vnode.tag.startsWith("button") &&
-      typeof vnode.attrs?.onclick === "function"
-    ) {
-      const ariaLabel = vnode.attrs["aria-label"];
-      if (typeof ariaLabel === "string" && ariaLabel.includes(label)) matches.push(vnode);
-    }
-  }
-  return matches;
-}
-
 function clickVnode(vnode: VnodeLike): void {
   (vnode.attrs?.onclick as () => void)();
 }
@@ -106,9 +87,6 @@ function stubFetch(response: Partial<Response>): ReturnType<typeof vi.fn> {
   vi.stubGlobal("fetch", mockFetch);
   return mockFetch;
 }
-
-// Let queued microtasks + the setTimeout-based redraw polyfill drain.
-const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
 function makeModal(attrs: ProjectSettingsModalAttrs): { render: () => unknown } {
   const component = ProjectSettingsModal();
@@ -133,100 +111,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("ProjectSettingsModal member list", () => {
-  it("shows an empty state for a project with no members", () => {
-    const modal = makeModal({
-      project: { ...PROJECT, members: [] },
-      onSaved: () => {},
-      onDeleted: () => {},
-      onCancel: () => {},
-      onMemberRemoved: () => {},
-    });
-
-    expect(JSON.stringify(modal.render())).toContain("No members yet.");
-  });
-
-  it("labels each member with its derived name when it was never renamed", () => {
-    agentManagerState.agentById["agent-9"] = { name: "Chat-9", display_name: "Chat 9" };
-
-    const modal = makeModal({
-      project: PROJECT,
-      onSaved: () => {},
-      onDeleted: () => {},
-      onCancel: () => {},
-      onMemberRemoved: () => {},
-    });
-    const tree = JSON.stringify(modal.render());
-
-    expect(tree).toContain("Chat 9");
-    expect(tree).toContain("Terminal 4");
-    expect(tree).toContain("Browser quiet-otter");
-    expect(tree).toContain("docs");
-    expect(tree).toContain("Page");
-  });
-
-  it("prefers a chosen member-titles name over the derived one", () => {
-    applyMemberTitleChange("terminal:terminal-4", "Build Server");
-
-    const modal = makeModal({
-      project: PROJECT,
-      onSaved: () => {},
-      onDeleted: () => {},
-      onCancel: () => {},
-      onMemberRemoved: () => {},
-    });
-    const tree = JSON.stringify(modal.render());
-
-    expect(tree).toContain("Build Server");
-    expect(tree).not.toContain("Terminal 4");
-  });
-
-  it("removes a member from the working list once the server confirms it", async () => {
-    const mockFetch = stubFetch({ ok: true, json: () => Promise.resolve({ project_id: "research", members: [] }) });
-    const modal = makeModal({
-      project: PROJECT,
-      onSaved: () => {},
-      onDeleted: () => {},
-      onCancel: () => {},
-      onMemberRemoved: () => {},
-    });
-    expect(JSON.stringify(modal.render())).toContain("service:docs");
-
-    const [docsRemoveButton] = buttonsByAriaLabel(modal.render(), "Remove docs");
-    expect(docsRemoveButton).toBeDefined();
-    clickVnode(docsRemoveButton);
-    await flush();
-
-    expect(mockFetch).toHaveBeenCalledWith("/api/projects/research/members/remove", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ref: "service:docs" }),
-    });
-    const tree = JSON.stringify(modal.render());
-    expect(tree).not.toContain("service:docs");
-  });
-
-  it("keeps the member and surfaces an error when the server refuses the removal", async () => {
-    stubFetch({ ok: false, status: 404, json: () => Promise.resolve({ detail: "Project 'research' not found" }) });
-    const modal = makeModal({
-      project: PROJECT,
-      onSaved: () => {},
-      onDeleted: () => {},
-      onCancel: () => {},
-      onMemberRemoved: () => {},
-    });
-
-    const [docsRemoveButton] = buttonsByAriaLabel(modal.render(), "Remove docs");
-    expect(docsRemoveButton).toBeDefined();
-    clickVnode(docsRemoveButton);
-    await flush();
-
-    const tree = JSON.stringify(modal.render());
-    expect(tree).toContain("service:docs");
-    expect(tree).toContain("Project 'research' not found");
-  });
-});
-
 describe("ProjectSettingsModal delete confirmation", () => {
   it("describes deleting as removing the view only, with members left running", () => {
     const modal = makeModal({
@@ -234,7 +118,6 @@ describe("ProjectSettingsModal delete confirmation", () => {
       onSaved: () => {},
       onDeleted: () => {},
       onCancel: () => {},
-      onMemberRemoved: () => {},
     });
     const deleteButton = findByClass(modal.render(), "destroy-dialog-btn-cancel");
     expect(deleteButton).toBeDefined();

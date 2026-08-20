@@ -16,7 +16,6 @@ import {
   shareMemberRow,
   startProjectChat,
   switchToView,
-  undockMemberRefIfMounted,
 } from "./DockviewWorkspace";
 import { ClaudeLoginModal } from "./ClaudeLoginModal";
 import { AgentAuthInstructionsModal } from "./AgentAuthInstructionsModal";
@@ -79,9 +78,6 @@ export function App(): m.Component {
               },
               onSetAppPinned: (app: AppEntry, isPinned: boolean) => {
                 setAppPinnedInView(app, isPinned);
-              },
-              onUndockMember: (projectId: string, ref: string) => {
-                undockMemberRefIfMounted(projectId, ref);
               },
               onOpenRow: (row: SidebarTabRow) => {
                 openMemberRow(row);

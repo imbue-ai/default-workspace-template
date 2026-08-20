@@ -257,6 +257,22 @@ describe("createProject", () => {
 
     await expect(createProject("Taxes", "#e5a33d", 7)).rejects.toThrow("project name already in use");
   });
+
+  it("says the workspace is unreachable rather than showing a bare gateway status", async () => {
+    // A 502/503/504 comes from the tunnel in FRONT of the server -- a workspace
+    // provisioning, restarting or shutting down -- so the request reached no
+    // endpoint and nothing changed. "HTTP 503" read as a bug in whatever the
+    // user had just clicked.
+    for (const status of [502, 503, 504]) {
+      stubFetch({ ok: false, status, json: () => Promise.reject(new Error("not json")) });
+      await expect(createProject("Taxes", "#e5a33d", 7)).rejects.toThrow(/not responding right now/);
+    }
+  });
+
+  it("still shows a bare status for one it has nothing better to say about", async () => {
+    stubFetch({ ok: false, status: 418, json: () => Promise.reject(new Error("not json")) });
+    await expect(createProject("Taxes", "#e5a33d", 7)).rejects.toThrow("HTTP 418");
+  });
 });
 
 describe("updateProjectSettings", () => {
