@@ -12,8 +12,6 @@ Follow-up work on projects, from a design review of the shipped build and a pass
 
 **Deleting a project deletes only the view.** Nothing is shut down. Every object it showed keeps running and stays in Everything and in any other project already showing it. The guard refusing to delete the last project is gone with it — a machine may sit at zero projects and fall back to Everything.
 
-**Project settings holds the member list**, which is where an object is removed from a project. Removal there is non-destructive in the same way: it drops the membership only.
-
 **Pinned apps leave the All apps popover**, since they are already in the rail a few pixels away. A pinned row carries its own pin icon, so unpinning is one click without opening a menu, and a just-pinned row fades out rather than vanishing under the pointer.
 
 **Ad-hoc pages are no longer filed as project members.** A panel with no agent, tmux session, or service was being filed under a hash of its own panel id — an identity that could not outlive the panel, and one no verb could act on.
@@ -37,3 +35,7 @@ One gap is known and deliberate: in the desktop app the rail does not fold when 
 **The attention flash is a flash.** Reopening something already open used to fade the tab out and back, which read as the tab leaving rather than arriving. It is now a brief amber wash — a hue this workspace uses for nothing else, so it cannot be mistaken for a state the tab has entered and stayed in — and it holds once instead of pulsing under reduced motion.
 
 **Starting something new says so, and cannot be started twice.** `mngr create` takes seconds, and the launcher used to sit there unchanged for all of it: the click looked like it had missed, and clicking again started a second object. The tiles now stand down and the heading reads "Starting…" until the object exists, whether it arrives or fails.
+
+**Project settings is back to display metadata only** — name, colour, squiggle, and the delete button. The member list that briefly lived there is gone.
+
+**A workspace that is not answering says so.** A 502, 503 or 504 comes from the tunnel in front of the workspace, not from the workspace itself: the request reached no endpoint and nothing changed. That used to surface as a bare "HTTP 503" on whatever had just been clicked, which read as that feature being broken rather than the workspace being briefly away.

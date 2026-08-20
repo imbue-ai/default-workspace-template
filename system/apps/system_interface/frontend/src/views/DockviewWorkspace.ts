@@ -2021,25 +2021,6 @@ export async function removeMemberRefFromView(ref: string): Promise<void> {
   }
 }
 
-/**
- * Undock one ref's panel, but only when the view it was removed from is the one
- * on screen.
- *
- * Project settings can edit a project the client is not currently mounted on,
- * where there is no panel of that view's to drop -- the dock is showing some
- * other view entirely. So this is the undock half of ``removeMemberRefFromView``
- * on its own, for a caller that has already done the membership half against a
- * project id of its choosing.
- */
-export function undockMemberRefIfMounted(projectId: string, ref: string): void {
-  // Covers a null `mountedViewId` too, since `projectId` is always a real one.
-  if (mountedViewId !== projectId) return;
-  const panelId = panelIdForMemberRef(ref);
-  if (panelId === null || !dockview) return;
-  const panel = dockview.panels.find((candidate) => candidate.id === panelId);
-  if (panel) dockview.removePanel(panel);
-}
-
 /** Open the machine's share surface for an app row. */
 export function shareMemberRow(row: SidebarTabRow): void {
   if (row.kind !== "app") return;

@@ -936,18 +936,6 @@ def _switch_view_via_rail(page: Page, view_name: str) -> None:
     page.locator(".project-rail-menu [role='menuitem']", has_text=view_name).first.click()
 
 
-def _open_project_settings(page: Page, project_name: str) -> None:
-    """Open one project's settings modal through the rail's switcher.
-
-    The switcher marks the mounted project with a checkmark that becomes the
-    edit pencil under the pointer, so reaching settings is: hover the rail,
-    open the switcher, click that row's pencil.
-    """
-    _open_rail_switcher(page)
-    page.locator(f'button[aria-label="Edit {project_name}"]').click()
-    expect(page.locator(".project-settings-member").first).to_be_visible(timeout=5000)
-
-
 def _collapse_rail(page: Page) -> None:
     """Fold the hover-expanded rail back up, so the dock underneath is clickable.
 
@@ -1670,16 +1658,26 @@ def test_double_click_renames_a_chat_and_the_name_survives_a_reload(tmp_path: Pa
 _TERMINAL_DESTROY_PORT = 18879
 
 
+# `/api/terminals` answers by shelling out to `tmux list-sessions`, so its
+# latency is a subprocess spawn's, not a handler's. Five seconds was tight
+# enough to lose the race on a machine also running the rest of this suite --
+# seen as a bare socket timeout inside this helper, which fails the calling
+# test outright rather than being retried by it.
+_TERMINALS_API_TIMEOUT_SECONDS = 20.0
+
+
 def _terminal_session_names(base_url: str) -> set[str]:
     """The live user-terminal session names, as the server's terminals API reports them."""
-    with urllib.request.urlopen(f"{base_url}/api/terminals", timeout=5.0) as response:
+    with urllib.request.urlopen(f"{base_url}/api/terminals", timeout=_TERMINALS_API_TIMEOUT_SECONDS) as response:
         payload = json.loads(response.read())
     return {terminal["session_name"] for terminal in payload["terminals"]}
 
 
 # Same _collapse_rail race as test_renaming_an_object_in_one_view_names_it_in
 # _the_other above: seen fail once on this helper's own wait, then pass twice
-# on retry with no code changed in between.
+# on retry with no code changed in between. Separately seen to lose the
+# terminals API's own timeout under load, which _TERMINALS_API_TIMEOUT_SECONDS
+# now allows for.
 @pytest.mark.flaky
 @pytest.mark.timeout(180, func_only=False)
 def test_shut_down_terminal_leaves_no_resurrected_tab_in_everything(tmp_path: Path, page: Page) -> None:
@@ -1836,9 +1834,6 @@ def test_shut_down_terminal_leaves_no_resurrected_tab_in_everything(tmp_path: Pa
             )
 
 
-_ROW_REMOVAL_PORT = 18873
-
-
 def _project_members(layout_dir: Path) -> list[str]:
     """The starter project's member refs, straight out of the registry on disk.
 
@@ -1853,78 +1848,6 @@ def _project_members(layout_dir: Path) -> list[str]:
     members = registry["project_by_id"][DEFAULT_PROJECT_ID]["members"]
     assert isinstance(members, list)
     return members
-
-
-@pytest.mark.timeout(120, func_only=False)
-def test_removing_a_row_from_the_project_unfiles_it_without_destroying_it(tmp_path: Path, page: Page) -> None:
-    """Project settings unfiles a member from the project rather than destroying it.
-
-    Removing an object from a view is the safe verb, and it lives in the
-    project settings modal's member list -- the rail row's menu no longer
-    carries it, since that menu now renders the same per-kind verb set the dock
-    tab does (objectMenu.ts), where every verb acts on the object rather than
-    on one view of it. The removal is asserted against the registry on disk,
-    same as any other membership change; "kept running" is asserted against
-    Everything, which lists every object on the machine regardless of
-    membership and so still has to show this one afterwards.
-    """
-    primary_agent_id = "primary-services-agent"
-    with _running_e2e_server(tmp_path, _ROW_REMOVAL_PORT, primary_agent_id=primary_agent_id) as (
-        base_url,
-        _agent_info,
-        _session_file,
-    ):
-        layout_dir = tmp_path / "agents" / primary_agent_id / "workspace_layout"
-        page.on("dialog", lambda dialog: dialog.accept())
-        page.goto(base_url)
-
-        expect(page.locator(".dv-default-tab-content", has_text="test-agent").first).to_be_visible(timeout=15000)
-        page.wait_for_function(
-            f"localStorage.getItem('si-active-project-id') === '{DEFAULT_PROJECT_ID}'", timeout=10000
-        )
-        wait_for(
-            lambda: _FIXTURE_CHAT_REF in _project_members(layout_dir),
-            timeout=15.0,
-            poll_interval=0.1,
-            error_message="the fixture chat was never filed as a member of the starter project",
-        )
-
-        # The rail row's own menu must NOT offer it any more: that menu is the
-        # object's verbs, and removal is a property of the view.
-        page.locator(".machine-sidebar").hover()
-        chat_row = page.locator(".project-rail-tab", has_text="test-agent")
-        expect(chat_row).to_have_count(1)
-        chat_row.click(button="right")
-        expect(page.locator(".project-rail-menu")).to_be_visible(timeout=5000)
-        expect(page.locator(".project-rail-menu [role='menuitem']", has_text="Remove from project")).to_have_count(0)
-        page.keyboard.press("Escape")
-
-        # Remove it where the verb actually lives now.
-        _open_project_settings(page, DEFAULT_PROJECT_NAME)
-        page.locator('button[aria-label^="Remove test-agent"]').click()
-        page.locator(".custom-url-dialog-cancel").first.click()
-
-        # The tab leaves the mounted project's dock ...
-        expect(page.locator(".dv-default-tab-content", has_text="test-agent")).to_have_count(0, timeout=10000)
-        # ... and the ref leaves the project's member list on disk.
-        wait_for(
-            lambda: _FIXTURE_CHAT_REF not in _project_members(layout_dir),
-            timeout=15.0,
-            poll_interval=0.1,
-            error_message="removing the member in project settings never took it out of the registry",
-        )
-
-        # It kept running rather than being destroyed: nothing was ever docked
-        # in Everything, so its launcher's machine-wide table -- not a
-        # membership list, since Everything is the unfiltered view -- is what
-        # still has to offer the chat even though the starter project no
-        # longer does.
-        _switch_view_via_rail(page, EVERYTHING_VIEW_NAME)
-        page.wait_for_function(
-            f"localStorage.getItem('si-active-project-id') === '{EVERYTHING_VIEW_ID}'", timeout=10000
-        )
-        expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=15000)
-        expect(page.locator(".new-tab-launcher-row:visible", has_text="test-agent")).to_have_count(1)
 
 
 _APP_PINNING_PORT = 18875
