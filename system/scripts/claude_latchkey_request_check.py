@@ -202,8 +202,8 @@ def main(argv: list[str] | None = None) -> int:
         "  latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \\\n"
         "    -H 'Content-Type: application/json' \\\n"
         '    -d \'{"agent_id": "\'"$MNGR_AGENT_ID"\'", ...}\'\n\n'
-        "Then wait for the system message carrying the user's verdict before filing "
-        "the next one.\n"
+        "Filing another request straight after this one is fine -- it just needs a "
+        "tool call of its own.\n"
     )
     return 2
 
