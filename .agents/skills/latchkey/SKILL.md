@@ -87,7 +87,9 @@ is never shown to the user, and `> /tmp/req.json` or `| jq .request_id` takes th
 echoed object away and leaves the card with no button. A PreToolUse hook blocks
 those forms, and every other way of putting a second command in the call
 (`| tee ...`, `&& echo done`, a leading `cd`) along with them -- the request has to
-be the whole tool call.
+be the whole tool call. It also blocks any redirection of the command's *input*,
+so pass the body inline with `-d '{...}'` rather than through a heredoc or
+`-d @- < body.json`.
 
 Need permissions for two scopes? Post the first one, wait for its verdict, then post
 the second.
