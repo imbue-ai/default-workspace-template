@@ -2569,10 +2569,17 @@ def apply_update(
             started_at=now(),
             updated_at=now(),
         )
+    # Resolve the merge ref (read-only) BEFORE the marker is written: an
+    # unresolvable ref raises the precondition error, and raising after the
+    # write would leave a marker behind for an apply that never started --
+    # showing the "update interrupted" banner and blocking other applies until
+    # a needless `recover`. (A *resumed* apply's pre-existing marker survives
+    # the raise, which is right: `recover` must still be able to roll it back.)
+    is_merge_landed = _is_merge_landed(merge_ref, repo_root, runner)
     write_marker(marker, repo_root, now)
 
     # --- Land the merge (skipped when already landed: idempotent re-entry). ---
-    if not _is_merge_landed(merge_ref, repo_root, runner):
+    if not is_merge_landed:
         merge_argv = (
             ["git", "merge", "--ff-only", merge_ref]
             if ff_only
