@@ -255,9 +255,8 @@ export function geometryFromSnapshot(snapshot: unknown): RowGeometryIndex {
     return new RowGeometryIndex();
   }
   const accepted: RowGeometry[] = [];
-  const candidates = [...((snapshot as GeometrySnapshot).rows as unknown[])];
   const valid: RowGeometry[] = [];
-  for (const candidate of candidates) {
+  for (const candidate of (snapshot as GeometrySnapshot).rows as unknown[]) {
     if (candidate === null || typeof candidate !== "object") {
       continue;
     }
