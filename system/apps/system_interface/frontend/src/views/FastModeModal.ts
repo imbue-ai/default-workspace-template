@@ -1,17 +1,29 @@
 /**
- * Asks whether to keep fast mode after a new chat's grace period.
+ * Asks whether to keep fast mode after the first chat's grace period.
  *
- * Every way out other than "Keep fast mode on" turns fast mode off -- the
- * buttons, the backdrop, and Escape -- because the cheaper outcome is the one
- * nobody can be surprised by. It is also the button the modal opens focused
- * on.
+ * Asked once per agent: every way out records the answer (see
+ * models/FastModePrompt.ts). Every way out other than "Keep fast mode on" also
+ * turns fast mode off -- the buttons, the backdrop, and Escape -- because the
+ * cheaper outcome is the one nobody can be surprised by. It is also the button
+ * the modal opens focused on. The answer applies only to this agent; no other
+ * chat launches fast in the first place.
  */
 
 import m from "mithril";
-import { resolveFastModePrompt } from "../models/WorkspaceFastMode";
+import { getAgentById } from "../models/AgentManager";
+import { getFastModePromptAgentId, resolveFastModePrompt } from "../models/FastModePrompt";
 import { icon } from "./icons";
 
 const FAST_MODE_DOC_URL = "https://code.claude.com/docs/en/fast-mode";
+
+/** The name of the agent that raised the prompt, for the modal copy. */
+function promptingAgentName(): string | null {
+  const agentId = getFastModePromptAgentId();
+  if (agentId === null) {
+    return null;
+  }
+  return getAgentById(agentId)?.name ?? null;
+}
 
 export function FastModeModal(): m.Component {
   return {
@@ -47,7 +59,8 @@ export function FastModeModal(): m.Component {
                 m("h3.fast-mode-modal-title", "Keep fast mode on?"),
               ]),
               m("p.fast-mode-modal-message", [
-                "Fast Mode is 2.5x faster and 6x more expensive (",
+                promptingAgentName() !== null ? [m("strong", promptingAgentName()), " has Fast Mode on. "] : null,
+                "Fast Mode is 2.5x faster and 2x more expensive (",
                 m(
                   "a.fast-mode-modal-link",
                   { href: FAST_MODE_DOC_URL, target: "_blank", rel: "noopener noreferrer" },

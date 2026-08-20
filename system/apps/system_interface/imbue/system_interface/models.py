@@ -16,6 +16,29 @@ class AgentCreationError(ValueError):
     ...
 
 
+class AgentRenameError(ValueError):
+    """Raised when an agent cannot be renamed in mngr.
+
+    A chat's name lives on the mngr agent (the true name plus its
+    ``display_name`` label), so a rename that cannot reach mngr must stop the
+    whole rename rather than leave the workspace showing a name mngr does not
+    hold. This is what the rename path turns into an error response.
+    """
+
+    ...
+
+
+class AgentNameConflictError(AgentRenameError, AgentCreationError):
+    """Raised when a chosen chat name collides with another agent's.
+
+    Names collide by canonical form -- the same per-host uniqueness rule mngr
+    enforces on true names -- and the endpoints answer 409 so the caller can
+    retry with a different name.
+    """
+
+    ...
+
+
 class AttachmentError(ValueError):
     """Raised when a chat attachment cannot be stored or located."""
 
@@ -98,21 +121,15 @@ class ModelOptionsResponse(FrozenModel):
 class PoweredByResponse(FrozenModel):
     """Response from GET /api/agents/{id}/powered-by."""
 
-    label: str = Field(description="The agent's harness product name, shown as a 'Powered by <label>' credit")
-
-
-class WorkspaceFastModeResponse(FrozenModel):
-    """Response from GET|POST /api/workspace/fast-mode."""
-
-    fast_mode: bool | None = Field(
-        description="The fast-mode setting new chat agents launch with, or null if the user has not answered yet"
+    label: str = Field(
+        description="The agent harness's verbatim credit text, or '' when that harness shows no credit"
     )
 
 
-class SetWorkspaceFastModeRequest(FrozenModel):
-    """Request body for POST /api/workspace/fast-mode."""
+class FastModePromptAnsweredResponse(FrozenModel):
+    """Response from POST /api/agents/<id>/fast-mode-answered."""
 
-    enabled: bool = Field(description="True to keep fast mode on for this workspace, False to turn it off")
+    status: str = Field(description="'ok' when the answered label was recorded")
 
 
 class AttachmentUploadResponse(FrozenModel):
@@ -270,6 +287,24 @@ class AppEntry(FrozenModel):
             "origin uses. Empty for legacy rows written before labels existed."
         ),
     )
+    icon: str = Field(
+        default="",
+        description=(
+            "The app's icon as SVG markup (a single ``<svg>`` element), stored "
+            "verbatim in the registry by ``system/scripts/forward_port.py``. "
+            "Empty when the app registered no icon, which is the normal case; "
+            "consumers fall back to their generic app glyph."
+        ),
+    )
+    internal: bool = Field(
+        default=False,
+        description=(
+            "Registered with ``forward_port.py --internal``: has a port to "
+            "forward but no page of its own, so the frontend must not offer it "
+            "as something to open (the New Tab launcher's machine table, the "
+            "rail's All apps popover, its shortcuts)."
+        ),
+    )
 
 
 class TerminalSessionInfo(FrozenModel):
@@ -283,20 +318,32 @@ class TerminalSessionInfo(FrozenModel):
 class CreateChatRequest(FrozenModel):
     """Request body for creating a chat agent (any harness; claude is the default)."""
 
-    name: str = Field(description="Name for the new chat agent")
+    name: str = Field(
+        default="",
+        description="Display name for the new chat agent; empty mints the first free "
+        '"<word> N" for the harness server-side ("Chat 1", "Codex 2", ...)',
+    )
     harness: HarnessType = Field(default=HarnessType.CLAUDE, description="Harness to run the agent on")
+    first: bool = Field(
+        default=False,
+        description="Stack the `first` create template: /welcome, the first=true label, and a fast-mode launch",
+    )
+
+
+class CreatedChatAgent(FrozenModel):
+    """A freshly-created chat agent's identity: its id and its name pair."""
+
+    agent_id: str = Field(description="The pre-generated agent ID")
+    name: str = Field(description="The agent's true (canonical) name, e.g. 'Chat-2'")
+    display_name: str = Field(description="The human-readable display name, e.g. 'Chat 2'")
 
 
 class CreateAgentResponse(FrozenModel):
     """Response from agent creation endpoints."""
 
     agent_id: str = Field(description="The pre-generated agent ID")
-
-
-class RandomNameResponse(FrozenModel):
-    """Response from the random name endpoint."""
-
-    name: str = Field(description="A random agent name")
+    name: str = Field(description="The agent's true (canonical) name, e.g. 'Chat-2'")
+    display_name: str = Field(description="The human-readable display name, e.g. 'Chat 2'")
 
 
 class DestroyAgentResponse(FrozenModel):

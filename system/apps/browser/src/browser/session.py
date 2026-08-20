@@ -64,7 +64,7 @@ from loguru import logger
 from pydantic import PrivateAttr
 
 from browser import manifest as fleet_manifest
-from browser.names import generate_browser_name, is_valid_browser_name
+from browser.names import first_free_numbered_browser_name, is_valid_browser_name
 from browser.oom_retag import notify_chromium_processes_expected
 
 # browser-use phones home anonymized telemetry by default; disable it (the
@@ -584,10 +584,14 @@ class LiveBrowser(MutableModel):
 
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
 
-    # The random ~2-word english NAME the user/agent sees (e.g. "alex-smith"). The
-    # addressing key everywhere (CLI arg, cast WS path, manifest id, profile dir).
-    # Stable and never reused: a closed name is gone, so a cached name is the same
-    # browser or a 404. There is no default browser -- every name is created on demand.
+    # The NAME the user/agent sees -- ``browser-<N>`` for daemon-minted browsers
+    # ("Browser N" in the UI), a random english pair on ones created by older
+    # builds. The addressing key everywhere (CLI arg, cast WS path, manifest id,
+    # profile dir). Stable while the browser lives; closing retires the name AND
+    # deletes its profile, and only then can a later create mint it again -- so a
+    # cached name is the same browser, a 404, or (after an explicit close) a
+    # brand-new browser with none of the old one's state. There is no default
+    # browser -- every name is created on demand.
     browser_id: str
     controller: ControlOwner = "human"
     owner_agent_id: str | None = None
@@ -728,6 +732,17 @@ class LiveBrowser(MutableModel):
             executable_path=chromium_path,
             user_data_dir=str(profile_dir),
             args=[
+                # Chromium blocklists --no-sandbox (which we must pass as root: see
+                # _should_disable_sandbox) and pins a permanent "You are using an
+                # unsupported command-line flag" infobar above every page for it. We film
+                # Chrome's real window, so the human sees that bar for the life of the
+                # browser. --test-type is the only supported suppression that does not
+                # break stealth: infobar_utils.cc skips the whole bad-flags prompt when it
+                # (or --enable-automation, which sets navigator.webdriver -- not an option
+                # for Fortress) is present. It also disables Chrome's own background
+                # *component* extensions; unpacked ones (browser-use's uBlock/ClearURLs)
+                # are unaffected, and nothing about it is visible to page JS.
+                "--test-type",
                 "--disable-gpu-compositing",
                 "--disable-smooth-scrolling",
                 "--wm-window-animations-disabled",
@@ -2021,10 +2036,12 @@ class BrowserSessionManager(MutableModel):
 
     The fleet is shared per workspace: every agent in a mind reaches this one
     manager, so ``ls`` shows one fleet and ownership arbitrates between agents.
-    Every browser is created on demand with a random ~2-word english NAME -- there
-    is no default browser and the fleet starts EMPTY. Names are unique within the
-    live fleet (generated under :attr:`_lock`, regenerated on collision) and never
-    reused: a closed name is gone.
+    Every browser is created on demand -- there is no default browser and the
+    fleet starts EMPTY. A daemon-minted NAME is the first free ``browser-<N>``
+    (the canonical form of the UI's "Browser N"), allocated under :attr:`_lock`
+    against the live fleet, the manifest, and the on-disk profiles. Closing a
+    browser retires its name and deletes its profile, which is what frees the
+    slot for a later create without any state carrying over.
 
     REGISTER-INIT-IMMEDIATELY (the responsiveness fix): :meth:`create` registers a new
     :class:`LiveBrowser` in ``init`` under :attr:`_lock` (cap check + name resolution +
@@ -2187,10 +2204,15 @@ class BrowserSessionManager(MutableModel):
 
         Cap: ``init`` browsers COUNT toward the cap (a half-started fleet still reserves
         its slots); only crashed shells are excluded (they're dead, kept only to report
-        "crashed"). A ``None`` name is generated and regenerated-on-collision against the
-        registry (the uniqueness guarantee). A provided name is validated
-        (:class:`InvalidBrowserNameError`) and rejected on collision
-        (:class:`DuplicateBrowserNameError`).
+        "crashed"). A ``None`` name is minted as the first free ``browser-<N>`` --
+        the canonical form of the "Browser N" display name the UI derives from it.
+        A provided name is validated (:class:`InvalidBrowserNameError`) and rejected
+        on collision (:class:`DuplicateBrowserNameError`). Both paths count the
+        manifest's entries and the on-disk profile dirs as taken alongside the live
+        registry: a saved browser that has not been restored yet, and a profile a
+        crash orphaned between a close and its delete, both hold their name -- so a
+        new browser can never adopt an existing profile (and its cookies). Orphaned
+        profiles are swept at the next boot, which frees their names.
         """
         async with self._lock:
             # Crashed browsers are dead shells kept only to report "crashed"; they
@@ -2199,18 +2221,24 @@ class BrowserSessionManager(MutableModel):
             live = sum(1 for browser in self._browsers.values() if not browser._crashed)
             if live >= _MAX_SESSIONS:
                 raise FleetFullError(f"{live}/{_MAX_SESSIONS} browsers open -- close one first.")
+            persisted_names = self._persisted_names()
             if name is None:
-                name = self._fresh_name_locked()
+                name = self._fresh_name_locked(persisted_names)
             else:
                 if not is_valid_browser_name(name):
                     raise InvalidBrowserNameError(
                         f"'{name}' is not a valid browser name -- use lowercase letters, digits, and "
-                        "single dashes (e.g. 'alex-smith'), 1-40 characters, no leading/trailing dash."
+                        "single dashes (e.g. 'browser-2'), 1-40 characters, no leading/trailing dash."
                     )
                 if name in self._browsers:
                     raise DuplicateBrowserNameError(
                         f"the name '{name}' is already in use -- pick another, or close that browser first "
                         "(a crashed browser still holds its name until you close it)."
+                    )
+                if name in persisted_names:
+                    raise DuplicateBrowserNameError(
+                        f"the name '{name}' still belongs to a saved browser or its on-disk profile -- "
+                        "pick another (a browser that has not been restored yet keeps its name)."
                     )
             session = self._register_init_locked(name)
         # Persist the manifest NOW, while the browser is still ``init`` (finding [5]):
@@ -2222,22 +2250,26 @@ class BrowserSessionManager(MutableModel):
         self._spawn_launch(session)
         return session
 
-    def _fresh_name_locked(self) -> str:
-        """A generated name not currently in the live fleet. Caller holds ``self._lock``,
-        so the check is against an unchanging ``_browsers`` -- this is the random-name
-        uniqueness guarantee. Bounded so a pathological generator can't spin forever
-        while holding the global launch lock (which would wedge the whole fleet): after
-        a few dozen attempts, fall back to appending a short random suffix."""
-        for _ in range(50):
-            candidate = generate_browser_name()
-            if candidate not in self._browsers:
-                return candidate
-        # Extremely unlikely (cap is 3); a defensive escape so we never loop unbounded.
-        base = generate_browser_name()
-        suffix = 1
-        while f"{base}-{suffix}" in self._browsers:
-            suffix += 1
-        return f"{base}-{suffix}"
+    def _persisted_names(self) -> set[str]:
+        """Names held by the manifest or an on-disk profile dir, live or not.
+
+        Both are name claims that ``create`` must respect: a manifest entry is a
+        saved browser that may not have been restored yet (creates work during
+        restore), and a profile dir carries a browser's cookies -- a new browser
+        adopting either would be a different object resurrecting the old one's
+        identity or state. Cheap synchronous reads (a small JSON file and one
+        directory listing), called under ``self._lock`` at create time only.
+        """
+        saved = fleet_manifest.read_manifest()
+        manifest_names = {entry.id for entry in saved.browsers} if saved is not None else set()
+        return manifest_names | set(self._scan_profile_names())
+
+    def _fresh_name_locked(self, persisted_names: set[str]) -> str:
+        """The first free ``browser-<N>`` name. Caller holds ``self._lock``, so the
+        check is against an unchanging ``_browsers`` -- this is the minted-name
+        uniqueness guarantee. ``persisted_names`` widens the taken set to saved and
+        on-disk claims (see :meth:`_persisted_names`)."""
+        return first_free_numbered_browser_name(set(self._browsers) | persisted_names)
 
     def get(self, browser_id: str) -> LiveBrowser:
         # Dict access raises KeyError for a missing/closed name; callers turn it into a 404.
@@ -2248,7 +2280,7 @@ class BrowserSessionManager(MutableModel):
         loop via ``bridge.run`` -- race-free against a concurrent close popping the name --
         without defining its own ``async def``. There is no default browser: every browser
         is created on demand and addressed by name; a closed/unknown name raises KeyError
-        (-> 404) and is never reused."""
+        (-> 404) until a later create mints it afresh."""
         return self.get(browser_id)
 
     def has_browser(self, browser_id: str) -> bool:
