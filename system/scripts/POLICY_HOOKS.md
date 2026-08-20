@@ -112,6 +112,12 @@ rendered per call — so a second request is never shown, and `> /tmp/req.json` 
 call, including reading the queue, is untouched. The tokenizing lives in
 `claude_latchkey_request_check.py` (`shlex` again, so a rationale that mentions `&&` or `>` stays
 inside its quoted token).
+
+The redirect half is blunt on purpose: `CommandSegment.has_redirect` records only *that* a
+segment is redirected, so an *input* redirect (`-d @- < body.json`, or a heredoc, whose body
+also re-enters the parse as further commands) is blocked alongside the output ones, even though
+it leaves the echo intact. The block message names that form, and the fix is the same either
+way — pass the body inline with `-d '{...}'`.
 - **claude / codex**: the `.sh`, which execs the `.py`; stderr + `exit 2` blocks.
 - **pi**: `on("tool_call")` runs the **same** `claude_latchkey_request_check.py` synchronously
   (only when the command mentions the host) and maps its exit-2/stderr to `{block, reason}` —
