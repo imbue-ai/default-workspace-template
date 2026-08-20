@@ -8,16 +8,14 @@
  *
  * Every message row's root element carries a DOM `id` equal to its virtualization
  * key (see message-renderers / conversation-rows); spacers have an empty id.
+ *
+ * The pin is bounded by what a selection spans, not by how far the viewport has
+ * moved away from it: only the rows between its two endpoints are held, never the
+ * arbitrarily many between them and the viewport. So there is no distance cap to
+ * enforce here, and a selection survives scrolling and streaming at any distance.
  */
 
 import { type SelectionState } from "../models/scrollFollow";
-
-// Stop holding a selection's rows in the virtualization window once the viewport
-// is more than this many rows away from them, so a selection left active during a
-// long stream can't keep an unbounded span of rows mounted. Past this the pin is
-// dropped (and the selection collapses) -- a deliberate memory bound; in practice
-// users select-then-copy within seconds, far inside this gap.
-export const SELECTION_PIN_MAX_GAP_ROWS = 300;
 
 /** Walk up from a selection endpoint node to the message-row element (the child
  *  of `.message-list`) and return its key, or null if the node isn't inside a
