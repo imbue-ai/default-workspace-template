@@ -612,11 +612,17 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   /**
    * Note which row the reader is looking at, and where in the viewport it sits.
    *
-   * Captured before the window is recomputed, in the virtualizer's own offset
-   * space rather than by measuring the DOM. That distinction is the whole point:
-   * a DOM-measured anchor is sampled against rows that are still settling, so it
-   * oscillates and rectifies into drift. These offsets are the same numbers the
-   * layout is about to be built from, so restoring against them is exact.
+   * Read in the virtualizer's own offset space rather than by measuring the DOM.
+   * That distinction is the whole point: a DOM-measured anchor is sampled against
+   * rows that are still settling, so it oscillates and rectifies into drift.
+   * These offsets are the same numbers the layout is about to be rebuilt from, so
+   * restoring against them is exact.
+   *
+   * Call this before the frame's rows, reserve rate and measurements are
+   * replaced, not merely before `virtualizer.sync()`. The virtualizer reads those
+   * three through closures while answering from a memo keyed on the options it
+   * was last given, so an anchor taken between the two sees a layout that is half
+   * this frame and half the last one.
    */
   function captureReadingAnchor(): void {
     const justBecameVisible = panelVisible && !wasPanelVisible;
@@ -827,6 +833,15 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     // catalog), not a harness-name check here.
     maybePromptForFastMode(agent, events, agentIsIdle);
 
+    // Before anything this frame changes. The virtualizer answers from a memo
+    // keyed on the options it was last given, but `getRowKey` and `estimateSize`
+    // are closures that read the live rows, rate and measurements -- so a memo
+    // invalidated after those move (a measurement landing in the same redraw, or
+    // the width reset below) recomputes the layout from the previous frame's row
+    // count against this frame's keys. Reading it here keeps both halves
+    // describing the frame the reader is actually looking at.
+    captureReadingAnchor();
+
     // Memoize the turn-grouping -> rows pipeline. buildSections walks the entire
     // held transcript, so recomputing it on every scroll-driven redraw is the
     // dominant scroll cost on a long conversation. Its output depends only on the
@@ -876,7 +891,6 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     // selection endpoint's node collapses the selection.
     pinnedRowIndices = selectionActive ? resolveSelectionRowIndices(scroll.scrollEl, cachedKeyToIndex) : [];
 
-    captureReadingAnchor();
     virtualizer.sync();
     const items = virtualizer.getVirtualItems();
 
