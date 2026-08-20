@@ -4,6 +4,8 @@ New PreToolUse guard `system/scripts/claude_latchkey_request_standalone.sh` (wit
 
 This closes two ways a request could silently fail to reach the user: the chat renders one permission card per tool call and reads only the first request object echoed in the result, so a batched second request was never shown (it sat unanswered in the minds inbox), and a `> /tmp/req.json` or `| jq .request_id` took the echoed object away, leaving a card with no button to open the approval dialog.
 
+"Redirects its output" covers curl's own write-the-body-to-a-file flags, in every spelling that names the flag as a whole word: `-o out.json`, `-oout.json`, `--output`, `--output=`, `-O`, `--remote-name`, and bundled short-flag clusters like `-so out.json` or `-fsSLo out.json`.
+
 Reading the queue and every other `latchkey curl` are untouched and may still be piped or chained.
 
 The guard is wired for claude in `.claude/settings.json`; codex and pi run the same checker (see `system/scripts/POLICY_HOOKS.md`, where it is now hook 3 and the later hooks are renumbered accordingly).
