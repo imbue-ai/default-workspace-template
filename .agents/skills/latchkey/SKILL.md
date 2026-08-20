@@ -56,9 +56,12 @@ latchkey curl http://latchkey-self.invalid/permissions/available/discord
 
 # 2. Retrieve the list of your existing permissions if necessary.
 latchkey curl http://latchkey-self.invalid/permissions/self | jq .rules
+```
 
-# 3. Ask for the necessary missing permissions.
-# (This one command, alone in its tool call, with its output untouched -- see the rule below.)
+Then ask for the missing permissions. This one goes in a tool call of its own,
+with nothing else in it and its output untouched -- see the rule below:
+
+```bash
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
   -H 'Content-Type: application/json' \
   -d '{"agent_id": "'"$MNGR_AGENT_ID"'", "type": "predefined", "payload": {"scope": "discord-api", "permissions": ["discord-read-all"]}, "rationale": "I'"'"'d like to access your Discord account to read server and channel information so I can help you summarize conversations."}'
