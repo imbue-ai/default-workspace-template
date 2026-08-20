@@ -1050,6 +1050,13 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
    * dropped rather than reused. Bucketing means the common small changes (a
    * scrollbar appearing, a few pixels of panel resize) stay warm.
    *
+   * Every measured height goes, not just the persisted ones. The virtualizer
+   * keeps its own size cache and only asks `estimateSize` for a row it has no
+   * size for, so leaving it holding the old width's heights would mean each
+   * off-screen row snapping as it came back into view. The learned per-event
+   * rate goes with them: it is settled-and-frozen by design, so a stale one
+   * would price unloaded history at the old width for the panel's lifetime.
+   *
    * The load is async and may land after the user has already scrolled. That is
    * safe: adopting it changes the reserved height, and restoreReadingAnchor puts
    * the reader back on the row they were reading, so the content in front of
@@ -1063,6 +1070,9 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     geometryWidthBucket = bucket;
     measurements.reset();
     geometry = new RowGeometryIndex();
+    virtualizer.reset();
+    reserveRate = DEFAULT_EVENT_HEIGHT_PX;
+    isReserveRateSettled = false;
     const requestedAgentId = agentId;
     const requestedBucket = bucket;
     loadGeometrySnapshot(agentId, bucket)
