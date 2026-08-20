@@ -4457,13 +4457,22 @@ def test_a_geometry_request_naming_no_width_is_refused_with_nowhere_to_store_it_
     the client treats every non-ok response as "nothing measured", so a 200 there
     would hide a mismatched request shape in exactly the setups that are used to
     develop against.
+
+    The write side answers the same way for the same reason -- a body the server
+    cannot read is a 400 whichever workspace it arrives at, and the missing place
+    to store it is a separate answer for a request that was well formed.
     """
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.delenv("MNGR_AGENT_ID", raising=False)
+    measured_rows = [{"row_key": "turn-1", "start_offset": 0, "end_offset": 3, "height": 160.0}]
 
     assert client.get("/api/agents/agent-7/geometry").status_code == 400
     assert client.get("/api/agents/agent-7/geometry?width=0").status_code == 400
     assert client.get("/api/agents/agent-7/geometry?width=760").get_json() == {"rows": []}
+    assert client.put("/api/agents/agent-7/geometry", json={"rows": measured_rows}).status_code == 400
+    assert client.put("/api/agents/agent-7/geometry", json={"width": 0, "rows": measured_rows}).status_code == 400
+    assert client.put("/api/agents/agent-7/geometry", json={"width": 760}).status_code == 400
+    assert client.put("/api/agents/agent-7/geometry", json={"width": 760, "rows": measured_rows}).status_code == 500
 
 
 def test_a_refused_destroy_leaves_the_transcripts_geometry_alone(

@@ -1574,10 +1574,9 @@ def _store_transcript_geometry_endpoint(agent_id: str) -> Response:
     stored geometry outlives the client that wrote it -- and the response is
     what was actually kept, so the caller never has to assume.
     """
-    layout_dir = _primary_agent_layout_dir()
-    if layout_dir is None:
-        error = ErrorResponse(detail="No primary agent configured for this workspace")
-        return _json_response(error.model_dump(), status_code=500)
+    # Before the workspace check, as on the read side, so the same malformed
+    # request gets the same answer whether or not this workspace happens to have
+    # a primary agent.
     body = _parse_json_object_body()
     if isinstance(body, Response):
         return body
@@ -1591,6 +1590,10 @@ def _store_transcript_geometry_endpoint(agent_id: str) -> Response:
     if not isinstance(rows, list):
         error = ErrorResponse(detail="'rows' must be a list of measured rows")
         return _json_response(error.model_dump(), status_code=400)
+    layout_dir = _primary_agent_layout_dir()
+    if layout_dir is None:
+        error = ErrorResponse(detail="No primary agent configured for this workspace")
+        return _json_response(error.model_dump(), status_code=500)
     stored_rows = transcript_geometry.write_geometry(layout_dir, agent_id, width, rows)
     return _json_response({"rows": [row.model_dump() for row in stored_rows]})
 
