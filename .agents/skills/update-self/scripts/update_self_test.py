@@ -1809,7 +1809,9 @@ def test_marker_is_written_before_the_merge_lands(apply_repo: Path) -> None:
     assert not _marker_exists(apply_repo)  # cleared on the way out
 
 
-def test_marker_records_the_dri_agent_and_phases(apply_repo: Path) -> None:
+def test_marker_records_the_dri_agent_and_phases(
+    apply_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     runner = _apply_runner(_BACKEND_DIFF, apply_repo)
     phases: list[str] = []
     dri: list[str] = []
@@ -1821,11 +1823,10 @@ def test_marker_records_the_dri_agent_and_phases(apply_repo: Path) -> None:
             dri.append(marker.dri_agent)
 
     runner.on_command = capture
-    os.environ["MNGR_AGENT_NAME"] = "test-lead-agent"
-    try:
-        code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
-    finally:
-        del os.environ["MNGR_AGENT_NAME"]
+    # monkeypatch (not a bare os.environ write): in a real agent workspace
+    # MNGR_AGENT_NAME is already set, and it must be restored, not deleted.
+    monkeypatch.setenv("MNGR_AGENT_NAME", "test-lead-agent")
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
 
     assert code == 0
     assert "test-lead-agent" in dri
