@@ -105,7 +105,7 @@ Blocks `git rebase`, `git commit --amend|--fixup`, `git pull --rebase`.
 ### 3. Block a batched/chained/redirected permission request — `claude_latchkey_request_standalone.sh`
 A **hard** block when a POST to the reserved `latchkey-self.invalid/permission-requests` host
 (the call that FILES a permission request) shares its tool call with a second request, with
-another command, or has its output redirected. The chat builds the card the user acts on out of
+another command, has its output redirected, or runs in the background. The chat builds the card the user acts on out of
 that one call: only the first echoed request object in the result is read, and one card is
 rendered per call — so a second request is never shown, and `> /tmp/req.json` / `| jq
 .request_id` takes the echoed object away, leaving the card with no button. Every other latchkey
@@ -118,10 +118,19 @@ segment is redirected, so an *input* redirect (`-d @- < body.json`, or a heredoc
 also re-enters the parse as further commands) is blocked alongside the output ones, even though
 it leaves the echo intact. The block message names that form, and the fix is the same either
 way — pass the body inline with `-d '{...}'`.
+
+One violation is not in the command text at all: a **backgrounded** tool call
+(claude's Bash `run_in_background: true`) returns a shell id, so the echo lands in a later
+`BashOutput` call rather than in the card's own result — the same failure as a trailing `&`,
+which the command-text checks already block. The `.sh` therefore also reads
+`.tool_input.run_in_background` out of the payload and passes `--backgrounded` to the `.py`,
+which blocks when a request is filed that way. A harness whose payload has no such field never
+sets it.
 - **claude / codex**: the `.sh`, which execs the `.py`; stderr + `exit 2` blocks.
 - **pi**: `on("tool_call")` runs the **same** `claude_latchkey_request_check.py` synchronously
   (only when the command mentions the host) and maps its exit-2/stderr to `{block, reason}` —
-  the same bridge shape as the tk-standalone checker below.
+  the same bridge shape as the tk-standalone checker below. It passes the command alone: the
+  `--backgrounded` flag has no counterpart in pi's `tool_call` input.
 
 ### 4. Rewrite every Bash command — `claude_rewrite_bash_command.py`
 Prepends an OOM self-tag (so the agent's subprocesses are shed first under memory pressure)

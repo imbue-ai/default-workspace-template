@@ -89,7 +89,9 @@ those forms, and every other way of putting a second command in the call
 (`| tee ...`, `&& echo done`, a leading `cd`) along with them -- the request has to
 be the whole tool call. It also blocks any redirection of the command's *input*,
 so pass the body inline with `-d '{...}'` rather than through a heredoc or
-`-d @- < body.json`.
+`-d @- < body.json`. Run it in the foreground, too: a background tool call
+(`run_in_background: true`) returns a shell id instead of the echo, which leaves
+the card just as buttonless, so the hook blocks that as well.
 
 Need permissions for two scopes? Post the first one, wait for its verdict, then post
 the second.

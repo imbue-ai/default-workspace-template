@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Decide whether a Bash command files a latchkey permission request badly.
 
-Takes the command as its single positional argument (passed by
-claude_latchkey_request_standalone.sh). Exits 0 to allow; exits 2 with a guiding
-stderr message to BLOCK. See the wrapper for the why.
+Takes the command as its positional argument, optionally preceded by
+``--backgrounded`` when the tool call runs the command in the background (both
+passed by claude_latchkey_request_standalone.sh, which reads them out of the
+hook payload). Exits 0 to allow; exits 2 with a guiding stderr message to BLOCK.
+See the wrapper for the why.
 
 The command structure (which segments POST to the permission-requests host,
 whether one is chained or redirected) comes from the shared `tk_command_parsing`
@@ -67,6 +69,15 @@ _CHAIN = (
     "it is chained with, piped into, or preceded by another command "
     "(`&&`, `||`, `;`, `|`, `&`, a leading `cd`, or a newline)"
 )
+_BACKGROUND = (
+    "the tool call itself runs in the background (`run_in_background`), so its "
+    "result is a shell id rather than the gateway's echo"
+)
+
+# The flag the wrapper adds when the hook payload says the tool call is
+# backgrounded. It is a property of the CALL, not of the command text, so it
+# cannot be read out of the command the way everything else here is.
+_BACKGROUNDED_FLAG = "--backgrounded"
 
 
 def _is_argument(word: str) -> bool:
@@ -121,8 +132,13 @@ def _request_count(segment: CommandSegment) -> int:
     return sum(1 for word in segment.words if _is_request_url(word))
 
 
-def classify(cmd: str) -> str | None:
+def classify(cmd: str, is_backgrounded: bool = False) -> str | None:
     """Return the violation reason if `cmd` files a permission request badly.
+
+    ``is_backgrounded`` is whether the tool call runs `cmd` in the background
+    (claude's Bash ``run_in_background``), which sends the output somewhere the
+    result cannot carry it -- the one input here that the command text does not
+    hold.
 
     Returns None when the command is allowed: either it files no permission
     request at all (including a GET of the queue, or a command that merely
@@ -139,6 +155,11 @@ def classify(cmd: str) -> str | None:
         return None
     if sum(count for _, count in filings) > 1:
         return _MULTIPLE
+    if is_backgrounded:
+        # Same failure as a trailing `&` below -- the call returns a shell id
+        # before the gateway answers, so its echo never lands in this tool
+        # result -- reached through the tool's own flag instead of the command.
+        return _BACKGROUND
     request = requests[0]
     if request.has_redirect or _writes_body_to_file(request.words):
         return _REDIRECT
@@ -159,9 +180,11 @@ def classify(cmd: str) -> str | None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = sys.argv if argv is None else argv
-    command = args[1] if len(args) > 1 else ""
-    violation = classify(command)
+    args = (sys.argv if argv is None else argv)[1:]
+    is_backgrounded = _BACKGROUNDED_FLAG in args
+    positional = [arg for arg in args if arg != _BACKGROUNDED_FLAG]
+    command = positional[0] if positional else ""
+    violation = classify(command, is_backgrounded=is_backgrounded)
     if violation is None:
         return 0
 
@@ -172,9 +195,10 @@ def main(argv: list[str] | None = None) -> int:
         "that single tool call: what to show comes from the command, and the button "
         "that opens the approval dialog comes from the request object the gateway "
         "echoes on stdout. A second request in the same call is never shown (the user "
-        "cannot answer a request they cannot see), and redirecting or piping the "
-        "output away leaves the card with no button.\n\n"
-        "Re-run with just the one request, output untouched:\n"
+        "cannot answer a request they cannot see), and anything that keeps the echo out "
+        "of this call's result -- redirecting or piping it away, or backgrounding the "
+        "call so the result is a shell id -- leaves the card with no button.\n\n"
+        "Re-run with just the one request, in the foreground, output untouched:\n"
         "  latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \\\n"
         "    -H 'Content-Type: application/json' \\\n"
         '    -d \'{"agent_id": "\'"$MNGR_AGENT_ID"\'", ...}\'\n\n'

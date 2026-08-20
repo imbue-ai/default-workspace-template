@@ -1,9 +1,10 @@
 """Tests for the one-permission-request-per-call PreToolUse guard.
 
 The guard blocks a latchkey permission request that is batched with another
-request, chained with another command, or has its output redirected, so the chat
-always sees one request per call with the gateway's echoed object intact. Every
-other latchkey call -- including reading the queue -- is left alone.
+request, chained with another command, has its output redirected, or is filed by
+a backgrounded tool call, so the chat always sees one request per call with the
+gateway's echoed object intact. Every other latchkey call -- including reading
+the queue -- is left alone.
 """
 
 from __future__ import annotations
@@ -142,7 +143,31 @@ def test_routes_to_the_right_block_reason() -> None:
     assert checker.classify(f"{_REQUEST} | jq .") == checker._CHAIN
 
 
+def test_blocks_a_request_filed_by_a_backgrounded_call() -> None:
+    """A backgrounded call keeps the echo out of its result just as `&` does --
+    the result is a shell id -- and the flag is the only such fact the command
+    text cannot carry."""
+    assert checker.classify(_REQUEST, is_backgrounded=True) == checker._BACKGROUND
+    assert (
+        checker.classify(_MULTILINE_REQUEST, is_backgrounded=True)
+        == checker._BACKGROUND
+    )
+    # ... and it is only the gate's business when a request is actually filed.
+    assert (
+        checker.classify("latchkey curl http://example.invalid/x", is_backgrounded=True)
+        is None
+    )
+    assert (
+        checker.classify(f"latchkey curl {_HOST} | jq .", is_backgrounded=True) is None
+    )
+
+
 def test_main_exit_codes() -> None:
-    """main() exits 0 for a lone request, 2 for a redirected one."""
+    """main() exits 0 for a lone request, 2 for a redirected or backgrounded one."""
     assert checker.main(["check", _REQUEST]) == 0
     assert checker.main(["check", f"{_REQUEST} > /tmp/out.json"]) == 2
+    assert checker.main(["check", "--backgrounded", _REQUEST]) == 2
+    # The flag is not mistaken for the command, and its absence leaves the
+    # positional-only call (the form pi's bridge uses) reading as foreground.
+    assert checker.main(["check", "--backgrounded"]) == 0
+    assert checker.main(["check", _REQUEST]) == 0
