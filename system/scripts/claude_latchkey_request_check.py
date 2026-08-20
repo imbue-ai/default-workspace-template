@@ -131,9 +131,12 @@ def classify(cmd: str) -> str | None:
     request = requests[0]
     if request.has_redirect or _writes_body_to_file(request.words):
         return _REDIRECT
-    if request.terminator == "&":
+    if any(seg.terminator == "&" for seg in parsed.segments):
         # Backgrounded: the call returns before the gateway answers, so its echo
-        # never lands in this tool result.
+        # never lands in this tool result. Read across every segment, because
+        # grouping (`( <request> ) &`) puts the `&` on the empty segment after
+        # `)` rather than on the request's own -- and an `&` that separates a
+        # real second command is caught by the word-bearing count below anyway.
         return _CHAIN
     # A trailing separator (`cmd;`) leaves an empty tail segment, which is not a
     # second command; anything with words is.

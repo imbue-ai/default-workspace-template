@@ -37,6 +37,7 @@ _ALLOWED = [
     f"  {_REQUEST}  ",  # surrounding whitespace
     f"{_REQUEST}\n",  # lone trailing newline
     f"{_REQUEST};",  # trailing separator, not a second command
+    f"( {_REQUEST} )",  # a plain subshell still writes the echo to the result
     # A rationale that quotes shell operators: they live inside one token.
     f"""latchkey curl -XPOST {_HOST} -d '{{"rationale": "read A && B > C | D"}}'""",
     # Reading the queue or the available permissions is not a filing: no POST.
@@ -89,6 +90,7 @@ _BLOCKED = [
     # operators to the lexer.
     f"( {_REQUEST} ) > /tmp/request.json",
     f"{{ {_REQUEST} ; }} | jq .request_id",
+    f"( {_REQUEST} ) &",  # the `&` lands on the segment after `)`, not the request
 ]
 
 
