@@ -64,11 +64,9 @@ def _is_argument(word: str) -> bool:
     return not any(char.isspace() for char in word)
 
 
-def _targets_request_host(words: tuple[str, ...]) -> bool:
-    """True when one of `words` is the permission-requests URL itself."""
-    return any(
-        _PERMISSION_REQUEST_HOST in word and _is_argument(word) for word in words
-    )
+def _is_request_url(word: str) -> bool:
+    """True when `word` is the permission-requests URL itself."""
+    return _PERMISSION_REQUEST_HOST in word and _is_argument(word)
 
 
 def _sets_post_method(words: tuple[str, ...]) -> bool:
@@ -93,17 +91,23 @@ def _writes_body_to_file(words: tuple[str, ...]) -> bool:
     )
 
 
-def _is_permission_request(segment: CommandSegment) -> bool:
-    """True when this one command POSTs to the permission-requests host.
+def _request_count(segment: CommandSegment) -> int:
+    """How many permission requests this one command files.
 
-    It has to FILE a request, not merely quote one: the host must be passed as
-    its own argument (the URL curl receives) and the method as its own flag
-    token. A commit message, grep pattern, or doc snippet that spells out the
-    canonical request keeps both inside a single token, along with the prose
-    around them. The transcript parser's looser whole-input match cannot tell
-    those apart; this gate must, because it blocks.
+    A command has to FILE a request to count, not merely quote one: the host
+    must be passed as its own argument (the URL curl receives) and the method as
+    its own flag token. A commit message, grep pattern, or doc snippet that
+    spells out the canonical request keeps both inside a single token, along
+    with the prose around them. The transcript parser's looser whole-input match
+    cannot tell those apart; this gate must, because it blocks.
+
+    Counted per URL rather than per command, because curl performs the request
+    once for each URL it is given (and `--next` lets each carry its own body),
+    so one invocation can file several.
     """
-    return _targets_request_host(segment.words) and _sets_post_method(segment.words)
+    if not _sets_post_method(segment.words):
+        return 0
+    return sum(1 for word in segment.words if _is_request_url(word))
 
 
 def classify(cmd: str) -> str | None:
@@ -118,10 +122,11 @@ def classify(cmd: str) -> str | None:
     if parsed is None:
         return None
 
-    requests = [seg for seg in parsed.segments if _is_permission_request(seg)]
+    filings = [(seg, _request_count(seg)) for seg in parsed.segments]
+    requests = [seg for seg, count in filings if count > 0]
     if not requests:
         return None
-    if len(requests) > 1:
+    if sum(count for _, count in filings) > 1:
         return _MULTIPLE
     request = requests[0]
     if request.has_redirect or _writes_body_to_file(request.words):

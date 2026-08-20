@@ -57,6 +57,9 @@ _ALLOWED = [
 _BLOCKED = [
     f"{_REQUEST} && {_REQUEST}",  # two requests batched into one call
     f"{_REQUEST}\n{_REQUEST}",  # ... via a newline
+    # ... and inside ONE curl, which runs once per URL it is handed.
+    f"{_REQUEST} {_HOST}",
+    f"{_REQUEST} --next -XPOST {_HOST} -d {_BODY}",
     f"{_REQUEST} > /tmp/request.json",  # the echoed object never reaches the chat
     f"{_REQUEST} 2>/dev/null",
     # curl writes the body to a file itself, which takes the echoed object away
@@ -102,6 +105,7 @@ def test_blocks_batched_chained_or_redirected_requests() -> None:
 def test_routes_to_the_right_block_reason() -> None:
     """Each violation kind maps to its distinct reason (not just any block)."""
     assert checker.classify(f"{_REQUEST} && {_REQUEST}") == checker._MULTIPLE
+    assert checker.classify(f"{_REQUEST} {_HOST}") == checker._MULTIPLE
     assert checker.classify(f"{_REQUEST} > /tmp/out.json") == checker._REDIRECT
     assert checker.classify(f"{_REQUEST} -o /tmp/out.json") == checker._REDIRECT
     assert checker.classify(f"{_REQUEST} | jq .") == checker._CHAIN
