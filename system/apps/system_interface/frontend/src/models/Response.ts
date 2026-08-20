@@ -8,6 +8,7 @@ import { apiUrl } from "../base-path";
 import { reportMessaged } from "./activityReporter";
 import { getActiveProjectId, getClientId, getDeviceKind } from "./ClientIdentity";
 import { noteBackendArrivals } from "./OutgoingMessages";
+import { describeRequestError } from "./request-error";
 
 export interface SubagentMetadata {
   agent_type: string;
@@ -463,6 +464,14 @@ class TranscriptStore {
 
 const storeByAgent: Record<string, TranscriptStore> = {};
 const notFoundAgentIds = new Set<string>();
+// Why the last snapshot fetch failed, per agent, or absent once one succeeded.
+// It lives here rather than in the panel because every path that reloads a
+// transcript -- the panel's own load, the tab's Refresh, and the stream's
+// background reconnect -- goes through `fetchEvents`, and only one of those is
+// the panel. A panel holding its own copy could not be cleared by the other two,
+// so a recovered transcript stayed hidden behind a stale error until the page
+// was reloaded.
+const loadErrorByAgent = new Map<string, string>();
 
 function storeFor(agentId: string): TranscriptStore {
   let store = storeByAgent[agentId];
@@ -497,6 +506,11 @@ export function hasMoreAfter(agentId: string): boolean {
 
 export function isConversationNotFound(agentId: string): boolean {
   return notFoundAgentIds.has(agentId);
+}
+
+/** Why this agent's last snapshot fetch failed, or null if the last one succeeded. */
+export function getConversationLoadError(agentId: string): string | null {
+  return loadErrorByAgent.get(agentId) ?? null;
 }
 
 export function getEventsForAgent(agentId: string): TranscriptEvent[] {
@@ -590,6 +604,11 @@ function placeWindow(agentId: string, result: EventsResponse): void {
 
 export async function fetchEvents(agentId: string): Promise<TranscriptEvent[]> {
   notFoundAgentIds.delete(agentId);
+  // Cleared on the attempt, not on its success: whoever is about to learn the
+  // outcome must not be shown the previous one. Only the snapshot records a
+  // load error -- a failed page or jump below leaves the loaded window intact
+  // and is deliberately non-fatal, so it must not blank a readable transcript.
+  loadErrorByAgent.delete(agentId);
 
   try {
     const result = await m.request<EventsResponse>({
@@ -605,6 +624,7 @@ export async function fetchEvents(agentId: string): Promise<TranscriptEvent[]> {
     if (requestError.code === 404) {
       notFoundAgentIds.add(agentId);
     }
+    loadErrorByAgent.set(agentId, describeRequestError(error));
     throw error;
   }
 }

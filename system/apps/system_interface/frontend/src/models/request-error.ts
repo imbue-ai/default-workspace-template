@@ -1,4 +1,16 @@
 /**
+ * Messages that carry no information, in the exact spellings mithril produces.
+ *
+ * Mithril builds its rejection as `new Error(body)`, and `Error` stringifies
+ * whatever it is handed -- so a body it could not read arrives as the *word*
+ * "null", not as an absent message. (With `responseType: "json"` and a
+ * non-JSON body, `xhr.response` is null and reading `xhr.responseText` throws,
+ * which is exactly a proxy's plain-text 503.) An emptiness check alone lets
+ * that through, which is how "Error: null" reached the user.
+ */
+const UNINFORMATIVE_MESSAGES: ReadonlySet<string> = new Set(["null", "undefined", "[object Object]"]);
+
+/**
  * Extract a human-readable message from a failed `m.request` rejection.
  *
  * Mithril rejects with an Error-like value carrying (when available) the parsed
@@ -22,9 +34,9 @@ export function describeRequestError(error: unknown): string {
     return detail.trim();
   }
 
-  const message = err.message;
-  if (typeof message === "string" && message.trim() !== "") {
-    return message.trim();
+  const message = typeof err.message === "string" ? err.message.trim() : "";
+  if (message !== "" && !UNINFORMATIVE_MESSAGES.has(message)) {
+    return message;
   }
 
   if (typeof err.code === "number" && err.code !== 0) {

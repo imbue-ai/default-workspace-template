@@ -13,6 +13,7 @@ import {
   fetchBackfillEvents,
   fetchForwardEvents,
   fetchWindowAtOffset,
+  getConversationLoadError,
   getEventsForAgent,
   getEventCount,
   getFirstOffset,
@@ -103,7 +104,6 @@ function isProtoAgent(agentId: string): boolean {
 
 export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean }> {
   let loading = false;
-  let loadingError: string | null = null;
   let currentAgentId: string | null = null;
 
   // Whether this panel is the visible (selected) tab in its dockview group.
@@ -365,25 +365,21 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
 
   async function loadAgent(agentId: string): Promise<void> {
     loading = true;
-    loadingError = null;
 
     try {
       // Buffer SSE deltas arriving during the snapshot fetch so the wholesale
       // snapshot replace in fetchEvents cannot drop a live event on first load.
       await loadSnapshotWithStream(agentId);
       if (agentId === currentAgentId) {
-        loading = false;
-        loadingError = null;
         checkLatestAssistantForAuthError(agentId);
       }
-    } catch (error) {
+    } catch {
+      // Why it failed is recorded against the agent by `fetchEvents` and read
+      // back in the view, so that a later success -- from any caller, including
+      // the stream's own reconnect -- clears it. Nothing to hold here.
+    } finally {
       if (agentId === currentAgentId) {
         loading = false;
-        // mithril attaches the parsed JSON error body to `.response`; the server
-        // sends the human-readable reason there as `detail`. Reading `.message`
-        // alone surfaces the raw body object as "[object Object]".
-        const errResp = (error as { response?: { detail?: string } }).response;
-        loadingError = errResp?.detail ?? (error as Error).message ?? String(error);
       }
     }
   }
@@ -620,7 +616,14 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       );
     }
 
-    if (loadingError) {
+    // Read per-render rather than latched at load time, so the panel leaves the
+    // error state as soon as any reload succeeds -- the tab's Refresh or the
+    // stream's background reconnect, neither of which goes through loadAgent.
+    // Shown only with nothing else to render: a Refresh or a reconnect that
+    // fails against an already-loaded transcript must leave it on screen, since
+    // a readable transcript beats an error about the attempt to re-read it.
+    const loadingError = getConversationLoadError(agentId);
+    if (loadingError !== null && getEventCount(agentId) === 0) {
       return m(
         "div",
         { class: "message-list-error flex items-center justify-center h-full" },
