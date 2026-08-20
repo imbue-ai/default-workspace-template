@@ -134,6 +134,29 @@ describe("createTranscriptVirtualizer windowing", () => {
     // recompute the range against a zero-height viewport.
     expect(renderedIndices(harness({ viewportHeight: 0 }))).toEqual([]);
   });
+
+  it("ignores the scroll offset of a view that is not visible", () => {
+    // The other half of the pair above, and deliberately not symmetric with it.
+    // A zero rect says "hidden" on its own, but a zero offset is exactly what
+    // the top of the transcript reads as -- so this one has to ask the view.
+    // Letting a hidden tab's offset through would rewind its window to the top
+    // and lose the place the reader had scrolled to.
+    const harnessed = harness({ rowCount: 200, enabled: false });
+    const before = renderedIndices(harnessed);
+
+    harnessed.scrollTo(2000);
+
+    expect(renderedIndices(harnessed)).toEqual(before);
+  });
+
+  it("follows the scroll offset of a view that is visible", () => {
+    const harnessed = harness({ rowCount: 200 });
+    const before = renderedIndices(harnessed);
+
+    harnessed.scrollTo(2000);
+
+    expect(renderedIndices(harnessed)).not.toEqual(before);
+  });
 });
 
 // The pins are set before the first render throughout: the library memoizes the
