@@ -454,6 +454,13 @@ extra_window = ["bootstrap='uv run bootstrap'"]
 # tracking hooks. It lives in its own file so those hook lines stay readable.
 extra_provision_command__extend = [
     '''printf '%s\n' 'set -g alternate-screen off' 'set -g mouse on' 'set -g set-clipboard on' 'set -as terminal-features ,*:clipboard' 'bind -T copy-mode MouseDragEnd1Pane send -X copy-pipe-and-cancel' 'bind -T copy-mode-vi MouseDragEnd1Pane send -X copy-pipe-and-cancel' 'if-shell "test -f /home/user/workspace/system/apps/terminal/terminal_tmux.conf" "source-file /home/user/workspace/system/apps/terminal/terminal_tmux.conf"' > "$HOME/.tmux.conf"''',
+    # Ctrl-S is two traps, not one. With flow control on (the default) it sends
+    # XOFF and output freezes. With flow control off, readline immediately claims
+    # the freed key for forward-search-history, so it drops into an `(i-search)`
+    # prompt where typing goes to the search buffer -- indistinguishable from a
+    # freeze. Both are disabled here. Ctrl-R (reverse-i-search) is deliberately
+    # left alone: that one is useful and nobody hits it by accident.
+    #
     # Ctrl-S sends XOFF and freezes the terminal. The standard unfreeze is
     # Ctrl-Q, but mngr binds Ctrl-Q in tmux's root table (to destroy the agent),
     # so tmux eats it and the pty never sees it -- the reflex recovery from a
@@ -461,7 +468,7 @@ extra_provision_command__extend = [
     # Ctrl-S cannot freeze anything. Idempotent: the grep guard makes re-running
     # provisioning a no-op. This rides provisioning rather than
     # seed_home_skeleton.sh because that only writes .bashrc when absent.
-    '''grep -q 'stty -ixon' "$HOME/.bashrc" 2>/dev/null || printf '%s\n' '' '# Ctrl-S would otherwise freeze this terminal (see .mngr/settings.toml).' 'case $- in *i*) stty -ixon 2>/dev/null ;; esac' >> "$HOME/.bashrc"''',
+    '''grep -q 'stty -ixon' "$HOME/.bashrc" 2>/dev/null || printf '%s\n' '' '# Ctrl-S would otherwise freeze this terminal (see .mngr/settings.toml).' 'case $- in *i*) stty -ixon 2>/dev/null; bind -r "\\C-s" 2>/dev/null ;; esac' >> "$HOME/.bashrc"''',
 ]
 
 # Shared base template for the local docker provider. Used on its own for the
