@@ -635,6 +635,27 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
     }
   });
 
+  it("removes in one click from the row itself, without opening it", () => {
+    const attrs = makeAttrs({ rows: [{ ref: "chat:agent-1", kind: "chat", label: "Chat 1", isOpen: true }] });
+    const { root, redraw } = mountSidebar(attrs);
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    click(root.querySelector(".project-rail-remove"));
+    expect(attrs.onRemoveFromView).toHaveBeenCalledTimes(1);
+    // The row underneath opens the object; the button must not have.
+    expect(attrs.onOpenRow).not.toHaveBeenCalled();
+  });
+
+  it("shows no one-click remove in Everything", () => {
+    const rows: SidebarTabRow[] = [{ ref: "chat:agent-1", kind: "chat", label: "Chat 1", isOpen: true }];
+    const { root, redraw } = mountSidebar(makeAttrs({ rows, activeViewId: EVERYTHING_VIEW_ID }));
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    expect(root.querySelector(".project-rail-remove")).toBeNull();
+  });
+
   it("offers no Remove from project in Everything, which is the home", () => {
     // Everything is not a project and nothing can be taken out of it -- an
     // object leaves it only by being destroyed.

@@ -12,6 +12,8 @@ Follow-up work on projects, from a design review of the shipped build and a pass
 
 **Deleting a project deletes only the view.** Nothing is shut down. Every object it showed keeps running and stays in Everything and in any other project already showing it. The guard refusing to delete the last project is gone with it — a machine may sit at zero projects and fall back to Everything.
 
+**Every rail row removes in one click.** A pinned app already had its pushpin; a chat, terminal or browser row now has the same one-click affordance for the same act, beside the menu that also carries it. It is absent in Everything, which is the home an object leaves only by being destroyed.
+
 **Pinned apps leave the All apps popover**, since they are already in the rail a few pixels away. A pinned row carries its own pin icon, so unpinning is one click without opening a menu, and a just-pinned row fades out rather than vanishing under the pointer.
 
 **Ad-hoc pages are no longer filed as project members.** A panel with no agent, tmux session, or service was being filed under a hash of its own panel id — an identity that could not outlive the panel, and one no verb could act on.
