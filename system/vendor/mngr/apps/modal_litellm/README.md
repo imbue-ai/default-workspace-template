@@ -14,11 +14,11 @@ A serverless [LiteLLM](https://github.com/BerriAI/litellm) proxy deployed as a M
 ### 1. Deploy (pushes secrets + runs `modal deploy`)
 
 ```bash
-eval "$(uv run minds env activate production)"
-uv run minds env deploy --yes-i-mean-production
+eval "$(uv run minds-admin env activate production)"
+uv run minds-admin env deploy --yes-i-mean-production
 ```
 
-`minds env deploy` reads `apps/minds/imbue/minds/config/envs/production/deploy.toml`
+`minds-admin env deploy` reads `apps/minds/imbue/minds/config/envs/production/deploy.toml`
 for the Modal workspace + the list of services to push from Vault,
 creates the `litellm-production` Modal secret with:
 
@@ -36,7 +36,7 @@ the mandatory safety bar; substitute `--yes-i-mean-staging` (and
 On the first cold start, LiteLLM runs ~118 Prisma migrations against the database. This takes ~14 minutes. Subsequent container starts take ~6 seconds.
 
 The `min_containers` setting keeps containers warm to avoid cold
-starts. ``minds env deploy`` reads the value from the tier's
+starts. ``minds-admin env deploy`` reads the value from the tier's
 ``apps/minds/imbue/minds/config/envs/<tier>/deploy.toml``
 (``[min_containers].litellm_proxy``, default ``0``; staging and
 production ship with ``1``) and threads it into ``modal deploy`` as

@@ -19,7 +19,9 @@ carried in the OAuth `state` JWT's `cb` claim.
 
 ## Security model
 
-The redirector holds **no secrets** and does not verify the state JWT (each
+The redirector holds **no credentials** (the only baked values are the
+allowlist regex and an optional error-reporting DSN, below) and does not
+verify the state JWT (each
 env has its own signing key; the connector verifies signature + nonce-cookie
 binding at the callback). Its one job is to not be an open redirector: the
 `cb` claim is read unverified and then checked against a strict allowlist
@@ -36,7 +38,7 @@ from bouncing codes anywhere outside the tier at all.
 
 ## Deploying (once per tier)
 
-Not part of `minds env deploy` -- the redirector is tier-level, not
+Not part of `minds-admin env deploy` -- the redirector is tier-level, not
 env-level, and changes rarely:
 
 ```bash
@@ -44,7 +46,11 @@ just deploy-oauth-redirector dev   # or ci
 ```
 
 The recipe bakes the tier's allowed-host regex at deploy time and prints the
-deployed URL. The function keeps one always-warm container
+deployed URL. It also best-effort reads the tier's Bugsink DSN
+(`OAUTH_REDIRECTOR_SENTRY_DSN` from `secrets/minds/<tier>/sentry`) and bakes
+it in for error reporting; when Vault is unavailable or the entry is
+unpopulated the DSN is empty, which simply disables reporting -- the app's
+zero-Vault deployment story is preserved. The function keeps one always-warm container
 (``min_containers=1``): the redirector sits between Google's consent screen
 and the connector callback in every Google sign-in, and a cold boot there
 (4-34s measured) reads as "Google is slow" to the user. Register that URL as the sole redirect URI on the tier's shared

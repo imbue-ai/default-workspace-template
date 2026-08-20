@@ -123,7 +123,7 @@ def _setup_rules() -> list[ScriptedExecRule]:
     )
     return [
         ScriptedExecRule("cat /work/mngr_sha", [ok_result("b" * 40 + "\n")]),
-        ScriptedExecRule("minds env activate", [ok_result(activation_script)]),
+        ScriptedExecRule("minds-admin env activate", [ok_result(activation_script)]),
         ScriptedExecRule("setsid nohup /usr/local/bin/entrypoint.sh", [ok_result()]),
         ScriptedExecRule("probe_minds_port.py", [ok_result("8123\n")]),
         ScriptedExecRule(

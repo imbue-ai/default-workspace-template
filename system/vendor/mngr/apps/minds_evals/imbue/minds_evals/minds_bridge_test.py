@@ -146,7 +146,7 @@ def test_resolve_chat_agent_id_returns_none_when_ambiguous() -> None:
 
 def test_fetch_minds_activation_env_raises_without_the_critical_exports(tmp_path: Path) -> None:
     environment = MockBoxEnvironment(
-        tmp_path, [ScriptedExecRule("minds env activate", [ok_result("export MINDS_ROOT_NAME=minds-staging\n")])]
+        tmp_path, [ScriptedExecRule("minds-admin env activate", [ok_result("export MINDS_ROOT_NAME=minds-staging\n")])]
     )
 
     with pytest.raises(BoxCommandError, match="MNGR_HOST_DIR"):

@@ -15,8 +15,8 @@ through LiteLLM's virtual key system for cost tracking.
 
 Usage:
     # Push secrets to Modal + deploy in one shot:
-    eval "$(uv run minds env activate production)"
-    uv run minds env deploy --yes-i-mean-production
+    eval "$(uv run minds-admin env activate production)"
+    uv run minds-admin env deploy --yes-i-mean-production
 
     # Use with claude -p (replace with your virtual key and Modal URL)
     ANTHROPIC_BASE_URL=https://<workspace>--llm-production-proxy.modal.run/ \\
@@ -45,12 +45,16 @@ from imbue.modal_app_kit.deploy import stamped_secret
 from imbue.modal_app_kit.image import IMAGE_REQUIREMENTS_FILENAME
 from imbue.modal_app_kit.image import pinned_image
 from imbue.modal_app_kit.request_logging import RequestLoggingMiddleware
+from imbue.modal_app_kit.sentry import capture_and_reraise
+from imbue.modal_app_kit.sentry import init_sentry
+from imbue.modal_app_kit.sentry import resolve_sentry_dsn
+from imbue.modal_app_kit.sentry import resolve_sentry_environment
 from imbue.modal_app_kit.source_mount import shipped_python_source_ignore
 
 _DEPLOY_ENV = read_deploy_env()
 
-# Per-deploy timestamp baked into the deployed function spec. ``minds env
-# deploy`` mints this at the start of every deploy and threads it through
+# Per-deploy timestamp baked into the deployed function spec.
+# ``minds-admin env deploy`` mints this at the start of every deploy and threads it through
 # the ``modal deploy`` subprocess env. The deployed function pins to the
 # matching ``<svc>-<tier>-<MINDS_DEPLOY_ID>`` Modal Secrets, so
 # ``modal app rollback`` reverts the captured env and re-attaches to the
@@ -58,7 +62,7 @@ _DEPLOY_ENV = read_deploy_env()
 # unset-sentinel safety property.
 _MINDS_DEPLOY_ID = read_deploy_id()
 
-# Warm-pool size for the deployed function. ``minds env deploy`` reads
+# Warm-pool size for the deployed function. ``minds-admin env deploy`` reads
 # the tier's ``[min_containers].litellm_proxy`` from its committed
 # ``deploy.toml`` and threads the value here at ``modal deploy`` time --
 # which is when this module is imported and the function spec is
@@ -66,7 +70,7 @@ _MINDS_DEPLOY_ID = read_deploy_id()
 # var gets the cheapest possible warm pool (cold start on first hit).
 _MIN_CONTAINERS = read_min_containers("MINDS_LITELLM_PROXY_MIN_CONTAINERS")
 
-# Idle-before-scaledown window (seconds). ``minds env deploy`` threads the
+# Idle-before-scaledown window (seconds). ``minds-admin env deploy`` threads the
 # tier's ``[scaledown_window].litellm_proxy`` here at ``modal deploy`` time.
 # Dev tiers set this high (~10 min) so the no-warm-pool proxy stays hot
 # across a dev session; staging / production leave it unset and rely on
@@ -107,8 +111,41 @@ LITELLM_CONFIG = {
     "litellm_settings": {
         "drop_params": True,
         "num_retries": 0,
+        # LiteLLM's native Sentry integration: failed LLM calls are reported
+        # (with LiteLLM's own context) to the tier's Bugsink instance via the
+        # SENTRY_DSN env var, which litellm_app() maps from LITELLM_SENTRY_DSN.
+        # Failure payloads can include request contents; the instance's short
+        # retention is the compensating control (see
+        # specs/minds-bugsink-error-tracking.md).
+        "failure_callback": ["sentry"],
     },
 }
+
+
+def _litellm_sentry_env_updates(environ: dict[str, str]) -> dict[str, str]:
+    """Env vars to export so LiteLLM's native sentry failure_callback behaves.
+
+    On the first proxied LLM call, LiteLLM's ``set_callbacks`` re-runs
+    ``sentry_sdk.init`` from env vars, REPLACING the global client our
+    ``init_sentry`` installed -- so its knobs must be pinned via LiteLLM's own
+    env vars: ``SENTRY_DSN`` (the DSN, resolved via the shared helper so the
+    MINDS_SENTRY_DISABLED kill switch has one semantic across both reporting
+    paths), ``SENTRY_API_TRACE_RATE=0.0`` (LiteLLM defaults to 1.0, which
+    would send a performance transaction per HTTP request to the tiny
+    single-container Bugsink instance), and ``SENTRY_ENVIRONMENT`` (LiteLLM
+    defaults to the literal "production" regardless of tier). Values already
+    present in ``environ`` (e.g. supplied through the stamped secret) win.
+    Empty when reporting is disabled, so LiteLLM's re-init never activates.
+    """
+    dsn = resolve_sentry_dsn(environ, "LITELLM_SENTRY_DSN")
+    if dsn is None:
+        return {}
+    updates = {"SENTRY_DSN": dsn}
+    if "SENTRY_API_TRACE_RATE" not in environ:
+        updates["SENTRY_API_TRACE_RATE"] = "0.0"
+    if "SENTRY_ENVIRONMENT" not in environ:
+        updates["SENTRY_ENVIRONMENT"] = resolve_sentry_environment(environ)
+    return updates
 
 
 def _write_config_file() -> str:
@@ -153,6 +190,7 @@ app = modal.App(name=f"llm-{_DEPLOY_ENV}", image=image)
     name="proxy",
     secrets=[
         stamped_secret("litellm", _DEPLOY_ENV, _MINDS_DEPLOY_ID),
+        stamped_secret("sentry", _DEPLOY_ENV, _MINDS_DEPLOY_ID),
         deploy_metadata_secret(_DEPLOY_ENV, _MINDS_DEPLOY_ID),
     ],
     min_containers=_MIN_CONTAINERS,
@@ -164,6 +202,17 @@ app = modal.App(name=f"llm-{_DEPLOY_ENV}", image=image)
 )
 @modal.asgi_app()
 def litellm_app():
+    # Server-level error reporting to the tier's Bugsink instance; a no-op
+    # until the tier's `sentry` Vault entry carries LITELLM_SENTRY_DSN.
+    init_sentry("litellm-proxy", "LITELLM_SENTRY_DSN")
+    # LiteLLM's own sentry failure_callback reads the literal SENTRY_DSN env
+    # var (plus the trace-rate / environment knobs); export them before the
+    # proxy import so the callback initializes correctly. Note LiteLLM's
+    # re-init replaces the client configured by init_sentry above on the
+    # first LLM call, so this process's server-level events lose the dedup
+    # before_send limiter and the release/server_name labels -- an accepted
+    # consequence of using the native callback (see _litellm_sentry_env_updates).
+    os.environ.update(_litellm_sentry_env_updates(dict(os.environ)))
     config_path = _write_config_file()
     os.environ["CONFIG_FILE_PATH"] = config_path
     os.environ["WORKER_CONFIG"] = json.dumps(
@@ -227,14 +276,21 @@ def _run_prisma_db_push(schema_path: str, subprocess_env: dict[str, str]) -> Non
 
 
 @app.function(
-    secrets=[stamped_secret("litellm", _DEPLOY_ENV, _MINDS_DEPLOY_ID)],
+    secrets=[
+        stamped_secret("litellm", _DEPLOY_ENV, _MINDS_DEPLOY_ID),
+        stamped_secret("sentry", _DEPLOY_ENV, _MINDS_DEPLOY_ID),
+        # Supplies MNGR_DEPLOY_ENV + MINDS_DEPLOY_ID at runtime so Sentry
+        # events from this function carry the real environment / release
+        # instead of "unknown" (init_sentry reads both from os.environ).
+        deploy_metadata_secret(_DEPLOY_ENV, _MINDS_DEPLOY_ID),
+    ],
     timeout=300,
 )
 def migrate_db() -> None:
     """Run `prisma db push` against DATABASE_URL to bring the LiteLLM schema current.
 
-    Invoked by ``minds env deploy`` (via
-    ``apps/minds/imbue/minds/envs/per_env_deploy.py::deploy_litellm_proxy``)
+    Invoked by ``minds-admin env deploy`` (via
+    ``apps/minds_admin/imbue/minds_admin/envs/per_env_deploy.py::deploy_litellm_proxy``)
     before each ``modal deploy`` so the running proxy never sees a
     missing LiteLLM_VerificationToken / LiteLLM_BudgetTable / etc.
 
@@ -260,8 +316,10 @@ def migrate_db() -> None:
     import litellm.proxy
 
     logging.basicConfig(level=logging.INFO, force=True)
-    direct_url = direct_database_url(os.environ["DATABASE_URL"])
-    direct_host = urllib.parse.urlsplit(direct_url).hostname
-    logging.info("Running prisma db push against database host %s", direct_host)
-    schema_path = os.path.join(os.path.dirname(litellm.proxy.__file__), "schema.prisma")
-    _run_prisma_db_push(schema_path, {**os.environ, "DATABASE_URL": direct_url})
+    init_sentry("litellm-proxy", "LITELLM_SENTRY_DSN")
+    with capture_and_reraise():
+        direct_url = direct_database_url(os.environ["DATABASE_URL"])
+        direct_host = urllib.parse.urlsplit(direct_url).hostname
+        logging.info("Running prisma db push against database host %s", direct_host)
+        schema_path = os.path.join(os.path.dirname(litellm.proxy.__file__), "schema.prisma")
+        _run_prisma_db_push(schema_path, {**os.environ, "DATABASE_URL": direct_url})

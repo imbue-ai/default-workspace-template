@@ -1,9 +1,26 @@
+from collections.abc import Iterator
+
 import pytest
+import sentry_sdk
 
 import imbue.remote_service_connector.auth as auth_mod
 from imbue.imbue_common.conftest_hooks import register_conftest_hooks
 
 register_conftest_hooks(globals())
+
+
+@pytest.fixture
+def isolated_sentry_client() -> Iterator[None]:
+    """Clear the sentry-sdk global client around a test that installs or inspects one.
+
+    Same shape as modal_app_kit's fixture of the same name (conftest fixtures
+    are directory-scoped, so it cannot be shared across projects). The clear
+    runs both before (isolating from any client a previous test left behind)
+    and after (even when the test fails mid-assertion).
+    """
+    sentry_sdk.get_global_scope().set_client(None)
+    yield
+    sentry_sdk.get_global_scope().set_client(None)
 
 
 @pytest.fixture(autouse=True)

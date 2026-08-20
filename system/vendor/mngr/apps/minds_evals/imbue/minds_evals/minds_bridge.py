@@ -101,7 +101,7 @@ def load_modal_token_env(config_path: Path) -> dict[str, str]:
 
 @pure
 def parse_activation_exports(activation_script: str) -> dict[str, str]:
-    """Parse the `export KEY=VALUE` lines out of `minds env activate` output (a shell snippet meant
+    """Parse the `export KEY=VALUE` lines out of `minds-admin env activate` output (a shell snippet meant
     for `eval`); `unset` lines and comments are ignored -- we build the exec env from scratch, so
     an unset variable is simply never set."""
     exports: dict[str, str] = {}
@@ -119,12 +119,12 @@ def parse_activation_exports(activation_script: str) -> dict[str, str]:
 
 
 async def fetch_minds_activation_env(environment: BaseEnvironment, minds_env: str) -> dict[str, str]:
-    """The env vars `minds env activate` exports (MNGR_PREFIX, MNGR_HOST_DIR, ...). Bridge execs do
+    """The env vars `minds-admin env activate` exports (MNGR_PREFIX, MNGR_HOST_DIR, ...). Bridge execs do
     not go through the entrypoint, so without these mngr's modal provider computes the wrong
     environment name and silently sees no workspaces -- fail fast if the critical vars are absent."""
     result = await check_run_in_box(
         environment,
-        "cd {} && uv run minds env activate {}".format(BOX_MNGR_DIR, shlex.quote(minds_env)),
+        "cd {} && uv run minds-admin env activate {}".format(BOX_MNGR_DIR, shlex.quote(minds_env)),
         {"MINDS_ENV": minds_env},
         _QUICK_EXEC_TIMEOUT_SECONDS,
     )
@@ -132,7 +132,7 @@ async def fetch_minds_activation_env(environment: BaseEnvironment, minds_env: st
     for required_key in ("MNGR_HOST_DIR", "MNGR_PREFIX"):
         if not activation_env.get(required_key):
             raise BoxCommandError(
-                "minds env activate did not export {} (got: {}) -- bridge mngr commands would "
+                "minds-admin env activate did not export {} (got: {}) -- bridge mngr commands would "
                 "silently see no workspaces".format(required_key, sorted(activation_env))
             )
     return activation_env

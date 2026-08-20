@@ -60,11 +60,11 @@ a valid env. Leftover legacy data can be cleaned up via
 
 ## Activation is the central UX
 
-`minds env activate <name>` prints shell-sourceable exports that point
+`minds-admin env activate <name>` prints shell-sourceable exports that point
 the rest of the stack at the env's data root:
 
 ```bash
-eval "$(uv run minds env activate dev-<your-user>)"
+eval "$(uv run minds-admin env activate dev-<your-user>)"
 ```
 
 Activation has two modes:
@@ -77,7 +77,7 @@ Activation has two modes:
   mode flips back cleanly: the `unset MODAL_PROFILE` line drops the
   stale workspace pin before the next `modal …` shellout can pick it up.
 - **Deploy mode (`--deploy`)**: additionally exports `MODAL_PROFILE`
-  pinned to the tier's `modal_workspace`. Required for `minds env
+  pinned to the tier's `modal_workspace`. Required for `minds-admin env
   deploy` / `destroy` / `recover` (they refuse without it -- see "Deploy
   mode" below). Pre-validates that `~/.modal.toml` has a profile matching
   the tier's `modal_workspace` and refuses up front with a
@@ -92,7 +92,7 @@ Exported use-side variables (both modes):
 - `MNGR_HOST_DIR` -- e.g. `$HOME/.minds-dev-<your-user>/mngr`.
 - `MNGR_PREFIX` -- e.g. `minds-dev-<your-user>-`.
 - `MINDS_CLIENT_CONFIG_PATH` -- for dev envs, the per-env
-  `~/.minds-<name>/client.toml` (written by `minds env deploy`).
+  `~/.minds-<name>/client.toml` (written by `minds-admin env deploy`).
   For `staging` / `production`, the in-repo
   `apps/minds/imbue/minds/config/envs/<tier>/client.toml` (committed
   to the repo).
@@ -120,7 +120,7 @@ Deploy-mode adds:
   profile *named* `minds-dev` that actually holds a token for a *different*
   workspace (e.g. `imbue`) passes the activation-time check, which only
   verifies the `[minds-dev]` section exists, not its token's workspace.
-  `minds env deploy` preflights the token's real workspace (via `modal
+  `minds-admin env deploy` preflights the token's real workspace (via `modal
   profile list`) and refuses with a clear error before touching any cloud
   state, but running `modal profile list` yourself confirms the binding up
   front.
@@ -128,7 +128,7 @@ Deploy-mode adds:
 To deactivate:
 
 ```bash
-eval "$(uv run minds env deactivate)"
+eval "$(uv run minds-admin env deactivate)"
 ```
 
 Source runs (`uv run minds run`, `just minds-start`, `propagate_changes`,
@@ -147,8 +147,8 @@ Behaviour by env type:
   in one line:
 
   ```bash
-  eval "$(uv run minds env activate --create --deploy dev-<your-user>)"
-  uv run minds env deploy
+  eval "$(uv run minds-admin env activate --create --deploy dev-<your-user>)"
+  uv run minds-admin env deploy
   ```
 
 The packaged Electron app sets all four variables itself from the
@@ -176,7 +176,7 @@ apps/minds/imbue/minds/config/envs/
 ```
 
 The dev tier has NO shared `client.toml` -- every dev env carries its
-own URLs in `~/.minds-<env-name>/client.toml`, which `minds env deploy`
+own URLs in `~/.minds-<env-name>/client.toml`, which `minds-admin env deploy`
 writes when it provisions the env.
 
 Staging and production `client.toml` files are committed by hand on
@@ -197,13 +197,13 @@ see `apps/minds/docs/deploy/vault-setup.md`.
 
 ## Deploy mode
 
-`minds env deploy`, `minds env destroy`, and `minds env recover` all
+`minds-admin env deploy`, `minds-admin env destroy`, and `minds-admin env recover` all
 refuse to run unless the shell is *deploy-activated* (i.e. the operator
-used `minds env activate --deploy <name>`). "Deploy-activated" is
+used `minds-admin env activate --deploy <name>`). "Deploy-activated" is
 detected via `MODAL_PROFILE`: it must be set in the environment and
 must equal the tier's `modal_workspace` from `deploy.toml`. A missing or
 mismatched `MODAL_PROFILE` is a hard error -- the refusal points the
-operator at the exact `eval "$(uv run minds env activate --deploy
+operator at the exact `eval "$(uv run minds-admin env activate --deploy
 <name>)"` to re-run.
 
 This split exists because activating `staging` (or any other tier) to
@@ -216,8 +216,8 @@ on every developer who had not added the tier's workspace to their
 ## Deploying a tier (staging / production)
 
 ```bash
-eval "$(uv run minds env activate --deploy staging)"
-uv run minds env deploy --yes-i-mean-staging
+eval "$(uv run minds-admin env activate --deploy staging)"
+uv run minds-admin env deploy --yes-i-mean-staging
 ```
 
 (For production: `activate --deploy production` + `--yes-i-mean-production`.)
@@ -225,7 +225,7 @@ uv run minds env deploy --yes-i-mean-staging
 The `--yes-i-mean-<tier>` flag is mandatory for tier deploys -- the
 unified deploy CLI uses the same code path for dev and tier deploys,
 and the flag is the explicit confirmation barrier so an accidental
-`minds env deploy` (e.g. while activated against production after a
+`minds-admin env deploy` (e.g. while activated against production after a
 context switch) can never silently fire.
 
 What a tier deploy does:
@@ -244,7 +244,7 @@ What a tier deploy does:
 Tier deploys are idempotent -- re-running picks up any new Vault
 values and re-deploys both apps in place.
 
-`minds env destroy` for `staging` requires `--yes-i-mean-staging`.
+`minds-admin env destroy` for `staging` requires `--yes-i-mean-staging`.
 Production destroy is hard-refused regardless of any flag --
 production tier teardown is operator-managed outside this CLI.
 
@@ -278,17 +278,17 @@ The mngr-agent + env-root-removal steps are identical.
 
 ## Tier generation id + activate auto-wipe
 
-`minds env deploy` for a tier mints a uuid + stores it at
+`minds-admin env deploy` for a tier mints a uuid + stores it at
 `secrets/minds/<tier>/generation` in Vault, then pushes it as
 `MINDS_TIER_GENERATION_ID=<uuid>` in the tier's
 `litellm-connector-<tier>` Modal Secret. The connector exposes the
 value at `GET /generation` (no auth required -- the id is non-sensitive).
 
-`minds env destroy` removes the Vault entry, so the next deploy mints
+`minds-admin env destroy` removes the Vault entry, so the next deploy mints
 a *new* uuid. Subsequent activations on any developer's machine see
 the changed uuid and know their local state is stale.
 
-`minds env activate <tier>` fetches `/generation` from the connector
+`minds-admin env activate <tier>` fetches `/generation` from the connector
 URL, compares against the dev's per-env
 `~/.minds-<env-name>/last_seen_generation` marker, and on mismatch
 auto-wipes the env's `mngr/`, `auth/`, and `logs/` subdirs before
@@ -307,7 +307,7 @@ before the first deploy).
 For source runs:
 
 ```bash
-eval "$(uv run minds env activate <name>)"
+eval "$(uv run minds-admin env activate <name>)"
 uv run minds run                       # or `just minds-start`
 ```
 
@@ -331,7 +331,7 @@ supplier account (currently OVH), Anthropic, and OAuth clients are
 dev-tier shared.
 
 The per-env Neon project gives every dev env atomic, isolated state
-for pool host rows and LiteLLM spend tracking. `minds env destroy`
+for pool host rows and LiteLLM spend tracking. `minds-admin env destroy`
 deletes the project outright (everything inside goes with it); no
 cross-dev contamination, no leftover roles to clean up.
 
@@ -341,18 +341,18 @@ Bootstrap a brand-new dev env:
 # 1. Activate the env in deploy mode (--create idempotently mkdirs
 #    ~/.minds-<name>/ if missing; --deploy pins MODAL_PROFILE for the
 #    deploy step in step 2).
-eval "$(uv run minds env activate --create --deploy dev-<your-user>)"
+eval "$(uv run minds-admin env activate --create --deploy dev-<your-user>)"
 
 # 2. Deploy: provisions the Modal env, Neon project (with host_pool +
 #    litellm_cost DBs), SuperTokens app, pushes per-env Modal Secrets,
 #    runs `modal deploy` for both apps, and writes
 #    ~/.minds-dev-<your-user>/{client.toml,secrets.toml}.
-uv run minds env deploy
+uv run minds-admin env deploy
 
 # 3. Re-activate in use-only mode so subsequent `mngr` / `minds run`
 #    invocations don't carry a stale MODAL_PROFILE, then launch the
 #    desktop client against the new env:
-eval "$(uv run minds env activate dev-<your-user>)"
+eval "$(uv run minds-admin env activate dev-<your-user>)"
 just minds-start
 ```
 
@@ -362,7 +362,7 @@ just minds-start
 ### Per-env share relay
 
 Workspace sharing needs a relay, and each dev/ci env expects its OWN:
-`minds env deploy` pins the env's sharing secret to region label
+`minds-admin env deploy` pins the env's sharing secret to region label
 `<env-name>` (underscores mapped to hyphens) with endpoint
 `relay.<env-name>.minds-dev.com:7000`. A single shared dev relay cannot
 serve multiple envs -- its frps plugin-auth URL points at exactly one
@@ -383,29 +383,29 @@ pointed at the activated env's connector, and reconciles the
 sharing from this env. Tear the instance down with
 `just list-share-relays` + `just destroy-share-relay <instance-id>` and
 `just deregister-share-relay <connector-url> <relay-id>` when
-destroying the env (relays are not part of `minds env destroy`).
+destroying the env (relays are not part of `minds-admin env destroy`).
 
 Re-deploy in place (idempotent -- picks up any new tier-shared Vault
 values and re-deploys both Modal apps):
 
 ```bash
-eval "$(uv run minds env activate --deploy dev-<your-user>)"
-uv run minds env deploy
+eval "$(uv run minds-admin env activate --deploy dev-<your-user>)"
+uv run minds-admin env deploy
 ```
 
 Tear it down (cloud resources + the env root):
 
 ```bash
-eval "$(uv run minds env activate --deploy dev-<your-user>)"
-uv run minds env destroy
-# `minds env destroy` rmdir's ~/.minds-dev-<your-user> after success;
-# clear your shell with `eval "$(uv run minds env deactivate)"`.
+eval "$(uv run minds-admin env activate --deploy dev-<your-user>)"
+uv run minds-admin env destroy
+# `minds-admin env destroy` rmdir's ~/.minds-dev-<your-user> after success;
+# clear your shell with `eval "$(uv run minds-admin env deactivate)"`.
 ```
 
 See what envs exist on this machine (globs `~/.minds*/` directly):
 
 ```bash
-uv run minds env list
+uv run minds-admin env list
 ```
 
 ## On-disk file layout per env
@@ -427,7 +427,7 @@ For a dev env named `dev-josh-3`:
   ...
 ```
 
-`NEON_HOST_POOL_DSN` is also the DSN `mngr imbue_cloud admin pool
+`NEON_HOST_POOL_DSN` is also the DSN `minds-admin pool
 create` defaults to when invoked from this activated shell -- no need
 to pass `--database-url` explicitly.
 
@@ -478,8 +478,8 @@ Done once per tier (production / staging), out of band:
    are deployed -- typically a one-line edit per app.)
 4. Deploy the Modal apps via the unified path:
    ```bash
-   eval "$(uv run minds env activate --deploy <tier>)"
-   uv run minds env deploy --yes-i-mean-<tier>
+   eval "$(uv run minds-admin env activate --deploy <tier>)"
+   uv run minds-admin env deploy --yes-i-mean-<tier>
    ```
 5. Smoke-test:
    ```bash
@@ -488,7 +488,7 @@ Done once per tier (production / staging), out of band:
 
 For dev-tier setup, the same steps but with no shared `client.toml`
 (every developer creates their own dev env on top of the shared dev
-base via `minds env deploy`).
+base via `minds-admin env deploy`).
 
 ## Cleaning up the legacy `~/.devminds/`
 
@@ -503,5 +503,5 @@ rm -rf ~/.devminds/    # when convenient -- nothing in the new code reads it
 A stale `MINDS_ROOT_NAME=devminds` left in a parent shell is harmless:
 the bootstrap logs a warning, falls back to the production root, and
 proceeds. Activated envs always win over inherited vars, so an
-in-shell `minds env activate <name>` immediately fixes a misconfigured
+in-shell `minds-admin env activate <name>` immediately fixes a misconfigured
 parent shell.
