@@ -342,3 +342,49 @@ describe("MessageInput stop-to-composer handback", () => {
     expect(textarea?.attrs?.value).toBe("keep me");
   });
 });
+
+describe("MessageInput send failure notice", () => {
+  beforeEach(() => {
+    mocks.sendMessage.mockClear();
+    mocks.openAgentAuth.mockClear();
+    mocks.agent.harness = "claude";
+    mocks.agent.activity_state = undefined;
+    localStorage.clear();
+  });
+
+  it("shows the reason the send was refused, in the workspace", async () => {
+    // Rejecting with a plain string: describeRequestError is mocked as String(e), so an Error
+    // would render as "Error: ...". mockRejectedValueOnce, not mockRejectedValue -- the mock is
+    // module-wide and only cleared between tests, so a persistent rejection leaks into others.
+    mocks.sendMessage.mockRejectedValueOnce("The agent is in shell mode with an unsubmitted command.");
+    const after = await typeAndSend(MessageInput(), "agent-1", "hello");
+    const text = renderedText(after);
+    expect(text).toContain("Couldn't send your message");
+    expect(text).toContain("shell mode with an unsubmitted command");
+    expect(text).toContain("OK");
+  });
+
+  it("dismisses on OK, leaving the restored draft alone", async () => {
+    mocks.sendMessage.mockRejectedValueOnce("nope");
+    const component = MessageInput();
+    const after = await typeAndSend(component, "agent-1", "hello");
+    const okButton = findByClass(after, "custom-url-dialog-cancel");
+    expect(okButton, "the notice should offer an OK button").toBeTruthy();
+    (okButton!.attrs!.onclick as () => void)();
+    const dismissed = component.view!({ attrs: { agentId: "agent-1" } } as never);
+    expect(renderedText(dismissed)).not.toContain("Couldn't send your message");
+  });
+
+  it("does not follow the user to another agent", async () => {
+    mocks.sendMessage.mockRejectedValueOnce("nope");
+    const component = MessageInput();
+    await typeAndSend(component, "agent-1", "hello");
+    const otherAgent = component.view!({ attrs: { agentId: "agent-2" } } as never);
+    expect(renderedText(otherAgent)).not.toContain("Couldn't send your message");
+  });
+
+  it("shows nothing when the send succeeds", async () => {
+    const after = await typeAndSend(MessageInput(), "agent-1", "hello");
+    expect(renderedText(after)).not.toContain("Couldn't send your message");
+  });
+});

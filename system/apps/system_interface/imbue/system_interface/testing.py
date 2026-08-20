@@ -108,11 +108,13 @@ class RecordingMngrMessenger(MngrMessenger):
     sent: list[tuple[str, str]] = []
     pressed: list[tuple[str, str]] = []
     succeeds: bool = True
+    # What a non-succeeding send reports, in place of a harness's own words.
+    failure_reason: str = "The agent could not be reached."
     press_succeeds: bool = True
 
-    def send_to_agent(self, agent_id: AgentId, message: str, known_locations: Sequence[AgentMatch]) -> bool:
+    def send_to_agent(self, agent_id: AgentId, message: str, known_locations: Sequence[AgentMatch]) -> str | None:
         self.sent.append((str(agent_id), message))
-        return self.succeeds
+        return None if self.succeeds else self.failure_reason
 
     def press_key_chord_to_agent(self, agent_id: AgentId, key: str, known_locations: Sequence[AgentMatch]) -> bool:
         self.pressed.append((str(agent_id), key))

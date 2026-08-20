@@ -34,6 +34,7 @@ from imbue.system_interface import member_last_used
 from imbue.system_interface import member_titles
 from imbue.system_interface import projects
 from imbue.system_interface.agent_discovery import AgentInfo
+from imbue.system_interface.agent_discovery import SendFailedError
 from imbue.system_interface.agent_discovery import discover_agents
 from imbue.system_interface.agent_discovery import get_host_dir
 from imbue.system_interface.agent_discovery import start_agent
@@ -496,7 +497,14 @@ def _send_message_endpoint(agent_id: str) -> Response:
     # for the duration); the codex session hands it to its live ledger, passing ``message_id``
     # only as the correlation token the committed item echoes back (Fix 2).
     session = agent_manager.get_or_create_session(agent_info)
-    outcome = session.send(send_message_request.message, message_id)
+    try:
+        outcome = session.send(send_message_request.message, message_id)
+    except SendFailedError as send_failure:
+        # The harness said why it refused, in words written for the person who has to fix it
+        # ("the agent is in shell mode with an unsubmitted command"). Pass that through rather
+        # than the generic failure below -- it is the only thing here the user can act on.
+        failure = ErrorResponse(detail=send_failure.detail)
+        return _json_response(failure.model_dump(), status_code=500)
     if outcome is SendOutcome.NOT_READY:
         failure = ErrorResponse(
             detail=f"Agent '{agent_info.name}' is not ready to receive messages yet (its daemon is starting)."
@@ -616,7 +624,9 @@ def _set_model_choice_endpoint(agent_id: str) -> Response:
 
     identity = ModelIdentity(model_id=req.model_id, effort=req.effort, fast=req.fast)
     result = resolver.switch(
-        identity, frozenset(req.axes), lambda line: agent_manager.send_message_to_agent(AgentId(agent_info.id), line)
+        identity,
+        frozenset(req.axes),
+        lambda line: agent_manager.send_message_to_agent(AgentId(agent_info.id), line) is None,
     )
     if not result.ok:
         detail = result.detail or f"Failed to switch model for agent '{agent_info.name}'"
@@ -904,8 +914,8 @@ def _flush_queue_endpoint(agent_id: str) -> Response:
 
     if block:
         agent_manager: AgentManager = get_state().agent_manager
-        is_sent = agent_manager.send_message_to_agent(AgentId(agent_info.id), block)
-        if not is_sent:
+        resend_failure = agent_manager.send_message_to_agent(AgentId(agent_info.id), block)
+        if resend_failure is not None:
             error = ErrorResponse(detail=f"Failed to resend queued messages to agent '{agent_info.name}'")
             return _json_response(error.model_dump(), status_code=500)
 
@@ -953,7 +963,7 @@ def _shoulder_tap_atomic_endpoint(agent_id: str) -> Response:
         agent_info,
         watcher,
         press_chord=lambda: agent_manager.press_key_chord_on_agent(AgentId(agent_info.id), TAP_CHORD),
-        send_recovery=lambda text: agent_manager.send_message_to_agent(AgentId(agent_info.id), text),
+        send_recovery=lambda text: agent_manager.send_message_to_agent(AgentId(agent_info.id), text) is None,
     )
     if outcome.error_detail is not None:
         error = ErrorResponse(detail=outcome.error_detail)
@@ -2559,9 +2569,7 @@ def _default_view_id(layout_dir: Path | None) -> str | None:
     the best single answer there is. None only without a registry to fall back
     on (dev/test with no layout dir and no agreeing client).
     """
-    distinct_views = {
-        info["active_layout_slug"] for info in get_state().broadcaster.get_connected_client_infos()
-    }
+    distinct_views = {info["active_layout_slug"] for info in get_state().broadcaster.get_connected_client_infos()}
     if len(distinct_views) == 1:
         return next(iter(distinct_views))
     if layout_dir is None:

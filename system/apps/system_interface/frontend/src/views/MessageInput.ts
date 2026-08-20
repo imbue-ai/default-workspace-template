@@ -83,6 +83,10 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
   // A slash command the chat declines to deliver, because it would change the agent's terminal
   // rather than start a turn. It still works from that terminal, which the notice says.
   let declinedSlashCommand: string | null = null;
+  // Why the last send or interrupt failed, in the harness's own words, shown as a notice.
+  // Component state like the notices above, NOT module state: every open chat panel mounts its
+  // own MessageInput, and a module-level value would raise the notice in all of them at once.
+  let actionFailureDetail: string | null = null;
   let fileInputElement: HTMLInputElement | null = null;
   let isInterruptInFlight = false;
 
@@ -96,6 +100,16 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
   function handleDeclinedNoticeKeydown(event: KeyboardEvent): void {
     if (event.key === "Escape") {
       declinedSlashCommand = null;
+      m.redraw();
+    }
+  }
+
+  // Its own handler rather than the one above: each notice clears only its own state, and
+  // registering one shared function reference from two overlays would be de-duplicated by
+  // addEventListener and then torn down by whichever overlay closed first.
+  function handleActionFailureNoticeKeydown(event: KeyboardEvent): void {
+    if (event.key === "Escape") {
+      actionFailureDetail = null;
       m.redraw();
     }
   }
@@ -167,6 +181,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         // user to the next one.
         declinedSlashCommand = null;
         interceptedAuthCommand = null;
+        actionFailureDetail = null;
       }
 
       // A sibling view (a native tap whose resend failed) merged a returned block into this agent's
@@ -259,12 +274,21 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
               messageText = sentText;
             }
           }
+          // Only if the user is still looking at the agent that failed: the catch runs after an
+          // await, so they may have switched, and the switch-clear above has already gone by.
+          if (currentAgentId === agentId) {
+            actionFailureDetail = detail;
+          }
           m.redraw();
-          alert(`Failed to send message: ${detail}`);
         }
 
         requestAnimationFrame(() => {
-          focusMessageTextarea();
+          // Not while a notice is open: this rAF lands after mithril has mounted the notice and
+          // focused its OK button, so refocusing the composer would steal it -- leaving a modal
+          // the keyboard cannot dismiss, and an Enter that re-sends the just-restored text.
+          if (actionFailureDetail === null) {
+            focusMessageTextarea();
+          }
         });
       }
 
@@ -305,9 +329,9 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
           const detail = describeRequestError(err);
           console.error(`Failed to interrupt agent ${agentId}: ${detail}`);
           // Surface the failure: they deliberately clicked Stop, and on failure
-          // the agent is still running. Matches the alert-based feedback
-          // convention for user-initiated mutations (see executeDestroy).
-          alert(`Failed to interrupt agent: ${detail}`);
+          // the agent is still running. Same notice as a failed send -- leaving this one as a
+          // system alert while its neighbour is a styled notice is worse than either.
+          actionFailureDetail = detail;
         } finally {
           isInterruptInFlight = false;
           m.redraw();
@@ -348,6 +372,57 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
       function dismissDeclinedCommandNotice(): void {
         declinedSlashCommand = null;
         m.redraw();
+      }
+
+      function dismissActionFailureNotice(): void {
+        actionFailureDetail = null;
+        m.redraw();
+        // Hand focus back to where the user was typing, which the send path skipped while the
+        // notice was up.
+        focusMessageTextarea();
+      }
+
+      function renderActionFailureNotice(detail: string): m.Vnode {
+        return m(
+          "div.custom-url-dialog-overlay",
+          {
+            oncreate() {
+              document.addEventListener("keydown", handleActionFailureNoticeKeydown);
+            },
+            onremove() {
+              document.removeEventListener("keydown", handleActionFailureNoticeKeydown);
+            },
+            onclick(e: MouseEvent) {
+              if ((e.target as HTMLElement).classList.contains("custom-url-dialog-overlay")) {
+                dismissActionFailureNotice();
+              }
+            },
+          },
+          m(
+            "div.custom-url-dialog",
+            {
+              onclick(e: MouseEvent) {
+                e.stopPropagation();
+              },
+            },
+            [
+              // The body already names the agent when the failure is agent-specific, so the
+              // title stays generic rather than repeating it.
+              m("h3.custom-url-dialog-title", "Couldn't send your message"),
+              m("p.logout-notice-body", detail),
+              m("div.custom-url-dialog-actions", [
+                m(
+                  "button.custom-url-dialog-cancel",
+                  {
+                    oncreate: (buttonVnode: m.VnodeDOM) => (buttonVnode.dom as HTMLButtonElement).focus(),
+                    onclick: () => dismissActionFailureNotice(),
+                  },
+                  "OK",
+                ),
+              ]),
+            ],
+          ),
+        );
       }
 
       function renderDeclinedCommandNotice(command: string): m.Vnode {
@@ -450,6 +525,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
       return m("div", { class: "message-input mx-auto w-full" }, [
         interceptedAuthCommand !== null ? renderAuthCommandNotice(interceptedAuthCommand) : null,
         declinedSlashCommand !== null ? renderDeclinedCommandNotice(declinedSlashCommand) : null,
+        actionFailureDetail !== null ? renderActionFailureNotice(actionFailureDetail) : null,
         m("input", {
           type: "file",
           multiple: true,

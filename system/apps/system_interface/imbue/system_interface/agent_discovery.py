@@ -205,6 +205,45 @@ def _send_to(matches: Sequence[AgentMatch], message: str, mngr_ctx: MngrContext)
     )
 
 
+class SendFailedError(Exception):
+    """A send was attempted and refused, carrying the reason in the harness's own words.
+
+    Raised on the chat path only, where the reason has somewhere to go: the endpoint turns it
+    into the failure the composer shows. The other callers of ``send_message_to_agent`` check
+    the returned reason instead, so this changes nothing for them.
+    """
+
+    def __init__(self, detail: str) -> None:
+        self.detail = detail
+        super().__init__(detail)
+
+
+def delivered_or_raise(failure_reason: str | None) -> bool:
+    """Turn a send's reason into an exception, or report delivery.
+
+    ``SessionDeps.send_to_harness`` is typed as returning a bool and is shared with paths that
+    have no way to show a reason, so the chat path raises rather than widening that contract.
+    The session's send already treats an exception as an expected exit (it resolves its
+    in-flight record in a ``finally`` and lets the request fail with the draft kept).
+    """
+    if failure_reason is not None:
+        raise SendFailedError(failure_reason)
+    return True
+
+
+def _first_failure_reason(result: MessageResult) -> str:
+    """Why a send that reached no agent failed, in the harness's own words.
+
+    ``failed_agents`` pairs an agent name with the error mngr raised; the message is the half
+    worth showing, since it is written for the person who has to fix it. A send can fail with
+    no entry at all (nothing matched the id), which is its own answer.
+    """
+    for _agent_name, error_message in result.failed_agents:
+        if error_message:
+            return error_message
+    return "The agent could not be reached."
+
+
 def _press_to(matches: Sequence[AgentMatch], key: str, mngr_ctx: MngrContext) -> MessageResult:
     """Press ``key`` into a pre-resolved set of agents' panes (never auto-starting).
 
@@ -233,8 +272,13 @@ class MngrMessenger(FrozenModel):
     send: SendFn = _send_to
     press: PressFn = _press_to
 
-    def send_to_agent(self, agent_id: AgentId, message: str, known_locations: Sequence[AgentMatch]) -> bool:
+    def send_to_agent(self, agent_id: AgentId, message: str, known_locations: Sequence[AgentMatch]) -> str | None:
         """Send to the agent with ``agent_id`` at ``known_locations``, else discovery.
+
+        Returns None when the message was delivered, or the reason it was not. The reason is
+        the harness's own words -- "the agent is in shell mode with an unsubmitted command",
+        say -- and it exists to be shown to the user, who can usually act on it. Reducing it to
+        a bool here would leave the UI with nothing to report but the fact of failure.
 
         ``known_locations`` (the caller's already-resolved location, from the live
         observe cache) is messaged directly -- no discovery. On a miss, or if that send
@@ -245,10 +289,15 @@ class MngrMessenger(FrozenModel):
         """
         mngr_ctx, cg = _get_mngr_context()
         try:
-            if known_locations and self.send(known_locations, message, mngr_ctx).successful_agents:
-                return True
+            if known_locations:
+                result = self.send(known_locations, message, mngr_ctx)
+                if result.successful_agents:
+                    return None
             matches = self.discover(agent_id, mngr_ctx)
-            return bool(self.send(matches, message, mngr_ctx).successful_agents)
+            result = self.send(matches, message, mngr_ctx)
+            if result.successful_agents:
+                return None
+            return _first_failure_reason(result)
         finally:
             cg.__exit__(None, None, None)
 

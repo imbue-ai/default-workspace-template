@@ -115,9 +115,9 @@ def test_check_and_resend_welcome_resends_when_transcript_missing_welcome(
     _set_up_host(tmp_path, _AGENT_ID, monkeypatch)
     send_calls: list[tuple[str, str]] = []
 
-    def _record_send(agent_id: str, message: str) -> bool:
+    def _record_send(agent_id: str, message: str) -> str | None:
         send_calls.append((agent_id, message))
-        return True
+        return None
 
     resender = WelcomeResender(
         resolve_agent=lambda _id: _agent_info(),
@@ -140,9 +140,9 @@ def test_check_and_resend_welcome_resolves_by_persisted_id(tmp_path: Path, monke
         resolved_ids.append(agent_id)
         return _agent_info(agent_id)
 
-    def _record_send(agent_id: str, message: str) -> bool:
+    def _record_send(agent_id: str, message: str) -> str | None:
         send_calls.append((agent_id, message))
-        return True
+        return None
 
     resender = WelcomeResender(
         resolve_agent=_record_resolve,
@@ -168,9 +168,9 @@ def test_check_and_resend_welcome_skips_when_transcript_has_welcome(
     _set_up_host(tmp_path, _AGENT_ID, monkeypatch)
     send_calls: list[tuple[str, str]] = []
 
-    def _record_send(agent_id: str, message: str) -> bool:
+    def _record_send(agent_id: str, message: str) -> str | None:
         send_calls.append((agent_id, message))
-        return True
+        return None
 
     resender = WelcomeResender(
         resolve_agent=lambda _id: _agent_info(),
@@ -190,9 +190,9 @@ def test_check_and_resend_welcome_resends_when_transcript_unavailable(
     _set_up_host(tmp_path, _AGENT_ID, monkeypatch)
     send_calls: list[tuple[str, str]] = []
 
-    def _record_send(agent_id: str, message: str) -> bool:
+    def _record_send(agent_id: str, message: str) -> str | None:
         send_calls.append((agent_id, message))
-        return True
+        return None
 
     resender = WelcomeResender(
         resolve_agent=lambda _id: _agent_info(),
@@ -212,9 +212,9 @@ def test_check_and_resend_welcome_skips_when_id_unresolved(tmp_path: Path, monke
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     send_calls: list[tuple[str, str]] = []
 
-    def _record_send(agent_id: str, message: str) -> bool:
+    def _record_send(agent_id: str, message: str) -> str | None:
         send_calls.append((agent_id, message))
-        return True
+        return None
 
     resender = WelcomeResender(
         resolve_agent=lambda _id: _agent_info(),
@@ -232,9 +232,9 @@ def test_check_and_resend_welcome_skips_when_agent_not_found(tmp_path: Path, mon
     _set_up_host(tmp_path, _AGENT_ID, monkeypatch)
     send_calls: list[tuple[str, str]] = []
 
-    def _record_send(agent_id: str, message: str) -> bool:
+    def _record_send(agent_id: str, message: str) -> str | None:
         send_calls.append((agent_id, message))
-        return True
+        return None
 
     resender = WelcomeResender(
         resolve_agent=lambda _id: None,

@@ -46,6 +46,7 @@ from imbue.system_interface.activity_state import is_lifecycle_dead
 from imbue.system_interface.activity_state import parse_iso_timestamp_to_epoch
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_discovery import MngrMessenger
+from imbue.system_interface.agent_discovery import delivered_or_raise
 from imbue.system_interface.agent_discovery import discover_agents
 from imbue.system_interface.agent_discovery import get_host_dir
 from imbue.system_interface.agent_discovery import read_claude_config_dir_from_env_file
@@ -708,13 +709,14 @@ class AgentManager:
             match = self._match_by_agent_id.get(agent_id)
             return [match] if match is not None else []
 
-    def send_message_to_agent(self, agent_id: AgentId, message: str) -> bool:
+    def send_message_to_agent(self, agent_id: AgentId, message: str) -> str | None:
         """Send a message to the agent with ``agent_id``, using the live location cache.
 
         The single entry point for messaging an agent: it reads this manager's
         event-fed location for the id and hands it to the `MngrMessenger`, so the
         message skips a fresh mngr discovery whenever the location is already known.
-        Returns True on success.
+        Returns None when the message was delivered, or the reason it was not -- the
+        harness's own words, meant to be shown to the user.
         """
         return self._messenger.send_to_agent(agent_id, message, self.get_agent_matches_by_id(str(agent_id)))
 
@@ -1606,7 +1608,7 @@ class AgentManager:
         deps = SessionDeps(
             harness=harness,
             state_dir=state_dir,
-            send_to_harness=lambda text: self.send_message_to_agent(AgentId(agent_id), text),
+            send_to_harness=lambda text: delivered_or_raise(self.send_message_to_agent(AgentId(agent_id), text)),
             notify_agents_changed=lambda: self._broadcaster.broadcast_agents_updated(self.get_agents_serialized()),
             is_tracked=lambda: self.is_activity_tracked(agent_id),
             on_queue_snapshot=lambda snapshot: self.update_queued_messages(agent_id, snapshot),

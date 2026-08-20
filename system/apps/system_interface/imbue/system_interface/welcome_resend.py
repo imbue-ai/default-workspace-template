@@ -63,7 +63,8 @@ class WelcomeResendError(RuntimeError):
 
 ResolveAgentFn = Callable[[str], AgentInfo | None]
 TranscriptReadFn = Callable[[AgentInfo], str | None]
-MessageSendFn = Callable[[AgentId, str], bool]
+# Returns None when the message was delivered, or the reason it was not.
+MessageSendFn = Callable[[AgentId, str], str | None]
 
 
 def _strip_frontmatter(body: str) -> str:
@@ -263,8 +264,8 @@ class WelcomeResender(FrozenModel):
             return False
 
         logger.info("Resending /welcome to agent {} (transcript missing opening line)", agent.id)
-        sent = self.send_message_fn(AgentId(agent.id), _WELCOME_COMMAND)
-        if not sent:
-            logger.warning("Failed to dispatch /welcome to agent {}", agent.id)
+        failure_reason = self.send_message_fn(AgentId(agent.id), _WELCOME_COMMAND)
+        if failure_reason is not None:
+            logger.warning("Failed to dispatch /welcome to agent {}: {}", agent.id, failure_reason)
             return False
         return True
