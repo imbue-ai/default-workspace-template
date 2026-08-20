@@ -28,6 +28,7 @@ import {
   getTotalEventCount,
   hasMoreBefore,
   hasMoreAfter,
+  isConversationNotFound,
   MAX_HELD_EVENTS,
   EVICT_TARGET_EVENTS,
   type AssistantMessageEvent,
@@ -595,6 +596,25 @@ describe("snapshot load state", () => {
 
     hung.reject(proxyUnavailableError());
     await expect(stale).rejects.toThrow();
+    expect(getConversationLoadState(agent)).toEqual({ phase: "idle", error: null });
+  });
+
+  it("does not let a superseded attempt's 404 declare the conversation missing", async () => {
+    // The panel acts on this harder than on the load state: "No conversation
+    // data" renders ahead of it, ungated by whether a transcript is on screen,
+    // and the live stream is disconnected. A late 404 from an attempt a later
+    // one has already answered must not blank a chat that is loaded and live.
+    const agent = freshAgent();
+    const hung = deferredResponse();
+    mockRequest.mockReturnValueOnce(hung.promise);
+    const stale = fetchEvents(agent);
+
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("a")] });
+    await fetchEvents(agent);
+
+    hung.reject(Object.assign(new Error("{}"), { code: 404, response: { detail: "Agent not found" } }));
+    await expect(stale).rejects.toThrow();
+    expect(isConversationNotFound(agent)).toBe(false);
     expect(getConversationLoadState(agent)).toEqual({ phase: "idle", error: null });
   });
 
