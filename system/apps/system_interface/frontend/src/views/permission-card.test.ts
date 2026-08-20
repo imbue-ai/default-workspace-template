@@ -7,6 +7,7 @@ import type { ScopeInfo } from "./latchkey-scope-info";
 import type { PermissionResolution } from "./message-classification";
 import {
   PermissionCard,
+  forgetFailedServiceMarks,
   initShellPermissionResolutions,
   openPermissionRequest,
   parsePermissionRequest,
@@ -477,6 +478,13 @@ const LOCK_RECT = '<rect x="3" y="11"';
 const UNBUNDLED_SERVICE_OUTPUT =
   '{"request_id":"x1","request_type":"predefined","rationale":"look something up","payload":{"scope":"madeup-api"}}';
 
+// A predefined request naming a service the workspace DOES bundle artwork for.
+// Deliberately not slack, which the other mark cases use: the failed-mark
+// fallback is remembered per URL for the life of the module, so poisoning this
+// one must not reach them.
+const GITHUB_SERVICE_OUTPUT =
+  '{"request_id":"x2","request_type":"predefined","rationale":"read the repo","payload":{"scope":"github-rest-api"}}';
+
 describe("renderPermissionCard", () => {
   it("shows the eyebrow, title, rationale, and review button on a pending card", () => {
     const vnode = renderCardFor(makeToolCall(PERMISSION_INPUT, "permission_request"), makeResult(PERMISSION_OUTPUT));
@@ -801,6 +809,25 @@ describe("renderPermissionCard", () => {
     // The card still names the service, so the cube reads as the artwork's
     // absence and not as a card that failed to read the request.
     expect(textOf(findByClass(vnode, "permission-request-title"))).toBe("madeup-api");
+  });
+
+  it("falls back to the cube when a bundled mark fails to load", () => {
+    // The file is a build asset, so a load failure is the asset not reaching
+    // the page. Without this the browser's broken-image glyph stands in for the
+    // logo permanently, since nothing re-requests it.
+    forgetFailedServiceMarks();
+    const render = () =>
+      renderCardFor(makeToolCall(PERMISSION_INPUT, "permission_request"), makeResult(GITHUB_SERVICE_OUTPUT));
+    const badge = findByClass(render(), "permission-request-badge");
+    expect(markSrc(badge)).toContain("github");
+
+    const image = findVnode(badge, (v) => v.tag === "img") as { attrs?: { onerror?: () => void } } | null;
+    expect(typeof image?.attrs?.onerror).toBe("function");
+    image?.attrs?.onerror?.();
+
+    const afterFailure = findByClass(render(), "permission-request-badge");
+    expect(markSrc(afterFailure)).toBeNull();
+    expect(trustedHtmlIn(afterFailure)).toContain(CUBE_PATH);
   });
 
   it("keeps the service mark on the resolved receipt", () => {

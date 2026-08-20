@@ -244,11 +244,33 @@ function renderKeyIcon(): m.Vnode {
   return m.trust(icon("key", { size: 13, className: "permission-request-icon" }));
 }
 
+/** Mark URLs whose file did not load. A mark is a build asset, so a failure is
+ *  the file not reaching the page -- a request that landed while the frontend was
+ *  being rebuilt (the build empties `static/` before re-emitting), a dropped
+ *  proxy hop -- rather than artwork we do not ship. Left alone, the browser's
+ *  broken-image glyph stands in for the logo and never recovers, since nothing
+ *  re-requests the image; the card then reads as one that failed rather than one
+ *  waiting on the user.
+ *
+ *  Keyed by URL and module-global rather than per-card: whether an asset is
+ *  reachable is a property of the server, not of the card asking, so one failure
+ *  moves every card for that service to the cube instead of each retrying the
+ *  same dead URL. The minds chrome's own ServiceMark probes its marks the same
+ *  way. */
+const FAILED_MARK_URLS = new Set<string>();
+
+/** Forget which marks failed to load. For tests only: the set is module-global
+ *  on purpose, so without this a test that fails one mark would retire it for
+ *  every test that follows in the same file. */
+export function forgetFailedServiceMarks(): void {
+  FAILED_MARK_URLS.clear();
+}
+
 /**
  * The badge's subject mark: the requested service's own logo when we bundle
  * one, and the generic cube otherwise. File-sharing, workspace and accounts
- * requests name no app by definition, and a service we ship no artwork for
- * falls back the same way.
+ * requests name no app by definition; a service we ship no artwork for, and a
+ * mark whose file failed to load, fall back the same way.
  *
  * The logo is an `<img>`, never inlined: the artwork carries its own color, and
  * several marks pair a white path with a deliberately unfilled one, so a
@@ -256,10 +278,21 @@ function renderKeyIcon(): m.Vnode {
  */
 function renderSubjectMark(details: PermissionRequestDetails | null, size: number): m.Vnode {
   const markUrl = details?.scope ? serviceMarkUrl(details.scope) : null;
-  if (markUrl === null) {
+  if (markUrl === null || FAILED_MARK_URLS.has(markUrl)) {
     return m.trust(icon("box", { size, className: "permission-request-icon" }));
   }
-  return m("img", { src: markUrl, alt: "", width: size, height: size, class: "permission-request-mark" });
+  return m("img", {
+    src: markUrl,
+    alt: "",
+    width: size,
+    height: size,
+    class: "permission-request-mark",
+    // Mithril redraws after a handler it bound, so the cube replaces the
+    // broken image on this failure rather than on the next unrelated redraw.
+    onerror: () => {
+      FAILED_MARK_URLS.add(markUrl);
+    },
+  });
 }
 
 /** The generic subject, used only where a row would otherwise be blank. It
