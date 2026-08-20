@@ -27,10 +27,26 @@ Harness-agnostic by construction: the band comes from the agent's label
 
 ponytail: codex uses its ``command`` as the prefix for BOTH its visible ``--remote``
 TUI and its ``app-server`` daemon, so a codex agent registers two pids under one
-agent id. Both get the correct band at launch, which is the protection that
-matters. ``lookup_pid_by_agent_id`` returns the first match, so the prioritizer's
-engagement re-tag reaches only one of the two -- fix by having it return every
-live match and re-tagging each.
+agent id. Both get the correct band at launch, which is the protection that matters,
+and either being shed now produces a ledger record where before there was none.
+
+Two known limits, both acceptable because they are strictly better than the
+unbanded status quo:
+
+- Shedding is asymmetric and only PROBABLY lands the right way. Killing the daemon
+  takes the TUI with it (``codex --remote`` exits on lost connection) -- a clean
+  full-agent death. Killing the TUI leaves the daemon orphaned in its detached
+  sidecar window, still holding memory. Both carry the same band, so earlyoom picks
+  by memory and the daemon -- the larger one -- goes first, which is the outcome we
+  want. To make that deterministic rather than lucky, give the daemon a
+  more-expendable band than the TUI (one more argument here).
+- ``lookup_pid_by_agent_id`` returns the first live match, so the prioritizer's
+  engagement re-tag reaches only one of the two. Fix by returning every live match
+  and re-tagging each.
+
+Separately, and outside this file: the shed NOTICE is claude-only
+(``claude_shed_notice_hook.py`` is a claude SessionStart hook), so a shed codex
+agent gets a ledger record but no in-session explanation on its next message.
 
 The band comes from the agent's label, resolved from ``MNGR_AGENT_NAME`` + the
 host records (see ``agent_identity``): a chat starts maximally expendable and is
