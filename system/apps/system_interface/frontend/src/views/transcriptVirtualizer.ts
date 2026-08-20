@@ -207,13 +207,14 @@ export function createTranscriptVirtualizer(config: TranscriptVirtualizerConfig)
   virtualizerRef = virtualizer;
 
   /**
-   * Only compensate scroll for size changes above the viewport when the user is
-   * not actively scrolling. Writing scrollTop mid-gesture fights the compositor:
-   * sampled at wheel cadence against rows that are still settling, a symmetric
-   * wobble rectifies into systematic drift that can cancel the user's own
-   * scrolling outright.
+   * Never compensate scroll here. The library adjusts scrollTop when an item
+   * above the viewport changes size, which is a reasonable default but only half
+   * the problem: the reserved space for unloaded history moves too, and the two
+   * routinely cancel. The view holds the reader's position by anchoring on the
+   * row they are reading, which covers both, so leaving this on would mean two
+   * mechanisms writing scrollTop for overlapping reasons and double-correcting.
    */
-  virtualizer.shouldAdjustScrollPositionOnItemSizeChange = () => !virtualizer.isScrolling;
+  virtualizer.shouldAdjustScrollPositionOnItemSizeChange = () => false;
 
   return {
     sync(): void {

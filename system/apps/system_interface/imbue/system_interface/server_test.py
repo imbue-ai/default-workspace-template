@@ -4378,6 +4378,97 @@ def test_touch_member_last_used_rejects_bad_bodies(
     assert client.get("/api/member-last-used").get_json() == {"last_used": {}}
 
 
+def test_transcript_geometry_is_handed_back_at_the_width_it_was_measured_at(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The server keeps what a client measured and reads nothing in it.
+
+    A row is a whole turn, so only a client that rendered one knows how tall it
+    came out; the width it wrapped at is part of the answer, which is why a
+    width nobody has measured comes back with no rows rather than the other
+    width's.
+    """
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    measured_rows = [
+        {"row_key": "turn-1", "start_offset": 0, "end_offset": 3, "height": 160.5},
+        {"row_key": "turn-2", "start_offset": 3, "end_offset": 51, "height": 940.0},
+    ]
+
+    stored = client.put("/api/agents/agent-7/geometry", json={"width": 760, "rows": measured_rows})
+
+    assert stored.status_code == 200
+    assert stored.get_json() == {"rows": measured_rows}
+    assert client.get("/api/agents/agent-7/geometry?width=760").get_json() == {"rows": measured_rows}
+    assert client.get("/api/agents/agent-7/geometry?width=1200").get_json() == {"rows": []}
+    assert client.get("/api/agents/agent-9/geometry?width=760").get_json() == {"rows": []}
+
+
+def test_stored_transcript_geometry_keeps_only_the_rows_that_are_measurements(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A row that measures nothing is dropped rather than failing the request.
+
+    Stored geometry outlives the client that wrote it, so the response says what
+    was actually kept instead of leaving the caller to assume.
+    """
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    measured_row = {"row_key": "turn-2", "start_offset": 3, "end_offset": 51, "height": 940.0}
+
+    stored = client.put(
+        "/api/agents/agent-7/geometry",
+        json={
+            "width": 760,
+            "rows": [{"row_key": "turn-1", "start_offset": 3, "end_offset": 3, "height": 0}, measured_row],
+        },
+    )
+
+    assert stored.status_code == 200
+    assert stored.get_json() == {"rows": [measured_row]}
+    assert client.get("/api/agents/agent-7/geometry?width=760").get_json() == {"rows": [measured_row]}
+
+
+def test_transcript_geometry_endpoints_reject_a_request_that_names_no_width(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Geometry measured at one width is not an answer at another, so there is no default."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    measured_rows = [{"row_key": "turn-1", "start_offset": 0, "end_offset": 3, "height": 160.0}]
+
+    assert client.get("/api/agents/agent-7/geometry").status_code == 400
+    assert client.get("/api/agents/agent-7/geometry?width=wide").status_code == 400
+    assert client.get("/api/agents/agent-7/geometry?width=0").status_code == 400
+    assert client.put("/api/agents/agent-7/geometry", json={"rows": measured_rows}).status_code == 400
+    assert client.put("/api/agents/agent-7/geometry", json={"width": True, "rows": measured_rows}).status_code == 400
+    assert client.put("/api/agents/agent-7/geometry", json={"width": 760}).status_code == 400
+    assert client.put("/api/agents/agent-7/geometry", json={"width": 760, "rows": "all of them"}).status_code == 400
+    assert client.get("/api/agents/agent-7/geometry?width=760").get_json() == {"rows": []}
+
+
+def test_a_refused_destroy_leaves_the_transcripts_geometry_alone(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Geometry is dropped by a destroy that happened, not by one that was refused.
+
+    A destroyed transcript can never be rendered again, so its measurements go
+    with it rather than holding a slot in a bounded store. A destroy that never
+    got that far must leave them exactly where they are: the transcript is still
+    open in front of someone.
+    """
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    measured_rows = [{"row_key": "turn-1", "start_offset": 0, "end_offset": 3, "height": 160.0}]
+    assert (
+        client.put("/api/agents/agent-unknown/geometry", json={"width": 760, "rows": measured_rows}).status_code == 200
+    )
+
+    assert client.post("/api/agents/agent-unknown/destroy").status_code == 404
+
+    assert client.get("/api/agents/agent-unknown/geometry?width=760").get_json() == {"rows": measured_rows}
+
+
 def test_delete_project_panel_drops_the_objects_recency(
     client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

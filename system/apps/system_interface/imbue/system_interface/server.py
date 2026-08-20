@@ -33,6 +33,7 @@ from imbue.system_interface import latchkey_endpoints
 from imbue.system_interface import member_last_used
 from imbue.system_interface import member_titles
 from imbue.system_interface import projects
+from imbue.system_interface import transcript_geometry
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_discovery import discover_agents
 from imbue.system_interface.agent_discovery import get_host_dir
@@ -1525,6 +1526,73 @@ def _touch_member_last_used_endpoint() -> Response:
     return _json_response({"ref": ref.strip(), "at_ms": stored_ms})
 
 
+def _parsed_width_bucket(raw_width: str | None) -> int | None:
+    """The viewport width bucket a request names, or None when it names none.
+
+    There is no default to fall back on the way a page size has one: geometry
+    measured at one width is not an answer at another, so a request that does
+    not say which width it means cannot be served with a guess.
+    """
+    if raw_width is None:
+        return None
+    try:
+        width_bucket = int(raw_width)
+    except ValueError:
+        return None
+    if width_bucket <= 0:
+        return None
+    return width_bucket
+
+
+def _get_transcript_geometry_endpoint(agent_id: str) -> Response:
+    """The rows a client last measured for this transcript at one viewport width.
+
+    The server keeps these and reads nothing in them: a row is a whole turn,
+    and only a client that rendered one knows how tall it came out. No rows is
+    the ordinary answer for a transcript nobody has measured at this width, and
+    the client measures as it renders rather than being handed a guess.
+    """
+    layout_dir = _primary_agent_layout_dir()
+    if layout_dir is None:
+        return _json_response({"rows": []})
+    width_bucket = _parsed_width_bucket(request.args.get("width"))
+    if width_bucket is None:
+        error = ErrorResponse(detail="'width' must be a positive integer")
+        return _json_response(error.model_dump(), status_code=400)
+    rows = transcript_geometry.read_geometry(layout_dir, agent_id, width_bucket)
+    return _json_response({"rows": [row.model_dump() for row in rows]})
+
+
+def _store_transcript_geometry_endpoint(agent_id: str) -> Response:
+    """Keep what this client measured for one transcript at one viewport width.
+
+    A whole pass replaces the stored one for that width, since the client that
+    just rendered the transcript measured the whole of what it rendered. Rows
+    that are not measurements are dropped rather than failing the request --
+    stored geometry outlives the client that wrote it -- and the response is
+    what was actually kept, so the caller never has to assume.
+    """
+    layout_dir = _primary_agent_layout_dir()
+    if layout_dir is None:
+        error = ErrorResponse(detail="No primary agent configured for this workspace")
+        return _json_response(error.model_dump(), status_code=500)
+    body = _parse_json_object_body()
+    if isinstance(body, Response):
+        return body
+    width = body.get("width")
+    rows = body.get("rows")
+    # ``bool`` is an ``int`` subclass, so reject it explicitly rather than
+    # letting ``true`` name a one-pixel viewport.
+    if not isinstance(width, int) or isinstance(width, bool) or width <= 0:
+        error = ErrorResponse(detail="'width' must be a positive integer")
+        return _json_response(error.model_dump(), status_code=400)
+    if not isinstance(rows, list):
+        error = ErrorResponse(detail="'rows' must be a list of measured rows")
+        return _json_response(error.model_dump(), status_code=400)
+    stored_rows = transcript_geometry.write_geometry(layout_dir, agent_id, width, rows)
+    return _json_response({"rows": [row.model_dump() for row in stored_rows]})
+
+
 def _stop_project_members(refs: list[str]) -> dict[str, list[str]]:
     """Tear down the members of a deleted project that have a stop verb.
 
@@ -2448,6 +2516,13 @@ def _destroy_agent(agent_id: str) -> Response:
     # so the frontend reflects the destruction without waiting for mngr observe.
     agent_manager.remove_agent(agent_id)
 
+    # The transcript can never be rendered again, so its measured geometry goes
+    # with it rather than holding a slot in a bounded store against a transcript
+    # someone is still reading.
+    layout_dir = _primary_agent_layout_dir()
+    if layout_dir is not None:
+        transcript_geometry.clear_geometry(layout_dir, agent_id)
+
     return _json_response(DestroyAgentResponse(status="ok").model_dump())
 
 
@@ -2985,6 +3060,18 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule("/api/agents/<agent_id>/screen", view_func=_get_screen_capture, methods=["GET"])
     application.add_url_rule("/api/agents/<agent_id>/destroy", view_func=_destroy_agent, methods=["POST"])
     application.add_url_rule("/api/agents/<agent_id>/start", view_func=_start_agent, methods=["POST"])
+    # Geometry belongs to the transcript that was measured rather than to the
+    # machine, so it hangs off the agent instead of joining the ref-keyed stores
+    # above.
+    application.add_url_rule(
+        "/api/agents/<agent_id>/geometry", view_func=_get_transcript_geometry_endpoint, methods=["GET"]
+    )
+    application.add_url_rule(
+        "/api/agents/<agent_id>/geometry",
+        view_func=_store_transcript_geometry_endpoint,
+        methods=["PUT"],
+        endpoint="_store_transcript_geometry",
+    )
     application.add_url_rule("/api/terminals", view_func=_list_terminals, methods=["GET"])
     application.add_url_rule("/api/terminals/allocate", view_func=_allocate_terminal, methods=["POST"])
     application.add_url_rule(

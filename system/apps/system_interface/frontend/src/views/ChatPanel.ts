@@ -148,12 +148,13 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   // viewport is over a reserved region and page/jump/overlay accordingly.
   let phantomTopHeight = 0;
   let phantomBottomHeight = 0;
-  // The reserved top height the currently laid-out DOM was built with. Reserved
-  // space above the window is not constant: measuring a row inside the window
-  // refines the learned per-event rate, which re-estimates the *unloaded* range
-  // above it. Any change there moves every rendered row, so the difference has to
-  // be given back to scrollTop or the reader drifts (see compensateForReservedShift).
-  let appliedPhantomTopHeight = 0;
+  // The row the reader was on last frame, and where in the viewport it sat, so
+  // it can be put back after the window is recomputed (see restoreReadingAnchor).
+  let anchorRowKey: string | null = null;
+  let anchorViewportOffset = 0;
+  // Whether the panel was visible on the previous render, so becoming visible
+  // again can be treated as a resume rather than as a shift to correct.
+  let wasPanelVisible = true;
   // Persisted geometry, so a conversation opened again is accurate immediately
   // instead of settling in from an estimate.
   const geometryCache = createGeometryCache();
@@ -579,28 +580,74 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   }
 
   /**
-   * Give back to scrollTop any change in the space reserved above the window.
+   * Note which row the reader is looking at, and where in the viewport it sits.
    *
-   * That reserve is an estimate of history this client has not rendered, and it
-   * moves whenever the estimate improves -- measuring a row inside the window
-   * refines the learned per-event rate, which re-sizes the unloaded range above
-   * it. Every rendered row moves with it, so without this the content the reader
-   * is looking at slides away underneath them.
-   *
-   * Deliberately narrow, which is what makes it safe where a DOM-anchored
-   * correction was not: the adjustment is one exactly-known quantity (the change
-   * in a number this component computed), not a measured guess at where content
-   * ought to be. It is applied only while scrolled up -- a follower is pinned to
-   * the tail anyway -- and never mid-gesture, since writing scrollTop while the
-   * user is scrolling fights the compositor.
+   * Captured before the window is recomputed, in the virtualizer's own offset
+   * space rather than by measuring the DOM. That distinction is the whole point:
+   * a DOM-measured anchor is sampled against rows that are still settling, so it
+   * oscillates and rectifies into drift. These offsets are the same numbers the
+   * layout is about to be built from, so restoring against them is exact.
    */
-  function compensateForReservedShift(element: HTMLElement): void {
-    const delta = phantomTopHeight - appliedPhantomTopHeight;
-    appliedPhantomTopHeight = phantomTopHeight;
-    if (delta === 0 || !panelVisible || !scroll.userScrolledUp || virtualizer.isScrolling()) {
+  function captureReadingAnchor(): void {
+    const justBecameVisible = panelVisible && !wasPanelVisible;
+    wasPanelVisible = panelVisible;
+    anchorRowKey = null;
+    // Nothing was being held while hidden -- the window was frozen against a
+    // zero-sized element -- so there is no position to restore, only one to
+    // adopt. The browser preserved the real scrollTop across hide/show, so that
+    // is the truth; correcting against offsets computed before the freeze would
+    // move the reader instead of holding them. Anchoring resumes next frame,
+    // once the window has been recomputed against the live viewport.
+    if (justBecameVisible || !panelVisible || !scroll.userScrolledUp) {
       return;
     }
-    scroll.pinTo(element, element.scrollTop + delta);
+    const top = scroll.scrollEl?.scrollTop ?? scroll.scrollTop;
+    for (const item of virtualizer.getVirtualItems()) {
+      if (item.end > top) {
+        anchorRowKey = String(item.key);
+        anchorViewportOffset = item.start - top;
+        return;
+      }
+    }
+  }
+
+  /**
+   * Put the reader back on the row they were reading, at the same place in the
+   * viewport.
+   *
+   * Everything above that row can legitimately change between two frames: the
+   * reserved estimate for unloaded history is refined as rows are measured, and
+   * a backfilled page replaces reserved space with real rows. Those two move in
+   * opposite directions and very nearly cancel, which is why correcting for
+   * either alone is wrong -- an earlier version of this compensated for the
+   * reserved-space change by itself and walked the reader to the top of the
+   * conversation, because the rows that landed had already made up the
+   * difference. Holding the anchor's position is the invariant that actually
+   * matters, and it subsumes both.
+   *
+   * This is also why the virtualizer's own scroll compensation is switched off:
+   * two mechanisms writing scrollTop for overlapping reasons double-correct, and
+   * this one is strictly more general.
+   *
+   * Skipped while following the tail, where the tail pin owns the position
+   * outright, and while hidden, where the element is zero-sized.
+   */
+  function restoreReadingAnchor(element: HTMLElement): void {
+    if (anchorRowKey === null || !panelVisible || !scroll.userScrolledUp) {
+      return;
+    }
+    for (const item of virtualizer.getVirtualItems()) {
+      if (String(item.key) !== anchorRowKey) {
+        continue;
+      }
+      const target = Math.max(0, item.start - anchorViewportOffset);
+      // A sub-pixel difference is layout rounding, not drift; writing scrollTop
+      // for it would feed the loop it is meant to prevent.
+      if (Math.abs(target - element.scrollTop) > 1) {
+        scroll.pinTo(element, target);
+      }
+      return;
+    }
   }
 
   function applyScrollPosition(element: HTMLElement): void {
@@ -802,6 +849,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       }
     }
 
+    captureReadingAnchor();
     virtualizer.sync();
     const items = virtualizer.getVirtualItems();
 
@@ -922,6 +970,13 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
    * events of their own and would corrupt the prefix sums.
    */
   function recordSettledGeometry(rows: RowDescriptor[]): boolean {
+    // A hidden panel has nothing laid out, so nothing it could learn is worth
+    // learning -- and refining the geometry then would move the reserved space
+    // under a reader who is not there to see it, so the tab would come back in a
+    // different place than they left it.
+    if (!panelVisible) {
+      return false;
+    }
     const now = Date.now();
     let changed = false;
     for (const row of rows) {
@@ -1016,7 +1071,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                 const element = mainVnode.dom as HTMLElement;
                 scroll.attach(element);
                 virtualizer.mount();
-                compensateForReservedShift(element);
+                restoreReadingAnchor(element);
                 applyScrollPosition(element);
                 scheduleRowMeasure();
                 if (currentAgentId !== null) {
@@ -1027,7 +1082,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                 const element = mainVnode.dom as HTMLElement;
                 scroll.attach(element);
                 virtualizer.mount();
-                compensateForReservedShift(element);
+                restoreReadingAnchor(element);
                 applyScrollPosition(element);
                 scheduleRowMeasure();
                 // Drive paging from the render loop, not only from scroll events, so
