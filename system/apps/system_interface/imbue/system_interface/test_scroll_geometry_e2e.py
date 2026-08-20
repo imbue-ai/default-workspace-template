@@ -218,15 +218,12 @@ def test_reading_history_does_not_move_the_viewport(tmp_path: Path, page: Page) 
         # an older page. Repeated in steps so a page lands mid-read, exactly as
         # it does for a user scrolling back through a conversation.
         for _ in range(6):
-            anchor_before = _viewport_anchor(page)
             page.evaluate("() => { document.querySelector('.app-content').scrollBy(0, -600); }")
             page.wait_for_timeout(_SETTLE_MS)
-            anchor_after = _viewport_anchor(page)
-            # The scroll itself moves the reader deliberately; what must not
-            # happen is the anchor row vanishing from the rendered set, which is
-            # what a window reset looks like.
-            assert anchor_after is not None, "transcript stopped rendering rows while scrolling up"
-            del anchor_before
+            # The scroll itself moves the reader deliberately, so there is nothing
+            # to hold across it; what must not happen is the anchor row vanishing
+            # from the rendered set, which is what a window reset looks like.
+            assert _viewport_anchor(page) is not None, "transcript stopped rendering rows while scrolling up"
 
         # Now hold still and let any in-flight page land. Nothing the user did
         # should move them; if a backfill lands, its geometry was already
