@@ -464,14 +464,25 @@ class TranscriptStore {
 
 const storeByAgent: Record<string, TranscriptStore> = {};
 const notFoundAgentIds = new Set<string>();
-// Why the last snapshot fetch failed, per agent, or absent once one succeeded.
-// It lives here rather than in the panel because every path that reloads a
-// transcript -- the panel's own load, the tab's Refresh, and the stream's
-// background reconnect -- goes through `fetchEvents`, and only one of those is
-// the panel. A panel holding its own copy could not be cleared by the other two,
-// so a recovered transcript stayed hidden behind a stale error until the page
-// was reloaded.
-const loadErrorByAgent = new Map<string, string>();
+
+/** Where an agent's transcript snapshot stands: in flight, failed, or settled. */
+export interface TranscriptLoadState {
+  readonly phase: "idle" | "loading" | "error";
+  /** Why it failed. Set when `phase` is "error", null otherwise. */
+  readonly error: string | null;
+}
+
+const IDLE_LOAD_STATE: TranscriptLoadState = { phase: "idle", error: null };
+
+// Where each agent's snapshot load stands. It lives here rather than in the
+// panel because every path that reloads a transcript -- the panel's own load,
+// the tab's Refresh, and the stream's background reconnect -- goes through
+// `fetchEvents`, and only one of those is the panel. A panel holding its own
+// copy could not be cleared by the other two, so a recovered transcript stayed
+// hidden behind a stale error until the page was reloaded. Holding the whole
+// phase rather than just the error keeps the in-flight state visible to those
+// same three paths, so a reload nobody started still reads as loading.
+const loadStateByAgent = new Map<string, TranscriptLoadState>();
 
 function storeFor(agentId: string): TranscriptStore {
   let store = storeByAgent[agentId];
@@ -508,9 +519,9 @@ export function isConversationNotFound(agentId: string): boolean {
   return notFoundAgentIds.has(agentId);
 }
 
-/** Why this agent's last snapshot fetch failed, or null if the last one succeeded. */
-export function getConversationLoadError(agentId: string): string | null {
-  return loadErrorByAgent.get(agentId) ?? null;
+/** Where this agent's transcript snapshot load stands; "idle" for one never attempted. */
+export function getConversationLoadState(agentId: string): TranscriptLoadState {
+  return loadStateByAgent.get(agentId) ?? IDLE_LOAD_STATE;
 }
 
 export function getEventsForAgent(agentId: string): TranscriptEvent[] {
@@ -604,11 +615,11 @@ function placeWindow(agentId: string, result: EventsResponse): void {
 
 export async function fetchEvents(agentId: string): Promise<TranscriptEvent[]> {
   notFoundAgentIds.delete(agentId);
-  // Cleared on the attempt, not on its success: whoever is about to learn the
-  // outcome must not be shown the previous one. Only the snapshot records a
-  // load error -- a failed page or jump below leaves the loaded window intact
-  // and is deliberately non-fatal, so it must not blank a readable transcript.
-  loadErrorByAgent.delete(agentId);
+  // Moved on the attempt, not on its outcome: whoever is about to learn the
+  // outcome must not be shown the previous one. Only the snapshot tracks this --
+  // a failed page or jump below leaves the loaded window intact and is
+  // deliberately non-fatal, so it must not blank a readable transcript.
+  loadStateByAgent.set(agentId, { phase: "loading", error: null });
 
   try {
     const result = await m.request<EventsResponse>({
@@ -618,13 +629,14 @@ export async function fetchEvents(agentId: string): Promise<TranscriptEvent[]> {
       config: applyEventsRequestTimeout,
     });
     placeWindow(agentId, result);
+    loadStateByAgent.set(agentId, IDLE_LOAD_STATE);
     return result.events;
   } catch (error) {
     const requestError = error as { code?: number; message?: string };
     if (requestError.code === 404) {
       notFoundAgentIds.add(agentId);
     }
-    loadErrorByAgent.set(agentId, describeRequestError(error));
+    loadStateByAgent.set(agentId, { phase: "error", error: describeRequestError(error) });
     throw error;
   }
 }

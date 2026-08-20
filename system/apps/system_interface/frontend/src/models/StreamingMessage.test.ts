@@ -11,7 +11,7 @@ vi.mock("mithril", () => ({
 }));
 
 import { loadSnapshotWithStream } from "./StreamingMessage";
-import { getConversationLoadError, getEventsForAgent, type TranscriptEvent } from "./Response";
+import { getConversationLoadState, getEventsForAgent, type TranscriptEvent } from "./Response";
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -135,14 +135,14 @@ describe("snapshot retry after reconnect", () => {
       const agentId = `agent-${agentCounter++}`;
       mockRequest.mockRejectedValueOnce(Object.assign(new Error(String(null)), { code: 503, response: null }));
       await expect(loadSnapshotWithStream(agentId)).rejects.toThrow();
-      expect(getConversationLoadError(agentId)).not.toBeNull();
+      expect(getConversationLoadState(agentId).error).toBe("request failed (HTTP 503)");
 
       mockRequest.mockResolvedValueOnce({ events: [makeEvent("after-recovery", "backend answered")] });
       const deadSource = FakeEventSource.instances[FakeEventSource.instances.length - 1];
       deadSource?.onerror?.();
       await vi.advanceTimersByTimeAsync(6000);
 
-      expect(getConversationLoadError(agentId)).toBeNull();
+      expect(getConversationLoadState(agentId)).toEqual({ phase: "idle", error: null });
       expect(getEventsForAgent(agentId).map((event) => event.event_id)).toContain("after-recovery");
     } finally {
       vi.useRealTimers();

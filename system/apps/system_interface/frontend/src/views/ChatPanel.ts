@@ -13,7 +13,7 @@ import {
   fetchBackfillEvents,
   fetchForwardEvents,
   fetchWindowAtOffset,
-  getConversationLoadError,
+  getConversationLoadState,
   getEventsForAgent,
   getEventCount,
   getFirstOffset,
@@ -103,7 +103,6 @@ function isProtoAgent(agentId: string): boolean {
 }
 
 export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean }> {
-  let loading = false;
   let currentAgentId: string | null = null;
 
   // Whether this panel is the visible (selected) tab in its dockview group.
@@ -364,8 +363,6 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   }
 
   async function loadAgent(agentId: string): Promise<void> {
-    loading = true;
-
     try {
       // Buffer SSE deltas arriving during the snapshot fetch so the wholesale
       // snapshot replace in fetchEvents cannot drop a live event on first load.
@@ -374,13 +371,11 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
         checkLatestAssistantForAuthError(agentId);
       }
     } catch {
-      // Why it failed is recorded against the agent by `fetchEvents` and read
-      // back in the view, so that a later success -- from any caller, including
-      // the stream's own reconnect -- clears it. Nothing to hold here.
-    } finally {
-      if (agentId === currentAgentId) {
-        loading = false;
-      }
+      // Where the load got to is recorded against the agent by `fetchEvents` and
+      // read back in the view, so that a later attempt -- from any caller,
+      // including the stream's own reconnect -- supersedes it. Nothing to hold
+      // here, and nothing to guard on the agent having been switched away from:
+      // the record is per-agent, so a stale load cannot speak for the new one.
     }
   }
 
@@ -608,7 +603,24 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       ]);
     }
 
-    if (loading) {
+    // A message the user just sent counts as content even before any event
+    // exists for it: it may be queued (the harness parked it) or still in flight
+    // (an optimistic "Sending…" bubble). All three whole-panel states below are
+    // about having nothing to show, so they share one answer -- otherwise a
+    // reload firing under a fresh chat replaces that bubble with a spinner or an
+    // error screen.
+    const tailNodes =
+      getEventCount(agentId) === 0 ? [...renderQueuedMessages(agentId), ...renderOutgoingMessages(agentId)] : [];
+    const hasNothingToShow = getEventCount(agentId) === 0 && tailNodes.length === 0;
+
+    // Read per-render rather than latched at load time, so the panel leaves the
+    // error state as soon as any reload succeeds -- the tab's Refresh or the
+    // stream's background reconnect, neither of which goes through loadAgent.
+    // Reading the phase (not just the error) is what keeps those two from
+    // falling through to "No events yet for this agent." while they are in
+    // flight, which is a lie the panel used to tell for the whole of a retry.
+    const load = getConversationLoadState(agentId);
+    if (hasNothingToShow && load.phase === "loading") {
       return m(
         "div",
         { class: "message-list-loading flex items-center justify-center h-full" },
@@ -616,18 +628,11 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       );
     }
 
-    // Read per-render rather than latched at load time, so the panel leaves the
-    // error state as soon as any reload succeeds -- the tab's Refresh or the
-    // stream's background reconnect, neither of which goes through loadAgent.
-    // Shown only with nothing else to render: a Refresh or a reconnect that
-    // fails against an already-loaded transcript must leave it on screen, since
-    // a readable transcript beats an error about the attempt to re-read it.
-    const loadingError = getConversationLoadError(agentId);
-    if (loadingError !== null && getEventCount(agentId) === 0) {
+    if (hasNothingToShow && load.error !== null) {
       return m(
         "div",
         { class: "message-list-error flex items-center justify-center h-full" },
-        m("p", { class: "text-red-500" }, `Error: ${loadingError}`),
+        m("p", { class: "text-red-500" }, `Error: ${load.error}`),
       );
     }
 
@@ -652,10 +657,8 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     const events = getEventsForAgent(agentId);
 
     if (events.length === 0) {
-      // No transcript yet -- but a message the user just sent may already be
-      // queued (the harness parked it) or still in flight (an optimistic
-      // "Sending…" bubble), so render those rather than the empty-state placeholder.
-      const tailNodes = [...renderQueuedMessages(agentId), ...renderOutgoingMessages(agentId)];
+      // No transcript yet -- but render any queued or in-flight message rather
+      // than the empty-state placeholder (see tailNodes above).
       if (tailNodes.length === 0) {
         return m(
           "div",
