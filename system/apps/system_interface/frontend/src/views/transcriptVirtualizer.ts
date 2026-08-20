@@ -101,23 +101,36 @@ export function createTranscriptVirtualizer(config: TranscriptVirtualizerConfig)
   // and the one read guards for the moment it is still null.
   let virtualizerRef: Virtualizer<HTMLElement, Element> | null = null;
 
+  // Last computed overscan, and whether a size has moved since. The average is
+  // over every row ever measured for this conversation, which is a table the
+  // library never prunes, while `sync` runs on every redraw -- so a scroll tick
+  // must not walk it. `resizeRow` is the only thing that writes that table here
+  // (measurement is ours and reported by index, so the library's own
+  // measureElement path is unused) and `reset` clears it, which makes the two of
+  // them an exact account of when this can change.
+  let cachedOverscanRows = DEFAULT_OVERSCAN_ROWS;
+  let isOverscanStale = true;
+
   /** Convert the pixel overscan budget into an item count using the average
    *  measured row height, so the rendered margin stays roughly OVERSCAN_PX
    *  regardless of row mix. */
   function overscanRows(): number {
-    const sizes = [...(virtualizerRef?.itemSizeCache.values() ?? [])];
-    if (sizes.length === 0) {
+    if (!isOverscanStale) {
+      return cachedOverscanRows;
+    }
+    const sizes = virtualizerRef?.itemSizeCache;
+    if (sizes === undefined || sizes.size === 0) {
       return DEFAULT_OVERSCAN_ROWS;
     }
     let total = 0;
-    for (const size of sizes) {
+    for (const size of sizes.values()) {
       total += size;
     }
-    const average = total / sizes.length;
-    if (!Number.isFinite(average) || average <= 0) {
-      return DEFAULT_OVERSCAN_ROWS;
-    }
-    return Math.max(2, Math.ceil(OVERSCAN_PX / average));
+    const average = total / sizes.size;
+    isOverscanStale = false;
+    cachedOverscanRows =
+      Number.isFinite(average) && average > 0 ? Math.max(2, Math.ceil(OVERSCAN_PX / average)) : DEFAULT_OVERSCAN_ROWS;
+    return cachedOverscanRows;
   }
 
   /**
@@ -235,6 +248,7 @@ export function createTranscriptVirtualizer(config: TranscriptVirtualizerConfig)
     },
 
     resizeRow(index: number, height: number): void {
+      isOverscanStale = true;
       virtualizer.resizeItem(index, height);
     },
 
@@ -251,6 +265,7 @@ export function createTranscriptVirtualizer(config: TranscriptVirtualizerConfig)
     },
 
     reset(): void {
+      isOverscanStale = true;
       // The library's own "forget every measurement": it clears the size cache
       // and bumps the version the measurements are memoized on, so the whole
       // table is rebuilt from estimates on the next read.
