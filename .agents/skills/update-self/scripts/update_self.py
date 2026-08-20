@@ -2643,13 +2643,18 @@ def apply_update(
             # The provisioner runs before any restart, so nothing boots into a
             # tree whose pinned global toolchain has not caught up with it.
             if plan.provisioner:
+                # Recorded before the run is attempted, like the restart flag:
+                # a provisioner that fails part-way (or is killed) may already
+                # have moved global tool state, so recovery must re-run it from
+                # the restored tree (best-effort) even then.
+                marker.provisioner_ran = True
+                write_marker(marker, repo_root, now)
                 _run_checked(
                     runner,
                     ["bash", PROVISIONER_SCRIPT],
                     repo_root,
                     f"bash {PROVISIONER_SCRIPT}",
                 )
-                marker.provisioner_ran = True
                 marker.phase = PHASE_PROVISIONED
                 write_marker(marker, repo_root, now)
 
