@@ -376,13 +376,39 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       // including the stream's own reconnect -- supersedes it. Nothing to hold
       // here, and nothing to guard on the agent having been switched away from:
       // the record is per-agent, so a stale load cannot speak for the new one.
-      // Retrying is not this function's job either: `loadSnapshotWithStream`
-      // schedules that for every caller. Still logged, as the paging and reconnect
-      // paths do -- an attempt that a newer one has superseded is recorded nowhere
-      // at all, so the log is the only trace of one that keeps losing the race.
+      // Still logged, as the paging and reconnect paths do -- an attempt that a
+      // newer one has superseded is recorded nowhere at all, so the log is the
+      // only trace of one that keeps losing the race.
       console.warn(`Failed to load the transcript for agent ${agentId}`, error);
     }
   }
+
+  // A user-initiated reload is outstanding; guards against stacking them.
+  let reloadInFlight = false;
+
+  /**
+   * Re-run the load that the panel is currently reporting a failure for.
+   *
+   * Identical to what the tab menu's Refresh does, offered where the user is
+   * already looking: an error screen whose only remedy lives behind a menu they
+   * have no particular reason to open reads as a dead end. Redraws on settle
+   * because a *failed* reload writes only the load state, which no redraw
+   * follows on its own (a successful one repaints when it places the window).
+   */
+  function reloadAfterFailure(agentId: string): void {
+    if (reloadInFlight) {
+      return;
+    }
+    reloadInFlight = true;
+    loadAgent(agentId).finally(() => {
+      reloadInFlight = false;
+      m.redraw();
+    });
+  }
+
+  const RELOAD_BUTTON_CLASS =
+    "message-list-reload cursor-pointer rounded-md border border-border px-3 py-1 text-sm " +
+    "text-text-primary hover:bg-bg-hover";
 
   function manageStreamConnection(agentId: string): void {
     if (!isConversationNotFound(agentId)) {
@@ -634,27 +660,25 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     }
 
     if (hasNothingToShow && load.error !== null) {
-      return m(
-        "div",
-        { class: "message-list-error flex items-center justify-center h-full" },
+      return m("div", { class: "message-list-error flex flex-col items-center justify-center h-full gap-3" }, [
         m("p", { class: "text-red-500" }, `Error: ${load.error}`),
-      );
+        m("button", { class: RELOAD_BUTTON_CLASS, onclick: () => reloadAfterFailure(agentId) }, "Refresh"),
+      ]);
     }
 
     // The same failure, over a transcript that is already on screen. Keeping the
     // transcript is right -- blanking it loses more than the error tells -- but
-    // staying silent is not: the user may have just asked for this reload from the
-    // tab menu, and a retry they cannot see is now running on a backoff. So it
-    // reports as a strip above the transcript rather than in place of it. Survives
-    // the retry itself because `error` outlives the "loading" phase.
+    // staying silent is not: the user may have just asked for this reload
+    // themselves, and got no answer either way. So it reports as a strip above the
+    // transcript rather than in place of it, carrying the same retry the error
+    // screen offers.
     const failedReloadNotice =
       load.error === null
         ? null
-        : m(
-            "div",
-            { class: "message-list-stale-notice border-b border-border px-3 py-1.5 text-sm text-red-500" },
-            `Couldn't refresh this conversation: ${load.error}. Retrying...`,
-          );
+        : m("div", { class: "message-list-stale-notice flex items-center gap-3 border-b border-border px-3 py-1.5" }, [
+            m("span", { class: "text-sm text-red-500" }, `Couldn't refresh this conversation: ${load.error}`),
+            m("button", { class: RELOAD_BUTTON_CLASS, onclick: () => reloadAfterFailure(agentId) }, "Refresh"),
+          ]);
 
     // Whether a live text selection is anchored in this panel's transcript. Gates
     // both eviction (below) and the tail-follow pin's effect on the window (via the

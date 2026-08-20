@@ -642,25 +642,6 @@ describe("snapshot load state", () => {
     expect(getConversationLoadState(agent)).toEqual({ phase: "idle", error: null });
   });
 
-  it("keeps the failure visible while the retry it scheduled is in flight", async () => {
-    // The retry puts the phase back to "loading". Clearing the error there would
-    // blink the panel's notice out for the whole of every attempt -- and against
-    // a dead tunnel an attempt runs to the full request timeout, so the failure
-    // would read as resolved for 30 seconds at a stretch. Only a success clears it.
-    const agent = freshAgent();
-    mockRequest.mockRejectedValueOnce(proxyUnavailableError());
-    await expect(fetchEvents(agent)).rejects.toThrow();
-
-    const pending = deferredResponse();
-    mockRequest.mockReturnValueOnce(pending.promise);
-    const retry = fetchEvents(agent);
-    expect(getConversationLoadState(agent)).toEqual({ phase: "loading", error: "request failed (HTTP 503)" });
-
-    pending.resolve({ events: [makeEvent("a")] });
-    await retry;
-    expect(getConversationLoadState(agent)).toEqual({ phase: "idle", error: null });
-  });
-
   it("is not moved by a failed backfill page, which leaves the window readable", async () => {
     const agent = freshAgent();
     mockRequest.mockResolvedValueOnce({ events: [makeEvent("b")], offset: 1, total: 2 });

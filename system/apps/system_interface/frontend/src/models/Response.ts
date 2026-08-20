@@ -467,16 +467,8 @@ const notFoundAgentIds = new Set<string>();
 
 /** Where an agent's transcript snapshot stands: in flight, failed, or settled. */
 export interface TranscriptLoadState {
-  /** What the load is doing right now. */
   readonly phase: "idle" | "loading" | "error";
-  /**
-   * The most recent failure that has not been resolved by a later success, or
-   * null. Deliberately NOT cleared when the following retry starts, so it
-   * outlives the "loading" phase: a failed reload schedules a retry, and a
-   * caller that read only `phase` would see the failure blink out for the whole
-   * of each attempt -- which, against a dead tunnel that takes the full request
-   * timeout to fail, reads as "it recovered". Only a successful load clears it.
-   */
+  /** Why it failed. Set when `phase` is "error", null otherwise. */
   readonly error: string | null;
 }
 
@@ -646,13 +638,7 @@ export async function fetchEvents(agentId: string): Promise<TranscriptEvent[]> {
   // fence; only the outcomes below do.
   const attempt = ++loadAttemptCounter;
   newestLoadAttemptByAgent.set(agentId, attempt);
-  // Carries any unresolved failure into the attempt rather than clearing it (see
-  // TranscriptLoadState.error): a retry is not evidence that the last failure is
-  // over, only a success is.
-  loadStateByAgent.set(agentId, {
-    phase: "loading",
-    error: loadStateByAgent.get(agentId)?.error ?? null,
-  });
+  loadStateByAgent.set(agentId, { phase: "loading", error: null });
 
   try {
     const result = await m.request<EventsResponse>({
