@@ -63,6 +63,10 @@ _ALLOWED = [
 _BLOCKED = [
     f"{_REQUEST} && {_REQUEST}",  # two requests batched into one call
     f"{_REQUEST}\n{_REQUEST}",  # ... via a newline
+    # ... in every spelling of the method flag the transcript parser's
+    # case-insensitive regex reads as a filing, so nothing it cards escapes here.
+    (f"{_REQUEST} && {_REQUEST}").replace("-XPOST", "-x POST"),
+    (f"{_REQUEST} && {_REQUEST}").replace("-XPOST", "--REQUEST=POST"),
     # ... and inside ONE curl, which runs once per URL it is handed.
     f"{_REQUEST} {_HOST}",
     f"{_REQUEST} --next -XPOST {_HOST} -d {_BODY}",
