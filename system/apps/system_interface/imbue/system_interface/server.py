@@ -1552,13 +1552,15 @@ def _get_transcript_geometry_endpoint(agent_id: str) -> Response:
     the ordinary answer for a transcript nobody has measured at this width, and
     the client measures as it renders rather than being handed a guess.
     """
-    layout_dir = _primary_agent_layout_dir()
-    if layout_dir is None:
-        return _json_response({"rows": []})
+    # Before the workspace check, so the same malformed request gets the same
+    # answer whether or not this workspace happens to have a primary agent.
     width_bucket = _parsed_width_bucket(request.args.get("width"))
     if width_bucket is None:
         error = ErrorResponse(detail="'width' must be a positive integer")
         return _json_response(error.model_dump(), status_code=400)
+    layout_dir = _primary_agent_layout_dir()
+    if layout_dir is None:
+        return _json_response({"rows": []})
     rows = transcript_geometry.read_geometry(layout_dir, agent_id, width_bucket)
     return _json_response({"rows": [row.model_dump() for row in rows]})
 

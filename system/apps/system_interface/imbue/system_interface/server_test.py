@@ -4447,6 +4447,25 @@ def test_transcript_geometry_endpoints_reject_a_request_that_names_no_width(
     assert client.get("/api/agents/agent-7/geometry?width=760").get_json() == {"rows": []}
 
 
+def test_a_geometry_request_naming_no_width_is_refused_with_nowhere_to_store_it_either(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A malformed request reads the same whether or not the workspace has a primary agent.
+
+    Without one there is nowhere to file geometry, so a well-formed read answers
+    with no rows. That must not turn a request naming no width into a success:
+    the client treats every non-ok response as "nothing measured", so a 200 there
+    would hide a mismatched request shape in exactly the setups that are used to
+    develop against.
+    """
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.delenv("MNGR_AGENT_ID", raising=False)
+
+    assert client.get("/api/agents/agent-7/geometry").status_code == 400
+    assert client.get("/api/agents/agent-7/geometry?width=0").status_code == 400
+    assert client.get("/api/agents/agent-7/geometry?width=760").get_json() == {"rows": []}
+
+
 def test_a_refused_destroy_leaves_the_transcripts_geometry_alone(
     client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
