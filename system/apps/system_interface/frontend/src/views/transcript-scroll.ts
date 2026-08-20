@@ -10,9 +10,11 @@
  *    scroll-up from a browser shrink-clamp (see scrollFollow);
  *  - the pointer-drag and viewport-resize lifecycle.
  *
- * Viewport stability while scrolled up is left entirely to native scroll anchoring
- * (the views' spacers opt out) -- the controller writes scrollTop only for the two
- * deliberate pins: following the tail, and landing an offset jump (`pinTo`).
+ * While scrolled up the default is native scroll anchoring (the views' spacers opt
+ * out of being chosen as its anchor). The controller writes scrollTop on its own
+ * account only for the tail pin; every other write goes through `pinTo`, so the two
+ * views' deliberate repositioning is visible in one place rather than spread across
+ * the file.
  *
  * The two views differ only in a few spots, injected via `config`: dockview
  * visibility gating, whether newer history exists below the loaded window, and any
@@ -66,8 +68,10 @@ export interface TranscriptScroll {
   /** Apply the tail-follow pin if following (no-op while scrolled up -- native
    *  anchoring handles that). Call from oncreate/onupdate. */
   applyScrollPosition(element: HTMLElement): void;
-  /** Pin scrollTop to an exact position once (ChatPanel: land an offset jump at the
-   *  top of the freshly loaded rows), syncing the follow bookkeeping. */
+  /** Pin scrollTop to an exact position, syncing the follow bookkeeping so the write
+   *  does not read back as a user scroll. ChatPanel uses it twice: to land an offset
+   *  jump at the top of the freshly loaded rows, and to hold the reader on the row
+   *  they were reading once the window has been recomputed. */
   pinTo(element: HTMLElement, top: number): void;
   /** Reset scroll + follow state (e.g. switching to a different agent). */
   reset(): void;
