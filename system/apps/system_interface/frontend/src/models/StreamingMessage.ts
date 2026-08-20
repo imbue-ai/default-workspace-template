@@ -133,9 +133,13 @@ function scheduleReconnectWithSnapshot(agentId: string): void {
  * `fetchEvents` replaces `eventsByAgent[agentId]` wholesale with the snapshot,
  * so a delta that arrives between the stream opening and the snapshot landing
  * would otherwise be overwritten and lost. Both the initial mount and the
- * reconnect path go through here so neither can drop events. Re-throws fetch
- * errors so the caller can surface a load error; buffered deltas are flushed
- * first regardless.
+ * reconnect path go through here so neither can drop events.
+ *
+ * A failed snapshot schedules its own retry on this agent's backoff before
+ * re-throwing, so recovery never depends on the user asking for one. The
+ * re-throw is still what lets the caller record the failure (`fetchEvents`
+ * writes it against the agent) for the view to surface while the retry runs;
+ * buffered deltas are flushed regardless.
  */
 export async function loadSnapshotWithStream(agentId: string): Promise<void> {
   // Subscribe to SSE before the snapshot fetch so deltas that arrive
@@ -148,6 +152,16 @@ export async function loadSnapshotWithStream(agentId: string): Promise<void> {
   connectToStream(agentId);
   try {
     await fetchEvents(agentId);
+  } catch (error) {
+    // Every snapshot load retries here, not just the stream's own reconnect: the
+    // first mount and the tab's Refresh go through this function too, and neither
+    // used to schedule anything. A chat whose first load lost the race with a
+    // waking tunnel therefore sat on a dead error screen until the user asked for
+    // a Refresh by hand -- even though nothing was wrong by then. Deduped to one
+    // pending timer per agent by scheduleReconnectWithSnapshot, and cancelled by
+    // disconnectFromStream, so a closed or switched-away panel stops retrying.
+    scheduleReconnectWithSnapshot(agentId);
+    throw error;
   } finally {
     if (inFlightSnapshotBuffersByAgent.get(agentId) === buffer) {
       inFlightSnapshotBuffersByAgent.delete(agentId);
@@ -166,10 +180,12 @@ async function reconnectWithSnapshot(agentId: string): Promise<void> {
     // Until the snapshot lands, the stream (if it connected) is appending
     // deltas onto the pre-outage window, so events emitted during the outage
     // are missing from it. A single failure must not be terminal -- that
-    // permanently desynchronizes the transcript from the server -- so keep
-    // retrying until the snapshot succeeds or the panel disconnects.
+    // permanently desynchronizes the transcript from the server -- so retrying
+    // until the snapshot succeeds or the panel disconnects is required, not
+    // best-effort. `loadSnapshotWithStream` is the one place that schedules it,
+    // for every caller rather than just this one; there is nothing to do here
+    // but say so.
     console.warn(`[si-sse] snapshot refetch failed for agent ${agentId}`, error);
-    scheduleReconnectWithSnapshot(agentId);
   }
 }
 

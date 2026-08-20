@@ -618,6 +618,49 @@ describe("snapshot load state", () => {
     expect(getConversationLoadState(agent)).toEqual({ phase: "idle", error: null });
   });
 
+  it("does not let a superseded attempt's late success replace the newer window", async () => {
+    // The fence has to cover the success path too, not just the failure one: a
+    // superseded attempt can still succeed, merely late, and the snapshot
+    // replaces the window wholesale. Letting the older one land would revert the
+    // transcript and strand everything placed since -- and it resets offset and
+    // hasMoreAfter with it, so neither backfill nor forward paging could reach
+    // the lost events again.
+    const agent = freshAgent();
+    const hung = deferredResponse();
+    mockRequest.mockReturnValueOnce(hung.promise);
+    const stale = fetchEvents(agent);
+
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("a"), makeEvent("b")] });
+    await fetchEvents(agent);
+    appendEvents(agent, [makeEvent("c")]);
+    expect(ids(agent)).toEqual(["a", "b", "c"]);
+
+    hung.resolve({ events: [makeEvent("a")] });
+    await stale;
+    expect(ids(agent)).toEqual(["a", "b", "c"]);
+    expect(hasMoreAfter(agent)).toBe(false);
+    expect(getConversationLoadState(agent)).toEqual({ phase: "idle", error: null });
+  });
+
+  it("keeps the failure visible while the retry it scheduled is in flight", async () => {
+    // The retry puts the phase back to "loading". Clearing the error there would
+    // blink the panel's notice out for the whole of every attempt -- and against
+    // a dead tunnel an attempt runs to the full request timeout, so the failure
+    // would read as resolved for 30 seconds at a stretch. Only a success clears it.
+    const agent = freshAgent();
+    mockRequest.mockRejectedValueOnce(proxyUnavailableError());
+    await expect(fetchEvents(agent)).rejects.toThrow();
+
+    const pending = deferredResponse();
+    mockRequest.mockReturnValueOnce(pending.promise);
+    const retry = fetchEvents(agent);
+    expect(getConversationLoadState(agent)).toEqual({ phase: "loading", error: "request failed (HTTP 503)" });
+
+    pending.resolve({ events: [makeEvent("a")] });
+    await retry;
+    expect(getConversationLoadState(agent)).toEqual({ phase: "idle", error: null });
+  });
+
   it("is not moved by a failed backfill page, which leaves the window readable", async () => {
     const agent = freshAgent();
     mockRequest.mockResolvedValueOnce({ events: [makeEvent("b")], offset: 1, total: 2 });
