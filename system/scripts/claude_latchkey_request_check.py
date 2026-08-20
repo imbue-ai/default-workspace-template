@@ -39,10 +39,17 @@ _PERMISSION_REQUEST_HOST = "latchkey-self.invalid/permission-requests"
 _METHOD_FLAGS = ("-X", "--request")
 _POST_FLAG_RE = re.compile(r"(?:-X|--request)=?POST", re.IGNORECASE)
 
+# curl's own ways of writing the response body to a file instead of echoing it on
+# stdout. They take the gateway's echoed object out of the tool result exactly as
+# `> file` does, so the gate reads them as a redirect. `-O` / `--remote-name` take
+# no value; `-o` / `--output` take the next token or a joined one.
+_OUTPUT_FLAGS = ("-o", "--output", "-O", "--remote-name")
+_OUTPUT_FLAG_RE = re.compile(r"-o.+|--output=.+")
+
 _MULTIPLE = "the call files more than one permission request"
 _REDIRECT = (
-    "its output is redirected or its input replaced "
-    "(`>`, `>>`, `2>`, `&>`, `<`, a heredoc)"
+    "its output is redirected, written to a file by curl itself, or its input "
+    "replaced (`>`, `>>`, `2>`, `&>`, `-o`, `-O`, `<`, a heredoc)"
 )
 _CHAIN = (
     "it is chained with, piped into, or preceded by another command "
@@ -76,6 +83,16 @@ def _sets_post_method(words: tuple[str, ...]) -> bool:
     return False
 
 
+def _writes_body_to_file(words: tuple[str, ...]) -> bool:
+    """True when `words` carry one of curl's write-the-body-to-a-file flags,
+    separated (`-o out.json`), joined (`-oout.json`, `--output=out.json`), or
+    valueless (`-O`)."""
+    return any(
+        word in _OUTPUT_FLAGS or _OUTPUT_FLAG_RE.fullmatch(word) is not None
+        for word in words
+    )
+
+
 def _is_permission_request(segment: CommandSegment) -> bool:
     """True when this one command POSTs to the permission-requests host.
 
@@ -107,7 +124,7 @@ def classify(cmd: str) -> str | None:
     if len(requests) > 1:
         return _MULTIPLE
     request = requests[0]
-    if request.has_redirect:
+    if request.has_redirect or _writes_body_to_file(request.words):
         return _REDIRECT
     if request.terminator == "&":
         # Backgrounded: the call returns before the gateway answers, so its echo
