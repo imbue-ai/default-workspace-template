@@ -57,12 +57,18 @@ virtualization), [chat-scroll-selection-fixes](../chat-scroll-selection-fixes/pl
     it covers.
   - `RowGeometryIndex` — rows sorted by `start_offset` and never overlapping, with cumulative sums
     over both height and event count maintained alongside.
-  - `heightBefore(offset)` — binary search + prefix-sum; event ranges no row covers are priced at a
-    per-event rate, and coverage is allowed to be sparse (reading the head and jumping to the tail
-    leaves a genuine hole, which is a normal state rather than one to repair).
-  - `offsetAtHeight(height, maxOffset)` — the exact inverse, binary-searched over `heightBefore`
-    itself so the two cannot drift apart.
-  - `learnedEventHeight()` — median px/event across measured rows, replacing the fixed `160`.
+  - `heightBefore(offset, gapRate)` — binary search + prefix-sum; event ranges no row covers are
+    priced at `gapRate`, and coverage is allowed to be sparse (reading the head and jumping to the
+    tail leaves a genuine hole, which is a normal state rather than one to repair).
+  - `offsetAtHeight(height, maxOffset, gapRate)` — the exact inverse, binary-searched over
+    `heightBefore` itself at the same rate so the two cannot drift apart.
+  - The rate is the **caller's**, not derived here, and the fixed `160` survives only as
+    `DEFAULT_EVENT_HEIGHT_PX` for a genuinely cold first paint. This index admits a row only once it
+    has *settled*, so a rate taken from it would sit at the cold value until the first settle landed
+    and then collapse in one step — on whichever redraw came next, routinely the user's own scroll.
+    `ChatPanel.updateReserveRate` learns it instead, from every row measured at all, as an
+    event-weighted mean over the whole loaded window rather than a median over the measured ones (a
+    median lurched as short user bubbles settled ahead of tall assistant rows).
   - `recordRow(row)` — replaces every row whose range the new one overlaps, so the same rendered row
     re-recorded at a different range (the loaded window moved) cannot be filed twice.
 - **`frontend/src/models/geometryCache.ts`** — IndexedDB persistence ("measure once").
@@ -164,8 +170,9 @@ Each phase leaves a working system; all six land as one branch (`preston/improve
 ## Testing strategy
 
 - **Unit (vitest).** `rowGeometry.ts`: prefix-sum correctness, binary search on row boundaries,
-  replacement by range, learned-estimate derivation, sparse coverage with a hole between measured
-  islands. `geometryCache.ts`: width bucketing, TTL, LRU eviction, IndexedDB-unavailable fallback.
+  replacement by range, `offsetAtHeight` pricing its gap at the same rate that sized it, sparse
+  coverage with a hole between measured islands. `geometryCache.ts`: width bucketing, TTL, LRU
+  eviction, IndexedDB-unavailable fallback.
 - **Ported invariants.** From `virtualWindow.test.ts`: pad/total consistency, the disjoint pinned run
   (a far-off selection must not mount the rows between), phantoms folded into outer spacers, backward
   fill when scrolled past the end, caller-supplied pin ranges clamped internally. From
