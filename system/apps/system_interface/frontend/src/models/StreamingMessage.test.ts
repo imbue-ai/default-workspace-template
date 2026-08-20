@@ -148,30 +148,4 @@ describe("snapshot retry after reconnect", () => {
       vi.useRealTimers();
     }
   });
-
-  it("retries a failed load without waiting for a stream error to prompt it", async () => {
-    // The case the reconnect loop did not cover, and the reason recovery used to
-    // need a hand: a 503 on the snapshot leaves the SSE stream itself healthy --
-    // the tunnel is up by the time the EventSource dials, so no error handler
-    // ever fires -- and the load path scheduled nothing of its own. The panel
-    // therefore sat on its error screen until the user picked Refresh from the
-    // tab menu, with a backend that had been answering for some time. Note there
-    // is deliberately no onerror() below: nothing but the failed load itself
-    // prompts this recovery.
-    vi.useFakeTimers();
-    try {
-      const agentId = `agent-${agentCounter++}`;
-      mockRequest.mockRejectedValueOnce(Object.assign(new Error(String(null)), { code: 503, response: null }));
-      await expect(loadSnapshotWithStream(agentId)).rejects.toThrow();
-      expect(getConversationLoadState(agentId).error).toBe("request failed (HTTP 503)");
-
-      mockRequest.mockResolvedValueOnce({ events: [makeEvent("recovered", "backend answered")] });
-      await vi.advanceTimersByTimeAsync(6000);
-
-      expect(getConversationLoadState(agentId)).toEqual({ phase: "idle", error: null });
-      expect(getEventsForAgent(agentId).map((event) => event.event_id)).toContain("recovered");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
 });

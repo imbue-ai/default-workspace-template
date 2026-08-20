@@ -2748,7 +2748,11 @@ def test_chat_recovers_from_a_failed_transcript_load(tmp_path: Path, page: Page)
     whole page brought the chat back.
 
     Both halves of that are asserted here: the error names the status rather
-    than reading "Error: null", and Refresh alone restores the transcript.
+    than reading "Error: null", and the Refresh the error screen itself offers
+    restores the transcript. The button is deliberately the one exercised --
+    recovery already took a single reload before it existed, but the only
+    control that did one lived in the tab's overflow menu, which nothing on the
+    error screen pointed at.
     """
     with _running_e2e_server(tmp_path, _TRANSCRIPT_RECOVERY_PORT) as (base_url, _agent_info, _session_file):
         # Stand in for the proxy's 503. The plain-text body matters: it is not
@@ -2766,15 +2770,13 @@ def test_chat_recovers_from_a_failed_transcript_load(tmp_path: Path, page: Page)
 
         error = page.locator(".message-list-error")
         expect(error).to_be_visible(timeout=15000)
-        expect(error).to_have_text("Error: request failed (HTTP 503)")
+        # The message itself, not the whole panel: the Refresh below is part of it.
+        expect(error.locator("p")).to_have_text("Error: request failed (HTTP 503)")
 
         # The workspace becomes reachable again. Nothing tells the panel.
         page.unroute(events_url)
 
-        chat_tab = page.locator(".dv-tab", has=page.locator(".dv-default-tab-content", has_text="test-agent")).first
-        chat_tab.hover()
-        chat_tab.locator(".dv-custom-tab-action").last.click()
-        page.locator("[role='menuitem']", has_text="Refresh").click()
+        error.locator(".message-list-reload").click()
 
         expect(page.locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
         expect(page.locator(".message-list-error")).to_have_count(0)
