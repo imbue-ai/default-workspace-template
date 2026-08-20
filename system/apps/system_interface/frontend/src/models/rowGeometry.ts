@@ -3,20 +3,21 @@
  * turns it into reserved scroll space.
  *
  * This exists because the transcript reserves space for history it has not
- * loaded, and the unit it reserved in was wrong. The old code sized that space
- * at a fixed constant per *event*, but the renderer groups a whole turn into one
- * row: a tool-heavy turn of 50 events renders as a single ProgressBlock. A page
- * landing at a fraction of its reservation collapsed the scroll height in one
- * frame, which is the transcript "jumping while reading history".
+ * loaded, and that space has to be sized in the unit the renderer works in. A
+ * fixed constant per *event* is not that unit: the renderer groups a whole turn
+ * into one row, so a tool-heavy turn of 50 events renders as a single
+ * ProgressBlock. A page landing at a fraction of its reservation collapses the
+ * scroll height in one frame, which is the transcript "jumping while reading
+ * history".
  *
- * The fix is to stop guessing. A completed row's height, at a given viewport
- * width, is a fact -- so measure it once, remember it, and reserve the real
- * number. What is left over (ranges this client has genuinely never rendered) is
- * estimated from what it *has* measured, not from a hardcoded constant.
+ * So nothing here guesses. A completed row's height, at a given viewport width,
+ * is a fact -- measure it once, remember it, and reserve the real number. What is
+ * left over (ranges this client has genuinely never rendered) is priced at a
+ * rate the caller learned from what it *has* measured.
  *
  * Rows are held sorted by `start_offset` and never overlap, so every query is a
- * binary search plus a prefix-sum lookup. Kept DOM-free so the arithmetic -- the
- * part that was subtly wrong for months -- is unit-testable on its own.
+ * binary search plus a prefix-sum lookup. Kept DOM-free so the arithmetic is
+ * unit-testable on its own.
  */
 
 /**

@@ -670,11 +670,10 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
    * reserved estimate for unloaded history is refined as rows are measured, and
    * a backfilled page replaces reserved space with real rows. Those two move in
    * opposite directions and very nearly cancel, which is why correcting for
-   * either alone is wrong -- an earlier version of this compensated for the
-   * reserved-space change by itself and walked the reader to the top of the
-   * conversation, because the rows that landed had already made up the
-   * difference. Holding the anchor's position is the invariant that actually
-   * matters, and it subsumes both.
+   * either alone is wrong: compensating for the reserved-space change by itself
+   * walks the reader to the top of the conversation, because the rows that
+   * landed have already made up the difference. Holding the anchor's position is
+   * the invariant that actually matters, and it subsumes both.
    *
    * This is also why the virtualizer's own scroll compensation is switched off:
    * two mechanisms writing scrollTop for overlapping reasons double-correct, and

@@ -13,10 +13,11 @@
  * 1. **Measurement is ours.** The stock `measureElement` rounds the border-box
  *    size to an integer and falls back to `offsetHeight`; both are
  *    device-pixel-snapped and so depend on a row's fractional vertical position,
- *    which is what produced a continuous ~1px jitter here before. Rows are
- *    measured by `rowMeasurement` instead and reported by index, so the library
- *    never reads the DOM for sizes and the message renderers need no index
- *    attribute -- the existing `id` contract is untouched.
+ *    which flips a height by a pixel as the row drifts and sustains a continuous
+ *    ~1px jitter. Rows are measured by `rowMeasurement` instead and reported by
+ *    index, so the library never reads the DOM for sizes and the message
+ *    renderers need no index attribute -- the existing `id` contract is
+ *    untouched.
  *
  * 2. **Spacer rendering, not absolute positioning.** Items stay in normal flow
  *    with a spacer above and below, because the transcript relies on the
