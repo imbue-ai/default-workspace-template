@@ -27,11 +27,22 @@ _BODY = (
 _REQUEST = (
     f"latchkey curl -XPOST {_HOST} -H 'Content-Type: application/json' -d {_BODY}"
 )
+# ... and the way every skill actually lays it out: one flag per line, joined by
+# backslash continuations. A distinct case, not a reformatting: the escaped
+# newline survives the newline-to-`;` pass and shlex emits each continuation as
+# its own `"\n"` word token inside the segment, so the words the gate classifies
+# are not the ones the single-line form produces.
+_MULTILINE_REQUEST = (
+    f"latchkey curl -XPOST {_HOST} \\\n"
+    "  -H 'Content-Type: application/json' \\\n"
+    f"  -d {_BODY}"
+)
 
 
 # Commands that must be ALLOWED (classify returns None).
 _ALLOWED = [
     _REQUEST,
+    _MULTILINE_REQUEST,
     _REQUEST.replace("-XPOST", "-X POST"),
     _REQUEST.replace("-XPOST", "--request POST"),
     f"  {_REQUEST}  ",  # surrounding whitespace
@@ -104,6 +115,10 @@ _BLOCKED = [
     f"( {_REQUEST} ) > /tmp/request.json",
     f"{{ {_REQUEST} ; }} | jq .request_id",
     f"( {_REQUEST} ) &",  # the `&` lands on the segment after `)`, not the request
+    # The continuations do not hide a violation either: the gate reads through
+    # them to the second request and to the pipe.
+    f"{_MULTILINE_REQUEST} && {_MULTILINE_REQUEST}",
+    f"{_MULTILINE_REQUEST} | jq .request_id",
 ]
 
 
