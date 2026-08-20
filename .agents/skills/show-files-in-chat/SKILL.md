@@ -1,6 +1,8 @@
 ---
 name: show-files-in-chat
 description: Show a file to the user in chat. Display an image inline (chart, plot, screenshot, diagram, rendered figure, photo), or offer any other file (PDF, CSV, log, zip, spreadsheet, ...) as a download link. Use whenever you have a file on disk you want the user to see or download, or want to embed an image from a public URL.
+metadata:
+  author: imbue
 ---
 
 # Showing a file in chat

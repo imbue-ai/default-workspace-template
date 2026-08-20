@@ -597,6 +597,14 @@ def _broadcast_layout_op(base_url: str, op: str, args: dict[str, Any], agent_id:
             if e.code == 412:
                 return False
             raise
+        except (TimeoutError, urllib.error.URLError):
+            # Not reaching the server is exactly what this loop is for, but only
+            # HTTPError was being caught -- so a request that timed out under
+            # load escaped the retry and failed the calling test outright,
+            # despite `wait_for` still having seconds left to spend. A server
+            # that never answers still fails, with this helper's own message
+            # rather than a raw socket traceback.
+            return False
 
     wait_for(
         _attempt,
