@@ -46,7 +46,10 @@ _POST_RE = re.compile(r"-X\s*POST|--request\s*POST", re.IGNORECASE)
 _REQUEST_COMMANDS = ("latchkey", "curl")
 
 _MULTIPLE = "the call files more than one permission request"
-_REDIRECT = "its output is redirected (`>`, `>>`, `2>`, `&>`, ...)"
+_REDIRECT = (
+    "its output is redirected or its input replaced "
+    "(`>`, `>>`, `2>`, `&>`, `<`, a heredoc)"
+)
 _CHAIN = (
     "it is chained with, piped into, or preceded by another command "
     "(`&&`, `||`, `;`, `|`, `&`, a leading `cd`, or a newline)"

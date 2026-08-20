@@ -59,6 +59,9 @@ _BLOCKED = [
     f"{_REQUEST}\n{_REQUEST}",  # ... via a newline
     f"{_REQUEST} > /tmp/request.json",  # the echoed object never reaches the chat
     f"{_REQUEST} 2>/dev/null",
+    # An input redirect is blocked too: the parser records only *that* a segment
+    # is redirected, and a heredoc body re-enters the parse as further commands.
+    f"{_REQUEST} -d @- <<EOF\n{{}}\nEOF",
     f"{_REQUEST} | jq .request_id",  # ... consumed by another command
     f"{_REQUEST} | tee /tmp/request.json",
     f"cd /home/user/workspace && {_REQUEST}",  # a command runs before it
