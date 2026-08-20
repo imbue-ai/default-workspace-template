@@ -32,12 +32,14 @@ def _commit(repo: Path, message: str) -> None:
 
 # A path the running server holds in memory (vendored mngr is imported
 # in-process), and paths the workspace repo moves for constantly without the
-# server being any staler for it.
+# server being any staler for it: the apply's own ledger commit, ordinary
+# agent work, frontend source (whose bundle is rebuilt without a restart),
+# and skill prose.
 _RELEVANT_PATH = "system/vendor/mngr/libs/mngr/imbue/mngr/api/list.py"
 _IRRELEVANT_PATHS = (
-    "docs/VERSION_HISTORY.md",  # the apply's own ledger commit
-    "data-notes.md",  # ordinary agent work
-    "system/apps/system_interface/frontend/src/views/App.ts",  # rebuilt, not restarted
+    "docs/VERSION_HISTORY.md",
+    "data-notes.md",
+    "system/apps/system_interface/frontend/src/views/App.ts",
     ".agents/skills/update-self/SKILL.md",
 )
 
