@@ -572,12 +572,22 @@ export function Sidebar(): m.Component<SidebarAttrs> {
    * The other half of "the pointer has left", for the crossing `mouseout`
    * can miss.
    *
-   * This UI runs inside a cross-origin iframe in the minds chrome, and a
-   * cursor leaving the OUTER window does not reliably raise a boundary event
-   * in here at all -- the OS simply stops delivering mouse events to the
-   * window, and nothing synthesizes the crossing. Both listeners are cheap and
-   * neither can fire wrongly (each demands the pointer be leaving the document
-   * itself), so both are registered rather than betting on one.
+   * KNOWN LIMIT, measured rather than assumed: in the minds desktop app this
+   * never fires for a cursor that leaves the app window. The workspace is a
+   * cross-origin iframe inside the minds chrome, and the OS simply stops
+   * delivering mouse events to the window -- nothing synthesizes a final
+   * crossing for a child frame to hear. Only `blur` arrives, which is why the
+   * rail folds on a click away but not on a cursor merely sliding off.
+   *
+   * Both listeners stay because the workspace is also served straight to a
+   * browser (a share link), where they do fire and are the right answer.
+   *
+   * Closing the gap needs a signal from OUTSIDE this frame: the top-level
+   * chrome page forwarding its own leave, or Electron's main process asking
+   * the OS where the cursor is, either one relayed over the embed contract.
+   * That was weighed and judged too much machinery for a rail collapse. Do not
+   * re-attempt it from in here -- there is no DOM API that answers "where is
+   * the pointer now", only events, and the events do not come.
    */
   function handleDocumentPointerLeave(): void {
     isPointerOverRail = false;
