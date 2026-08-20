@@ -10,6 +10,7 @@ function fullActions(overrides: Partial<ObjectMenuActions> = {}): ObjectMenuActi
     share: { label: "Share web", run: vi.fn() },
     rename: vi.fn(),
     hideTab: vi.fn(),
+    removeFromProject: vi.fn(),
     quit: { label: "Quit Chat 1", run: vi.fn() },
     ...overrides,
   };
@@ -49,7 +50,12 @@ describe("objectMenuEntries", () => {
   it("drops the divider when nothing would follow it", () => {
     // A backgrounded terminal still allocating its session has no rename, no
     // tab to hide and no destroy, so the menu must not end on a rule.
-    const entries = objectMenuEntries("terminal", { ...fullActions(), hideTab: null, quit: null });
+    const entries = objectMenuEntries("terminal", {
+      ...fullActions(),
+      hideTab: null,
+      removeFromProject: null,
+      quit: null,
+    });
     expect(entries).not.toContain(OBJECT_MENU_DIVIDER);
     expect(entries.map((entry) => (entry === OBJECT_MENU_DIVIDER ? "--" : entry.label))).toEqual(["Refresh"]);
   });
@@ -60,6 +66,25 @@ describe("objectMenuEntries", () => {
     // for what "Refresh" actually does to a terminal's live session).
     const entries = objectMenuEntries("terminal", fullActions());
     expect(labels(entries)).toContain("Refresh");
+  });
+
+  it("offers Remove from project wherever there is a project to remove from", () => {
+    // Everything is the home -- an object leaves it only by being destroyed --
+    // which the caller says by passing null, exactly as it does for a
+    // backgrounded row's absent Hide tab.
+    const inProject = objectMenuEntries("chat", fullActions());
+    expect(labels(inProject)).toContain("Remove from project");
+    const inEverything = objectMenuEntries("chat", fullActions({ removeFromProject: null }));
+    expect(labels(inEverything)).not.toContain("Remove from project");
+  });
+
+  it("puts Remove from project between Hide tab and the destroy", () => {
+    // It is the middle of three easily-confused acts: drop the panel, drop the
+    // filing, drop the object. Reading them in that order is what tells them
+    // apart.
+    const shown = labels(objectMenuEntries("chat", fullActions()));
+    expect(shown.indexOf("Hide tab")).toBeLessThan(shown.indexOf("Remove from project"));
+    expect(shown.indexOf("Remove from project")).toBeLessThan(shown.indexOf("Quit Chat 1"));
   });
 
   it("offers Share only to an app", () => {
@@ -122,6 +147,7 @@ describe("objectMenuEntries", () => {
       OBJECT_MENU_DIVIDER,
       "Rename",
       "Hide tab",
+      "Remove from project",
       "Quit Chat 1",
     ]);
     expect(labels(objectMenuEntries("app", fullActions()))).toEqual([
@@ -129,6 +155,7 @@ describe("objectMenuEntries", () => {
       "Share web",
       OBJECT_MENU_DIVIDER,
       "Hide tab",
+      "Remove from project",
       "Quit Chat 1",
     ]);
   });

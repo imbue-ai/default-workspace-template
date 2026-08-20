@@ -1,6 +1,6 @@
 Follow-up work on projects, from a design review of the shipped build and a pass over the object verbs.
 
-**One verb set, wherever you meet an object.** The rail row menu and the dock tab menu now render the same definition, reached by right-click as well as by the kebab. Seven differently-named items collapse to five verbs: Refresh, Share, Rename, Hide tab, and Quit. "Remove from project" and "Delete from this machine" are gone — the first moved to project settings, the second was the same act as Quit under another name.
+**One verb set, wherever you meet an object.** The rail row menu and the dock tab menu now render the same definition, reached by right-click as well as by the kebab. Seven differently-named items collapse to five verbs: Refresh, Share, Rename, Hide tab, and Quit. "Delete from this machine" is gone — it was the same act as Quit under another name. "Remove from project" stays, and now appears on both surfaces rather than only the rail: it sits between "Hide tab" and the destroy, which is the order those three read in, from dropping the panel to dropping the filing to dropping the object. It is absent in Everything, which is the home an object leaves only by being destroyed.
 
 **Refresh works on terminals**, where it means reattaching the tmux session. The session outlives the panel, so a refresh keeps its scrollback.
 
@@ -36,6 +36,6 @@ One gap is known and deliberate: in the desktop app the rail does not fold when 
 
 **Starting something new says so, and cannot be started twice.** `mngr create` takes seconds, and the launcher used to sit there unchanged for all of it: the click looked like it had missed, and clicking again started a second object. The tiles now stand down and the heading reads "Starting…" until the object exists, whether it arrives or fails.
 
-**Project settings is back to display metadata only** — name, colour, squiggle, and the delete button. The member list that briefly lived there is gone.
+**Project settings is display metadata only** — name, colour, squiggle, and the delete button. Removing an object from a project is a verb on the object, so it lives in the object's own menu on both surfaces.
 
 **A workspace that is not answering says so.** A 502, 503 or 504 comes from the tunnel in front of the workspace, not from the workspace itself: the request reached no endpoint and nothing changed. That used to surface as a bare "HTTP 503" on whatever had just been clicked, which read as that feature being broken rather than the workspace being briefly away.
