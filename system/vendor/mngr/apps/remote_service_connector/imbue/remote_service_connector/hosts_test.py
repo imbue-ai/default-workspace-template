@@ -77,7 +77,7 @@ def test_lease_host_fails_closed_when_host_keys_missing(monkeypatch: pytest.Monk
         headers=_user_headers(),
     )
     assert resp.status_code == 503
-    assert "host-key backfill" in resp.json()["detail"]
+    assert "backfill-host-keys" in resp.json()["detail"]
     # The row must NOT have been leased, and no SSH key injection was attempted.
     assert backend.pool_rows[0].status == "available"
     assert backend.append_key_calls == []
@@ -179,7 +179,7 @@ def test_lease_host_keeps_quarantine_when_a_keyless_row_stops_the_request(monkey
         headers=_user_headers(),
     )
     assert resp.status_code == 503
-    assert "host-key backfill" in resp.json()["detail"]
+    assert "backfill-host-keys" in resp.json()["detail"]
     # The dead row's quarantine survives the keyless-row 503.
     assert backend.pool_rows[0].status == "unreachable"
     assert backend.pool_rows[1].status == "available"

@@ -1,0 +1,266 @@
+"""Bugsink Django settings for our VPS deployment (eager mode).
+
+Derived from bugsink 2.5.0's own ``bugsink/conf_templates/docker.py.template``
+with exactly these deltas (re-diff against the new upstream template on every
+version bump):
+
+* ``SNAPPEA["TASK_ALWAYS_EAGER"] = True`` -- digestion (and therefore
+  retention/eviction, which are digest-time-driven) runs inline in the
+  ingest request. There is no snappea foreman process on our instance, so
+  the ``WORKAHOLIC``/``NUM_WORKERS``/``PID_FILE`` knobs and the snappea
+  sqlite queue are irrelevant (left as upstream wrote them; never touched
+  in eager mode).
+* This module docstring. Everything else is upstream's template verbatim --
+  it takes all real configuration from env vars (SECRET_KEY, DATABASE_URL,
+  BASE_URL, ALLOWED_HOSTS, BEHIND_HTTPS_PROXY, PHONEHOME, MAX_EVENT_AGE_DAYS,
+  CREATE_SUPERUSER, ...), which the rendered EnvironmentFile supplies (see
+  ``imbue.observability.bugsink_render``).
+
+Installed by ``observability bugsink deploy`` at ``/opt/bugsink/bugsink_conf.py``;
+``bugsink-manage`` and gunicorn resolve it as the ``bugsink_conf`` Django
+settings module from that working directory.
+"""
+
+import os
+
+from bugsink.conf_utils import deduce_allowed_hosts, eat_your_own_dogfood, deduce_script_name, int_or_none, parse_database_url
+
+from bugsink.settings.default import *  # noqa
+from bugsink.settings.default import DATABASES
+
+_KIBIBYTE = 1024
+_MEBIBYTE = 1024 * _KIBIBYTE
+_GIBIBYTE = 1024 * _MEBIBYTE
+_PORT = os.environ.get("PORT", "8000")
+
+
+IS_DOCKER = True
+
+DEBUG = os.getenv("DEBUG", "False").lower() in ("true", "1", "yes")
+DEBUG_CSRF = "USE_DEBUG" if os.getenv("DEBUG_CSRF") == "USE_DEBUG" else os.getenv("DEBUG_CSRF", "False").lower() in ("true", "1", "yes")
+
+# The security checks on SECRET_KEY are done as part of 'bugsink-manage check --deploy'
+SECRET_KEY = os.getenv("SECRET_KEY")
+
+
+BEHIND_HTTPS_PROXY = os.getenv("BEHIND_HTTPS_PROXY", "False").lower() in ("true", "1", "yes")
+BEHIND_PLAIN_HTTP_PROXY = os.getenv("BEHIND_PLAIN_HTTP_PROXY", "False").lower() in ("true", "1", "yes")
+
+if BEHIND_HTTPS_PROXY or BEHIND_PLAIN_HTTP_PROXY:
+    # We hard-code the choice of proxy headers; which means you have to match those on the proxy side (easy enough).
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')  # Note: slightly redundant, Gunicorn also does this.
+    USE_X_REAL_IP = os.getenv("USE_X_REAL_IP", "True").lower() in ("true", "1", "yes")
+    USE_X_FORWARDED_HOST = os.getenv("USE_X_FORWARDED_HOST", "False").lower() in ("true", "1", "yes")
+    USE_X_FORWARDED_FOR = os.getenv("USE_X_FORWARDED_FOR", "False").lower() in ("true", "1", "yes")
+
+    if USE_X_REAL_IP and USE_X_FORWARDED_FOR:
+        raise ValueError("USE_X_REAL_IP=True and USE_X_FORWARDED_FOR=True are mutually exclusive")
+
+    if USE_X_FORWARDED_FOR:
+        X_FORWARDED_FOR_PROXY_COUNT = int(os.getenv("X_FORWARDED_FOR_PROXY_COUNT", "0"))
+
+        if X_FORWARDED_FOR_PROXY_COUNT <= 0:
+            raise ValueError("USE_X_FORWARDED_FOR=True requires X_FORWARDED_FOR_PROXY_COUNT to be set to a positive integer")
+
+if BEHIND_HTTPS_PROXY:
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+else:
+    # We don't warn about SESSION_COOKIE_SECURE and CSRF_COOKIE_SECURE; we can't set them to True because some browsers
+    # interpret that as "use https for cookies, even on localhost", and there is no https (BEHIND_HTTPS_PROXY is False).
+    # "some browsers": https://forum.djangoproject.com/t/why-are-cookie-secure-settings-defaulted-to-false/1133/4
+    SILENCED_SYSTEM_CHECKS += [
+        "security.W012",  # SESSION_COOKIE_SECURE
+        "security.W016",  # CSRF_COOKIE_SECURE
+    ]
+
+
+
+# The time-zone here is the default for display purposes (when no project/user configuration is used).
+# https://docs.djangoproject.com/en/4.2/ref/settings/#std-setting-TIME_ZONE
+TIME_ZONE = os.getenv("TIME_ZONE", "UTC")
+
+
+SENTRY_DSN = os.getenv("SENTRY_DSN", None)
+eat_your_own_dogfood(SENTRY_DSN)
+
+
+# Our Docker image is hard-coded to run with snappea in the background; this means we hard-code (as opposed to reading
+# the from the env) certain variables: TASK_ALWAYS_EAGER and WORKAHOLIC
+SNAPPEA = {
+    "TASK_ALWAYS_EAGER": True,  # DELTA from upstream: no foreman on Modal; digest inline (see module docstring)
+    "WORKAHOLIC": True,  # hard-coded, corresponds to Docker setup
+
+    "NUM_WORKERS": int(os.getenv("SNAPPEA_NUM_WORKERS", 2)),
+    "STATS_RETENTION_MINUTES": int(os.getenv("SNAPPEA_STATS_RETENTION_MINUTES", 60 * 24 * 7)),
+
+    # in our Dockerfile the foreman is started exactly once (no check against collisions needed) and whatever is
+    # running the container is responsible for the container's lifecycle (again: no pid-file check needed to avoid
+    # collisions)
+    "PID_FILE": None,
+
+}
+
+# Not actually a "database", this is a (tmp to the container) message queue.
+DATABASES["snappea"]["NAME"] = '/tmp/snappea.sqlite3'
+
+
+if os.getenv("DATABASE_URL"):
+    DATABASES['default'] = parse_database_url(os.getenv("DATABASE_URL"))
+else:
+    # similar to the default, but the fallback is /data/db.sqlite3; we also create the directory if it doesn't exist,
+    # which allows for throwaway setups (no volume mounted) to work out of the box.
+    DATABASES['default']['NAME'] = os.getenv("DATABASE_PATH", '/data/db.sqlite3')
+    database_path = os.path.dirname(DATABASES['default']['NAME'])
+
+
+if os.getenv("EMAIL_BACKEND"):
+    EMAIL_BACKEND = os.getenv("EMAIL_BACKEND")
+elif os.getenv("EMAIL_HOST"):
+    EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"  # default, here for explicitness
+    EMAIL_HOST = os.getenv("EMAIL_HOST")
+    EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER")
+    EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD")
+    EMAIL_PORT = int(os.getenv("EMAIL_PORT", 587))
+    # When neither EMAIL_USE_xxx is set, we default to EMAIL_USE_TLS=True (this matches port 587). If either is set to
+    # True, we use that.
+    EMAIL_USE_SSL = os.getenv("EMAIL_USE_SSL", "False").lower() in ("true", "1", "yes")
+    EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", str(not EMAIL_USE_SSL)).lower() in ("true", "1", "yes")
+
+    if os.getenv("EMAIL_LOGGING", "false").lower() in ("true", "1", "yes"):
+        LOGGING['loggers']['bugsink.email']['level'] = "INFO"
+
+else:
+    # print("WARNING: EMAIL_HOST not set; email will not be sent")
+    EMAIL_BACKEND = "bugsink.email_backends.QuietConsoleEmailBackend"
+
+if os.getenv("EMAIL_TIMEOUT"):
+    EMAIL_TIMEOUT = int(os.getenv("EMAIL_TIMEOUT"))
+
+SERVER_EMAIL = DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "Bugsink <bugsink@example.org>")
+
+# constants for "create by" (user/team/project) settings
+CB_ANYBODY = "CB_ANYBODY"
+CB_MEMBERS = "CB_MEMBERS"
+CB_ADMINS = "CB_ADMINS"
+CB_NOBODY = "CB_NOBODY"
+
+
+BUGSINK = {
+    # The URL where the Bugsink instance is hosted. This is used in the email notifications and to construct DSNs.
+    "BASE_URL": os.getenv("BASE_URL", f"http://localhost:{_PORT}"),  # no trailing slash
+
+    # you can customize this as e.g. "My Bugsink" or "Bugsink for My Company"
+    "SITE_TITLE": os.getenv("SITE_TITLE", "Bugsink"),
+
+    "USE_ADMIN": os.getenv("USE_ADMIN", False),
+
+    # Settings for Users, Teams and Projects
+    "SINGLE_USER": os.getenv("SINGLE_USER", "False").lower() in ("true", "1", "yes"),
+
+    # who can register new users. default: members, i.e. any user can invite others
+    "USER_REGISTRATION": os.getenv("USER_REGISTRATION", CB_MEMBERS),
+    "USER_REGISTRATION_VERIFY_EMAIL":
+        os.getenv("USER_REGISTRATION_VERIFY_EMAIL", "True").lower() in ("true", "1", "yes"),
+    "USER_REGISTRATION_VERIFY_EMAIL_EXPIRY":
+        int(os.getenv("USER_REGISTRATION_VERIFY_EMAIL_EXPIRY", 7 * 24 * 60 * 60)),  # 7 days
+
+    # if True, there is only one team, and all projects are in that team
+    "SINGLE_TEAM": os.getenv("SINGLE_TEAM", "False").lower() in ("true", "1", "yes"),
+    "TEAM_CREATION": os.getenv("TEAM_CREATION", CB_MEMBERS),  # who can create new teams.
+
+    # MAX* below mirror the (current) values for the Sentry Relay.
+    "MAX_EVENT_SIZE": int(os.getenv("MAX_EVENT_SIZE", _MEBIBYTE)),
+    "MAX_EVENT_COMPRESSED_SIZE": int(os.getenv("MAX_EVENT_COMPRESSED_SIZE", 200 * _KIBIBYTE)),
+    "MAX_ENVELOPE_SIZE": int(os.getenv("MAX_ENVELOPE_SIZE", 100 * _MEBIBYTE)),
+    "MAX_ENVELOPE_COMPRESSED_SIZE": int(os.getenv("MAX_ENVELOPE_COMPRESSED_SIZE", 20 * _MEBIBYTE)),
+    "MAX_CSP_REPORT_SIZE": int(os.getenv("MAX_CSP_REPORT_SIZE", 64 * _KIBIBYTE)),
+    "MAX_EVENT_TAGS": int(os.getenv("MAX_EVENT_TAGS", 100)),
+    # For large MAX_FILE_SIZE values, you may want FILE_OBJECT_STORAGE_PATH configured too.
+    "MAX_FILE_SIZE": int(os.getenv("MAX_FILE_SIZE", 2 * _GIBIBYTE)),
+
+    # Bugsink-specific limits:
+    # The default values are 1_000, 5_000, 1M respectively; which corresponds to ~6%, ~2.7%, .8% of the total capacity
+    # of 50/s (ingestion) on low-grade hardware that I measured.
+    "MAX_EVENTS_PER_PROJECT_PER_5_MINUTES": int(os.getenv("MAX_EVENTS_PER_PROJECT_PER_5_MINUTES", 1_000)),
+    "MAX_EVENTS_PER_PROJECT_PER_HOUR": int(os.getenv("MAX_EVENTS_PER_PROJECT_PER_HOUR", 5_000)),
+    "MAX_EVENTS_PER_PROJECT_PER_MONTH": int(os.getenv("MAX_EVENTS_PER_PROJECT_PER_MONTH", 1_000_000)),
+
+    "MAX_EVENTS_PER_5_MINUTES": int(os.getenv("MAX_EVENTS_PER_5_MINUTES", 1_000)),
+    "MAX_EVENTS_PER_HOUR": int(os.getenv("MAX_EVENTS_PER_HOUR", 5_000)),
+    "MAX_EVENTS_PER_MONTH": int(os.getenv("MAX_EVENTS_PER_MONTH", 1_000_000)),
+
+    "MAX_EMAILS_PER_HOUR": int_or_none(os.getenv("MAX_EMAILS_PER_HOUR", 60)),
+    "MAX_EMAILS_PER_MONTH": int_or_none(os.getenv("MAX_EMAILS_PER_MONTH", None)),
+
+    "MAX_RETENTION_PER_PROJECT_EVENT_COUNT": int_or_none(os.getenv("MAX_RETENTION_PER_PROJECT_EVENT_COUNT", None)),
+    "MAX_RETENTION_EVENT_COUNT": int_or_none(os.getenv("MAX_RETENTION_EVENT_COUNT", None)),
+    "MAX_EVENT_AGE_DAYS": int_or_none(os.getenv("MAX_EVENT_AGE_DAYS", None)),
+    "MAX_STORED_FILE_COUNT": int_or_none(os.getenv("MAX_STORED_FILE_COUNT", None)),
+    "MAX_STORED_FILE_BYTES": int_or_none(os.getenv("MAX_STORED_FILE_BYTES", None)),
+
+    # Settings that help with debugging and development ("why isn't Bugsink doing what I expect?")
+    "VALIDATE_ON_DIGEST": os.getenv("VALIDATE_ON_DIGEST", "none").lower(),  # other legal values are "warn" and "strict"
+    "KEEP_ENVELOPES": int(os.getenv("KEEP_ENVELOPES", 0)),  # keep this many in the database; 0 means "don't keep"
+
+    "API_LOG_UNIMPLEMENTED_CALLS": os.getenv("API_LOG_UNIMPLEMENTED_CALLS", "false").lower() in ("true", "1", "yes"),
+    "KEEP_ARTIFACT_BUNDLES": os.getenv("KEEP_ARTIFACT_BUNDLES", "false").lower() in ("true", "1", "yes"),
+
+    "MINIMIZE_INFORMATION_EXPOSURE":
+        os.getenv("MINIMIZE_INFORMATION_EXPOSURE", "false").lower() in ("true", "1", "yes"),
+
+    "PHONEHOME": os.getenv("PHONEHOME", "true").lower() in ("true", "1", "yes"),
+
+    # Webhook outbound security:
+    # * ALERTS_WEBHOOK_OUTBOUND_MODE=open|allowlist_only
+    # * ALERTS_WEBHOOK_ALLOW_LIST / ALERTS_WEBHOOK_DENY_LIST accept comma-separated hostname/IP/CIDR entries.
+    # * ALERTS_WEBHOOK_DENY_NON_GLOBAL blocks non-global destination IPs by default.
+    "ALERTS_WEBHOOK_OUTBOUND_MODE": os.getenv("ALERTS_WEBHOOK_OUTBOUND_MODE", "open").lower(),
+    "ALERTS_WEBHOOK_ALLOW_LIST":
+        [h.strip() for h in os.getenv("ALERTS_WEBHOOK_ALLOW_LIST", "").split(",") if h.strip()],
+    "ALERTS_WEBHOOK_DENY_LIST":
+        [h.strip() for h in os.getenv("ALERTS_WEBHOOK_DENY_LIST", "").split(",") if h.strip()],
+    "ALERTS_WEBHOOK_DENY_NON_GLOBAL":
+        os.getenv("ALERTS_WEBHOOK_DENY_NON_GLOBAL", "true").lower() in ("true", "1", "yes"),
+
+    # Feature flags
+    "FEATURE_MINIDUMPS": os.getenv("FEATURE_MINIDUMPS", "false").lower() in ("true", "1", "yes"),
+}
+
+
+if os.getenv("ALLOWED_HOSTS"):
+    ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS").split(",")
+else:
+    ALLOWED_HOSTS = deduce_allowed_hosts(BUGSINK["BASE_URL"])
+
+if os.getenv("FILE_EVENT_STORAGE_PATH"):
+    BUGSINK["EVENT_STORAGES"] = {
+        "file_event_storage": {
+            "STORAGE": "events.storage.FileEventStorage",
+            "OPTIONS": {
+                "basepath": os.getenv("FILE_EVENT_STORAGE_PATH"),
+            },
+            "USE_FOR_WRITE": os.getenv("FILE_EVENT_STORAGE_USE_FOR_WRITE", "false").lower() in ("true", "1", "yes"),
+        },
+    }
+
+if os.getenv("FILE_OBJECT_STORAGE_PATH"):
+    BUGSINK["OBJECT_STORAGES"] = {
+        "file": {
+            "file_object_storage": {
+                "STORAGE": "files.storage.ObjectFileStorage",
+                "OPTIONS": {
+                    "basepath": os.getenv("FILE_OBJECT_STORAGE_PATH"),
+                },
+                "USE_FOR_WRITE": os.getenv("FILE_OBJECT_STORAGE_USE_FOR_WRITE", "false").lower() in ("true", "1", "yes"),
+            },
+        },
+    }
+
+
+FORCE_SCRIPT_NAME = deduce_script_name(BUGSINK["BASE_URL"])
+if FORCE_SCRIPT_NAME:
+    # "in theory" a "relative" (non-leading-slash) config for STATIC_URL should just prepend [FORCE_]SCRIPT_NAME
+    # automatically, but I haven't been able to get that to work reliably, https://code.djangoproject.com/ticket/34028
+    # so we'll just be explicit about it.
+    STATIC_URL = f"{FORCE_SCRIPT_NAME}/static/"

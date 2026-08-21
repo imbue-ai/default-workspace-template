@@ -1,7 +1,7 @@
 """FastAPI app assembly: mounts every feature router and owns the system endpoints.
 
 The system endpoints (liveness, generation, version) are unauthenticated
-operational probes used by ``minds env deploy`` and the deployment-test
+operational probes used by ``minds-admin env deploy`` and the deployment-test
 suite; everything else lives in the feature routers.
 """
 
@@ -45,23 +45,23 @@ web_app.include_router(retention_router)
 
 # Public env var name the deployed connector reads at startup to expose
 # the tier's generation id via ``GET /generation``. The id is minted by
-# ``minds env deploy`` and stored in HCP Vault at
+# ``minds-admin env deploy`` and stored in HCP Vault at
 # ``secrets/minds/<tier>/generation``; the per-tier ``litellm-connector-<tier>``
 # Modal Secret carries it into the container. See
-# ``apps/minds/imbue/minds/envs/generation.py`` for the full lifecycle.
+# ``apps/minds_admin/imbue/minds_admin/envs/generation.py`` for the full lifecycle.
 # An empty string is the **steady state** for any tier whose
 # ``deploy.toml`` has ``[lifecycle].tracks_generation = false`` (dev tier
 # today) -- ``deploy_env`` only mints + pushes a generation id when the
 # flag is true, so the connector sees no value and ``/generation``
 # answers ``{"generation_id": ""}``. The activate-time auto-wipe in
-# ``minds env activate`` skips the wipe on empty, which is the right
+# ``minds-admin env activate`` skips the wipe on empty, which is the right
 # no-op for untracked tiers. (Empty is also what an older pre-generation-
 # lifecycle deploy would produce, hence the matching legacy fallback.)
 _GENERATION_ID_ENV_VAR = "MINDS_TIER_GENERATION_ID"
 
 # Test-only env var honored by ``/health/liveness``. When set to ``"1"``,
 # the liveness probe returns 500 unconditionally so the deployment-test
-# suite can drive the auto-rollback path in ``minds env deploy`` without
+# suite can drive the auto-rollback path in ``minds-admin env deploy`` without
 # editing source. Unset in every non-test deploy. See
 # ``specs/minds-deployment-tests.md`` (``test_deploy_auto_rollback_on_broken_healthcheck``).
 _INJECT_BROKEN_HEALTHCHECK_ENV_VAR = "MINDS_INJECT_BROKEN_HEALTHCHECK"
@@ -71,7 +71,7 @@ _INJECT_BROKEN_HEALTHCHECK_ENV_VAR = "MINDS_INJECT_BROKEN_HEALTHCHECK"
 def get_health_liveness() -> dict[str, str]:
     """Lightweight no-auth liveness probe.
 
-    Used by ``minds env deploy``'s post-deploy health check to confirm
+    Used by ``minds-admin env deploy``'s post-deploy health check to confirm
     the connector is reachable. Returns a fixed body so the poller has
     something to assert on beyond a 200 status.
 
@@ -86,15 +86,15 @@ def get_health_liveness() -> dict[str, str]:
 
 @web_app.get("/generation")
 def get_generation() -> dict[str, str]:
-    """Return the tier generation id minted at ``minds env deploy`` time.
+    """Return the tier generation id minted at ``minds-admin env deploy`` time.
 
-    ``minds env activate <tier>`` polls this on the client side: if the
+    ``minds-admin env activate <tier>`` polls this on the client side: if the
     returned id differs from the per-env ``last_seen_generation``
     marker the dev has on disk, the tier has been destroyed + redeployed
     since they last activated, and local state needs to be wiped.
 
     Doesn't require auth -- the generation id is non-sensitive (just a
-    uuid the operator can read off ``minds env list`` or Vault anyway).
+    uuid the operator can read off ``minds-admin env list`` or Vault anyway).
     """
     return {"generation_id": os.environ.get(_GENERATION_ID_ENV_VAR, "")}
 
@@ -108,7 +108,7 @@ def get_version() -> dict[str, str]:
     field) and as part of the logged-in smoke test's "is this env
     healthy" sanity check.
 
-    Reads two env vars that are already populated by ``minds env
+    Reads two env vars that are already populated by ``minds-admin env
     deploy`` for every tier:
 
     * ``MINDS_DEPLOY_ID`` -- the compact ISO-8601 timestamp minted by

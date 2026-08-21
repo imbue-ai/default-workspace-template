@@ -1,6 +1,5 @@
 import hashlib
 import json
-import subprocess
 import tomllib
 from pathlib import Path
 
@@ -11,11 +10,12 @@ from imbue.minds_evals.data_types import DEFAULT_AVG_WORD_COUNT_BASELINE
 from imbue.minds_evals.data_types import DEFAULT_DWT_REPO
 from imbue.minds_evals.driver import parse_case_config
 from imbue.minds_evals.errors import EvalConfigError
-from imbue.minds_evals.errors import MngrSourceError
+from imbue.minds_evals.errors import GitSourceError
 from imbue.minds_evals.generate import derive_case_id
 from imbue.minds_evals.generate import generate_dataset
 from imbue.minds_evals.generate import load_eval_config
 from imbue.minds_evals.generate import resolve_remote_tip
+from imbue.minds_evals.testing import make_local_git_repo
 
 
 def _write_config(tmp_path: Path, config: dict[str, object]) -> Path:
@@ -83,37 +83,17 @@ def test_derive_case_id_prefers_explicit_id_and_falls_back_to_position() -> None
     assert derive_case_id({}, 2) == "case-3"
 
 
-def _make_local_mngr_repo(tmp_path: Path) -> Path:
-    """A tiny local git repo standing in for mngr-internal (no network in unit tests)."""
-    repo = tmp_path / "fake-mngr"
-    repo.mkdir()
-    (repo / "README.md").write_text("fake mngr\n")
-    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
-    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
-    subprocess.run(
-        [
-            "git",
-            "-C",
-            str(repo),
-            "-c",
-            "user.email=test@test",
-            "-c",
-            "user.name=test",
-            "commit",
-            "-q",
-            "-m",
-            "init",
-        ],
-        check=True,
-    )
-    return repo
+def test_resolve_remote_tip_returns_the_branch_tip(tmp_path: Path) -> None:
+    repo = make_local_git_repo(tmp_path, "fake-mngr", commit_count=2)
+
+    assert resolve_remote_tip(str(repo.repo_dir), "main") == repo.commit_shas[-1]
 
 
 def test_resolve_remote_tip_raises_for_missing_branch(tmp_path: Path) -> None:
-    repo = _make_local_mngr_repo(tmp_path)
+    repo = make_local_git_repo(tmp_path, "fake-mngr", commit_count=1)
 
-    with pytest.raises(MngrSourceError, match="not found"):
-        resolve_remote_tip(str(repo), "no-such-branch-8471")
+    with pytest.raises(GitSourceError, match="not found"):
+        resolve_remote_tip(str(repo.repo_dir), "no-such-branch-8471")
 
 
 def _dir_content_digest(root: Path) -> str:
@@ -126,19 +106,26 @@ def _dir_content_digest(root: Path) -> str:
 
 
 def test_generate_dataset_writes_complete_byte_identical_tasks(tmp_path: Path) -> None:
-    repo = _make_local_mngr_repo(tmp_path)
-    config_path = _write_config(tmp_path, _valid_config())
+    repo = make_local_git_repo(tmp_path, "fake-mngr", commit_count=1)
+    dwt_repo = make_local_git_repo(tmp_path, "fake-dwt", commit_count=2)
+    config_path = _write_config(tmp_path, _valid_config(dwt_repo=str(dwt_repo.repo_dir)))
     output_dir = tmp_path / "dataset"
 
-    task_dirs = generate_dataset(config_path=config_path, output_dir=output_dir, mngr_repo=str(repo))
+    task_dirs = generate_dataset(config_path=config_path, output_dir=output_dir, mngr_repo=str(repo.repo_dir))
 
     assert [task_dir.name for task_dir in task_dirs] == ["todo-app", "case-2"]
-    expected_sha = resolve_remote_tip(str(repo), "main")
+    expected_sha = repo.commit_shas[-1]
+    expected_dwt_sha = dwt_repo.commit_shas[-1]
 
     for task_dir in task_dirs:
         task_config = tomllib.loads((task_dir / "task.toml").read_text())
         assert task_config["task"]["name"] == "minds-evals/{}".format(task_dir.name)
         assert task_config["metadata"]["mngr_sha"] == expected_sha
+        # The workspace template is pinned to an exact SHA, recorded alongside
+        # the branch it was resolved from.
+        assert task_config["metadata"]["dwt_sha"] == expected_dwt_sha
+        assert task_config["metadata"]["dwt_branch"] == "main"
+        assert task_config["metadata"]["dwt_repo"] == str(dwt_repo.repo_dir)
         assert task_config["agent"]["timeout_sec"] == 1800.0 + 300.0
         assert task_config["verifier"]["environment_mode"] == "separate"
         assert task_config["verifier"]["env"]["ANTHROPIC_API_KEY"] == "${ANTHROPIC_API_KEY}"
@@ -152,6 +139,7 @@ def test_generate_dataset_writes_complete_byte_identical_tasks(tmp_path: Path) -
         case_config = parse_case_config((task_dir / "instruction.md").read_text())
         assert case_config.case_id == task_dir.name
         assert case_config.mngr_sha == expected_sha
+        assert case_config.dwt_sha == expected_dwt_sha
 
         # tests/ carries the verifier image inputs plus the case data.
         tests_case = json.loads((task_dir / "tests" / "case.json").read_text())
@@ -180,11 +168,12 @@ def test_generate_dataset_writes_complete_byte_identical_tasks(tmp_path: Path) -
 
 
 def test_generate_dataset_rejects_nonempty_output_dir(tmp_path: Path) -> None:
-    repo = _make_local_mngr_repo(tmp_path)
-    config_path = _write_config(tmp_path, _valid_config())
+    repo = make_local_git_repo(tmp_path, "fake-mngr", commit_count=1)
+    dwt_repo = make_local_git_repo(tmp_path, "fake-dwt", commit_count=1)
+    config_path = _write_config(tmp_path, _valid_config(dwt_repo=str(dwt_repo.repo_dir)))
     output_dir = tmp_path / "dataset"
     output_dir.mkdir()
     (output_dir / "leftover.txt").write_text("stale")
 
     with pytest.raises(EvalConfigError, match="not empty"):
-        generate_dataset(config_path=config_path, output_dir=output_dir, mngr_repo=str(repo))
+        generate_dataset(config_path=config_path, output_dir=output_dir, mngr_repo=str(repo.repo_dir))

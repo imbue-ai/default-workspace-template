@@ -1,0 +1,1 @@
+Bump the pinned Claude Code CLI version from 2.1.207 to 2.1.227 (the `stable` release channel) in CI workflows (`release-tests.yml`, `tmr-setup` action) and the minds e2e snapshot script, matching the new workspace pin that supports Claude Opus 5.

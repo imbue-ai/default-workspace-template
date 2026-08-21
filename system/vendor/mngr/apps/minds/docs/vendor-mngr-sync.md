@@ -27,7 +27,18 @@ working tree).
 `just sync-vendor-mngr [default-workspace-template-path]` (root `justfile`) archives mngr `HEAD`,
 replaces `system/vendor/mngr/` with the snapshot, and commits in DEFAULT_WORKSPACE_TEMPLATE. It carries only
 committed content, so position your mngr checkout at the exact commit you want
-to vendor first. The full release procedure -- including the vendor-match
+to vendor first.
+
+Both archive callers -- this recipe and the `sync_vendor` job in
+`.github/workflows/minds-launch-to-msg.yml` -- also run `uv lock` in the DEFAULT_WORKSPACE_TEMPLATE root
+and commit the result with the snapshot. DEFAULT_WORKSPACE_TEMPLATE's root `uv.lock` pins the vendored
+mngr libraries as editable path deps (`imbue-mngr`, `imbue-common`, `overlay`,
+`resource-guards`, `concurrency-group`, `mngr_claude`) and records their resolved
+`requires-dist`, so a snapshot that moves any of their dependencies strands it.
+That lock is the DEFAULT_WORKSPACE_TEMPLATE root's own, not the `system/vendor/mngr/uv.lock` inside the
+snapshot, which the relock leaves untouched -- so the vendor-match invariant
+(`system/vendor/mngr` equals the archive of its mngr SHA, blob for blob) still
+holds. The full release procedure -- including the vendor-match
 invariant (DEFAULT_WORKSPACE_TEMPLATE `system/vendor/mngr` must be the `git archive` of the exact mngr SHA it
 is tagged with) -- is in `apps/minds/docs/deploy/release.md`.
 
@@ -49,15 +60,15 @@ rsync -a --delete --filter=':- .gitignore' --exclude=.git --exclude=uv.lock SRC/
   install context regenerates its own).
 
 The exclude set is defined once in code, in
-`libs/mngr_imbue_cloud/.../bake/pool_bake.py`
+`apps/minds_admin/imbue/minds_admin/bake/pool_bake.py`
 (`_VENDOR_RSYNC_MANUAL_EXCLUDES` and `_GITIGNORE_RSYNC_FILTER`). Three paths
 populate `system/vendor/mngr/` from the monorepo with this form; keep them in step with
 those constants:
 
 | Path | Where | Trigger |
 |---|---|---|
-| `just minds-start` | root `justfile` (inline) | every dev-app startup |
-| `sync_mngr_into_template` | `pool_bake.py` (the constants) | `mngr imbue_cloud admin pool create --mngr-source ...` / `minds pool create --mngr-source ...` |
+| `just sync-vendor-mngr-live` | root `justfile` | every dev-app startup (`just minds-start` calls it), or on demand |
+| `sync_mngr_into_template` | `pool_bake.py` (the constants) | `minds-admin pool create --mngr-source ...` |
 | `propagate_changes` | `apps/minds/scripts/propagate_changes` (`RSYNC_EXCLUDES`) | each dev-loop iteration into a running container |
 
 `propagate_changes` additionally protects `data/`, `.mngr/`, and
@@ -65,6 +76,19 @@ those constants:
 
 The desktop client's Create flow performs a *separate* rsync -- the DEFAULT_WORKSPACE_TEMPLATE worktree
 over a shallow clone into `/home/user/workspace/` -- not a monorepo->`system/vendor/mngr` sync.
+
+### The rsync'd copy is meant to be uncommitted
+
+`just sync-vendor-mngr-live` deliberately leaves the DEFAULT_WORKSPACE_TEMPLATE worktree dirty; the
+code-guardian stop hook exempts `system/vendor/mngr` from its commit check
+(`stop_hook.uncommitted_exempt_paths`) for exactly this reason. Git does not
+honor that exemption, though: it refuses to merge over working-tree state the
+merge would overwrite, which is what happens whenever a release-time vendor
+refresh is in the incoming range. The hook reports that case on its own (`Merge blocked by uncommitted
+changes under an exempt path`) rather than as a merge conflict. Drop the copy,
+merge, and re-run `just sync-vendor-mngr-live` -- never commit it from the dev
+loop, and never resolve it as a conflict. See the mngr `CLAUDE.md` section
+"Vendored mngr in the default-workspace-template worktree" for the commands.
 
 ## `system/vendor/tk`
 

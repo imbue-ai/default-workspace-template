@@ -1,10 +1,20 @@
 import threading
 from pathlib import Path
+from typing import Final
 
 import pytest
 
 from scripts.lima_image.publish import ObjectStore
 from scripts.lima_image.publish import _upload_store
+
+_REPO_ROOT: Final[Path] = Path(__file__).parents[2]
+
+# Where an operator is told to run the publisher: the runbook and the bake
+# script that prints the next command when it finishes.
+_INVOCATION_SOURCES: Final[tuple[Path, ...]] = (
+    *sorted((_REPO_ROOT / "apps/minds/docs").glob("*.md")),
+    *sorted((_REPO_ROOT / "scripts").glob("*.sh")),
+)
 
 
 class _RecordingStore(ObjectStore):
@@ -68,3 +78,19 @@ def test_upload_store_propagates_a_failed_chunk(tmp_path: Path) -> None:
 
     with pytest.raises(RuntimeError):
         _upload_store(store_dir, _FailingStore(present=set()))
+
+
+def test_the_publisher_is_only_ever_invoked_as_a_module() -> None:
+    """`python scripts/lima_image/publish.py` cannot resolve `scripts.r2.client`.
+
+    Running a file by path puts that file's own directory on `sys.path`, never
+    the repo root, so the intra-repo import fails before a single flag is
+    parsed -- and after a 40-minute bake. Nothing else catches it: this suite
+    imports the module through the package, where pytest's rootdir is already
+    importable.
+    """
+    path_form = "python scripts/lima_image/publish.py"
+    offenders = [source for source in _INVOCATION_SOURCES if path_form in source.read_text()]
+    assert offenders == [], f"run it as `python -m scripts.lima_image.publish` in {offenders}"
+    # So the check cannot pass by the command going undocumented instead.
+    assert any("-m scripts.lima_image.publish" in source.read_text() for source in _INVOCATION_SOURCES)

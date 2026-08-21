@@ -1,6 +1,8 @@
+import html
 import json
 import os
 import queue
+import shlex
 import socket
 import threading
 import time
@@ -23,6 +25,7 @@ from loguru import logger as _loguru_logger
 from pydantic import Field
 from simple_websocket import ConnectionClosed
 from werkzeug.exceptions import HTTPException
+from werkzeug.exceptions import NotFound
 
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -71,6 +74,7 @@ from imbue.system_interface.layout_ops import is_sessionless_browser_ref
 from imbue.system_interface.layout_ops import layout_inspect
 from imbue.system_interface.layout_ops import layout_list
 from imbue.system_interface.layout_ops import parse_tmux_sessions_output
+from imbue.system_interface.layout_ops import terminal_origin_label
 from imbue.system_interface.models import ActivityRequest
 from imbue.system_interface.models import ActivityResponse
 from imbue.system_interface.models import AgentCreationError
@@ -105,9 +109,250 @@ logger = _loguru_logger
 
 STATIC_DIRECTORY = Path(__file__).parent / "static"
 
-_FRONTEND_NOT_BUILT_HTML = (
-    "<html><body><p>Frontend not built. Run <code>npm run build</code> in <code>frontend/</code>.</p></body></html>"
+# Stamped on every app-shell response so a caller can tell the real app from
+# the "not built" placeholder, which is otherwise an identical HTTP 200 HTML
+# response. The reveal flow's frontend health check reads it.
+FRONTEND_BUILT_HEADER = "X-Frontend-Built"
+
+# How often the placeholder asks whether the bundle is back. Also the interval
+# of the scriptless fallback below, so both routes behave the same.
+_NOT_BUILT_POLL_SECONDS = 10
+
+# The ``mngr`` invocation the placeholder offers for standing up an agent to
+# repair the workspace. It mirrors what ``agent_manager._build_chat_create_command``
+# runs for a chat -- ``--template chat`` for the shared work directory, the output
+# style, and running in the workspace tree rather than a worktree of it, plus the
+# ``user_created`` label that puts the agent in the dynamic chat memory band.
+# Where it differs from that builder:
+#
+# No ``--type``, which is the one thing that builder cannot leave out: it is
+# serving a menu entry, so the harness is a choice the user already made. This
+# page has no such choice to carry, so leaving the flag off lets ``mngr`` resolve
+# the harness from ``[commands.create] type`` -- whatever this workspace is
+# configured to open chats as, rather than whatever it was when this string was
+# written. ``--template chat`` supplies the rest either way: it is harness-
+# agnostic (``output_style`` is honored by the claude, codex and pi plugins
+# alike), so it does not pick one and must not be relied on to.
+#
+# No ``--transfer none`` either, for a different reason: the ``chat`` template
+# already sets it, and the builder spells it out only because it is assembling
+# an argv rather than a line for a reader. It is not optional the way the harness
+# is -- an agent in a worktree would repair a copy of the workspace instead of
+# the workspace -- so ``server_test.py`` reads the template and fails if that
+# setting ever leaves it, rather than trusting this comment.
+#
+# ``--connect`` instead of its ``--no-connect``, which exists to keep a headless
+# caller from attaching. Someone typing this wants the opposite, and connecting
+# is what turns the create into a conversation. Not merely explicit for the
+# reader's sake: the workspace's own ``[commands.create] connect = false`` is
+# the default this overrides.
+#
+# ``--message`` so the agent opens already knowing what the reader is looking at.
+# It quotes the page's own heading, which is the one detail a reader on this page
+# can be certain of and the one the agent can act on without being told anything
+# else.
+#
+# No name, so mngr mints one. A reload, a second tab, or a first attempt that did
+# not finish therefore starts a fresh conversation rather than rejoining an
+# earlier one.
+#
+# Written as the shell line a reader sees and copies, because that string is the
+# artifact; the argv is derived from it by the same parse a shell performs, so
+# what is offered cannot drift from what runs. Quoted with ``"`` rather than as
+# ``shlex.join`` would (``'i'"'"'m ...``): the message carries apostrophes, and
+# this is the one line on the page a reader has to be able to read in full.
+#
+# Kept in sync with that builder by ``server_test.py``, which also validates it
+# against the live CLI. It is a suggestion, not a dispatch: the server never
+# runs it, so an agent is created only if the reader decides to.
+_NOT_BUILT_REPAIR_MNGR_COMMAND: Final[str] = (
+    "mngr create --connect --template chat --label user_created=true "
+    '--message "i\'m seeing \\"this workspace\'s interface needs to be rebuilt, can you fix it?\\""'
 )
+
+_NOT_BUILT_REPAIR_ARGV: Final[tuple[str, ...]] = tuple(shlex.split(_NOT_BUILT_REPAIR_MNGR_COMMAND))
+
+# ``mngr connect`` refuses to attach from inside tmux unless ``is_nested_tmux_allowed``
+# is set (see ``mngr.api.connect``, which gates purely on ``$TMUX``), and it is the
+# connect half of the create above that would hit it. The workspace's own terminal
+# tabs are tmux sessions, so a reader who runs this in one gets a created agent and
+# an error instead of a conversation. Dropping ``TMUX`` for this one command is
+# exactly what mngr does for itself once the check passes, and scoping it with
+# ``env -u`` leaves the reader's own shell alone.
+_NOT_BUILT_REPAIR_COMMAND: Final[str] = "env -u TMUX " + _NOT_BUILT_REPAIR_MNGR_COMMAND
+
+# Served in place of the app whenever the compiled bundle is missing. The bundle
+# is gitignored build output, so a code refresh that replaces the tree can leave
+# the workspace here. The page offers a way out and returns to the interface on
+# its own once there is one, so a bundle restored by anything else -- most often
+# the reveal flow's rollback -- brings the reader back without them having to
+# know to retry.
+#
+# The way out is a terminal, not a "rebuild" button. A button has to be right
+# about what went wrong; the states that strand a workspace here are dominated
+# by ones where a build dispatched from the server would fail too (no registry,
+# no memory, a lockfile that does not resolve), and it would fail with nowhere
+# to say so, on a page with no application to render the failure. It would also
+# inherit the server's memory band, which puts it ahead of the user's chats and
+# agents in a shed. A shell is the general case of every repair rather than one
+# of them, and ttyd is already running and already *more* protected than this
+# server, so the page is pointing at something that outlives it rather than
+# starting anything.
+#
+# Nothing here is part of the compiled bundle -- this is a string in the
+# backend -- so the script below ships whether or not the frontend has ever
+# been built. That is what lets the page be more than static text in exactly
+# the state where the frontend is missing.
+_FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Interface not built</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; display: flex;
+         align-items: center; justify-content: center; min-height: 100vh;
+         background: #14161a; color: #e6e8eb; }
+  main { max-width: 48rem; padding: 2rem; width: 100%; box-sizing: border-box; }
+  h1 { font-size: 1.25rem; font-weight: 600; margin: 0 0 0.75rem; }
+  p { line-height: 1.5; margin: 0 0 1rem; color: #b6bcc4; max-width: 34rem; }
+  code { background: #1d2026; border-radius: 4px; padding: 0.1rem 0.3rem;
+         font-size: 0.9em; }
+  /* The command wraps rather than scrolling: a horizontal scrollbar hides
+     most of it behind a control nobody looks for, and this is the one line on
+     the page a reader has to be able to read in full. */
+  #repair { position: relative; }
+  pre { background: #1d2026; border-radius: 6px; padding: 0.75rem 1rem;
+        margin: 0 0 1rem; font-size: 0.85em; color: #e6e8eb;
+        white-space: pre-wrap; overflow-wrap: anywhere; }
+  /* Room for the copy button, so the last line never runs underneath it. */
+  #repair-command { padding-right: 5.5rem; }
+  #copy-repair { position: absolute; top: 0.5rem; right: 0.5rem;
+                 font: inherit; font-size: 0.8em; padding: 0.25rem 0.6rem;
+                 color: #e6e8eb; background: #2a2f37; border: 1px solid #3a414b;
+                 border-radius: 4px; cursor: pointer; }
+  #copy-repair:hover { background: #333a44; }
+  #copy-repair[hidden] { display: none; }
+  #terminal-slot[hidden] { display: none; }
+  #terminal { width: 100%; height: 24rem; border: 1px solid #2a2f37;
+              border-radius: 6px; background: #000; }
+</style>
+<!-- The scriptless fallback for the poll at the end of the body. Whole-page
+     reloads and a live terminal cannot coexist -- a refresh every ten seconds
+     would destroy the session the reader is typing into -- so this runs only
+     where there is no script to poll with, and therefore no terminal either. -->
+<noscript><meta http-equiv="refresh" content="__POLL_SECONDS__"></noscript>
+</head>
+<body>
+<main>
+  <h1>This workspace's interface needs to be rebuilt</h1>
+  <p>The compiled interface is missing, so there is nothing to show yet. Your
+     work and your agents are untouched -- only the interface itself is gone,
+     and this page returns to the interface on its own once it is back.</p>
+  <p>If you would rather not work the repair out yourself, this creates an agent
+     and tells it what you are looking at:</p>
+  <div id="repair">
+    <pre id="repair-command">__REPAIR_COMMAND__</pre>
+    <!-- Hidden until the script confirms it can actually copy, so the page
+         never shows a button that does nothing. -->
+    <button id="copy-repair" type="button" hidden>Copy</button>
+  </div>
+  <!-- The lead-in belongs to the terminal, not to the command: the command
+       stands on its own wherever the reader finds a shell, so it keeps its own
+       introduction above and is never left orphaned when there is no terminal
+       to offer. -->
+  <p id="terminal-intro" hidden>You can run that -- or do the repair yourself --
+     in this workspace's terminal, below.</p>
+  <div id="terminal-slot" hidden>
+    <iframe id="terminal" title="Workspace terminal"></iframe>
+  </div>
+</main>
+<script>
+(function () {
+  // The terminal's hostname label, minted per workspace, or "" when there is
+  // no terminal registered to offer.
+  var terminalLabel = __TERMINAL_LABEL__;
+
+  // Mirrors deriveServiceOrigin/workspaceHostCoordinate in
+  // frontend/src/origin.ts, which is canonical: a service origin is its label
+  // prefixed onto the workspace host COORDINATE -- the host-<hex> label and
+  // everything after it -- and never onto this page's host verbatim, which
+  // would nest the service under the shell's own label and route back here.
+  //
+  // It differs from origin.ts in one way, deliberately: no coordinate label
+  // means no origin, rather than falling back to the host unchanged. The shell
+  // can assume it is running inside a workspace; this page cannot (a direct
+  // hit on the loopback port has no coordinate), and a made-up origin would
+  // show the reader a broken frame instead of the prose that still helps them.
+  function serviceOrigin(label) {
+    var labels = window.location.host.split(".");
+    for (var index = 0; index < labels.length; index++) {
+      // The port rides on whichever label is last, so it is stripped before
+      // matching -- otherwise a coordinate that happens to BE the last label
+      // reads as an ordinary one and the terminal is silently not offered.
+      // The slice below keeps it, which is what the origin needs.
+      if (/^(?:host|agent)-[a-f0-9]+$/i.test(labels[index].split(":")[0])) {
+        return window.location.protocol + "//" + label + "." +
+               labels.slice(index).join(".") + "/";
+      }
+    }
+    return null;
+  }
+
+  // The command is long enough to be worth not retyping, and the reader may be
+  // copying it into a terminal on the far side of a share. Shown only when the
+  // clipboard is actually reachable: it needs a secure context, which every
+  // workspace origin is (``*.localhost`` locally, https on a share) but which a
+  // direct hit on the loopback port is not.
+  var copyButton = document.getElementById("copy-repair");
+  if (navigator.clipboard && window.isSecureContext) {
+    copyButton.hidden = false;
+    copyButton.addEventListener("click", function () {
+      navigator.clipboard
+        .writeText(document.getElementById("repair-command").textContent)
+        .then(function () {
+          copyButton.textContent = "Copied";
+          setTimeout(function () {
+            copyButton.textContent = "Copy";
+          }, 2000);
+        })
+        // A denied permission is the realistic failure. Selecting the text puts
+        // the reader one keystroke from the same result rather than leaving a
+        // button that silently did nothing.
+        .catch(function () {
+          window.getSelection().selectAllChildren(document.getElementById("repair-command"));
+          copyButton.textContent = "Press to copy";
+        });
+    });
+  }
+
+  var origin = terminalLabel ? serviceOrigin(terminalLabel) : null;
+  if (origin) {
+    document.getElementById("terminal").src = origin;
+    document.getElementById("terminal-slot").hidden = false;
+    document.getElementById("terminal-intro").hidden = false;
+  }
+
+  // Ask whether the bundle is back rather than reloading blind. The reply
+  // carries the same header the reveal flow's own health check reads, so a
+  // rebuild by ANY route -- a rollback, a build run in the terminal above --
+  // brings the interface back with no further action. Asking (rather than
+  // refreshing) is what lets the terminal stay alive between checks.
+  setInterval(function () {
+    fetch(window.location.pathname, { method: "HEAD", cache: "no-store" })
+      .then(function (response) {
+        if (response.headers.get("__BUILT_HEADER__") === "true") {
+          window.location.reload();
+        }
+      })
+      // The backend restarting is the expected way for this to fail, and it is
+      // also a moment when the bundle may be arriving. Say nothing and ask again.
+      .catch(function () {});
+  }, __POLL_SECONDS__ * 1000);
+})();
+</script>
+</body>
+</html>
+"""
 
 # Default number of events for tail-first loading
 _DEFAULT_TAIL_COUNT = 50
@@ -219,6 +464,19 @@ def _html_response(html_content: str, status_code: int = 200) -> Response:
     return response
 
 
+def _shell_response(html_content: str, *, is_frontend_built: bool) -> Response:
+    """Return an app-shell response, stamped with whether it is the real app.
+
+    Both the app and the not-built placeholder are HTTP 200 HTML, so nothing
+    downstream can tell them apart from the status line alone. The header says
+    which one this is, so a health check does not have to pattern-match markup
+    that is free to change.
+    """
+    response = _html_response(html_content)
+    response.headers[FRONTEND_BUILT_HEADER] = "true" if is_frontend_built else "false"
+    return response
+
+
 def _inject_base_path_meta_tag(html_content: str, root_path: str) -> str:
     meta_tag = f'<meta name="system-interface-base-path" content="{root_path}">'
     return html_content.replace("</head>", f"{meta_tag}\n</head>")
@@ -273,7 +531,7 @@ def _is_feature_flag_enabled(env_var: str) -> bool:
 # for what they create is never gated, so an agent made while a flag was on keeps
 # working with it off.
 _FEATURE_FLAG_META_TAGS: Final[dict[str, str]] = {
-    # The "New Codex agent" / "New Pi agent" launchers. Claude is the workspace default
+    # The "Codex chat" / "Pi chat" launchers. Claude is the workspace default
     # and is never gated.
     "FEATURE_FLAG_ENABLE_OTHER_HARNESSES": "system-interface-enable-other-harnesses",
     # The "New introductory <harness> chat" launchers, which stack the `first` create
@@ -305,8 +563,58 @@ def _index() -> Response:
         html_content = _inject_feature_flag_meta_tags(html_content)
         if config.javascript_plugin_basenames:
             html_content = _inject_plugin_script_tags(html_content, config.javascript_plugin_basenames, root_path)
-        return _html_response(html_content)
-    return _html_response(_FRONTEND_NOT_BUILT_HTML)
+        return _shell_response(html_content, is_frontend_built=True)
+    return _frontend_not_built_response()
+
+
+def render_frontend_not_built_page(terminal_label: str | None) -> str:
+    """Fill the not-built placeholder in, given the terminal's origin label.
+
+    Takes the label rather than reading the registry itself so the page can be
+    rendered for a workspace with no terminal (pass ``None``) without touching
+    the filesystem, which is the case worth testing and the one hardest to
+    arrange for real.
+
+    The label is substituted as a JSON literal, so the script receives a string
+    however it is spelled, and ``""`` -- which the script treats as "no
+    terminal" -- when there is none. ``layout_ops.terminal_origin_label``
+    has already rejected anything that is not a single DNS label, so no value
+    that reaches here can close the script element.
+
+    The repair command goes in as HTML text rather than markup. It is a shell
+    line written for a reader, so ``&`` and ``<`` are ordinary characters in it
+    that the browser would otherwise take as an entity reference or a tag --
+    which would show something other than the command, and hand the copy button
+    (which reads ``textContent``) something other than what the tests validated.
+    Quotes are left alone: this is text content, and the line is full of them.
+    """
+    return (
+        _FRONTEND_NOT_BUILT_TEMPLATE.replace("__TERMINAL_LABEL__", json.dumps(terminal_label or ""))
+        .replace("__REPAIR_COMMAND__", html.escape(_NOT_BUILT_REPAIR_COMMAND, quote=False))
+        .replace("__BUILT_HEADER__", FRONTEND_BUILT_HEADER)
+        .replace("__POLL_SECONDS__", str(_NOT_BUILT_POLL_SECONDS))
+    )
+
+
+def _frontend_not_built_response() -> Response:
+    """Render the placeholder shown when there is no compiled bundle to serve.
+
+    A ``HEAD`` gets the header and nothing else. That is the placeholder's own
+    poll asking whether the bundle is back yet -- every ten seconds, for every
+    open tab, for as long as the outage lasts -- and answering it in full would
+    re-read the app registry and re-render the page each time, and bury the one
+    diagnostic below in six repetitions a minute of itself. Werkzeug drops the
+    body of a HEAD response anyway, so the caller sees no difference.
+    """
+    if request.method == "HEAD":
+        return _shell_response("", is_frontend_built=False)
+    # Logged with the resolved directory because the usual cause is that the
+    # served tree was replaced under a running service, which is otherwise
+    # invisible from the supervisor logs.
+    _loguru_logger.warning(
+        "Served the not-built placeholder: no frontend bundle at {}", STATIC_DIRECTORY / "index.html"
+    )
+    return _shell_response(render_frontend_not_built_page(terminal_origin_label()), is_frontend_built=False)
 
 
 def _index_catch_all(path: str) -> Response:
@@ -329,7 +637,18 @@ def _favicon() -> Response:
 
 def _serve_asset(filename: str) -> Response:
     assets_directory = STATIC_DIRECTORY / "assets"
-    return send_from_directory(assets_directory, filename)
+    # A missing asset is a plain 404, as for the favicon above, rather than the
+    # HTML error page ``send_from_directory`` would raise. Existence and safety
+    # are both left to ``send_from_directory``: ``filename`` arrives with any
+    # ``..`` segments intact, so joining it onto the directory ourselves would
+    # stat paths outside it -- an existence oracle for the whole filesystem.
+    # What keeps an asset request off the SPA catch-all is the route itself,
+    # registered unconditionally in ``create_application``; nothing here
+    # decides that.
+    try:
+        return send_from_directory(assets_directory, filename)
+    except NotFound:
+        return Response(status=404)
 
 
 def _discover_with_filters() -> list[AgentInfo]:
@@ -660,18 +979,19 @@ def _get_model_options_endpoint(agent_id: str) -> Response:
 
 
 def _get_powered_by_endpoint(agent_id: str) -> Response:
-    """The agent's "Powered by" credit label -- a per-agent path decoupled from the model bar.
+    """The agent's credit text -- a per-agent path decoupled from the model bar.
 
-    The label is a pure function of the agent's harness, so it must never blink with the live
+    The text is a pure function of the agent's harness, so it must never blink with the live
     model choice or wait on the catalog fetch. This resolves the harness backend-side and
-    returns its product name directly, so the frontend can render the credit from ``agentId``
-    alone, independent of ``model_choice`` and of ``GET /api/harnesses``. 404 for an unknown
-    agent (e.g. a proto-agent), which the frontend treats as "don't show the credit yet".
+    returns the harness's verbatim credit string, so the frontend can render it from ``agentId``
+    alone, independent of ``model_choice`` and of ``GET /api/harnesses``. A harness that shows
+    no credit (claude) declares "", which the frontend renders as nothing. 404 for an unknown
+    agent (e.g. a proto-agent), which the frontend also treats as "no credit".
     """
     agent_info = _find_agent(agent_id)
     if agent_info is None:
         return _agent_not_found_response(agent_id)
-    return _json_response(PoweredByResponse(label=get_catalog(agent_info.harness).powered_by_label).model_dump())
+    return _json_response(PoweredByResponse(label=get_catalog(agent_info.harness).powered_by_text).model_dump())
 
 
 def _build_fast_mode_answered_label_command(agent_name: str) -> list[str]:
@@ -2558,9 +2878,7 @@ def _default_view_id(layout_dir: Path | None) -> str | None:
     the best single answer there is. None only without a registry to fall back
     on (dev/test with no layout dir and no agreeing client).
     """
-    distinct_views = {
-        info["active_layout_slug"] for info in get_state().broadcaster.get_connected_client_infos()
-    }
+    distinct_views = {info["active_layout_slug"] for info in get_state().broadcaster.get_connected_client_infos()}
     if len(distinct_views) == 1:
         return next(iter(distinct_views))
     if layout_dir is None:
@@ -3025,9 +3343,14 @@ def create_application(state: SystemInterfaceState) -> Flask:
     sock.route("/api/proto-agents/<agent_id>/logs")(_proto_agent_logs_endpoint)
     application.add_url_rule("/plugins/<basename>", view_func=_serve_static_file, methods=["GET"])
 
-    assets_directory = STATIC_DIRECTORY / "assets"
-    if assets_directory.is_dir():
-        application.add_url_rule("/assets/<path:filename>", view_func=_serve_asset, methods=["GET"])
+    # Registered unconditionally, even when the bundle is absent at startup: the
+    # directory can appear later (a rebuild), and a route decided at construction
+    # time can never notice. Without the route, asset requests fall through to
+    # the catch-all below and come back as index.html with a text/html type,
+    # which the browser refuses as a module script -- a blank screen instead of
+    # the recoverable placeholder. A file that really is missing gets the plain
+    # 404 ``_serve_asset`` answers with itself.
+    application.add_url_rule("/assets/<path:filename>", view_func=_serve_asset, methods=["GET"])
 
     application.add_url_rule("/<path:path>", view_func=_index_catch_all, methods=["GET"])
 
