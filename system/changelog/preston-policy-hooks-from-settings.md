@@ -1,7 +1,9 @@
-This repo now declares its own policy guards for codex and pi, instead of mngr carrying the list.
+This repo declares its own codex and pi guards, in the files those harnesses already read.
 
-`[agent_types.codex.policy_hooks]` in `.mngr/settings.toml` maps each codex hook event to the commands to run for it -- the same scripts, in the same shape, that `.claude/settings.json` gives claude. `[[agent_types.pi-coding.policy_checkers]]` declares the two checkers pi runs before a bash tool call, each with a `match` pre-filter.
+`.codex/hooks.json` gives codex the same scripts `.claude/settings.json` gives claude. Codex loads hooks from every active config layer without a higher layer replacing a lower one, so this file runs alongside the per-agent one mngr writes for its own bookkeeping hook. Its two preconditions -- a trusted project layer and trusted hooks -- are already met by the workspace trust mngr seeds and the `--dangerously-bypass-hook-trust` it passes.
 
-mngr used to name these scripts itself: `build_codex_hooks_config()` listed six of them by filename, and pi's lifecycle extension spawned two by path. Adding a guard therefore meant a mngr release, and any other workspace using those harnesses inherited hooks it never asked for. Now the guard set lives with the guards.
+`.pi/extensions/policy_guards.ts` does the same for pi, which has no shell-hook surface: pi auto-discovers extensions from `.pi/extensions/`, calls every extension's `tool_call` handler, and blocks when any returns `{block, reason}`. It spawns the same `agent_latchkey_request_check.py` and `agent_tk_standalone_check.py` the hook wrappers do, so one checker file serves all three harnesses.
 
-`POLICY_HOOKS.md` says where each harness's wiring lives, and the "keeping the three in step" list points at the settings tables rather than at mngr internals.
+Neither needed anything from mngr, which no longer carries a guard list for either harness.
+
+`agent_tk_standalone_check.py` gained the `from __future__ import annotations` its sibling already had; without it the checker crashed on a python older than 3.10 rather than checking anything.
