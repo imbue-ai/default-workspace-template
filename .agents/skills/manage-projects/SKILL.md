@@ -79,7 +79,7 @@ specific dockview tab instance, not membership.
 # clients currently have it in front.
 python3 system/scripts/layout.py views
 
-# Everything addressable (registered services + mngr agents), with
+# Everything addressable (registered services and chat agents), with
 # open/running flags scoped to one view.
 python3 system/scripts/layout.py list --view "Research"
 
