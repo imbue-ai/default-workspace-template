@@ -28,19 +28,19 @@ from imbue.minds.bootstrap import MINDS_ROOT_NAME_ENV_VAR
 from imbue.minds.bootstrap import mngr_host_dir_for
 from imbue.minds.bootstrap import mngr_prefix_for
 from imbue.minds.bootstrap import root_name_for_env_name
-from imbue.minds.cli._activated_env import MODAL_PROFILE_ENV_VAR
-from imbue.minds.cli._activated_env import modal_profile_for_tier_or_none
-from imbue.minds.cli._activated_env import tier_for_env_name
-from imbue.minds.cli.paid import admin_key_from_supertokens_secret
+from imbue.minds.config.modal_profile import MODAL_PROFILE_ENV_VAR
+from imbue.minds.config.modal_profile import modal_profile_for_tier_or_none
 from imbue.minds.deployment_tests.data_types import SharedEnvHandle
 from imbue.minds.deployment_tests.primitives import SharedEnvRole
 from imbue.minds.envs.paths import client_config_file
 from imbue.minds.envs.primitives import DevEnvName
 from imbue.minds.envs.vault_reader import VaultPath
+from imbue.minds.envs.vault_reader import admin_key_from_supertokens_secret
 from imbue.minds.envs.vault_reader import delete_vault_kv
 from imbue.minds.envs.vault_reader import read_vault_kv
 from imbue.minds.envs.vault_reader import write_vault_kv
 from imbue.minds.errors import MindError
+from imbue.mngr_imbue_cloud.primitives import tier_for_env_name
 
 _SUPERTOKENS_TENANT_ID: Final[str] = "public"
 _CONNECTOR_HTTP_TIMEOUT_SECONDS: Final[float] = 60.0
@@ -257,14 +257,14 @@ def create_verified_user_via_admin_api(
 
 
 def build_minds_env_subprocess_env(name: DevEnvName) -> dict[str, str]:
-    """Build the env dict for a ``minds env deploy/destroy`` subprocess targeting ``name``.
+    """Build the env dict for a ``minds-admin env deploy/destroy`` subprocess targeting ``name``.
 
-    Mirrors what ``minds env activate --deploy <name>`` exports (without
+    Mirrors what ``minds-admin env activate --deploy <name>`` exports (without
     going through the print-shell-vars indirection): MINDS_ROOT_NAME,
     MNGR_HOST_DIR, MNGR_PREFIX, MINDS_CLIENT_CONFIG_PATH, and (for tiers
     with a committed ``modal_workspace``) MODAL_PROFILE. The
     MODAL_PROFILE lookup goes through the same
-    ``modal_profile_for_tier_or_none`` helper ``minds env activate``
+    ``modal_profile_for_tier_or_none`` helper ``minds-admin env activate``
     itself uses, so a separated CI Modal workspace (planned)
     automatically lands here without having to update a test-only
     hardcoded constant. Including MODAL_PROFILE is required for the
@@ -460,7 +460,7 @@ def modal_env_exists(name: DevEnvName) -> bool:
 def neon_project_exists(*, name: DevEnvName, org_id: str, api_token: SecretStr) -> bool:
     """Return True if a Neon project named ``minds-<name>`` exists under ``org_id``.
 
-    Mirrors the lookup ``minds env destroy`` uses internally (Neon
+    Mirrors the lookup ``minds-admin env destroy`` uses internally (Neon
     doesn't enforce unique names, so we look up by name + org). Returns
     True for 1+ matches, False for zero matches.
     """

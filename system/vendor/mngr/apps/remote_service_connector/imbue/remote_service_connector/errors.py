@@ -63,7 +63,7 @@ class NoActiveRelaysError(RuntimeError):
         scope = f"region '{region}'" if region else "any region"
         super().__init__(
             f"No active sharing relay is registered for {scope}. "
-            "Provision one with `share-relay provision/deploy` and register it via `mngr imbue_cloud admin relays add`."
+            "Provision one with `share-relay provision/deploy` and register it via `minds-admin relays add`."
         )
 
 
@@ -255,7 +255,7 @@ class PlanNotFoundError(KeyError):
         self.plan_name = plan_name
         super().__init__(
             f"Plan '{plan_name}' is not seeded in the plans table; "
-            "run `minds env deploy` (which writes the [plans] blocks from deploy.toml)."
+            "run `minds-admin env deploy` (which writes the [plans] blocks from deploy.toml)."
         )
 
 

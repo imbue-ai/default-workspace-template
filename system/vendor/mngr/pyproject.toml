@@ -109,6 +109,7 @@ addopts = [
   "--cov=imbue.mngr_behaviors",
   "--cov=imbue.skitwright",
   "--cov=imbue.minds",
+  "--cov=imbue.minds_admin",
   "--cov=imbue.slack_exporter",
   "--cov=imbue.remote_service_connector",
   "--cov=imbue.oauth_redirector",
@@ -148,6 +149,9 @@ exclude = [
     "**/__snapshots__/**",
     "scripts/style_guide.py",
     "frpc_test",
+    # Vendored upstream bugsink settings template (star-import style is
+    # upstream's; kept byte-similar for the re-diff-on-bump workflow).
+    "apps/observability/imbue/observability/deploy_assets/bugsink_conf.py",
 ]
 
 [tool.ruff.lint]
@@ -195,6 +199,10 @@ exclude = [
     "apps/minds/scripts/",
     "apps/minds/hatch_build.py",
     "apps/minds_evals/imbue/minds_evals/templates/",
+    # Vendored upstream bugsink settings template; the bugsink package is
+    # installed only on the error-tracker VPS (never in the dev venv), so its
+    # imports are unresolvable here.
+    "apps/observability/imbue/observability/deploy_assets/bugsink_conf.py",
 ]
 
 [tool.ty.environment]
@@ -216,6 +224,9 @@ omit = [
     "test_*.py",
     "*/tests/*",
     "*/conftest.py",
+    # Vendored upstream bugsink settings template (a deploy asset shipped to
+    # the error-tracker VPS); never importable in the test process.
+    "*/bugsink_conf.py",
     # minds_evals's harbor task templates run inside eval containers, never in
     # the dev/test process.
     "*/minds_evals/templates/*",
@@ -279,6 +290,7 @@ source = [
 root_packages = [
     "imbue.mngr",
     "imbue.minds",
+    "imbue.minds_admin",
     "imbue.mngr_imbue_cloud",
     "imbue.apt_mirror",
     "imbue.remote_service_connector",
@@ -364,7 +376,6 @@ type = "layers"
 layers = [
     "imbue.mngr_imbue_cloud.plugin",
     "imbue.mngr_imbue_cloud.cli",
-    "imbue.mngr_imbue_cloud.bake",
     "imbue.mngr_imbue_cloud.providers",
     "imbue.mngr_imbue_cloud.hosts",
     "imbue.mngr_imbue_cloud.slices",
@@ -374,6 +385,17 @@ layers = [
     "imbue.mngr_imbue_cloud.data_types",
     "imbue.mngr_imbue_cloud.errors",
     "imbue.mngr_imbue_cloud.primitives",
+]
+
+[[tool.importlinter.contracts]]
+name = "minds_admin layers contract"
+type = "layers"
+layers = [
+    "imbue.minds_admin.main",
+    "imbue.minds_admin.cli",
+    "imbue.minds_admin.envs",
+    "imbue.minds_admin.bake",
+    "imbue.minds_admin.slices",
 ]
 
 # The connector's shipped modules form a DAG: the Modal entrypoint (app) on

@@ -101,6 +101,73 @@ jobs:
         if: steps.worker-diff.outputs.changed == 'true'
         run: just test-apt-mirror-worker
 
+  # minds JS tests: the Electron shell's node:test units and the SPA frontend's
+  # vitest. Run only when the code it covers changed.
+  test-minds-js:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Fetch base branch and deepen HEAD for the path diff
+        run: |
+          if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+            git fetch --no-tags --unshallow origin "$(git rev-parse HEAD)"
+          fi
+          git fetch --no-tags origin \
+            "+refs/heads/${GITHUB_BASE_REF}:refs/remotes/origin/${GITHUB_BASE_REF}"
+
+      - name: Check whether the minds JS changed
+        id: js-diff
+        run: |
+          # The lockfile counts: electron-updater is pinned exactly, so moving it
+          # need not touch package.json -- and the node units are what catch the
+          # updater behaving differently than they assert.
+          #
+          # desktop_client and the schema generator count too, even though they
+          # are Python: the frontend's types are generated from the pydantic
+          # models there, so a rename can leave frontend code reading a field
+          # that no longer exists. The generator's input is transitive, so this
+          # list is a net rather than a proof.
+          if git diff --name-only "origin/${GITHUB_BASE_REF}...HEAD" \
+            -- apps/minds/electron apps/minds/test/unit apps/minds/frontend \
+               apps/minds/package.json apps/minds/pnpm-lock.yaml apps/minds/todesktop.js \
+               apps/minds/imbue/minds/desktop_client apps/minds/scripts/generate_ui_schema.py | grep -q .; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Python
+        if: steps.js-diff.outputs.changed == 'true'
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        if: steps.js-diff.outputs.changed == 'true'
+        uses: astral-sh/setup-uv@v7
+
+      - name: setup node
+        if: steps.js-diff.outputs.changed == 'true'
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24.15.0'
+
+      - name: setup pnpm
+        if: steps.js-diff.outputs.changed == 'true'
+        run: |
+          npm install -g pnpm@10.33.4
+          pnpm --version
+
+      - name: Install just
+        if: steps.js-diff.outputs.changed == 'true'
+        uses: extractions/setup-just@v4
+
+      - name: Run the minds JS suites
+        if: steps.js-diff.outputs.changed == 'true'
+        run: just test-minds-js
+
   # Unit + integration tests via offload on Modal
   test-offload:
     runs-on: ubuntu-latest
@@ -793,7 +860,7 @@ jobs:
           sudo mv /tmp/vault-bin/vault /usr/local/bin/vault
           vault --version
       # Exchange the GitHub OIDC token for a Vault token (role minds_ci_env_gh,
-      # gated on the minds-ci-env environment). `minds env deploy` and the
+      # gated on the minds-ci-env environment). `minds-admin env deploy` and the
       # per-run secret publish both shell out to the `vault` CLI, which reads
       # ~/.vault-token, so we need a real token here -- not just exported values.
       - name: Authenticate to Vault via GitHub OIDC
@@ -814,7 +881,7 @@ jobs:
           echo "::add-mask::$MODAL_TOKEN_SECRET"
           printf 'MODAL_TOKEN_ID<<__EOF__\n%s\n__EOF__\n' "$MODAL_TOKEN_ID" >> "$GITHUB_ENV"
           printf 'MODAL_TOKEN_SECRET<<__EOF__\n%s\n__EOF__\n' "$MODAL_TOKEN_SECRET" >> "$GITHUB_ENV"
-      # `minds env deploy` for the ci tier requires deploy-mode activation, which
+      # `minds-admin env deploy` for the ci tier requires deploy-mode activation, which
       # pins MODAL_PROFILE to the tier's modal_workspace (minds-dev) and
       # validates it against ~/.modal.toml. CI has no ~/.modal.toml, so synthesize
       # a throwaway one from the Modal token env.
@@ -827,7 +894,7 @@ jobs:
           active = true
           EOF
       - name: Deploy the per-run ci env
-        run: uv run python apps/minds/scripts/test_deployments.py up
+        run: uv run python apps/minds_admin/scripts/test_deployments.py up
       - name: Upload deployment env config
         uses: actions/upload-artifact@v7
         with:
@@ -906,7 +973,7 @@ jobs:
           active = true
           EOF
       - name: Sweep leaked ci-* envs older than 1 hour
-        run: uv run python apps/minds/scripts/test_deployments.py sweep --max-age-hours 1
+        run: uv run python apps/minds_admin/scripts/test_deployments.py sweep --max-age-hours 1
 
   test-minds-snapshot:
     runs-on: ubuntu-latest
@@ -1227,7 +1294,7 @@ jobs:
           name: minds-ci-env-config
           path: .minds
       - name: Destroy the per-run ci env
-        run: uv run python apps/minds/scripts/test_deployments.py down
+        run: uv run python apps/minds_admin/scripts/test_deployments.py down
 
   # Release tier (manual). The home for *all* minds release tests, gated to a
   # manual run rather than every push (the minds release procedure is a manual
@@ -1313,7 +1380,7 @@ jobs:
           active = true
           EOF
       - name: Run minds release-tier tests (minds_deployment)
-        run: uv run python apps/minds/scripts/test_deployments.py deployment-only
+        run: uv run python apps/minds_admin/scripts/test_deployments.py deployment-only
       # The plain minds @release tests need no ci env, so run them here too
       # (folded into the minds release job rather than the mngr release
       # workflow). `!cancelled()` so they still run if the deployment group

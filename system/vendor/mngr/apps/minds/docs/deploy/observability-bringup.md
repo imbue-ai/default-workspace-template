@@ -15,7 +15,7 @@ Then staging, let it soak, then production.
 
 - PR mngr-internal#465 merged (or run from its branch).
 - `vault login` (see [vault-setup.md](./vault-setup.md)) and an activated
-  env for the target tier (`eval "$(uv run minds env activate <env>)"`).
+  env for the target tier (`eval "$(uv run minds-admin env activate <env>)"`).
   Any `dev-*`/`ci-*` env maps to the single shared **dev** instance.
 - Access to the tier's Cloudflare account (R2 + origin certs), Neon org, and
   Modal workspace settings (the OpenTelemetry integration is configured in
@@ -29,7 +29,7 @@ Run this once per tier (dev, then staging, then production).
 
 - **Neon**: create an `openobserve` database. For staging/production, inside
   the tier's existing Neon project; for dev, inside a small dedicated project
-  in the dev org (mirroring `bugsink-dev`). Note the DIRECT (non `-pooler`)
+  in the dev org (mirroring the shared dev Bugsink instance). Note the DIRECT (non `-pooler`)
   DSN.
 - **R2**: in the tier's Cloudflare account, create the
   `minds-observability-<tier>` bucket and an account-owned R2 token scoped to
@@ -60,7 +60,7 @@ leaves stay empty: provisioning mints them and writes them back.
 ### 3. Provision the instance
 
 ```bash
-eval "$(uv run minds env activate <env>)"   # tier is derived from this
+eval "$(uv run minds-admin env activate <env>)"   # tier is derived from this
 just provision-observability                # OVH region defaults to US-EAST-VA-1
 ```
 
@@ -102,10 +102,11 @@ configure the OpenTelemetry integration by hand:
 
 ### 5. Roll the fleet collectors
 
-- Boxes: one `just prep-server <server-id>` pass per box (prep installs the
-  pinned otelcol-contrib whenever the tier's boxes credential exists in
-  Vault; it prints a clean skip otherwise). New boxes get it at prep
-  automatically.
+- Boxes: one `just prep-server <server-id>` pass per box (`minds-admin server
+  prep` resolves the tier's boxes credential from Vault in-process, installs
+  the pinned otelcol-contrib, and verifies the unit is active -- fail-closed;
+  it logs a clean skip while the credential is absent). New boxes get it at
+  `just setup-server` / prep automatically.
 - Relays (existing ones; new dev relays get this during
   `just provision-dev-relay`):
 
@@ -199,4 +200,5 @@ per tier. Record completion (and any lessons) in
 - A `minds_services` deployment test pushing one log through the public
   ingest path.
 - Dashboards + alert-on-no-data rules (separate PR).
-- Migrate Bugsink onto this hosting pattern: mngr-internal#464.
+- Migrate Bugsink onto this hosting pattern: mngr-internal#464 -- DONE; see
+  [bugsink-bringup.md](./bugsink-bringup.md).

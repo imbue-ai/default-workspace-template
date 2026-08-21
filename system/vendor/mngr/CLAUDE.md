@@ -77,6 +77,7 @@ Only after doing all of the above should you begin writing code.
 - Release tests do *not* run in CI. If you are developing or modifying release tests, CI will not verify them for you, so you must run them yourself locally.
 - If you need to run a specific acceptance or release test to write or fix it, iterate on that specific test locally by calling "just test <full_path>::<test_name>" from the root of the git checkout. Do this rather than re-running all tests in CI.
 - Note that tasks are *not* allowed to finish without A) all tests passing in CI, B) running /autofix to verify and fix code issues, and C) running /verify-conversation to review the conversation for behavioral issues.
+- Before finishing, prune the comments on your branch's diff by running /crispy-comments: remove incidental history, defensive justification, correctness arguments, DRY restatement of volatile facts, commented-out code, and banners, keeping only comments that explain a non-obvious "why". The /autofix pass also enforces this (the `comment_cruft` category in `.reviewer/code-issue-categories.md`), but running it yourself keeps the diff clean before review.
 - Before finishing your response, create a draft PR for the current branch using `gh pr create --draft`. If a PR already exists for the branch, skip this step. The stop hook will then poll CI checks on the PR.
 - To help verify that you ran the tests, report the exact command you used to run the tests, as well as the total number of tests that passed and failed (and the number that failed had better be 0).
 

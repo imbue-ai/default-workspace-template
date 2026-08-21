@@ -2,6 +2,8 @@
 name: github-sync
 description: Enable, check, or disable GitHub sync for this workspace. Enabling creates a dedicated PRIVATE GitHub repo via latchkey, points origin at it, and auto-pushes every commit from every checkout. Workspace data under data/ is NOT synced to GitHub (the restic host backup covers it). Use when the user asks to back up / sync the workspace to GitHub, enable auto-push, or asks about GitHub sync status.
 compatibility: Requires latchkey (see the latchkey skill) and the user approving GitHub permissions in the Minds app.
+metadata:
+  author: imbue
 ---
 
 # GitHub sync

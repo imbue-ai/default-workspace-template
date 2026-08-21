@@ -365,3 +365,21 @@ def set_oom_score_adj(pid: int, adj: int) -> bool:
     except OSError:
         return False
     return True
+
+
+def oom_tag_shell_prefix(adj: int) -> str:
+    """A shell statement that bands the running shell into ``adj``, for prefixing.
+
+    For the callers that cannot write ``/proc`` themselves because the process
+    they are banding does not exist yet: they hand a shell this statement plus
+    their own command, and everything the shell then spawns (or ``exec``s)
+    inherits the band.
+
+    The write is gated on ``test -w`` so that on a host without a writable
+    ``/proc/self/oom_score_adj`` (e.g. macOS, which has no ``/proc``) the prefix
+    is a clean no-op that emits nothing -- a bare ``> /proc/...`` redirect would
+    otherwise leak a shell "no such file or directory" error past ``2>/dev/null``.
+    It ends with ``;`` rather than ``&&`` so what follows runs whether or not the
+    tag applied.
+    """
+    return f"test -w /proc/self/oom_score_adj && echo {adj} > /proc/self/oom_score_adj 2>/dev/null; "

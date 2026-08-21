@@ -1,9 +1,11 @@
 import asyncio
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
 from harbor.models.agent.context import AgentContext
+from pydantic import ValidationError
 
 from imbue.minds_evals.data_types import CaseConfig
 from imbue.minds_evals.data_types import DECIDE_SENTINEL
@@ -12,7 +14,9 @@ from imbue.minds_evals.driver import MindsPersonaDriver
 from imbue.minds_evals.driver import PersonaLLMTurnSource
 from imbue.minds_evals.driver import SnapshotMode
 from imbue.minds_evals.driver import _new_agent_reply_texts
+from imbue.minds_evals.driver import build_eval_base_clone_command
 from imbue.minds_evals.driver import derive_user_id
+from imbue.minds_evals.driver import parse_agent_flag
 from imbue.minds_evals.driver import parse_case_config
 from imbue.minds_evals.driver import parse_snapshot_mode
 from imbue.minds_evals.driver import resolve_turn_sources
@@ -23,6 +27,8 @@ from imbue.minds_evals.mock_environment_test import MockBoxEnvironment
 from imbue.minds_evals.mock_environment_test import ScriptedExecRule
 from imbue.minds_evals.mock_environment_test import mngr_exec_json
 from imbue.minds_evals.mock_environment_test import ok_result
+from imbue.minds_evals.testing import commit_readme_revision
+from imbue.minds_evals.testing import make_local_git_repo
 
 
 def _case_config(prompts: tuple[str, ...], timeout_seconds: float = 1800.0) -> CaseConfig:
@@ -35,6 +41,7 @@ def _case_config(prompts: tuple[str, ...], timeout_seconds: float = 1800.0) -> C
         mngr_sha="a" * 40,
         dwt_repo="https://example.invalid/dwt.git",
         dwt_branch="main",
+        dwt_sha="c" * 40,
         avg_word_count_baseline=100.0,
     )
 
@@ -57,6 +64,17 @@ def test_parse_case_config_rejects_instruction_without_json_block() -> None:
 def test_parse_case_config_rejects_unparseable_json() -> None:
     with pytest.raises(InstructionParseError, match="not valid JSON"):
         parse_case_config("```json\n{nope\n```")
+
+
+def test_parse_case_config_rejects_a_case_without_a_pinned_workspace_template() -> None:
+    """A dataset generated before the template was pinned must fail the trial rather than quietly
+    build its workspaces from whatever the branch points at now."""
+    unpinned_case = _case_config(("Build it",)).model_dump()
+    del unpinned_case["dwt_sha"]
+    instruction = "# Task\n\n```json\n{}\n```\n".format(json.dumps(unpinned_case, indent=2))
+
+    with pytest.raises(ValidationError, match="dwt_sha"):
+        parse_case_config(instruction)
 
 
 def test_sanitize_user_id_lowercases_and_collapses_dashes() -> None:
@@ -104,6 +122,64 @@ def test_new_agent_reply_texts_only_counts_replies_after_the_baseline() -> None:
     assert _new_agent_reply_texts(events, 5) == []
 
 
+def _git_output(repo_dir: Path, *args: str) -> str:
+    result = subprocess.run(["git", "-C", str(repo_dir), *args], check=True, capture_output=True, text=True)
+    return result.stdout.strip()
+
+
+def test_build_eval_base_clone_command_lands_the_pinned_sha_on_a_real_branch(tmp_path: Path) -> None:
+    # Pinned to the middle commit: a command that resolved the branch instead of
+    # the sha would land on the tip.
+    source = make_local_git_repo(tmp_path, "fake-dwt", commit_count=3)
+    pinned_sha = source.commit_shas[1]
+    eval_base_dir = tmp_path / "eval-base"
+
+    command = build_eval_base_clone_command(
+        dwt_repo=str(source.repo_dir),
+        dwt_branch="main",
+        dwt_sha=pinned_sha,
+        eval_base_dir=str(eval_base_dir),
+    )
+    subprocess.run(["bash", "-c", command], check=True, capture_output=True)
+
+    assert _git_output(eval_base_dir, "rev-parse", "HEAD") == pinned_sha
+    # A named branch, not a detached HEAD: every downstream clone takes its
+    # checkout from this HEAD, and the workspace is created with an empty branch
+    # field, meaning "whatever HEAD is".
+    assert _git_output(eval_base_dir, "rev-parse", "--abbrev-ref", "HEAD") == "main"
+
+    # The per-case clone, then mngr's clone of that, must come out populated at the pin.
+    case_clone_dir = tmp_path / "case-clone"
+    subprocess.run(["git", "clone", "-q", str(eval_base_dir), str(case_clone_dir)], check=True)
+    workspace_clone_dir = tmp_path / "workspace-clone"
+    subprocess.run(["git", "clone", "-q", str(case_clone_dir), str(workspace_clone_dir)], check=True)
+
+    assert (workspace_clone_dir / "README.md").read_text() == "fake-dwt revision 1\n"
+    assert _git_output(workspace_clone_dir, "rev-parse", "HEAD") == pinned_sha
+    assert _git_output(workspace_clone_dir, "rev-parse", "--abbrev-ref", "HEAD") == "main"
+
+
+def test_build_eval_base_clone_command_pins_a_sha_off_a_non_default_branch(tmp_path: Path) -> None:
+    """A dwt branch other than the remote's default must still be reachable in the box clone."""
+    source = make_local_git_repo(tmp_path, "fake-dwt", commit_count=1)
+    subprocess.run(["git", "-C", str(source.repo_dir), "checkout", "-q", "-b", "codex/harness"], check=True)
+    pinned_sha = commit_readme_revision(source.repo_dir, "side branch\n", "side")
+    subprocess.run(["git", "-C", str(source.repo_dir), "checkout", "-q", "main"], check=True)
+    eval_base_dir = tmp_path / "eval-base"
+
+    command = build_eval_base_clone_command(
+        dwt_repo=str(source.repo_dir),
+        dwt_branch="codex/harness",
+        dwt_sha=pinned_sha,
+        eval_base_dir=str(eval_base_dir),
+    )
+    subprocess.run(["bash", "-c", command], check=True, capture_output=True)
+
+    assert _git_output(eval_base_dir, "rev-parse", "HEAD") == pinned_sha
+    assert _git_output(eval_base_dir, "rev-parse", "--abbrev-ref", "HEAD") == "codex/harness"
+    assert (eval_base_dir / "README.md").read_text() == "side branch\n"
+
+
 def _write_modal_config(tmp_path: Path) -> Path:
     modal_config = tmp_path / "modal.toml"
     modal_config.write_text('[default]\ntoken_id = "ak-test"\ntoken_secret = "as-test"\nactive = true\n')
@@ -122,7 +198,7 @@ def _setup_rules() -> list[ScriptedExecRule]:
     )
     return [
         ScriptedExecRule("cat /work/mngr_sha", [ok_result("b" * 40 + "\n")]),
-        ScriptedExecRule("minds env activate", [ok_result(activation_script)]),
+        ScriptedExecRule("minds-admin env activate", [ok_result(activation_script)]),
         ScriptedExecRule("setsid nohup /usr/local/bin/entrypoint.sh", [ok_result()]),
         ScriptedExecRule("probe_minds_port.py", [ok_result("8123\n")]),
         ScriptedExecRule(
@@ -135,13 +211,17 @@ def _setup_rules() -> list[ScriptedExecRule]:
     ]
 
 
-def _reply_events(reply_text: str) -> list[dict]:
+def _reply_events(reply_text: str, usage: dict | None = None) -> list[dict]:
     """The events the workspace produces when a turn is sent: the echoed user message plus the
-    agent's reply (with a leading empty/internal assistant event, as the real stream carries)."""
+    agent's reply (with a leading empty/internal assistant event, as the real stream carries).
+    ``usage`` mirrors the per-message accounting the real transcript attaches to agent messages."""
+    reply: dict = {"type": "assistant_message", "text": reply_text}
+    if usage is not None:
+        reply = {**reply, "model": "claude-opus-4-8", "usage": usage}
     return [
         {"type": "user_message", "content": "sent"},
         {"type": "assistant_message", "text": ""},
-        {"type": "assistant_message", "text": reply_text},
+        reply,
     ]
 
 
@@ -159,6 +239,8 @@ def _run_driver(
         logs_dir=logs_dir,
         modal_config_path=str(_write_modal_config(tmp_path)),
         poll_seconds=0.01,
+        # The key the driver signs the workspace in with, supplied the way harbor supplies it.
+        extra_env={"ANTHROPIC_API_KEY": "sk-eval-test"},
     )
     environment = MockBoxEnvironment(
         tmp_path, rules if rules is not None else _setup_rules(), conversation=conversation
@@ -206,6 +288,12 @@ def test_driver_completes_a_multi_turn_conversation(tmp_path: Path) -> None:
     assert state["test_state"] == "finished"
     assert state["waits_done"] == 2
     assert state["num_turns"] == 2
+    # Both pinned inputs travel with the trial record.
+    assert state["mngr_sha"] == "b" * 40
+    assert state["dwt_sha"] == "c" * 40
+
+    # The workspace template clone is driven from the case's pinned sha.
+    assert any("checkout -B main {}".format("c" * 40) in command for command in environment.exec_commands)
 
     # The per-trial box env carried the Modal token pair, the salted user id, and the key manifest.
     backend_env = next(env for env in environment.exec_envs if env and "MINDS_BOX_MNGR_REF" in env)
@@ -220,12 +308,141 @@ def test_driver_completes_a_multi_turn_conversation(tmp_path: Path) -> None:
     assert context.metadata is not None
     assert context.metadata["test_state"] == "finished"
     assert context.metadata["turns_completed"] == 2
+    assert context.metadata["dwt_sha"] == "c" * 40
     assert context.metadata["average_words_per_turn"] > 0
     assert context.metadata["average_words_per_message"] > 0
 
     # The ATIF trajectory renders the clean conversation for harbor view.
     trajectory = json.loads((driver.logs_dir / "trajectory.json").read_text())
     assert [step["source"] for step in trajectory["steps"]] == ["user", "agent", "user", "agent"]
+
+
+def test_driver_signs_the_workspace_in_before_the_first_turn(tmp_path: Path) -> None:
+    conversation = ConversationModel(
+        chat_agent_id="chat-1",
+        chat_agent_name="eval-todo-app",
+        pre_events=[],
+        turn_reply_events=[_reply_events("Building it now.")],
+    )
+    _driver, environment, _context = _run_driver(
+        tmp_path,
+        ("Build it",),
+        conversation,
+        trial_name="todo-app__auth1",
+        timeout_seconds=1800.0,
+    )
+
+    # Signed in through the product's own endpoint, carrying the key as a credential paste.
+    assert len(conversation.submitted_credential_commands) == 1
+    assert "ANTHROPIC_API_KEY=sk-eval-test" in conversation.submitted_credential_commands[0]
+    # ...and never through the create-time host env, which is the regime production does not use.
+    backend_env = next(env for env in environment.exec_envs if env and "MINDS_BOX_MNGR_REF" in env)
+    assert "ANTHROPIC_API_KEY" not in backend_env
+    assert "MINDS_EXTRA_PASS_HOST_ENV" not in backend_env
+    assert "MNGR__AGENT_TYPES__CLAUDE__ISOLATE_LOCAL_CONFIG_DIR" not in backend_env
+
+
+def test_driver_marks_timed_out_when_the_workspace_cannot_be_signed_in(tmp_path: Path) -> None:
+    conversation = ConversationModel(
+        chat_agent_id="chat-1",
+        chat_agent_name="eval-todo-app",
+        pre_events=[],
+        turn_reply_events=[_reply_events("Building it now.")],
+    )
+    conversation.is_auth_endpoint_up = False
+    _driver, environment, context = _run_driver(
+        tmp_path,
+        ("Build it",),
+        conversation,
+        trial_name="todo-app__auth2",
+        timeout_seconds=0.3,
+    )
+
+    # An unauthenticated workspace can never take a turn, so the trial fails at the gate rather
+    # than burning its budget and being graded on refusal text.
+    assert conversation.submitted_credential_commands == []
+    state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
+    assert state["test_state"] == "timed_out"
+    assert context.metadata is not None
+    assert context.metadata["turns_completed"] == 0
+
+
+def test_driver_reports_the_workspace_agents_usage_and_keeps_the_decider_separate(tmp_path: Path) -> None:
+    conversation = ConversationModel(
+        chat_agent_id="chat-1",
+        chat_agent_name="eval-todo-app",
+        pre_events=[],
+        turn_reply_events=[
+            _reply_events(
+                "Building it now.",
+                usage={
+                    "input_tokens": 10,
+                    "output_tokens": 100,
+                    "cache_read_tokens": 5_000,
+                    "cache_write_tokens": 2_000,
+                },
+            ),
+            _reply_events(
+                "All done.",
+                usage={
+                    "input_tokens": 5,
+                    "output_tokens": 50,
+                    "cache_read_tokens": 6_000,
+                    "cache_write_tokens": 0,
+                },
+            ),
+        ],
+    )
+    driver, _environment, context = _run_driver(
+        tmp_path,
+        ("Build it", "Sounds good."),
+        conversation,
+        trial_name="todo-app__usage1",
+        timeout_seconds=1800.0,
+    )
+
+    # Harbor's fields carry the workspace agent, cache-inclusive on input.
+    assert context.n_input_tokens == 15 + 11_000 + 2_000
+    assert context.n_cache_tokens == 11_000
+    assert context.n_output_tokens == 150
+    assert context.cost_usd is not None and context.cost_usd > 0
+
+    # Both turns are literal, so the decider never ran -- and its (empty) accounting is metadata,
+    # never folded into the agent's own numbers.
+    assert context.metadata is not None
+    assert context.metadata["decider_usage"]["call_count"] == 0
+    workspace_usage = context.metadata["workspace_usage"]
+    assert workspace_usage["tokens"] == {"input": 15, "output": 150, "cache_read": 11_000, "cache_write": 2_000}
+    assert workspace_usage["per_model"][0]["model"] == "claude-opus-4-8"
+
+    # The breakdown is also its own artifact, and the trajectory carries the same totals.
+    usage_artifact = json.loads((driver.logs_dir / "usage.json").read_text())
+    assert usage_artifact["workspace_agent"]["cost_usd"] == context.cost_usd
+    trajectory = json.loads((driver.logs_dir / "trajectory.json").read_text())
+    assert trajectory["final_metrics"]["total_cached_tokens"] == 11_000
+    assert trajectory["final_metrics"]["total_cost_usd"] == context.cost_usd
+
+
+def test_driver_leaves_usage_unset_when_the_transcript_carries_none(tmp_path: Path) -> None:
+    conversation = ConversationModel(
+        chat_agent_id="chat-1",
+        chat_agent_name="eval-todo-app",
+        pre_events=[],
+        turn_reply_events=[_reply_events("Building it now.")],
+    )
+    _driver, _environment, context = _run_driver(
+        tmp_path,
+        ("Build it",),
+        conversation,
+        trial_name="todo-app__nousage1",
+        timeout_seconds=1800.0,
+    )
+
+    # An unknown cost must stay unknown rather than being reported as zero.
+    assert context.n_input_tokens is None
+    assert context.cost_usd is None
+    assert context.metadata is not None
+    assert context.metadata["workspace_usage"]["cost_usd"] is None
 
 
 def test_driver_marks_timed_out_when_no_reply_arrives(tmp_path: Path) -> None:
@@ -251,3 +468,85 @@ def test_driver_marks_timed_out_when_no_reply_arrives(tmp_path: Path) -> None:
     assert context.metadata["timed_out"] is True
     # Cleanup still ran.
     assert any("mngr destroy - --force" in command for command in environment.exec_commands)
+
+
+def test_driver_fails_when_the_workspace_reports_the_wrong_auth_mode(tmp_path: Path) -> None:
+    # The sign-in endpoint runs no credential probe, so it accepts a bad key and reports the mode it
+    # ended up in. Without checking that, the trial would run on an unauthenticated workspace and
+    # the judge would grade the agent's "not logged in" replies as if they were its own behaviour.
+    conversation = ConversationModel(
+        chat_agent_id="chat-1",
+        chat_agent_name="eval-todo-app",
+        pre_events=[],
+        turn_reply_events=[_reply_events("Building it now.")],
+    )
+    conversation.expected_auth_mode = "none"
+    _driver, environment, context = _run_driver(
+        tmp_path,
+        ("Build it",),
+        conversation,
+        trial_name="todo-app__auth3",
+        timeout_seconds=1800.0,
+    )
+
+    state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
+    assert state["test_state"] == "timed_out"
+    assert context.metadata is not None
+    assert context.metadata["turns_completed"] == 0
+
+
+def test_parse_agent_flag_accepts_every_form_harbor_can_deliver() -> None:
+    # Harbor JSON-parses agent kwargs, so `--ak flag=true` arrives as a bool and `--ak flag=yes`
+    # as a string. Both must work, or the trial dies in __init__ before writing any log.
+    assert parse_agent_flag(True) is True
+    assert parse_agent_flag(False) is False
+    assert parse_agent_flag("true") is True
+    assert parse_agent_flag("yes") is True
+    assert parse_agent_flag("1") is True
+    assert parse_agent_flag("") is False
+    assert parse_agent_flag("false") is False
+
+
+def test_driver_captures_work_the_agent_does_after_it_reports_waiting(tmp_path: Path) -> None:
+    # The agent can keep spending after it says WAITING (the workspace's turn-end flow runs then).
+    # Those messages exist only in the workspace, so a driver that stops reading at the reply loses
+    # them permanently once the workspace is destroyed -- and the trial then reports a cost with no
+    # messages behind part of it.
+    conversation = ConversationModel(
+        chat_agent_id="chat-1",
+        chat_agent_name="eval-todo-app",
+        pre_events=[],
+        turn_reply_events=[
+            _reply_events(
+                "All done.",
+                usage={"input_tokens": 10, "output_tokens": 100, "cache_read_tokens": 0, "cache_write_tokens": 0},
+            )
+        ],
+        trailing_events=[
+            {
+                "type": "assistant_message",
+                "text": "tidying up",
+                "model": "claude-opus-4-8",
+                "usage": {
+                    "input_tokens": 7,
+                    "output_tokens": 70,
+                    "cache_read_tokens": 0,
+                    "cache_write_tokens": 0,
+                },
+            }
+        ],
+    )
+
+    driver, environment, context = _run_driver(
+        tmp_path,
+        ("Build it",),
+        conversation,
+        trial_name="todo-app__trailing",
+        timeout_seconds=1800.0,
+    )
+
+    transcript = environment.uploaded_content_by_target["/logs/agent/full_transcript.jsonl"]
+    assert "tidying up" in transcript
+    # And its tokens are accounted for, rather than being spend with no record.
+    assert context.n_input_tokens == 17
+    assert context.n_output_tokens == 170

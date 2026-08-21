@@ -5,7 +5,13 @@ description = "LiteLLM proxy deployed as a Modal serverless function for cost-tr
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "litellm[proxy]>=1.83",
+    # Plain litellm (no [proxy] extra), ==-pinned to the image group's version
+    # so the venv the tests run in agrees with the image by construction (the
+    # drift test asserts it). The [proxy] extra stays image-group-only: its
+    # gunicorn<24 cap must not constrain the workspace outside the litellm
+    # image fork (the bugsink image fork needs gunicorn 26 -- see the
+    # `conflicts` declaration in the root pyproject).
+    "litellm==1.93.0",
     "modal>=1.4.3",
     "modal-app-kit",
     "prisma>=0.15",
@@ -29,6 +35,7 @@ image = [
     "litellm[proxy]==1.93.0",
     "prisma==0.15.0",
     "pyyaml==6.0.3",
+    "sentry-sdk==2.66.0",
     "tenacity==9.1.4",
 ]
 

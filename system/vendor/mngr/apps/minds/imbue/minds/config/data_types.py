@@ -63,13 +63,12 @@ class ClientEnvConfig(FrozenModel):
     The non-secret half of an env's on-disk state. Used in two places:
 
     * Staging / production: ``apps/minds/imbue/minds/config/envs/<tier>/client.toml``
-      is committed to the repo. The deploy writer is forbidden from ever
-      adding fields beyond the URLs declared here -- a separate
-      :class:`PublicClientEnvConfig` type and a runtime guard in
-      ``envs/local_store.py`` make sure no secret can sneak into a
-      committed file.
+      is committed to the repo, so it must never carry a secret. What keeps
+      it that way is ``write_client_config`` in ``envs/local_store.py``:
+      it names every key it emits, one at a time, rather than serializing
+      whatever this model happens to hold.
     * Dev envs: ``~/.minds-<env-name>/client.toml`` (chmod 0644) is
-      written by ``minds env deploy <name>``; secrets land in a separate
+      written by ``minds-admin env deploy <name>``; secrets land in a separate
       chmod-0600 ``secrets.toml`` next to it (see :class:`DevEnvSecretsModel`
       in ``envs/local_store.py``).
 
@@ -98,6 +97,16 @@ class ClientEnvConfig(FrozenModel):
         description=(
             "Minisign public key (single-line 'RW...' form) the pre-baked image's signed root manifest "
             "is verified against. Required alongside `lima_image_base_url`."
+        ),
+    )
+    update_feed_base_url: AnyUrl | None = Field(
+        default=None,
+        description=(
+            "Root URL serving the release-channel manifests for this env, every channel "
+            "including stable. A build carrying no value here falls back to ToDesktop's own "
+            "feed and offers stable only; production always sets one, so that fallback is a "
+            "guard rather than a path anything takes. Set together with the promotion job "
+            "that writes those manifests; see specs/minds-release-channels/spec.md."
         ),
     )
     accounts_base_url: AnyUrl | None = Field(
@@ -229,7 +238,7 @@ class DeployLifecycleConfig(FrozenModel):
 class MinContainersConfig(FrozenModel):
     """Warm-pool sizes for each Modal app the tier deploy ships.
 
-    Read by ``minds env deploy`` and threaded into each ``modal deploy``
+    Read by ``minds-admin env deploy`` and threaded into each ``modal deploy``
     invocation as the matching ``MINDS_<APP>_MIN_CONTAINERS`` env var.
     The Modal app reads its value at module load (which is the moment
     ``modal deploy`` serializes the function spec) so the deployed
@@ -255,7 +264,7 @@ class MinContainersConfig(FrozenModel):
 class ScaledownWindowConfig(FrozenModel):
     """Idle-before-scaledown windows (seconds) for each Modal app the tier ships.
 
-    Read by ``minds env deploy`` and threaded into each ``modal deploy``
+    Read by ``minds-admin env deploy`` and threaded into each ``modal deploy``
     invocation as the matching ``MINDS_<APP>_SCALEDOWN_WINDOW`` env var,
     which the Modal app reads at module load and passes to its function's
     ``scaledown_window``. This keeps a container alive for the configured
@@ -283,7 +292,7 @@ class ScaledownWindowConfig(FrozenModel):
 class PaidDefaultsConfig(FrozenModel):
     """Default paid-access entries seeded into the connector's paid tables on deploy.
 
-    After the pool-hosts schema migrations run, ``minds env deploy`` seeds
+    After the pool-hosts schema migrations run, ``minds-admin env deploy`` seeds
     these into ``paid_domains`` / ``paid_emails`` (as ``is_paid = true``)
     using ``INSERT ... ON CONFLICT DO NOTHING`` -- i.e. **seed-if-absent**:
     it sets the tier's initial default but never re-activates an entry an
@@ -336,7 +345,7 @@ class PlanQuotasConfig(FrozenModel):
 class WebWorkspacesConfig(FrozenModel):
     """The ``[web_workspaces]`` block of a ``deploy.toml`` -- the tier's pinned web-create template.
 
-    Read by ``minds env deploy`` and pushed into the connector's per-deploy
+    Read by ``minds-admin env deploy`` and pushed into the connector's per-deploy
     Modal Secret as ``MINDS_WEB_TEMPLATE_*`` / ``MINDS_WEB_SHAPE_*`` env vars.
     The connector's ``POST /hosts/claim`` (browser-driven workspace creation)
     leases only pool hosts whose baked attributes match this pin exactly.
@@ -429,7 +438,7 @@ class OriginsConfig(FrozenModel):
 
 
 class DeployEnvConfig(FrozenModel):
-    """Per-tier deploy-time config read by deploy scripts and `minds env create`.
+    """Per-tier deploy-time config read by deploy scripts and `minds-admin env create`.
 
     Names the Modal workspace + tier-specific Vault path prefix and the
     list of services whose ``.minds/template/<service>.sh`` schemas must

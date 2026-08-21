@@ -21,7 +21,7 @@ replication), so the region's wildcard DNS record set carries every relay IP:
 a visitor whose resolver picked a dead relay falls back to the next A record
 at TCP-connect failure. The fleet is data, not config: each relay is
 registered in the connector's `relays` table (`share-relay register` /
-`mngr imbue_cloud admin relays ...`), which drives share creation, the
+`minds-admin relays ...`), which drives share creation, the
 workspace assignment endpoint (`GET /shares/assignment`), frps auth (each
 relay's plugin path ends in its `relay_id`), and the connector's per-minute
 health sweep that keeps the DNS record sets in step with `/healthz`.
