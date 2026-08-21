@@ -476,6 +476,43 @@ def test_send_button_appears_on_input(e2e_server: tuple[str, list[AgentInfo], Pa
     expect(send_button).to_be_visible()
 
 
+@pytest.mark.timeout(60, func_only=False)
+def test_composer_bar_survives_a_shorter_window(e2e_server: tuple[str, list[AgentInfo], Path], page: Page) -> None:
+    """A window that gets shorter keeps the whole composer on screen.
+
+    The minds shell does this without the user touching the window: its recovery
+    band takes ~50px off the top of the frame this app runs in. Everything below
+    the dock is positioned in pixels -- the panes, and the live surfaces
+    mirroring them -- so a row that grows with the viewport but cannot shrink
+    back leaves the chat laid out at the old height, with the model bar under
+    the composer hanging below the bottom edge where nothing can bring it back.
+    Asserted against the viewport rather than against a pixel height: what
+    matters is that the bar is inside the window, whatever the window is.
+    """
+    base_url, _, _ = e2e_server
+    page.set_viewport_size({"width": 1200, "height": 900})
+    # Waited on so the view is fully mounted before the window changes size, and
+    # so the module's tmux mark is honored (mounting is what shells out to it).
+    with page.expect_response(lambda response: response.url.endswith("/api/terminals"), timeout=15000):
+        page.goto(base_url)
+
+    under_bar = page.locator(".composer-under-bar")
+    expect(under_bar).to_be_visible(timeout=15000)
+
+    page.set_viewport_size({"width": 1200, "height": 848})
+    expect(under_bar).to_be_visible()
+    # The dock relays out on a resize observation and the surfaces follow on the
+    # next frame, so the settled geometry is what is asserted -- polled rather
+    # than slept on. The wrong layout is stable, not slow: it never settles.
+    wait_for(
+        lambda: page.eval_on_selector(
+            ".composer-under-bar", "e => e.getBoundingClientRect().bottom <= window.innerHeight"
+        ),
+        timeout=10.0,
+        error_message="the composer's model bar stayed below the bottom of the shortened window",
+    )
+
+
 _TOOL_CALL_SESSION_EVENTS: list[dict[str, Any]] = [
     {
         "type": "user",
