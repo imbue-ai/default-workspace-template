@@ -118,11 +118,16 @@ export interface ObjectMenuActions {
  * Rename is offered for the kinds whose name is theirs to choose, which is
  * what ``isRenameableKind`` decides and why.
  * Share is an app-only affordance: the share surface is per registered
- * service, and the other three kinds have none. Hide tab, Remove from project
- * and the destructive verb are each omitted per-OBJECT rather than per-kind,
- * through ``actions``, because whether they apply depends on this particular
- * object's state (open or backgrounded, allocated or not, in a project or in
- * Everything) rather than on its kind alone.
+ * service, and the other three kinds have none.
+ * Hide tab and Remove from project are each one SURFACE's job, which the two
+ * callers say by supplying only their own. Hiding is what you want while
+ * looking at the tab, and unfiling is what you want while looking at the
+ * project's list of what it shows -- so the dock tab passes no
+ * ``removeFromProject`` and the rail passes no ``hideTab``, and neither menu
+ * offers a verb the other one owns.
+ * The destructive verb is likewise omitted per-OBJECT rather than per-kind,
+ * through ``actions``: whether it applies depends on this object's state
+ * (allocated or not, the primary agent or not) rather than on its kind.
  */
 export function objectMenuEntries(kind: ObjectMenuKind, actions: ObjectMenuActions): ObjectMenuEntry[] {
   const opening: ObjectMenuEntry[] = [{ label: "Refresh", iconName: "refresh", run: actions.refresh }];
@@ -134,13 +139,12 @@ export function objectMenuEntries(kind: ObjectMenuKind, actions: ObjectMenuActio
     closing.push({ label: "Rename", iconName: "edit", run: actions.rename });
   }
   if (actions.hideTab !== null) {
-    closing.push({ label: "Hide tab", iconName: "minus", run: actions.hideTab });
+    closing.push({ label: "Hide tab", iconName: "close", run: actions.hideTab });
   }
-  // Sits between the two it is easily confused with, which is the clearest
-  // place for it: above, "Hide tab" drops the panel and leaves the object filed
-  // here; below, the destroy takes it off the machine entirely. This one is in
-  // between -- the object keeps running and stays in Everything and in any
-  // other project showing it, it just stops showing in this view.
+  // Sits above the destroy, which is the one it is easily confused with: this
+  // takes the object out of one view and leaves it running, filed in Everything
+  // and in any other project showing it, while the destroy takes it off the
+  // machine entirely.
   if (actions.removeFromProject !== null) {
     closing.push({ label: "Remove from project", iconName: "minus-circle", run: actions.removeFromProject });
   }

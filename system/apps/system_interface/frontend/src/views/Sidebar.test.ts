@@ -592,8 +592,11 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
     // for an OPEN row (hideTab non-null). No Share (chat-only exclusion) and
     // no "Remove from project" / "Delete from this machine": those verbs moved
     // to the project settings modal and the shared Quit verb respectively.
-    expect(menuItemLabels(menu)).toEqual(["Refresh", "Rename", "Hide tab", "Remove from project", "Quit Chat 1"]);
+    expect(menuItemLabels(menu)).toEqual(["Refresh", "Rename", "Remove from project", "Quit Chat 1"]);
     expect(menu?.textContent).not.toContain("Delete from this machine");
+    // Hiding a tab is the tab's own job; from here the row is a thing the
+    // project shows, so the verb that belongs to it is taking it out.
+    expect(menu?.textContent).not.toContain("Hide tab");
   });
 
   it("withholds Quit from the primary agent's own chat, as the tab menu does", () => {
@@ -614,7 +617,6 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
       expect(menuItemLabels(openRowMenuByContextClick(root, redraw, "Chat 1"))).toEqual([
         "Refresh",
         "Rename",
-        "Hide tab",
         "Remove from project",
       ]);
     } finally {

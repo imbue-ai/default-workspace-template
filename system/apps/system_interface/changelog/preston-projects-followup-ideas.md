@@ -47,3 +47,9 @@ One gap is known and deliberate: in the desktop app the rail does not fold when 
 Which starting points a project keeps to hand belongs to that project, so it is stored per project rather than per user, and recorded as the rows taken out rather than the rows kept: a project that has never touched this shows all four, which is every project until it says otherwise. Everything has no project entry to record against and always shows the full set.
 
 Unlike an app, none of these four is an object with a member ref — a chat is a create, and the terminal and browser services are fleets reached by making a session rather than by opening the service — so this rides its own field rather than the member list.
+
+**Hide and unfile each live where they belong.** The tab's menu keeps "Hide tab" and no longer offers "Remove from project"; the rail's row menu is the other way round. Putting a tab away is what you want while looking at the tab, and taking an object out of a project is what you want while looking at the project's list of what it shows.
+
+**The tab's hide control is an X**, and sits outboard of the three dots rather than inboard, which is where a close lives in every other tabbed thing.
+
+**The "+" goes while a New Tab tab is open.** A pane holds at most one, so with one on screen the button could only focus the tab already in front of you.
