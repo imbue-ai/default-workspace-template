@@ -3,7 +3,7 @@
 
 Takes the command as its positional argument, optionally preceded by
 ``--backgrounded`` when the tool call runs the command in the background (both
-passed by claude_latchkey_request_standalone.sh, which reads them out of the
+passed by agent_latchkey_request_standalone.sh, which reads them out of the
 hook payload). Exits 0 to allow; exits 2 with a guiding stderr message to BLOCK.
 See the wrapper for the why.
 

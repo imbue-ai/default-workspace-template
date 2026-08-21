@@ -30,10 +30,10 @@ interpreted the way a shell would.
 
 ## Consumers
 
-- `system/scripts/claude_tk_standalone_check.py` -- the PreToolUse gate that blocks a
+- `system/scripts/agent_tk_standalone_check.py` -- the PreToolUse gate that blocks a
   non-standalone `tk start`/`tk close`. It uses `parse_command` to split the
   Bash command into segments and inspect the verbs.
-- `system/scripts/claude_latchkey_request_check.py` -- the PreToolUse gate that blocks a
+- `system/scripts/agent_latchkey_request_check.py` -- the PreToolUse gate that blocks a
   latchkey permission request that is batched, chained, or redirected. It reads
   each segment's words to find the ones that POST to the permission-requests
   host, and its `terminator` to allow a trailing `;` while still blocking a

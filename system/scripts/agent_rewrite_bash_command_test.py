@@ -14,8 +14,8 @@ from pathlib import Path
 
 import pytest
 
-_SCRIPT = Path(__file__).parent / "claude_rewrite_bash_command.py"
-_spec = importlib.util.spec_from_file_location("claude_rewrite_bash_command", _SCRIPT)
+_SCRIPT = Path(__file__).parent / "agent_rewrite_bash_command.py"
+_spec = importlib.util.spec_from_file_location("agent_rewrite_bash_command", _SCRIPT)
 assert _spec is not None and _spec.loader is not None
 hook = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(hook)

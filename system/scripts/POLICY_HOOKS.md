@@ -108,17 +108,17 @@ source — all in agreement):
 
 ## Category A — shell-command safety policies (live in all three)
 
-### 1. Block pipe into `tail`/`head` — `claude_block_pipe_tail_head.sh`
+### 1. Block pipe into `tail`/`head` — `agent_block_pipe_tail_head.sh`
 Redirect to a file and read that instead.
 - **claude / codex**: the script — matches `\|\s*(tail|head)`, writes the reason to stderr, `exit 2`.
 - **pi**: same regex in `commandBlockReason()`; returns `{block, reason}`.
 
-### 2. Block git history rewrites — `claude_prevent_commit_rewrite.sh`
+### 2. Block git history rewrites — `agent_prevent_commit_rewrite.sh`
 Blocks `git rebase`, `git commit --amend|--fixup`, `git pull --rebase`.
 - **claude / codex**: the script (stderr + `exit 2`).
 - **pi**: the same set of regexes in `commandBlockReason()`.
 
-### 3. Block a batched/chained/redirected permission request — `claude_latchkey_request_standalone.sh`
+### 3. Block a batched/chained/redirected permission request — `agent_latchkey_request_standalone.sh`
 A **hard** block when a POST to the reserved `latchkey-self.invalid/permission-requests` host
 (the call that FILES a permission request) shares its tool call with a second request, with
 another command, has its output redirected, or runs in the background. The chat builds the card the user acts on out of
@@ -126,7 +126,7 @@ that one call: only the first echoed request object in the result is read, and o
 rendered per call — so a second request is never shown, and `> /tmp/req.json` / `| jq
 .request_id` takes the echoed object away, leaving the card with no button. Every other latchkey
 call, including reading the queue, is untouched. The tokenizing lives in
-`claude_latchkey_request_check.py` (`shlex` again, so a rationale that mentions `&&` or `>` stays
+`agent_latchkey_request_check.py` (`shlex` again, so a rationale that mentions `&&` or `>` stays
 inside its quoted token).
 
 The redirect half is blunt on purpose: `CommandSegment.has_redirect` records only *that* a
@@ -143,12 +143,12 @@ which the command-text checks already block. The `.sh` therefore also reads
 which blocks when a request is filed that way. A harness whose payload has no such field never
 sets it.
 - **claude / codex**: the `.sh`, which execs the `.py`; stderr + `exit 2` blocks.
-- **pi**: `on("tool_call")` runs the **same** `claude_latchkey_request_check.py` synchronously
+- **pi**: `on("tool_call")` runs the **same** `agent_latchkey_request_check.py` synchronously
   (only when the command mentions the host) and maps its exit-2/stderr to `{block, reason}` —
   the same bridge shape as the tk-standalone checker below. It passes the command alone: the
   `--backgrounded` flag has no counterpart in pi's `tool_call` input.
 
-### 4. Rewrite every Bash command — `claude_rewrite_bash_command.py`
+### 4. Rewrite every Bash command — `agent_rewrite_bash_command.py`
 Prepends an OOM self-tag (so the agent's subprocesses are shed first under memory pressure)
 and the agent's git identity (`GIT_AUTHOR_*`/`GIT_COMMITTER_*`), then runs the original
 command verbatim.
@@ -172,7 +172,7 @@ codex-specific output-channel quirks were found and handled while wiring these (
 below): the carryover reminder needs a `--codex` flag, and the stop nudge must never exit
 non-zero.
 
-### 5. Require a step before substantive work — `claude_require_steps_pretool.sh`
+### 5. Require a step before substantive work — `agent_require_steps_pretool.sh`
 A **soft** reminder (never blocks) when a substantive tool call happens with no in-progress
 step. Skipped for read-only tools (`Read`/`Glob`/`Grep`/…) and for Bash commands that invoke
 `tk` itself.
@@ -184,20 +184,20 @@ step. Skipped for read-only tools (`Read`/`Glob`/`Grep`/…) and for Bash comman
   result cannot inject non-blocking context, so the reminder rides the tool result instead —
   same visible effect, one tool-round later).
 
-### 6. Block a non-standalone `tk start`/`close` — `claude_tk_standalone.sh`
+### 6. Block a non-standalone `tk start`/`close` — `agent_tk_standalone.sh`
 A **hard** block when a `tk start`/`close` is chained (`cd …;`, `&&`, `|`, …) or redirected,
 which would drop the step's transition out of the progress view. `create` is exempt. The
-tokenizing lives in `claude_tk_standalone_check.py` (uses `shlex`, which a bash regex can't do
+tokenizing lives in `agent_tk_standalone_check.py` (uses `shlex`, which a bash regex can't do
 reliably).
 - **claude / codex**: the `.sh`, which execs the `.py`; stderr + `exit 2` blocks. Codex honors
   the exit-2 block identically.
-- **pi**: `on("tool_call")` runs the **same** `claude_tk_standalone_check.py` synchronously
+- **pi**: `on("tool_call")` runs the **same** `agent_tk_standalone_check.py` synchronously
   (`spawnSync("python3", [checker, command])`, only when the command mentions `tk`/`ticket`) and
   maps its exit-2/stderr to `{block, reason}` — reusing the checker keeps the shlex tokenizer
   single-sourced. Step state for the other guards comes from `spawnSync("bash", [ticket, ...])`
   (via `bash` so it runs regardless of the mount's exec bit).
 
-### 7. Carry over open steps into the next turn — `claude_open_tickets_reminder.sh`
+### 7. Carry over open steps into the next turn — `agent_open_tickets_reminder.sh`
 When a new user message arrives and this agent has still-open step records, inject a reminder
 listing them so the agent reconciles before acting.
 - **claude**: UserPromptSubmit, prints the reminder to stdout (added to context).
@@ -214,7 +214,7 @@ listing them so the agent reconciles before acting.
   channel to the agent, so both the carryover and the leftover-open reminder are delivered here,
   at the start of the next turn.
 
-### 8. Nudge on stop with open steps — `claude_open_tickets_stop_nudge.sh`
+### 8. Nudge on stop with open steps — `agent_open_tickets_stop_nudge.sh`
 A non-blocking, log-only note (exit 0 always) when the agent stops with steps still open.
 Real follow-up is handled by hook 7 on the next turn.
 - **claude**: Stop, writes to stderr, `exit 0`.
@@ -264,10 +264,10 @@ Stop hooks resolve paths correctly. This does not port:
 When a rule changes, update every harness that carries it:
 - **Safety 1–2** and **workflow 5–7**: the `claude_*` scripts (shared by claude **and** codex)
   and the matching handler in `mngr_pi_lifecycle.ts` (pi).
-- **Safety 3** (`claude_latchkey_request_check.py`) and **workflow 6**
-  (`claude_tk_standalone_check.py`): one checker file each, reached by claude and codex through
+- **Safety 3** (`agent_latchkey_request_check.py`) and **workflow 6**
+  (`agent_tk_standalone_check.py`): one checker file each, reached by claude and codex through
   their `.sh` wrappers and called directly by pi — so the tokenizing rule is single-sourced.
-- **Safety 4** (`claude_rewrite_bash_command.py`): shared by claude and codex; pi mirrors its
+- **Safety 4** (`agent_rewrite_bash_command.py`): shared by claude and codex; pi mirrors its
   prefix logic in `rewriteBashCommand()`.
 - codex and pi wiring lives in **this repo's** `.mngr/settings.toml`
   (`[agent_types.codex.policy_hooks]`, `[[agent_types.pi-coding.policy_checkers]]`); a guard
