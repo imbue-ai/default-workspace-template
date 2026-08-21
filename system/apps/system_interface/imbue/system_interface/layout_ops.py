@@ -49,6 +49,13 @@ _TERMINAL_SERVICE_NAME = "terminal"
 # a ``host-<32hex>`` label appears somewhere PAST the first label.
 _WORKSPACE_HOST_LABEL_PATTERN = re.compile(r"^host-[0-9a-f]{32}$")
 
+# A service's origin label as ``forward_port.py`` mints it: one DNS label. Read
+# back rather than assumed, because the registry is a file on disk that other
+# things write; a row that could not be a hostname could not name an origin
+# either, so ``terminal_origin_label`` reports no terminal instead of handing a
+# caller a value it would have to defend against.
+_ORIGIN_LABEL_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$", re.IGNORECASE)
+
 # The app registry the frontend/forwarder key off. Defaults to
 # ``data/.state/apps.toml`` relative to cwd; overridable via ``MINDS_APPS_FILE``
 # (tests point it at a sandboxed fixture). Mirrors ``forward_port.py`` /
@@ -60,6 +67,7 @@ _ENV_APPS_FILE = "MINDS_APPS_FILE"
 def _apps_file() -> Path:
     """Path to the app registry (``data/.state/apps.toml`` by default)."""
     return Path(os.environ.get(_ENV_APPS_FILE, _DEFAULT_APPS_FILE))
+
 
 # Query parameter that distinguishes individual browsers in the per-workspace
 # browser fleet. The viewer is served at the browser service's origin with a
@@ -327,6 +335,28 @@ def _read_label_to_service_name(path: Path) -> dict[str, str]:
         if isinstance(name, str) and name and isinstance(label, str) and label:
             mapping[label] = name
     return mapping
+
+
+def terminal_origin_label() -> str | None:
+    """The terminal service's unguessable origin label, or ``None``.
+
+    The label is minted per workspace (``forward_port.py``), so nothing that
+    needs to address the terminal can hardcode it; this is the read side of
+    that registry for callers outside the layout itself -- notably the
+    "interface not built" placeholder, which offers a terminal as the way out
+    of a state where the app that would normally open one is missing.
+
+    ``None`` means "no terminal to offer", which every caller must treat as an
+    ordinary outcome rather than an error: the terminal may not be registered
+    yet (ttyd starts alongside the other services, not before them), the
+    registry may be missing or unreadable, or the recorded label may not be a
+    usable hostname label. The label only ever adds an affordance, so failing
+    to find one must not cost the caller anything else.
+    """
+    for label, name in _read_label_to_service_name(_apps_file()).items():
+        if name == _TERMINAL_SERVICE_NAME and _ORIGIN_LABEL_PATTERN.match(label):
+            return label
+    return None
 
 
 def _service_name_from_url(url: Any) -> str | None:
