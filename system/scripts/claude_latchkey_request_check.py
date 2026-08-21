@@ -32,17 +32,12 @@ sys.path.insert(
 from tk_command_parsing.parser import CommandSegment, parse_command
 
 # The reserved latchkey host an agent POSTs to when asking the user to approve an
-# action, and the POST method flag that distinguishes filing a request from
-# reading the queue. The host is the transcript parser's constant verbatim
-# (`PERMISSION_REQUEST_HOST` in
-# system/apps/system_interface/imbue/system_interface/harnesses/tool_output.py --
-# the reader this gate exists for; the wrapper names the rest of that seam). The
-# method match is
-# deliberately a SUPERSET of that parser's (`-X\s*POST|--request\s*POST` over the
-# raw input): it is matched token-wise and also accepts the `=` form, so a
-# spelling like `--request=POST` -- which curl honors and the parser's regex
-# misses -- is still gated. Erring wide is the right direction here: a filing the
-# gate waves through is a request the user may never get to answer.
+# action, and the POST method flag that distinguishes filing a request from reading
+# the queue. The host is verbatim `PERMISSION_REQUEST_HOST` from
+# system/apps/system_interface/imbue/system_interface/harnesses/tool_output.py, the
+# reader this gate exists for (the wrapper names the rest of that seam). The method
+# match is a superset of that parser's `-X\s*POST|--request\s*POST`: token-wise, and
+# accepting the `=` form, so `--request=POST` -- which curl honors -- is gated too.
 _PERMISSION_REQUEST_HOST = "latchkey-self.invalid/permission-requests"
 # Lowercased, because the flag is matched case-insensitively -- as the parser's
 # regex and the joined form below both are.
@@ -50,16 +45,12 @@ _METHOD_FLAGS = ("-x", "--request")
 _POST_FLAG_RE = re.compile(r"(?:-X|--request)=?POST", re.IGNORECASE)
 
 # curl's own ways of writing the response body to a file instead of echoing it on
-# stdout. They take the gateway's echoed object out of the tool result exactly as
-# `> file` does, so the gate reads them as a redirect. Matched with `fullmatch`:
-#   * `-[A-Za-z]*[oO]` -- a single-dash cluster of letters ending in the flag, so
-#     the bundled forms count too (`-o`, `-O`, `-so /tmp/x`, `-fsSLo out.json`).
-#     Requiring the flag to be the LAST letter is what keeps `-XPOST` out; that
-#     is also why the bundled joined-value form (`-soout.json`) is left alone --
-#     no pattern separates it from `-XPOST` without modelling which short flags
-#     consume a value.
-#   * `-o.+` -- the joined-value form of the flag on its own (`-oout.json`).
-#   * the long forms, with or without a joined value.
+# stdout, which takes the gateway's object out of the tool result exactly as `> file`
+# does. Matched with `fullmatch`; `-[A-Za-z]*[oO]` accepts the bundled forms (`-so
+# /tmp/x`, `-fsSLo out.json`) by requiring the flag to be the cluster's LAST letter,
+# which is what keeps `-XPOST` out -- and why the bundled joined-value form
+# (`-soout.json`) is left alone, since no pattern separates it from `-XPOST` without
+# modelling which short flags consume a value.
 _OUTPUT_FLAG_RE = re.compile(r"-[A-Za-z]*[oO]|-o.+|--output(?:=.+)?|--remote-name")
 
 _MULTIPLE = "the call files more than one permission request"
