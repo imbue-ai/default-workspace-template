@@ -107,6 +107,25 @@ _VENDOR_EXCLUDES: Final[tuple[str, ...]] = (
 )
 
 
+@pure
+def build_eval_base_clone_command(dwt_repo: str, dwt_branch: str, dwt_sha: str, eval_base_dir: str) -> str:
+    """The in-box command that materializes the workspace template at the SHA the dataset pinned."""
+    # `git clone` can only be pointed at a ref name, so the pin is applied by a
+    # second step, and that step must land on a real local branch rather than a
+    # detached HEAD: the per-case clone of this directory -- and mngr's clone of
+    # that one -- takes its checkout from this HEAD, and the workspace is created
+    # with an empty branch field, meaning "whatever HEAD is". Naming the branch
+    # after the configured dwt branch keeps the workspace on the branch name it
+    # would have had without the pin. --no-checkout avoids populating the large
+    # template worktree twice.
+    return "rm -rf {base} && git clone --no-checkout {repo} {base} && git -C {base} checkout -B {branch} {sha}".format(
+        base=shlex.quote(eval_base_dir),
+        repo=shlex.quote(dwt_repo),
+        branch=shlex.quote(dwt_branch),
+        sha=shlex.quote(dwt_sha),
+    )
+
+
 class SnapshotMode(UpperCaseStrEnum):
     """When the driver snapshots the workspace home tree into the trial artifacts."""
 
@@ -726,21 +745,30 @@ class MindsPersonaDriver(BaseAgent):
         return True
 
     async def _prepare_workspace_clone(self, case: CaseConfig, environment: BaseEnvironment) -> None:
-        """Clone the workspace template in the box and overwrite its vendored mngr with the box's
-        /work/mngr (ported from the old harness's launch clone prep, minus the retired eval worker's
-        metadata file)."""
+        """Clone the workspace template at its pinned SHA in the box and overwrite its vendored mngr
+        with the box's /work/mngr (ported from the old harness's launch clone prep, minus the retired
+        eval worker's metadata file)."""
         assert self._box_env is not None
         exclude_flags = " ".join("--exclude='{}'".format(pattern) for pattern in _VENDOR_EXCLUDES)
-        # Config-derived values (case id, dwt repo/branch) are shell-quoted:
-        # they come from an author-controlled eval config, but a quote or space
-        # in one must not break out of the command.
+        # Config-derived values are shell-quoted wherever they are interpolated
+        # into a box command -- the case id here, the dwt repo/branch/sha in
+        # build_eval_base_clone_command. They come from an author-controlled eval
+        # config, but a quote or space in one must not break out of the command.
         clone_dir = shlex.quote("/work/clones/{}".format(case.case_id))
         commit_message = shlex.quote("eval case {}".format(case.case_id))
-        logger.info("Preparing the workspace template clone ({}@{})", case.dwt_repo, case.dwt_branch)
+        logger.info(
+            "Preparing the workspace template clone ({}@{}, pinned from {})",
+            case.dwt_repo,
+            case.dwt_sha[:12],
+            case.dwt_branch,
+        )
         await minds_bridge.check_run_in_box(
             environment,
-            "rm -rf /work/eval-base && git clone --branch {} {} /work/eval-base".format(
-                shlex.quote(case.dwt_branch), shlex.quote(case.dwt_repo)
+            build_eval_base_clone_command(
+                dwt_repo=case.dwt_repo,
+                dwt_branch=case.dwt_branch,
+                dwt_sha=case.dwt_sha,
+                eval_base_dir="/work/eval-base",
             ),
             self._box_env,
             600,
@@ -778,6 +806,8 @@ class MindsPersonaDriver(BaseAgent):
         return {
             "eval_name": self.logs_dir.parent.name,
             "case_name": self._case.case_id if self._case is not None else "",
+            "mngr_sha": self._mngr_sha,
+            "dwt_sha": self._case.dwt_sha if self._case is not None else "",
             "waits_done": self._waits_done,
             # "num_turns" is the ported state.json schema key (the old harness's
             # readers and the verifier gates both consume it).
@@ -882,6 +912,9 @@ class MindsPersonaDriver(BaseAgent):
             "decider_model": self._decider_model,
             "modal_user_id": self._user_id,
             "mngr_sha": self._mngr_sha,
+            # Both pinned inputs travel with the trial record, so a captured
+            # trial says which mngr and which workspace template produced it.
+            "dwt_sha": self._case.dwt_sha if self._case is not None else "",
             "workspace_usage": usage_accounting.workspace_usage_metadata(workspace_usage),
             # Both sources, so the two can be reconciled after the fact: they agree exactly when the
             # agent delegates nothing, and differ by the delegated spend when it does.

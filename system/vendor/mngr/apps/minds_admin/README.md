@@ -10,7 +10,7 @@ All commands are env-aware: with an activated env (`eval "$(uv run minds-admin e
 
 - `minds-admin env {activate, deactivate, list, deploy, destroy, recover}` -- minds environment lifecycle (dev / staging / production tiers).
 - `minds-admin pool {create, list, destroy, teardown-slices, backfill-host-keys}` -- bare-metal slice pool provisioning (bakes leasable pool hosts onto registered boxes).
-- `minds-admin server {pricing, order, await-delivery, setup, prep, list, register, set-status, backfill-autostart}` -- bare-metal box fleet management.
+- `minds-admin server {pricing, order, await-delivery, setup, prep, list, register, set-status}` -- bare-metal box fleet management.
 - `minds-admin paid {domain, email} {add, remove, list}` -- the connector's paid lists (ally-plan eligibility).
 - `minds-admin account {show, set-plan, set-quota}` -- per-account entitlements.
 - `minds-admin workspaces abandon` -- workspace-lifecycle escape hatches.

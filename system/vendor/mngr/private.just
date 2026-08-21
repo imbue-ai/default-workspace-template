@@ -363,7 +363,8 @@ default-workspace-template-worktree branch="" base="origin/main":
 # checkout at the exact commit you want to vendor first -- your release PR branch
 # HEAD / the verified release SHA, NOT blindly `main`, which can drift past it
 # between verification and merge. The recipe archives HEAD, replaces system/vendor/mngr/
-# with that snapshot, and commits in DEFAULT_WORKSPACE_TEMPLATE. Does not push. Aborts if DEFAULT_WORKSPACE_TEMPLATE is dirty.
+# with that snapshot, relocks DEFAULT_WORKSPACE_TEMPLATE's root uv.lock, and commits both there.
+# Does not push. Aborts if DEFAULT_WORKSPACE_TEMPLATE is dirty.
 # Full release flow: apps/minds/docs/deploy/release.md.
 [group("minds dev")]
 sync-vendor-mngr default_workspace_template="":
@@ -406,9 +407,12 @@ sync-vendor-mngr default_workspace_template="":
     rm -rf ./* ./.[!.]*
     tar -xf "$tarball"
     cd "$default_workspace_template"
-    git add -A system/vendor/mngr/
-    if git diff --cached --quiet -- system/vendor/mngr/; then
-        echo "system/vendor/mngr already in sync with mngr ${short}; nothing to commit"
+    # The template's root uv.lock pins the vendored mngr libs as editable path
+    # deps, so a refresh that moves their dependencies strands it.
+    uv lock
+    git add -A system/vendor/mngr/ uv.lock
+    if git diff --cached --quiet -- system/vendor/mngr/ uv.lock; then
+        echo "system/vendor/mngr and uv.lock already in sync with mngr ${short}; nothing to commit"
         exit 0
     fi
     git commit -m "Sync system/vendor/mngr to ${branch} (${short})" -m "Tracks ${full} in mngr."
@@ -1631,15 +1635,6 @@ setup-server server_id *extra_args:
 [group("minds ops")]
 prep-server server_id *extra_args:
     uv run minds-admin server prep --server-id "{{server_id}}" {{extra_args}}
-
-# Backfill the volume-gated minds-autostart units onto every existing slice VM
-# of the activated env's fleet (reboot-resilience rollout Step 2; see
-# apps/minds/docs/deploy/reboot-resilience-rollout.md). Idempotent and safe on running
-# workspaces. Pass --dry-run to list the per-VM plan first, or
-# --server-id <id> (repeatable) to scope to specific boxes.
-#   just backfill-autostart --dry-run
-backfill-autostart *extra_args:
-    uv run minds-admin server backfill-autostart {{extra_args}}
 
 # One-time host-key backfill for the activated minds env. Keyscans every
 # pre-existing pool host + bare-metal box whose recorded sshd host key columns

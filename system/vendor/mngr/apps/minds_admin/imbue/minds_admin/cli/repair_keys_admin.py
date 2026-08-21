@@ -3,8 +3,8 @@
 Fleet mode sweeps every slice VM on every box (see
 ``imbue.minds_admin.slices.key_repair``); ``--server-id`` / ``--vm-name``
 scope it down to one box or one VM (the break-glass mode). The pool SSH key
-and pool DSN resolve from the activated env, exactly like
-``minds-admin server backfill-autostart``.
+and pool DSN resolve from the activated env, exactly like the other
+``minds-admin server`` fleet commands.
 """
 
 import click

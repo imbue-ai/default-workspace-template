@@ -174,6 +174,14 @@ The old harness's schema, unchanged:
 
 - `mngr_branch` is resolved to an exact SHA at generation time and recorded in each task's
   `[metadata]`; the box is built from that SHA.
+- `dwt_branch` (on `dwt_repo`, the workspace template; defaults to `main` on
+  `imbue-ai/default-workspace-template`) is pinned the same way: generation resolves it to an exact
+  SHA, records it as `dwt_sha` in `[metadata]` next to the branch it came from, and the box clones
+  that SHA. So a dataset builds the same workspaces however long after generation it is run --
+  **picking up new template changes requires regenerating the dataset**, and datasets generated
+  before `dwt_sha` existed no longer run (regenerate them). Each trial's own record carries
+  `mngr_sha` and `dwt_sha` too (in `state.json` and the agent metadata), so a captured trial says
+  which mngr and which template produced it.
 - Each `prompts` entry is one turn: a literal string sent verbatim, or `DECIDE_FROM_PERSONA` (the
   decider role-plays the client from the persona plus the transcript so far; cannot be the first
   entry).

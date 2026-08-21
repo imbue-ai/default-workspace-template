@@ -10,8 +10,9 @@ class EvalConfigError(MindsEvalsError, ValueError):
     ...
 
 
-class MngrSourceError(MindsEvalsError, RuntimeError):
-    """Raised when the mngr source ref cannot be resolved or fetched."""
+class GitSourceError(MindsEvalsError, RuntimeError):
+    """Raised when a pinned git source ref (mngr or the workspace template) cannot be resolved or
+    fetched."""
 
     ...
 

@@ -61,9 +61,6 @@ from imbue.minds_admin.cli._tier_secrets import resolve_boxes_collector_install_
 from imbue.minds_admin.cli._tier_secrets import resolve_ovh_config
 from imbue.minds_admin.cli._tier_secrets import resolve_pool_database_url
 from imbue.minds_admin.cli._tier_secrets import resolve_pool_private_key_pem
-from imbue.minds_admin.slices.autostart_backfill import SliceAutostartBackfillOutcome
-from imbue.minds_admin.slices.autostart_backfill import backfill_box_autostart
-from imbue.minds_admin.slices.autostart_backfill import build_autostart_backfill_report
 from imbue.minds_admin.slices.bare_metal_db import POOL_HOST_STATUS_LEASED
 from imbue.minds_admin.slices.bare_metal_db import build_slice_pool_host_insert_values
 from imbue.minds_admin.slices.bare_metal_db import claim_pool_host_for_removal
@@ -588,74 +585,6 @@ def list_servers(database_url: str | None, is_occupancy_verified: bool) -> None:
             "{} box(es) could not be read, so their occupancy and tier state are UNKNOWN (not clean). "
             "See unaudited_boxes in the JSON above.",
             report.unaudited,
-        )
-
-
-@server.command(name="backfill-autostart")
-@click.option("--database-url", default=None, help=DATABASE_URL_HELP)
-@click.option(
-    "--server-id",
-    "server_ids",
-    multiple=True,
-    help="Restrict the sweep to these bare_metal_servers row ids (repeatable; default: every box).",
-)
-@click.option(
-    "--dry-run",
-    "is_dry_run",
-    is_flag=True,
-    default=False,
-    help="List the slice VMs that would be backfilled (probing each VM's reachability) without applying.",
-)
-def backfill_autostart(database_url: str | None, server_ids: tuple[str, ...], is_dry_run: bool) -> None:
-    """Backfill the volume-gated minds-autostart units onto existing slice VMs.
-
-    The fleet half of the reboot-resilience rollout (minds
-    docs/deploy/reboot-resilience-rollout.md Step 2): slices baked before the merged
-    installer keep the old racy oneshot until this sweep re-applies it. The
-    installer is idempotent and safe on running workspaces, fires the
-    workspace start immediately, and the sweep only reports a VM as
-    backfilled after observing that fired run succeed; a VM whose data volume
-    is not mounted is refused by the installer itself and reported as a
-    per-VM failure to investigate. The pool SSH key is resolved from the
-    activated tier's Vault entry (or $POOL_SSH_PRIVATE_KEY).
-    """
-    conn = psycopg2.connect(resolve_pool_database_url(database_url))
-    try:
-        capacities = fetch_server_capacities(conn)
-    finally:
-        conn.close()
-    selected = [c.server for c in capacities if not server_ids or str(c.server.id) in set(server_ids)]
-    if server_ids:
-        unknown_ids = set(server_ids) - {str(s.id) for s in selected}
-        if unknown_ids:
-            raise click.ClickException(f"Unknown --server-id value(s): {sorted(unknown_ids)}")
-    outcomes: list[SliceAutostartBackfillOutcome] = []
-    unreadable_boxes: list[str] = []
-    with pool_private_key_path(resolve_pool_private_key_pem()) as private_key_path:
-        for box_server in selected:
-            if not box_server.public_address:
-                logger.warning("Box {} has no public_address; skipping (state unknown)", box_server.id)
-                unreadable_boxes.append(str(box_server.id))
-                continue
-            client = LimaSliceVpsClient(
-                box_address=str(box_server.public_address),
-                box_ssh_user=box_server.lima_service_user or "limahost",
-                private_key_path=str(private_key_path),
-                box_host_public_key=box_server.box_host_public_key,
-            )
-            # One unreachable box must not cost the rest of the fleet its
-            # sweep (the same resilience rule as the occupancy audit).
-            try:
-                outcomes.extend(backfill_box_autostart(client, str(box_server.id), is_dry_run=is_dry_run))
-            except (LimaCommandError, BareMetalProvisioningError, OSError) as exc:
-                logger.warning("Could not sweep box {} ({}): {}", box_server.id, box_server.public_address, exc)
-                unreadable_boxes.append(str(box_server.id))
-    report = build_autostart_backfill_report(outcomes, unreadable_boxes)
-    emit_json(report.model_dump(mode="json"))
-    if report.failed or report.unreadable_boxes:
-        raise click.ClickException(
-            f"{report.failed} VM(s) failed to backfill and {len(report.unreadable_boxes)} box(es) were "
-            "unreachable; see the JSON above and re-run against them once fixed."
         )
 
 

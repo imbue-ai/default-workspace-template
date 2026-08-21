@@ -5,11 +5,13 @@ import httpx
 import pytest
 from click import ClickException
 
-from scripts.lima_image.setup_tier import CloudflareClient
-from scripts.lima_image.setup_tier import CloudflareEnv
-from scripts.lima_image.setup_tier import bucket_name
-from scripts.lima_image.setup_tier import default_hostname
-from scripts.lima_image.setup_tier import r2_s3_secret_access_key
+from scripts.r2.setup_tier import CloudflareClient
+from scripts.r2.setup_tier import CloudflareEnv
+from scripts.r2.setup_tier import LIMA_IMAGES
+from scripts.r2.setup_tier import UPDATE_FEED
+from scripts.r2.setup_tier import bucket_name
+from scripts.r2.setup_tier import default_hostname
+from scripts.r2.setup_tier import r2_s3_secret_access_key
 
 _ENV = CloudflareEnv(api_token="tok", account_id="acct123", zone_id="zone123", domain="minds.example")
 
@@ -24,6 +26,52 @@ def test_each_environment_gets_its_own_bucket_and_hostname() -> None:
     assert default_hostname("dev-weishi", "minds.example") != default_hostname("production", "minds.example")
     assert bucket_name("production") == "minds-lima-images-production"
     assert default_hostname("production", "minds.example") == "lima-images-production.minds.example"
+
+
+def test_each_kind_gets_its_own_bucket_and_hostname() -> None:
+    """Update-feed manifests and Lima images must never share a bucket.
+
+    They have different write cadences and different blast radii, and the
+    bucket-scoped publish token minted for one must not reach the other.
+    """
+    assert bucket_name("production", UPDATE_FEED) != bucket_name("production", LIMA_IMAGES)
+    assert default_hostname("production", "minds.example", UPDATE_FEED) != default_hostname(
+        "production", "minds.example", LIMA_IMAGES
+    )
+    assert bucket_name("production", UPDATE_FEED) == "minds-update-feed-production"
+    assert default_hostname("production", "minds.example", UPDATE_FEED) == "updates.minds.example"
+
+
+def test_production_serves_the_update_feed_from_a_bare_hostname() -> None:
+    """The feed URL is compiled into every binary and can never change.
+
+    So production gets `updates.<domain>` rather than a hostname carrying an
+    environment name it will never shed. Other environments stay suffixed, since
+    they must not collide with it.
+    """
+    assert default_hostname("production", "minds.example", UPDATE_FEED) == "updates.minds.example"
+    assert default_hostname("staging", "minds.example", UPDATE_FEED) == "updates-staging.minds.example"
+    # The Lima image store is operator-facing and keeps the suffix everywhere.
+    assert default_hostname("production", "minds.example", LIMA_IMAGES) == "lima-images-production.minds.example"
+
+
+def test_the_lima_image_kind_stays_the_default() -> None:
+    """Existing invocations in the release runbook must keep provisioning the image bucket."""
+    assert bucket_name("production") == bucket_name("production", LIMA_IMAGES)
+    assert default_hostname("production", "minds.example") == default_hostname(
+        "production", "minds.example", LIMA_IMAGES
+    )
+
+
+def test_each_kind_names_the_client_config_key_it_populates() -> None:
+    assert LIMA_IMAGES.client_config_key == "lima_image_base_url"
+    assert UPDATE_FEED.client_config_key == "update_feed_base_url"
+
+
+def test_only_the_signed_kind_names_a_minisign_key() -> None:
+    """The update feed's manifests carry ToDesktop's own sha512 digests, so nothing signs them."""
+    assert LIMA_IMAGES.minisign_public_key_config_key == "lima_image_minisign_public_key"
+    assert UPDATE_FEED.minisign_public_key_config_key is None
 
 
 def test_s3_secret_is_the_sha256_of_the_token_value() -> None:

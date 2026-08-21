@@ -1,32 +1,51 @@
 #!/usr/bin/env python3
-"""Provision one environment's Cloudflare R2 hosting for the pre-baked Lima image.
+"""Provision one environment's Cloudflare R2 hosting, for one kind of artifact.
 
-This is the one-time setup that must run once per environment before
-``publish.py`` can upload anything. It is idempotent: re-running against an
+Two kinds exist, chosen with ``--kind``, and each gets its own bucket, its own
+hostname, and its own bucket-scoped credential per environment:
+
+  * ``lima-images`` (the default) -- the pre-baked Lima image chunk store that
+    ``lima_image/publish.py`` uploads to.
+  * ``update-feed`` -- the release-channel manifests that
+    ``release_channel/publish.py`` publishes. It hosts no binaries; those
+    stay on ToDesktop's CDN and the manifests point at them.
+
+Separate buckets are the point: a publish of one kind can never overwrite the
+other, and the credential minted for one is ``AccessDenied`` against the other.
+
+This is the one-time setup that must run once per environment and kind before
+anything can be published. It is idempotent: re-running against an
 already-provisioned environment reports what exists and changes nothing, so it is
 safe to run against production after running it against dev.
 
-It performs exactly the three things the image distribution needs:
+It performs exactly three things:
 
-  1. Creates the bucket ``minds-lima-images-<env>``.
-  2. Attaches a custom domain to it. This is required, not a preference: a client
-     download fetches tens of thousands of chunks, and the managed ``r2.dev``
-     origin is rate-limited, so an extract served from it dies partway through
-     with ``429`` and the image never assembles. A custom domain is served
-     through Cloudflare's CDN and is not throttled.
+  1. Creates the bucket (``minds-lima-images-<env>`` or
+     ``minds-update-feed-<env>``).
+  2. Attaches a custom domain to it. For images this is required, not a
+     preference: a client download fetches tens of thousands of chunks, and the
+     managed ``r2.dev`` origin is rate-limited, so an extract served from it dies
+     partway through with ``429`` and the image never assembles. The update feed
+     needs one for a different reason -- its hostname is compiled into every
+     shipped binary and can never change without stranding the installs that
+     already carry it.
   3. Mints an R2 API token scoped to *that one bucket*, and prints the S3
-     credentials ``publish.py`` needs. The account-wide token this script runs
+     credentials the publisher needs. The account-wide token this script runs
      with is never what publishes; the operator who publishes only ever holds a
      bucket-scoped credential.
 
 The environment name is a full environment, not a tier: ``production``,
 ``staging``, or a per-developer dev environment such as ``dev-weishi``. Each gets
 its own bucket and hostname, so one developer's republish cannot overwrite
-another's image or production's.
+another's or production's. (The module name says tier; the argument is an
+environment.)
 
-Nothing here is a runtime secret. The app fetches a public URL and verifies a
-public minisign key; the credentials below are only ever used by an operator at
-publish time.
+Nothing here is a runtime secret: the app fetches a public URL, and the
+credentials below are only ever used by an operator at publish time. What the app
+checks on top of that differs by kind -- an image is verified against the public
+minisign key named in the tier's ``client.toml``, while the update feed names no
+such key, because the manifest it serves carries the sha512 of an artifact
+ToDesktop signed and notarized.
 
 Reads ``CLOUDFLARE_API_TOKEN`` / ``CLOUDFLARE_ACCOUNT_ID`` / ``CLOUDFLARE_ZONE_ID``
 / ``CLOUDFLARE_DOMAIN`` -- i.e. the environment's existing Vault ``cloudflare``
@@ -36,24 +55,65 @@ entry:
     for key in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_ZONE_ID CLOUDFLARE_DOMAIN; do
       export $key=$(vault kv get -mount=secrets -field=value minds/<tier>/cloudflare/$key)
     done
-    uv run python scripts/lima_image/setup_tier.py --env production
+    uv run python scripts/r2/setup_tier.py --env production
 """
 
 import hashlib
 import os
 import sys
 from dataclasses import dataclass
+from typing import Final
 
 import click
 import httpx
 
 _API_ROOT = "https://api.cloudflare.com/client/v4"
-_BUCKET_PREFIX = "minds-lima-images"
-_HOSTNAME_PREFIX = "lima-images"
+
+
+@dataclass(frozen=True)
+class BucketKind:
+    """One class of artifact hosted in R2, and the config key that points at it."""
+
+    name: str
+    bucket_prefix: str
+    hostname_prefix: str
+    client_config_key: str
+    # Whether production serves the bare, unsuffixed hostname. True for anything
+    # whose URL is compiled into a shipped binary: that host can never change
+    # without stranding installs that already have it, so it should not carry an
+    # environment name it will never shed.
+    is_production_hostname_bare: bool = False
+    # The client.toml key naming the minisign public key this bucket's artifacts
+    # are verified against, or None when it holds nothing separately signed.
+    minisign_public_key_config_key: str | None = None
+
+
+LIMA_IMAGES = BucketKind(
+    name="lima-images",
+    bucket_prefix="minds-lima-images",
+    hostname_prefix="lima-images",
+    client_config_key="lima_image_base_url",
+    minisign_public_key_config_key="lima_image_minisign_public_key",
+)
+UPDATE_FEED = BucketKind(
+    name="update-feed",
+    bucket_prefix="minds-update-feed",
+    hostname_prefix="updates",
+    client_config_key="update_feed_base_url",
+    is_production_hostname_bare=True,
+)
+
+# What the bucket holds, keyed by the `--kind` value. Each kind gets its own
+# bucket and hostname per environment, so a publish of one can never overwrite
+# the other, and the bucket-scoped token minted for one cannot touch the other.
+_KINDS: Final[dict[str, BucketKind]] = {kind.name: kind for kind in (LIMA_IMAGES, UPDATE_FEED)}
 
 # Cloudflare permission groups, scoped to a single bucket rather than the whole
-# account. Both are needed: publish.py probes each chunk before uploading it, so a
-# write-only token would fail every presence check.
+# account, and the same pair for either kind. Both publishers read before they
+# write, so a write-only token serves neither: `lima_image/publish.py` probes
+# each chunk to skip the ones already there, and `release_channel/publish.py`
+# reads `<channel>-mac.yml` out of the bucket to check the move is not
+# backwards.
 _R2_BUCKET_ITEM_READ = "6a018a9f2fc74eb6b293b0c548f38b39"
 _R2_BUCKET_ITEM_WRITE = "2efd5506f9c8494dacb1fa10a3e7d5b6"
 
@@ -155,14 +215,16 @@ class CloudflareClient:
         return result["id"], result["value"]
 
 
-def bucket_name(env_name: str) -> str:
-    """e.g. minds-lima-images-dev-weishi"""
-    return f"{_BUCKET_PREFIX}-{env_name}"
+def bucket_name(env_name: str, kind: BucketKind = LIMA_IMAGES) -> str:
+    """e.g. minds-lima-images-dev-weishi, or minds-update-feed-production"""
+    return f"{kind.bucket_prefix}-{env_name}"
 
 
-def default_hostname(env_name: str, domain: str) -> str:
-    """e.g. lima-images-production.minds.example"""
-    return f"{_HOSTNAME_PREFIX}-{env_name}.{domain}"
+def default_hostname(env_name: str, domain: str, kind: BucketKind = LIMA_IMAGES) -> str:
+    """e.g. lima-images-production.minds.example, or updates.minds.example"""
+    if kind.is_production_hostname_bare and env_name == "production":
+        return f"{kind.hostname_prefix}.{domain}"
+    return f"{kind.hostname_prefix}-{env_name}.{domain}"
 
 
 def r2_s3_secret_access_key(token_value: str) -> str:
@@ -177,16 +239,25 @@ def r2_s3_secret_access_key(token_value: str) -> str:
     required=True,
     help="Environment to provision: production, staging, or a dev env such as dev-weishi",
 )
-@click.option("--hostname", default=None, help="Custom domain to serve the image from (default: derived)")
+@click.option(
+    "--kind",
+    "kind_name",
+    type=click.Choice(sorted(_KINDS)),
+    default=LIMA_IMAGES.name,
+    show_default=True,
+    help="What the bucket holds: pre-baked Lima images, or the release-channel manifests",
+)
+@click.option("--hostname", default=None, help="Custom domain to serve from (default: derived)")
 @click.option("--mint-token/--no-mint-token", default=True, help="Mint a bucket-scoped R2 token for publishing")
 @click.option("--dry-run", is_flag=True, help="Report what would change without changing anything")
-def main(env_name: str, hostname: str | None, mint_token: bool, dry_run: bool) -> None:
+def main(env_name: str, kind_name: str, hostname: str | None, mint_token: bool, dry_run: bool) -> None:
     env = _read_env()
-    bucket = bucket_name(env_name)
-    resolved_hostname = hostname if hostname is not None else default_hostname(env_name, env.domain)
+    kind = _KINDS[kind_name]
+    bucket = bucket_name(env_name, kind)
+    resolved_hostname = hostname if hostname is not None else default_hostname(env_name, env.domain, kind)
     client = CloudflareClient(env)
 
-    click.echo(f"Environment: {env_name}")
+    click.echo(f"Environment: {env_name} ({kind.name})")
     click.echo(f"  bucket:   {bucket}")
     click.echo(f"  hostname: {resolved_hostname}")
     click.echo("")
@@ -227,10 +298,11 @@ def main(env_name: str, hostname: str | None, mint_token: bool, dry_run: bool) -
         click.echo(f"  export R2_SECRET_ACCESS_KEY={r2_s3_secret_access_key(token_value)}")
         click.echo("")
 
-    click.echo(f"Commit into the tier's client.toml (both values are public), once {resolved_hostname} is live:")
+    click.echo(f"Commit into the tier's client.toml (public values), once {resolved_hostname} is live:")
     click.echo("")
-    click.echo(f'  lima_image_base_url = "https://{resolved_hostname}"')
-    click.echo('  lima_image_minisign_public_key = "RW..."   # line 2 of the tier\'s minisign .pub')
+    click.echo(f'  {kind.client_config_key} = "https://{resolved_hostname}"')
+    if kind.minisign_public_key_config_key is not None:
+        click.echo(f'  {kind.minisign_public_key_config_key} = "RW..."   # line 2 of the tier\'s minisign .pub')
 
 
 if __name__ == "__main__":

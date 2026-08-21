@@ -96,6 +96,8 @@ def write_client_config(
         doc["lima_image_base_url"] = str(config.lima_image_base_url)
     if config.lima_image_minisign_public_key is not None:
         doc["lima_image_minisign_public_key"] = config.lima_image_minisign_public_key
+    if config.update_feed_base_url is not None:
+        doc["update_feed_base_url"] = str(config.update_feed_base_url)
 
     tmp = target.with_suffix(target.suffix + ".tmp")
     tmp.write_text(tomlkit.dumps(doc))

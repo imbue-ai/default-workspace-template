@@ -1,9 +1,11 @@
 import asyncio
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
 from harbor.models.agent.context import AgentContext
+from pydantic import ValidationError
 
 from imbue.minds_evals.data_types import CaseConfig
 from imbue.minds_evals.data_types import DECIDE_SENTINEL
@@ -12,6 +14,7 @@ from imbue.minds_evals.driver import MindsPersonaDriver
 from imbue.minds_evals.driver import PersonaLLMTurnSource
 from imbue.minds_evals.driver import SnapshotMode
 from imbue.minds_evals.driver import _new_agent_reply_texts
+from imbue.minds_evals.driver import build_eval_base_clone_command
 from imbue.minds_evals.driver import derive_user_id
 from imbue.minds_evals.driver import parse_agent_flag
 from imbue.minds_evals.driver import parse_case_config
@@ -24,6 +27,8 @@ from imbue.minds_evals.mock_environment_test import MockBoxEnvironment
 from imbue.minds_evals.mock_environment_test import ScriptedExecRule
 from imbue.minds_evals.mock_environment_test import mngr_exec_json
 from imbue.minds_evals.mock_environment_test import ok_result
+from imbue.minds_evals.testing import commit_readme_revision
+from imbue.minds_evals.testing import make_local_git_repo
 
 
 def _case_config(prompts: tuple[str, ...], timeout_seconds: float = 1800.0) -> CaseConfig:
@@ -36,6 +41,7 @@ def _case_config(prompts: tuple[str, ...], timeout_seconds: float = 1800.0) -> C
         mngr_sha="a" * 40,
         dwt_repo="https://example.invalid/dwt.git",
         dwt_branch="main",
+        dwt_sha="c" * 40,
         avg_word_count_baseline=100.0,
     )
 
@@ -58,6 +64,17 @@ def test_parse_case_config_rejects_instruction_without_json_block() -> None:
 def test_parse_case_config_rejects_unparseable_json() -> None:
     with pytest.raises(InstructionParseError, match="not valid JSON"):
         parse_case_config("```json\n{nope\n```")
+
+
+def test_parse_case_config_rejects_a_case_without_a_pinned_workspace_template() -> None:
+    """A dataset generated before the template was pinned must fail the trial rather than quietly
+    build its workspaces from whatever the branch points at now."""
+    unpinned_case = _case_config(("Build it",)).model_dump()
+    del unpinned_case["dwt_sha"]
+    instruction = "# Task\n\n```json\n{}\n```\n".format(json.dumps(unpinned_case, indent=2))
+
+    with pytest.raises(ValidationError, match="dwt_sha"):
+        parse_case_config(instruction)
 
 
 def test_sanitize_user_id_lowercases_and_collapses_dashes() -> None:
@@ -103,6 +120,64 @@ def test_new_agent_reply_texts_only_counts_replies_after_the_baseline() -> None:
     assert _new_agent_reply_texts(events, 1) == ["new reply"]
     # Baseline past the reply: nothing new.
     assert _new_agent_reply_texts(events, 5) == []
+
+
+def _git_output(repo_dir: Path, *args: str) -> str:
+    result = subprocess.run(["git", "-C", str(repo_dir), *args], check=True, capture_output=True, text=True)
+    return result.stdout.strip()
+
+
+def test_build_eval_base_clone_command_lands_the_pinned_sha_on_a_real_branch(tmp_path: Path) -> None:
+    # Pinned to the middle commit: a command that resolved the branch instead of
+    # the sha would land on the tip.
+    source = make_local_git_repo(tmp_path, "fake-dwt", commit_count=3)
+    pinned_sha = source.commit_shas[1]
+    eval_base_dir = tmp_path / "eval-base"
+
+    command = build_eval_base_clone_command(
+        dwt_repo=str(source.repo_dir),
+        dwt_branch="main",
+        dwt_sha=pinned_sha,
+        eval_base_dir=str(eval_base_dir),
+    )
+    subprocess.run(["bash", "-c", command], check=True, capture_output=True)
+
+    assert _git_output(eval_base_dir, "rev-parse", "HEAD") == pinned_sha
+    # A named branch, not a detached HEAD: every downstream clone takes its
+    # checkout from this HEAD, and the workspace is created with an empty branch
+    # field, meaning "whatever HEAD is".
+    assert _git_output(eval_base_dir, "rev-parse", "--abbrev-ref", "HEAD") == "main"
+
+    # The per-case clone, then mngr's clone of that, must come out populated at the pin.
+    case_clone_dir = tmp_path / "case-clone"
+    subprocess.run(["git", "clone", "-q", str(eval_base_dir), str(case_clone_dir)], check=True)
+    workspace_clone_dir = tmp_path / "workspace-clone"
+    subprocess.run(["git", "clone", "-q", str(case_clone_dir), str(workspace_clone_dir)], check=True)
+
+    assert (workspace_clone_dir / "README.md").read_text() == "fake-dwt revision 1\n"
+    assert _git_output(workspace_clone_dir, "rev-parse", "HEAD") == pinned_sha
+    assert _git_output(workspace_clone_dir, "rev-parse", "--abbrev-ref", "HEAD") == "main"
+
+
+def test_build_eval_base_clone_command_pins_a_sha_off_a_non_default_branch(tmp_path: Path) -> None:
+    """A dwt branch other than the remote's default must still be reachable in the box clone."""
+    source = make_local_git_repo(tmp_path, "fake-dwt", commit_count=1)
+    subprocess.run(["git", "-C", str(source.repo_dir), "checkout", "-q", "-b", "codex/harness"], check=True)
+    pinned_sha = commit_readme_revision(source.repo_dir, "side branch\n", "side")
+    subprocess.run(["git", "-C", str(source.repo_dir), "checkout", "-q", "main"], check=True)
+    eval_base_dir = tmp_path / "eval-base"
+
+    command = build_eval_base_clone_command(
+        dwt_repo=str(source.repo_dir),
+        dwt_branch="codex/harness",
+        dwt_sha=pinned_sha,
+        eval_base_dir=str(eval_base_dir),
+    )
+    subprocess.run(["bash", "-c", command], check=True, capture_output=True)
+
+    assert _git_output(eval_base_dir, "rev-parse", "HEAD") == pinned_sha
+    assert _git_output(eval_base_dir, "rev-parse", "--abbrev-ref", "HEAD") == "codex/harness"
+    assert (eval_base_dir / "README.md").read_text() == "side branch\n"
 
 
 def _write_modal_config(tmp_path: Path) -> Path:
@@ -213,6 +288,12 @@ def test_driver_completes_a_multi_turn_conversation(tmp_path: Path) -> None:
     assert state["test_state"] == "finished"
     assert state["waits_done"] == 2
     assert state["num_turns"] == 2
+    # Both pinned inputs travel with the trial record.
+    assert state["mngr_sha"] == "b" * 40
+    assert state["dwt_sha"] == "c" * 40
+
+    # The workspace template clone is driven from the case's pinned sha.
+    assert any("checkout -B main {}".format("c" * 40) in command for command in environment.exec_commands)
 
     # The per-trial box env carried the Modal token pair, the salted user id, and the key manifest.
     backend_env = next(env for env in environment.exec_envs if env and "MINDS_BOX_MNGR_REF" in env)
@@ -227,6 +308,7 @@ def test_driver_completes_a_multi_turn_conversation(tmp_path: Path) -> None:
     assert context.metadata is not None
     assert context.metadata["test_state"] == "finished"
     assert context.metadata["turns_completed"] == 2
+    assert context.metadata["dwt_sha"] == "c" * 40
     assert context.metadata["average_words_per_turn"] > 0
     assert context.metadata["average_words_per_message"] > 0
 
