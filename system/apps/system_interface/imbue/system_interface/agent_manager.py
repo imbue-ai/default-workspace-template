@@ -33,6 +33,8 @@ from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.api.observe import AgentRemovedEvent
 from imbue.mngr.api.observe import AgentStateEvent
 from imbue.mngr.api.observe import FullAgentStateEvent
+from imbue.mngr.api.observe import ObserveEventFollower
+from imbue.mngr.api.observe import ObserveStreamUnavailableError
 from imbue.mngr.api.observe import parse_observe_event_line
 from imbue.mngr.errors import MngrError
 from imbue.mngr.interfaces.data_types import AgentDetails
@@ -49,6 +51,8 @@ from imbue.system_interface.agent_discovery import MngrMessenger
 from imbue.system_interface.agent_discovery import discover_agents
 from imbue.system_interface.agent_discovery import get_host_dir
 from imbue.system_interface.agent_discovery import read_claude_config_dir_from_env_file
+from imbue.system_interface.agent_events import AgentEventsMode
+from imbue.system_interface.agent_events import AgentEventsStatus
 from imbue.system_interface.harnesses.activity import HarnessActivityTracker
 from imbue.system_interface.harnesses.auth_check import HarnessAuthCheck
 from imbue.system_interface.harnesses.auth_check import find_unauthenticated_harness_reason
@@ -388,6 +392,40 @@ class _AppsFileHandler(FileSystemEventHandler):
     on_closed = _maybe_fire
 
 
+def _refuse_to_set_oom_score_adj(pid: int, adj: int) -> bool:
+    """The ``set_adj`` a non-authoritative instance gets: never writes, always fails.
+
+    Chat ``oom_score_adj`` is not shared state a FOLLOW-mode instance (the
+    ``update-system-interface`` preview, the reveal pre-flight) may contribute to:
+    the two instances would fight over the same ``/proc`` entries, and this one
+    would lose anyway. The open/visible bonuses come from frontend activity
+    reports, and this instance sees only its *own* -- the preview's tab set, which
+    is not the workspace's, or for the headless reveal pre-flight nothing at all,
+    which reads as every chat closed. So its writes would be both contending *and*
+    worse. That is the whole argument, and it turns on this instance's activity
+    inputs being wrong; it does not generalize to state it derives from a source
+    both instances read alike.
+
+    Withholding the capability rather than gating the call sites is deliberate:
+    ``reapply`` is reached from the sweep, from ``record_activity``, and from
+    every lifecycle event via ``record_running_agents``, and the last of those
+    fires in FOLLOW mode too. A new ``oom_score_adj`` call site added later is
+    therefore inert by construction instead of needing to remember a mode check.
+
+    Note the bound on that guarantee: it covers this one capability, not the
+    instance. A FOLLOW-mode instance is not read-only at large -- it discovers and
+    tracks agents in both modes (``_initial_discover`` runs before ``start``
+    branches on the mode), so ``_ensure_activity_tracking`` brings up each agent's
+    harness session, and a codex session's ``ensure_live`` writes that agent's
+    ``model_state.json`` and model-options sidecar under the *live* host dir. Both
+    values are read straight back from the agent's daemon, so the two instances
+    write the same bytes; a mode check is not obviously the right answer, since the
+    preview needs a working codex surface to be worth previewing. A new shared
+    write does not inherit this function's guarantee -- reason about it on its own.
+    """
+    return False
+
+
 def _make_apps_file_handler(
     agent_id: str,
     on_change: Any,
@@ -422,7 +460,15 @@ def _assert_special_kinds_declared(harness: HarnessType, events: list[dict[str, 
 class AgentManager:
     """Manages agent lifecycle detection, app-registry watching, and agent creation.
 
-    Runs mngr observe as a subprocess for event-driven agent lifecycle detection.
+    Sources event-driven agent lifecycle state in one of two ways, per
+    ``AgentEventsMode``: by running ``mngr observe`` as a subprocess and reading
+    its ``--stream-events`` stdout (the workspace's own system interface), or by
+    following the event file that another process's observer is writing (a
+    preview or pre-flight instance sharing the same host, which cannot take the
+    single-writer observe lock). The mode selects the event *source* and withholds
+    chat ``oom_score_adj`` (see ``_refuse_to_set_oom_score_adj``); everything else
+    -- discovery, activity tracking, harness sessions, model watchers -- runs the
+    same either way, against the same host dir.
     Watches data/.state/apps.toml for each agent.
     Handles agent creation via local mngr create calls.
     """
@@ -450,8 +496,24 @@ class AgentManager:
     _own_agent_id: str
     _own_work_dir: str
     _shutdown_event: ShutdownEvent
+    _events_mode: AgentEventsMode
     _observe_cg: ConcurrencyGroup | None
     _observe_process: RunningProcess | None
+    # Set in FOLLOW mode once the follower is running; None before ``start`` and
+    # when the follower refused to start (``_events_failure`` then says why).
+    _follower: ObserveEventFollower | None
+    # Why the lifecycle stream is dead, in either mode: the observe subprocess
+    # failed to spawn or exited, or the follower found no observer to follow.
+    # None means "nothing has gone wrong (yet)", which is not by itself proof
+    # that events are flowing -- see ``_has_received_lifecycle_event``.
+    _events_failure: str | None
+    # Positive evidence that events really are arriving, required in both modes.
+    # In OBSERVE, a healthy observer emits a full-state snapshot within seconds of
+    # starting while one that loses the lock exits without ever emitting, so
+    # spawning successfully is not enough. In FOLLOW, the follower drops every
+    # line until it has a snapshot to fold from, so starting cleanly is not
+    # enough either.
+    _has_received_lifecycle_event: bool
     _creation_cg: ConcurrencyGroup
     _mngr_binary: str
     _host_dir: Path
@@ -509,6 +571,7 @@ class AgentManager:
         broadcaster: WebSocketBroadcaster,
         messenger: MngrMessenger = _DEFAULT_MESSENGER,
         mngr_binary: str = _DEFAULT_MNGR_BINARY,
+        events_mode: AgentEventsMode = AgentEventsMode.OBSERVE,
         auth_gate: Callable[[HarnessAuthCheck | None], str | None] = find_unauthenticated_harness_reason,
     ) -> "AgentManager":
         """Build an AgentManager with the given broadcaster.
@@ -517,7 +580,11 @@ class AgentManager:
         real mngr discover/send. Tests pass one whose ``discover``/``send`` are
         fakes to avoid touching mngr. ``mngr_binary`` is the path or name of the
         mngr executable used for the stream-events observe subprocess and for
-        agent-creation commands.
+        agent-creation commands. ``events_mode`` selects whether this instance
+        runs the observer itself or follows one another process is running --
+        the default is correct for the workspace's own system interface, and a
+        second instance on the same host must be built with
+        ``AgentEventsMode.FOLLOW`` or its observer will lose the lock and die.
         """
         manager = cls.__new__(cls)
         manager._broadcaster = broadcaster
@@ -533,8 +600,12 @@ class AgentManager:
         manager._own_agent_id = os.environ.get("MNGR_AGENT_ID", "")
         manager._own_work_dir = os.environ.get("MNGR_AGENT_WORK_DIR", "")
         manager._shutdown_event = ShutdownEvent.build_root()
+        manager._events_mode = events_mode
         manager._observe_cg = None
         manager._observe_process = None
+        manager._follower = None
+        manager._events_failure = None
+        manager._has_received_lifecycle_event = False
         manager._creation_cg = ConcurrencyGroup(name="agent-creation")
         manager._creation_cg.__enter__()
         manager._mngr_binary = mngr_binary
@@ -552,34 +623,116 @@ class AgentManager:
         manager._transcript_broadcaster = None
         # Built last: its ``list_chat_agent_ids`` / ``resolve_process_started_at``
         # callbacks read ``_agents`` / ``_lock`` / ``_host_dir``, which are set above.
+        # Only the authoritative instance gets the capability to write scores; a
+        # FOLLOW-mode instance is handed one that never does (see
+        # ``_refuse_to_set_oom_score_adj``).
         manager._oom_prioritizer = ChatOomPrioritizer(
             list_chat_agent_ids=manager.get_chat_agent_ids,
             resolve_pid=lookup_pid_by_agent_id,
-            set_adj=set_oom_score_adj,
+            set_adj=set_oom_score_adj if events_mode is AgentEventsMode.OBSERVE else _refuse_to_set_oom_score_adj,
             resolve_process_started_at=manager._read_agent_process_started_at,
         )
         return manager
 
     def start(self) -> None:
-        """Start the observe subprocess and perform initial agent discovery.
+        """Perform initial agent discovery, then attach to the lifecycle event stream.
 
-        Also seeds and starts the OOM prioritizer. Seeding happens before the
-        sweep so the first pass ranks chats against their real message history
-        rather than treating a restart as "nothing has ever been messaged".
+        In OBSERVE mode this also seeds and starts the OOM prioritizer. Seeding
+        happens before the sweep so the first pass ranks chats against their real
+        message history rather than treating a restart as "nothing has ever been
+        messaged". A FOLLOW-mode instance skips both: chat OOM scores belong to
+        the one authoritative instance, and it cannot write them anyway.
+
+        Never raises: a lifecycle stream that cannot be attached to is recorded
+        as a failure and surfaced through :meth:`get_agent_events_status` (and
+        thus the ``/api/health`` gate), so the caller decides what a dead stream
+        means rather than the server dying at import-time-ish depth.
         """
         self._initial_discover()
-        self._seed_oom_prioritizer()
-        self._oom_prioritizer.start()
-        self._start_observe()
+        if self._events_mode is AgentEventsMode.OBSERVE:
+            self._seed_oom_prioritizer()
+            self._oom_prioritizer.start()
+            self._start_observe()
+        else:
+            self._start_follow()
 
     def start_without_observe(self) -> None:
         """Start with initial discovery only, no observe subprocess. For testing."""
         self._initial_discover()
 
+    def get_agent_events_status(self) -> AgentEventsStatus:
+        """Report whether agent lifecycle events are actually reaching this instance.
+
+        This is the question a health gate must ask. Listing agents is not: a
+        one-shot discovery succeeds just as well on an instance whose lifecycle
+        stream is dead, which is how a preview with a frozen agent view used to
+        pass its boot health check while showing "No conversation data" for
+        every agent created after it booted.
+        """
+        with self._lock:
+            failure = self._events_failure
+            has_received_event = self._has_received_lifecycle_event
+            follower = self._follower
+        if failure is not None:
+            return AgentEventsStatus(mode=self._events_mode, is_stream_healthy=False, detail=failure)
+        if self._events_mode is AgentEventsMode.FOLLOW:
+            return self._build_follow_status(follower, has_received_event)
+        if not has_received_event:
+            return AgentEventsStatus(
+                mode=self._events_mode,
+                is_stream_healthy=False,
+                detail="Waiting for the first event from the 'mngr observe' subprocess.",
+            )
+        return AgentEventsStatus(
+            mode=self._events_mode,
+            is_stream_healthy=True,
+            detail="Folding live events from this instance's own 'mngr observe' subprocess.",
+        )
+
+    def _build_follow_status(
+        self, follower: ObserveEventFollower | None, has_received_event: bool
+    ) -> AgentEventsStatus:
+        """Render FOLLOW-mode liveness from the follower's own view of the stream.
+
+        Requires a folded event for the same reason OBSERVE mode does. A follower
+        that started cleanly is not yet proof of anything: it drops every line
+        until it sees a full-state snapshot to fold from, so one seeded against a
+        file that has no snapshot yet sits at boot-state discovery indefinitely --
+        the frozen agent view this whole gate exists to catch, in the mode that
+        was built to fix it.
+        """
+        if follower is None:
+            return AgentEventsStatus(
+                mode=self._events_mode,
+                is_stream_healthy=False,
+                detail="The agent-lifecycle follower has not been started.",
+            )
+        follower_failure = follower.failure_detail()
+        if follower_failure is not None:
+            return AgentEventsStatus(mode=self._events_mode, is_stream_healthy=False, detail=follower_failure)
+        if not has_received_event:
+            return AgentEventsStatus(
+                mode=self._events_mode,
+                is_stream_healthy=False,
+                detail=(
+                    "Waiting for the first event from the observer's stream (no full-state "
+                    "snapshot has been folded yet)."
+                ),
+            )
+        return AgentEventsStatus(
+            mode=self._events_mode,
+            is_stream_healthy=True,
+            detail="Following the agent-lifecycle event stream written by the workspace's own observer.",
+        )
+
     def stop(self) -> None:
-        """Stop the observe subprocess, file watchers, and creation threads."""
+        """Stop the observe subprocess or follower, file watchers, and creation threads."""
         self._shutdown_event.set()
         self._oom_prioritizer.stop()
+
+        if self._follower is not None:
+            self._follower.stop()
+            self._follower = None
 
         if self._observe_cg is not None:
             self._observe_cg.shutdown()
@@ -1250,6 +1403,44 @@ class AgentManager:
         """Build the argv for the mngr observe --stream-events subprocess. Pure."""
         return _build_observe_command_argv(self._mngr_binary)
 
+    def _record_events_failure(self, detail: str) -> None:
+        """Record why the lifecycle event stream is dead (first cause wins).
+
+        There is deliberately no restart: in OBSERVE mode the usual cause is
+        that another process legitimately owns the observe lock, and retrying
+        would just lose it again. Recording the failure is what makes it visible
+        to ``/api/health``, which is how a second instance fails its boot gate
+        instead of running on with a frozen agent view.
+        """
+        with self._lock:
+            if self._events_failure is not None:
+                return
+            self._events_failure = detail
+
+    def _start_follow(self) -> None:
+        """Attach to the event stream that another process's observer is writing."""
+        follower = ObserveEventFollower(
+            events_base_dir=self._host_dir,
+            on_line=self._handle_follower_line,
+        )
+        try:
+            follower.start()
+        except ObserveStreamUnavailableError as e:
+            _loguru_logger.error("Could not follow the agent-lifecycle event stream: {}", e)
+            self._record_events_failure(str(e))
+            return
+        with self._lock:
+            self._follower = follower
+
+    def _handle_follower_line(self, line: str) -> None:
+        """Fold one raw event line from the follower.
+
+        The follower forwards exactly the lines ``mngr observe --stream-events``
+        would have printed, so both modes converge on the same handler and the
+        fold cannot diverge between them.
+        """
+        self._handle_observe_output_line(line, True)
+
     def _start_observe(self) -> None:
         """Start the mngr observe subprocess and a watchdog for early exit."""
         cmd = self._build_observe_command()
@@ -1280,10 +1471,11 @@ class AgentManager:
                 shutdown_event=self._shutdown_event,
                 is_checked_by_group=False,
             )
-        except (OSError, InvalidConcurrencyGroupStateError):
+        except (OSError, InvalidConcurrencyGroupStateError) as e:
             _loguru_logger.warning(
                 "Could not start mngr observe subprocess. Agent lifecycle events will not be detected."
             )
+            self._record_events_failure(f"The 'mngr observe' subprocess could not be started: {e}")
             self._observe_cg.__exit__(None, None, None)
             self._observe_cg = None
             return
@@ -1309,6 +1501,7 @@ class AgentManager:
             if self._shutdown_event.is_set():
                 return
             _loguru_logger.opt(exception=e).error("mngr observe subprocess failed")
+            self._record_events_failure(f"The 'mngr observe' subprocess failed: {type(e).__name__}: {e}")
             return
 
         if self._shutdown_event.is_set():
@@ -1320,6 +1513,10 @@ class AgentManager:
             "Agent lifecycle events will no longer be detected. stderr: {}",
             process.returncode,
             stderr if stderr else "(empty)",
+        )
+        self._record_events_failure(
+            f"The 'mngr observe' subprocess exited unexpectedly (returncode={process.returncode}), so agent "
+            f"lifecycle events are no longer being detected. stderr: {stderr if stderr else '(empty)'}"
         )
 
     def _handle_observe_output_line(self, line: str, is_stdout: bool) -> None:
@@ -1355,6 +1552,9 @@ class AgentManager:
         auto-open, exactly as the discovery membership delta used to.
         """
         with self._lock:
+            # Proof that the stream is really feeding us, not merely that a
+            # subprocess was spawned -- see ``_has_received_lifecycle_event``.
+            self._has_received_lifecycle_event = True
             before_details = dict(self._agent_details_by_id)
             match event:
                 case FullAgentStateEvent():

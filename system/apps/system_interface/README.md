@@ -30,27 +30,39 @@ npm run dev
 
 The deployed system interface is the live web UI the user is looking at, so
 changes are not applied in place. The canonical flow is the
-`update-system-interface` agent skill: a change is delegated to a worker, tested
-in isolation (including Playwright against an isolated instance) and run through
-the review gates; then **previewed** to the user as a tab before merging; and,
-once approved, merged and revealed. See
-`.agents/skills/update-system-interface/SKILL.md`.
+`update-system-interface` agent skill -- the system-interface specialization of
+`update-app`'s "live loop first, ratify at turn-end" pattern. The lead edits
+an **isolated worktree**, builds, and refreshes a labeled **preview tab** in
+place, iterating live with the user (seconds per round, not a full harden pass);
+once the user approves the shape, a background worker runs the full test + review
+gate on that same branch; then the change is merged and **revealed** to the live
+UI with auto-rollback. See `.agents/skills/update-system-interface/SKILL.md`.
 
-The same `reveal_system_interface.py` script owns the deterministic setup/teardown
-on both sides of that user gate, as sub-commands:
+The `reveal_system_interface.py` script owns the deterministic parts of that flow
+as sub-commands:
 
-- `preview --slug <name> --work-dir <worker-work-dir>` boots the worker's
-  already-built work_dir (a local worktree-agent folder in this same container)
-  on a free port and registers it as the `si-preview-app` service, then boots a
-  small wrapper page that embeds it in a labeled "preview" frame and registers
-  that as the user-facing `si-preview` service -- so the proxied tab reads as a
-  clearly-marked proposed change rather than a nested clone of the live UI. No
-  fetch, no re-checkout, no rebuild, and without merging or touching the served
-  tree. (Resolve the work_dir from
+- `preview --slug <name> --work-dir <work-dir>` boots an already-built work_dir
+  (the lead's editing worktree during the live loop, or a worker's work_dir for a
+  final pre-merge preview) on a free port and registers it as the `si-preview-app`
+  service, then boots a small wrapper page that embeds it in a labeled "preview"
+  frame and registers that as the user-facing `si-preview` service -- so the tab
+  reads as a clearly-marked proposed change rather than a nested clone of the
+  live UI. No fetch, no re-checkout, no rebuild, and without merging or
+  touching the served tree. (For a worker's work_dir, resolve it from
   `mngr ls --include 'name=="<name>"' --format json` -> `agents[0].work_dir`.)
-- `unpreview --slug <name>` tears that down -- kill both servers, deregister both
-  services (idempotent).
 - `reveal --rollback-to <sha>` reveals the merged change (below).
+
+Refreshing a live preview and tearing it down are **not** sub-commands here --
+they needed nothing from this flow but the slug, so they are the shared
+`serve_isolated_instance.py`'s own `refresh` / `down`, addressed by the instance
+name `preview` prints on success (`si-preview-<slug>`):
+
+- `refresh --name si-preview-<slug>` re-boots the preview's inner app on its
+  existing port to pick up a backend edit/rebuild during the live loop, without
+  disturbing the wrapper frame or the user's tab (a frontend-only round needs no
+  bounce -- just rebuild and `layout.py refresh si-preview`).
+- `down --name si-preview-<slug>` tears it down -- kill both servers, deregister
+  both services (idempotent).
 
 The reveal, after merge, is a single self-healing command. With the known-good
 revision captured before the merge (`ROLLBACK_TO=$(git rev-parse HEAD)`):
@@ -63,19 +75,28 @@ It classifies what changed and does only what is needed: refreshes dependencies
 if a manifest changed (`npm ci`, plus the vendored mngr tool, the backend tool
 and the workspace venv -- the same environments `build_workspace.sh` builds),
 rebuilds the gitignored `static/` bundle (frontend), and/or
-restarts the services agent so the editable backend re-imports the merged `.py`
-(backend), then asks every open view of the workspace to reload --
-unconditionally, since a backend-only change leaves the open page rendering what
-it had already fetched. For a backend change it pre-flights the merged code on a
-throwaway port before touching the live service, then polls the loopback
-endpoint to confirm health. If anything fails,
+restarts the `system_interface` supervisord program so the editable backend
+re-imports the merged `.py` (backend), then asks every open view of the
+workspace to reload -- unconditionally, since a backend-only change leaves the
+open page rendering what it had already fetched. Only that one program is
+bounced: the environments a dependency refresh rebuilds are consumed at process
+start or per invocation, so restarting the services agent (supervisord's
+parent) would bounce every other program for nothing -- and the health budget
+below would then be racing a whole-stack restart storm. For a backend change it
+pre-flights the merged code on a throwaway port before touching the live
+service (quoting the throwaway boot's own output on failure, so the cause rides
+back with the error), then polls the loopback endpoint until it is
+*settled* healthy: several consecutive 200s on an unchanging supervisord pid,
+because a single probe can read green in a gap between restarts (and red on a
+change that was never broken) and this verdict is what arms the rollback. If
+anything fails,
 it restores the tree to `--rollback-to` as a forward revert commit, rebuilds and
 restarts from it, and re-confirms the UI is healthy -- so the served interface
 can never be left broken. The exit code reports the outcome (`0` revealed, `2`
 rolled back, `3` emergency, `1` precondition error).
 
 That reload is delegated to `system/scripts/refresh_workspace_view.py`, the shared
-helper every flow that restarts the services agent uses. It fires two channels,
+helper every flow that restarts the interface uses. It fires two channels,
 because neither reaches every viewer: a `reload_system_interface` op, and the Minds
 app's own refresh endpoint (which lands even when the page's WebSocket never came
 back from the restart).

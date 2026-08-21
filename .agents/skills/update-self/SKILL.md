@@ -512,13 +512,13 @@ it from inside that preview. Skip previews for services that came in clean.
 
 **When the update touches `system/apps/system_interface/` at all** (merged *or* pulled
 in -- anything that makes 5c run the safe-reveal), first take the
-`editing service system_interface` lease and hold it through the end of 5c,
-exactly as `update-system-interface` Step 4 does: the reveal's auto-rollback
-restores a captured revision, so a foreign merge landing between here and the
-reveal could be swept away by it. Check `tk ready` for another agent's lease
-and surface instead of proceeding if one is held; then `tk create "editing
-service system_interface" -t chore` and `tk start` it (each as its own
-command). Release it (tk close) after 5c.
+`editing service system_interface` lease and hold it through the end of 5c, for
+the same reason the `update-system-interface` flow holds it across its whole
+pass: the reveal's auto-rollback restores a captured revision, so a foreign
+merge landing between here and the reveal could be swept away by it. Check
+`tk ready` for another agent's lease and surface instead of proceeding if one is
+held; then `tk create "editing service system_interface" -t chore` and
+`tk start` it (each as its own command). Release it (tk close) after 5c.
 
 Capture the rollback revision, then fast-forward the worker branch. It branched
 off this exact `HEAD`, so the merge fast-forwards and **preserves the worker's
@@ -687,11 +687,11 @@ The report says which classes merged. Apply each; a clean pull-in is still
   ```bash
   python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py reveal \
       --rollback-to "$ROLLBACK_TO"
-  python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py unpreview --slug update-self
+  python3 .agents/shared/scripts/serve_isolated_instance.py down --name si-preview-update-self
   python3 system/scripts/layout.py close si-preview
   ```
 
-  Exit codes per `update-system-interface` Step 5 (`0` revealed; `2`
+  Exit codes per `update-system-interface`'s reveal step (`0` revealed; `2`
   auto-rolled-back; `3` emergency; `1` precondition). **On exit 2 the rollback
   reverts `$ROLLBACK_TO..HEAD` -- the entire landed merge, every class, not
   just the system interface.** Stop here: apply no other class (the tree no

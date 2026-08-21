@@ -45,18 +45,26 @@ System-interface specifics:
   the **real** agents (this is how you open the motivating conversation named in
   `## Real scenario` -- see below); point it at fixture data instead when you want
   an isolated, reproducible scene for a committed test.
+- **Never `goto(..., wait_until="networkidle")` against a system-interface
+  instance.** It holds live connections (the event WebSocket, streaming
+  endpoints), so the network never goes idle and the call simply burns its whole
+  timeout before failing. Use `wait_until="domcontentloaded"` and then wait on
+  the element you actually care about.
 
 ## Leave a built frontend in your work_dir (required, even for a backend-only change)
 
 Before you report `done`, your work_dir **must** contain a current frontend
 build (`cd system/apps/system_interface/frontend && npm ci && npm run build`, output in
 the gitignored `imbue/system_interface/static/`). This is **not** conditional on
-whether you touched the frontend: the lead previews your change by booting your
-work_dir directly, and the preview **refuses to boot a work_dir with no build**
-(it serves the backend's "Frontend not built" placeholder otherwise, which reads
-as a broken UI). A fresh worktree has no `node_modules` and no `static/`, so a
-backend-only change that skips the build leaves nothing to preview. Build it and
-confirm `imbue/system_interface/static/index.html` exists before reporting `done`.
+whether you touched the frontend: the lead may preview your change by booting
+your work_dir directly -- the live-editing flow does exactly that whenever you
+produced real work the user has not seen yet -- and the preview **refuses to
+boot a work_dir with no build** (it serves the backend's "Frontend not built"
+placeholder otherwise, which reads as a broken UI). A fresh worktree has no
+`node_modules` and no `static/`, so a backend-only change that skips the build
+leaves nothing to preview. You cannot know at report time which way the lead
+will go, and the preview never builds for you, so always build: confirm
+`imbue/system_interface/static/index.html` exists before reporting `done`.
 
 ## Real scenario: look at it firsthand, do not imagine it
 

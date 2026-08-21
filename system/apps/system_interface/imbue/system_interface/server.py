@@ -109,6 +109,11 @@ _FRONTEND_NOT_BUILT_HTML = (
     "<html><body><p>Frontend not built. Run <code>npm run build</code> in <code>frontend/</code>.</p></body></html>"
 )
 
+# The prefix every API route shares, as the single-page-app catch-all sees it
+# (no leading slash). Anything under it that reaches the catch-all is a path no
+# API route claimed, and must not be answered with the app shell.
+_API_PATH_PREFIX = "api/"
+
 # Default number of events for tail-first loading
 _DEFAULT_TAIL_COUNT = 50
 
@@ -310,6 +315,15 @@ def _index() -> Response:
 
 
 def _index_catch_all(path: str) -> Response:
+    # An /api path reaching the catch-all matched no API route. Falling through to
+    # the app shell would answer it 200 with index.html, so a mistyped API fetch
+    # "succeeds" and its caller parses a web page as data -- and probing whether a
+    # route exists yet reports that every route already does. The bare prefix
+    # (``/api``, no trailing slash) is API-shaped for the same reason, so it gets
+    # the same answer.
+    if path.startswith(_API_PATH_PREFIX) or path == _API_PATH_PREFIX.rstrip("/"):
+        error = ErrorResponse(detail=f"No such API route: /{path}")
+        return _json_response(error.model_dump(), status_code=404)
     # An agent-authored file is addressed by its absolute on-disk path, which
     # lands here as a catch-all path; serve it (image inline, any other existing
     # file as a download) before falling through to the single-page-app shell.
@@ -347,6 +361,33 @@ def _list_agents_endpoint() -> Response:
     agents = _discover_with_filters()
     items = [AgentListItem(id=agent.id, name=agent.name, state=agent.state) for agent in agents]
     return _json_response(AgentListResponse(agents=items).model_dump())
+
+
+def _health_endpoint() -> Response:
+    """Report whether this instance is actually working, for a boot health gate.
+
+    Two independent things must hold, and it is 200 only when both do:
+
+    - a fresh mngr discovery succeeds, which exercises the plugin/config path a
+      missing backend dependency or a bad plugin config would take down;
+    - the agent lifecycle event stream is live (see
+      ``AgentManager.get_agent_events_status``).
+
+    The second check is the point. ``/api/agents`` runs its own discovery rather
+    than reading the manager's cache, so it answers correctly even on an
+    instance whose lifecycle stream died -- which let a preview whose agent view
+    was permanently frozen sail through its boot probe looking healthy. A
+    degraded instance answers 503 here, so whoever is gating on it (the preview
+    boot, the reveal pre-flight) refuses to bring it up.
+    """
+    agents = _discover_with_filters()
+    status = get_state().agent_manager.get_agent_events_status()
+    payload = {
+        "status": "ok" if status.is_stream_healthy else "degraded",
+        "agent_count": len(agents),
+        "agent_events": status.model_dump(mode="json"),
+    }
+    return _json_response(payload, status_code=200 if status.is_stream_healthy else 503)
 
 
 def _find_agent(agent_id: str) -> AgentInfo | None:
@@ -2904,6 +2945,7 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule("/", view_func=_index, methods=["GET"])
     application.add_url_rule("/favicon.ico", view_func=_favicon, methods=["GET"])
     application.add_url_rule("/api/agents", view_func=_list_agents_endpoint, methods=["GET"])
+    application.add_url_rule("/api/health", view_func=_health_endpoint, methods=["GET"])
     application.add_url_rule("/api/agents/create-chat", view_func=_create_chat_agent, methods=["POST"])
     application.add_url_rule("/api/agents/<agent_id>/events", view_func=_get_events, methods=["GET"])
     application.add_url_rule("/api/agents/<agent_id>/stream", view_func=_stream_events, methods=["GET"])

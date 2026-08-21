@@ -19,6 +19,7 @@ from pydantic import PrivateAttr
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.concurrency_group.local_process import RunningProcess
+from imbue.concurrency_group.thread_utils import ObservableThread
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.event_envelope import EventEnvelope
 from imbue.imbue_common.event_envelope import EventId
@@ -54,6 +55,7 @@ from imbue.mngr.primitives import HostState
 from imbue.mngr.primitives import LOCAL_PROVIDER_NAME
 from imbue.mngr.primitives import ProviderInstanceName
 from imbue.mngr.utils.jsonl_warn import MalformedJsonLineWarner
+from imbue.mngr.utils.jsonl_warn import split_complete_lines
 
 # === Constants ===
 
@@ -68,6 +70,19 @@ _ACTIVITY_DEBOUNCE_SECONDS: Final[float] = 2.0
 # so it must stay small; process death itself is detected event-driven, well
 # before this elapses.
 _WATCH_POLL_SECONDS: Final[float] = 1.0
+# Cheap byte-level pre-filter so scanning a large event file does not run every
+# line through ``json.loads``. Only lines containing the literal type token are
+# parsed to confirm they really are full-state snapshots.
+_FULL_STATE_MARKER: Final[bytes] = b'"AGENTS_FULL_STATE"'
+# How often a follower re-reads the tail of the event file (and re-checks that the
+# writing observer is still alive). The observer emits on agent activity and every
+# FULL_STATE_INTERVAL_SECONDS otherwise, so this is far finer-grained than the
+# stream it follows and costs a single ``stat`` per tick when idle.
+_FOLLOW_POLL_SECONDS: Final[float] = 1.0
+# Default for how long ``ObserveEventFollower.stop`` waits for its thread to notice
+# the stop flag. The thread only ever blocks in the poll wait or inside the
+# consumer's sink, so a few default poll intervals is ample.
+_FOLLOW_JOIN_TIMEOUT_SECONDS: Final[float] = 5.0
 
 
 # === Event Types ===
@@ -318,6 +333,79 @@ def _details_instance_key(agent: AgentDetails) -> str:
 # === History Loading ===
 
 
+def _is_full_state_line(line: str) -> bool:
+    """Whether a COMPLETE JSONL line is an ``AGENTS_FULL_STATE`` snapshot event.
+
+    Callers must not pass a file's half-written tail (see
+    :func:`find_last_full_state_offset`): a torn line is the one benign way this
+    parse fails, so excluding it up front means a failure here is real corruption
+    and is logged as such.
+    """
+    try:
+        data = json.loads(line)
+    except json.JSONDecodeError as e:
+        logger.warning("Skipping an unparseable observe events line: {}", e)
+        return False
+    if not isinstance(data, dict):
+        return False
+    return data.get("type") == ObserveEventType.AGENTS_FULL_STATE
+
+
+def find_last_full_state_offset(events_path: Path) -> int | None:
+    """Byte offset of the last complete ``AGENTS_FULL_STATE`` line, or None if there is none.
+
+    Both readers of this file start here, for the same reason: a full snapshot is
+    the only line a whole-agent-set view can be rebuilt from. Replaying a lone
+    mid-stream ``AGENT_STATE`` first would collapse that view to the single agent
+    it names.
+
+    Scans the file once without retaining it, so a long-lived host's event history
+    costs one sequential read and constant memory.
+
+    Raises ``FileNotFoundError`` for an events file that does not exist -- the
+    ordinary state of a host dir where no observer has ever run. That is kept
+    distinct from None, which says the file is there and holds no snapshot yet: a
+    caller may reasonably wait for the second and not the first.
+    """
+    return _scan_last_snapshot_and_boundary(events_path)[0]
+
+
+def _scan_last_snapshot_and_boundary(events_path: Path) -> tuple[int | None, int]:
+    """One pass over ``events_path``: the last complete snapshot's offset (or
+    None), and the offset just past the last complete line.
+
+    One pass rather than two lookups because the file has a live writer: with
+    separate scans, a snapshot appended between "is there a snapshot?" (no) and
+    "where does the tail start?" lands *before* the answered boundary and is
+    silently skipped -- and a follower seeded that way drops every event until the
+    writer's next snapshot. A single pass cannot see the file in two different
+    states, so whatever it misses is at or past the boundary it answers.
+    """
+    last_snapshot_offset: int | None = None
+    offset = 0
+    end_of_last_complete_line = 0
+    with open(events_path, "rb") as handle:
+        for raw_line in handle:
+            # Only a newline-terminated line is complete. Iterating a file yields
+            # a concurrent writer's half-written tail as a final unterminated
+            # "line", which a snapshot exceeding the atomic-append size hits
+            # routinely (see ``_append_event_to_file``). Skipping it leaves
+            # ``last_snapshot_offset`` on the previous snapshot -- where a fold
+            # should start anyway, since replaying forward reaches this line once
+            # the writer has finished it.
+            #
+            # The byte-level marker test keeps this whole-file scan from running
+            # every line through ``json.loads``; only candidates are decoded.
+            if raw_line.endswith(b"\n"):
+                if _FULL_STATE_MARKER in raw_line and _is_full_state_line(raw_line.decode("utf-8", errors="replace")):
+                    last_snapshot_offset = offset
+                offset += len(raw_line)
+                end_of_last_complete_line = offset
+            else:
+                offset += len(raw_line)
+    return last_snapshot_offset, end_of_last_complete_line
+
+
 def load_base_state_from_history(
     events_base_dir: Path,
 ) -> dict[str, _TrackedState]:
@@ -329,6 +417,13 @@ def load_base_state_from_history(
     Returns a dict mapping agent instance key (``<agent_id>@<host_id>``) ->
     _TrackedState. A history line missing host details (which current writers
     always include) falls back to the bare agent id for that line only.
+
+    Deliberately does its own scan rather than reusing
+    :func:`find_last_full_state_offset`: this reader exists partly to *report* on
+    the file's health, warning about mid-file corruption via
+    ``MalformedJsonLineWarner``, whereas the follower's scan skips non-snapshot
+    lines without parsing them and treats a torn tail as routine. The two look
+    alike and want different things.
     """
     events_path = get_observe_events_path(events_base_dir)
     if not events_path.exists():
@@ -406,6 +501,420 @@ def release_observe_lock(fd: int) -> None:
         os.close(fd)
     except OSError as e:
         logger.warning("Failed to close observe lock file descriptor: {}", e)
+
+
+class ObserveLockProbeError(MngrError):
+    """Raised when whether an observer holds the lock could not be determined.
+
+    Distinct from a definitive "no observer": the answer is unknown, not negative.
+    Callers must decide what to do about that themselves, because the right move
+    differs -- a follower cannot attach and should say why, while a command that
+    only wanted to avoid starting a second observer may reasonably press on.
+    """
+
+    def __init__(self, lock_path: Path, cause: OSError) -> None:
+        super().__init__(f"Could not probe the observe lock at {lock_path}: {cause}")
+
+
+def is_observe_writer_running(events_base_dir: Path) -> bool:
+    """Whether some process currently holds the observe lock for this directory.
+
+    This is the liveness signal for the event stream a follower reads: the observer
+    holds the lock for its whole run, so "the lock is held" means "someone is
+    writing the event file", and nothing else does.
+
+    Implemented by trying to take the lock and immediately dropping it again;
+    failing to take it *because someone else holds it* is the positive answer, and
+    that is the only failure which is. The momentary hold in the negative case can
+    in principle make an observer starting at that exact microsecond fail to take
+    its own lock. Nothing cheaper avoids that -- a shared lock would block a
+    starting writer's exclusive one just the same -- and the window is a single
+    ``flock`` pair on a path nobody else contends for, so the exposure is accepted
+    rather than eliminated. Unlike :func:`acquire_observe_lock` this never creates
+    the lock file, and it asks only for read access: ``flock`` is advisory and
+    independent of the open mode, so requesting write access would make a lock file
+    owned by another user (an observer started as root during bootstrap, say) read
+    as "no observer" while one is running.
+
+    Raises :class:`ObserveLockProbeError` when the probe itself fails (a permission
+    problem, a filesystem without ``flock``). Returning either answer there would
+    state as fact something the evidence does not support, and every caller goes on
+    to repeat that conclusion to a user.
+    """
+    lock_path = get_observe_lock_path(events_base_dir)
+    try:
+        fd = os.open(str(lock_path), os.O_RDONLY)
+    except FileNotFoundError:
+        # No observer has ever run here, so there is nothing to follow. This is the
+        # one negative answer the probe can actually establish.
+        return False
+    except OSError as e:
+        raise ObserveLockProbeError(lock_path, e) from e
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        # Someone else holds it. This is the only failure that means "an observer is
+        # running"; catching OSError broadly here would turn ENOLCK (an NFS or CIFS
+        # mount, a filesystem without flock) into that same positive, and a stale
+        # lock file left by an older mngr is enough to make it stick. That is the
+        # direction this function must least afford to guess in: it would send a
+        # follower off to tail a dormant file, the exact failure it exists to prevent.
+        return True
+    except OSError as e:
+        raise ObserveLockProbeError(lock_path, e) from e
+    finally:
+        os.close(fd)
+    return False
+
+
+# === Following ===
+
+
+class ObserveStreamUnavailableError(MngrError, ValueError):
+    """Raised when there is no live observer whose event stream could be followed."""
+
+
+class ObserveEventFollower(MutableModel):
+    """Reads the agents event stream that another process's observer is writing.
+
+    Exactly one process per host may *run* an observer (it needs the single-writer
+    lock above), but the events it produces are appended to a plain JSONL file that
+    any number of processes may *read*. This is the read side: a second consumer --
+    a throwaway server booted alongside the real one, a monitoring tool -- follows
+    the live stream instead of fighting for the lock and getting a dead observer.
+
+    Feeds each JSONL line to ``on_line`` verbatim as the observer wrote it to the
+    event file. That is the same event sequence ``mngr observe --stream-events``
+    prints on stdout (only the JSON separators differ, since that path re-encodes),
+    so a consumer folds identical events whether it owns the observer or follows one.
+
+    Two invariants make the fold safe:
+
+    - Folding starts at a full-state snapshot. On start we seek to the last one in
+      the file and replay forward; if the file has none yet, every line is dropped
+      until the observer emits one.
+    - Only complete lines are forwarded. A snapshot of many agents exceeds the
+      atomic-append size, so the tail can legitimately hold a half-written line; it
+      is left in place and picked up on a later poll.
+
+    Threading: ``start`` spawns one daemon thread that calls :meth:`poll_once` on a
+    fixed interval. Tests drive :meth:`poll_once` directly instead, so the class
+    needs no test-only seam.
+
+    Two kinds of thing can stop events arriving, and they are handled differently:
+
+    - An *outage* is environmental -- no observer holds the lock, or the lock could
+      not be probed. The follow loop keeps running, :meth:`failure_detail` reports
+      the outage for as long as it lasts, and the fold resumes on its own when an
+      observer comes back (a new ``mngr observe`` appends a fresh full-state
+      snapshot, which replaces the folded view). Nothing is lost by re-probing: a
+      follower holds no lock, so it cannot take one away from the writer it wants.
+    - A *failure* is internal -- the ``on_line`` sink raised, or the loop itself
+      died. That is permanent and first-cause-wins, because retrying a consumer
+      whose fold is broken just breaks it again.
+
+    A follower is single-use: ``start`` may be called once, and not again after
+    ``stop``. Construct a new one to follow the stream again.
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid", frozen=False)
+
+    events_base_dir: Path = Field(frozen=True, description="Directory the observer writes its events under")
+    on_line: Callable[[str], None] = Field(frozen=True, description="Sink for each complete event line")
+    poll_interval_seconds: float = Field(
+        default=_FOLLOW_POLL_SECONDS, frozen=True, description="Seconds between tail reads"
+    )
+    join_timeout_seconds: float = Field(
+        default=_FOLLOW_JOIN_TIMEOUT_SECONDS,
+        frozen=True,
+        description="Seconds ``stop`` waits for the follow thread before reporting it still running",
+    )
+
+    _stop_event: threading.Event = PrivateAttr(default_factory=threading.Event)
+    _thread: ObservableThread | None = PrivateAttr(default=None)
+    _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
+    # None until something internal makes the stream unfollowable for good.
+    # "Never started" is not represented here -- that is the owner's fact, not the
+    # follower's.
+    _failure: str | None = PrivateAttr(default=None)
+    # The environmental outage in effect right now, or None. Unlike ``_failure``
+    # this is cleared as soon as a writer comes back, and it is refreshed rather
+    # than kept first-cause-wins so it describes the *current* reason.
+    _outage: str | None = PrivateAttr(default=None)
+    _offset: int = PrivateAttr(default=0)
+    _is_seeded: bool = PrivateAttr(default=False)
+    _has_seen_snapshot: bool = PrivateAttr(default=False)
+    _is_started: bool = PrivateAttr(default=False)
+
+    def start(self) -> None:
+        """Begin following the live observer's event stream.
+
+        Raises :class:`ObserveStreamUnavailableError` when no observer holds the
+        lock, because there is then no stream to follow and silently tailing a
+        dormant file is the exact failure this class exists to prevent. Also once
+        this follower has been started or stopped, since neither way of starting it
+        again does what the caller means: a second thread would share the first's
+        read offset and forward every line twice, and a thread started with the stop
+        flag already set would exit on its first loop check and -- because the flag
+        is set -- record no failure, leaving ``is_stream_healthy`` reporting True
+        forever. That second case includes a ``stop`` that ran before the follower
+        ever started, e.g. from a ``finally`` around a ``start`` that raised.
+        """
+        with self._lock:
+            if self._is_started or self._stop_event.is_set():
+                raise ObserveStreamUnavailableError(
+                    "This agent-lifecycle follower has already been started or stopped; a follower is "
+                    "single-use, so construct a new one to follow the stream again."
+                )
+            # Claimed under the lock, so two concurrent starts cannot both pass the
+            # guard and spawn threads that share one read offset.
+            self._is_started = True
+        try:
+            self._require_a_live_writer()
+        except ObserveStreamUnavailableError:
+            # Refusing here leaves the follower entirely unused, and the caller may
+            # reasonably retry once an observer comes up, so give the claim back.
+            with self._lock:
+                self._is_started = False
+            raise
+        thread = ObservableThread(
+            target=self._follow_loop,
+            name="observe-follower",
+            daemon=True,
+            on_failure=self._on_follow_failure,
+            # ``ObservableThread.join`` re-raises what the thread raised, and ``stop``
+            # joins. The consumer's teardown is what calls ``stop``, and handing it its
+            # own sink's exception there is not the contract: a dead stream is reported
+            # through ``failure_detail()``.
+            suppressed_exceptions=(BaseException,),
+        )
+        self._thread = thread
+        thread.start()
+
+    def _require_a_live_writer(self) -> None:
+        """Raise :class:`ObserveStreamUnavailableError` unless an observer holds the lock."""
+        try:
+            is_writer_running = is_observe_writer_running(self.events_base_dir)
+        except ObserveLockProbeError as e:
+            # Unknown is not followable either, so the caller's answer is the same
+            # error -- but it carries what actually went wrong rather than claiming
+            # no observer is running.
+            raise ObserveStreamUnavailableError(str(e)) from e
+        if not is_writer_running:
+            raise ObserveStreamUnavailableError(
+                f"No 'mngr observe' process holds {get_observe_lock_path(self.events_base_dir)}, so there is "
+                "no live agent-lifecycle event stream to follow."
+            )
+
+    def stop(self) -> None:
+        """Stop the follow thread and wait briefly for it to exit. Idempotent.
+
+        A thread that has not exited by the end of that wait is reported rather
+        than assumed gone: it can only be stuck inside ``on_line``, so it is still
+        feeding a consumer that has just been told the follower is stopped, and it
+        is a daemon thread that will keep doing so until the process exits. There
+        is no safe way to kill it from here, which is exactly why the caller has to
+        hear about it.
+        """
+        self._stop_event.set()
+        thread = self._thread
+        if thread is not None:
+            thread.join(timeout=self.join_timeout_seconds)
+            if thread.is_alive():
+                logger.warning(
+                    "The agent-lifecycle follower thread did not exit within {} seconds and is still "
+                    "running; its 'on_line' sink has most likely not returned, so it may keep "
+                    "delivering events after this stop.",
+                    self.join_timeout_seconds,
+                )
+            self._thread = None
+
+    def is_stream_healthy(self) -> bool:
+        """Whether events are reaching this follower right now.
+
+        False while an outage is in effect and once an internal failure has been
+        recorded. A follower that was never started, or was deliberately stopped,
+        still reports True: neither is a fault of the stream, and which of those
+        applies is the owner's own fact.
+        """
+        return self.failure_detail() is None
+
+    def failure_detail(self) -> str | None:
+        """Why the stream is not being followed right now, or None when it is.
+
+        An internal failure wins over an outage: it is permanent, so it stays the
+        answer even if a writer happens to be up.
+        """
+        with self._lock:
+            return self._failure if self._failure is not None else self._outage
+
+    def poll_once(self) -> None:
+        """Advance by one tick: confirm the writer, then drain new lines.
+
+        The writer check comes first so a stream that died between ticks is
+        reported as dead rather than as "no new events", which is precisely the
+        distinction a health gate needs. A tick that finds no writer records an
+        outage and stops there; the next tick tries again, so an observer that
+        restarts is picked back up without anyone re-attaching the follower.
+        """
+        try:
+            is_writer_running = is_observe_writer_running(self.events_base_dir)
+        except ObserveLockProbeError as e:
+            # Says what actually happened. Reporting the observer as exited would
+            # be a diagnosis we have no evidence for, and this string is what a
+            # consumer puts in front of whoever has to fix it.
+            self._record_outage(
+                f"Could not tell whether the 'mngr observe' process writing "
+                f"{get_observe_events_path(self.events_base_dir)} is still running, so agent lifecycle "
+                f"events can no longer be relied on: {e}"
+            )
+            return
+        if not is_writer_running:
+            self._record_outage(
+                f"The 'mngr observe' process writing {get_observe_events_path(self.events_base_dir)} exited, "
+                "so agent lifecycle events are no longer arriving."
+            )
+            return
+        self._clear_outage()
+        if not self._is_seeded:
+            self._seed()
+            return
+        self._drain()
+
+    def _follow_loop(self) -> None:
+        """Poll until stopped, or until something internal makes the stream unfollowable.
+
+        An outage does not end the loop: the observer it follows may come back, and
+        re-probing a lock this follower never takes cannot get in that observer's way.
+        The only other way out is an exception, which records a failure on the way
+        past (see :meth:`_on_follow_failure`), so a consumer gating on
+        :meth:`is_stream_healthy` cannot keep reporting itself live once this thread
+        is gone.
+        """
+        while not self._stop_event.is_set():
+            self.poll_once()
+            self._stop_event.wait(timeout=self.poll_interval_seconds)
+
+    def _on_follow_failure(self, e: BaseException) -> None:
+        """Turn an exception that ended the follow thread into the consumer's diagnosis.
+
+        Reached for anything that escapes :meth:`_follow_loop`, which includes
+        whatever ``on_line`` raises -- this class cannot enumerate a consumer's fold.
+        ``ObservableThread`` has already logged the traceback and re-raises after
+        this returns, so nothing is swallowed; all that is left is to name the cause,
+        since "something exited" is not actionable to whoever reads
+        :meth:`failure_detail`. An exception that raced a deliberate ``stop`` is not a
+        failure of the stream.
+        """
+        if self._stop_event.is_set():
+            return
+        self._record_failure(f"The agent-lifecycle follower stopped: {type(e).__name__}: {e}")
+
+    def _seed(self) -> None:
+        """Position at the newest full-state snapshot and replay from it to EOF."""
+        events_path = get_observe_events_path(self.events_base_dir)
+        self._is_seeded = True
+        if not events_path.exists():
+            self._offset = 0
+            return
+        # Both answers come from one scan (see ``_scan_last_snapshot_and_boundary``):
+        # a snapshot the live writer appends after that scan sits at or past the
+        # boundary, so the drain below -- or the next tick's -- picks it up rather
+        # than losing it in the gap between two separate lookups.
+        snapshot_offset, boundary = _scan_last_snapshot_and_boundary(events_path)
+        if snapshot_offset is None:
+            # No snapshot has ever been written. Skip the existing history (it
+            # cannot be folded from) and wait at the tail; ``_has_seen_snapshot``
+            # keeps dropping lines until the observer emits its next snapshot.
+            #
+            # Wait at the last line *boundary* rather than at EOF: seeking to a raw
+            # size can land inside a line the writer is still appending, and the
+            # remainder would then be read as though it were a whole line and logged
+            # as corruption -- the one thing ``_is_full_state_line`` promises not to
+            # cry wolf about. Every other offset this class sets is already on a
+            # boundary, so this was the lone exception.
+            self._offset = boundary
+            return
+        self._offset = snapshot_offset
+        self._drain()
+
+    def _drain(self) -> None:
+        """Forward every complete line appended since the last read.
+
+        Replacement is detected by the file shrinking, which is all a size check can
+        see: a replacement that happens to land on the same size reads as "no new
+        events" and is deliberately out of scope (it would take tracking the inode).
+        """
+        events_path = get_observe_events_path(self.events_base_dir)
+        if not events_path.exists():
+            return
+        size = events_path.stat().st_size
+        if size < self._offset:
+            # The file shrank, so it was truncated or replaced. Re-run the seed scan
+            # over whatever is there now rather than reading garbage from a stale
+            # offset -- and rather than replaying from byte 0, which would fold every
+            # snapshot the replacement already holds and leave the view on an older
+            # one than the file does.
+            self._offset = 0
+            self._is_seeded = False
+            self._has_seen_snapshot = False
+            self._seed()
+            return
+        if size == self._offset:
+            return
+        with open(events_path, "rb") as handle:
+            handle.seek(self._offset)
+            chunk = handle.read(size - self._offset)
+        # A trailing line with no terminator is a write in progress -- routine here,
+        # since a snapshot over the atomic-append size tears. ``split_complete_lines``
+        # holds it back and reports the byte count actually consumed, so the offset
+        # lands on it and it is re-read once the writer has finished it.
+        lines, consumed_bytes = split_complete_lines(chunk.decode("utf-8", errors="replace"))
+        self._offset += consumed_bytes
+        for line in lines:
+            self._forward(line)
+
+    def _forward(self, line: str) -> None:
+        """Hand one complete line to the sink, once folding has a snapshot to build on."""
+        if not line.strip():
+            return
+        if not self._has_seen_snapshot:
+            if not _is_full_state_line(line):
+                return
+            self._has_seen_snapshot = True
+        self.on_line(line)
+
+    def _record_failure(self, detail: str) -> None:
+        """Mark the stream permanently dead (first cause wins) and say so loudly."""
+        with self._lock:
+            if self._failure is not None:
+                return
+            self._failure = detail
+        logger.error("Agent lifecycle stream unavailable: {}", detail)
+
+    def _record_outage(self, detail: str) -> None:
+        """Note that no writer is reachable right now, refreshing the reason each tick.
+
+        Logged only as the outage begins: it is re-recorded on every poll for as
+        long as it lasts, and an observer that stays down would otherwise fill the
+        log with one identical line per second.
+        """
+        with self._lock:
+            is_new_outage = self._outage is None
+            self._outage = detail
+        if is_new_outage:
+            logger.warning("Agent lifecycle stream unavailable: {}", detail)
+
+    def _clear_outage(self) -> None:
+        """Note that a writer is reachable again, if one was not."""
+        with self._lock:
+            was_out = self._outage is not None
+            self._outage = None
+        if was_out:
+            logger.info(
+                "Agent lifecycle stream recovered: an 'mngr observe' process is writing {} again",
+                get_observe_events_path(self.events_base_dir),
+            )
 
 
 # === Observer ===

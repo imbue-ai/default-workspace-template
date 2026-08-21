@@ -45,14 +45,44 @@ specifics, but the shape below holds for all of them.
    abandoning the user's core ask? If yes (your own code, a trivial transform),
    it does not belong in this pass. If no, validate it now. Fail fast here.
 
-5. **Put a cheap, real, prototype creation in front of the user.** Produce the
-   smallest *real* creation that lets the user judge the shape and loop on it:
-   present, take feedback, present an updated creation that *visibly applies* the
-   feedback. Keep this phase
-   throwaway -- no production scripts, services, tests, or commits yet; producing
-   the creation by hand, in-context, is fine, as long as the *output* is real.
-   Loop until the user **explicitly confirms** the shape is right. That
-   confirmation is the gate to everything below.
+5. **Put a cheap, real, demonstrative prototype in front of the user.** Produce
+   the smallest *real* prototype that lets the user judge the shape and loop on
+   it: present, take feedback, present an updated prototype that *visibly applies*
+   the feedback. The purpose of this prototype is **fast feedback** -- getting the
+   shape in front of the user in seconds -- not merely avoiding a broken surface;
+   keep it cheap and disposable. Loop until the user **explicitly confirms** the
+   shape is right. That confirmation is the gate to everything below.
+
+   Two demonstrative-prototype types, chosen by **wiring-cost vs. restart-cost**:
+
+   - *Type 1 -- janky real edit:* rough or hardcoded, but in the *real* code and
+     shown through the *real* surface. Faithful, and it flows straight into the
+     real implementation. Prefer it when real context is needed to convince, when
+     integration is cheap, or when the rough version should simply become the real
+     thing.
+   - *Type 2 -- detached prototype:* a separate throwaway (a hand-built HTML mock,
+     a fake UI). Cheapest and fastest, no real wiring, discarded after. Prefer it
+     for the fastest look-and-feel loop, or for comparing directions when a fake
+     conveys the idea and real wiring is costly -- but it may *not convince* when
+     real rendering matters.
+
+   Keep this phase **throwaway either way: no commits on the served branch and no
+   production state** (no production scripts, services, or tests). Producing a
+   Type 2 prototype by hand, in-context, is fine as long as its *output* is real.
+   Committing a Type 1 edit on an *isolated throwaway branch* is also fine -- a
+   worktree-based live loop depends on exactly those commits; what matters is that
+   nothing reaches the served branch or production state until the shape is
+   confirmed.
+
+   **Do not test the prototype yourself; that is what you are surfacing it for.**
+   Your own check ends at "it came up" -- an exit code, a health probe, a `curl`,
+   a log line -- and it happens *before* you put the thing in front of the user.
+   Once it is in front of them, driving it (a browser session, a scripted
+   interaction) buys nothing the next few seconds of their attention won't, and
+   it costs the thing this phase exists for: speed. Worse, the surface is often
+   live -- wired to real data, real accounts, real conversations -- so your test
+   actions land in the user's view and in their state. The thorough pass is phase
+   7's, and it runs in a background worker against its own instance.
 
 6. **Hard gate: nothing hardened before confirmation.** Do not crystallize, write
    thorough tests, run review gates, or build production state on an unconfirmed

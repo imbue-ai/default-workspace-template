@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
@@ -124,6 +125,10 @@ class _FakeSpawner(reveal_mod.Spawner):
     output: str = ""
     exited: bool = False
     spawns: list[list[str]] = field(default_factory=list)
+    # The environment each pre-flight boot was given, so a test can assert how
+    # the throwaway instance was configured (e.g. that it follows the live
+    # observer rather than starting one of its own).
+    spawn_envs: list[dict] = field(default_factory=list)
     output_paths: list[Path] = field(default_factory=list)
     last: _FakeSpawned | None = None
 
@@ -131,9 +136,17 @@ class _FakeSpawner(reveal_mod.Spawner):
         self, argv: Sequence[str], cwd: str, env: dict, output_path: Path
     ) -> _FakeSpawned:
         self.spawns.append(list(argv))
+        self.spawn_envs.append(dict(env))
         self.output_paths.append(output_path)
         self.last = _FakeSpawned(output=self.output, exited=self.exited)
         return self.last
+
+
+def _supervisor_status(pid: int) -> _Result:
+    """What ``supervisorctl status`` prints for a RUNNING program on ``pid``."""
+    return _Result(
+        stdout=f"{reveal_mod.SUPERVISOR_PROGRAM}   RUNNING   pid {pid}, uptime 0:00:12\n"
+    )
 
 
 def _runner_with_diff(name_status: str, *, dirty: bool = False) -> _RecordingRunner:
@@ -142,6 +155,9 @@ def _runner_with_diff(name_status: str, *, dirty: bool = False) -> _RecordingRun
         ("git", "status", "--porcelain"), _Result(stdout=" M foo\n" if dirty else "")
     )
     runner.respond(("git", "diff"), _Result(stdout=name_status))
+    # A settled service by default: RUNNING on one pid that does not turn over.
+    # Tests about an unsettled stack override this with a pid-changing response.
+    runner.respond(("supervisorctl", "status"), _supervisor_status(4242))
     return runner
 
 
@@ -274,7 +290,9 @@ def test_frontend_only_builds_and_refreshes_without_restart() -> None:
 
     assert code == 0
     assert runner.ran("npm", "run", "build")
-    assert not runner.ran("mngr", "start")  # frontend change never restarts the backend
+    assert not runner.ran(
+        "supervisorctl", "restart"
+    )  # frontend change never restarts the backend
     assert not runner.ran(
         "uv", "tool", "install"
     )  # no manifest change -> no dep refresh
@@ -297,7 +315,7 @@ def test_backend_only_change_still_refreshes_the_view() -> None:
     code = _reveal(runner, _FakeHttp(_all_healthy), _FakeSpawner())
 
     assert code == 0
-    assert runner.ran("mngr", "start", "--restart", "system-services")
+    assert runner.ran("supervisorctl", "restart", reveal_mod.SUPERVISOR_PROGRAM)
     assert _refreshed_the_view(runner)
 
 
@@ -310,7 +328,7 @@ def test_refresh_runs_after_the_restart_not_before() -> None:
     _reveal(runner, _FakeHttp(_all_healthy), _FakeSpawner())
 
     restart_index = next(
-        i for i, c in enumerate(runner.calls) if c[:2] == ["mngr", "start"]
+        i for i, c in enumerate(runner.calls) if c[:2] == ["supervisorctl", "restart"]
     )
     refresh_index = next(
         i
@@ -383,8 +401,41 @@ def test_backend_with_manifest_refreshes_preflights_restarts_and_probes() -> Non
         reveal_mod.TOOL_NAME
     ]  # pre-flight booted
     assert spawner.last is not None and spawner.last.terminated  # and torn down
-    assert runner.ran("mngr", "start", "--restart", "system-services")
+    assert runner.ran("supervisorctl", "restart", reveal_mod.SUPERVISOR_PROGRAM)
     assert any(_is_live(u) for u in http.get_urls)  # live health probed
+
+
+def test_preflight_boot_follows_the_live_observer_and_uses_the_strict_health_path() -> (
+    None
+):
+    """The pre-flight boots beside the still-running live service, so it must follow it.
+
+    Trying to run its own observer would lose the single-writer lock, and the old
+    ``/api/agents`` probe would have passed the pre-flight anyway -- so the gate
+    proved nothing about whether the merged backend can serve a live agent view.
+    """
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/imbue/system_interface/server.py\n"
+    )
+    http = _FakeHttp(_all_healthy)
+    spawner = _FakeSpawner()
+
+    code = _reveal(runner, http, spawner)
+
+    assert code == 0
+    assert len(spawner.spawn_envs) == 1
+    assert (
+        spawner.spawn_envs[0][reveal_mod.PREVIEW_AGENT_EVENTS_MODE_ENV]
+        == reveal_mod.FOLLOW_AGENT_EVENTS_MODE
+    )
+    preflight_urls = [u for u in http.get_urls if not _is_live(u)]
+    assert preflight_urls
+    assert all(u.endswith(reveal_mod.STRICT_HEALTH_PATH) for u in preflight_urls)
+    # The live service keeps the looser probe: a rollback here is heavy and
+    # lifecycle-stream trouble on the live UI is not something reverting fixes.
+    live_urls = [u for u in http.get_urls if _is_live(u)]
+    assert live_urls
+    assert all(u.endswith(reveal_mod.HEALTH_PATH) for u in live_urls)
 
 
 def test_backend_src_only_skips_dependency_refresh() -> None:
@@ -397,7 +448,7 @@ def test_backend_src_only_skips_dependency_refresh() -> None:
 
     assert code == 0
     assert not runner.ran("uv", "tool", "install")
-    assert runner.ran("mngr", "start")
+    assert runner.ran("supervisorctl", "restart")
 
 
 def test_no_relevant_changes_does_nothing() -> None:
@@ -408,7 +459,7 @@ def test_no_relevant_changes_does_nothing() -> None:
 
     assert code == 0
     assert not runner.ran("npm", "run", "build")
-    assert not runner.ran("mngr", "start")
+    assert not runner.ran("supervisorctl", "restart")
     # The unconditional refresh in _apply_reveal is only safe because this run
     # never reaches it: nothing changed, so there is nothing to reveal and no
     # reason to reload the view the user is already looking at.
@@ -432,7 +483,7 @@ def test_failed_preflight_never_restarts_live_service_and_rolls_back() -> None:
     # The live service was never restarted -- pre-flight failed before the
     # restart, so the running service is still healthy on known-good code and
     # recovery must NOT restart it (doing so would needlessly blip a live UI).
-    assert not runner.ran("mngr", "start")
+    assert not runner.ran("supervisorctl", "restart")
     # Recovery still re-confirmed the untouched service via the health probe.
     assert any(_is_live(u) for u in http.get_urls)
     # An added file is removed on rollback (not checked out).
@@ -767,7 +818,9 @@ def test_failed_preflight_with_manifest_refreshes_deps_but_does_not_restart() ->
     code = _reveal(runner, http, _FakeSpawner())
 
     assert code == 2
-    assert not runner.ran("mngr", "start")  # untouched live service is not restarted
+    assert not runner.ran(
+        "supervisorctl", "restart"
+    )  # untouched live service is not restarted
     # Both tools are rebuilt twice: once in the failed reveal, once in recovery to
     # restore the known-good dependency set on disk. Recovery has to cover the mngr
     # tool too -- the rollback moves the vendored source back, which stales its
@@ -788,7 +841,9 @@ def test_failed_post_restart_health_triggers_rollback_then_recovers() -> None:
     def responder(url: str) -> int | None:
         if not _is_live(url):
             return 200  # pre-flight always boots
-        restarts = runner.calls.count(["mngr", "start", "--restart", "system-services"])
+        restarts = runner.calls.count(
+            ["supervisorctl", "restart", reveal_mod.SUPERVISOR_PROGRAM]
+        )
         return 200 if restarts >= 2 else None
 
     http = _FakeHttp(responder)
@@ -804,7 +859,7 @@ def test_failed_post_restart_health_triggers_rollback_then_recovers() -> None:
             [
                 c
                 for c in runner.calls
-                if c == ["mngr", "start", "--restart", "system-services"]
+                if c == ["supervisorctl", "restart", reveal_mod.SUPERVISOR_PROGRAM]
             ]
         )
         == 2
@@ -826,6 +881,74 @@ def test_emergency_when_rollback_cannot_restore_health() -> None:
     code = _reveal(runner, http, _FakeSpawner())
 
     assert code == 3
+
+
+def test_emergency_when_a_recovery_step_itself_fails() -> None:
+    """Exit 3 is not only "never went green" -- a recovery *step* can fail outright.
+
+    Here the tree is restored fine, but rebuilding from known-good fails, so the
+    recovery never reaches its health probe at all. That has to read as the
+    emergency it is rather than as a successful rollback.
+    """
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/frontend/src/views/Chat.ts\n"
+    )
+    runner.respond(("npm", "run", "build"), _Result(returncode=1, stderr="type error"))
+    http = _FakeHttp(_all_healthy)
+
+    code = _reveal(runner, http, _FakeSpawner())
+
+    assert code == 3
+    assert runner.ran("git", "checkout", _ROLLBACK)  # the tree was still restored
+
+
+def test_a_green_verdict_requires_the_service_to_stop_turning_over() -> None:
+    """A single 200 can land in the gap between two restarts of a settling stack.
+
+    Reveal printed "updated and confirmed healthy" on exactly that, and five
+    seconds later the live UI did not answer and supervisord had a new pid. The
+    verdict arms the automatic rollback, so it has to describe settled state.
+    """
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/imbue/system_interface/server.py\n"
+    )
+    # A different pid on every status call for the reveal's entire budget, so no
+    # run of consecutive probes ever shares one. The canned list's last entry
+    # repeats once exhausted, which is the stack finally settling -- so the
+    # rollback that follows can confirm the UI and this stays an ordinary exit 2.
+    runner.respond(
+        ("supervisorctl", "status"),
+        [
+            _supervisor_status(7000 + offset)
+            for offset in range(reveal_mod._HEALTH_ATTEMPTS)
+        ],
+    )
+    http = _FakeHttp(_all_healthy)  # every probe answers 200
+
+    code = _reveal(runner, http, _FakeSpawner())
+
+    assert code == 2, "a stack that is still restarting is not a healthy reveal"
+    assert runner.ran("git", "checkout", _ROLLBACK)
+
+
+def test_a_settled_verdict_tolerates_a_pid_that_settles_partway_through() -> None:
+    """The confirmation restarts on a pid change rather than failing on one.
+
+    The point is to wait a settling stack out, not to judge it: a restart landing
+    mid-confirmation is exactly the normal case this budget exists for.
+    """
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/imbue/system_interface/server.py\n"
+    )
+    runner.respond(
+        ("supervisorctl", "status"),
+        [_supervisor_status(7001), _supervisor_status(7002)],
+    )
+    http = _FakeHttp(_all_healthy)
+
+    code = _reveal(runner, http, _FakeSpawner())
+
+    assert code == 0
 
 
 def test_frontend_build_failure_rolls_back() -> None:
@@ -857,7 +980,7 @@ def test_dirty_tree_refuses_before_touching_anything() -> None:
     with pytest.raises(reveal_mod.PreconditionError):
         _reveal(runner, http, _FakeSpawner())
 
-    assert not runner.ran("mngr", "start")
+    assert not runner.ran("supervisorctl", "restart")
     assert not runner.ran("npm", "run", "build")
 
 
@@ -902,18 +1025,19 @@ def test_restore_tree_removes_adds_and_checks_out_the_rest() -> None:
     ]
 
 
-# --- preview / unpreview adapters -------------------------------------------
+# --- the preview adapter ------------------------------------------------------
 #
-# ``preview`` / ``unpreview`` are thin system-interface adapters over the shared
+# ``preview`` is a thin system-interface adapter over the shared
 # ``serve_isolated_instance.py`` script. These tests assert the adapter validates
 # its input and hands the shared script the system-interface specifics; the
-# preview *mechanism* (booting, health, registration, teardown, state) is
-# exercised in ``.agents/shared/scripts/serve_isolated_instance_test.py``.
+# preview *mechanism* (booting, health, registration, refresh, teardown, state) is
+# exercised in ``.agents/shared/scripts/serve_isolated_instance_test.py``, which is
+# also where refreshing and tearing a live preview down are covered -- the flow
+# invokes those directly rather than through a wrapper here.
 
 
 _SLUG = "demo-change"
 _SERVE_UP = (sys.executable, str(reveal_mod._SHARED_SERVE_SCRIPT), "up")
-_SERVE_DOWN = (sys.executable, str(reveal_mod._SHARED_SERVE_SCRIPT), "down")
 
 
 def _make_work_dir(tmp_path: Path, *, built: bool = True) -> Path:
@@ -936,6 +1060,11 @@ def _flag(argv: Sequence[str], flag: str) -> str:
     return argv[argv.index(flag) + 1]
 
 
+def _flags(argv: Sequence[str], flag: str) -> list[str]:
+    """Every value of a repeatable flag (``--env`` is passed more than once)."""
+    return [argv[index + 1] for index, item in enumerate(argv) if item == flag]
+
+
 def test_preview_delegates_to_the_shared_script_with_si_specifics(
     tmp_path: Path,
 ) -> None:
@@ -955,14 +1084,40 @@ def test_preview_delegates_to_the_shared_script_with_si_specifics(
     # The launch command (after ``--``) is ``uv run system-interface``.
     assert argv[-3:] == ["uv", "run", reveal_mod.TOOL_NAME]
     # System-interface specifics: bind port/host env, neuter layout persistence by
-    # dropping MNGR_AGENT_ID, probe /api/agents, register the inner app + wrapper.
+    # dropping MNGR_AGENT_ID, register the inner app + wrapper.
     assert _flag(argv, "--port-env") == reveal_mod.PREVIEW_PORT_ENV
     assert _flag(argv, "--host-env") == reveal_mod.PREVIEW_HOST_ENV
     assert _flag(argv, "--unset-env") == reveal_mod.ENV_MNGR_AGENT_ID
-    assert _flag(argv, "--health-path") == reveal_mod.HEALTH_PATH
     assert _flag(argv, "--service-name") == reveal_mod.PREVIEW_INNER_SERVICE_NAME
     assert _flag(argv, "--preview-service-name") == reveal_mod.PREVIEW_SERVICE_NAME
     assert _flag(argv, "--preview-title") == _SLUG
+
+
+def test_preview_follows_the_live_observer_and_gates_on_the_strict_health_path(
+    tmp_path: Path,
+) -> None:
+    """A preview must read the live agent event stream, not compete for it.
+
+    ``mngr observe`` is single-writer per mngr host dir and the live system
+    interface holds that lock, so a preview that started its own observer had it
+    die seconds into boot and showed a frozen agent list plus "No conversation
+    data" for every agent created afterwards -- while still passing a health
+    probe that only listed agents. FOLLOW mode fixes the cause; the strict health
+    path is what stops a preview from coming up if it is broken anyway.
+    """
+    work_dir = _make_work_dir(tmp_path)
+    runner = _RecordingRunner()
+
+    code = reveal_mod.preview(_SLUG, str(work_dir), tmp_path, runner=runner)
+
+    assert code == 0
+    argv = runner.argvs_starting(*_SERVE_UP)[0]
+    assert (
+        f"{reveal_mod.PREVIEW_AGENT_EVENTS_MODE_ENV}={reveal_mod.FOLLOW_AGENT_EVENTS_MODE}"
+        in _flags(argv, "--env")
+    )
+    assert _flag(argv, "--health-path") == reveal_mod.STRICT_HEALTH_PATH
+    assert reveal_mod.STRICT_HEALTH_PATH != reveal_mod.HEALTH_PATH
 
 
 def test_preview_rejects_a_work_dir_without_the_app(tmp_path: Path) -> None:
@@ -1037,34 +1192,24 @@ def test_preview_propagates_a_shared_script_failure(tmp_path: Path) -> None:
     assert code == 1
 
 
-def test_unpreview_delegates_to_the_shared_script(tmp_path: Path) -> None:
-    runner = _RecordingRunner()
-
-    code = reveal_mod.unpreview(_SLUG, tmp_path, runner=runner)
-
-    assert code == 0
-    down_calls = runner.argvs_starting(*_SERVE_DOWN)
-    assert len(down_calls) == 1
-    # Tears down the same instance name the preview created for this slug.
-    assert _flag(down_calls[0], "--name") == reveal_mod._preview_instance_name(_SLUG)
-
-
-def test_unpreview_propagates_a_shared_script_failure(tmp_path: Path) -> None:
-    runner = _RecordingRunner()
-    runner.respond(_SERVE_DOWN, _Result(returncode=1))
-
-    code = reveal_mod.unpreview(_SLUG, tmp_path, runner=runner)
-
-    assert code == 1
-
-
-def test_main_routes_unpreview_through_the_shared_script(tmp_path: Path) -> None:
-    # End-to-end wiring: main() -> unpreview() spawns a *real* subprocess of the
-    # shared script -- proving ``_SHARED_SERVE_SCRIPT`` resolves to an existing,
-    # runnable stdlib script. No instance exists, so the shared ``down`` is an
-    # idempotent no-op success.
-    code = reveal_mod.main(["unpreview", "--slug", _SLUG, "--repo-root", str(tmp_path)])
-    assert code == 0
+def test_the_shared_serve_script_path_resolves_to_a_runnable_script() -> None:
+    # ``preview`` spawns the shared script by this path, and the refresh/teardown
+    # halves of the flow are invoked directly by the agent rather than through
+    # this module -- so nothing else here would notice the ``parents[3]`` arithmetic
+    # drifting (a skill folder moving, the script being renamed). Run it for real.
+    assert reveal_mod._SHARED_SERVE_SCRIPT.is_file()
+    assert (
+        subprocess.run(
+            [sys.executable, str(reveal_mod._SHARED_SERVE_SCRIPT), "--help"],
+            capture_output=True,
+        ).returncode
+        == 0
+    )
+    # The prose the agent copies from (this module's docstring, the skill) names
+    # the same script repo-relatively; keep the two spellings in step.
+    assert str(reveal_mod._SHARED_SERVE_SCRIPT).endswith(
+        reveal_mod._SHARED_SERVE_SCRIPT_HINT
+    )
 
 
 def test_main_preview_rejects_a_bad_work_dir(tmp_path: Path) -> None:

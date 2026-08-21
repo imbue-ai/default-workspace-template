@@ -23,11 +23,13 @@ from mngr_cli_contract.contract import assert_mngr_argv_valid
 from oom_priority import bands
 
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
+from imbue.mngr.api.observe import make_full_agent_state_event
 from imbue.mngr.errors import AgentStartError
 from imbue.mngr_codex.app_server_client import CodexModel
 from imbue.system_interface import client_activity
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.agent_discovery import AgentInfo
+from imbue.system_interface.agent_events import AgentEventsMode
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.app_context import state_of
@@ -65,6 +67,7 @@ from imbue.system_interface.server import _handle_client_state_message
 from imbue.system_interface.server import _stream_filtered_events
 from imbue.system_interface.server import create_application
 from imbue.system_interface.testing import RecordingMngrMessenger
+from imbue.system_interface.testing import build_agent_details
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import close_ws
 from imbue.system_interface.testing import open_ws
@@ -139,6 +142,33 @@ def test_index_returns_not_built_when_no_static(client: FlaskClient, tmp_path: P
         assert "npm run build" in response.text
 
 
+def test_an_unknown_api_path_is_a_json_404_not_the_app_shell(client: FlaskClient) -> None:
+    """A mistyped API fetch must fail, not "succeed" with a page.
+
+    The single-page-app catch-all answers any unmatched path with ``index.html``
+    at HTTP 200, which for an ``/api/*`` path means a caller parses a web page as
+    data -- and a probe for whether a route exists yet answers that it does.
+    """
+    response = client.get("/api/definitely-not-a-route-xyz")
+
+    assert response.status_code == 404
+    assert response.get_json()["detail"] == "No such API route: /api/definitely-not-a-route-xyz"
+
+    # The bare prefix is just as API-shaped: /api itself must not render the shell.
+    bare_response = client.get("/api")
+
+    assert bare_response.status_code == 404
+    assert bare_response.get_json()["detail"] == "No such API route: /api"
+
+
+def test_a_client_side_route_still_renders_the_app_shell(client: FlaskClient) -> None:
+    """Only /api paths change: everything else the catch-all handles is a UI route."""
+    response = client.get("/some/client/side/route")
+
+    assert response.status_code == 200
+    assert response.headers["Content-Type"].startswith("text/html")
+
+
 def test_list_agents_endpoint(client: FlaskClient) -> None:
     """The agents endpoint returns agent data."""
     with patch("imbue.system_interface.server.discover_agents") as mock_discover:
@@ -158,6 +188,41 @@ def test_list_agents_endpoint(client: FlaskClient) -> None:
     assert len(data["agents"]) == 1
     assert data["agents"][0]["name"] == "test-agent"
     assert data["agents"][0]["state"] == "RUNNING"
+
+
+def test_health_is_degraded_while_no_lifecycle_events_have_arrived(client: FlaskClient) -> None:
+    """Discovery working is not enough; the lifecycle stream must be live too.
+
+    This is the gap that let a preview boot green with a permanently frozen agent
+    view: ``/api/agents`` runs its own discovery, so it answers 200 regardless of
+    whether the instance is receiving lifecycle events at all.
+    """
+    with patch("imbue.system_interface.server.discover_agents", return_value=[]):
+        agents_response = client.get("/api/agents")
+        health_response = client.get("/api/health")
+
+    assert agents_response.status_code == 200
+    assert health_response.status_code == 503
+    body = health_response.get_json()
+    assert body["status"] == "degraded"
+    assert body["agent_events"]["is_stream_healthy"] is False
+
+
+def test_health_is_ok_once_the_lifecycle_stream_is_feeding_the_instance(
+    broadcaster: WebSocketBroadcaster,
+) -> None:
+    manager = AgentManager.build(broadcaster)
+    manager._handle_observe_event(make_full_agent_state_event([build_agent_details("live")]))
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+
+    with patch("imbue.system_interface.server.discover_agents", return_value=[]):
+        response = client.get("/api/health")
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["status"] == "ok"
+    assert body["agent_events"]["is_stream_healthy"] is True
+    assert body["agent_events"]["mode"] == AgentEventsMode.OBSERVE
 
 
 def test_get_events_for_unknown_agent(client: FlaskClient) -> None:

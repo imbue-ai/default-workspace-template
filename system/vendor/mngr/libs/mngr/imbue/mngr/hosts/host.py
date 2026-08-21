@@ -416,6 +416,20 @@ def _git_command_stdout(host: OnlineHostInterface, command: str, cwd: Path) -> s
     return result.stdout.strip() or None
 
 
+def _read_checked_out_branch_name(host: OnlineHostInterface, work_dir_path: Path) -> str | None:
+    """The branch ``work_dir_path`` ended up on, or None when it is on no branch.
+
+    Read back from the work_dir rather than taken from what the caller asked for.
+    ``--branch`` accepts any checkout target, so a SHA, a tag, or ``origin/main``
+    leaves the work_dir detached (or on a DWIMmed local branch whose name is not the
+    string that was passed), and the source's own branch can come back empty. This
+    value is persisted and surfaced as the branch an agent's work lands on, so
+    recording the request would point callers at a ref that need not exist.
+    """
+    branch = _git_command_stdout(host, "git rev-parse --abbrev-ref HEAD", work_dir_path)
+    return None if branch == _DETACHED_HEAD_REF else branch
+
+
 @pure
 def _is_same_machine(a: OnlineHostInterface, b: OnlineHostInterface) -> bool:
     """Whether ``a`` and ``b`` share a filesystem so file ops do not need SSH.
@@ -487,6 +501,10 @@ _KILL_BENIGN_STDERR_SUBSTRINGS: Final[tuple[str, ...]] = ("no such process",)
 # call in _build_start_agent_shell_command for why -x/-y are passed at all).
 _DEFAULT_TMUX_WIDTH: Final[int] = 200
 _DEFAULT_TMUX_HEIGHT: Final[int] = 50
+
+# What ``git rev-parse --abbrev-ref HEAD`` prints for a repo that is not on a branch.
+# It works as a checkout target but names no branch.
+_DETACHED_HEAD_REF: Final[str] = "HEAD"
 
 # Resource script (shipped under mngr/resources/) that sends SIGWINCH to an agent's
 # pane processes so they repaint after a client attaches. Installed at host level and
@@ -1300,12 +1318,17 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
         tmux's -c flag silently falls back to $HOME when the directory does not exist,
         which causes the agent to launch in the wrong place. This method detects the
         missing directory early and raises a clear error with a recovery command.
+
+        The recovery command names the branch the work_dir was on, not just one mngr
+        created: ``git worktree add`` restores it either way, and the narrower answer
+        is None for an agent attached to a pre-existing branch -- which would leave
+        exactly those agents told that no branch is recorded when one is.
         """
         check = self.execute_idempotent_command(f"test -d {shlex.quote(str(agent.work_dir))}")
         if check.success:
             return
 
-        branch = agent.get_created_branch_name()
+        branch = agent.get_checked_out_branch_name()
         if branch is None:
             raise AgentStartError(
                 str(agent.name),
@@ -1734,7 +1757,9 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
             # Track generated work dir in a thread to reduce latency
             track_thread = cg.start_new_thread(self._add_generated_work_dir, (target_path,))
 
-            created_branch_name = self._transfer_git_repo(source_host, source_path, target_path, options)
+            created_branch_name, checked_out_branch_name = self._transfer_git_repo(
+                source_host, source_path, target_path, options
+            )
             self._transfer_extra_files(source_host, source_path, target_path, options)
 
             # Run rsync if enabled. This is designed for adding extra files (e.g., data files not in git),
@@ -1756,7 +1781,11 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
 
             track_thread.join(60.0)
 
-        return CreateWorkDirResult(path=target_path, created_branch_name=created_branch_name)
+        return CreateWorkDirResult(
+            path=target_path,
+            created_branch_name=created_branch_name,
+            checked_out_branch_name=checked_out_branch_name,
+        )
 
     def _transfer_git_repo(
         self,
@@ -1764,10 +1793,15 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
         source_path: Path,
         target_path: Path,
         options: CreateAgentOptions,
-    ) -> str | None:
+    ) -> tuple[str | None, str | None]:
         """Transfer a git repository from source to target.
 
-        Returns the name of the branch created on the target, or None if no new branch.
+        Returns ``(created_branch_name, checked_out_branch_name)``: the branch newly
+        created on the target (None if none was), and the branch the target actually
+        ends up on. They differ when an existing branch is merely checked out, which
+        is why the second is read back off the target once the checkout has happened
+        rather than inferred from the ref that was asked for. It is None when the
+        target ends up on no branch at all.
         """
         new_branch_name = options.git.new_branch_name if options.git else None
         if options.git and options.git.base_branch:
@@ -1863,7 +1897,7 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
                 if not result.success:
                     raise MngrError(f"Failed to configure git repo on target: {result.stderr}")
 
-        return new_branch_name
+        return new_branch_name, _read_checked_out_branch_name(self, target_path)
 
     def _read_source_git_info_exclude(
         self,
@@ -2519,7 +2553,11 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
                     host, source_path, work_dir_path, self.mngr_ctx.config.work_dir_extra_paths
                 )
 
-                return CreateWorkDirResult(path=work_dir_path, created_branch_name=created_branch)
+                return CreateWorkDirResult(
+                    path=work_dir_path,
+                    created_branch_name=created_branch,
+                    checked_out_branch_name=_read_checked_out_branch_name(self, work_dir_path),
+                )
 
         with log_span("Creating git worktree", path=str(work_dir_path), branch=branch_label):
             git_c = f"git -C {shlex.quote(str(source_path))}"
@@ -2567,18 +2605,29 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
                 host, source_path, work_dir_path, self.mngr_ctx.config.work_dir_extra_paths
             )
 
-            return CreateWorkDirResult(path=work_dir_path, created_branch_name=created_branch)
+            return CreateWorkDirResult(
+                path=work_dir_path,
+                created_branch_name=created_branch,
+                checked_out_branch_name=_read_checked_out_branch_name(self, work_dir_path),
+            )
 
     def create_agent_state(
         self,
         work_dir_path: Path,
         options: CreateAgentOptions,
         created_branch_name: str | None = None,
+        checked_out_branch_name: str | None = None,
     ) -> AgentInterface:
         """Create the agent state directory and return the agent.
 
         In update mode (options.is_update), the state directory already exists.
         We preserve the original create_time and update all other fields.
+
+        ``created_branch_name`` stays scoped to "a branch we made", because teardown
+        keys branch deletion off it and must never delete a pre-existing branch.
+        ``checked_out_branch_name`` is the branch the work_dir is actually on either
+        way, which is what a caller asking "where do I merge this agent's work from"
+        needs.
         """
         agent_id = options.agent_id if options.agent_id is not None else AgentId.generate()
         agent_name = options.name or AgentName(f"agent-{str(agent_id)}")
@@ -2657,6 +2706,7 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
                 "start_on_boot": False,
                 "labels": dict(options.label_options.labels),
                 "created_branch_name": created_branch_name,
+                "checked_out_branch_name": checked_out_branch_name,
                 "tmux": options.tmux.to_data_dict(),
             }
 

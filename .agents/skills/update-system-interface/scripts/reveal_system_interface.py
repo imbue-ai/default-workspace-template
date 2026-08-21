@@ -25,12 +25,15 @@ What it does, given the pre-merge revision (``--rollback-to``):
    restarted and we go straight to rollback (the UI never went down). The
    throwaway boot's output rides back on the failure, because "it did not boot"
    without the traceback sends whoever reads it guessing at a cause.
-5. Build the frontend bundle and restart the backend, as applicable, then ask
-   every open view of the workspace to reload, via
+5. Build the frontend bundle and restart the backend, as applicable (the
+   ``system_interface`` supervisord program alone -- see ``SUPERVISOR_PROGRAM``),
+   then ask every open view of the workspace to reload, via
    ``system/scripts/refresh_workspace_view.py`` -- for a backend-only change
    too, since the restart leaves the open page rendering from what it had
    already fetched.
-6. Probe the live service's loopback endpoint until healthy (with a deadline).
+6. Probe the live service's loopback endpoint until it is *settled* healthy
+   (several consecutive 200s on an unchanging supervisord pid, with a deadline),
+   since this verdict is what arms the automatic rollback below.
 7. On ANY failure, restore the served tree to the known-good revision (as a
    forward revert commit) and re-probe to *confirm* the UI is back. The live
    backend is restarted during recovery only if the failed reveal had already
@@ -44,26 +47,46 @@ Run via bare ``python3`` (standard library only), like ``forward_port.py`` and
 ``reload_system_interface``'s predecessor -- it orchestrates the environment, so
 it must not depend on any particular venv being synced.
 
-The ``preview`` / ``unpreview`` subcommands are thin system-interface adapters
-over the shared ``serve_isolated_instance.py`` motion (the previewable-instance
-substrate every service flow shares). They hand it the system-interface
-specifics -- boot ``uv run system-interface`` from the worker's already-built
+The ``preview`` subcommand is a thin system-interface adapter over the shared
+``serve_isolated_instance.py`` motion (the previewable-instance substrate every
+service flow shares). It hands it the system-interface
+specifics -- boot ``uv run system-interface`` from an already-built
 ``--work-dir`` on a free port, with layout persistence neutered (drop
-MNGR_AGENT_ID so it can't clobber the live ``layout.json``) but agent discovery
-kept, probe ``/api/agents``, and register the inner app plus the labeled
+MNGR_AGENT_ID so it can't clobber the live ``layout.json``); keep agent
+discovery; source agent lifecycle events by *following* the live observer rather
+than running a second one (``SYSTEM_INTERFACE_AGENT_EVENTS_MODE=FOLLOW``, since
+``mngr observe`` is single-writer per mngr host dir); probe ``/api/health``,
+which refuses to go green unless that lifecycle stream is actually live; and
+register the inner app plus the labeled
 "preview" wrapper frame the user opens. The shared script owns the ports, the
 process/service teardown, and the state file; no fetch, checkout, or rebuild
-happens, and the served tree and the worker's folder are never touched. The
-worker is a local git-worktree sub-agent whose work_dir is a folder it has
-already built, and it must still exist at preview time.
+happens, and the served tree and the previewed folder are never touched.
+
+That ``--work-dir`` is either the **lead's own editing worktree** (the live
+editing loop, where no worker exists yet) or a **worker's work_dir** (the
+optional final pre-merge preview). Either way it must be a folder that has
+already been built, and it must still exist at preview time -- for a worker's
+work_dir that means previewing before the worker is destroyed.
 
 The non-deterministic part -- opening the tab and gating on the user's judgment
 -- stays with the agent.
 
 Usage:
     python3 reveal_system_interface.py reveal --rollback-to <pre-merge-sha> [--repo-root PATH]
-    python3 reveal_system_interface.py preview --slug <name> --work-dir <worker-work-dir> [--repo-root PATH]
-    python3 reveal_system_interface.py unpreview --slug <name> [--repo-root PATH]
+    python3 reveal_system_interface.py preview --slug <name> --work-dir <built-work-dir> [--repo-root PATH]
+
+Refreshing a live preview in place and tearing it down are **not** commands here:
+they are the shared script's own, addressed by the instance name ``preview``
+prints on success (``si-preview-<slug>``)::
+
+    python3 .agents/shared/scripts/serve_isolated_instance.py refresh --name si-preview-<slug>
+    python3 .agents/shared/scripts/serve_isolated_instance.py down --name si-preview-<slug>
+
+``refresh`` re-boots the preview's inner app on its existing port (for a backend
+round in the live editing loop) so an edit/rebuild is picked up in place, without
+disturbing the wrapper frame or the user's tab; ``down`` is the idempotent
+teardown. Neither needed anything from this script but the slug, so neither is
+wrapped here -- a wrapper would only duplicate the naming convention.
 
 Environment:
     MINDS_WORKSPACE_SERVER_URL  Base URL of the live workspace server
@@ -79,10 +102,10 @@ Exit codes (``reveal``):
        on the known-good revision (the requested change did NOT land).
     3  EMERGENCY: even rollback could not restore a healthy UI.
 
-Exit codes (``preview`` / ``unpreview``):
-    0  Success (preview is up / torn down).
-    1  The preview failed to build or boot (and tore itself down), or a bad
-       argument / unreadable state file.
+Exit codes (``preview``):
+    0  The preview is up.
+    1  The ``--work-dir`` is missing or was never built; another pass's preview is
+       already holding the tab; or the boot failed (and tore itself down).
 """
 
 from __future__ import annotations
@@ -116,7 +139,7 @@ FRONTEND_DIR = f"{APP_DIR}/frontend"
 # moment a merge advances this tree, the ``mngr`` CLI starts running new code
 # against whatever was resolved for the old code. build_workspace.sh re-resolves
 # it; a reveal that did not would leave ``mngr`` broken (and with it ``mngr
-# start --restart``, and the ``mngr observe`` the backend spawns).
+# observe``, which the backend spawns to source its agent lifecycle events).
 MNGR_VENDOR_DIR = "system/vendor/mngr"
 MNGR_DIR = f"{MNGR_VENDOR_DIR}/libs/mngr"
 MNGR_TOOL_NAME = "imbue-mngr"
@@ -149,9 +172,11 @@ _REFRESH_TIMEOUT_SECONDS = 120.0
 
 # Pre-merge preview: the deterministic boot + teardown of a previewable instance
 # is the shared ``serve_isolated_instance.py`` motion that every service flow
-# reuses. ``preview`` / ``unpreview`` below are thin adapters that hand it the
-# system-interface specifics; the shared script owns the ports, the
-# process/service teardown, and the state file. It lives two levels up under
+# reuses. ``preview`` below is a thin adapter that hands it the system-interface
+# specifics; the shared script owns the ports, the process/service teardown, and
+# the state file. Refreshing and tearing that instance down need no adapter here
+# -- they are the shared script's own ``refresh`` / ``down``, addressed by the
+# instance name ``preview`` prints on success. It lives two levels up under
 # ``.agents/shared/scripts/`` and is stdlib-only, so it runs under the same
 # interpreter as this script.
 _SHARED_SERVE_SCRIPT = (
@@ -160,6 +185,9 @@ _SHARED_SERVE_SCRIPT = (
     / "scripts"
     / "serve_isolated_instance.py"
 )
+# How to spell that script in a message an agent will copy: repo-root-relative,
+# like every other command in the flow, rather than the absolute resolved path.
+_SHARED_SERVE_SCRIPT_HINT = ".agents/shared/scripts/serve_isolated_instance.py"
 # The service names the preview registers: the inner booted app and the
 # outer wrapper the user actually opens. Fixed because the flow runs one preview
 # at a time -- enforced by the guard in ``preview`` (a different slug's live
@@ -179,18 +207,62 @@ _INSTANCE_STATE_FILENAME = "instance.json"
 PREVIEW_PORT_ENV = "SYSTEM_INTERFACE_PORT"
 PREVIEW_HOST_ENV = "SYSTEM_INTERFACE_HOST"
 
-# Endpoints used to probe liveness. ``/api/agents`` exercises the mngr plugin
-# discovery path -- exactly what a missing backend dependency or a broken
-# plugin-config parse would take down -- so a 200 there is a strong "the backend
-# actually works" signal, not just "the server is listening". It is also handed
-# to the shared preview script as its ``--health-path``.
+# How a throwaway second instance sources agent lifecycle events. ``mngr observe``
+# is single-writer per mngr host dir (an exclusive flock), and this box's live
+# system interface already holds that lock -- so an instance booted alongside it
+# (the preview, the pre-flight) that tried to run its own observer would have it
+# die seconds into boot, leaving that instance's agent list and chat panels
+# frozen at boot state forever while terminals and everything else kept working.
+# FOLLOW makes it read the live observer's event stream instead, which is all a
+# read-only second instance ever needed. This is the env spelling of the server's
+# ``Config.system_interface_agent_events_mode``.
+PREVIEW_AGENT_EVENTS_MODE_ENV = "SYSTEM_INTERFACE_AGENT_EVENTS_MODE"
+FOLLOW_AGENT_EVENTS_MODE = "FOLLOW"
+
+# Endpoints used to probe liveness.
+#
+# ``/api/health`` is the strict gate, used for the *throwaway* instances (the
+# preview and the pre-flight boot). It asserts both that a fresh mngr discovery
+# works -- the plugin/config path a missing backend dependency or a broken
+# plugin-config parse would take down -- and that the instance's agent lifecycle
+# event stream is actually live. That second half is why ``/api/agents`` is not
+# enough: it runs its own discovery rather than reading the cache the lifecycle
+# stream feeds, so it answers 200 on an instance whose agent view is dead. A
+# preview that came up looking healthy and showed "No conversation data" for
+# every agent created after it booted is exactly the gap this closes.
+STRICT_HEALTH_PATH = "/api/health"
+# ``/api/agents`` stays the probe for the *live* service (post-restart and during
+# recovery). Deliberately the looser check: a rollback here is a heavy, risky
+# action, and lifecycle-stream trouble on the live service is not something
+# reverting a UI change would fix -- it would just escalate a real problem into a
+# spurious rollback, and then into an "even rollback failed" emergency.
 HEALTH_PATH = "/api/agents"
 SERVE_PATH = "/"
 
+# The supervisord program that runs the live system interface, and the client
+# used to bounce it. Restarting only this program -- rather than the whole
+# services agent, which is supervisord's parent and so bounces every program in
+# the workspace -- is what makes the reveal's own health budget meaningful. The
+# environments a dependency refresh rebuilds (this service's venv/tool installs,
+# node_modules, and the mngr tool) are consumed at process start or per
+# invocation: this service -- and the ``mngr observe`` child it spawns -- reloads
+# them on this restart, and everything else that shells out to ``mngr`` picks up
+# the refreshed install on its next call without needing a bounce.
+SUPERVISOR_PROGRAM = "system_interface"
+_SUPERVISORCTL = "supervisorctl"
+
 # Poll budget for "did the service come back up". Restart is fire-and-forget, so
-# we poll rather than assume.
-_HEALTH_ATTEMPTS = 30
+# we poll rather than assume. 60s matches the shared serve script's boot gate:
+# this gate does strictly more (a restart, then a settled confirmation), so it
+# must not get half that script's budget.
+_HEALTH_ATTEMPTS = 60
 _HEALTH_INTERVAL_SECONDS = 1.0
+# How many consecutive healthy answers (one poll interval apart) make a verdict.
+# One 200 is a point-in-time probe, not settled state: it reads green in a gap
+# between two restarts and red on a change that was never broken. Since this
+# verdict is what arms the automatic rollback, both directions are expensive --
+# green ships a stack that is still turning over, red reverts a good change.
+_SETTLED_HEALTHY_PROBES = 3
 # Pre-flight boot is a fresh process on a throwaway port; give it the same grace.
 _PREFLIGHT_ATTEMPTS = 30
 _PREFLIGHT_INTERVAL_SECONDS = 1.0
@@ -539,6 +611,79 @@ def wait_healthy(
     return False
 
 
+def parse_supervisor_pid(status_output: str) -> str | None:
+    """The pid a ``supervisorctl status`` line reports, or None if it is not RUNNING.
+
+    The line reads ``system_interface   RUNNING   pid 1234, uptime 0:00:05``.
+    Every other state (STARTING, BACKOFF, FATAL, STOPPED) names no settled
+    process, so it answers None -- which is the same answer a supervisorctl that
+    could not be reached gets, because neither is evidence the service has
+    settled, and that is the only question asked here.
+    """
+    if "RUNNING" not in status_output:
+        return None
+    marker = "pid "
+    index = status_output.find(marker)
+    if index == -1:
+        return None
+    return status_output[index + len(marker) :].split(",")[0].strip() or None
+
+
+def _live_service_pid(repo_root: Path, runner: Runner) -> str | None:
+    """Ask supervisord for the live system interface's pid (None if not RUNNING)."""
+    result = runner.run(
+        [_SUPERVISORCTL, "status", SUPERVISOR_PROGRAM],
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return parse_supervisor_pid(getattr(result, "stdout", "") or "")
+
+
+def wait_settled(
+    http: HttpClient,
+    url: str,
+    repo_root: Path,
+    runner: Runner,
+    sleeper: Callable[[float], None],
+    *,
+    require_stable_pid: bool,
+    attempts: int = _HEALTH_ATTEMPTS,
+) -> bool:
+    """Whether the live service reaches -- and holds -- a healthy state.
+
+    Requires ``_SETTLED_HEALTHY_PROBES`` consecutive healthy answers rather than
+    one, and, when the caller has just restarted the service, that supervisord
+    reports it RUNNING on the same pid throughout. A pid that turns over mid-run
+    restarts the confirmation instead of failing it: the stack is still settling,
+    which is the situation this exists to wait out rather than to judge.
+
+    ``require_stable_pid`` is set only by callers that ran the restart themselves,
+    so a workspace where supervisorctl cannot be reached never turns into a
+    spurious "the UI is down" -- the restart would already have failed loudly.
+    """
+    healthy_streak = 0
+    streak_pid: str | None = None
+    for index in range(attempts):
+        is_healthy = http.get_status(url, timeout=5.0) == 200
+        pid = _live_service_pid(repo_root, runner) if require_stable_pid else None
+        if is_healthy and (pid is not None or not require_stable_pid):
+            if healthy_streak == 0 or pid != streak_pid:
+                healthy_streak = 1
+                streak_pid = pid
+            else:
+                healthy_streak += 1
+            if healthy_streak >= _SETTLED_HEALTHY_PROBES:
+                return True
+        else:
+            healthy_streak = 0
+            streak_pid = None
+        if index < attempts - 1:
+            sleeper(_HEALTH_INTERVAL_SECONDS)
+    return False
+
+
 def _detail_block(detail: str) -> str:
     """Render captured failure output for stderr, or nothing when there is none."""
     return f"--- pre-flight boot output ---\n{detail}\n" if detail else ""
@@ -568,11 +713,20 @@ def _preflight(
     of *why* the merged code did not come up, and the process and its scratch
     file are both gone by the time anyone reads the failure, so it has to travel
     back with the error rather than be left somewhere to look up.
+
+    Runs in FOLLOW mode: this boots *alongside* the still-running live service,
+    which holds the single-writer observe lock, so a pre-flight that tried to run
+    its own observer would lose the lock and boot with a dead agent view -- and
+    then pass anyway, because the old ``/api/agents`` probe never looked at the
+    lifecycle stream. Following the live observer makes the pre-flight both able
+    to come up and able to prove the merged backend really can serve a live agent
+    view, which is what this gate is for.
     """
     port = find_free_port()
     env = dict(os.environ)
     env["SYSTEM_INTERFACE_HOST"] = "127.0.0.1"
     env["SYSTEM_INTERFACE_PORT"] = str(port)
+    env[PREVIEW_AGENT_EVENTS_MODE_ENV] = FOLLOW_AGENT_EVENTS_MODE
     with tempfile.TemporaryDirectory() as scratch:
         output_path = Path(scratch) / "preflight-boot.log"
         spawned = spawner.spawn(
@@ -584,7 +738,7 @@ def _preflight(
         try:
             if wait_healthy(
                 http,
-                f"http://127.0.0.1:{port}{HEALTH_PATH}",
+                f"http://127.0.0.1:{port}{STRICT_HEALTH_PATH}",
                 _PREFLIGHT_ATTEMPTS,
                 _PREFLIGHT_INTERVAL_SECONDS,
                 sleeper,
@@ -854,20 +1008,21 @@ def _apply_reveal(
         # failure leaves it potentially running broken code: recovery must restart.
         _run_checked(
             runner,
-            ["mngr", "start", "--restart", "system-services"],
+            [_SUPERVISORCTL, "restart", SUPERVISOR_PROGRAM],
             repo_root,
-            "mngr start --restart",
+            f"supervisorctl restart {SUPERVISOR_PROGRAM}",
             live_service_restarted=True,
         )
-        if not wait_healthy(
+        if not wait_settled(
             http,
             f"{base_url}{HEALTH_PATH}",
-            _HEALTH_ATTEMPTS,
-            _HEALTH_INTERVAL_SECONDS,
+            repo_root,
+            runner,
             sleeper,
+            require_stable_pid=True,
         ):
             raise RevealFailed(
-                "backend did not become healthy after restart",
+                "backend did not settle into a healthy state after restart",
                 live_service_restarted=True,
             )
     # Unconditional: this runs only when something changed (``reveal`` returns
@@ -958,28 +1113,32 @@ def _recover_running_state(
             if live_service_restarted:
                 _run_checked(
                     runner,
-                    ["mngr", "start", "--restart", "system-services"],
+                    [_SUPERVISORCTL, "restart", SUPERVISOR_PROGRAM],
                     repo_root,
-                    "mngr start --restart",
+                    f"supervisorctl restart {SUPERVISOR_PROGRAM}",
                 )
             # Probe the backend health endpoint either way: after a restart to
             # confirm known-good booted, or (no restart) to confirm the untouched
-            # service is still serving.
-            healthy = wait_healthy(
+            # service is still serving. Settled, not point-in-time, for the same
+            # reason the reveal path is: "the live UI is confirmed healthy" was
+            # printed once while supervisord was still turning the pid over.
+            healthy = wait_settled(
                 http,
                 f"{base_url}{HEALTH_PATH}",
-                _HEALTH_ATTEMPTS,
-                _HEALTH_INTERVAL_SECONDS,
+                repo_root,
+                runner,
                 sleeper,
+                require_stable_pid=live_service_restarted,
             )
         else:
             # Frontend-only: the server was never restarted; confirm it still serves.
-            healthy = wait_healthy(
+            healthy = wait_settled(
                 http,
                 f"{base_url}{SERVE_PATH}",
-                _HEALTH_ATTEMPTS,
-                _HEALTH_INTERVAL_SECONDS,
+                repo_root,
+                runner,
                 sleeper,
+                require_stable_pid=False,
             )
     except RevealFailed as exc:
         sys.stderr.write(f"recovery step failed: {exc}\n")
@@ -1056,7 +1215,9 @@ def reveal(
 
 def _preview_instance_name(slug: str) -> str:
     """The name the shared script files this preview's instance under (its state
-    dir + the stable id ``unpreview`` tears down). One preview per slug."""
+    dir + the stable id its ``refresh`` / ``down`` address). One preview per
+    slug. ``preview`` prints this on success, so the caller never reconstructs
+    it."""
     return f"{PREVIEW_SERVICE_NAME}-{slug}"
 
 
@@ -1082,52 +1243,65 @@ def _find_other_preview(repo_root: Path, slug: str) -> str | None:
 
 
 def preview(slug: str, work_dir: str, repo_root: Path, *, runner: Runner) -> int:
-    """Stand up a pre-merge preview of the worker's ``work_dir``.
+    """Stand up a preview of an already-built ``work_dir``.
+
+    ``work_dir`` is the lead's own editing worktree during the live editing loop
+    (no worker exists yet), or a worker's work_dir for the optional final
+    pre-merge preview. Either way it must already be built, and it must still
+    exist -- for a worker's work_dir, run this before the worker is destroyed.
 
     Thin system-interface adapter over the shared ``serve_isolated_instance.py``
-    ``up`` motion: validate the worker's app dir, require that the worker built its
-    frontend bundle, then hand the shared script the system-interface specifics --
-    boot ``uv run system-interface`` from the worker's already-built app dir on a
+    ``up`` motion: validate the app dir, require that its frontend bundle was
+    built, then hand the shared script the system-interface specifics --
+    boot ``uv run system-interface`` from that already-built app dir on a
     free port; neuter layout persistence by dropping MNGR_AGENT_ID (so the preview
-    can't clobber the live ``layout.json``) while keeping discovery, so the real
-    conversations still render; probe ``/api/agents``; register the inner app and
-    the labeled wrapper frame. The shared script owns the ports, the
-    process/service teardown, and the state file. ``work_dir`` must still exist --
-    run this before the worker is destroyed.
+    cannot clobber the live ``layout.json``); keep discovery so real conversations
+    still render; run
+    in FOLLOW mode so the preview reads the live observer's agent lifecycle stream
+    instead of trying to start a second observer it cannot get the lock for; probe
+    ``/api/health``, which stays red unless that stream really is feeding the
+    preview; register the inner app and the labeled wrapper frame. The shared
+    script owns the ports, the process/service teardown, and the state file.
+
+    Because the health gate is strict, a preview whose lifecycle stream cannot be
+    established does not come up at all -- the shared script tears the partial
+    instance down and this returns non-zero. That is deliberate: a preview whose
+    agent view is silently frozen is worse than no preview, because the user
+    reads it as the real UI.
     """
     # Sanity-check the work_dir before disturbing anything: a wrong --work-dir
     # should fail fast rather than reaching the shared script.
-    worker_app_dir = Path(work_dir) / APP_DIR
-    if not worker_app_dir.is_dir():
+    previewed_app_dir = Path(work_dir) / APP_DIR
+    if not previewed_app_dir.is_dir():
         sys.stderr.write(
-            f"preview: {worker_app_dir} is not a directory; is --work-dir correct "
-            "and is the worker still alive (not destroyed)?\n"
+            f"preview: {previewed_app_dir} is not a directory; is --work-dir "
+            "correct, and does that folder still exist (an editing worktree that "
+            "was removed, or a worker that was destroyed)?\n"
         )
         return 1
-    # The preview serves the worker's app dir as-is; it does not build for the
-    # worker. A work_dir without a frontend bundle means the worker reported done
-    # without building it (a fresh worktree has no gitignored static/ until built),
-    # so booting would only serve the backend's "Frontend not built" placeholder --
-    # a dead preview that reads as working. Refuse loudly and point at the fix: the
-    # worker must build before it is previewable.
+    # The preview serves the app dir as-is; it never builds for it. A work_dir
+    # without a frontend bundle means whoever produced it skipped the build (a
+    # fresh worktree has no gitignored static/ until built), so booting would only
+    # serve the backend's "Frontend not built" placeholder -- a dead preview that
+    # reads as working. Refuse loudly and point at the fix.
     if not (Path(work_dir) / FRONTEND_BUILD_INDEX).exists():
         sys.stderr.write(
             f"preview: no frontend build in {work_dir} "
             f"({FRONTEND_BUILD_INDEX} is missing), so the preview would serve the "
-            "'Frontend not built' placeholder. The worker must build the frontend "
-            "(cd system/apps/system_interface/frontend && npm ci && npm run build) before "
-            "its work_dir can be previewed -- re-brief it to build, then retry.\n"
+            "'Frontend not built' placeholder. Build the frontend first "
+            "(cd system/apps/system_interface/frontend && npm ci && npm run build) "
+            "-- in your editing worktree, or by re-briefing the worker -- then "
+            "retry.\n"
         )
         return 1
     other = _find_other_preview(repo_root, slug)
     if other is not None:
-        other_slug = other.removeprefix(f"{PREVIEW_SERVICE_NAME}-")
         sys.stderr.write(
             f"preview: another pass's preview is already up ({other}); the "
             f"'{PREVIEW_SERVICE_NAME}' tab can only show one at a time, so booting "
             "this one would hijack it. Surface this to the user and coordinate "
             "with that pass -- or, if it is abandoned, tear it down first with "
-            f"'unpreview --slug {other_slug}'.\n"
+            f"'python3 {_SHARED_SERVE_SCRIPT_HINT} down --name {other}'.\n"
         )
         return 1
     result = runner.run(
@@ -1138,15 +1312,17 @@ def preview(slug: str, work_dir: str, repo_root: Path, *, runner: Runner) -> int
             "--name",
             _preview_instance_name(slug),
             "--cwd",
-            str(worker_app_dir),
+            str(previewed_app_dir),
             "--port-env",
             PREVIEW_PORT_ENV,
             "--host-env",
             PREVIEW_HOST_ENV,
+            "--env",
+            f"{PREVIEW_AGENT_EVENTS_MODE_ENV}={FOLLOW_AGENT_EVENTS_MODE}",
             "--unset-env",
             ENV_MNGR_AGENT_ID,
             "--health-path",
-            HEALTH_PATH,
+            STRICT_HEALTH_PATH,
             "--service-name",
             PREVIEW_INNER_SERVICE_NAME,
             "--preview-service-name",
@@ -1166,26 +1342,6 @@ def preview(slug: str, work_dir: str, repo_root: Path, *, runner: Runner) -> int
     return int(getattr(result, "returncode", 0))
 
 
-def unpreview(slug: str, repo_root: Path, *, runner: Runner) -> int:
-    """Tear down the preview for ``slug`` via the shared script. Idempotent: a
-    missing instance is a no-op success, so this is safe on reject, after a
-    successful reveal, or to recover from a half-set-up preview."""
-    result = runner.run(
-        [
-            sys.executable,
-            str(_SHARED_SERVE_SCRIPT),
-            "down",
-            "--name",
-            _preview_instance_name(slug),
-            "--repo-root",
-            str(repo_root),
-        ],
-        cwd=str(repo_root),
-        check=False,
-    )
-    return int(getattr(result, "returncode", 0))
-
-
 def _add_repo_root_arg(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument(
         "--repo-root",
@@ -1197,9 +1353,11 @@ def _add_repo_root_arg(subparser: argparse.ArgumentParser) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Manage the system-interface update lifecycle: preview a worker "
-            "branch before merging, reveal a merged change with auto-recovery, "
-            "and tear the preview down."
+            "Manage the system-interface update lifecycle: preview a built "
+            "work_dir as a labeled tab, and reveal a merged change with "
+            "auto-recovery. Refreshing that preview in place and tearing it "
+            "down are the shared serve_isolated_instance.py's own `refresh` / "
+            "`down`, by the instance name `preview` prints."
         )
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1216,8 +1374,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     preview_parser = subparsers.add_parser(
         "preview",
-        help="Boot the worker's already-built work_dir and serve it as a "
-        "previewable tab, before any merge.",
+        help="Boot an already-built work_dir and serve it as a previewable tab, "
+        "before any merge.",
     )
     preview_parser.add_argument(
         "--slug",
@@ -1227,19 +1385,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     preview_parser.add_argument(
         "--work-dir",
         required=True,
-        help="The worker's work_dir (from `mngr ls --include 'name==\"<worker>\"' "
-        "--format json` -> agent.work_dir). The worker must still exist.",
+        help="A built work_dir to serve: the lead's editing worktree during the "
+        "live loop, or a worker's work_dir (from `mngr ls --include "
+        "'name==\"<worker>\"' --format json` -> agent.work_dir) for a final "
+        "pre-merge preview. It must still exist when this runs.",
     )
     _add_repo_root_arg(preview_parser)
-
-    unpreview_parser = subparsers.add_parser(
-        "unpreview",
-        help="Tear down a preview (kill the server, deregister the service). Idempotent.",
-    )
-    unpreview_parser.add_argument(
-        "--slug", required=True, help="The slug passed to 'preview'."
-    )
-    _add_repo_root_arg(unpreview_parser)
 
     args = parser.parse_args(argv)
     repo_root = Path(args.repo_root).resolve()
@@ -1259,8 +1410,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 repo_root,
                 runner=Runner(),
             )
-        if args.command == "unpreview":
-            return unpreview(args.slug, repo_root, runner=Runner())
         parser.error(f"unknown command: {args.command}")
         return 1
     except PreconditionError as exc:

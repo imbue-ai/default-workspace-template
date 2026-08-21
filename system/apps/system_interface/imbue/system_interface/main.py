@@ -54,7 +54,7 @@ def build_production_state(
     ``testing.build_test_state``.
     """
     broadcaster = WebSocketBroadcaster()
-    agent_manager = AgentManager.build(broadcaster)
+    agent_manager = AgentManager.build(broadcaster, events_mode=config.system_interface_agent_events_mode)
     # The codex ledger owns live user-turns (Fix 1); route each committed user-turn it emits onto
     # the same per-agent event fan-out the session watchers use. Wired here (not at manager build)
     # because the manager is constructed before its event-queue collaborator.

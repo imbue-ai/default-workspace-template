@@ -4,6 +4,8 @@ from pathlib import Path
 from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
+from imbue.system_interface.agent_events import AgentEventsMode
+
 
 class DuplicateStaticBasenameError(ValueError):
     pass
@@ -16,6 +18,13 @@ class Config(BaseSettings):
     system_interface_static_paths: list[str] | None = None
     system_interface_host: str = "127.0.0.1"
     system_interface_port: int = 8000
+    # How this instance gets agent lifecycle events. The default (OBSERVE) runs
+    # ``mngr observe``, which needs the single-writer observe lock for the mngr
+    # host dir. A second system interface on the same host -- the live-editing
+    # preview, or the reveal script's pre-flight boot -- must be launched with
+    # FOLLOW so it reads the running observer's event stream instead of fighting
+    # it for the lock (which would leave its agent view frozen from boot).
+    system_interface_agent_events_mode: AgentEventsMode = AgentEventsMode.OBSERVE
 
     @field_validator("system_interface_javascript_plugins", "system_interface_static_paths", mode="before")
     @classmethod
