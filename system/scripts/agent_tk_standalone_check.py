@@ -18,6 +18,8 @@ it puts the parser lib's source directory on `sys.path` explicitly rather than
 relying on an installed package; the lib is stdlib-only for the same reason.
 """
 
+from __future__ import annotations
+
 import sys
 from pathlib import Path
 
