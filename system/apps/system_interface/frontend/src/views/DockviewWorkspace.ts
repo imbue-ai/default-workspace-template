@@ -1634,7 +1634,13 @@ function createAddTabButton(group: DockviewGroupPanel): IHeaderActionsRenderer {
    *  screen. Hidden rather than disabled -- a control that cannot act and
    *  cannot say why is just noise in a strip this narrow. */
   const refreshVisibility = (): void => {
-    element.style.display = launcherPanelIdInGroup(group) === null ? "" : "none";
+    // Deferred: these fire DURING a panel add or remove, while dockview's own
+    // panel list and this file's `panelParams` are still catching up with each
+    // other. Read in that window, a launcher being retired still looks open --
+    // which left the "+" hidden for good once its launcher folded away.
+    requestAnimationFrame(() => {
+      element.style.display = launcherPanelIdInGroup(group) === null ? "" : "none";
+    });
   };
 
   const subscriptions: { dispose: () => void }[] = [];
@@ -1686,15 +1692,18 @@ function createLauncherRenderer(panelId: string): IContentRenderer {
               openTabOfTypeInGroup(target, groupForPanel(panelId), panelId);
             },
             onOpenMember: (row: LauncherRow) => {
-              // A row for something ALREADY open is "show me that one", not
-              // "put something in this pane" -- so the launcher stays and the
-              // revealed tab flashes instead. Asked before the open, since
-              // openMemberRef answers with a panel id either way and cannot be
-              // read afterwards to tell a reveal from a creation.
-              const wasAlreadyOpen = panelIdForMemberRef(row.ref) !== null;
-              if (openMemberRef(row.ref, groupForPanel(panelId)) !== null && !wasAlreadyOpen) {
-                retireLauncher(panelId);
+              // A row for something ALREADY open is "show me where that one
+              // is", not "put something in this pane". So nothing moves: the
+              // launcher keeps the pane, focus stays put, and the tab that
+              // already holds the object flashes to say which one it is. Taking
+              // focus would answer a question the user did not ask, and would
+              // swap away the list they are still reading.
+              const openPanelId = panelIdForMemberRef(row.ref);
+              if (openPanelId !== null) {
+                flashPanelTab(openPanelId);
+                return;
               }
+              if (openMemberRef(row.ref, groupForPanel(panelId)) !== null) retireLauncher(panelId);
             },
             onOpenFromMachine: (row: LauncherRow) => {
               openFromMachine(row.ref, panelId);

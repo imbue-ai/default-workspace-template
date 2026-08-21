@@ -742,19 +742,52 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
     expect(menuItemLabels(menu)).toEqual(["Refresh", "Remove from project", "Quit Terminal 1"]);
   });
 
-  it("adds Share for an app row, named the way the row is -- but no Rename", () => {
-    const rows: SidebarTabRow[] = [{ ref: "service:grafana", kind: "app", label: "Grafana", isOpen: false }];
+  it("still lists an app the machine no longer offers, which has no shortcut row", () => {
+    // The shortcut strip is built from the live app list, so a member of an
+    // unregistered app is not up there. Dropping it from the list too would
+    // leave it showing nowhere, and removable from nowhere.
+    vi.mocked(getApps).mockReturnValue([]);
+    const rows: SidebarTabRow[] = [{ ref: "service:gone", kind: "app", label: "Gone", isOpen: false }];
     const { root, redraw } = mountSidebar(makeAttrs({ rows }));
     root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
     redraw();
 
-    const menu = openRowMenuByContextClick(root, redraw, "Grafana");
-    // Every verb names the app the way the row does. The registered service
-    // name ("grafana") is the app's stable id -- it keys the ref, apps.toml and
-    // the supervisord program -- and the share is still keyed by it; it just no
-    // longer surfaces, which is what let "Share grafana" sit under "Quit
-    // Grafana" for a renamed app.
-    expect(menuItemLabels(menu)).toEqual(["Refresh", "Share Grafana", "Remove from project", "Quit Grafana"]);
+    const listed = Array.from(root.querySelectorAll(".project-rail-tab")).map((element) => element.textContent);
+    expect(listed.some((text) => text?.includes("Gone"))).toBe(true);
+  });
+
+  it("keeps an app's verbs reachable from its shortcut row, which is its only row now", () => {
+    // The tab list no longer repeats an app, so its shortcut row has to carry
+    // the menu -- otherwise Share and Quit would exist only while the app
+    // happened to have a tab open.
+    vi.mocked(getApps).mockReturnValue([{ name: "grafana", url: "http://example.test", label: "grafana-abc123" }]);
+    try {
+      const rows: SidebarTabRow[] = [{ ref: "service:grafana", kind: "app", label: "Grafana", isOpen: false }];
+      const { root, redraw } = mountSidebar(makeAttrs({ rows }));
+      root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+      redraw();
+
+      // Not in the list below...
+      expect(root.querySelector(".project-rail-tab")).toBeNull();
+      // ...and its menu opens from the shortcut row instead.
+      // Found by the name the SHORTCUT draws, which is the app's registered
+      // one until someone gives it another; the menu's own labels come from the
+      // member row, which is why they read "Grafana" below.
+      const shortcut = Array.from(root.querySelectorAll(".project-rail-shortcut")).find((element) =>
+        element.textContent?.includes("grafana"),
+      );
+      shortcut?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+      redraw();
+
+      // Every verb names the app the way the row does. The registered service
+      // name ("grafana") is the app's stable id -- it keys the ref, apps.toml
+      // and the supervisord program -- and the share is still keyed by it; it
+      // just no longer surfaces.
+      const menu = root.querySelector<HTMLElement>('.project-rail-menu[role="menu"]');
+      expect(menuItemLabels(menu)).toEqual(["Refresh", "Share Grafana", "Remove from project", "Quit Grafana"]);
+    } finally {
+      vi.mocked(getApps).mockReturnValue([]);
+    }
   });
 
   it("offers no row menu at all for a legacy url member", () => {

@@ -36,6 +36,7 @@ import {
   createProject,
   isEverythingView,
   isShortcutPinned,
+  memberRef,
   projectForViewId,
   searchMembers,
   serviceNameFromRef,
@@ -913,10 +914,17 @@ export function Sidebar(): m.Component<SidebarAttrs> {
    *  `expanded` the same as the tab list's own trailing controls: collapsed,
    *  the row is icon-only and has nothing to reveal a control onto. */
   function pinnedAppRow(app: AppEntry, attrs: SidebarAttrs): m.Vnode {
-    // An app renamed anywhere is renamed here too: the shortcut, the tab list
-    // and the All apps popover are three views of one object, so they read the
-    // one definition of what it is called rather than each keeping its own.
+    // An app renamed anywhere is renamed here too: the shortcut and the All
+    // apps popover are two views of one object, so they read the one definition
+    // of what it is called rather than each keeping its own.
     const label = appDisplayName(app);
+    // This row is now the app's ONLY place in the rail (the tab list no longer
+    // repeats it), so the app's verbs have to be reachable from here or they
+    // would only exist while it happened to have a tab open. The row it stands
+    // for is still in `attrs.rows`; it is simply not listed below.
+    const appRef = memberRef("app", app.name);
+    const memberRow = attrs.rows.find((row) => row.ref === appRef) ?? null;
+    const isMenuOpenHere = openMenu?.kind === "row" && openMenu.ref === appRef;
     return m(
       "span",
       { key: `app:${app.name}`, class: "flex w-full shrink-0", ...hoverTooltipAttrs(label, "right") },
@@ -925,6 +933,11 @@ export function Sidebar(): m.Component<SidebarAttrs> {
         {
           class: `project-rail-shortcut group ${ROW_CLASS} pr-1 text-text-primary hover:bg-bg-hover`,
           onclick: () => pick(() => attrs.onOpenApp(app)),
+          oncontextmenu: (event: MouseEvent) => {
+            event.preventDefault();
+            if (memberRow === null) return;
+            openMenuAt({ kind: "row", anchor: anchorForPointer(event), ref: appRef });
+          },
         },
         [
           m(
@@ -954,6 +967,32 @@ export function Sidebar(): m.Component<SidebarAttrs> {
                   },
                 },
                 m.trust(railIcon("pin", ACTION_ICON_SIZE)),
+              )
+            : null,
+          // The app's own verbs -- Refresh, Share, Quit -- reached the same way
+          // a tab-list row's are. Absent when the row is not in this view's
+          // members, since there is then no object here to act on.
+          expanded && memberRow !== null
+            ? m(
+                "button",
+                {
+                  type: "button",
+                  class:
+                    "flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded text-text-faint " +
+                    "hover:text-text-primary focus-visible:opacity-100 group-hover:opacity-100 " +
+                    (isMenuOpenHere ? "opacity-100" : "opacity-0"),
+                  "aria-label": `Actions for ${label}`,
+                  onclick: (event: MouseEvent) => {
+                    // The row underneath opens the app; the kebab must not.
+                    event.stopPropagation();
+                    if (isMenuOpenHere) {
+                      openMenu = null;
+                      return;
+                    }
+                    openMenuAt({ kind: "row", anchor: anchorForEvent(event), ref: appRef });
+                  },
+                },
+                m.trust(railIcon("kebab", ACTION_ICON_SIZE)),
               )
             : null,
         ],
@@ -1188,13 +1227,29 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     );
   }
 
-  function tabList(attrs: SidebarAttrs): m.Vnode {
-    const results = searchMembers(attrs.rows, searchQuery);
+  function tabList(attrs: SidebarAttrs, shortcutApps: readonly AppEntry[]): m.Vnode {
+    // An app that HAS a shortcut row above is shown once, there. Listing it
+    // here too put the same app in the rail twice, with two of everything --
+    // two names to keep in step, and two controls for the one act of taking it
+    // out of the project.
+    //
+    // Only the ones actually drawn above are dropped, which is the whole reason
+    // this takes `shortcutApps` rather than testing the kind: a member of an
+    // app the machine no longer offers has no icon or URL to draw a shortcut
+    // from, so it is not up there, and dropping it here as well would leave it
+    // showing nowhere and removable from nowhere.
+    //
+    // The rows are still read UNFILTERED elsewhere -- `pinnedAppNamesForView`
+    // builds the shortcut strip out of exactly these app rows -- so this drops
+    // them from the list and from nothing else.
+    const shownAbove = new Set(shortcutApps.map((app) => memberRef("app", app.name)));
+    const listedRows = attrs.rows.filter((row) => !shownAbove.has(row.ref));
+    const results = searchMembers(listedRows, searchQuery);
     if (results.length === 0) {
       return m(
         "div",
         { class: `px-2 py-2 ${ROW_TEXT_CLASS} text-text-faint` },
-        attrs.rows.length === 0 ? "Nothing here yet." : "No tabs match that.",
+        listedRows.length === 0 ? "Nothing here yet." : "No tabs match that.",
       );
     }
     return m(
@@ -1680,7 +1735,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
               expanded ? allAppsRow() : null,
               expanded ? m("div", { class: `${DIVIDER_CLASS} mt-1` }) : null,
               expanded ? searchPill(viewName) : null,
-              expanded ? tabList(attrs) : null,
+              expanded ? tabList(attrs, shortcutApps) : null,
             ],
           ),
           openMenu === null ? null : menuScrim(),
