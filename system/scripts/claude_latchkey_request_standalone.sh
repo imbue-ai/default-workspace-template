@@ -3,9 +3,8 @@
 # another request, chained with another command, has its output redirected, or is
 # filed by a backgrounded tool call.
 #
-# Why: a permission request is the one tool call the USER has to act on. This gate
-# exists for one reader, and every rule below is that reader's shape rather than
-# anything latchkey requires -- keep the two in step:
+# Every rule here is the shape one reader needs, not something latchkey requires;
+# keep the two in step:
 #
 #   system/apps/system_interface/imbue/system_interface/harnesses/tool_output.py
 #     is_permission_request_call()  -- recognizes the card from the call's INPUT
@@ -16,34 +15,20 @@
 #     parsePermissionRequest()      -- reads the request_id the card's
 #                                      "Review & respond" button opens the dialog with
 #
-# The chat builds the card from that single call -- the request is recognized
-# from the command, the button comes from the echoed object. Only the FIRST such
-# object in the result is read, and only one card is rendered per call, so:
-#   * two requests in one call -> the second one is never shown, and the user
-#     cannot answer a request they cannot see (it just sits in the minds inbox);
-#     the verdict messages that come back then line up against the wrong card.
-#   * `> /tmp/out.json`, `-o /tmp/out.json`, `| jq .request_id` -> the echoed
-#     object never reaches the transcript, so the card has nothing to open the
-#     dialog with.
-#   * `run_in_background: true` -> same thing through the tool's own flag rather
-#     than the command: the result is a shell id, and the output the agent later
-#     polls belongs to a different tool call than the card.
-# Forbidding the batched/chained/redirected form makes that class of bug
-# structurally impossible at the source. The chaining half of the rule is
-# deliberately blunt: a chained command that happens to preserve the echo
-# (`| tee out.json`) is blocked with the rest, because "the request is the whole
-# tool call" is the property the card depends on, and it is the one an agent can
-# check without knowing which commands pass stdout through.
+# So a second request in one call is never shown to the user, and anything that
+# keeps the echo out of this call's result -- `> /tmp/out.json`, `-o /tmp/out.json`,
+# `| jq .request_id`, or `run_in_background: true`, whose result is a shell id --
+# leaves a card with no button. `| tee out.json` preserves the echo and is blocked
+# anyway: "the request is the whole tool call" is the property the card depends on,
+# and the one an agent can check without knowing which commands pass stdout through.
 #
 # Scope: ONLY a POST to the reserved `latchkey-self.invalid/permission-requests`
 # host -- the call that FILES a request. Reading the queue or any other latchkey
 # curl is untouched, and may be piped or chained freely.
 #
-# Blocks via exit 2 with a stderr message the agent sees (mirrors
-# claude_tk_standalone.sh). The command parsing lives in the sibling
-# claude_latchkey_request_check.py -- it shell-tokenizes the command with `shlex`
-# (so a rationale that mentions `&&` or `>` stays inside one quoted token and
-# cannot trip the checks), which bash regex cannot do reliably.
+# Blocks via exit 2 with a stderr message the agent sees. The command parsing lives
+# in the sibling claude_latchkey_request_check.py, which shell-tokenizes with
+# `shlex` so a rationale that mentions `&&` or `>` stays inside one quoted token.
 set -euo pipefail
 
 input=$(cat)
