@@ -295,27 +295,6 @@ Already have something in mind? Tell me what you'd like to work on below. If not
 
 Then stop. If the user's next message asks for suggestions or says they are not sure, follow the rest of `.agents/skills/welcome/SKILL.md`."""]
 
-# The tool-call guards this workspace runs on pi. pi has no shell-hook surface, so its
-# lifecycle extension runs these itself: each gets the agent's command as $1, and exit 2
-# blocks the call with the checker's stderr as the reason. `match` is the pre-filter that
-# keeps a guard off commands it has nothing to say about.
-#
-# These are the same two checkers claude and codex reach through their hook wrappers
-# (agent_tk_standalone.sh / agent_latchkey_request_standalone.sh), called directly here
-# because those wrappers read a hook payload on stdin that pi has no equivalent of. One
-# checker file, three harnesses -- see system/scripts/POLICY_HOOKS.md.
-#
-# NOTE: these tables must stay at the END of [agent_types.pi-coding], for the same reason
-# as the codex block above.
-[[agent_types.pi-coding.policy_checkers]]
-command = 'python3 "$MNGR_AGENT_WORK_DIR/system/scripts/agent_latchkey_request_check.py"'
-match = "permission-requests"
-
-[[agent_types.pi-coding.policy_checkers]]
-command = 'python3 "$MNGR_AGENT_WORK_DIR/system/scripts/agent_tk_standalone_check.py"'
-match = "tk"
-
-
 # --- Provider configurations ---
 
 # all disabled for now, since we don't want the agents to be able to launch mngr agents anywhere except within their own containers
