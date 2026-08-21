@@ -43,22 +43,38 @@ Runs the `.sh`/`.py` scripts in this directory, one entry per hook under the mat
 (`PreToolUse`, `UserPromptSubmit`, `Stop`, `SessionStart`). A script reads the event JSON on
 stdin. This is the reference implementation and needs no changes.
 
-### codex  (wiring: `mngr_codex/.../codex_config.py` → `build_codex_hooks_config()`)
+### codex  (wiring: `.mngr/settings.toml` → `[agent_types.codex.policy_hooks]`)
 Codex speaks the **same hook protocol** as claude — same event names, same stdin payload
 (`tool_name`, `.tool_input.command`, claude-shaped even under code mode), same output
 channels — so codex **reuses the exact same scripts**, referenced from the work dir
 (`$MNGR_AGENT_WORK_DIR/system/scripts/…`). No copy, no new logic: editing a script updates
-claude and codex at once. `build_codex_hooks_config` just adds the entries. Codex requires its
-command hooks be trusted; the plugin passes `--dangerously-bypass-hook-trust` (consent-gated)
-so mngr's own hooks run.
+claude and codex at once.
 
-### pi  (wiring: `mngr_pi_coding/.../resources/mngr_pi_lifecycle.ts`)
+The list lives **here, in this repo**, not in mngr: `[agent_types.codex.policy_hooks]` maps
+each hook event to the commands to run for it, and mngr writes them into the agent's
+`hooks.json` verbatim (after its own session-pointer recorder on `UserPromptSubmit`). So
+adding a guard is an edit to `.claude/settings.json` + that table — never a mngr release.
+Codex requires its command hooks be trusted; the plugin passes
+`--dangerously-bypass-hook-trust` (consent-gated) so hooks run at all.
+
+### pi  (wiring: `.mngr/settings.toml` → `[[agent_types.pi-coding.policy_checkers]]`, plus `mngr_pi_lifecycle.ts`)
 Pi has **no shell-hook surface** — its only extension point is a TypeScript module loaded with
-`pi -e <per-agent-path>`. So pi **cannot run the scripts**; it re-expresses each rule against
-the pi SDK event that matches. Reminder *text* and regexes are copied verbatim from the scripts
-so all three harnesses read identically; where a rule needs tk state, pi shells out to the same
-vendored `ticket` binary the scripts use. The SDK is documented in the package's
-`dist/core/extensions/types.d.ts`; we do NOT modify it.
+`pi -e <per-agent-path>`. It therefore cannot run a hook *wrapper* (those read a hook payload on
+stdin, which pi has no equivalent of), and splits our rules two ways:
+
+* **This repo's guards** are declared in `[[agent_types.pi-coding.policy_checkers]]` — a
+  `command` plus an optional `match` pre-filter. mngr hands the list to the extension, which
+  runs each one before a bash tool call with the agent's command as `$1`; exit 2 blocks with
+  the checker's stderr as the reason. That is how pi reaches the very same `*_check.py` files
+  claude and codex reach through their wrappers: one checker file, three harnesses. Adding a
+  guard of this kind is an edit to that table — never a mngr release.
+* **Rules with no script to call** (the pipe-into-`tail`/`head` block, the git history-rewrite
+  block, the OOM/git-identity rewrite, and the tk step reminders) are re-expressed in the
+  extension against the pi SDK event that matches. Reminder *text* and regexes are copied
+  verbatim from the scripts so all three harnesses read identically; where a rule needs tk
+  state, pi shells out to the same vendored `ticket` binary the scripts use.
+
+The SDK is documented in the package's `dist/core/extensions/types.d.ts`; we do NOT modify it.
 
 **Minds-only, by construction.** The pi extension is loaded via the `-e` flag mngr adds *only*
 to a managed agent's launch command (`plugin.py::assemble_command`). A user running plain `pi`
@@ -253,7 +269,10 @@ When a rule changes, update every harness that carries it:
   their `.sh` wrappers and called directly by pi — so the tokenizing rule is single-sourced.
 - **Safety 4** (`claude_rewrite_bash_command.py`): shared by claude and codex; pi mirrors its
   prefix logic in `rewriteBashCommand()`.
-- codex wiring lives in `build_codex_hooks_config()`; pi wiring in the `pi.on(...)` handlers.
+- codex and pi wiring lives in **this repo's** `.mngr/settings.toml`
+  (`[agent_types.codex.policy_hooks]`, `[[agent_types.pi-coding.policy_checkers]]`); a guard
+  added to `.claude/settings.json` needs the matching line there, and nothing in mngr. What
+  still lives in mngr is the pi extension's own re-expressed rules (see the pi section above).
 - claude and codex share one runtime (shell + JSON) so they share files; pi is a separate
   runtime (in-process TypeScript), so its copy is unavoidable — but small, and its rules and
   reminder text are verbatim copies.
