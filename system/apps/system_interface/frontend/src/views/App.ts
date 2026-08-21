@@ -42,7 +42,16 @@ export function App(): m.Component {
           // The whole content area is one grey surface with the rail sitting on
           // it, directly left of the dock. Which view you are in is said by the
           // rail's own header now, so there is no bar above this row.
-          m("div", { class: "app-main flex flex-1 min-w-80" }, [
+          //
+          // min-h-0: a flex item's automatic minimum size is its content's, so
+          // without this the row can grow with the viewport but never shrink
+          // back. The dock then keeps the height it was laid out at, and
+          // everything it positions in pixels -- the panes, and the live
+          // surfaces mirroring them -- hangs below the viewport with the
+          // composer's model bar clipped off the bottom. The minds shell
+          // shrinking this window for its recovery band is how that happens
+          // without the user touching the window.
+          m("div", { class: "app-main flex min-h-0 flex-1 min-w-80" }, [
             // Every attr is read straight off the workspace on each draw rather
             // than cached: the registry loads asynchronously, and a rename, a
             // new tab or another client's change all arrive as a redraw, so the
