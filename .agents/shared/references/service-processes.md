@@ -6,8 +6,10 @@ program. Reach for this from any service flow (`update-app`,
 `build-app`) when a change touches *how a service runs* (its port,
 command, logs) or adds/removes a program, rather than only its code.
 
-Background services are defined as `[program:<name>]` sections in
-`system/supervisord.conf` at the repo root. `uv run bootstrap` runs first-boot
+Background services are defined as `[program:<name>]` sections, one program
+per file under `system/supervisord.conf.d/`, pulled in by an `[include]` glob
+in `system/supervisord.conf` at the repo root (which otherwise holds only the
+daemon's own config). `uv run bootstrap` runs first-boot
 setup and then `exec`s `supervisord` in the foreground (in the `bootstrap`
 tmux window); supervisord starts and supervises every program. supervisord
 does **not** watch the config file -- you apply changes with
@@ -17,7 +19,7 @@ does **not** watch the config file -- you apply changes with
 
 ```ini
 [program:my-service]
-command=python3 system/services/oom_priority/bin/oom_tag_service.py user uv run my-service
+command=python3 system/services/oom_priority/bin/oom_tag_service.py user uv run --all-packages my-service
 directory=/home/user/workspace
 autostart=true
 autorestart=true
@@ -39,7 +41,7 @@ Key fields:
   other shell syntax must be wrapped in `bash -c "..."`:
 
   ```ini
-  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:8090 --name foo && uv run foo"
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:8090 --name foo && uv run --all-packages foo"
   ```
 
   The `python3 system/services/oom_priority/bin/oom_tag_service.py user` prefix is the **OOM band tag**
@@ -93,7 +95,7 @@ than ~1s later, and it keeps the command self-documenting.
 
 ## Adding a service
 
-1. Add a new `[program:<name>]` section to `system/supervisord.conf`.
+1. Write a new `[program:<name>]` section to its own `system/supervisord.conf.d/<name>.conf`.
 2. Apply it:
 
    ```bash
@@ -106,18 +108,19 @@ than ~1s later, and it keeps the command self-documenting.
 
 ## Removing a service
 
-1. Delete the `[program:<name>]` section from `system/supervisord.conf`.
+1. Delete the program's `system/supervisord.conf.d/<name>.conf`.
 2. `supervisorctl reread && supervisorctl update` -- supervisord stops and
    forgets the removed program.
 
 For an app, also drop its `data/.state/apps.toml` entry with
 `python3 system/scripts/forward_port.py --name <name> --remove`; for a scaffolded
 web lib, `build-app`'s `cleanup.md` reference covers the full
-teardown (reverting the lib and the root `pyproject.toml` edits).
+teardown (removing the lib; the root `pyproject.toml` needs no edit, since the
+scaffold never added one).
 
 ## Modifying a service
 
-1. Change the program's `command` (or other fields) in `system/supervisord.conf`.
+1. Change the program's `command` (or other fields) in its `system/supervisord.conf.d/<name>.conf`.
 2. `supervisorctl reread && supervisorctl update` applies the change (it
    restarts the program when its definition changed). To bounce a program
    without editing its config, use `supervisorctl restart <name>`.
@@ -139,8 +142,10 @@ Or read the log files directly under `/var/log/supervisor/`.
   letters/digits with single hyphens, underscores only for legacy names,
   not `localhost`, not starting with `host-` or `agent-`) because it becomes
   the leading label of the service's origin hostname.
-- supervisord only manages the programs in `system/supervisord.conf`; it does not touch
-  the main agent window or other tmux windows.
+- supervisord only manages the programs declared under
+  `system/supervisord.conf.d/` (plus `system_interface`, which stays in
+  `system/supervisord.conf` -- see the note there); it does not touch the main
+  agent window or other tmux windows.
 - If you need a one-off command, just run it directly rather than adding a
   program.
 - For standing up a new app (Flask lib or wrapping a third-party

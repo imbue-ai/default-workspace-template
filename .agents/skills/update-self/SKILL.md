@@ -10,7 +10,7 @@ metadata:
 This repo was created from a template repo and stays connected to it via a git
 remote (`system/config/parent.toml` has the URL and branch). Upstream carries the shared
 infrastructure: skills, scripts, `CLAUDE.md` scaffolding, `Dockerfile`,
-`system/supervisord.conf`, the system interface, the vendored `mngr`.
+`system/supervisord.conf` and its `supervisord.conf.d/` drop-ins, the system interface, the vendored `mngr`.
 
 Merging upstream can break the live workspace -- a settings-schema change the
 running `system_interface` can't parse, a bumped `system/vendor/mngr`, a new service.
@@ -698,7 +698,7 @@ The report says which classes merged. Apply each; a clean pull-in is still
   longer contains the update), surface the failure, and re-dispatch once the
   cause is fixed. Exit 3 means the restore itself failed -- surface immediately.
 
-- **`service` / `system/supervisord.conf` / `bootstrap`** -- restart the whole services
+- **`service` / `system/supervisord.conf{,.d/}` / `bootstrap`** -- restart the whole services
   agent (do not use `supervisorctl reread && update` here), then rebuild the
   user's view of the workspace, then refresh any affected tab
   (`python3 system/scripts/layout.py refresh <name>`):

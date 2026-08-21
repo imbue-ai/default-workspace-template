@@ -52,7 +52,8 @@ in that app's folder and is named `<app>-<role>`.
 - `.mngr/settings.toml` - Agent types, create templates, command defaults
 - `.agents/skills/` - Agent skills (task delegation, app building, self-update)
 - `system/scripts/` - Utility and provisioning scripts
-- `system/supervisord.conf` - Supervisord config defining the apps' and
+- `system/supervisord.conf` + `system/supervisord.conf.d/` - Supervisord
+  config (one file per program under `conf.d/`) defining the apps' and
   services' programs
 - `system/apps/` - Everything tab-openable: `system_interface/` (the workspace
   web UI -- the special app that hosts the other tabs), `terminal/`,

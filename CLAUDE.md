@@ -206,7 +206,7 @@ You can (and should) modify your own configuration to improve yourself:
 
 - **CLAUDE.md**: (this file) update these instructions if you discover better ways to operate.
 - **.agents/skills/**: Create new skills or modify existing ones. Each skill is a directory with a SKILL.md file. (Also symlinked from `.claude/skills/`.)
-- **system/supervisord.conf**: Add, modify, or remove background services. See the `update-app` skill.
+- **system/supervisord.conf.d/**: Add, modify, or remove background services -- one file per program. See the `update-app` skill.
 - **system/scripts/**: Add utility scripts that help you accomplish your purpose.
 
 Commit your changes to git after making modifications.
@@ -239,11 +239,11 @@ Memory is gitignored (everything under `data/` is). It survives container loss v
 
 # Apps and services
 
-**Before editing any code that belongs to a supervisord program -- an app (a tab the user can open) or a background service -- load the `update-app` skill first.** It owns the live change loop (apply, refresh, verify) and the turn-end hardening flow; do not hand-edit an app's or service's code or `system/supervisord.conf` without it.
+**Before editing any code that belongs to a supervisord program -- an app (a tab the user can open) or a background service -- load the `update-app` skill first.** It owns the live change loop (apply, refresh, verify) and the turn-end hardening flow; do not hand-edit an app's or service's code or its `system/supervisord.conf.d/<name>.conf` without it.
 
-Apps and background services both run as supervisord programs in `system/supervisord.conf`.
+Apps and background services both run as supervisord programs, each declared in its own `system/supervisord.conf.d/<name>.conf` (pulled in by an `[include]` glob in `system/supervisord.conf`, which holds only the daemon's own config).
 Supervisord (launched by `bootstrap` after first-boot setup) supervises them; each program writes its own rotated logs under `/var/log/supervisor/<name>-stdout.log` and `/var/log/supervisor/<name>-stderr.log`.
-To add, change, or remove a service, edit `system/supervisord.conf` and run `supervisorctl reread && supervisorctl update` (and `supervisorctl restart <name>` to bounce one). Inspect with `supervisorctl status` / `supervisorctl tail -f <name> stderr`.
+To add, change, or remove a service, add/edit/delete its own `system/supervisord.conf.d/<name>.conf` and run `supervisorctl reread && supervisorctl update` (and `supervisorctl restart <name>` to bounce one). Inspect with `supervisorctl status` / `supervisorctl tail -f <name> stderr`.
 See the `update-app` skill for details.
 
 For routine jobs that run on a cadence and then exit (backups, health checks, the weekly Caretaker -- off by default, see the enable-caretaker skill), use cron via the **`manage-scheduled-tasks`** skill rather than a supervisord program; and after building or editing any service, use the `check-app-errors` skill to scan `/var/log/supervisor/` for errors (a clean exit code does not mean the service is healthy).

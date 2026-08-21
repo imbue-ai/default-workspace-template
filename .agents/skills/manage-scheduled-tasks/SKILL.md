@@ -237,7 +237,7 @@ The complete map of the scheduling machinery, for edits and debugging:
   `system/libs/automations/run_job_test.py`).
 - `/home/user/workspace/data/.state/jobs/<job-id>/` -- each runner job's state
   (`last_attempt`, `last_success`, `failures`, `lock`).
-- `supervisord.conf` -- `[program:cron]` is the cron daemon (check it with
+- `supervisord.conf.d/cron.conf` -- `[program:cron]` is the cron daemon (check it with
   `supervisorctl status cron`).
 - `/var/log/supervisor/<job>.log` -- each job's own output (per the redirect
   on its entry); `/var/log/supervisor/cron-*.log` -- the cron daemon's logs.
