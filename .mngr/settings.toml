@@ -454,6 +454,25 @@ extra_window = ["bootstrap='uv run bootstrap'"]
 # tracking hooks. It lives in its own file so those hook lines stay readable.
 extra_provision_command__extend = [
     '''printf '%s\n' 'set -g alternate-screen off' 'set -g mouse on' 'set -g set-clipboard on' 'set -as terminal-features ,*:clipboard' 'bind -T copy-mode MouseDragEnd1Pane send -X copy-pipe-and-cancel' 'bind -T copy-mode-vi MouseDragEnd1Pane send -X copy-pipe-and-cancel' 'if-shell "test -f /home/user/workspace/system/apps/terminal/terminal_tmux.conf" "source-file /home/user/workspace/system/apps/terminal/terminal_tmux.conf"' > "$HOME/.tmux.conf"''',
+    # Ctrl-S is two traps, not one. With flow control on (the default) it sends
+    # XOFF and output freezes; the standard unfreeze is Ctrl-Q, but mngr binds
+    # Ctrl-Q in tmux's root table to destroy the agent, so tmux eats it and the
+    # pty never sees it -- the reflex recovery destroys the workspace. With flow
+    # control merely off, readline claims the freed key for
+    # forward-search-history and drops you into an `(i-search)` prompt where
+    # typing goes to the search buffer -- indistinguishable from a freeze. Both
+    # are disabled. Ctrl-R (reverse-i-search) is left alone: it is useful and
+    # nobody hits it by accident.
+    #
+    # This goes in /etc/profile.d, NOT ~/.bashrc. tmux runs default-shell as a
+    # *login* shell here (default-command is empty), and a bash login shell
+    # reads /etc/profile plus the first of ~/.bash_profile, ~/.bash_login,
+    # ~/.profile -- none of which exist in this image. ~/.bashrc is only read by
+    # non-login interactive shells, so a setting placed there never runs in a
+    # workspace terminal. /etc/bash.bashrc covers the non-login case (a nested
+    # `bash` inherits the pty's -ixon but rebinds Ctrl-S in its own readline).
+    # Writing whole files rather than appending makes re-provisioning a no-op.
+    '''printf '%s\n' 'case $- in *i*) stty -ixon 2>/dev/null; bind -r "\\C-s" 2>/dev/null ;; esac' > /etc/profile.d/no_flow_control.sh; grep -q no_flow_control /etc/bash.bashrc 2>/dev/null || printf '%s\n' '[ -f /etc/profile.d/no_flow_control.sh ] && . /etc/profile.d/no_flow_control.sh' >> /etc/bash.bashrc''',
 ]
 
 # Shared base template for the local docker provider. Used on its own for the
