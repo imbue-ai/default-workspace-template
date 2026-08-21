@@ -23,6 +23,8 @@ from typing import Final
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.activity import HarnessActivityTracker
+from imbue.system_interface.harnesses.antigravity.activity import AntigravityActivityTracker
+from imbue.system_interface.harnesses.antigravity.watcher import AntigravitySessionWatcher
 from imbue.system_interface.harnesses.auth_check import CODEX_AUTH_CHECK
 from imbue.system_interface.harnesses.auth_check import HarnessAuthCheck
 from imbue.system_interface.harnesses.auth_check import PI_AUTH_CHECK
@@ -46,6 +48,10 @@ from imbue.system_interface.harnesses.interrupt import RestartDrainInterruptToCo
 from imbue.system_interface.harnesses.model import HarnessCatalog
 from imbue.system_interface.harnesses.model import HarnessModelResolver
 from imbue.system_interface.harnesses.model import model_state_path
+from imbue.system_interface.harnesses.opencode.placeholder import OpenCodePlaceholderActivityTracker
+from imbue.system_interface.harnesses.placeholder import EMPTY_CATALOG
+from imbue.system_interface.harnesses.placeholder import PlaceholderModelResolver
+from imbue.system_interface.harnesses.placeholder import PlaceholderSessionWatcher
 from imbue.system_interface.harnesses.pi_coding.activity import PiActivityTracker
 from imbue.system_interface.harnesses.pi_coding.model import PI_STATE_RELATIVE_PATH
 from imbue.system_interface.harnesses.pi_coding.model import PiAtomicShoulderTap
@@ -231,6 +237,12 @@ class HarnessSpec(FrozenModel):
     # disk -- too much for import time, and importing this module must not fail on an image
     # where a harness's data is absent. claude/codex just return their hand-written constant.
     catalog_factory: Callable[[], HarnessCatalog]
+    # The harness's ``*_process_started`` marker filename, touched by mngr on every
+    # launch/resume. Harness IDENTITY, so it is declared here rather than read off a live
+    # tracker instance: the OOM prioritizer resolves it knowing only an agent id, and an
+    # agent that has been discovered but not yet wired up has no tracker to ask -- which
+    # silently cost the prioritizer its aging for exactly the agents it most needs to age.
+    process_started_marker_filename: str
     # The special-event kinds this harness may emit. A parser emitting a kind outside its
     # own declaration is a bug; an empty set is the honest statement that a harness's
     # transcript carries no markers, not an omission.
@@ -266,6 +278,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         name=HarnessType.CLAUDE,
         watcher_class=ClaudeSessionWatcher,
         tracker_class=ClaudeActivityTracker,
+        process_started_marker_filename=ClaudeActivityTracker.marker_filename,
         resolver_class=ClaudeModelResolver,
         catalog_factory=lambda: CLAUDE_CATALOG,
         model_state_relative_path=CLAUDE_STATE_RELATIVE_PATH,
@@ -296,6 +309,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         # emits those, only thread/status/changed, so the dot got stuck. The ledger stays as the
         # queue/message-lifecycle authority; it does not drive the dot.)
         tracker_class=CodexActivityTracker,
+        process_started_marker_filename=CodexActivityTracker.marker_filename,
         resolver_class=CodexModelResolver,
         catalog_factory=lambda: CODEX_CATALOG,
         model_state_relative_path=CODEX_STATE_RELATIVE_PATH,
@@ -329,6 +343,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         # so activity is the lifecycle-plus-tail heuristic.
         watcher_class=PiSessionWatcher,
         tracker_class=PiActivityTracker,
+        process_started_marker_filename=PiActivityTracker.marker_filename,
         resolver_class=PiModelResolver,
         catalog_factory=get_pi_catalog,
         model_state_relative_path=PI_STATE_RELATIVE_PATH,
@@ -345,6 +360,48 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
             ),
         ),
         auth_instructions="Open the agent's terminal and run /login to add accounts or keys.",
+    ),
+    # opencode and antigravity are LAUNCH-ONLY so far: their mngr plugins can create and run
+    # an agent, but neither has a transcript watcher, activity tracker, model resolver or
+    # catalog of its own yet. They are registered anyway, because an UNregistered harness is
+    # not neutral -- ``parse_harness`` would fall it back to claude and point claude's watcher
+    # at another harness's state dir. So each names the shared placeholders (see
+    # ``harnesses/placeholder.py``) until its own implementation lands, one harness at a time.
+    #
+    # ``auth_check`` is deliberately None for both. ``find_unauthenticated_harness_reason`` is
+    # FAIL-CLOSED: an auth probe whose command or output pattern is wrong refuses every create
+    # on that harness. Neither CLI's sign-in probe has been verified here, so a guessed one
+    # would block the very thing this registration exists to enable. Each harness adds its own
+    # (to ``auth_check.py``, with its popups) alongside its real implementation.
+    HarnessType.OPENCODE: HarnessSpec(
+        name=HarnessType.OPENCODE,
+        watcher_class=PlaceholderSessionWatcher,
+        tracker_class=OpenCodePlaceholderActivityTracker,
+        process_started_marker_filename=OpenCodePlaceholderActivityTracker.marker_filename,
+        resolver_class=PlaceholderModelResolver,
+        catalog_factory=lambda: EMPTY_CATALOG,
+        # No model_state.json is written for opencode yet; the path is the state-dir root
+        # (claude/pi's value) so the shared reader looks somewhere harmless until it is.
+        model_state_relative_path=Path("."),
+        special_kinds=frozenset(),
+    ),
+    HarnessType.ANTIGRAVITY: HarnessSpec(
+        name=HarnessType.ANTIGRAVITY,
+        # Tails agy's own per-conversation SQLite store (the protobuf-encoded ``steps``
+        # table), located from the conversation-ids file mngr's capture hook writes. agy's
+        # transcript carries no turn markers (like claude and pi), so activity is the
+        # lifecycle-plus-tail heuristic -- with one agy-specific correction, see
+        # antigravity/activity.py.
+        watcher_class=AntigravitySessionWatcher,
+        tracker_class=AntigravityActivityTracker,
+        process_started_marker_filename=AntigravityActivityTracker.marker_filename,
+        # Model bar only. agy reads and switches its model through its own settings, and the
+        # uniform ``model_state.json`` it should write is not wired on the mngr side yet, so
+        # the resolver and catalog stay inert while the transcript above is real.
+        resolver_class=PlaceholderModelResolver,
+        catalog_factory=lambda: EMPTY_CATALOG,
+        model_state_relative_path=Path("."),
+        special_kinds=frozenset(),
     ),
 }
 

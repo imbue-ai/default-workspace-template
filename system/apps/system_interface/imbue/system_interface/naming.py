@@ -28,6 +28,8 @@ AUTO_NAME_WORD_BY_HARNESS: Final[dict[HarnessType, str]] = {
     HarnessType.CLAUDE: "Chat",
     HarnessType.CODEX: "Codex",
     HarnessType.PI_CODING: "Pi",
+    HarnessType.OPENCODE: "OpenCode",
+    HarnessType.ANTIGRAVITY: "Agy",
 }
 
 # What ``canonical_agent_name`` strips: everything that is neither a safe-name
