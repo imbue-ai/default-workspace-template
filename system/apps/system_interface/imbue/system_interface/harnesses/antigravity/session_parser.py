@@ -22,10 +22,14 @@ from typing import Final
 
 from imbue.system_interface.harnesses.antigravity.agy_transcript import DecodedStep
 from imbue.system_interface.harnesses.antigravity.tool_labels import keeps_full_tool_input
+from imbue.system_interface.harnesses.antigravity.tool_labels import run_command_line
 from imbue.system_interface.harnesses.antigravity.tool_labels import tool_labels
 from imbue.system_interface.harnesses.events import MAX_TOOL_INPUT_PREVIEW_LENGTH
-from imbue.system_interface.harnesses.events import MAX_TOOL_OUTPUT_LENGTH
 from imbue.system_interface.harnesses.message_display import stamp_user_message_display
+from imbue.system_interface.harnesses.tool_output import classify_tool_call_display
+from imbue.system_interface.harnesses.tool_output import find_permission_request
+from imbue.system_interface.harnesses.tool_output import is_pure_tk_lifecycle_command
+from imbue.system_interface.harnesses.tool_output import truncate_tool_output
 
 # "common" here means the normalized/common event *form*, matching the
 # ``<harness>/common_transcript`` label claude/codex stamp -- not an on-disk file.
@@ -53,12 +57,6 @@ def _clean_user_text(raw: str) -> str:
 
 def _event_id(step: DecodedStep, suffix: str) -> str:
     return f"{step.conv_id}:{step.idx}:{suffix}"
-
-
-def _truncate_output(text: str) -> str:
-    if len(text) > MAX_TOOL_OUTPUT_LENGTH:
-        return text[:MAX_TOOL_OUTPUT_LENGTH] + "..."
-    return text
 
 
 def _input_preview(tool_name: str, args_json: str) -> str:
@@ -133,6 +131,15 @@ def _tool_events(step: DecodedStep) -> list[dict[str, Any]]:
         "header_label": header_label,
         "caption_label": caption_label,
     }
+    # The render decision ships with the call, exactly as it does for claude/codex/pi: a PURE
+    # tk lifecycle call is a hidden structural marker rather than work, and a latchkey POST
+    # renders as the permission card (recognised from the INPUT, so the card appears while the
+    # request is still pending and has no result yet).
+    command = run_command_line(call.name, call.args)
+    is_pure_tk = command is not None and is_pure_tk_lifecycle_command(command)
+    display = classify_tool_call_display(is_pure_tk=is_pure_tk, raw_input=call.args)
+    if display is not None:
+        tool_call["display"] = display.value
     events: list[dict[str, Any]] = [
         _assistant_message(step, text="", tool_calls=[tool_call], suffix="toolcall")
     ]
@@ -140,19 +147,25 @@ def _tool_events(step: DecodedStep) -> list[dict[str, Any]]:
     # keeps the call unmatched (= TOOL_RUNNING) during execution.
     if step.is_terminal and step.tool_result_text is not None:
         result_event_id = _event_id(step, "toolresult")
-        events.append(
-            {
-                "timestamp": step.created_at,
-                "type": "tool_result",
-                "event_id": result_event_id,
-                "source": SOURCE,
-                "tool_call_id": call_event_id,
-                "tool_name": call.name,
-                "output": _truncate_output(step.tool_result_text),
-                "is_error": step.is_error_result,
-                "message_uuid": result_event_id,
-            }
-        )
+        # Lift the permission-request object and preserve tk step decoration BEFORE truncation
+        # (shared with the claude/codex/pi parsers -- see ``harnesses/tool_output``). Order
+        # matters: head-slicing first would destroy an object or decoration past the cut.
+        raw_output = step.tool_result_text
+        permission_request = find_permission_request(raw_output)
+        result_event: dict[str, Any] = {
+            "timestamp": step.created_at,
+            "type": "tool_result",
+            "event_id": result_event_id,
+            "source": SOURCE,
+            "tool_call_id": call_event_id,
+            "tool_name": call.name,
+            "output": truncate_tool_output(raw_output, permission_request),
+            "is_error": step.is_error_result,
+            "message_uuid": result_event_id,
+        }
+        if permission_request is not None:
+            result_event["permission_request"] = permission_request.details
+        events.append(result_event)
     return events
 
 

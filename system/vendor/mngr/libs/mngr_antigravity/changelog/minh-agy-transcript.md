@@ -1,0 +1,3 @@
+An antigravity agent now stamps an `antigravity_process_started` marker in its state directory on every launch and resume, matching the `claude_process_started` / `codex_process_started` / `pi_process_started` markers the peer plugins write.
+
+Consumers use its mtime to bound transcript staleness. This matters more for agy than for the others because agy resumes from its own conversation store: after a mid-turn restart the previous process's steps are still present, including a dispatched tool call that never completed, and without a process-start timestamp there is no way to tell that tail apart from live work.

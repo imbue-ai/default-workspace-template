@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
+
 from imbue.system_interface.harnesses.antigravity.agy_transcript import DecodedStep
 from imbue.system_interface.harnesses.antigravity.agy_transcript import DecodedToolCall
 from imbue.system_interface.harnesses.antigravity.session_parser import parse_step
+from imbue.system_interface.harnesses.events import MAX_TOOL_OUTPUT_LENGTH
 
 
 _BASE_STEP = DecodedStep(
@@ -116,3 +119,78 @@ def test_error_message_step_becomes_flagged_assistant_message() -> None:
 
 def test_conversation_history_step_is_skipped() -> None:
     assert parse_step(_step(step_type_name="CONVERSATION_HISTORY", source_name="SYSTEM")) == []
+
+
+# --- shared tool_output behaviour (parity with claude / codex / pi) ------------------------
+
+
+def _named_tool_step(*, name: str, args: str, result: str | None = None, **kwargs: object) -> DecodedStep:
+    return _step(
+        idx=2,
+        step_type_name="RUN_COMMAND",
+        tool_call=DecodedToolCall(call_id="t1", name=name, args=args, caption_short="", caption_long=""),
+        tool_result_text=result,
+        **kwargs,
+    )
+
+
+def _make_permission_request_output(rationale: str) -> str:
+    """The stdout of a latchkey permission-request POST: curl's progress meter, then the
+    created request pretty-printed the way the gateway writes it."""
+    body = json.dumps(
+        {
+            "request_id": "885711ec07bf47239d71294e1534330b",
+            "agent_id": "agent-28dc23edadd34caeaba58441ac8e7218",
+            "rationale": rationale,
+            "request_type": "predefined",
+            "payload": {"scope": "slack-api", "permissions": ["slack-read-all"]},
+        },
+        indent=2,
+    )
+    meter = "  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n" * 3
+    return meter + body + "\n"
+
+
+def test_pure_tk_lifecycle_call_is_hidden() -> None:
+    """A run_command that is nothing but a tk lifecycle invocation is a structural marker,
+    not work, so it renders hidden -- the same decision claude/codex/pi make."""
+    step = _named_tool_step(name="run_command", args=json.dumps({"CommandLine": 'tk create --step "do a thing"'}))
+    call = parse_step(step)[0]["tool_calls"][0]
+    assert call["display"] == "hidden"
+
+
+def test_an_ordinary_command_gets_no_display_override() -> None:
+    """The hide rule is strict: a command that merely MENTIONS tk still renders normally."""
+    step = _named_tool_step(name="run_command", args=json.dumps({"CommandLine": "grep -r tk ."}))
+    assert "display" not in parse_step(step)[0]["tool_calls"][0]
+
+
+def test_permission_request_call_renders_as_the_card() -> None:
+    """Recognised from the tool INPUT, so the card appears while the request is still
+    pending and has produced no result yet."""
+    args = json.dumps({"CommandLine": "curl -X POST https://latchkey-self.invalid/permission-requests -d @-"})
+    call = parse_step(_named_tool_step(name="run_command", args=args))[0]["tool_calls"][0]
+    assert call["display"] == "permission_request"
+
+
+def test_permission_request_survives_output_truncation() -> None:
+    """A permission-request response longer than the output limit is preserved whole: the
+    parsed request rides on the event, and the object left in ``output`` is still complete
+    and still readable from its first ``{``. Head truncation alone cut it mid-object, which
+    is what left the chat's permission card unable to name a still-pending request."""
+    output = _make_permission_request_output("I need to read the eng-releases channel. " * 60)
+    assert len(output) > MAX_TOOL_OUTPUT_LENGTH
+    events = parse_step(_named_tool_step(name="run_command", args="{}", result=output))
+    result = next(event for event in events if event["type"] == "tool_result")
+    assert result["permission_request"]["request_id"] == "885711ec07bf47239d71294e1534330b"
+    recovered = json.loads(result["output"][result["output"].index("{") :])
+    assert recovered["payload"]["scope"] == "slack-api"
+
+
+def test_tk_step_decoration_past_the_cut_is_preserved() -> None:
+    """tk decoration lines are what the step timeline reads; head truncation alone dropped
+    any that fell past the limit, silently losing a step's structure."""
+    output = ("x" * MAX_TOOL_OUTPUT_LENGTH) + "\nUpdated abc123 -> closed"
+    events = parse_step(_named_tool_step(name="run_command", args="{}", result=output))
+    result = next(event for event in events if event["type"] == "tool_result")
+    assert "Updated abc123 -> closed" in result["output"]

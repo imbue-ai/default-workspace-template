@@ -6,6 +6,7 @@ import re
 from collections.abc import Mapping
 from datetime import datetime
 from datetime import timezone
+import shlex
 from pathlib import Path
 from typing import Any
 
@@ -1783,3 +1784,16 @@ def test_provision_still_writes_the_rules_file_when_over_the_soft_limit(
     agy_home = tmp_path / "agy_home"
     agent._provision_agent_instructions(agent.host, agy_home)
     assert get_antigravity_global_rules_path(agy_home).read_text() == big
+
+def test_assemble_command_stamps_the_process_started_marker(antigravity_agent: AntigravityAgent) -> None:
+    """Every launch/resume touches ``antigravity_process_started`` BEFORE agy runs.
+
+    Its mtime is what the workspace uses to bound transcript staleness: agy resumes from its
+    own store, so after a mid-turn restart the previous process's tail is still there --
+    including an unmatched tool call nothing will ever close -- and the chat's activity
+    indicator would latch on it. Ordering matters (the touch precedes the agy invocation), so
+    the marker can never be older than the process it stands for.
+    """
+    command = str(antigravity_agent.assemble_command(antigravity_agent.host, (), command_override=None))
+    assert "antigravity_process_started" in command
+    assert command.index("touch ") < command.index(" agy ")

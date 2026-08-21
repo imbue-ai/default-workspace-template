@@ -33,13 +33,12 @@ class AntigravityActivityTracker(HarnessActivityTracker):
     """agy: no turn markers, so activity is inferred from the mngr lifecycle plus the
     transcript tail (with an empty planner tail read as still-working, not finished)."""
 
-    # mngr_antigravity does not write this marker YET -- unlike mngr_claude/codex/pi_coding,
-    # it writes no startup/resume marker at all. Naming the file it SHOULD write keeps the
-    # declaration honest: while it is absent the base reads ``process_started_at = None`` and
-    # its staleness gate is inert, which costs agy nothing because the ``active`` marker below
-    # is *removed* when agy goes idle -- so a restarted-but-idle agent already reads
-    # not-running and settles IDLE without a staleness rung. Adding the marker on the mngr
-    # side tightens the mid-turn-restart case; it does not unblock anything here.
+    # Written by mngr_antigravity on every launch/resume, like the peer harnesses' own
+    # ``*_process_started`` markers. Load-bearing here, not decoration: agy resumes from its
+    # own store, so after a mid-turn restart the PREVIOUS process's tail is still present --
+    # including an unmatched tool call no later event will ever close. The base's staleness
+    # gate compares the tail against this marker's mtime and settles IDLE; without it the
+    # indicator latches on that dead tool call and never clears.
     marker_filename: ClassVar[str] = "antigravity_process_started"
 
     def _observe_extra(self, events: Sequence[dict[str, Any]]) -> tuple[Any, ...]:

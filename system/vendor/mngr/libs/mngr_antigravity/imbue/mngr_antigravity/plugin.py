@@ -255,6 +255,14 @@ _AGY_HOME_RELATIVE_PATH: Final[tuple[str, ...]] = ("plugin", "antigravity", "hom
 # agy refuses as a *workspace*, even though it accepts a hidden config dir.)
 _AGY_WORKSPACE_SYMLINK_PARENT: Final[str] = "/tmp/mngr_antigravity_workspaces"
 
+# Touched in the agent state dir on every launch/resume. Its mtime is how the workspace
+# bounds transcript staleness: after a mid-turn restart the previous process's tail is still
+# in agy's store -- including an unmatched tool call no later event will ever close -- and
+# without this the chat's activity indicator latches on it and never clears. The peer
+# harnesses each write their own (claude_process_started / codex_process_started /
+# pi_process_started); this is agy's.
+_PROCESS_STARTED_MARKER_FILENAME: Final[str] = "antigravity_process_started"
+
 # OS-specific subpath (under ``$HOME``) of agy's ms-playwright-go cache. agy
 # downloads heavy playwright + browser binaries there on first real use; a fully
 # isolated per-agent ``$HOME`` would make every agent re-download them, so each
@@ -1445,6 +1453,10 @@ class AntigravityAgent(
 
         symlink_path = self._get_agy_workspace_symlink_path()
         mkdir_cmd = f"mkdir -p {shlex.quote(str(log_file_path.parent))} {shlex.quote(_AGY_WORKSPACE_SYMLINK_PARENT)}"
+        # Stamp the process-start marker in the same chain, so its mtime always reflects
+        # THIS process rather than a previous one (see the constant).
+        marker_path = self._get_agent_dir() / _PROCESS_STARTED_MARKER_FILENAME
+        touch_cmd = f"touch {shlex.quote(str(marker_path))}"
         ln_cmd = f"ln -sfn {shlex.quote(str(self.work_dir))} {shlex.quote(symlink_path)}"
         cd_cmd = f"cd {shlex.quote(symlink_path)}"
         home_prefix = f"env HOME={shlex.quote(str(agy_home))}"
@@ -1469,7 +1481,7 @@ class AntigravityAgent(
         agy_invocation = f"{base_command} {' '.join(extra_args)}"
 
         return CommandString(
-            f"{background_cmd} {mkdir_cmd} && {ln_cmd} && {cd_cmd} "
+            f"{background_cmd} {mkdir_cmd} && {touch_cmd} && {ln_cmd} && {cd_cmd} "
             f'&& {{ {resume_prelude}; {home_prefix} {agy_invocation} "$@" ; }}'
         )
 
