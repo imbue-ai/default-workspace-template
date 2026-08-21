@@ -1,0 +1,3 @@
+Document the analytics collection footprint: a new `docs/system/analytics-collection.md` explains `data/.imbue/analytics/` (the injected collection script, its cursors, and the `collections.jsonl` run audit) for imbue-hosted explorer-plan workspaces, and `data/README.md` lists the directory. Docs only -- no analytics code ships in the template; the script is injected on every run by the analytics service (see the mngr repo's `specs/minds-analytics/`).
+
+The revocation instruction names both authorized_keys files the workspace's sshd reads (`~/.ssh/authorized_keys` and `/root/.ssh/authorized_keys` via `60-workspace-root-keys.conf`) -- the pool key is listed in each, so removing it from only one does not revoke access.
