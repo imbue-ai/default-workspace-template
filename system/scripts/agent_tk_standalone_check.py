@@ -2,7 +2,7 @@
 """Decide whether a Bash command is a non-standalone `tk start`/`tk close`.
 
 Takes the command as its single positional argument (passed by
-claude_tk_standalone.sh). Exits 0 to allow; exits 2 with a guiding stderr
+agent_tk_standalone.sh). Exits 0 to allow; exits 2 with a guiding stderr
 message to BLOCK. Only `start` and `close` are in scope -- `create` is exempt.
 See the wrapper for the why.
 

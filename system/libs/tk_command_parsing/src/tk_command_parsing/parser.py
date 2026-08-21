@@ -16,8 +16,8 @@ tokenizing -- that is the lexer's one blind spot here, and the only place the
 raw string is scanned char by char.
 
 This module is intentionally **stdlib-only**: the PreToolUse gate hooks in
-``system/scripts/`` -- ``claude_tk_standalone_check.py`` and
-``claude_latchkey_request_check.py`` -- import it under a bare ``python3`` with
+``system/scripts/`` -- ``agent_tk_standalone_check.py`` and
+``agent_latchkey_request_check.py`` -- import it under a bare ``python3`` with
 no virtualenv, so it must not pull in any third-party dependency. That is also
 why the records below are ``typing.NamedTuple`` rather than a pydantic model.
 """

@@ -27,7 +27,7 @@
 # curl is untouched, and may be piped or chained freely.
 #
 # Blocks via exit 2 with a stderr message the agent sees. The command parsing lives
-# in the sibling claude_latchkey_request_check.py, which shell-tokenizes with
+# in the sibling agent_latchkey_request_check.py, which shell-tokenizes with
 # `shlex` so a rationale that mentions `&&` or `>` stays inside one quoted token.
 set -euo pipefail
 
@@ -44,7 +44,7 @@ command=$(echo "$input" | jq -r '.tool_input.command // empty')
 [[ "$command" == *"permission-requests"* ]] || exit 0
 
 script_dir=$(cd "$(dirname "$0")" && pwd)
-checker="$script_dir/claude_latchkey_request_check.py"
+checker="$script_dir/agent_latchkey_request_check.py"
 
 # Whether the call runs the command in the background is a property of the tool
 # input, not of the command text, so it is read here and handed to the checker.
