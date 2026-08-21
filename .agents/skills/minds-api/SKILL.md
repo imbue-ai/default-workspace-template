@@ -2,6 +2,8 @@
 name: minds-api
 description: "Use to act on OTHER Minds workspaces on the user's behalf -- list them, create a fresh one, SSH into one, read or export its backups, start/stop/destroy/recover it, or change its settings and service sharing. Reached through the latchkey gateway's minds-api-proxy; most routes need a per-workspace permission grant. For bringing another workspace's content into this one, use the migrate-workspace skill, which drives these routes as part of a much larger flow."
 compatibility: Requires latchkey (the standard agent gateway) and curl; ssh/ssh-keygen for the SSH capability. mngr (vendored) for handing tasks to another workspace's agent.
+metadata:
+  author: imbue
 ---
 
 # Minds API

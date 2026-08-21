@@ -1,6 +1,8 @@
 ---
 name: use-template
 description: Adapt an existing template (a published snapshot of apps/features from another mind) into this mind, resolving its requirements interactively. Use when the user gives a template's git URL, or asks to adopt/adapt/reuse a published template.
+metadata:
+  author: imbue
 ---
 
 # Adapting a template

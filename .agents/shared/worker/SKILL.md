@@ -2,6 +2,7 @@
 name: harden-worker
 description: Run the background harden pass for one creation -- crystallize, update, or heal a skill, an app, a service, or the system interface in an isolated worktree, then report back. Invoke when your task file hands you a creation to harden; it names the operation and creation type to compose.
 metadata:
+  author: imbue
   role: worker-sub-skill
 ---
 

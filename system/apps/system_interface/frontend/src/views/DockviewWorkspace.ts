@@ -64,7 +64,7 @@ import { ShareModal } from "./ShareModal";
 import { pickableApps } from "./AllAppsPicker";
 import { serviceIconMarkup } from "./appIcon";
 import { NewTabLauncher, buildLauncherRows } from "./NewTabLauncher";
-import type { LaunchKind, LauncherRow } from "./NewTabLauncher";
+import type { LaunchTarget, LauncherRow } from "./NewTabLauncher";
 import { placeMenu } from "./Sidebar";
 import type { MenuAnchor, QuickAddTabType, SidebarTabRow } from "./Sidebar";
 import { effectiveLifecycleState, livenessCategoryForState } from "./agentLiveness";
@@ -108,6 +108,7 @@ import {
   type MemberLastUsedListener,
   type MemberTitleListener,
   type ProjectSyncEvent,
+  type ChatHarness,
   type ProjectSyncListener,
   type TerminalSessionInfo,
   type TerminalSessionListener,
@@ -1530,8 +1531,8 @@ function createLauncherRenderer(panelId: string): IContentRenderer {
             rows: launcherRows(),
             memberRows: launcherMemberRows(),
             isEverything: mountedViewId !== null && isEverythingView(mountedViewId),
-            onOpenNew: (kind: LaunchKind) => {
-              openTabOfTypeInGroup(kind, groupForPanel(panelId), panelId);
+            onOpenNew: (target: LaunchTarget) => {
+              openTabOfTypeInGroup(target, groupForPanel(panelId), panelId);
             },
             onOpenMember: (row: LauncherRow) => {
               if (openMemberRef(row.ref, groupForPanel(panelId)) !== null) retireLauncher(panelId);
@@ -1720,10 +1721,10 @@ function derivedLabelForMemberRef(ref: string): string {
   }
 }
 
-// The chat harnesses a create can stack (see ``CreateChatRequest.harness``).
-// The display name each create wears ("Chat N", "Codex N", "Pi N") is minted
-// server-side, so no numbering lives here.
-type ChatHarness = "claude" | "codex" | "pi";
+// The chat harnesses a create can stack are ``ChatHarness`` (see AgentManager),
+// declared beside the create that carries them. The display name each create
+// wears ("Chat N", "Codex N", "Pi N") is minted server-side, so no numbering
+// lives here either.
 
 /** The project registry, for the sidebar's switcher and its member lists.
  *  Everything is never in it. */
@@ -2755,42 +2756,33 @@ export function openSubagentTab(agentId: string, subagentSessionId: string, desc
  * rather than it being closed here.
  */
 function openTabOfTypeInGroup(
-  // LaunchKind rather than QuickAddTabType: the launcher's tiles include the
-  // flag-gated harness kinds (codex/pi), which have no rail shortcut. The
-  // rail's QuickAddTabType is a subset, so its callers pass through unchanged.
-  tabType: LaunchKind,
+  // A LaunchTarget rather than the rail's QuickAddTabType: the launcher's tiles
+  // include the flag-gated harness chats, which have no rail shortcut and carry
+  // a harness the rail never names. The rail builds its plain-chat target in
+  // ``openTabOfType``.
+  target: LaunchTarget,
   targetGroup: DockviewGroupPanel | null,
   launcherPanelId: string | null,
 ): void {
-  if (
-    tabType === "chat" ||
-    tabType === "codex" ||
-    tabType === "pi" ||
-    tabType === "intro-chat" ||
-    tabType === "intro-codex" ||
-    tabType === "intro-pi"
-  ) {
-    // The harness tiles are the same create as Chat -- the same `chat` role in
-    // the primary's work dir -- stacked on a different harness template. The
-    // intro- variants additionally stack the `first` create template (fast
-    // launch where the harness supports it, /welcome, the first=true label).
-    // No dialog for any of them: the name is auto-minted like every other create.
-    const isFirst = tabType.startsWith("intro-");
-    const bareKind = isFirst ? tabType.slice("intro-".length) : tabType;
-    const harness: ChatHarness = bareKind === "chat" ? "claude" : (bareKind as ChatHarness);
-    void openNewChat(targetGroup, launcherPanelId, harness, isFirst).then(() => {
+  // Every chat tile is the same create -- the same `chat` role in the primary's
+  // work dir -- stacked on the harness the tile names, plus the `first` template
+  // when it asks for it (fast launch where the harness supports it, /welcome, the
+  // first=true label). Both ride the target's own fields, so nothing here decodes
+  // a name. No dialog either: the name is auto-minted like every other create.
+  if (target.kind === "chat") {
+    void openNewChat(targetGroup, launcherPanelId, target.harness, target.first).then(() => {
       m.redraw();
     });
     return;
   }
-  if (tabType === "terminal") {
+  if (target.kind === "terminal") {
     void openNewTerminal(targetGroup).then((panelId) => {
       if (panelId !== null) retireLauncher(launcherPanelId);
       m.redraw();
     });
     return;
   }
-  if (tabType === "browser") {
+  if (target.kind === "browser") {
     void openNewBrowser(targetGroup, launcherPanelId).then(() => {
       m.redraw();
     });
@@ -2799,7 +2791,7 @@ function openTabOfTypeInGroup(
   // What is left ("files") is not a tab type the workspace builds itself -- it
   // is whichever app of that name the machine runs, so it opens through the
   // same path as the rail's app rows, and opens nothing where none runs.
-  const backingApp = getApps().find((app) => app.name === tabType);
+  const backingApp = getApps().find((app) => app.name === target.kind);
   if (backingApp === undefined) return;
   openAppTab(backingApp);
   retireLauncher(launcherPanelId);
@@ -2917,7 +2909,13 @@ function focusExistingForShortcut(tabType: FocusableTabType): boolean {
  */
 export function openTabOfType(tabType: QuickAddTabType): void {
   if (tabType !== "files" && focusExistingForShortcut(tabType)) return;
-  openTabOfTypeInGroup(tabType, null, null);
+  // The rail names no harness and no template: its "chat" is a plain claude chat,
+  // which is the launcher's first tile.
+  openTabOfTypeInGroup(
+    tabType === "chat" ? { kind: "chat", harness: "claude", first: false } : { kind: tabType },
+    null,
+    null,
+  );
 }
 
 /** Open ``app``'s pane in the active project, focusing the one already open
