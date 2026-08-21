@@ -728,7 +728,11 @@ export function Sidebar(): m.Component<SidebarAttrs> {
             { label: `Share ${row.label}`, run: () => attrs.onShareApp(row) }
           : null,
       rename: () => beginRename(row),
-      hideTab: row.isOpen ? () => attrs.onHideRowTab(row) : null,
+      // The rail never offers this: putting a tab away is what you want while
+      // looking AT the tab, and the tab's own menu carries it. From here the
+      // row is a thing the project shows, so the verb that belongs to it is
+      // taking it out of the project.
+      hideTab: null,
       // Null in Everything, which is the home: an object leaves it only by
       // being destroyed. For an app this is the same act as the row's own pin
       // icon -- pinning IS membership -- so the two agree by construction.

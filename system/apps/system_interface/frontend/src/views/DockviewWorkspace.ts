@@ -753,18 +753,10 @@ function tabMenuEntries(panelId: string): ObjectMenuEntry[] {
             },
           }
         : null,
-    // Null in Everything, which is the home: an object leaves it only by being
-    // destroyed. Elsewhere the ref is resolved at click time rather than now,
-    // since a tab opened a moment ago may not have been filed yet.
-    removeFromProject:
-      mountedViewId === null || isEverythingView(mountedViewId)
-        ? null
-        : () => {
-            void (async () => {
-              const ref = memberRefByPanelId.get(panelId) ?? (await rememberMemberRef(panelId));
-              if (ref !== null) removeMemberRefWithAlert(ref);
-            })();
-          },
+    // The tab never offers this: unfiling an object is what you want while
+    // looking at the project's list of what it shows, not while looking at the
+    // object itself. The rail's row menu carries it (see `railMenuActions`).
+    removeFromProject: null,
     rename: () => {
       // The same inline editor the double-click opens, reached through the
       // tab's handle so the menu and the gesture stay one mechanism.
@@ -1117,17 +1109,17 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
         return;
       }
 
-      actions.appendChild(
-        // A minus, not an "x": this puts the tab away and leaves the object
-        // running and filed wherever it was filed. Ending it for good is the
-        // menu's job, and wears the "x".
-        createTabActionButton("Hide tab", "minus", disposables, () => {
-          parameters.api.close();
-        }),
-      );
+      // Built now, appended last: the hide sits at the strip's outer edge with
+      // the menu inboard of it, which is where a close lives in every other
+      // tabbed thing. It closes the tab and nothing else -- the object keeps
+      // running and stays filed wherever it was filed; ending it for good is
+      // the menu's job, behind its own confirmation.
+      const hideButton = createTabActionButton("Hide tab", "close", disposables, () => {
+        parameters.api.close();
+      });
 
       // A launcher tab is a question about this pane, not an object: there is
-      // nothing to refresh, share or shut down, so it carries only the minus.
+      // nothing to refresh, share or shut down, so it carries only the hide.
       if (!isLauncher) {
         const openMenu = (anchor: MenuAnchor, trigger: HTMLElement | null): void => {
           if (isMenuOpen) {
@@ -1159,6 +1151,9 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
           );
         });
       }
+
+      // Last, so it is the outermost control on the strip.
+      actions.appendChild(hideButton);
 
       element.addEventListener("mouseenter", () => {
         isPointerOver = true;
@@ -1634,11 +1629,38 @@ function createAddTabButton(group: DockviewGroupPanel): IHeaderActionsRenderer {
     openLauncherPanel(group);
   });
 
+  /** A group holds at most one launcher, so while it has one the "+" has
+   *  nothing left to do: clicking it could only focus the tab already on
+   *  screen. Hidden rather than disabled -- a control that cannot act and
+   *  cannot say why is just noise in a strip this narrow. */
+  const refreshVisibility = (): void => {
+    element.style.display = launcherPanelIdInGroup(group) === null ? "" : "none";
+  };
+
+  const subscriptions: { dispose: () => void }[] = [];
+
   return {
     element,
-    init() {},
+    init() {
+      refreshVisibility();
+      // Both directions matter: the "+" goes when a launcher opens here, and
+      // comes back when that launcher is closed or retired. Panels can also
+      // move between groups, which arrives as a layout change rather than as
+      // an add or a remove.
+      if (dockview) {
+        subscriptions.push(
+          dockview.api.onDidAddPanel(refreshVisibility),
+          dockview.api.onDidRemovePanel(refreshVisibility),
+          dockview.api.onDidLayoutChange(refreshVisibility),
+        );
+      }
+    },
     dispose() {
       tooltip.dispose();
+      for (const subscription of subscriptions) {
+        subscription.dispose();
+      }
+      subscriptions.length = 0;
     },
   };
 }
