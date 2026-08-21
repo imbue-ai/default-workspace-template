@@ -1,11 +1,15 @@
 """Tests for the Flask server."""
 
 import fcntl
+import html
 import io
 import json
 import os
 import queue
+import re
+import subprocess
 import time
+import tomllib
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
@@ -29,6 +33,7 @@ from imbue.system_interface import client_activity
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_manager import AgentManager
+from imbue.system_interface.agent_manager import _build_chat_create_command
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.config import Config
@@ -56,14 +61,20 @@ from imbue.system_interface.projects import EVERYTHING_VIEW_NAME
 from imbue.system_interface.projects import add_member
 from imbue.system_interface.projects import create_project
 from imbue.system_interface.projects import write_project_content
+from imbue.system_interface.server import FRONTEND_BUILT_HEADER
 from imbue.system_interface.server import _DEFAULT_TAIL_COUNT
 from imbue.system_interface.server import _FORWARD_PORT_SCRIPT
+from imbue.system_interface.server import _NOT_BUILT_REPAIR_ARGV
+from imbue.system_interface.server import _NOT_BUILT_REPAIR_COMMAND
+from imbue.system_interface.server import _NOT_BUILT_REPAIR_MNGR_COMMAND
+from imbue.system_interface.server import _WORKSPACE_ROOT_DIRECTORY
 from imbue.system_interface.server import _agent_switch_options
 from imbue.system_interface.server import _build_destroy_command
 from imbue.system_interface.server import _build_fast_mode_answered_label_command
 from imbue.system_interface.server import _handle_client_state_message
 from imbue.system_interface.server import _stream_filtered_events
 from imbue.system_interface.server import create_application
+from imbue.system_interface.server import render_frontend_not_built_page
 from imbue.system_interface.testing import RecordingMngrMessenger
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import close_ws
@@ -104,6 +115,9 @@ def test_index_returns_html_when_static_exists(client: FlaskClient, tmp_path: Pa
         response = test_client.get("/")
         assert response.status_code == 200
         assert "test" in response.text
+        # Both the app and the placeholder are HTTP 200 HTML, so the header is
+        # the only thing that distinguishes them to a health check.
+        assert response.headers[FRONTEND_BUILT_HEADER] == "true"
 
 
 def test_index_is_served_uncacheable(client: FlaskClient, tmp_path: Path) -> None:
@@ -127,16 +141,344 @@ def test_index_is_served_uncacheable(client: FlaskClient, tmp_path: Path) -> Non
         assert response.headers["Cache-Control"] == "no-store"
 
 
-def test_index_returns_not_built_when_no_static(client: FlaskClient, tmp_path: Path) -> None:
-    """When static dir has no index.html, show a helpful message."""
+def test_index_marks_the_not_built_placeholder_as_not_the_app(tmp_path: Path) -> None:
+    """The placeholder and the real app are both HTTP 200 HTML.
+
+    Only the header tells them apart, and the reveal flow's frontend probe
+    decides whether to roll back on it -- a placeholder that claimed to be the
+    app would let a reveal sign off on a UI the user cannot see.
+    """
     empty_dir = tmp_path / "static"
     empty_dir.mkdir()
 
     with patch("imbue.system_interface.server.STATIC_DIRECTORY", empty_dir):
         test_client = create_application(build_test_state()).test_client()
         response = test_client.get("/")
-        assert response.status_code == 200
-        assert "npm run build" in response.text
+
+    assert response.status_code == 200
+    assert response.headers[FRONTEND_BUILT_HEADER] == "false"
+    # The page keeps asking whether the bundle is back, which is the only thing
+    # that returns an open tab to the interface once something else restores it
+    # -- nothing on the page can produce one, and nothing notifies it.
+    assert FRONTEND_BUILT_HEADER in response.text
+
+
+def test_not_built_placeholder_polls_rather_than_refreshing_the_whole_page(tmp_path: Path) -> None:
+    """The reader's terminal must survive the wait for a bundle.
+
+    Returning to the interface unattended and hosting a live shell pull against
+    each other: a whole-page refresh on a timer would tear down the terminal
+    session every few seconds, right while it is being typed into. So the
+    scripted page asks for the app-shell marker and reloads only once it says
+    the bundle is back. A page-level ``http-equiv="refresh"`` may therefore
+    appear only inside ``<noscript>``, where there is no terminal to protect.
+    """
+    empty_dir = tmp_path / "static"
+    empty_dir.mkdir()
+
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", empty_dir):
+        test_client = create_application(build_test_state()).test_client()
+        response = test_client.get("/")
+
+    scriptless_only = re.sub(r"<noscript>.*?</noscript>", "", response.text, flags=re.DOTALL)
+    assert 'http-equiv="refresh"' not in scriptless_only
+    assert 'http-equiv="refresh"' in response.text
+    # HEAD, because the marker is a header: the poll must not pull the page's
+    # own body down every tick for the lifetime of the outage.
+    assert '"HEAD"' in response.text
+
+
+def test_not_built_placeholder_offers_the_registered_terminal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The way out of a missing interface is a shell, and the page has to name it.
+
+    The terminal's origin label is minted per workspace, so the page cannot
+    carry it -- it is read from the app registry at render time and handed to
+    the script, which derives the origin from the browser's own location. If
+    the label never reaches the page there is no frame to open, and the reader
+    is back to prose about a repair they cannot perform here.
+    """
+    apps_file = tmp_path / "apps.toml"
+    apps_file.write_text('[[apps]]\nname = "terminal"\nurl = "http://localhost:7681"\nlabel = "terminal-x7k9q2w1"\n')
+    monkeypatch.setenv("MINDS_APPS_FILE", str(apps_file))
+    empty_dir = tmp_path / "static"
+    empty_dir.mkdir()
+
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", empty_dir):
+        test_client = create_application(build_test_state()).test_client()
+        response = test_client.get("/")
+
+    assert '"terminal-x7k9q2w1"' in response.text
+    assert 'id="terminal"' in response.text
+
+
+def test_not_built_placeholder_renders_without_a_terminal_to_offer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A workspace with no registered terminal still gets a usable page.
+
+    ttyd registers itself alongside the other services rather than before them,
+    so the placeholder can be served in the window where there is nothing to
+    offer -- and this page exists precisely for states where things are missing.
+    It must degrade to the prose rather than fail to render or show an empty
+    frame pointed at nowhere.
+    """
+    apps_file = tmp_path / "apps.toml"
+    apps_file.write_text('[[apps]]\nname = "browser"\nurl = "http://localhost:8081"\nlabel = "browser-aaaa1111"\n')
+    monkeypatch.setenv("MINDS_APPS_FILE", str(apps_file))
+    empty_dir = tmp_path / "static"
+    empty_dir.mkdir()
+
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", empty_dir):
+        test_client = create_application(build_test_state()).test_client()
+        response = test_client.get("/")
+
+    assert response.status_code == 200
+    assert response.headers[FRONTEND_BUILT_HEADER] == "false"
+    # The empty label is what the script reads as "no terminal", so the frame
+    # stays hidden instead of loading a made-up origin.
+    assert 'var terminalLabel = "";' in response.text
+    assert "needs to be rebuilt" in response.text
+
+
+def _chat_create_template() -> dict[str, object]:
+    """The workspace's own ``[create_templates.chat]`` block, read from its settings.
+
+    Parsed straight out of the TOML rather than through mngr's config loader: the
+    question is what this repo ships, not what a particular machine resolves, and
+    the loader would fold in user and local layers that a workspace being repaired
+    may not have. ``server.py`` resolves the workspace root the same way.
+    """
+    settings = tomllib.loads((_WORKSPACE_ROOT_DIRECTORY / ".mngr" / "settings.toml").read_text())
+    return settings["create_templates"]["chat"]
+
+
+def test_not_built_repair_command_is_the_one_the_app_runs_for_a_chat() -> None:
+    """The suggested agent has to come up as a chat, or the suggestion misleads.
+
+    The page tells a reader to create an agent to repair the workspace, and an
+    agent created with the wrong flags is a different thing: a worktree of the
+    tree instead of the tree itself, in the wrong memory band, without the chat
+    role. So every flag the page suggests must be one the app itself passes
+    when it creates a chat, and the command must be one the live CLI accepts.
+    """
+    argv = list(_NOT_BUILT_REPAIR_ARGV)
+    assert_mngr_argv_valid(argv)
+
+    real = _build_chat_create_command(
+        mngr_binary="mngr",
+        name="repair",
+        agent_id="agent-123",
+        primary_labels={},
+        harness=HarnessType.CLAUDE,
+    )
+    assert argv[argv.index("--template") + 1] == real[real.index("--template") + 1]
+    assert "user_created=true" in real
+
+    # ``--no-connect`` is the one flag deliberately inverted: it exists to stop a
+    # headless caller attaching, and a reader typing this wants to land in the
+    # conversation.
+    assert "--no-connect" in real
+    assert "--connect" in argv
+    assert "--no-connect" not in argv
+
+    # ``--type`` is the one the builder must pass and the page must not: the app
+    # is serving a harness the user picked from a menu, while the page has no
+    # such choice to carry and would be pinning every reader to whichever harness
+    # was current when this string was written. Omitted, mngr resolves it from
+    # ``[commands.create] type``, so the repair agent comes up on whatever this
+    # workspace opens chats as.
+    assert "--type" in real
+    assert "--type" not in argv
+
+    # ``--transfer`` is left out for a different reason, and a weaker one: the
+    # ``chat`` template already sets it, so the line does not have to. Unlike the
+    # harness this is not the reader's to choose -- an agent in a worktree would
+    # repair a copy of the workspace instead of the workspace -- so the template
+    # is read rather than assumed. Losing that setting has to fail here and not
+    # in a workspace that has already lost its interface.
+    assert "--transfer" in real
+    assert "--transfer" not in argv
+    assert _chat_create_template()["transfer"] == "none"
+
+    # No agent name, so mngr mints one and nothing collides with an earlier run.
+    # The whole line has to stay flags-only for that: ``mngr create`` reads bare
+    # words as positionals (the name, then the agent type), so one anywhere past
+    # the subcommand -- not just directly after it -- puts the collision back.
+    # ``assert_mngr_argv_valid`` does not catch that: it checks option shape and
+    # throws the positionals away. A value-taking flag added to the line without
+    # being named here reports its value as a positional, which fails in the
+    # direction that gets looked at.
+    assert argv[:2] == ["mngr", "create"]
+    flags_taking_a_value = {"--template", "--transfer", "--label", "--message"}
+    positionals = [
+        token
+        for index, token in enumerate(argv[2:], start=2)
+        if not token.startswith("--") and argv[index - 1] not in flags_taking_a_value
+    ]
+    assert positionals == [], f"the suggested line passes positional arguments: {positionals}"
+
+    # The message is what makes the created agent useful without the reader
+    # having to describe anything, so it has to survive the shell as one word of
+    # plain prose -- an escape dropped from the line above splits it into several
+    # words, or leaves the escapes themselves in what the agent is told.
+    assert argv[argv.index("--message") + 1] == (
+        "i'm seeing \"this workspace's interface needs to be rebuilt, can you fix it?\""
+    )
+
+    # The shell prefix is not part of the argv the CLI validates, but it is what
+    # makes the connect half work from the workspace's own tmux-backed terminals.
+    assert _NOT_BUILT_REPAIR_COMMAND == "env -u TMUX " + _NOT_BUILT_REPAIR_MNGR_COMMAND
+
+
+def test_not_built_repair_message_quotes_the_heading_the_reader_is_looking_at() -> None:
+    """What the message quotes has to be what the page says, or it quotes nothing.
+
+    The message's whole claim on the agent's attention is that it repeats the
+    line the reader is looking at, so the two are one statement written twice.
+    Nothing else notices when they part: reword the heading and the message still
+    parses, still validates against the CLI, and still reads as a quotation --
+    of a sentence that now appears nowhere. The comparison is case-insensitive
+    because the message is in the reader's voice and the heading is a title.
+    """
+    message = _NOT_BUILT_REPAIR_ARGV[_NOT_BUILT_REPAIR_ARGV.index("--message") + 1]
+    quoted = re.search(r'"(.*?)[,.?!]?"', message)
+    assert quoted is not None, f"the message no longer quotes anything: {message}"
+
+    heading = re.search(r"<h1>(.*?)</h1>", render_frontend_not_built_page(None), re.DOTALL)
+    assert heading is not None, "the page no longer carries a heading"
+    assert quoted.group(1).lower().startswith(heading.group(1).strip().lower())
+
+
+def _repair_line_shown_on(page: str) -> str:
+    """The repair line as the page's own markup hands it to the reader.
+
+    Undoing the escaping is what the browser does to fill ``textContent``, which
+    is both what a reader sees in the block and what the copy button puts on the
+    clipboard, so this is the line the page actually offers.
+    """
+    shown = re.search(r'<pre id="repair-command">(.*?)</pre>', page, re.DOTALL)
+    assert shown is not None, "the page no longer carries a repair-command block"
+    return html.unescape(shown.group(1))
+
+
+def test_not_built_repair_command_reaches_the_page_as_text_not_markup() -> None:
+    """The suggested line is prose, so the page has to render it as written.
+
+    It carries a ``--message`` a maintainer will reword, and a browser reads an
+    ``&`` in it as the start of an entity reference and a ``<`` as the start of
+    a tag. Either would show a line other than the one the tests validated, and
+    the copy button reads ``textContent``, so it would put that other line on
+    the reader's clipboard.
+    """
+    with patch("imbue.system_interface.server._NOT_BUILT_REPAIR_COMMAND", 'mngr create --message "a & b <c>"'):
+        page = render_frontend_not_built_page(None)
+
+    assert 'mngr create --message "a &amp; b &lt;c&gt;"' in page
+    assert "<c>" not in page
+
+    # And the escaping has to be transparent to the line that ships: undoing it
+    # is what the browser does to fill ``textContent``, so this is the line the
+    # reader reads and copies, and it has to be the one the CLI check and the
+    # shell split validated. The assertions above only show that escaping
+    # happens; this is what says the real command survives it.
+    shown = _repair_line_shown_on(render_frontend_not_built_page(None))
+    assert shown == _NOT_BUILT_REPAIR_COMMAND
+
+
+def test_not_built_repair_line_splits_the_way_a_shell_splits_it() -> None:
+    """The argv the CLI validates has to be the argv the reader's shell builds.
+
+    The readable line is the source of truth and the argv is parsed back out of
+    it, which is only sound while the parse agrees with a shell's. ``shlex.split``
+    quotes and splits but expands nothing, so a ``$`` or a backtick worded into
+    the message -- prose, and prose gets reworded -- would reach the argv as
+    itself, leaving the sentence assertion and the live-CLI check above both
+    green while the line a reader copies tells the agent something else.
+
+    So the split is checked against a real shell rather than assumed to match
+    one. ``set --`` keeps the flags from being read as options to ``set`` and
+    keeps the line's first word from being run as a command -- but the words are
+    still expanded on the way in, which is how a ``$`` is caught here. Command
+    substitution is an expansion too, and that one would be *run* rather than
+    reported, so it is refused before a shell ever sees the line.
+    """
+    for substitution in ("`", "$("):
+        assert substitution not in _NOT_BUILT_REPAIR_MNGR_COMMAND, (
+            f"the suggested line contains a command substitution ({substitution}), which the shell below "
+            "would execute rather than report: word it out of the message"
+        )
+
+    printed_words = subprocess.run(
+        ["sh", "-c", f'set -- {_NOT_BUILT_REPAIR_MNGR_COMMAND}\nprintf "%s\\n" "$@"'],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=30,
+    )
+    assert printed_words.stdout.splitlines() == list(_NOT_BUILT_REPAIR_ARGV)
+
+
+def test_assets_404_rather_than_falling_through_to_the_spa_shell(tmp_path: Path) -> None:
+    """A missing asset must 404, never come back as the SPA shell.
+
+    The catch-all would answer with index.html as text/html, which the browser
+    refuses as a module script -- a blank screen with no hint of the cause.
+    """
+    empty_dir = tmp_path / "static"
+    empty_dir.mkdir()
+
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", empty_dir):
+        test_client = create_application(build_test_state()).test_client()
+        response = test_client.get("/assets/index-abc123.js")
+
+    assert response.status_code == 404
+    # The app-shell marker is absent, proving the request did not reach the
+    # catch-all and come back as index.html with a 200.
+    assert FRONTEND_BUILT_HEADER not in response.headers
+
+
+def test_assets_do_not_reveal_whether_files_outside_the_directory_exist(tmp_path: Path) -> None:
+    """A ``..`` path must get the same plain 404 whether or not its target exists.
+
+    Flask's ``<path:>`` converter passes ``..`` segments through unnormalized, so
+    any pre-check that joins the raw filename onto the assets directory stats
+    paths outside it -- and a response that differs between an existing and a
+    missing target is an existence oracle for the whole filesystem.
+    """
+    static_dir = tmp_path / "static"
+    (static_dir / "assets").mkdir(parents=True)
+    (static_dir / "index.html").write_text("<html>app</html>")
+
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
+        test_client = create_application(build_test_state()).test_client()
+        # index.html exists one level above assets/; a file two levels up does not.
+        exists_outside = test_client.get("/assets/../index.html")
+        missing_outside = test_client.get("/assets/../../no-such-file")
+
+    for response in (exists_outside, missing_outside):
+        assert response.status_code == 404
+        assert response.data == b""
+
+
+def test_assets_serve_a_bundle_that_appeared_after_startup(tmp_path: Path) -> None:
+    """The route must survive being constructed before the bundle exists.
+
+    Deciding at construction time whether to register it turned a recoverable
+    state into a stuck one: rebuilding no longer helped until a restart.
+    """
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
+        # App built while there is no bundle at all, as it is on a cold start
+        # into a wiped tree.
+        test_client = create_application(build_test_state()).test_client()
+        (static_dir / "assets").mkdir()
+        (static_dir / "assets" / "index-abc123.js").write_text("console.log('app');")
+        response = test_client.get("/assets/index-abc123.js")
+
+    assert response.status_code == 200
+    assert "javascript" in response.headers["Content-Type"]
 
 
 def test_list_agents_endpoint(client: FlaskClient) -> None:
@@ -660,9 +1002,9 @@ def test_get_harnesses_lists_the_claude_catalog(client: FlaskClient) -> None:
     claude = data["claude"]
     assert [option["id"] for option in claude["options"]] == ["opus[1m]", "sonnet", "haiku"]
     # Each option carries the suffix-free reported id the matcher keys on.
-    assert claude["options"][0]["harness_reported_model_id"] == "claude-opus-4-8"
+    assert claude["options"][0]["harness_reported_model_id"] == "claude-opus-5"
     assert claude["switch_mode"] == "eager_then_reconcile"
-    assert claude["powered_by_label"] == "Claude Code"
+    assert claude["powered_by_text"] == ""
 
 
 def test_get_harnesses_includes_every_harness_regardless_of_the_flag(
@@ -684,24 +1026,24 @@ def test_get_harnesses_includes_every_harness_regardless_of_the_flag(
     assert client.get("/api/harnesses").get_json() == without_flag
 
 
-def test_powered_by_returns_the_harness_product_name(client: FlaskClient, tmp_path: Path) -> None:
-    """The per-agent powered-by endpoint returns the agent harness's product-name label."""
+def test_powered_by_is_empty_for_a_harness_that_declares_no_credit(client: FlaskClient, tmp_path: Path) -> None:
+    """Claude declares "" as its credit text, so the endpoint returns it and nothing renders."""
     agent_id = "agent-00000000000000000000000000000010"
     agent_info = _model_agent_info(agent_id, tmp_path)
     with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
         response = client.get(f"/api/agents/{agent_id}/powered-by")
     assert response.status_code == 200
-    assert response.get_json() == {"label": "Claude Code"}
+    assert response.get_json() == {"label": ""}
 
 
-def test_powered_by_resolves_the_label_per_harness(client: FlaskClient, tmp_path: Path) -> None:
-    """The label is a pure function of the agent's harness (codex -> "Codex")."""
+def test_powered_by_resolves_the_text_per_harness(client: FlaskClient, tmp_path: Path) -> None:
+    """The text is a pure function of the agent's harness, prefix included."""
     agent_id = "agent-00000000000000000000000000000011"
     agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
     with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
         response = client.get(f"/api/agents/{agent_id}/powered-by")
     assert response.status_code == 200
-    assert response.get_json() == {"label": "Codex"}
+    assert response.get_json() == {"label": "Powered by Codex"}
 
 
 def test_powered_by_unknown_agent_returns_404(client: FlaskClient) -> None:
@@ -4711,3 +5053,50 @@ def test_websocket_snapshot_exposes_each_agent_project_label(app: Flask) -> None
     assert first["type"] == "agents_updated"
     project_by_agent_id = {agent["id"]: agent["project"] for agent in first["agents"]}
     assert project_by_agent_id == {"chat-1": "alpha", "chat-2": None}
+
+
+def test_not_built_page_coordinate_regex_matches_the_canonical_one() -> None:
+    """The placeholder derives a service origin, so it carries a copy of the rule.
+
+    ``frontend/src/origin.ts`` is canonical and two mirrors already exist
+    (``layout_ops.py`` and ``system/scripts/layout.py``, pinned to each other by
+    ``layout_ops_test``). The placeholder cannot import any of them -- it runs in
+    the browser, in the one state where the bundle those live in is missing -- so
+    it holds a fourth copy, and this pins it to the source of truth the way the
+    others are pinned. Without it the rule can be corrected in one place and
+    silently rot in the page that only renders when everything else is broken.
+    """
+    origin_ts = Path(__file__).parents[2] / "frontend" / "src" / "origin.ts"
+    canonical = re.search(r"WORKSPACE_COORDINATE_LABEL = (/.+/i);", origin_ts.read_text())
+    assert canonical is not None, f"the canonical regex is no longer declared in {origin_ts}"
+
+    page = render_frontend_not_built_page("terminal-x7k9q2w1")
+    in_page = re.findall(r"(/\^\(\?:host\|agent\).+?/i)\.test\(", page)
+    assert in_page == [canonical.group(1)], (
+        f"the placeholder's coordinate regex has drifted from {origin_ts}: "
+        f"page has {in_page}, origin.ts has {canonical.group(1)!r}"
+    )
+
+
+def test_not_built_placeholder_answers_its_own_poll_cheaply(tmp_path: Path) -> None:
+    """The poll reads a header, so HEAD must still carry it -- and nothing else.
+
+    This is the page's only route back to the interface, so a HEAD that stopped
+    reporting the marker would strand every open tab until someone reloaded by
+    hand. It is also the request the page makes every ten seconds per tab for
+    the length of an outage, so it must not re-render the page or re-read the
+    app registry to answer.
+    """
+    empty_dir = tmp_path / "static"
+    empty_dir.mkdir()
+
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", empty_dir):
+        test_client = create_application(build_test_state()).test_client()
+        head = test_client.head("/")
+        get = test_client.get("/")
+
+    assert head.headers[FRONTEND_BUILT_HEADER] == "false"
+    assert get.headers[FRONTEND_BUILT_HEADER] == "false"
+    # The GET is the one that renders; the HEAD carries no page to render.
+    assert "needs to be rebuilt" in get.text
+    assert head.text == ""

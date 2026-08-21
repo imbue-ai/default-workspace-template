@@ -1,6 +1,8 @@
 ---
 name: enable-caretaker
 description: Turn on the weekly Caretaker, a BETA feature that is off by default. Use ONLY when the user explicitly asks about the Caretaker or about enabling it -- never suggest, mention, or enable it proactively.
+metadata:
+  author: imbue
 ---
 
 # Enable the Caretaker (BETA)

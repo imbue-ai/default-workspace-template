@@ -1,6 +1,8 @@
 ---
 name: update-system-interface
 description: Canonical flow for changing the system interface (the web workspace UI at system/apps/system_interface) -- its frontend (dockview shell, chat rendering, progress view) or backend (Flask server, agent discovery, layout ops). Use whenever the user wants to edit, fix, restyle, or add to the workspace UI / chat interface / dockview.
+metadata:
+  author: imbue
 ---
 
 # Updating the system interface
@@ -262,7 +264,13 @@ That single command owns the whole reveal as one deterministic, self-healing
 motion -- you do not run `npm`/`uv`/`mngr` by hand. It:
 
 - **Classifies** what the merge changed (frontend source, frontend manifest,
-  backend source, backend manifest).
+  backend source, backend manifest). Anything under `frontend/` counts as a
+  frontend change, not just `frontend/src/` -- `index.html`, the vite and
+  TypeScript configs and the bundled media all change the emitted bundle.
+- **Snapshots the built `static/` bundle** before anything destructive runs.
+  `npm ci` deletes `node_modules` before installing and the build empties the
+  bundle directory before writing, so a failure part-way leaves nothing to
+  serve; the copy is what the rollback restores from.
 - **Refreshes dependencies only if a manifest changed** -- `npm ci` for the
   frontend, and for the backend the same environments `build_workspace.sh`
   builds: the vendored mngr tool, the backend tool, and the workspace venv. This
@@ -274,28 +282,58 @@ motion -- you do not run `npm`/`uv`/`mngr` by hand. It:
   manifest -- as does `system/vendor/mngr/pyproject.toml`, the workspace root
   that install resolves through -- alongside the app's own and the repo root
   `pyproject.toml` / `uv.lock`.
+- **Rebuilds the gitignored `static/` bundle** for a frontend change. A build that
+  exits 0 without producing a bundle counts as a failure. This runs before the
+  pre-flight below, so a change that does not compile is rejected without also
+  spending a throwaway boot on it.
 - **Pre-flights a backend change** by booting the merged code on a throwaway port
-  before touching the live service. If it can't boot, the live service is never
-  restarted -- the UI never goes down.
-- **Reveals**: rebuilds the gitignored `static/` bundle (frontend); restarts the
-  services agent so the editable backend re-imports the merged `.py` (backend).
-- **Rebuilds the user's view** afterwards, via
+  before touching the live service, then **restarts** the services agent so the
+  editable backend re-imports the merged `.py`. If it can't boot, the live service
+  is never restarted -- the UI never goes down.
+- **Verifies** the live service is healthy by polling its loopback endpoint, and
+  that the app shell really is the built app and that its module script serves as
+  JavaScript. The backend endpoint alone cannot see either failure: the "frontend
+  not built" placeholder and an unserved `/assets` path are both HTTP 200s to it.
+  This is scoped to a regression -- the same probe runs beforehand, and only a
+  frontend that was serving then has to be serving after. A workspace that was
+  already broken gets the finding reported on stderr rather than a rollback,
+  since rolling an unrelated change back would not fix it.
+- **Rebuilds the user's view** last, via
   `system/scripts/refresh_workspace_view.py` -- for a backend-only change too,
   since the restart leaves the open page rendering what it had already fetched.
-  Best-effort: it never fails a reveal that landed.
-- **Verifies** the live service is healthy by polling its loopback endpoint.
+  After the checks above, so a reveal that regressed the frontend rolls back
+  rather than asking every open view to reload into it. Best-effort: it never
+  fails a reveal that landed.
 - **Auto-rolls-back on any failure**: restores the tree to `--rollback-to` as a
-  forward revert commit, rebuilds/restarts from it, and re-confirms the UI is
-  healthy.
+  forward revert commit, puts the snapshotted bundle back, restarts if needed,
+  and re-confirms the UI is healthy -- to the same frontend standard, so a
+  rollback cannot report success while serving nothing. Restoring the snapshot
+  needs neither `npm` nor a registry, so a broken build environment cannot take
+  the UI down with it.
 
 Interpret the exit code and report it to the user:
 
-- `0` -- revealed; the live UI is updated and healthy.
+- `0` -- revealed; the live UI is updated and healthy. One variant to read for:
+  if the workspace's frontend was *already* broken when the reveal started and
+  is still broken now, the change still lands and still exits `0`, but the final
+  line names the breakage instead of confirming health. Pass that finding on --
+  it is a separate problem, not something rolling this change back would have
+  fixed. (A reveal that happened to fix it prints the ordinary healthy line.)
 - `2` -- the change was bad and was **automatically rolled back**; the live UI is
   healthy on the previous revision, but the requested change did **not** land.
-  Report this and diagnose before retrying.
-- `3` -- **emergency**: even rollback could not restore a healthy UI. The
-  interface may be down; escalate immediately.
+  Report this and diagnose before retrying. This carries the same variant as `0`:
+  when the frontend was already broken beforehand the rollback is never held to
+  that standard, so the final line says the backend is healthy and names what
+  could not be confirmed instead of claiming the UI is. Pass both problems on.
+- `3` -- **emergency**: even rollback could not restore a healthy UI (including
+  a rollback whose own git steps failed). The interface may be down; escalate
+  immediately. If the reveal touched the frontend *and* a snapshot was taken,
+  the bundle is kept and its path printed on stderr -- copying it back over
+  `system/apps/system_interface/imbue/system_interface/static/` needs neither
+  `npm` nor a registry, so pass that path on with the escalation. Read the
+  stderr rather than assuming a path is there: a backend-only reveal never wrote
+  that directory, and a frontend one has nothing to hand over when there was no
+  bundle to copy or the copy itself failed (both say so at the time).
 - `1` -- precondition error (e.g. a dirty tree); nothing was changed.
 
 Once you no longer need the preview (after a successful reveal, *or* after a
