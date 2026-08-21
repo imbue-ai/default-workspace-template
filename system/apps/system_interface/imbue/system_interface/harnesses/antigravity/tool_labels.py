@@ -115,16 +115,27 @@ def tool_labels(tool_name: str, args_json: str, native_caption: str) -> tuple[st
 
 
 @pure
+def run_command_line(tool_name: str, args_json: str) -> str | None:
+    """The shell command behind a ``run_command`` call, or None for any other tool.
+
+    agy's own arg-key casing lives in this module, so both tk questions below -- "keep the
+    full input?" and "is this a pure lifecycle marker?" -- ask it here rather than each
+    re-deriving where the command string is.
+    """
+    if tool_name != "run_command":
+        return None
+    return _first_string_ci(parse_input_preview(args_json), ("CommandLine",))
+
+
 def keeps_full_tool_input(tool_name: str, args_json: str) -> bool:
     """True when a tool call's stored input must NOT be truncated for display: a file body
     (the diff view renders it whole) or a tk lifecycle command (the step timeline reads its
     ``--step`` titles / close summaries). Mirrors the claude/codex exemption."""
     if tool_name in _KEEPS_FULL_BODY_TOOLS:
         return True
-    if tool_name == "run_command":
-        command = _first_string_ci(parse_input_preview(args_json), ("CommandLine",))
-        if command is not None:
-            parsed = parse_command(command)
-            if parsed is not None and any(segment.tk_verb in _TK_LIFECYCLE_VERBS for segment in parsed.segments):
-                return True
+    command = run_command_line(tool_name, args_json)
+    if command is not None:
+        parsed = parse_command(command)
+        if parsed is not None and any(segment.tk_verb in _TK_LIFECYCLE_VERBS for segment in parsed.segments):
+            return True
     return False

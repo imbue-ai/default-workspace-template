@@ -4,12 +4,13 @@ The antigravity peer of :mod:`claude_activity_state` / :mod:`codex_activity_stat
 claude, agy has no turn-boundary events, so "the agent is working" is inferred from the
 mngr lifecycle (RUNNING) plus the transcript tail. Two things differ from claude:
 
-1. **No stale-tail rung.** claude/codex guard against a mid-turn restart leaving a stale
-   tail by comparing it to a ``*_process_started`` marker. agy writes no such marker; its
-   mngr ``active`` lifecycle marker (surfaced here as ``is_agent_running``) is *removed*
-   when agy is idle, so a restarted-but-idle agent already reads not-running -> IDLE. The
-   lifecycle gate therefore covers the restart case on its own, and there is no staleness
-   rung to keep inert.
+1. **The stale-tail rung lives in the shared base, not here.** Like claude and codex, agy
+   guards a mid-turn restart by comparing the tail against its ``*_process_started`` marker
+   (mngr_antigravity stamps ``antigravity_process_started`` on every launch/resume) -- the
+   base applies that gate before this function is reached. It matters for agy specifically
+   because agy RESUMES its own store, so a restarted agent's transcript still carries the
+   dead process's unmatched tool call. What this function need not re-check is liveness: the
+   mngr ``active`` marker (surfaced as ``is_agent_running``) is removed when agy goes idle.
 
 2. **An empty planner step is not the end of the turn.** agy emits a PLANNER_RESPONSE step
    carrying only ``thinking`` (empty text) before each tool call -- its "deciding what to
