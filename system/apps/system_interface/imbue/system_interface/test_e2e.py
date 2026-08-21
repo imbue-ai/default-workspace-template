@@ -1540,7 +1540,11 @@ def _create_terminal_from_launcher(page: Page, known_titles: set[str]) -> str:
     naming dialog ever appears: the session name is machine-allocated and the
     display name is derived from it.
     """
-    page.locator(".dockview-add-tab-button").first.click()
+    # The "+" is only offered when the pane has no launcher, since a pane holds
+    # at most one; a create leaves the launcher behind on the failure paths, so
+    # a repeat call may find one already up.
+    if page.locator(".new-tab-launcher").count() == 0:
+        page.locator(".dockview-add-tab-button").first.click()
     expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=10000)
     page.locator(".new-tab-launcher-tile:visible", has_text="Terminal").click()
     expect(page.locator(".custom-url-dialog")).to_have_count(0)
@@ -1785,7 +1789,7 @@ def test_shut_down_terminal_leaves_no_resurrected_tab_in_everything(tmp_path: Pa
             ).first
             expect(terminal_tab).to_be_visible(timeout=15000)
             terminal_tab.hover()
-            terminal_tab.locator(".dv-custom-tab-action").last.click()
+            terminal_tab.locator('.dv-custom-tab-action[aria-label="Tab options"]').click()
             page.locator("[role='menuitem']", has_text=f"Quit {terminal_title}").click()
             page.locator(".destroy-dialog-btn-destroy").click()
 
@@ -2110,9 +2114,12 @@ def test_launcher_shows_an_opened_tabs_recency_and_it_survives_a_reload(tmp_path
         page.reload()
         expect(page.locator(".dv-default-tab-content", has_text="test-agent").first).to_be_visible(timeout=15000)
 
-        # A launcher may have been restored with the layout; the "+" opens one
-        # if not and flashes the existing one if so, so either way one is up.
-        page.locator(".dockview-add-tab-button").first.click()
+        # A launcher may have been restored with the layout. The "+" is only
+        # offered when there is none -- a pane holds at most one, so with one
+        # open the button would have nothing left to do -- hence asking first
+        # rather than clicking blind.
+        if page.locator(".new-tab-launcher").count() == 0:
+            page.locator(".dockview-add-tab-button").first.click()
         expect(page.locator(".new-tab-launcher").first).to_be_visible(timeout=10000)
         chat_row = page.locator(
             ".new-tab-launcher-section[data-section='in-project'] .new-tab-launcher-row", has_text="test-agent"
@@ -2280,7 +2287,7 @@ def test_overflowed_tabs_list_as_plain_rows_and_the_strip_keeps_its_handles(tmp_
         strip_tab = page.locator(".dv-tab", has=page.locator(".dv-default-tab-content", has_text=clicked_title)).first
         strip_tab.hover()
         expect(strip_tab.locator(".dv-custom-tab-action")).to_have_count(2, timeout=5000)
-        strip_tab.locator(".dv-custom-tab-action").last.click()
+        strip_tab.locator('.dv-custom-tab-action[aria-label="Tab options"]').click()
         expect(page.locator("[role='menuitem']", has_text="Hide tab")).to_be_visible(timeout=5000)
         page.keyboard.press("Escape")
 

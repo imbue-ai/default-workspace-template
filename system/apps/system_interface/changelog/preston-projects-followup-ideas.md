@@ -53,3 +53,7 @@ Unlike an app, none of these four is an object with a member ref — a chat is a
 **The tab's hide control is an X**, and sits outboard of the three dots rather than inboard, which is where a close lives in every other tabbed thing.
 
 **The "+" goes while a New Tab tab is open.** A pane holds at most one, so with one on screen the button could only focus the tab already in front of you.
+
+**An app appears once in the rail.** Pinned it is a shortcut row, unpinned it is an All apps row; either way the list below no longer repeats it. That row carries the app's own menu too, so its verbs did not go with the duplicate. The one exception is an app the machine no longer offers: it has no shortcut to draw, so it keeps its place in the list, where it can still be taken out of the project.
+
+**Opening something already open from the New Tab view no longer moves anything.** The tab holding it flashes to say which one it is; focus stays where it was, and the list you were reading stays in front of you.
