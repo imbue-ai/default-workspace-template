@@ -35,3 +35,10 @@ App specifics:
 Beyond the live-instance rules in `web-frontend-testing.md`: do not run `layout.py
 open` / `refresh` / `list` against the served tree, and do not touch
 `system/apps/system_interface`.
+
+The app's stored data needs isolating separately from its code -- a worktree
+gives you the second, not the first. See
+`.agents/shared/references/data-isolation.md` for the contract (copy outside
+`data/`, spare port, delete the copy) and for the `DATA_DIR` override the route
+tests must resolve through: an app whose tests read whatever is on disk passes
+against an empty store without ever rendering a real record.
