@@ -69,10 +69,16 @@ equivalent of), and splits our rules two ways:
   checker's stderr as the reason. pi calls every extension's `tool_call` handler and blocks
   when any returns `{block, reason}`, so this runs alongside mngr's lifecycle extension.
   One checker file, three harnesses.
-* **Rules with no script to call** (the pipe-into-`tail`/`head` block, the git history-rewrite
-  block, the OOM/git-identity rewrite, and the tk step reminders) are re-expressed in mngr's
-  lifecycle extension against the pi SDK event that matches. Reminder *text* and regexes are
-  copied verbatim from the scripts so all three harnesses read identically.
+* **This repo's tk step discipline** lives in `.pi/extensions/tk_workflow.ts` — the
+  require-steps nudge on `tool_result`, the open-steps carryover on `before_agent_start`,
+  and the stop nudge on `agent_settled`. pi composes across extensions (`tool_result`
+  handlers chain like middleware, `before_agent_start` chains the system prompt), so it
+  runs alongside mngr's without either clobbering the other. Reminder *text* is copied
+  verbatim from the scripts so all three harnesses read identically, and step state comes
+  from the same vendored `ticket` binary they read.
+* **Rules that hold for any pi agent** (the pipe-into-`tail`/`head` block, the git
+  history-rewrite block, and the OOM/git-identity rewrite) stay re-expressed in mngr's
+  lifecycle extension against the pi SDK event that matches.
 
 The SDK is documented in the package's `dist/core/extensions/types.d.ts`; we do NOT modify it.
 
