@@ -63,18 +63,31 @@ It classifies what changed and does only what is needed: refreshes dependencies
 if a manifest changed (`npm ci`, plus the vendored mngr tool, the backend tool
 and the workspace venv -- the same environments `build_workspace.sh` builds),
 rebuilds the gitignored `static/` bundle (frontend), and/or
-restarts the services agent so the editable backend re-imports the merged `.py`
-(backend), then asks every open view of the workspace to reload --
-unconditionally, since a backend-only change leaves the open page rendering what
-it had already fetched. For a backend change it pre-flights the merged code on a
-throwaway port before touching the live service, then polls the loopback
-endpoint to confirm health. If anything fails,
-it restores the tree to `--rollback-to` as a forward revert commit, rebuilds and
-restarts from it, and re-confirms the UI is healthy -- so the served interface
-can never be left broken. The exit code reports the outcome (`0` revealed, `2`
-rolled back, `3` emergency, `1` precondition error).
+pre-flights the merged code on a throwaway port before restarting the services
+agent so the editable backend re-imports the merged `.py` (backend). It then
+polls the loopback endpoint to confirm health and checks that the frontend
+really serves, and only after those does it ask every open view of the workspace
+to reload -- unconditionally, since a backend-only change leaves the open page
+rendering what it had already fetched, but last, so a reveal that regressed the
+frontend rolls back instead of asking every open view to reload into it. If
+anything fails, it restores the tree to `--rollback-to` as a forward revert
+commit, restores the bundle, restarts only if the failed reveal had already
+restarted the service, and re-confirms the UI is healthy -- so the served
+interface can never be left broken. The exit code reports the outcome (`0`
+revealed, `2` rolled back, `3` emergency, `1` precondition error).
 
-That reload is delegated to `system/scripts/refresh_workspace_view.py`, the shared
+Two properties are load-bearing there. It **snapshots `static/` before anything
+destructive runs**, because both steps delete before they produce (`npm ci`
+removes `node_modules`; the build empties the bundle directory) -- so a rollback
+restores a *copy* rather than re-running the build that just failed, and a broken
+build environment cannot take the UI down with it. And it **checks that the
+frontend actually serves**, not just that the backend answers: the "not built"
+placeholder and an unserved `/assets` path are both HTTP 200s to `/api/agents`,
+so the probe confirms the app shell is the real app and that its module script
+comes back as JavaScript.
+
+The reveal's reload of every open view is delegated to
+`system/scripts/refresh_workspace_view.py`, the shared
 helper every flow that restarts the services agent uses. It fires two channels,
 because neither reaches every viewer: a `reload_system_interface` op, and the Minds
 app's own refresh endpoint (which lands even when the page's WebSocket never came
@@ -88,6 +101,99 @@ assets. That reaches every attached browser, including anyone the workspace was
 shared with over a Cloudflare tunnel. This is distinct from
 `system/scripts/layout.py refresh`, which only reloads a single inner
 iframe/panel for arranging the workspace.
+
+## When the bundle is missing
+
+`static/` is gitignored build output, produced at workspace creation
+(`system/scripts/build_workspace.sh`) and by the reveal above. Nothing rebuilds
+it at service start, so a code refresh that replaces the tree can leave the
+backend with nothing to serve. In that state `/` serves a placeholder, and
+because the placeholder is a string in the backend rather than part of the
+bundle, it still works when nothing else does.
+
+The placeholder is the workspace's general recovery surface, so it hands over a
+**terminal** rather than a repair. It embeds the already-running `terminal`
+service (ttyd) in a frame, and suggests creating an agent to do the work if the
+reader would rather not:
+
+```
+env -u TMUX mngr create --connect --template chat --label user_created=true --message "i'm seeing \"this workspace's interface needs to be rebuilt, can you fix it?\""
+```
+
+`--template chat` is what makes the result a chat, and it carries everything
+that is not a choice: the shared work directory, the output style, and running
+in the workspace tree rather than a worktree of it. It is harness-agnostic --
+`output_style` is honored by the claude, codex and pi plugins alike -- so it
+neither picks a harness nor can be relied on to.
+
+The rest is where the line departs from what
+`agent_manager._build_chat_create_command` passes for the same chat, in four
+places:
+
+- **`--connect`, against its `--no-connect`.** Someone typing this wants to land
+  in the conversation. It is load-bearing rather than decorative: this
+  workspace's own `[commands.create] connect = false` is the default it
+  overrides.
+- **No `--type`, which the builder must pass.** The app is serving a harness the
+  user picked from a menu; this page has no such choice to carry, so hardcoding
+  one would hand a codex or pi workspace a line that quietly opens claude.
+  Omitted, mngr resolves it from `[commands.create] type`.
+- **No `--transfer none`, which the builder spells out.** The `chat` template
+  already sets it. Unlike the harness this is not the reader's to choose -- an
+  agent in a worktree would repair a copy of the workspace instead of the
+  workspace -- so a test reads the template and fails if that setting ever
+  leaves it.
+- **A `--message` carrying the page's own heading**, so the agent opens already
+  knowing what the reader is looking at. A test ties the two together, since a
+  reworded heading would otherwise leave the message quoting a sentence that
+  appears nowhere.
+
+The line also names no agent, so mngr mints one and a second run starts a fresh
+conversation rather than colliding with the first. `env -u TMUX` is what lets the
+connect half work from the workspace's tmux-backed terminal tabs, which `mngr
+connect` otherwise refuses to attach from.
+
+Tests pin the whole of it: the flags against the builder, the line parsed back
+into an argv and resolved against the live mngr CLI, the same line word-split by
+a real `sh` (because `shlex` expands nothing and a shell does), and the rendered
+page's own repair block -- so the suggestion cannot drift into creating something
+that is not a chat, into a line that does not run, or into a line other than the
+one a reader copies.
+
+A shell rather than a "rebuild" button because a button has to be right about
+what went wrong: the states that strand a workspace here are dominated by ones
+where a build dispatched from the server would fail too (no registry, no
+memory, a lockfile that does not resolve), and it would fail with nowhere to
+report it, on a page with no application to render the failure. It would also
+inherit the server's memory band and be protected ahead of the user's chats and
+agents. Nothing is spawned either way: ttyd is supervised, always running, and
+sits at a *lower* (more protected) memory band than this server, so the page
+points at something that outlives it.
+
+The terminal's origin label is minted per workspace, so the page cannot carry
+it; the server reads it from the app registry (`data/.state/apps.toml`) at
+render time and the page's own script derives the origin from the browser's
+location, mirroring `frontend/src/origin.ts`. When there is no terminal
+registered -- ttyd starts alongside the other services, not before them -- the
+frame stays hidden and the prose stands alone.
+
+The page returns to the interface on its own once a bundle exists, so a
+rollback (or a build run in that terminal) needs no further action. It polls the
+`X-Frontend-Built` header rather than reloading on a timer: a whole-page refresh
+would destroy the terminal session every few seconds, right while it is being
+typed into. The timer-based reload survives only inside `<noscript>`, where
+there is no terminal to protect.
+
+Two things make that state recoverable rather than terminal. Every app-shell
+response carries an `X-Frontend-Built` header, so the placeholder is
+distinguishable from the real app without pattern-matching its markup -- that is
+what the reveal's frontend probe reads. And `/assets/<path>` is registered
+unconditionally rather than only when the bundle exists at startup: a route
+decided at construction time can never notice a bundle that appears later, and
+without it asset requests fall through to the SPA catch-all and come back as
+`index.html` with a `text/html` type, which the browser refuses as a module
+script -- a blank screen instead of the placeholder. A genuinely missing asset
+gets a plain 404.
 
 ## Projects
 
