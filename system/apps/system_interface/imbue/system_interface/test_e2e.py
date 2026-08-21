@@ -353,6 +353,106 @@ def test_chat_transcript_area_is_pure_white(e2e_server: tuple[str, list[AgentInf
     )
 
 
+@pytest.mark.timeout(60, func_only=False)
+def test_content_row_shrinks_when_window_shrinks(e2e_server: tuple[str, list[AgentInfo], Path], page: Page) -> None:
+    """Growing then shrinking the window must not leave the content overflowing the viewport.
+
+    Regression test for the sticky-vertical-viewport bug ("only grows, never
+    shrinks"). ``.app-main`` -- the row holding the projects sidebar and the dock
+    -- is a vertical flex child of ``.app-layout`` (``flex flex-col``). A flex
+    item defaults to ``min-height: auto``, so it refuses to shrink below its
+    content's intrinsic height; when dockview's internal layout momentarily
+    lagged a window shrink, that ``auto`` pinned the whole row -- sidebar
+    included -- at the taller height and the app overflowed past the visible
+    viewport, so the user could only reach the top and bottom of the content.
+
+    The fix adds ``min-h-0`` to the row and ``min-h-0``/``overflow-hidden`` to the
+    dock wrapper so the dock clips to its container while dockview catches up
+    rather than forcing the row taller than the window.
+
+    We first assert the real flex chain the bug lived in is present (so the
+    checks below cannot silently pass against a different tree), grow then shrink
+    the viewport, then -- deterministically simulating the dockview layout lag by
+    injecting a tall block into the dock wrapper -- assert the row's computed
+    ``min-height`` is ``0px`` and that neither the body, the row, nor the sidebar
+    overflows past the shrunk viewport. Before the fix the injected block
+    balloons the row (``min-height: auto`` + a non-clipping wrapper) and the body
+    overflows; after it, the wrapper clips and everything tracks the window.
+    """
+    base_url, _, _ = e2e_server
+    page.set_viewport_size({"width": 1200, "height": 800})
+    page.goto(base_url)
+
+    # The chat auto-opens; waiting on it also proves the dock (and thus the row's
+    # dock wrapper) has mounted before we probe the layout.
+    expect(page.locator(".dv-default-tab-content", has_text="test-agent").first).to_be_visible(timeout=15000)
+
+    # The exact chain the fix targets must exist, or the assertions are vacuous:
+    # a ``flex flex-col`` ``.app-layout`` holding ``.app-main``, whose last child
+    # is the dock wrapper holding the dockview workspace.
+    shape = page.evaluate(
+        """() => {
+          const layout = document.querySelector('.app-layout');
+          const main = layout && layout.querySelector('.app-main');
+          const wrapper = main && main.lastElementChild;
+          const cs = layout && getComputedStyle(layout);
+          return {
+            layoutIsFlexCol: !!cs && cs.display === 'flex' && cs.flexDirection === 'column',
+            hasMain: !!main,
+            wrapperHoldsDock: !!(wrapper && wrapper.querySelector('.dockview-workspace')),
+          };
+        }"""
+    )
+    assert shape["layoutIsFlexCol"], f"expected .app-layout to be a column flexbox: {shape}"
+    assert shape["hasMain"], f"expected .app-main inside .app-layout: {shape}"
+    assert shape["wrapperHoldsDock"], f"expected the dock wrapper as .app-main's last child: {shape}"
+
+    # Grow the window tall, then shrink it short -- the sequence the user hit.
+    page.set_viewport_size({"width": 1200, "height": 1600})
+    page.set_viewport_size({"width": 1200, "height": 500})
+
+    # Deterministically reproduce dockview's layout lagging the shrink: a tall
+    # block inside the dock wrapper stands in for the momentarily-too-tall dock.
+    # With the fix the row clips to the window; without it the row balloons.
+    metrics = page.evaluate(
+        """() => {
+          const main = document.querySelector('.app-main');
+          const wrapper = main.lastElementChild;
+          const probe = document.createElement('div');
+          probe.style.height = '1500px';
+          probe.setAttribute('data-test-lag-probe', '');
+          wrapper.appendChild(probe);
+          void main.offsetHeight;  // force reflow
+          const sidebar = main.firstElementChild;
+          const result = {
+            mainMinHeight: getComputedStyle(main).minHeight,
+            innerHeight: window.innerHeight,
+            bodyScrollHeight: document.body.scrollHeight,
+            mainHeight: Math.round(main.getBoundingClientRect().height),
+            sidebarHeight: Math.round(sidebar.getBoundingClientRect().height),
+          };
+          probe.remove();
+          return result;
+        }"""
+    )
+    # The flexbox min-height trap is gone: the row can now shrink below its
+    # content.
+    assert metrics["mainMinHeight"] == "0px", (
+        f"content row still has min-height:auto -- it will not shrink: {metrics}"
+    )
+    # Nothing overflows past the viewport: the row, the sidebar, and therefore
+    # the whole document track the shrunk window instead of spilling below it.
+    assert metrics["bodyScrollHeight"] <= metrics["innerHeight"], (
+        f"content overflows past the viewport after the shrink: {metrics}"
+    )
+    assert metrics["mainHeight"] <= metrics["innerHeight"], (
+        f"content row is taller than the viewport after the shrink: {metrics}"
+    )
+    assert metrics["sidebarHeight"] <= metrics["innerHeight"], (
+        f"projects sidebar is taller than the viewport after the shrink: {metrics}"
+    )
+
+
 # Marked flaky on an UNIDENTIFIED cause: it failed once inside a full-suite run
 # and then passed three times out of three on its own, with and without the
 # change that was in the tree at the time. That is the signature of the launcher

@@ -42,7 +42,12 @@ export function App(): m.Component {
           // The whole content area is one grey surface with the rail sitting on
           // it, directly left of the dock. Which view you are in is said by the
           // rail's own header now, so there is no bar above this row.
-          m("div", { class: "app-main flex flex-1 min-w-80" }, [
+          // ``min-h-0`` frees this vertical flex child from its default
+          // ``min-height: auto``, which would otherwise refuse to shrink below
+          // the dock's intrinsic content height -- so a window that grows then
+          // shrinks left the whole row (sidebar included) pinned at the taller
+          // height and overflowing the viewport.
+          m("div", { class: "app-main flex flex-1 min-w-80 min-h-0" }, [
             // Every attr is read straight off the workspace on each draw rather
             // than cached: the registry loads asynchronously, and a rename, a
             // new tab or another client's change all arrive as a redraw, so the
@@ -94,7 +99,12 @@ export function App(): m.Component {
             // instead of pushing this row wider than the window. The rail is
             // absolutely positioned inside its own 37px slot, so expanding it
             // overlays this dock rather than squeezing it.
-            m("div", { class: "min-w-0 flex-1" }, m(DockviewWorkspace)),
+            // ``overflow-hidden`` clips the dock to its container while
+            // dockview's own layout catches up to a shrink, so a momentarily
+            // too-tall dock can't push this row -- and the body -- past the
+            // window. ``min-h-0`` frees this wrapper from ``min-height: auto``
+            // to match the row above; the clip is what carries the guarantee.
+            m("div", { class: "min-w-0 flex-1 min-h-0 overflow-hidden" }, m(DockviewWorkspace)),
           ]),
           // Claude auth is mind-global, so the login modal is a single
           // app-level instance driven by global auth state -- not one per
