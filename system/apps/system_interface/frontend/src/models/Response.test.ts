@@ -19,6 +19,7 @@ import {
   fetchBackfillEvents,
   fetchForwardEvents,
   fetchWindowAtOffset,
+  getConversationLoadState,
   getEventsForAgent,
   getEventCount,
   getFirstEventId,
@@ -27,6 +28,7 @@ import {
   getTotalEventCount,
   hasMoreBefore,
   hasMoreAfter,
+  isConversationNotFound,
   MAX_HELD_EVENTS,
   EVICT_TARGET_EVENTS,
   type AssistantMessageEvent,
@@ -88,6 +90,21 @@ function toolCallsOf(event: TranscriptEvent): ToolCall[] {
 let counter = 0;
 function freshAgent(): string {
   return `agent-${counter++}`;
+}
+
+/** A request whose settling the test controls, for observing the in-flight state and ordering two fetches. */
+function deferredResponse(): {
+  promise: Promise<unknown>;
+  resolve: (value: unknown) => void;
+  reject: (reason: unknown) => void;
+} {
+  let resolve!: (value: unknown) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<unknown>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
 }
 
 beforeEach(() => {
@@ -505,5 +522,136 @@ describe("total event count", () => {
     mockRequest.mockResolvedValueOnce({ events: [makeEvent("a"), makeEvent("b")] });
     await fetchEvents(agent);
     expect(getTotalEventCount(agent)).toBe(2);
+  });
+});
+
+// Where the snapshot load stands is recorded against the agent rather than held
+// by the panel that asked for it, so that a reload from anywhere -- the tab's
+// Refresh, the stream's background reconnect -- moves the panel out of whatever
+// state the last attempt left it in.
+describe("snapshot load state", () => {
+  // What mithril rejects with when the proxy answers a 503 whose body is not
+  // JSON: `responseType: "json"` leaves `response` null, reading `responseText`
+  // throws, so mithril builds `new Error(null)` -- whose `.message` is the
+  // string "null". That is the shape that used to reach the user as
+  // "Error: null".
+  function proxyUnavailableError(): Error {
+    return Object.assign(new Error(String(null)), { code: 503, response: null });
+  }
+
+  it("records a message naming the status when the body carries no detail", async () => {
+    const agent = freshAgent();
+    mockRequest.mockRejectedValueOnce(proxyUnavailableError());
+    await expect(fetchEvents(agent)).rejects.toThrow();
+    expect(getConversationLoadState(agent)).toEqual({ phase: "error", error: "request failed (HTTP 503)" });
+  });
+
+  it("prefers the server's own detail when the body has one", async () => {
+    const agent = freshAgent();
+    mockRequest.mockRejectedValueOnce(
+      Object.assign(new Error("{}"), { code: 404, response: { detail: "Agent 'x' not found" } }),
+    );
+    await expect(fetchEvents(agent)).rejects.toThrow();
+    expect(getConversationLoadState(agent).error).toBe("Agent 'x' not found");
+  });
+
+  it("reads as loading while the fetch is in flight, so nothing reports an empty transcript", async () => {
+    const agent = freshAgent();
+    const pending = deferredResponse();
+    mockRequest.mockReturnValueOnce(pending.promise);
+
+    const inFlight = fetchEvents(agent);
+    expect(getConversationLoadState(agent).phase).toBe("loading");
+
+    pending.resolve({ events: [makeEvent("a")] });
+    await inFlight;
+    expect(getConversationLoadState(agent)).toEqual({ phase: "idle", error: null });
+  });
+
+  it("settles on the next successful fetch, whoever makes it", async () => {
+    const agent = freshAgent();
+    mockRequest.mockRejectedValueOnce(proxyUnavailableError());
+    await expect(fetchEvents(agent)).rejects.toThrow();
+    expect(getConversationLoadState(agent).phase).toBe("error");
+
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("a")] });
+    await fetchEvents(agent);
+    expect(getConversationLoadState(agent)).toEqual({ phase: "idle", error: null });
+  });
+
+  it("keeps the newest attempt's outcome when an older one settles after it", async () => {
+    // Three callers fetch the same snapshot -- the panel's load, the tab's
+    // Refresh, the stream's reconnect -- so two can be in flight at once, and a
+    // request hung on a dead tunnel settles up to the 30s timeout after a later
+    // one already landed. Its failure must not put the panel back on an error
+    // screen for a transcript that has since loaded.
+    const agent = freshAgent();
+    const hung = deferredResponse();
+    mockRequest.mockReturnValueOnce(hung.promise);
+    const stale = fetchEvents(agent);
+
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("a")] });
+    await fetchEvents(agent);
+    expect(getConversationLoadState(agent)).toEqual({ phase: "idle", error: null });
+
+    hung.reject(proxyUnavailableError());
+    await expect(stale).rejects.toThrow();
+    expect(getConversationLoadState(agent)).toEqual({ phase: "idle", error: null });
+  });
+
+  it("does not let a superseded attempt's 404 declare the conversation missing", async () => {
+    // The panel acts on this harder than on the load state: "No conversation
+    // data" renders ahead of it, ungated by whether a transcript is on screen,
+    // and the live stream is disconnected. A late 404 from an attempt a later
+    // one has already answered must not blank a chat that is loaded and live.
+    const agent = freshAgent();
+    const hung = deferredResponse();
+    mockRequest.mockReturnValueOnce(hung.promise);
+    const stale = fetchEvents(agent);
+
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("a")] });
+    await fetchEvents(agent);
+
+    hung.reject(Object.assign(new Error("{}"), { code: 404, response: { detail: "Agent not found" } }));
+    await expect(stale).rejects.toThrow();
+    expect(isConversationNotFound(agent)).toBe(false);
+    expect(getConversationLoadState(agent)).toEqual({ phase: "idle", error: null });
+  });
+
+  it("does not let a superseded attempt's late success replace the newer window", async () => {
+    // The fence has to cover the success path too, not just the failure one: a
+    // superseded attempt can still succeed, merely late, and the snapshot
+    // replaces the window wholesale. Letting the older one land would revert the
+    // transcript and strand everything placed since -- and it resets offset and
+    // hasMoreAfter with it, so neither backfill nor forward paging could reach
+    // the lost events again.
+    const agent = freshAgent();
+    const hung = deferredResponse();
+    mockRequest.mockReturnValueOnce(hung.promise);
+    const stale = fetchEvents(agent);
+
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("a"), makeEvent("b")] });
+    await fetchEvents(agent);
+    appendEvents(agent, [makeEvent("c")]);
+    expect(ids(agent)).toEqual(["a", "b", "c"]);
+
+    hung.resolve({ events: [makeEvent("a")] });
+    await stale;
+    expect(ids(agent)).toEqual(["a", "b", "c"]);
+    expect(hasMoreAfter(agent)).toBe(false);
+    expect(getConversationLoadState(agent)).toEqual({ phase: "idle", error: null });
+  });
+
+  it("is not moved by a failed backfill page, which leaves the window readable", async () => {
+    const agent = freshAgent();
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("b")], offset: 1, total: 2 });
+    await fetchEvents(agent);
+
+    // Paging failures are deliberately non-fatal: the older history just is not
+    // loaded. Recording one would blank a transcript the user can still read.
+    mockRequest.mockRejectedValueOnce(proxyUnavailableError());
+    await fetchBackfillEvents(agent);
+    expect(getConversationLoadState(agent)).toEqual({ phase: "idle", error: null });
+    expect(ids(agent)).toEqual(["b"]);
   });
 });

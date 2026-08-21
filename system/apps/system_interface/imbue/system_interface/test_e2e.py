@@ -2730,3 +2730,57 @@ def test_mobile_client_saves_its_own_arrangement(tmp_path: Path, page: Page) -> 
         # load test above does: the launcher's own fetch races this short test.
         with urllib.request.urlopen(f"{base_url}/api/terminals", timeout=5) as response:
             assert response.status == 200
+
+
+_TRANSCRIPT_RECOVERY_PORT = 18885
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_chat_recovers_from_a_failed_transcript_load(tmp_path: Path, page: Page) -> None:
+    """A chat whose transcript fetch failed recovers on Refresh, without reloading the page.
+
+    The reported shape of this: a laptop wakes, the proxy in front of the
+    workspace answers ``/events`` with a 503 while its tunnel is re-dialled, and
+    the panel is left on an error screen. Refresh re-fetched the transcript
+    successfully -- the request was visible in the network tab -- but the panel
+    kept rendering the error over it, because the failure was held by the panel
+    and only its own first load ever cleared it. Nothing short of reloading the
+    whole page brought the chat back.
+
+    Both halves of that are asserted here: the error names the status rather
+    than reading "Error: null", and the Refresh the error screen itself offers
+    restores the transcript. The button is deliberately the one exercised --
+    recovery already took a single reload before it existed, but the only
+    control that did one lived in the tab's overflow menu, which nothing on the
+    error screen pointed at.
+    """
+    with _running_e2e_server(tmp_path, _TRANSCRIPT_RECOVERY_PORT) as (base_url, _agent_info, _session_file):
+        # Stand in for the proxy's 503. The plain-text body matters: it is not
+        # JSON, so the request layer has no detail to report and must fall back
+        # to the status rather than to mithril's stringified empty body. Only
+        # the transcript snapshot is intercepted; the SSE stream beside it stays
+        # healthy, so nothing retries in the background and Refresh is the sole
+        # recovery path under test.
+        events_url = "**/api/agents/*/events"
+        page.route(
+            events_url,
+            lambda route: route.fulfill(status=503, content_type="text/plain", body="Backend not yet available"),
+        )
+        page.goto(base_url)
+
+        error = page.locator(".message-list-error")
+        expect(error).to_be_visible(timeout=15000)
+        # The message itself, not the whole panel: the Refresh below is part of it.
+        expect(error.locator("p")).to_have_text("Error: request failed (HTTP 503)")
+
+        # The workspace becomes reachable again. Nothing tells the panel.
+        page.unroute(events_url)
+
+        error.locator(".message-list-reload").click()
+
+        expect(page.locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
+        expect(page.locator(".message-list-error")).to_have_count(0)
+
+        # Touch tmux deterministically for the module-wide mark, as above.
+        with urllib.request.urlopen(f"{base_url}/api/terminals", timeout=5) as response:
+            assert response.status == 200
