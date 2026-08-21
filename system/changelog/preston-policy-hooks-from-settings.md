@@ -4,7 +4,7 @@ This repo declares its own codex and pi guards, in the files those harnesses alr
 
 `.pi/extensions/policy_guards.ts` and `.pi/extensions/tk_workflow.ts` do the same for pi, which has no shell-hook surface: pi auto-discovers extensions from `.pi/extensions/`, calls every extension's `tool_call` handler, and blocks when any returns `{block, reason}`. It spawns the same `agent_latchkey_request_check.py` and `agent_tk_standalone_check.py` the hook wrappers do, so one checker file serves all three harnesses.
 
-Neither needed anything from mngr, which no longer carries a guard list for either harness.
+Neither needs anything from mngr, which no longer carries a guard list for either harness -- and the settings tables that used to feed it are gone with it.
 
 `agent_tk_standalone_check.py` gained the `from __future__ import annotations` its sibling already had; without it the checker crashed on a python older than 3.10 rather than checking anything.
 
