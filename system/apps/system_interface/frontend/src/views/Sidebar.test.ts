@@ -185,7 +185,6 @@ function makeAttrs(overrides: Partial<SidebarAttrs> = {}): SidebarAttrs {
     onOpenRow: vi.fn(),
     onRefreshRow: vi.fn(),
     onRenameRow: vi.fn(),
-    onHideRowTab: vi.fn(),
     onRemoveFromView: vi.fn(),
     onShareApp: vi.fn(),
     onDeleteFromMachine: vi.fn(),

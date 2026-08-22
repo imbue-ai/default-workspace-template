@@ -5,7 +5,6 @@ import {
   getActiveViewId,
   getAvailableProjects,
   getSidebarRows,
-  hideMemberRowTab,
   openAppTab,
   openMemberRow,
   openTabOfType,
@@ -92,9 +91,6 @@ export function App(): m.Component {
               },
               onRenameRow: (row: SidebarTabRow, title: string) => {
                 renameMemberRowWithAlert(row, title);
-              },
-              onHideRowTab: (row: SidebarTabRow) => {
-                hideMemberRowTab(row);
               },
               onRemoveFromView: (row: SidebarTabRow) => {
                 removeMemberRow(row);
