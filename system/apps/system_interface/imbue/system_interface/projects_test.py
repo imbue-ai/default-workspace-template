@@ -362,6 +362,35 @@ def test_registry_with_no_projects_is_read_as_is(tmp_path: Path) -> None:
     assert get_last_active_id(tmp_path) == EVERYTHING_VIEW_ID
 
 
+def test_legacy_url_members_are_purged_on_read_and_persisted(tmp_path: Path) -> None:
+    # Ad-hoc pages are no longer filed as members, so url: refs written by the
+    # old filer are dead entries; the first read drops them everywhere and
+    # rewrites the registry, leaving every real member untouched.
+    (tmp_path / "projects_meta.json").write_text(
+        json.dumps(
+            {
+                "project_by_id": {
+                    "research": {
+                        "name": "Research",
+                        "color": "#12B5A5",
+                        "glyph": 4,
+                        "members": ["chat:agent-1", "url:9f86d081", "service:web"],
+                    },
+                    "taxes": {"name": "Taxes", "color": "#E5A33D", "glyph": 7, "members": ["url:deadbeef"]},
+                },
+                "last_active_id": "research",
+            }
+        )
+    )
+
+    members_by_id = {info.project_id: list(info.members) for info in list_projects(tmp_path)}
+
+    assert members_by_id == {"research": ["chat:agent-1", "service:web"], "taxes": []}
+    persisted = json.loads((tmp_path / "projects_meta.json").read_text())
+    assert persisted["project_by_id"]["research"]["members"] == ["chat:agent-1", "service:web"]
+    assert persisted["project_by_id"]["taxes"]["members"] == []
+
+
 def test_corrupt_content_reads_as_empty(tmp_path: Path) -> None:
     write_project_content(tmp_path, DEFAULT_PROJECT_ID, {"ok": True})
     project_content_path(tmp_path, DEFAULT_PROJECT_ID).write_text("garbage{")
