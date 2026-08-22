@@ -459,10 +459,10 @@ export function nextGlyphIndex(usedGlyphs: readonly number[]): number {
  *
  * The four consolidated kinds map straight across; a "url" row (an ad-hoc
  * page, no longer filed as a member going forward -- see objectMenu.ts's own
- * module docstring) gets no menu at all rather than a partial one. A legacy
- * url member still on an older project's list is removed from the project
- * settings modal's own member list instead (see ProjectSettingsModal), which
- * is reachable independent of what any one row offers.
+ * module docstring) gets no menu at all rather than a partial one. That does
+ * not strand a legacy url member still on an older project's list: the row's
+ * one-click remove is rendered for every kind (see `tabRow`), so unfiling it
+ * is still one click, it just has no second verb to sit beside.
  */
 function objectMenuKindForRow(row: SidebarTabRow): ObjectMenuKind | null {
   return row.kind === "url" ? null : row.kind;

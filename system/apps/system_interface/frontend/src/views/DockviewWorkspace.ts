@@ -1946,8 +1946,8 @@ export function getSidebarRows(): SidebarTabRow[] {
  * of the page, so the address does not survive the tab. Only a legacy member
  * still on an older project's list can be one -- an ad-hoc page is no longer
  * filed as a member at all (see ``memberRefForPanelParams``) -- and such a row
- * is dropped from the project settings modal's member list, which is where
- * removing a member lives now.
+ * is dropped from the project through the one-click remove its rail row
+ * carries like every other row's, which is the only verb it has.
  *
  * Flashes the tab when it was already open: every caller here is a click on a
  * row that ASKS to open something (a rail row, a launcher's member/machine
