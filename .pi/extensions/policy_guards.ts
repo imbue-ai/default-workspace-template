@@ -14,13 +14,14 @@
 // harnesses reach it.
 
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 const WORK_DIR = process.env.MNGR_AGENT_WORK_DIR || process.cwd();
 const SCRIPTS = join(WORK_DIR, "system", "scripts");
 
 interface Checker {
-  command: string;
+  script: string;
   match: RegExp;
 }
 
@@ -29,8 +30,8 @@ interface Checker {
 // word for a step transition (`ticket` does not contain `tk`, so a substring test would
 // miss the spelling the checker and the shared parser both accept).
 const CHECKERS: Checker[] = [
-  { command: `python3 "${join(SCRIPTS, "agent_latchkey_request_check.py")}"`, match: /permission-requests/ },
-  { command: `python3 "${join(SCRIPTS, "agent_tk_standalone_check.py")}"`, match: /\b(tk|ticket)\b/ },
+  { script: join(SCRIPTS, "agent_latchkey_request_check.py"), match: /permission-requests/ },
+  { script: join(SCRIPTS, "agent_tk_standalone_check.py"), match: /\b(tk|ticket)\b/ },
 ];
 
 /** The reason to refuse `command`, from the first checker that refuses it, else null.
@@ -45,8 +46,13 @@ const CHECKERS: Checker[] = [
 function refusalReason(command: string): string | null {
   for (const checker of CHECKERS) {
     if (!checker.match.test(command)) continue;
+    // A checker that is not on disk refuses nothing: python3 exits 2 on a file it
+    // cannot open, the same status a real refusal uses, so without this every
+    // matching command would be blocked with a python error as its reason.
+    if (!existsSync(checker.script)) continue;
     try {
-      const result = spawnSync("bash", ["--noprofile", "--norc", "-c", `${checker.command} "$1"`, "bash", command], {
+      const argv = ["--noprofile", "--norc", "-c", `python3 "${checker.script}" "$1"`, "bash", command];
+      const result = spawnSync("bash", argv, {
         encoding: "utf-8",
         env: { ...process.env, BASH_ENV: undefined, ENV: undefined },
       });
