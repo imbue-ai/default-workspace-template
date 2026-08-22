@@ -578,15 +578,23 @@ export function Sidebar(): m.Component<SidebarAttrs> {
   }
 
   /**
-   * The other half of "the pointer has left", for the crossing `mouseout`
-   * can miss.
+   * What a pointer that has left the document does to the rail -- for both
+   * listeners that can report one, since `handlePointerLeftWindow` defers here
+   * once it has established that its own `mouseout` is a real exit.
    *
-   * KNOWN LIMIT, measured rather than assumed: in the minds desktop app this
-   * never fires for a cursor that leaves the app window. The workspace is a
-   * cross-origin iframe inside the minds chrome, and the OS simply stops
-   * delivering mouse events to the window -- nothing synthesizes a final
-   * crossing for a child frame to hear. Only `blur` arrives, which is why the
-   * rail folds on a click away but not on a cursor merely sliding off.
+   * The exceptions are the slot's own `onmouseleave`'s, for the same reasons:
+   * an open menu extends past the rail and is still the thing the user is
+   * working, and a row mid-rename would commit a half-typed name on the
+   * input's removal. Both still record that the pointer has gone, so whatever
+   * ends the edit folds the rail up in place of the leave this swallowed (see
+   * `endRename`).
+   *
+   * KNOWN LIMIT, measured rather than assumed: in the minds desktop app
+   * neither listener fires for a cursor that leaves the app window. The
+   * workspace is a cross-origin iframe inside the minds chrome, and the OS
+   * simply stops delivering mouse events to the window -- nothing synthesizes
+   * a final crossing for a child frame to hear. Only `blur` arrives, which is
+   * why the rail folds on a click away but not on a cursor merely sliding off.
    *
    * Both listeners stay because the workspace is also served straight to a
    * browser (a share link), where they do fire and are the right answer.
@@ -620,18 +628,13 @@ export function Sidebar(): m.Component<SidebarAttrs> {
    * entered, and entering an iframe names the frame. So this fires only for
    * the case the slot's own handler can miss.
    *
-   * The exceptions are the slot's, for the same reasons: an open menu extends
-   * past the rail and is still the thing the user is working, and a row
-   * mid-rename would commit a half-typed name on the input's removal. Both
-   * still record that the pointer has gone, so whatever ends the edit folds
-   * the rail up in place of the leave this swallowed (see `endRename`).
+   * That test is the whole of what is specific to `mouseout`; what to do about
+   * a pointer that has gone is `handleDocumentPointerLeave`'s, and is stated
+   * once, there.
    */
   function handlePointerLeftWindow(event: MouseEvent): void {
     if (event.relatedTarget !== null) return;
-    isPointerOverRail = false;
-    if (openMenu !== null || renamingRef !== null) return;
-    closeMenus();
-    m.redraw();
+    handleDocumentPointerLeave();
   }
 
   function handleKeydown(event: KeyboardEvent): void {
