@@ -342,6 +342,9 @@ _EXEMPT_ROUTES: dict[tuple[str, str], str] = {
     ("GET", "/generation"): _TOLERANT_CLIENT,
     ("GET", "/version"): _TOLERANT_CLIENT,
     ("GET", "/health/liveness"): _STATUS_ONLY,
+    # Dev/ci-only reporting probe; consumed by the deployment-test suite,
+    # which ships from this repo, not with the desktop fleet.
+    ("GET", "/health/reporting-probe"): _OPERATOR,
     ("GET", "/policies/destroyed-workspace-backups"): _TOLERANT_CLIENT,
     # Auth surface beyond the three strictly-parsed responses.
     ("POST", "/auth/session/refresh"): _TOLERANT_CLIENT,

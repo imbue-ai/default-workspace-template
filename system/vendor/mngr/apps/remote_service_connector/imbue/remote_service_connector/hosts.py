@@ -343,12 +343,19 @@ def clean_up_slice_on_box(
 
 
 # Slice lima resources are named ``mngr-slice-<env>-<host-hex>`` (the data disk
-# adds a ``-data`` suffix). The host hex is a hyphen-free uuid, so the env stamp is
-# everything between the prefix and the trailing ``-<host-hex>``. Mirrors
-# ``mngr_imbue_cloud.slices.bare_metal`` (the connector has no dependency on it).
+# adds a ``-data`` suffix). The host hex is a hyphen-free uuid -- truncated to 16
+# chars on current slices so long (CI) env names fit limactl's name budget, the
+# full 32 on slices baked before the truncation -- so the env stamp is everything
+# between the prefix and the trailing ``-<host-hex>``. Longest-first so a legacy
+# env that happens to end in ``-<16 hex>`` still parses as the 32-hex shape.
+# Mirrors ``mngr_imbue_cloud.slices.bare_metal`` (the connector has no dependency
+# on it).
 _SLICE_LIMA_PREFIX = "mngr-slice-"
 _SLICE_LIMA_DISK_SUFFIX = "-data"
-_STAMPED_SLICE_CORE_RE = re.compile(r"^(?P<env>.+)-(?P<host>[0-9a-f]{32})$")
+_STAMPED_SLICE_CORE_RES = (
+    re.compile(r"^(?P<env>.+)-(?P<host>[0-9a-f]{32})$"),
+    re.compile(r"^(?P<env>.+)-(?P<host>[0-9a-f]{16})$"),
+)
 # Non-login SSH may not source the lima user's profile, so set PATH explicitly
 # (limactl is extracted to /usr/local/bin by box prep).
 _BOX_LIMACTL_PATH_PREFIX = "PATH=/usr/local/bin:$HOME/.local/bin:$PATH"
@@ -361,8 +368,11 @@ def slice_name_env_owner(name: str) -> str | None:
     core = name[len(_SLICE_LIMA_PREFIX) :]
     if core.endswith(_SLICE_LIMA_DISK_SUFFIX):
         core = core[: -len(_SLICE_LIMA_DISK_SUFFIX)]
-    match = _STAMPED_SLICE_CORE_RE.match(core)
-    return match.group("env") if match else None
+    for pattern in _STAMPED_SLICE_CORE_RES:
+        match = pattern.match(core)
+        if match is not None:
+            return match.group("env")
+    return None
 
 
 def _list_box_lima_names(client: paramiko.SSHClient, host: str, json_subcommand: str) -> set[str]:

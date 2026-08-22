@@ -84,6 +84,7 @@ from supertokens_python.types import RecipeUserId
 
 import imbue.remote_service_connector.auth as auth_module
 import imbue.remote_service_connector.auth_proxy as auth_proxy_module
+from imbue.modal_app_kit.metrics import emit_metric
 from imbue.remote_service_connector import db
 from imbue.remote_service_connector.attribution import ATTRIBUTION_COOKIE_NAME
 from imbue.remote_service_connector.attribution import record_account_attribution
@@ -234,7 +235,7 @@ def _resolve_browser_identity(request: Request) -> tuple[str, str, bool] | None:
         try:
             revoke_session(session.get_handle())
         except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
-            logger.warning("Could not revoke an over-max-age browser session: %s", exc)
+            logger.warning("Could not revoke an over-max-age browser session", exc_info=exc)
         return None
     user_id = session.get_user_id()
     email, is_verified = auth_module.resolve_account_email(user_id)
@@ -514,7 +515,8 @@ def _verify_turnstile_token(token: str, remote_ip: str | None) -> bool:
         response.raise_for_status()
         return bool(response.json().get("success"))
     except (httpx.HTTPError, ValueError) as exc:
-        logger.warning("Turnstile verification failed: %s", exc)
+        emit_metric("turnstile_verify_request_failed", 1, {})
+        logger.warning("Turnstile verification failed", exc_info=exc)
         return False
 
 
@@ -705,7 +707,12 @@ def accounts_verify_email_token(request: Request, body: VerifyEmailTokenRequest)
         tenant_id = body.tenant_id or AUTH_TENANT_ID
         try:
             result = verify_email_using_token(tenant_id=tenant_id, token=body.token)
-        except (SuperTokensSessionError, SuperTokensGeneralError, ValueError) as exc:
+        except ValueError as exc:
+            # A malformed/expired token is routine client input, not a fault.
+            emit_metric("email_verification_token_invalid", 1, {})
+            logger.info("Rejected an email verification token: %s", exc)
+            return {"status": "INVALID_TOKEN"}
+        except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
             logger.error("Email verification error", exc_info=exc)
             return {"status": "INVALID_TOKEN"}
         if isinstance(result, VerifyEmailUsingTokenOkResult):
@@ -1143,6 +1150,7 @@ def accounts_oauth_callback(request: Request) -> RedirectResponse:
         if auth_result.status == ACCOUNT_EXISTS_WITH_OTHER_METHOD_STATUS:
             return _login_redirect(next_path, "password_account")
         if auth_result.status != "OK" or auth_result.user is None:
+            emit_metric("oauth_callback_failed", 1, {"provider": "google-browser"})
             logger.warning("Accounts OAuth callback failed: %s", auth_result.message)
             return _login_redirect(next_path, "oauth_failed")
 

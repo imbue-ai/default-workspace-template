@@ -688,11 +688,20 @@ def test_slice_name_env_owner_parses_stamped_instance_and_disk_names() -> None:
     assert hosts_mod.slice_name_env_owner(f"mngr-slice-dev-josh-foo-{host_hex}-data") == "dev-josh-foo"
 
 
+def test_slice_name_env_owner_parses_truncated_host_hex_names() -> None:
+    # Slices baked since the host-id truncation carry a 16-char host hex
+    # (mirroring mngr_imbue_cloud's SLICE_HOST_ID_HEX_LENGTH).
+    host_hex = "0123456789abcdef"
+    assert hosts_mod.slice_name_env_owner(f"mngr-slice-dev-josh-foo-{host_hex}") == "dev-josh-foo"
+    assert hosts_mod.slice_name_env_owner(f"mngr-slice-dev-josh-foo-{host_hex}-data") == "dev-josh-foo"
+
+
 def test_slice_name_env_owner_returns_none_for_legacy_and_non_slice_names() -> None:
-    host_hex = "0123456789abcdef0123456789abcdef"
-    # Legacy un-stamped slice names have no env owner (must be left untouched).
-    assert hosts_mod.slice_name_env_owner(f"mngr-slice-{host_hex}") is None
-    assert hosts_mod.slice_name_env_owner(f"mngr-slice-{host_hex}-data") is None
+    # Legacy un-stamped slice names -- full-hex or truncated -- have no env
+    # owner (must be left untouched).
+    for host_hex in ("0123456789abcdef0123456789abcdef", "0123456789abcdef"):
+        assert hosts_mod.slice_name_env_owner(f"mngr-slice-{host_hex}") is None
+        assert hosts_mod.slice_name_env_owner(f"mngr-slice-{host_hex}-data") is None
     # Non-slice lima names are never attributed to an env.
     assert hosts_mod.slice_name_env_owner("default") is None
     assert hosts_mod.slice_name_env_owner("some-other-vm") is None

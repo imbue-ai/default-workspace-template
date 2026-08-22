@@ -6,14 +6,22 @@ or a restore onto a same-region box), verifies the restored coordinates
 answer SSH, and releases the lease.
 
 Needs a pool with at least one available baked slice AND workspace storage
-configured for the env, so it *skips cleanly* on envs without that
-infrastructure (the shared ci env's pool is typically empty; run against a
-dev env with a baked box: ``just minds-test-services-against dev-<you>
-apps/minds/deployment_tests/test_workspace_stop_start.py``). The full cycle
-includes the real artifact upload, whose duration is bounded by the box's
-measured upload throughput -- budget tens of minutes.
+configured for the env. An empty pool FAILS by default (the CI release flow
+pre-bakes slices, so an empty pool there means the bake stage broke -- see
+specs/remote-workspaces-in-ci.md); set ``MINDS_ALLOW_EMPTY_POOL=1`` to skip
+instead when running against an env that legitimately has no pool (e.g.
+``just minds-test-services-against dev-<you> ...``, which sets it). Missing
+workspace storage still skips.
+
+Opt-in via ``MINDS_STOP_START_RELEASE_TEST=1`` (the ``MNGR_AWS_RELEASE_TESTS``
+pattern): the full cycle's measured wall time against the standing CI box was
+~2.6 HOURS (the ~13GB artifact upload ran at ~1.4MB/s effective), which no CI
+job budget fits -- see the spec's open questions for the follow-ups (raise the
+ci tier's upload throttle or shrink the test workspace). Until one lands, the
+test runs only where an operator explicitly opts in.
 """
 
+import os
 import socket
 from collections.abc import Callable
 
@@ -23,18 +31,24 @@ import pytest
 from imbue.minds.deployment_tests.data_types import SharedEnvHandle
 from imbue.minds.deployment_tests.data_types import VerifiedUserHandle
 from imbue.minds.deployment_tests.helpers import wait_for_env_ready
+from imbue.minds.deployment_tests.testing import handle_no_pool_capacity
 from imbue.mngr.utils.polling import poll_for_value
 
 pytestmark = [pytest.mark.release, pytest.mark.minds_services]
 
+# The opt-in gate (see the module docstring); a skipif marker rather than an
+# in-body skip so the verified_user fixture never provisions a real user for
+# a run that is about to skip.
+_STOP_START_OPT_IN = os.environ.get("MINDS_STOP_START_RELEASE_TEST") == "1"
+
 _HTTP_TIMEOUT_SECONDS = 60.0
-# The stop uploads the whole artifact (~13GB at the currently-throttled
-# 6-25 MB/s => 9-36 min) concurrently with the env's local-retention window
-# (default WORKSPACE_STOP_RETENTION_SECONDS is 3600s), and only reports
-# "stopped" once BOTH have elapsed -- so the deadline must exceed the
-# retention ceiling, not just the upload. The start downloads at ~1 GB/s
-# and boots in seconds.
-_STOP_DEADLINE_SECONDS = 80 * 60.0
+# The stop uploads the whole artifact concurrently with the env's
+# local-retention window (default WORKSPACE_STOP_RETENTION_SECONDS is 3600s)
+# and only reports "stopped" once BOTH have elapsed. Measured against the
+# standing CI box, the ~13GB upload ran at ~1.4MB/s effective (~2.6h), so the
+# deadline budgets that plus margin -- which also dwarfs the retention
+# ceiling. The start downloads at ~1 GB/s and boots in seconds.
+_STOP_DEADLINE_SECONDS = 3.5 * 3600.0
 _START_DEADLINE_SECONDS = 20 * 60.0
 _POLL_INTERVAL_SECONDS = 15.0
 
@@ -83,7 +97,16 @@ def _assert_ssh_banner(address: str, port: int) -> None:
     assert banner.startswith(b"SSH"), f"{address}:{port} did not answer with an SSH banner: {banner!r}"
 
 
-@pytest.mark.timeout(2700)
+# The stop deadline plus the start deadline plus lease/SSH/poll overhead; the
+# test is opt-in (see above), so this long budget never holds up a default run.
+@pytest.mark.timeout(4 * 3600)
+@pytest.mark.skipif(
+    not _STOP_START_OPT_IN,
+    reason=(
+        "stop/start's full cycle measured ~2.6h against the standing CI box (upload-bound), which no CI "
+        "job budget fits; set MINDS_STOP_START_RELEASE_TEST=1 to run it (see the module docstring)"
+    ),
+)
 def test_workspace_stop_uploads_frees_slot_and_start_restores(
     shared_env: Callable[[str], SharedEnvHandle], verified_user: VerifiedUserHandle
 ) -> None:
@@ -102,7 +125,7 @@ def test_workspace_stop_uploads_frees_slot_and_start_restores(
             },
         )
         if lease.status_code == 503:
-            pytest.skip("pool has no available baked slice; run against a dev env with a baked box")
+            handle_no_pool_capacity("pool has no available baked slice")
         assert lease.status_code == 200, f"lease failed: {lease.status_code} {lease.text[:400]}"
         host_db_id = lease.json()["host_db_id"]
         try:

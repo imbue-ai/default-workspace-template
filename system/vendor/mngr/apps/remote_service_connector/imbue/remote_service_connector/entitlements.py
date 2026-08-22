@@ -22,6 +22,7 @@ from supertokens_python.exceptions import GeneralError as SuperTokensGeneralErro
 from supertokens_python.recipe.session.exceptions import SuperTokensSessionError
 from supertokens_python.syncio import get_user
 
+from imbue.modal_app_kit.metrics import emit_metric
 from imbue.remote_service_connector import db
 from imbue.remote_service_connector.auth import UserAuth
 from imbue.remote_service_connector.auth import is_email_paid
@@ -221,7 +222,8 @@ def _get_user_time_joined_ms(user_id: str, user_getter: Callable[[str], Any] = g
     try:
         user = user_getter(user_id)
     except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
-        logger.warning("Failed to fetch SuperTokens user %s for time_joined: %s", user_id[:8], exc)
+        emit_metric("supertokens_user_fetch_failed", 1, {"caller": "entitlements_time_joined"})
+        logger.warning("Failed to fetch SuperTokens user %s for time_joined", user_id[:8], exc_info=exc)
         return 0
     if user is None:
         return 0

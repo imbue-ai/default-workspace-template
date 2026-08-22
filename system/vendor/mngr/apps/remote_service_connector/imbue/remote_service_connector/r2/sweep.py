@@ -28,6 +28,7 @@ from supertokens_python.recipe.session.exceptions import SuperTokensSessionError
 
 import imbue.remote_service_connector.auth as auth_module
 import imbue.remote_service_connector.entitlements as entitlements_module
+from imbue.modal_app_kit.metrics import emit_metric
 from imbue.remote_service_connector.cloudflare import CloudflareOps
 from imbue.remote_service_connector.entitlements import EntitlementsStore
 from imbue.remote_service_connector.errors import CloudflareApiError
@@ -52,7 +53,8 @@ def _sweep_owner_email(user_id: str, email_getter: Callable[[str], str | None]) 
     try:
         return email_getter(user_id)
     except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
-        logger.warning("Sweep could not resolve email for user %s: %s", user_id[:8], exc)
+        emit_metric("supertokens_user_fetch_failed", 1, {"caller": "r2_sweep"})
+        logger.warning("Sweep could not resolve email for user %s", user_id[:8], exc_info=exc)
         return None
 
 
@@ -86,7 +88,8 @@ def _revoke_extra_bucket_keys(
             try:
                 ops.delete_bucket_token(access_key_id)
             except (CloudflareApiError, httpx.HTTPError) as exc:
-                logger.error("Sweep failed to revoke extra key %s: %s", access_key_id, exc)
+                emit_metric("cloudflare_api_failed", 1, {"operation": "sweep_revoke_extra_key"})
+                logger.warning("Sweep failed to revoke extra key %s", access_key_id, exc_info=exc)
                 counters["key_update_failures"] += 1
                 continue
             key_store.delete_key(access_key_id)
@@ -150,7 +153,8 @@ def enforce_owner_key_access(
                 # read-only, already downgraded, or already restored).
                 pass
         except (CloudflareApiError, httpx.HTTPError) as exc:
-            logger.error("Sweep failed to update token %s for bucket %s: %s", access_key_id, bucket_name, exc)
+            emit_metric("cloudflare_api_failed", 1, {"operation": "sweep_update_token"})
+            logger.warning("Sweep failed to update token %s for bucket %s", access_key_id, bucket_name, exc_info=exc)
             counters["key_update_failures"] += 1
 
 
@@ -172,7 +176,8 @@ def _settle_expired_grants(
         try:
             live_bytes = measure_live_owner_usage_bytes(ops, str(grant["user_id_prefix"]))
         except (CloudflareApiError, httpx.HTTPError) as exc:
-            logger.error("Sweep failed to settle grant %s (usage read failed): %s", grant["grant_id"], exc)
+            emit_metric("cloudflare_api_failed", 1, {"operation": "sweep_settle_grant_usage_read"})
+            logger.warning("Sweep failed to settle grant %s (usage read failed)", grant["grant_id"], exc_info=exc)
             counters["grant_settle_failures"] += 1
             continue
         grant_store.settle_grant(int(grant["grant_id"]), live_bytes, live_bytes < int(grant["baseline_bytes"]))
@@ -242,7 +247,7 @@ def run_r2_quota_sweep(
 
         limit_bytes = _resolve_owner_storage_limit_bytes(owner_user_id, owner_prefix, entitlements_store, email_getter)
         if limit_bytes is None:
-            logger.error(
+            logger.warning(
                 "Sweep skipping user %s: no resolvable verified email for lazy plan assignment", owner_user_id[:8]
             )
             counters["users_skipped"] += 1
@@ -257,7 +262,8 @@ def run_r2_quota_sweep(
             try:
                 live_bytes = measure_live_owner_usage_bytes(ops, owner_prefix)
             except (CloudflareApiError, httpx.HTTPError) as exc:
-                logger.error("Sweep skipping user %s: live usage read failed: %s", owner_user_id[:8], exc)
+                emit_metric("cloudflare_api_failed", 1, {"operation": "sweep_live_usage_read"})
+                logger.warning("Sweep skipping user %s: live usage read failed", owner_user_id[:8], exc_info=exc)
                 counters["live_usage_read_failures"] += 1
                 counters["users_skipped"] += 1
                 continue

@@ -39,6 +39,7 @@ import imbue.remote_service_connector.hosts as hosts_module
 import imbue.remote_service_connector.storage as storage_module
 from imbue.remote_service_connector import box_scripts
 from imbue.remote_service_connector import db
+from imbue.remote_service_connector.errors import ConnectorError
 from imbue.remote_service_connector.errors import WorkspaceTransitionError
 from imbue.remote_service_connector.storage import StorageConfig
 
@@ -505,7 +506,7 @@ def _poll_transfer(row: WorkspaceRow, box: BoxRow, instance_name: str, expected_
     raise WorkspaceTransitionError(f"transfer did not finish within {_TRANSFER_WAIT_SECONDS:.0f}s")
 
 
-class _TransitionSuperseded(Exception):
+class _TransitionSuperseded(ConnectorError):
     """The row left the expected status mid-transition (e.g. an in-window restart)."""
 
     def __init__(self, new_status: str) -> None:
@@ -538,7 +539,7 @@ def _drive_stop(config: StorageConfig, row: WorkspaceRow) -> str:
         logger.info("Stop of %s superseded (row now %s)", row.host_db_id, exc.new_status)
         return "superseded"
     except (WorkspaceTransitionError, paramiko.SSHException, OSError) as exc:
-        logger.error("Stop of %s failed: %s", row.host_db_id, exc)
+        logger.error("Stop of %s failed", row.host_db_id, exc_info=exc)
         _record_transition_error(row.host_db_id, str(exc))
         return "stop-failed"
 
@@ -642,7 +643,7 @@ def _finalize_stopped_leftover(config: StorageConfig, row: WorkspaceRow) -> str:
         # The superseded generation is whatever precedes the recorded one.
         _delete_local_vm_and_previous_generation(config, row, box, previous_generation=row.artifact_generation - 1)
     except (WorkspaceTransitionError, paramiko.SSHException, OSError) as exc:
-        logger.error("Finalize of stopped %s failed: %s", row.host_db_id, exc)
+        logger.error("Finalize of stopped %s failed", row.host_db_id, exc_info=exc)
         _record_transition_error(row.host_db_id, str(exc))
         return "finalize-failed"
     return "finalized"
@@ -655,7 +656,7 @@ def _drive_start(config: StorageConfig, row: WorkspaceRow) -> str:
         logger.info("Start of %s superseded (row now %s)", row.host_db_id, exc.new_status)
         return "superseded"
     except (WorkspaceTransitionError, paramiko.SSHException, OSError) as exc:
-        logger.error("Start of %s failed: %s", row.host_db_id, exc)
+        logger.error("Start of %s failed", row.host_db_id, exc_info=exc)
         _fail_start_back_to_stopped(row, str(exc))
         return "start-failed"
 
@@ -865,7 +866,7 @@ def _remove_transfer_dir(box: BoxRow, instance_name: str) -> None:
     try:
         exit_status, _stdout, stderr = _run_box_command(box, f'rm -rf "{transfer_dir}"')
     except (paramiko.SSHException, OSError) as exc:
-        logger.warning("Could not remove transfer dir for %s on %s: %s", instance_name, box.public_address, exc)
+        logger.warning("Could not remove transfer dir for %s on %s", instance_name, box.public_address, exc_info=exc)
         return
     if exit_status != 0:
         logger.warning(
@@ -882,7 +883,9 @@ def _cleanup_reserved_restore(box: BoxRow, instance_name: str, disk_name: str) -
             _SSH_COMMAND_TIMEOUT_SECONDS,
         )
     except (WorkspaceTransitionError, paramiko.SSHException, OSError) as exc:
-        logger.warning("Could not roll back reserved restore for %s on %s: %s", instance_name, box.public_address, exc)
+        logger.warning(
+            "Could not roll back reserved restore for %s on %s", instance_name, box.public_address, exc_info=exc
+        )
 
 
 def _teardown_superseded_restore(box: BoxRow, instance_name: str, disk_name: str) -> None:
@@ -893,7 +896,7 @@ def _teardown_superseded_restore(box: BoxRow, instance_name: str, disk_name: str
         )
     except (WorkspaceTransitionError, paramiko.SSHException, OSError) as exc:
         logger.warning(
-            "Could not tear down superseded restore for %s on %s: %s", instance_name, box.public_address, exc
+            "Could not tear down superseded restore for %s on %s", instance_name, box.public_address, exc_info=exc
         )
 
 

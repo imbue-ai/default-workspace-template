@@ -27,6 +27,7 @@ import imbue.remote_service_connector.cloudflare as cloudflare_module
 import imbue.remote_service_connector.entitlements as entitlements_module
 import imbue.remote_service_connector.litellm_client as litellm_client
 import imbue.remote_service_connector.sync as sync_module
+from imbue.modal_app_kit.metrics import emit_metric
 from imbue.remote_service_connector import db
 from imbue.remote_service_connector.auth import authenticate_request
 from imbue.remote_service_connector.auth import clear_paid_status_cache
@@ -269,7 +270,10 @@ def summarize_owner_bucket_usage(ops: CloudflareOps, user_id_prefix: str) -> tup
     total_bucket_bytes = 0
     for bucket_name, result in zip(bucket_names, read_bucket_usage_bytes_concurrently(ops, bucket_names), strict=True):
         if isinstance(result, (CloudflareApiError, httpx.HTTPError)):
-            logger.warning("Failed to read usage for bucket %s: %s", bucket_name, result)
+            # Display-only degradation on a transient upstream read: counted,
+            # not error-reported.
+            emit_metric("cloudflare_api_failed", 1, {"operation": "display_bucket_usage_read"})
+            logger.info("Failed to read usage for bucket %s: %s", bucket_name, result)
         else:
             total_bucket_bytes += result
     return len(bucket_names), total_bucket_bytes

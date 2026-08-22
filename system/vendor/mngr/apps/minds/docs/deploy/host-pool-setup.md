@@ -2,6 +2,11 @@
 
 How to set up the infrastructure for the imbue-cloud-leased pool host flow.
 
+**Note:** the CI tier's standing boxes (used by the remote-workspace release
+tests) follow this same flow with a standing "infra" DB as the canonical box
+registry; their runbook lives in
+[`specs/remote-workspaces-in-ci.md`](../../../../specs/remote-workspaces-in-ci.md).
+
 Pool hosts are **bare-metal slices**: lima/QEMU VMs carved on bare-metal boxes we
 operate. (The boxes are currently rented from OVH, but that is an internal
 implementation detail of the slice backend; other suppliers may be added later.)

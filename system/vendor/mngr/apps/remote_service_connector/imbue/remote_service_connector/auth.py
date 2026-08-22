@@ -17,6 +17,7 @@ from supertokens_python.recipe.session.exceptions import SuperTokensSessionError
 from supertokens_python.recipe.session.syncio import get_session_without_request_response
 from supertokens_python.syncio import get_user
 
+from imbue.modal_app_kit.metrics import emit_metric
 from imbue.remote_service_connector import db
 from imbue.remote_service_connector.errors import EmailNotVerifiedError
 
@@ -108,7 +109,8 @@ def resolve_account_email(
     try:
         user = resolved_getter(user_id)
     except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
-        logger.warning("Failed to fetch SuperTokens user %s: %s", user_id[:8], exc)
+        emit_metric("supertokens_user_fetch_failed", 1, {"caller": "resolve_account_email"})
+        logger.warning("Failed to fetch SuperTokens user %s", user_id[:8], exc_info=exc)
         return None, False
     if user is None:
         return None, False
@@ -139,7 +141,8 @@ def get_backfill_email(
     try:
         user = resolved_getter(user_id)
     except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
-        logger.warning("Failed to fetch SuperTokens user %s: %s", user_id[:8], exc)
+        emit_metric("supertokens_user_fetch_failed", 1, {"caller": "get_backfill_email"})
+        logger.warning("Failed to fetch SuperTokens user %s", user_id[:8], exc_info=exc)
         return None
     if user is None:
         return None
@@ -369,7 +372,7 @@ def require_ally_eligible(
     try:
         is_paid = paid_checker(email)
     except psycopg2.Error as exc:
-        logger.warning("Paid-status lookup failed for %s: %s", email, exc)
+        logger.warning("Paid-status lookup failed for %s", email, exc_info=exc)
         raise HTTPException(
             status_code=403,
             detail="Could not verify ally-plan eligibility (database error); please try again",

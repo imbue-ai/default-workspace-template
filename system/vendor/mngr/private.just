@@ -226,9 +226,14 @@ tmr-behaviors-minds *args:
 # and apps/minds/deployment_tests/README.md for the full design + usage.
 
 # Full run: shared env stand-up + sequential pytest x2 + teardown.
+# MINDS_ALLOW_EMPTY_POOL=1: this flow mints a fresh shared env with no bake
+# stage, so its pool is empty by construction -- the pool-consuming tests skip
+# here instead of failing (use `minds-test-deployment-up` + `bake-ci-slices`
+# to run them for real; the CI release flow never sets this, where an empty
+# pool means the bake stage broke and must fail).
 [group("minds test")]
 minds-test-deployment *args:
-  uv run python apps/minds_admin/scripts/test_deployments.py run {{args}}
+  MINDS_ALLOW_EMPTY_POOL=1 uv run python apps/minds_admin/scripts/test_deployments.py run {{args}}
 
 # Wipe everything from prior runs that the ledger still tracks as active or leaked.
 [group("minds test")]
@@ -246,9 +251,24 @@ minds-test-deployment-down role="default":
   uv run python apps/minds_admin/scripts/test_deployments.py down "{{role}}"
 
 # Point minds_services tests at an already-deployed dev env (e.g. dev-josh).
+# MINDS_ALLOW_EMPTY_POOL=1: an arbitrary dev env may legitimately have no baked
+# pool capacity, so the pool-consuming tests skip there instead of failing (the
+# CI release flow never sets it -- an empty pool there means the bake stage
+# broke and must fail). See specs/remote-workspaces-in-ci.md.
 [group("minds test")]
 minds-test-services-against env_name *tests:
-  uv run python apps/minds_admin/scripts/test_deployments.py services-against "{{env_name}}" {{tests}}
+  MINDS_ALLOW_EMPTY_POOL=1 uv run python apps/minds_admin/scripts/test_deployments.py services-against "{{env_name}}" {{tests}}
+
+# Pre-bake leasable pool slices for the env `minds-test-deployment-up` stood up
+# (the local twin of CI's bake stage): sweep stale CI slices, import the standing
+# CI boxes into the env's DB, bake from the given template ref (or --template-dir),
+# and record the stamped repo_branch_or_tag for the pool tests to lease against.
+# Slices are CONSUMED by each test's release, so top up between re-runs (warm
+# content re-bakes in minutes). See specs/remote-workspaces-in-ci.md.
+#   just bake-ci-slices --count 2 --template-dir "$PWD/.external_worktrees/default-workspace-template"
+[group("minds test")]
+bake-ci-slices *args:
+  uv run python apps/minds_admin/scripts/test_deployments.py bake-pool {{args}}
 
 # Run only the minds_deployment pytest batch (each test mints its own ephemeral env).
 # No shared env stand-up, no mail.tm account -- fast iteration for the deploy tests.

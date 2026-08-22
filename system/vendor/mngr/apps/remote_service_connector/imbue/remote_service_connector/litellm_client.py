@@ -17,6 +17,8 @@ from collections.abc import Callable
 import httpx
 from fastapi import HTTPException
 
+from imbue.modal_app_kit.metrics import emit_metric
+
 logger = logging.getLogger(__name__)
 
 
@@ -55,7 +57,11 @@ def litellm_request(
     )
     if response.status_code >= 400:
         detail = response.text[:500]
-        logger.warning("LiteLLM API error: %s %s -> %s %s", method, path, response.status_code, detail)
+        # Counted rather than warned: some rejections are routine (e.g.
+        # /user/new for an existing user on every key mint), and the raised
+        # HTTPException already surfaces the genuine failures to the caller.
+        emit_metric("litellm_api_error", 1, {"path": path, "status": str(response.status_code)})
+        logger.info("LiteLLM API error: %s %s -> %s %s", method, path, response.status_code, detail)
         raise HTTPException(status_code=response.status_code, detail="LiteLLM error: {}".format(detail))
     return response
 
@@ -108,7 +114,10 @@ def get_litellm_user_spend(
     except (HTTPException, httpx.HTTPError) as exc:
         # HTTPException covers HTTP >= 400 responses and missing proxy config;
         # httpx.HTTPError covers transport failures (proxy unreachable).
-        logger.warning("LiteLLM /user/info for %s failed (%s); reporting zero spend", user_id[:8], exc)
+        # Counts the degraded outcome (spend reported as zero); the HTTP >= 400
+        # path is additionally counted inside litellm_request with its status.
+        emit_metric("litellm_spend_read_failed", 1, {})
+        logger.warning("LiteLLM /user/info for %s failed; reporting zero spend", user_id[:8], exc_info=exc)
         return 0.0, None
     data = response.json()
     info = data.get("user_info") if isinstance(data, dict) else None

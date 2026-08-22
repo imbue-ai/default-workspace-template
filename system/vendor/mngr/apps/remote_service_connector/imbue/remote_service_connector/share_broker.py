@@ -43,6 +43,7 @@ from supertokens_python.recipe.session.exceptions import SuperTokensSessionError
 import imbue.remote_service_connector.accounts_web as accounts_web_module
 import imbue.remote_service_connector.auth_proxy as auth_proxy_module
 import imbue.remote_service_connector.shares as shares_module
+from imbue.modal_app_kit.metrics import emit_metric
 from imbue.remote_service_connector.http_api import handle_endpoint_errors
 
 logger = logging.getLogger(__name__)
@@ -220,7 +221,8 @@ def _send_visitor_verification_email(user_id: str, email: str, continue_next_pat
         # A failed send must not fail the visit: the visitor still lands on
         # /check-inbox (which explains what to do), and the manage page offers
         # a resend. The cooldown slot was already released for the retry.
-        logger.warning("Could not send the visitor verification email: %s", exc)
+        emit_metric("verification_email_send_failed", 1, {"caller": "share_broker"})
+        logger.warning("Could not send the visitor verification email", exc_info=exc)
 
 
 @router.get("/share/authorize", response_model=None)

@@ -60,13 +60,33 @@ connector and the LiteLLM proxy. The push aborts with a diagnostic if
 any Vault entry is missing a key declared by the template (empty
 values are fine -- the deploy skips them when pushing to Modal).
 
-The connector reports errors (unhandled request exceptions, stdlib
-`logger.error` events, and failures in every cron/spawned function) to
-the tier's self-hosted Bugsink instance (an operator-lifecycle VPS,
-provisioned via `apps/observability`) through
+The connector reports errors to the tier's self-hosted Bugsink instance
+(an operator-lifecycle VPS, provisioned via `apps/observability`) through
 `imbue.modal_app_kit.sentry` -- a no-op until the tier's `sentry`
 Vault entry carries `RSC_SENTRY_DSN`, and disabled entirely by
 `MINDS_SENTRY_DISABLED=1` (see `specs/minds-bugsink-error-tracking.md`).
+The reporting policy:
+
+- Every connector-defined exception inherits `errors.ConnectorError`; the
+  EXPECTED ones are exactly those `http_api.raise_as_http` maps to status
+  codes. Anything else escaping a route reaches the app-level 500 handler
+  (`http_api.handle_unexpected_exception`), which reports it at error
+  (top) priority and answers `{"detail": {"code": "internal_error",
+  "message": ..., "event_id": ...}}` -- the exception text itself is
+  included only on dev/ci tiers, never on production/staging.
+- `logger.error` and `logger.warning` both become Bugsink events; warning
+  is the lower-priority channel for exceptions the code caught and
+  continued past for robustness. Expected, routine anomalies (transient
+  upstream errors, client-input junk) are instead counted as `metric`
+  JSON log lines (`imbue.modal_app_kit.metrics`) that flow into the
+  tier's OpenObserve via Modal's OTEL integration, so their rates are
+  chartable without polluting the error tracker.
+- Cron/spawned Modal functions report through `capture_and_reraise`.
+- `GET /health/reporting-probe` (dev/ci tiers only; disabled on
+  production/staging) deliberately exercises every channel in one request
+  -- a metric line, a warning event, and an unmapped exception through the
+  500 handler -- so the deployment-test suite can prove the pipeline end
+  to end (`apps/minds/deployment_tests/test_error_reporting.py`).
 
 **cloudflare.sh** holds the Cloudflare API credentials (R2 buckets + ACME DNS-01 TXT records; the tunnel/Access stack is gone):
 

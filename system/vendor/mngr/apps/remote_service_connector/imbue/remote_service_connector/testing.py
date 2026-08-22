@@ -3193,7 +3193,7 @@ def _make_quota_test_client(
     backend = make_fake_pool_backend()
     backend.add_paid_email(_USER_STUB_EMAIL)
     backend.install_on_app_module(app_mod, monkeypatch)
-    return TestClient(web_app), entitlements_store, litellm
+    return TestClient(web_app, raise_server_exceptions=False), entitlements_store, litellm
 
 
 def _make_test_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
@@ -3556,7 +3556,11 @@ def _make_accounts_web_test_client(
     monkeypatch.setenv("SUPERTOKENS_CONNECTION_URI", "https://fake-supertokens.example.com")
     st_backend = make_fake_supertokens_backend()
     st_backend.install_on_app_module(app_mod, monkeypatch)
-    return TestClient(web_app, base_url="https://testserver"), st_backend, st_backend.device_code_store
+    return (
+        TestClient(web_app, base_url="https://testserver", raise_server_exceptions=False),
+        st_backend,
+        st_backend.device_code_store,
+    )
 
 
 def _make_share_test_client_with_fakes(
@@ -3571,4 +3575,4 @@ def _make_share_test_client_with_fakes(
         monkeypatch.setattr(auth_mod, name, fake_impl)
     backend = make_fake_pool_backend()
     backend.install_on_app_module(app_mod, monkeypatch)
-    return TestClient(web_app), backend
+    return TestClient(web_app, raise_server_exceptions=False), backend

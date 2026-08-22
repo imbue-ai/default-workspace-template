@@ -287,5 +287,7 @@ def abandon_workspace(request: Request, host_db_id: UUID, body: AbandonWorkspace
             conn.close()
         if updated == 0:
             raise HTTPException(status_code=404, detail="No abandonable workspace with that id")
-        logger.warning("Workspace %s abandoned by operator: %s", host_db_id, body.reason)
+        # A deliberate operator action, not a fault -- log for the record
+        # without raising an error-tracker event.
+        logger.info("Workspace %s abandoned by operator: %s", host_db_id, body.reason)
         return TransitionResponse(host_db_id=host_db_id, status="crashed").model_dump(mode="json")
