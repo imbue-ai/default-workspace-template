@@ -171,6 +171,13 @@ function detailsFromResponseObject(obj: Record<string, unknown>): PermissionRequ
  * succeeded and carries a request_id; otherwise null (the request is still
  * pending, errored, or nothing could be read -- the caller then shows a
  * pending card and keeps the raw output available).
+ *
+ * The `request_id` this reads is what the "Review & respond" button opens the
+ * approval dialog with, so a filing whose echo never reaches its own tool result
+ * renders a card the user cannot act on. The PreToolUse gate in
+ * `system/scripts/agent_latchkey_request_standalone.sh` blocks the forms that
+ * would do that; if this parser learns to read a filing the gate refuses, or
+ * stops reading one it allows, the two need updating together.
  */
 export function parsePermissionRequest(
   toolCall: ToolCall,

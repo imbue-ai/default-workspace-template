@@ -41,11 +41,15 @@ When a request comes back with the "request not permitted by the user"
 message, ask the user for permission first:
 
 ```bash
-# 1. Retrieve the list of your existing permissions if necessary.
+# Retrieve the list of your existing permissions if necessary.
 latchkey curl http://latchkey-self.invalid/permissions/self | jq .rules
+```
 
-# 2. Ask for the necessary missing permissions.
-# (Never pipe the output through jq because frontend rendering depends on seeing the full output from your tool.)
+Then ask for the missing permissions. This one goes in a tool call of its own,
+with nothing else in it and its output untouched -- see "File exactly one
+permission request per tool call" in the `latchkey` skill for why:
+
+```bash
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
   -H 'Content-Type: application/json' \
   -d '{"agent_id": "'"$MNGR_AGENT_ID"'", "type": "file-sharing", "payload": {"path": "/home/hynek/project", "access": "READ"}, "rationale": "I'"'"'d like to access the /home/hynek/project directory in order to find the most recent accounting spreadsheet you asked me about."}'

@@ -70,10 +70,11 @@ to one specific workspace at a time.
 When a call comes back rejected (a "not permitted by the user" message / 403),
 file a permission request and wait for the user to approve it. Minds uses a
 dedicated `type: "workspace"` request (distinct from the predefined-service
-requests in the `latchkey` skill):
+requests in the `latchkey` skill). It goes in a tool call of its own, with
+nothing else in it and its output untouched -- see "File exactly one permission
+request per tool call" in the `latchkey` skill for why:
 
 ```bash
-# (Never pipe the output through jq because frontend rendering depends on seeing the full output from your tool.)
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
   -H 'Content-Type: application/json' \
   -d '{
