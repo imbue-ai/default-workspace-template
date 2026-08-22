@@ -197,20 +197,25 @@ gets a plain 404.
 
 ## Projects
 
-The workspace shows one *view* at a time: a project, or Everything. The
+The workspace shows one _view_ at a time: a project, or Everything. The
 machine holds a single pool of objects -- chat agents, terminal
-sessions, browsers, registered apps, and ad-hoc URL pages -- and a
-project is a filter over that pool plus its own dockview arrangement.
-Membership is an explicit list of member refs (`chat:<agent-id>`,
-`terminal:<name>`, `service:<name>`, `service:browser?session=<name>`,
-`url:<hash>`) kept separately from the layout, and it is many-to-many:
-the same object can be in any number of projects at once, nothing owns
-anything, and there is no "move". A member with no panel is
-*backgrounded* -- still running, still listed in the rail -- so closing
-a tab never stops the underlying object or changes membership. "Remove
-from project" hides an object in that one view only; only the
-destructive per-kind verbs (below) actually end something, and they
-take it out of every project at once.
+sessions, browsers, and registered apps -- and a project is a filter
+over that pool plus its own dockview arrangement. Membership is an
+explicit list of member refs (`chat:<agent-id>`, `terminal:<name>`,
+`service:<name>`, `service:browser?session=<name>`) kept separately from
+the layout, and it is many-to-many: the same object can be in any number
+of projects at once, nothing owns anything, and there is no "move". An
+ad-hoc URL page is _not_ a member: it has no identity beyond the panel
+showing it, so it is only ever a tab in one view's arrangement. (A
+machine that migrated from before projects may still carry
+`url:<hash>` members, filed by the migration from panels it could not
+otherwise name; such a leftover is removed from its rail row like any
+other member, which is the only verb it has.)
+A member with no panel is _backgrounded_ -- still running, still listed
+in the rail -- so closing a tab never stops the underlying object or
+changes membership. "Remove from project" hides an object in that one
+view only; only the destructive per-kind verbs (below) actually end
+something, and they take it out of every project at once.
 
 Everything is the unfiltered view, and the home. It is not a project --
 it has no registry entry and no member list, and cannot be renamed or
@@ -260,7 +265,9 @@ recency with it.
 
 Each browser client remembers its active view in localStorage
 (`si-active-project-id`) and reopens it on the next connect, falling
-back to the first project when the stored one is gone. Autosaves target
+back to the first project when the stored one is gone -- and to
+Everything when there is no project to fall back to, since a machine may
+hold none. Autosaves target
 the active view; project, membership, title, and last-used changes
 broadcast over the WebSocket so every connected client catches up live,
 and a deletion moves clients sitting in the deleted project onto the
@@ -270,6 +277,8 @@ fallback. The REST surface is `GET /api/projects`, `POST /api/projects`
 `POST /api/projects/<id>/settings`, `POST /api/projects/<id>/delete`,
 `POST /api/projects/<id>/members` and
 `POST /api/projects/<id>/members/remove`,
+`POST /api/projects/<id>/shortcuts` (pin one built-in rail row into a
+project, or unpin it out),
 `POST /api/projects/members/share` (add one member to several projects),
 `GET /api/projects/members`, `POST /api/projects/panels/<panel_id>/delete`
 (drop one panel from every project that holds it),
@@ -280,43 +289,78 @@ float over the dock. Top to bottom: the active view's squiggle -- one
 of the ten glyphs in `frontend/src/views/squiggles.ts` -- and name (the
 row opens the view switcher, with "New project" and Everything;
 right-clicking it opens project settings: name, color, glyph, and
-delete); shortcut rows for Chat, File Viewer, Browser, and Terminal,
-which go to what the view already shows and create only when it shows
-none (every project is created with one chat of its own, and its Chat
-shortcut goes to that chat; File Viewer renders disabled until an app
-backs it); the project's pinned apps and an "All apps" popover --
-pinning an app in a project *is* its membership, so the popover's
-"Pinned in <project>" and "Unpinned" halves toggle the app's member ref
-and nothing else, and Everything pins nothing because it already lists
-every app; a search pill that filters rows by label and kind; and the
-view's tab list, open members as primary text and backgrounded ones as
-tertiary, each row with a hover kebab offering the verbs for its kind
-(Remove from project, Share app, Delete from this machine for chats,
-terminals, and browsers).
+delete -- deleting a project removes the view and nothing else: every
+object it showed keeps running and stays in Everything, and a machine
+may sit at zero projects. Settings is display metadata and the delete,
+nothing more: taking an object out of a project is a verb on the object,
+so it lives on the object's own row); shortcut rows for Chat, File
+Viewer, Browser, and Terminal, which go to what the view already shows
+and create only when it shows none (every project is created with one
+chat of its own, and its Chat shortcut goes to that chat; File Viewer
+renders disabled until an app backs it). Each of those four carries the
+same pin a pinned app does, and unpinning one moves it into the "All
+apps" popover for that project alone -- recorded as the rows taken
+_out_, so a project that has never touched this shows all four, and
+Everything, which has no project entry to record against, always does.
+Then the project's pinned apps and that "All apps" popover -- pinning an
+app in a project _is_ its membership, so the popover toggles the app's
+member ref and nothing else. It lists only apps the view has _not_
+pinned, since the pinned ones are already in the rail a few pixels away;
+a just-pinned row fades out rather than vanishing, and a pinned row
+carries its own pin icon so unpinning stays one click. Everything pins
+nothing because it already lists every app; a search pill that filters
+rows by label and kind; and the view's tab list, open members as primary
+text and backgrounded ones as tertiary, each row with a one-click remove
+and a hover kebab -- or a right-click -- offering the verbs for its kind.
+An app that already has a shortcut row above is not repeated in that
+list; its own menu hangs off the shortcut instead. The one exception is
+an app the machine no longer offers, which has no shortcut to draw and so
+keeps its place in the list. The rail and the dock tab build their menus
+from the _same_ definition (`frontend/src/views/objectMenu.ts`), so which
+verbs an object offers, and the order they read in, are settled in one
+place for both.
 
 New tabs come from a full-page New Tab launcher that opens as a real
 tab: tiles to start a chat, browser, or terminal from scratch, an "In
 this project" table of the view's members, and an "On this machine"
 table of everything else, each with a kind-filter menu and a
 last-active column ordered by the machine-wide recency store. Opening a
-row from the machine table *adds* it to the project on screen; nothing
+row from the machine table _adds_ it to the project on screen; nothing
 leaves the projects it was already in. The dock never goes empty --
 closing the last tab opens a launcher -- and a launcher folds up on its
 own once another panel takes focus.
 
-Every tab carries a minus that closes the tab and nothing else, plus a
-menu offering Refresh (reloads what the tab is showing -- service-wide
-for a service-backed iframe, the transcript and stream for a chat;
-terminals have none), Share for app tabs, Rename for chats (the one
-kind whose name is chosen rather than derived), Close tab, and one
-confirm-gated destructive verb per kind: Shut down agent, Shut down
-terminal, Shut down browser, or Unregister app. The shut-downs tear
-down the object itself, so it leaves *every* project, including ones no
-client currently has open; a destroyed chat's transcript stays
-accessible. Unregister app is deliberately weaker: it removes the app
-from the registry (`POST /api/apps/<name>/deregister`) and from every
-project, but nothing in the workspace supervises the program answering
-on the port, so the program keeps running.
+Every tab carries an X that closes the tab and nothing else, sitting
+outboard of a menu built from the same per-kind definition the rail
+row's is. Refresh reloads what
+the object is showing -- service-wide for a service-backed iframe, the
+transcript and stream for a chat, a reattach for a terminal, whose tmux
+session outlives the panel and keeps its scrollback across one. Share is
+an app affordance, since the share surface is per registered service.
+Rename is offered for a chat and nothing else. A chat is an mngr agent:
+its ref is a stable agent id and `mngr rename` moves the name everywhere
+the agent is known, so the name the user gives it is the name anything
+else -- an agent included -- can address it by. A terminal and a browser
+have no identity apart from their names (a live tmux session, a Chromium
+profile directory), so a rename there could only be a display name over
+the top. An app does have a stable id in its registered service name, but
+that name is also the only handle anything else accepts -- `layout.py`
+expands a bare word to `service:<word>` -- so a renamed app could be read
+and not addressed. All three keep their registered or derived names. Hide
+tab closes the panel and preserves membership, and is the tab menu's
+alone; "Remove from project" is the rail row menu's alone. Putting a tab
+away is what you want while looking at the tab, and taking an object out
+of a project is what you want while looking at the project's list of what
+it shows. Quit <name> is the single
+confirm-gated destructive verb: one act with one wording whether it is
+an agent, a terminal, a browser, or an app. It tears the object off the
+machine, so it leaves _every_ project, including ones no client
+currently has open; a destroyed chat's transcript stays accessible. It
+is withheld for the primary agent, which runs the workspace's own
+services. Quit is weaker for an app than for the other three: it removes
+the app from the registry (`POST /api/apps/<name>/deregister`) and from
+every project, but does not stop the program answering on the port,
+which keeps serving until whatever started it stops it.
 
 Chat messages sent through the UI (and every view switch) are logged
 to `workspace_layout/events/client_activity/events.jsonl` with the

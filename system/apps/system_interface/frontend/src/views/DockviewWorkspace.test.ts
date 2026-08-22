@@ -8,7 +8,16 @@ vi.hoisted(() => {
     setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
 });
 
-import { equalTabWidth, isTitleTruncated, preferredChatRefForView, refForShortcutFocus } from "./DockviewWorkspace";
+import {
+  displayNameForView,
+  equalTabWidth,
+  isTitleTruncated,
+  memberRefForPanelParams,
+  preferredChatRefForView,
+  refForShortcutFocus,
+} from "./DockviewWorkspace";
+import type { ProjectInfo } from "../models/Projects";
+import type { PanelParams } from "./liveSurfaces";
 
 describe("equalTabWidth", () => {
   it("shares what is left of a strip once the '+' is accounted for", () => {
@@ -175,5 +184,98 @@ describe("preferredChatRefForView", () => {
     // it is not this project's chat.
     const refs = [`chat:${PRIMARY}`];
     expect(preferredChatRefForView(refs, "project-1", ORIGINS, PRIMARY)).toBeNull();
+  });
+});
+
+describe("memberRefForPanelParams", () => {
+  it("files a chat under its stable agent id", () => {
+    const params: PanelParams = { panelType: "chat", agentId: "agent-1", chatAgentId: "agent-1" };
+    expect(memberRefForPanelParams(params)).toBe("chat:agent-1");
+  });
+
+  it("files a chat with no resolvable agent id nowhere", () => {
+    expect(memberRefForPanelParams({ panelType: "chat", agentId: "" })).toBeNull();
+  });
+
+  it("files a persistent terminal under its tmux session name", () => {
+    const params: PanelParams = {
+      panelType: "iframe",
+      agentId: "agent-primary",
+      terminalSessionName: "terminal-2",
+      terminalId: "term-abc",
+    };
+    expect(memberRefForPanelParams(params)).toBe("terminal:terminal-2");
+  });
+
+  it("files a registered app under its service name", () => {
+    const params: PanelParams = { panelType: "iframe", agentId: "agent-primary", serviceName: "web" };
+    expect(memberRefForPanelParams(params)).toBe("service:web");
+  });
+
+  it("files a browser fleet pane under its session, parsed off the url's query", () => {
+    const params: PanelParams = {
+      panelType: "iframe",
+      agentId: "agent-primary",
+      serviceName: "browser",
+      url: "https://browser.example/?session=browser-2",
+    };
+    expect(memberRefForPanelParams(params)).toBe("service:browser?session=browser-2");
+  });
+
+  it("files a launcher nowhere -- it is a question about a pane, not an object", () => {
+    expect(memberRefForPanelParams({ panelType: "launcher", agentId: "agent-primary" })).toBeNull();
+  });
+
+  it("files nothing when there are no params at all", () => {
+    expect(memberRefForPanelParams(undefined)).toBeNull();
+  });
+
+  it("no longer files an ad-hoc URL page under a url:<hash> ref", () => {
+    // Previously fell back to memberRef("url", await shortHash(panelId)): a
+    // ref that named the PANEL rather than anything durable about the page.
+    // A panel with none of a chat's agent id, a terminal's session name, or a
+    // service name is not a persistent object the way the four real member
+    // kinds are, so it now files nothing.
+    const params: PanelParams = {
+      panelType: "iframe",
+      agentId: "agent-primary",
+      url: "https://example.com/",
+      title: "Example",
+    };
+    expect(memberRefForPanelParams(params)).toBeNull();
+  });
+
+  it("files nothing for a subagent view either, which sets none of the three identifying fields", () => {
+    const params: PanelParams = { panelType: "subagent", agentId: "agent-primary", subagentSessionId: "sub-1" };
+    expect(memberRefForPanelParams(params)).toBeNull();
+  });
+
+  it("does not yet file a terminal still allocating its tmux session name", () => {
+    // terminalId is set synchronously at creation; terminalSessionName lands
+    // once the backend hands back a free name (see addPanelForRef's
+    // service:terminal branch, which re-files the panel once it does).
+    const params: PanelParams = { panelType: "iframe", agentId: "agent-primary", terminalId: "term-abc", url: "" };
+    expect(memberRefForPanelParams(params)).toBeNull();
+  });
+});
+
+describe("displayNameForView", () => {
+  const PROJECTS: ProjectInfo[] = [
+    { project_id: "project-1", name: "Alpha", color: "#3B82F6", glyph: 0, has_content: true, members: [] },
+  ];
+
+  it("names a project in the registry", () => {
+    expect(displayNameForView("project-1", PROJECTS)).toBe("Alpha");
+  });
+
+  it("names Everything without looking it up -- it has no registry entry to find", () => {
+    // The fallback a delete reports once the last project goes, so the one
+    // message announcing zero projects must not read `switched to "everything"`.
+    expect(displayNameForView("everything", PROJECTS)).toBe("Everything");
+    expect(displayNameForView("everything", [])).toBe("Everything");
+  });
+
+  it("falls back to the bare id for a project the registry no longer holds", () => {
+    expect(displayNameForView("gone", PROJECTS)).toBe("gone");
   });
 });
