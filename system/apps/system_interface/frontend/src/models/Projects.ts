@@ -373,7 +373,13 @@ export function projectForViewId(projects: readonly ProjectInfo[], viewId: strin
 }
 
 /** The kinds of object a member ref addresses: what the sidebar picks an icon
- *  for, and what its search matches against so "browser" keeps browsers. */
+ *  for, and what its search matches against so "browser" keeps browsers.
+ *
+ *  CLEANUP: drop "url" (and every branch that handles it) once the server's
+ *  legacy purge (``_purge_legacy_url_members_unlocked`` in projects.py) has
+ *  run on all supported workspaces -- ad-hoc pages are no longer filed as
+ *  members, and the purge deletes the entries older registries still hold, so
+ *  no client will ever see a "url" member again after that. */
 export type MemberKind = "chat" | "browser" | "terminal" | "app" | "url";
 
 const CHAT_REF_PREFIX = "chat:";
