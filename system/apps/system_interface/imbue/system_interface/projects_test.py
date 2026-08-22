@@ -8,7 +8,6 @@ from imbue.system_interface.projects import DEFAULT_PROJECT_COLOR
 from imbue.system_interface.projects import EVERYTHING_VIEW_ID
 from imbue.system_interface.projects import DEFAULT_PROJECT_ID
 from imbue.system_interface.projects import DEFAULT_PROJECT_NAME
-from imbue.system_interface.projects import LastProjectDeletionError
 from imbue.system_interface.projects import ProjectColorError
 from imbue.system_interface.projects import ProjectConflictError
 from imbue.system_interface.projects import ProjectGlyphError
@@ -28,7 +27,10 @@ from imbue.system_interface.projects import member_refs_from_content
 from imbue.system_interface.projects import project_content_path
 from imbue.system_interface.projects import projects_showing
 from imbue.system_interface.projects import read_project_content
+from imbue.system_interface.projects import ProjectShortcutError
+from imbue.system_interface.projects import list_projects
 from imbue.system_interface.projects import remove_member
+from imbue.system_interface.projects import set_shortcut_pinned
 from imbue.system_interface.projects import remove_panel_from_all_projects
 from imbue.system_interface.projects import set_last_active_id
 from imbue.system_interface.projects import slugify_project_name
@@ -243,10 +245,50 @@ def test_delete_project_unfiles_its_members(tmp_path: Path) -> None:
     assert projects_showing(tmp_path, "service:notes") == [DEFAULT_PROJECT_ID]
 
 
-def test_deleting_the_last_project_raises(tmp_path: Path) -> None:
-    with pytest.raises(LastProjectDeletionError):
+def test_deleting_the_last_project_leaves_the_machine_with_none(tmp_path: Path) -> None:
+    # Delete is a pure view operation now, so there is no undeletable project:
+    # a machine may end up with zero of them, with Everything as the fallback.
+    fallback_id = delete_project(tmp_path, DEFAULT_PROJECT_ID)
+
+    assert fallback_id == EVERYTHING_VIEW_ID
+    assert list_projects(tmp_path) == []
+    assert get_last_active_id(tmp_path) == EVERYTHING_VIEW_ID
+    # Reading again does not resurrect the starter project: an empty registry
+    # is a legitimate, persistent state rather than something to reseed.
+    assert list_projects(tmp_path) == []
+    with pytest.raises(ProjectNotFoundError):
         delete_project(tmp_path, DEFAULT_PROJECT_ID)
-    assert [info.project_id for info in list_projects(tmp_path)] == [DEFAULT_PROJECT_ID]
+
+
+def test_everything_still_works_with_zero_projects(tmp_path: Path) -> None:
+    # Everything has no registry entry, so it never depended on a project
+    # existing; deleting every project must not take it down too.
+    write_project_content(tmp_path, EVERYTHING_VIEW_ID, {"dockview": {}, "panelParams": {}})
+    delete_project(tmp_path, DEFAULT_PROJECT_ID)
+
+    assert read_project_content(tmp_path, EVERYTHING_VIEW_ID) == {"dockview": {}, "panelParams": {}}
+    write_project_content(tmp_path, EVERYTHING_VIEW_ID, {"dockview": {"grid": {}}, "panelParams": {}})
+    assert read_project_content(tmp_path, EVERYTHING_VIEW_ID) == {"dockview": {"grid": {}}, "panelParams": {}}
+
+
+def test_deleting_a_project_never_touches_other_projects_or_everything(tmp_path: Path) -> None:
+    # A pure view operation: the deleted project's own member list and content
+    # go, and nothing about any other view -- not a member list, not a saved
+    # arrangement -- moves.
+    create_project(tmp_path, "Scratch", "#3B82F6", 3)
+    add_member(tmp_path, "scratch", "terminal:terminal-4")
+    add_member(tmp_path, DEFAULT_PROJECT_ID, "terminal:terminal-4")
+    write_project_content(tmp_path, EVERYTHING_VIEW_ID, _content_with_panels("terminal-session-terminal-4"))
+
+    delete_project(tmp_path, "scratch")
+
+    # The surviving project keeps the member the deleted one also showed.
+    assert list_members(tmp_path, DEFAULT_PROJECT_ID) == ["terminal:terminal-4"]
+    assert projects_showing(tmp_path, "terminal:terminal-4") == [DEFAULT_PROJECT_ID]
+    # Everything's saved arrangement is untouched: nothing was destroyed.
+    assert content_contains_panel(
+        read_project_content(tmp_path, EVERYTHING_VIEW_ID) or {}, "terminal-session-terminal-4"
+    )
 
 
 def test_set_last_active_ignores_unknown_id(tmp_path: Path) -> None:
@@ -310,12 +352,14 @@ def test_corrupt_meta_recovers_to_defaults(tmp_path: Path) -> None:
     assert get_last_active_id(tmp_path) == DEFAULT_PROJECT_ID
 
 
-def test_registry_with_no_projects_recovers_to_defaults(tmp_path: Path) -> None:
-    # Nothing is undeletable any more, so an externally emptied registry has to
-    # reseed rather than leave the workspace with no project to fall back to.
+def test_registry_with_no_projects_is_read_as_is(tmp_path: Path) -> None:
+    # Deleting is a pure view operation with no undeletable project any more, so
+    # an on-disk registry holding zero of them is a legitimate state -- reached
+    # by deleting down to none -- and must not be reseeded back to the starter
+    # project on the next read.
     (tmp_path / "projects_meta.json").write_text('{"project_by_id": {}, "last_active_id": "gone"}')
-    assert [info.project_id for info in list_projects(tmp_path)] == [DEFAULT_PROJECT_ID]
-    assert get_last_active_id(tmp_path) == DEFAULT_PROJECT_ID
+    assert list_projects(tmp_path) == []
+    assert get_last_active_id(tmp_path) == EVERYTHING_VIEW_ID
 
 
 def test_corrupt_content_reads_as_empty(tmp_path: Path) -> None:
@@ -357,6 +401,62 @@ def test_refs_in_no_project_are_filed_nowhere(tmp_path: Path) -> None:
     # its home, and Everything enumerates the machine rather than this registry.
     assert projects_showing(tmp_path, "chat:loose-agent") == []
     assert all_members(tmp_path) == {}
+
+
+def _unpinned(layout_dir: Path, project_id: str) -> tuple[str, ...]:
+    return next(p.unpinned_shortcuts for p in list_projects(layout_dir) if p.project_id == project_id)
+
+
+def test_a_project_shows_every_shortcut_until_one_is_unpinned(tmp_path: Path) -> None:
+    """Absence has to mean the default, or every project written before this would lose its rail."""
+    create_project(tmp_path, "Research", "#12B5A5", 4)
+    assert _unpinned(tmp_path, "research") == ()
+
+
+def test_unpinning_a_shortcut_records_it_against_that_project_only(tmp_path: Path) -> None:
+    # Which starting points a project keeps to hand is a property of THAT
+    # project, which is the whole reason this is stored per project.
+    create_project(tmp_path, "Research", "#12B5A5", 4)
+    create_project(tmp_path, "Coding", "#16A34A", 1)
+
+    set_shortcut_pinned(tmp_path, "research", "terminal", False)
+
+    assert _unpinned(tmp_path, "research") == ("terminal",)
+    assert _unpinned(tmp_path, "coding") == ()
+
+
+def test_pinning_a_shortcut_back_returns_it_to_the_rail(tmp_path: Path) -> None:
+    create_project(tmp_path, "Research", "#12B5A5", 4)
+    set_shortcut_pinned(tmp_path, "research", "files", False)
+    set_shortcut_pinned(tmp_path, "research", "files", True)
+    assert _unpinned(tmp_path, "research") == ()
+
+
+def test_setting_a_shortcut_to_what_it_already_is_changes_nothing(tmp_path: Path) -> None:
+    create_project(tmp_path, "Research", "#12B5A5", 4)
+    set_shortcut_pinned(tmp_path, "research", "chat", False)
+    assert set_shortcut_pinned(tmp_path, "research", "chat", False) == ["chat"]
+    assert _unpinned(tmp_path, "research") == ("chat",)
+
+
+def test_an_unknown_shortcut_is_refused_rather_than_stored(tmp_path: Path) -> None:
+    # Storing one would hide nothing while riding every list response forever.
+    create_project(tmp_path, "Research", "#12B5A5", 4)
+    with pytest.raises(ProjectShortcutError):
+        set_shortcut_pinned(tmp_path, "research", "not-a-shortcut", False)
+    assert _unpinned(tmp_path, "research") == ()
+
+
+def test_a_hand_edited_shortcut_name_is_ignored_on_read(tmp_path: Path) -> None:
+    """The registry is hand-editable, so a name that is not a shortcut must not survive a read."""
+    create_project(tmp_path, "Research", "#12B5A5", 4)
+    set_shortcut_pinned(tmp_path, "research", "browser", False)
+    meta_path = tmp_path / "projects_meta.json"
+    meta = json.loads(meta_path.read_text())
+    meta["project_by_id"]["research"]["unpinned_shortcuts"] = ["browser", "made-up", 7]
+    meta_path.write_text(json.dumps(meta))
+
+    assert _unpinned(tmp_path, "research") == ("browser",)
 
 
 def test_remove_member_leaves_other_projects_alone(tmp_path: Path) -> None:
@@ -620,9 +720,7 @@ def test_remove_panel_matches_both_the_given_id_and_the_ref(tmp_path: Path) -> N
     # panel id catches the first and the ref-resolution catches the second,
     # without double-stripping a panel that matches both.
     ref = "terminal:terminal-1"
-    write_project_content(
-        tmp_path, DEFAULT_PROJECT_ID, _content_with_panels("terminal-session-terminal-1", "chat-a")
-    )
+    write_project_content(tmp_path, DEFAULT_PROJECT_ID, _content_with_panels("terminal-session-terminal-1", "chat-a"))
     everything_content = _content_with_panels("iframe-terminal-1755000000003", "chat-a")
     everything_content["panelParams"]["iframe-terminal-1755000000003"] = {"terminalSessionName": "terminal-1"}
     write_project_content(tmp_path, EVERYTHING_VIEW_ID, everything_content)

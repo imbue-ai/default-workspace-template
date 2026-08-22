@@ -8,9 +8,12 @@ import {
   openAppTab,
   openMemberRow,
   openTabOfType,
+  refreshMemberRow,
   refreshProjects,
   removeMemberRow,
+  renameMemberRowWithAlert,
   setAppPinnedInView,
+  setShortcutPinnedInView,
   shareMemberRow,
   startProjectChat,
   switchToView,
@@ -86,8 +89,17 @@ export function App(): m.Component {
               onSetAppPinned: (app: AppEntry, isPinned: boolean) => {
                 setAppPinnedInView(app, isPinned);
               },
+              onSetShortcutPinned: (shortcut: QuickAddTabType, isPinned: boolean) => {
+                setShortcutPinnedInView(shortcut, isPinned);
+              },
               onOpenRow: (row: SidebarTabRow) => {
                 openMemberRow(row);
+              },
+              onRefreshRow: (row: SidebarTabRow) => {
+                refreshMemberRow(row);
+              },
+              onRenameRow: (row: SidebarTabRow, title: string) => {
+                renameMemberRowWithAlert(row, title);
               },
               onRemoveFromView: (row: SidebarTabRow) => {
                 removeMemberRow(row);

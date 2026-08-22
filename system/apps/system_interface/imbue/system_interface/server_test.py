@@ -3769,6 +3769,7 @@ def test_create_project_slugifies_and_registers(
         "glyph": 6,
         "has_content": False,
         "members": [],
+        "unpinned_shortcuts": [],
     }
     list_response = client.get("/api/projects")
     assert [project["project_id"] for project in list_response.get_json()["projects"]] == [
@@ -3905,248 +3906,126 @@ def test_update_project_settings_keeps_id_content_and_members(
         "glyph": 7,
         "has_content": True,
         "members": ["terminal:terminal-1"],
+        "unpinned_shortcuts": [],
     }
     assert client.get("/api/projects/alpha").get_json()["layout"] == layout_data
     unknown = client.post("/api/projects/gone/settings", json={"name": "Gone", "color": "#F0603A", "glyph": 0})
     assert unknown.status_code == 404
 
 
-def test_delete_project_reports_the_fallback_and_guards_the_last_one(
+def test_delete_project_reports_the_fallback(
     client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Deleting reports the fallback project; the last remaining one is protected."""
+    """Deleting reports the fallback project clients should switch to."""
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
     assert client.post("/api/projects", json={"name": "Scratch", "color": "#3B82F6", "glyph": 3}).status_code == 200
 
     delete_scratch = client.post("/api/projects/scratch/delete")
     assert delete_scratch.status_code == 200
-    assert delete_scratch.get_json() == {
-        "fallback_id": "project-1",
-        "stopped": [],
-        "failed": [],
-        "left_running": [],
-    }
-
-    delete_last = client.post("/api/projects/project-1/delete")
-    assert delete_last.status_code == 409
+    assert delete_scratch.get_json() == {"fallback_id": "project-1"}
 
     delete_unknown = client.post("/api/projects/scratch/delete")
     assert delete_unknown.status_code == 404
 
 
-def test_delete_project_stops_its_terminals_and_browsers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Delete tears down the members that have a stop verb and reports the rest.
+def test_deleting_the_last_project_leaves_the_machine_with_zero(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """There is no undeletable project any more: the last one goes too, landing on Everything."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
 
-    A terminal's tmux session is killed and a fleet browser is retired through
-    the browser daemon -- the same teardown their own destroy endpoints use. A
-    chat is an agent and an app is supervised elsewhere, so both are reported as
-    still running rather than being killed off the back of a project delete.
+    response = client.post("/api/projects/project-1/delete")
+
+    assert response.status_code == 200
+    assert response.get_json() == {"fallback_id": "everything"}
+    listed = client.get("/api/projects").get_json()
+    assert listed == {"projects": [], "last_active_id": "everything"}
+    # Everything itself is unaffected: it has no registry entry to have lost,
+    # and reading and writing its content keeps working with zero projects.
+    assert client.get("/api/projects/everything").get_json() == {"layout": None}
+    layout_data = {"dockview": {}, "panelParams": {}}
+    assert client.post("/api/projects/everything", json={"layout": layout_data, "client_id": "c1"}).status_code == 200
+    # A read after the delete does not resurrect the starter project.
+    assert client.get("/api/projects").get_json()["projects"] == []
+    # The rail's "New project" path still works from zero.
+    assert (
+        client.post("/api/projects", json={"name": "Fresh Start", "color": "#3B82F6", "glyph": 1}).status_code == 200
+    )
+
+
+def test_delete_project_never_touches_its_members(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Deleting a project is a pure view operation: nothing it showed is stopped.
+
+    A terminal's tmux session is never killed and a fleet browser is never
+    contacted through its daemon -- unlike their own per-tab destroy verbs, a
+    project delete has no stop control over any kind of member. Every member
+    stays filed wherever else it already was and in Everything.
     """
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
     monkeypatch.setenv("MNGR_PREFIX", "mngr-")
-    killed_session = FinishedProcess(
-        returncode=0,
-        stdout="",
-        stderr="",
-        command=("tmux", "kill-session", "-t", "=terminal-4"),
-        is_output_already_logged=False,
-    )
-    with serve_app(_build_stub_browser_backend()) as backend:
-        test_client = _client_with_browser_service(backend.http_url)
-        assert (
-            test_client.post("/api/projects", json={"name": "Scratch", "color": "#3B82F6", "glyph": 3}).status_code
-            == 200
-        )
-        for ref in ("terminal:terminal-4", "service:browser?session=research", "chat:agent-9", "service:web"):
-            assert test_client.post("/api/projects/scratch/members", json={"ref": ref}).status_code == 200
-        with patch(
-            "imbue.system_interface.server.run_local_command_modern_version", return_value=killed_session
-        ) as mock_run:
-            response = test_client.post("/api/projects/scratch/delete")
-
-    assert response.status_code == 200
-    body = response.get_json()
-    assert body["stopped"] == ["terminal:terminal-4", "service:browser?session=research"]
-    assert body["failed"] == []
-    assert body["left_running"] == ["chat:agent-9", "service:web"]
-    assert body["fallback_id"] == "project-1"
-    assert mock_run.call_args.kwargs["command"] == ["tmux", "kill-session", "-t", "=terminal-4"]
-
-
-def test_delete_project_reports_a_terminal_it_could_not_stop(
-    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A tmux session that survives the kill is reported as failed, not as stopped."""
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
-    monkeypatch.setenv("MNGR_PREFIX", "mngr-")
-    failed_kill = FinishedProcess(
-        returncode=1,
-        stdout="",
-        stderr="can't kill session",
-        command=("tmux", "kill-session", "-t", "=terminal-4"),
-        is_output_already_logged=False,
-    )
-    still_listed = FinishedProcess(
-        returncode=0,
-        stdout="terminal-4\t$1\t/work\n",
-        stderr="",
-        command=("tmux", "list-sessions"),
-        is_output_already_logged=False,
-    )
-    assert client.post("/api/projects", json={"name": "Scratch", "color": "#3B82F6", "glyph": 3}).status_code == 200
-    assert client.post("/api/projects/scratch/members", json={"ref": "terminal:terminal-4"}).status_code == 200
-
-    with patch(
-        "imbue.system_interface.server.run_local_command_modern_version",
-        side_effect=[failed_kill, still_listed],
-    ):
-        response = client.post("/api/projects/scratch/delete")
-
-    assert response.status_code == 200
-    assert response.get_json()["failed"] == ["terminal:terminal-4"]
-    assert response.get_json()["stopped"] == []
-
-
-def test_delete_project_reports_a_browser_it_could_not_close(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """With no browser daemon registered, the browser is reported as still running."""
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
     test_client = _client_with_browser_service(None)
     assert (
         test_client.post("/api/projects", json={"name": "Scratch", "color": "#3B82F6", "glyph": 3}).status_code == 200
     )
-    assert (
-        test_client.post("/api/projects/scratch/members", json={"ref": "service:browser?session=research"}).status_code
-        == 200
-    )
-
-    response = test_client.post("/api/projects/scratch/delete")
-
-    assert response.status_code == 200
-    assert response.get_json()["failed"] == ["service:browser?session=research"]
-    assert response.get_json()["stopped"] == []
-
-
-def test_delete_project_never_stops_an_agent_tmux_session(
-    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A ``terminal:`` ref naming an mngr agent session is refused, not killed."""
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
-    monkeypatch.setenv("MNGR_PREFIX", "mngr-")
-    assert client.post("/api/projects", json={"name": "Scratch", "color": "#3B82F6", "glyph": 3}).status_code == 200
-    assert client.post("/api/projects/scratch/members", json={"ref": "terminal:mngr-alice"}).status_code == 200
+    members = ("terminal:terminal-4", "service:browser?session=research", "chat:agent-9", "service:web")
+    for ref in members:
+        assert test_client.post("/api/projects/scratch/members", json={"ref": ref}).status_code == 200
+        # Also filed in the surviving project, so membership elsewhere is
+        # verifiably untouched by the delete below.
+        assert test_client.post("/api/projects/project-1/members", json={"ref": ref}).status_code == 200
 
     with patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run:
-        response = client.post("/api/projects/scratch/delete")
+        response = test_client.post("/api/projects/scratch/delete")
 
     assert response.status_code == 200
-    assert response.get_json()["failed"] == ["terminal:mngr-alice"]
+    assert response.get_json() == {"fallback_id": "project-1"}
     mock_run.assert_not_called()
+    remaining = test_client.get("/api/projects").get_json()["projects"]
+    assert len(remaining) == 1
+    assert set(remaining[0]["members"]) == set(members)
 
 
-def test_delete_project_drops_the_names_of_what_it_stopped(
-    app: Flask, client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_delete_project_keeps_the_names_and_recency_of_its_members(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A stopped member loses its name, so a reused ref inherits no dead one.
-
-    Deleting a project kills its terminals, and the allocator hands the lowest
-    free ``terminal-<N>`` straight back out -- so a name left behind would land
-    on the next terminal to answer to that ref. Only what actually stopped is
-    cleared: a member the delete left running keeps the name it is known by, and
-    every client is told about the ones that went.
-    """
+    """Nothing is stopped, so no member's name or recency is cleared by a delete."""
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
-    monkeypatch.setenv("MNGR_PREFIX", "mngr-")
-    killed_session = FinishedProcess(
-        returncode=0,
-        stdout="",
-        stderr="",
-        command=("tmux", "kill-session", "-t", "=terminal-4"),
-        is_output_already_logged=False,
-    )
     assert client.post("/api/projects", json={"name": "Scratch", "color": "#3B82F6", "glyph": 3}).status_code == 200
     for ref in ("terminal:terminal-4", "service:docs"):
         assert client.post("/api/projects/scratch/members", json={"ref": ref}).status_code == 200
     assert client.post("/api/member-titles", json={"ref": "terminal:terminal-4", "title": "Build"}).status_code == 200
     assert client.post("/api/member-titles", json={"ref": "service:docs", "title": "Planning"}).status_code == 200
-    # Registered last, so the queue holds the delete's broadcasts and nothing
-    # the setup above already announced.
-    client_queue = _register_fake_client(app, "client-1", "desktop")
+    assert client.post("/api/member-last-used", json={"ref": "terminal:terminal-4"}).status_code == 200
 
-    with patch("imbue.system_interface.server.run_local_command_modern_version", return_value=killed_session):
-        response = client.post("/api/projects/scratch/delete")
+    response = client.post("/api/projects/scratch/delete")
 
     assert response.status_code == 200
-    assert response.get_json()["stopped"] == ["terminal:terminal-4"]
-    # The app was only left project-less, not stopped, so it keeps its name.
-    assert client.get("/api/member-titles").get_json() == {"titles": {"service:docs": "Planning"}}
-    assert _next_broadcast_message(client_queue) == {
-        "type": "member_title_changed",
-        "ref": "terminal:terminal-4",
-        "title": None,
+    assert client.get("/api/member-titles").get_json() == {
+        "titles": {"terminal:terminal-4": "Build", "service:docs": "Planning"}
     }
+    assert "terminal:terminal-4" in client.get("/api/member-last-used").get_json()["last_used"]
 
 
-def test_delete_project_sweeps_stopped_members_out_of_every_view(
+def test_delete_project_broadcasts_only_the_id_and_fallback(
     app: Flask, client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A member the delete stopped also leaves every other view, Everything included.
-
-    The deleted project's own file goes with the delete, but the stopped
-    terminal's panel also sits in Everything's saved arrangement -- and its ref
-    may still be filed in another project. Left anywhere, the panel would
-    restore as a dead tab that silently respawns a fresh tmux session under the
-    reused name. The sweep is announced so clients still showing the tab drop
-    it live instead of autosaving it back.
-    """
+    """The ``project_deleted`` broadcast carries no per-member stop report any more."""
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
-    monkeypatch.setenv("MNGR_PREFIX", "mngr-")
-    killed_session = FinishedProcess(
-        returncode=0,
-        stdout="",
-        stderr="",
-        command=("tmux", "kill-session", "-t", "=terminal-4"),
-        is_output_already_logged=False,
-    )
     assert client.post("/api/projects", json={"name": "Scratch", "color": "#3B82F6", "glyph": 3}).status_code == 200
-    assert client.post("/api/projects/scratch/members", json={"ref": "terminal:terminal-4"}).status_code == 200
-    # The same terminal is filed in the surviving project too, and docked in
-    # Everything's saved arrangement.
-    assert client.post("/api/projects/project-1/members", json={"ref": "terminal:terminal-4"}).status_code == 200
-    layout_data = {
-        "dockview": {
-            "panels": {
-                "terminal-session-terminal-4": {"id": "terminal-session-terminal-4"},
-                "chat-1": {"id": "chat-1"},
-            }
-        },
-        "panelParams": {"terminal-session-terminal-4": {"terminalSessionName": "terminal-4"}},
-    }
-    assert client.post("/api/projects/everything", json={"layout": layout_data, "client_id": "c1"}).status_code == 200
     client_queue = _register_fake_client(app, "client-1", "desktop")
 
-    with patch("imbue.system_interface.server.run_local_command_modern_version", return_value=killed_session):
-        response = client.post("/api/projects/scratch/delete")
+    assert client.post("/api/projects/scratch/delete").status_code == 200
 
-    assert response.status_code == 200
-    assert response.get_json()["stopped"] == ["terminal:terminal-4"]
-    remaining_everything = client.get("/api/projects/everything").get_json()["layout"]
-    assert set(remaining_everything["dockview"]["panels"]) == {"chat-1"}
-    assert client.get("/api/projects").get_json()["projects"][0]["members"] == []
     assert _next_broadcast_message(client_queue) == {
-        "type": "project_panel_removed",
-        "panel_id": "terminal-session-terminal-4",
-        "ref": "terminal:terminal-4",
-        "project_ids": ["project-1", "everything"],
+        "type": "project_deleted",
+        "project_id": "scratch",
+        "fallback_id": "project-1",
     }
-    assert _next_broadcast_message(client_queue) == {"type": "project_members_changed", "project_ids": ["project-1"]}
-    assert _next_broadcast_message(client_queue)["type"] == "project_deleted"
 
 
 def test_add_member_files_a_ref_and_lists_it(
@@ -4181,6 +4060,23 @@ def test_add_member_rejects_bad_bodies_and_unknown_projects(
     assert unknown_project.status_code == 404
 
 
+def test_add_member_without_a_primary_agent_degrades_gracefully(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No ``MNGR_AGENT_ID`` means nothing persists, so this must not 500.
+
+    Mirrors ``GET /api/projects/members``, the read side of the same resource,
+    which already answers an empty map rather than raising in this dev/test
+    setup with no primary agent configured.
+    """
+    monkeypatch.delenv("MNGR_AGENT_WORK_DIR", raising=False)
+    monkeypatch.delenv("MNGR_AGENT_ID", raising=False)
+    test_client = create_application(build_test_state()).test_client()
+
+    response = test_client.post("/api/projects/project-1/members", json={"ref": "terminal:terminal-1"})
+
+    assert response.status_code == 200
+    assert response.get_json() == {"project_id": "project-1", "members": []}
+
+
 def test_add_member_files_a_ref_another_project_already_shows(
     client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -4197,6 +4093,46 @@ def test_add_member_files_a_ref_another_project_already_shows(
         project["project_id"]: project["members"] for project in client.get("/api/projects").get_json()["projects"]
     }
     assert members_by_id == {"project-1": ["service:web"], "alpha": ["service:web"]}
+
+
+def test_set_project_shortcut_moves_it_between_the_rail_and_all_apps(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unpinning records the shortcut; pinning it back clears it. Idempotent either way."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+
+    unpin = client.post("/api/projects/project-1/shortcuts", json={"shortcut": "terminal", "is_pinned": False})
+    assert unpin.status_code == 200
+    assert unpin.get_json() == {"project_id": "project-1", "unpinned_shortcuts": ["terminal"]}
+
+    listed = next(p for p in client.get("/api/projects").get_json()["projects"] if p["project_id"] == "project-1")
+    assert listed["unpinned_shortcuts"] == ["terminal"]
+
+    again = client.post("/api/projects/project-1/shortcuts", json={"shortcut": "terminal", "is_pinned": False})
+    assert again.get_json()["unpinned_shortcuts"] == ["terminal"]
+
+    repin = client.post("/api/projects/project-1/shortcuts", json={"shortcut": "terminal", "is_pinned": True})
+    assert repin.get_json() == {"project_id": "project-1", "unpinned_shortcuts": []}
+
+
+def test_set_project_shortcut_refuses_a_bad_body_or_an_unknown_target(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    url = "/api/projects/project-1/shortcuts"
+
+    assert client.post(url, json={"shortcut": "", "is_pinned": False}).status_code == 400
+    assert client.post(url, json={"shortcut": "terminal"}).status_code == 400
+    assert client.post(url, json={"shortcut": "terminal", "is_pinned": "no"}).status_code == 400
+    # Not a shortcut: refused rather than stored, since it would hide nothing
+    # while riding every list response.
+    assert client.post(url, json={"shortcut": "made-up", "is_pinned": False}).status_code == 400
+    assert (
+        client.post("/api/projects/gone/shortcuts", json={"shortcut": "terminal", "is_pinned": False}).status_code
+        == 404
+    )
 
 
 def test_remove_member_unfiles_it_without_touching_the_object(
@@ -4753,38 +4689,6 @@ def test_delete_project_panel_drops_the_objects_recency(
     assert set(client.get("/api/member-last-used").get_json()["last_used"]) == {"chat:agent-7"}
 
 
-def test_delete_project_drops_the_recency_of_what_it_stopped(
-    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A stopped member loses its recency along with its name.
-
-    Only what actually stopped is cleared: a member the delete left running was
-    genuinely in front of the user and keeps its place in the launcher.
-    """
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
-    monkeypatch.setenv("MNGR_PREFIX", "mngr-")
-    killed_session = FinishedProcess(
-        returncode=0,
-        stdout="",
-        stderr="",
-        command=("tmux", "kill-session", "-t", "=terminal-4"),
-        is_output_already_logged=False,
-    )
-    assert client.post("/api/projects", json={"name": "Scratch", "color": "#3B82F6", "glyph": 3}).status_code == 200
-    for ref in ("terminal:terminal-4", "chat:agent-9"):
-        assert client.post("/api/projects/scratch/members", json={"ref": ref}).status_code == 200
-        assert client.post("/api/member-last-used", json={"ref": ref}).status_code == 200
-
-    with patch("imbue.system_interface.server.run_local_command_modern_version", return_value=killed_session):
-        response = client.post("/api/projects/scratch/delete")
-
-    assert response.status_code == 200
-    assert response.get_json()["stopped"] == ["terminal:terminal-4"]
-    # The chat was only left project-less, not stopped, so it keeps its recency.
-    assert set(client.get("/api/member-last-used").get_json()["last_used"]) == {"chat:agent-9"}
-
-
 def test_member_last_used_changes_broadcast_to_every_client(app: Flask) -> None:
     """A touch and a destroy each announce the object's recency, machine-wide.
 
@@ -4948,6 +4852,7 @@ def test_project_mutations_broadcast_to_every_client(app: Flask) -> None:
         "glyph": 2,
         "has_content": False,
         "members": [],
+        "unpinned_shortcuts": [],
     }
 
     assert client.post("/api/projects/alpha", json={"layout": {}, "client_id": "client-1"}).status_code == 200
@@ -4970,9 +4875,6 @@ def test_project_mutations_broadcast_to_every_client(app: Flask) -> None:
         "type": "project_deleted",
         "project_id": "alpha",
         "fallback_id": "project-1",
-        "stopped": [],
-        "failed": [],
-        "left_running": [],
     }
 
 
