@@ -89,11 +89,15 @@ export function isRenameableKind(kind: ObjectMenuKind): boolean {
  *
  * ``share`` is read only when ``kind`` is "app" (every other kind never
  * offers Share, so a caller building a menu for one of them may simply pass
- * null). ``hideTab`` and ``quit`` are ``null`` to OMIT the verb for this
- * particular object, as opposed to wiring it to a no-op: a backgrounded rail
- * row has no open tab to hide, and a handful of objects -- the workspace's
- * own primary chat, a terminal or browser still allocating its session --
- * have no destroy available yet. ``share`` and ``quit`` each carry their own
+ * null). ``hideTab``, ``removeFromProject`` and ``quit`` are ``null`` to OMIT
+ * the verb, as opposed to wiring it to a no-op. For the first two the null is
+ * per-surface -- the dock tab always supplies ``hideTab`` and never
+ * ``removeFromProject``, and the rail the other way round (see
+ * ``objectMenuEntries`` below), with the rail also passing null
+ * ``removeFromProject`` under Everything. ``quit``'s null is per-object: a
+ * handful of them -- the workspace's own primary chat, a terminal or browser
+ * still allocating its session -- have no destroy available yet.
+ * ``share`` and ``quit`` each carry their own
  * label because "Share {name}" / "Quit {name}" always names the object the
  * way the surface calling this currently displays it, and only the caller
  * knows what that is right now.
