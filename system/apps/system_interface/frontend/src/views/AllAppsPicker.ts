@@ -187,11 +187,6 @@ export function AllAppsPicker(): m.Component<AllAppsPickerAttrs> {
   // size on the next redraw, rather than staying lost.
   const fadingNames = new Set<string>();
 
-  /** One app row. `isPinnable` is false under Everything, which pins nothing:
-   *  the row still opens the app, it just carries no toggle. `isFadingOut`
-   *  collapses an already-pinned row out of the list instead of dropping it
-   *  outright (see `fadingNames`); it is only ever true when `isPinnable` is,
-   *  since Everything's rows never leave this popover's list to begin with. */
   /** One unpinned built-in shortcut. Same shape as an app row on purpose: from
    *  here they are both "a starting point this project does not keep in its
    *  rail", and the only difference is which callback the pin goes to. */
@@ -231,6 +226,11 @@ export function AllAppsPicker(): m.Component<AllAppsPickerAttrs> {
     );
   }
 
+  /** One app row. `isPinnable` is false under Everything, which pins nothing:
+   *  the row still opens the app, it just carries no toggle. `isFadingOut`
+   *  collapses an already-pinned row out of the list instead of dropping it
+   *  outright (see `fadingNames`); it is only ever true when `isPinnable` is,
+   *  since Everything's rows never leave this popover's list to begin with. */
   function appRow(app: AppEntry, isPinnable: boolean, isFadingOut: boolean, attrs: AllAppsPickerAttrs): m.Vnode {
     // What the row reads, and what its control is labeled after: an app named
     // by the user is named that here too, or this popover would be the one
