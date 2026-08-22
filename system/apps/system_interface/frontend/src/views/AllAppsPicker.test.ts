@@ -502,10 +502,11 @@ describe("AllAppsPicker names an app the way the rest of the workspace does", ()
   }
 
   it("shows the name the user gave an app, not the one it registered under", () => {
-    // Rename is a verb on every kind now, apps included, and a name is filed by
-    // ref machine-wide -- so this popover has to read the same store the rail,
-    // the tab and the launcher read, or it is the one surface still calling the
-    // app "docs".
+    // An app carries no rename gesture in the UI, but it can still be given a
+    // title by an agent through `layout.py rename`, and a title is filed by ref
+    // machine-wide -- so this popover has to read the same store the rail, the
+    // tab and the launcher read, or it is the one surface still calling the app
+    // "docs".
     appState.apps = APPS;
     withRenamedDocs("Handbook", () => {
       const tree = render();
