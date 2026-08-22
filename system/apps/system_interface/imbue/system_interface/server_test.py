@@ -4095,6 +4095,24 @@ def test_add_member_files_a_ref_another_project_already_shows(
     assert members_by_id == {"project-1": ["service:web"], "alpha": ["service:web"]}
 
 
+def test_set_project_shortcut_without_a_primary_agent_degrades_gracefully(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No ``MNGR_AGENT_ID`` means nothing persists, so this must not 500.
+
+    Mirrors the add-member endpoint's soft no-op for the same dev/test setup;
+    a malformed body still answers 400, so validation is not skipped with it.
+    """
+    monkeypatch.delenv("MNGR_AGENT_WORK_DIR", raising=False)
+    monkeypatch.delenv("MNGR_AGENT_ID", raising=False)
+    test_client = create_application(build_test_state()).test_client()
+
+    response = test_client.post("/api/projects/project-1/shortcuts", json={"shortcut": "chat", "is_pinned": False})
+    assert response.status_code == 200
+    assert response.get_json() == {"project_id": "project-1", "unpinned_shortcuts": []}
+
+    bad_body = test_client.post("/api/projects/project-1/shortcuts", json={"shortcut": "chat"})
+    assert bad_body.status_code == 400
+
+
 def test_set_project_shortcut_moves_it_between_the_rail_and_all_apps(
     client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

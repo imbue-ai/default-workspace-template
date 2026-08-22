@@ -1605,11 +1605,11 @@ def _set_project_shortcut_endpoint(project_id: str) -> Response:
     create, and the terminal and browser services are fleets reached by making
     a session rather than by opening the service, so there is no membership
     here to add or drop and this rides its own field instead.
+
+    No primary agent configured (dev/test) means nothing persists, so after
+    validating the body this answers the same soft no-op the add-member
+    endpoint does, rather than 500ing on every pin click.
     """
-    layout_dir = _primary_agent_layout_dir()
-    if layout_dir is None:
-        error = ErrorResponse(detail="No primary agent configured for this workspace")
-        return _json_response(error.model_dump(), status_code=500)
     body = _parse_json_object_body()
     if isinstance(body, Response):
         return body
@@ -1619,6 +1619,9 @@ def _set_project_shortcut_endpoint(project_id: str) -> Response:
         return _json_response(ErrorResponse(detail="'shortcut' must be a non-empty string").model_dump(), 400)
     if not isinstance(is_pinned, bool):
         return _json_response(ErrorResponse(detail="'is_pinned' must be a boolean").model_dump(), 400)
+    layout_dir = _primary_agent_layout_dir()
+    if layout_dir is None:
+        return _json_response({"project_id": project_id, "unpinned_shortcuts": []})
     try:
         unpinned = projects.set_shortcut_pinned(layout_dir, project_id, shortcut.strip(), is_pinned)
     except projects.ProjectNotFoundError:
