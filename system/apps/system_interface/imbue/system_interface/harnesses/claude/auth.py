@@ -296,8 +296,12 @@ class AuthStatus(FrozenModel):
     masked_key_suffix: str | None = Field(
         default=None, description="Last few characters of the managed key/token, for display"
     )
-    workspace_host_id: str | None = Field(
-        default=None, description="This mind's mngr host id, for the desktop app's key-mint page link"
+    workspace_id: str | None = Field(
+        default=None,
+        description=(
+            "This workspace's id (its services agent id; the machine's host id as a fallback), "
+            "for the desktop app's key-mint page link"
+        ),
     )
     restart_phase: str | None = Field(
         default=None, description="Phase of the post-auth agent restart: 'restarting', 'finishing', 'done', 'failed'"
@@ -447,17 +451,42 @@ def masked_credential_suffix(managed_env: Mapping[str, str]) -> str | None:
     return credential[-_DISPLAY_SUFFIX_LENGTH:]
 
 
-def read_workspace_host_id() -> str | None:
-    """Read this mind's mngr host id from `$MNGR_HOST_DIR/data.json`.
+def read_workspace_id() -> str | None:
+    """Read this workspace's id -- its services agent's id -- from mngr host state.
 
-    Tolerant: returns None when the env var or file is missing/corrupt --
-    the host id only powers the desktop app's key-mint page link, and the
-    rest of the modal must keep working without it.
+    The workspace is identified by the agent carrying the ``is_primary``
+    label (its id is stable for the workspace's whole life, across machine
+    changes); the machine's host id is the fallback coordinate for hosts
+    whose agent state cannot be read (the desktop dual-accepts both).
+    Tolerant: returns None when nothing is readable -- the id only powers
+    the desktop app's key-mint page link, and the rest of the modal must
+    keep working without it.
     """
     host_dir = os.environ.get(_HOST_DIR_ENV_VAR, "")
     if not host_dir:
         return None
-    data_path = Path(host_dir) / "data.json"
+    agents_dir = Path(host_dir) / "agents"
+    if agents_dir.is_dir():
+        for data_path in sorted(agents_dir.glob("*/data.json")):
+            try:
+                data = json.loads(data_path.read_text())
+            except (OSError, json.JSONDecodeError) as e:
+                logger.warning("Cannot read agent data.json at {}: {}", data_path, e)
+                continue
+            if not isinstance(data, dict):
+                continue
+            labels = data.get("labels")
+            if not isinstance(labels, dict) or labels.get("is_primary") != "true":
+                continue
+            agent_id = data.get("id")
+            if isinstance(agent_id, str) and agent_id:
+                return agent_id
+    return _read_machine_host_id(Path(host_dir))
+
+
+def _read_machine_host_id(host_dir: Path) -> str | None:
+    """The machine's mngr host id from ``data.json`` (the legacy link coordinate)."""
+    data_path = host_dir / "data.json"
     if not data_path.exists():
         return None
     try:
@@ -945,7 +974,7 @@ class ClaudeAuthService(MutableModel):
         return status.model_copy_update(
             to_update(status.field_ref().auth_mode, derived_mode),
             to_update(status.field_ref().masked_key_suffix, masked_credential_suffix(managed_env)),
-            to_update(status.field_ref().workspace_host_id, read_workspace_host_id()),
+            to_update(status.field_ref().workspace_id, read_workspace_id()),
             to_update(status.field_ref().restart_phase, progress.phase.value if progress is not None else None),
             to_update(status.field_ref().restart_detail, progress.detail if progress is not None else None),
             to_update(status.field_ref().restart_error, progress.error if progress is not None else None),
