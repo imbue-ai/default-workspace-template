@@ -268,8 +268,13 @@ Stop hooks resolve paths correctly. This does not port:
 ## Keeping the three in step
 
 When a rule changes, update every harness that carries it:
-- **Safety 1–2** and **workflow 5–7**: the `claude_*` scripts (shared by claude **and** codex)
-  and the matching handler in `mngr_pi_lifecycle.ts` (pi).
+- **Safety 1–2** (`agent_block_pipe_tail_head.sh`, `agent_prevent_commit_rewrite.sh`): the
+  scripts (shared by claude **and** codex) and `commandBlockReason()` in mngr's
+  `mngr_pi_lifecycle.ts` (pi) — these hold for any pi agent, so mngr still carries them.
+- **Workflow 5, 7–8** (`agent_require_steps_pretool.sh`, `agent_open_tickets_reminder.sh`,
+  `agent_open_tickets_stop_nudge.sh`): the scripts (claude **and** codex) and the matching
+  handler in **this repo's** `.pi/extensions/tk_workflow.ts` (pi). The step discipline is
+  this repo's, not mngr's — mngr's lifecycle extension no longer carries any of it.
 - **Safety 3** (`agent_latchkey_request_check.py`) and **workflow 6**
   (`agent_tk_standalone_check.py`): one checker file each, reached by claude and codex through
   their `.sh` wrappers and called directly by pi — so the tokenizing rule is single-sourced.
