@@ -21,12 +21,16 @@ const SCRIPTS = join(WORK_DIR, "system", "scripts");
 
 interface Checker {
   command: string;
-  match: string;
+  match: RegExp;
 }
 
+// `match` mirrors the prefilter each `.sh` wrapper uses, so pi refuses exactly what
+// claude and codex refuse: the host path for a permission request, and the `tk`/`ticket`
+// word for a step transition (`ticket` does not contain `tk`, so a substring test would
+// miss the spelling the checker and the shared parser both accept).
 const CHECKERS: Checker[] = [
-  { command: `python3 "${join(SCRIPTS, "agent_latchkey_request_check.py")}"`, match: "permission-requests" },
-  { command: `python3 "${join(SCRIPTS, "agent_tk_standalone_check.py")}"`, match: "tk" },
+  { command: `python3 "${join(SCRIPTS, "agent_latchkey_request_check.py")}"`, match: /permission-requests/ },
+  { command: `python3 "${join(SCRIPTS, "agent_tk_standalone_check.py")}"`, match: /\b(tk|ticket)\b/ },
 ];
 
 /** The reason to refuse `command`, from the first checker that refuses it, else null.
@@ -40,7 +44,7 @@ const CHECKERS: Checker[] = [
  * Never throws. A broken checker must not block every command. */
 function refusalReason(command: string): string | null {
   for (const checker of CHECKERS) {
-    if (!command.includes(checker.match)) continue;
+    if (!checker.match.test(command)) continue;
     try {
       const result = spawnSync("bash", ["--noprofile", "--norc", "-c", `${checker.command} "$1"`, "bash", command], {
         encoding: "utf-8",
