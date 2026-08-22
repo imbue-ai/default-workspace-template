@@ -4247,15 +4247,33 @@ async function handleMove(args: Record<string, unknown>, requesterAgentId: strin
  *
  * The tab strip is repainted here rather than waiting for the broadcast that
  * follows, so this client settles immediately; the broadcast repaints every
- * other one (and this one again, harmlessly). Throws with the server's detail
- * when the rename is refused: both callers await it and report the rejection
- * their own way -- an alert on the tab editor, a console warning on the
- * agent-facing op.
+ * other one (and this one again, harmlessly). Twice, though, and the first one
+ * is the point: ``setMemberTitle`` is optimistic -- it files the typed name
+ * before the server has agreed to it -- but a dock tab's title is not mithril's
+ * to repaint, it moves only when ``panel.api.setTitle`` is called, which is
+ * what ``syncTabTitlesFromStore`` does. Syncing only after the round trip would
+ * leave the tab the user typed into showing the old name for the seconds
+ * ``mngr rename`` takes, while the rail beside it already said the new one. The
+ * second sync settles the strip on whatever the server answered -- the stored
+ * name, or the old one a refusal has already put back.
+ *
+ * Throws with the server's detail when the rename is refused: both callers
+ * await it and report the rejection their own way -- an alert on the tab
+ * editor, a console warning on the agent-facing op.
  */
 export async function renameMemberRef(ref: string, title: string): Promise<void> {
-  await setMemberTitle(ref, title);
+  // Deliberately not awaited yet: ``setMemberTitle`` applies the name before
+  // its first await, so the sync below puts it on the strip in the same tick
+  // every other surface gets it.
+  const stored = setMemberTitle(ref, title);
   syncTabTitlesFromStore();
   m.redraw();
+  try {
+    await stored;
+  } finally {
+    syncTabTitlesFromStore();
+    m.redraw();
+  }
 }
 
 /**
