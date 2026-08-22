@@ -179,7 +179,7 @@ Verb changes:
   Stop needs no confirmation dialog: it is reversible in one click, and the current Quit confirmation existed to explain irreversibility that no longer applies.
 - **Deregister leaves the UI entirely.**
   Real removal (delete the supervisord block, the package, the registry row) is the mind's job via the `update-app` skill, matching the product stance that the agent maintains `system/`.
-  The `/api/apps/<name>/deregister` endpoint remains as an API for agent tooling (`serve_isolated_instance.py down` depends on it) but no UI surface calls it.
+  The `/api/apps/<name>/deregister` endpoint remains available for agent tooling, though nothing currently depends on it: its only caller today is the UI verb this change removes, and `serve_isolated_instance.py down` deregisters through `forward_port.py --remove` directly.
 
 Open app tabs of a stopped app show a dead iframe today; render a lightweight "stopped" placeholder with a Start button instead of the raw connection error (implementation may reuse the existing friendly-error page shape).
 
