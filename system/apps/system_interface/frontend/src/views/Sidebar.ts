@@ -120,10 +120,10 @@ export interface SidebarAttrs {
   // reaches this row's own tab immediately if it has one open.
   onRenameRow: (row: SidebarTabRow, title: string) => void;
   // Open the machine's share surface with this app pre-selected.
+  onShareApp: (row: SidebarTabRow) => void;
   // Stop showing one object in the active view. The object keeps running and
   // stays in Everything and in any other project showing it.
   onRemoveFromView: (row: SidebarTabRow) => void;
-  onShareApp: (row: SidebarTabRow) => void;
   // Destroy the object behind this row, machine-wide (weaker for an app: see
   // objectMenu.ts). The workspace confirms first -- it is the half that knows
   // what each kind takes down with it.
