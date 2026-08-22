@@ -1,6 +1,6 @@
 Follow-up work on projects, from a design review of the shipped build and a pass over the object verbs.
 
-**One verb set, wherever you meet an object.** The rail row menu and the dock tab menu now render the same definition, reached by right-click as well as by the kebab. Seven differently-named items collapse to five verbs: Refresh, Share, Rename, Hide tab, and Quit. "Delete from this machine" is gone — it was the same act as Quit under another name. "Remove from project" stays, and now appears on both surfaces rather than only the rail: it sits between "Hide tab" and the destroy, which is the order those three read in, from dropping the panel to dropping the filing to dropping the object. It is absent in Everything, which is the home an object leaves only by being destroyed.
+**One verb set, wherever you meet an object.** The rail row menu and the dock tab menu now render the same definition, reached by right-click as well as by the kebab. Seven differently-named items collapse to six verbs: Refresh, Share, Rename, Hide tab, Remove from project, and Quit. "Delete from this machine" is gone — it was the same act as Quit under another name. The order the last three read in is from dropping the panel to dropping the filing to dropping the object; which surface offers which of them is settled further down. "Remove from project" is absent in Everything, which is the home an object leaves only by being destroyed.
 
 **Refresh works on terminals**, where it means reattaching the tmux session. The session outlives the panel, so a refresh keeps its scrollback.
 
