@@ -51,8 +51,9 @@ import shutil
 import subprocess
 import threading
 import time
+import tomllib
 from collections import deque
-from urllib.parse import urlparse
+from urllib.parse import ParseResult, urlparse
 from collections.abc import Awaitable, Callable, Coroutine
 from pathlib import Path
 from typing import Any, Literal
@@ -287,29 +288,226 @@ _MAX_SESSIONS = int(os.environ.get("BROWSER_MAX_SESSIONS", "2"))
 
 _ALLOWED_NAV_SCHEMES = frozenset({"http", "https"})
 
+_DEFAULT_PORT_BY_SCHEME = {"http": 80, "https": 443}
+
+# The workspace's own service registry (``forward_port.py`` writes it; ``layout.py`` and the fleet
+# CLI read it the same way). Relative paths resolve against the workspace root, so the daemon finds
+# it wherever it was started from.
+_APPS_REGISTRY_ENV = "MINDS_APPS_FILE"
+_APPS_REGISTRY_DEFAULT = "data/.state/apps.toml"
+
+
+def _apps_registry_path() -> Path:
+    path = Path(os.environ.get(_APPS_REGISTRY_ENV, _APPS_REGISTRY_DEFAULT))
+    return path if path.is_absolute() else _repo_root() / path
+
+
+def _effective_port(parsed: ParseResult) -> "int | None":
+    """A URL's port, defaulted from its scheme. None when the authority names a port that is not a
+    number at all, which must never be treated as matching anything."""
+    try:
+        port = parsed.port
+    except ValueError:
+        return None
+    if port is not None:
+        return port
+    return _DEFAULT_PORT_BY_SCHEME.get(parsed.scheme.lower())
+
+
+def _url_authority(url: str) -> str:
+    """The raw authority segment of a URL -- everything between ``//`` and whatever ends it.
+
+    Read off the raw text rather than taken from ``urlparse``, because the point is to inspect
+    characters ``urlparse`` silently tolerates there. Everything from the first ``/``, ``?`` or
+    ``#`` onwards is dropped, so a path, query or fragment is never mistaken for the authority.
+    """
+    _, separator, rest = url.partition("//")
+    if not separator:
+        return ""
+    for delimiter in ("/", "?", "#"):
+        rest = rest.split(delimiter, 1)[0]
+    return rest
+
+
+def _normalized_host(host: str) -> str:
+    """A host with its trailing root dot removed. ``localhost.`` is a fully-qualified spelling of
+    ``localhost`` and resolves to the same machine, so the two must not read as unrelated names."""
+    return host[:-1] if host.endswith(".") else host
+
+
+# Digits of the numeric host-label forms browsers accept: ``0x``-prefixed hex, leading-zero octal,
+# and plain decimal. Membership tests stand in for ``int(part, base)``'s own parsing, which would
+# also swallow signs, surrounding whitespace and ``_`` separators -- none of which is a host label.
+_DIGITS_BY_BASE = {
+    8: frozenset("01234567"),
+    10: frozenset("0123456789"),
+    16: frozenset("0123456789abcdefABCDEF"),
+}
+
+
+def _numeric_label_value(part: str) -> "int | None":
+    """The value of one label of a numeric IPv4 host, or None if it is not one.
+
+    Follows what browsers do with each dot-separated part: ``0x``/``0X`` introduces hex, a leading
+    zero introduces octal, anything else is decimal. ASCII only -- ``int`` would happily read
+    other scripts' digits, which no host resolver does.
+    """
+    if not part.isascii():
+        return None
+    if part[:2].lower() == "0x":
+        digits, base = part[2:] or "0", 16
+    elif len(part) > 1 and part[0] == "0":
+        digits, base = part[1:], 8
+    else:
+        digits, base = part, 10
+    if not digits or not all(character in _DIGITS_BY_BASE[base] for character in digits):
+        return None
+    return int(digits, base)
+
+
+def _numeric_ipv4_host(host: str) -> "ipaddress.IPv4Address | None":
+    """The address a numeric IPv4 host denotes, or None if the host is not one.
+
+    Covers every spelling a browser accepts, not just the dotted quad: one to four numeric labels,
+    each in hex/octal/decimal, where the LAST label fills all the remaining low-order bytes. So
+    ``127.1``, ``0x7f.0.0.1``, ``0177.0.0.1`` and ``2130706433`` are all ``127.0.0.1``, and each
+    reaches loopback from a browser exactly as the dotted quad does. A label too large for the
+    bytes it has to fill is not an address at all.
+    """
+    parts = host.split(".")
+    if len(parts) > 4:
+        return None
+    values: list[int] = []
+    for part in parts:
+        value = _numeric_label_value(part)
+        if value is None:
+            return None
+        values.append(value)
+    if any(value > 0xFF for value in values[:-1]):
+        return None
+    if values[-1] >= 1 << (8 * (5 - len(values))):
+        return None
+    number = values[-1]
+    for index, value in enumerate(values[:-1]):
+        number += value << (8 * (3 - index))
+    return ipaddress.IPv4Address(number)
+
+
+def _has_numeric_final_label(host: str) -> bool:
+    """Whether a host's last label is numeric, which means the host cannot be a DNS name: a
+    top-level domain is never all-numeric (RFC 3696), so such a host is some IPv4 spelling. The
+    guard fails closed on one it cannot parse rather than letting it pass as an ordinary name."""
+    last = host.rsplit(".", 1)[-1]
+    if not last.isascii():
+        return False
+    return last.isdigit() or last[:2].lower() == "0x"
+
+
+def _host_address(host: str) -> "ipaddress.IPv4Address | ipaddress.IPv6Address | None":
+    """A host's IP address, or None when it is a name rather than an address.
+
+    An IPv4-mapped IPv6 literal is reduced to the IPv4 address it carries: ``::ffff:127.0.0.1``
+    reaches the very same socket as ``127.0.0.1``, but reports neither ``is_loopback`` nor
+    ``is_link_local`` in its mapped form, so without this it would slip through as an ordinary
+    address.
+
+    Numeric IPv4 hosts are resolved through :func:`_numeric_ipv4_host` rather than
+    ``ipaddress.ip_address``, which knows only the dotted quad while browsers accept far more
+    spellings of the same address.
+    """
+    numeric = _numeric_ipv4_host(host)
+    if numeric is not None:
+        return numeric
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return None
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        return address.ipv4_mapped
+    return address
+
+
+def _is_loopback_host(host: str) -> bool:
+    """Whether a host name or literal resolves to this machine. ``*.localhost`` counts: RFC 6761
+    reserves the whole subtree for loopback, so ``anything.localhost:8080`` reaches the very same
+    socket as ``localhost:8080``. So does the unspecified address (``0.0.0.0``, ``::``): as a
+    destination it is the local machine, and a browser pointed at it lands on loopback."""
+    name = _normalized_host(host)
+    if name == "localhost" or name.endswith(".localhost"):
+        return True
+    address = _host_address(name)
+    return address is not None and (address.is_loopback or address.is_unspecified)
+
+
+def _registered_service_ports() -> frozenset[int]:
+    """Loopback ports the workspace's own apps have registered as their served origins.
+
+    Read on every check rather than cached: a workspace registers apps as they are built, and a
+    port that became legitimate a second ago must be navigable now.
+    """
+    try:
+        registry = tomllib.loads(_apps_registry_path().read_text())
+    except (OSError, tomllib.TOMLDecodeError):
+        return frozenset()
+    ports: set[int] = set()
+    for app in registry.get("apps") or []:
+        if not isinstance(app, dict):
+            continue
+        registered = urlparse(str(app.get("url") or "").strip())
+        if not _is_loopback_host((registered.hostname or "").lower()):
+            continue
+        port = _effective_port(registered)
+        if port is not None:
+            ports.add(port)
+    return frozenset(ports)
+
 
 def _unsafe_navigation_reason(url: str) -> "str | None":
     """Reason a caller-supplied URL must not be navigated to (SSRF guard), or None if allowed.
 
-    Blocks non-web schemes (``file:``/``chrome:``/``data:``...) and loopback/link-local hosts
+    Blocks non-web schemes (``file:``/``chrome:``/``data:``...) and loopback/unspecified/link-local hosts
     (including the cloud-metadata IP 169.254.169.254), so a caller can't make the browser read a
     local file -- e.g. the Anthropic key at ``file:///home/user/.mngr/env`` -- or hit an internal
     service and exfiltrate it back through the state/screenshot channel. Literal-IP based; a
-    hostname that DNS-rebinds to a blocked IP is a residual this minimal guard does not resolve."""
-    parsed = urlparse((url or "").strip())
+    hostname that DNS-rebinds to a blocked IP is a residual this minimal guard does not resolve.
+
+    The one loopback exception is the workspace's OWN registered service origins -- the ports in
+    ``data/.state/apps.toml``. Those are already published to the outside world by the host-side
+    forwarder and are already reachable from any shell in this container, so pointing the fleet at
+    one exposes nothing the caller could not reach anyway; what the guard exists to stop -- local
+    files, unregistered internal ports, the metadata IP -- stays blocked. This is what lets an app
+    built in the workspace be exercised in the same browser the human watches.
+    """
+    text = (url or "").strip()
+    parsed = urlparse(text)
     scheme = parsed.scheme.lower()
     if scheme not in _ALLOWED_NAV_SCHEMES:
         return f"scheme {scheme or '(none)'!r} is not allowed (only http/https)"
-    host = (parsed.hostname or "").lower()
+    if "\\" in _url_authority(text):
+        # WHATWG parsing (what the browser does) reads a backslash as a slash, so it ends the
+        # authority where ``urlparse`` does not: the browser and this guard would disagree about
+        # which host is being contacted -- ``http://127.0.0.1:4000\@example.com/`` is example.com
+        # here and loopback there. Reject rather than pick a side.
+        return "URL authority contains a backslash"
+    host = _normalized_host((parsed.hostname or "").lower())
     if not host:
         return "URL has no host"
+    is_registered_origin = _is_loopback_host(host) and _effective_port(parsed) in _registered_service_ports()
     if host == "localhost" or host.endswith(".localhost"):
+        if is_registered_origin:
+            return None
         return "loopback host is not allowed"
-    try:
-        address = ipaddress.ip_address(host)
-    except ValueError:
+    address = _host_address(host)
+    if address is None:
+        if _has_numeric_final_label(host):
+            # Not a name any resolver could answer for, so it is a numeric address the parser above
+            # could not make sense of. Decline to guess -- guessing is how the interesting spellings
+            # of 127.0.0.1 get through -- and block a host no legitimate site can have.
+            return f"host {host!r} is not a usable address"
         return None  # a regular hostname
-    if address.is_loopback or address.is_link_local:
+    if is_registered_origin:
+        return None
+    if address.is_loopback or address.is_unspecified or address.is_link_local:
         return f"internal address {host} is not allowed"
     return None
 
@@ -1836,6 +2034,14 @@ class LiveBrowser(MutableModel):
         return await self.run_action(agent_id, agent_name, _do)
 
     async def act_tab(self, agent_id: str, agent_name: str | None, action: str, index: int | None, url: str | None) -> dict[str, Any]:
+        # `tab new --url` reaches the same page load as `open`, so it answers to the same SSRF
+        # guard. Without this the guard would only ever be a speed bump: a caller told "navigation
+        # blocked" here has an unguarded second door two subcommands away.
+        if action == "new" and url:
+            reason = _unsafe_navigation_reason(url)
+            if reason is not None:
+                return {"ok": False, "status": "blocked", "error": f"navigation blocked: {reason}"}
+
         async def _do(_handler: ActionHandler) -> dict[str, Any]:
             # ONE tab model: browser-use. switch/new move the REAL tab AND foreground it
             # (via _focus_and_foreground), so state/click and the pane all follow. "list"

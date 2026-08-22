@@ -216,12 +216,28 @@ The pane is **viewer only** -- your real output (`state` listings, `ok:`/error l
 - **Tabs:** `tab <name> ...` manages tabs within one browser.
 - **Drive the browser yourself, here in this chat.** A `launch-task` sub-agent runs in a separate, isolated container with no access to this workspace's browser fleet, so do web/browser work yourself. If a sub-agent needs something from the web, have it tell you what it needs and you do the browsing. (A parent passing its chat to a sub-agent can set `BROWSER_FLEET_ANCHOR` so panes anchor to that chat, but the daemon/fleet still isn't reachable from an isolated sub-agent.)
 
+## What the fleet will not open
+
+`open` and `tab new --url` refuse anything that is not the public web or **this workspace's own
+registered app origins**. Refused URLs answer `navigation blocked: <reason>` and exit `1`; retrying
+or switching browsers changes nothing.
+
+- **Only `http`/`https`.** `file:`, `chrome:`, `data:` and friends are never navigable, so the
+  fleet can never be pointed at a local file such as `~/.mngr/env`.
+- **Loopback is allowed only for registered apps.** A URL on `localhost` / `127.0.0.1` opens when
+  its port appears as a `url` in `data/.state/apps.toml` -- which is exactly the set of things the
+  workspace already serves to the human's app tabs. An app you just built is navigable as soon as
+  `system/scripts/forward_port.py` has registered it; if it is not, register it first (and see
+  `build-app`'s verify.md, which is still the right tool for asserting on a page you are building).
+- **Everything else internal stays blocked**, including unregistered local ports and the
+  cloud-metadata address `169.254.169.254`.
+
 ## Exit codes -- branch on these
 
 | Code | Meaning | What to do |
 |---|---|---|
 | `0` | ok | Read the output; for `state`, decide your next action. |
-| `1` | error / stale index / crashed browser | Stale index: `state <name>`, find the new number, retry. Crashed: `new`. Else read the message. |
+| `1` | error / stale index / crashed browser / blocked URL | Stale index: `state <name>`, find the new number, retry. Crashed: `new`. `navigation blocked:`: see "What the fleet will not open" -- retrying changes nothing. Else read the message. |
 | `2` | preempted (human took control, or you ran `handoff`) | **Stop and end your turn.** Tell the user; you'll be messaged to resume (re-run `state <name>` first). Don't poll or `--reclaim` on your own. |
 | `3` | busy (another agent holds it, or fleet full / still restoring / the browser is still launching) | Use a different browser (or `new`); you're queued and will be messaged when it frees. For "restoring" or "still starting up (Chromium is launching)", wait a few seconds and retry the SAME command (a freshly `new`ed browser launches in the background). |
 | `4` | timed out (waited via `--max-wait` and another agent still held it) | Try later, or pick a different browser. |
