@@ -1467,12 +1467,6 @@ function launcherPanelIdInGroup(group: DockviewGroupPanel | null): string | null
   return null;
 }
 
-/** Blink a tab to point at it. Used whenever some other control asks to open
- *  something that is already open -- the "+" landing on a pane that already
- *  has a launcher, a rail row or a launcher row for a member that already has
- *  a tab, an app already open from the rail or the all-apps popover -- so the
- *  click visibly does something ("it is right there") instead of appearing to
- *  do nothing. */
 /**
  * Launchers whose "Open new" tile is waiting on a create.
  *
@@ -2000,10 +1994,6 @@ export function openMemberRow(row: SidebarTabRow): void {
   m.redraw();
 }
 
-/** Stop showing one ref in the active view, shouting if the server refuses.
- *  The click-and-forget half of ``removeMemberRefFromView``, used by the
- *  rail's pin-icon unpin toggle: unpinning an app IS removing it from the
- *  view. */
 /** Stop showing one rail row's object in the active view. The rail's half of
  *  the shared Remove-from-project verb; the tab's half resolves its own ref and
  *  lands in the same place. */
@@ -2011,22 +2001,16 @@ export function removeMemberRow(row: SidebarTabRow): void {
   removeMemberRefWithAlert(row.ref);
 }
 
+/** Stop showing one ref in the active view, shouting if the server refuses.
+ *  The click-and-forget half of ``removeMemberRefFromView``, shared by
+ *  ``removeMemberRow`` and the rail's pin-icon unpin toggle: unpinning an app
+ *  IS removing it from the view, so both take the same path. */
 function removeMemberRefWithAlert(ref: string): void {
   void removeMemberRefFromView(ref).catch((e: Error) => {
     alert(`Failed to remove from project: ${e.message}`);
   });
 }
 
-/**
- * Pin an app in the active view, or unpin it.
- *
- * Pinning an app to a project is the same fact as its membership -- it is
- * pinned exactly when the project's member list holds its ``service:<name>``
- * ref -- so there is nothing to this beyond adding or removing that member.
- * Unpinning goes through the same path as any other "remove from project": the
- * app keeps running, it stays in every other project showing it, and it stays
- * in Everything. Everything itself pins nothing, so neither verb applies there.
- */
 /**
  * Move one of the rail's built-in shortcut rows between the active project's
  * rail and its All apps menu.
@@ -2054,6 +2038,16 @@ export function setShortcutPinnedInView(shortcut: ShortcutName, isPinned: boolea
   })();
 }
 
+/**
+ * Pin an app in the active view, or unpin it.
+ *
+ * Pinning an app to a project is the same fact as its membership -- it is
+ * pinned exactly when the project's member list holds its ``service:<name>``
+ * ref -- so there is nothing to this beyond adding or removing that member.
+ * Unpinning goes through the same path as any other "remove from project": the
+ * app keeps running, it stays in every other project showing it, and it stays
+ * in Everything. Everything itself pins nothing, so neither verb applies there.
+ */
 export function setAppPinnedInView(app: AppEntry, isPinned: boolean): void {
   const ref = memberRef("app", app.name);
   if (!isPinned) {
