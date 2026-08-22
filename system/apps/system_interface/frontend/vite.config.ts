@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import tailwindcss from "@tailwindcss/vite";
+import { configDefaults } from "vitest/config";
 import path from "path";
 
 export default defineConfig({
@@ -10,8 +11,13 @@ export default defineConfig({
   // test beside its source: the same suite twice, with one half frozen at
   // whenever that build ran. Excluded so a stale directory cannot quietly
   // double the count or report passes from code that is no longer there.
+  //
+  // Added TO vitest's own defaults rather than written out beside them:
+  // `exclude` is a whole-list override, so a hand-copied list silently drops
+  // whatever else vitest excludes by default and leaves this file owning a
+  // decision it has no opinion about. `dist/**` is the only local one.
   test: {
-    exclude: ["**/node_modules/**", "dist/**"],
+    exclude: [...configDefaults.exclude, "dist/**"],
   },
   plugins: [tailwindcss()],
   publicDir: "media",
