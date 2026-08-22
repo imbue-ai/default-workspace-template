@@ -101,6 +101,29 @@ class HarnessPopup(FrozenModel):
     trigger: PopupTrigger
     commands: tuple[str, ...] = ()
     action: PopupAction
+    # NOTICE only: replaces the notice's default "send it from the agent's terminal"
+    # body. A harness declares WHY a command is declined; the composer stays free of
+    # per-command branching, which is the whole point of shipping these declaratively.
+    notice_body: str | None = None
+
+
+# The three commands the model bar owns, declined on EVERY harness for a different
+# reason than the lists below: not that they break the terminal, but that the composer
+# is not where a model change belongs. Typing one works, which is exactly the problem --
+# the message is stamped hidden (it is the bar's own traffic), so the model silently
+# changes with nothing in the transcript to show it, and a typed /fast additionally does
+# not persist, because only the bar's switch path records fastMode where a restart reads
+# it back. Kept as its own popup rather than folded into a harness's declined tuple so
+# the distinct rationale survives: those tuples are measured-against-a-live-agent lists,
+# and a future re-measure would find these three send fine and drop them.
+_MODEL_BAR_COMMANDS: Final[tuple[str, ...]] = ("/model", "/effort", "/fast")
+_MODEL_BAR_NOTICE: Final[str] = "Use the model picker below the chat to change the model, effort, or speed."
+_MODEL_BAR_POPUP: Final[HarnessPopup] = HarnessPopup(
+    trigger=PopupTrigger.COMPOSER_COMMAND,
+    commands=_MODEL_BAR_COMMANDS,
+    action=PopupAction.NOTICE,
+    notice_body=_MODEL_BAR_NOTICE,
+)
 
 
 # Claude Code slash commands the chat declines to send (action="notice").
@@ -163,13 +186,10 @@ _CODEX_DECLINED_COMMANDS: Final[tuple[str, ...]] = (
     "/btw",
     "/clear",
     "/delete",
-    "/effort",
     "/exit",
     "/experimental",
-    "/fast",
     "/fork",
     "/keymap",
-    "/model",
     "/new",
     "/plan",
     "/quit",
@@ -188,7 +208,6 @@ _PI_DECLINED_COMMANDS: Final[tuple[str, ...]] = (
     "/compact",
     "/fork",
     "/llama",
-    "/model",
     "/name",
     "/new",
     "/quit",
@@ -282,6 +301,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
             HarnessPopup(
                 trigger=PopupTrigger.COMPOSER_COMMAND, commands=_CLAUDE_DECLINED_COMMANDS, action=PopupAction.NOTICE
             ),
+            _MODEL_BAR_POPUP,
             _FAST_MODE_PROMPT_POPUP,
         ),
         auth_modal=AuthModalKind.MANAGED,
@@ -316,6 +336,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
             HarnessPopup(
                 trigger=PopupTrigger.COMPOSER_COMMAND, commands=_CODEX_DECLINED_COMMANDS, action=PopupAction.NOTICE
             ),
+            _MODEL_BAR_POPUP,
             _FAST_MODE_PROMPT_POPUP,
         ),
         auth_instructions=(
@@ -343,6 +364,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
             HarnessPopup(
                 trigger=PopupTrigger.COMPOSER_COMMAND, commands=_PI_DECLINED_COMMANDS, action=PopupAction.NOTICE
             ),
+            _MODEL_BAR_POPUP,
         ),
         auth_instructions="Open the agent's terminal and run /login to add accounts or keys.",
     ),
