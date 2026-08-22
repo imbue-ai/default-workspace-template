@@ -8,7 +8,6 @@ import {
   EVERYTHING_VIEW_ID,
   addMember,
   autosaveProject,
-  browserSessionFromRef,
   buildEverythingMembers,
   chatAgentIdFromRef,
   chooseInitialViewId,
@@ -28,7 +27,6 @@ import {
   searchMembers,
   serviceNameFromRef,
   shareMember,
-  terminalSessionFromRef,
   updateProjectSettings,
   type MachineInventory,
   type MemberKind,
@@ -507,17 +505,6 @@ describe("chatAgentIdFromRef", () => {
   });
 });
 
-describe("terminalSessionFromRef", () => {
-  it("recovers the tmux session name a terminal ref was built from", () => {
-    expect(terminalSessionFromRef(memberRef("terminal", "terminal-4"))).toBe("terminal-4");
-  });
-
-  it("answers null for a ref that addresses no terminal", () => {
-    expect(terminalSessionFromRef("chat:agent-9")).toBeNull();
-    expect(terminalSessionFromRef("terminal:")).toBeNull();
-  });
-});
-
 describe("serviceNameFromRef", () => {
   it("recovers the name an app ref was built from", () => {
     expect(serviceNameFromRef(memberRef("app", "web"))).toBe("web");
@@ -535,20 +522,6 @@ describe("serviceNameFromRef", () => {
 
   it("answers null for a fleet browser, which is a session rather than an app", () => {
     expect(serviceNameFromRef(memberRef("browser", "quiet-otter"))).toBeNull();
-  });
-});
-
-describe("browserSessionFromRef", () => {
-  it("recovers the session name a fleet-browser ref was built from", () => {
-    expect(browserSessionFromRef(memberRef("browser", "quiet-otter"))).toBe("quiet-otter");
-  });
-
-  it("answers null for a ref that addresses no fleet browser", () => {
-    expect(browserSessionFromRef(memberRef("app", "web"))).toBeNull();
-    expect(browserSessionFromRef("chat:a1b2c3")).toBeNull();
-    expect(browserSessionFromRef("terminal:build")).toBeNull();
-    expect(browserSessionFromRef("service:browser?session=")).toBeNull();
-    expect(browserSessionFromRef("")).toBeNull();
   });
 });
 

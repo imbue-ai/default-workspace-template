@@ -440,14 +440,6 @@ export function chatAgentIdFromRef(ref: string): string | null {
   return id === "" ? null : id;
 }
 
-/** The tmux session name out of a `terminal:<name>` ref, or null for a ref
- *  that addresses no terminal. The inverse of `memberRef("terminal", name)`. */
-export function terminalSessionFromRef(ref: string): string | null {
-  if (!ref.startsWith(TERMINAL_REF_PREFIX)) return null;
-  const name = ref.substring(TERMINAL_REF_PREFIX.length);
-  return name === "" ? null : name;
-}
-
 /**
  * The service name a `service:<name>` ref addresses, or null for a ref that
  * addresses no service.
@@ -464,22 +456,6 @@ export function serviceNameFromRef(ref: string): string | null {
   const name = ref.substring(SERVICE_REF_PREFIX.length);
   if (name === "" || name.includes("?")) return null;
   return name;
-}
-
-/**
- * The fleet browser's own session name out of a `service:browser?session=<id>`
- * ref, or null for a ref that addresses no fleet browser.
- *
- * The counterpart to `serviceNameFromRef`, which deliberately refuses this same
- * ref shape: an installed app has no `?session=` suffix, and a fleet browser
- * has one, so the two calls together are how a caller tells the two `service:`
- * shapes apart. `memberRef("browser", name)` is the inverse.
- */
-export function browserSessionFromRef(ref: string): string | null {
-  const prefix = memberRef("browser", "");
-  if (!ref.startsWith(prefix)) return null;
-  const session = ref.substring(prefix.length);
-  return session === "" ? null : session;
 }
 
 /** One object as the machine reports it, before it becomes a row: the name its
