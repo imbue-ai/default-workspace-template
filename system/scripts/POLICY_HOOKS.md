@@ -80,6 +80,17 @@ equivalent of), and splits our rules two ways:
   history-rewrite block, and the OOM/git-identity rewrite) stay re-expressed in mngr's
   lifecycle extension against the pi SDK event that matches.
 
+**Which command a guard sees.** On claude and codex, the rewriter (#4) is deliberately the
+**last** PreToolUse hook, so every blocker ahead of it inspects the command the agent wrote.
+pi offers no such ordering: it calls every extension's `tool_call` handler on one shared,
+mutable event, and mngr's rewrite prepends the OOM tag and git identity as their own
+`;`-joined commands — which our checkers would refuse as "another command runs before it",
+blocking every permission request and every `tk start`/`tk close`. So mngr's handler records
+the pre-rewrite command on the event as **`mngrOriginalCommand`**, and
+`policy_guards.ts` prefers it, falling back to `input.command` (the untouched value) when it
+is absent because this extension ran first. Either order gives the guards the agent's own
+command. Keep the two ends of that contract in step.
+
 The SDK is documented in the package's `dist/core/extensions/types.d.ts`; we do NOT modify it.
 
 **Minds-only, by construction.** The pi extension is loaded via the `-e` flag mngr adds *only*
@@ -280,7 +291,9 @@ When a rule changes, update every harness that carries it:
   (`agent_tk_standalone_check.py`): one checker file each, reached by claude and codex through
   their `.sh` wrappers and called directly by pi — so the tokenizing rule is single-sourced.
 - **Safety 4** (`agent_rewrite_bash_command.py`): shared by claude and codex; pi mirrors its
-  prefix logic in `rewriteBashCommand()`.
+  prefix logic in `rewriteBashCommand()`. Keep it **last** in both hook configs, and keep
+  mngr recording `mngrOriginalCommand` for pi — a blocker that inspects the rewritten
+  command refuses everything (see "Which command a guard sees" above).
 - codex and pi wiring lives in **this repo**: `.codex/hooks.json` and
   `.pi/extensions/policy_guards.ts`. A guard added to `.claude/settings.json` needs the
   matching entry in both, and nothing in mngr.
