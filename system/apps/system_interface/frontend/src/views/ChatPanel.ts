@@ -155,13 +155,6 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   // viewport is over a reserved region and page/jump/overlay accordingly.
   let phantomTopHeight = 0;
   let phantomBottomHeight = 0;
-  // The row the reader was on last frame, and where in the viewport it sat, so
-  // it can be put back after the window is recomputed (see restoreReadingAnchor).
-  let anchorRowKey: string | null = null;
-  let anchorViewportOffset = 0;
-  // Whether the panel was visible on the previous render, so becoming visible
-  // again can be treated as a resume rather than as a shift to correct.
-  let wasPanelVisible = true;
   // Which width bucket the held geometry describes; -1 until the first measure,
   // so the first real width always counts as a change and triggers a load.
   let geometryWidthBucket = -1;
@@ -633,82 +626,6 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     }
   }
 
-  /**
-   * Note which row the reader is looking at, and where in the viewport it sits.
-   *
-   * Read in the virtualizer's own offset space rather than by measuring the DOM.
-   * That distinction is the whole point: a DOM-measured anchor is sampled against
-   * rows that are still settling, so it oscillates and rectifies into drift.
-   * These offsets are the same numbers the layout is about to be rebuilt from, so
-   * restoring against them is exact.
-   *
-   * Call this before the frame's rows, reserve rate and measurements are
-   * replaced, not merely before `virtualizer.sync()`. The virtualizer reads those
-   * three through closures while answering from a memo keyed on the options it
-   * was last given, so an anchor taken between the two sees a layout that is half
-   * this frame and half the last one.
-   */
-  function captureReadingAnchor(): void {
-    const justBecameVisible = panelVisible && !wasPanelVisible;
-    wasPanelVisible = panelVisible;
-    anchorRowKey = null;
-    // Nothing was being held while hidden -- the window was frozen against a
-    // zero-sized element -- so there is no position to restore, only one to
-    // adopt. The browser preserved the real scrollTop across hide/show, so that
-    // is the truth; correcting against offsets computed before the freeze would
-    // move the reader instead of holding them. Anchoring resumes next frame,
-    // once the window has been recomputed against the live viewport.
-    if (justBecameVisible || !panelVisible || !scroll.userScrolledUp) {
-      return;
-    }
-    const top = scroll.scrollEl?.scrollTop ?? scroll.scrollTop;
-    for (const item of virtualizer.getVirtualItems()) {
-      if (item.end > top) {
-        anchorRowKey = String(item.key);
-        anchorViewportOffset = item.start - top;
-        return;
-      }
-    }
-  }
-
-  /**
-   * Put the reader back on the row they were reading, at the same place in the
-   * viewport.
-   *
-   * Everything above that row can legitimately change between two frames: the
-   * reserved estimate for unloaded history is refined as rows are measured, and
-   * a backfilled page replaces reserved space with real rows. Those two move in
-   * opposite directions and very nearly cancel, which is why correcting for
-   * either alone is wrong: compensating for the reserved-space change by itself
-   * walks the reader to the top of the conversation, because the rows that
-   * landed have already made up the difference. Holding the anchor's position is
-   * the invariant that actually matters, and it subsumes both.
-   *
-   * This is also why the virtualizer's own scroll compensation is switched off:
-   * two mechanisms writing scrollTop for overlapping reasons double-correct, and
-   * this one is strictly more general.
-   *
-   * Skipped while following the tail, where the tail pin owns the position
-   * outright, and while hidden, where the element is zero-sized.
-   */
-  function restoreReadingAnchor(element: HTMLElement): void {
-    if (anchorRowKey === null || !panelVisible || !scroll.userScrolledUp) {
-      return;
-    }
-    for (const item of virtualizer.getVirtualItems()) {
-      if (String(item.key) !== anchorRowKey) {
-        continue;
-      }
-      const target = Math.max(0, item.start - anchorViewportOffset);
-      // A sub-pixel difference is layout rounding, not drift; writing scrollTop
-      // for it would feed the loop it is meant to prevent.
-      if (Math.abs(target - element.scrollTop) > 1) {
-        scroll.pinTo(element, target);
-      }
-      return;
-    }
-  }
-
   function applyScrollPosition(element: HTMLElement): void {
     // Hidden panels and the tail-follow pin are handled by the shared controller;
     // this wrapper only adds the offset-jump pin that is specific to the main chat.
@@ -864,7 +781,6 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     // the width reset below) recomputes the layout from the previous frame's row
     // count against this frame's keys. Reading it here keeps both halves
     // describing the frame the reader is actually looking at.
-    captureReadingAnchor();
 
     // Memoize the turn-grouping -> rows pipeline. buildSections walks the entire
     // held transcript, so recomputing it on every scroll-driven redraw is the
@@ -1163,7 +1079,6 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                 const element = mainVnode.dom as HTMLElement;
                 scroll.attach(element);
                 virtualizer.mount();
-                restoreReadingAnchor(element);
                 applyScrollPosition(element);
                 measureScheduler.schedule();
                 if (currentAgentId !== null) {
@@ -1174,7 +1089,6 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                 const element = mainVnode.dom as HTMLElement;
                 scroll.attach(element);
                 virtualizer.mount();
-                restoreReadingAnchor(element);
                 applyScrollPosition(element);
                 measureScheduler.schedule();
                 // Drive paging from the render loop, not only from scroll events, so

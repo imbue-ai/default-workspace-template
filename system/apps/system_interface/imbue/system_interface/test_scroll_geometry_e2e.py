@@ -392,3 +392,56 @@ def test_selection_survives_streaming_and_scrolling(tmp_path: Path, page: Page) 
         page.wait_for_timeout(_SETTLE_MS)
         after_scrolling = page.evaluate("() => (window.getSelection().toString() || '').trim()")
         assert after_scrolling == selected, f"scrolling away collapsed the selection ({after_scrolling!r})"
+
+
+@pytest.mark.timeout(180, func_only=False)
+def test_a_small_scroll_up_from_the_tail_is_not_undone(tmp_path: Path, page: Page) -> None:
+    """Nudging up a little from the live tail must leave the reader where they nudged.
+
+    The gap every other test here left open. They all scroll a long way, which
+    puts the viewport far outside the band where following re-arms -- so none of
+    them exercised the case a reader actually hits first, which is a small scroll
+    back to re-read the last thing that went past.
+
+    It is worth asserting separately because the failure is not a wrong position
+    but a *fight*: the view is pulled back to the bottom, so scrolling up at all
+    becomes impossible rather than merely inaccurate.
+    """
+    events = _tool_heavy_events(80)
+    with _running_e2e_server(tmp_path, _PORT + 3, session_events=events) as (base_url, _, session_file):
+        page.goto(base_url)
+        _wait_for_transcript(page)
+
+        # Start attached at the tail, which is where a reader always starts.
+        assert page.evaluate(
+            "() => { const el = document.querySelector('.app-content');"
+            " return el.scrollHeight - el.scrollTop - el.clientHeight < 40; }"
+        ), "setup failed: the transcript did not open at the tail"
+
+        nudged_gap = page.evaluate(
+            "() => { const el = document.querySelector('.app-content');"
+            " el.scrollBy(0, -150);"
+            " return el.scrollHeight - el.scrollTop - el.clientHeight; }"
+        )
+        assert nudged_gap > 100, f"setup failed: the nudge did not move the viewport ({nudged_gap}px from the bottom)"
+
+        # Let every redraw the nudge triggers land: measurement, the window
+        # recomputing, and any position correction the view decides to make.
+        page.wait_for_timeout(_SETTLE_MS)
+        settled_gap = page.evaluate(
+            "() => { const el = document.querySelector('.app-content');"
+            " return el.scrollHeight - el.scrollTop - el.clientHeight; }"
+        )
+        assert settled_gap > 100, (
+            f"a small scroll up was undone: {nudged_gap}px from the bottom became {settled_gap}px"
+        )
+
+        # And it must stay put while the agent keeps talking -- a reader who
+        # nudged up is reading, not following.
+        _append_event(session_file, "nudge-stream-1", "streamed-after-nudge")
+        page.wait_for_timeout(_STREAM_DELIVERY_MS)
+        streamed_gap = page.evaluate(
+            "() => { const el = document.querySelector('.app-content');"
+            " return el.scrollHeight - el.scrollTop - el.clientHeight; }"
+        )
+        assert streamed_gap > 100, f"streaming pulled a nudged-up reader back to the tail ({streamed_gap}px)"

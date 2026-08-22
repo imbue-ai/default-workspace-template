@@ -96,6 +96,41 @@ export function createTranscriptScroll(config: TranscriptScrollConfig = {}): Tra
   let isPointerDown = false;
   let viewportResizeObserver: ResizeObserver | null = null;
   let pointerReleaseListener: (() => void) | null = null;
+  // Scroll events this controller caused by writing scrollTop itself, which are
+  // still queued. See writeScrollTop for why they must not reach the follow rule.
+  let pendingSelfInflictedScrolls = 0;
+
+  /**
+   * Write scrollTop, and remember that the event it fires is ours.
+   *
+   * Every write here schedules a scroll event indistinguishable, at the DOM
+   * level, from the user moving the wheel. Keeping `previousScrollTop` in step
+   * is not enough to make it harmless: that only makes the event look like *no
+   * movement*, and "no movement while near the bottom" is exactly the condition
+   * the follow rule re-attaches on. So a correction applied a little way above
+   * the tail re-armed following and the next redraw slammed the view back down
+   * -- which is what made scrolling up a short distance impossible rather than
+   * merely inaccurate. Counting the write lets onScroll drop that event instead
+   * of deriving anything from it.
+   */
+  function writeScrollTop(element: HTMLElement, top: number): void {
+    if (element.scrollTop === top) {
+      // No change, so no event is coming; counting one would swallow the user's
+      // next real scroll.
+      return;
+    }
+    pendingSelfInflictedScrolls += 1;
+    element.scrollTop = top;
+    scrollTop = element.scrollTop;
+    previousScrollTop = element.scrollTop;
+    lastScrollHeight = element.scrollHeight;
+    // A write that is clamped, coalesced, or dropped may never deliver its
+    // event. Clearing on the next frame keeps one lost event from silently
+    // swallowing a real scroll for the rest of the session.
+    requestAnimationFrame(() => {
+      pendingSelfInflictedScrolls = 0;
+    });
+  }
 
   function applyTailFollow(element: HTMLElement): void {
     if (isPointerDown) {
@@ -112,9 +147,7 @@ export function createTranscriptScroll(config: TranscriptScrollConfig = {}): Tra
       previousScrollTop = element.scrollTop;
       return;
     }
-    element.scrollTop = element.scrollHeight;
-    scrollTop = element.scrollTop;
-    previousScrollTop = element.scrollTop;
+    writeScrollTop(element, element.scrollHeight);
   }
 
   return {
@@ -136,6 +169,16 @@ export function createTranscriptScroll(config: TranscriptScrollConfig = {}): Tra
 
     onScroll(event: Event): void {
       const element = event.target as HTMLElement;
+      if (pendingSelfInflictedScrolls > 0) {
+        // Our own write coming back. Record where it left us, but derive nothing
+        // from it: it carries no user intent, and treating it as one is what let
+        // a correction re-attach the view to the tail underneath the reader.
+        pendingSelfInflictedScrolls -= 1;
+        previousScrollTop = element.scrollTop;
+        scrollTop = element.scrollTop;
+        lastScrollHeight = element.scrollHeight;
+        return;
+      }
       // applyScrollPosition keeps previousScrollTop in lockstep with its own
       // programmatic pins, so only a genuine user scroll registers as movement.
       const didScrollUp = element.scrollTop < previousScrollTop;
@@ -233,10 +276,7 @@ export function createTranscriptScroll(config: TranscriptScrollConfig = {}): Tra
     },
 
     pinTo(element: HTMLElement, top: number): void {
-      element.scrollTop = top;
-      scrollTop = element.scrollTop;
-      previousScrollTop = element.scrollTop;
-      lastScrollHeight = element.scrollHeight;
+      writeScrollTop(element, top);
     },
 
     reset(): void {
