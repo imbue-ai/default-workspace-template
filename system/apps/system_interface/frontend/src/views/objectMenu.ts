@@ -52,20 +52,6 @@ export const OBJECT_MENU_DIVIDER = "divider";
 export type ObjectMenuEntry = ObjectMenuItem | typeof OBJECT_MENU_DIVIDER;
 
 /**
- * What each verb does for one specific object, supplied by the caller.
- *
- * ``share`` is read only when ``kind`` is "app" (every other kind never
- * offers Share, so a caller building a menu for one of them may simply pass
- * null). ``hideTab`` and ``quit`` are ``null`` to OMIT the verb for this
- * particular object, as opposed to wiring it to a no-op: a backgrounded rail
- * row has no open tab to hide, and a handful of objects -- the workspace's
- * own primary chat, a terminal or browser still allocating its session --
- * have no destroy available yet. ``share`` and ``quit`` each carry their own
- * label because "Share {name}" / "Quit {name}" always names the object the
- * way the surface calling this currently displays it, and only the caller
- * knows what that is right now.
- */
-/**
  * Whether a kind's name is the user's to choose. Only a chat's is.
  *
  * A chat is an mngr agent: its ref is a stable agent id and its name is
@@ -98,6 +84,20 @@ export function isRenameableKind(kind: ObjectMenuKind): boolean {
   return kind === "chat";
 }
 
+/**
+ * What each verb does for one specific object, supplied by the caller.
+ *
+ * ``share`` is read only when ``kind`` is "app" (every other kind never
+ * offers Share, so a caller building a menu for one of them may simply pass
+ * null). ``hideTab`` and ``quit`` are ``null`` to OMIT the verb for this
+ * particular object, as opposed to wiring it to a no-op: a backgrounded rail
+ * row has no open tab to hide, and a handful of objects -- the workspace's
+ * own primary chat, a terminal or browser still allocating its session --
+ * have no destroy available yet. ``share`` and ``quit`` each carry their own
+ * label because "Share {name}" / "Quit {name}" always names the object the
+ * way the surface calling this currently displays it, and only the caller
+ * knows what that is right now.
+ */
 export interface ObjectMenuActions {
   refresh: () => void;
   share: { label: string; run: () => void } | null;
