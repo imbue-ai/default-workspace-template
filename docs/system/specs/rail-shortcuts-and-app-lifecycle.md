@@ -43,7 +43,7 @@ The design treats the section as one list of typed shortcut entries so that futu
 Every shortcut has a **mode**, which is per-project state:
 
 - **Focus mode** (label "X", e.g. "Chat"): clicking goes to an existing X in the active view -- the most recently used one -- and creates a new X only when the view shows none.
-  This is today's behavior.
+  The focus-then-create shape is today's behavior; the most-recently-used resolution is new, deliberately replacing today's rule (the chat shortcut prefers the project's own chat -- the primary agent's under Everything -- and the other kinds take the view's first-listed member).
 - **New mode** (label "New X", e.g. "New Chat"): clicking always creates a fresh X.
 
 The row's label is derived from the mode; nothing else about the row changes.
