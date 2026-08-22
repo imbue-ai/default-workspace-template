@@ -26,7 +26,8 @@ anything:
 - **A member with no open tab is *backgrounded*** -- still running,
   still listed in that project's rail, just not docked. Closing a tab
   never changes membership; only filing (below) and the UI's "remove
-  from project" (in project settings) do.
+  from project" (a verb on the object, offered by its rail row -- the
+  row's own one-click control, or its kebab/right-click menu) do.
 - **Only the destructive per-kind verbs actually end something** (Quit,
   offered from the tab/rail menu -- not exposed through `layout.py`),
   and those take the object out of *every* project at once, including
@@ -62,8 +63,9 @@ external-URL tab has no identity beyond the panel showing it (its
 panel), so opening a URL tab no longer files it as a member at all. A
 `url:<hash>` entry you see in a project's member list is a leftover
 from a machine that predated projects (the one-time migration filed
-panels it couldn't otherwise name this way); project settings' member
-list is where such a leftover gets removed.
+panels it couldn't otherwise name this way). Such a leftover is removed
+from its rail row like any other member -- the row's one-click remove is
+the only verb it has, since a `url:` ref carries no menu.
 
 This is a *different* grammar from the live-panel refs `layout.py`
 resolves to (see `manage-layout`): `chat-terminal:<name>`,
@@ -129,8 +131,9 @@ python3 system/scripts/layout.py split web --relative-to=self --direction=right 
 
 There is no `layout.py` verb for the opposite (removing a ref from a
 project without also closing it, or removing it while leaving it
-open elsewhere) -- that is the UI's "remove from project" in project
-settings, or the REST `POST /api/projects/<id>/members/remove`
+open elsewhere) -- that is the UI's "remove from project", which lives on
+the object's own rail row (a one-click control, and the same verb in the
+row's menu), or the REST `POST /api/projects/<id>/members/remove`
 endpoint the README documents, neither of which `layout.py` wraps.
 Likewise, creating, deleting, or renaming a *project itself* (as
 opposed to renaming an object shown in one) has no `layout.py`
