@@ -3,7 +3,6 @@ import os
 import queue
 import re
 import shlex
-import signal
 import threading
 import tomllib
 from collections.abc import Callable
@@ -27,6 +26,7 @@ from imbue.concurrency_group.errors import EnvironmentStoppedError
 from imbue.concurrency_group.errors import ProcessError
 from imbue.concurrency_group.event_utils import ShutdownEvent
 from imbue.concurrency_group.local_process import RunningProcess
+from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
@@ -241,31 +241,37 @@ def _build_chat_rename_command(mngr_binary: str, agent_id: str, name: str) -> li
     ]
 
 
-def _rename_failure_detail(cmd: list[str], result: Any) -> str:
+def _rename_failure_detail(cmd: list[str], result: FinishedProcess) -> str:
     """Why a rename subprocess failed, in terms the user can act on.
 
     ``run_local_command_modern_version`` reports a killed process as a NEGATIVE
     return code carrying the signal number, so the plain "exited with code"
     wording turned our own timeout into "exited with code -15" -- a number that
-    says nothing about what happened or what to do next. The timeout is the
-    common case by far (see ``_RENAME_TIMEOUT_SECONDS``): the rename shells out
-    to the mngr CLI, whose startup alone is seconds, so a loaded host reaches
-    the cap without anything being wrong with the name.
+    says nothing about what happened or what to do next. The timeout is named
+    off ``result.is_timed_out`` -- the flag the runner sets exactly when the
+    ``timeout`` it was given ran out -- rather than inferred from the SIGTERM
+    it sends, so a timeout that had to escalate to SIGKILL still reads as the
+    timeout it was, and a signal from anything else (the OOM shedder, say)
+    does not. It is the common case by far (see ``_RENAME_TIMEOUT_SECONDS``):
+    the rename shells out to the mngr CLI, whose startup alone is seconds, so
+    a loaded host reaches the cap without anything being wrong with the name.
+    It also outranks whatever partial stderr escaped before the kill, since
+    the timeout is the actual cause.
 
     Its wording deliberately does not promise the rename did not happen. The
     subprocess is stopped partway, and a rename both rewrites the provider's
     persisted agent data and moves the tmux session on a live host, so which of
     those landed is genuinely unknown from here.
     """
+    if result.is_timed_out:
+        return (
+            f"'{cmd[1]}' did not finish within {_RENAME_TIMEOUT_SECONDS:.0f}s and was stopped, "
+            "so the new name may or may not have been applied -- reopen the workspace to see which"
+        )
     stderr = result.stderr.strip()
     if stderr:
         return stderr
-    if result.returncode < 0:
-        if -result.returncode == signal.SIGTERM:
-            return (
-                f"'{cmd[1]}' did not finish within {_RENAME_TIMEOUT_SECONDS:.0f}s and was stopped, "
-                "so the new name may or may not have been applied -- reopen the workspace to see which"
-            )
+    if result.returncode is not None and result.returncode < 0:
         return f"'{cmd[1]}' was stopped by signal {-result.returncode}"
     return f"'{cmd[1]}' exited with code {result.returncode}"
 

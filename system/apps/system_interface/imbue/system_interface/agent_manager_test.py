@@ -21,6 +21,7 @@ from watchdog.events import FileModifiedEvent
 from watchdog.events import FileMovedEvent
 from watchdog.events import FileOpenedEvent
 
+from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.imbue_common.logging import format_nanosecond_iso_timestamp
 from imbue.imbue_common.model_update import to_update
 from imbue.mngr.api.observe import make_agent_removed_event
@@ -1330,23 +1331,29 @@ def test_rename_chat_agent_rejects_a_name_with_no_usable_characters(
         manager.stop()
 
 
-class _FakeCompletedCommand:
-    """Just the two fields ``_rename_failure_detail`` reads off a finished command."""
-
-    def __init__(self, returncode: int, stderr: str) -> None:
-        self.returncode = returncode
-        self.stderr = stderr
+def _finished_rename(returncode: int, stderr: str, is_timed_out: bool = False) -> FinishedProcess:
+    """A rename subprocess's result, as ``run_local_command_modern_version`` shapes it."""
+    return FinishedProcess(
+        returncode=returncode,
+        stdout="",
+        stderr=stderr,
+        command=("mngr", "rename"),
+        is_timed_out=is_timed_out,
+        is_output_already_logged=False,
+    )
 
 
 def test_rename_failure_detail_names_our_own_timeout_rather_than_a_signal_number() -> None:
-    """A SIGTERMed rename is our timeout, and has to read like one.
+    """A timed-out rename is our cap, and has to read like one.
 
-    ``run_local_command_modern_version`` reports a killed process as a negative
-    return code, so the old wording turned the cap in ``_RENAME_TIMEOUT_SECONDS``
-    into "rename exited with code -15" -- which tells the user neither what went
-    wrong nor whether the name landed.
+    ``run_local_command_modern_version`` SIGTERMs a run that hits its timeout
+    and reports the kill as a negative return code, so the old wording turned
+    the cap in ``_RENAME_TIMEOUT_SECONDS`` into "rename exited with code -15"
+    -- which tells the user neither what went wrong nor whether the name landed.
     """
-    detail = _rename_failure_detail(["mngr", "rename", "agent-1", "Docs"], _FakeCompletedCommand(-signal.SIGTERM, ""))
+    detail = _rename_failure_detail(
+        ["mngr", "rename", "agent-1", "Docs"], _finished_rename(-signal.SIGTERM, "", is_timed_out=True)
+    )
     assert "did not finish within" in detail
     assert "-15" not in detail
     # It must not claim the rename did not happen: the subprocess was stopped
@@ -1354,19 +1361,33 @@ def test_rename_failure_detail_names_our_own_timeout_rather_than_a_signal_number
     assert "may or may not have been applied" in detail
 
 
+def test_rename_failure_detail_still_reads_as_a_timeout_when_the_kill_had_to_escalate() -> None:
+    # A SIGTERM the process ignored escalates to SIGKILL, but the cause is
+    # still the timeout -- which is why the wording keys off ``is_timed_out``
+    # rather than off which signal did the stopping.
+    detail = _rename_failure_detail(["mngr", "rename"], _finished_rename(-signal.SIGKILL, "", is_timed_out=True))
+    assert "did not finish within" in detail
+
+
 def test_rename_failure_detail_prefers_what_the_command_actually_said() -> None:
-    detail = _rename_failure_detail(["mngr", "rename"], _FakeCompletedCommand(1, "  name already taken  "))
+    detail = _rename_failure_detail(["mngr", "rename"], _finished_rename(1, "  name already taken  "))
     assert detail == "name already taken"
 
 
 def test_rename_failure_detail_reports_an_ordinary_exit_code_as_one() -> None:
-    detail = _rename_failure_detail(["mngr", "rename"], _FakeCompletedCommand(2, ""))
+    detail = _rename_failure_detail(["mngr", "rename"], _finished_rename(2, ""))
     assert detail == "'rename' exited with code 2"
 
 
 def test_rename_failure_detail_names_a_signal_we_did_not_send() -> None:
-    detail = _rename_failure_detail(["mngr", "rename"], _FakeCompletedCommand(-signal.SIGKILL, ""))
-    assert detail == "'rename' was stopped by signal 9"
+    # No ``is_timed_out``, so this SIGTERM was not our cap (the OOM shedder,
+    # say) and must not be dressed up as one.
+    assert _rename_failure_detail(["mngr", "rename"], _finished_rename(-signal.SIGTERM, "")) == (
+        "'rename' was stopped by signal 15"
+    )
+    assert _rename_failure_detail(["mngr", "rename"], _finished_rename(-signal.SIGKILL, "")) == (
+        "'rename' was stopped by signal 9"
+    )
 
 
 def test_create_chat_agent_mints_the_first_free_numbered_name(
