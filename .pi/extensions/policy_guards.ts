@@ -67,11 +67,28 @@ function refusalReason(command: string): string | null {
   return null;
 }
 
+/** The command the agent wrote, from a bash `tool_call` event, or null.
+ *
+ * `input.command` is mutable and mngr's lifecycle extension rewrites it in place,
+ * prepending the OOM self-tag and git identity as their own `;`-joined commands. pi
+ * runs every extension's `tool_call` handler on the same event without specifying
+ * their order, so that rewrite may already have happened by the time we read it --
+ * and the checkers would refuse the prefix as a command chained ahead of the
+ * agent's, blocking every request and every step transition. mngr therefore records
+ * the pre-rewrite command as `mngrOriginalCommand`; it is absent when we run first,
+ * which is exactly when `input.command` is still untouched. */
+function agentCommand(event: any): string | null {
+  for (const candidate of [event?.mngrOriginalCommand, event?.input?.command]) {
+    if (typeof candidate === "string" && candidate) return candidate;
+  }
+  return null;
+}
+
 export default function policyGuards(pi: any): void {
   pi.on("tool_call", (event: any) => {
     if (event?.toolName !== "bash") return;
-    const command = event.input?.command;
-    if (typeof command !== "string" || !command) return;
+    const command = agentCommand(event);
+    if (command === null) return;
     const reason = refusalReason(command);
     if (reason !== null) return { block: true, reason };
   });
