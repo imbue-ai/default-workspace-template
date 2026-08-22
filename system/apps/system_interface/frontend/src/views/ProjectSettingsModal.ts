@@ -65,13 +65,6 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
   let isDeleting = false;
   let isConfirmingDelete = false;
   let error: string | null = null;
-  // A working copy of the project's member list, seeded from `attrs.project`
-  // on open and updated locally as removals land -- the parent hands this
-  // modal a snapshot rather than a live-updating prop (see the module
-  // docstring), so this is the only place that stays in step with what this
-  // dialog has actually done.
-  // The one member currently being removed, so its row shows its own pending
-  // state and a second click on any row is a no-op rather than a race.
   // The Escape handler is registered on the document once, so it reaches the
   // callbacks through this rather than through a vnode captured at create time.
   let latestAttrs: ProjectSettingsModalAttrs | null = null;
