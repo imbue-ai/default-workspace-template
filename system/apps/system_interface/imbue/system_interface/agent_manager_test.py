@@ -4,6 +4,7 @@ import json
 import os
 import queue
 import shutil
+import signal
 import threading
 import time
 from datetime import datetime
@@ -47,6 +48,7 @@ from imbue.system_interface.agent_manager import _build_chat_rename_command
 from imbue.system_interface.agent_manager import _build_observe_command_argv
 from imbue.system_interface.agent_manager import _chat_project_label
 from imbue.system_interface.agent_manager import _make_apps_file_handler
+from imbue.system_interface.agent_manager import _rename_failure_detail
 from imbue.system_interface.harnesses.codex.activity import CodexActivityTracker
 from imbue.system_interface.harnesses.codex.model import codex_models_to_options
 from imbue.system_interface.harnesses.codex.model import get_codex_model_options_path
@@ -1216,7 +1218,9 @@ def test_chat_display_label_argv_accepted_by_live_cli() -> None:
 def _tracked_chat(manager: AgentManager, agent_id: str, name: str, display_name: str | None = None) -> None:
     labels = {} if display_name is None else {"display_name": display_name}
     with manager._lock:
-        manager._agents[agent_id] = AgentStateItem(id=agent_id, name=name, state="RUNNING", labels=labels, work_dir=None)
+        manager._agents[agent_id] = AgentStateItem(
+            id=agent_id, name=name, state="RUNNING", labels=labels, work_dir=None
+        )
 
 
 def test_rename_chat_agent_refuses_a_chat_that_is_still_being_created(
@@ -1324,6 +1328,45 @@ def test_rename_chat_agent_rejects_a_name_with_no_usable_characters(
             manager.rename_chat_agent("agent-7", "!!!")
     finally:
         manager.stop()
+
+
+class _FakeCompletedCommand:
+    """Just the two fields ``_rename_failure_detail`` reads off a finished command."""
+
+    def __init__(self, returncode: int, stderr: str) -> None:
+        self.returncode = returncode
+        self.stderr = stderr
+
+
+def test_rename_failure_detail_names_our_own_timeout_rather_than_a_signal_number() -> None:
+    """A SIGTERMed rename is our timeout, and has to read like one.
+
+    ``run_local_command_modern_version`` reports a killed process as a negative
+    return code, so the old wording turned the cap in ``_RENAME_TIMEOUT_SECONDS``
+    into "rename exited with code -15" -- which tells the user neither what went
+    wrong nor whether the name landed.
+    """
+    detail = _rename_failure_detail(["mngr", "rename", "agent-1", "Docs"], _FakeCompletedCommand(-signal.SIGTERM, ""))
+    assert "did not finish within" in detail
+    assert "-15" not in detail
+    # It must not claim the rename did not happen: the subprocess was stopped
+    # partway through work that spans the provider's data and a live tmux session.
+    assert "may or may not have been applied" in detail
+
+
+def test_rename_failure_detail_prefers_what_the_command_actually_said() -> None:
+    detail = _rename_failure_detail(["mngr", "rename"], _FakeCompletedCommand(1, "  name already taken  "))
+    assert detail == "name already taken"
+
+
+def test_rename_failure_detail_reports_an_ordinary_exit_code_as_one() -> None:
+    detail = _rename_failure_detail(["mngr", "rename"], _FakeCompletedCommand(2, ""))
+    assert detail == "'rename' exited with code 2"
+
+
+def test_rename_failure_detail_names_a_signal_we_did_not_send() -> None:
+    detail = _rename_failure_detail(["mngr", "rename"], _FakeCompletedCommand(-signal.SIGKILL, ""))
+    assert detail == "'rename' was stopped by signal 9"
 
 
 def test_create_chat_agent_mints_the_first_free_numbered_name(
@@ -2544,6 +2587,8 @@ def test_offline_codex_chip_matches_the_persisted_selection_from_the_sidecar(age
     assert choice.identity.model_id == "gpt-5.6-terra"
     assert choice.matched is not None
     assert choice.matched.id == "gpt-5.6-terra"
+
+
 def _capture_prioritizer_writes(manager: AgentManager, pids: dict[str, int]) -> list[tuple[int, int]]:
     """Swap in an OOM prioritizer that captures its band writes, and return the log.
 

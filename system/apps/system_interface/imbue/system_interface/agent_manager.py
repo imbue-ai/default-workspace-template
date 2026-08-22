@@ -3,6 +3,7 @@ import os
 import queue
 import re
 import shlex
+import signal
 import threading
 import tomllib
 from collections.abc import Callable
@@ -238,6 +239,35 @@ def _build_chat_rename_command(mngr_binary: str, agent_id: str, name: str) -> li
         "--label",
         f"display_name={name}",
     ]
+
+
+def _rename_failure_detail(cmd: list[str], result: Any) -> str:
+    """Why a rename subprocess failed, in terms the user can act on.
+
+    ``run_local_command_modern_version`` reports a killed process as a NEGATIVE
+    return code carrying the signal number, so the plain "exited with code"
+    wording turned our own timeout into "exited with code -15" -- a number that
+    says nothing about what happened or what to do next. The timeout is the
+    common case by far (see ``_RENAME_TIMEOUT_SECONDS``): the rename shells out
+    to the mngr CLI, whose startup alone is seconds, so a loaded host reaches
+    the cap without anything being wrong with the name.
+
+    Its wording deliberately does not promise the rename did not happen. The
+    subprocess is stopped partway, and a rename both rewrites the provider's
+    persisted agent data and moves the tmux session on a live host, so which of
+    those landed is genuinely unknown from here.
+    """
+    stderr = result.stderr.strip()
+    if stderr:
+        return stderr
+    if result.returncode < 0:
+        if -result.returncode == signal.SIGTERM:
+            return (
+                f"'{cmd[1]}' did not finish within {_RENAME_TIMEOUT_SECONDS:.0f}s and was stopped, "
+                "so the new name may or may not have been applied -- reopen the workspace to see which"
+            )
+        return f"'{cmd[1]}' was stopped by signal {-result.returncode}"
+    return f"'{cmd[1]}' exited with code {result.returncode}"
 
 
 def _build_chat_display_label_command(mngr_binary: str, agent_id: str, name: str) -> list[str]:
@@ -812,8 +842,9 @@ class AgentManager:
             _loguru_logger.opt(exception=e).error("Error renaming agent {}", agent_state.id)
             raise AgentRenameError(f"Failed to rename agent '{agent_state.name}': {e}") from e
         if result.returncode != 0:
-            detail = result.stderr.strip() or f"{cmd[1]} exited with code {result.returncode}"
-            raise AgentRenameError(f"Failed to rename agent '{agent_state.name}': {detail}")
+            raise AgentRenameError(
+                f"Failed to rename agent '{agent_state.name}': {_rename_failure_detail(cmd, result)}"
+            )
 
         # Reflect the new name pair immediately rather than waiting for the
         # observe stream to relist, exactly as destroy drops the agent immediately.

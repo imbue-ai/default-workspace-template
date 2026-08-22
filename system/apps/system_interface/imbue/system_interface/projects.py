@@ -116,12 +116,6 @@ class ProjectNotFoundError(KeyError):
         super().__init__(f"Project '{project_id}' not found")
 
 
-class LastProjectDeletionError(ValueError):
-    """Raised when deleting a project would leave the workspace with none."""
-
-    ...
-
-
 class ProjectColorError(ValueError):
     """Raised when a project color is not a ``#RRGGBB`` hex string."""
 
@@ -140,6 +134,12 @@ class ProjectMemberRefError(ValueError):
     ...
 
 
+class ProjectShortcutError(ValueError):
+    """Raised when a shortcut name is not one of the rail's built-in rows."""
+
+    ...
+
+
 class ProjectDeviceError(ValueError):
     """Raised when a device kind is not one of DEVICE_KINDS."""
 
@@ -154,6 +154,14 @@ def validate_device(device: str) -> str:
     return device
 
 
+# The rail's four built-in shortcut rows. Unlike an app, none of these is an
+# object with a member ref -- "chat" is a create, and the terminal and browser
+# services are fleets reached by making a session rather than by opening the
+# service -- so which of them a project shows cannot be membership and is
+# recorded here instead.
+SHORTCUT_NAMES: Final[frozenset[str]] = frozenset({"chat", "files", "browser", "terminal"})
+
+
 class ProjectInfo(FrozenModel):
     """One project as listed to clients."""
 
@@ -163,6 +171,13 @@ class ProjectInfo(FrozenModel):
     glyph: int = Field(description="Index into the frontend's squiggle glyph table")
     has_content: bool = Field(description="Whether a saved content file exists yet")
     members: tuple[str, ...] = Field(description="Panel refs this project shows, open or backgrounded")
+    # Recorded as the ones taken OUT rather than the ones kept, so that an entry
+    # with no such field -- every project written before this existed, and every
+    # one created since -- shows all four. The default is the whole set, and
+    # absence has to mean the default or the registry would need migrating.
+    unpinned_shortcuts: tuple[str, ...] = Field(
+        default=(), description="Built-in shortcut rows this project has unpinned into its All apps menu"
+    )
 
 
 @pure
@@ -252,6 +267,21 @@ def _project_entry(name: str, color: str, glyph: int, members: list[str]) -> _Pr
         "glyph": _validated_glyph(glyph),
         "members": list(members),
     }
+
+
+@pure
+def _entry_unpinned_shortcuts(entry: Mapping[str, Any]) -> list[str]:
+    """The shortcut rows one entry has unpinned, tolerating a hand-edit.
+
+    Filtered against ``SHORTCUT_NAMES`` rather than trusted: a name that is not
+    a shortcut could otherwise hide nothing while still riding every list
+    response, and a shortcut renamed in a later version would strand its old
+    name here forever.
+    """
+    unpinned = entry.get("unpinned_shortcuts")
+    if not isinstance(unpinned, list):
+        return []
+    return [name for name in unpinned if isinstance(name, str) and name in SHORTCUT_NAMES]
 
 
 @pure
@@ -463,11 +493,12 @@ def _migrate_named_layouts_unlocked(layout_dir: Path) -> dict[str, Any] | None:
 def _read_meta_unlocked(layout_dir: Path) -> dict[str, Any]:
     """Read the registry, seeding the starter project on first use.
 
-    A corrupt meta file -- or one a hand-edit left holding no projects at all
-    -- is treated as first use (logged at warning) rather than crashing every
-    project endpoint: the registry is derivable state and the content files
-    themselves are untouched. Reseeding is also what guarantees the rest of
-    this module always has at least one project to fall back to.
+    A corrupt meta file is treated as first use (logged at warning) rather than
+    crashing every project endpoint: the registry is derivable state and the
+    content files themselves are untouched. An empty ``project_by_id`` is *not*
+    treated as corrupt -- deleting is a pure view operation with no undeletable
+    project any more, so a machine legitimately reaches zero of them, and
+    Everything is always there to fall back to.
     """
     meta_path = _meta_path(layout_dir)
     if meta_path.exists():
@@ -476,7 +507,7 @@ def _read_meta_unlocked(layout_dir: Path) -> dict[str, Any]:
         except (json.JSONDecodeError, OSError) as e:
             _loguru_logger.opt(exception=e).warning("Failed to read {}; reinitializing defaults", meta_path)
             meta = None
-        if isinstance(meta, dict) and isinstance(meta.get("project_by_id"), dict) and meta["project_by_id"]:
+        if isinstance(meta, dict) and isinstance(meta.get("project_by_id"), dict):
             return meta
     migrated_meta = _migrate_named_layouts_unlocked(layout_dir)
     meta = migrated_meta if migrated_meta is not None else _default_meta()
@@ -494,6 +525,7 @@ def _project_info(layout_dir: Path, project_id: str, entry: Mapping[str, Any]) -
         glyph=glyph if isinstance(glyph, int) else DEFAULT_PROJECT_GLYPH,
         has_content=any(project_content_path(layout_dir, project_id, device).exists() for device in DEVICE_KINDS),
         members=tuple(_entry_members(entry)),
+        unpinned_shortcuts=tuple(_entry_unpinned_shortcuts(entry)),
     )
 
 
@@ -505,6 +537,7 @@ def list_projects(layout_dir: Path) -> list[ProjectInfo]:
 
 
 def get_last_active_id(layout_dir: Path) -> str:
+    """The view a client should land on, falling back to Everything with zero projects."""
     with _projects_lock:
         meta = _read_meta_unlocked(layout_dir)
         last_active = meta.get("last_active_id")
@@ -512,7 +545,7 @@ def get_last_active_id(layout_dir: Path) -> str:
             last_active == EVERYTHING_VIEW_ID or last_active in meta["project_by_id"]
         ):
             return last_active
-        return next(iter(meta["project_by_id"]))
+        return next(iter(meta["project_by_id"]), EVERYTHING_VIEW_ID)
 
 
 def set_last_active_id(layout_dir: Path, project_id: str) -> None:
@@ -641,6 +674,40 @@ def add_member(layout_dir: Path, project_id: str, ref: str) -> None:
             return
         entry["members"] = [*members, member_ref]
         _write_meta_unlocked(layout_dir, meta)
+
+
+def set_shortcut_pinned(layout_dir: Path, project_id: str, shortcut: str, is_pinned: bool) -> list[str]:
+    """Pin one built-in shortcut row into ``project_id``'s rail, or unpin it out.
+
+    This moves where the row is offered and changes nothing about what it does:
+    pinned it sits in the rail, unpinned it moves into the All apps menu, and
+    clicking it starts the same thing either way.
+
+    It is project-scoped on purpose -- which starting points a project keeps to
+    hand is a property of that project -- and stored as the unpinned set, so a
+    project that has never touched this shows all four. Idempotent; returns the
+    resulting unpinned set. An unknown project id raises ProjectNotFoundError,
+    an unknown shortcut ProjectShortcutError.
+    """
+    if shortcut not in SHORTCUT_NAMES:
+        known = ", ".join(sorted(SHORTCUT_NAMES))
+        raise ProjectShortcutError(f"Unknown shortcut {shortcut!r} (known shortcuts: {known})")
+    with _projects_lock:
+        meta = _read_meta_unlocked(layout_dir)
+        entry = meta["project_by_id"].get(project_id)
+        if entry is None:
+            raise ProjectNotFoundError(project_id)
+        unpinned = _entry_unpinned_shortcuts(entry)
+        is_currently_pinned = shortcut not in unpinned
+        if is_currently_pinned == is_pinned:
+            return unpinned
+        if is_pinned:
+            unpinned = [name for name in unpinned if name != shortcut]
+        else:
+            unpinned = [*unpinned, shortcut]
+        entry["unpinned_shortcuts"] = unpinned
+        _write_meta_unlocked(layout_dir, meta)
+        return unpinned
 
 
 def remove_member(layout_dir: Path, project_id: str, ref: str) -> None:
@@ -914,22 +981,22 @@ def update_project(layout_dir: Path, project_id: str, name: str, color: str, gly
 def delete_project(layout_dir: Path, project_id: str) -> str:
     """Delete a project and return the fallback id clients should switch to.
 
-    The fallback is the first remaining project in registry order. The member
-    list goes with the project, which changes nothing about the objects it
-    showed: they keep running, and they stay in every other project showing them
-    and in Everything. Stopping any of them is the caller's job, and is what the
-    delete confirmation enumerates. Raises ProjectNotFoundError for an unknown id
-    and LastProjectDeletionError when this is the only project left, since the
-    fallback is always another project.
+    A pure view operation: only this project's registry entry and its own
+    content files (desktop and mobile) go. The member list goes with them, but
+    that changes nothing about the objects it showed -- they keep running, and
+    they stay in every other project showing them and in Everything, neither of
+    which this function ever touches. The fallback is the first remaining
+    project in registry order, or Everything once none are left: a machine may
+    end up with zero projects and still work, since Everything has no registry
+    entry to delete and is always there. Raises ProjectNotFoundError for an
+    unknown id.
     """
     with _projects_lock:
         meta = _read_meta_unlocked(layout_dir)
         if project_id not in meta["project_by_id"]:
             raise ProjectNotFoundError(project_id)
-        if len(meta["project_by_id"]) <= 1:
-            raise LastProjectDeletionError("Cannot delete the last remaining project")
         del meta["project_by_id"][project_id]
-        fallback_id = next(iter(meta["project_by_id"]))
+        fallback_id = next(iter(meta["project_by_id"]), EVERYTHING_VIEW_ID)
         if meta.get("last_active_id") == project_id:
             meta["last_active_id"] = fallback_id
         _write_meta_unlocked(layout_dir, meta)

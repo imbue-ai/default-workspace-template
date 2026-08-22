@@ -59,6 +59,25 @@ export interface ProjectInfo {
   // added. Not derived from the layout: a member with no panel is still here.
   // The same ref may appear in other projects' lists too.
   members: string[];
+  // Which of the rail's four built-in shortcut rows this project has moved into
+  // its All apps menu. Recorded as the ones taken OUT rather than the ones
+  // kept, so a project that has never touched this -- which is every project
+  // until it does -- shows all four. Optional here for the same reason: a
+  // server that predates the field is a server where none are unpinned.
+  unpinned_shortcuts?: string[];
+}
+
+/** The rail's built-in shortcut rows, in the order the rail offers them.
+ *  Unlike an app, none of these is an object with a member ref, so which of
+ *  them a project shows is its own stored field rather than membership. */
+export const SHORTCUT_NAMES = ["chat", "files", "browser", "terminal"] as const;
+
+export type ShortcutName = (typeof SHORTCUT_NAMES)[number];
+
+/** Whether this project keeps ``shortcut`` in its rail. Absent means all four,
+ *  so a project the server told us nothing about shows the full set. */
+export function isShortcutPinned(project: ProjectInfo | null, shortcut: ShortcutName): boolean {
+  return !(project?.unpinned_shortcuts ?? []).includes(shortcut);
 }
 
 export interface ProjectsListResponse {
@@ -99,9 +118,27 @@ export async function fetchProjectContent(viewId: string): Promise<unknown | nul
   }
 }
 
+// What the tunnel in front of this server answers when the server itself is
+// not up: a workspace still provisioning, restarting, or shutting down. The
+// request never reached an endpoint, so nothing was read and nothing changed.
+const UNREACHABLE_STATUSES: ReadonlySet<number> = new Set([502, 503, 504]);
+
+/**
+ * Why a request failed, in terms the user can act on.
+ *
+ * The server's own ``detail`` when it gave one -- it knows best. Otherwise the
+ * bare status was being shown, and "HTTP 503" reads as a bug in the thing you
+ * just clicked when it actually means the workspace was not answering at all.
+ * Saying so, and saying that nothing changed, is the difference between "this
+ * feature is broken" and "try again in a moment".
+ */
 async function errorDetailFromResponse(response: Response): Promise<string> {
   const data = (await response.json().catch(() => ({}))) as { detail?: string };
-  return data.detail ?? `HTTP ${response.status}`;
+  if (data.detail) return data.detail;
+  if (UNREACHABLE_STATUSES.has(response.status)) {
+    return "the workspace is not responding right now, so nothing was changed — try again in a moment";
+  }
+  return `HTTP ${response.status}`;
 }
 
 /** Autosave the active view's content, EVERYTHING_VIEW_ID included, into this
@@ -153,12 +190,37 @@ export async function updateProjectSettings(
   return (await response.json()) as ProjectInfo;
 }
 
-/** Delete a project. Stopping the services behind its members is the server's
- *  half of this, and the confirmation that precedes it is the caller's, so by
- *  the time this is called the user has already seen what goes away. Throws
- *  with the server's detail on rejection (unknown project, or the last
- *  remaining project, which may not be deleted -- the dock always needs a real
- *  project behind it). */
+/**
+ * Move one built-in shortcut row between this project's rail and its All apps
+ * menu. Project-scoped: which starting points a project keeps to hand belongs
+ * to that project, not to the user or the device.
+ *
+ * Returns the project's resulting unpinned set. Throws with the server's
+ * detail on rejection (an unknown project, a name that is not a shortcut).
+ */
+export async function setShortcutPinned(
+  projectId: string,
+  shortcut: ShortcutName,
+  isPinned: boolean,
+): Promise<string[]> {
+  const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(projectId)}/shortcuts`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ shortcut, is_pinned: isPinned }),
+  });
+  if (!response.ok) {
+    throw new Error(await errorDetailFromResponse(response));
+  }
+  const data = (await response.json()) as { unpinned_shortcuts?: string[] };
+  return data.unpinned_shortcuts ?? [];
+}
+
+/** Delete a project. This is a pure view operation: only the project's
+ *  registry entry, member list and saved content go, and the server never
+ *  touches the objects it showed -- they keep running, and stay in Everything
+ *  and in any other project already showing them. A machine may end up with
+ *  zero projects; Everything is always there. Throws with the server's detail
+ *  on rejection (unknown project). */
 export async function deleteProjectRequest(projectId: string): Promise<void> {
   const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(projectId)}/delete`), { method: "POST" });
   if (!response.ok) {
@@ -268,17 +330,22 @@ export async function fetchMemberMap(): Promise<Record<string, string[]>> {
 
 /**
  * Pick the view a client should mount on: its stored per-browser choice when
- * that view still exists, else the first project. Null only when no projects
- * exist at all, which means the registry could not be read.
+ * that view still exists, else the first project, else Everything.
+ *
+ * A machine may genuinely have zero projects now that deleting one is a pure
+ * view operation with no undeletable project left, and a registry that could
+ * not be read (server unreachable) looks the same as one holding none --
+ * either way Everything is always there to land on, so there is always a view
+ * to name and this never comes back empty-handed.
  *
  * A client last looking at Everything lands back on Everything: it is the home
  * and has a layout of its own, so there is nothing to fall back from.
  */
-export function chooseInitialViewId(projects: readonly ProjectInfo[], storedId: string): string | null {
+export function chooseInitialViewId(projects: readonly ProjectInfo[], storedId: string): string {
   if (isEverythingView(storedId)) return EVERYTHING_VIEW_ID;
   const stored = projects.find((project) => project.project_id === storedId);
   if (stored) return stored.project_id;
-  return projects.length === 0 ? null : projects[0].project_id;
+  return projects.length === 0 ? EVERYTHING_VIEW_ID : projects[0].project_id;
 }
 
 /**
@@ -365,6 +432,22 @@ export function memberRef(kind: MemberKind, name: string): string {
   }
 }
 
+/** The stable agent id out of a `chat:<agent-id>` ref, or null for a ref that
+ *  addresses no chat. The inverse of `memberRef("chat", id)`. */
+export function chatAgentIdFromRef(ref: string): string | null {
+  if (!ref.startsWith(CHAT_REF_PREFIX)) return null;
+  const id = ref.substring(CHAT_REF_PREFIX.length);
+  return id === "" ? null : id;
+}
+
+/** The tmux session name out of a `terminal:<name>` ref, or null for a ref
+ *  that addresses no terminal. The inverse of `memberRef("terminal", name)`. */
+export function terminalSessionFromRef(ref: string): string | null {
+  if (!ref.startsWith(TERMINAL_REF_PREFIX)) return null;
+  const name = ref.substring(TERMINAL_REF_PREFIX.length);
+  return name === "" ? null : name;
+}
+
 /**
  * The service name a `service:<name>` ref addresses, or null for a ref that
  * addresses no service.
@@ -383,6 +466,22 @@ export function serviceNameFromRef(ref: string): string | null {
   return name;
 }
 
+/**
+ * The fleet browser's own session name out of a `service:browser?session=<id>`
+ * ref, or null for a ref that addresses no fleet browser.
+ *
+ * The counterpart to `serviceNameFromRef`, which deliberately refuses this same
+ * ref shape: an installed app has no `?session=` suffix, and a fleet browser
+ * has one, so the two calls together are how a caller tells the two `service:`
+ * shapes apart. `memberRef("browser", name)` is the inverse.
+ */
+export function browserSessionFromRef(ref: string): string | null {
+  const prefix = memberRef("browser", "");
+  if (!ref.startsWith(prefix)) return null;
+  const session = ref.substring(prefix.length);
+  return session === "" ? null : session;
+}
+
 /** One object as the machine reports it, before it becomes a row: the name its
  *  ref is built from (see memberRef) and what to call it in the UI. */
 export interface MachineObject {
@@ -393,15 +492,20 @@ export interface MachineObject {
 /**
  * Everything the machine currently holds, gathered per kind from the source
  * that knows about it: chat agents from the agent list, terminals from the
- * tmux fleet, browsers from the browser fleet, apps from the registered
- * service list, and ad-hoc URL tabs from the layouts that host them.
+ * tmux fleet, browsers from the browser fleet, and apps from the registered
+ * service list.
+ *
+ * Those four kinds are the whole of it, because they are the four the machine
+ * can enumerate: an ad-hoc URL page exists only as a panel in some view's
+ * arrangement (see `memberRefForPanelParams` in DockviewWorkspace, which files
+ * none), so nothing here can report one and a `url:` ref only ever reaches a
+ * tab list through a migrated project's own member list.
  */
 export interface MachineInventory {
   chatAgents: readonly MachineObject[];
   terminals: readonly MachineObject[];
   browsers: readonly MachineObject[];
   apps: readonly MachineObject[];
-  urlTabs: readonly MachineObject[];
 }
 
 /** One row of a tab list: the object, what it is called, and which projects
@@ -419,7 +523,6 @@ const INVENTORY_KINDS: readonly { kind: MemberKind; key: keyof MachineInventory 
   { kind: "terminal", key: "terminals" },
   { kind: "browser", key: "browsers" },
   { kind: "app", key: "apps" },
-  { kind: "url", key: "urlTabs" },
 ];
 
 /**
@@ -433,10 +536,10 @@ const INVENTORY_KINDS: readonly { kind: MemberKind; key: keyof MachineInventory 
  * projects showing it, for the row menu; a ref missing from it is filed
  * nowhere, not hidden.
  *
- * Kinds come out in inventory order (chats, terminals, browsers, apps, URL
- * tabs) and objects within a kind in the order their source listed them.
- * Duplicate refs collapse onto the first row for them, so a URL tab that the
- * layouts report twice does not list twice.
+ * Kinds come out in inventory order (chats, terminals, browsers, apps) and
+ * objects within a kind in the order their source listed them. Duplicate refs
+ * collapse onto the first row for them, so an object a source reports twice
+ * does not list twice.
  */
 export function buildEverythingMembers(
   inventory: MachineInventory,
