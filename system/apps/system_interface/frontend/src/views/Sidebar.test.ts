@@ -587,10 +587,10 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
     redraw();
 
     const menu = openRowMenuByContextClick(root, redraw, "Chat 1");
-    // Refresh, Rename, Hide tab, Quit -- exactly objectMenuEntries("chat", ...)
-    // for an OPEN row (hideTab non-null). No Share (chat-only exclusion) and
-    // no "Remove from project" / "Delete from this machine": those verbs moved
-    // to the project settings modal and the shared Quit verb respectively.
+    // Refresh, Rename, Remove from project, Quit -- exactly
+    // objectMenuEntries("chat", ...) as the rail builds it. No Share, which is
+    // an app-only affordance, and no "Delete from this machine", which folded
+    // into the shared Quit verb.
     expect(menuItemLabels(menu)).toEqual(["Refresh", "Rename", "Remove from project", "Quit Chat 1"]);
     expect(menu?.textContent).not.toContain("Delete from this machine");
     // Hiding a tab is the tab's own job; from here the row is a thing the
