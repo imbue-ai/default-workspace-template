@@ -39,6 +39,7 @@ import re
 import threading
 import urllib.parse
 from collections.abc import Mapping
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 from typing import Final
@@ -257,15 +258,24 @@ class _ProjectEntry(TypedDict):
     color: str
     glyph: int
     members: list[str]
+    unpinned_shortcuts: list[str]
 
 
-def _project_entry(name: str, color: str, glyph: int, members: list[str]) -> _ProjectEntry:
-    """Build one registry entry from validated display metadata plus its members."""
+def _project_entry(
+    name: str, color: str, glyph: int, members: list[str], unpinned_shortcuts: Sequence[str] = ()
+) -> _ProjectEntry:
+    """Build one registry entry from validated display metadata plus its members.
+
+    ``unpinned_shortcuts`` defaults to none unpinned -- the same state an absent
+    key means on read -- so only ``update_project``, which must carry an existing
+    project's pin state through a rebuild, ever passes it.
+    """
     return {
         "name": _validated_name(name),
         "color": _validated_color(color),
         "glyph": _validated_glyph(glyph),
         "members": list(members),
+        "unpinned_shortcuts": list(unpinned_shortcuts),
     }
 
 
@@ -961,7 +971,7 @@ def create_project(layout_dir: Path, name: str, color: str, glyph: int) -> Proje
 
 
 def update_project(layout_dir: Path, project_id: str, name: str, color: str, glyph: int) -> ProjectInfo:
-    """Replace one project's display metadata, keeping its id, content and members.
+    """Replace one project's display metadata, keeping its id, content, members and shortcut pins.
 
     Renaming never re-slugifies the id: the id keys the content file and the
     registry entry that owns the members, so a rename is purely cosmetic.
@@ -972,7 +982,9 @@ def update_project(layout_dir: Path, project_id: str, name: str, color: str, gly
         existing_entry = meta["project_by_id"].get(project_id)
         if existing_entry is None:
             raise ProjectNotFoundError(project_id)
-        entry = _project_entry(name, color, glyph, _entry_members(existing_entry))
+        entry = _project_entry(
+            name, color, glyph, _entry_members(existing_entry), _entry_unpinned_shortcuts(existing_entry)
+        )
         meta["project_by_id"][project_id] = entry
         _write_meta_unlocked(layout_dir, meta)
         return _project_info(layout_dir, project_id, entry)

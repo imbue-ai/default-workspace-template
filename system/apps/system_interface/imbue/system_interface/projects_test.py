@@ -459,6 +459,19 @@ def test_a_hand_edited_shortcut_name_is_ignored_on_read(tmp_path: Path) -> None:
     assert _unpinned(tmp_path, "research") == ("browser",)
 
 
+def test_update_project_keeps_the_unpinned_shortcuts(tmp_path: Path) -> None:
+    # A settings save rebuilds the registry entry, and it must carry the pin
+    # state through the same way it carries the member list -- or renaming a
+    # project would silently put every shortcut it had unpinned back in its rail.
+    create_project(tmp_path, "Research", "#12B5A5", 4)
+    set_shortcut_pinned(tmp_path, "research", "terminal", False)
+
+    updated = update_project(tmp_path, "research", "Research Renamed", "#16A34A", 2)
+
+    assert updated.unpinned_shortcuts == ("terminal",)
+    assert _unpinned(tmp_path, "research") == ("terminal",)
+
+
 def test_remove_member_leaves_other_projects_alone(tmp_path: Path) -> None:
     create_project(tmp_path, "Research", "#12B5A5", 4)
     create_project(tmp_path, "Coding", "#16A34A", 1)
