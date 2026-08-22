@@ -52,8 +52,9 @@ claude and codex at once.
 
 Codex loads hooks from every active config layer and a higher-precedence layer does not
 replace a lower one, so this repo's `.codex/hooks.json` runs alongside the per-agent file
-mngr writes for its own bookkeeping hook. Adding a guard is an edit to `.claude/settings.json`
-+ `.codex/hooks.json` (and `.pi/extensions/policy_guards.ts` below) — never a mngr release.
+mngr writes for its own bookkeeping hook. Adding a guard is an edit to
+`.claude/settings.json` and `.codex/hooks.json` (and `.pi/extensions/policy_guards.ts`
+below) — never a mngr release.
 
 A project layer's hooks need the layer trusted and each hook trusted by hash; mngr already
 marks the work dir trusted and passes `--dangerously-bypass-hook-trust`, which covers both.
