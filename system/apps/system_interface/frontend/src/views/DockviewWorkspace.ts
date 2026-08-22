@@ -879,25 +879,23 @@ const tabHandlesByPanelId = new Map<
  * ``:hover`` rule because the menu has to hold them open while it is up, after
  * the pointer has left the tab for the menu card.
  *
- * Double-clicking a tab's title renames the object it shows, for all four
- * kinds that carry one (chat, terminal, browser, app -- see objectMenu.ts):
- * the title becomes a text field seeded with the current name, Enter and blur
- * commit, Escape puts the old one back. The commit goes through
- * ``renameMemberRef`` -- the same path the agent-facing layout op and the
- * kebab menu's own Rename take -- which is only ever a store write
- * (``/api/member-titles``) from here. What that write actually DOES differs
- * by kind, and the asymmetry is deliberate: a chat is an mngr agent, so the
- * server routes a ``chat:`` ref's rename to ``mngr rename`` instead of the
- * store, moving the agent's ``display_name`` label (with the canonical form
- * as its true name) so `mngr list` and the tab keep agreeing -- see
- * ``_rename_chat_agent_for_ref`` in server.py. A terminal, a browser and an
- * app have no such canonical name to move: the typed title is DISPLAY-ONLY,
- * stored purely in the machine-wide title map (models/MemberTitles.ts) and
- * read back everywhere the object is shown, while the tmux session name and
- * the Chromium fleet identity that actually address the object underneath
- * stay exactly what they were. Renaming a browser tab to "Research" does not
- * rename its ``browser-1`` session, and must not -- that identity is what the
- * fleet, the layout store and every other client resolve the object by.
+ * Double-clicking a CHAT tab's title renames it, and only a chat's: whose
+ * name is the user's to choose is what ``isRenameableKind`` decides, and
+ * objectMenu.ts is where the reasoning lives. The title becomes a text field
+ * seeded with the current name, Enter and blur commit, Escape puts the old one
+ * back. The commit goes through ``renameMemberRef`` -- the same path the
+ * agent-facing layout op and the kebab menu's own Rename take -- and for a
+ * ``chat:`` ref the server routes that write to ``mngr rename`` rather than to
+ * the machine-wide title store, moving the agent's ``display_name`` label
+ * (with the canonical form as its true name) so `mngr list` and the tab keep
+ * agreeing; see ``_rename_chat_agent_for_ref`` in server.py.
+ *
+ * A terminal, a browser and an app get no gesture here -- they keep the tmux
+ * session name, Chromium profile or registered service name that addresses
+ * them -- so a double-click on one of those propagates instead, and dockview
+ * treats it as the ordinary click it is. (An agent can still put a display
+ * title on any of them through ``layout.py rename``; the tab reads that title
+ * like every other surface, it just offers no way to set one.)
  */
 function createCustomTab(options: { id: string; name: string }): ITabRenderer {
   const element = document.createElement("div");
