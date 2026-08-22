@@ -249,8 +249,6 @@ Already have something in mind? Tell me what you'd like to work on below. If not
 
 Then stop. If the user's next message asks for suggestions or says they are not sure, follow the rest of `.agents/skills/welcome/SKILL.md`."""]
 
-
-
 # the "pi-coding" agent type -- Pi coding CLI as a peer harness (short alias `pi`).
 # Registered by the vendored imbue-mngr-pi-coding plugin; the pi binary is baked
 # into the image (system/scripts/setup_system.sh, PI_VERSION), so check_installation
