@@ -1643,6 +1643,11 @@ def test_start_observe_spawns_long_lived_subprocess(
     # otherwise running pytest from inside a mngr-managed worktree would inherit
     # a config with ``is_allowed_in_pytest = false`` and the child would abort.
     monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    # And at an empty host dir: with the developer's real ~/.mngr, the spawned
+    # observe enumerates their live agents and queries tmux about them, which
+    # trips the tmux resource guard on any machine with running agents. The
+    # test only asserts the child stays alive, which an empty world satisfies.
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path / "mngr-host"))
     manager = AgentManager.build(broadcaster)
     try:
         manager._start_observe()
@@ -1700,8 +1705,9 @@ def test_start_observe_watchdog_stays_quiet_on_clean_shutdown(
         pytest.skip("mngr binary not on PATH")
 
     monkeypatch.setenv("MNGR_AGENT_STATE_DIR", str(tmp_path))
-    # See test_start_observe_spawns_long_lived_subprocess for why this is needed.
+    # See test_start_observe_spawns_long_lived_subprocess for why these are needed.
     monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path / "mngr-host"))
     manager = AgentManager.build(broadcaster)
     manager._start_observe()
     # ``_start_observe`` only returns after ``run_process_in_background``
