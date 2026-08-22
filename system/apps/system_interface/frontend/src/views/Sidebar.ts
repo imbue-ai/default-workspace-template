@@ -710,13 +710,12 @@ export function Sidebar(): m.Component<SidebarAttrs> {
    * The rail's own ``ObjectMenuActions`` for one row -- the half of the shared
    * verb set (objectMenu.ts) that varies by caller.
    *
-   * The one real difference from the tab's own build (``tabMenuEntries`` in
-   * DockviewWorkspace): a rail row can be showing a *backgrounded* object with
-   * no open panel at all, so ``hideTab`` -- which only ever closes a live tab
-   * -- is offered exactly when ``row.isOpen`` says there is one to close.
-   * Rename carries no such condition: an object is nameable whether or not it
-   * currently has a tab (the rename is filed by ref, not by panel), so it
-   * always opens the rail's own inline editor.
+   * The differences from the tab's own build (``tabMenuEntries`` in
+   * DockviewWorkspace): the rail supplies no ``hideTab`` at all (putting a tab
+   * away belongs to the tab's menu, as the inline comment below says), and its
+   * Rename opens the rail's own inline editor -- which works for a
+   * *backgrounded* row too, since the rename is filed by ref rather than
+   * against any open panel.
    */
   function railMenuActions(row: SidebarTabRow, attrs: SidebarAttrs): ObjectMenuActions {
     return {

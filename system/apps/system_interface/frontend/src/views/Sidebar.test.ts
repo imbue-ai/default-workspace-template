@@ -729,7 +729,7 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
     expect(attrs.onRemoveFromView).toHaveBeenCalledTimes(1);
   });
 
-  it("omits Hide tab for a backgrounded row, since it has no open tab to hide", () => {
+  it("gives a terminal row no Rename and no Hide tab, whether or not it is open", () => {
     const rows: SidebarTabRow[] = [{ ref: "terminal:build", kind: "terminal", label: "Terminal 1", isOpen: false }];
     const { root, redraw } = mountSidebar(makeAttrs({ rows }));
     root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
