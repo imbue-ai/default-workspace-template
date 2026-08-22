@@ -54,13 +54,15 @@ When the view's members of the kind have no recency data, any of them may be foc
 
 Per kind, "create a new X" maps to the existing create paths:
 
-- chat: the launcher's default new-chat create (same template stack, auto-minted name).
+- chat: the launcher's default claude new-chat create (same template stack, auto-minted name; the feature-flagged other-harness tiles are launcher-only and do not change what the shortcut creates).
 - terminal: a new tmux session via the terminal allocator.
 - browser: a new fleet session.
 - app: a new pane on the app's service (see "Uniformity for apps" below).
 - files: disabled until an app backs the File Viewer; the row keeps its current disabled treatment, and once a `files` service exists it behaves as an ordinary app-kind shortcut target.
 
 Shortcut-initiated creates take the same in-flight guard the launcher tiles got in the projects follow-up: while a create this shortcut asked for is pending, the row stands down, so a second click cannot start a second object.
+
+The New Tab launcher is unaffected by modes: its "Open new" tiles are always new -- that is what the launcher is for -- and its member/machine tables are always focus-or-file.
 
 ### The shortcut menu
 
@@ -120,6 +122,13 @@ Per-project shortcut state generalizes the projects follow-up's `unpinned_shortc
 
 Future shortcut kinds extend the same map with richer entries (a `kind` field plus kind-specific payload); the built-ins do not need one now because the key namespace already distinguishes them.
 
+### Agent-facing surface
+
+Shortcut configuration is not user-only state: agents may read and change it.
+`system/scripts/layout.py` grows a `shortcuts` query (the active or named view's effective shortcut list: id, pinned, mode) and a `shortcut set` verb (`--pin/--unpin`, `--mode focus|new`) that calls the same endpoint the UI uses, so both writers share one validation path.
+The `manage-projects` skill documents the new verbs alongside its existing membership coverage.
+This ships with the storage phase (see Phasing), so the agent surface and the UI surface appear together.
+
 ### API
 
 Extend the existing endpoint additively: `POST /api/projects/<id>/shortcuts` accepts `{shortcut, is_pinned?, mode?}` with at least one of the optional fields present.
@@ -173,6 +182,10 @@ New endpoints:
   Both are idempotent: stopping a stopped program and starting a running one answer success (supervisord's ALREADY_STARTED / NOT_RUNNING faults map to the no-op case, not to errors).
   Neither touches the registry row or the app's memberships: a stopped app stays listed, stays filed, stays shareable-later.
 
+Stop is the **service** level, and it coexists with the **instance** level that already exists: Quit on a chat destroys that agent, Quit on a terminal kills that tmux session, and Quit on a browser session retires that one fleet browser.
+The browser therefore has both levels -- Quit a single session (existing, unchanged) and Stop the whole fleet daemon (new).
+Plain apps have no per-pane process, so their instance level is simply closing the pane (Hide tab); Stop is their only process verb.
+
 Verb changes:
 
 - The app's destructive-slot verb in `objectMenu.ts` becomes **"Stop <name>"** (power icon, reversible), wired to the stop endpoint; a stopped app's menus offer **"Start <name>"** instead.
@@ -202,7 +215,7 @@ Each phase is independently shippable, in order:
 1. Registry `program` field, `forward_port.py --program`, `build-app` and browser-block updates.
 2. Liveness in `AgentManager`, `AppEntry.is_running`, dimmed rendering and the stopped-tab placeholder.
 3. Stop/Start endpoints, verb swap, UI deregister removal, README and verb-table updates.
-4. Shortcut storage (`shortcut_overrides`, legacy read, API extension).
+4. Shortcut storage (`shortcut_overrides`, legacy read, API extension) plus the agent-facing surface (`layout.py` verbs, `manage-projects` skill update).
 5. Shortcut modes, labels, the shortcut menu, per-kind "new" paths, the create guard, and the chat default flip.
 
 ## Out of scope
@@ -212,9 +225,7 @@ Each phase is independently shippable, in order:
 - Multi-pane addressing improvements (per-pane member refs for apps): accepted as a known ambiguity.
 - minds desktop client changes: none needed; stopped rows keep their labels so local and shared origins stay stable across stop/start.
 
-## Open questions
+## Implementation notes (verification owed, not open design)
 
-1. **Browser stop semantics**: stopping `[program:browser]` kills the daemon and (stopasgroup) its Chromium children; profiles persist on disk, but whether fleet sessions resume cleanly on Start -- and what open browser tabs should show meanwhile -- needs verification against the fleet daemon before Phase 3 enables Stop for it.
-2. **New Chat's harness**: the launcher offers multiple harness tiles behind feature flags; the chat shortcut's "new" path needs a defined choice (proposal: the default claude tile's create, ignoring flags).
-3. **supervisord RPC access**: confirm the socket path and permissions available to the system_interface process, and whether the RPC responds fast enough to sit on the liveness poll path or needs caching.
-4. **Stopped-app placeholder depth**: whether Phase 2 ships the minimal dead-iframe replacement or a fuller state (last-stopped time, log tail) -- proposal: minimal.
+1. **Browser session resume**: before Phase 3 enables Stop for the browser, verify against the fleet daemon that sessions resume cleanly on Start (Chromium profiles persist on disk) and that open browser tabs get the stopped-tab placeholder rather than a raw error meanwhile.
+2. **supervisord RPC access**: confirm the socket path and permissions available to the system_interface process, and whether the RPC responds fast enough to sit on the liveness poll path or needs caching.
