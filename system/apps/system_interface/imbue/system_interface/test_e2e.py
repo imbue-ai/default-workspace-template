@@ -1862,6 +1862,80 @@ def _project_members(layout_dir: Path) -> list[str]:
     return members
 
 
+_ROW_REMOVAL_PORT = 18873
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_removing_a_row_from_the_project_unfiles_it_without_destroying_it(tmp_path: Path, page: Page) -> None:
+    """The rail row menu's "Remove from project" unfiles a member rather than destroying it.
+
+    The safe middle verb of the shared object menu (objectMenu.ts): it takes
+    the ref out of the mounted project's member list and undocks its tab, and
+    the object itself is untouched. Both halves are unit-tested apart -- the
+    menu item routes to ``onRemoveFromView``, and the endpoint unfiles without
+    stopping anything -- so what this covers is the wiring between them, which
+    is the part that moved when the verb went from the rail's own
+    ``removalItemsForRow`` to the definition the tab menu shares.
+
+    The removal is asserted against the registry on disk, same as any other
+    membership change; "kept running" is asserted against Everything, which
+    lists every object on the machine regardless of membership and so still has
+    to show this one afterwards.
+    """
+    primary_agent_id = "primary-services-agent"
+    with _running_e2e_server(tmp_path, _ROW_REMOVAL_PORT, primary_agent_id=primary_agent_id) as (
+        base_url,
+        _agent_info,
+        _session_file,
+    ):
+        layout_dir = tmp_path / "agents" / primary_agent_id / "workspace_layout"
+        page.on("dialog", lambda dialog: dialog.accept())
+        page.goto(base_url)
+
+        expect(page.locator(".dv-default-tab-content", has_text="test-agent").first).to_be_visible(timeout=15000)
+        page.wait_for_function(
+            f"localStorage.getItem('si-active-project-id') === '{DEFAULT_PROJECT_ID}'", timeout=10000
+        )
+        wait_for(
+            lambda: _FIXTURE_CHAT_REF in _project_members(layout_dir),
+            timeout=15.0,
+            poll_interval=0.1,
+            error_message="the fixture chat was never filed as a member of the starter project",
+        )
+
+        # Right-click the chat's row in the rail's tab list, which is one of the
+        # two ways that row's menu opens, and take the verb from the menu rather
+        # than from the row's own one-click remove: the menu is what renders the
+        # shared definition.
+        page.locator(".machine-sidebar").hover()
+        chat_row = page.locator(".project-rail-tab", has_text="test-agent")
+        expect(chat_row).to_have_count(1)
+        chat_row.click(button="right")
+        page.locator(".project-rail-menu [role='menuitem']", has_text="Remove from project").click()
+
+        # The tab leaves the mounted project's dock ...
+        expect(page.locator(".dv-default-tab-content", has_text="test-agent")).to_have_count(0, timeout=10000)
+        # ... and the ref leaves the project's member list on disk.
+        wait_for(
+            lambda: _FIXTURE_CHAT_REF not in _project_members(layout_dir),
+            timeout=15.0,
+            poll_interval=0.1,
+            error_message="Remove from project never took the member out of the registry",
+        )
+
+        # It kept running rather than being destroyed: nothing was ever docked
+        # in Everything, so its launcher's machine-wide table -- not a
+        # membership list, since Everything is the unfiltered view -- is what
+        # still has to offer the chat even though the starter project no
+        # longer does.
+        _switch_view_via_rail(page, EVERYTHING_VIEW_NAME)
+        page.wait_for_function(
+            f"localStorage.getItem('si-active-project-id') === '{EVERYTHING_VIEW_ID}'", timeout=10000
+        )
+        expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=15000)
+        expect(page.locator(".new-tab-launcher-row:visible", has_text="test-agent")).to_have_count(1)
+
+
 _APP_PINNING_PORT = 18875
 
 # The one app the machine offers in the pinning test, and the member ref it is
