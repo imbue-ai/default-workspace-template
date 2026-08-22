@@ -96,17 +96,18 @@ A project that has explicitly flipped a shortcut keeps its choice.
 
 ### Storage
 
-Per-project shortcut state generalizes the projects follow-up's `unpinned_shortcuts` list into a sparse overrides map on the project's registry entry:
+Per-project shortcut state generalizes the projects follow-up's `unpinned_shortcuts` list into a sparse overrides map on the project's entry in the `projects_meta.json` registry:
 
-```toml
-[project_by_id.<id>.shortcut_overrides.chat]
-mode = "focus"            # overriding the "new" default
-
-[project_by_id.<id>.shortcut_overrides.terminal]
-is_pinned = false
-
-[project_by_id.<id>.shortcut_overrides."app:docs"]
-mode = "new"
+```json
+"project_by_id": {
+  "<id>": {
+    "shortcut_overrides": {
+      "chat": {"mode": "focus"},
+      "terminal": {"is_pinned": false},
+      "app:docs": {"mode": "new"}
+    }
+  }
+}
 ```
 
 - Keys are shortcut ids: a built-in name (`chat`, `files`, `browser`, `terminal`) or `app:<service-name>`.
@@ -117,7 +118,7 @@ mode = "new"
 - The legacy `unpinned_shortcuts` list is read as `{<name>: {is_pinned: false}}` when `shortcut_overrides` is absent, and the first write of any override rewrites the entry to the new shape and drops the legacy key.
   Mark the legacy-read branch with a `CLEANUP:` comment (removable once no supported workspace's registry predates this change).
 
-Future shortcut kinds extend the same table with richer entries (a `kind` field plus kind-specific payload); the built-ins do not need one now because the key namespace already distinguishes them.
+Future shortcut kinds extend the same map with richer entries (a `kind` field plus kind-specific payload); the built-ins do not need one now because the key namespace already distinguishes them.
 
 ### API
 
