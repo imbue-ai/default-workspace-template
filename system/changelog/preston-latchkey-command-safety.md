@@ -13,3 +13,5 @@ Reading the queue and every other `latchkey curl` are untouched and may still be
 The guard is wired for claude in `.claude/settings.json`; codex and pi run the same checker (see `system/scripts/POLICY_HOOKS.md`, where it is now hook 3 and the later hooks are renumbered accordingly).
 
 The cross-harness scripts in `system/scripts/` are now `agent_*` rather than `claude_*`: claude, codex, and pi all run them, and the old prefix read as though they were claude's. `claude_status_line.sh` and `claude_update_plugin.sh` keep theirs -- those are Claude Code features with no counterpart on the other harnesses.
+
+A new test, `system/scripts/agent_hook_wiring_test.py`, holds the three harnesses' wiring together: every `system/scripts/` path named in `.claude/settings.json`, `.codex/hooks.json`, and `.pi/extensions/policy_guards.ts` has to resolve, and the two hook configs have to carry the same PreToolUse guard set. A hook naming a script that has moved fails silently -- it just never runs -- so a rename that misses one of those files was previously invisible.
