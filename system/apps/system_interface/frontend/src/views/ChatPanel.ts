@@ -25,11 +25,15 @@ import {
   isConversationNotFound,
   MAX_HELD_EVENTS,
 } from "../models/Response";
-import { computeTranscriptSlices } from "../models/virtualWindow";
 import { isSelectionActiveWithin } from "../models/scrollFollow";
-import { OVERSCAN_PX } from "./row-measurement";
-import { resolveSelectionRowRange, selectionStateWithin } from "./scroll-selection";
+import { RowGeometryIndex, geometryFromSnapshot, type GeometrySnapshot } from "../models/rowGeometry";
+import { COLD_RESERVE_RATE, nextReserveRate, type ReserveRate } from "../models/reserveRate";
+import { sharedGeometryCache, widthBucketFor } from "../models/geometryCache";
+import { loadWorkspaceGeometry, saveWorkspaceGeometry } from "../models/workspaceGeometry";
+import { resolveSelectionRowIndices, selectionStateWithin } from "./scroll-selection";
 import { createTranscriptScroll } from "./transcript-scroll";
+import { createTranscriptVirtualizer } from "./transcriptVirtualizer";
+import { createRowMeasureScheduler, createRowMeasurementStore } from "./rowMeasurement";
 import { connectToStream, disconnectFromStream, loadSnapshotWithStream } from "../models/StreamingMessage";
 import {
   addAgentsUpdatedListener,
@@ -46,7 +50,7 @@ import { MessageInput } from "./MessageInput";
 import { PoweredByCredit } from "./PoweredByCredit";
 import { ModelBar } from "./ModelBar";
 import { buildAgentTerminalUrl, getTerminalUrl, openIframeTabForAgent } from "./DockviewWorkspace";
-import { buildConversationRows, renderTranscriptSegments, type RowDescriptor } from "./conversation-rows";
+import { buildConversationRows, renderVirtualRows, type RowDescriptor } from "./conversation-rows";
 import { ActivityIndicator } from "./ActivityIndicator";
 import { renderQueuedMessages } from "./QueuedMessageView";
 import { renderOutgoingMessages } from "./OutgoingMessageView";
@@ -85,18 +89,9 @@ const BACKFILL_TRIGGER_PX = 600;
 // there incrementally. Small enough that ordinary scrolling keeps paging; large
 // enough that a couple of pages' overshoot doesn't trigger a disruptive reload.
 const JUMP_GAP_EVENTS = 120;
-// Stable per-event height used to size the reserved (phantom) regions for history
-// that exists on the server but isn't loaded yet. It is deliberately a constant
-// rather than the measured average of the loaded window: the loaded window is a
-// tiny fraction of a long transcript (e.g. 50 of 5000+ events), so its measured
-// average -- which shifts every frame as rows measure -- would be amplified by the
-// large unloaded count into wild scrollbar jumps. A constant keeps the total
-// scroll height (~ total * this) stable, so the scrollbar thumb doesn't churn and
-// an offset jump lands at a fixed position. Its exact value isn't UX-critical:
-// the drag fraction -> event index mapping and the post-jump thumb position both
-// scale with it and so are independent of it; only the loaded window's small
-// residual (measured height vs count * this) is affected.
-const ESTIMATED_EVENT_HEIGHT_PX = 160;
+// Coalescing window for persisting geometry, so a burst of rows settling after a
+// paint costs one write rather than one per row.
+const GEOMETRY_SAVE_DEBOUNCE_MS = 2000;
 
 function isProtoAgent(agentId: string): boolean {
   return getProtoAgents().some((p) => p.agent_id === agentId);
@@ -114,12 +109,10 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   // createMithrilRenderer); the scroll hooks below skip while it is false.
   // Defaults to true so the panel works before the first render sets it.
   let panelVisible = true;
-  // Shared scroll controller: owns the scroll position, follow state, drag flag and
-  // row measurer, plus the tail-follow / native-anchoring / pointer / resize
-  // machinery. Everything specific to the main chat -- the phantom regions, paging,
-  // eviction and the offset-jump pin below -- stays here; the controller is fed this
-  // panel's visibility, whether newer history exists below the window, and the
-  // after-scroll paging hook.
+  // Shared scroll controller: owns the scroll position, follow state, drag flag
+  // and the tail-follow / native-anchoring / pointer / resize machinery. Windowing
+  // is the virtualizer's job; this remains the single owner of the follow decision,
+  // which is the part every previous attempt at this got wrong.
   const scroll = createTranscriptScroll({
     isVisible: () => panelVisible,
     getHasMoreAfter: () => hasMoreAfter(currentAgentId ?? ""),
@@ -138,20 +131,106 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   // selection's DOM rows to virtualization indices so they can be pinned into the
   // window (see renderMessages).
   let cachedKeyToIndex = new Map<string, number>();
+  // Accepted row heights, with the hysteresis and settle tracking that keep a
+  // sub-pixel reflow from looping and a pre-markdown placeholder from being
+  // remembered as final.
+  const measurements = createRowMeasurementStore();
+  // Measured geometry for this conversation: which rows cover which events and
+  // how tall each is. Reserved space above and below the loaded window is read
+  // straight out of this, so it reflects what the transcript actually renders.
+  let geometry = new RowGeometryIndex();
+  /**
+   * Pixels per event used to price history this client has never rendered, and
+   * whether that rate has stopped moving. The rule itself lives in
+   * `models/reserveRate`; this holds the answer for one conversation.
+   *
+   * Declared here rather than beside `updateReserveRate` because the virtualizer
+   * below is constructed with a closure that reads it, so it has to be
+   * initialized first.
+   */
+  let reserveRate: ReserveRate = COLD_RESERVE_RATE;
   // Heights reserved above/below the loaded window for history that exists on the
-  // server but isn't loaded yet (see renderMessages). Shared so the scroll handler
-  // can tell when the viewport is over a reserved region and page/jump/overlay
-  // accordingly.
+  // server but isn't loaded yet. Shared so the scroll handler can tell when the
+  // viewport is over a reserved region and page/jump/overlay accordingly.
   let phantomTopHeight = 0;
   let phantomBottomHeight = 0;
+  // Which width bucket the held geometry describes; -1 until the first measure,
+  // so the first real width always counts as a change and triggers a load.
+  let geometryWidthBucket = -1;
+  let geometrySaveTimer: ReturnType<typeof setTimeout> | null = null;
+  // Windowing. Reads the memoized rows and the reserved heights above; owns the
+  // visible range, the selection pin and scroll compensation.
+  const virtualizer = createTranscriptVirtualizer({
+    getScrollElement: () => scroll.scrollEl,
+    getCount: () => cachedRows.length,
+    getRowKey: (index) => cachedRows[index]?.key ?? String(index),
+    estimateSize: (index) => {
+      const row = cachedRows[index];
+      if (row === undefined) {
+        return 0;
+      }
+      const measured = measurements.heightFor(row.key);
+      if (measured !== undefined) {
+        return measured;
+      }
+      // Estimate an unmeasured row from what this transcript actually renders
+      // at, not from a per-kind constant. The constants are necessarily generic
+      // -- an assistant row is 240px whether it holds three words or a screenful
+      // -- and on a transcript of short messages every newly rendered row then
+      // shrank by a couple of hundred pixels the moment it was measured.
+      // Scrolling up rendered a screenful of them at once, the content collapsed
+      // by thousands of pixels, and the bottom rose to meet a reader who had
+      // deliberately scrolled away from it -- which re-armed tail-following and
+      // dragged them back down.
+      const events = row.end_offset - row.start_offset;
+      if (reserveRate.is_settled && events > 0) {
+        return Math.max(1, reserveRate.rate * events);
+      }
+      return row.estimate;
+    },
+    getPaddingStart: () => phantomTopHeight,
+    getPaddingEnd: () => phantomBottomHeight,
+    getPinnedIndices: () => pinnedRowIndices,
+    isEnabled: () => panelVisible,
+  });
+  // Row indices a live text selection touches, recomputed each render and read
+  // by the virtualizer's range extractor.
+  let pinnedRowIndices: number[] = [];
+  /**
+   * The rendered message column, or null when there is nothing laid out -- not
+   * mounted yet, or a hidden panel.
+   *
+   * This is the element rows are measured in *and* the one whose width they wrap
+   * at, which is why both the measure pass and the geometry width bucket read it
+   * rather than the scroll container. The container is wider by its own padding
+   * and the column is capped (`max-w-(--width-message-column)`), so on any panel
+   * past that cap the container's width moves while the width every row is laid
+   * out at does not.
+   */
+  function messageListElement(): Element | null {
+    return panelVisible ? (scroll.scrollEl?.querySelector(".message-list") ?? null) : null;
+  }
+  // The frame-debounced measure pass. A hidden panel has nothing laid out, so it
+  // reports no list and the frame reads nothing.
+  const measureScheduler = createRowMeasureScheduler({
+    store: measurements,
+    getListElement: messageListElement,
+    reportHeight: (rowKey, height) => {
+      const index = cachedKeyToIndex.get(rowKey);
+      if (index !== undefined) {
+        virtualizer.resizeRow(index, height);
+      }
+    },
+  });
   // Paging (scroll-driven fetch) in-flight guard. Covers older/newer pages and
   // offset jumps -- only one is outstanding at a time.
   let backfillInFlight = false;
   // After an offset jump replaces the window, pin the viewport once to the top of
   // the freshly loaded rows (just below the top reserved spacer) so the user lands
-  // on the jumped-to content rather than in the reserved region above it. With the
-  // reserved heights now sized by a stable constant, the top of the loaded window
-  // doesn't drift as rows measure, so a single pin suffices -- no timed settle.
+  // on the jumped-to content rather than in the reserved region above it. A single
+  // pin suffices -- no timed settle -- because the space above those rows is priced
+  // off geometry that has already settled and a per-event rate that has stopped
+  // moving (see updateReserveRate), so it does not drift as the new rows measure.
   let pendingPinToWindowTop = false;
 
   // File drag-and-drop: dropping a file anywhere over the chat stages it as a
@@ -425,6 +504,16 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
 
     currentAgentId = agentId;
     scroll.reset();
+    // A different conversation's rows share no keys with this one's, and its
+    // geometry is indexed on its own transcript offsets, so both are dropped
+    // rather than carried across.
+    measurements.reset();
+    cancelGeometrySave();
+    geometry = new RowGeometryIndex();
+    geometryWidthBucket = -1;
+    reserveRate = COLD_RESERVE_RATE;
+    virtualizer.reset();
+    rowsCacheKey = null;
     backfillInFlight = false;
     loadAgent(agentId);
   }
@@ -498,18 +587,25 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     // Map the viewport to a target event index using the SAME phantom-region
     // geometry the renderer uses to size the reserved spacers, so it is the exact
     // inverse. Only the reserved regions above/below the loaded window can imply a
-    // jump; over the loaded rows the edge-paging branches below handle it. The old
-    // global-fraction mapping assumed scrollHeight ~= total * ESTIMATED_EVENT_HEIGHT_PX,
-    // so measured-height divergence in the loaded window could push the estimate
-    // across the jump threshold and fire a spurious window reset (which unmounts
-    // every row -- the most violent scroll jolt, and a guaranteed selection kill).
+    // jump; over the loaded rows the edge-paging branches below handle it. Deriving
+    // the target from the scroll height as a whole instead would drift as the loaded
+    // rows measure, and could cross the jump threshold on its own -- firing a window
+    // reset nobody asked for, which unmounts every row: the most violent scroll jolt
+    // there is, and a guaranteed selection kill.
+    const total = getTotalEventCount(agentId);
     const loadedBottom = element.scrollHeight - phantomBottomHeight;
     let targetIndex: number | null = null;
     if (phantomTopHeight > 0 && element.scrollTop < phantomTopHeight) {
-      targetIndex = Math.round(element.scrollTop / ESTIMATED_EVENT_HEIGHT_PX);
+      // The exact inverse of the function that sized the reserved space, so the
+      // position the thumb is at and the offset it resolves to cannot disagree.
+      targetIndex = geometry.offsetAtHeight(element.scrollTop, firstOffset, reserveRate.rate);
     } else if (phantomBottomHeight > 0 && element.scrollTop + element.clientHeight > loadedBottom) {
       const intoBottomRegion = element.scrollTop + element.clientHeight - loadedBottom;
-      targetIndex = windowEnd + Math.round(intoBottomRegion / ESTIMATED_EVENT_HEIGHT_PX);
+      targetIndex = geometry.offsetAtHeight(
+        geometry.heightBefore(windowEnd, reserveRate.rate) + intoBottomRegion,
+        total,
+        reserveRate.rate,
+      );
     }
 
     // Far from the loaded window in either direction -> jump.
@@ -560,9 +656,10 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     }
     // After an offset jump, pin the viewport once to the top of the freshly loaded
     // rows (just below the top reserved spacer) so the user lands on the jumped-to
-    // content rather than in the reserved (blank) region above it. The reserved
-    // top height is a stable constant * offset, so it doesn't drift as the loaded
-    // rows measure -- a single pin lands correctly without a timed settle.
+    // content rather than in the reserved (blank) region above it. The reserved top
+    // height covers history that is not loaded, priced off settled geometry and a
+    // rate that has stopped moving, so it doesn't drift as the loaded rows measure
+    // -- a single pin lands correctly without a timed settle.
     if (pendingPinToWindowTop) {
       pendingPinToWindowTop = false;
       scroll.pinTo(element, phantomTopHeight);
@@ -730,6 +827,14 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     // catalog), not a harness-name check here.
     maybePromptForFastMode(agent, events, agentIsIdle);
 
+    // Before anything this frame changes. The virtualizer answers from a memo
+    // keyed on the options it was last given, but `getRowKey` and `estimateSize`
+    // are closures that read the live rows, rate and measurements -- so a memo
+    // invalidated after those move (a measurement landing in the same redraw, or
+    // the width reset below) recomputes the layout from the previous frame's row
+    // count against this frame's keys. Reading it here keeps both halves
+    // describing the frame the reader is actually looking at.
+
     // Memoize the turn-grouping -> rows pipeline. buildSections walks the entire
     // held transcript, so recomputing it on every scroll-driven redraw is the
     // dominant scroll cost on a long conversation. Its output depends only on the
@@ -743,52 +848,44 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       // Both structure and decoration come from the transcript walk; there is no
       // side-channel enrichment. The same pipeline feeds the subagent view, so a
       // subagent's "View conversation" renders an identical progress timeline.
-      cachedRows = buildConversationRows(agentId, events, agentIsIdle);
+      cachedRows = buildConversationRows(agentId, events, agentIsIdle, getFirstOffset(agentId));
       cachedKeyToIndex = new Map(cachedRows.map((row, index) => [row.key, index]));
-      scroll.rowMeasurer.prune(new Set(cachedRows.map((row) => row.key)));
+      measurements.prune(new Set(cachedRows.map((row) => row.key)));
       rowsCacheKey = renderKey;
     }
     const rows = cachedRows;
 
-    const getHeight = (index: number): number => scroll.rowMeasurer.getHeight(rows[index].key) ?? rows[index].estimate;
+    // Fold every settled row into the conversation's geometry, so the reserved
+    // space below reflects real heights. Only settled rows are admitted: a height
+    // read before markdown and highlighting land is a placeholder, and persisting
+    // it would make the estimate permanently wrong.
+    syncGeometryToWidth(agentId, messageListElement()?.clientWidth ?? 0);
+    if (recordSettledGeometry(rows)) {
+      scheduleGeometrySave(agentId);
+    }
 
     // Reserve space above and below the loaded window for history that exists on
     // the server but isn't loaded yet, so the scrollbar reflects the whole
-    // conversation rather than just the loaded window -- and so paging more in
-    // doesn't make it jump. Each reserve is the count of not-yet-loaded events on
-    // that side times a stable per-event constant (see ESTIMATED_EVENT_HEIGHT_PX).
-    // Using a constant (not the loaded window's measured average) is what keeps the
-    // total scroll height stable: deriving it from the small loaded window would
-    // make every row measurement, amplified by the large unloaded count, jolt the
-    // scrollbar. As events page in, the reserve shrinks by ~the height they add, so
-    // existing content stays put.
+    // conversation rather than just the loaded window. Both numbers come from
+    // measured geometry, falling back to a rate learned from this transcript's own
+    // rows for ranges never rendered -- so what a page reserves and what it lands
+    // at are the same quantity, and paging one in does not shift the scrollbar.
     const total = getTotalEventCount(agentId);
     const firstOffset = getFirstOffset(agentId);
-    const olderUnloaded = Math.max(0, firstOffset);
-    const newerUnloaded = Math.max(0, total - (firstOffset + events.length));
-    phantomTopHeight = Math.round(olderUnloaded * ESTIMATED_EVENT_HEIGHT_PX);
-    phantomBottomHeight = Math.round(newerUnloaded * ESTIMATED_EVENT_HEIGHT_PX);
+    const windowEnd = firstOffset + events.length;
+    updateReserveRate(rows);
+    phantomTopHeight = Math.round(geometry.heightBefore(firstOffset, reserveRate.rate));
+    phantomBottomHeight = Math.round(
+      Math.max(0, geometry.heightBefore(total, reserveRate.rate) - geometry.heightBefore(windowEnd, reserveRate.rate)),
+    );
 
-    // Before the first measure viewportHeight is 0; fall back to the live
-    // clientHeight (or a large value) so the initial render is not a 1-row sliver
-    // that the post-mount measure then has to expand.
-    const effectiveViewportHeight =
-      scroll.viewportHeight > 0 ? scroll.viewportHeight : (scroll.scrollEl?.clientHeight ?? 2000);
-    // Windowed slice for the viewport, plus a (possibly disjoint) run holding the
-    // rows a live selection touches so scrolling/streaming past them doesn't
-    // unmount their DOM and collapse the selection. A disjoint run mounts only the
-    // selected rows -- not the arbitrarily many between them and the viewport -- so
-    // there is no gap cap: the selection survives at any scroll distance.
-    const { segments } = computeTranscriptSlices({
-      count: rows.length,
-      getHeight,
-      scrollTop: scroll.scrollTop,
-      viewportHeight: effectiveViewportHeight,
-      overscanPx: OVERSCAN_PX,
-      phantomTopHeight,
-      phantomBottomHeight,
-      pinnedRange: selectionActive ? resolveSelectionRowRange(scroll.scrollEl, cachedKeyToIndex) : null,
-    });
+    // Rows a live selection touches, kept mounted by the virtualizer's range
+    // extractor even when the viewport has moved far away -- removing a
+    // selection endpoint's node collapses the selection.
+    pinnedRowIndices = selectionActive ? resolveSelectionRowIndices(scroll.scrollEl, cachedKeyToIndex) : [];
+
+    virtualizer.sync();
+    const items = virtualizer.getVirtualItems();
 
     return m("div", { class: "message-list-wrapper" }, [
       failedReloadNotice,
@@ -796,11 +893,173 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       // the live tail, below the last committed turn. It is a full snapshot from
       // the harness, replaced wholesale on each push.
       m("div", { class: MESSAGE_LIST_CLASS }, [
-        ...renderTranscriptSegments(rows, segments),
+        ...renderVirtualRows(rows, items, virtualizer.getTrailingSpace()),
         ...renderQueuedMessages(agentId),
         ...renderOutgoingMessages(agentId),
       ]),
     ]);
+  }
+
+  /** Re-learn the reserve rate from what the loaded window currently looks like. */
+  function updateReserveRate(rows: RowDescriptor[]): void {
+    // A hidden panel has nothing laid out, so it can learn nothing -- and
+    // re-pricing the reserve then would move the content behind a tab the reader
+    // is not looking at, so it would come back somewhere else than they left it.
+    // A settled rate needs no sample either, so neither case builds one.
+    if (!panelVisible || reserveRate.is_settled) {
+      return;
+    }
+    reserveRate = nextReserveRate(
+      rows.map((row) => {
+        const measured = measurements.heightFor(row.key);
+        return {
+          events: row.end_offset - row.start_offset,
+          height: measured ?? row.estimate,
+          is_measured: measured !== undefined,
+        };
+      }),
+      reserveRate,
+    );
+  }
+
+  /**
+   * The geometry stored for this conversation at this width, from whichever tier
+   * has it.
+   *
+   * Two tiers because they answer different questions. IndexedDB is what *this*
+   * browser measured and costs no request, so it is asked first. The workspace's
+   * copy covers a conversation this browser has never rendered but another
+   * window -- or another device at the same width -- already measured, which is
+   * the difference between landing on accurate geometry and settling into it.
+   */
+  async function loadGeometrySnapshot(agentId: string, bucket: number): Promise<GeometrySnapshot | null> {
+    const cached = await sharedGeometryCache.load(agentId, bucket);
+    if (cached !== null) {
+      return cached;
+    }
+    return loadWorkspaceGeometry(agentId, bucket);
+  }
+
+  /**
+   * Adopt the persisted geometry for this agent at the width its rows wrap at
+   * (see messageListElement).
+   *
+   * Heights are a function of width, so a width change is a genuine cache miss:
+   * the measurements in hand describe a layout that no longer exists, and are
+   * dropped rather than reused. Bucketing means the common small changes (a
+   * scrollbar appearing, a few pixels of panel resize) stay warm.
+   *
+   * Every measured height goes, not just the persisted ones. The virtualizer
+   * keeps its own size cache and only asks `estimateSize` for a row it has no
+   * size for, so leaving it holding the old width's heights would mean each
+   * off-screen row snapping as it came back into view. The learned per-event
+   * rate goes with them: it is settled-and-frozen by design, so a stale one
+   * would price unloaded history at the old width for the panel's lifetime.
+   *
+   * The load is async and may land after the user has already scrolled. That is
+   * safe: adopting it changes the reserved height, and restoreReadingAnchor puts
+   * the reader back on the row they were reading, so the content in front of
+   * them does not move.
+   */
+  function syncGeometryToWidth(agentId: string, width: number): void {
+    const bucket = widthBucketFor(width);
+    if (bucket === geometryWidthBucket || width <= 0) {
+      return;
+    }
+    geometryWidthBucket = bucket;
+    measurements.reset();
+    geometry = new RowGeometryIndex();
+    virtualizer.reset();
+    reserveRate = COLD_RESERVE_RATE;
+    const requestedAgentId = agentId;
+    const requestedBucket = bucket;
+    loadGeometrySnapshot(agentId, bucket)
+      .then((snapshot) => {
+        // Discard a load that lost a race with an agent switch or another
+        // resize; its numbers describe a layout or conversation we left.
+        if (snapshot === null || currentAgentId !== requestedAgentId || geometryWidthBucket !== requestedBucket) {
+          return;
+        }
+        geometry = geometryFromSnapshot(snapshot);
+        m.redraw();
+      })
+      .catch(() => {
+        // A cache miss is not a failure worth surfacing: the transcript renders
+        // from estimates and re-measures as it goes.
+      });
+  }
+
+  /** Persist the conversation's geometry to both tiers, coalesced so a burst of
+   *  settling rows costs one write rather than one per row. */
+  function scheduleGeometrySave(agentId: string): void {
+    if (geometrySaveTimer !== null) {
+      return;
+    }
+    geometrySaveTimer = setTimeout(() => {
+      geometrySaveTimer = null;
+      if (currentAgentId !== agentId || geometry.rowCount === 0) {
+        return;
+      }
+      const snapshot = geometry.toSnapshot();
+      void sharedGeometryCache.save(agentId, geometryWidthBucket, snapshot).catch(() => {
+        // Both tiers are fire-and-forget for the same reason: geometry is an
+        // optimisation, so a write that does not land costs one settling pass on
+        // the next visit and nothing a reader can see.
+      });
+      // The workspace's copy, so the next window to open this conversation --
+      // this browser or another -- does not have to measure it again.
+      void saveWorkspaceGeometry(agentId, geometryWidthBucket, snapshot);
+    }, GEOMETRY_SAVE_DEBOUNCE_MS);
+  }
+
+  /** Drop a pending save. The conversation it was armed for is going away, so its
+   *  snapshot is about to be replaced by an empty index anyway, and leaving the
+   *  timer armed would hold the "already scheduled" slot against the next one. */
+  function cancelGeometrySave(): void {
+    if (geometrySaveTimer !== null) {
+      clearTimeout(geometrySaveTimer);
+      geometrySaveTimer = null;
+    }
+  }
+
+  /**
+   * Fold settled row measurements into the conversation's geometry.
+   *
+   * A row is admitted only once its height has gone quiet, so a placeholder
+   * measured before markdown or syntax highlighting lands is never recorded as
+   * the real height. Rows whose range is degenerate are skipped: they carry no
+   * events of their own and would corrupt the prefix sums.
+   */
+  function recordSettledGeometry(rows: RowDescriptor[]): boolean {
+    // A hidden panel has nothing laid out, so nothing it could learn is worth
+    // learning -- and refining the geometry then would move the reserved space
+    // under a reader who is not there to see it, so the tab would come back in a
+    // different place than they left it.
+    if (!panelVisible) {
+      return false;
+    }
+    const now = Date.now();
+    let changed = false;
+    for (const row of rows) {
+      if (row.end_offset <= row.start_offset) {
+        continue;
+      }
+      const height = measurements.heightFor(row.key);
+      if (height === undefined || !measurements.isSettled(row.key, now)) {
+        continue;
+      }
+      if (
+        geometry.recordRow({
+          row_key: row.key,
+          start_offset: row.start_offset,
+          end_offset: row.end_offset,
+          height,
+        })
+      ) {
+        changed = true;
+      }
+    }
+    return changed;
   }
 
   const handleAgentsUpdated = (): void => retryAfterAgentResolved();
@@ -814,6 +1073,8 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       removeAgentsUpdatedListener(handleAgentsUpdated);
       disconnectLogWs();
       scroll.detach();
+      virtualizer.unmount();
+      cancelGeometrySave();
       if (currentAgentId !== null) {
         disconnectFromStream(currentAgentId);
       }
@@ -871,8 +1132,9 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
               oncreate: (mainVnode: m.VnodeDOM) => {
                 const element = mainVnode.dom as HTMLElement;
                 scroll.attach(element);
+                virtualizer.mount();
                 applyScrollPosition(element);
-                scroll.scheduleMeasure();
+                measureScheduler.schedule();
                 if (currentAgentId !== null) {
                   maybePage(currentAgentId, element);
                 }
@@ -880,8 +1142,9 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
               onupdate: (mainVnode: m.VnodeDOM) => {
                 const element = mainVnode.dom as HTMLElement;
                 scroll.attach(element);
+                virtualizer.mount();
                 applyScrollPosition(element);
-                scroll.scheduleMeasure();
+                measureScheduler.schedule();
                 // Drive paging from the render loop, not only from scroll events, so
                 // the viewport sitting over a reserved region always triggers (or
                 // already has in flight) the fetch to cover it. Without this a drag

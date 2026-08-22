@@ -8,16 +8,14 @@
  *
  * Every message row's root element carries a DOM `id` equal to its virtualization
  * key (see message-renderers / conversation-rows); spacers have an empty id.
+ *
+ * The pin is bounded by what a selection spans, not by how far the viewport has
+ * moved away from it: only the rows between its two endpoints are held, never the
+ * arbitrarily many between them and the viewport. So there is no distance cap to
+ * enforce here, and a selection survives scrolling and streaming at any distance.
  */
 
 import { type SelectionState } from "../models/scrollFollow";
-
-// Stop holding a selection's rows in the virtualization window once the viewport
-// is more than this many rows away from them, so a selection left active during a
-// long stream can't keep an unbounded span of rows mounted. Past this the pin is
-// dropped (and the selection collapses) -- a deliberate memory bound; in practice
-// users select-then-copy within seconds, far inside this gap.
-export const SELECTION_PIN_MAX_GAP_ROWS = 300;
 
 /** Walk up from a selection endpoint node to the message-row element (the child
  *  of `.message-list`) and return its key, or null if the node isn't inside a
@@ -57,9 +55,9 @@ export function selectionStateWithin(scrollEl: HTMLElement | null): SelectionSta
  * The inclusive row-index range spanned by the live selection's endpoints within
  * this view, or null when there is no active selection here or its endpoints
  * don't map to known rows (e.g. a selection anchored above `.message-list`, like
- * Cmd+A). Used to pin those rows into the virtualization window.
+ * Cmd+A).
  */
-export function resolveSelectionRowRange(
+function resolveSelectionRowRange(
   scrollEl: HTMLElement | null,
   keyToIndex: Map<string, number>,
 ): { start: number; end: number } | null {
@@ -92,4 +90,25 @@ export function resolveSelectionRowRange(
     return null;
   }
   return { start: Math.min(...indices), end: Math.max(...indices) };
+}
+
+/**
+ * Every row index the live selection spans, for the virtualizer to pin into the
+ * rendered set. Empty when there is nothing to hold.
+ *
+ * The expansion lives here rather than at each view's call site because the
+ * virtualizer wants indices while the resolution above produces a range, and both
+ * transcript views need the same bridge -- including the inclusive end, which is
+ * the selection's last row and the one whose unmounting would collapse it.
+ */
+export function resolveSelectionRowIndices(scrollEl: HTMLElement | null, keyToIndex: Map<string, number>): number[] {
+  const range = resolveSelectionRowRange(scrollEl, keyToIndex);
+  if (range === null) {
+    return [];
+  }
+  const indices: number[] = [];
+  for (let index = range.start; index <= range.end; index++) {
+    indices.push(index);
+  }
+  return indices;
 }
