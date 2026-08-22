@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 // Mithril captures `requestAnimationFrame` at import time so it can schedule
 // redraws. Vitest's default (node) environment has no such global, which
@@ -15,35 +15,20 @@ vi.hoisted(() => {
 // /api paths (mirrors Projects.test.ts).
 vi.mock("../base-path", () => ({ apiUrl: (path: string) => path }));
 
-// The modal's own member-name resolution reaches into AgentManager's module
-// state (fed by the WebSocket in a live workspace) for a chat's display name
-// and the machine's app list. Swap it for a mutable stand-in so each case can
-// pose a different machine, the same idiom AllAppsPicker.test.ts and
-// Sidebar.test.ts use for the same module.
-const agentManagerState: {
-  agentById: Record<string, { name: string; display_name?: string | null }>;
-  apps: { name: string; url: string; label: string; icon?: string }[];
-  protoAgents: { agent_id: string; name: string }[];
-} = { agentById: {}, apps: [], protoAgents: [] };
-
-vi.mock("../models/AgentManager", () => ({
-  getApps: () => agentManagerState.apps,
-  getAgentById: (id: string) => agentManagerState.agentById[id],
-  getProtoAgents: () => agentManagerState.protoAgents,
-}));
-
-import { loadMemberTitles } from "../models/MemberTitles";
 import type { ProjectInfo } from "../models/Projects";
 import { ProjectSettingsModal } from "./ProjectSettingsModal";
 import type { ProjectSettingsModalAttrs } from "./ProjectSettingsModal";
 
+// Members are carried but never read: the modal is display metadata (name,
+// color, glyph) plus the delete, and taking an object out of a project is a
+// verb on the object's own rail row rather than anything reachable from here.
 const PROJECT: ProjectInfo = {
   project_id: "research",
   name: "Research",
   color: "#4f8ef7",
   glyph: 3,
   has_content: true,
-  members: ["chat:agent-9", "terminal:terminal-4", "service:browser?session=quiet-otter", "service:docs", "url:9f86"],
+  members: [],
 };
 
 type VnodeLike = {
@@ -81,13 +66,6 @@ function clickVnode(vnode: VnodeLike): void {
   (vnode.attrs?.onclick as () => void)();
 }
 
-/** Stand in for the backend with one canned response for every call. */
-function stubFetch(response: Partial<Response>): ReturnType<typeof vi.fn> {
-  const mockFetch = vi.fn(() => Promise.resolve(response as Response));
-  vi.stubGlobal("fetch", mockFetch);
-  return mockFetch;
-}
-
 function makeModal(attrs: ProjectSettingsModalAttrs): { render: () => unknown } {
   const component = ProjectSettingsModal();
   const vnode = { attrs };
@@ -96,20 +74,6 @@ function makeModal(attrs: ProjectSettingsModalAttrs): { render: () => unknown } 
     render: () => component.view(vnode as Parameters<typeof component.view>[0]),
   };
 }
-
-beforeEach(async () => {
-  agentManagerState.agentById = {};
-  agentManagerState.apps = [];
-  agentManagerState.protoAgents = [];
-  // Reset the member-titles module cache, the same way MemberTitles.test.ts does.
-  stubFetch({ ok: true, json: () => Promise.resolve({ titles: {} }) });
-  await loadMemberTitles();
-  vi.unstubAllGlobals();
-});
-
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
 
 describe("ProjectSettingsModal delete confirmation", () => {
   it("describes deleting as removing the view only, with members left running", () => {
