@@ -119,10 +119,6 @@ export interface SidebarAttrs {
   // other naming surface goes through (see renameMemberRef), so a chosen name
   // reaches this row's own tab immediately if it has one open.
   onRenameRow: (row: SidebarTabRow, title: string) => void;
-  // Close this row's own tab without touching membership. Only ever called
-  // while the row is open (see SidebarTabRow.isOpen) -- a backgrounded row has
-  // no tab to close.
-  onHideRowTab: (row: SidebarTabRow) => void;
   // Open the machine's share surface with this app pre-selected.
   // Stop showing one object in the active view. The object keeps running and
   // stays in Everything and in any other project showing it.

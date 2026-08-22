@@ -2172,16 +2172,6 @@ export function refreshMemberRow(row: SidebarTabRow): void {
   refreshPanelContent(panelId);
 }
 
-/** Close a row's own tab without touching membership -- the rail's
- *  counterpart of the tab's own "Hide tab" (see tabMenuEntries). Only ever
- *  called while the row is open (SidebarTabRow.isOpen), so there is always a
- *  panel here to close. */
-export function hideMemberRowTab(row: SidebarTabRow): void {
-  const panelId = panelIdForMemberRef(row.ref);
-  if (panelId === null || !dockview) return;
-  dockview.panels.find((candidate) => candidate.id === panelId)?.api.close();
-}
-
 /** Rail-initiated rename, reporting a rejection with an alert -- the
  *  click-and-forget half of ``renameMemberRef``, matching how the tab's own
  *  inline editor reports the same rejection. */
