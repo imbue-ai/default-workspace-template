@@ -26,6 +26,7 @@ a real core (matching the seam pattern used across this package).
 
 import base64
 import hashlib
+import html
 import logging
 import os
 import re
@@ -80,10 +81,12 @@ from supertokens_python.recipe.thirdparty.provider import ProviderClientConfig
 from supertokens_python.recipe.thirdparty.provider import ProviderConfig
 from supertokens_python.recipe.thirdparty.provider import ProviderInput
 from supertokens_python.recipe.thirdparty.providers.config_utils import find_and_create_provider_instance
+from supertokens_python.syncio import delete_user
 from supertokens_python.types import RecipeUserId
 
 import imbue.remote_service_connector.auth as auth_module
 import imbue.remote_service_connector.auth_proxy as auth_proxy_module
+import imbue.remote_service_connector.signup_hardening as signup_hardening_module
 from imbue.modal_app_kit.metrics import emit_metric
 from imbue.remote_service_connector import db
 from imbue.remote_service_connector.attribution import ATTRIBUTION_COOKIE_NAME
@@ -325,25 +328,105 @@ def _serve_frontend_index() -> HTMLResponse | FileResponse:
     return FileResponse(index_path, media_type="text/html")
 
 
+def _configured_accounts_origin() -> str:
+    """The tier's dedicated accounts origin (no trailing slash), or '' when there is none (dev/CI)."""
+    return os.environ.get("ACCOUNTS_BASE_URL", "").strip().rstrip("/")
+
+
+def _configured_chrome_origin_host() -> str:
+    """Host of the tier's web-chrome origin, or '' when none is configured."""
+    origin = os.environ.get("SHARE_CHROME_ORIGIN", "").strip().rstrip("/")
+    if not origin:
+        return ""
+    return urlsplit(origin).netloc.lower()
+
+
+def _refuse_misdirected_browser_page(
+    request: Request,
+    # Whether the page still works on the chrome origin. The account pages do
+    # (the session cookie is apex-scoped, shared with the chrome); the Google
+    # OAuth start does not (its nonce cookie is host-only while the callback
+    # always lands on the accounts origin), so it passes False.
+    is_chrome_origin_allowed: bool,
+    # Path + query (leading slash) appended to the accounts origin to build
+    # the "continue" link on the refusal page.
+    continue_path: str,
+) -> HTMLResponse | None:
+    """Refuse a browser identity page served on a host where it cannot work, or None to serve it.
+
+    On tiers with a dedicated accounts origin, sign-in only functions there:
+    the session cookie's Domain is the accounts apex (rejected on unrelated
+    hosts like the connector's *.modal.run URL), and a Google flow started
+    elsewhere strands its host-only nonce cookie and dead-ends in
+    nonce_mismatch after the whole provider round-trip. Refusing up front with
+    a link to the right origin turns that silent late failure into an
+    immediate, recoverable one (old shipped clients still open these pages on
+    the connector host). Tiers without an accounts origin serve everything on
+    the connector host, so the guard is inert there.
+    """
+    accounts_origin = _configured_accounts_origin()
+    if not accounts_origin:
+        return None
+    request_host = request.url.netloc.lower()
+    if request_host == urlsplit(accounts_origin).netloc.lower():
+        return None
+    if is_chrome_origin_allowed and request_host == _configured_chrome_origin_host():
+        return None
+    emit_metric("misdirected_browser_page", 1, {"path": request.url.path})
+    continue_url = html.escape(accounts_origin + continue_path, quote=True)
+    body = (
+        "<!doctype html><html><head><title>Wrong sign-in address</title></head><body>"
+        "<h1>This page is served at a different address</h1>"
+        f"<p>Sign-in pages for this service live at <a href='{continue_url}'>{continue_url}</a>. "
+        "Continue there to sign in.</p>"
+        "</body></html>"
+    )
+    # 421 Misdirected Request: this server name cannot produce a working
+    # response for the target, and the status is distinct enough that it can
+    # never be mistaken for an ordinary 404.
+    return HTMLResponse(body, status_code=421)
+
+
+def _request_path_with_query(request: Request) -> str:
+    if request.url.query:
+        return f"{request.url.path}?{request.url.query}"
+    return request.url.path
+
+
 @router.get("/login", response_model=None)
-def accounts_login_page() -> HTMLResponse | FileResponse:
+def accounts_login_page(request: Request) -> HTMLResponse | FileResponse:
     """The hosted sign-in page (also renders the sign-up tab and the continue-as interstitial)."""
+    misdirected = _refuse_misdirected_browser_page(
+        request, is_chrome_origin_allowed=True, continue_path=_request_path_with_query(request)
+    )
+    if misdirected is not None:
+        return misdirected
     return _serve_frontend_index()
 
 
 @router.get("/signup", response_model=None)
-def accounts_signup_page() -> HTMLResponse | FileResponse:
+def accounts_signup_page(request: Request) -> HTMLResponse | FileResponse:
     """The hosted sign-up page (the same bundle, leading with the sign-up tab)."""
+    misdirected = _refuse_misdirected_browser_page(
+        request, is_chrome_origin_allowed=True, continue_path=_request_path_with_query(request)
+    )
+    if misdirected is not None:
+        return misdirected
     return _serve_frontend_index()
 
 
 @router.get("/manage", response_model=None)
-def accounts_manage_page() -> HTMLResponse | FileResponse:
+def accounts_manage_page(request: Request) -> HTMLResponse | FileResponse:
     """The signed-in account-management page (identity, verification, password, sessions).
 
     Deliberately NOT ``/account`` -- that path is the deprecated JSON account
     API released clients still call.
     """
+    misdirected = _refuse_misdirected_browser_page(
+        request, is_chrome_origin_allowed=True, continue_path=_request_path_with_query(request)
+    )
+    if misdirected is not None:
+        return misdirected
     return _serve_frontend_index()
 
 
@@ -482,19 +565,16 @@ def accounts_me(request: Request) -> JSONResponse:
 
 
 def _client_ip(request: Request) -> str | None:
-    """The end-client IP for Turnstile's optional ``remoteip`` check.
+    """The trusted end-client IP: the socket peer, never a forwarding header.
 
-    Behind Modal's ingress the direct peer is the proxy, so the first
-    ``x-forwarded-for`` hop is the visitor (matching how
-    :func:`accounts_public_base_url` trusts ``x-forwarded-proto``); the
-    socket peer is the fallback for direct (local/test) connections.
+    Modal's ingress delivers the real client as the connection peer and
+    strips ``X-Forwarded-For``; every other forwarding-style header passes
+    through unsanitized and must never be consulted (see
+    ``signup_hardening.client_ip_for_request``). This value is load-bearing:
+    it keys the signup velocity limits and reputation checks, not just
+    Turnstile's advisory ``remoteip``.
     """
-    forwarded_for = request.headers.get("x-forwarded-for", "")
-    if forwarded_for:
-        first_hop = forwarded_for.split(",")[0].strip()
-        if first_hop:
-            return first_hop
-    return request.client.host if request.client else None
+    return signup_hardening_module.client_ip_for_request(request)
 
 
 def _verify_turnstile_token(token: str, remote_ip: str | None) -> bool:
@@ -541,17 +621,66 @@ class BrowserSigninRequest(BaseModel):
 
 
 class BrowserAuthResponse(BaseModel):
-    status: str = Field(description="OK, WRONG_CREDENTIALS, EMAIL_ALREADY_EXISTS, TURNSTILE_FAILED, ... or ERROR")
+    status: str = Field(
+        description=(
+            "OK, WRONG_CREDENTIALS, EMAIL_ALREADY_EXISTS, TURNSTILE_FAILED, "
+            "RATE_LIMITED, SIGNUP_BLOCKED, OAUTH_ONLY, ... or ERROR"
+        )
+    )
     message: str | None = Field(default=None)
     user: AuthUser | None = Field(default=None)
+
+
+def _signup_ip_gate_rejection(
+    assessment: signup_hardening_module.SignupIpAssessment, email: str
+) -> BrowserAuthResponse | None:
+    """The IP gate's refusal for a password signup, or None when it may proceed.
+
+    Every refusal is recorded with its verdict (the caller records the
+    allowed ones) so floods are visible in real time. Enforcement only
+    applies on the restricted tiers; elsewhere the verdict is recorded but
+    never refuses.
+    """
+    if not signup_hardening_module.is_signup_ip_enforcement_enabled():
+        return None
+    if assessment.is_rate_limited:
+        signup_hardening_module.record_signup_attempt(
+            assessment, email, "password", signup_hardening_module.SignupGateOutcome.RATE_LIMITED
+        )
+        return BrowserAuthResponse(
+            status="RATE_LIMITED",
+            message="Too many sign-ups from your network right now. Please try again later.",
+        )
+    if assessment.verdict is signup_hardening_module.SignupIpVerdict.ABUSIVE:
+        signup_hardening_module.record_signup_attempt(
+            assessment, email, "password", signup_hardening_module.SignupGateOutcome.BLOCKED
+        )
+        return BrowserAuthResponse(
+            status="SIGNUP_BLOCKED",
+            message="Sign-ups from this network are not accepted. Please try a different network connection.",
+        )
+    if assessment.verdict is signup_hardening_module.SignupIpVerdict.SUSPICIOUS:
+        signup_hardening_module.record_signup_attempt(
+            assessment, email, "password", signup_hardening_module.SignupGateOutcome.OAUTH_ONLY
+        )
+        return BrowserAuthResponse(
+            status="OAUTH_ONLY",
+            message=(
+                "Email-and-password sign-up is not available from your network. "
+                "Continue with Google to create your account."
+            ),
+        )
+    return None
 
 
 @router.post("/accounts/api/signup", response_model=BrowserAuthResponse)
 def accounts_signup(request: Request, body: BrowserSignupRequest) -> BrowserAuthResponse:
     """Browser sign-up: create the account and establish the cookie session.
 
-    Verification is non-blocking (no verification email is sent here); the
-    Turnstile check is the bot gate for this public form.
+    Verification is non-blocking (no verification email is sent here). Two
+    gates guard this public form: the IP gate (velocity limits + reputation,
+    fail-open, enforced on restricted tiers -- see ``signup_hardening``) and
+    the Turnstile human check (fail-closed).
     """
     with handle_endpoint_errors():
         require_supertokens_configured()
@@ -559,7 +688,15 @@ def accounts_signup(request: Request, body: BrowserSignupRequest) -> BrowserAuth
         email = body.email.strip()
         if not email or not body.password:
             return BrowserAuthResponse(status="FIELD_ERROR", message="Email and password are required")
-        if not _verify_turnstile_token(body.turnstile_token, _client_ip(request)):
+        client_ip = _client_ip(request)
+        assessment = signup_hardening_module.assess_signup_ip(client_ip)
+        gate_rejection = _signup_ip_gate_rejection(assessment, email)
+        if gate_rejection is not None:
+            return gate_rejection
+        signup_hardening_module.record_signup_attempt(
+            assessment, email, "password", signup_hardening_module.SignupGateOutcome.ALLOWED
+        )
+        if not _verify_turnstile_token(body.turnstile_token, client_ip):
             return BrowserAuthResponse(
                 status="TURNSTILE_FAILED", message="Could not verify you are human. Please retry the challenge."
             )
@@ -963,9 +1100,9 @@ def accounts_public_base_url(request: Request) -> str:
     ``ACCOUNTS_BASE_URL`` (sharing secret) wins when set; otherwise derived
     from the request (dev tiers: the per-env connector URL).
     """
-    configured = os.environ.get("ACCOUNTS_BASE_URL", "").strip()
+    configured = _configured_accounts_origin()
     if configured:
-        return configured.rstrip("/")
+        return configured
     scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
     return f"{scheme}://{request.url.netloc}"
 
@@ -1064,15 +1201,58 @@ def _login_redirect(next_path: str, error_code: str = "") -> RedirectResponse:
     return RedirectResponse(url=f"/login{suffix}", status_code=303)
 
 
-@router.get("/accounts/oauth/google/start")
-def accounts_oauth_start(request: Request) -> RedirectResponse:
+def _oauth_signup_ip_gate_redirect(request: Request, user: AuthUser, next_path: str) -> RedirectResponse | None:
+    """The IP gate for a just-created Google account: a refusal redirect, or None to proceed.
+
+    Applies only the velocity caps and the abusive band (vpn/proxy/relay IPs
+    pass -- Google OAuth is the step-up path the suspicious band is sent to).
+    A refusal deletes the account the exchange just created, records the
+    outcome, and bounces to the login page's ``signup_blocked`` banner.
+    """
+    assessment = signup_hardening_module.assess_signup_ip(_client_ip(request))
+    is_refused = signup_hardening_module.is_signup_ip_enforcement_enabled() and (
+        assessment.is_rate_limited or assessment.verdict is signup_hardening_module.SignupIpVerdict.ABUSIVE
+    )
+    if not is_refused:
+        signup_hardening_module.record_signup_attempt(
+            assessment, user.email, "google", signup_hardening_module.SignupGateOutcome.ALLOWED
+        )
+        return None
+    outcome = (
+        signup_hardening_module.SignupGateOutcome.RATE_LIMITED
+        if assessment.is_rate_limited
+        else signup_hardening_module.SignupGateOutcome.BLOCKED
+    )
+    signup_hardening_module.record_signup_attempt(assessment, user.email, "google", outcome)
+    try:
+        # Roll back the SuperTokens user this OAuth exchange just created.
+        delete_user(user.user_id)
+    except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
+        # The refusal stands either way; the surviving account got no session
+        # and is inert until a (clean-IP) sign-in.
+        logger.warning("Could not roll back a refused OAuth-signup account %s: %s", user.user_id[:8], exc)
+    return _login_redirect(next_path, "signup_blocked")
+
+
+@router.get("/accounts/oauth/google/start", response_model=None)
+def accounts_oauth_start(request: Request) -> RedirectResponse | HTMLResponse:
     """Begin the browser Google sign-in: stamp a nonce cookie and bounce to the provider."""
     with handle_endpoint_errors():
+        next_path = sanitize_local_next_path(request.query_params.get("next", "/"))
+        # A Google flow started on any host but the accounts origin can never
+        # complete (the nonce cookie is host-only; the callback is registered
+        # on the accounts origin), so refuse it up front -- on every other
+        # host, the chrome origin included.
+        continue_query = f"?{urlencode({'next': next_path})}" if next_path != "/" else ""
+        misdirected = _refuse_misdirected_browser_page(
+            request, is_chrome_origin_allowed=False, continue_path=f"/login{continue_query}"
+        )
+        if misdirected is not None:
+            return misdirected
         require_supertokens_configured()
         provider = get_accounts_oauth_provider()
         if provider is None:
             raise HTTPException(status_code=404, detail="Google sign-in is not configured on this server")
-        next_path = sanitize_local_next_path(request.query_params.get("next", "/"))
         nonce = secrets.token_urlsafe(16)
         redirect_uri = _oauth_redirect_uri(request)
         callback_url = accounts_public_base_url(request) + OAUTH_GOOGLE_CALLBACK_PATH
@@ -1126,6 +1306,7 @@ def accounts_oauth_callback(request: Request) -> RedirectResponse:
         state_param = request.query_params.get("state", "")
         verified_state = verify_oauth_state(accounts_signing_key().public_key(), state_param)
         if verified_state is None:
+            emit_metric("oauth_state_invalid", 1, {"provider": "google-browser"})
             return _login_redirect("/", "invalid_state")
         nonce = verified_state.nonce
         next_path = verified_state.next_path
@@ -1138,6 +1319,7 @@ def accounts_oauth_callback(request: Request) -> RedirectResponse:
         # attacker-controllable -- a crafted cookie must yield the clean
         # nonce_mismatch redirect, not a 500. (The minted nonce is ASCII.)
         if not cookie_nonce or not secrets.compare_digest(cookie_nonce.encode("utf-8"), nonce.encode("utf-8")):
+            emit_metric("oauth_nonce_mismatch", 1, {"provider": "google-browser"})
             return _login_redirect(next_path, "nonce_mismatch")
 
         redirect_uri = _oauth_redirect_uri(request)
@@ -1153,6 +1335,16 @@ def accounts_oauth_callback(request: Request) -> RedirectResponse:
             emit_metric("oauth_callback_failed", 1, {"provider": "google-browser"})
             logger.warning("Accounts OAuth callback failed: %s", auth_result.message)
             return _login_redirect(next_path, "oauth_failed")
+
+        if auth_result.is_new_account:
+            # The IP gate for Google account CREATION (returning sign-ins are
+            # untouched): only the velocity caps and the abusive band apply --
+            # completing a real Google OAuth exchange IS the suspicious band's
+            # step-up remedy. Refusal rolls the just-created SuperTokens user
+            # back, so a blocked flood leaves no inert accounts behind.
+            oauth_gate_redirect = _oauth_signup_ip_gate_redirect(request, auth_result.user, next_path)
+            if oauth_gate_redirect is not None:
+                return oauth_gate_redirect
 
         _sdk_create_browser_session(request, auth_result.user.user_id)
         if auth_result.is_new_account:

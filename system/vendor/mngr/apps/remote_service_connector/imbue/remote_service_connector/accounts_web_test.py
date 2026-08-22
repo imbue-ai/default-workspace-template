@@ -14,8 +14,6 @@ from urllib.parse import urlsplit
 import jwt as pyjwt
 import psycopg2
 import pytest
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
 from starlette.requests import Request
 from starlette.testclient import TestClient
 from supertokens_python.recipe.emailpassword.interfaces import SignUpOkResult as EPSignUpOkResult
@@ -30,15 +28,10 @@ from imbue.remote_service_connector.attribution import ATTRIBUTION_COOKIE_NAME
 from imbue.remote_service_connector.testing import FakeProvider
 from imbue.remote_service_connector.testing import FakeSuperTokensBackend
 from imbue.remote_service_connector.testing import InMemoryDeviceAuthCodeStore
+from imbue.remote_service_connector.testing import TEST_OAUTH_SIGNING_KEY
+from imbue.remote_service_connector.testing import TEST_OAUTH_SIGNING_KEY_PEM
 from imbue.remote_service_connector.testing import _make_accounts_web_test_client
 from imbue.remote_service_connector.testing import encode_attribution_cookie
-
-_TEST_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-_TEST_KEY_PEM = _TEST_KEY.private_bytes(
-    encoding=serialization.Encoding.PEM,
-    format=serialization.PrivateFormat.PKCS8,
-    encryption_algorithm=serialization.NoEncryption(),
-).decode("utf-8")
 
 
 def _sign_in_browser(
@@ -87,6 +80,40 @@ def test_pages_serve_the_built_bundle_index(monkeypatch: pytest.MonkeyPatch, tmp
 
     for page in ("/login", "/signup", "/manage", "/auth/reset-password", "/auth/verify-email", "/check-inbox"):
         resp = client.get(page)
+        assert resp.status_code == 200
+        assert "Minds accounts" in resp.text
+
+
+def test_account_pages_are_refused_off_the_accounts_origin_with_a_link_there(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """With a dedicated accounts origin configured, the identity pages cannot work
+    on other hosts (the session cookie's Domain is the accounts apex), so they are
+    refused with a link to the same page on the right origin."""
+    client, _st, _codes = _make_accounts_web_test_client(monkeypatch)
+    (tmp_path / "index.html").write_text("<!doctype html><title>Minds accounts</title>")
+    monkeypatch.setenv("ACCOUNTS_FRONTEND_DIST", str(tmp_path))
+    monkeypatch.setenv("ACCOUNTS_BASE_URL", "https://accounts.example.com")
+
+    refused = client.get("/login?next=%2Fmanage")
+    assert refused.status_code == 421
+    assert "https://accounts.example.com/login?next=%2Fmanage" in refused.text
+
+    served = client.get("https://accounts.example.com/login?next=%2Fmanage")
+    assert served.status_code == 200
+    assert "Minds accounts" in served.text
+
+
+def test_account_pages_still_serve_on_the_chrome_origin(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The chrome origin shares the apex session cookie, so the account pages keep working there."""
+    client, _st, _codes = _make_accounts_web_test_client(monkeypatch)
+    (tmp_path / "index.html").write_text("<!doctype html><title>Minds accounts</title>")
+    monkeypatch.setenv("ACCOUNTS_FRONTEND_DIST", str(tmp_path))
+    monkeypatch.setenv("ACCOUNTS_BASE_URL", "https://accounts.example.com")
+    monkeypatch.setenv("SHARE_CHROME_ORIGIN", "https://chrome.example.com")
+
+    for page in ("/login", "/signup", "/manage"):
+        resp = client.get(f"https://chrome.example.com{page}")
         assert resp.status_code == 200
         assert "Minds accounts" in resp.text
 
@@ -529,7 +556,7 @@ def _make_oauth_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[TestClient, FakeSuperTokensBackend]:
     client, st_backend, _codes = _make_accounts_web_test_client(monkeypatch)
-    monkeypatch.setenv("BROKER_JWT_SIGNING_KEY_PEM", _TEST_KEY_PEM)
+    monkeypatch.setenv("BROKER_JWT_SIGNING_KEY_PEM", TEST_OAUTH_SIGNING_KEY_PEM)
     st_backend.register_provider("google", email="visitor@example.com", is_verified=True)
     return client, st_backend
 
@@ -551,7 +578,7 @@ def test_oauth_start_redirects_with_signed_state_and_nonce_cookie(monkeypatch: p
     query = parse_qs(location.query)
     # The redirect URI is our own registered callback path, derived from the request.
     assert query["redirect_uri"] == ["https://testserver/share/oauth/google/callback"]
-    claims = pyjwt.decode(query["state"][0], _TEST_KEY.public_key(), algorithms=["RS256"])
+    claims = pyjwt.decode(query["state"][0], TEST_OAUTH_SIGNING_KEY.public_key(), algorithms=["RS256"])
     assert claims["purpose"] == "accounts_oauth"
     assert claims["next"] == "/accounts/authorize?a=b"
     assert claims["cb"] == "https://testserver/share/oauth/google/callback"
@@ -567,13 +594,41 @@ def test_oauth_start_uses_the_tier_redirector_when_configured(monkeypatch: pytes
 
     query = parse_qs(urlsplit(resp.headers["location"]).query)
     assert query["redirect_uri"] == ["https://oauth-redirector.example.com/forward"]
-    claims = pyjwt.decode(query["state"][0], _TEST_KEY.public_key(), algorithms=["RS256"])
+    claims = pyjwt.decode(query["state"][0], TEST_OAUTH_SIGNING_KEY.public_key(), algorithms=["RS256"])
     assert claims["cb"] == "https://testserver/share/oauth/google/callback"
+
+
+def test_oauth_start_is_refused_off_the_accounts_origin_even_on_the_chrome_origin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Google flow started anywhere but the accounts origin can never complete
+    (host-only nonce cookie; the callback is registered on the accounts origin),
+    so the start is refused up front -- on the chrome origin included -- with a
+    link to the accounts-origin login carrying the pending ``next``."""
+    client, _st = _make_oauth_client(monkeypatch)
+    monkeypatch.setenv("ACCOUNTS_BASE_URL", "https://accounts.example.com")
+    monkeypatch.setenv("SHARE_CHROME_ORIGIN", "https://chrome.example.com")
+
+    for start_host in ("https://testserver", "https://chrome.example.com"):
+        refused = client.get(
+            f"{start_host}/accounts/oauth/google/start?next=%2Fmanage",
+            follow_redirects=False,
+        )
+        assert refused.status_code == 421
+        assert "https://accounts.example.com/login?next=%2Fmanage" in refused.text
+        assert "imbue_oauth_nonce" not in refused.headers.get("set-cookie", "")
+
+    started = client.get(
+        "https://accounts.example.com/accounts/oauth/google/start?next=%2Fmanage",
+        follow_redirects=False,
+    )
+    assert started.status_code == 302
+    assert "imbue_oauth_nonce" in started.headers.get("set-cookie", "")
 
 
 def test_oauth_start_404s_when_not_configured(monkeypatch: pytest.MonkeyPatch) -> None:
     client, st_backend, _codes = _make_accounts_web_test_client(monkeypatch)
-    monkeypatch.setenv("BROKER_JWT_SIGNING_KEY_PEM", _TEST_KEY_PEM)
+    monkeypatch.setenv("BROKER_JWT_SIGNING_KEY_PEM", TEST_OAUTH_SIGNING_KEY_PEM)
 
     resp = client.get("/accounts/oauth/google/start?next=%2F", follow_redirects=False)
 
@@ -694,7 +749,7 @@ def test_oauth_callback_rejects_wrong_purpose_state_under_the_same_key(monkeypat
     """
     client, _st = _make_oauth_client(monkeypatch)
     handoff = share_broker_module.mint_share_handoff_token(
-        signing_key=_TEST_KEY,
+        signing_key=TEST_OAUTH_SIGNING_KEY,
         user_id="user-1",
         email="visitor@example.com",
         machine_domain="x.example.com",

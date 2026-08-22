@@ -41,6 +41,7 @@ const LOGIN_ERROR_COPY: Record<string, string> = {
   nonce_mismatch: "This sign-in attempt could not be verified. Please try again.",
   password_account: "An account with this email already signs in with a password. Use the email and password form.",
   oauth_failed: "Google sign-in failed. Please try again.",
+  signup_blocked: "Sign-ups from this network are not accepted. Please try a different network connection.",
 };
 
 function loginErrorCopy(code: string | null): string {
@@ -99,9 +100,10 @@ function googleStartHref(state: PageState): string {
 }
 
 function resetTurnstile(state: PageState): void {
-  // Turnstile response tokens are single-use (the server verifies them before
-  // any other signup check) and short-lived, so a failed submit must issue a
-  // fresh challenge for the retry.
+  // Turnstile response tokens are single-use and short-lived, and a failed
+  // submit may or may not have consumed the token (the server checks the IP
+  // gate before verifying Turnstile), so unconditionally issue a fresh
+  // challenge for the retry.
   state.turnstileToken = "";
   if (state.turnstileWidgetId !== null) {
     window.turnstile?.reset(state.turnstileWidgetId);
@@ -126,6 +128,9 @@ async function submitCredentials(state: PageState, email: string, password: stri
       return;
     }
     state.error = result.message || "Something went wrong. Please try again.";
+    // The server stepped this visitor up to OAuth-only: re-collapse the
+    // email/password fields so Continue with Google is the visible path.
+    if (result.status === "OAUTH_ONLY") state.isEmailSignupFormRevealed = false;
     if (state.tab === "signup") resetTurnstile(state);
   } catch {
     state.error = "Could not reach the sign-in service. Check your connection and try again.";

@@ -25,12 +25,7 @@ def _http_scope(
     }
 
 
-def test_client_ip_prefers_the_first_x_forwarded_for_hop() -> None:
-    scope = _http_scope(headers=[(b"x-forwarded-for", b"203.0.113.9, 10.0.0.2")])
-    assert client_ip_from_asgi_scope(scope) == "203.0.113.9"
-
-
-def test_client_ip_falls_back_to_the_socket_peer() -> None:
+def test_client_ip_is_the_socket_peer() -> None:
     assert client_ip_from_asgi_scope(_http_scope()) == "127.0.0.1"
 
 
@@ -38,11 +33,19 @@ def test_client_ip_is_a_dash_when_nothing_is_known() -> None:
     assert client_ip_from_asgi_scope(_http_scope(client=None)) == "-"
 
 
-def test_client_ip_discards_injected_content_after_the_ip_token() -> None:
-    # The header is client-controlled free text reduced to one clean token:
-    # whitespace and control characters must never survive into the field.
-    scope = _http_scope(headers=[(b"x-forwarded-for", b"9.9.9.9 status=200\x01, 10.0.0.2")])
-    assert client_ip_from_asgi_scope(scope) == "9.9.9.9"
+def test_client_ip_never_trusts_forwarding_headers() -> None:
+    # Modal strips X-Forwarded-For but passes other forwarding-style headers
+    # through unsanitized, so any header consultation would be spoofable. The
+    # socket peer must win even when every such header is present.
+    scope = _http_scope(
+        headers=[
+            (b"x-forwarded-for", b"203.0.113.9, 10.0.0.2"),
+            (b"x-real-ip", b"198.51.100.1"),
+            (b"forwarded", b"for=198.51.100.2"),
+            (b"cf-connecting-ip", b"198.51.100.3"),
+        ]
+    )
+    assert client_ip_from_asgi_scope(scope) == "127.0.0.1"
 
 
 def test_format_request_log_line_is_one_json_object_without_the_query_string() -> None:
@@ -50,7 +53,6 @@ def test_format_request_log_line_is_one_json_object_without_the_query_string() -
         method="POST",
         path="/auth/verify-email",
         headers=[
-            (b"x-forwarded-for", b"203.0.113.9"),
             (b"user-agent", b'Mozilla/5.0 ("weird" agent)'),
             (b"x-imbue-client", b"minds/0.3.16 imbue-cloud-plugin/0.1.6"),
         ],
@@ -66,7 +68,7 @@ def test_format_request_log_line_is_one_json_object_without_the_query_string() -
         "path": "/auth/verify-email",
         "status": 200,
         "duration_ms": 12.3,
-        "client_ip": "203.0.113.9",
+        "client_ip": "127.0.0.1",
         "user_agent": 'Mozilla/5.0 ("weird" agent)',
         "imbue_client": "minds/0.3.16 imbue-cloud-plugin/0.1.6",
     }
@@ -140,7 +142,7 @@ def test_middleware_logs_one_line_with_the_response_status() -> None:
 
     middleware = RequestLoggingMiddleware(_RespondingApp(), line_sink=lines.append)
 
-    scope = _http_scope(headers=[(b"x-forwarded-for", b"198.51.100.7")])
+    scope = _http_scope(client=("198.51.100.7", 41000))
     _run_coroutine_synchronously(middleware(scope, None, _send))
 
     # The response passed through untouched and exactly one line was logged.

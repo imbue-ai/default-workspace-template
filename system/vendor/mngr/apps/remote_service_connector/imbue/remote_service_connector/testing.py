@@ -9,6 +9,7 @@ import uuid
 from collections.abc import Iterator
 from collections.abc import Set as AbstractSet
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from types import SimpleNamespace
 from typing import Any
@@ -22,6 +23,8 @@ from uuid import UUID
 import paramiko
 import psycopg2
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import HTTPException
 from starlette.testclient import TestClient
 from supertokens_python.recipe.emailpassword.interfaces import ConsumePasswordResetTokenOkResult
@@ -61,6 +64,7 @@ import imbue.remote_service_connector.hosts as hosts_module
 import imbue.remote_service_connector.litellm_client as litellm_client_mod
 import imbue.remote_service_connector.r2.stores as r2_stores_mod
 import imbue.remote_service_connector.share_broker as share_broker_module
+import imbue.remote_service_connector.signup_hardening as signup_hardening_module
 import imbue.remote_service_connector.stop_start as stop_start_module
 import imbue.remote_service_connector.storage as connector_storage_module
 import imbue.remote_service_connector.sync as sync_mod
@@ -84,6 +88,16 @@ from imbue.remote_service_connector.sync import UPDATABLE_RECORD_COLUMNS
 from imbue.remote_service_connector.sync import _ONE_ACTIVE_PER_AGENT_INDEX_NAME
 from imbue.remote_service_connector.sync import _WORKSPACE_RECORD_COLUMNS
 from imbue.remote_service_connector.web import web_app
+
+# Shared RSA signing key for the accounts-surface OAuth tests: it mints the
+# BROKER_JWT_SIGNING_KEY_PEM env value and verifies the signed OAuth state.
+# Generated once here so each test module does not pay its own keygen.
+TEST_OAUTH_SIGNING_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+TEST_OAUTH_SIGNING_KEY_PEM = TEST_OAUTH_SIGNING_KEY.private_bytes(
+    encoding=serialization.Encoding.PEM,
+    format=serialization.PrivateFormat.PKCS8,
+    encryption_algorithm=serialization.NoEncryption(),
+).decode("utf-8")
 
 
 class FakeCloudflareOps:
@@ -468,6 +482,15 @@ class FakeSuperTokensBackend:
     device_code_store: "InMemoryDeviceAuthCodeStore"
     # In-memory attribution store installed onto the attribution module.
     attribution_store: "InMemoryAttributionStore"
+    # In-memory signup-hardening stores/seams installed onto signup_hardening.
+    signup_attempt_store: "InMemorySignupAttemptStore"
+    ip_reputation_cache: "InMemoryIpReputationCache"
+    ip_reputation_provider: "FakeIpReputationProvider"
+    tor_exit_list: "FakeTorExitList"
+    # The client IP the fake `_client_ip` seam reports for every request (the
+    # test client's real socket peer is not a routable IP). None models an
+    # underivable client IP.
+    fake_client_ip: str | None
 
     def install_on_app_module(self, app_mod: Any, monkeypatch: pytest.MonkeyPatch) -> None:
         """Swap every SuperTokens SDK call site with a fake.
@@ -500,13 +523,20 @@ class FakeSuperTokensBackend:
             "manually_create_or_update_user": self.manually_create_or_update_user,
             "_sdk_create_browser_session": self.sdk_create_browser_session,
             "_sdk_get_browser_session": self.sdk_get_browser_session,
+            "delete_user": self.sdk_delete_user,
             # Not SuperTokens seams, but accounts-surface test plumbing that
             # rides the same single-loop install: the Turnstile verifier
-            # (driven by ``is_turnstile_passing``) and the in-memory
-            # device-auth-code and attribution stores.
+            # (driven by ``is_turnstile_passing``), the in-memory
+            # device-auth-code / attribution / signup-hardening stores, and
+            # the client-IP seam (driven by ``fake_client_ip``).
             "_verify_turnstile_token": self.verify_turnstile_token,
             "_device_code_store": self.device_code_store,
             "_attribution_store": self.attribution_store,
+            "_signup_attempt_store": self.signup_attempt_store,
+            "_ip_reputation_cache": self.ip_reputation_cache,
+            "_ip_reputation_provider": self.ip_reputation_provider,
+            "_tor_exit_list": self.tor_exit_list,
+            "_client_ip": self.client_ip,
         }
         target_modules = [
             app_mod,
@@ -516,6 +546,7 @@ class FakeSuperTokensBackend:
             share_broker_module,
             accounts_web_module,
             attribution_module,
+            signup_hardening_module,
         ]
         for name, fake in fakes.items():
             matching_modules = [module for module in target_modules if hasattr(module, name)]
@@ -922,6 +953,24 @@ class FakeSuperTokensBackend:
         del token, remote_ip
         return self.is_turnstile_passing
 
+    def client_ip(self, request: Any) -> str | None:
+        """Fake for ``accounts_web._client_ip``: driven by ``fake_client_ip``."""
+        del request
+        return self.fake_client_ip
+
+    def sdk_delete_user(self, user_id: str) -> None:
+        """Fake for the SDK's ``delete_user`` (the refused-OAuth-signup rollback)."""
+        self._raise_if_configured("delete_user")
+        account = self.accounts_by_id.pop(user_id, None)
+        if account is None:
+            return
+        emails_pointing_at_account = [
+            email for email, existing in self.accounts_by_email.items() if existing.user_id == user_id
+        ]
+        for email in emails_pointing_at_account:
+            del self.accounts_by_email[email]
+        self.revoke_all_sessions_for_user(user_id=user_id)
+
     def manually_create_or_update_user(
         self,
         *,
@@ -986,6 +1035,11 @@ def make_fake_supertokens_backend() -> FakeSuperTokensBackend:
     backend.is_turnstile_passing = True
     backend.device_code_store = InMemoryDeviceAuthCodeStore()
     backend.attribution_store = InMemoryAttributionStore()
+    backend.signup_attempt_store = InMemorySignupAttemptStore()
+    backend.ip_reputation_cache = InMemoryIpReputationCache()
+    backend.ip_reputation_provider = FakeIpReputationProvider()
+    backend.tor_exit_list = FakeTorExitList()
+    backend.fake_client_ip = "203.0.113.77"
     return backend
 
 
@@ -3472,6 +3526,133 @@ class InMemoryDeviceAuthCodeStore:
         }
 
 
+class InMemorySignupAttemptStore:
+    """In-memory stand-in for the Neon signup_attempts table."""
+
+    def __init__(self) -> None:
+        self.attempts: list[dict[str, Any]] = []
+        # When set, both store methods raise it (the DB-outage fail-open path).
+        self.error_to_raise: Exception | None = None
+
+    def count_recent_attempts(self, client_ip: str, subnet: str | None) -> tuple[int, int]:
+        if self.error_to_raise is not None:
+            raise self.error_to_raise
+        now = datetime.now(timezone.utc)
+        ip_hour_count = sum(
+            1
+            for attempt in self.attempts
+            if attempt["client_ip"] == client_ip and (now - attempt["attempted_at"]) < timedelta(hours=1)
+        )
+        subnet_day_count = sum(
+            1
+            for attempt in self.attempts
+            if subnet is not None
+            and attempt["subnet"] == subnet
+            and (now - attempt["attempted_at"]) < timedelta(days=1)
+        )
+        return ip_hour_count, subnet_day_count
+
+    def record_attempt(
+        self,
+        client_ip: str | None,
+        subnet: str | None,
+        email: str,
+        signup_method: str,
+        verdict: str,
+        outcome: str,
+        reputation_json: str | None,
+    ) -> None:
+        if self.error_to_raise is not None:
+            raise self.error_to_raise
+        self.attempts.append(
+            {
+                "attempted_at": datetime.now(timezone.utc),
+                "client_ip": client_ip,
+                "subnet": subnet,
+                "email": email,
+                "signup_method": signup_method,
+                "verdict": verdict,
+                "outcome": outcome,
+                "reputation_json": reputation_json,
+            }
+        )
+
+    def seed_attempts(self, client_ip: str, subnet: str | None, count: int) -> None:
+        """Plant ``count`` recent attempts so a test can trip the velocity caps."""
+        for _ in range(count):
+            self.record_attempt(
+                client_ip=client_ip,
+                subnet=subnet,
+                email="seeded@example.com",
+                signup_method="password",
+                verdict="clean",
+                outcome="allowed",
+                reputation_json=None,
+            )
+
+
+class InMemoryIpReputationCache:
+    """In-memory stand-in for the Neon ip_reputation_cache table."""
+
+    def __init__(self) -> None:
+        self.entries_by_ip: dict[str, tuple[datetime, signup_hardening_module.IpReputation]] = {}
+        # When set, every cache method raises it (the cache-outage fail-open path).
+        self.error_to_raise: Exception | None = None
+
+    def get_fresh(self, client_ip: str, ttl_seconds: int) -> signup_hardening_module.IpReputation | None:
+        if self.error_to_raise is not None:
+            raise self.error_to_raise
+        entry = self.entries_by_ip.get(client_ip)
+        if entry is None:
+            return None
+        fetched_at, reputation = entry
+        if (datetime.now(timezone.utc) - fetched_at) > timedelta(seconds=ttl_seconds):
+            return None
+        return reputation
+
+    def store(self, client_ip: str, reputation: signup_hardening_module.IpReputation) -> None:
+        if self.error_to_raise is not None:
+            raise self.error_to_raise
+        self.entries_by_ip[client_ip] = (datetime.now(timezone.utc), reputation)
+
+    def count_lookups_in_last_day(self) -> int:
+        if self.error_to_raise is not None:
+            raise self.error_to_raise
+        now = datetime.now(timezone.utc)
+        return sum(1 for fetched_at, _ in self.entries_by_ip.values() if (now - fetched_at) < timedelta(days=1))
+
+
+class FakeIpReputationProvider:
+    """Configurable reputation provider: per-IP flags, a not-configured default, and error injection."""
+
+    def __init__(self) -> None:
+        self.reputation_by_ip: dict[str, signup_hardening_module.IpReputation] = {}
+        self.fetch_count = 0
+        # When set, every fetch raises this instead of answering (the
+        # provider-outage fail-open path).
+        self.error_to_raise: Exception | None = None
+        # When False the provider acts unconfigured (no token on this tier).
+        self.is_configured = True
+
+    def fetch_reputation(self, client_ip: str) -> signup_hardening_module.IpReputation | None:
+        self.fetch_count += 1
+        if self.error_to_raise is not None:
+            raise self.error_to_raise
+        if not self.is_configured:
+            return None
+        return self.reputation_by_ip.get(client_ip, signup_hardening_module.IpReputation())
+
+
+class FakeTorExitList:
+    """Static in-memory Tor exit set (no network)."""
+
+    def __init__(self) -> None:
+        self.exit_ips: set[str] = set()
+
+    def is_tor_exit(self, client_ip: str) -> bool:
+        return client_ip in self.exit_ips
+
+
 def encode_attribution_cookie(payload: object) -> str:
     """Encode a payload the way the marketing site writes the imbue_attribution cookie.
 
@@ -3554,6 +3735,12 @@ def _make_accounts_web_test_client(
     st_backend.last_browser_session.access_token)``.
     """
     monkeypatch.setenv("SUPERTOKENS_CONNECTION_URI", "https://fake-supertokens.example.com")
+    # The identity pages and the OAuth start change behavior when a dedicated
+    # accounts origin or chrome origin is configured (misdirected requests are
+    # refused with 421), so clear any ambient values: tests only see the
+    # origins they set themselves.
+    monkeypatch.delenv("ACCOUNTS_BASE_URL", raising=False)
+    monkeypatch.delenv("SHARE_CHROME_ORIGIN", raising=False)
     st_backend = make_fake_supertokens_backend()
     st_backend.install_on_app_module(app_mod, monkeypatch)
     return (

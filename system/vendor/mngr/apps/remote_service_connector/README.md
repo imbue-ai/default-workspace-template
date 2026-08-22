@@ -170,6 +170,16 @@ All non-`/auth/*` endpoints require a Bearer token, with the exceptions noted be
 
 The `/auth/*` endpoints are themselves the authentication flow, so they do not require a token.
 
+### Signup IP hardening
+
+Account creation on the hosted accounts surface (the Turnstile-gated password form and the Google OAuth callback's new-account branch) is additionally gated on the client IP (`signup_hardening.py`); returning sign-ins are untouched. The trusted IP is the ASGI socket peer -- Modal's ingress delivers the real client there and strips `X-Forwarded-For`, while other forwarding-style headers pass through unsanitized and are never consulted (see `modal_app_kit`'s `client_ip_from_asgi_scope`).
+
+- **Velocity limits**: per-IP (hourly) and per-subnet (/24 v4, /48 v6, daily) caps counted from the Neon `signup_attempts` table. Refusals answer status `RATE_LIMITED`.
+- **Reputation bands** from the IPinfo Max lookup API (`IPINFO_TOKEN` in the supertokens secret; lookups are cached per IP in `ip_reputation_cache` and budget-capped per day), unioned with an hourly-refreshed Tor-exit-list check that needs no token: Tor/hosting IPs are blocked outright (`SIGNUP_BLOCKED`; a Google-created account is rolled back), and vpn/proxy/relay IPs (residential proxies included, on the IPinfo Max plan) are stepped up to OAuth-only (`OAUTH_ONLY` -- the password form is refused, Continue with Google still works).
+- **Fail-open everywhere** (deliberately the opposite of Turnstile, which fails closed): a Neon, IPinfo, or Tor-list outage degrades signup to "Turnstile + whatever signal remains" with a warning log.
+- **Every gated attempt is recorded** (allowed ones included) with its IP, subnet, verdict, and outcome in `signup_attempts`, so a flood is visible in real time rather than reconstructed from Modal logs afterwards.
+- Enforcement applies on the tiers whose signup is restricted to the hosted surface (production/staging, the same line as the JSON-signup refusal); dev/CI tiers record verdicts but never refuse.
+
 ### Quota enforcement
 
 Every resource-granting endpoint checks the caller's entitlements (see "Plans and entitlements" above) on top of user auth:

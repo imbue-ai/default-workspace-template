@@ -69,6 +69,22 @@ release published).
   `just provision-observability-accounts <instance-ip>` once data flows so
   the log-stream retention overrides land. (Done for the dev fleet
   2026-08-18; staging/production fleets pending their tier bring-up.)
+- [ ] **Signup IP hardening** (issue mngr-internal#467; migration 028 applies
+  automatically):
+  - `IPINFO_TOKEN` is populated in every tier's Vault `supertokens` entry
+    (dev, ci, staging, production; 2026-08-21/22) -- nothing to do before
+    deploying. Verified live on dev-josh-2: recorded signup attempt with a
+    real Max-lookup reputation, cache reuse on the second attempt.
+  - The token must come from an account on the IPinfo **Max** plan: the
+    connector calls the Max lookup API (`api.ipinfo.io/lookup/{ip}`,
+    residential proxies included); a non-Max token 403s there, which the
+    gate treats as provider-off (fail open). One IPinfo account/token may
+    serve all tiers -- the token only guards lookup quota.
+  - After the first deploy with this change, confirm on staging that a
+    request's access-log line (`client_ip=` in the Modal function logs)
+    shows the caller's real public IP: the client-IP derivation switched
+    to the socket peer, verified on `*.modal.run` but worth one glance
+    behind the custom domains.
 - [ ] **Bugsink error tracking bring-up** (per-tier OVH VPS, converging on
   the OpenObserve hosting pattern; needs the observability bring-up's
   Cloudflare/OVH plumbing familiarity but no code dependency): dev-tier

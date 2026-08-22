@@ -28,6 +28,7 @@ import os
 import time
 from collections.abc import Callable
 from collections.abc import Iterable
+from collections.abc import Mapping
 from typing import Any
 from typing import Final
 
@@ -67,22 +68,21 @@ def _first_header_value(headers: Iterable[tuple[bytes, bytes]], name: bytes) -> 
     return ""
 
 
-def client_ip_from_asgi_scope(scope: dict[str, Any]) -> str:
+def client_ip_from_asgi_scope(scope: Mapping[str, Any]) -> str:
     """The end-client IP of an HTTP request, or ``"-"`` when unknown.
 
-    Behind Modal's ingress the direct peer is the proxy, so the first
-    ``x-forwarded-for`` hop is the real client; the socket peer is the
-    fallback for direct (local/test) connections. The header is
-    client-controlled free text, so it is reduced to a single printable
-    whitespace-free token (an IP contains no whitespace) -- anything else in
-    the hop is discarded rather than logged.
+    The ASGI socket peer is the ONLY trustworthy source behind Modal's
+    ingress: Modal delivers the real end-client IP as the connection peer
+    (their documented way to read the client IP) and strips any
+    client-supplied ``X-Forwarded-For`` before the request reaches the app
+    (verified empirically 2026-08 against a deployed echo endpoint, over
+    both HTTP/1.1 and HTTP/2 and every header-case spelling). Other
+    forwarding-style headers (``X-Real-IP``, ``Forwarded``,
+    ``CF-Connecting-IP``) pass through Modal UNSANITIZED and are therefore
+    attacker-controlled -- no caller may ever consult them. This value
+    feeds abuse enforcement (per-IP signup limits), not just logs, so the
+    header-less derivation here is load-bearing.
     """
-    forwarded_for = _first_header_value(scope.get("headers") or [], b"x-forwarded-for")
-    first_hop_tokens = forwarded_for.split(",")[0].split()
-    first_hop = first_hop_tokens[0] if first_hop_tokens else ""
-    first_hop = "".join(character for character in first_hop if character.isprintable())
-    if first_hop:
-        return first_hop
     client = scope.get("client")
     if isinstance(client, (tuple, list)) and client and client[0]:
         return str(client[0])
