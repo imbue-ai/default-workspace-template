@@ -4,8 +4,8 @@ Minds runs a set of **hooks** on its agents: checkpoints fired around a tool cal
 turn where we can block a command, rewrite it, or inject a reminder into the model's
 context. claude is the reference harness — it runs every hook here. This file is the single
 source of truth for **each hook claude runs and how codex and pi reflect it** (or why one is
-deliberately claude-only). The hook *logic* lives in the `claude_*` scripts in this directory;
-codex reuses those scripts verbatim, pi re-expresses them in TypeScript.
+deliberately claude-only). The hook *logic* lives in the `agent_*` scripts in this directory;
+codex reuses those scripts verbatim, pi runs their checkers or re-expresses them in TypeScript.
 
 ## Status legend
 
@@ -197,11 +197,12 @@ tokenizing lives in `agent_tk_standalone_check.py` (uses `shlex`, which a bash r
 reliably).
 - **claude / codex**: the `.sh`, which execs the `.py`; stderr + `exit 2` blocks. Codex honors
   the exit-2 block identically.
-- **pi**: `on("tool_call")` runs the **same** `agent_tk_standalone_check.py` synchronously
-  (`spawnSync("python3", [checker, command])`, only when the command mentions `tk`/`ticket`) and
-  maps its exit-2/stderr to `{block, reason}` — reusing the checker keeps the shlex tokenizer
-  single-sourced. Step state for the other guards comes from `spawnSync("bash", [ticket, ...])`
-  (via `bash` so it runs regardless of the mount's exec bit).
+- **pi**: `.pi/extensions/policy_guards.ts` runs the **same** `agent_tk_standalone_check.py`
+  synchronously from `on("tool_call")` — through `bash --noprofile --norc -c`, with the command
+  passed as `$1`, and only when the command mentions `tk`/`ticket` — and maps its exit-2/stderr
+  to `{block, reason}`; reusing the checker keeps the shlex tokenizer single-sourced. Step state
+  for the other guards comes from `spawnSync("bash", [ticket, ...])` in
+  `.pi/extensions/tk_workflow.ts` (via `bash` so it runs regardless of the mount's exec bit).
 
 ### 7. Carry over open steps into the next turn — `agent_open_tickets_reminder.sh`
 When a new user message arrives and this agent has still-open step records, inject a reminder
