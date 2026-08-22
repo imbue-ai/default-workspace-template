@@ -38,6 +38,10 @@ export interface HarnessPopup {
   trigger: "composer_command" | "turn_check";
   commands: string[];
   action: "notice" | "open_auth" | "fast_mode_prompt";
+  /** `notice` only: replaces the notice's default body. Absent for most declines,
+   *  which are declined for the same reason (the command takes over the terminal);
+   *  present where the harness has a more specific thing to say. */
+  notice_body?: string | null;
 }
 
 export interface HarnessCatalog {
