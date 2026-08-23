@@ -4112,6 +4112,13 @@ async function applyLayoutContent(saved: SavedLayout | null, isInitialMount: boo
  * are skipped; a failed allocation leaves the pane as it was, and the next
  * mount retries.
  *
+ * Adoption is deliberately per pane, per view: a legacy app that was open in
+ * two projects -- one shared page pre-instances -- becomes two independent
+ * instances, one minted at each view's first mount. Nothing is lost (both
+ * panes keep working, each filed into its own project), but the old
+ * shared-page identity is not preserved; adopting into an existing instance
+ * instead would risk colliding two legacy panes of one app inside one view.
+ *
  * CLEANUP: drop this pass once no supported workspace's saved layouts predate
  * app instances (every pane saved since carries ``serviceInstanceId``).
  */

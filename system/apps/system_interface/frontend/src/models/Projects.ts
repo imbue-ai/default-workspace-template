@@ -521,7 +521,10 @@ const INSTANCE_QUERY_KEY = "instance";
 /** The member ref one app instance is filed under:
  *  `service:<service>?instance=<instance>` with the FULL canonical instance
  *  name (`files-2`) in the query, mirroring the backend's
- *  `app_instances.instance_ref`. */
+ *  `app_instances.instance_ref`. Built without URL-encoding on purpose: the
+ *  allocator is the only writer, and a canonical name is a registered service
+ *  name (a DNS label) plus `-<N>`, which carries nothing the query-decoding
+ *  parsers would transform. */
 export function appInstanceRef(serviceName: string, instanceName: string): string {
   return `${SERVICE_REF_PREFIX}${serviceName}?${INSTANCE_QUERY_KEY}=${instanceName}`;
 }
