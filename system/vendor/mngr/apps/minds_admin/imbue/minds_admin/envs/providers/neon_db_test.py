@@ -12,6 +12,7 @@ from imbue.minds_admin.envs.providers.neon_db import NeonProjectSummary
 from imbue.minds_admin.envs.providers.neon_db import NeonProviderError
 from imbue.minds_admin.envs.providers.neon_db import _format_multi_match_message
 from imbue.minds_admin.envs.providers.neon_db import _select_one_or_raise_multi_match
+from imbue.minds_admin.envs.providers.neon_db import direct_dsn_from_pooled
 
 
 def _make_summary(*, id: str, created_at: str = "2026-01-01T00:00:00Z") -> NeonProjectSummary:
@@ -76,3 +77,12 @@ def test_format_multi_match_sorts_oldest_first_in_the_per_project_list() -> None
     one_liner_idx = message.index("for PID in ")
     nuke_segment = message[one_liner_idx : message.index(";", one_liner_idx)]
     assert nuke_segment.index("oldest") < nuke_segment.index("middle") < nuke_segment.index("newest")
+
+
+def test_direct_dsn_from_pooled_strips_only_the_pooler_label() -> None:
+    pooled = "postgresql://u:p@ep-x-pooler.c-4.us-west-2.aws.neon.tech/host_pool?sslmode=require"
+    direct = "postgresql://u:p@ep-x.c-4.us-west-2.aws.neon.tech/host_pool?sslmode=require"
+
+    assert direct_dsn_from_pooled(pooled) == direct
+    assert direct_dsn_from_pooled(direct) == direct
+    assert direct_dsn_from_pooled("postgresql://u:p@plainhost/db") == "postgresql://u:p@plainhost/db"

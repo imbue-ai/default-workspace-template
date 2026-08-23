@@ -50,13 +50,15 @@ AUTHENTICATED_USER_STATE_KEY: Final[str] = "authenticated_user_id"
 # ``minds-admin env deploy`` (dev envs: the env name; shared tiers: the tier
 # name). Stamped into every structured log line so downstream consumers of the
 # shared per-tier log store (the analytics aggregation's log views) can filter
-# one env's lines out of the mix. Empty (field omitted) when the container
-# predates the stamping or runs outside a minds deploy.
+# one env's lines out of the mix, and used by the connector to scope
+# env-owned maintenance (the slice-box reconcile) on shared infrastructure.
+# Empty when the container predates the stamping or runs outside a minds
+# deploy; log lines omit the field and env-scoped maintenance skips.
 _MINDS_ENV_NAME_ENV_VAR: Final[str] = "MINDS_ENV_NAME"
 
 
-def minds_env_name_for_log_lines() -> str:
-    """The env name to stamp into structured log lines ('' when not deployed via minds)."""
+def deployed_minds_env_name() -> str:
+    """The deployed env's name from MINDS_ENV_NAME ('' when not deployed via minds)."""
     return os.environ.get(_MINDS_ENV_NAME_ENV_VAR, "")
 
 
@@ -128,7 +130,7 @@ def format_request_log_line(scope: dict[str, Any], status_code: int | None, dura
     authenticated_user = _authenticated_user_from_scope(scope)
     if authenticated_user:
         record["user"] = authenticated_user
-    env_name = minds_env_name_for_log_lines()
+    env_name = deployed_minds_env_name()
     if env_name:
         record["minds_env"] = env_name
     return json.dumps(record, ensure_ascii=True, separators=(",", ":"))

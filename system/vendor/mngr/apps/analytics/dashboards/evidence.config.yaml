@@ -1,0 +1,7 @@
+# Evidence's mandated project config (YAML because Evidence requires YAML --
+# a third-party tool's format, like the OpenTelemetry Collector's config).
+plugins:
+  components:
+    "@evidence-dev/core-components": {}
+  datasources:
+    "@evidence-dev/duckdb": {}

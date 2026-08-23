@@ -98,18 +98,7 @@ def list_litellm_keys(request: Request) -> list[dict[str, object]]:
     with handle_endpoint_errors():
         user_id = accounts_web_module.resolve_web_user_identity(request)[1]
 
-        # Without ``return_full_object=true`` LiteLLM returns the keys as a
-        # bare list of token-id strings (and the ``KeyInfo`` mapping below
-        # would crash on ``entry.get(...)``); with it, each entry is a dict
-        # carrying alias / spend / budget / etc.
-        resp = litellm_client.litellm_request(
-            "GET",
-            "/key/list",
-            params={"user_id": user_id, "return_full_object": "true"},
-        )
-        data = resp.json()
-
-        keys_raw = data if isinstance(data, list) else data.get("keys", [])
+        keys_raw = litellm_client.list_litellm_user_key_entries(user_id)
         result: list[dict[str, object]] = []
         for entry in keys_raw:
             if not isinstance(entry, dict):
@@ -257,11 +246,7 @@ def mint_workspace_key(request: Request, body: WorkspaceMintRequest) -> dict[str
         # Rotate-on-exists: delete any key already carrying this workspace's
         # deterministic alias before minting the fresh one.
         alias = f"workspace-{host_id}"
-        list_resp = litellm_client.litellm_request(
-            "GET", "/key/list", params={"user_id": user_id, "return_full_object": "true"}
-        )
-        listed = list_resp.json()
-        keys_raw = listed if isinstance(listed, list) else listed.get("keys", [])
+        keys_raw = litellm_client.list_litellm_user_key_entries(user_id)
         stale_tokens = [
             str(entry.get("token"))
             for entry in keys_raw

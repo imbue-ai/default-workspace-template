@@ -42,6 +42,7 @@ const LOGIN_ERROR_COPY: Record<string, string> = {
   password_account: "An account with this email already signs in with a password. Use the email and password form.",
   oauth_failed: "Google sign-in failed. Please try again.",
   signup_blocked: "Sign-ups from this network are not accepted. Please try a different network connection.",
+  account_suspended: "This account is suspended. If you believe this is a mistake, contact support@imbue.com.",
 };
 
 function loginErrorCopy(code: string | null): string {

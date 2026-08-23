@@ -36,7 +36,9 @@ _SLICE_AUTOSTART_PARALLELISM: Final[int] = 4
 # Packages the box needs to run lima/QEMU VMs and the slice bake (Docker lives
 # inside each VM, not on the box). ``libguestfs-tools`` provides ``virt-customize``,
 # used to pre-install Docker + inotify-tools into the golden slice image so per-VM
-# first-boot provisioning skips those downloads.
+# first-boot provisioning skips those downloads. ``zstd`` compresses the workspace
+# stop/start transfer streams (the box-health sweep probes for it alongside the
+# pinned age + s5cmd installs below).
 _BOX_APT_PACKAGES: Final[tuple[str, ...]] = (
     "qemu-system-x86",
     "qemu-utils",
@@ -47,6 +49,7 @@ _BOX_APT_PACKAGES: Final[tuple[str, ...]] = (
     "ca-certificates",
     "iproute2",
     "libguestfs-tools",
+    "zstd",
 )
 
 

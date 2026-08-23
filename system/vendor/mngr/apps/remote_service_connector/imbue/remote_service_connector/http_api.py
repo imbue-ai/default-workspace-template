@@ -21,6 +21,7 @@ from fastapi.responses import JSONResponse
 
 from imbue.modal_app_kit.deploy import read_deploy_env
 from imbue.modal_app_kit.sentry import capture_unexpected_exception
+from imbue.remote_service_connector.errors import AccountSuspendedError
 from imbue.remote_service_connector.errors import AcmeIssuanceError
 from imbue.remote_service_connector.errors import CleanupGrantBudgetExhaustedError
 from imbue.remote_service_connector.errors import CloudflareApiError
@@ -85,6 +86,14 @@ def raise_as_http(exc: Exception) -> NoReturn:
                 # Whether the refusal itself sent the verification email
                 # (null when no send was attempted in this context).
                 "sent": exc.is_verification_email_sent,
+                "message": str(exc),
+            },
+        ) from exc
+    if isinstance(exc, AccountSuspendedError):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "account_suspended",
                 "message": str(exc),
             },
         ) from exc

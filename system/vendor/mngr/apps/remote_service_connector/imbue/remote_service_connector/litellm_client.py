@@ -13,6 +13,7 @@ LiteLLM cannot fail an unrelated request.
 import logging
 import os
 from collections.abc import Callable
+from typing import Any
 
 import httpx
 from fastapi import HTTPException
@@ -69,6 +70,21 @@ def litellm_request(
 def litellm_base_url_for_agents() -> str:
     """Return the base URL agents should use as ANTHROPIC_BASE_URL."""
     return litellm_proxy_url()
+
+
+def list_litellm_user_key_entries(user_id: str) -> list[Any]:
+    """Return every virtual key LiteLLM holds for the account, as full objects.
+
+    Without ``return_full_object=true`` LiteLLM answers with a bare list of
+    token-id strings; with it, each entry is a dict carrying token / alias /
+    spend / budget. The response is either the list itself or a ``keys``
+    envelope depending on the proxy version, so both shapes are unwrapped
+    here. Entries are returned unfiltered -- callers project what they need
+    and decide how to treat a non-dict entry.
+    """
+    response = litellm_request("GET", "/key/list", params={"user_id": user_id, "return_full_object": "true"})
+    data = response.json()
+    return data if isinstance(data, list) else data.get("keys", [])
 
 
 _LITELLM_USER_BUDGET_DURATION = "1mo"

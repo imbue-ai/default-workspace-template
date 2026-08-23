@@ -209,7 +209,7 @@ A shared workspace lives at `<service>.<host-id>.<user-label>.<region>.<content-
 - `DELETE /shares/{host_id}` -- Disable sharing (share goes `inactive`, relay token deleted).
 - `GET /shares/{host_id}/status` -- One share's domain, tunnel-liveness signal, certificate expiry, and the chrome's entry label.
 - `POST /shares/cert` -- Sign the workspace's CSR via ACME DNS-01 (authenticated by the share's relay token; the workspace keeps its private key).
-- `POST /frps/auth/{plugin_secret}` -- The frps server-plugin callback authorizing relay `Login` / `NewProxy` operations. An allowed `NewProxy` also records the workspace's shell-service label as the share's chrome entry origin (the connector never reads anything from inside the workspace).
+- `POST /frps/auth/{plugin_secret}` -- The frps server-plugin callback authorizing relay `Login` / `NewProxy` / `Ping` operations. An allowed `NewProxy` also records the workspace's shell-service label as the share's chrome entry origin (the connector never reads anything from inside the workspace). A `Ping` (the workspace's ~10s heartbeat) is rejected when its relay token no longer resolves to an active share -- severing the LIVE tunnel of a suspended or freshly unshared workspace within one heartbeat interval -- and fails open on connector-internal errors so tunnel uptime is coupled only to the connector being reachable.
 - `GET /share/authorize`, `GET /share/jwks.json` -- the accounts broker: authorizes a visit to a shared workspace against the hosted accounts surface's browser session and mints the short-lived handoff JWT (`GET /share/login` survives only as a permanent redirect to the merged `/login` page).
 
 ### Buckets (signed-in user only)
@@ -266,9 +266,13 @@ Destroyed workspaces' backups (bucket + workspace record) are retained for 30 da
 
 Email-addressed operator management of per-account entitlements, authenticated by the same fixed `MINDS_ADMIN_KEY` as the paid-list CRUD (and exposed as `minds-admin account ...`):
 
-- `GET /admin/accounts/{email}` -- One account's plan, entitlements, and live usage (lazily creates the row).
+- `GET /admin/accounts/{email}` -- One account's plan, entitlements, live usage, and suspension state (lazily creates the row).
 - `POST /admin/accounts/{email}/plan` -- Body `{"plan": "..."}`; always resets to the plan's defaults (the operator's way to wipe manual bumps; skips the ally eligibility check).
 - `POST /admin/accounts/{email}/quota` -- Body `{"entitlement": "...", "value": N}`; bump a single entitlement.
+- `POST /admin/accounts/{email}/revoke-sessions` -- Revoke every SuperTokens session of the account (standalone; sign-in stays possible). State-modifying routes verify Bearer sessions against the core per request, so a revoked session is refused within one round-trip while read access drains out over the access token's remaining ~1h lifetime.
+- `POST /admin/accounts/{email}/suspend` -- Body `{"reason": "...", "block_storage": bool}`. Reversible, data-preserving suspension: sets the flag (every session-creation/refresh path then answers the structured `account_suspended` refusal), revokes all sessions, force-stops leased workspaces, blocks LiteLLM keys, flips R2 tokens read-only (or disables them outright under `block_storage` -- reads included), and suspends shares by state (relay tokens kept). Idempotent and re-runnable with a per-step report; re-running with `block_storage` escalates, re-running without it never de-escalates. The reason is operator-internal; users see a generic message with the support contact.
+- `POST /admin/accounts/{email}/unsuspend` -- Clear the flag and restore what suspend changed (unblock keys, restore R2 access per the quota state, reactivate shares -- tunnels resume on their own once the workspace runs, since the workspace still holds its relay token). Workspaces stay stopped until the user starts them; the user signs in fresh.
+- `POST /admin/workspaces/{host_db_id}/stop` -- Operator force-stop of one workspace (the owner stop transition without the ownership check; used by suspension, migrations, and future idle shutdown).
 
 There is deliberately **no account-deletion endpoint** here: fully removing a user (its SuperTokens identity plus every connector-DB row keyed to it) is a destructive operator action done out-of-band, not something the connected clients need. Use the local operator tool `scripts/delete_accounts.py` (repo root) for that -- see "Fully deleting accounts" below.
 

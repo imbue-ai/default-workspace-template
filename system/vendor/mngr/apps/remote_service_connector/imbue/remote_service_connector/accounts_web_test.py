@@ -25,12 +25,15 @@ from imbue.remote_service_connector.accounts_web import _mark_next_confirmed
 from imbue.remote_service_connector.accounts_web import compute_pkce_challenge
 from imbue.remote_service_connector.accounts_web import is_valid_loopback_redirect_uri
 from imbue.remote_service_connector.attribution import ATTRIBUTION_COOKIE_NAME
+from imbue.remote_service_connector.auth import UserAuth
+from imbue.remote_service_connector.auth import derive_user_id_prefix
 from imbue.remote_service_connector.testing import FakeProvider
 from imbue.remote_service_connector.testing import FakeSuperTokensBackend
 from imbue.remote_service_connector.testing import InMemoryDeviceAuthCodeStore
 from imbue.remote_service_connector.testing import TEST_OAUTH_SIGNING_KEY
 from imbue.remote_service_connector.testing import TEST_OAUTH_SIGNING_KEY_PEM
 from imbue.remote_service_connector.testing import _make_accounts_web_test_client
+from imbue.remote_service_connector.testing import _make_share_test_client_with_fakes
 from imbue.remote_service_connector.testing import encode_attribution_cookie
 
 
@@ -635,6 +638,72 @@ def test_oauth_start_404s_when_not_configured(monkeypatch: pytest.MonkeyPatch) -
     assert resp.status_code == 404
 
 
+def _make_base_url_request(scheme: str, host: str, forwarded_proto: str | None) -> Request:
+    """A minimal ASGI request for exercising ``accounts_public_base_url`` directly."""
+    headers: list[tuple[bytes, bytes]] = [(b"host", host.encode("latin-1"))]
+    if forwarded_proto is not None:
+        headers.append((b"x-forwarded-proto", forwarded_proto.encode("latin-1")))
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "scheme": scheme,
+        "path": "/",
+        "query_string": b"",
+        "headers": headers,
+        "server": (host, 443 if scheme == "https" else 80),
+    }
+    return Request(scope)
+
+
+def test_accounts_public_base_url_prefers_configured_origin(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ACCOUNTS_BASE_URL", "https://accounts.example.com")
+    request = _make_base_url_request("https", "rsc-dev.modal.run", forwarded_proto="http")
+
+    assert accounts_web_module.accounts_public_base_url(request) == "https://accounts.example.com"
+
+
+def test_accounts_public_base_url_trusts_a_plain_forwarded_scheme(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ACCOUNTS_BASE_URL", raising=False)
+    # Modal terminates TLS at ingress, so the ASGI scheme is http and the
+    # https origin must be recovered from the forwarded-proto header.
+    request = _make_base_url_request("http", "rsc-dev.modal.run", forwarded_proto="https")
+
+    assert accounts_web_module.accounts_public_base_url(request) == "https://rsc-dev.modal.run"
+
+
+def test_accounts_public_base_url_falls_back_when_header_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ACCOUNTS_BASE_URL", raising=False)
+    request = _make_base_url_request("https", "rsc-dev.modal.run", forwarded_proto=None)
+
+    assert accounts_web_module.accounts_public_base_url(request) == "https://rsc-dev.modal.run"
+
+
+@pytest.mark.parametrize(
+    "poisoned_proto",
+    [
+        "https://evil.example/?",
+        "https://evil.example",
+        "javascript:alert(1)//",
+        "https ",
+        "ftp",
+        "minds",
+    ],
+)
+def test_accounts_public_base_url_rejects_a_poisoned_forwarded_scheme(
+    monkeypatch: pytest.MonkeyPatch, poisoned_proto: str
+) -> None:
+    """An untrusted forwarded-proto never reaches the f-string, so it can never
+    change the constructed URL's effective host."""
+    monkeypatch.delenv("ACCOUNTS_BASE_URL", raising=False)
+    request = _make_base_url_request("https", "rsc-dev.modal.run", forwarded_proto=poisoned_proto)
+
+    base_url = accounts_web_module.accounts_public_base_url(request)
+
+    # The clamp falls back to the ASGI scheme; the host stays the real request host.
+    assert base_url == "https://rsc-dev.modal.run"
+    assert urlsplit(base_url).hostname == "rsc-dev.modal.run"
+
+
 def test_oauth_callback_signs_in_and_marks_a_pending_authorize_confirmed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -973,3 +1042,79 @@ def test_download_still_redirects_when_the_event_write_fails(monkeypatch: pytest
 
     assert resp.status_code == 302
     assert st_backend.attribution_store.download_rows == []
+
+
+def test_browser_signin_refused_for_suspended_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, st_backend, _codes = _make_accounts_web_test_client(monkeypatch)
+    signup = st_backend.sign_up(tenant_id="public", email="banned@example.com", password="pw-123456")
+    assert isinstance(signup, EPSignUpOkResult)
+    st_backend.suspended_user_ids.add(signup.user.id)
+
+    resp = client.post("/accounts/api/signin", json={"email": "banned@example.com", "password": "pw-123456"})
+
+    body = resp.json()
+    assert body["status"] == "ACCOUNT_SUSPENDED"
+    assert "support@imbue.com" in body["message"]
+    # No session was minted for the refused sign-in.
+    assert st_backend.last_browser_session is None
+
+
+def test_device_token_exchange_refused_for_suspended_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A code authorized before the suspension must not be exchangeable after it."""
+    client, st_backend, _codes = _make_accounts_web_test_client(monkeypatch)
+    user_id = _sign_in_browser(client, st_backend)
+    verifier = secrets.token_urlsafe(32)
+    query = _authorize_query(verifier=verifier)
+    query["confirmed"] = "1"
+    authorize = client.get(f"/accounts/authorize?{urlencode(query)}", follow_redirects=False)
+    code = parse_qs(urlsplit(authorize.headers["location"]).query)["code"][0]
+    st_backend.suspended_user_ids.add(user_id)
+
+    exchange = client.post(
+        "/auth/device/token",
+        json={"code": code, "code_verifier": verifier, "redirect_uri": "http://127.0.0.1:8123/callback"},
+    )
+
+    assert exchange.status_code == 403
+    assert exchange.json()["detail"]["code"] == "account_suspended"
+
+
+def test_oauth_callback_refuses_a_suspended_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, st_backend = _make_oauth_client(monkeypatch)
+    # First OAuth login creates the account.
+    first_state = _start_oauth(client, "/")
+    client.get(f"/share/oauth/google/callback?code=code-1&state={first_state}", follow_redirects=False)
+    account = st_backend.accounts_by_email["visitor@example.com"]
+    st_backend.suspended_user_ids.add(account.user_id)
+    st_backend.last_browser_session = None
+
+    second_state = _start_oauth(client, "/")
+    resp = client.get(f"/share/oauth/google/callback?code=code-2&state={second_state}", follow_redirects=False)
+
+    assert resp.status_code == 303
+    assert "error=account_suspended" in resp.headers["location"]
+    assert st_backend.last_browser_session is None
+
+
+def test_bearer_identity_checks_the_core_on_writes_and_not_on_reads(monkeypatch: pytest.MonkeyPatch) -> None:
+    """D3: resolve_web_user_identity infers check_database from the request method."""
+    checked_databases: list[bool] = []
+    user_id = "d3d3d3d3-1111-2222-3333-444455556666"
+
+    def _recording_authenticate_request(request: Request, check_database: bool = False) -> UserAuth:
+        checked_databases.append(check_database)
+        return UserAuth(user_id_prefix=derive_user_id_prefix(user_id), email="d3@example.com", is_email_verified=True)
+
+    client, _backend = _make_share_test_client_with_fakes(
+        monkeypatch,
+        {
+            "get_user_id_from_access_token": lambda token: user_id,
+            "authenticate_request": _recording_authenticate_request,
+        },
+    )
+    headers = {"Authorization": "Bearer d3-session-token"}
+
+    client.get("/shares", headers=headers)
+    client.post("/shares", json={"host_id": "host-" + "c" * 32}, headers=headers)
+
+    assert checked_databases == [False, True]

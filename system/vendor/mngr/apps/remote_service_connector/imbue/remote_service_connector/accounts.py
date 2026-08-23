@@ -22,6 +22,7 @@ from pydantic import Field
 from supertokens_python.syncio import list_users_by_account_info
 from supertokens_python.types.base import AccountInfoInput
 
+import imbue.remote_service_connector.accounts_web as accounts_web_module
 import imbue.remote_service_connector.auth as auth_module
 import imbue.remote_service_connector.cloudflare as cloudflare_module
 import imbue.remote_service_connector.entitlements as entitlements_module
@@ -398,8 +399,10 @@ def set_account_plan(request: Request, body: SetPlanRequest) -> dict[str, object
     unverified email may never satisfy it.
     """
     with handle_endpoint_errors():
-        user = authenticate_request(request)
-        user_id = auth_module.get_user_id_from_bearer_header(request)
+        # Resolved via the shared web-identity helper so the POST verifies the
+        # session against the core (revoked sessions are refused immediately)
+        # and the hosted chrome's cookie sessions work here too.
+        user, user_id = accounts_web_module.resolve_web_user_identity(request)
         entitlements = entitlements_module.resolve_entitlements_for_user(user_id, user)
         if body.plan == entitlements.plan_name:
             return {
@@ -442,7 +445,7 @@ def admin_get_account(request: Request, email: str) -> dict[str, object]:
         usage = compute_account_usage(
             cloudflare_module.get_cloudflare_ctx().ops, entitlements.user_id_prefix, entitlements.user_id
         )
-        return _with_deprecated_tunnel_account_fields(
+        payload = _with_deprecated_tunnel_account_fields(
             AccountInfoResponse(
                 user_id=entitlements.user_id,
                 email=email.strip().lower(),
@@ -454,6 +457,11 @@ def admin_get_account(request: Request, email: str) -> dict[str, object]:
                 ],
             ).model_dump()
         )
+        # Suspension state is operator-facing only, so it rides the admin
+        # response rather than the shared AccountInfoResponse model.
+        payload["suspended_at"] = entitlements.suspended_at
+        payload["suspended_reason"] = entitlements.suspended_reason
+        return payload
 
 
 @router.post("/admin/accounts/{email}/plan")

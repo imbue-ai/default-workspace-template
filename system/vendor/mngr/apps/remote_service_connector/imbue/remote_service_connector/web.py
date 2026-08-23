@@ -29,6 +29,7 @@ from imbue.remote_service_connector.retention import router as retention_router
 from imbue.remote_service_connector.share_broker import router as share_broker_router
 from imbue.remote_service_connector.share_certs import router as share_certs_router
 from imbue.remote_service_connector.shares import router as shares_router
+from imbue.remote_service_connector.suspension_admin import router as suspension_admin_router
 from imbue.remote_service_connector.sync import router as sync_router
 from imbue.remote_service_connector.workspaces import router as workspaces_router
 
@@ -52,6 +53,7 @@ web_app.include_router(share_certs_router)
 web_app.include_router(share_broker_router)
 web_app.include_router(llm_keys_router)
 web_app.include_router(accounts_router)
+web_app.include_router(suspension_admin_router)
 web_app.include_router(retention_router)
 
 

@@ -152,6 +152,15 @@ def _connector_app_file() -> Path:
     return _repo_root() / "apps" / "remote_service_connector" / "imbue" / "remote_service_connector" / "app.py"
 
 
+def _analytics_app_file() -> Path:
+    return _repo_root() / "apps" / "analytics" / "imbue" / "analytics" / "app.py"
+
+
+def analytics_migrations_dir() -> Path:
+    """The analytics ops-DB SQL migrations, applied by the schema_migrations runner."""
+    return _repo_root() / "apps" / "analytics" / "migrations"
+
+
 def _connector_frontend_dir() -> Path:
     return _repo_root() / "apps" / "remote_service_connector" / "frontend"
 
@@ -521,6 +530,36 @@ def deploy_litellm_proxy(
         )
 
 
+def deploy_analytics_app(
+    *,
+    modal_env: str,
+    tier: str,
+    deploy_id: str,
+    strategy: DeployStrategy,
+    parent_cg: ConcurrencyGroup,
+) -> None:
+    """``modal deploy`` the cron-only analytics app into ``modal_env`` for ``tier``.
+
+    Unlike the web apps there is no URL to parse or assert (the app has no
+    web endpoint) and no warm-pool knobs (crons don't hold containers). The
+    app's ops-DB migrations are applied separately by the deploy flow before
+    this runs.
+    """
+    app_file = _analytics_app_file()
+    _verify_image_requirements_fresh("analytics", parent_cg)
+    with info_span("modal deploy analytics-{} into env {!r} (strategy={})", tier, modal_env, strategy.value):
+        _run_modal_deploy(
+            app_file=app_file,
+            app_name=f"analytics-{tier}",
+            modal_env=modal_env,
+            tier=tier,
+            deploy_id=deploy_id,
+            strategy=strategy,
+            extra_env=None,
+            parent_cg=parent_cg,
+        )
+
+
 def delete_modal_secret(
     *,
     secret_name: str,
@@ -687,6 +726,37 @@ def _deploy_modal_app(
     extra_env: dict[str, str] | None = None,
     parent_cg: ConcurrencyGroup,
 ) -> AnyUrl:
+    stdout = _run_modal_deploy(
+        app_file=app_file,
+        app_name=app_name,
+        modal_env=modal_env,
+        tier=tier,
+        deploy_id=deploy_id,
+        strategy=strategy,
+        extra_env=extra_env,
+        parent_cg=parent_cg,
+    )
+    url = _parse_deploy_url_from_stdout(stdout)
+    if url is None:
+        raise ModalDeployError(
+            f"`modal deploy --name {app_name} --env {modal_env}` succeeded but no .modal.run URL "
+            f"appeared in its stdout. Captured tail: {stdout[-500:]}"
+        )
+    return url
+
+
+def _run_modal_deploy(
+    *,
+    app_file: Path,
+    app_name: str,
+    modal_env: str,
+    tier: str,
+    deploy_id: str,
+    strategy: DeployStrategy,
+    extra_env: dict[str, str] | None = None,
+    parent_cg: ConcurrencyGroup,
+) -> str:
+    """Run ``modal deploy`` for one app and return its stdout (web apps parse their deploy URL from it)."""
     if not app_file.is_file():
         raise RepoLayoutError(f"Modal app file not found: {app_file}")
     # Modal's CLI calls the rollover strategy ``rolling`` and the
@@ -732,13 +802,7 @@ def _deploy_modal_app(
         raise ModalDeployError(
             f"`modal deploy --name {app_name} --env {modal_env}` failed (exit {result.returncode}): {stderr}"
         )
-    url = _parse_deploy_url_from_stdout(result.stdout)
-    if url is None:
-        raise ModalDeployError(
-            f"`modal deploy --name {app_name} --env {modal_env}` succeeded but no .modal.run URL "
-            f"appeared in its stdout. Captured tail: {result.stdout[-500:]}"
-        )
-    return url
+    return result.stdout
 
 
 def _modal_subprocess_env() -> dict[str, str]:

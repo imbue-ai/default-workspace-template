@@ -87,6 +87,7 @@ from supertokens_python.types import RecipeUserId
 import imbue.remote_service_connector.auth as auth_module
 import imbue.remote_service_connector.auth_proxy as auth_proxy_module
 import imbue.remote_service_connector.signup_hardening as signup_hardening_module
+import imbue.remote_service_connector.suspension as suspension_module
 from imbue.modal_app_kit.metrics import emit_metric
 from imbue.remote_service_connector import db
 from imbue.remote_service_connector.attribution import ATTRIBUTION_COOKIE_NAME
@@ -149,6 +150,11 @@ _OAUTH_NONCE_COOKIE_NAME: Final[str] = "imbue_oauth_nonce"
 # the redirect URI registered on every tier's Web-application OAuth client;
 # renaming it would require re-registering every tier.
 OAUTH_GOOGLE_CALLBACK_PATH: Final[str] = "/share/oauth/google/callback"
+
+# The only ``x-forwarded-proto`` values ``accounts_public_base_url`` will trust
+# (the header is client-controlled behind Modal's ingress); anything else falls
+# back to the ASGI scheme rather than being spliced into the base URL verbatim.
+_TRUSTED_FORWARDED_SCHEMES: Final[frozenset[str]] = frozenset({"http", "https"})
 
 # Stable per-platform installer links for GET /download. ToDesktop's channel
 # URLs always resolve to the latest published build, so nothing here changes
@@ -279,25 +285,44 @@ def authenticate_web_request(request: Request) -> auth_module.UserAuth:
     return resolve_web_user_identity(request)[0]
 
 
-def resolve_web_user_identity(request: Request) -> tuple[auth_module.UserAuth, str]:
+def resolve_web_user_identity(
+    request: Request,
+    # Force the against-the-core session check on a read route whose response
+    # is sensitive enough to warrant it (no current route needs this; the
+    # state-modifying methods below always get it).
+    is_database_check_required: bool = False,
+) -> tuple[auth_module.UserAuth, str]:
     """Return ``(UserAuth, full user_id)`` from a Bearer token or the browser session.
 
     The full user id is what share coordinates and LiteLLM keys are scoped by
     (a ``UserAuth`` alone only carries the 16-hex prefix).
+
+    State-modifying methods (anything but GET/HEAD/OPTIONS) verify the Bearer
+    session against the SuperTokens core (``check_database``), so a revoked
+    session is refused within one request instead of coasting on its
+    signature-valid access token for up to ~1h. Read methods keep the cheap
+    stateless validation. The browser branch always checks the core (see
+    ``_sdk_get_browser_session``), so the two credential paths agree on
+    state-modifying requests.
     """
+    is_state_modifying = request.method not in ("GET", "HEAD", "OPTIONS")
     if request.headers.get("authorization", "").lower().startswith("bearer "):
-        user = auth_module.authenticate_request(request)
+        user = auth_module.authenticate_request(
+            request, check_database=is_state_modifying or is_database_check_required
+        )
         return user, auth_module.get_user_id_from_bearer_header(request)
-    if request.method not in ("GET", "HEAD", "OPTIONS"):
+    if is_state_modifying:
         _reject_cross_site_post(request)
     identity = _resolve_browser_identity(request)
     if identity is None:
         raise HTTPException(status_code=401, detail="Missing Bearer credentials")
     user_id, email, is_verified = identity
+    auth_module.stash_authenticated_user_for_access_log(request, user_id)
     user = auth_module.UserAuth(
         user_id_prefix=auth_module.derive_user_id_prefix(user_id),
         email=email,
         is_email_verified=is_verified,
+        user_id=user_id,
     )
     return user, user_id
 
@@ -714,6 +739,13 @@ def accounts_signup(request: Request, body: BrowserSignupRequest) -> BrowserAuth
                 )
             if not isinstance(result, EPSignUpOkResult):
                 return BrowserAuthResponse(status="ERROR", message="Sign-up failed")
+            # Defensive: a just-created account has no suspension row, but every
+            # session-creation path carries the gate so none can be missed.
+            if suspension_module.is_user_suspended_at_gate(result.user.id, gate="browser_signup"):
+                return BrowserAuthResponse(
+                    status=suspension_module.ACCOUNT_SUSPENDED_STATUS,
+                    message=suspension_module.SUSPENDED_USER_MESSAGE,
+                )
             _sdk_create_browser_session(request, result.user.id)
         except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
             logger.error("SuperTokens SDK error during browser signup", exc_info=exc)
@@ -747,6 +779,11 @@ def accounts_signin(request: Request, body: BrowserSigninRequest) -> BrowserAuth
                 return BrowserAuthResponse(status="WRONG_CREDENTIALS", message="Incorrect email or password")
             if not isinstance(result, EPSignInOkResult):
                 return BrowserAuthResponse(status="ERROR", message="Sign-in failed")
+            if suspension_module.is_user_suspended_at_gate(result.user.id, gate="browser_signin"):
+                return BrowserAuthResponse(
+                    status=suspension_module.ACCOUNT_SUSPENDED_STATUS,
+                    message=suspension_module.SUSPENDED_USER_MESSAGE,
+                )
             _sdk_create_browser_session(request, result.user.id)
         except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
             logger.error("SuperTokens SDK error during browser signin", exc_info=exc)
@@ -1040,6 +1077,9 @@ def device_token_exchange(body: DeviceTokenRequest) -> dict[str, object]:
         if body.redirect_uri != row["redirect_uri"]:
             raise HTTPException(status_code=400, detail="redirect_uri does not match the authorized request")
         user_id = str(row["user_id"])
+        # The account may have been suspended between the browser authorize
+        # step and this exchange; refuse rather than mint a device session.
+        suspension_module.require_not_suspended(user_id, gate="device_token_exchange")
         email, _is_verified = auth_module.resolve_account_email(user_id)
         if email is None:
             raise HTTPException(status_code=400, detail="Account no longer resolvable")
@@ -1103,7 +1143,13 @@ def accounts_public_base_url(request: Request) -> str:
     configured = _configured_accounts_origin()
     if configured:
         return configured
-    scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
+    # Clamp the forwarded scheme (see _TRUSTED_FORWARDED_SCHEMES): an untrusted
+    # value must never reach the f-string below, where it could change the
+    # constructed URL's effective host (e.g. ``https://evil/?`` yields a URL
+    # whose host parses as ``evil``). A ``minds://`` custom scheme is an
+    # OS-level deep link, never an inbound request scheme, so it is not trusted.
+    forwarded_scheme = request.headers.get("x-forwarded-proto", "").strip().lower()
+    scheme = forwarded_scheme if forwarded_scheme in _TRUSTED_FORWARDED_SCHEMES else request.url.scheme
     return f"{scheme}://{request.url.netloc}"
 
 
@@ -1345,6 +1391,9 @@ def accounts_oauth_callback(request: Request) -> RedirectResponse:
             oauth_gate_redirect = _oauth_signup_ip_gate_redirect(request, auth_result.user, next_path)
             if oauth_gate_redirect is not None:
                 return oauth_gate_redirect
+
+        if suspension_module.is_user_suspended_at_gate(auth_result.user.user_id, gate="browser_oauth"):
+            return _login_redirect(next_path, "account_suspended")
 
         _sdk_create_browser_session(request, auth_result.user.user_id)
         if auth_result.is_new_account:
