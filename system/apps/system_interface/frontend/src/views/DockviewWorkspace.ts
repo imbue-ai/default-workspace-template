@@ -4140,9 +4140,13 @@ function adoptLegacyAppPanes(): void {
         scheduleSave();
         m.redraw();
       })
-      .catch(() => {
+      .catch((e: Error) => {
         // The pane keeps working as a plain service pane; adoption retries on
-        // the next mount.
+        // the next mount. Logged rather than surfaced: a background adoption
+        // must not interrupt anyone, but a persistent refusal (say, an app
+        // deregistered while its pane survives in a saved layout) should
+        // still leave a trace.
+        console.warn(`Could not adopt pane ${panelId} as an instance of ${serviceName}: ${e.message}`);
       });
   }
 }
