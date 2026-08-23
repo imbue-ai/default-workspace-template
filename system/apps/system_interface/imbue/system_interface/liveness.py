@@ -61,6 +61,58 @@ class _UnixSocketTransport(xmlrpc.client.Transport):
         return _UnixSocketHttpConnection(self._socket_path)
 
 
+class SupervisorProgramActionError(RuntimeError):
+    """Raised when supervisord refuses, or cannot be reached for, a stop/start."""
+
+    ...
+
+
+# Fault codes from supervisord's ``supervisor.xmlrpc.Faults`` -- pinned here
+# because the supervisor package is not a dependency of this app; the RPC
+# protocol is the contract.
+_FAULT_ALREADY_STARTED: Final[int] = 60
+_FAULT_NOT_RUNNING: Final[int] = 70
+
+
+def _supervisor_proxy(socket_path: Path) -> xmlrpc.client.ServerProxy:
+    return xmlrpc.client.ServerProxy("http://localhost/RPC2", transport=_UnixSocketTransport(socket_path))
+
+
+def start_supervisor_program(program: str, socket_path: Path) -> None:
+    """Ask supervisord to start ``program``. Idempotent: already-started is success.
+
+    ``wait=False`` so the RPC answers immediately and the liveness sweep tracks
+    the program through STARTING; waiting out a slow start would outlive the
+    socket timeout. Raises SupervisorProgramActionError when supervisord
+    refuses (an unknown program, a spawn error) or cannot be reached.
+    """
+    try:
+        _supervisor_proxy(socket_path).supervisor.startProcess(program, False)
+    except xmlrpc.client.Fault as e:
+        if e.faultCode == _FAULT_ALREADY_STARTED:
+            return
+        raise SupervisorProgramActionError(f"supervisord refused to start {program!r}: {e.faultString}") from e
+    except (OSError, xmlrpc.client.ProtocolError, xmlrpc.client.ResponseError) as e:
+        raise SupervisorProgramActionError(f"could not reach supervisord to start {program!r}: {e}") from e
+
+
+def stop_supervisor_program(program: str, socket_path: Path) -> None:
+    """Ask supervisord to stop ``program``. Idempotent: not-running is success.
+
+    ``wait=False`` for the same reason as the start: waiting out stopwaitsecs
+    (10s by default) would outlive the socket timeout, and the liveness sweep
+    tracks the program through STOPPING anyway.
+    """
+    try:
+        _supervisor_proxy(socket_path).supervisor.stopProcess(program, False)
+    except xmlrpc.client.Fault as e:
+        if e.faultCode == _FAULT_NOT_RUNNING:
+            return
+        raise SupervisorProgramActionError(f"supervisord refused to stop {program!r}: {e.faultString}") from e
+    except (OSError, xmlrpc.client.ProtocolError, xmlrpc.client.ResponseError) as e:
+        raise SupervisorProgramActionError(f"could not reach supervisord to stop {program!r}: {e}") from e
+
+
 def probe_supervisor_program(program: str, socket_path: Path) -> bool | None:
     """Whether supervisord reports ``program`` as up, or None when it cannot say.
 

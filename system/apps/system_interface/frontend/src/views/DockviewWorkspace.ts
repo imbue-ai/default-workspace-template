@@ -161,7 +161,7 @@ import {
   type ProjectInfo,
 } from "../models/Projects";
 import type { ShortcutName } from "../models/Projects";
-import { appStoppedDetail, stoppedAppForServiceName } from "../models/appLiveness";
+import { appStoppedDetail, isAppRunning, isAppStoppable, stoppedAppForServiceName } from "../models/appLiveness";
 
 const AUTOSAVE_DEBOUNCE_MS = 1500;
 
@@ -263,24 +263,6 @@ const DESTROY_TERMINAL_DETAILS =
   "The tmux session is killed and the terminal is removed from every project that shows it, not just this one.";
 const DESTROY_BROWSER_DETAILS =
   "The browser is retired from the fleet and removed from every project that shows it, not just this one.";
-// The app verb is the one that has to be careful about what it does NOT do.
-// Deregistering takes the app out of the port registry, so it leaves the app
-// list and every project at once, but does not stop the program behind the
-// port. That is not because nothing on the machine COULD: every app onboarded
-// through the build-app skill -- the scaffolded-Flask path and the
-// wrap-an-existing-server escape hatch alike -- registers as a same-named
-// supervisord ``[program:<name>]`` block (system/supervisord.conf), so
-// ``supervisorctl stop <name>`` (or supervisor's own RPC interface, over the
-// unix socket that config also declares) would genuinely end it. apps.toml
-// just records no "this entry is supervisord-managed" flag, so a real stop
-// needs the backend to check first and fall back to registry-only removal for
-// the rare entry with no matching program -- server.py's
-// ``_deregister_app_endpoint`` does not do that yet. Saying "shut down" here
-// would be a lie until it does.
-const DEREGISTER_APP_DETAILS =
-  "The app disappears from every project that shows it and from the app list, not just from this project. " +
-  "The program it runs is not stopped — it keeps running until the agent that started it stops it.";
-
 // Destroy dialog state
 let showDestroyDialog = false;
 let destroyTargetAgentId: string | null = null;
@@ -300,14 +282,6 @@ let terminalDestroyPanelId: string | null = null;
 let showBrowserDestroyDialog = false;
 let browserDestroyName: string | null = null;
 let browserDestroyPanelId: string | null = null;
-
-// App-deregister dialog state. Separate for the fourth time, and for the
-// starkest reason: this one does not take anything down. It unregisters the app
-// (POST /api/apps/<name>/deregister, which drives system/scripts/forward_port.py
-// --remove) and unfiles it everywhere, and the process it was serving lives on.
-let showAppDeregisterDialog = false;
-let appDeregisterName: string | null = null;
-let appDeregisterPanelId: string | null = null;
 
 // Share modal state
 let showShareModal = false;
@@ -849,17 +823,47 @@ function tabQuitAction(
       const serviceName = params.serviceName;
       // objectMenuKindForPanel only returns "app" once serviceName is known.
       if (serviceName === undefined) return null;
-      return {
-        label: `Quit ${currentTabTitle(panelId, serviceName)}`,
-        run: () => {
-          appDeregisterName = serviceName;
-          appDeregisterPanelId = panelId;
-          showAppDeregisterDialog = true;
-          m.redraw();
-        },
-      };
+      return appLifecycleQuitAction(serviceName, currentTabTitle(panelId, serviceName));
     }
   }
+}
+
+/**
+ * The destructive-slot verb for an app: the reversible, service-level
+ * "Stop {name}" (or "Start {name}" when it is stopped), replacing the old
+ * deregister-flavored Quit. No confirmation dialog on either: a stop is one
+ * click from undone, and the confirmation existed to explain an
+ * irreversibility that no longer applies. Null for an app the workspace
+ * cannot honestly stop -- one with no supervised program, or an essential
+ * service -- and for a name no registered app answers to.
+ */
+function appLifecycleQuitAction(
+  serviceName: string,
+  displayedName: string,
+): { label: string; run: () => void; isDestructive: boolean } | null {
+  const app = getApps().find((candidate) => candidate.name === serviceName);
+  if (app === undefined || !isAppStoppable(app)) return null;
+  const action = isAppRunning(app) ? "stop" : "start";
+  return {
+    label: `${action === "stop" ? "Stop" : "Start"} ${displayedName}`,
+    isDestructive: false,
+    run: () => requestAppLifecycleAction(serviceName, action),
+  };
+}
+
+/** Fire one stop/start at the backend, surfacing a refusal with the alert
+ *  pattern the other lifecycle actions use. The ``apps_updated`` broadcast the
+ *  endpoint triggers is what repaints every surface -- nothing optimistic. */
+function requestAppLifecycleAction(serviceName: string, action: "stop" | "start"): void {
+  void fetch(apiUrl(`/api/apps/${encodeURIComponent(serviceName)}/${action}`), { method: "POST" })
+    .then(async (response) => {
+      if (response.ok) return;
+      const data = (await response.json().catch(() => ({}))) as { detail?: string };
+      alert(`Failed to ${action} ${serviceName}: ${data.detail ?? `HTTP ${response.status}`}`);
+    })
+    .catch((e: Error) => {
+      alert(`Failed to ${action} ${serviceName}: ${e.message}`);
+    });
 }
 
 // ---------- The tab ----------
@@ -1990,10 +1994,18 @@ function openMemberRef(ref: string, targetGroup: DockviewGroupPanel | null): str
     }
     case "terminal":
       return addTerminalPanel(body, { targetGroup });
+    case "app": {
+      // Opening a stopped app means wanting it: start it first (idempotent);
+      // the pane shows the stopped placeholder until the program is up.
+      const stoppedApp = stoppedAppForServiceName(getApps(), serviceNameFromRef(ref));
+      if (stoppedApp !== null && isAppStoppable(stoppedApp)) {
+        requestAppLifecycleAction(stoppedApp.name, "start");
+      }
+      return addPanelForRef(ref, getPrimaryAgentId(), placementForGroup(targetGroup));
+    }
     case "browser":
-    case "app":
-      // Both are ``service:`` refs, which addPanelForRef creates and dedups --
-      // including the browser fleet's ``?session=`` form.
+      // A ``service:`` ref like an app's, which addPanelForRef creates and
+      // dedups -- including the fleet's ``?session=`` form.
       return addPanelForRef(ref, getPrimaryAgentId(), placementForGroup(targetGroup));
     case "url":
       console.warn(`Cannot reopen ${ref}: an ad-hoc page's address does not survive its tab`);
@@ -2145,16 +2157,16 @@ export function destroyMemberRow(row: SidebarTabRow): void {
       browserDestroyPanelId = livePanelId ?? row.ref;
       showBrowserDestroyDialog = true;
       break;
-    case "app":
-      // Weaker than the other three (see DEREGISTER_APP_DETAILS and
-      // executeAppDeregister): it takes the app out of the registry and every
-      // project, not the program answering on its port. A pinned-but-
-      // backgrounded app's panel id, like a browser's, is minted per open, so
-      // it has none to sweep either.
-      appDeregisterName = body;
-      appDeregisterPanelId = livePanelId ?? row.ref;
-      showAppDeregisterDialog = true;
+    case "app": {
+      // The service level rather than a destroy: stop (or start) the app's
+      // supervised program, leaving its registry row and memberships alone.
+      // No confirmation -- it is one click from undone -- and no panel sweep:
+      // an open pane simply shows the stopped placeholder until a start.
+      const app = getApps().find((candidate) => candidate.name === body);
+      if (app === undefined || !isAppStoppable(app)) return;
+      requestAppLifecycleAction(body, isAppRunning(app) ? "stop" : "start");
       break;
+    }
     // An ad-hoc page has nothing to destroy: it is only ever a panel.
     case "url":
       return;
@@ -3200,6 +3212,13 @@ export function openTabOfType(tabType: QuickAddTabType): void {
  *  and the all-apps picker, and used by the launcher's app rows. */
 export function openAppTab(app: AppEntry): void {
   if (!dockview) return;
+  // Opening a stopped app means wanting it: start it first (idempotent), and
+  // open the pane right away -- it shows the stopped placeholder until the
+  // ``apps_updated`` push flips it to the live iframe, so the click has an
+  // immediate, honest answer while supervisord brings the program up.
+  if (!isAppRunning(app) && isAppStoppable(app)) {
+    requestAppLifecycleAction(app.name, "start");
+  }
   const openPanelId = findIframePanelIdForService(app.name);
   const openPanel = openPanelId === null ? undefined : dockview.panels.find((p) => p.id === openPanelId);
   revealedOpenPanelId = null;
@@ -4860,35 +4879,6 @@ async function executeBrowserDestroy(name: string, panelId: string): Promise<voi
   m.redraw();
 }
 
-async function executeAppDeregister(name: string, panelId: string): Promise<void> {
-  // Unregister the app, then drop the tab. The endpoint runs
-  // system/scripts/forward_port.py --remove (so the app leaves data/.state/apps.toml
-  // and the app list) and unfiles ``service:<name>`` from every project. It does
-  // not stop anything: the program the agent started keeps serving its port, and
-  // re-registering brings the app straight back.
-  try {
-    const response = await fetch(apiUrl(`/api/apps/${encodeURIComponent(name)}/deregister`), {
-      method: "POST",
-    });
-    if (!response.ok) {
-      const data = await response.json().catch(() => ({}));
-      const detail = (data as { detail?: string }).detail ?? "Unknown error";
-      alert(`Failed to unregister app: ${detail}`);
-      return;
-    }
-  } catch (e) {
-    alert(`Failed to unregister app: ${(e as Error).message}`);
-    return;
-  }
-
-  // The app has no page left to show once it is off the registry -- its origin
-  // no longer resolves -- so the live surface goes the way a destroyed object's
-  // does, and the panel leaves every project's saved layout with it.
-  await forgetDestroyedObject(memberRef("app", name), panelId);
-
-  m.redraw();
-}
-
 export const DockviewWorkspace: m.Component = {
   oncreate(vnode: m.VnodeDOM) {
     const wrapper = vnode.dom as HTMLElement;
@@ -4975,31 +4965,6 @@ export const DockviewWorkspace: m.Component = {
                 showBrowserDestroyDialog = false;
                 browserDestroyName = null;
                 browserDestroyPanelId = null;
-              },
-            })
-          : null,
-
-        showAppDeregisterDialog && appDeregisterName
-          ? m(DestroyConfirmDialog, {
-              agentName: appDeregisterName,
-              title: "Unregister app",
-              // Not "Are you sure you want to destroy ...? This cannot be
-              // undone", which the other three ask: neither half is true here.
-              question: ["Unregister ", m("strong", appDeregisterName), "?"],
-              details: DEREGISTER_APP_DETAILS,
-              confirmLabel: "Unregister",
-              onConfirm() {
-                showAppDeregisterDialog = false;
-                const name = appDeregisterName!;
-                const panelId = appDeregisterPanelId!;
-                appDeregisterName = null;
-                appDeregisterPanelId = null;
-                executeAppDeregister(name, panelId);
-              },
-              onCancel() {
-                showAppDeregisterDialog = false;
-                appDeregisterName = null;
-                appDeregisterPanelId = null;
               },
             })
           : null,

@@ -351,16 +351,31 @@ tab closes the panel and preserves membership, and is the tab menu's
 alone; "Remove from project" is the rail row menu's alone. Putting a tab
 away is what you want while looking at the tab, and taking an object out
 of a project is what you want while looking at the project's list of what
-it shows. Quit <name> is the single
-confirm-gated destructive verb: one act with one wording whether it is
-an agent, a terminal, a browser, or an app. It tears the object off the
-machine, so it leaves _every_ project, including ones no client
-currently has open; a destroyed chat's transcript stays accessible. It
-is withheld for the primary agent, which runs the workspace's own
-services. Quit is weaker for an app than for the other three: it removes
-the app from the registry (`POST /api/apps/<name>/deregister`) and from
-every project, but does not stop the program answering on the port,
-which keeps serving until whatever started it stops it.
+it shows. Quit <name> is the confirm-gated destructive verb for a chat, a
+terminal, and a browser session: one act with one wording. It tears the
+object off the machine, so it leaves _every_ project, including ones no
+client currently has open; a destroyed chat's transcript stays
+accessible. It is withheld for the primary agent, which runs the
+workspace's own services. An app's slot carries the reversible
+service-level verb instead: Stop <name> (no confirmation -- it is one
+click from undone) stops the app's supervisord program via
+`POST /api/apps/<name>/stop`, and a stopped app's menus offer
+Start <name> (`POST /api/apps/<name>/start`) in its place. Both are
+idempotent, neither touches the registry row or the app's memberships,
+and both are offered only for an app whose registry entry carries a
+`program` (see `forward_port.py --program`); the essential services
+(`system_interface`, `terminal`) are refused by name. The registry row
+is the app's identity and whether it runs is derived: `AgentManager`
+probes supervisord's process state for `program` rows (and TCP-connects
+the registered URL otherwise), carries the result as
+`AppEntry.is_running` on the apps WebSocket, and every surface renders a
+stopped app dimmed, with its open tabs showing a minimal stopped
+placeholder (with a Start button) instead of a dead iframe. Clicking a
+stopped app anywhere starts it first and opens its pane. Real removal
+(delete the supervisord block, the package, the registry row) is the
+mind's job via the `update-app` skill; the
+`POST /api/apps/<name>/deregister` endpoint remains for agent tooling
+but no UI surface calls it.
 
 Chat messages sent through the UI (and every view switch) are logged
 to `workspace_layout/events/client_activity/events.jsonl` with the

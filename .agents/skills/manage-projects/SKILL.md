@@ -29,9 +29,17 @@ anything:
   from project" (a verb on the object, offered by its rail row -- the
   row's own one-click control, or its kebab/right-click menu) do.
 - **Only the destructive per-kind verbs actually end something** (Quit,
-  offered from the tab/rail menu -- not exposed through `layout.py`),
-  and those take the object out of *every* project at once, including
-  ones with no client currently looking at them.
+  offered from the tab/rail menu for chats, terminals, and browser
+  sessions -- not exposed through `layout.py`), and those take the
+  object out of *every* project at once, including ones with no client
+  currently looking at them. An app's slot is different in kind: the UI
+  offers the reversible service-level Stop/Start (`POST
+  /api/apps/<name>/stop` / `/start`, supervisord-backed, only for apps
+  registered with a `program`), which changes no membership and no
+  registry row -- a stopped app stays listed, dimmed. Actually removing
+  an app is the mind's job via the `update-app` skill; the
+  `POST /api/apps/<name>/deregister` endpoint remains for tooling but no
+  UI surface calls it.
 
 **Everything** is the unfiltered view and the home. It is not a
 project: it has no registry entry, no member list, and cannot be
