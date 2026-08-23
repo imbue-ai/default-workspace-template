@@ -3421,7 +3421,7 @@ export function openAppTab(app: AppEntry, options: { isNew?: boolean } = {}): vo
   // one page cannot show in two panes -- the second would render blank and
   // the restore-dedup would drop it. The ordinary pane stays on the default
   // instance so every view showing the app shares one document.
-  const serviceInstanceId = options.isNew === true ? crypto.randomUUID() : undefined;
+  const serviceInstanceId = options.isNew === true ? mintId("") : undefined;
   openIframeTab(
     deriveServiceOrigin(labelForService(app.name)),
     app.name,
