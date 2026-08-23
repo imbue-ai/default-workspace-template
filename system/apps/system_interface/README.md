@@ -199,12 +199,14 @@ gets a plain 404.
 
 The workspace shows one _view_ at a time: a project, or Everything. The
 machine holds a single pool of objects -- chat agents, terminal
-sessions, browsers, and registered apps -- and a project is a filter
-over that pool plus its own dockview arrangement. Membership is an
-explicit list of member refs (`chat:<agent-id>`, `terminal:<name>`,
-`service:<name>`, `service:browser?session=<name>`) kept separately from
-the layout, and it is many-to-many: the same object can be in any number
-of projects at once, nothing owns anything, and there is no "move". An
+sessions, browsers, and registered apps' numbered instances -- and a
+project is a filter over that pool plus its own dockview arrangement.
+Membership is an explicit list of member refs (`chat:<agent-id>`,
+`terminal:<name>`, `service:<name>?instance=<name>-<N>` for an app
+instance, `service:<name>` for an app's pin,
+`service:browser?session=<name>`) kept separately from the layout, and
+it is many-to-many: the same object can be in any number of projects at
+once, nothing owns anything, and there is no "move". An
 ad-hoc URL page is _not_ a member: it has no identity beyond the panel
 showing it, so it is only ever a tab in one view's arrangement. (A
 machine that migrated from before projects may still carry
@@ -223,11 +225,31 @@ deleted -- but it keeps its own arrangement like any other view. Its
 tab list enumerates the machine, so an object in no project at all
 still appears there.
 
-There is one live page per object, machine-wide: an app open in three
-projects is one iframe and one document, not three. Switching views,
-closing a tab, or re-arranging panes never reloads or duplicates
+There is one live page per object, machine-wide: an app instance open
+in three projects is one iframe and one document, not three. Switching
+views, closing a tab, or re-arranging panes never reloads or duplicates
 anything; a page is torn down only when the object behind it is
 destroyed.
+
+A plain app is multi-instance the way terminals and browsers are: each
+open pane is a numbered instance ("File Viewer 2", ref
+`service:files?instance=files-2`) minted by the backend (lowest free
+number machine-wide, `POST /api/apps/<name>/instances/allocate`).
+Instance existence is derived rather than stored: an instance exists
+while any project's member list or any view's saved layout references
+it, and removing the last reference is its deletion (`GET
+/api/apps/instances` lists what exists). Opening an app -- its rail
+shortcut in focus mode, its All apps popover row, a pinned `service:`
+ref -- goes to the view's most recently used instance and mints the
+first one when the view shows none; "new"-mode shortcuts, the
+launcher's tiles, and `layout.py open <app> --new` always mint. An
+instance that beacons its location (the file viewer does; the
+`build-app` scaffold includes the one-liner) reopens at the path it was
+showing: the page posts `{type: "minds-location", path}` one hop up on
+each load, the shell validates the origin against its own service
+origins, resolves the pane by its window, and stores the path by ref
+(`GET|POST /api/member-locations`), cleared when the instance is
+deleted.
 
 Each view keeps one arrangement file per device kind under the primary
 agent's `workspace_layout/projects/` directory -- `<id>.json` for
@@ -252,10 +274,12 @@ form -- `Chat-1` -- is the agent's mngr name), so `mngr list` and the
 tab always agree; renaming a chat (double-click its tab title, or its
 tab menu's Rename, or `layout.py rename`) goes through `mngr rename`
 and keeps the pair matched, refusing a name whose canonical form
-collides with another agent's. Terminals and browsers derive their
-display names from their identities ("Terminal 3" from the `terminal-3`
-tmux session, "Browser 1" from the daemon-minted `browser-1`) and have
-no rename gesture; an agent's `layout.py rename` for those kinds writes
+collides with another agent's. Terminals, browsers, and app instances
+derive their display names from their identities ("Terminal 3" from the
+`terminal-3` tmux session, "Browser 1" from the daemon-minted
+`browser-1`, "File Viewer 2" from the allocator-minted `files-2` --
+with the app's own chosen name riding into its instances' names, so a
+"Docs" app's instances read "Docs 2") and have no rename gesture; an agent's `layout.py rename` for those kinds writes
 the machine-wide title registry
 (`workspace_layout/member_titles.json`), which every surface reads
 before falling back to the derived name. Last-used timestamps are keyed
@@ -284,7 +308,11 @@ full sparse `shortcut_overrides` map),
 `POST /api/projects/members/share` (add one member to several projects),
 `GET /api/projects/members`, `POST /api/projects/panels/<panel_id>/delete`
 (drop one panel from every project that holds it),
-`GET|POST /api/member-titles`, and `GET|POST /api/member-last-used`.
+`GET|POST /api/member-titles`, `GET|POST /api/member-last-used`,
+`GET|POST /api/member-locations` (the location-beacon store),
+`GET /api/apps/instances` (the derived instance inventory), and
+`POST /api/apps/<name>/instances/allocate` (mint the next free
+instance name).
 
 Down the left edge is a 37px project rail that expands on hover to
 float over the dock. Top to bottom: the active view's squiggle -- one
@@ -318,21 +346,26 @@ on the defaults, and Everything, which has no project entry to record
 against, always does.
 Then the project's pinned apps and that "All apps" popover -- pinning an
 app in a project _is_ its membership, so the popover toggles the app's
-member ref and nothing else. It lists only apps the view has _not_
-pinned, since the pinned ones are already in the rail a few pixels away;
-a just-pinned row fades out rather than vanishing, and a pinned row
-carries its own pin icon so unpinning stays one click. Everything pins
-nothing because it already lists every app; a search pill that filters
-rows by label and kind; and the view's tab list, open members as primary
-text and backgrounded ones as tertiary, each row with a one-click remove
-and a hover kebab -- or a right-click -- offering the verbs for its kind.
-An app that already has a shortcut row above is not repeated in that
-list; its own menu hangs off the shortcut instead. The one exception is
-an app the machine no longer offers, which has no shortcut to draw and so
-keeps its place in the list. The rail and the dock tab build their menus
-from the _same_ definition (`frontend/src/views/objectMenu.ts`), so which
-verbs an object offers, and the order they read in, are settled in one
-place for both.
+bare `service:<name>` member ref and nothing else. It lists only apps
+the view has _not_ pinned, since the pinned ones are already in the rail
+a few pixels away; a just-pinned row fades out rather than vanishing,
+and a pinned row carries its own pin icon so unpinning stays one click.
+Everything's rail instead shows a fixed shortcut row for every openable
+app -- built-ins first in rail order, then apps alphabetically, no
+unpin (there is no registry entry to record one against) -- so a newly
+added app appears there automatically, and its All apps popover shows
+the already-pinned empty state; a search pill that filters rows by
+label and kind; and the view's tab list, open members as primary text
+and backgrounded ones as tertiary, each row with a one-click remove and
+a hover kebab -- or a right-click -- offering the verbs for its kind.
+The tab list holds app INSTANCES ("File Viewer 2"), never bare apps: a
+zero-instance app lives in the rail, the popover and the launcher tiles
+but has no tab-list row. A pinned app whose shortcut row is drawn above
+is not repeated in the list; its own menu hangs off the shortcut
+instead. The rail and the dock tab build their menus from the _same_
+definition (`frontend/src/views/objectMenu.ts`), so which verbs an
+object offers, and the order they read in, are settled in one place for
+both.
 
 New tabs come from a full-page New Tab launcher that opens as a real
 tab: tiles to start a chat, browser, or terminal from scratch, an "In
@@ -365,31 +398,35 @@ tab closes the panel and preserves membership, and is the tab menu's
 alone; "Remove from project" is the rail row menu's alone. Putting a tab
 away is what you want while looking at the tab, and taking an object out
 of a project is what you want while looking at the project's list of what
-it shows. Quit <name> is the confirm-gated destructive verb for a chat, a
-terminal, and a browser session: one act with one wording. It tears the
-object off the machine, so it leaves _every_ project, including ones no
-client currently has open; a destroyed chat's transcript stays
-accessible. It is withheld for the primary agent, which runs the
-workspace's own services. An app's slot carries the reversible
-service-level verb instead: Stop <name> (no confirmation -- it is one
-click from undone) stops the app's supervisord program via
-`POST /api/apps/<name>/stop`, and a stopped app's menus offer
-Start <name> (`POST /api/apps/<name>/start`) in its place. Both are
-idempotent, neither touches the registry row or the app's memberships,
-and both are offered only for an app whose registry entry carries a
-`program` (see `forward_port.py --program`); the essential services
-(`system_interface`, `terminal`) are refused by name. The registry row
-is the app's identity and whether it runs is derived: `AgentManager`
-probes supervisord's process state for `program` rows (and TCP-connects
-the registered URL otherwise), carries the result as
-`AppEntry.is_running` on the apps WebSocket, and every surface renders a
-stopped app dimmed, with its open tabs showing a minimal stopped
-placeholder (with a Start button) instead of a dead iframe. Clicking a
-stopped app anywhere starts it first and opens its pane. Real removal
-(delete the supervisord block, the package, the registry row) is the
-mind's job via the `update-app` skill; the
-`POST /api/apps/<name>/deregister` endpoint remains for agent tooling
-but no UI surface calls it.
+it shows. Delete <name> is the confirm-gated destructive verb for a
+chat, a terminal, a browser session, and an app instance: one act with
+one wording. It tears the object off the machine, so it leaves _every_
+project, including ones no client currently has open; a destroyed
+chat's transcript stays accessible, and a deleted app instance's
+service keeps running -- only the instance's references (memberships,
+panes, name, recency, stored location) go, which is all an instance is.
+Delete is withheld for the primary agent, which runs the workspace's
+own services. An instance's menu also carries the SERVICE's own verbs
+in a trailing group -- Share, and the reversible Stop <app> (no
+confirmation -- it is one click from undone), which stops the app's
+supervisord program via `POST /api/apps/<name>/stop`; a stopped app's
+menus offer Start <app> (`POST /api/apps/<name>/start`) in its place.
+Both are idempotent, neither touches the registry row or any
+membership, and both are offered only for an app whose registry entry
+carries a `program` (see `forward_port.py --program`); the essential
+services (`system_interface`, `terminal`) are refused by name. The
+registry row is the app's identity and whether it runs is derived:
+`AgentManager` probes supervisord's process state for `program` rows
+(and TCP-connects the registered URL otherwise), carries the result as
+`AppEntry.is_running` on the apps WebSocket, and every surface renders
+a stopped app's rows dimmed, with its open tabs showing a minimal
+stopped placeholder (with a Start button) instead of a dead iframe.
+Clicking a stopped app anywhere starts it first and opens its pane.
+Instances of an app the machine no longer offers stay listed, with
+Delete as the remaining verb. Real removal (delete the supervisord
+block, the package, the registry row) is the mind's job via the
+`update-app` skill; the `POST /api/apps/<name>/deregister` endpoint
+remains for agent tooling but no UI surface calls it.
 
 Chat messages sent through the UI (and every view switch) are logged
 to `workspace_layout/events/client_activity/events.jsonl` with the

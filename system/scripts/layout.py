@@ -556,12 +556,32 @@ def _walk_tree_leaves(node: Any) -> list[dict[str, Any]]:
     return []
 
 
+def _ref_matches(requested: str, panel_ref: Any) -> bool:
+    """Whether a live panel's ref satisfies the ref the caller asked about.
+
+    Exact match, plus one deliberate widening: a bare ``service:<name>`` ref
+    for a plain app is satisfied by any of the app's INSTANCE panels
+    (``service:<name>?instance=<name>-<N>``) -- an app's panes are numbered
+    instances now, so the bare ref means "an instance of it", exactly as the
+    frontend resolves it. The two fleets keep exact matching: a terminal pane
+    never wears a ``service:terminal`` ref, and a bare browser ref is
+    rejected upstream.
+    """
+    if not isinstance(panel_ref, str):
+        return False
+    if panel_ref == requested:
+        return True
+    if not requested.startswith("service:") or "?" in requested:
+        return False
+    return panel_ref.startswith(f"{requested}?instance=")
+
+
 def _find_leaf_for_ref(layout: dict[str, Any], ref: str) -> dict[str, Any] | None:
     """Return the leaf node containing ``ref``'s panel, or None if not present."""
     tree = layout.get("tree")
     for leaf in _walk_tree_leaves(tree):
         for panel in leaf.get("panels", []) or []:
-            if panel.get("ref") == ref:
+            if _ref_matches(ref, panel.get("ref")):
                 return leaf
     return None
 
@@ -569,7 +589,7 @@ def _find_leaf_for_ref(layout: dict[str, Any], ref: str) -> dict[str, Any] | Non
 def _find_panel_summary(layout: dict[str, Any], ref: str) -> dict[str, Any] | None:
     """Return the flat panel summary for ``ref``, or None if not present."""
     for panel in layout.get("panels", []) or []:
-        if panel.get("ref") == ref:
+        if _ref_matches(ref, panel.get("ref")):
             return panel
     return None
 
@@ -655,7 +675,7 @@ def _predicate_focus(ref: str) -> _Predicate:
         if leaf is None:
             return False
         for panel in leaf.get("panels", []) or []:
-            if panel.get("ref") == ref:
+            if _ref_matches(ref, panel.get("ref")):
                 return bool(panel.get("active"))
         return False
 
@@ -1202,6 +1222,27 @@ def _cmd_where(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _allocate_instance_ref(service_name: str) -> str | None:
+    """Mint the app's next free instance via the allocator endpoint.
+
+    Returns the minted ``service:<name>?instance=<name>-<N>`` ref, or None
+    after writing the failure to stderr. REST rather than a broadcast: the
+    allocation is registry-side state the server owns, exactly like the
+    shortcut writes.
+    """
+    status, body = _request_rest_json(
+        "POST", f"/api/apps/{urllib.parse.quote(service_name)}/instances/allocate"
+    )
+    minted_ref = body.get("ref") if isinstance(body, dict) else None
+    if status != 200 or not isinstance(minted_ref, str) or not minted_ref:
+        detail = body.get("detail", body) if isinstance(body, dict) else body
+        sys.stderr.write(
+            f"error: could not mint an instance of {service_name!r} (HTTP {status}): {detail}\n"
+        )
+        return None
+    return minted_ref
+
+
 def _cmd_open(args: argparse.Namespace) -> int:
     ref = _normalize_ref(args.target)
     # Validate before the registration wait so empty-name / malformed refs
@@ -1217,6 +1258,25 @@ def _cmd_open(args: argparse.Namespace) -> int:
                 f"Did you forward_port.py / start the service?\n"
             )
             return EXIT_ERROR
+    # ``--new`` mints a fresh numbered instance of a plain app (``open files
+    # --new`` -> ``files-2``) instead of resolving to one already open. Only a
+    # bare app ref can mint: an instance ref already names its instance, and
+    # the two fleets create through their own paths (``open terminal`` always
+    # creates; browsers through the agentic-browser-fleet commands).
+    if getattr(args, "new", False):
+        if not ref.startswith("service:") or "?" in ref or ref == "service:terminal" or ref == "service:browser":
+            sys.stderr.write(
+                "error: --new mints an app instance, so it takes a bare app name "
+                f"(got {ref!r}; terminals and browsers create through their own paths)\n"
+            )
+            return EXIT_ERROR
+        minted_ref = _allocate_instance_ref(_service_name_from_ref(ref))
+        if minted_ref is None:
+            return EXIT_ERROR
+        ref = minted_ref
+        # The minted ref goes to stdout the way a terminal creation's does, so
+        # the caller can address the new instance without an ``inspect``.
+        _emit_allocated_ref({"ref": ref})
     payload: dict[str, Any] = {
         "ref": ref,
         "new_group": bool(args.new_group),
@@ -1849,6 +1909,16 @@ def main(argv: list[str] | None = None) -> int:
         help=(
             "Force a brand-new dockview group instead of tabbing into an existing "
             "right-side group (the default reuses adjacent groups when present)."
+        ),
+    )
+    p_open.add_argument(
+        "--new",
+        action="store_true",
+        help=(
+            "Mint a fresh numbered instance of a plain app and open it "
+            "(``open files --new`` -> ``files-2``), instead of resolving to an "
+            "already-open one. Bare app names only; the minted "
+            "``service:<name>?instance=...`` ref is printed to stdout."
         ),
     )
     _add_mutating_view_argument(p_open)

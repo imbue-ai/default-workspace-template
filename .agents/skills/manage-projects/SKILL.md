@@ -28,18 +28,20 @@ anything:
   never changes membership; only filing (below) and the UI's "remove
   from project" (a verb on the object, offered by its rail row -- the
   row's own one-click control, or its kebab/right-click menu) do.
-- **Only the destructive per-kind verbs actually end something** (Quit,
-  offered from the tab/rail menu for chats, terminals, and browser
-  sessions -- not exposed through `layout.py`), and those take the
-  object out of *every* project at once, including ones with no client
-  currently looking at them. An app's slot is different in kind: the UI
-  offers the reversible service-level Stop/Start (`POST
+- **Only the destructive per-kind verbs actually end something**
+  (Delete, offered from the tab/rail menu for chats, terminals, browser
+  sessions, and app instances -- not exposed through `layout.py`), and
+  those take the object out of *every* project at once, including ones
+  with no client currently looking at them. Deleting an app INSTANCE
+  removes only that instance's references (memberships, panes, name,
+  recency, stored location); the app's service keeps running. The
+  service itself gets the reversible Stop/Start instead (`POST
   /api/apps/<name>/stop` / `/start`, supervisord-backed, only for apps
   registered with a `program`), which changes no membership and no
-  registry row -- a stopped app stays listed, dimmed. Actually removing
-  an app is the mind's job via the `update-app` skill; the
-  `POST /api/apps/<name>/deregister` endpoint remains for tooling but no
-  UI surface calls it.
+  registry row -- a stopped app's instances stay listed, dimmed.
+  Actually removing an app is the mind's job via the `update-app` skill;
+  the `POST /api/apps/<name>/deregister` endpoint remains for tooling
+  but no UI surface calls it.
 
 **Everything** is the unfiltered view and the home. It is not a
 project: it has no registry entry, no member list, and cannot be
@@ -62,8 +64,17 @@ against `system/apps/system_interface/imbue/system_interface/projects.py`'s
 |---|---|
 | `chat:<agent-id>` | A chat, filed under the agent's stable id (not its renameable display name, so membership survives a rename). |
 | `terminal:<tmux-session-name>` | A terminal, filed under its live tmux session name -- the identity *is* the name here. |
-| `service:<name>` | A registered app, `<name>` being its registered service name (the `apps.toml` entry, not any display title). |
+| `service:<name>?instance=<name>-<N>` | One numbered INSTANCE of a registered app (`service:files?instance=files-2`, shown as "File Viewer 2"). Instances are what the tab lists hold; each is a separate object with its own page, filed and deleted independently. |
+| `service:<name>` | A registered app's PIN in a project (which app the project keeps a rail shortcut for). Not a tab-list object: opening it resolves to the view's most recently used instance, minting `<name>-1` when it shows none. |
 | `service:browser?session=<id>` | One pane of the browser fleet; the `session` query makes each pane a distinct member. |
+
+An instance exists while anything references it -- a project's member
+list, or a pane in any view's saved layout -- and deleting it (the UI's
+confirm-gated Delete, which also fires when its last reference goes)
+just removes those references; the app's service keeps running. The
+backend mints instance names machine-wide, lowest free number first
+(`POST /api/apps/<name>/instances/allocate`), and
+`GET /api/apps/instances` lists every instance the machine holds.
 
 `url:<hash>` is a **legacy form only** on this branch: an ad-hoc
 external-URL tab has no identity beyond the panel showing it (its
@@ -129,9 +140,19 @@ closed tab stays backgrounded, not removed). `focus` / `maximize` /
 them change membership either.
 
 ```bash
-# Files "web" into the Research project (opens it there if not
-# already open; no-op if it's already open and already a member).
+# Opens an instance of "web" in the Research project and files it: the
+# view's most recently used instance when it shows one, else a freshly
+# minted web-1. No-op if an instance is already open there.
 python3 system/scripts/layout.py open web --view "Research"
+
+# Always mint a fresh numbered instance (web-2, web-3, ...); the minted
+# service:web?instance=... ref is printed to stdout for later ops.
+python3 system/scripts/layout.py open web --new --view "Research"
+
+# Address one specific instance -- open/focus/close/move/refresh all
+# accept instance refs.
+python3 system/scripts/layout.py focus "service:web?instance=web-2"
+python3 system/scripts/layout.py close "service:web?instance=web-2"
 
 # Same, with explicit positioning.
 python3 system/scripts/layout.py split web --relative-to=self --direction=right --view "Research"

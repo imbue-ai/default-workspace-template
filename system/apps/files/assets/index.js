@@ -130,6 +130,16 @@ window.addEventListener("DOMContentLoaded", async () => {
 });
 
 async function ready() {
+  // minds patch: location beacon. Post the path being viewed ONE hop up -- to
+  // the dockview shell embedding this frame, never further out -- on each page
+  // load, so the shell can reopen this file-viewer instance at the same place.
+  // The shell validates the sender's origin and resolves which pane posted;
+  // the payload carries nothing but the path. The wildcard target is fine for
+  // the same reason: the path is already visible to any embedder.
+  if (window.parent !== window) {
+    window.parent.postMessage({ type: "minds-location", path: location.pathname + location.search }, "*");
+  }
+
   $pathsTable = document.querySelector(".paths-table");
   $pathsTableHead = document.querySelector(".paths-table thead");
   $pathsTableBody = document.querySelector(".paths-table tbody");
