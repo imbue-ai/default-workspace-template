@@ -3,8 +3,8 @@
  *
  * An app instance that posts its location (the vendored file viewer beacons
  * the folder it is showing on each page load -- see the shell's beacon
- * listener in DockviewWorkspace) reopens there: the pane's URL is the service
- * origin plus the stored path. The location is a fact about the **object**,
+ * listener in src/locationBeacon.ts) reopens there: the pane's URL is the
+ * service origin plus the stored path. The location is a fact about the **object**,
  * machine-wide, exactly as a name (MemberTitles) and a recency
  * (MemberLastUsed) are, and this module mirrors those two: a sibling of
  * Projects, cached at startup, kept current by the
