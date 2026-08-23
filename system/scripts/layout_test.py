@@ -18,6 +18,7 @@ These tests exercise the behavior an agent depends on:
 
 from __future__ import annotations
 
+import importlib
 import importlib.util
 import json
 import threading
@@ -1931,3 +1932,28 @@ def test_shortcut_set_refuses_everything_and_bad_ids(fake_workspace_rest: Any) -
     # No field to set is refused too.
     assert layout.main(["shortcut", "set", "terminal", "--view", "Research"]) == 1
     assert fake_workspace_rest.posted == []
+
+
+def test_shortcut_grammar_and_defaults_stay_in_step_with_the_server_and_frontend() -> None:
+    """Drift guard: the shortcut grammar and mode defaults exist in three places
+    -- the server (projects.py, the validator of record), the frontend
+    (models/Projects.ts), and this script's friendlier pre-validation -- and a
+    flipped default that lands in only some of them would silently disagree.
+    The py/py pair is compared directly; the frontend copy is pinned as text,
+    the way a stub cannot be imported but can still be held to its contract.
+    """
+    projects = importlib.import_module("imbue.system_interface.projects")
+
+    assert set(layout._BUILTIN_SHORTCUT_IDS) == set(projects.SHORTCUT_NAMES)
+    assert tuple(layout._SHORTCUT_MODES) == tuple(projects.SHORTCUT_MODES)
+    assert layout._APP_SHORTCUT_PREFIX == projects.APP_SHORTCUT_PREFIX
+    for shortcut_id in (*layout._BUILTIN_SHORTCUT_IDS, "app:docs"):
+        assert layout._default_shortcut_mode(shortcut_id) == projects.default_shortcut_mode(shortcut_id), shortcut_id
+
+    frontend_projects = (
+        Path(__file__).parents[1] / "apps/system_interface/frontend/src/models/Projects.ts"
+    ).read_text()
+    # The frontend's default rule: chat -> new, everything else -> focus.
+    assert 'return shortcutId === "chat" ? "new" : "focus";' in frontend_projects
+    # And its copy of the built-in shortcut list, in rail order.
+    assert 'export const SHORTCUT_NAMES = ["chat", "files", "browser", "terminal"] as const;' in frontend_projects

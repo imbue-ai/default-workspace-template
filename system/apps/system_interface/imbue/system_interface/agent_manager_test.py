@@ -327,7 +327,9 @@ def test_refresh_app_liveness_updates_entries_and_broadcasts_once(
     manager.refresh_app_liveness()
 
     while not client_queue.empty():
-        events.append(json.loads(client_queue.get_nowait()))
+        message = client_queue.get_nowait()
+        if message is not None:
+            events.append(json.loads(message))
     apps_updated_events = [event for event in events if event.get("type") == "apps_updated"]
     assert len(apps_updated_events) == 1
     serialized_by_name = {app["name"]: app for app in apps_updated_events[0]["apps"]}
@@ -340,7 +342,9 @@ def test_refresh_app_liveness_updates_entries_and_broadcasts_once(
     manager.refresh_app_liveness()
     second_pass_events = []
     while not client_queue.empty():
-        second_pass_events.append(json.loads(client_queue.get_nowait()))
+        second_pass_message = client_queue.get_nowait()
+        if second_pass_message is not None:
+            second_pass_events.append(json.loads(second_pass_message))
     assert [event for event in second_pass_events if event.get("type") == "apps_updated"] == []
 
 
