@@ -5,6 +5,7 @@ import type { AppEntry } from "../models/AgentManager";
 import { appStoppedDetail, isAppStoppable, stoppedAppForServiceName } from "../models/appLiveness";
 import { displayNameForMember } from "../models/MemberTitles";
 import { memberRef } from "../models/Projects";
+import { appServiceDisplayName } from "./derived-names";
 
 interface IframePanelAttrs {
   url: string;
@@ -65,7 +66,7 @@ export const IframePanel: m.Component<IframePanelAttrs> = {
 const StoppedAppPlaceholder: m.Component<{ app: AppEntry }> = {
   view(vnode) {
     const app = vnode.attrs.app;
-    const label = displayNameForMember(memberRef("app", app.name), app.name);
+    const label = displayNameForMember(memberRef("app", app.name), appServiceDisplayName(app.name));
     return m(
       "div",
       {
