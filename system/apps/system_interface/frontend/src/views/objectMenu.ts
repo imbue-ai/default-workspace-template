@@ -102,20 +102,32 @@ export function isRenameableKind(kind: ObjectMenuKind): boolean {
  * way the surface calling this currently displays it, and only the caller
  * knows what that is right now.
  *
+ * ``addToProjects`` and ``moveToProjects`` each open the project-picking
+ * dialog over the object (add: also show it in the chosen projects; move: show
+ * it in exactly the chosen projects and no others). Null omits them, for a
+ * panel with no member ref to file (a terminal still allocating its session).
+ *
+ * ``stop`` is the reversible process-level verb for a chat: ``mngr stop`` on
+ * the agent, which a later message or start brings back. Distinct from the
+ * ``quit`` slot below, which for a chat is the confirm-gated delete.
+ *
  * ``quit`` is the destructive SLOT, not always a destructive ACT: for a chat,
- * terminal, or browser session it is the confirm-gated "Quit {name}" that ends
- * the object, while for an app it is the reversible service-level
+ * terminal, or browser session it is the confirm-gated "Delete {name}" that
+ * ends the object, while for an app it is the reversible service-level
  * "Stop {name}" / "Start {name}" (supervisord stop/start; the row and its
- * memberships stay). The caller says which by ``isDestructive`` -- false keeps
- * the power icon but drops the destructive tone, since stopping is one click
- * from undone.
+ * memberships stay). The caller says which by ``isDestructive`` -- false swaps
+ * the trash icon for the power button and drops the destructive tone, since
+ * stopping is one click from undone.
  */
 export interface ObjectMenuActions {
   refresh: () => void;
   share: { label: string; run: () => void } | null;
   rename: () => void;
   hideTab: (() => void) | null;
+  addToProjects: (() => void) | null;
+  moveToProjects: (() => void) | null;
   removeFromProject: (() => void) | null;
+  stop: { label: string; run: () => void } | null;
   quit: { label: string; run: () => void; isDestructive?: boolean } | null;
 }
 
@@ -153,6 +165,15 @@ export function objectMenuEntries(kind: ObjectMenuKind, actions: ObjectMenuActio
   if (actions.hideTab !== null) {
     closing.push({ label: "Hide tab", iconName: "close", run: actions.hideTab });
   }
+  // The filing pair sits directly above "Remove from project": all three act
+  // on where the object shows rather than on the object itself, and reading
+  // them together is what tells the group apart from the process verbs below.
+  if (actions.addToProjects !== null) {
+    closing.push({ label: "Add to project...", iconName: "folder-plus", run: actions.addToProjects });
+  }
+  if (actions.moveToProjects !== null) {
+    closing.push({ label: "Move to project...", iconName: "folder-input", run: actions.moveToProjects });
+  }
   // Sits above the destroy, which is the one it is easily confused with: this
   // takes the object out of one view and leaves it running, filed in Everything
   // and in any other project showing it, while the destroy takes it off the
@@ -160,11 +181,18 @@ export function objectMenuEntries(kind: ObjectMenuKind, actions: ObjectMenuActio
   if (actions.removeFromProject !== null) {
     closing.push({ label: "Remove from project", iconName: "minus-circle", run: actions.removeFromProject });
   }
+  // Above the delete it must never be confused with: stopping puts the process
+  // down and keeps the object, deleting ends it. The icons say the same thing
+  // (power button vs trash can).
+  if (actions.stop !== null) {
+    closing.push({ label: actions.stop.label, iconName: "power", run: actions.stop.run });
+  }
   if (actions.quit !== null) {
+    const isDestructive = actions.quit.isDestructive !== false;
     closing.push({
       label: actions.quit.label,
-      iconName: "power",
-      isDestructive: actions.quit.isDestructive !== false,
+      iconName: isDestructive ? "trash" : "power",
+      isDestructive,
       run: actions.quit.run,
     });
   }

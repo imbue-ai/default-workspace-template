@@ -329,9 +329,16 @@ export function AllAppsPicker(): m.Component<AllAppsPickerAttrs> {
       // that matches only pinned apps HAS matched, and saying otherwise sends
       // the user looking for an app already sitting in the rail.
       const query = filterText.trim();
-      const emptyMessage =
+      // The machine-runs-nothing case alone gets a second line: unlike the
+      // filter misses, its fix is not a different query but building an app,
+      // and a fresh workspace's user has no other hint that asking the mind
+      // is how apps come to exist.
+      const emptyMessage: m.Children =
         apps.length === 0
-          ? "No apps are running on this machine."
+          ? [
+              m("p", "No apps are running on this machine."),
+              m("p", { class: "mt-2" }, "Create a chat and tell Minds to create one!"),
+            ]
           : visibleApps.length === 0
             ? `No apps match "${query}".`
             : query === ""

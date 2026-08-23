@@ -10,8 +10,11 @@ function fullActions(overrides: Partial<ObjectMenuActions> = {}): ObjectMenuActi
     share: { label: "Share web", run: vi.fn() },
     rename: vi.fn(),
     hideTab: vi.fn(),
+    addToProjects: vi.fn(),
+    moveToProjects: vi.fn(),
     removeFromProject: vi.fn(),
-    quit: { label: "Quit Chat 1", run: vi.fn() },
+    stop: { label: "Stop Chat 1", run: vi.fn() },
+    quit: { label: "Delete Chat 1", run: vi.fn() },
     ...overrides,
   };
 }
@@ -53,7 +56,10 @@ describe("objectMenuEntries", () => {
     const entries = objectMenuEntries("terminal", {
       ...fullActions(),
       hideTab: null,
+      addToProjects: null,
+      moveToProjects: null,
       removeFromProject: null,
+      stop: null,
       quit: null,
     });
     expect(entries).not.toContain(OBJECT_MENU_DIVIDER);
@@ -84,7 +90,7 @@ describe("objectMenuEntries", () => {
     // apart.
     const shown = labels(objectMenuEntries("chat", fullActions()));
     expect(shown.indexOf("Hide tab")).toBeLessThan(shown.indexOf("Remove from project"));
-    expect(shown.indexOf("Remove from project")).toBeLessThan(shown.indexOf("Quit Chat 1"));
+    expect(shown.indexOf("Remove from project")).toBeLessThan(shown.indexOf("Delete Chat 1"));
   });
 
   it("offers Share only to an app", () => {
@@ -117,10 +123,10 @@ describe("objectMenuEntries", () => {
   });
 
   it("labels the destructive verb with whatever name the caller supplies", () => {
-    const entries = objectMenuEntries("terminal", fullActions({ quit: { label: "Quit Terminal 3", run: vi.fn() } }));
+    const entries = objectMenuEntries("terminal", fullActions({ quit: { label: "Delete Terminal 3", run: vi.fn() } }));
     const destructive = entries.find((entry) => entry !== OBJECT_MENU_DIVIDER && entry.isDestructive === true);
     expect(destructive).not.toBeUndefined();
-    expect((destructive as { label: string }).label).toBe("Quit Terminal 3");
+    expect((destructive as { label: string }).label).toBe("Delete Terminal 3");
   });
 
   it("runs the caller's callback and nobody else's", () => {
@@ -141,22 +147,67 @@ describe("objectMenuEntries", () => {
     expect(entries[dividerIndex + 1]).not.toBe(OBJECT_MENU_DIVIDER);
   });
 
+  it("puts the filing pair directly ahead of Remove from project", () => {
+    const shown = labels(objectMenuEntries("chat", fullActions()));
+    const removeIndex = shown.indexOf("Remove from project");
+    expect(shown[removeIndex - 2]).toBe("Add to project...");
+    expect(shown[removeIndex - 1]).toBe("Move to project...");
+  });
+
+  it("puts the reversible stop ahead of the delete, never as the destructive row", () => {
+    const entries = objectMenuEntries("chat", fullActions());
+    const shown = labels(entries);
+    expect(shown.indexOf("Stop Chat 1")).toBeLessThan(shown.indexOf("Delete Chat 1"));
+    const stopEntry = entries.find((entry) => entry !== OBJECT_MENU_DIVIDER && entry.label === "Stop Chat 1");
+    expect((stopEntry as { isDestructive?: boolean }).isDestructive).toBeUndefined();
+    expect((stopEntry as { iconName: string }).iconName).toBe("power");
+  });
+
+  it("gives the destructive delete the trash icon and a reversible quit slot the power icon", () => {
+    // A chat's delete is destructive and reads behind the trash can; an app's
+    // quit slot is the reversible Stop/Start, which keeps the power button.
+    const deleteEntry = objectMenuEntries("chat", fullActions()).find(
+      (entry) => entry !== OBJECT_MENU_DIVIDER && entry.isDestructive === true,
+    );
+    expect((deleteEntry as { iconName: string }).iconName).toBe("trash");
+    const appEntries = objectMenuEntries(
+      "app",
+      fullActions({ stop: null, quit: { label: "Stop web", run: vi.fn(), isDestructive: false } }),
+    );
+    const stopSlot = appEntries.find((entry) => entry !== OBJECT_MENU_DIVIDER && entry.label === "Stop web");
+    expect((stopSlot as { iconName: string }).iconName).toBe("power");
+    expect((stopSlot as { isDestructive?: boolean }).isDestructive).toBe(false);
+  });
+
+  it("omits the filing pair and the stop when the caller has none to give", () => {
+    const entries = objectMenuEntries("chat", fullActions({ addToProjects: null, moveToProjects: null, stop: null }));
+    const shown = labels(entries);
+    expect(shown).not.toContain("Add to project...");
+    expect(shown).not.toContain("Move to project...");
+    expect(shown).not.toContain("Stop Chat 1");
+  });
+
   it("produces the full four-kind, fully-available list end to end", () => {
     expect(labels(objectMenuEntries("chat", fullActions()))).toEqual([
       "Refresh",
       OBJECT_MENU_DIVIDER,
       "Rename",
       "Hide tab",
+      "Add to project...",
+      "Move to project...",
       "Remove from project",
-      "Quit Chat 1",
+      "Stop Chat 1",
+      "Delete Chat 1",
     ]);
-    expect(labels(objectMenuEntries("app", fullActions()))).toEqual([
+    expect(labels(objectMenuEntries("app", fullActions({ stop: null })))).toEqual([
       "Refresh",
       "Share web",
       OBJECT_MENU_DIVIDER,
       "Hide tab",
+      "Add to project...",
+      "Move to project...",
       "Remove from project",
-      "Quit Chat 1",
+      "Delete Chat 1",
     ]);
   });
 });

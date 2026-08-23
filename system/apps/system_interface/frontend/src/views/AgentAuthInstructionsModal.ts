@@ -8,6 +8,7 @@
  */
 
 import m from "mithril";
+import { backdropDismissAttrs } from "./modalBackdrop";
 import { getAgentById } from "../models/AgentManager";
 import { getHarnessCatalog } from "../models/HarnessCatalog";
 import { dismissAuthInstructions, getAuthInstructionsAgentId } from "../models/AgentAuth";
@@ -39,11 +40,7 @@ export function AgentAuthInstructionsModal(): m.Component {
       return m(
         "div.custom-url-dialog-overlay",
         {
-          onclick(e: MouseEvent) {
-            if ((e.target as HTMLElement).classList.contains("custom-url-dialog-overlay")) {
-              dismissAuthInstructions();
-            }
-          },
+          ...backdropDismissAttrs(dismissAuthInstructions),
         },
         m(
           "div.custom-url-dialog",

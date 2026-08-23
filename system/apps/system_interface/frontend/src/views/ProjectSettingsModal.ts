@@ -25,6 +25,7 @@
  */
 
 import m from "mithril";
+import { backdropDismissAttrs } from "./modalBackdrop";
 import { deleteProjectRequest, updateProjectSettings } from "../models/Projects";
 import type { ProjectInfo } from "../models/Projects";
 import { SQUIGGLE_GLYPHS, squiggleMarkup } from "./squiggles";
@@ -209,11 +210,7 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
           onremove() {
             document.removeEventListener("keydown", handleKeydown);
           },
-          onclick(e: MouseEvent) {
-            if ((e.target as HTMLElement).classList.contains("custom-url-dialog-overlay")) {
-              attrs.onCancel();
-            }
-          },
+          ...backdropDismissAttrs(attrs.onCancel),
         },
         [
           m(

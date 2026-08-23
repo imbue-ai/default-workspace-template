@@ -144,6 +144,15 @@ export interface SidebarAttrs {
   onRenameRow: (row: SidebarTabRow, title: string) => void;
   // Open the machine's share surface with this app pre-selected.
   onShareApp: (row: SidebarTabRow) => void;
+  // Open the membership dialog over this row's object, in add mode (also show
+  // it in the chosen projects) or move mode (show it in exactly the chosen
+  // projects). The workspace owns the dialog, as it owns the other modals.
+  onAddRowToProjects: (row: SidebarTabRow) => void;
+  onMoveRowToProjects: (row: SidebarTabRow) => void;
+  // Stop a chat agent's process (``mngr stop``), reversibly: the object keeps
+  // its transcript, name, and memberships. Only ever called for a
+  // non-primary chat row.
+  onStopRow: (row: SidebarTabRow) => void;
   // Stop showing one object in the active view. The object keeps running and
   // stays in Everything and in any other project showing it.
   onRemoveFromView: (row: SidebarTabRow) => void;
@@ -771,12 +780,24 @@ export function Sidebar(): m.Component<SidebarAttrs> {
       // row is a thing the project shows, so the verb that belongs to it is
       // taking it out of the project.
       hideTab: null,
+      // Both open the workspace's membership dialog over the object; a rail
+      // row always has a ref to file, so neither is ever withheld here.
+      addToProjects: () => attrs.onAddRowToProjects(row),
+      moveToProjects: () => attrs.onMoveRowToProjects(row),
       // Null in Everything, which is the home: an object leaves it only by
       // being destroyed. For an app this is the same act as the row's own pin
       // icon -- pinning IS membership -- so the two agree by construction.
       removeFromProject: isEverythingView(attrs.activeViewId) ? null : () => attrs.onRemoveFromView(row),
+      // A chat's reversible process-level verb (``mngr stop``), withheld for
+      // the primary agent exactly as its delete is. The other kinds have no
+      // separate stop: a terminal's or browser session's process IS the
+      // object, and an app's stop lives in its quit slot below.
+      stop:
+        row.kind === "chat" && !isPrimaryAgentRow(row)
+          ? { label: `Stop ${row.label}`, run: () => attrs.onStopRow(row) }
+          : null,
       // Withheld for the primary agent, exactly as the tab's own build
-      // withholds it: that agent runs the workspace's services, so quitting it
+      // withholds it: that agent runs the workspace's services, so deleting it
       // would take the machine down. Both surfaces recognize it by id rather
       // than by name, since a chat can be renamed to anything. An app's slot
       // is the reversible service-level Stop/Start instead of a destroy (see
@@ -805,7 +826,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
       };
     }
     if (isPrimaryAgentRow(row)) return null;
-    return { label: `Quit ${row.label}`, run: () => attrs.onDeleteFromMachine(row) };
+    return { label: `Delete ${row.label}`, run: () => attrs.onDeleteFromMachine(row) };
   }
 
   /** One row of a shortcut's own menu group (see ``shortcutMenuEntries``). */
@@ -938,13 +959,49 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     );
   }
 
+  /** The pencil the header reveals on hover, for a project view: one press to
+   *  its settings. The switcher's per-row pencils cover the same ground, but
+   *  only after opening the switcher and finding the mounted row in it --
+   *  with a single project that row is the one already on screen, and nothing
+   *  else hinted that settings exist at all. A span with the button role
+   *  rather than a real button, because it renders inside the header button
+   *  and buttons do not nest. */
+  function headerEditButton(project: ProjectInfo): m.Vnode {
+    const openSettings = (event: Event): void => {
+      // Never also the header's own click: the pencil opens settings, not the
+      // switcher.
+      event.stopPropagation();
+      settingsProject = project;
+    };
+    return m(
+      "span",
+      {
+        role: "button",
+        tabindex: 0,
+        class:
+          "flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded text-text-faint opacity-0 " +
+          "hover:bg-bg-hover hover:text-text-primary focus-visible:opacity-100 group-hover:opacity-100",
+        "aria-label": "Project settings",
+        ...hoverTooltipAttrs("Project settings"),
+        onclick: openSettings,
+        onkeydown: (event: KeyboardEvent) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            openSettings(event);
+          }
+        },
+      },
+      m.trust(icon("edit", { size: ACTION_ICON_SIZE, strokeWidth: 1.75 })),
+    );
+  }
+
   function header(project: ProjectInfo | null, viewName: string): m.Vnode {
     return m(
       "button",
       {
         type: "button",
         class:
-          "project-rail-header -mx-[5px] -mt-[5px] flex h-[34px] w-[calc(100%+10px)] shrink-0 cursor-pointer " +
+          "project-rail-header group -mx-[5px] -mt-[5px] flex h-[34px] w-[calc(100%+10px)] shrink-0 cursor-pointer " +
           "items-center gap-1 px-[5px] text-left text-text-primary hover:bg-bg-hover",
         "aria-haspopup": "menu",
         "aria-expanded": openMenu?.kind === "switcher" ? "true" : "false",
@@ -970,6 +1027,10 @@ export function Sidebar(): m.Component<SidebarAttrs> {
       [
         m("span", { class: ICON_BOX_CLASS }, m.trust(viewIdentityMarkup(project, ROW_ICON_SIZE))),
         railLabel(viewName, "font-semibold"),
+        // Everything has no settings to open, so only a project view carries
+        // the pencil. It hides with the chevron while the rail is folded --
+        // group-hover alone would flash it during the collapse transition.
+        project !== null && expanded ? headerEditButton(project) : null,
         m(
           "span",
           {
