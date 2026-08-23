@@ -192,7 +192,6 @@ function makeAttrs(overrides: Partial<SidebarAttrs> = {}): SidebarAttrs {
     onRemoveFromView: vi.fn(),
     onShareApp: vi.fn(),
     onAddRowToProjects: vi.fn(),
-    onMoveRowToProjects: vi.fn(),
     onStopRow: vi.fn(),
     onDeleteFromMachine: vi.fn(),
     ...overrides,
@@ -657,7 +656,6 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
       "Refresh",
       "Rename",
       "Add to project...",
-      "Move to project...",
       "Remove from project",
       "Stop Chat 1",
       "Delete Chat 1",
@@ -687,7 +685,6 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
         "Refresh",
         "Rename",
         "Add to project...",
-        "Move to project...",
         "Remove from project",
       ]);
     } finally {
@@ -850,13 +847,7 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
     const menu = openRowMenuByContextClick(root, redraw, "Terminal 1");
     // No Rename either: a terminal IS its tmux session name, so the verb is
     // withheld rather than offered as a display name over the top.
-    expect(menuItemLabels(menu)).toEqual([
-      "Refresh",
-      "Add to project...",
-      "Move to project...",
-      "Remove from project",
-      "Delete Terminal 1",
-    ]);
+    expect(menuItemLabels(menu)).toEqual(["Refresh", "Add to project...", "Remove from project", "Delete Terminal 1"]);
   });
 
   it("still lists an app the machine no longer offers, which has no shortcut row", () => {
@@ -911,7 +902,6 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
         "Refresh",
         "Share Grafana",
         "Add to project...",
-        "Move to project...",
         "Remove from project",
         "Stop Grafana",
         "New Grafana",
@@ -966,7 +956,6 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
         "Refresh",
         "Share Grafana",
         "Add to project...",
-        "Move to project...",
         "Remove from project",
         "New Grafana",
         'Change shortcut to "New Grafana"',

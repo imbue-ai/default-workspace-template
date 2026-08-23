@@ -144,11 +144,10 @@ export interface SidebarAttrs {
   onRenameRow: (row: SidebarTabRow, title: string) => void;
   // Open the machine's share surface with this app pre-selected.
   onShareApp: (row: SidebarTabRow) => void;
-  // Open the membership dialog over this row's object, in add mode (also show
-  // it in the chosen projects) or move mode (show it in exactly the chosen
-  // projects). The workspace owns the dialog, as it owns the other modals.
+  // Open the membership dialog over this row's object (also show it in the
+  // chosen projects). The workspace owns the dialog, as it owns the other
+  // modals.
   onAddRowToProjects: (row: SidebarTabRow) => void;
-  onMoveRowToProjects: (row: SidebarTabRow) => void;
   // Stop a chat agent's process (``mngr stop``), reversibly: the object keeps
   // its transcript, name, and memberships. Only ever called for a
   // non-primary chat row.
@@ -780,10 +779,9 @@ export function Sidebar(): m.Component<SidebarAttrs> {
       // row is a thing the project shows, so the verb that belongs to it is
       // taking it out of the project.
       hideTab: null,
-      // Both open the workspace's membership dialog over the object; a rail
-      // row always has a ref to file, so neither is ever withheld here.
+      // Opens the workspace's membership dialog over the object; a rail row
+      // always has a ref to file, so it is never withheld here.
       addToProjects: () => attrs.onAddRowToProjects(row),
-      moveToProjects: () => attrs.onMoveRowToProjects(row),
       // Null in Everything, which is the home: an object leaves it only by
       // being destroyed. For an app this is the same act as the row's own pin
       // icon -- pinning IS membership -- so the two agree by construction.

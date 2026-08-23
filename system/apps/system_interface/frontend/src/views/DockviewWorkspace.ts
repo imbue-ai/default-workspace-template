@@ -292,13 +292,12 @@ let browserDestroyPanelId: string | null = null;
 let showShareModal = false;
 let shareServiceName: string | null = null;
 
-// Project-membership dialog state (the object menu's "Add to project..." /
-// "Move to project..."). One dialog at a time, opened with the object's
-// current memberships already fetched so the checkboxes start truthful.
+// Project-membership dialog state (the object menu's "Add to project...").
+// One dialog at a time, opened with the object's current memberships already
+// fetched so the checkboxes start truthful.
 let membershipDialog: {
   ref: string;
   memberLabel: string;
-  mode: "add" | "move";
   memberProjectIds: string[];
 } | null = null;
 
@@ -745,12 +744,11 @@ function tabMenuEntries(panelId: string): ObjectMenuEntry[] {
             },
           }
         : null,
-    // Both open the membership dialog over the object this tab shows. The ref
-    // is resolved at click time rather than menu-build time: a tab opened a
+    // Opens the membership dialog over the object this tab shows. The ref is
+    // resolved at click time rather than menu-build time: a tab opened a
     // moment ago may not have been filed yet, exactly as the rename path
     // tolerates.
-    addToProjects: () => openMembershipDialogForPanel(panelId, "add"),
-    moveToProjects: () => openMembershipDialogForPanel(panelId, "move"),
+    addToProjects: () => openMembershipDialogForPanel(panelId),
     // The tab never offers this: unfiling an object is what you want while
     // looking at the project's list of what it shows, not while looking at the
     // object itself. The rail's row menu carries it (see `railMenuActions`).
@@ -774,11 +772,11 @@ function tabMenuEntries(panelId: string): ObjectMenuEntry[] {
  *  open the membership dialog over it. A panel that resolves to no ref -- a
  *  terminal still allocating its session -- has nothing to file, so the click
  *  is silently spent, matching how its other by-ref verbs stand down. */
-function openMembershipDialogForPanel(panelId: string, mode: "add" | "move"): void {
+function openMembershipDialogForPanel(panelId: string): void {
   void (async () => {
     const ref = memberRefByPanelId.get(panelId) ?? (await rememberMemberRef(panelId));
     if (ref === null) return;
-    openMembershipDialog(ref, currentTabTitle(panelId, ref), mode);
+    openMembershipDialog(ref, currentTabTitle(panelId, ref));
   })();
 }
 
@@ -952,50 +950,29 @@ export function stopChatRow(row: SidebarTabRow): void {
  * fetched: the checkboxes must start from what the registry actually says, not
  * from what this client last painted.
  */
-function openMembershipDialog(ref: string, memberLabel: string, mode: "add" | "move"): void {
+function openMembershipDialog(ref: string, memberLabel: string): void {
   void (async () => {
     const memberMap = await fetchMemberMap();
-    membershipDialog = { ref, memberLabel, mode, memberProjectIds: memberMap[ref] ?? [] };
+    membershipDialog = { ref, memberLabel, memberProjectIds: memberMap[ref] ?? [] };
     m.redraw();
   })();
 }
 
 /** "Add to project..." for a rail row. */
 export function addMemberRowToProjects(row: SidebarTabRow): void {
-  openMembershipDialog(row.ref, row.label, "add");
+  openMembershipDialog(row.ref, row.label);
 }
 
-/** "Move to project..." for a rail row. */
-export function moveMemberRowToProjects(row: SidebarTabRow): void {
-  openMembershipDialog(row.ref, row.label, "move");
-}
-
-/**
- * Apply a confirmed membership selection: add the object to every newly
- * checked project and (move only) remove it from every unchecked one. When a
- * move takes the object out of the mounted view, its open panel goes with it
- * -- the same sweep "Remove from project" does -- since the view no longer
- * shows the object behind the tab.
- */
+/** Apply a confirmed selection: add the object to every checked project. The
+ *  dialog only ever offers projects not already showing the object, so this
+ *  never removes anything. */
 async function applyMembershipSelection(
-  dialog: { ref: string; memberLabel: string; mode: "add" | "move"; memberProjectIds: string[] },
+  dialog: { ref: string; memberLabel: string },
   selectedProjectIds: string[],
 ): Promise<void> {
-  const current = new Set(dialog.memberProjectIds);
-  const selected = new Set(selectedProjectIds);
-  const additions = selectedProjectIds.filter((id) => !current.has(id));
-  const removals = dialog.mode === "move" ? dialog.memberProjectIds.filter((id) => !selected.has(id)) : [];
-  if (mountedViewId !== null && removals.includes(mountedViewId) && dockview) {
-    const panelId = panelIdForMemberRef(dialog.ref);
-    const panel = panelId === null ? undefined : dockview.panels.find((candidate) => candidate.id === panelId);
-    if (panel) dockview.removePanel(panel);
-  }
   try {
-    for (const projectId of additions) {
+    for (const projectId of selectedProjectIds) {
       await addMember(projectId, dialog.ref);
-    }
-    for (const projectId of removals) {
-      await removeMember(projectId, dialog.ref);
     }
     await refreshProjectsList();
   } catch (e) {
@@ -2424,11 +2401,14 @@ function openIframeTab(
   panelType: PanelType = "iframe",
   serviceName?: string,
   targetGroup?: DockviewGroupPanel | null,
+  // A minted id gives this pane a live page of its own (a "New X" second
+  // pane); unset, the pane shares the service's one default-instance page.
+  serviceInstanceId?: string,
 ): void {
   if (!dockview) return;
   const primaryId = getPrimaryAgentId();
   const panelId = `${panelType}-${primaryId}-${Date.now()}`;
-  const params: PanelParams = { panelType, agentId: primaryId, url, title, serviceName };
+  const params: PanelParams = { panelType, agentId: primaryId, url, title, serviceName, serviceInstanceId };
   panelParams.set(panelId, params);
   dockview.addPanel({
     id: panelId,
@@ -3436,7 +3416,20 @@ export function openAppTab(app: AppEntry, options: { isNew?: boolean } = {}): vo
       return;
     }
   }
-  openIframeTab(deriveServiceOrigin(labelForService(app.name)), app.name, "iframe", app.name);
+  // A deliberate second pane gets a live page of its own: without a minted
+  // instance id it would share the service's one default-instance page, and
+  // one page cannot show in two panes -- the second would render blank and
+  // the restore-dedup would drop it. The ordinary pane stays on the default
+  // instance so every view showing the app shares one document.
+  const serviceInstanceId = options.isNew === true ? crypto.randomUUID() : undefined;
+  openIframeTab(
+    deriveServiceOrigin(labelForService(app.name)),
+    app.name,
+    "iframe",
+    app.name,
+    undefined,
+    serviceInstanceId,
+  );
 }
 
 function buildLayoutPayload(): SavedLayout | null {
@@ -5188,7 +5181,6 @@ export const DockviewWorkspace: m.Component = {
         membershipDialog
           ? m(ProjectMembershipDialog, {
               memberLabel: membershipDialog.memberLabel,
-              mode: membershipDialog.mode,
               projects: getAvailableProjects(),
               memberProjectIds: membershipDialog.memberProjectIds,
               onConfirm(selectedProjectIds: string[]) {

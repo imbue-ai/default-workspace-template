@@ -6,6 +6,11 @@
 #
 # dufs publishes no checksum assets, so the per-arch tarball sha256s are pinned
 # here, recorded from the release at pin time; a version bump must update both.
+#
+# A version bump must ALSO re-vendor system/apps/files/assets/ from the new
+# tag and re-apply its marked "minds patch" blocks (see that directory's
+# README): the vendored frontend is served via --assets and must come from the
+# same release as the binary.
 set -euo pipefail
 
 DUFS_VERSION="v0.46.0"

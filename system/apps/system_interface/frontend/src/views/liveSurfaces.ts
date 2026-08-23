@@ -4,7 +4,10 @@
  * There is ONE live page per object, machine-wide: an app open in three
  * projects is one iframe and one document, not three. A project is a *view*
  * that may or may not include the object, and a pane is only a place to show
- * it at some size. Removing an iframe from the document destroys it, and
+ * it at some size. (A deliberate "New X" second pane on an app is the one
+ * exception: it is minted its own instance of the service's page -- see the
+ * ``?instance=`` half of the key grammar below -- since one page cannot show
+ * in two panes at once.) Removing an iframe from the document destroys it, and
  * re-parenting one reloads it, so the element holding a page must never leave
  * the DOM -- not on a view switch, not on a tab close, not on a re-arrange.
  * Destroying the object behind it is the one thing that takes it out.
@@ -57,6 +60,13 @@ export interface PanelParams {
   // Drives both the WS-driven `layout_op` (op="refresh") service-wide
   // reload match and the presence of the per-tab Refresh button.
   serviceName?: string;
+  // Which live page of the service this pane shows. The ordinary pane leaves
+  // it unset and reads as the default instance -- one page machine-wide, so
+  // every view showing the app shares one document -- while a deliberate
+  // second pane ("New X") carries a minted id, giving it a live page of its
+  // own instead of a blank slot fighting the first pane for one. Absent from
+  // layouts saved before instances existed, which is exactly the default.
+  serviceInstanceId?: string;
   // Set only on persistent-terminal iframe tabs. ``terminalSessionName`` is
   // the named tmux session the tab attaches to (attach-or-create); its
   // presence is what marks a panel as a terminal (drives the banner, the
@@ -119,15 +129,25 @@ export function sessionParamFromUrl(url: string | undefined): string | null {
   return new URLSearchParams(query).get("session");
 }
 
+/** The instance id a service pane reads as when it carries none: the one
+ *  shared, machine-wide page of the service. Deliberately a constant rather
+ *  than anything per-pane, so every ordinarily-opened pane of an app -- in
+ *  every view -- resolves to the same key and shares one document. */
+export const DEFAULT_SERVICE_INSTANCE_ID = "0";
+
 /**
  * The live page a panel stands for, or null for a panel that is not an object.
  *
  * Deliberately the member-ref grammar wherever an object has a durable
- * identity (``chat:<agent-id>``, ``terminal:<session>``, ``service:<name>``,
- * ``service:browser?session=<name>``), so the thing a project files and the
- * thing that holds its page are spelled the same way. Where the member ref is
- * itself a hash of the panel id (``url:<hash>``), the key is ``panel:<id>``
- * instead -- bijective with it, and, unlike it, synchronous.
+ * identity (``chat:<agent-id>``, ``terminal:<session>``), so the thing a
+ * project files and the thing that holds its page are spelled the same way.
+ * A service pane's key qualifies the ref with which page of the service it
+ * shows: ``service:<name>?instance=<id>`` (the default instance for the
+ * ordinary pane, a minted id for a deliberate "New X" second pane), and
+ * ``service:browser?session=<name>`` for a fleet browser, whose per-session
+ * identity is durable server-side rather than minted here. Where the member
+ * ref is itself a hash of the panel id (``url:<hash>``), the key is
+ * ``panel:<id>`` instead -- bijective with it, and, unlike it, synchronous.
  *
  * A launcher is a question about a pane rather than an object on the machine,
  * so it has no page to keep alive and stays an ordinary dockview panel.
@@ -141,17 +161,23 @@ export function liveKeyForPanel(panelId: string, params: PanelParams | undefined
   if (params.terminalSessionName) return `terminal:${params.terminalSessionName}`;
   if (params.serviceName) {
     const session = params.serviceName === BROWSER_SERVICE_NAME ? sessionParamFromUrl(params.url) : null;
-    return session === null ? `service:${params.serviceName}` : `service:${BROWSER_SERVICE_NAME}?session=${session}`;
+    if (session !== null) return `service:${BROWSER_SERVICE_NAME}?session=${session}`;
+    return `service:${params.serviceName}?instance=${params.serviceInstanceId ?? DEFAULT_SERVICE_INSTANCE_ID}`;
   }
   return `panel:${panelId}`;
 }
 
-/** The live page a member ref stands for. Chat, terminal and service refs are
- *  already live keys; an ad-hoc page is filed under a hash of its panel id, so
- *  it answers to ``panel:<id>`` instead -- the caller always has the panel id,
- *  live or deterministic. */
+/** The live page a member ref stands for. Chat and terminal refs are already
+ *  live keys, as is a browser's per-session service ref; a bare service ref
+ *  answers to the service's default-instance page (membership is per service,
+ *  so a ref cannot name a minted second pane). An ad-hoc page is filed under
+ *  a hash of its panel id, so it answers to ``panel:<id>`` instead -- the
+ *  caller always has the panel id, live or deterministic. */
 export function liveKeyForRef(ref: string, panelId: string): LiveKey {
-  if (ref.startsWith("chat:") || ref.startsWith("terminal:") || ref.startsWith("service:")) return ref;
+  if (ref.startsWith("chat:") || ref.startsWith("terminal:")) return ref;
+  if (ref.startsWith("service:")) {
+    return ref.includes("?") ? ref : `${ref}?instance=${DEFAULT_SERVICE_INSTANCE_ID}`;
+  }
   return `panel:${panelId}`;
 }
 
