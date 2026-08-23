@@ -157,7 +157,7 @@ def get_backfill_email(
     """Return the email to feed an entitlements-row backfill for ``user_id``.
 
     The backfill's paid-list check may only consume verified emails, but a
-    user who merely lacks verification must still get a (explorer) row -- so
+    user who merely lacks verification must still get a (free) row -- so
     an existing-but-unverified user maps to ``""`` (create the row, skip the
     paid check) while a missing/unresolvable user maps to ``None`` (do not
     create anything).

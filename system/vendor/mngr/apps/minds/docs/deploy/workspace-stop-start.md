@@ -57,8 +57,8 @@ running (leased) -> stopping -> stopped -> starting -> running
   generation; destroy deletes the workspace's objects immediately (the
   restic backup's 30-day retention remains the safety net).
 - **Quotas**: `max_remote_workspaces` caps *running* workspaces
-  (leased/stopping/starting); the larger `max_total_workspaces` (explorer
-  10 / ally 50) caps running + stopped. A just-stopped row counts as
+  (leased/stopping/starting); the larger `max_total_workspaces` (free 5 /
+  explorer 10 / ally 50) caps running + stopped. A just-stopped row counts as
   stopped even while its retained local VM still occupies a physical slot
   (pool capacity itself is enforced by real slot occupancy on the boxes).
   Stopping is always allowed; create checks both caps; start re-checks the
