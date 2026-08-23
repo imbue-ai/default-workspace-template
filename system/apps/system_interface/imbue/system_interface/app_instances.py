@@ -54,7 +54,13 @@ _recently_allocated_names_by_layout_dir: dict[Path, set[str]] = {}
 
 @pure
 def instance_ref(service_name: str, instance_name: str) -> str:
-    """The member ref one app instance is filed under."""
+    """The member ref one app instance is filed under.
+
+    Built without URL-encoding on purpose: the allocator is the only writer,
+    and a canonical name is a registered service name (a DNS label) plus
+    ``-<N>``, which carries nothing the query-decoding parsers would
+    transform.
+    """
     return f"{_SERVICE_REF_PREFIX}{service_name}?{INSTANCE_QUERY_KEY}={instance_name}"
 
 
