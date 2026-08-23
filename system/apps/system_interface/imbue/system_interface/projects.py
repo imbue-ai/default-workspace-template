@@ -2,11 +2,12 @@
 
 A *project* is a **view** over the machine's objects: a filter saying which of
 them it shows, plus its own saved dockview arrangement. A member is a panel ref
-(``service:<name>``, ``service:browser?session=<name>``, ``chat:<agent-id>``,
-``terminal:<name>``, ``url:<hash>``) the project shows whether or not a tab for
-it is open, so a member with no panel is simply *backgrounded*: still running,
-just not docked. Closing a tab therefore never changes the member list; only
-``add_member`` / ``remove_member`` do.
+(``service:<name>``, ``service:<name>?instance=<name>-<N>``,
+``service:browser?session=<name>``, ``chat:<agent-id>``, ``terminal:<name>``,
+``url:<hash>``) the project shows whether or not a tab for it is open, so a
+member with no panel is simply *backgrounded*: still running, just not docked.
+Closing a tab therefore never changes the member list; only ``add_member`` /
+``remove_member`` do.
 
 Nothing owns anything. The same object may appear in any number of projects at
 once -- the one app a machine runs can sit in every project that cares about
@@ -89,6 +90,13 @@ _COLOR_PATTERN: Final[re.Pattern[str]] = re.compile(r"#[0-9a-fA-F]{6}")
 # rides along in its ref -- mirroring ``layout_ops``, which resolves live
 # panels to the same refs members are filed under.
 _BROWSER_SESSION_QUERY_KEY: Final[str] = "session"
+
+# Query parameter that distinguishes a plain app's instances, riding the same
+# ``service:<name>?<query>`` grammar the browser fleet uses. The value is the
+# instance's full canonical name (``files-2``), carried on the pane's params
+# (``serviceInstanceId``) rather than in its URL -- the URL is the service
+# origin plus wherever the instance is looking. See ``app_instances``.
+_SERVICE_INSTANCE_QUERY_KEY: Final[str] = "instance"
 
 # Serializes every read-modify-write of the meta file + content files across
 # the threaded WSGI server. Mirrors the module-level ``_terminal_allocate_lock``
@@ -458,11 +466,14 @@ def _panel_member_ref(panel_id: str, params: dict[str, Any]) -> str:
     chat_agent_id = params.get("chatAgentId")
     terminal_session_name = params.get("terminalSessionName")
     service_name = params.get("serviceName")
+    service_instance_id = params.get("serviceInstanceId")
     if params.get("panelType") == "chat" and isinstance(chat_agent_id, str) and chat_agent_id:
         return f"chat:{chat_agent_id}"
     if isinstance(terminal_session_name, str) and terminal_session_name:
         return f"terminal:{terminal_session_name}"
     if isinstance(service_name, str) and service_name:
+        if isinstance(service_instance_id, str) and service_instance_id:
+            return f"service:{service_name}?{_SERVICE_INSTANCE_QUERY_KEY}={service_instance_id}"
         session_suffix = _browser_session_suffix(params.get("url"))
         return f"service:{service_name}{session_suffix}"
     return f"url:{hashlib.sha256(panel_id.encode('utf-8')).hexdigest()[:8]}"

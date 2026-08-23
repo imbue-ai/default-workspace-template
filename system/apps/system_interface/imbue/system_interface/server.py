@@ -31,9 +31,11 @@ from imbue.concurrency_group.subprocess_utils import run_local_command_modern_ve
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.mngr.errors import MngrError
 from imbue.mngr.primitives import AgentId
+from imbue.system_interface import app_instances
 from imbue.system_interface import client_activity
 from imbue.system_interface import latchkey_endpoints
 from imbue.system_interface import member_last_used
+from imbue.system_interface import member_locations
 from imbue.system_interface import member_titles
 from imbue.system_interface import projects
 from imbue.system_interface.agent_discovery import AgentInfo
@@ -1907,6 +1909,96 @@ def _touch_member_last_used_endpoint() -> Response:
     return _json_response({"ref": ref.strip(), "at_ms": stored_ms})
 
 
+def _broadcast_member_location_changed(ref: str, path: str | None) -> None:
+    """Tell every client where this object is looking now; None means nowhere again.
+
+    A location belongs to the object rather than to a panel, so a client that
+    could open it from a launcher this one never touched still has to know
+    where it would open. Hence a plain broadcast, as renames get.
+    """
+    get_state().broadcaster.broadcast({"type": "member_location_changed", "ref": ref, "path": path})
+
+
+def _list_member_locations_endpoint() -> Response:
+    """Where each beaconing object was last looking, keyed by its ref.
+
+    One flat map for the whole machine: a location belongs to the object, so
+    the same opening path is what every view uses, and a ref that is absent
+    has simply never beaconed -- the caller opens at the service origin.
+    """
+    layout_dir = _primary_agent_layout_dir()
+    if layout_dir is None:
+        return _json_response({"locations": {}})
+    return _json_response({"locations": member_locations.read_locations(layout_dir)})
+
+
+def _set_member_location_endpoint() -> Response:
+    """Record where one object is looking, machine-wide, or clear it with a blank.
+
+    The shell is the writer: it has already validated the beacon's origin and
+    resolved the posting pane to its ref, so this end only checks shape (a
+    rooted path within the cap). The stored path comes back in the response
+    and the broadcast, ``null`` when the entry was cleared.
+    """
+    layout_dir = _primary_agent_layout_dir()
+    if layout_dir is None:
+        error = ErrorResponse(detail="No primary agent configured for this workspace")
+        return _json_response(error.model_dump(), status_code=500)
+    body = _parse_json_object_body()
+    if isinstance(body, Response):
+        return body
+    ref = body.get("ref")
+    path = body.get("path")
+    if not isinstance(ref, str) or not ref.strip():
+        error = ErrorResponse(detail="'ref' must be a non-empty string")
+        return _json_response(error.model_dump(), status_code=400)
+    if not isinstance(path, str):
+        error = ErrorResponse(detail="'path' must be a string (an empty one clears the location)")
+        return _json_response(error.model_dump(), status_code=400)
+    try:
+        stored_path = member_locations.set_location(layout_dir, ref, path)
+    except member_locations.MemberLocationError as e:
+        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
+    _broadcast_member_location_changed(ref.strip(), stored_path)
+    return _json_response({"ref": ref.strip(), "path": stored_path})
+
+
+def _list_app_instances_endpoint() -> Response:
+    """Every app instance the machine holds, by service name.
+
+    An instance exists while any project's member list or any view's saved
+    layout references it (see ``app_instances``), so this is the machine
+    inventory's app half: the tab lists and launchers list instances, never
+    bare services.
+    """
+    layout_dir = _primary_agent_layout_dir()
+    if layout_dir is None:
+        return _json_response({"instances": {}})
+    return _json_response({"instances": app_instances.list_app_instances(layout_dir)})
+
+
+def _allocate_app_instance_endpoint(name: str) -> Response:
+    """Mint the next free ``<name>-<N>`` instance of one registered app.
+
+    The instance does not exist yet when this answers -- existence is derived
+    from references, and the caller's open is what files the first one -- so
+    the allocator's in-flight reservation set is what keeps two rapid mints
+    apart. 404 for a name no registered app answers to: minting is an open
+    surface's act, and every open surface starts from a registered app.
+    """
+    layout_dir = _primary_agent_layout_dir()
+    if layout_dir is None:
+        error = ErrorResponse(detail="No primary agent configured for this workspace")
+        return _json_response(error.model_dump(), status_code=500)
+    if get_state().agent_manager.get_app_by_name(name) is None:
+        error = ErrorResponse(detail=f"No registered app named {name!r}")
+        return _json_response(error.model_dump(), status_code=404)
+    instance_name = app_instances.allocate_app_instance(layout_dir, name)
+    return _json_response(
+        {"name": name, "instance": instance_name, "ref": app_instances.instance_ref(name, instance_name)}
+    )
+
+
 def _delete_project_endpoint(project_id: str) -> Response:
     """Delete a project: a pure view operation, nothing more.
 
@@ -1983,6 +2075,17 @@ def _delete_project_panel_endpoint(panel_id: str) -> Response:
     # surface at the top of the launcher on the strength of a dead object.
     if ref is not None and member_last_used.clear_last_used(layout_dir, ref):
         _broadcast_member_last_used_changed(ref, None)
+    # And the stored location: instance names are reused too, and a location
+    # left behind would aim the next holder of this ref at a folder it never
+    # visited.
+    if ref is not None and member_locations.clear_location(layout_dir, ref):
+        _broadcast_member_location_changed(ref, None)
+    # A deleted app instance's allocator reservation goes with it, so its
+    # number frees up immediately (mirroring the terminal allocator's discard
+    # on destroy).
+    parsed_instance = app_instances.parse_instance_ref(ref) if ref is not None else None
+    if parsed_instance is not None:
+        app_instances.release_app_instance(layout_dir, parsed_instance[1])
     return _json_response({"project_ids": changed_project_ids})
 
 
@@ -3376,6 +3479,19 @@ def create_application(state: SystemInterfaceState) -> Flask:
     )
     application.add_url_rule("/api/apps/<string:name>/stop", view_func=_stop_app_endpoint, methods=["POST"])
     application.add_url_rule("/api/apps/<string:name>/start", view_func=_start_app_endpoint, methods=["POST"])
+    application.add_url_rule("/api/apps/instances", view_func=_list_app_instances_endpoint, methods=["GET"])
+    application.add_url_rule(
+        "/api/apps/<string:name>/instances/allocate",
+        view_func=_allocate_app_instance_endpoint,
+        methods=["POST"],
+    )
+    application.add_url_rule("/api/member-locations", view_func=_list_member_locations_endpoint, methods=["GET"])
+    application.add_url_rule(
+        "/api/member-locations",
+        view_func=_set_member_location_endpoint,
+        methods=["POST"],
+        endpoint="_set_member_location_endpoint",
+    )
     auth_endpoints.register_routes(application)
     latchkey_endpoints.register_routes(application)
     application.add_url_rule("/api/layout/broadcast", view_func=_layout_broadcast_endpoint, methods=["POST"])

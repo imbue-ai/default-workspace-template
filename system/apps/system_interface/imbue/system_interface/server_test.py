@@ -5190,3 +5190,196 @@ def test_not_built_placeholder_answers_its_own_poll_cheaply(tmp_path: Path) -> N
     # The GET is the one that renders; the HEAD carries no page to render.
     assert "needs to be rebuilt" in get.text
     assert head.text == ""
+
+
+# ---------- App instances and member locations ----------
+
+
+def test_a_fresh_workspace_lists_no_app_instances(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    assert client.get("/api/apps/instances").get_json() == {"instances": {}}
+
+
+def test_app_instances_are_derived_from_members_and_layouts(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The instance listing is exactly what the member lists and saved layouts reference."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    assert (
+        client.post("/api/projects/project-1/members", json={"ref": "service:files?instance=files-2"}).status_code
+        == 200
+    )
+    layout_data = {
+        "dockview": {"panels": {"app-instance-files-1": {"id": "app-instance-files-1"}}},
+        "panelParams": {
+            "app-instance-files-1": {
+                "panelType": "iframe",
+                "serviceName": "files",
+                "serviceInstanceId": "files-1",
+            }
+        },
+    }
+    assert client.post("/api/projects/everything", json={"layout": layout_data, "client_id": "c1"}).status_code == 200
+
+    assert client.get("/api/apps/instances").get_json() == {"instances": {"files": ["files-1", "files-2"]}}
+
+
+def test_allocating_an_instance_mints_the_lowest_free_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    test_client = _app_with_registered_app("files").test_client()
+    assert (
+        test_client.post("/api/projects/project-1/members", json={"ref": "service:files?instance=files-1"}).status_code
+        == 200
+    )
+
+    response = test_client.post("/api/apps/files/instances/allocate")
+
+    assert response.status_code == 200
+    assert response.get_json() == {"name": "files", "instance": "files-2", "ref": "service:files?instance=files-2"}
+
+
+def test_two_rapid_allocations_mint_distinct_instances(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Neither mint has been filed yet, so only the reservation set keeps them apart."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    test_client = _app_with_registered_app("files").test_client()
+
+    first = test_client.post("/api/apps/files/instances/allocate").get_json()["instance"]
+    second = test_client.post("/api/apps/files/instances/allocate").get_json()["instance"]
+
+    assert first != second
+
+
+def test_allocating_an_instance_of_an_unknown_app_is_a_404(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    test_client = _app_with_registered_app("files").test_client()
+
+    assert test_client.post("/api/apps/nonexistent/instances/allocate").status_code == 404
+
+
+def test_set_member_location_stores_and_clears_machine_wide(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+
+    stored = client.post(
+        "/api/member-locations", json={"ref": "service:files?instance=files-2", "path": "/notes/2026/"}
+    )
+    assert stored.status_code == 200
+    assert stored.get_json() == {"ref": "service:files?instance=files-2", "path": "/notes/2026/"}
+    assert client.get("/api/member-locations").get_json() == {
+        "locations": {"service:files?instance=files-2": "/notes/2026/"}
+    }
+
+    cleared = client.post("/api/member-locations", json={"ref": "service:files?instance=files-2", "path": ""})
+    assert cleared.status_code == 200
+    assert cleared.get_json() == {"ref": "service:files?instance=files-2", "path": None}
+    assert client.get("/api/member-locations").get_json() == {"locations": {}}
+
+
+def test_set_member_location_rejects_paths_that_could_leave_the_origin(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+
+    for bad_path in ("notes/", "//evil.example/x"):
+        response = client.post(
+            "/api/member-locations", json={"ref": "service:files?instance=files-1", "path": bad_path}
+        )
+        assert response.status_code == 400
+    assert client.get("/api/member-locations").get_json() == {"locations": {}}
+
+
+def test_deleting_an_instance_sweeps_membership_title_recency_and_location(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Delete clears every trace of the instance: the ref leaves the project, and
+    the machine-wide stores (title, recency, location) all drop their entries,
+    so a later instance reusing the name inherits nothing."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    instance_member_ref = "service:files?instance=files-1"
+    panel_id = "app-instance-files-1"
+    layout_data = {
+        "dockview": {"panels": {panel_id: {"id": panel_id}}},
+        "panelParams": {panel_id: {"panelType": "iframe", "serviceName": "files", "serviceInstanceId": "files-1"}},
+    }
+    assert client.post("/api/projects/project-1/members", json={"ref": instance_member_ref}).status_code == 200
+    assert client.post("/api/projects/project-1", json={"layout": layout_data, "client_id": "c1"}).status_code == 200
+    assert client.post("/api/member-titles", json={"ref": instance_member_ref, "title": "Notes"}).status_code == 200
+    assert client.post("/api/member-last-used", json={"ref": instance_member_ref}).status_code == 200
+    assert (
+        client.post("/api/member-locations", json={"ref": instance_member_ref, "path": "/notes/"}).status_code == 200
+    )
+
+    delete_response = client.post(
+        f"/api/projects/panels/{panel_id}/delete", json={"ref": instance_member_ref}
+    )
+
+    assert delete_response.status_code == 200
+    assert delete_response.get_json()["project_ids"] == ["project-1"]
+    assert client.get("/api/projects").get_json()["projects"][0]["members"] == []
+    assert client.get("/api/apps/instances").get_json() == {"instances": {}}
+    assert client.get("/api/member-titles").get_json() == {"titles": {}}
+    assert client.get("/api/member-last-used").get_json() == {"last_used": {}}
+    assert client.get("/api/member-locations").get_json() == {"locations": {}}
+
+
+def test_a_deleted_instances_reservation_is_released_through_the_delete_endpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Mint, file, delete, mint again: the number comes back."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    test_client = _app_with_registered_app("files").test_client()
+
+    minted = test_client.post("/api/apps/files/instances/allocate").get_json()
+    assert minted["instance"] == "files-1"
+    assert test_client.post("/api/projects/project-1/members", json={"ref": minted["ref"]}).status_code == 200
+    assert (
+        test_client.post("/api/projects/panels/app-instance-files-1/delete", json={"ref": minted["ref"]}).status_code
+        == 200
+    )
+
+    assert test_client.post("/api/apps/files/instances/allocate").get_json()["instance"] == "files-1"
+
+
+def test_member_location_changes_broadcast_to_every_client(app: Flask) -> None:
+    """A beacon and a destroy each announce the object's location, machine-wide.
+
+    A location belongs to the object, so a client that never opened the
+    project holding it still has to know where its panes would open; hence a
+    plain broadcast, exactly as renames get. A destroyed object's entry is
+    announced as gone (``path`` null), so no client keeps aiming a reused ref
+    at a dead folder.
+    """
+    client = app.test_client()
+    client_queue = _register_fake_client(app, "client-1", "desktop")
+
+    stored = client.post("/api/member-locations", json={"ref": "service:files?instance=files-1", "path": "/a/"})
+    assert stored.status_code == 200
+    assert _next_broadcast_message(client_queue) == {
+        "type": "member_location_changed",
+        "ref": "service:files?instance=files-1",
+        "path": "/a/",
+    }
+
+    assert (
+        client.post(
+            "/api/projects/panels/app-instance-files-1/delete", json={"ref": "service:files?instance=files-1"}
+        ).status_code
+        == 200
+    )
+    assert _next_broadcast_message(client_queue) == {
+        "type": "member_location_changed",
+        "ref": "service:files?instance=files-1",
+        "path": None,
+    }
