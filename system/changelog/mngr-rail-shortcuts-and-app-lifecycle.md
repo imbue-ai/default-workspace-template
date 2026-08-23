@@ -1,0 +1,3 @@
+`forward_port.py` grows `--program <name>`, recording the supervisord program that runs an app on its registry row -- the capability grant for the workspace's new Stop/Start. Authoritative per call (omitting it clears any stored value), never set for unsupervised instances. The `files` and `browser` supervisord registrations pass it; `system_interface` and `terminal` deliberately do not.
+
+`layout.py` grows the agent-facing shortcut surface: a `shortcuts` query (the active or named view's effective rail shortcut list: id, pinned, mode) and a `shortcut set <id> [--pin/--unpin] [--mode focus|new]` verb that calls the same `POST /api/projects/<id>/shortcuts` endpoint the UI uses.
