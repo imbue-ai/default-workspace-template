@@ -564,16 +564,8 @@ def _make_oauth_client(
     return client, st_backend
 
 
-def _start_oauth(client: TestClient, next_path: str, is_terms_accepted: bool = True, plan: str = "") -> str:
-    # Terms ride the start URL by default (the signup tab's button always
-    # carries them); pass False to model the sign-in tab's button. A non-empty
-    # plan models the signup tab's plan selector.
-    terms_suffix = "&terms=1" if is_terms_accepted else ""
-    plan_suffix = f"&plan={quote(plan, safe='')}" if plan else ""
-    resp = client.get(
-        f"/accounts/oauth/google/start?next={quote(next_path, safe='')}{terms_suffix}{plan_suffix}",
-        follow_redirects=False,
-    )
+def _start_oauth(client: TestClient, next_path: str) -> str:
+    resp = client.get(f"/accounts/oauth/google/start?next={quote(next_path, safe='')}", follow_redirects=False)
     assert resp.status_code == 302
     return parse_qs(urlsplit(resp.headers["location"]).query)["state"][0]
 
@@ -865,127 +857,6 @@ def test_oauth_callback_refuses_an_email_registered_with_a_password(monkeypatch:
 
 
 # ---------------------------------------------------------------------------
-# Signup plan choice + terms agreement + the static doc pages
-# ---------------------------------------------------------------------------
-
-
-def test_browser_signup_records_the_selected_plan(monkeypatch: pytest.MonkeyPatch) -> None:
-    client, st_backend, _codes = _make_accounts_web_test_client(monkeypatch)
-
-    resp = client.post(
-        "/accounts/api/signup", json={"email": "new@example.com", "password": "pw-123456", "plan": "free"}
-    )
-
-    assert resp.json()["status"] == "OK"
-    user_id = resp.json()["user"]["user_id"]
-    row = st_backend.entitlements_store.get_entitlements(user_id)
-    assert row is not None
-    assert row["plan_name"] == "free"
-    assert row["user_id_prefix"] == user_id.replace("-", "")[:16]
-
-
-def test_browser_signup_ignores_an_unknown_or_absent_plan(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Only the signup selector's plans are honored; anything else defers to the lazy backfill."""
-    client, st_backend, _codes = _make_accounts_web_test_client(monkeypatch)
-
-    crafted = client.post(
-        "/accounts/api/signup", json={"email": "crafty@example.com", "password": "pw-123456", "plan": "ally"}
-    )
-    assert crafted.json()["status"] == "OK"
-
-    legacy = client.post("/accounts/api/signup", json={"email": "old-frontend@example.com", "password": "pw-123456"})
-    assert legacy.json()["status"] == "OK"
-
-    assert st_backend.entitlements_store.rows_by_user_id == {}
-
-
-def test_browser_signup_succeeds_when_the_plan_write_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The plan choice fails open: the lazy backfill's free default is consent-safe."""
-    client, st_backend, _codes = _make_accounts_web_test_client(monkeypatch)
-    st_backend.entitlements_store.raise_on_insert = psycopg2.OperationalError("neon is down")
-
-    resp = client.post(
-        "/accounts/api/signup", json={"email": "resilient@example.com", "password": "pw-123456", "plan": "explorer"}
-    )
-
-    assert resp.json()["status"] == "OK"
-    assert st_backend.entitlements_store.rows_by_user_id == {}
-
-
-def test_oauth_signup_carries_the_plan_and_terms_through_the_state(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The signup tab's Google button carries plan + terms; a new account gets its chosen row."""
-    client, st_backend = _make_oauth_client(monkeypatch)
-    state = _start_oauth(client, "/manage", plan="free")
-
-    resp = client.get(f"/share/oauth/google/callback?code=code-1&state={state}", follow_redirects=False)
-
-    assert resp.status_code == 303
-    assert resp.headers["location"] == "/manage"
-    account = st_backend.accounts_by_email["visitor@example.com"]
-    row = st_backend.entitlements_store.get_entitlements(account.user_id)
-    assert row is not None
-    assert row["plan_name"] == "free"
-
-
-def test_oauth_new_account_without_terms_is_rolled_back(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A Google exchange creating an account without the terms agreement (the sign-in
-    tab's button) is rolled back and bounced to the terms_required banner."""
-    client, st_backend = _make_oauth_client(monkeypatch)
-    state = _start_oauth(client, "/manage", is_terms_accepted=False)
-
-    resp = client.get(f"/share/oauth/google/callback?code=code-1&state={state}", follow_redirects=False)
-
-    assert resp.status_code == 303
-    assert resp.headers["location"].startswith("/login")
-    assert "error=terms_required" in resp.headers["location"]
-    # The just-created account was rolled back: no account, no session, no
-    # attribution, no entitlements row.
-    assert "visitor@example.com" not in st_backend.accounts_by_email
-    assert st_backend.last_browser_session is None
-    assert st_backend.attribution_store.account_rows == []
-    assert st_backend.entitlements_store.rows_by_user_id == {}
-
-
-def test_oauth_returning_signin_needs_no_terms(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The terms gate applies only to account CREATION; returning Google sign-ins are untouched."""
-    client, st_backend = _make_oauth_client(monkeypatch)
-    signup_state = _start_oauth(client, "/manage", plan="explorer")
-    created = client.get(f"/share/oauth/google/callback?code=code-1&state={signup_state}", follow_redirects=False)
-    assert created.status_code == 303
-    assert "error=" not in created.headers["location"]
-
-    # The same account signing in again from the sign-in tab (no plan/terms).
-    signin_state = _start_oauth(client, "/manage", is_terms_accepted=False)
-    returning = client.get(f"/share/oauth/google/callback?code=code-2&state={signin_state}", follow_redirects=False)
-
-    assert returning.status_code == 303
-    assert returning.headers["location"] == "/manage"
-    account = st_backend.accounts_by_email["visitor@example.com"]
-    row = st_backend.entitlements_store.get_entitlements(account.user_id)
-    assert row is not None
-    assert row["plan_name"] == "explorer"
-
-
-def test_terms_conduct_and_privacy_pages_serve_from_the_bundle(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    client, _st, _codes = _make_accounts_web_test_client(monkeypatch)
-    monkeypatch.setenv("ACCOUNTS_FRONTEND_DIST", str(tmp_path))
-    page_title_by_path = {
-        "/terms-of-service": "Terms of Service",
-        "/code-of-conduct": "Code of Conduct",
-        "/privacy-policy": "Privacy Policy",
-    }
-    for path, title in page_title_by_path.items():
-        # Missing from the dist (an unbuilt bundle) answers the 503 placeholder.
-        assert client.get(path).status_code == 503
-        (tmp_path / f"{path.lstrip('/')}.html").write_text(f"<!doctype html><h1>{title}</h1>")
-        served = client.get(path)
-        assert served.status_code == 200
-        assert title in served.text
-
-
-# ---------------------------------------------------------------------------
 # Marketing attribution (signup capture + the /download redirect)
 # ---------------------------------------------------------------------------
 
@@ -1084,7 +955,7 @@ def test_oauth_signup_records_attribution_but_returning_signin_does_not(monkeypa
     client, st_backend = _make_oauth_client(monkeypatch)
     _plant_attribution_cookie(client)
     start = client.get(
-        "/accounts/oauth/google/start?next=%2Fweb%2Foverview&pq=utm_source%3Dsignup-link&pp=%2Fsignup&terms=1",
+        "/accounts/oauth/google/start?next=%2Fweb%2Foverview&pq=utm_source%3Dsignup-link&pp=%2Fsignup",
         follow_redirects=False,
     )
     state = parse_qs(urlsplit(start.headers["location"]).query)["state"][0]

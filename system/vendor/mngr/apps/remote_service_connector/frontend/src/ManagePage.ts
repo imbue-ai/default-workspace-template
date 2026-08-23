@@ -211,9 +211,7 @@ export function ManagePage(): m.Component {
       state.identity = { signed_in: false };
     }
     if (!state.identity.signed_in) {
-      // Carry the destination: without an explicit next the login page lands
-      // on /web, not back here.
-      window.location.assign("/login?next=%2Fmanage");
+      window.location.assign("/login");
       return;
     }
     m.redraw();

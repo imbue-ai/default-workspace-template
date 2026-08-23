@@ -110,7 +110,7 @@ def _resolve_owner_storage_limit_bytes(
     ``existing_row`` is the owner's already-fetched entitlements row (None when
     the owner has none yet). Mirrors the request-path rule (paid pre-cutoff
     accounts land on ally; an existing-but-unverified owner gets a plain
-    free row). Returns ``None`` only for an owner whose SuperTokens record
+    explorer row). Returns ``None`` only for an owner whose SuperTokens record
     cannot be resolved at all -- the sweep must skip them, never enforce
     against guessed limits.
     """

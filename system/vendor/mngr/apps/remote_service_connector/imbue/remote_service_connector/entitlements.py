@@ -61,24 +61,14 @@ class PlanEntitlements(BaseModel):
     max_active_synced_workspaces: int = Field(description="Max ACTIVE synced workspace records")
 
 
-PLAN_FREE = "free"
 PLAN_EXPLORER = "explorer"
 PLAN_ALLY = "ally"
 
-# The plans the signup page's selector offers. Explorer is the recommended
-# default there; picking it is the analytics consent (see
-# specs/minds-analytics/spec.md), which is why the lazy backfill below never
-# assigns it -- only an explicit choice may.
-SIGNUP_SELECTABLE_PLAN_NAMES: frozenset[str] = frozenset({PLAN_FREE, PLAN_EXPLORER})
-
 # Ship-time cutoff for the lazy-backfill rule: accounts whose SuperTokens
 # ``time_joined`` predates this instant get the paid-list-based initial plan
-# (ally when paid-listed); every other lazily-backfilled account gets the
-# free plan -- explorer-plan membership is the analytics-collection consent,
-# so it is only ever assigned by an explicit user choice (the signup
-# selector or a later plan switch), never by a fallback.
-# 2026-07-21T00:00:00Z, in the epoch milliseconds SuperTokens uses for
-# ``time_joined``.
+# (ally when paid-listed); accounts created after it always start as explorer
+# and must select ally explicitly. 2026-07-21T00:00:00Z, in the epoch
+# milliseconds SuperTokens uses for ``time_joined``.
 _PREEXISTING_ACCOUNT_CUTOFF_EPOCH_MS = 1784592000000
 
 # Columns the suspension flag lives in. Orthogonal to plans and quotas on
@@ -266,14 +256,12 @@ def _initial_plan_name_for_user(
     """Pick the plan for a lazily-created entitlements row.
 
     Accounts predating the feature-ship cutoff get ally when their email is
-    paid-listed (the backfill rule); everyone else starts as free. Explorer
-    is never assigned here -- it carries the analytics-collection consent, so
-    only an explicit user choice may select it.
+    paid-listed (the backfill rule); everyone else starts as explorer.
     """
     resolved_getter = time_joined_getter if time_joined_getter is not None else _get_user_time_joined_ms
     if resolved_getter(user_id) < _PREEXISTING_ACCOUNT_CUTOFF_EPOCH_MS and email and paid_checker(email):
         return PLAN_ALLY
-    return PLAN_FREE
+    return PLAN_EXPLORER
 
 
 def ensure_account_entitlements(
@@ -311,33 +299,6 @@ def ensure_account_entitlements(
     return AccountEntitlements(**stored)
 
 
-def create_entitlements_row_from_plan(
-    store: EntitlementsStore,
-    user_id: str,
-    user_id_prefix: str,
-    plan_name: str,
-) -> None:
-    """Create the account's entitlements row from an explicitly chosen plan.
-
-    The signup flow's counterpart to the lazy backfill: the chosen plan is
-    written at account creation so a later quota-relevant touch never has to
-    reconstruct the user's choice from a default. Insert-if-absent, so a
-    pre-existing row (a re-run, a race with a lazy creation) is never
-    overwritten. Raises PlanNotFoundError when the plan is not seeded.
-    """
-    plan = store.get_plan(plan_name)
-    if plan is None:
-        raise PlanNotFoundError(plan_name)
-    store.insert_entitlements_if_absent(
-        {
-            "user_id": user_id,
-            "user_id_prefix": user_id_prefix,
-            "plan_name": plan_name,
-            **{name: plan[name] for name in QUOTA_ENTITLEMENT_NAMES},
-        }
-    )
-
-
 def resolve_entitlements_for_user(user_id: str, user: UserAuth) -> AccountEntitlements:
     """Resolve (lazily creating) the entitlements row for a user-authenticated request.
 
@@ -347,7 +308,7 @@ def resolve_entitlements_for_user(user_id: str, user: UserAuth) -> AccountEntitl
     doing so made every quota-checked endpoint 401 for the hosted chrome's
     cookie sessions. The lazy creation's paid-list check may only consume a
     verified email (ally is authorized by domain ownership), so an unverified
-    account is backfilled as a plain free row.
+    account is backfilled as a plain explorer row.
     """
     return ensure_account_entitlements(
         user_id=user_id, user_id_prefix=user.user_id_prefix, email=user.verified_email or ""

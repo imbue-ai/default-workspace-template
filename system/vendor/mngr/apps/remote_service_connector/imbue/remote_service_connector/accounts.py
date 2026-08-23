@@ -353,7 +353,7 @@ def get_account(request: Request) -> dict[str, object]:
         token = request.headers.get("authorization", "")[7:]
         user_id = auth_module.get_user_id_from_access_token(token)
         # The backfill's paid-list check may only consume a verified email --
-        # an unverified account gets a plain free row.
+        # an unverified account gets a plain explorer row.
         entitlements = entitlements_module.ensure_account_entitlements(
             user_id=user_id, user_id_prefix=user.user_id_prefix, email=user.verified_email or ""
         )

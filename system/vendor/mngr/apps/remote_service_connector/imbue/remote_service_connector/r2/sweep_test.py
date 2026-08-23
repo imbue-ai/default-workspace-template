@@ -169,7 +169,7 @@ def test_sweep_skips_unknown_owner_without_downgrading() -> None:
 
 
 def test_sweep_lazily_creates_row_for_resolvable_owner(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An owner with no row gets one created from their email (unpaid -> free here)."""
+    """An owner with no row gets one created from their email (unpaid -> explorer here)."""
     monkeypatch.setenv("MINDS_PAID_LIST_CACHE_TTL_SECONDS", "0")
     backend = make_fake_pool_backend()
     backend.install_on_app_module(app_mod, monkeypatch)
@@ -189,7 +189,7 @@ def test_sweep_lazily_creates_row_for_resolvable_owner(monkeypatch: pytest.Monke
     assert counters["users_skipped"] == 0
     row = entitlements_store.get_entitlements("user-1")
     assert row is not None
-    assert row["plan_name"] == "free"
+    assert row["plan_name"] == "explorer"
     assert ops.account_tokens[key_id]["access"] == "readwrite"
 
 

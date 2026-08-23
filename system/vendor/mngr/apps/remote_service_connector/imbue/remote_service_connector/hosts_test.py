@@ -598,10 +598,10 @@ def test_list_hosts_returns_leased_hosts(monkeypatch: pytest.MonkeyPatch) -> Non
     assert host_ids == {"00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000003"}
 
 
-def test_route_lease_host_succeeds_for_unpaid_free_account(
+def test_route_lease_host_succeeds_for_unpaid_explorer_account(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An unpaid account backfills to the free plan and can still lease (quota permitting)."""
+    """An unpaid account resolves to the explorer plan and can still lease (quota permitting)."""
     client, backend, entitlements_store, _litellm = _make_pool_quota_test_client(monkeypatch)
     backend.add_available_host(host_id=UUID("00000000-0000-0000-0000-000000000001"), version="v0.1.0")
     backend.add_paid_email(_USER_STUB_EMAIL, is_paid=False)
@@ -616,10 +616,10 @@ def test_route_lease_host_succeeds_for_unpaid_free_account(
     )
     assert resp.status_code == 200
     assert backend.pool_rows[0].status == "leased"
-    # The lazily-created row is on free (unpaid email, no explicit choice).
+    # The lazily-created row is on explorer (unpaid email).
     row = entitlements_store.get_entitlements(_USER_STUB_USER_ID)
     assert row is not None
-    assert row["plan_name"] == "free"
+    assert row["plan_name"] == "explorer"
 
 
 def test_route_lease_host_returns_quota_403_at_workspace_cap(
