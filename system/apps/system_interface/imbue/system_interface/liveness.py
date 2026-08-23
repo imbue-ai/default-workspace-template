@@ -121,11 +121,8 @@ def probe_supervisor_program(program: str, socket_path: Path) -> bool | None:
     or a block removed since registration); the caller falls back to the TCP
     probe rather than presenting a guess as supervisord's answer.
     """
-    server = xmlrpc.client.ServerProxy(
-        "http://localhost/RPC2", transport=_UnixSocketTransport(socket_path)
-    )
     try:
-        process_info = server.supervisor.getProcessInfo(program)
+        process_info = _supervisor_proxy(socket_path).supervisor.getProcessInfo(program)
     except xmlrpc.client.Fault as e:
         _loguru_logger.debug("Supervisord has no program {!r}: {}", program, e.faultString)
         return None
