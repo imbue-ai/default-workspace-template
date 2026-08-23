@@ -13,7 +13,6 @@ import {
   equalTabWidth,
   isTitleTruncated,
   memberRefForPanelParams,
-  preferredChatRefForView,
   refForShortcutFocus,
 } from "./DockviewWorkspace";
 import type { ProjectInfo } from "../models/Projects";
@@ -86,104 +85,50 @@ describe("isTitleTruncated", () => {
 });
 
 describe("refForShortcutFocus", () => {
-  const PRIMARY_CHAT = "chat:agent-primary";
-
   it("finds nothing to focus in a view with no chat, so the shortcut creates", () => {
     const refs = ["terminal:work", "service:web", "service:browser?session=1"];
-    expect(refForShortcutFocus(refs, "chat", PRIMARY_CHAT)).toBeNull();
+    expect(refForShortcutFocus(refs, "chat", {})).toBeNull();
   });
 
   it("goes to the one chat a view lists", () => {
-    expect(refForShortcutFocus(["service:web", "chat:agent-a"], "chat", null)).toBe("chat:agent-a");
+    expect(refForShortcutFocus(["service:web", "chat:agent-a"], "chat", {})).toBe("chat:agent-a");
   });
 
-  it("prefers the named chat over the others", () => {
-    const refs = ["chat:agent-a", PRIMARY_CHAT, "chat:agent-b"];
-    expect(refForShortcutFocus(refs, "chat", PRIMARY_CHAT)).toBe(PRIMARY_CHAT);
+  it("goes to the most recently used chat among several", () => {
+    const refs = ["chat:agent-a", "chat:agent-b", "chat:agent-c"];
+    const recency = { "chat:agent-b": 2_000, "chat:agent-a": 1_000 };
+    expect(refForShortcutFocus(refs, "chat", recency)).toBe("chat:agent-b");
   });
 
-  it("falls back to the first chat the view lists when the named one is not among them", () => {
+  it("ranks members with no recency data behind any that have some", () => {
     const refs = ["chat:agent-a", "chat:agent-b"];
-    expect(refForShortcutFocus(refs, "chat", PRIMARY_CHAT)).toBe("chat:agent-a");
+    expect(refForShortcutFocus(refs, "chat", { "chat:agent-b": 5 })).toBe("chat:agent-b");
   });
 
-  it("takes the first chat when the view names none", () => {
-    expect(refForShortcutFocus(["chat:agent-a", "chat:agent-b"], "chat", null)).toBe("chat:agent-a");
+  it("takes the first listed when nothing has recency data", () => {
+    expect(refForShortcutFocus(["chat:agent-a", "chat:agent-b"], "chat", {})).toBe("chat:agent-a");
   });
 
-  it("ignores a preferred ref of another kind", () => {
-    // A view's own chat can never be a browser, but the two shortcuts share
-    // this function and a mismatch must not leak across them.
-    const refs = ["chat:agent-a", "service:browser?session=2"];
-    expect(refForShortcutFocus(refs, "browser", "chat:agent-a")).toBe("service:browser?session=2");
+  it("ignores recency entries of other kinds", () => {
+    // A terminal used moments ago must not steal the chat shortcut's focus.
+    const refs = ["chat:agent-a", "terminal:work"];
+    const recency = { "terminal:work": 9_000, "chat:agent-a": 1 };
+    expect(refForShortcutFocus(refs, "chat", recency)).toBe("chat:agent-a");
   });
 
   it("finds nothing to focus in a view with no browser", () => {
-    expect(refForShortcutFocus(["chat:agent-a", "terminal:work"], "browser", null)).toBeNull();
+    expect(refForShortcutFocus(["chat:agent-a", "terminal:work"], "browser", {})).toBeNull();
   });
 
-  it("goes to the one browser a view lists", () => {
-    const refs = ["chat:agent-a", "service:browser?session=2"];
-    expect(refForShortcutFocus(refs, "browser", null)).toBe("service:browser?session=2");
-  });
-
-  it("takes the first browser when a view lists several", () => {
-    // A browser has no per-view singleton, so listing order decides.
+  it("goes to the most recently used browser a view lists", () => {
     const refs = ["service:browser?session=2", "service:browser?session=5"];
-    expect(refForShortcutFocus(refs, "browser", null)).toBe("service:browser?session=2");
+    const recency = { "service:browser?session=5": 10 };
+    expect(refForShortcutFocus(refs, "browser", recency)).toBe("service:browser?session=5");
   });
 
   it("keeps browsers apart from the apps and terminals sharing their ref scheme", () => {
     const refs = ["service:web", "service:terminal", "service:browser?session=1"];
-    expect(refForShortcutFocus(refs, "browser", null)).toBe("service:browser?session=1");
-  });
-});
-
-describe("preferredChatRefForView", () => {
-  const PRIMARY = "agent-primary";
-  // Which project each chat agent was started in, keyed by the chat's ref.
-  const ORIGINS = { "chat:agent-own": "project-1", "chat:agent-other": "project-2" };
-
-  it("names the chat a project was made with, whatever else the project holds", () => {
-    const refs = ["chat:agent-other", "service:web", "chat:agent-own"];
-    expect(preferredChatRefForView(refs, "project-1", ORIGINS, PRIMARY)).toBe("chat:agent-own");
-  });
-
-  it("keeps naming it once the project has been given other chats", () => {
-    // Membership is many-to-many, so a project may show chats started
-    // elsewhere -- including the primary agent's. The shortcut is still a
-    // singleton pointing at the project's own chat.
-    const refs = [`chat:${PRIMARY}`, "chat:agent-other", "chat:agent-own"];
-    expect(preferredChatRefForView(refs, "project-1", ORIGINS, PRIMARY)).toBe("chat:agent-own");
-  });
-
-  it("names nothing when the project's own chat is not one it shows", () => {
-    // Removed from the project, or destroyed: listing order decides again, and
-    // a project showing no chat at all has the shortcut create one.
-    expect(preferredChatRefForView(["chat:agent-other"], "project-1", ORIGINS, PRIMARY)).toBeNull();
-    expect(preferredChatRefForView([], "project-1", ORIGINS, PRIMARY)).toBeNull();
-  });
-
-  it("names nothing while the project's chat is still starting up", () => {
-    // A proto agent carries no label yet, so it is absent from the map.
-    expect(preferredChatRefForView(["chat:agent-starting"], "project-1", ORIGINS, PRIMARY)).toBeNull();
-  });
-
-  it("names the primary agent's chat in Everything, which has no chat of its own", () => {
-    const refs = ["chat:agent-own", `chat:${PRIMARY}`];
-    expect(preferredChatRefForView(refs, "everything", ORIGINS, PRIMARY)).toBe(`chat:${PRIMARY}`);
-  });
-
-  it("names nothing in Everything when the primary agent id is unknown", () => {
-    // The id comes off a meta tag, which an embedder may not have written.
-    expect(preferredChatRefForView(["chat:agent-own"], "everything", ORIGINS, "")).toBeNull();
-  });
-
-  it("does not let a project inherit Everything's preference", () => {
-    // The primary agent's chat is a member here but was started elsewhere, so
-    // it is not this project's chat.
-    const refs = [`chat:${PRIMARY}`];
-    expect(preferredChatRefForView(refs, "project-1", ORIGINS, PRIMARY)).toBeNull();
+    expect(refForShortcutFocus(refs, "browser", {})).toBe("service:browser?session=1");
   });
 });
 

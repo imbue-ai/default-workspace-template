@@ -296,14 +296,26 @@ object it showed keeps running and stays in Everything, and a machine
 may sit at zero projects. Settings is display metadata and the delete,
 nothing more: taking an object out of a project is a verb on the object,
 so it lives on the object's own row); shortcut rows for Chat, File
-Viewer, Browser, and Terminal, which go to what the view already shows
-and create only when it shows none (every project is created with one
-chat of its own, and its Chat shortcut goes to that chat; File Viewer
-renders disabled until an app backs it). Each of those four carries the
-same pin a pinned app does, and unpinning one moves it into the "All
-apps" popover for that project alone -- recorded as the rows taken
-_out_, so a project that has never touched this shows all four, and
-Everything, which has no project entry to record against, always does.
+Viewer, Browser, and Terminal (File Viewer renders disabled until an app
+backs it). Every shortcut -- built-in and pinned app alike -- has a
+per-project **mode**, which its label reads from: focus mode ("Chat")
+goes to the view's most recently used member of that kind (per the
+machine-wide recency store) and creates only when the view shows none,
+while new mode ("New Chat") always creates. Defaults are code-side --
+chat defaults to new, everything else to focus -- and every project is
+still created with one chat of its own so the user lands in a working
+chat. Each shortcut row also carries its own kebab/right-click menu: the
+complementary action ("New X" in focus mode, "Focus last X" in new mode,
+disabled when the view shows no X), the mode flip, and Unpin (built-ins
+only); a pinned app's row combines its object verbs, a divider, and that
+shortcut group. Shortcut-initiated creates take the same in-flight guard
+the launcher tiles have, so a second click cannot start a second object.
+Each built-in row carries the same pin a pinned app does, and unpinning
+one moves it into the "All apps" popover for that project alone -- the
+overrides are stored sparsely (`shortcut_overrides` on the project's
+registry entry), so a project that has never touched this shows all four
+on the defaults, and Everything, which has no project entry to record
+against, always does.
 Then the project's pinned apps and that "All apps" popover -- pinning an
 app in a project _is_ its membership, so the popover toggles the app's
 member ref and nothing else. It lists only apps the view has _not_

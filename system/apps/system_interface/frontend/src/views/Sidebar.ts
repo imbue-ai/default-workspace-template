@@ -34,6 +34,7 @@ import { appStoppedDetail, isAppRunning, isAppStoppable } from "../models/appLiv
 import {
   EVERYTHING_VIEW_ID,
   EVERYTHING_VIEW_NAME,
+  appShortcutId,
   chatAgentIdFromRef,
   createProject,
   isEverythingView,
@@ -42,8 +43,9 @@ import {
   projectForViewId,
   searchMembers,
   serviceNameFromRef,
+  shortcutModeForProject,
 } from "../models/Projects";
-import type { MatchRange, MemberKind, ProjectInfo } from "../models/Projects";
+import type { MatchRange, MemberKind, ProjectInfo, ShortcutMode } from "../models/Projects";
 import { AllAppsPicker, appDisplayName, pickableApps } from "./AllAppsPicker";
 import type { UnpinnedShortcutRow } from "./AllAppsPicker";
 import { appIconMarkup, serviceIconMarkup } from "./appIcon";
@@ -117,6 +119,20 @@ export interface SidebarAttrs {
   // Move one built-in shortcut row between this project's rail and its All apps
   // menu. Project-scoped, so it is stored against the project rather than here.
   onSetShortcutPinned: (shortcut: QuickAddTabType, isPinned: boolean) => void;
+  // Flip one shortcut's mode for this project (focus <-> new); the id is a
+  // built-in name or ``app:<service>``. Never called under Everything, whose
+  // shortcut menu offers no flip (there is no entry to store it against).
+  onSetShortcutMode: (shortcutId: string, mode: ShortcutMode) => void;
+  // Always create a fresh object of this shortcut's kind -- the menu's
+  // complementary action while the row is in focus mode.
+  onNewOfKind: (shortcutId: string) => void;
+  // Focus the most recently used object of this shortcut's kind -- the menu's
+  // complementary action while the row is in new mode. Only called while the
+  // active view shows one (the entry is disabled otherwise).
+  onFocusLastOfKind: (shortcutId: string) => void;
+  // Shortcut ids whose create is in flight right now: those rows stand down so
+  // a second click cannot start a second object.
+  awaitingShortcutIds: ReadonlySet<string>;
   // Focus this row's existing tab, or open the object into the active pane.
   onOpenRow: (row: SidebarTabRow) => void;
   // Reload what this row is showing when it has an open tab; opens it fresh
@@ -487,12 +503,19 @@ function objectMenuKindForRow(row: SidebarTabRow): ObjectMenuKind | null {
 // ---------- The component ----------
 
 /** Which floating menu is open, and against what. Only one is ever open: they
- *  all close on an outside press, on Escape, and on picking anything. */
+ *  all close on an outside press, on Escape, and on picking anything.
+ *
+ *  A "row" menu opened from a pinned-app SHORTCUT row carries
+ *  ``shortcutAppName``: that one row is both an object (the app) and a
+ *  shortcut, so its menu is the object verb set, a divider, then the shortcut
+ *  group. A tab-list app row (an app the machine no longer offers) has no
+ *  shortcut and leaves it unset. */
 type OpenMenu =
   | { kind: "switcher"; anchor: MenuAnchor }
   | { kind: "header"; anchor: MenuAnchor }
   | { kind: "allApps"; anchor: MenuAnchor }
-  | { kind: "row"; anchor: MenuAnchor; ref: string };
+  | { kind: "row"; anchor: MenuAnchor; ref: string; shortcutAppName?: string }
+  | { kind: "shortcut"; anchor: MenuAnchor; shortcutId: QuickAddTabType };
 
 export function Sidebar(): m.Component<SidebarAttrs> {
   // Expansion is component state rather than a CSS `:hover` rule because
@@ -785,6 +808,98 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     return { label: `Quit ${row.label}`, run: () => attrs.onDeleteFromMachine(row) };
   }
 
+  /** One row of a shortcut's own menu group (see ``shortcutMenuEntries``). */
+  interface ShortcutMenuEntry {
+    label: string;
+    run: () => void;
+    isDisabled?: boolean;
+  }
+
+  /** Whether the active view currently shows an object of this shortcut's
+   *  kind -- what "Focus last X" needs to be able to act. The built-in
+   *  create-backed kinds match by row kind; the file viewer and apps match by
+   *  the backing service's ref. */
+  function viewShowsKindOf(shortcutId: string, rows: readonly SidebarTabRow[]): boolean {
+    if (shortcutId === "chat" || shortcutId === "browser" || shortcutId === "terminal") {
+      return rows.some((row) => row.kind === shortcutId);
+    }
+    const serviceName =
+      shortcutId === "files" ? "files" : shortcutId.startsWith("app:") ? shortcutId.slice("app:".length) : null;
+    return serviceName !== null && rows.some((row) => serviceNameFromRef(row.ref) === serviceName);
+  }
+
+  /**
+   * The shortcut group every shortcut row's menu carries: the complementary
+   * action, then the mode flip.
+   *
+   * The complementary action keeps both behaviors reachable whatever mode the
+   * row is in: "New X" while it focuses, "Focus last X" while it creates --
+   * disabled when the active view shows no X, since offering a focus that
+   * would create is exactly the confusion the two modes exist to avoid. The
+   * File Viewer omits it entirely while no app backs it. The mode flip
+   * persists per project, so Everything (no entry to store against) offers
+   * only the complementary action.
+   */
+  function shortcutMenuEntries(shortcutId: string, baseLabel: string, attrs: SidebarAttrs): ShortcutMenuEntry[] {
+    const isEverything = isEverythingView(attrs.activeViewId);
+    const project = isEverything ? null : projectForViewId(attrs.projects, attrs.activeViewId);
+    const mode = shortcutModeForProject(project, shortcutId);
+    const entries: ShortcutMenuEntry[] = [];
+    const isFilesUnbacked = shortcutId === "files" && !isFileViewerBacked();
+    if (!isFilesUnbacked) {
+      if (mode === "focus") {
+        entries.push({ label: `New ${baseLabel}`, run: () => attrs.onNewOfKind(shortcutId) });
+      } else {
+        entries.push({
+          label: `Focus last ${baseLabel}`,
+          run: () => attrs.onFocusLastOfKind(shortcutId),
+          isDisabled: !viewShowsKindOf(shortcutId, attrs.rows),
+        });
+      }
+    }
+    if (project !== null) {
+      entries.push({
+        label: mode === "focus" ? `Change shortcut to "New ${baseLabel}"` : `Change shortcut to "${baseLabel}"`,
+        run: () => attrs.onSetShortcutMode(shortcutId, mode === "focus" ? "new" : "focus"),
+      });
+    }
+    return entries;
+  }
+
+  /** The floating menu of one built-in shortcut row: the shortcut group, then
+   *  Unpin (the same act as the row's pin icon; absent under Everything). */
+  function shortcutMenu(attrs: SidebarAttrs, menu: Extract<OpenMenu, { kind: "shortcut" }>): m.Children {
+    const rowDefinition = SHORTCUT_ROWS.find((candidate) => candidate.tabType === menu.shortcutId);
+    if (rowDefinition === undefined) return null;
+    const entries = shortcutMenuEntries(menu.shortcutId, rowDefinition.label, attrs);
+    const isEverything = isEverythingView(attrs.activeViewId);
+    const canUnpin = !isEverything && projectForViewId(attrs.projects, attrs.activeViewId) !== null;
+    if (entries.length === 0 && !canUnpin) return null;
+    return floatingCard({
+      anchor: menu.anchor,
+      placement: "right",
+      role: "menu",
+      width: null,
+      children: [
+        ...entries.map((entry) =>
+          menuRow({
+            iconMarkup: null,
+            label: entry.label,
+            isDisabled: entry.isDisabled,
+            onclick: () => pick(entry.run),
+          }),
+        ),
+        canUnpin
+          ? menuRow({
+              iconMarkup: null,
+              label: "Unpin",
+              onclick: () => pick(() => attrs.onSetShortcutPinned(menu.shortcutId, false)),
+            })
+          : null,
+      ],
+    });
+  }
+
   async function createNewProject(attrs: SidebarAttrs): Promise<void> {
     const glyph = nextGlyphIndex(attrs.projects.map((project) => project.glyph));
     try {
@@ -876,6 +991,9 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     key: string;
     iconMarkup: string;
     label: string;
+    // The row's mode-independent name ("Chat" while the label reads "New
+    // Chat"), for the trailing controls' accessible names.
+    baseLabel: string;
     tooltip: string;
     // Render dimmed while staying clickable: the row's backing app is stopped,
     // which the tooltip explains. Distinct from a null `onclick`, which is a
@@ -885,29 +1003,42 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     // Move this row into the All apps menu. Null where there is nowhere to
     // record that: Everything has no project entry to store it against.
     onUnpin: (() => void) | null;
+    // Open this row's own shortcut menu (complementary action, mode flip,
+    // unpin). Null for a row with no menu to offer.
+    onMenu: ((event: MouseEvent) => void) | null;
+    isMenuOpen: boolean;
   }): m.Vnode {
     // Beside the row rather than beneath it: the rail is a vertical list, and a
     // tooltip centered under one row covers the next one down -- which is
     // usually the row being decided against. Every other surface keeps the
     // shell-matched default (see hoverTooltip.ts).
     const isDisabled = options.onclick === null;
+    const hasKebab = options.onMenu !== null;
+    const hasUnpin = options.onUnpin !== null;
     return m(
       "span",
       {
         key: options.key,
-        // The unpin reads as the right end of the row, not as a control beside
-        // it, so the shortcut button keeps the full width and the unpin is laid
-        // OVER its right edge. A sibling rather than a child because both are
-        // real buttons and a button inside a button is not markup a browser
-        // will keep. (`pinnedAppRow` below reaches the same look from the other
-        // side -- a clickable div -- because there the row itself is the
-        // target.) The row's hover fill therefore lives on this slot: the
-        // button is not an ancestor of the unpin, so its own `:hover` would
-        // drop the fill the moment the pointer reached the pin.
+        // The trailing controls read as the right end of the row, not as
+        // controls beside it, so the shortcut button keeps the full width and
+        // they are laid OVER its right edge. Siblings rather than children
+        // because all of these are real buttons and a button inside a button
+        // is not markup a browser will keep. (`pinnedAppRow` below reaches the
+        // same look from the other side -- a clickable div -- because there
+        // the row itself is the target.) The row's hover fill therefore lives
+        // on this slot: the button is not an ancestor of the controls, so its
+        // own `:hover` would drop the fill the moment the pointer reached one.
         class:
           "project-rail-shortcut-slot group relative flex w-full shrink-0 items-center rounded-md " +
           (options.onclick === null ? "" : "hover:bg-bg-hover"),
         ...hoverTooltipAttrs(options.tooltip, "right"),
+        oncontextmenu:
+          options.onMenu === null
+            ? undefined
+            : (event: MouseEvent) => {
+                event.preventDefault();
+                options.onMenu?.(event);
+              },
       },
       [
         m(
@@ -917,9 +1048,9 @@ export function Sidebar(): m.Component<SidebarAttrs> {
             disabled: isDisabled,
             class:
               `project-rail-shortcut ${ROW_CLASS} ` +
-              // Padded so a long label fades out before it reaches the unpin
-              // rather than running underneath it.
-              (options.onUnpin === null ? "" : "pr-7 ") +
+              // Padded so a long label fades out before it reaches the
+              // trailing controls rather than running underneath them.
+              (hasUnpin && hasKebab ? "pr-12 " : hasUnpin || hasKebab ? "pr-7 " : "") +
               (isDisabled
                 ? "cursor-default text-text-faint opacity-60"
                 : options.isDimmed === true
@@ -939,13 +1070,33 @@ export function Sidebar(): m.Component<SidebarAttrs> {
                   "project-rail-shortcut-unpin absolute right-1 flex h-5 w-5 shrink-0 cursor-pointer " +
                   "items-center justify-center rounded text-text-faint opacity-0 hover:text-text-primary " +
                   "focus-visible:opacity-100 group-hover:opacity-100",
-                "aria-label": `Unpin ${options.label} from this project`,
+                "aria-label": `Unpin ${options.baseLabel} from this project`,
                 onclick: (event: MouseEvent) => {
                   event.stopPropagation();
                   options.onUnpin?.();
                 },
               },
               m.trust(railIcon("pin", ACTION_ICON_SIZE)),
+            ),
+        options.onMenu === null
+          ? null
+          : m(
+              "button",
+              {
+                type: "button",
+                class:
+                  "project-rail-shortcut-menu absolute flex h-5 w-5 shrink-0 cursor-pointer items-center " +
+                  "justify-center rounded text-text-faint hover:text-text-primary focus-visible:opacity-100 " +
+                  "group-hover:opacity-100 " +
+                  (hasUnpin ? "right-6 " : "right-1 ") +
+                  (options.isMenuOpen ? "opacity-100" : "opacity-0"),
+                "aria-label": `Shortcut options for ${options.baseLabel}`,
+                onclick: (event: MouseEvent) => {
+                  event.stopPropagation();
+                  options.onMenu?.(event);
+                },
+              },
+              m.trust(railIcon("kebab", ACTION_ICON_SIZE)),
             ),
       ],
     );
@@ -965,6 +1116,12 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     // apps popover are two views of one object, so they read the one definition
     // of what it is called rather than each keeping its own.
     const label = appDisplayName(app);
+    // The label follows the shortcut's mode, exactly as the built-in rows':
+    // "New Docs" while the shortcut always opens another pane.
+    const appProject = isEverythingView(attrs.activeViewId)
+      ? null
+      : projectForViewId(attrs.projects, attrs.activeViewId);
+    const shownLabel = shortcutModeForProject(appProject, appShortcutId(app.name)) === "new" ? `New ${label}` : label;
     // A stopped app's row stays -- identity is not liveness -- but reads
     // dimmed, and its tooltip says why it is not answering.
     const isStopped = !isAppRunning(app);
@@ -992,7 +1149,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
           oncontextmenu: (event: MouseEvent) => {
             event.preventDefault();
             if (memberRow === null) return;
-            openMenuAt({ kind: "row", anchor: anchorForPointer(event), ref: appRef });
+            openMenuAt({ kind: "row", anchor: anchorForPointer(event), ref: appRef, shortcutAppName: app.name });
           },
         },
         [
@@ -1001,7 +1158,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
             { class: ICON_BOX_CLASS },
             m.trust(appIconMarkup(app.icon, ROW_ICON_SIZE, railIcon("app", ROW_ICON_SIZE), app.name)),
           ),
-          railLabel(label, ""),
+          railLabel(shownLabel, ""),
           expanded
             ? m(
                 "button",
@@ -1045,7 +1202,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
                       openMenu = null;
                       return;
                     }
-                    openMenuAt({ kind: "row", anchor: anchorForEvent(event), ref: appRef });
+                    openMenuAt({ kind: "row", anchor: anchorForEvent(event), ref: appRef, shortcutAppName: app.name });
                   },
                 },
                 m.trust(railIcon("kebab", ACTION_ICON_SIZE)),
@@ -1075,10 +1232,11 @@ export function Sidebar(): m.Component<SidebarAttrs> {
 
   function shortcuts(attrs: SidebarAttrs, shortcutApps: readonly AppEntry[]): m.Vnode {
     // Everything has no project entry, so there is nowhere to record an unpin
-    // and all four rows stay: it is the home, and it shows every starting point
-    // the machine has.
-    const project = projectForViewId(attrs.projects, attrs.activeViewId);
-    const canUnpin = !isEverythingView(attrs.activeViewId) && project !== null;
+    // or a mode and all four rows stay on the defaults: it is the home, and it
+    // shows every starting point the machine has.
+    const isEverything = isEverythingView(attrs.activeViewId);
+    const project = isEverything ? null : projectForViewId(attrs.projects, attrs.activeViewId);
+    const canUnpin = !isEverything && project !== null;
     return m("div", { class: "min-h-0 shrink overflow-x-hidden overflow-y-auto" }, [
       ...SHORTCUT_ROWS.filter((row) => !canUnpin || isShortcutPinned(project, row.tabType)).map((row) => {
         const isDisabledFilesRow = row.tabType === "files" && !isFileViewerBacked();
@@ -1089,18 +1247,30 @@ export function Sidebar(): m.Component<SidebarAttrs> {
           row.tabType === "files" && !isDisabledFilesRow
             ? (getApps().find((app) => app.name === "files" && !isAppRunning(app)) ?? null)
             : null;
+        // The row's label is derived from its mode -- "New Chat" while the
+        // shortcut always creates, "Chat" while it focuses -- and nothing else
+        // about the row changes with it.
+        const mode = shortcutModeForProject(project, row.tabType);
+        const label = mode === "new" && !isDisabledFilesRow ? `New ${row.label}` : row.label;
+        // While a create this shortcut asked for is pending, the row stands
+        // down so a second click cannot start a second object.
+        const isAwaitingCreate = attrs.awaitingShortcutIds.has(row.tabType);
         return shortcutRow({
           key: `tab-type:${row.tabType}`,
           iconMarkup: railIcon(row.tabType, ROW_ICON_SIZE),
-          label: row.label,
+          label: isAwaitingCreate ? "Starting…" : label,
+          baseLabel: row.label,
           tooltip: isDisabledFilesRow
             ? FILE_VIEWER_TOOLTIP
             : stoppedFilesApp !== null
-              ? `${row.label} — ${appStoppedDetail(stoppedFilesApp)}`
+              ? `${label} — ${appStoppedDetail(stoppedFilesApp)}`
               : SHORTCUT_TOOLTIPS[row.tabType],
           isDimmed: stoppedFilesApp !== null,
-          onclick: isDisabledFilesRow ? null : () => pick(() => attrs.onOpenTabType(row.tabType)),
+          onclick: isDisabledFilesRow || isAwaitingCreate ? null : () => pick(() => attrs.onOpenTabType(row.tabType)),
           onUnpin: canUnpin ? () => attrs.onSetShortcutPinned(row.tabType, false) : null,
+          onMenu: (event: MouseEvent) =>
+            openMenuAt({ kind: "shortcut", anchor: anchorForEvent(event), shortcutId: row.tabType }),
+          isMenuOpen: openMenu?.kind === "shortcut" && openMenu.shortcutId === row.tabType,
         });
       }),
       ...shortcutApps.map((app) => pinnedAppRow(app, attrs)),
@@ -1403,6 +1573,10 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     // -- but reads as clickable rather than disabled, so it goes fully
     // primary on hover rather than staying faint.
     isQuiet?: boolean;
+    // Rendered faint and inert: the verb exists but cannot act right now
+    // ("Focus last X" while the view shows no X). Distinct from isQuiet,
+    // which is clickable.
+    isDisabled?: boolean;
     tooltip?: string | null;
     onclick: (event: MouseEvent) => void;
     onmouseenter?: (event: MouseEvent) => void;
@@ -1415,18 +1589,21 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     rowClass?: string;
     iconBoxClass?: string;
   }): m.Vnode {
-    const tone = options.isDestructive
-      ? "text-red-600"
-      : options.isQuiet
-        ? "text-text-faint hover:text-text-primary"
-        : "text-text-primary";
+    const tone = options.isDisabled
+      ? "project-rail-menu-item-disabled text-text-faint cursor-default hover:bg-transparent"
+      : options.isDestructive
+        ? "text-red-600"
+        : options.isQuiet
+          ? "text-text-faint hover:text-text-primary"
+          : "text-text-primary";
     return m(
       "div",
       {
         class: `${options.rowClass ?? MENU_ROW_CLASS} ${tone}`,
         role: "menuitem",
+        "aria-disabled": options.isDisabled === true ? "true" : undefined,
         ...(options.tooltip === null || options.tooltip === undefined ? {} : hoverTooltipAttrs(options.tooltip)),
-        onclick: options.onclick,
+        onclick: options.isDisabled === true ? undefined : options.onclick,
         ...(options.onmouseenter === undefined ? {} : { onmouseenter: options.onmouseenter }),
       },
       [
@@ -1613,21 +1790,40 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     const kind = objectMenuKindForRow(row);
     if (kind === null) return null;
     const entries = objectMenuEntries(kind, railMenuActions(row, attrs));
+    // A pinned app's one row is both an object and a shortcut, so its one menu
+    // carries both: the object verbs as they are, a divider, then the shortcut
+    // group (complementary action, mode flip). No unpin entry here -- the
+    // app's "Remove from project" IS its unpin.
+    const shortcutEntries =
+      menu.shortcutAppName === undefined
+        ? []
+        : shortcutMenuEntries(appShortcutId(menu.shortcutAppName), row.label, attrs);
     return floatingCard({
       anchor: menu.anchor,
       placement: "right",
       role: "menu",
       width: null,
-      children: entries.map((entry) =>
-        entry === OBJECT_MENU_DIVIDER
-          ? m("div", { class: "my-1 border-t border-border" })
-          : menuRow({
-              iconMarkup: icon(entry.iconName, { size: ACTION_ICON_SIZE }),
-              label: entry.label,
-              isDestructive: entry.isDestructive,
-              onclick: () => pick(entry.run),
-            }),
-      ),
+      children: [
+        ...entries.map((entry) =>
+          entry === OBJECT_MENU_DIVIDER
+            ? m("div", { class: "my-1 border-t border-border" })
+            : menuRow({
+                iconMarkup: icon(entry.iconName, { size: ACTION_ICON_SIZE }),
+                label: entry.label,
+                isDestructive: entry.isDestructive,
+                onclick: () => pick(entry.run),
+              }),
+        ),
+        ...(shortcutEntries.length === 0 ? [] : [m("div", { class: "my-1 border-t border-border" })]),
+        ...shortcutEntries.map((entry) =>
+          menuRow({
+            iconMarkup: null,
+            label: entry.label,
+            isDisabled: entry.isDisabled,
+            onclick: () => pick(entry.run),
+          }),
+        ),
+      ],
     });
   }
 
@@ -1820,6 +2016,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
             ? allAppsMenu(attrs, openMenu.anchor, isEverything ? null : viewName, pinnedAppNames)
             : null,
           openMenu?.kind === "row" ? rowMenu(attrs, openMenu) : null,
+          openMenu?.kind === "shortcut" ? shortcutMenu(attrs, openMenu) : null,
           settingsModal(attrs),
         ],
       );
