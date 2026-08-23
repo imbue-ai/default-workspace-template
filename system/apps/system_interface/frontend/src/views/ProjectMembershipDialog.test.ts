@@ -125,17 +125,24 @@ describe("ProjectMembershipDialog", () => {
     expect(attrs.onConfirm).toHaveBeenCalledWith(["gamma"]);
   });
 
-  it("dismisses on mouse DOWN on the backdrop, never on a click that merely ended there", () => {
+  it("dismisses on a primary mouse DOWN on the backdrop, never on a click that merely ended there", () => {
     // Selecting text inside the dialog and releasing past its edge fires a
     // click whose target is the overlay; only a press that STARTS on the
-    // overlay may close it (see modalBackdrop.ts).
+    // overlay may close it (see modalBackdrop.ts). And only a PRIMARY press:
+    // a right-click on the backdrop reaches for a context menu, not "close".
     const attrs = makeAttrs();
     const tree = makeDialog(attrs).render() as VnodeLike;
     expect(tree.attrs?.onclick).toBeUndefined();
-    const onmousedown = tree.attrs?.onmousedown as (e: { target: unknown; currentTarget: unknown }) => void;
+    const onmousedown = tree.attrs?.onmousedown as (e: {
+      button: number;
+      target: unknown;
+      currentTarget: unknown;
+    }) => void;
     expect(onmousedown).toBeTypeOf("function");
     const overlay = {};
-    onmousedown({ target: overlay, currentTarget: overlay });
+    onmousedown({ button: 2, target: overlay, currentTarget: overlay });
+    expect(attrs.onCancel).not.toHaveBeenCalled();
+    onmousedown({ button: 0, target: overlay, currentTarget: overlay });
     expect(attrs.onCancel).toHaveBeenCalledOnce();
   });
 });

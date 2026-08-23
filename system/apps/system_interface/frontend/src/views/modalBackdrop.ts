@@ -9,14 +9,17 @@
  *
  * The target check keeps presses inside the dialog from dismissing: the
  * handler sits on the backdrop element, so a press on any child of the dialog
- * arrives with a target other than the backdrop itself.
+ * arrives with a target other than the backdrop itself. The button check keeps
+ * secondary presses from dismissing: a right-click reaches for a context menu,
+ * not for "close this", and mousedown (unlike the click these handlers used to
+ * key off) fires for every button.
  */
 export function backdropDismissAttrs(onDismiss: () => void): {
   onmousedown: (event: MouseEvent) => void;
 } {
   return {
     onmousedown(event: MouseEvent) {
-      if (event.target === event.currentTarget) onDismiss();
+      if (event.button === 0 && event.target === event.currentTarget) onDismiss();
     },
   };
 }
