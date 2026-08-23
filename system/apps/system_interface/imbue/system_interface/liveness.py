@@ -133,7 +133,14 @@ def probe_supervisor_program(program: str, socket_path: Path) -> bool | None:
         return None
     if not isinstance(process_info, dict):
         return None
-    return str(process_info.get("statename", "")) in _RUNNING_STATE_NAMES
+    # Read the one key by iteration: the proxy stub's inferred dict variants
+    # make every keyed access (``get``, ``in``, subscript) an overload mismatch,
+    # while an argument-free ``items()`` walk types cleanly on all of them.
+    statename = ""
+    for key, value in process_info.items():
+        if key == "statename":
+            statename = str(value)
+    return statename in _RUNNING_STATE_NAMES
 
 
 def probe_tcp_url(url: str) -> bool:
