@@ -32,6 +32,7 @@
 
 import m from "mithril";
 import { buildEverythingMembers, partitionByMembership, serviceNameFromRef } from "../models/Projects";
+import { getApps } from "../models/AgentManager";
 import type { ChatHarness } from "../models/AgentManager";
 import type { MachineInventory, MemberKind } from "../models/Projects";
 import { serviceIconMarkup } from "./appIcon";
@@ -337,10 +338,11 @@ export function openNewTiles(): readonly LaunchTile[] {
   return tiles;
 }
 
-// No file-viewer app exists on this machine yet, so the tile is present but
-// cannot act. It is marked aria-disabled rather than `disabled`: a disabled
-// button receives no pointer events in Chromium, which would swallow the very
-// hover that explains why it does nothing.
+// Shown on the files tile only where no "files" app is registered (a workspace
+// from before the dufs service shipped): the tile is present but cannot act.
+// It is marked aria-disabled rather than `disabled`: a disabled button
+// receives no pointer events in Chromium, which would swallow the very hover
+// that explains why it does nothing.
 const FILE_VIEWER_TOOLTIP = "A file viewer is coming — no app backs it yet";
 
 // Replaces the "Open new" heading while a create this pane asked for is in
@@ -348,6 +350,13 @@ const FILE_VIEWER_TOOLTIP = "A file viewer is coming — no app backs it yet";
 // tiles are already visibly stood down, and what the user needs to know is
 // that the click landed.
 const STARTING_TITLE = "Starting…";
+
+/** Whether a registered app backs the File viewer tile. A workspace built
+ *  before the dufs "files" service shipped has none, and the tile renders
+ *  disabled there rather than pretending to work. */
+function isFileViewerBacked(): boolean {
+  return getApps().some((app) => app.name === "files");
+}
 
 export interface NewTabLauncherAttrs {
   // Everything the machine holds, already flattened (see buildLauncherRows).
@@ -367,7 +376,8 @@ export interface NewTabLauncherAttrs {
   // stand down and say so: `mngr create` takes seconds, and a launcher that
   // looked untouched invited a second click that started a second object.
   isAwaitingCreate?: boolean;
-  // Start a new object of this kind in this pane. Never fired for "files".
+  // Start a new object of this kind in this pane. Fired for "files" only
+  // where a registered app backs the tile.
   onOpenNew: (target: LaunchTarget) => void;
   // Open an object the active view already shows. Membership does not change.
   onOpenMember: (row: LauncherRow) => void;
@@ -578,8 +588,11 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
             openNewTiles().map((tile) => {
               // A tile stands down while this pane is starting something --
               // both so a second click cannot start a second object, and so
-              // the wait is visible at all.
-              const isDisabled = tile.target.kind === "files" || attrs.isAwaitingCreate === true;
+              // the wait is visible at all. The files tile additionally stands
+              // down when no app backs it (a workspace from before the dufs
+              // service shipped).
+              const isUnbackedFilesTile = tile.target.kind === "files" && !isFileViewerBacked();
+              const isDisabled = isUnbackedFilesTile || attrs.isAwaitingCreate === true;
               return m(
                 "button",
                 {
@@ -595,11 +608,11 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
                       ? "text-text-faint cursor-not-allowed"
                       : "text-text-primary hover:bg-bg-hover cursor-pointer"),
                   onclick: isDisabled ? undefined : () => attrs.onOpenNew(tile.target),
-                  // Keyed on the file viewer itself rather than on `isDisabled`:
-                  // every tile is disabled while a create is in flight, and
-                  // "a file viewer is coming" is not the reason for any of the
-                  // others.
-                  ...(tile.target.kind === "files" && attrs.isAwaitingCreate !== true
+                  // Keyed on the unbacked file viewer itself rather than on
+                  // `isDisabled`: every tile is disabled while a create is in
+                  // flight, and "a file viewer is coming" is not the reason
+                  // for any of the others.
+                  ...(isUnbackedFilesTile && attrs.isAwaitingCreate !== true
                     ? hoverTooltipAttrs(FILE_VIEWER_TOOLTIP)
                     : {}),
                 },

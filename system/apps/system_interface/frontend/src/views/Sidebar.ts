@@ -28,6 +28,7 @@
 
 import m from "mithril";
 import { getPrimaryAgentId } from "../base-path";
+import { getApps } from "../models/AgentManager";
 import type { AppEntry } from "../models/AgentManager";
 import {
   EVERYTHING_VIEW_ID,
@@ -301,18 +302,27 @@ const SHORTCUT_ROWS: readonly { tabType: QuickAddTabType; label: string }[] = [
   { tabType: "terminal", label: "Terminal" },
 ];
 
-// No file-viewer app exists in the workspace template yet, so this shortcut has
-// nothing to open. It stays in the list -- it is one of the design's four
-// starting points -- but renders disabled rather than pretending to work.
+// A workspace built before the dufs file-viewer service shipped registers no
+// "files" app, so the shortcut has nothing to open there. It stays in the list
+// -- it is one of the design's four starting points -- but renders disabled
+// rather than pretending to work.
 const FILE_VIEWER_TOOLTIP = "A file viewer is coming to this workspace";
 
-// Copy for the rail's three working shortcuts, as designed -- "A agent chat"
+// Copy for the rail's working shortcuts, as designed -- "A agent chat"
 // included, not a typo to silently correct.
-const SHORTCUT_TOOLTIPS: Record<Exclude<QuickAddTabType, "files">, string> = {
+const SHORTCUT_TOOLTIPS: Record<QuickAddTabType, string> = {
   chat: "A agent chat to work alongside you",
+  files: "Browse and manage the files in your workspace",
   browser: "A browser that agents can control on your behalf",
   terminal: "A terminal to run commands in your workspace",
 };
+
+/** Whether a registered app backs the File Viewer shortcut. Read through
+ *  ``getApps`` rather than ``pickableApps``, which hides "files" the same way
+ *  it hides the other services with their own rail rows. */
+function isFileViewerBacked(): boolean {
+  return getApps().some((app) => app.name === "files");
+}
 
 /**
  * Full <svg> string for a view's identity, sized to `size` pixels square.
@@ -1008,9 +1018,10 @@ export function Sidebar(): m.Component<SidebarAttrs> {
       shortcut: row.tabType,
       label: row.label,
       iconMarkup: railIcon(row.tabType, ROW_ICON_SIZE),
-      // The file viewer has nothing to open yet, so its row lists (to be pinned
-      // back) without pretending otherwise.
-      isOpenable: row.tabType !== "files",
+      // The file viewer opens only where a "files" app backs it (a workspace
+      // built before the dufs service shipped has none); elsewhere its row
+      // lists (to be pinned back) without pretending otherwise.
+      isOpenable: row.tabType !== "files" || isFileViewerBacked(),
     }));
   }
 
@@ -1021,16 +1032,17 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     const project = projectForViewId(attrs.projects, attrs.activeViewId);
     const canUnpin = !isEverythingView(attrs.activeViewId) && project !== null;
     return m("div", { class: "min-h-0 shrink overflow-x-hidden overflow-y-auto" }, [
-      ...SHORTCUT_ROWS.filter((row) => !canUnpin || isShortcutPinned(project, row.tabType)).map((row) =>
-        shortcutRow({
+      ...SHORTCUT_ROWS.filter((row) => !canUnpin || isShortcutPinned(project, row.tabType)).map((row) => {
+        const isDisabledFilesRow = row.tabType === "files" && !isFileViewerBacked();
+        return shortcutRow({
           key: `tab-type:${row.tabType}`,
           iconMarkup: railIcon(row.tabType, ROW_ICON_SIZE),
           label: row.label,
-          tooltip: row.tabType === "files" ? FILE_VIEWER_TOOLTIP : SHORTCUT_TOOLTIPS[row.tabType],
-          onclick: row.tabType === "files" ? null : () => pick(() => attrs.onOpenTabType(row.tabType)),
+          tooltip: isDisabledFilesRow ? FILE_VIEWER_TOOLTIP : SHORTCUT_TOOLTIPS[row.tabType],
+          onclick: isDisabledFilesRow ? null : () => pick(() => attrs.onOpenTabType(row.tabType)),
           onUnpin: canUnpin ? () => attrs.onSetShortcutPinned(row.tabType, false) : null,
-        }),
-      ),
+        });
+      }),
       ...shortcutApps.map((app) => pinnedAppRow(app, attrs)),
     ]);
   }
