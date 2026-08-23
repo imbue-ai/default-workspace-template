@@ -20,7 +20,10 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import threading
 import urllib.request
+from http.server import BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -1787,3 +1790,144 @@ def test_service_name_from_ref_strips_query_and_path() -> None:
     assert layout._service_name_from_ref("service:browser?session=2") == "browser"
     assert layout._service_name_from_ref("service:web/health") == "web"
     assert layout._service_name_from_ref("service:web") == "web"
+
+
+# ---------- shortcuts / shortcut set ----------
+
+
+class _FakeWorkspaceRestHandler(BaseHTTPRequestHandler):
+    """Serves the two REST endpoints the shortcut commands ride."""
+
+    def log_message(self, format: str, *args: Any) -> None:
+        # Keep request logging out of pytest output.
+        return
+
+    def _respond(self, status: int, body: dict[str, Any]) -> None:
+        payload = json.dumps(body).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def do_GET(self) -> None:
+        server: Any = self.server
+        if self.path == "/api/projects":
+            self._respond(200, {"projects": server.projects, "last_active_id": server.last_active_id})
+            return
+        self._respond(404, {"detail": f"unknown path {self.path}"})
+
+    def do_POST(self) -> None:
+        server: Any = self.server
+        body_length = int(self.headers.get("Content-Length", "0"))
+        body = json.loads(self.rfile.read(body_length) or b"{}")
+        server.posted.append((self.path, body))
+        if self.path.startswith("/api/projects/") and self.path.endswith("/shortcuts"):
+            self._respond(200, {"project_id": self.path.split("/")[3], "shortcut_overrides": server.override_answer})
+            return
+        self._respond(404, {"detail": f"unknown path {self.path}"})
+
+
+@pytest.fixture
+def fake_workspace_rest(monkeypatch: pytest.MonkeyPatch) -> Any:
+    """A workspace-server stand-in for the REST-riding shortcut commands.
+
+    Yields the server object; tests pose registries by assigning ``projects``
+    / ``last_active_id`` and read what was posted from ``posted``.
+    """
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeWorkspaceRestHandler)
+    server.projects = []
+    server.last_active_id = None
+    server.posted = []
+    server.override_answer = {}
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.setenv(layout.ENV_WORKSPACE_URL, f"http://127.0.0.1:{server.server_address[1]}")
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def _research_project(**overrides: Any) -> dict[str, Any]:
+    return {
+        "project_id": "research",
+        "name": "Research",
+        "members": ["chat:agent-1", "service:docs", "service:browser?session=2", "service:terminal"],
+        "shortcut_overrides": {},
+        **overrides,
+    }
+
+
+def test_shortcuts_lists_the_effective_rows_with_defaults(
+    fake_workspace_rest: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Built-ins in rail order with the code-side defaults (chat -> new mode),
+    then the project's pinned apps in member order -- fleets excluded, since
+    the browser and terminal rows already stand for those."""
+    fake_workspace_rest.projects = [_research_project()]
+    fake_workspace_rest.last_active_id = "research"
+
+    exit_code = layout.main(["shortcuts", "--json"])
+
+    assert exit_code == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data == {
+        "view": "research",
+        "shortcuts": [
+            {"id": "chat", "pinned": True, "mode": "new"},
+            {"id": "files", "pinned": True, "mode": "focus"},
+            {"id": "browser", "pinned": True, "mode": "focus"},
+            {"id": "terminal", "pinned": True, "mode": "focus"},
+            {"id": "app:docs", "pinned": True, "mode": "focus"},
+        ],
+    }
+
+
+def test_shortcuts_reads_the_stored_overrides(
+    fake_workspace_rest: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake_workspace_rest.projects = [
+        _research_project(
+            shortcut_overrides={
+                "terminal": {"is_pinned": False, "mode": None},
+                "chat": {"is_pinned": None, "mode": "focus"},
+                "app:docs": {"mode": "new"},
+            }
+        )
+    ]
+
+    exit_code = layout.main(["shortcuts", "--view", "Research", "--json"])
+
+    assert exit_code == 0
+    rows = {row["id"]: row for row in json.loads(capsys.readouterr().out)["shortcuts"]}
+    assert rows["terminal"] == {"id": "terminal", "pinned": False, "mode": "focus"}
+    assert rows["chat"] == {"id": "chat", "pinned": True, "mode": "focus"}
+    assert rows["app:docs"] == {"id": "app:docs", "pinned": True, "mode": "new"}
+
+
+def test_shortcut_set_posts_to_the_ui_endpoint(fake_workspace_rest: Any) -> None:
+    """The agent surface and the UI share one write path (and so one validator)."""
+    fake_workspace_rest.projects = [_research_project()]
+
+    exit_code = layout.main(["shortcut", "set", "terminal", "--unpin", "--mode", "new", "--view", "Research"])
+
+    assert exit_code == 0
+    assert fake_workspace_rest.posted == [
+        ("/api/projects/research/shortcuts", {"shortcut": "terminal", "is_pinned": False, "mode": "new"})
+    ]
+
+
+def test_shortcut_set_refuses_everything_and_bad_ids(fake_workspace_rest: Any) -> None:
+    fake_workspace_rest.projects = [_research_project()]
+    fake_workspace_rest.last_active_id = "everything"
+
+    # Everything has no project entry to store shortcut state against.
+    assert layout.main(["shortcut", "set", "terminal", "--unpin"]) == 1
+    # A bad id fails before any network round trip records it.
+    assert layout.main(["shortcut", "set", "not-a-shortcut", "--unpin", "--view", "Research"]) == 1
+    # No field to set is refused too.
+    assert layout.main(["shortcut", "set", "terminal", "--view", "Research"]) == 1
+    assert fake_workspace_rest.posted == []

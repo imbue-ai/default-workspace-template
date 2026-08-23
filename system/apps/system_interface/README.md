@@ -277,8 +277,10 @@ fallback. The REST surface is `GET /api/projects`, `POST /api/projects`
 `POST /api/projects/<id>/settings`, `POST /api/projects/<id>/delete`,
 `POST /api/projects/<id>/members` and
 `POST /api/projects/<id>/members/remove`,
-`POST /api/projects/<id>/shortcuts` (pin one built-in rail row into a
-project, or unpin it out),
+`POST /api/projects/<id>/shortcuts` (record one shortcut's pin or mode
+override -- body `{shortcut, is_pinned?, mode?}`, where `shortcut` is a
+built-in name or `app:<service>`; the response carries the project's
+full sparse `shortcut_overrides` map),
 `POST /api/projects/members/share` (add one member to several projects),
 `GET /api/projects/members`, `POST /api/projects/panels/<panel_id>/delete`
 (drop one panel from every project that holds it),

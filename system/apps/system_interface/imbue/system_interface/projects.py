@@ -39,7 +39,6 @@ import re
 import threading
 import urllib.parse
 from collections.abc import Mapping
-from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 from typing import Final
@@ -162,6 +161,55 @@ def validate_device(device: str) -> str:
 # recorded here instead.
 SHORTCUT_NAMES: Final[frozenset[str]] = frozenset({"chat", "files", "browser", "terminal"})
 
+# A pinned app's shortcut is keyed ``app:<service-name>`` in the overrides map.
+# App pinning itself stays membership (the ``service:<name>`` member ref IS the
+# pin), so an ``app:`` override carries only ``mode``.
+APP_SHORTCUT_PREFIX: Final[str] = "app:"
+
+# A shortcut's two modes: focus goes to the most recently used member of the
+# kind in the active view (creating only when the view shows none), new always
+# creates. Stored lowercase because these are wire/registry values.
+SHORTCUT_MODES: Final[tuple[str, ...]] = ("focus", "new")
+
+# Per-shortcut mode defaults, code-side so changing one applies to every
+# project that never stored an override. Chat defaults to new ("New Chat") --
+# multi-chat discoverability is the point -- and everything else to focus.
+_DEFAULT_NEW_MODE_SHORTCUTS: Final[frozenset[str]] = frozenset({"chat"})
+
+
+@pure
+def default_shortcut_mode(shortcut_id: str) -> str:
+    return "new" if shortcut_id in _DEFAULT_NEW_MODE_SHORTCUTS else "focus"
+
+
+@pure
+def validated_shortcut_id(shortcut_id: str) -> str:
+    """A built-in shortcut name or ``app:<service-name>``, else ProjectShortcutError."""
+    if shortcut_id in SHORTCUT_NAMES:
+        return shortcut_id
+    if shortcut_id.startswith(APP_SHORTCUT_PREFIX) and len(shortcut_id) > len(APP_SHORTCUT_PREFIX):
+        return shortcut_id
+    known = ", ".join(sorted(SHORTCUT_NAMES))
+    raise ProjectShortcutError(
+        f"Unknown shortcut {shortcut_id!r} (known shortcuts: {known}, or 'app:<service-name>')"
+    )
+
+
+class ShortcutOverride(FrozenModel):
+    """One shortcut's stored deviations from the code-side defaults."""
+
+    is_pinned: bool | None = Field(
+        default=None,
+        description=(
+            "False when a built-in row is unpinned into the All apps menu; None means "
+            "the default (pinned). Never stored for an app: key -- app pinning IS membership."
+        ),
+    )
+    mode: str | None = Field(
+        default=None,
+        description="'focus' or 'new' when the project has flipped this shortcut's mode; None means the default",
+    )
+
 
 class ProjectInfo(FrozenModel):
     """One project as listed to clients."""
@@ -172,12 +220,12 @@ class ProjectInfo(FrozenModel):
     glyph: int = Field(description="Index into the frontend's squiggle glyph table")
     has_content: bool = Field(description="Whether a saved content file exists yet")
     members: tuple[str, ...] = Field(description="Panel refs this project shows, open or backgrounded")
-    # Recorded as the ones taken OUT rather than the ones kept, so that an entry
-    # with no such field -- every project written before this existed, and every
-    # one created since -- shows all four. The default is the whole set, and
-    # absence has to mean the default or the registry would need migrating.
-    unpinned_shortcuts: tuple[str, ...] = Field(
-        default=(), description="Built-in shortcut rows this project has unpinned into its All apps menu"
+    # Sparse on purpose: an absent key means all defaults, so no migration is
+    # ever needed and the registry stays hand-edit tolerant. Keys are a
+    # built-in name or ``app:<service-name>`` (see ``validated_shortcut_id``).
+    shortcut_overrides: dict[str, ShortcutOverride] = Field(
+        default_factory=dict,
+        description="Per-shortcut deviations from the defaults (pinning for built-ins, mode for any)",
     )
 
 
@@ -258,40 +306,87 @@ class _ProjectEntry(TypedDict):
     color: str
     glyph: int
     members: list[str]
-    unpinned_shortcuts: list[str]
+    shortcut_overrides: dict[str, dict[str, Any]]
 
 
 def _project_entry(
-    name: str, color: str, glyph: int, members: list[str], unpinned_shortcuts: Sequence[str] = ()
+    name: str,
+    color: str,
+    glyph: int,
+    members: list[str],
+    shortcut_overrides: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> _ProjectEntry:
     """Build one registry entry from validated display metadata plus its members.
 
-    ``unpinned_shortcuts`` defaults to none unpinned -- the same state an absent
-    key means on read -- so only ``update_project``, which must carry an existing
-    project's pin state through a rebuild, ever passes it.
+    ``shortcut_overrides`` defaults to none -- the same state an absent key
+    means on read -- so only ``update_project``, which must carry an existing
+    project's shortcut state through a rebuild, ever passes it.
     """
     return {
         "name": _validated_name(name),
         "color": _validated_color(color),
         "glyph": _validated_glyph(glyph),
         "members": list(members),
-        "unpinned_shortcuts": list(unpinned_shortcuts),
+        "shortcut_overrides": {key: dict(value) for key, value in (shortcut_overrides or {}).items()},
     }
 
 
 @pure
-def _entry_unpinned_shortcuts(entry: Mapping[str, Any]) -> list[str]:
-    """The shortcut rows one entry has unpinned, tolerating a hand-edit.
+def _sanitized_override(shortcut_id: str, raw_override: Mapping[str, Any]) -> dict[str, Any]:
+    """One override's usable fields, tolerating a hand-edit.
 
-    Filtered against ``SHORTCUT_NAMES`` rather than trusted: a name that is not
-    a shortcut could otherwise hide nothing while still riding every list
-    response, and a shortcut renamed in a later version would strand its old
-    name here forever.
+    Only the fields that deviate from the defaults survive: ``is_pinned`` when
+    False (True is the default, and app pinning is membership so an ``app:``
+    key never carries it -- the spec says such a field is ignored), ``mode``
+    when it is a known mode other than the shortcut's default. Anything else
+    is dropped rather than trusted, so junk cannot ride every list response.
     """
-    unpinned = entry.get("unpinned_shortcuts")
-    if not isinstance(unpinned, list):
-        return []
-    return [name for name in unpinned if isinstance(name, str) and name in SHORTCUT_NAMES]
+    sanitized: dict[str, Any] = {}
+    is_pinned = raw_override.get("is_pinned")
+    if is_pinned is False and shortcut_id in SHORTCUT_NAMES:
+        sanitized["is_pinned"] = False
+    mode = raw_override.get("mode")
+    if isinstance(mode, str) and mode in SHORTCUT_MODES and mode != default_shortcut_mode(shortcut_id):
+        sanitized["mode"] = mode
+    return sanitized
+
+
+@pure
+def _entry_shortcut_overrides(entry: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    """One entry's shortcut overrides, tolerating hand-edits and legacy shapes.
+
+    Keys that are not shortcut ids, values that are not objects, and fields
+    that just restate a default are all dropped on read. When the entry has no
+    ``shortcut_overrides`` at all, the legacy ``unpinned_shortcuts`` list is
+    read as ``{<name>: {"is_pinned": False}}`` -- the shape the projects
+    follow-up stored pin state in -- so nothing a user put away pops back.
+
+    CLEANUP: drop the legacy ``unpinned_shortcuts`` branch once no supported
+    workspace's registry predates the shortcut_overrides map (the first write
+    of any override rewrites the entry to the new shape).
+    """
+    raw_overrides = entry.get("shortcut_overrides")
+    if isinstance(raw_overrides, dict):
+        sanitized_overrides: dict[str, dict[str, Any]] = {}
+        for shortcut_id, raw_override in raw_overrides.items():
+            if not isinstance(shortcut_id, str) or not isinstance(raw_override, dict):
+                continue
+            try:
+                validated_shortcut_id(shortcut_id)
+            except ProjectShortcutError:
+                continue
+            sanitized = _sanitized_override(shortcut_id, raw_override)
+            if sanitized:
+                sanitized_overrides[shortcut_id] = sanitized
+        return sanitized_overrides
+    legacy_unpinned = entry.get("unpinned_shortcuts")
+    if not isinstance(legacy_unpinned, list):
+        return {}
+    return {
+        name: {"is_pinned": False}
+        for name in legacy_unpinned
+        if isinstance(name, str) and name in SHORTCUT_NAMES
+    }
 
 
 @pure
@@ -564,7 +659,10 @@ def _project_info(layout_dir: Path, project_id: str, entry: Mapping[str, Any]) -
         glyph=glyph if isinstance(glyph, int) else DEFAULT_PROJECT_GLYPH,
         has_content=any(project_content_path(layout_dir, project_id, device).exists() for device in DEVICE_KINDS),
         members=tuple(_entry_members(entry)),
-        unpinned_shortcuts=tuple(_entry_unpinned_shortcuts(entry)),
+        shortcut_overrides={
+            shortcut_id: ShortcutOverride.model_validate(override)
+            for shortcut_id, override in _entry_shortcut_overrides(entry).items()
+        },
     )
 
 
@@ -715,38 +813,81 @@ def add_member(layout_dir: Path, project_id: str, ref: str) -> None:
         _write_meta_unlocked(layout_dir, meta)
 
 
-def set_shortcut_pinned(layout_dir: Path, project_id: str, shortcut: str, is_pinned: bool) -> list[str]:
-    """Pin one built-in shortcut row into ``project_id``'s rail, or unpin it out.
+def set_shortcut_override(
+    layout_dir: Path,
+    project_id: str,
+    shortcut_id: str,
+    # None leaves the field as it is; a value sets it (and a value equal to the
+    # default clears it back out, keeping the stored map sparse).
+    is_pinned: bool | None,
+    mode: str | None,
+) -> dict[str, dict[str, Any]]:
+    """Record one shortcut's deviation from the defaults on ``project_id``.
 
-    This moves where the row is offered and changes nothing about what it does:
-    pinned it sits in the rail, unpinned it moves into the All apps menu, and
-    clicking it starts the same thing either way.
+    Pinning moves where a built-in row is offered (the rail when pinned, the
+    All apps menu when not) and mode decides what clicking it does (focus the
+    most recent member of the kind, or always create). Both are project-scoped
+    on purpose: which starting points a project keeps to hand, and how they
+    behave, are properties of that project.
 
-    It is project-scoped on purpose -- which starting points a project keeps to
-    hand is a property of that project -- and stored as the unpinned set, so a
-    project that has never touched this shows all four. Idempotent; returns the
-    resulting unpinned set. An unknown project id raises ProjectNotFoundError,
-    an unknown shortcut ProjectShortcutError.
+    Idempotent; returns the resulting sparse override map. The first write also
+    migrates a legacy ``unpinned_shortcuts`` entry to the new shape (the
+    legacy key is folded in by the read and dropped from the entry here). An
+    unknown project id raises ProjectNotFoundError; an unknown shortcut id, a
+    bad mode, or a pin on an ``app:`` key (whose pinning IS membership) raises
+    ProjectShortcutError.
     """
-    if shortcut not in SHORTCUT_NAMES:
-        known = ", ".join(sorted(SHORTCUT_NAMES))
-        raise ProjectShortcutError(f"Unknown shortcut {shortcut!r} (known shortcuts: {known})")
+    validated_shortcut_id(shortcut_id)
+    if mode is not None and mode not in SHORTCUT_MODES:
+        known_modes = ", ".join(SHORTCUT_MODES)
+        raise ProjectShortcutError(f"Unknown shortcut mode {mode!r} (known modes: {known_modes})")
+    if is_pinned is not None and shortcut_id not in SHORTCUT_NAMES:
+        raise ProjectShortcutError(
+            f"Pinning is not stored for {shortcut_id!r}: an app's pin IS its project membership"
+        )
     with _projects_lock:
         meta = _read_meta_unlocked(layout_dir)
         entry = meta["project_by_id"].get(project_id)
         if entry is None:
             raise ProjectNotFoundError(project_id)
-        unpinned = _entry_unpinned_shortcuts(entry)
-        is_currently_pinned = shortcut not in unpinned
-        if is_currently_pinned == is_pinned:
-            return unpinned
-        if is_pinned:
-            unpinned = [name for name in unpinned if name != shortcut]
+        overrides = _entry_shortcut_overrides(entry)
+        override = dict(overrides.get(shortcut_id, {}))
+        if is_pinned is not None:
+            if is_pinned:
+                override.pop("is_pinned", None)
+            else:
+                override["is_pinned"] = False
+        if mode is not None:
+            if mode == default_shortcut_mode(shortcut_id):
+                override.pop("mode", None)
+            else:
+                override["mode"] = mode
+        if override:
+            overrides[shortcut_id] = override
         else:
-            unpinned = [*unpinned, shortcut]
-        entry["unpinned_shortcuts"] = unpinned
+            overrides.pop(shortcut_id, None)
+        if entry.get("shortcut_overrides") == overrides and "unpinned_shortcuts" not in entry:
+            return overrides
+        entry["shortcut_overrides"] = overrides
+        # The first write of any override migrates the entry to the new shape:
+        # the legacy list was already folded into ``overrides`` by the read.
+        # CLEANUP: remove alongside _entry_shortcut_overrides' legacy branch.
+        entry.pop("unpinned_shortcuts", None)
         _write_meta_unlocked(layout_dir, meta)
-        return unpinned
+        return overrides
+
+
+def get_shortcut_overrides(layout_dir: Path, project_id: str) -> dict[str, dict[str, Any]]:
+    """One project's sparse shortcut override map (legacy shapes folded in).
+
+    Raises ProjectNotFoundError for an unknown id.
+    """
+    with _projects_lock:
+        meta = _read_meta_unlocked(layout_dir)
+        entry = meta["project_by_id"].get(project_id)
+        if entry is None:
+            raise ProjectNotFoundError(project_id)
+        return _entry_shortcut_overrides(entry)
 
 
 def remove_member(layout_dir: Path, project_id: str, ref: str) -> None:
@@ -1012,7 +1153,7 @@ def update_project(layout_dir: Path, project_id: str, name: str, color: str, gly
         if existing_entry is None:
             raise ProjectNotFoundError(project_id)
         entry = _project_entry(
-            name, color, glyph, _entry_members(existing_entry), _entry_unpinned_shortcuts(existing_entry)
+            name, color, glyph, _entry_members(existing_entry), _entry_shortcut_overrides(existing_entry)
         )
         meta["project_by_id"][project_id] = entry
         _write_meta_unlocked(layout_dir, meta)

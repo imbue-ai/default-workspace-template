@@ -154,6 +154,44 @@ other than the one the connected client is looking at. `refresh` is
 the one exception: it takes no `--view` (it reloads the named iframe
 on every connected client, view notwithstanding).
 
+## Rail shortcuts: pins and modes
+
+Each project's rail carries **shortcuts**: the four built-in rows (chat,
+files, browser, terminal) plus one row per pinned app. Two facts about
+each are per-project state:
+
+- **Pinned** (built-ins only): whether the row sits in the rail or in
+  the All apps menu. An app's pin IS its membership, so `app:` shortcuts
+  have no separate pin state.
+- **Mode**: what clicking the row does. `focus` goes to the most
+  recently used member of that kind in the view (creating only when the
+  view shows none); `new` always creates. Defaults are code-side: chat
+  defaults to `new` ("New Chat"), everything else to `focus`.
+
+Agents can read and change both -- the same endpoint the UI uses, so
+one validator covers both writers:
+
+```bash
+# The active (or named) view's effective shortcut list: id, pinned, mode.
+python3 system/scripts/layout.py shortcuts --view "Research"
+
+# Unpin the terminal row into Research's All apps menu.
+python3 system/scripts/layout.py shortcut set terminal --unpin --view "Research"
+
+# Make the docs app's shortcut always open a fresh pane.
+python3 system/scripts/layout.py shortcut set app:docs --mode new --view "Research"
+
+# Put the chat shortcut in focus mode (its default is new).
+python3 system/scripts/layout.py shortcut set chat --mode focus --view "Research"
+```
+
+`shortcut set` refuses Everything (it has no project entry to store
+state against; its shortcuts are always the defaults) and refuses
+`--pin/--unpin` on an `app:` key (pin an app by opening it in the view,
+unpin with the UI's remove-from-project or the REST member-remove
+endpoint). Storage is a sparse `shortcut_overrides` map on the
+project's registry entry -- only deviations from the defaults persist.
+
 ## The trap: ref resolution only ever sees the registered name
 
 Every `<ref-or-service>` argument to `layout.py` accepts a bare word
