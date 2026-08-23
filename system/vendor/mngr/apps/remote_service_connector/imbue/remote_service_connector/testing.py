@@ -501,6 +501,10 @@ class FakeSuperTokensBackend:
     device_code_store: "InMemoryDeviceAuthCodeStore"
     # In-memory attribution store installed onto the attribution module.
     attribution_store: "InMemoryAttributionStore"
+    # In-memory entitlements store (pre-seeded with the committed plans),
+    # installed onto accounts_web's get_entitlements_store seam so signup
+    # plan choices land somewhere assertable.
+    entitlements_store: "InMemoryEntitlementsStore"
     # In-memory signup-hardening stores/seams installed onto signup_hardening.
     signup_attempt_store: "InMemorySignupAttemptStore"
     ip_reputation_cache: "InMemoryIpReputationCache"
@@ -524,6 +528,13 @@ class FakeSuperTokensBackend:
         (the SDK functions are referenced as module globals at call time, so
         patching the importing module's attribute is what takes effect).
         """
+        # If a quota test client already installed an in-memory entitlements
+        # store on the seam, adopt it rather than shadowing it: browser-signup
+        # writes and quota-endpoint reads must resolve one store, or
+        # cross-flow assertions lie.
+        already_installed_store = entitlements_mod.get_entitlements_store()
+        if isinstance(already_installed_store, InMemoryEntitlementsStore):
+            self.entitlements_store = already_installed_store
         fakes: dict[str, Any] = {
             "ep_sign_up": self.sign_up,
             "ep_sign_in": self.sign_in,
@@ -554,6 +565,7 @@ class FakeSuperTokensBackend:
             "_verify_turnstile_token": self.verify_turnstile_token,
             "_device_code_store": self.device_code_store,
             "_attribution_store": self.attribution_store,
+            "get_entitlements_store": lambda: self.entitlements_store,
             "_signup_attempt_store": self.signup_attempt_store,
             "_ip_reputation_cache": self.ip_reputation_cache,
             "_ip_reputation_provider": self.ip_reputation_provider,
@@ -572,6 +584,9 @@ class FakeSuperTokensBackend:
             signup_hardening_module,
             suspension_module,
             suspension_admin_module,
+            # accounts_web's signup plan recorder resolves the entitlements
+            # store through this module (the runtime-seam convention).
+            entitlements_mod,
         ]
         for name, fake in fakes.items():
             matching_modules = [module for module in target_modules if hasattr(module, name)]
@@ -1073,6 +1088,7 @@ def make_fake_supertokens_backend() -> FakeSuperTokensBackend:
     backend.is_turnstile_passing = True
     backend.device_code_store = InMemoryDeviceAuthCodeStore()
     backend.attribution_store = InMemoryAttributionStore()
+    backend.entitlements_store = make_fake_entitlements_store()
     backend.signup_attempt_store = InMemorySignupAttemptStore()
     backend.ip_reputation_cache = InMemoryIpReputationCache()
     backend.ip_reputation_provider = FakeIpReputationProvider()
@@ -3025,6 +3041,14 @@ def make_fake_orphan_bucket_store() -> InMemoryOrphanBucketStore:
 
 
 # Canonical plan values matching the committed deploy.toml [plans] blocks.
+FREE_PLAN_VALUES: Final[dict[str, float]] = {
+    "max_remote_workspaces": 1,
+    "max_total_workspaces": 5,
+    "max_buckets": 5,
+    "max_total_bucket_bytes": 25 * 1024**3,
+    "monthly_llm_spend_usd": 0.0,
+    "max_active_synced_workspaces": 200,
+}
 EXPLORER_PLAN_VALUES: Final[dict[str, float]] = {
     "max_remote_workspaces": 2,
     "max_total_workspaces": 10,
@@ -3044,13 +3068,18 @@ ALLY_PLAN_VALUES: Final[dict[str, float]] = {
 
 
 class InMemoryEntitlementsStore:
-    """In-memory EntitlementsStore for testing plans + per-account quota rows."""
+    """In-memory EntitlementsStore for testing plans + per-account quota rows.
+
+    Set ``raise_on_insert`` to exercise the signup plan recorder's fail-open
+    path (the exception is raised by ``insert_entitlements_if_absent``).
+    """
 
     def __init__(self) -> None:
         # plan_name -> {plan_name, <quota columns>}
         self.plans_by_name: dict[str, dict[str, Any]] = {}
         # user_id -> {user_id, user_id_prefix, plan_name, <quota columns>}
         self.rows_by_user_id: dict[str, dict[str, Any]] = {}
+        self.raise_on_insert: Exception | None = None
 
     def seed_plan(self, plan_name: str, values: dict[str, float]) -> None:
         self.plans_by_name[plan_name] = {"plan_name": plan_name, **values}
@@ -3073,6 +3102,8 @@ class InMemoryEntitlementsStore:
         return None
 
     def insert_entitlements_if_absent(self, row: dict[str, Any]) -> None:
+        if self.raise_on_insert is not None:
+            raise self.raise_on_insert
         self.rows_by_user_id.setdefault(row["user_id"], dict(row))
 
     def update_entitlements(self, user_id: str, values: dict[str, Any]) -> None:
@@ -3082,8 +3113,9 @@ class InMemoryEntitlementsStore:
 
 
 def make_fake_entitlements_store() -> InMemoryEntitlementsStore:
-    """Construct an in-memory entitlements store pre-seeded with the two launch plans."""
+    """Construct an in-memory entitlements store pre-seeded with the committed plans."""
     store = InMemoryEntitlementsStore()
+    store.seed_plan("free", FREE_PLAN_VALUES)
     store.seed_plan("explorer", EXPLORER_PLAN_VALUES)
     store.seed_plan("ally", ALLY_PLAN_VALUES)
     return store
@@ -3314,7 +3346,7 @@ def _make_quota_test_client(
     Sets up the SuperTokens Bearer auth path so tests calling user-authenticated endpoints
     can authenticate with ``_user_headers()`` without needing a real JWT.
     Installs an in-memory paid-list backend seeded with the stub user email,
-    an entitlements store pre-seeded with the two launch plans (with the stub
+    an entitlements store pre-seeded with the committed plans (with the stub
     user's SuperTokens ``time_joined`` faked to 0, i.e. pre-cutoff, so the
     stub's lazy plan resolves to ally by default), and a fake LiteLLM admin
     API. The paid-status cache is disabled
@@ -3364,7 +3396,7 @@ def _make_test_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     return client
 
 
-_PLAN_VALUES_BY_NAME = {"explorer": EXPLORER_PLAN_VALUES, "ally": ALLY_PLAN_VALUES}
+_PLAN_VALUES_BY_NAME = {"free": FREE_PLAN_VALUES, "explorer": EXPLORER_PLAN_VALUES, "ally": ALLY_PLAN_VALUES}
 
 
 def _seed_entitlements_row(
@@ -3401,8 +3433,9 @@ def _make_pool_quota_test_client(
 
     The returned pool backend is seeded with the stub user email as paid, so
     the stub's lazily-created entitlements row resolves to the ally plan by
-    default; explorer-plan tests flip the entry via ``backend.add_paid_email``
-    or write a row into the entitlements store directly.
+    default; free-plan tests flip the entry via ``backend.add_paid_email``
+    (the lazy backfill never assigns explorer), and tests wanting any other
+    plan write a row into the entitlements store directly.
     """
     client, entitlements_store, litellm = _make_quota_test_client(monkeypatch)
     monkeypatch.setenv("POOL_SSH_PRIVATE_KEY", "fake-management-key-pem")
@@ -3434,6 +3467,8 @@ def _make_pool_quota_web_test_client(
     """
     client, backend, entitlements_store, litellm = _make_pool_quota_test_client(monkeypatch)
     st_backend = make_fake_supertokens_backend()
+    # install adopts the quota client's entitlements store, so both seams
+    # resolve one store.
     st_backend.install_on_app_module(app_mod, monkeypatch)
     return client, backend, entitlements_store, litellm, st_backend
 
