@@ -162,6 +162,7 @@ import {
   setShortcutOverride,
   shortcutModeForProject,
   removePanelFromAllProjects,
+  serviceNameFromInstanceName,
   shareMember,
   type MachineInventory,
   type MemberKind,
@@ -2628,16 +2629,6 @@ function terminalPanelId(sessionName: string): string {
  *  machine-wide, so it is the whole of the id. */
 function appInstancePanelId(instanceName: string): string {
   return `${APP_INSTANCE_PANEL_ID_PREFIX}${instanceName}`;
-}
-
-/** The registered service name a canonical ``<service>-<N>`` instance name
- *  belongs to, or null when the name does not parse. The allocator always
- *  appends ``-<N>`` to the full service name, so stripping the final
- *  ``-<digits>`` group recovers it -- even for a service whose own name ends
- *  in digits. */
-function serviceNameFromInstanceName(instanceName: string): string | null {
-  const match = /^(.+)-([1-9][0-9]*)$/.exec(instanceName);
-  return match === null ? null : match[1];
 }
 
 /** The URL an app instance's pane opens at: the service origin, plus the

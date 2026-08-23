@@ -538,12 +538,17 @@ export function instanceNameFromRef(ref: string): string | null {
   return instanceName === null || instanceName === "" ? null : instanceName;
 }
 
+/** `<service>-<N>`: the canonical instance name the allocator mints, always
+ *  the full registered service name plus a dash and a 1-based number -- so
+ *  the final `-<digits>` group always separates the two, even for a service
+ *  whose own name ends in digits. Mirrors the backend's
+ *  `app_instances._INSTANCE_NAME_PATTERN`. */
+const INSTANCE_NAME_PATTERN = /^(.+)-([1-9][0-9]*)$/;
+
 /** The 1-based number out of a canonical `<service>-<N>` instance name, or
- *  null when the name does not carry one (a hand-edited ref). The service
- *  name is always the whole prefix before the final `-<digits>` group, so
- *  this parses even for a service whose own name ends in digits. */
+ *  null when the name does not carry one (a hand-edited ref). */
 export function instanceNumberFromName(instanceName: string): number | null {
-  const match = /^(.+)-([1-9][0-9]*)$/.exec(instanceName);
+  const match = INSTANCE_NAME_PATTERN.exec(instanceName);
   return match === null ? null : Number(match[2]);
 }
 
@@ -551,7 +556,7 @@ export function instanceNumberFromName(instanceName: string): number | null {
  *  name, or null when the name does not parse. The inverse of the allocator's
  *  mint, which always appends `-<N>` to the full service name. */
 export function serviceNameFromInstanceName(instanceName: string): string | null {
-  const match = /^(.+)-([1-9][0-9]*)$/.exec(instanceName);
+  const match = INSTANCE_NAME_PATTERN.exec(instanceName);
   return match === null ? null : match[1];
 }
 
