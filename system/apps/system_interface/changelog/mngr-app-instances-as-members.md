@@ -6,4 +6,4 @@ Instance rows and tabs carry the uniform confirm-gated Delete (the instance leav
 
 Instances that beacon their location reopen where they were looking: the shell listens for one-hop `minds-location` posts from framed apps, validates the sender against its own service origins, and stores the path machine-wide per instance ref (`GET|POST /api/member-locations`).
 
-App panes restored from a pre-instances layout adopt the app's lowest free instance on first mount and file through the normal auto-membership path.
+App panes restored from a pre-instances layout adopt the app's lowest free instance on first mount and file through the normal auto-membership path. Bare `service:files` member entries left behind by older builds -- dead entries that only ever rendered a phantom "files" tab row, since the file viewer's pin is its built-in rail row -- are purged from the project registry on read, alongside the existing legacy `url:` member purge.
