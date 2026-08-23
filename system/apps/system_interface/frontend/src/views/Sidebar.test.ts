@@ -491,6 +491,29 @@ describe("Sidebar row clicks", () => {
   });
 });
 
+describe("Sidebar stopped tab-list rows", () => {
+  it("dims a tab-list row carrying a stopped detail", () => {
+    const attrs = makeAttrs({
+      rows: [
+        { ref: "service:docs", kind: "app", label: "docs", isOpen: true, stoppedDetail: "stopped" },
+        { ref: "service:web", kind: "app", label: "web", isOpen: true },
+      ],
+    });
+    const { root, redraw } = mountSidebar(attrs);
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    const stoppedRow = Array.from(root.querySelectorAll(".project-rail-tab")).find((element) =>
+      element.textContent?.includes("docs"),
+    );
+    const runningRow = Array.from(root.querySelectorAll(".project-rail-tab")).find((element) =>
+      element.textContent?.includes("web"),
+    );
+    expect(stoppedRow?.classList.contains("project-rail-tab-stopped")).toBe(true);
+    expect(runningRow?.classList.contains("project-rail-tab-stopped")).toBe(false);
+  });
+});
+
 describe("Sidebar pinned-app rows", () => {
   const DEMO_APP: AppEntry = { name: "grafana", url: "http://example.test", label: "grafana-abc123" };
 
@@ -524,6 +547,38 @@ describe("Sidebar pinned-app rows", () => {
       });
       const { root } = mountSidebar(attrs);
       expect(root.querySelector(".project-rail-pin")).toBeNull();
+    } finally {
+      vi.mocked(getApps).mockReturnValue([]);
+    }
+  });
+
+  it("dims a pinned app whose backing service is stopped", () => {
+    vi.mocked(getApps).mockReturnValue([{ ...DEMO_APP, program: "grafana", is_running: false }]);
+    try {
+      const attrs = makeAttrs({
+        rows: [{ ref: "service:grafana", kind: "app", label: "grafana", isOpen: false }],
+      });
+      const { root, redraw } = mountSidebar(attrs);
+      root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+      redraw();
+
+      expect(root.querySelector(".project-rail-shortcut-stopped")).not.toBeNull();
+    } finally {
+      vi.mocked(getApps).mockReturnValue([]);
+    }
+  });
+
+  it("renders a running pinned app undimmed", () => {
+    vi.mocked(getApps).mockReturnValue([{ ...DEMO_APP, program: "grafana", is_running: true }]);
+    try {
+      const attrs = makeAttrs({
+        rows: [{ ref: "service:grafana", kind: "app", label: "grafana", isOpen: false }],
+      });
+      const { root, redraw } = mountSidebar(attrs);
+      root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+      redraw();
+
+      expect(root.querySelector(".project-rail-shortcut-stopped")).toBeNull();
     } finally {
       vi.mocked(getApps).mockReturnValue([]);
     }

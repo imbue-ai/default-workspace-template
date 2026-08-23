@@ -152,13 +152,16 @@ import {
   filingProjectForAgentOp,
   projectForViewId,
   removeMember,
+  serviceNameFromRef,
   setShortcutPinned,
   removePanelFromAllProjects,
   shareMember,
   type MachineInventory,
+  type MemberKind,
   type ProjectInfo,
 } from "../models/Projects";
 import type { ShortcutName } from "../models/Projects";
+import { appStoppedDetail, stoppedAppForServiceName } from "../models/appLiveness";
 
 const AUTOSAVE_DEBOUNCE_MS = 1500;
 
@@ -1927,6 +1930,7 @@ export function getSidebarRows(): SidebarTabRow[] {
       kind: row.kind,
       label: labelForMemberRef(row.ref),
       isOpen: panelIdForMemberRef(row.ref) !== null,
+      stoppedDetail: stoppedDetailForRef(row.ref, row.kind),
     }));
   }
   const members = projectForViewId(availableProjects, viewId)?.members ?? [];
@@ -1935,7 +1939,16 @@ export function getSidebarRows(): SidebarTabRow[] {
     kind: memberKindFromRef(ref),
     label: labelForMemberRef(ref),
     isOpen: panelIdForMemberRef(ref) !== null,
+    stoppedDetail: stoppedDetailForRef(ref, memberKindFromRef(ref)),
   }));
+}
+
+/** Why an app row's backing service is not running, or undefined for a running
+ *  one (and for every non-app kind, whose liveness is not the registry's). */
+function stoppedDetailForRef(ref: string, kind: MemberKind): string | undefined {
+  if (kind !== "app") return undefined;
+  const stoppedApp = stoppedAppForServiceName(getApps(), serviceNameFromRef(ref));
+  return stoppedApp === null ? undefined : appStoppedDetail(stoppedApp);
 }
 
 /**

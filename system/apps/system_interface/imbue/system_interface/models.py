@@ -305,6 +305,23 @@ class AppEntry(FrozenModel):
             "rail's All apps popover, its shortcuts)."
         ),
     )
+    program: str = Field(
+        default="",
+        description=(
+            "The supervisord program running this app, registered via "
+            "``forward_port.py --program``. Its presence is the capability "
+            "grant 'this app can be stopped and started through supervisord'; "
+            "empty means unsupervised (or registered before the field existed)."
+        ),
+    )
+    is_running: bool = Field(
+        default=True,
+        description=(
+            "Derived liveness, never stored in the registry: supervisord's "
+            "process state for ``program`` rows, a TCP probe of ``url`` "
+            "otherwise. Rows default to running until the first probe lands."
+        ),
+    )
 
 
 class TerminalSessionInfo(FrozenModel):

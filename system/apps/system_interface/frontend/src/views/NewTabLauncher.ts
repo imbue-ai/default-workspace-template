@@ -34,6 +34,7 @@ import m from "mithril";
 import { buildEverythingMembers, partitionByMembership, serviceNameFromRef } from "../models/Projects";
 import { getApps } from "../models/AgentManager";
 import type { ChatHarness } from "../models/AgentManager";
+import { appStoppedDetail, stoppedAppForServiceName } from "../models/appLiveness";
 import type { MachineInventory, MemberKind } from "../models/Projects";
 import { serviceIconMarkup } from "./appIcon";
 import { areIntroductoryAgentsEnabled, areOtherHarnessesEnabled } from "../base-path";
@@ -504,8 +505,11 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
     );
   }
 
-  /** One row: kind glyph, label, kind column, recency column. */
+  /** One row: kind glyph, label, kind column, recency column. A stopped app's
+   *  row stays clickable (opening it shows the stopped state) but reads dimmed,
+   *  with the tooltip saying why it is not answering. */
   function memberRow(row: LauncherRow, nowMs: number, onOpen: (row: LauncherRow) => void): m.Vnode {
+    const stoppedApp = row.kind === "app" ? stoppedAppForServiceName(getApps(), serviceNameFromRef(row.ref)) : null;
     return m(
       "button",
       {
@@ -513,7 +517,9 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
         type: "button",
         class:
           "new-tab-launcher-row flex h-9 w-full cursor-pointer items-center gap-3 rounded-md px-2 text-left " +
-          "text-[13px] text-text-primary hover:bg-bg-hover",
+          "text-[13px] hover:bg-bg-hover " +
+          (stoppedApp !== null ? "new-tab-launcher-row-stopped text-text-faint opacity-60" : "text-text-primary"),
+        ...(stoppedApp !== null ? hoverTooltipAttrs(`${row.label} — ${appStoppedDetail(stoppedApp)}`) : {}),
         onclick: () => onOpen(row),
       },
       [

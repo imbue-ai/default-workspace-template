@@ -260,6 +260,90 @@ def test_read_apps_reads_the_internal_flag(agent_manager: AgentManager, tmp_path
     assert apps[1].internal is False
 
 
+def test_read_apps_reads_the_program_field(agent_manager: AgentManager, tmp_path: Path) -> None:
+    toml_file = tmp_path / "apps.toml"
+    toml_file.write_text(
+        "[[apps]]\n"
+        'name = "files"\n'
+        'url = "http://localhost:8300"\n'
+        'program = "files"\n'
+        "\n"
+        "[[apps]]\n"
+        'name = "web"\n'
+        'url = "http://localhost:8000"\n'
+    )
+
+    agent_manager._read_apps(toml_file)
+
+    apps = agent_manager.get_apps()
+    assert apps[0].program == "files"
+    # A row with no `program` key -- an unsupervised or pre-field app -- reads back "".
+    assert apps[1].program == ""
+
+
+def test_read_apps_carries_probed_liveness_across_a_reread(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    """Re-reading the registry (a registration, an icon change) must not flash
+    a stopped app back to running until the next probe lands."""
+    toml_file = tmp_path / "apps.toml"
+    toml_file.write_text('[[apps]]\nname = "web"\nurl = "http://localhost:8000"\n')
+    agent_manager._read_apps(toml_file)
+    with agent_manager._lock:
+        agent_manager._apps = [
+            app.model_copy_update(to_update(app.field_ref().is_running, False))
+            for app in agent_manager._apps
+        ]
+
+    agent_manager._read_apps(toml_file)
+
+    apps = agent_manager.get_apps()
+    assert apps[0].is_running is False
+
+
+def test_refresh_app_liveness_updates_entries_and_broadcasts_once(
+    broadcaster: WebSocketBroadcaster,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("MNGR_AGENT_ID", "test-agent-id")
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", "/tmp/test-work")
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    probed_targets: list[tuple[str, str]] = []
+
+    def fake_prober(program: str, url: str) -> bool:
+        probed_targets.append((program, url))
+        return program == "files"
+
+    manager = AgentManager.build(broadcaster, liveness_prober=fake_prober)
+    with manager._lock:
+        manager._apps = [
+            AppEntry(name="files", url="http://localhost:8300", program="files"),
+            AppEntry(name="web", url="http://localhost:8000"),
+        ]
+    events: list[dict[str, Any]] = []
+    client_queue = broadcaster.register()
+
+    manager.refresh_app_liveness()
+
+    while not client_queue.empty():
+        events.append(json.loads(client_queue.get_nowait()))
+    apps_updated_events = [event for event in events if event.get("type") == "apps_updated"]
+    assert len(apps_updated_events) == 1
+    serialized_by_name = {app["name"]: app for app in apps_updated_events[0]["apps"]}
+    assert serialized_by_name["files"]["is_running"] is True
+    assert serialized_by_name["web"]["is_running"] is False
+    assert ("files", "http://localhost:8300") in probed_targets
+    assert ("", "http://localhost:8000") in probed_targets
+
+    # A second pass with the same answers changes nothing, so nothing is broadcast.
+    manager.refresh_app_liveness()
+    second_pass_events = []
+    while not client_queue.empty():
+        second_pass_events.append(json.loads(client_queue.get_nowait()))
+    assert [event for event in second_pass_events if event.get("type") == "apps_updated"] == []
+
+
 def test_read_apps_handles_missing_file(agent_manager: AgentManager, tmp_path: Path) -> None:
     toml_file = tmp_path / "nonexistent.toml"
     agent_manager._read_apps(toml_file)
@@ -323,6 +407,8 @@ def test_get_apps_serialized(agent_manager: AgentManager) -> None:
             "label": "web-x7k9q2w1",
             "icon": "",
             "internal": False,
+            "program": "",
+            "is_running": True,
         }
     ]
 
@@ -344,6 +430,8 @@ def test_get_apps_serialized_carries_the_icon(agent_manager: AgentManager) -> No
             "label": "web-x7k9q2w1",
             "icon": icon,
             "internal": False,
+            "program": "",
+            "is_running": True,
         }
     ]
 
@@ -364,6 +452,8 @@ def test_get_apps_serialized_carries_internal(agent_manager: AgentManager) -> No
             "label": "",
             "icon": "",
             "internal": True,
+            "program": "",
+            "is_running": True,
         }
     ]
 

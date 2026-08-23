@@ -30,6 +30,7 @@ import m from "mithril";
 import { getPrimaryAgentId } from "../base-path";
 import { getApps } from "../models/AgentManager";
 import type { AppEntry } from "../models/AgentManager";
+import { appStoppedDetail, isAppRunning } from "../models/appLiveness";
 import {
   EVERYTHING_VIEW_ID,
   EVERYTHING_VIEW_NAME,
@@ -76,6 +77,11 @@ export interface SidebarTabRow {
   // Whether the object has a tab in the dock right now. Open rows read as
   // primary text, backgrounded ones (running, just not docked) as tertiary.
   isOpen: boolean;
+  // Why this row's backing app is not running, when it is not: "stopped" for a
+  // supervised app, the managed-outside wording otherwise (see
+  // models/appLiveness). Absent for a running app and for every non-app kind.
+  // A stopped row renders dimmed with this as its tooltip.
+  stoppedDetail?: string;
 }
 
 export interface SidebarAttrs {
@@ -846,6 +852,10 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     iconMarkup: string;
     label: string;
     tooltip: string;
+    // Render dimmed while staying clickable: the row's backing app is stopped,
+    // which the tooltip explains. Distinct from a null `onclick`, which is a
+    // row with nothing to open at all.
+    isDimmed?: boolean;
     onclick: (() => void) | null;
     // Move this row into the All apps menu. Null where there is nowhere to
     // record that: Everything has no project entry to store it against.
@@ -885,7 +895,11 @@ export function Sidebar(): m.Component<SidebarAttrs> {
               // Padded so a long label fades out before it reaches the unpin
               // rather than running underneath it.
               (options.onUnpin === null ? "" : "pr-7 ") +
-              (isDisabled ? "cursor-default text-text-faint opacity-60" : "text-text-primary"),
+              (isDisabled
+                ? "cursor-default text-text-faint opacity-60"
+                : options.isDimmed === true
+                  ? "project-rail-shortcut-stopped text-text-faint opacity-60"
+                  : "text-text-primary"),
             onclick: options.onclick ?? undefined,
           },
           [m("span", { class: ICON_BOX_CLASS }, m.trust(options.iconMarkup)), railLabel(options.label, "")],
@@ -926,6 +940,9 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     // apps popover are two views of one object, so they read the one definition
     // of what it is called rather than each keeping its own.
     const label = appDisplayName(app);
+    // A stopped app's row stays -- identity is not liveness -- but reads
+    // dimmed, and its tooltip says why it is not answering.
+    const isStopped = !isAppRunning(app);
     // This row is now the app's ONLY place in the rail (the tab list no longer
     // repeats it), so the app's verbs have to be reachable from here or they
     // would only exist while it happened to have a tab open. The row it stands
@@ -935,11 +952,17 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     const isMenuOpenHere = openMenu?.kind === "row" && openMenu.ref === appRef;
     return m(
       "span",
-      { key: `app:${app.name}`, class: "flex w-full shrink-0", ...hoverTooltipAttrs(label, "right") },
+      {
+        key: `app:${app.name}`,
+        class: "flex w-full shrink-0",
+        ...hoverTooltipAttrs(isStopped ? `${label} — ${appStoppedDetail(app)}` : label, "right"),
+      },
       m(
         "div",
         {
-          class: `project-rail-shortcut group ${ROW_CLASS} pr-1 text-text-primary hover:bg-bg-hover`,
+          class:
+            `project-rail-shortcut group ${ROW_CLASS} pr-1 hover:bg-bg-hover ` +
+            (isStopped ? "project-rail-shortcut-stopped text-text-faint opacity-60" : "text-text-primary"),
           onclick: () => pick(() => attrs.onOpenApp(app)),
           oncontextmenu: (event: MouseEvent) => {
             event.preventDefault();
@@ -1034,11 +1057,23 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     return m("div", { class: "min-h-0 shrink overflow-x-hidden overflow-y-auto" }, [
       ...SHORTCUT_ROWS.filter((row) => !canUnpin || isShortcutPinned(project, row.tabType)).map((row) => {
         const isDisabledFilesRow = row.tabType === "files" && !isFileViewerBacked();
+        // A backed-but-stopped file viewer stays clickable (opening it shows
+        // the stopped state, from which it can be started) but reads dimmed
+        // like every other stopped app.
+        const stoppedFilesApp =
+          row.tabType === "files" && !isDisabledFilesRow
+            ? (getApps().find((app) => app.name === "files" && !isAppRunning(app)) ?? null)
+            : null;
         return shortcutRow({
           key: `tab-type:${row.tabType}`,
           iconMarkup: railIcon(row.tabType, ROW_ICON_SIZE),
           label: row.label,
-          tooltip: isDisabledFilesRow ? FILE_VIEWER_TOOLTIP : SHORTCUT_TOOLTIPS[row.tabType],
+          tooltip: isDisabledFilesRow
+            ? FILE_VIEWER_TOOLTIP
+            : stoppedFilesApp !== null
+              ? `${row.label} — ${appStoppedDetail(stoppedFilesApp)}`
+              : SHORTCUT_TOOLTIPS[row.tabType],
+          isDimmed: stoppedFilesApp !== null,
           onclick: isDisabledFilesRow ? null : () => pick(() => attrs.onOpenTabType(row.tabType)),
           onUnpin: canUnpin ? () => attrs.onSetShortcutPinned(row.tabType, false) : null,
         });
@@ -1156,7 +1191,12 @@ export function Sidebar(): m.Component<SidebarAttrs> {
         // the only fill.
         class:
           `project-rail-tab group ${ROW_CLASS} pr-1 hover:bg-bg-hover ` +
-          (row.isOpen ? "text-text-primary" : "text-text-faint"),
+          (row.stoppedDetail !== undefined
+            ? "project-rail-tab-stopped text-text-faint opacity-60"
+            : row.isOpen
+              ? "text-text-primary"
+              : "text-text-faint"),
+        ...(row.stoppedDetail === undefined ? {} : hoverTooltipAttrs(`${row.label} — ${row.stoppedDetail}`, "right")),
         onclick: () =>
           pick(() => {
             attrs.onOpenRow(row);
