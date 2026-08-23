@@ -54,7 +54,7 @@ const EMPTY_INVENTORY: MachineInventory = {
   chatAgents: [],
   terminals: [],
   browsers: [],
-  apps: [],
+  appInstances: [],
 };
 
 describe("buildLauncherRows", () => {
@@ -65,7 +65,7 @@ describe("buildLauncherRows", () => {
         chatAgents: [{ name: "agent-1", label: "Build the Newsreader" }],
         terminals: [{ name: "build", label: "build" }],
         browsers: [{ name: "gazette", label: "Gazette (signed in)" }],
-        apps: [{ name: "newsreader", label: "Newsreader" }],
+        appInstances: [{ serviceName: "newsreader", instanceName: "newsreader-1", label: "Newsreader 1" }],
       },
       {},
     );
@@ -73,7 +73,7 @@ describe("buildLauncherRows", () => {
       ["chat:agent-1", "chat"],
       ["terminal:build", "terminal"],
       ["service:browser?session=gazette", "browser"],
-      ["service:newsreader", "app"],
+      ["service:newsreader?instance=newsreader-1", "app"],
     ]);
     expect(rows[0].label).toBe("Build the Newsreader");
   });

@@ -37,6 +37,7 @@ import {
   appShortcutId,
   chatAgentIdFromRef,
   createProject,
+  instanceNameFromRef,
   isEverythingView,
   isShortcutPinned,
   memberRef,
@@ -152,6 +153,10 @@ export interface SidebarAttrs {
   // its transcript, name, and memberships. Only ever called for a
   // non-primary chat row.
   onStopRow: (row: SidebarTabRow) => void;
+  // Stop or start one app's supervised program (whichever its liveness calls
+  // for), reversibly -- the service half of an instance row's menu. Only ever
+  // called with a stoppable app's registered service name.
+  onServiceLifecycle: (serviceName: string) => void;
   // Stop showing one object in the active view. The object keeps running and
   // stays in Everything and in any other project showing it.
   onRemoveFromView: (row: SidebarTabRow) => void;
@@ -451,9 +456,12 @@ export function pinnedAppNamesForView(rows: readonly SidebarTabRow[], isEverythi
   if (isEverything) return [];
   return rows.flatMap((row) => {
     if (row.kind !== "app") return [];
-    // A fleet ref (`service:browser?session=...`) names no installed app and
-    // answers null, but its row is not of kind "app" either -- this is the ref
-    // grammar being asked rather than trusted.
+    // Only a BARE `service:<name>` member is a pin. An instance ref
+    // (`service:<name>?instance=...`) is an object the project shows -- a
+    // tab-list row -- and filing one must not drag the app's shortcut into
+    // the rail. A fleet ref (`service:browser?session=...`) names no
+    // installed app, but its row is not of kind "app" either.
+    if (instanceNameFromRef(row.ref) !== null) return [];
     const name = serviceNameFromRef(row.ref);
     return name === null ? [] : [name];
   });
@@ -765,14 +773,41 @@ export function Sidebar(): m.Component<SidebarAttrs> {
    * against any open panel.
    */
   function railMenuActions(row: SidebarTabRow, attrs: SidebarAttrs): ObjectMenuActions {
+    // An instance row's menu carries the instance's own verbs, with the
+    // SERVICE's Share and Stop/Start trailing in their own group -- so the
+    // service stays reachable from any of its instances, Everything's rows
+    // included. A bare app row IS the service, and keeps the flat menu.
+    const instanceServiceName =
+      row.kind === "app" && instanceNameFromRef(row.ref) !== null ? serviceNameFromRef(row.ref) : null;
+    const serviceApp =
+      instanceServiceName === null ? undefined : getApps().find((candidate) => candidate.name === instanceServiceName);
+    const serviceLabel = serviceApp !== undefined ? appDisplayName(serviceApp) : (instanceServiceName ?? "");
     return {
       refresh: () => attrs.onRefreshRow(row),
       share:
-        row.kind === "app"
+        row.kind === "app" && instanceServiceName === null
           ? // The row already carries the chosen name; the share label follows it
             // rather than the registered service name (see the tab's own build).
             { label: `Share ${row.label}`, run: () => attrs.onShareApp(row) }
           : null,
+      serviceGroup:
+        instanceServiceName === null
+          ? null
+          : {
+              // Offered even for an instance of an app the machine no longer
+              // registers? No: with no registered service there is nothing to
+              // share or stop, so the group collapses away and Delete is the
+              // row's remaining verb.
+              share:
+                serviceApp === undefined ? null : { label: `Share ${serviceLabel}`, run: () => attrs.onShareApp(row) },
+              lifecycle:
+                serviceApp === undefined || !isAppStoppable(serviceApp)
+                  ? null
+                  : {
+                      label: `${isAppRunning(serviceApp) ? "Stop" : "Start"} ${serviceLabel}`,
+                      run: () => attrs.onServiceLifecycle(serviceApp.name),
+                    },
+            },
       rename: () => beginRename(row),
       // The rail never offers this: putting a tab away is what you want while
       // looking AT the tab, and the tab's own menu carries it. From here the
@@ -815,6 +850,12 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     attrs: SidebarAttrs,
   ): { label: string; run: () => void; isDestructive?: boolean } | null {
     if (row.kind === "app") {
+      // An instance row deletes like every other object -- confirm-gated,
+      // leaves every project, the app keeps running. The service verbs sit in
+      // the menu's own service group (see railMenuActions).
+      if (instanceNameFromRef(row.ref) !== null) {
+        return { label: `Delete ${row.label}`, run: () => attrs.onDeleteFromMachine(row) };
+      }
       const app = getApps().find((candidate) => candidate.name === serviceNameFromRef(row.ref));
       if (app === undefined || !isAppStoppable(app)) return null;
       return {
@@ -1218,7 +1259,10 @@ export function Sidebar(): m.Component<SidebarAttrs> {
             m.trust(appIconMarkup(app.icon, ROW_ICON_SIZE, railIcon("app", ROW_ICON_SIZE), app.name)),
           ),
           railLabel(shownLabel, ""),
-          expanded
+          // Everything's app rows are fixed -- every openable app shows there
+          // by construction, with no registry entry to record an unpin
+          // against -- so only a project's rows carry the toggle.
+          expanded && !isEverythingView(attrs.activeViewId)
             ? m(
                 "button",
                 {
@@ -1979,9 +2023,16 @@ export function Sidebar(): m.Component<SidebarAttrs> {
       // unregistered -- has no icon or URL to draw a shortcut from, so it drops
       // out here and stays in the tab list, where it can still be removed.
       const pinnedAppNames = pinnedAppNamesForView(attrs.rows, isEverything);
-      const shortcutApps = pinnedAppNames
-        .map((name) => machineApps.find((app) => app.name === name))
-        .filter((app): app is AppEntry => app !== undefined);
+      // Everything shows a fixed shortcut row for every openable app (built-in
+      // rows first in rail order, then apps alphabetically -- pickableApps'
+      // own order): it is the home, a newly added app appears here without
+      // anyone pinning anything, and there is no registry entry to record an
+      // unpin against, so the rows are fixed.
+      const shortcutApps = isEverything
+        ? machineApps
+        : pinnedAppNames
+            .map((name) => machineApps.find((app) => app.name === name))
+            .filter((app): app is AppEntry => app !== undefined);
 
       return m(
         "div",

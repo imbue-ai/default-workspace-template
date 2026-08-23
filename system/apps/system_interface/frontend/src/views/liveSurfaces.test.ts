@@ -67,26 +67,28 @@ describe("liveKeyForPanel", () => {
     );
   });
 
-  it("files an app under its service name and the default instance", () => {
-    // Every ordinarily-opened pane of a service -- in every view -- reads as
-    // the default instance, so they all share one live page.
-    expect(liveKeyForPanel("iframe-p-1", params({ serviceName: "web", url: "http://web.example.com" }))).toBe(
-      "service:web?instance=0",
+  it("files an app pane under the instance it shows", () => {
+    // The canonical instance name IS the object's identity: two instances of
+    // one service are two objects with a live page each.
+    const first = liveKeyForPanel(
+      "app-instance-web-1",
+      params({ serviceName: "web", url: "http://web.example.com", serviceInstanceId: "web-1" }),
     );
-    expect(liveKeyForPanel("iframe-p-2", params({ serviceName: "web", url: "http://web.example.com" }))).toBe(
-      "service:web?instance=0",
+    const second = liveKeyForPanel(
+      "app-instance-web-2",
+      params({ serviceName: "web", url: "http://web.example.com", serviceInstanceId: "web-2" }),
     );
+    expect(first).toBe("service:web?instance=web-1");
+    expect(second).toBe("service:web?instance=web-2");
+    expect(first).not.toBe(second);
   });
 
-  it("gives a minted-instance pane a live page of its own", () => {
-    // A deliberate "New X" second pane carries a minted instance id, so it no
-    // longer fights the ordinary pane over the service's one page.
-    const second = liveKeyForPanel(
-      "iframe-p-2",
-      params({ serviceName: "web", url: "http://web.example.com", serviceInstanceId: "abc123" }),
+  it("falls back to the panel while an app pane's instance is still landing", () => {
+    // Mid-mint (or mid-adoption of a pre-instances layout) the pane is not an
+    // object yet, exactly as a terminal before its session name is allocated.
+    expect(liveKeyForPanel("iframe-p-1", params({ serviceName: "web", url: "http://web.example.com" }))).toBe(
+      "panel:iframe-p-1",
     );
-    expect(second).toBe("service:web?instance=abc123");
-    expect(second).not.toBe(liveKeyForPanel("iframe-p-1", params({ serviceName: "web" })));
   });
 
   it("files each fleet browser under its own session", () => {
@@ -99,7 +101,7 @@ describe("liveKeyForPanel", () => {
 
   it("keeps a sessionless browser pane off the per-session keys", () => {
     expect(liveKeyForPanel("iframe-p-3", params({ serviceName: "browser", url: "http://b/" }))).toBe(
-      "service:browser?instance=0",
+      "panel:iframe-p-3",
     );
   });
 
@@ -130,10 +132,12 @@ describe("liveKeyForRef", () => {
     expect(liveKeyForRef("service:browser?session=one", "iframe-p-2")).toBe("service:browser?session=one");
   });
 
-  it("maps a bare service ref onto the service's default-instance page", () => {
-    // Membership is per service, so a ref can only ever name the default
-    // page; minted second panes are panes, not members.
-    expect(liveKeyForRef("service:web", "iframe-p-1")).toBe("service:web?instance=0");
+  it("passes an instance ref through as its own live key", () => {
+    expect(liveKeyForRef("service:web?instance=web-2", "app-instance-web-2")).toBe("service:web?instance=web-2");
+  });
+
+  it("maps a bare service ref onto the panel: it is a pin, not an object with a page", () => {
+    expect(liveKeyForRef("service:web", "iframe-p-1")).toBe("panel:iframe-p-1");
   });
 
   it("maps an ad-hoc page's hashed ref back onto its panel", () => {

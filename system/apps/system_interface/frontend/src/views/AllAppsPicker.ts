@@ -25,9 +25,9 @@
  * server-side, and a failed pin leaves the row back where it was (see the
  * `rows` computation in `view`) rather than losing it.
  *
- * Everything is the unfiltered view and pins nothing, since every app on the
- * machine already shows there. Under it the popover is one flat list with no
- * toggles at all: there is no membership here to add.
+ * Everything is the unfiltered view and pins nothing -- its rail already
+ * shows a fixed shortcut row for every openable app -- so under it the
+ * popover has nothing left to list and shows its already-pinned empty state.
  *
  * The popover renders as a bare card and is placed by the rail, which owns the
  * one floating-menu placement (flip, clamp) every one of its menus uses. It
@@ -299,15 +299,16 @@ export function AllAppsPicker(): m.Component<AllAppsPickerAttrs> {
       const apps = pickableApps();
       const visibleApps = filterApps(apps, filterText);
       const projectName = attrs.projectName;
-      // What actually renders: every match under Everything (nothing pinned
-      // there to exclude), and under a project every match the project has not
-      // pinned. A name just clicked to pin is held back out of that exclusion
-      // for one transition's worth of time (`fadingNames`), so its row stays
-      // put and fades rather than going the instant the project's member list
-      // catches up.
+      // What actually renders: under a project, every match the project has
+      // not pinned. Under Everything, nothing -- its rail already shows a
+      // fixed row for every openable app, so this popover has only its
+      // already-pinned empty state to offer there. A name just clicked to pin
+      // is held back out of the exclusion for one transition's worth of time
+      // (`fadingNames`), so its row stays put and fades rather than going the
+      // instant the project's member list catches up.
       const rows =
         projectName === null
-          ? visibleApps
+          ? []
           : unpinnedApps(
               visibleApps,
               attrs.pinnedAppNames.filter((name) => !fadingNames.has(name)),

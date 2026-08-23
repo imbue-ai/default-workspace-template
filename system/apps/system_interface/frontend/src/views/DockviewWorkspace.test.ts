@@ -152,9 +152,21 @@ describe("memberRefForPanelParams", () => {
     expect(memberRefForPanelParams(params)).toBe("terminal:terminal-2");
   });
 
-  it("files a registered app under its service name", () => {
+  it("files an app pane under the instance it shows", () => {
+    const params: PanelParams = {
+      panelType: "iframe",
+      agentId: "agent-primary",
+      serviceName: "web",
+      serviceInstanceId: "web-2",
+    };
+    expect(memberRefForPanelParams(params)).toBe("service:web?instance=web-2");
+  });
+
+  it("files nothing for an app pane whose instance has not landed yet", () => {
+    // Mid-mint (or mid-adoption of a pre-instances layout) the pane is not an
+    // object yet, exactly as a terminal before its session name is allocated.
     const params: PanelParams = { panelType: "iframe", agentId: "agent-primary", serviceName: "web" };
-    expect(memberRefForPanelParams(params)).toBe("service:web");
+    expect(memberRefForPanelParams(params)).toBeNull();
   });
 
   it("files a browser fleet pane under its session, parsed off the url's query", () => {
