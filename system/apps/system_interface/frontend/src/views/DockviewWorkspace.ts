@@ -175,12 +175,8 @@ import {
   getAppInstances,
   refreshAppInstances,
 } from "../models/AppInstances";
-import {
-  applyMemberLocationChange,
-  getMemberLocation,
-  loadMemberLocations,
-  recordMemberLocation,
-} from "../models/MemberLocations";
+import { applyMemberLocationChange, getMemberLocation, loadMemberLocations } from "../models/MemberLocations";
+import { initializeLocationBeaconListener } from "../locationBeacon";
 import { appStoppedDetail, isAppRunning, isAppStoppable, stoppedAppForServiceName } from "../models/appLiveness";
 
 const AUTOSAVE_DEBOUNCE_MS = 1500;
@@ -5261,7 +5257,9 @@ function initializeDockview(parentElement: HTMLElement): void {
 
   // The location beacon itself: a framed app posts the path it is showing one
   // hop up -- to this dockview shell, never further out -- on each page load.
-  window.addEventListener("message", handleLocationBeaconMessage);
+  // The listener lives in its own sanctioned boundary module (see
+  // src/locationBeacon.ts and test_embed_ratchets.py).
+  initializeLocationBeaconListener();
 
   // Terminal session updates (client switched session / session renamed) push
   // over the same WebSocket; reflect them onto the owning tab's title.
@@ -5272,40 +5270,6 @@ function initializeDockview(parentElement: HTMLElement): void {
 
   // Pick this browser's active view and mount its content.
   void initializeActiveView();
-}
-
-/**
- * Ingest one location beacon from a framed app page.
- *
- * The contract (see the vendored file viewer and the build-app scaffold): the
- * page posts ``{type: "minds-location", path}`` to ``window.parent`` -- one
- * hop up, which is this shell -- on each page load. The shell trusts nothing
- * about the message: the origin must be one of this workspace's own service
- * origins, the posting window must belong to a pane this dock is rendering,
- * and that pane must show an app instance (the only objects with a location
- * to keep). What survives is stored by the instance's ref, machine-wide.
- */
-function handleLocationBeaconMessage(event: MessageEvent): void {
-  const data = event.data as { type?: unknown; path?: unknown } | null;
-  if (data === null || typeof data !== "object" || data.type !== "minds-location") return;
-  if (typeof data.path !== "string" || data.path === "") return;
-  // The sender must be one of this workspace's own services: their origins
-  // are derived from the registry exactly as the panes' URLs are, so the
-  // comparison is against what this shell itself would frame.
-  const serviceOrigins = new Set(
-    getApps().map((app) => deriveServiceOrigin(labelForService(app.name)).replace(/\/$/, "")),
-  );
-  if (!serviceOrigins.has(event.origin)) return;
-  // Resolve WHICH pane posted by its window, then which object that pane
-  // shows by its live key -- the instance's ref.
-  const iframes = document.querySelectorAll<HTMLIFrameElement>(`iframe[${IFRAME_PANEL_LIVE_KEY_ATTR}]`);
-  for (const iframe of iframes) {
-    if (iframe.contentWindow !== event.source) continue;
-    const liveKey = iframe.getAttribute(IFRAME_PANEL_LIVE_KEY_ATTR);
-    if (liveKey === null || instanceNameFromRef(liveKey) === null) return;
-    recordMemberLocation(liveKey, data.path);
-    return;
-  }
 }
 
 async function executeAppInstanceDestroy(ref: string, panelId: string): Promise<void> {
