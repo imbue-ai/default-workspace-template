@@ -30,7 +30,7 @@ import m from "mithril";
 import { getPrimaryAgentId } from "../base-path";
 import { getApps } from "../models/AgentManager";
 import type { AppEntry } from "../models/AgentManager";
-import { appStoppedDetail, isAppRunning } from "../models/appLiveness";
+import { appStoppedDetail, isAppRunning, isAppStoppable } from "../models/appLiveness";
 import {
   EVERYTHING_VIEW_ID,
   EVERYTHING_VIEW_NAME,
@@ -755,9 +755,34 @@ export function Sidebar(): m.Component<SidebarAttrs> {
       // Withheld for the primary agent, exactly as the tab's own build
       // withholds it: that agent runs the workspace's services, so quitting it
       // would take the machine down. Both surfaces recognize it by id rather
-      // than by name, since a chat can be renamed to anything.
-      quit: isPrimaryAgentRow(row) ? null : { label: `Quit ${row.label}`, run: () => attrs.onDeleteFromMachine(row) },
+      // than by name, since a chat can be renamed to anything. An app's slot
+      // is the reversible service-level Stop/Start instead of a destroy (see
+      // ``railQuitSlot``).
+      quit: railQuitSlot(row, attrs),
     };
+  }
+
+  /** The destructive-slot verb for one rail row, or null when the row has none.
+   *
+   *  For an app the slot is the reversible, service-level "Stop {name}" (or
+   *  "Start {name}" while stopped), and only for an app the workspace can
+   *  honestly stop -- supervised and non-essential. The workspace half
+   *  (``destroyMemberRow``) reads the same liveness, so label and act agree. */
+  function railQuitSlot(
+    row: SidebarTabRow,
+    attrs: SidebarAttrs,
+  ): { label: string; run: () => void; isDestructive?: boolean } | null {
+    if (row.kind === "app") {
+      const app = getApps().find((candidate) => candidate.name === serviceNameFromRef(row.ref));
+      if (app === undefined || !isAppStoppable(app)) return null;
+      return {
+        label: `${isAppRunning(app) ? "Stop" : "Start"} ${row.label}`,
+        isDestructive: false,
+        run: () => attrs.onDeleteFromMachine(row),
+      };
+    }
+    if (isPrimaryAgentRow(row)) return null;
+    return { label: `Quit ${row.label}`, run: () => attrs.onDeleteFromMachine(row) };
   }
 
   async function createNewProject(attrs: SidebarAttrs): Promise<void> {

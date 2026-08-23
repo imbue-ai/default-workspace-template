@@ -75,6 +75,7 @@ from imbue.system_interface.server import _handle_client_state_message
 from imbue.system_interface.server import _stream_filtered_events
 from imbue.system_interface.server import create_application
 from imbue.system_interface.server import render_frontend_not_built_page
+from imbue.system_interface.testing import FakeSupervisorServer
 from imbue.system_interface.testing import RecordingMngrMessenger
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import close_ws
@@ -4854,6 +4855,101 @@ def test_deregister_app_broadcasts_the_projects_it_left(tmp_path: Path, monkeypa
         "type": "project_members_changed",
         "project_ids": ["project-1"],
     }
+
+
+def _app_with_supervised_app(name: str, program: str) -> Flask:
+    """A workspace app whose registry holds one supervised app under ``name``."""
+    agent_manager = AgentManager.build(WebSocketBroadcaster())
+    agent_manager._apps = [AppEntry(name=name, url="http://localhost:8090", program=program)]
+    return create_application(build_test_state(agent_manager=agent_manager))
+
+
+def test_stop_and_start_app_drive_the_supervised_program(
+    fake_supervisor: FakeSupervisorServer,
+) -> None:
+    """Stop and start reach supervisord and answer the new derived liveness.
+
+    Both are idempotent: stopping a stopped program and starting a running one
+    are the no-op case, not errors -- there is nothing for the caller to
+    recover from.
+    """
+    fake_supervisor.statename_by_program["docs-viewer"] = "RUNNING"
+    test_client = _app_with_supervised_app("docs-viewer", "docs-viewer").test_client()
+
+    stopped = test_client.post("/api/apps/docs-viewer/stop")
+    assert stopped.status_code == 200
+    assert stopped.get_json() == {"name": "docs-viewer", "is_running": False}
+    assert fake_supervisor.statename_by_program["docs-viewer"] == "STOPPED"
+
+    stopped_again = test_client.post("/api/apps/docs-viewer/stop")
+    assert stopped_again.status_code == 200
+    assert stopped_again.get_json() == {"name": "docs-viewer", "is_running": False}
+
+    started = test_client.post("/api/apps/docs-viewer/start")
+    assert started.status_code == 200
+    assert started.get_json() == {"name": "docs-viewer", "is_running": True}
+    assert fake_supervisor.statename_by_program["docs-viewer"] == "RUNNING"
+
+    started_again = test_client.post("/api/apps/docs-viewer/start")
+    assert started_again.status_code == 200
+    assert started_again.get_json() == {"name": "docs-viewer", "is_running": True}
+
+
+def test_stop_app_refuses_the_essential_services_unknown_names_and_programless_rows(
+    fake_supervisor: FakeSupervisorServer,
+) -> None:
+    """The essential set is refused by name even when a hand-edited registry
+    grants it a program; a row without a program has nothing here to stop."""
+    fake_supervisor.statename_by_program["terminal"] = "RUNNING"
+    agent_manager = AgentManager.build(WebSocketBroadcaster())
+    agent_manager._apps = [
+        AppEntry(name="terminal", url="http://localhost:7681", program="terminal"),
+        AppEntry(name="docs-viewer", url="http://localhost:8090"),
+    ]
+    test_client = create_application(build_test_state(agent_manager=agent_manager)).test_client()
+
+    assert test_client.post("/api/apps/terminal/stop").status_code == 400
+    assert test_client.post("/api/apps/system_interface/stop").status_code == 400
+    assert test_client.post("/api/apps/terminal/start").status_code == 400
+    assert test_client.post("/api/apps/unknown-app/stop").status_code == 404
+    assert test_client.post("/api/apps/unknown-app/start").status_code == 404
+    programless = test_client.post("/api/apps/docs-viewer/stop")
+    assert programless.status_code == 400
+    assert "no supervised program" in programless.get_json()["detail"]
+    # Nothing above reached supervisord: the terminal is still running.
+    assert fake_supervisor.statename_by_program["terminal"] == "RUNNING"
+
+
+def test_stop_app_reports_an_unreachable_supervisord(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MINDS_SUPERVISOR_SOCKET", str(tmp_path / "absent.sock"))
+    test_client = _app_with_supervised_app("docs-viewer", "docs-viewer").test_client()
+
+    response = test_client.post("/api/apps/docs-viewer/stop")
+
+    assert response.status_code == 502
+    assert "could not reach supervisord" in response.get_json()["detail"]
+
+
+def test_stop_app_broadcasts_the_refreshed_liveness(
+    fake_supervisor: FakeSupervisorServer,
+) -> None:
+    """The stop's own request lands the dimmed state on every client -- the
+    liveness refresh runs inside the request rather than waiting for a poll."""
+    fake_supervisor.statename_by_program["docs-viewer"] = "RUNNING"
+    agent_manager = AgentManager.build(WebSocketBroadcaster())
+    agent_manager._apps = [AppEntry(name="docs-viewer", url="http://localhost:8090", program="docs-viewer")]
+    workspace_app = create_application(build_test_state(agent_manager=agent_manager))
+    test_client = workspace_app.test_client()
+    client_queue = _register_fake_client(workspace_app, "client-1", "desktop")
+
+    assert test_client.post("/api/apps/docs-viewer/stop").status_code == 200
+
+    message = _next_broadcast_message(client_queue)
+    assert message["type"] == "apps_updated"
+    assert message["apps"][0]["name"] == "docs-viewer"
+    assert message["apps"][0]["is_running"] is False
 
 
 def test_project_mutations_broadcast_to_every_client(app: Flask) -> None:

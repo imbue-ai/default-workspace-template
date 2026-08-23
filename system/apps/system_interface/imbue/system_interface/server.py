@@ -63,6 +63,10 @@ from imbue.system_interface.harnesses.registry import get_harness_spec
 from imbue.system_interface.harnesses.session import SendOutcome
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.layout_ops import LayoutMutex
+from imbue.system_interface.liveness import SupervisorProgramActionError
+from imbue.system_interface.liveness import start_supervisor_program
+from imbue.system_interface.liveness import stop_supervisor_program
+from imbue.system_interface.liveness import supervisor_socket_path
 from imbue.system_interface.layout_ops import allocate_next_terminal_name
 from imbue.system_interface.layout_ops import allocate_terminal_panel_id
 from imbue.system_interface.layout_ops import filter_user_terminal_sessions
@@ -83,6 +87,7 @@ from imbue.system_interface.models import AgentListResponse
 from imbue.system_interface.models import AgentNameConflictError
 from imbue.system_interface.models import AgentRenameError
 from imbue.system_interface.models import AgentRestartError
+from imbue.system_interface.models import AppEntry
 from imbue.system_interface.models import AttachmentError
 from imbue.system_interface.models import AttachmentUploadResponse
 from imbue.system_interface.models import CreateAgentResponse
@@ -366,6 +371,13 @@ _BROWSER_SERVICE_NAME = "browser"
 # the registry, so the deregister endpoint has to refuse it explicitly -- pulling
 # its own row would leave the workspace with no origin to serve the UI from.
 _SHELL_SERVICE_NAME = "system_interface"
+
+# The services the stop/start endpoints refuse outright: the shell that serves
+# the UI, and the terminal service whose ttyd carries every terminal tab.
+# Neither registers a ``program`` (see system/supervisord.conf), so this is
+# defense in depth for hand-edited registries. Everything else with a
+# ``program`` -- the browser fleet daemon included -- is stoppable.
+_ESSENTIAL_SERVICE_NAMES = frozenset({_SHELL_SERVICE_NAME, "terminal"})
 
 _SERVICE_REF_PREFIX = "service:"
 
@@ -2301,6 +2313,78 @@ def _deregister_app_endpoint(name: str) -> Response:
     return _json_response({"name": name, "project_ids": project_ids, "is_process_stopped": False})
 
 
+def _resolve_stoppable_app(name: str) -> "AppEntry | Response":
+    """The registered app behind a stop/start request, or the refusal response.
+
+    Shared by the two endpoints so what may be stopped and what may be started
+    stay the same set: 404 for an unknown name, 400 for the essential services
+    (defense in depth against a hand-edited registry granting them a
+    ``program``), 400 for a row without a ``program`` (nothing here supervises
+    the process behind it).
+    """
+    if name in _ESSENTIAL_SERVICE_NAMES:
+        error = ErrorResponse(detail=f"{name!r} is an essential service and cannot be stopped or started here")
+        return _json_response(error.model_dump(), status_code=400)
+    app_entry = get_state().agent_manager.get_app_by_name(name)
+    if app_entry is None:
+        error = ErrorResponse(detail=f"No registered app named {name!r}")
+        return _json_response(error.model_dump(), status_code=404)
+    if not app_entry.program:
+        error = ErrorResponse(
+            detail=(
+                f"App {name!r} has no supervised program registered, so it cannot be "
+                "stopped or started from the workspace (it is managed outside it)"
+            )
+        )
+        return _json_response(error.model_dump(), status_code=400)
+    return app_entry
+
+
+def _finish_app_lifecycle_action(name: str) -> Response:
+    """Land a stop/start's outcome: re-probe liveness now and answer the new state.
+
+    The refresh broadcasts ``apps_updated`` itself when anything changed, so
+    every client's dimming and placeholders flip in the same beat as the
+    response.
+    """
+    agent_manager: AgentManager = get_state().agent_manager
+    agent_manager.refresh_app_liveness()
+    refreshed = agent_manager.get_app_by_name(name)
+    return _json_response({"name": name, "is_running": refreshed.is_running if refreshed is not None else False})
+
+
+def _stop_app_endpoint(name: str) -> Response:
+    """Stop one app's supervisord program. Idempotent; the registry row stays.
+
+    The service level of the two-level lifecycle: the app stays listed, stays
+    filed in its projects, and keeps its origin -- only the program behind it
+    stops. Reversible in one click, so no confirmation gate anywhere on the
+    callers.
+    """
+    resolved = _resolve_stoppable_app(name)
+    if isinstance(resolved, Response):
+        return resolved
+    try:
+        stop_supervisor_program(resolved.program, supervisor_socket_path())
+    except SupervisorProgramActionError as e:
+        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=502)
+    logger.info("Stopped app {} (program {})", name, resolved.program)
+    return _finish_app_lifecycle_action(name)
+
+
+def _start_app_endpoint(name: str) -> Response:
+    """Start one app's supervisord program. Idempotent."""
+    resolved = _resolve_stoppable_app(name)
+    if isinstance(resolved, Response):
+        return resolved
+    try:
+        start_supervisor_program(resolved.program, supervisor_socket_path())
+    except SupervisorProgramActionError as e:
+        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=502)
+    logger.info("Started app {} (program {})", name, resolved.program)
+    return _finish_app_lifecycle_action(name)
+
+
 def _get_screen_capture(agent_id: str) -> Response:
     """Capture the tmux pane content for an agent.
 
@@ -3226,6 +3310,8 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule(
         "/api/apps/<string:name>/deregister", view_func=_deregister_app_endpoint, methods=["POST"]
     )
+    application.add_url_rule("/api/apps/<string:name>/stop", view_func=_stop_app_endpoint, methods=["POST"])
+    application.add_url_rule("/api/apps/<string:name>/start", view_func=_start_app_endpoint, methods=["POST"])
     auth_endpoints.register_routes(application)
     latchkey_endpoints.register_routes(application)
     application.add_url_rule("/api/layout/broadcast", view_func=_layout_broadcast_endpoint, methods=["POST"])

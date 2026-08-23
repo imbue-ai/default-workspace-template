@@ -101,6 +101,14 @@ export function isRenameableKind(kind: ObjectMenuKind): boolean {
  * label because "Share {name}" / "Quit {name}" always names the object the
  * way the surface calling this currently displays it, and only the caller
  * knows what that is right now.
+ *
+ * ``quit`` is the destructive SLOT, not always a destructive ACT: for a chat,
+ * terminal, or browser session it is the confirm-gated "Quit {name}" that ends
+ * the object, while for an app it is the reversible service-level
+ * "Stop {name}" / "Start {name}" (supervisord stop/start; the row and its
+ * memberships stay). The caller says which by ``isDestructive`` -- false keeps
+ * the power icon but drops the destructive tone, since stopping is one click
+ * from undone.
  */
 export interface ObjectMenuActions {
   refresh: () => void;
@@ -108,7 +116,7 @@ export interface ObjectMenuActions {
   rename: () => void;
   hideTab: (() => void) | null;
   removeFromProject: (() => void) | null;
-  quit: { label: string; run: () => void } | null;
+  quit: { label: string; run: () => void; isDestructive?: boolean } | null;
 }
 
 /**
@@ -153,7 +161,12 @@ export function objectMenuEntries(kind: ObjectMenuKind, actions: ObjectMenuActio
     closing.push({ label: "Remove from project", iconName: "minus-circle", run: actions.removeFromProject });
   }
   if (actions.quit !== null) {
-    closing.push({ label: actions.quit.label, iconName: "power", isDestructive: true, run: actions.quit.run });
+    closing.push({
+      label: actions.quit.label,
+      iconName: "power",
+      isDestructive: actions.quit.isDestructive !== false,
+      run: actions.quit.run,
+    });
   }
   // The divider earns its place only when it has something on both sides: a
   // backgrounded terminal still allocating its session has neither a rename,

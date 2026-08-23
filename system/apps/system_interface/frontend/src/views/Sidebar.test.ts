@@ -847,9 +847,11 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
 
   it("keeps an app's verbs reachable from its shortcut row, which is its only row now", () => {
     // The tab list no longer repeats an app, so its shortcut row has to carry
-    // the menu -- otherwise Share and Quit would exist only while the app
+    // the menu -- otherwise Share and Stop would exist only while the app
     // happened to have a tab open.
-    vi.mocked(getApps).mockReturnValue([{ name: "grafana", url: "http://example.test", label: "grafana-abc123" }]);
+    vi.mocked(getApps).mockReturnValue([
+      { name: "grafana", url: "http://example.test", label: "grafana-abc123", program: "grafana" },
+    ]);
     try {
       const rows: SidebarTabRow[] = [{ ref: "service:grafana", kind: "app", label: "Grafana", isOpen: false }];
       const { root, redraw } = mountSidebar(makeAttrs({ rows }));
@@ -871,9 +873,57 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
       // Every verb names the app the way the row does. The registered service
       // name ("grafana") is the app's stable id -- it keys the ref, apps.toml
       // and the supervisord program -- and the share is still keyed by it; it
-      // just no longer surfaces.
+      // just no longer surfaces. The destructive slot is the reversible
+      // service-level Stop, not a destroy: the app is supervised (it carries a
+      // program), so the workspace can honestly stop and start it.
       const menu = root.querySelector<HTMLElement>('.project-rail-menu[role="menu"]');
-      expect(menuItemLabels(menu)).toEqual(["Refresh", "Share Grafana", "Remove from project", "Quit Grafana"]);
+      expect(menuItemLabels(menu)).toEqual(["Refresh", "Share Grafana", "Remove from project", "Stop Grafana"]);
+    } finally {
+      vi.mocked(getApps).mockReturnValue([]);
+    }
+  });
+
+  it("offers Start instead of Stop for a stopped app", () => {
+    vi.mocked(getApps).mockReturnValue([
+      { name: "grafana", url: "http://example.test", label: "grafana-abc123", program: "grafana", is_running: false },
+    ]);
+    try {
+      const rows: SidebarTabRow[] = [{ ref: "service:grafana", kind: "app", label: "Grafana", isOpen: false }];
+      const { root, redraw } = mountSidebar(makeAttrs({ rows }));
+      root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+      redraw();
+      const shortcut = Array.from(root.querySelectorAll(".project-rail-shortcut")).find((element) =>
+        element.textContent?.includes("grafana"),
+      );
+      shortcut?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+      redraw();
+
+      const menu = root.querySelector<HTMLElement>('.project-rail-menu[role="menu"]');
+      expect(menuItemLabels(menu)).toContain("Start Grafana");
+      expect(menuItemLabels(menu)).not.toContain("Stop Grafana");
+    } finally {
+      vi.mocked(getApps).mockReturnValue([]);
+    }
+  });
+
+  it("offers no stop or start for an app without a supervised program", () => {
+    // The workspace cannot honestly stop what nothing here supervises, and the
+    // old deregister-flavored Quit is gone entirely: removal is the mind's job
+    // via update-app.
+    vi.mocked(getApps).mockReturnValue([{ name: "grafana", url: "http://example.test", label: "grafana-abc123" }]);
+    try {
+      const rows: SidebarTabRow[] = [{ ref: "service:grafana", kind: "app", label: "Grafana", isOpen: false }];
+      const { root, redraw } = mountSidebar(makeAttrs({ rows }));
+      root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+      redraw();
+      const shortcut = Array.from(root.querySelectorAll(".project-rail-shortcut")).find((element) =>
+        element.textContent?.includes("grafana"),
+      );
+      shortcut?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+      redraw();
+
+      const menu = root.querySelector<HTMLElement>('.project-rail-menu[role="menu"]');
+      expect(menuItemLabels(menu)).toEqual(["Refresh", "Share Grafana", "Remove from project"]);
     } finally {
       vi.mocked(getApps).mockReturnValue([]);
     }
