@@ -682,6 +682,41 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
     expect(labels).toEqual(["Chat", "File Viewer", "Browser", "Terminal"]);
   });
 
+  it("opens the File Viewer once a files app backs it", () => {
+    vi.mocked(getApps).mockReturnValue([{ name: "files", url: "http://files.test", label: "files-abc123" }]);
+    try {
+      const attrs = makeAttrs();
+      const { root, redraw } = mountSidebar(attrs);
+      root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+      redraw();
+
+      const filesButton = Array.from(root.querySelectorAll("button.project-rail-shortcut")).find(
+        (el) => el.textContent === "File Viewer",
+      );
+      expect(filesButton?.hasAttribute("disabled")).toBe(false);
+      click(filesButton ?? null);
+      expect(attrs.onOpenTabType).toHaveBeenCalledWith("files");
+    } finally {
+      vi.mocked(getApps).mockReturnValue([]);
+    }
+  });
+
+  it("keeps the File Viewer disabled where no app backs it", () => {
+    // A workspace built before the dufs "files" service shipped registers no
+    // such app; the row stays put but must not pretend to work.
+    const attrs = makeAttrs();
+    const { root, redraw } = mountSidebar(attrs);
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    const filesButton = Array.from(root.querySelectorAll("button.project-rail-shortcut")).find(
+      (el) => el.textContent === "File Viewer",
+    );
+    expect(filesButton?.hasAttribute("disabled")).toBe(true);
+    click(filesButton ?? null);
+    expect(attrs.onOpenTabType).not.toHaveBeenCalled();
+  });
+
   it("reports an unpin without starting the shortcut", () => {
     const attrs = makeAttrs();
     const { root, redraw } = mountSidebar(attrs);

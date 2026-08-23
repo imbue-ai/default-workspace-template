@@ -59,9 +59,11 @@ const FILTER_ROW_THRESHOLD = 8;
 // surrounding chrome UI is not a tab-able app -- opening it would nest the
 // whole workspace inside one of its own panels -- and the terminal and
 // browser services are fleets with their own shortcut rows, reached by
-// creating a session rather than by opening the service. Same exclusions the
-// rail's own shortcut list makes.
-const HIDDEN_APP_NAMES: ReadonlySet<string> = new Set(["system_interface", "terminal", "browser"]);
+// creating a session rather than by opening the service. The file viewer
+// likewise has its own built-in rail row (the File Viewer shortcut), so its
+// backing "files" service listing here too would just be the same app twice.
+// Same exclusions the rail's own shortcut list makes.
+const HIDDEN_APP_NAMES: ReadonlySet<string> = new Set(["system_interface", "terminal", "browser", "files"]);
 
 // The size every glyph in this list is drawn at, app icon and generic alike.
 const ROW_GLYPH_SIZE = 14;

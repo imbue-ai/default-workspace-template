@@ -244,6 +244,10 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # below SHARED_BROWSER, where those Chromium processes live: a coordinator
     # ranked above them would be picked first every time and free nothing.
     "browser": 70,
+    # The file viewer (dufs): a tiny static file server holding almost no
+    # memory, restarted by supervisord if shed, so it is the most expendable
+    # built-in service of all.
+    "files": 75,
     "user": USER_SERVICE,
 }
 

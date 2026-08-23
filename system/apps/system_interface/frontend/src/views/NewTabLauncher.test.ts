@@ -10,6 +10,14 @@ vi.mock("../base-path", () => ({
   areIntroductoryAgentsEnabled: () => introductoryAgentsEnabled,
 }));
 
+// The launcher asks the machine's app list whether a "files" app backs its
+// file-viewer tile; a mutable stand-in lets each case pose a different machine
+// (AgentManager's real list is module state fed by the WebSocket).
+const appState: { apps: { name: string; url: string; label: string }[] } = { apps: [] };
+vi.mock("../models/AgentManager", () => ({
+  getApps: () => appState.apps,
+}));
+
 // Mithril captures `requestAnimationFrame` at import time so it can schedule
 // redraws. Vitest's default (node) environment has no such global, so provide
 // a polyfill before any import is evaluated.
@@ -324,6 +332,17 @@ describe("NewTabLauncher", () => {
     expect(tiles[1].attrs?.["aria-disabled"]).toBe("true");
     expect(tiles[1].attrs?.onclick).toBeUndefined();
     expect(tiles[0].attrs?.onclick).toBeTypeOf("function");
+  });
+
+  it("lets the file viewer act once a files app backs it", () => {
+    appState.apps = [{ name: "files", url: "http://files.test", label: "files-abc123" }];
+    try {
+      const tiles = buttonsOf(render()).slice(0, 4);
+      expect(tiles[1].attrs?.["aria-disabled"]).toBeUndefined();
+      expect(tiles[1].attrs?.onclick).toBeTypeOf("function");
+    } finally {
+      appState.apps = [];
+    }
   });
 
   it("offers the harness tiles only where the host enables the alt harnesses", () => {
