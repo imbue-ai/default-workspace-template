@@ -444,3 +444,19 @@ def test_route_get_account_reports_plan_entitlements_and_usage(monkeypatch: pyte
     assert body["entitlements"]["max_tunnels"] == 0
     assert body["entitlements"]["max_services_per_tunnel"] == 0
     assert body["usage"]["tunnels"] == 0
+
+
+def test_admin_get_account_reports_suspension_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, entitlements_store, _litellm, st_backend = _make_account_admin_test_client(monkeypatch)
+    st_backend.sign_up(tenant_id="public", email="somebody@example.com", password="password123")
+
+    fresh = client.get("/admin/accounts/somebody@example.com", headers=_admin_key_headers()).json()
+    assert fresh["suspended_at"] is None
+    assert fresh["suspended_reason"] is None
+
+    entitlements_store.update_entitlements(
+        fresh["user_id"], {"suspended_at": "2026-08-22T00:00:00+00:00", "suspended_reason": "abuse"}
+    )
+    suspended = client.get("/admin/accounts/somebody@example.com", headers=_admin_key_headers()).json()
+    assert suspended["suspended_at"] == "2026-08-22T00:00:00+00:00"
+    assert suspended["suspended_reason"] == "abuse"

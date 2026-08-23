@@ -836,3 +836,21 @@ def test_build_container_file_write_command_seed_only_creates_when_absent_and_sk
     target.write_text(edited)
     _run_container_file_write_command(target, seed, is_seed_only=True)
     assert target.read_text() == edited
+
+
+def test_split_box_health_output_reports_missing_transfer_binaries() -> None:
+    output = (
+        "md0 : active raid1 sda1[0] sdb1[1]\nMNGR_BOX_HEALTH_SPLIT\n"
+        "Filename Type Size Used Priority\nMNGR_BOX_HEALTH_SPLIT\n"
+        "s5cmd\nage\n"
+    )
+    mdstat_text, proc_swaps_text, missing_binaries = hosts_mod._split_box_health_output(output)
+    assert "md0" in mdstat_text
+    assert "Filename" in proc_swaps_text
+    assert missing_binaries == ["s5cmd", "age"]
+
+
+def test_split_box_health_output_reports_no_missing_binaries_on_a_healthy_box() -> None:
+    output = "md0 : active raid1 sda1[0] sdb1[1]\nMNGR_BOX_HEALTH_SPLIT\nswaps\nMNGR_BOX_HEALTH_SPLIT\n"
+    _mdstat, _swaps, missing_binaries = hosts_mod._split_box_health_output(output)
+    assert missing_binaries == []

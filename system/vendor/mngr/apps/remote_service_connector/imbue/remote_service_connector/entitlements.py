@@ -71,9 +71,16 @@ PLAN_ALLY = "ally"
 # milliseconds SuperTokens uses for ``time_joined``.
 _PREEXISTING_ACCOUNT_CUTOFF_EPOCH_MS = 1784592000000
 
+# Columns the suspension flag lives in. Orthogonal to plans and quotas on
+# purpose: suspend/unsuspend never touches the entitlement values, so
+# unsuspending restores the account exactly (operator bumps included).
+SUSPENSION_COLUMN_NAMES: tuple[str, ...] = ("suspended_at", "suspended_reason")
+
 _QUOTA_COLUMNS_SQL = ", ".join(QUOTA_ENTITLEMENT_NAMES)
 _PLAN_COLUMNS_SQL = f"plan_name, {_QUOTA_COLUMNS_SQL}"
-_ENTITLEMENT_COLUMNS_SQL = f"user_id, user_id_prefix, plan_name, {_QUOTA_COLUMNS_SQL}"
+_ENTITLEMENT_COLUMNS_SQL = (
+    f"user_id, user_id_prefix, plan_name, {_QUOTA_COLUMNS_SQL}, {', '.join(SUSPENSION_COLUMN_NAMES)}"
+)
 
 
 class AccountEntitlements(PlanEntitlements):
@@ -82,6 +89,10 @@ class AccountEntitlements(PlanEntitlements):
     user_id: str = Field(description="Full SuperTokens user id (row key)")
     user_id_prefix: str = Field(description="16-hex user-id prefix used to namespace leases/buckets")
     plan_name: str = Field(description="The plan this row was last assigned from")
+    suspended_at: str | None = Field(default=None, description="When the account was suspended (None = not suspended)")
+    suspended_reason: str | None = Field(
+        default=None, description="Operator-recorded suspension reason (internal; never shown to the user)"
+    )
 
     def quota_values(self) -> PlanEntitlements:
         return PlanEntitlements(
@@ -121,11 +132,15 @@ class PostgresEntitlementsStore:
         return {"plan_name": row[0], **_quota_values_from_row(row, 1)}
 
     def _entitlements_row_to_dict(self, row: tuple[Any, ...]) -> dict[str, Any]:
+        suspension_offset = 3 + len(QUOTA_ENTITLEMENT_NAMES)
+        suspended_at = row[suspension_offset]
         return {
             "user_id": row[0],
             "user_id_prefix": row[1],
             "plan_name": row[2],
             **_quota_values_from_row(row, 3),
+            "suspended_at": str(suspended_at) if suspended_at is not None else None,
+            "suspended_reason": row[suspension_offset + 1],
         }
 
     def get_plan(self, plan_name: str) -> dict[str, Any] | None:
@@ -190,7 +205,7 @@ class PostgresEntitlementsStore:
             conn.close()
 
     def update_entitlements(self, user_id: str, values: dict[str, Any]) -> None:
-        allowed = {"plan_name", *QUOTA_ENTITLEMENT_NAMES}
+        allowed = {"plan_name", *QUOTA_ENTITLEMENT_NAMES, *SUSPENSION_COLUMN_NAMES}
         unknown = set(values) - allowed
         if unknown:
             raise UnknownEntitlementColumnError(sorted(unknown))

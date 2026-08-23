@@ -331,3 +331,39 @@ def test_sweep_scoped_to_one_user_leaves_others_untouched() -> None:
     assert counters["keys_downgraded"] == 1
     assert ops.account_tokens[key_one]["access"] == "read"
     assert ops.account_tokens[key_two]["access"] == "readwrite"
+
+
+def test_sweep_skips_suspended_owners_entirely() -> None:
+    """Suspension owns a suspended account's keys: the sweep neither downgrades nor restores them."""
+    ops, store, entitlements_store = _sweep_fixtures()
+    _seed_sweep_row(entitlements_store, "user-1", "u1prefix", 100)
+    entitlements_store.update_entitlements(
+        "user-1", {"suspended_at": "2026-08-22T00:00:00+00:00", "suspended_reason": "abuse"}
+    )
+    key_id = _add_bucket_with_key(ops, store, "user-1", "u1prefix--data")
+    ops.usage_bytes_by_bucket["u1prefix--data"] = 10_000
+
+    counters = _run_sweep(ops, store, entitlements_store)
+
+    assert counters["users_skipped_suspended"] == 1
+    assert counters["keys_downgraded"] == 0
+    assert ops.account_tokens[key_id]["access"] == "readwrite"
+
+
+def test_sweep_never_touches_a_key_under_suspension_enforcement() -> None:
+    """The per-key guard: a suspension-marked key is left alone even mid-race."""
+    ops, store, entitlements_store = _sweep_fixtures()
+    _seed_sweep_row(entitlements_store, "user-1", "u1prefix", 10**12)
+    key_id = _add_bucket_with_key(ops, store, "user-1", "u1prefix--data")
+    # Model the suspend fan-out having flipped the key while the row itself
+    # reads unsuspended (state changed mid-pass).
+    ops.update_bucket_token_access(key_id, "u1prefix--data", "read", "mngr-r2:u1prefix--data:default")
+    store.set_suspension_access(key_id, "read")
+    store.set_enforced_access(key_id, "read")
+
+    counters = _run_sweep(ops, store, entitlements_store)
+
+    # Under quota, an enforced_access key would normally be restored; the
+    # suspension marker blocks it.
+    assert counters["keys_restored"] == 0
+    assert ops.account_tokens[key_id]["access"] == "read"

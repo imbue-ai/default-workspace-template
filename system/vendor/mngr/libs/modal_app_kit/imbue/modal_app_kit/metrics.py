@@ -23,8 +23,8 @@ import logging
 from collections.abc import Mapping
 from typing import Final
 
+from imbue.modal_app_kit.request_logging import deployed_minds_env_name
 from imbue.modal_app_kit.request_logging import ensure_info_log_handler
-from imbue.modal_app_kit.request_logging import minds_env_name_for_log_lines
 
 logger = logging.getLogger(__name__)
 # At import (single-threaded under the import lock), so concurrent emitters
@@ -43,7 +43,7 @@ def format_metric_record(metric_name: str, value: float, tags: Mapping[str, str]
         "value": value,
         "tags": dict(tags),
     }
-    env_name = minds_env_name_for_log_lines()
+    env_name = deployed_minds_env_name()
     if env_name:
         record["minds_env"] = env_name
     return json.dumps(record, ensure_ascii=True, separators=(",", ":"))

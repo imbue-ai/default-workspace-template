@@ -418,6 +418,9 @@ _EXEMPT_ROUTES: dict[tuple[str, str], str] = {
     ("GET", "/admin/accounts/{email}"): _OPERATOR,
     ("POST", "/admin/accounts/{email}/plan"): _OPERATOR,
     ("POST", "/admin/accounts/{email}/quota"): _OPERATOR,
+    ("POST", "/admin/accounts/{email}/revoke-sessions"): _OPERATOR,
+    ("POST", "/admin/accounts/{email}/suspend"): _OPERATOR,
+    ("POST", "/admin/accounts/{email}/unsuspend"): _OPERATOR,
     ("GET", "/admin/relays"): _OPERATOR,
     ("POST", "/admin/relays"): _OPERATOR,
     ("DELETE", "/admin/relays/{relay_id}"): _OPERATOR,
@@ -425,6 +428,7 @@ _EXEMPT_ROUTES: dict[tuple[str, str], str] = {
     ("POST", "/admin/sweep/r2"): _OPERATOR,
     ("POST", "/admin/test-signup"): _OPERATOR,
     ("POST", "/admin/workspaces/{host_db_id}/abandon"): _OPERATOR,
+    ("POST", "/admin/workspaces/{host_db_id}/stop"): _OPERATOR,
 }
 
 

@@ -20,8 +20,10 @@ from imbue.minds_admin.envs.local_store import DevEnvSecretsModel
 from imbue.minds_admin.envs.local_store import client_config_exists
 from imbue.minds_admin.envs.local_store import delete_env_root
 from imbue.minds_admin.envs.local_store import env_root_exists
+from imbue.minds_admin.envs.local_store import read_analytics_override
 from imbue.minds_admin.envs.local_store import read_client_config_file
 from imbue.minds_admin.envs.local_store import read_secrets_file
+from imbue.minds_admin.envs.local_store import write_analytics_override
 from imbue.minds_admin.envs.local_store import write_client_config
 from imbue.minds_admin.envs.local_store import write_secrets_file
 
@@ -221,3 +223,21 @@ def test_dev_env_secrets_model_rejects_extra_keys() -> None:
     """
     with pytest.raises(ValidationError):
         DevEnvSecretsModel.model_validate({"secrets": {}, "extra_key": "oops"})
+
+
+def test_analytics_override_round_trips_and_defaults_to_none(_isolated_home: Path) -> None:
+    env_name = DevEnvName("dev-analytics-override")
+
+    assert read_analytics_override(env_name) is None
+    write_analytics_override(env_name, True)
+    assert read_analytics_override(env_name) is True
+    write_analytics_override(env_name, False)
+    assert read_analytics_override(env_name) is False
+
+
+def test_analytics_override_treats_a_malformed_value_as_unset(_isolated_home: Path) -> None:
+    env_name = DevEnvName("dev-analytics-mangled")
+    override_path = write_analytics_override(env_name, True)
+    override_path.write_text("maybe?")
+
+    assert read_analytics_override(env_name) is None
