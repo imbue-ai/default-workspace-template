@@ -122,7 +122,9 @@ def probe_supervisor_program(program: str, socket_path: Path) -> bool | None:
     probe rather than presenting a guess as supervisord's answer.
     """
     try:
-        process_info = _supervisor_proxy(socket_path).supervisor.getProcessInfo(program)
+        # ``object`` collapses the marshallable union the proxy stub infers, so
+        # the isinstance below is the one narrowing the read relies on.
+        process_info: object = _supervisor_proxy(socket_path).supervisor.getProcessInfo(program)
     except xmlrpc.client.Fault as e:
         _loguru_logger.debug("Supervisord has no program {!r}: {}", program, e.faultString)
         return None

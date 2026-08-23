@@ -63,10 +63,6 @@ from imbue.system_interface.harnesses.registry import get_harness_spec
 from imbue.system_interface.harnesses.session import SendOutcome
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.layout_ops import LayoutMutex
-from imbue.system_interface.liveness import SupervisorProgramActionError
-from imbue.system_interface.liveness import start_supervisor_program
-from imbue.system_interface.liveness import stop_supervisor_program
-from imbue.system_interface.liveness import supervisor_socket_path
 from imbue.system_interface.layout_ops import allocate_next_terminal_name
 from imbue.system_interface.layout_ops import allocate_terminal_panel_id
 from imbue.system_interface.layout_ops import filter_user_terminal_sessions
@@ -75,6 +71,10 @@ from imbue.system_interface.layout_ops import is_destroyable_terminal_session
 from imbue.system_interface.layout_ops import is_known_op
 from imbue.system_interface.layout_ops import is_mutating_op
 from imbue.system_interface.layout_ops import is_sessionless_browser_ref
+from imbue.system_interface.liveness import SupervisorProgramActionError
+from imbue.system_interface.liveness import start_supervisor_program
+from imbue.system_interface.liveness import stop_supervisor_program
+from imbue.system_interface.liveness import supervisor_socket_path
 from imbue.system_interface.layout_ops import layout_inspect
 from imbue.system_interface.layout_ops import layout_list
 from imbue.system_interface.layout_ops import parse_tmux_sessions_output

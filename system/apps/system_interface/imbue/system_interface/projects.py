@@ -877,18 +877,6 @@ def set_shortcut_override(
         return overrides
 
 
-def get_shortcut_overrides(layout_dir: Path, project_id: str) -> dict[str, dict[str, Any]]:
-    """One project's sparse shortcut override map (legacy shapes folded in).
-
-    Raises ProjectNotFoundError for an unknown id.
-    """
-    with _projects_lock:
-        meta = _read_meta_unlocked(layout_dir)
-        entry = meta["project_by_id"].get(project_id)
-        if entry is None:
-            raise ProjectNotFoundError(project_id)
-        return _entry_shortcut_overrides(entry)
-
 
 def remove_member(layout_dir: Path, project_id: str, ref: str) -> None:
     """Drop ``ref`` from ``project_id``'s member list.

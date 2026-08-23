@@ -115,25 +115,31 @@ class FakeSupervisorServer:
         self._server.server_close()
         self._thread.join(timeout=5)
 
-    def _get_process_info(self, name: str) -> dict[str, str]:
-        if name not in self.statename_by_program:
-            raise xmlrpc.client.Fault(_SUPERVISOR_FAULT_BAD_NAME, f"BAD_NAME: {name}")
-        return {"name": name, "statename": self.statename_by_program[name]}
+    # The dispatch protocol hands every RPC argument over as a marshallable
+    # value, so the handlers take ``object`` and stringify -- exactly what the
+    # wire delivers.
+    def _get_process_info(self, name: object) -> dict[str, str]:
+        program = str(name)
+        if program not in self.statename_by_program:
+            raise xmlrpc.client.Fault(_SUPERVISOR_FAULT_BAD_NAME, f"BAD_NAME: {program}")
+        return {"name": program, "statename": self.statename_by_program[program]}
 
-    def _start_process(self, name: str, _wait: bool) -> bool:
-        if name not in self.statename_by_program:
-            raise xmlrpc.client.Fault(_SUPERVISOR_FAULT_BAD_NAME, f"BAD_NAME: {name}")
-        if self.statename_by_program[name] in ("RUNNING", "STARTING"):
-            raise xmlrpc.client.Fault(_SUPERVISOR_FAULT_ALREADY_STARTED, f"ALREADY_STARTED: {name}")
-        self.statename_by_program[name] = "RUNNING"
+    def _start_process(self, name: object, _wait: object) -> bool:
+        program = str(name)
+        if program not in self.statename_by_program:
+            raise xmlrpc.client.Fault(_SUPERVISOR_FAULT_BAD_NAME, f"BAD_NAME: {program}")
+        if self.statename_by_program[program] in ("RUNNING", "STARTING"):
+            raise xmlrpc.client.Fault(_SUPERVISOR_FAULT_ALREADY_STARTED, f"ALREADY_STARTED: {program}")
+        self.statename_by_program[program] = "RUNNING"
         return True
 
-    def _stop_process(self, name: str, _wait: bool) -> bool:
-        if name not in self.statename_by_program:
-            raise xmlrpc.client.Fault(_SUPERVISOR_FAULT_BAD_NAME, f"BAD_NAME: {name}")
-        if self.statename_by_program[name] not in ("RUNNING", "STARTING"):
-            raise xmlrpc.client.Fault(_SUPERVISOR_FAULT_NOT_RUNNING, f"NOT_RUNNING: {name}")
-        self.statename_by_program[name] = "STOPPED"
+    def _stop_process(self, name: object, _wait: object) -> bool:
+        program = str(name)
+        if program not in self.statename_by_program:
+            raise xmlrpc.client.Fault(_SUPERVISOR_FAULT_BAD_NAME, f"BAD_NAME: {program}")
+        if self.statename_by_program[program] not in ("RUNNING", "STARTING"):
+            raise xmlrpc.client.Fault(_SUPERVISOR_FAULT_NOT_RUNNING, f"NOT_RUNNING: {program}")
+        self.statename_by_program[program] = "STOPPED"
         return True
 
 
