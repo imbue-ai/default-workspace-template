@@ -1,12 +1,16 @@
-"""Project-specific ratchets confining postMessage to the embed contract.
+"""Project-specific ratchets confining postMessage to the sanctioned boundaries.
 
-All messaging between this UI and the embedding minds chrome flows through
-the vendored embed contract (imported via ``src/embed.ts``); see minds'
-``docs/embed-contract.md``. These ratchets are allowlist-by-file: any NEW
-file that touches ``postMessage`` or registers a ``message`` listener fails
-immediately, keeping the whole boundary greppable and auditable in one
-place. Lives outside ``test_ratchets.py`` because that file must define the
-same test set across every project (enforced by ``test_meta_ratchets.py``).
+Cross-frame messaging flows through exactly two files, each owning one
+boundary: messaging with the embedding minds chrome goes through the
+vendored embed contract (imported via ``src/embed.ts``; see minds'
+``docs/embed-contract.md``), and the location beacons the workspace's own
+framed apps post go through ``src/locationBeacon.ts`` (origin-validated
+against the workspace's own service origins; see that module's docstring).
+These ratchets are allowlist-by-file: any NEW file that touches
+``postMessage`` or registers a ``message`` listener fails immediately,
+keeping the whole message surface greppable and auditable file by file.
+Lives outside ``test_ratchets.py`` because that file must define the same
+test set across every project (enforced by ``test_meta_ratchets.py``).
 """
 
 from pathlib import Path
@@ -24,21 +28,25 @@ _FRONTEND_SRC = Path(__file__).parent.parent.parent / "frontend" / "src"
 pytestmark = pytest.mark.xdist_group(name="ratchets")
 
 _RAW_POST_MESSAGE_RULE = RatchetRuleInfo(
-    rule_name="raw postMessage / message-listener usages outside the embed boundary",
+    rule_name="raw postMessage / message-listener usages outside the sanctioned boundaries",
     rule_description=(
-        "All chrome<->workspace messaging must flow through the embed contract via src/embed.ts "
-        "(sendToEmbedder / setEmbedderMessageHandler), so the whole message surface stays in one "
-        "auditable place with the contract's source checks and payload validation applied. Do not "
-        "call postMessage or register 'message' listeners directly -- extend the contract instead "
-        "(see minds' docs/embed-contract.md)."
+        "Cross-frame messaging must flow through a sanctioned boundary module: chrome<->workspace "
+        "through the embed contract via src/embed.ts (sendToEmbedder / setEmbedderMessageHandler), "
+        "and the framed apps' location beacons through src/locationBeacon.ts -- so the whole "
+        "message surface stays in auditable, allowlisted files with each boundary's source checks "
+        "and payload validation applied. Do not call postMessage or register 'message' listeners "
+        "anywhere else -- extend a boundary module instead (see minds' docs/embed-contract.md and "
+        "locationBeacon.ts's own docstring)."
     ),
 )
 
-# Files sanctioned to touch the raw primitives: only the test suites, which
-# stand in windows/listeners to exercise the boundary itself.
+# Files sanctioned to touch the raw primitives: the two boundary modules
+# (each owning one documented, origin-checked channel) and the test suites,
+# which stand in windows/listeners to exercise the boundaries themselves.
 _ALLOWED_FILES = (
     "*.test.ts",
     "embed-contract.d.ts",
+    "locationBeacon.ts",
 )
 
 

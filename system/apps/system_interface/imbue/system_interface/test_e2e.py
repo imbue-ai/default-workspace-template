@@ -2253,9 +2253,9 @@ def test_launcher_kind_filter_hides_a_kind_and_reset_restores_it(tmp_path: Path,
 
     The filter is a checkbox menu per table: one row per kind the table holds,
     plus a reset. Unchecking "Chats" must drop the chat rows and ONLY the chat
-    rows -- the app seeded beside them stays -- and "Reset filters" must bring
-    them straight back. The machine offers an extra agent and an app so the
-    "On this machine" table holds two kinds to tell apart.
+    rows -- the app instance seeded beside them stays -- and "Reset filters"
+    must bring them straight back. The machine offers an extra agent and an
+    app so the "On this machine" table holds two kinds to tell apart.
     """
     with _running_e2e_server(
         tmp_path,
@@ -2263,6 +2263,28 @@ def test_launcher_kind_filter_hides_a_kind_and_reset_restores_it(tmp_path: Path,
         additional_agents=(("agent-filter-999", "filter-agent"),),
         apps=("docs-viewer",),
     ) as (base_url, _agent_info, _session_file):
+        # Apps list as their INSTANCES, and an instance exists while something
+        # references it -- so the machine table only holds an app row once one
+        # is referenced somewhere. Seed one docs-viewer instance as a member of
+        # a second project: the client mounts the first project, so the
+        # instance lands in its "On this machine" table rather than the
+        # in-project one.
+        seed_request = urllib.request.Request(
+            f"{base_url}/api/projects",
+            data=json.dumps({"name": "Seed", "color": "#3B82F6", "glyph": 1}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(seed_request, timeout=5) as response:
+            assert response.status == 200
+        member_request = urllib.request.Request(
+            f"{base_url}/api/projects/seed/members",
+            data=json.dumps({"ref": "service:docs-viewer?instance=docs-viewer-1"}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(member_request, timeout=5) as response:
+            assert response.status == 200
         page.goto(base_url)
         expect(page.locator(".dv-default-tab-content", has_text="test-agent").first).to_be_visible(timeout=15000)
 
