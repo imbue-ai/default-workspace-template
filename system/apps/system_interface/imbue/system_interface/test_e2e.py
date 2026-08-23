@@ -2260,15 +2260,18 @@ def test_launcher_kind_filter_hides_a_kind_and_reset_restores_it(tmp_path: Path,
     with _running_e2e_server(
         tmp_path,
         _LAUNCHER_FILTER_PORT,
+        primary_agent_id="primary-filter-agent",
         additional_agents=(("agent-filter-999", "filter-agent"),),
         apps=("docs-viewer",),
     ) as (base_url, _agent_info, _session_file):
         # Apps list as their INSTANCES, and an instance exists while something
         # references it -- so the machine table only holds an app row once one
         # is referenced somewhere. Seed one docs-viewer instance as a member of
-        # a second project: the client mounts the first project, so the
-        # instance lands in its "On this machine" table rather than the
-        # in-project one.
+        # a second project: the client mounts the first project (a fresh
+        # browser lands on projects[0], the starter), so the instance lands in
+        # its "On this machine" table rather than the in-project one. The
+        # primary agent id is what gives the project endpoints a layout dir to
+        # persist into -- without one the seed POSTs answer 500 / drop the ref.
         seed_request = urllib.request.Request(
             f"{base_url}/api/projects",
             data=json.dumps({"name": "Seed", "color": "#3B82F6", "glyph": 1}).encode("utf-8"),
