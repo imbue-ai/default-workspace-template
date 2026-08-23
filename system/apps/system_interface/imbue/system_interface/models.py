@@ -121,9 +121,7 @@ class ModelOptionsResponse(FrozenModel):
 class PoweredByResponse(FrozenModel):
     """Response from GET /api/agents/{id}/powered-by."""
 
-    label: str = Field(
-        description="The agent harness's verbatim credit text, or '' when that harness shows no credit"
-    )
+    label: str = Field(description="The agent harness's verbatim credit text, or '' when that harness shows no credit")
 
 
 class FastModePromptAnsweredResponse(FrozenModel):
@@ -373,6 +371,12 @@ class StartAgentResponse(FrozenModel):
     """Response from the agent start endpoint."""
 
     status: str = Field(description="Result of the start operation")
+
+
+class StopAgentResponse(FrozenModel):
+    """Response from the agent stop endpoint."""
+
+    status: str = Field(description="Result of the stop operation")
 
 
 class ClaudeAuthStatusResponse(FrozenModel):

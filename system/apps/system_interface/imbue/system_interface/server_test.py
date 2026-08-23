@@ -71,6 +71,7 @@ from imbue.system_interface.server import _WORKSPACE_ROOT_DIRECTORY
 from imbue.system_interface.server import _agent_switch_options
 from imbue.system_interface.server import _build_destroy_command
 from imbue.system_interface.server import _build_fast_mode_answered_label_command
+from imbue.system_interface.server import _build_stop_command
 from imbue.system_interface.server import _handle_client_state_message
 from imbue.system_interface.server import _stream_filtered_events
 from imbue.system_interface.server import create_application
@@ -3438,6 +3439,42 @@ def test_destroy_argv_accepted_by_live_cli() -> None:
     assert_mngr_argv_valid(_build_destroy_command("demo"))
 
 
+def test_stop_argv_accepted_by_live_cli() -> None:
+    """The ``mngr stop`` argv, confronted with the live CLI tree exactly as the
+    destroy argv is."""
+    assert_mngr_argv_valid(_build_stop_command("demo"))
+
+
+def test_stop_unknown_agent_returns_404(client: FlaskClient) -> None:
+    """POST /api/agents/<id>/stop returns 404 for an unknown agent."""
+    response = client.post("/api/agents/nonexistent/stop")
+    assert response.status_code == 404
+
+
+def test_stop_rejects_is_primary_agent(client: FlaskClient, app: Flask) -> None:
+    """POST /api/agents/<id>/stop returns 400 for the services agent.
+
+    Stopping the services agent would take down every supervised service in
+    the workspace, so the endpoint refuses it exactly as destroy does -- and
+    the guard runs before any subprocess, so the agent's tracked state is
+    untouched.
+    """
+    agent_manager: AgentManager = state_of(app).agent_manager
+    services_agent = AgentStateItem(
+        id="services-stop-1",
+        name="system-services",
+        state="RUNNING",
+        labels={"is_primary": "true", "workspace": "my-ws"},
+        work_dir="/home/user/workspace",
+    )
+    agent_manager._agents[services_agent.id] = services_agent
+
+    response = client.post(f"/api/agents/{services_agent.id}/stop")
+    assert response.status_code == 400
+    assert "is_primary" in response.get_json()["detail"]
+    assert services_agent.id in agent_manager._agents
+
+
 # -- Agent file serving (markdown images + download links) --------------------
 #
 # An agent writes a file and references its absolute on-disk path in markdown;
@@ -4947,9 +4984,7 @@ def test_stop_app_refuses_the_essential_services_unknown_names_and_programless_r
     assert fake_supervisor.statename_by_program["terminal"] == "RUNNING"
 
 
-def test_stop_app_reports_an_unreachable_supervisord(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_stop_app_reports_an_unreachable_supervisord(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MINDS_SUPERVISOR_SOCKET", str(tmp_path / "absent.sock"))
     test_client = _app_with_supervised_app("docs-viewer", "docs-viewer").test_client()
 

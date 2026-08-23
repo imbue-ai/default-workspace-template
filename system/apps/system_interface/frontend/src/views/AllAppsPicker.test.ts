@@ -455,6 +455,9 @@ describe("AllAppsPicker", () => {
   it("distinguishes an empty machine, an empty filter result, and a fully-pinned project", () => {
     appState.apps = [];
     expect(texts(render())).toContain("No apps are running on this machine.");
+    // The machine-runs-nothing case alone carries the second line: its fix is
+    // building an app, not retyping a query.
+    expect(texts(render())).toContain("Create a chat and tell Minds to create one!");
 
     appState.apps = [...APPS, ...EXTRA_APPS];
     const component = AllAppsPicker();

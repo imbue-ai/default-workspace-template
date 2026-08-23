@@ -60,6 +60,7 @@ import {
 import { TerminalBanner } from "./TerminalBanner";
 import { SubagentView } from "./SubagentView";
 import { DestroyConfirmDialog } from "./DestroyConfirmDialog";
+import { ProjectMembershipDialog } from "./ProjectMembershipDialog";
 import { ShareModal } from "./ShareModal";
 import { pickableApps } from "./AllAppsPicker";
 import { serviceIconMarkup } from "./appIcon";
@@ -143,7 +144,9 @@ import {
   appShortcutId,
   autosaveProject,
   buildEverythingMembers,
+  chatAgentIdFromRef,
   chooseInitialViewId,
+  fetchMemberMap,
   fetchProjectContent,
   fetchProjectsList,
   isEverythingView,
@@ -288,6 +291,16 @@ let browserDestroyPanelId: string | null = null;
 // Share modal state
 let showShareModal = false;
 let shareServiceName: string | null = null;
+
+// Project-membership dialog state (the object menu's "Add to project..." /
+// "Move to project..."). One dialog at a time, opened with the object's
+// current memberships already fetched so the checkboxes start truthful.
+let membershipDialog: {
+  ref: string;
+  memberLabel: string;
+  mode: "add" | "move";
+  memberProjectIds: string[];
+} | null = null;
 
 interface SavedLayout {
   dockview: SerializedDockview;
@@ -538,7 +551,7 @@ function tabIconMarkupForPanel(params: PanelParams | undefined): string {
 
 // ---------- The tab ⋮ menu ----------
 //
-// The verb SET (which of Refresh/Share/Rename/Hide tab/Quit a kind gets, in
+// The verb SET (which of Refresh/Share/Rename/Hide tab/Delete a kind gets, in
 // what order) is defined once in objectMenu.ts, shared with the rail's row
 // menu. What lives here is the tab-specific half: turning a live panel into
 // the ObjectMenuActions that module asks for, and the floating-card chrome
@@ -683,7 +696,7 @@ function objectMenuKindForPanel(params: PanelParams): ObjectMenuKind | null {
  * The verb SET comes from ``objectMenuEntries`` (objectMenu.ts), keyed by
  * kind and shared with the rail's row menu -- this function's whole job is
  * building the ``ObjectMenuActions`` that call takes, i.e. turning "what
- * Refresh/Rename/Hide tab/Quit mean" into closures over THIS live, open
+ * Refresh/Rename/Hide tab/Delete mean" into closures over THIS live, open
  * panel. A panel that is not one of the four kinds (a launcher never reaches
  * here -- see its call site below -- a subagent view or an ad-hoc URL page)
  * gets a minimal menu of its own: there is nothing on it to name, share or
@@ -722,7 +735,7 @@ function tabMenuEntries(panelId: string): ObjectMenuEntry[] {
             // supervisord program and the ref), and every other surface
             // already shows the chosen name over it -- this label was the one
             // place the id still reached the user, reading "Share web"
-            // directly above "Quit Docs" for a renamed app. The share itself
+            // directly above "Stop Docs" for a renamed app. The share itself
             // is still keyed by the service name below.
             label: `Share ${displayNameForMember(memberRef("app", params.serviceName), params.serviceName)}`,
             run: () => {
@@ -732,6 +745,12 @@ function tabMenuEntries(panelId: string): ObjectMenuEntry[] {
             },
           }
         : null,
+    // Both open the membership dialog over the object this tab shows. The ref
+    // is resolved at click time rather than menu-build time: a tab opened a
+    // moment ago may not have been filed yet, exactly as the rename path
+    // tolerates.
+    addToProjects: () => openMembershipDialogForPanel(panelId, "add"),
+    moveToProjects: () => openMembershipDialogForPanel(panelId, "move"),
     // The tab never offers this: unfiling an object is what you want while
     // looking at the project's list of what it shows, not while looking at the
     // object itself. The rail's row menu carries it (see `railMenuActions`).
@@ -745,14 +764,48 @@ function tabMenuEntries(panelId: string): ObjectMenuEntry[] {
     // always a tab here to hide -- unlike a rail row, which may be showing a
     // backgrounded object with no panel at all.
     hideTab: () => dockview?.panels.find((candidate) => candidate.id === panelId)?.api.close(),
+    stop: tabStopAction(panelId, params, kind),
     quit: tabQuitAction(panelId, params, kind),
   };
   return objectMenuEntries(kind, actions);
 }
 
+/** Resolve a tab's member ref (filing it on the spot when it has none yet) and
+ *  open the membership dialog over it. A panel that resolves to no ref -- a
+ *  terminal still allocating its session -- has nothing to file, so the click
+ *  is silently spent, matching how its other by-ref verbs stand down. */
+function openMembershipDialogForPanel(panelId: string, mode: "add" | "move"): void {
+  void (async () => {
+    const ref = memberRefByPanelId.get(panelId) ?? (await rememberMemberRef(panelId));
+    if (ref === null) return;
+    openMembershipDialog(ref, currentTabTitle(panelId, ref), mode);
+  })();
+}
+
+/** The reversible process-level verb for a chat tab: "Stop {name}" via
+ *  ``mngr stop``. Null for every other kind (a terminal's process IS its
+ *  session, a browser session's its profile -- their delete verbs already end
+ *  the process) and for the primary agent, whose process runs the workspace. */
+function tabStopAction(
+  panelId: string,
+  params: PanelParams,
+  kind: ObjectMenuKind,
+): { label: string; run: () => void } | null {
+  if (kind !== "chat") return null;
+  const chatAgentId = params.chatAgentId ?? params.agentId;
+  if (!chatAgentId || chatAgentId === getPrimaryAgentId()) return null;
+  const agent = getAgentById(chatAgentId);
+  const agentName = agent === undefined ? chatAgentId : chatDisplayName(agent);
+  const displayedName = currentTabTitle(panelId, agentName);
+  return {
+    label: `Stop ${displayedName}`,
+    run: () => requestAgentStop(chatAgentId, displayedName),
+  };
+}
+
 /** What the tab itself is currently called, for the destructive verb's label
- *  -- "Quit {name}" always matches the name printed on the tab, whatever kind
- *  of object it is. Falls back to the panel's own title (set at creation,
+ *  -- "Delete {name}" always matches the name printed on the tab, whatever
+ *  kind of object it is. Falls back to the panel's own title (set at creation,
  *  before any name is filed) on the rare chance the live dock has already
  *  lost the panel by the time the menu renders. */
 function currentTabTitle(panelId: string, fallback: string): string {
@@ -760,13 +813,13 @@ function currentTabTitle(panelId: string, fallback: string): string {
 }
 
 /** The destructive verb for one tab, or null for an object that has none right
- *  now. Each raises its own confirmation, which is where what the destroy
+ *  now. Each raises its own confirmation, which is where what the delete
  *  takes down -- and that it reaches every project, not just this one -- is
- *  spelled out. Every kind reads "Quit {name}" behind the power icon: shutting
- *  an object down is one act with one wording, whether it is an agent, a
- *  terminal, a browser, or (weaker, see below) an app. This absorbs what used
- *  to be the rail's separately-worded "Delete from this machine" -- one
- *  destroy, one name, on both surfaces. */
+ *  spelled out. Every kind reads "Delete {name}" behind the trash icon:
+ *  ending an object for good is one act with one wording, whether it is an
+ *  agent, a terminal, or a browser session -- and the wording says what it
+ *  does, unlike the "Quit" it replaced, which read as merely stopping. An
+ *  app's slot is the reversible Stop/Start instead. */
 function tabQuitAction(
   panelId: string,
   params: PanelParams,
@@ -781,7 +834,7 @@ function tabQuitAction(
       const agent = getAgentById(chatAgentId);
       const agentName = agent === undefined ? chatAgentId : chatDisplayName(agent);
       return {
-        label: `Quit ${currentTabTitle(panelId, agentName)}`,
+        label: `Delete ${currentTabTitle(panelId, agentName)}`,
         run: () => {
           destroyTargetAgentId = chatAgentId;
           destroyTargetAgentName = agentName;
@@ -797,7 +850,7 @@ function tabQuitAction(
       // kill.
       if (!sessionName) return null;
       return {
-        label: `Quit ${currentTabTitle(panelId, sessionName)}`,
+        label: `Delete ${currentTabTitle(panelId, sessionName)}`,
         run: () => {
           terminalDestroySessionName = sessionName;
           terminalDestroyPanelId = panelId;
@@ -812,7 +865,7 @@ function tabQuitAction(
       const browserName = sessionParamFromUrl(params.url);
       if (browserName === null) return null;
       return {
-        label: `Quit ${currentTabTitle(panelId, browserName)}`,
+        label: `Delete ${currentTabTitle(panelId, browserName)}`,
         run: () => {
           browserDestroyName = browserName;
           browserDestroyPanelId = panelId;
@@ -866,6 +919,89 @@ function requestAppLifecycleAction(serviceName: string, action: "stop" | "start"
     .catch((e: Error) => {
       alert(`Failed to ${action} ${serviceName}: ${e.message}`);
     });
+}
+
+/** Stop one chat agent's process (``mngr stop`` server-side), the reversible
+ *  counterpart to the delete: the agent leaves nothing, keeps its transcript
+ *  and name, and comes back on its next start or message. No confirmation --
+ *  it is one message away from undone. The agent list catches up through the
+ *  ordinary mngr observe stream rather than anything optimistic here. */
+function requestAgentStop(agentId: string, displayedName: string): void {
+  void fetch(apiUrl(`/api/agents/${encodeURIComponent(agentId)}/stop`), { method: "POST" })
+    .then(async (response) => {
+      if (response.ok) return;
+      const data = (await response.json().catch(() => ({}))) as { detail?: string };
+      alert(`Failed to stop ${displayedName}: ${data.detail ?? `HTTP ${response.status}`}`);
+    })
+    .catch((e: Error) => {
+      alert(`Failed to stop ${displayedName}: ${e.message}`);
+    });
+}
+
+/** The rail's route into ``requestAgentStop``: a chat row's ref carries the
+ *  agent id. The primary agent runs the workspace's services, so it is
+ *  refused here exactly as its delete is (the server refuses it too). */
+export function stopChatRow(row: SidebarTabRow): void {
+  const agentId = chatAgentIdFromRef(row.ref);
+  if (agentId === null || agentId === getPrimaryAgentId()) return;
+  requestAgentStop(agentId, row.label);
+}
+
+/**
+ * Open the membership dialog over one object, with its current filing already
+ * fetched: the checkboxes must start from what the registry actually says, not
+ * from what this client last painted.
+ */
+function openMembershipDialog(ref: string, memberLabel: string, mode: "add" | "move"): void {
+  void (async () => {
+    const memberMap = await fetchMemberMap();
+    membershipDialog = { ref, memberLabel, mode, memberProjectIds: memberMap[ref] ?? [] };
+    m.redraw();
+  })();
+}
+
+/** "Add to project..." for a rail row. */
+export function addMemberRowToProjects(row: SidebarTabRow): void {
+  openMembershipDialog(row.ref, row.label, "add");
+}
+
+/** "Move to project..." for a rail row. */
+export function moveMemberRowToProjects(row: SidebarTabRow): void {
+  openMembershipDialog(row.ref, row.label, "move");
+}
+
+/**
+ * Apply a confirmed membership selection: add the object to every newly
+ * checked project and (move only) remove it from every unchecked one. When a
+ * move takes the object out of the mounted view, its open panel goes with it
+ * -- the same sweep "Remove from project" does -- since the view no longer
+ * shows the object behind the tab.
+ */
+async function applyMembershipSelection(
+  dialog: { ref: string; memberLabel: string; mode: "add" | "move"; memberProjectIds: string[] },
+  selectedProjectIds: string[],
+): Promise<void> {
+  const current = new Set(dialog.memberProjectIds);
+  const selected = new Set(selectedProjectIds);
+  const additions = selectedProjectIds.filter((id) => !current.has(id));
+  const removals = dialog.mode === "move" ? dialog.memberProjectIds.filter((id) => !selected.has(id)) : [];
+  if (mountedViewId !== null && removals.includes(mountedViewId) && dockview) {
+    const panelId = panelIdForMemberRef(dialog.ref);
+    const panel = panelId === null ? undefined : dockview.panels.find((candidate) => candidate.id === panelId);
+    if (panel) dockview.removePanel(panel);
+  }
+  try {
+    for (const projectId of additions) {
+      await addMember(projectId, dialog.ref);
+    }
+    for (const projectId of removals) {
+      await removeMember(projectId, dialog.ref);
+    }
+    await refreshProjectsList();
+  } catch (e) {
+    alert(`Failed to update the projects showing ${dialog.memberLabel}: ${(e as Error).message}`);
+  }
+  m.redraw();
 }
 
 // ---------- The tab ----------
@@ -5000,7 +5136,7 @@ export const DockviewWorkspace: m.Component = {
         showTerminalDestroyDialog && terminalDestroySessionName
           ? m(DestroyConfirmDialog, {
               agentName: terminalDestroySessionName,
-              title: "Destroy terminal",
+              title: "Delete terminal",
               details: DESTROY_TERMINAL_DETAILS,
               onConfirm() {
                 showTerminalDestroyDialog = false;
@@ -5021,7 +5157,7 @@ export const DockviewWorkspace: m.Component = {
         showBrowserDestroyDialog && browserDestroyName
           ? m(DestroyConfirmDialog, {
               agentName: browserDestroyName,
-              title: "Destroy browser",
+              title: "Delete browser",
               details: DESTROY_BROWSER_DETAILS,
               onConfirm() {
                 showBrowserDestroyDialog = false;
@@ -5045,6 +5181,23 @@ export const DockviewWorkspace: m.Component = {
               onClose() {
                 showShareModal = false;
                 shareServiceName = null;
+              },
+            })
+          : null,
+
+        membershipDialog
+          ? m(ProjectMembershipDialog, {
+              memberLabel: membershipDialog.memberLabel,
+              mode: membershipDialog.mode,
+              projects: getAvailableProjects(),
+              memberProjectIds: membershipDialog.memberProjectIds,
+              onConfirm(selectedProjectIds: string[]) {
+                const dialog = membershipDialog!;
+                membershipDialog = null;
+                void applyMembershipSelection(dialog, selectedProjectIds);
+              },
+              onCancel() {
+                membershipDialog = null;
               },
             })
           : null,

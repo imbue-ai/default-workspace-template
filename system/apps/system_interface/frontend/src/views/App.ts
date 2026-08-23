@@ -1,12 +1,14 @@
 import m from "mithril";
 import {
   DockviewWorkspace,
+  addMemberRowToProjects,
   destroyMemberRow,
   focusLastOfShortcut,
   getActiveViewId,
   getAvailableProjects,
   getAwaitingShortcutIds,
   getSidebarRows,
+  moveMemberRowToProjects,
   openAppShortcut,
   openMemberRow,
   openNewOfShortcut,
@@ -20,6 +22,7 @@ import {
   setShortcutPinnedInView,
   shareMemberRow,
   startProjectChat,
+  stopChatRow,
   switchToView,
 } from "./DockviewWorkspace";
 import { ClaudeLoginModal } from "./ClaudeLoginModal";
@@ -120,6 +123,15 @@ export function App(): m.Component {
               },
               onShareApp: (row: SidebarTabRow) => {
                 shareMemberRow(row);
+              },
+              onAddRowToProjects: (row: SidebarTabRow) => {
+                addMemberRowToProjects(row);
+              },
+              onMoveRowToProjects: (row: SidebarTabRow) => {
+                moveMemberRowToProjects(row);
+              },
+              onStopRow: (row: SidebarTabRow) => {
+                stopChatRow(row);
               },
               onDeleteFromMachine: (row: SidebarTabRow) => {
                 destroyMemberRow(row);

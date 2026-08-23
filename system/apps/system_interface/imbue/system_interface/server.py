@@ -104,6 +104,7 @@ from imbue.system_interface.models import SendMessageResponse
 from imbue.system_interface.models import SetModelChoiceRequest
 from imbue.system_interface.models import ShoulderTapAtomicResponse
 from imbue.system_interface.models import StartAgentResponse
+from imbue.system_interface.models import StopAgentResponse
 from imbue.system_interface.models import TerminalSessionInfo
 from imbue.system_interface.plugins import get_plugin_manager
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
@@ -2762,6 +2763,57 @@ def _destroy_agent(agent_id: str) -> Response:
     return _json_response(DestroyAgentResponse(status="ok").model_dump())
 
 
+def _build_stop_command(agent_name: str) -> list[str]:
+    """Build the ``mngr stop`` argv for one agent.
+
+    Pure: argv assembly only, so the repo<->mngr CLI contract is testable
+    against the live CLI without a subprocess (see ``server_test.py``).
+    """
+    return ["mngr", "stop", agent_name]
+
+
+def _stop_agent(agent_id: str) -> Response:
+    """Stop an agent's process by running ``mngr stop`` -- the reversible
+    counterpart to ``_destroy_agent``.
+
+    The agent keeps its transcript, name, and project memberships; messaging
+    it (or the start endpoint) brings it back. Refuses the ``is_primary=true``
+    services agent for the same reason destroy does: stopping it would take
+    down every supervised service in the workspace. The agent stays in the
+    manager's tracked state -- the observe stream reports the STOPPED state on
+    its own.
+    """
+    agent_manager: AgentManager = get_state().agent_manager
+    agent_state = agent_manager.get_agent_by_id(agent_id)
+    if agent_state is None:
+        error = ErrorResponse(detail=f"Agent '{agent_id}' not found")
+        return _json_response(error.model_dump(), status_code=404)
+
+    if agent_state.labels.get("is_primary") == "true":
+        error = ErrorResponse(
+            detail=(
+                f"Refusing to stop agent '{agent_state.name}': it carries "
+                "the is_primary=true label (services agent for this workspace)"
+            )
+        )
+        return _json_response(error.model_dump(), status_code=400)
+
+    # Stopping is lighter work than a destroy (no resource teardown), but it
+    # rides the same mngr CLI startup and host-lock path, so it shares the
+    # destroy's generous bound.
+    result = run_local_command_modern_version(
+        command=_build_stop_command(agent_state.name),
+        cwd=None,
+        is_checked=False,
+        timeout=_DESTROY_TIMEOUT_SECONDS,
+    )
+    if result.returncode != 0:
+        error = ErrorResponse(detail=f"Failed to stop agent '{agent_state.name}': {result.stderr.strip()}")
+        return _json_response(error.model_dump(), status_code=500)
+
+    return _json_response(StopAgentResponse(status="ok").model_dump())
+
+
 def _start_agent(agent_id: str) -> Response:
     """Ensure an agent is running so its terminal session is attachable.
 
@@ -3297,6 +3349,7 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule("/api/agents/<agent_id>/screen", view_func=_get_screen_capture, methods=["GET"])
     application.add_url_rule("/api/agents/<agent_id>/destroy", view_func=_destroy_agent, methods=["POST"])
     application.add_url_rule("/api/agents/<agent_id>/start", view_func=_start_agent, methods=["POST"])
+    application.add_url_rule("/api/agents/<agent_id>/stop", view_func=_stop_agent, methods=["POST"])
     application.add_url_rule("/api/terminals", view_func=_list_terminals, methods=["GET"])
     application.add_url_rule("/api/terminals/allocate", view_func=_allocate_terminal, methods=["POST"])
     application.add_url_rule(

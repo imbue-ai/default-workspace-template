@@ -191,6 +191,9 @@ function makeAttrs(overrides: Partial<SidebarAttrs> = {}): SidebarAttrs {
     onRenameRow: vi.fn(),
     onRemoveFromView: vi.fn(),
     onShareApp: vi.fn(),
+    onAddRowToProjects: vi.fn(),
+    onMoveRowToProjects: vi.fn(),
+    onStopRow: vi.fn(),
     onDeleteFromMachine: vi.fn(),
     ...overrides,
   };
@@ -646,22 +649,30 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
     redraw();
 
     const menu = openRowMenuByContextClick(root, redraw, "Chat 1");
-    // Refresh, Rename, Remove from project, Quit -- exactly
+    // Refresh, Rename, the filing group, Stop, Delete -- exactly
     // objectMenuEntries("chat", ...) as the rail builds it. No Share, which is
     // an app-only affordance, and no "Delete from this machine", which folded
-    // into the shared Quit verb.
-    expect(menuItemLabels(menu)).toEqual(["Refresh", "Rename", "Remove from project", "Quit Chat 1"]);
+    // into the shared Delete verb.
+    expect(menuItemLabels(menu)).toEqual([
+      "Refresh",
+      "Rename",
+      "Add to project...",
+      "Move to project...",
+      "Remove from project",
+      "Stop Chat 1",
+      "Delete Chat 1",
+    ]);
     expect(menu?.textContent).not.toContain("Delete from this machine");
     // Hiding a tab is the tab's own job; from here the row is a thing the
     // project shows, so the verb that belongs to it is taking it out.
     expect(menu?.textContent).not.toContain("Hide tab");
   });
 
-  it("withholds Quit from the primary agent's own chat, as the tab menu does", () => {
-    // That agent runs the workspace's services, so quitting it would take the
-    // machine down with it. The tab's build has always withheld the verb; the
-    // rail renders the same shared set, so it has to withhold it too -- and by
-    // id, since a chat can be renamed to anything.
+  it("withholds Stop and Delete from the primary agent's own chat, as the tab menu does", () => {
+    // That agent runs the workspace's services, so stopping or deleting it
+    // would take the machine down with it. The tab's build has always withheld
+    // the verbs; the rail renders the same shared set, so it has to withhold
+    // them too -- and by id, since a chat can be renamed to anything.
     vi.mocked(getPrimaryAgentId).mockReturnValue("agent-primary");
     try {
       const rows: SidebarTabRow[] = [
@@ -675,6 +686,8 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
       expect(menuItemLabels(openRowMenuByContextClick(root, redraw, "Chat 1"))).toEqual([
         "Refresh",
         "Rename",
+        "Add to project...",
+        "Move to project...",
         "Remove from project",
       ]);
     } finally {
@@ -682,7 +695,7 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
     }
   });
 
-  it("still offers Quit on any other chat row", () => {
+  it("still offers Delete on any other chat row", () => {
     vi.mocked(getPrimaryAgentId).mockReturnValue("agent-primary");
     try {
       const rows: SidebarTabRow[] = [{ ref: "chat:agent-2", kind: "chat", label: "Chat 2", isOpen: true }];
@@ -690,7 +703,7 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
       root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
       redraw();
 
-      expect(menuItemLabels(openRowMenuByContextClick(root, redraw, "Chat 2"))).toContain("Quit Chat 2");
+      expect(menuItemLabels(openRowMenuByContextClick(root, redraw, "Chat 2"))).toContain("Delete Chat 2");
     } finally {
       vi.mocked(getPrimaryAgentId).mockReturnValue("");
     }
@@ -837,7 +850,13 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
     const menu = openRowMenuByContextClick(root, redraw, "Terminal 1");
     // No Rename either: a terminal IS its tmux session name, so the verb is
     // withheld rather than offered as a display name over the top.
-    expect(menuItemLabels(menu)).toEqual(["Refresh", "Remove from project", "Quit Terminal 1"]);
+    expect(menuItemLabels(menu)).toEqual([
+      "Refresh",
+      "Add to project...",
+      "Move to project...",
+      "Remove from project",
+      "Delete Terminal 1",
+    ]);
   });
 
   it("still lists an app the machine no longer offers, which has no shortcut row", () => {
@@ -891,6 +910,8 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
       expect(menuItemLabels(menu)).toEqual([
         "Refresh",
         "Share Grafana",
+        "Add to project...",
+        "Move to project...",
         "Remove from project",
         "Stop Grafana",
         "New Grafana",
@@ -944,6 +965,8 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
       expect(menuItemLabels(menu)).toEqual([
         "Refresh",
         "Share Grafana",
+        "Add to project...",
+        "Move to project...",
         "Remove from project",
         "New Grafana",
         'Change shortcut to "New Grafana"',
@@ -968,7 +991,7 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
     expect(root.querySelector('.project-rail-menu[role="menu"]')).toBeNull();
   });
 
-  it("routes Quit to onDeleteFromMachine, closing the menu", () => {
+  it("routes Delete to onDeleteFromMachine, closing the menu", () => {
     const rows: SidebarTabRow[] = [{ ref: "chat:agent-1", kind: "chat", label: "Chat 1", isOpen: true }];
     const attrs = makeAttrs({ rows });
     const { root, redraw } = mountSidebar(attrs);
@@ -977,7 +1000,7 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
 
     const menu = openRowMenuByContextClick(root, redraw, "Chat 1");
     const quitItem = Array.from(menu?.querySelectorAll('[role="menuitem"]') ?? []).find(
-      (element) => element.textContent === "Quit Chat 1",
+      (element) => element.textContent === "Delete Chat 1",
     );
     click(quitItem ?? null);
     redraw();
