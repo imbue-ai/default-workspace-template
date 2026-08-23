@@ -140,6 +140,7 @@ import {
 } from "../models/MemberLastUsed";
 import {
   addMember,
+  appShortcutId,
   autosaveProject,
   buildEverythingMembers,
   chooseInitialViewId,
@@ -154,6 +155,7 @@ import {
   removeMember,
   serviceNameFromRef,
   setShortcutOverride,
+  shortcutModeForProject,
   removePanelFromAllProjects,
   shareMember,
   type MachineInventory,
@@ -3052,14 +3054,17 @@ function openTabOfTypeInGroup(
   target: LaunchTarget,
   targetGroup: DockviewGroupPanel | null,
   launcherPanelId: string | null,
-): void {
+  // Returns the in-flight create's promise for the async kinds (so a rail
+  // shortcut can ride its own stand-down guard on it), null for the
+  // synchronous paths and a refused double-click.
+): Promise<void> | null {
   // One create per launcher at a time. `mngr create` takes seconds, during
   // which the tiles used to sit there untouched -- so an impatient second click
   // started a second object. The flag both refuses that click and is what the
   // launcher renders its "Starting..." state from; every path below releases it
   // in a `finally`, so a failed create leaves the tiles live rather than stuck.
   if (launcherPanelId !== null) {
-    if (launchersAwaitingCreate.has(launcherPanelId)) return;
+    if (launchersAwaitingCreate.has(launcherPanelId)) return null;
     launchersAwaitingCreate.add(launcherPanelId);
     m.redraw();
   }
@@ -3069,14 +3074,13 @@ function openTabOfTypeInGroup(
   // first=true label). Both ride the target's own fields, so nothing here decodes
   // a name. No dialog either: the name is auto-minted like every other create.
   if (target.kind === "chat") {
-    void openNewChat(targetGroup, launcherPanelId, target.harness, target.first).finally(() => {
+    return openNewChat(targetGroup, launcherPanelId, target.harness, target.first).finally(() => {
       releaseLauncherCreate(launcherPanelId);
       m.redraw();
     });
-    return;
   }
   if (target.kind === "terminal") {
-    void openNewTerminal(targetGroup)
+    return openNewTerminal(targetGroup)
       .then((panelId) => {
         if (panelId !== null) retireLauncher(launcherPanelId);
       })
@@ -3084,14 +3088,12 @@ function openTabOfTypeInGroup(
         releaseLauncherCreate(launcherPanelId);
         m.redraw();
       });
-    return;
   }
   if (target.kind === "browser") {
-    void openNewBrowser(targetGroup, launcherPanelId).finally(() => {
+    return openNewBrowser(targetGroup, launcherPanelId).finally(() => {
       releaseLauncherCreate(launcherPanelId);
       m.redraw();
     });
-    return;
   }
   // What is left ("files") is not a tab type the workspace builds itself -- it
   // is whichever app of that name the machine runs, so it opens through the
@@ -3099,11 +3101,12 @@ function openTabOfTypeInGroup(
   const backingApp = getApps().find((app) => app.name === target.kind);
   if (backingApp === undefined) {
     releaseLauncherCreate(launcherPanelId);
-    return;
+    return null;
   }
   openAppTab(backingApp);
   retireLauncher(launcherPanelId);
   releaseLauncherCreate(launcherPanelId);
+  return null;
 }
 
 /** The shortcuts that go to an object the active view already shows instead of
@@ -3111,87 +3114,46 @@ function openTabOfTypeInGroup(
 export type FocusableTabType = "chat" | "browser" | "terminal";
 
 /**
- * Which object a Chat or Browser shortcut should go to, or null when the view
- * shows none of that kind and the shortcut has to create one.
+ * Which object a focus-mode shortcut should go to, or null when the view shows
+ * none of that kind and the shortcut has to create one.
  *
- * ``memberRefs`` is the active view's tab list in the order it renders (a
- * project's member list, or the machine for Everything), so "the first one the
- * view lists" means the first one the user sees. ``preferredRef`` is the one
- * the view names as *its* object of that kind (see ``preferredChatRefForView``)
- * and is honored only while the view still lists it; without one, or once it is
- * gone, the first listed wins. Backgrounded objects count -- they are listed
- * and still running, and the caller opens one into the active pane.
+ * Focus goes to the **most recently used** member of the kind among what the
+ * active view lists (``memberRefs``: a project's member list, or the machine
+ * for Everything -- under which the restriction is a no-op, so resolution is
+ * effectively machine-wide). Recency comes from the machine-wide member
+ * recency store; members with no recency data rank behind any that have some,
+ * and among themselves the first listed wins, so a view with no recorded
+ * recency at all still answers deterministically. Backgrounded objects count
+ * -- they are listed and still running, and the caller opens one into the
+ * active pane.
  */
 export function refForShortcutFocus(
   memberRefs: readonly string[],
   tabType: FocusableTabType,
-  preferredRef: string | null,
+  lastUsedMsByRef: Readonly<Record<string, number>>,
 ): string | null {
   const candidates = memberRefs.filter((ref) => memberKindFromRef(ref) === tabType);
   if (candidates.length === 0) return null;
-  if (preferredRef !== null && candidates.includes(preferredRef)) return preferredRef;
-  return candidates[0];
-}
-
-/**
- * The chat a view's Chat shortcut goes to before any other, or null when the
- * view names none and listing order decides.
- *
- * A project has ONE chat of its own: the one started with it (see
- * ``startProjectChat``), which carries the project's id in its agent's
- * ``project`` label. That is what makes the shortcut a singleton -- it keeps
- * going to the project's chat however many others the project is later given,
- * and it never mints a second one.
- *
- * Everything is not a project and has no chat of its own, so it keeps naming
- * the primary agent's chat, which is the closest the machine has to a home
- * chat. ``originatingProjectByChatRef`` maps a chat ref to the project its
- * agent was created in; a chat still starting up is not in it yet, which only
- * costs a preference and never a wrong answer.
- *
- * An agent's children inherit its ``project`` label, so a project may list
- * several chats claiming it. Listing order settles that, and the project's own
- * chat is first: it was filed the moment the project was made, before anything
- * else could be.
- */
-export function preferredChatRefForView(
-  memberRefs: readonly string[],
-  viewId: string,
-  originatingProjectByChatRef: Readonly<Record<string, string>>,
-  primaryAgentId: string,
-): string | null {
-  if (isEverythingView(viewId)) return primaryAgentId === "" ? null : memberRef("chat", primaryAgentId);
-  const own = memberRefs.find(
-    (ref) => memberKindFromRef(ref) === "chat" && originatingProjectByChatRef[ref] === viewId,
-  );
-  return own ?? null;
-}
-
-/** Which project each known chat agent was started in, keyed by the chat's
- *  member ref. The label rides the agent (mngr propagates it to its children),
- *  so this follows the machine rather than any one project's member list. */
-function originatingProjectByChatRef(): Record<string, string> {
-  const byRef: Record<string, string> = {};
-  for (const agent of getAgents()) {
-    if (agent.project) byRef[memberRef("chat", agent.id)] = agent.project;
+  let mostRecentRef = candidates[0];
+  let mostRecentMs = lastUsedMsByRef[mostRecentRef] ?? Number.NEGATIVE_INFINITY;
+  for (const candidateRef of candidates.slice(1)) {
+    const candidateMs = lastUsedMsByRef[candidateRef] ?? Number.NEGATIVE_INFINITY;
+    if (candidateMs > mostRecentMs) {
+      mostRecentRef = candidateRef;
+      mostRecentMs = candidateMs;
+    }
   }
-  return byRef;
+  return mostRecentRef;
 }
 
-/** Go to the Chat, Browser or Terminal the active view already shows, reporting whether
- *  there was one. Focuses its tab when it has one and opens it into the active
- *  pane when it is backgrounded -- ``openMemberRef`` is the same path the
- *  sidebar rows take, so a member with no panel is opened rather than
- *  ignored. */
+/** Go to the most recently used Chat, Browser or Terminal the active view
+ *  shows, reporting whether there was one. Focuses its tab when it has one and
+ *  opens it into the active pane when it is backgrounded -- ``openMemberRef``
+ *  is the same path the sidebar rows take, so a member with no panel is opened
+ *  rather than ignored. */
 function focusExistingForShortcut(tabType: FocusableTabType): boolean {
   const memberRefs = getSidebarRows().map((row) => row.ref);
-  // Only a chat has a per-view singleton to prefer. A browser and a terminal
-  // have no notion of the view's *own* one, so the first the view lists wins.
-  const preferredRef =
-    tabType === "chat"
-      ? preferredChatRefForView(memberRefs, mountedViewId ?? "", originatingProjectByChatRef(), getPrimaryAgentId())
-      : null;
-  const ref = refForShortcutFocus(memberRefs, tabType, preferredRef);
+  const ref = refForShortcutFocus(memberRefs, tabType, getMemberLastUsed());
   if (ref === null) return false;
   if (openMemberRef(ref, null) === null) return false;
   m.redraw();
@@ -3199,38 +3161,126 @@ function focusExistingForShortcut(tabType: FocusableTabType): boolean {
 }
 
 /**
- * Open ``tabType`` in the active pane. Exported for the sidebar's shortcut rows,
- * which offer the machine's starting points as one-click rows.
- *
- * Chat, Browser and Terminal all go to what the active view already shows and
- * only create when it shows none. This deliberately REVERSES spec §7, which has
- * Chat always create a new agent and Browser and Terminal always create a new
- * session: Preston asked for the rail's chat to be "a singleton to refer to the
- * primary chat of each
- * project", and for the browser to behave the same way, and later extended
- * terminals to match. Do not "fix" it back -- starting another one from
- * scratch is what the launcher's "Open new" tiles are for.
- *
- * A project therefore has exactly one chat of its own, started with the project
- * itself (``startProjectChat``), and this shortcut goes to that chat rather
- * than minting another. Everything is not a project and has no chat of its own,
- * so its shortcut keeps creating one on the machine when it lists none.
+ * Shortcut clicks that create ride the same in-flight guard the launcher tiles
+ * have, keyed by shortcut id: while a create this shortcut asked for is
+ * pending, the row stands down, so a second click cannot start a second
+ * object. Released in a ``finally`` so a failed create leaves the row live.
  */
-export function openTabOfType(tabType: QuickAddTabType): void {
-  if (tabType !== "files" && focusExistingForShortcut(tabType)) return;
-  // The rail names no harness and no template: its "chat" is a plain claude chat,
-  // which is the launcher's first tile.
-  openTabOfTypeInGroup(
-    tabType === "chat" ? { kind: "chat", harness: "claude", first: false } : { kind: tabType },
+const shortcutsAwaitingCreate = new Set<string>();
+
+/** The shortcut ids whose create is in flight right now. Read by the rail to
+ *  stand those rows down. */
+export function getAwaitingShortcutIds(): ReadonlySet<string> {
+  return shortcutsAwaitingCreate;
+}
+
+/** Start a fresh object of a built-in shortcut's kind, under the shortcut's
+ *  own in-flight guard. ``files`` never lands here -- its "new" is a second
+ *  pane on the files app (see ``openShortcut``). */
+function createNewForShortcut(shortcutId: FocusableTabType): void {
+  if (shortcutsAwaitingCreate.has(shortcutId)) return;
+  // The rail names no harness and no template: its "chat" is the launcher's
+  // first tile -- a plain claude chat, flags ignored.
+  const pending = openTabOfTypeInGroup(
+    shortcutId === "chat" ? { kind: "chat", harness: "claude", first: false } : { kind: shortcutId },
     null,
     null,
   );
+  if (pending === null) return;
+  shortcutsAwaitingCreate.add(shortcutId);
+  m.redraw();
+  void pending.finally(() => {
+    shortcutsAwaitingCreate.delete(shortcutId);
+    m.redraw();
+  });
+}
+
+/** Run one built-in shortcut in an explicit mode: focus goes to the view's
+ *  most recent member of the kind (creating only when it shows none), new
+ *  always creates. The file viewer is app-backed, so both of its modes ride
+ *  ``openAppTab`` -- "new" is a second pane on the files service. */
+function openShortcut(shortcutId: QuickAddTabType, mode: ShortcutMode): void {
+  if (shortcutId === "files") {
+    const backingApp = getApps().find((app) => app.name === "files");
+    if (backingApp === undefined) return;
+    openAppTab(backingApp, { isNew: mode === "new" });
+    return;
+  }
+  if (mode === "focus" && focusExistingForShortcut(shortcutId)) return;
+  createNewForShortcut(shortcutId);
+}
+
+/**
+ * Open ``tabType`` in the active pane, in the active view's mode for that
+ * shortcut. Exported for the sidebar's shortcut rows, which offer the
+ * machine's starting points as one-click rows.
+ *
+ * The mode is per shortcut, per project (see ``shortcutModeForProject``):
+ * focus goes to the most recently used member of the kind the view shows and
+ * creates only when it shows none, new always creates. Defaults are
+ * code-side -- chat defaults to new ("New Chat"), the rest to focus -- and
+ * Everything, which has no project entry to store an override against, always
+ * runs the defaults.
+ */
+export function openTabOfType(tabType: QuickAddTabType): void {
+  const project = projectForViewId(availableProjects, mountedViewId ?? "");
+  openShortcut(tabType, shortcutModeForProject(project, tabType));
+}
+
+/** Always create a fresh object of ``shortcutId``'s kind -- the shortcut
+ *  menu's complementary "New X", reachable whatever mode the row is in. For
+ *  an app (or the file viewer) that is a second pane on the same service. */
+export function openNewOfShortcut(shortcutId: string): void {
+  const appName = appNameFromShortcutId(shortcutId);
+  if (appName !== null) {
+    const app = getApps().find((candidate) => candidate.name === appName);
+    if (app !== undefined) openAppTab(app, { isNew: true });
+    return;
+  }
+  if (shortcutId === "chat" || shortcutId === "browser" || shortcutId === "terminal") {
+    createNewForShortcut(shortcutId);
+  }
+}
+
+/** Focus the most recently used object of ``shortcutId``'s kind -- the
+ *  shortcut menu's complementary action while the row is in new mode. Never
+ *  creates: the menu disables this when the view shows none, and a race just
+ *  no-ops. */
+export function focusLastOfShortcut(shortcutId: string): void {
+  const appName = appNameFromShortcutId(shortcutId);
+  if (appName !== null) {
+    const app = getApps().find((candidate) => candidate.name === appName);
+    if (app !== undefined) openAppTab(app);
+    return;
+  }
+  if (shortcutId === "chat" || shortcutId === "browser" || shortcutId === "terminal") {
+    focusExistingForShortcut(shortcutId);
+  }
+}
+
+/** The service name behind an ``app:<name>`` or ``files`` shortcut id, or null
+ *  for the create-backed built-ins. */
+function appNameFromShortcutId(shortcutId: string): string | null {
+  if (shortcutId === "files") return "files";
+  if (shortcutId.startsWith("app:")) return shortcutId.slice("app:".length);
+  return null;
+}
+
+/** Open ``app`` from its rail shortcut, in the active view's mode for it:
+ *  focus (the default) goes to the existing pane, new opens another pane on
+ *  the same service. */
+export function openAppShortcut(app: AppEntry): void {
+  const project = projectForViewId(availableProjects, mountedViewId ?? "");
+  openAppTab(app, { isNew: shortcutModeForProject(project, appShortcutId(app.name)) === "new" });
 }
 
 /** Open ``app``'s pane in the active project, focusing (and flashing) the one
- *  already open rather than stacking a second. Exported for the machine rail
- *  and the all-apps picker, and used by the launcher's app rows. */
-export function openAppTab(app: AppEntry): void {
+ *  already open rather than stacking a second -- unless ``isNew`` asks for a
+ *  second pane on the same service outright (two panels per ref is legal;
+ *  ref-addressed verbs keep acting on the first match). Exported for the
+ *  machine rail and the all-apps picker, and used by the launcher's app
+ *  rows. */
+export function openAppTab(app: AppEntry, options: { isNew?: boolean } = {}): void {
   if (!dockview) return;
   // Opening a stopped app means wanting it: start it first (idempotent), and
   // open the pane right away -- it shows the stopped placeholder until the
@@ -3239,14 +3289,16 @@ export function openAppTab(app: AppEntry): void {
   if (!isAppRunning(app) && isAppStoppable(app)) {
     requestAppLifecycleAction(app.name, "start");
   }
-  const openPanelId = findIframePanelIdForService(app.name);
-  const openPanel = openPanelId === null ? undefined : dockview.panels.find((p) => p.id === openPanelId);
-  revealedOpenPanelId = null;
-  if (openPanel !== undefined) {
-    revealedOpenPanelId = openPanel.id;
-    dockview.setActivePanel(openPanel);
-    flashPanelTab(openPanel.id);
-    return;
+  if (options.isNew !== true) {
+    const openPanelId = findIframePanelIdForService(app.name);
+    const openPanel = openPanelId === null ? undefined : dockview.panels.find((p) => p.id === openPanelId);
+    revealedOpenPanelId = null;
+    if (openPanel !== undefined) {
+      revealedOpenPanelId = openPanel.id;
+      dockview.setActivePanel(openPanel);
+      flashPanelTab(openPanel.id);
+      return;
+    }
   }
   openIframeTab(deriveServiceOrigin(labelForService(app.name)), app.name, "iframe", app.name);
 }
@@ -3755,11 +3807,9 @@ function soleLauncherPanelId(): string | null {
  * Start the chat a freshly-created project is made with, file it as a member,
  * and open it into that project.
  *
- * Every project gets exactly one chat, made with it, so the user lands in a
- * working chat instead of an empty launcher and the rail's Chat shortcut has
- * something to go to (see ``openTabOfType``, which no longer creates one per
- * click). The chat carries the project's id in its agent's ``project`` label,
- * which is what ``preferredChatRefForView`` recognizes it by.
+ * Every project starts with one chat, made with it, so the user lands in a
+ * working chat instead of an empty launcher. The chat carries the project's id
+ * in its agent's ``project`` label -- the project it starts out filed in.
  *
  * The create is asynchronous and may fail, and the project is already created
  * and usable by the time it does: the failure is reported rather than swallowed

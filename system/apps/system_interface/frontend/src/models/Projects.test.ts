@@ -7,6 +7,7 @@ vi.mock("../base-path", () => ({ apiUrl: (path: string) => path }));
 import {
   EVERYTHING_VIEW_ID,
   addMember,
+  appShortcutId,
   autosaveProject,
   buildEverythingMembers,
   chatAgentIdFromRef,
@@ -16,13 +17,16 @@ import {
   fetchMemberMap,
   fetchProjectContent,
   fetchProjectsList,
+  defaultShortcutMode,
   filingProjectForAgentOp,
   isEverythingView,
+  isShortcutPinned,
   memberKindFromRef,
   memberRef,
   partitionByMembership,
   projectForViewId,
   removeMember,
+  shortcutModeForProject,
   removePanelFromAllProjects,
   searchMembers,
   serviceNameFromRef,
@@ -751,5 +755,53 @@ describe("filingProjectForAgentOp", () => {
     expect(filingProjectForAgentOp("", [WEBSITE])).toBeNull();
     // A label naming a project that no longer exists must not file anywhere.
     expect(filingProjectForAgentOp("deleted-project", [WEBSITE])).toBeNull();
+  });
+});
+
+describe("shortcut overrides", () => {
+  const base: ProjectInfo = {
+    project_id: "p",
+    name: "P",
+    color: "#000000",
+    glyph: 0,
+    has_content: false,
+    members: [],
+  };
+
+  it("keeps every shortcut pinned until an override says otherwise", () => {
+    expect(isShortcutPinned(base, "terminal")).toBe(true);
+    expect(isShortcutPinned({ ...base, shortcut_overrides: { terminal: { is_pinned: false } } }, "terminal")).toBe(
+      false,
+    );
+    // A null field is the server spelling "unset", which means the default.
+    expect(isShortcutPinned({ ...base, shortcut_overrides: { terminal: { is_pinned: null } } }, "terminal")).toBe(
+      true,
+    );
+    // Everything (a null project) always shows the full set.
+    expect(isShortcutPinned(null, "terminal")).toBe(true);
+  });
+
+  it("defaults chat to new mode and everything else to focus", () => {
+    expect(defaultShortcutMode("chat")).toBe("new");
+    expect(defaultShortcutMode("terminal")).toBe("focus");
+    expect(defaultShortcutMode("app:docs")).toBe("focus");
+  });
+
+  it("reads a stored mode override and falls back to the default otherwise", () => {
+    expect(shortcutModeForProject(base, "chat")).toBe("new");
+    expect(shortcutModeForProject({ ...base, shortcut_overrides: { chat: { mode: "focus" } } }, "chat")).toBe("focus");
+    expect(shortcutModeForProject({ ...base, shortcut_overrides: { "app:docs": { mode: "new" } } }, "app:docs")).toBe(
+      "new",
+    );
+    // Junk from a hand-edited registry falls back rather than leaking through.
+    expect(shortcutModeForProject({ ...base, shortcut_overrides: { chat: { mode: "sometimes" } } }, "chat")).toBe(
+      "new",
+    );
+    // Everything runs the defaults.
+    expect(shortcutModeForProject(null, "chat")).toBe("new");
+  });
+
+  it("builds an app's shortcut id from its service name", () => {
+    expect(appShortcutId("docs")).toBe("app:docs");
   });
 });

@@ -2,17 +2,21 @@ import m from "mithril";
 import {
   DockviewWorkspace,
   destroyMemberRow,
+  focusLastOfShortcut,
   getActiveViewId,
   getAvailableProjects,
+  getAwaitingShortcutIds,
   getSidebarRows,
-  openAppTab,
+  openAppShortcut,
   openMemberRow,
+  openNewOfShortcut,
   openTabOfType,
   refreshMemberRow,
   refreshProjects,
   removeMemberRow,
   renameMemberRowWithAlert,
   setAppPinnedInView,
+  setShortcutModeInView,
   setShortcutPinnedInView,
   shareMemberRow,
   startProjectChat,
@@ -75,16 +79,16 @@ export function App(): m.Component {
                 // Mount the new project, THEN start the one chat it is made
                 // with: the mount tears the dock down and rebuilds it, so a
                 // chat tab opened before it lands would be swept away with the
-                // outgoing layout. One chat per project, which is what the
-                // rail's Chat shortcut then goes to instead of starting
-                // another.
+                // outgoing layout.
                 void switchToView(projectId).then(() => startProjectChat(projectId));
               },
               onOpenTabType: (tabType: QuickAddTabType) => {
                 openTabOfType(tabType);
               },
               onOpenApp: (app: AppEntry) => {
-                openAppTab(app);
+                // Mode-aware: focus (the default) goes to the app's existing
+                // pane, new opens another pane on the same service.
+                openAppShortcut(app);
               },
               onSetAppPinned: (app: AppEntry, isPinned: boolean) => {
                 setAppPinnedInView(app, isPinned);
@@ -92,6 +96,16 @@ export function App(): m.Component {
               onSetShortcutPinned: (shortcut: QuickAddTabType, isPinned: boolean) => {
                 setShortcutPinnedInView(shortcut, isPinned);
               },
+              onSetShortcutMode: (shortcutId: string, mode) => {
+                setShortcutModeInView(shortcutId, mode);
+              },
+              onNewOfKind: (shortcutId: string) => {
+                openNewOfShortcut(shortcutId);
+              },
+              onFocusLastOfKind: (shortcutId: string) => {
+                focusLastOfShortcut(shortcutId);
+              },
+              awaitingShortcutIds: getAwaitingShortcutIds(),
               onOpenRow: (row: SidebarTabRow) => {
                 openMemberRow(row);
               },

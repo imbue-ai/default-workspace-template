@@ -182,6 +182,10 @@ function makeAttrs(overrides: Partial<SidebarAttrs> = {}): SidebarAttrs {
     onOpenApp: vi.fn(),
     onSetAppPinned: vi.fn(),
     onSetShortcutPinned: vi.fn(),
+    onSetShortcutMode: vi.fn(),
+    onNewOfKind: vi.fn(),
+    onFocusLastOfKind: vi.fn(),
+    awaitingShortcutIds: new Set<string>(),
     onOpenRow: vi.fn(),
     onRefreshRow: vi.fn(),
     onRenameRow: vi.fn(),
@@ -723,7 +727,8 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
 
     const labels = Array.from(root.querySelectorAll(".project-rail-shortcut")).map((el) => el.textContent);
     expect(labels).not.toContain("Terminal");
-    expect(labels).toContain("Chat");
+    // Chat's label follows its default mode, which is new ("New Chat").
+    expect(labels).toContain("New Chat");
   });
 
   it("shows all four until a project unpins one", () => {
@@ -734,7 +739,9 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
     redraw();
 
     const labels = Array.from(root.querySelectorAll(".project-rail-shortcut")).map((el) => el.textContent);
-    expect(labels).toEqual(["Chat", "File Viewer", "Browser", "Terminal"]);
+    // Chat's default mode is new, so its row reads "New Chat"; the rest
+    // default to focus and keep their plain labels.
+    expect(labels).toEqual(["New Chat", "File Viewer", "Browser", "Terminal"]);
   });
 
   it("opens the File Viewer once a files app backs it", () => {
@@ -790,7 +797,9 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
 
     expect(root.querySelector(".project-rail-shortcut-unpin")).toBeNull();
     const labels = Array.from(root.querySelectorAll(".project-rail-shortcut")).map((el) => el.textContent);
-    expect(labels).toEqual(["Chat", "File Viewer", "Browser", "Terminal"]);
+    // Chat's default mode is new, so its row reads "New Chat"; the rest
+    // default to focus and keep their plain labels.
+    expect(labels).toEqual(["New Chat", "File Viewer", "Browser", "Terminal"]);
   });
 
   it("offers no Remove from project in Everything, which is the home", () => {
@@ -877,7 +886,16 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
       // service-level Stop, not a destroy: the app is supervised (it carries a
       // program), so the workspace can honestly stop and start it.
       const menu = root.querySelector<HTMLElement>('.project-rail-menu[role="menu"]');
-      expect(menuItemLabels(menu)).toEqual(["Refresh", "Share Grafana", "Remove from project", "Stop Grafana"]);
+      // The object verbs, then (after a divider) the shortcut group: the
+      // complementary "New Grafana" and the mode flip.
+      expect(menuItemLabels(menu)).toEqual([
+        "Refresh",
+        "Share Grafana",
+        "Remove from project",
+        "Stop Grafana",
+        "New Grafana",
+        'Change shortcut to "New Grafana"',
+      ]);
     } finally {
       vi.mocked(getApps).mockReturnValue([]);
     }
@@ -923,7 +941,13 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
       redraw();
 
       const menu = root.querySelector<HTMLElement>('.project-rail-menu[role="menu"]');
-      expect(menuItemLabels(menu)).toEqual(["Refresh", "Share Grafana", "Remove from project"]);
+      expect(menuItemLabels(menu)).toEqual([
+        "Refresh",
+        "Share Grafana",
+        "Remove from project",
+        "New Grafana",
+        'Change shortcut to "New Grafana"',
+      ]);
     } finally {
       vi.mocked(getApps).mockReturnValue([]);
     }
@@ -1147,5 +1171,110 @@ describe("Sidebar tooltips", () => {
       );
       expect(await bubbleTextAfterHover(button?.parentElement ?? null)).toBe(tooltip);
     }
+  });
+});
+
+describe("Sidebar shortcut menus (modes)", () => {
+  /** Opens one built-in shortcut row's own menu via its kebab. */
+  function openShortcutMenu(root: HTMLElement, redraw: () => void, baseLabel: string): HTMLElement | null {
+    const kebab = root.querySelector<HTMLElement>(`button[aria-label="Shortcut options for ${baseLabel}"]`);
+    kebab?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    redraw();
+    return root.querySelector<HTMLElement>('.project-rail-menu[role="menu"]');
+  }
+
+  function menuLabels(menu: HTMLElement | null): (string | null)[] {
+    return Array.from(menu?.querySelectorAll('[role="menuitem"]') ?? []).map((element) => element.textContent);
+  }
+
+  it("offers the focus-mode group on a focus-mode row: New X, the flip, and Unpin", () => {
+    const attrs = makeAttrs();
+    const { root, redraw } = mountSidebar(attrs);
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    const menu = openShortcutMenu(root, redraw, "Terminal");
+    expect(menuLabels(menu)).toEqual(["New Terminal", 'Change shortcut to "New Terminal"', "Unpin"]);
+  });
+
+  it("offers the new-mode group on a new-mode row, with Focus last disabled while the view shows none", () => {
+    // Chat's default mode is new; the view lists no chat, so the
+    // complementary focus is present but cannot act.
+    const attrs = makeAttrs();
+    const { root, redraw } = mountSidebar(attrs);
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    const menu = openShortcutMenu(root, redraw, "Chat");
+    expect(menuLabels(menu)).toEqual(["Focus last Chat", 'Change shortcut to "Chat"', "Unpin"]);
+    const focusEntry = menu?.querySelector('[role="menuitem"][aria-disabled="true"]');
+    expect(focusEntry?.textContent).toBe("Focus last Chat");
+    focusEntry?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    expect(attrs.onFocusLastOfKind).not.toHaveBeenCalled();
+  });
+
+  it("enables Focus last once the view shows one, and reports the focus", () => {
+    const attrs = makeAttrs({ rows: [{ ref: "chat:agent-1", kind: "chat", label: "Chat 1", isOpen: true }] });
+    const { root, redraw } = mountSidebar(attrs);
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    const menu = openShortcutMenu(root, redraw, "Chat");
+    const focusEntry = Array.from(menu?.querySelectorAll('[role="menuitem"]') ?? []).find(
+      (element) => element.textContent === "Focus last Chat",
+    );
+    expect(focusEntry?.getAttribute("aria-disabled")).toBeNull();
+    focusEntry?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    expect(attrs.onFocusLastOfKind).toHaveBeenCalledWith("chat");
+  });
+
+  it("reports a mode flip through onSetShortcutMode", () => {
+    const attrs = makeAttrs();
+    const { root, redraw } = mountSidebar(attrs);
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    const menu = openShortcutMenu(root, redraw, "Terminal");
+    const flipEntry = Array.from(menu?.querySelectorAll('[role="menuitem"]') ?? []).find(
+      (element) => element.textContent === 'Change shortcut to "New Terminal"',
+    );
+    flipEntry?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    expect(attrs.onSetShortcutMode).toHaveBeenCalledWith("terminal", "new");
+  });
+
+  it("relabels a row from its stored mode override", () => {
+    const flipped: ProjectInfo = { ...PROJECT_A, shortcut_overrides: { terminal: { mode: "new" } } };
+    const { root, redraw } = mountSidebar(makeAttrs({ projects: [flipped, PROJECT_B], activeViewId: "project-a" }));
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    const labels = Array.from(root.querySelectorAll(".project-rail-shortcut")).map((el) => el.textContent);
+    expect(labels).toContain("New Terminal");
+  });
+
+  it("offers only the complementary action under Everything", () => {
+    // Everything has no project entry: no mode to flip, nowhere to unpin.
+    const attrs = makeAttrs({ activeViewId: EVERYTHING_VIEW_ID });
+    const { root, redraw } = mountSidebar(attrs);
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    const menu = openShortcutMenu(root, redraw, "Terminal");
+    expect(menuLabels(menu)).toEqual(["New Terminal"]);
+  });
+
+  it("stands a shortcut row down while its create is in flight", () => {
+    const attrs = makeAttrs({ awaitingShortcutIds: new Set(["chat"]) });
+    const { root, redraw } = mountSidebar(attrs);
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    const chatButton = Array.from(root.querySelectorAll("button.project-rail-shortcut")).find((el) =>
+      el.textContent?.includes("Starting"),
+    );
+    expect(chatButton).not.toBeUndefined();
+    expect(chatButton?.hasAttribute("disabled")).toBe(true);
+    chatButton?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    expect(attrs.onOpenTabType).not.toHaveBeenCalled();
   });
 });
