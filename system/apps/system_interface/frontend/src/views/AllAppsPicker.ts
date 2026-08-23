@@ -46,6 +46,7 @@ import { appStoppedDetail, isAppRunning } from "../models/appLiveness";
 import { displayNameForMember } from "../models/MemberTitles";
 import { memberRef } from "../models/Projects";
 import type { ShortcutName } from "../models/Projects";
+import { appServiceDisplayName } from "./derived-names";
 import { appIconMarkup } from "./appIcon";
 import { hoverTooltipAttrs } from "./hoverTooltip";
 import { icon } from "./icons";
@@ -103,12 +104,13 @@ export function pickableApps(): AppEntry[] {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-/** What one app is called: the name the user gave it if it has one, else the
- *  name it registered under. Read through the machine-wide title store like
- *  every other surface that names an object (see models/MemberTitles), so an
- *  app renamed on its tab or in the rail reads the same here. */
+/** What one app is called: the name the user gave it if it has one, else its
+ *  derived name ("File Viewer" for the built-in files service, the registered
+ *  name otherwise). Read through the machine-wide title store like every
+ *  other surface that names an object (see models/MemberTitles), so an app
+ *  renamed on its tab or in the rail reads the same here. */
 export function appDisplayName(app: AppEntry): string {
-  return displayNameForMember(memberRef("app", app.name), app.name);
+  return displayNameForMember(memberRef("app", app.name), appServiceDisplayName(app.name));
 }
 
 /** Case-insensitive substring match on either name an app answers to: the one

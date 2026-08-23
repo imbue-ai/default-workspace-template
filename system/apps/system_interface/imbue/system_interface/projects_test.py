@@ -391,6 +391,34 @@ def test_legacy_url_members_are_purged_on_read_and_persisted(tmp_path: Path) -> 
     assert persisted["project_by_id"]["taxes"]["members"] == []
 
 
+def test_bare_files_members_are_purged_on_read_while_instances_survive(tmp_path: Path) -> None:
+    # The file viewer's pin is its built-in rail row, never membership, so a
+    # bare service:files ref (filed by builds whose opens filed bare app refs)
+    # is a dead entry that only ever rendered a phantom "files" tab row. Its
+    # instances -- and other apps' bare pins -- are real members and stay.
+    (tmp_path / "projects_meta.json").write_text(
+        json.dumps(
+            {
+                "project_by_id": {
+                    "research": {
+                        "name": "Research",
+                        "color": "#12B5A5",
+                        "glyph": 4,
+                        "members": ["service:files", "service:files?instance=files-1", "service:docs"],
+                    },
+                },
+                "last_active_id": "research",
+            }
+        )
+    )
+
+    members_by_id = {info.project_id: list(info.members) for info in list_projects(tmp_path)}
+
+    assert members_by_id == {"research": ["service:files?instance=files-1", "service:docs"]}
+    persisted = json.loads((tmp_path / "projects_meta.json").read_text())
+    assert persisted["project_by_id"]["research"]["members"] == ["service:files?instance=files-1", "service:docs"]
+
+
 def test_corrupt_content_reads_as_empty(tmp_path: Path) -> None:
     write_project_content(tmp_path, DEFAULT_PROJECT_ID, {"ok": True})
     project_content_path(tmp_path, DEFAULT_PROJECT_ID).write_text("garbage{")
