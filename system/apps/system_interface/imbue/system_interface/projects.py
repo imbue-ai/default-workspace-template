@@ -877,7 +877,6 @@ def set_shortcut_override(
         return overrides
 
 
-
 def remove_member(layout_dir: Path, project_id: str, ref: str) -> None:
     """Drop ``ref`` from ``project_id``'s member list.
 
