@@ -306,14 +306,13 @@ describe("AllAppsPicker", () => {
     expect(texts(tree)).not.toContain("Unpinned");
   });
 
-  it("renders one flat list with no toggles under Everything", () => {
-    // Everything pins nothing: every app on the machine is in its tab list
-    // already, so there is no membership here to add or remove.
+  it("renders the already-pinned empty state under Everything", () => {
+    // Everything's rail shows a fixed shortcut row for every openable app, so
+    // this popover has nothing left to list there.
     appState.apps = APPS;
     const tree = render({ projectName: null });
-    expect(rowsOf(tree).length).toBe(7);
-    expect(texts(tree)).not.toContain("Unpinned");
-    expect(buttonsOf(tree)).toEqual([]);
+    expect(rowsOf(tree).length).toBe(0);
+    expect(JSON.stringify(texts(tree))).toContain("already pinned here");
   });
 
   it("hands the clicked app to the open callback", () => {

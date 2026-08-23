@@ -495,15 +495,64 @@ export function chatAgentIdFromRef(ref: string): string | null {
  * The partial inverse of `memberRef("app", name)`, kept beside it so the
  * grammar stays written down in one place: the views that need to look an app
  * up from a row (its icon, say) ask here rather than slicing the ref
- * themselves. A fleet ref (`service:browser?session=...`) names the fleet's
- * service and not an installed app, so it answers null -- the browser and the
- * terminal are their own kinds everywhere else too.
+ * themselves. An app INSTANCE ref (`service:<name>?instance=<name>-<N>`)
+ * answers its service's name -- the instance is a page of that service, so
+ * its icon, liveness and share surface are the service's. A fleet ref
+ * (`service:browser?session=...`) names the fleet's service and not an
+ * installed app, so it answers null -- the browser and the terminal are
+ * their own kinds everywhere else too.
  */
 export function serviceNameFromRef(ref: string): string | null {
   if (!ref.startsWith(SERVICE_REF_PREFIX)) return null;
-  const name = ref.substring(SERVICE_REF_PREFIX.length);
-  if (name === "" || name.includes("?")) return null;
+  const body = ref.substring(SERVICE_REF_PREFIX.length);
+  const queryIndex = body.indexOf("?");
+  if (queryIndex === -1) {
+    return body === "" ? null : body;
+  }
+  const name = body.substring(0, queryIndex);
+  if (name === "" || instanceNameFromRef(ref) === null) return null;
   return name;
+}
+
+/** The query key an app instance's ref carries its canonical name under,
+ *  mirroring the backend's `app_instances.INSTANCE_QUERY_KEY`. */
+const INSTANCE_QUERY_KEY = "instance";
+
+/** The member ref one app instance is filed under:
+ *  `service:<service>?instance=<instance>` with the FULL canonical instance
+ *  name (`files-2`) in the query, mirroring the backend's
+ *  `app_instances.instance_ref`. */
+export function appInstanceRef(serviceName: string, instanceName: string): string {
+  return `${SERVICE_REF_PREFIX}${serviceName}?${INSTANCE_QUERY_KEY}=${instanceName}`;
+}
+
+/** The canonical instance name out of an instance ref, or null for a ref that
+ *  names no instance (a bare service ref -- an app's pin -- or the browser
+ *  fleet's `?session=` form). */
+export function instanceNameFromRef(ref: string): string | null {
+  if (!ref.startsWith(SERVICE_REF_PREFIX)) return null;
+  const body = ref.substring(SERVICE_REF_PREFIX.length);
+  const queryIndex = body.indexOf("?");
+  if (queryIndex === -1 || queryIndex === 0) return null;
+  const instanceName = new URLSearchParams(body.substring(queryIndex + 1)).get(INSTANCE_QUERY_KEY);
+  return instanceName === null || instanceName === "" ? null : instanceName;
+}
+
+/** The 1-based number out of a canonical `<service>-<N>` instance name, or
+ *  null when the name does not carry one (a hand-edited ref). The service
+ *  name is always the whole prefix before the final `-<digits>` group, so
+ *  this parses even for a service whose own name ends in digits. */
+export function instanceNumberFromName(instanceName: string): number | null {
+  const match = /^(.+)-([1-9][0-9]*)$/.exec(instanceName);
+  return match === null ? null : Number(match[2]);
+}
+
+/** The registered service name out of a canonical `<service>-<N>` instance
+ *  name, or null when the name does not parse. The inverse of the allocator's
+ *  mint, which always appends `-<N>` to the full service name. */
+export function serviceNameFromInstanceName(instanceName: string): string | null {
+  const match = /^(.+)-([1-9][0-9]*)$/.exec(instanceName);
+  return match === null ? null : match[1];
 }
 
 /** One object as the machine reports it, before it becomes a row: the name its
@@ -513,11 +562,23 @@ export interface MachineObject {
   label: string;
 }
 
+/** One app instance as the machine reports it: which service it is a page of,
+ *  its canonical instance name (the ref is built from both -- see
+ *  appInstanceRef), and what to call it in the UI. */
+export interface AppInstanceObject {
+  serviceName: string;
+  instanceName: string;
+  label: string;
+}
+
 /**
  * Everything the machine currently holds, gathered per kind from the source
  * that knows about it: chat agents from the agent list, terminals from the
- * tmux fleet, browsers from the browser fleet, and apps from the registered
- * service list.
+ * tmux fleet, browsers from the browser fleet, and app INSTANCES from the
+ * instance inventory (derived server-side from member lists and saved
+ * layouts -- see models/AppInstances). A registered app with no instances is
+ * openable (the rail, the popover, the launcher tiles all offer it) but is
+ * not an object here: the tab lists hold instances, never bare services.
  *
  * Those four kinds are the whole of it, because they are the four the machine
  * can enumerate: an ad-hoc URL page exists only as a panel in some view's
@@ -529,7 +590,7 @@ export interface MachineInventory {
   chatAgents: readonly MachineObject[];
   terminals: readonly MachineObject[];
   browsers: readonly MachineObject[];
-  apps: readonly MachineObject[];
+  appInstances: readonly AppInstanceObject[];
 }
 
 /** One row of a tab list: the object, what it is called, and which projects
@@ -542,11 +603,10 @@ export interface MemberRow {
   projectIds: string[];
 }
 
-const INVENTORY_KINDS: readonly { kind: MemberKind; key: keyof MachineInventory }[] = [
+const INVENTORY_KINDS: readonly { kind: MemberKind; key: "chatAgents" | "terminals" | "browsers" }[] = [
   { kind: "chat", key: "chatAgents" },
   { kind: "terminal", key: "terminals" },
   { kind: "browser", key: "browsers" },
-  { kind: "app", key: "apps" },
 ];
 
 /**
@@ -560,10 +620,10 @@ const INVENTORY_KINDS: readonly { kind: MemberKind; key: keyof MachineInventory 
  * projects showing it, for the row menu; a ref missing from it is filed
  * nowhere, not hidden.
  *
- * Kinds come out in inventory order (chats, terminals, browsers, apps) and
- * objects within a kind in the order their source listed them. Duplicate refs
- * collapse onto the first row for them, so an object a source reports twice
- * does not list twice.
+ * Kinds come out in inventory order (chats, terminals, browsers, app
+ * instances) and objects within a kind in the order their source listed them.
+ * Duplicate refs collapse onto the first row for them, so an object a source
+ * reports twice does not list twice.
  */
 export function buildEverythingMembers(
   inventory: MachineInventory,
@@ -571,14 +631,23 @@ export function buildEverythingMembers(
 ): MemberRow[] {
   const rows: MemberRow[] = [];
   const seenRefs = new Set<string>();
+  const pushRow = (ref: string, kind: MemberKind, label: string): void => {
+    if (seenRefs.has(ref)) return;
+    seenRefs.add(ref);
+    rows.push({ ref, kind, label, projectIds: [...(projectsByRef[ref] ?? [])] });
+  };
   for (const { kind, key } of INVENTORY_KINDS) {
     for (const object of inventory[key]) {
       if (object.name === "") continue;
-      const ref = memberRef(kind, object.name);
-      if (seenRefs.has(ref)) continue;
-      seenRefs.add(ref);
-      rows.push({ ref, kind, label: object.label, projectIds: [...(projectsByRef[ref] ?? [])] });
+      pushRow(memberRef(kind, object.name), kind, object.label);
     }
+  }
+  // Apps list as their instances: an instance is the object the way a chat or
+  // a terminal is, while a zero-instance app has no tab-list row anywhere --
+  // the rail, the popover and the launcher tiles are where it stays openable.
+  for (const instance of inventory.appInstances) {
+    if (instance.serviceName === "" || instance.instanceName === "") continue;
+    pushRow(appInstanceRef(instance.serviceName, instance.instanceName), "app", instance.label);
   }
   return rows;
 }

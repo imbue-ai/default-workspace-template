@@ -55,14 +55,12 @@ import {
   type LiveKey,
   type LiveSurface,
   type PanelParams,
-  type PanelType,
 } from "./liveSurfaces";
 import { TerminalBanner } from "./TerminalBanner";
 import { SubagentView } from "./SubagentView";
 import { DestroyConfirmDialog } from "./DestroyConfirmDialog";
 import { ProjectMembershipDialog } from "./ProjectMembershipDialog";
 import { ShareModal } from "./ShareModal";
-import { pickableApps } from "./AllAppsPicker";
 import { serviceIconMarkup } from "./appIcon";
 import { NewTabLauncher, buildLauncherRows } from "./NewTabLauncher";
 import type { LaunchTarget, LauncherRow } from "./NewTabLauncher";
@@ -86,6 +84,7 @@ import {
   addLayoutOpListener,
   addLayoutSyncListener,
   addMemberLastUsedListener,
+  addMemberLocationListener,
   addMemberTitleListener,
   addProjectSyncListener,
   addTerminalSessionListener,
@@ -109,6 +108,7 @@ import {
   type LayoutSyncEvent,
   type LayoutOpListener,
   type MemberLastUsedListener,
+  type MemberLocationListener,
   type MemberTitleListener,
   type ProjectSyncEvent,
   type ChatHarness,
@@ -141,6 +141,7 @@ import {
 } from "../models/MemberLastUsed";
 import {
   addMember,
+  appInstanceRef,
   appShortcutId,
   autosaveProject,
   buildEverythingMembers,
@@ -149,6 +150,7 @@ import {
   fetchMemberMap,
   fetchProjectContent,
   fetchProjectsList,
+  instanceNameFromRef,
   isEverythingView,
   EVERYTHING_VIEW_NAME,
   memberKindFromRef,
@@ -166,6 +168,18 @@ import {
   type ProjectInfo,
 } from "../models/Projects";
 import type { ShortcutMode, ShortcutName } from "../models/Projects";
+import {
+  allocateAppInstance,
+  appInstanceDisplayName,
+  getAppInstances,
+  refreshAppInstances,
+} from "../models/AppInstances";
+import {
+  applyMemberLocationChange,
+  getMemberLocation,
+  loadMemberLocations,
+  recordMemberLocation,
+} from "../models/MemberLocations";
 import { appStoppedDetail, isAppRunning, isAppStoppable, stoppedAppForServiceName } from "../models/appLiveness";
 
 const AUTOSAVE_DEBOUNCE_MS = 1500;
@@ -178,6 +192,11 @@ const AUTOSAVE_DEBOUNCE_MS = 1500;
 // params from its id alone when the bookkeeping entry is missing.
 const CHAT_PANEL_ID_PREFIX = "chat-";
 const TERMINAL_PANEL_ID_PREFIX = "terminal-session-";
+// An app instance's pane is ``app-instance-<canonical-instance-name>``
+// (``app-instance-files-2``), deterministic for the same reason a chat's is:
+// reopening the instance from any surface focuses the existing tab, and
+// destroying a backgrounded instance still knows which saved panel to sweep.
+const APP_INSTANCE_PANEL_ID_PREFIX = "app-instance-";
 // New Tab launcher panels. The prefix is what tells a launcher apart after a
 // layout restore, when all that survives is the panel id and its params.
 const LAUNCHER_PANEL_ID_PREFIX = "new-tab-";
@@ -288,6 +307,19 @@ let showBrowserDestroyDialog = false;
 let browserDestroyName: string | null = null;
 let browserDestroyPanelId: string | null = null;
 
+// App-instance-delete dialog state. Separate once more because deleting an
+// instance touches nothing server-side beyond the references that make it
+// exist: it leaves every project, its panes close everywhere, and its name,
+// recency and stored location are cleared -- while the app's service keeps
+// running untouched.
+let showAppInstanceDestroyDialog = false;
+let appInstanceDestroyRef: string | null = null;
+let appInstanceDestroyLabel: string | null = null;
+let appInstanceDestroyPanelId: string | null = null;
+
+const DESTROY_APP_INSTANCE_DETAILS =
+  "It is removed from every project that shows it, not just this one. The app itself keeps running.";
+
 // Share modal state
 let showShareModal = false;
 let shareServiceName: string | null = null;
@@ -315,6 +347,7 @@ let _layoutOpListener: LayoutOpListener | null = null;
 let _projectSyncListener: ProjectSyncListener | null = null;
 let _memberTitleListener: MemberTitleListener | null = null;
 let _memberLastUsedListener: MemberLastUsedListener | null = null;
+let _memberLocationListener: MemberLocationListener | null = null;
 let _terminalSessionListener: TerminalSessionListener | null = null;
 let initialized = false;
 // True while a view's content is being mounted. The teardown half of that
@@ -716,32 +749,40 @@ function tabMenuEntries(panelId: string): ObjectMenuEntry[] {
       },
     ];
   }
+  // An app pane's menu splits by what the pane IS: an instance pane carries
+  // the instance verbs with the service's own Share and Stop/Start trailing
+  // in their own group, while a pane whose instance has not landed yet keeps
+  // the bare service menu (share in the opening group, lifecycle in the
+  // destructive slot).
+  const isInstancePane = kind === "app" && params.serviceInstanceId !== undefined && params.serviceInstanceId !== "";
+  const shareAction =
+    kind === "app" && params.serviceName !== undefined
+      ? {
+          // Named the way the app is displayed, not the way the registry is.
+          // The service name is the app's stable id (it keys apps.toml, the
+          // supervisord program and the ref), and every other surface already
+          // shows the chosen name over it. The share itself is still keyed by
+          // the service name.
+          label: `Share ${appDisplayLabel(params.serviceName)}`,
+          run: () => {
+            shareServiceName = params.serviceName ?? null;
+            showShareModal = true;
+            m.redraw();
+          },
+        }
+      : null;
   const actions: ObjectMenuActions = {
     // Reloads what the tab is showing for chat/browser/app; for a terminal
     // this reattaches its tmux session instead of reloading anything (see
     // refreshPanelContent) -- the session survives independently of the tab,
     // so a reattach never loses scrollback or respawns the shell.
     refresh: () => refreshPanelContent(panelId),
-    // Only ever read by objectMenuEntries when kind is "app" -- constructed
-    // just for that case rather than for every serviceName-bearing panel, so
-    // a browser pane (which has a serviceName too) does not build a Share it
-    // will never be offered.
-    share:
-      kind === "app" && params.serviceName !== undefined
+    share: isInstancePane ? null : shareAction,
+    serviceGroup:
+      isInstancePane && params.serviceName !== undefined
         ? {
-            // Named the way the tab is, not the way the registry is. The
-            // service name is the app's stable id (it keys apps.toml, the
-            // supervisord program and the ref), and every other surface
-            // already shows the chosen name over it -- this label was the one
-            // place the id still reached the user, reading "Share web"
-            // directly above "Stop Docs" for a renamed app. The share itself
-            // is still keyed by the service name below.
-            label: `Share ${displayNameForMember(memberRef("app", params.serviceName), params.serviceName)}`,
-            run: () => {
-              shareServiceName = params.serviceName ?? null;
-              showShareModal = true;
-              m.redraw();
-            },
+            share: shareAction,
+            lifecycle: appLifecycleQuitAction(params.serviceName, appDisplayLabel(params.serviceName)),
           }
         : null,
     // Opens the membership dialog over the object this tab shows. The ref is
@@ -876,7 +917,25 @@ function tabQuitAction(
       const serviceName = params.serviceName;
       // objectMenuKindForPanel only returns "app" once serviceName is known.
       if (serviceName === undefined) return null;
-      return appLifecycleQuitAction(serviceName, currentTabTitle(panelId, serviceName));
+      // An instance pane's destructive slot is the uniform Delete; the
+      // service-level Stop/Start lives in the menu's service group instead.
+      // A pane whose instance has not landed yet (mid-mint or mid-adoption)
+      // keeps the service verb, since there is no instance to delete.
+      const instanceName = params.serviceInstanceId;
+      if (!instanceName) {
+        return appLifecycleQuitAction(serviceName, currentTabTitle(panelId, serviceName));
+      }
+      const ref = appInstanceRef(serviceName, instanceName);
+      return {
+        label: `Delete ${currentTabTitle(panelId, labelForMemberRef(ref))}`,
+        run: () => {
+          appInstanceDestroyRef = ref;
+          appInstanceDestroyLabel = currentTabTitle(panelId, labelForMemberRef(ref));
+          appInstanceDestroyPanelId = panelId;
+          showAppInstanceDestroyDialog = true;
+          m.redraw();
+        },
+      };
     }
   }
 }
@@ -934,6 +993,16 @@ function requestAgentStop(agentId: string, displayedName: string): void {
     .catch((e: Error) => {
       alert(`Failed to stop ${displayedName}: ${e.message}`);
     });
+}
+
+/** The rail's route into the service-level Stop/Start for an instance row's
+ *  menu: fire whichever direction the app's current liveness calls for. A
+ *  name no stoppable app answers to is a no-op -- the menu only offers the
+ *  verb where one does. */
+export function toggleAppLifecycle(serviceName: string): void {
+  const app = getApps().find((candidate) => candidate.name === serviceName);
+  if (app === undefined || !isAppStoppable(app)) return;
+  requestAppLifecycleAction(serviceName, isAppRunning(app) ? "stop" : "start");
 }
 
 /** The rail's route into ``requestAgentStop``: a chat row's ref carries the
@@ -1913,10 +1982,12 @@ function launcherMemberRows(): LauncherRow[] {
 /** Re-read the fleets the sidebar and the launcher enumerate. Called when a
  *  view is mounted, when a launcher opens, and after creating a browser or a
  *  terminal, so a freshly-created one is listed without waiting for the next
- *  mount. */
+ *  mount. The instance inventory rides along: it is the app half of the same
+ *  enumeration. */
 function refreshMachineInventory(): void {
   refreshBrowserFleet(() => m.redraw());
   refreshTerminalFleet(() => m.redraw());
+  void refreshAppInstances().then(() => m.redraw());
 }
 
 /**
@@ -1935,6 +2006,19 @@ function refreshMachineInventory(): void {
  * ``memberRefForPanelParams``).
  */
 function machineInventory(): MachineInventory {
+  // Instances come out grouped by service, services alphabetically (the
+  // backend's map carries no order of its own) and numbers ascending within
+  // each -- the same order the rail's app rows read in.
+  const instancesByService = getAppInstances();
+  const appInstances = Object.keys(instancesByService)
+    .sort((left, right) => left.localeCompare(right))
+    .flatMap((serviceName) =>
+      instancesByService[serviceName].map((instanceName) => ({
+        serviceName,
+        instanceName,
+        label: labelForMemberRef(appInstanceRef(serviceName, instanceName)),
+      })),
+    );
   return {
     chatAgents: getAgents().map((agent) => ({ name: agent.id, label: chatDisplayName(agent) })),
     terminals: terminalFleet.map((terminal) => ({
@@ -1942,7 +2026,7 @@ function machineInventory(): MachineInventory {
       label: terminalDisplayName(terminal.session_name),
     })),
     browsers: browserFleet.map((browser) => ({ name: browser.id, label: browserDisplayName(browser.id) })),
-    apps: pickableApps().map((app) => ({ name: app.name, label: app.name })),
+    appInstances,
   };
 }
 
@@ -1999,8 +2083,15 @@ function derivedLabelForMemberRef(ref: string): string {
       return terminalDisplayName(body);
     case "browser":
       return browserDisplayName(serviceSessionLabel(parseServiceRefBody(body).query));
-    case "app":
-      return body;
+    case "app": {
+      // An instance derives "<app display name> N" ("File Viewer 2", "Docs 2"
+      // for a renamed app): the app's own chosen name rides into every one of
+      // its instances' names. A bare ref (the app's pin) is the service name.
+      const instanceName = instanceNameFromRef(ref);
+      if (instanceName === null) return body;
+      const serviceName = serviceNameFromRef(ref) ?? parseServiceRefBody(body).name;
+      return appInstanceDisplayName(appDisplayLabel(serviceName), instanceName);
+    }
     case "url":
       return (openPanelId === null ? undefined : panelParams.get(openPanelId)?.title) ?? "Page";
   }
@@ -2088,6 +2179,51 @@ function stoppedDetailForRef(ref: string, kind: MemberKind): string | undefined 
  * to do nothing -- the same acknowledgement ``openLauncherPanel`` already
  * gives a "+" click that lands on an already-open launcher.
  */
+/**
+ * How each member kind opens from its ref -- the one dispatch table the
+ * ref-first paths (rail rows, launcher rows, shortcut focus) consult, in
+ * place of the per-kind switch that used to live inline in ``openMemberRef``.
+ * Bodies are the switch's own, unchanged; the app entry is the first source
+ * whose instances are wholly derived from references (see ``app_instances``
+ * server-side), and the three legacy kinds keep their own grammars until the
+ * follow-up that migrates them onto the same seam.
+ */
+const memberOpenerByKind: Record<MemberKind, (ref: string, targetGroup: DockviewGroupPanel | null) => string | null> =
+  {
+    chat: (ref, targetGroup) => {
+      const chatAgentId = memberRefBody(ref);
+      const agent = getAgentById(chatAgentId);
+      focusOrCreateChatPanel(chatAgentId, agent === undefined ? chatAgentId : chatDisplayName(agent), targetGroup);
+      return chatPanelId(chatAgentId);
+    },
+    terminal: (ref, targetGroup) => addTerminalPanel(memberRefBody(ref), { targetGroup }),
+    app: (ref, targetGroup) => {
+      // Opening a stopped app means wanting it: start it first (idempotent);
+      // the pane shows the stopped placeholder until the program is up.
+      const stoppedApp = stoppedAppForServiceName(getApps(), serviceNameFromRef(ref));
+      if (stoppedApp !== null && isAppStoppable(stoppedApp)) {
+        requestAppLifecycleAction(stoppedApp.name, "start");
+      }
+      // A bare ``service:<name>`` ref is the app's pin: opening it means an
+      // instance of the app -- the view's most recent, minting when it shows
+      // none. An instance ref opens that instance's own pane.
+      if (instanceNameFromRef(ref) === null) {
+        const app = getApps().find((candidate) => candidate.name === memberRefBody(ref));
+        if (app === undefined) return null;
+        openAppTab(app);
+        return panelIdForMemberRef(mruInstanceRefForApp(app.name) ?? ref);
+      }
+      return addPanelForRef(ref, getPrimaryAgentId(), placementForGroup(targetGroup));
+    },
+    // A ``service:`` ref like an app's, which addPanelForRef creates and
+    // dedups -- including the fleet's ``?session=`` form.
+    browser: (ref, targetGroup) => addPanelForRef(ref, getPrimaryAgentId(), placementForGroup(targetGroup)),
+    url: (ref) => {
+      console.warn(`Cannot reopen ${ref}: an ad-hoc page's address does not survive its tab`);
+      return null;
+    },
+  };
+
 function openMemberRef(ref: string, targetGroup: DockviewGroupPanel | null): string | null {
   if (!dockview) return null;
   const openPanelId = panelIdForMemberRef(ref);
@@ -2099,33 +2235,7 @@ function openMemberRef(ref: string, targetGroup: DockviewGroupPanel | null): str
     flashPanelTab(openPanelId);
     return openPanelId;
   }
-  const body = memberRefBody(ref);
-  switch (memberKindFromRef(ref)) {
-    case "chat": {
-      const chatAgentId = body;
-      const agent = getAgentById(chatAgentId);
-      focusOrCreateChatPanel(chatAgentId, agent === undefined ? chatAgentId : chatDisplayName(agent), targetGroup);
-      return chatPanelId(chatAgentId);
-    }
-    case "terminal":
-      return addTerminalPanel(body, { targetGroup });
-    case "app": {
-      // Opening a stopped app means wanting it: start it first (idempotent);
-      // the pane shows the stopped placeholder until the program is up.
-      const stoppedApp = stoppedAppForServiceName(getApps(), serviceNameFromRef(ref));
-      if (stoppedApp !== null && isAppStoppable(stoppedApp)) {
-        requestAppLifecycleAction(stoppedApp.name, "start");
-      }
-      return addPanelForRef(ref, getPrimaryAgentId(), placementForGroup(targetGroup));
-    }
-    case "browser":
-      // A ``service:`` ref like an app's, which addPanelForRef creates and
-      // dedups -- including the fleet's ``?session=`` form.
-      return addPanelForRef(ref, getPrimaryAgentId(), placementForGroup(targetGroup));
-    case "url":
-      console.warn(`Cannot reopen ${ref}: an ad-hoc page's address does not survive its tab`);
-      return null;
-  }
+  return memberOpenerByKind[memberKindFromRef(ref)](ref, targetGroup);
 }
 
 /** Sidebar row click: focus the object's tab, or open it into the active pane. */
@@ -2253,10 +2363,13 @@ export async function removeMemberRefFromView(ref: string): Promise<void> {
   }
 }
 
-/** Open the machine's share surface for an app row. */
+/** Open the machine's share surface for an app row -- the share is per
+ *  registered service, so an instance row shares its service. */
 export function shareMemberRow(row: SidebarTabRow): void {
   if (row.kind !== "app") return;
-  shareServiceName = memberRefBody(row.ref);
+  const serviceName = serviceNameFromRef(row.ref);
+  if (serviceName === null) return;
+  shareServiceName = serviceName;
   showShareModal = true;
   m.redraw();
 }
@@ -2293,10 +2406,24 @@ export function destroyMemberRow(row: SidebarTabRow): void {
       showBrowserDestroyDialog = true;
       break;
     case "app": {
-      // The service level rather than a destroy: stop (or start) the app's
-      // supervised program, leaving its registry row and memberships alone.
-      // No confirmation -- it is one click from undone -- and no panel sweep:
-      // an open pane simply shows the stopped placeholder until a start.
+      // An instance row's delete is the uniform, confirm-gated Delete: the
+      // instance leaves every project and its panes close everywhere, while
+      // the app's service keeps running (see the dialog's wording). Works for
+      // an instance of an app the machine no longer offers too -- there is
+      // nothing server-side to reach beyond the references themselves.
+      const instanceName = instanceNameFromRef(row.ref);
+      if (instanceName !== null) {
+        appInstanceDestroyRef = row.ref;
+        appInstanceDestroyLabel = row.label;
+        appInstanceDestroyPanelId = livePanelId ?? appInstancePanelId(instanceName);
+        showAppInstanceDestroyDialog = true;
+        break;
+      }
+      // A bare app row keeps the service level rather than a destroy: stop
+      // (or start) the app's supervised program, leaving its registry row and
+      // memberships alone. No confirmation -- it is one click from undone --
+      // and no panel sweep: an open pane simply shows the stopped placeholder
+      // until a start.
       const app = getApps().find((candidate) => candidate.name === body);
       if (app === undefined || !isAppStoppable(app)) return;
       requestAppLifecycleAction(body, isAppRunning(app) ? "stop" : "start");
@@ -2395,31 +2522,6 @@ function openInitialChatTab(): boolean {
 let awaitingInitialChat = false;
 let agentsUpdatedListener: AgentsUpdatedListener | null = null;
 
-function openIframeTab(
-  url: string,
-  title: string,
-  panelType: PanelType = "iframe",
-  serviceName?: string,
-  targetGroup?: DockviewGroupPanel | null,
-  // A minted id gives this pane a live page of its own (a "New X" second
-  // pane); unset, the pane shares the service's one default-instance page.
-  serviceInstanceId?: string,
-): void {
-  if (!dockview) return;
-  const primaryId = getPrimaryAgentId();
-  const panelId = `${panelType}-${primaryId}-${Date.now()}`;
-  const params: PanelParams = { panelType, agentId: primaryId, url, title, serviceName, serviceInstanceId };
-  panelParams.set(panelId, params);
-  dockview.addPanel({
-    id: panelId,
-    component: "iframe",
-    title,
-    params,
-    ...placementForGroup(targetGroup),
-  });
-  recordMembership(panelId);
-}
-
 /** Find the chat panel id to anchor an agent-initiated split against.
  *
  *  Strict identity: the only acceptable anchor is the requester's own chat
@@ -2450,17 +2552,25 @@ function findIframePanelIdForService(serviceName: string): string | null {
 /** Find an existing iframe panel for a ``service:`` ref body, or null.
  *
  *  Dedup is keyed on what makes the pane unique:
- *   - A ref with no query (``web``) dedups by ``serviceName`` -- the
- *     existing single-pane-per-service behavior.
- *   - A ref with a query (``browser?session=2``) dedups by the resolved
- *     URL, which embeds the query. Two browser panes with different
- *     ``?session=`` therefore resolve to different panels and never collide:
- *     opening ``service:browser?session=2`` focuses session 2's pane (or
- *     creates it) without touching session 0's. */
+ *   - A ref with no query (``web``) dedups by ``serviceName``: any pane of
+ *     the service satisfies a bare ref, whichever instance it shows.
+ *   - An instance ref (``files?instance=files-2``) dedups by the instance
+ *     itself -- the pane already filed under the ref, else the deterministic
+ *     panel id the instance is always opened under.
+ *   - A browser-session ref (``browser?session=2``) dedups by the resolved
+ *     URL, which embeds the query. Distinct sessions therefore resolve to
+ *     distinct panels and never collide. */
 function findIframePanelIdForServiceRef(body: string): string | null {
   const { name, query } = parseServiceRefBody(body);
   if (query === "") {
     return findIframePanelIdForService(name);
+  }
+  const instanceName = instanceNameFromRef(`service:${body}`);
+  if (instanceName !== null) {
+    const filedPanelId = panelIdForMemberRef(`service:${body}`);
+    if (filedPanelId !== null) return filedPanelId;
+    const deterministicId = appInstancePanelId(instanceName);
+    return dockview?.panels.some((panel) => panel.id === deterministicId) === true ? deterministicId : null;
   }
   return findIframePanelIdForUrl(serviceRefUrl(body));
 }
@@ -2513,6 +2623,35 @@ function terminalPanelId(sessionName: string): string {
   return `${TERMINAL_PANEL_ID_PREFIX}${sessionName}`;
 }
 
+/** Deterministic dockview panel id for an app instance, for the same reasons
+ *  a chat's and a terminal's are. The canonical instance name is unique
+ *  machine-wide, so it is the whole of the id. */
+function appInstancePanelId(instanceName: string): string {
+  return `${APP_INSTANCE_PANEL_ID_PREFIX}${instanceName}`;
+}
+
+/** The registered service name a canonical ``<service>-<N>`` instance name
+ *  belongs to, or null when the name does not parse. The allocator always
+ *  appends ``-<N>`` to the full service name, so stripping the final
+ *  ``-<digits>`` group recovers it -- even for a service whose own name ends
+ *  in digits. */
+function serviceNameFromInstanceName(instanceName: string): string | null {
+  const match = /^(.+)-([1-9][0-9]*)$/.exec(instanceName);
+  return match === null ? null : match[1];
+}
+
+/** The URL an app instance's pane opens at: the service origin, plus the
+ *  folder (or page) the instance last beaconed from -- which is what makes an
+ *  instance reopen where it was looking, across reloads and restarts. An
+ *  instance that never beaconed opens at the origin, as every app always did. */
+function appInstanceUrl(serviceName: string, ref: string): string {
+  const origin = deriveServiceOrigin(labelForService(serviceName));
+  const storedPath = getMemberLocation(ref);
+  if (storedPath === null) return origin;
+  // The origin carries a trailing slash and every stored path is /-rooted.
+  return `${origin.replace(/\/$/, "")}${storedPath}`;
+}
+
 /** Rebuild a panel's params from its (deterministic) panel id.
  *
  *  Launcher, chat and persistent-terminal panel ids encode their identity, so a panel
@@ -2542,6 +2681,19 @@ function derivePanelParamsFromId(panelId: string): PanelParams | null {
       title: sessionName,
       terminalSessionName: sessionName,
       terminalId,
+    };
+  }
+  if (panelId.startsWith(APP_INSTANCE_PANEL_ID_PREFIX)) {
+    const instanceName = panelId.substring(APP_INSTANCE_PANEL_ID_PREFIX.length);
+    const serviceName = instanceName === "" ? null : serviceNameFromInstanceName(instanceName);
+    if (serviceName === null) return null;
+    return {
+      panelType: "iframe",
+      agentId: getPrimaryAgentId(),
+      url: appInstanceUrl(serviceName, appInstanceRef(serviceName, instanceName)),
+      title: instanceName,
+      serviceName,
+      serviceInstanceId: instanceName,
     };
   }
   return null;
@@ -2845,17 +2997,56 @@ function addPanelForRef(ref: string, requesterAgentId: string, addOptions: AddPa
 
   if (ref.startsWith("service:")) {
     const body = ref.substring("service:".length);
-    // Dedup distinguishes browser sessions: ``service:browser?session=2``
-    // resolves to a different panel than ``service:browser?session=0`` (or
-    // the bare ``service:browser``) because the query is part of the URL we
-    // dedup on. Plain service refs still dedup by serviceName.
+    // Dedup distinguishes instances and browser sessions: an instance ref and
+    // a ``?session=`` ref each resolve to their own panel, and plain service
+    // refs dedup by serviceName (any pane of the service).
     const existingPanelId = findIframePanelIdForServiceRef(body);
     if (existingPanelId !== null) {
       const existing = dockview.panels.find((p) => p.id === existingPanelId);
       if (existing) dockview.setActivePanel(existing);
       return existingPanelId;
     }
+    // An app instance's pane: deterministic id, the instance name on the
+    // params (which is what its live key and member ref are built from --
+    // the URL carries the service origin plus any beaconed location, never
+    // the instance query), and the same bookkeeping as every other create.
+    const instanceName = instanceNameFromRef(ref);
+    if (instanceName !== null) {
+      const { name: serviceName } = parseServiceRefBody(body);
+      const panelId = appInstancePanelId(instanceName);
+      const title = labelForMemberRef(ref);
+      const params: PanelParams = {
+        panelType: "iframe",
+        agentId: requesterAgentId || getPrimaryAgentId(),
+        url: appInstanceUrl(serviceName, ref),
+        title,
+        serviceName,
+        serviceInstanceId: instanceName,
+      };
+      panelParams.set(panelId, params);
+      dockview.addPanel({
+        id: panelId,
+        component: "iframe",
+        title,
+        params,
+        ...placement,
+      });
+      recordMembership(panelId);
+      return panelId;
+    }
     const { name: serviceName, query } = parseServiceRefBody(body);
+    // A bare ref for a plain app means "an instance of it", and none is open
+    // (the dedup above would have answered): mint the next free one and open
+    // it with this same placement. Asynchronous -- the allocation is the
+    // backend's -- so nothing is returned; the caller's op has taken effect
+    // once the minted instance's pane lands.
+    if (query === "" && serviceName !== BROWSER_SERVICE_NAME) {
+      const app = getApps().find((candidate) => candidate.name === serviceName);
+      if (app !== undefined) {
+        mintAppInstance(app, addOptions);
+        return null;
+      }
+    }
     const ownerId = requesterAgentId || getPrimaryAgentId();
     const panelId = `iframe-${ownerId}-${Date.now()}`;
     // ``serviceName`` is the bare name (no query) so the per-tab Refresh
@@ -3212,14 +3403,15 @@ function openTabOfTypeInGroup(
     });
   }
   // What is left ("files") is not a tab type the workspace builds itself -- it
-  // is whichever app of that name the machine runs, so it opens through the
-  // same path as the rail's app rows, and opens nothing where none runs.
+  // is whichever app of that name the machine runs, and an "Open new" tile
+  // means a NEW object, so it always mints a fresh instance rather than
+  // focusing one (the mint carries its own per-app in-flight guard).
   const backingApp = getApps().find((app) => app.name === target.kind);
   if (backingApp === undefined) {
     releaseLauncherCreate(launcherPanelId);
     return null;
   }
-  openAppTab(backingApp);
+  openAppTab(backingApp, { isNew: true });
   retireLauncher(launcherPanelId);
   releaseLauncherCreate(launcherPanelId);
   return null;
@@ -3383,19 +3575,74 @@ function appNameFromShortcutId(shortcutId: string): string | null {
 }
 
 /** Open ``app`` from its rail shortcut, in the active view's mode for it:
- *  focus (the default) goes to the existing pane, new opens another pane on
- *  the same service. */
+ *  focus (the default) goes to the view's most recently used instance, new
+ *  always mints another. */
 export function openAppShortcut(app: AppEntry): void {
   const project = projectForViewId(availableProjects, mountedViewId ?? "");
   openAppTab(app, { isNew: shortcutModeForProject(project, appShortcutId(app.name)) === "new" });
 }
 
-/** Open ``app``'s pane in the active project, focusing (and flashing) the one
- *  already open rather than stacking a second -- unless ``isNew`` asks for a
- *  second pane on the same service outright (two panels per ref is legal;
- *  ref-addressed verbs keep acting on the first match). Exported for the
- *  machine rail and the all-apps picker, and used by the launcher's app
- *  rows. */
+/**
+ * Mints in flight, by service name: while one is pending the surfaces that
+ * would mint another stand down, so a double click cannot start two
+ * instances. The same guard the launcher tiles and shortcut rows already
+ * apply per surface; this one is per app, covering every mint path at once.
+ */
+const appsAwaitingInstanceMint = new Set<string>();
+
+/** Mint the next free instance of ``app`` machine-wide and open its pane with
+ *  ``addOptions``. The allocation is the backend's (lowest free ``<app>-<N>``
+ *  under its reservation set); the open that follows is what files the
+ *  instance into the active view and thereby makes it exist. */
+function mintAppInstance(app: AppEntry, addOptions: AddPanelPlacementOptions): void {
+  if (appsAwaitingInstanceMint.has(app.name)) return;
+  appsAwaitingInstanceMint.add(app.name);
+  void allocateAppInstance(app.name)
+    .then((instanceName) => {
+      addPanelForRef(appInstanceRef(app.name, instanceName), getPrimaryAgentId(), addOptions);
+    })
+    .catch((e: Error) => {
+      alert(`Failed to open ${appDisplayLabel(app.name)}: ${e.message}`);
+    })
+    .finally(() => {
+      appsAwaitingInstanceMint.delete(app.name);
+      m.redraw();
+    });
+}
+
+/** What one app is called right now, read through the machine-wide title
+ *  store like every surface that names it. */
+function appDisplayLabel(serviceName: string): string {
+  return displayNameForMember(memberRef("app", serviceName), serviceName);
+}
+
+/** The active view's most recently used instance of ``serviceName``, or null
+ *  when it shows none. The same MRU rule the built-in shortcuts follow
+ *  (``refForShortcutFocus``): recency from the machine-wide store, no-recency
+ *  instances last, first-listed breaking ties. Under Everything the view
+ *  lists the machine, so resolution is effectively machine-wide. */
+function mruInstanceRefForApp(serviceName: string): string | null {
+  const candidates = getSidebarRows()
+    .map((row) => row.ref)
+    .filter((ref) => instanceNameFromRef(ref) !== null && serviceNameFromRef(ref) === serviceName);
+  if (candidates.length === 0) return null;
+  const lastUsedMsByRef = getMemberLastUsed();
+  let mostRecentRef = candidates[0];
+  let mostRecentMs = lastUsedMsByRef[mostRecentRef] ?? Number.NEGATIVE_INFINITY;
+  for (const candidateRef of candidates.slice(1)) {
+    const candidateMs = lastUsedMsByRef[candidateRef] ?? Number.NEGATIVE_INFINITY;
+    if (candidateMs > mostRecentMs) {
+      mostRecentRef = candidateRef;
+      mostRecentMs = candidateMs;
+    }
+  }
+  return mostRecentRef;
+}
+
+/** Open an instance of ``app`` in the active view: the most recently used one
+ *  the view shows (creating only when it shows none) -- or always mint a
+ *  fresh one when ``isNew`` asks. Exported for the machine rail and the
+ *  all-apps picker, and used by the launcher's tiles and rows. */
 export function openAppTab(app: AppEntry, options: { isNew?: boolean } = {}): void {
   if (!dockview) return;
   // Opening a stopped app means wanting it: start it first (idempotent), and
@@ -3406,30 +3653,14 @@ export function openAppTab(app: AppEntry, options: { isNew?: boolean } = {}): vo
     requestAppLifecycleAction(app.name, "start");
   }
   if (options.isNew !== true) {
-    const openPanelId = findIframePanelIdForService(app.name);
-    const openPanel = openPanelId === null ? undefined : dockview.panels.find((p) => p.id === openPanelId);
-    revealedOpenPanelId = null;
-    if (openPanel !== undefined) {
-      revealedOpenPanelId = openPanel.id;
-      dockview.setActivePanel(openPanel);
-      flashPanelTab(openPanel.id);
+    const mruRef = mruInstanceRefForApp(app.name);
+    if (mruRef !== null) {
+      openMemberRef(mruRef, null);
+      m.redraw();
       return;
     }
   }
-  // A deliberate second pane gets a live page of its own: without a minted
-  // instance id it would share the service's one default-instance page, and
-  // one page cannot show in two panes -- the second would render blank and
-  // the restore-dedup would drop it. The ordinary pane stays on the default
-  // instance so every view showing the app shares one document.
-  const serviceInstanceId = options.isNew === true ? mintId("") : undefined;
-  openIframeTab(
-    deriveServiceOrigin(labelForService(app.name)),
-    app.name,
-    "iframe",
-    app.name,
-    undefined,
-    serviceInstanceId,
-  );
+  mintAppInstance(app, {});
 }
 
 function buildLayoutPayload(): SavedLayout | null {
@@ -3497,7 +3728,12 @@ export function memberRefForPanelParams(params: PanelParams | undefined): string
   if (params.terminalSessionName) return memberRef("terminal", params.terminalSessionName);
   if (params.serviceName) {
     const browserSession = params.serviceName === BROWSER_SERVICE_NAME ? sessionParamFromUrl(params.url) : null;
-    return browserSession === null ? memberRef("app", params.serviceName) : memberRef("browser", browserSession);
+    if (browserSession !== null) return memberRef("browser", browserSession);
+    // An app pane is filed as the INSTANCE it shows; a pane whose instance
+    // has not landed yet (mid-mint, or a pre-instances pane awaiting
+    // adoption) is not an object yet and files nothing, exactly as a
+    // terminal before its session name is allocated.
+    return params.serviceInstanceId ? appInstanceRef(params.serviceName, params.serviceInstanceId) : null;
   }
   return null;
 }
@@ -3692,6 +3928,10 @@ function beginRemoteApplySuppression(): void {
 async function refreshProjectsList(): Promise<void> {
   const listResponse = await fetchProjectsList();
   availableProjects = listResponse.projects;
+  // Instance existence is derived from references, and every flow that moves
+  // references re-lists projects, so the instance inventory rides the same
+  // refresh rather than growing its own set of triggers.
+  void refreshAppInstances().then(() => m.redraw());
   m.redraw();
 }
 
@@ -3790,6 +4030,11 @@ async function applyLayoutContent(saved: SavedLayout | null, isInitialMount: boo
       if (params.terminalSessionName) {
         params.terminalId = mintTerminalId();
         params.url = buildSessionTerminalUrl(params.terminalSessionName, params.terminalId, primaryWorkDir());
+      } else if (params.serviceName && params.serviceInstanceId) {
+        // An instance's pane reopens at the folder it last beaconed from
+        // (see appInstanceUrl), which is fresher than whatever URL the
+        // layout saved; an instance that never beaconed opens at the origin.
+        params.url = appInstanceUrl(params.serviceName, appInstanceRef(params.serviceName, params.serviceInstanceId));
       } else if (params.serviceName) {
         params.url = `${deriveServiceOrigin(labelForService(params.serviceName))}${urlQuerySuffix(params.url)}`;
       } else if (params.url) {
@@ -3809,10 +4054,10 @@ async function applyLayoutContent(saved: SavedLayout | null, isInitialMount: boo
     // <services-agent-id> panel; we don't want to surface that ever.
     //
     // This MUST be limited to chat panels. Iframe tabs (terminals,
-    // apps, custom URLs) opened via openIframeTab() set
-    // `agentId` to the primary agent id as a placeholder owner, so a
-    // bare `agentId === primaryId` check would wrongly strip every
-    // terminal/app/URL tab on each restore.
+    // app instances, custom URLs) set `agentId` to the primary agent
+    // id as a placeholder owner, so a bare `agentId === primaryId`
+    // check would wrongly strip every terminal/app/URL tab on each
+    // restore.
     const primaryId = getPrimaryAgentId();
     if (primaryId) {
       for (const panel of dv.panels.slice()) {
@@ -3854,11 +4099,61 @@ async function applyLayoutContent(saved: SavedLayout | null, isInitialMount: boo
   // The restored panels arrived all at once rather than through the creation
   // paths, so their refs are derived (and filed) here instead.
   reconcileMembersWithPanels();
+  adoptLegacyAppPanes();
   // Now rather than on the next frame: a page both views show has to land in
   // its new pane in the same paint the new arrangement does, or it would be
   // seen for a frame where the outgoing view had it.
   reconcileLiveSurfaces();
   scheduleTabWidthRecompute();
+}
+
+/**
+ * Adopt the app panes of a pre-instances layout as numbered instances.
+ *
+ * A layout saved before instances existed keys an app pane by its service
+ * alone (no ``serviceInstanceId``). Such a pane is not an object yet -- it
+ * files no member and its page is keyed by its panel -- so on first mount it
+ * is adopted: the allocator mints the app's lowest free instance, the pane
+ * takes the name (re-keying its live page, exactly as a terminal's late
+ * session-name allocation does), the ordinary auto-membership path files it,
+ * and the next autosave persists the adoption. Browser panes (session-keyed)
+ * and terminal panes (session-named, no serviceName) are not app panes and
+ * are skipped; a failed allocation leaves the pane as it was, and the next
+ * mount retries.
+ *
+ * CLEANUP: drop this pass once no supported workspace's saved layouts predate
+ * app instances (every pane saved since carries ``serviceInstanceId``).
+ */
+function adoptLegacyAppPanes(): void {
+  if (!dockview) return;
+  for (const panel of dockview.panels) {
+    const params = panelParams.get(panel.id);
+    if (params === undefined || params.panelType !== "iframe") continue;
+    if (!params.serviceName || params.serviceName === BROWSER_SERVICE_NAME) continue;
+    if (params.serviceInstanceId || isTerminalPanelParams(params)) continue;
+    const serviceName = params.serviceName;
+    const panelId = panel.id;
+    void allocateAppInstance(serviceName)
+      .then((instanceName) => {
+        // The pane may have been closed (or its view unmounted) while the
+        // allocation was in flight; adopting a gone pane would file a member
+        // nothing shows.
+        if (!panelParams.has(panelId)) return;
+        mutatePanelParams(panelId, (stored) => {
+          stored.serviceInstanceId = instanceName;
+        });
+        dockview?.panels
+          .find((candidate) => candidate.id === panelId)
+          ?.api.setTitle(labelForMemberRef(appInstanceRef(serviceName, instanceName)));
+        recordMembership(panelId);
+        scheduleSave();
+        m.redraw();
+      })
+      .catch(() => {
+        // The pane keeps working as a plain service pane; adoption retries on
+        // the next mount.
+      });
+  }
 }
 
 /** Record ``viewId`` as this browser's active view.
@@ -3882,11 +4177,14 @@ function setActiveView(viewId: string): void {
  * simply finds no saved content, which renders as the New Tab launcher.
  */
 async function initializeActiveView(): Promise<void> {
-  // Before anything is mounted: the names and recencies are machine-wide, so
-  // the first paint of the rail and the dock already says what things are
-  // called, and the first launcher already ranks by recency.
+  // Before anything is mounted: the names, recencies and locations are
+  // machine-wide, so the first paint of the rail and the dock already says
+  // what things are called, the first launcher already ranks by recency, and
+  // the first restore already opens instances where they were looking.
   await loadMemberTitles();
   await loadMemberLastUsed();
+  await loadMemberLocations();
+  await refreshAppInstances();
   const listResponse = await fetchProjectsList();
   availableProjects = listResponse.projects;
   const chosenId = chooseInitialViewId(availableProjects, getStoredProjectId());
@@ -4948,6 +5246,19 @@ function initializeDockview(parentElement: HTMLElement): void {
   };
   addMemberLastUsedListener(_memberLastUsedListener);
 
+  // A beacon anywhere on the machine -- another client's pane reporting where
+  // its instance is looking, or the entry dropped when an instance was
+  // destroyed. It locates the object rather than a panel, so the next open of
+  // the instance anywhere lands on the fresh path.
+  _memberLocationListener = (ref: string, path: string | null) => {
+    applyMemberLocationChange(ref, path);
+  };
+  addMemberLocationListener(_memberLocationListener);
+
+  // The location beacon itself: a framed app posts the path it is showing one
+  // hop up -- to this dockview shell, never further out -- on each page load.
+  window.addEventListener("message", handleLocationBeaconMessage);
+
   // Terminal session updates (client switched session / session renamed) push
   // over the same WebSocket; reflect them onto the owning tab's title.
   _terminalSessionListener = (terminalId, sessionId, sessionName) => {
@@ -4957,6 +5268,49 @@ function initializeDockview(parentElement: HTMLElement): void {
 
   // Pick this browser's active view and mount its content.
   void initializeActiveView();
+}
+
+/**
+ * Ingest one location beacon from a framed app page.
+ *
+ * The contract (see the vendored file viewer and the build-app scaffold): the
+ * page posts ``{type: "minds-location", path}`` to ``window.parent`` -- one
+ * hop up, which is this shell -- on each page load. The shell trusts nothing
+ * about the message: the origin must be one of this workspace's own service
+ * origins, the posting window must belong to a pane this dock is rendering,
+ * and that pane must show an app instance (the only objects with a location
+ * to keep). What survives is stored by the instance's ref, machine-wide.
+ */
+function handleLocationBeaconMessage(event: MessageEvent): void {
+  const data = event.data as { type?: unknown; path?: unknown } | null;
+  if (data === null || typeof data !== "object" || data.type !== "minds-location") return;
+  if (typeof data.path !== "string" || data.path === "") return;
+  // The sender must be one of this workspace's own services: their origins
+  // are derived from the registry exactly as the panes' URLs are, so the
+  // comparison is against what this shell itself would frame.
+  const serviceOrigins = new Set(
+    getApps().map((app) => deriveServiceOrigin(labelForService(app.name)).replace(/\/$/, "")),
+  );
+  if (!serviceOrigins.has(event.origin)) return;
+  // Resolve WHICH pane posted by its window, then which object that pane
+  // shows by its live key -- the instance's ref.
+  const iframes = document.querySelectorAll<HTMLIFrameElement>(`iframe[${IFRAME_PANEL_LIVE_KEY_ATTR}]`);
+  for (const iframe of iframes) {
+    if (iframe.contentWindow !== event.source) continue;
+    const liveKey = iframe.getAttribute(IFRAME_PANEL_LIVE_KEY_ATTR);
+    if (liveKey === null || instanceNameFromRef(liveKey) === null) return;
+    recordMemberLocation(liveKey, data.path);
+    return;
+  }
+}
+
+async function executeAppInstanceDestroy(ref: string, panelId: string): Promise<void> {
+  // Nothing server-side to tear down: an instance exists only as its
+  // references, so the sweep that drops it from every project's member list
+  // and saved layout (plus its name, recency and stored location) IS the
+  // delete. The app's own service keeps running untouched.
+  await forgetDestroyedObject(ref, panelId);
+  m.redraw();
 }
 
 async function executeDestroy(agentId: string, panelId: string): Promise<void> {
@@ -5164,6 +5518,29 @@ export const DockviewWorkspace: m.Component = {
                 showBrowserDestroyDialog = false;
                 browserDestroyName = null;
                 browserDestroyPanelId = null;
+              },
+            })
+          : null,
+
+        showAppInstanceDestroyDialog && appInstanceDestroyRef && appInstanceDestroyLabel
+          ? m(DestroyConfirmDialog, {
+              agentName: appInstanceDestroyLabel,
+              title: "Delete app page",
+              details: DESTROY_APP_INSTANCE_DETAILS,
+              onConfirm() {
+                showAppInstanceDestroyDialog = false;
+                const ref = appInstanceDestroyRef!;
+                const panelId = appInstanceDestroyPanelId!;
+                appInstanceDestroyRef = null;
+                appInstanceDestroyLabel = null;
+                appInstanceDestroyPanelId = null;
+                void executeAppInstanceDestroy(ref, panelId);
+              },
+              onCancel() {
+                showAppInstanceDestroyDialog = false;
+                appInstanceDestroyRef = null;
+                appInstanceDestroyLabel = null;
+                appInstanceDestroyPanelId = null;
               },
             })
           : null,

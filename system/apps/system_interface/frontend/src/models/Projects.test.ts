@@ -7,6 +7,7 @@ vi.mock("../base-path", () => ({ apiUrl: (path: string) => path }));
 import {
   EVERYTHING_VIEW_ID,
   addMember,
+  appInstanceRef,
   appShortcutId,
   autosaveProject,
   buildEverythingMembers,
@@ -18,6 +19,8 @@ import {
   fetchProjectContent,
   fetchProjectsList,
   defaultShortcutMode,
+  instanceNameFromRef,
+  instanceNumberFromName,
   filingProjectForAgentOp,
   isEverythingView,
   isShortcutPinned,
@@ -29,6 +32,7 @@ import {
   shortcutModeForProject,
   removePanelFromAllProjects,
   searchMembers,
+  serviceNameFromInstanceName,
   serviceNameFromRef,
   shareMember,
   updateProjectSettings,
@@ -79,7 +83,7 @@ const EMPTY_INVENTORY: MachineInventory = {
   chatAgents: [],
   terminals: [],
   browsers: [],
-  apps: [],
+  appInstances: [],
 };
 
 afterEach(() => {
@@ -527,6 +531,33 @@ describe("serviceNameFromRef", () => {
   it("answers null for a fleet browser, which is a session rather than an app", () => {
     expect(serviceNameFromRef(memberRef("browser", "quiet-otter"))).toBeNull();
   });
+
+  it("answers an instance ref with its service: the instance is a page of it", () => {
+    expect(serviceNameFromRef("service:files?instance=files-2")).toBe("files");
+  });
+});
+
+describe("app instance refs", () => {
+  it("builds and parses the instance ref round trip", () => {
+    const ref = appInstanceRef("files", "files-2");
+    expect(ref).toBe("service:files?instance=files-2");
+    expect(instanceNameFromRef(ref)).toBe("files-2");
+    expect(memberKindFromRef(ref)).toBe("app");
+  });
+
+  it("reads no instance out of a bare service ref or a browser session ref", () => {
+    expect(instanceNameFromRef("service:files")).toBeNull();
+    expect(instanceNameFromRef(memberRef("browser", "browser-2"))).toBeNull();
+    expect(instanceNameFromRef("chat:a1")).toBeNull();
+  });
+
+  it("parses the canonical instance name, digits-ending services included", () => {
+    expect(instanceNumberFromName("files-2")).toBe(2);
+    expect(serviceNameFromInstanceName("files-2")).toBe("files");
+    expect(serviceNameFromInstanceName("app-2-3")).toBe("app-2");
+    expect(instanceNumberFromName("files")).toBeNull();
+    expect(serviceNameFromInstanceName("files-0")).toBeNull();
+  });
 });
 
 describe("buildEverythingMembers", () => {
@@ -535,14 +566,14 @@ describe("buildEverythingMembers", () => {
       chatAgents: [{ name: "a1", label: "Planning" }],
       terminals: [{ name: "build", label: "build" }],
       browsers: [{ name: "quiet-otter", label: "Browser quiet-otter" }],
-      apps: [{ name: "web", label: "web" }],
+      appInstances: [{ serviceName: "web", instanceName: "web-1", label: "web 1" }],
     };
 
     expect(buildEverythingMembers(inventory, {})).toEqual([
       { ref: "chat:a1", kind: "chat", label: "Planning", projectIds: [] },
       { ref: "terminal:build", kind: "terminal", label: "build", projectIds: [] },
       { ref: "service:browser?session=quiet-otter", kind: "browser", label: "Browser quiet-otter", projectIds: [] },
-      { ref: "service:web", kind: "app", label: "web", projectIds: [] },
+      { ref: "service:web?instance=web-1", kind: "app", label: "web 1", projectIds: [] },
     ]);
   });
 
@@ -559,20 +590,23 @@ describe("buildEverythingMembers", () => {
 
   it("decorates a row with every project showing it", () => {
     const rows = buildEverythingMembers(
-      { ...EMPTY_INVENTORY, apps: [{ name: "web", label: "web" }] },
-      { "service:web": ["website-redesign", "taxes"] },
+      { ...EMPTY_INVENTORY, appInstances: [{ serviceName: "web", instanceName: "web-1", label: "web 1" }] },
+      { "service:web?instance=web-1": ["website-redesign", "taxes"] },
     );
 
     expect(rows[0].projectIds).toEqual(["website-redesign", "taxes"]);
   });
 
   it("copies the project list rather than aliasing the map", () => {
-    const projectsByRef = { "service:web": ["taxes"] };
-    const rows = buildEverythingMembers({ ...EMPTY_INVENTORY, apps: [{ name: "web", label: "web" }] }, projectsByRef);
+    const projectsByRef = { "service:web?instance=web-1": ["taxes"] };
+    const rows = buildEverythingMembers(
+      { ...EMPTY_INVENTORY, appInstances: [{ serviceName: "web", instanceName: "web-1", label: "web 1" }] },
+      projectsByRef,
+    );
 
     rows[0].projectIds.push("website-redesign");
 
-    expect(projectsByRef["service:web"]).toEqual(["taxes"]);
+    expect(projectsByRef["service:web?instance=web-1"]).toEqual(["taxes"]);
   });
 
   it("keeps the order each source listed its objects in", () => {
@@ -608,7 +642,12 @@ describe("buildEverythingMembers", () => {
   });
 
   it("skips an object the machine reported with no name", () => {
-    expect(buildEverythingMembers({ ...EMPTY_INVENTORY, apps: [{ name: "", label: "unnamed" }] }, {})).toEqual([]);
+    expect(
+      buildEverythingMembers(
+        { ...EMPTY_INVENTORY, appInstances: [{ serviceName: "", instanceName: "", label: "unnamed" }] },
+        {},
+      ),
+    ).toEqual([]);
   });
 
   it("yields nothing for an empty machine", () => {

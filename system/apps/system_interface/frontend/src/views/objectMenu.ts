@@ -127,6 +127,19 @@ export interface ObjectMenuActions {
   removeFromProject: (() => void) | null;
   stop: { label: string; run: () => void } | null;
   quit: { label: string; run: () => void; isDestructive?: boolean } | null;
+  /**
+   * The SERVICE's own verbs on an app-instance menu -- "Share {app}" and the
+   * reversible "Stop {app}" / "Start {app}" -- rendered as a trailing group
+   * behind their own divider, so the service stays reachable from any of its
+   * instances (Everything's rows included) while the verbs above stay the
+   * instance's. Null (or absent) everywhere else: a chat, terminal, or
+   * browser has no service behind it, and a bare app row IS the service, so
+   * its share and lifecycle ride the ordinary slots instead.
+   */
+  serviceGroup?: {
+    share: { label: string; run: () => void } | null;
+    lifecycle: { label: string; run: () => void } | null;
+  } | null;
 }
 
 /**
@@ -191,8 +204,30 @@ export function objectMenuEntries(kind: ObjectMenuKind, actions: ObjectMenuActio
       run: actions.quit.run,
     });
   }
-  // The divider earns its place only when it has something on both sides: a
-  // backgrounded terminal still allocating its session has neither a rename,
-  // a tab to hide, nor a destroy, and a menu must not end on a rule.
-  return closing.length === 0 ? opening : [...opening, OBJECT_MENU_DIVIDER, ...closing];
+  // The service's own verbs trail the instance's behind their own divider
+  // (see ``ObjectMenuActions.serviceGroup``): Share, then Stop/Start,
+  // reading in the same order the bare app menu offers them.
+  const serviceEntries: ObjectMenuEntry[] = [];
+  if (actions.serviceGroup != null) {
+    if (actions.serviceGroup.share !== null) {
+      serviceEntries.push({
+        label: actions.serviceGroup.share.label,
+        iconName: "share",
+        run: actions.serviceGroup.share.run,
+      });
+    }
+    if (actions.serviceGroup.lifecycle !== null) {
+      serviceEntries.push({
+        label: actions.serviceGroup.lifecycle.label,
+        iconName: "power",
+        run: actions.serviceGroup.lifecycle.run,
+      });
+    }
+  }
+  // The dividers earn their place only when they have something on both
+  // sides: a backgrounded terminal still allocating its session has neither
+  // a rename, a tab to hide, nor a destroy, and a menu must not end on a
+  // rule.
+  const leading: ObjectMenuEntry[] = closing.length === 0 ? opening : [...opening, OBJECT_MENU_DIVIDER, ...closing];
+  return serviceEntries.length === 0 ? leading : [...leading, OBJECT_MENU_DIVIDER, ...serviceEntries];
 }

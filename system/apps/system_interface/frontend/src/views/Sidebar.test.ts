@@ -193,6 +193,7 @@ function makeAttrs(overrides: Partial<SidebarAttrs> = {}): SidebarAttrs {
     onShareApp: vi.fn(),
     onAddRowToProjects: vi.fn(),
     onStopRow: vi.fn(),
+    onServiceLifecycle: vi.fn(),
     onDeleteFromMachine: vi.fn(),
     ...overrides,
   };

@@ -23,6 +23,7 @@ import {
   startProjectChat,
   stopChatRow,
   switchToView,
+  toggleAppLifecycle,
 } from "./DockviewWorkspace";
 import { ClaudeLoginModal } from "./ClaudeLoginModal";
 import { AgentAuthInstructionsModal } from "./AgentAuthInstructionsModal";
@@ -128,6 +129,9 @@ export function App(): m.Component {
               },
               onStopRow: (row: SidebarTabRow) => {
                 stopChatRow(row);
+              },
+              onServiceLifecycle: (serviceName: string) => {
+                toggleAppLifecycle(serviceName);
               },
               onDeleteFromMachine: (row: SidebarTabRow) => {
                 destroyMemberRow(row);
