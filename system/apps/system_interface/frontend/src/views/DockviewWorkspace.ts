@@ -132,7 +132,7 @@ import {
   setMemberTitle,
 } from "../models/MemberTitles";
 import { createBrowser } from "../models/Browsers";
-import { browserDisplayName, chatDisplayName, terminalDisplayName } from "./derived-names";
+import { appServiceDisplayName, browserDisplayName, chatDisplayName, terminalDisplayName } from "./derived-names";
 import {
   applyMemberLastUsedChange,
   getMemberLastUsed,
@@ -3601,10 +3601,12 @@ function mintAppInstance(app: AppEntry, addOptions: AddPanelPlacementOptions): v
     });
 }
 
-/** What one app is called right now, read through the machine-wide title
- *  store like every surface that names it. */
+/** What one app is called right now: the chosen name when it has one, else
+ *  the derived one ("File Viewer" for the built-in files service, the
+ *  registered name otherwise) -- read through the machine-wide title store
+ *  like every surface that names it. */
 function appDisplayLabel(serviceName: string): string {
-  return displayNameForMember(memberRef("app", serviceName), serviceName);
+  return displayNameForMember(memberRef("app", serviceName), appServiceDisplayName(serviceName));
 }
 
 /** The active view's most recently used instance of ``serviceName``, or null

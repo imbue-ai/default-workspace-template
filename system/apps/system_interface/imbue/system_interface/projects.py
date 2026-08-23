@@ -606,31 +606,45 @@ def _migrate_named_layouts_unlocked(layout_dir: Path) -> dict[str, Any] | None:
     }
 
 
-def _purge_legacy_url_members_unlocked(layout_dir: Path, meta: dict[str, Any]) -> None:
-    """Drop legacy ``url:`` members left behind by the old ad-hoc-page filer.
+# Member refs that name nothing a project can show any more, purged on read:
+#
+# - ``url:`` members, left behind by the old ad-hoc-page filer. A ``url:<hash>``
+#   ref named the panel that once showed the page rather than the page itself,
+#   so nothing can open or act on one. (CLEANUP: remove -- with the frontend's
+#   remaining "url" member handling in models/Projects.ts -- once no supported
+#   workspace's registry predates the projects follow-up that stopped filing
+#   ad-hoc pages.)
+# - bare ``service:files`` members, left behind by builds whose app opens filed
+#   the bare service ref. The file viewer's pin is its built-in rail row, never
+#   membership, so such an entry only ever rendered as a phantom "files" tab
+#   row. Opens file ``?instance=`` refs now. (CLEANUP: remove once no supported
+#   workspace's registry predates app instances.)
+_PURGED_MEMBER_REFS: Final[tuple[str, ...]] = ("service:files",)
+_PURGED_MEMBER_REF_PREFIXES: Final[tuple[str, ...]] = ("url:",)
 
-    Ad-hoc pages are no longer filed as members at all: a ``url:<hash>`` ref
-    named the panel that once showed the page rather than the page itself, so
-    nothing can open or act on one, and entries written before that change
-    would otherwise linger in member lists until removed by hand. Pages still
-    persist as panels in each view's saved arrangement; only the dead member
-    entries go. Rewrites the registry only when something was actually dropped.
 
-    CLEANUP: remove this purge (and the frontend's remaining "url" member
-    handling in models/Projects.ts) once no supported workspace's registry
-    predates the projects follow-up that stopped filing ad-hoc pages.
+def _purge_legacy_members_unlocked(layout_dir: Path, meta: dict[str, Any]) -> None:
+    """Drop the member refs nothing can show any more (see the table above).
+
+    Pages and panes still persist in each view's saved arrangement; only the
+    dead member entries go. Rewrites the registry only when something was
+    actually dropped.
     """
     dropped_count = 0
     for entry in meta["project_by_id"].values():
         if not isinstance(entry, dict):
             continue
         members = _entry_members(entry)
-        kept_members = [ref for ref in members if not ref.startswith("url:")]
+        kept_members = [
+            ref
+            for ref in members
+            if ref not in _PURGED_MEMBER_REFS and not ref.startswith(_PURGED_MEMBER_REF_PREFIXES)
+        ]
         if len(kept_members) != len(members):
             dropped_count += len(members) - len(kept_members)
             entry["members"] = kept_members
     if dropped_count:
-        _loguru_logger.info("Dropped {} legacy url: member(s) from the project registry", dropped_count)
+        _loguru_logger.info("Dropped {} legacy member(s) from the project registry", dropped_count)
         _write_meta_unlocked(layout_dir, meta)
 
 
@@ -652,7 +666,7 @@ def _read_meta_unlocked(layout_dir: Path) -> dict[str, Any]:
             _loguru_logger.opt(exception=e).warning("Failed to read {}; reinitializing defaults", meta_path)
             meta = None
         if isinstance(meta, dict) and isinstance(meta.get("project_by_id"), dict):
-            _purge_legacy_url_members_unlocked(layout_dir, meta)
+            _purge_legacy_members_unlocked(layout_dir, meta)
             return meta
     migrated_meta = _migrate_named_layouts_unlocked(layout_dir)
     meta = migrated_meta if migrated_meta is not None else _default_meta()
