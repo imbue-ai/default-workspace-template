@@ -1826,6 +1826,24 @@ class _FakeWorkspaceRestHandler(BaseHTTPRequestHandler):
         if self.path.startswith("/api/projects/") and self.path.endswith("/shortcuts"):
             self._respond(200, {"project_id": self.path.split("/")[3], "shortcut_overrides": server.override_answer})
             return
+        if self.path.startswith("/api/apps/") and self.path.endswith("/instances/allocate"):
+            service_name = self.path.split("/")[3]
+            if getattr(server, "allocate_refuses", False):
+                self._respond(404, {"detail": f"No registered app named {service_name!r}"})
+                return
+            instance_name = f"{service_name}-{getattr(server, 'allocate_number', 1)}"
+            self._respond(
+                200,
+                {
+                    "name": service_name,
+                    "instance": instance_name,
+                    "ref": f"service:{service_name}?instance={instance_name}",
+                },
+            )
+            return
+        if self.path == "/api/layout/broadcast":
+            self._respond(200, {"ok": True})
+            return
         self._respond(404, {"detail": f"unknown path {self.path}"})
 
 
@@ -1957,3 +1975,74 @@ def test_shortcut_grammar_and_defaults_stay_in_step_with_the_server_and_frontend
     assert 'return shortcutId === "chat" ? "new" : "focus";' in frontend_projects
     # And its copy of the built-in shortcut list, in rail order.
     assert 'export const SHORTCUT_NAMES = ["chat", "files", "browser", "terminal"] as const;' in frontend_projects
+
+
+# ---------- App instances: bare-ref matching and ``open --new`` ----------
+
+
+def test_ref_matches_widens_a_bare_app_ref_to_its_instances() -> None:
+    """A bare ``service:<name>`` ref is satisfied by any of the app's
+    instance panels -- an app's panes are numbered instances now -- while
+    everything else stays an exact match."""
+    assert layout._ref_matches("service:files", "service:files?instance=files-2")
+    assert layout._ref_matches("service:files", "service:files")
+    assert not layout._ref_matches("service:files", "service:files2?instance=files2-1")
+    assert not layout._ref_matches("service:files?instance=files-1", "service:files?instance=files-2")
+    assert not layout._ref_matches("service:browser?session=2", "service:browser?session=3")
+    assert not layout._ref_matches("chat:alice", "chat:alice2")
+    assert layout._ref_matches("chat:alice", "chat:alice")
+
+
+def test_open_new_mints_an_instance_and_opens_its_ref(
+    fake_workspace_rest: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """``open files --new`` mints through the allocator endpoint, opens the
+    minted instance ref, and prints it to stdout so the caller can address
+    the new instance without an ``inspect``."""
+    apps_file = tmp_path / "apps.toml"
+    _write_apps_toml(apps_file, ["files"])
+    monkeypatch.setenv(layout.ENV_APPS_FILE, str(apps_file))
+    monkeypatch.setenv(layout.ENV_NO_WAIT_STABLE, "1")
+    fake_workspace_rest.allocate_number = 2
+
+    exit_code = layout.main(["open", "files", "--new"])
+
+    assert exit_code == 0
+    assert capsys.readouterr().out.strip() == "service:files?instance=files-2"
+    posted_paths = [path for path, _body in fake_workspace_rest.posted]
+    assert posted_paths == ["/api/apps/files/instances/allocate", "/api/layout/broadcast"]
+    broadcast_body = fake_workspace_rest.posted[1][1]
+    assert broadcast_body["op"] == "open"
+    assert broadcast_body["args"]["ref"] == "service:files?instance=files-2"
+
+
+def test_open_new_refuses_the_fleets_and_instance_refs(
+    fake_workspace_rest: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    apps_file = tmp_path / "apps.toml"
+    _write_apps_toml(apps_file, ["files", "terminal", "browser"])
+    monkeypatch.setenv(layout.ENV_APPS_FILE, str(apps_file))
+    monkeypatch.setenv(layout.ENV_NO_WAIT_STABLE, "1")
+
+    assert layout.main(["open", "terminal", "--new"]) == layout.EXIT_ERROR
+    assert layout.main(["open", "browser", "--new"]) == layout.EXIT_ERROR
+    assert layout.main(["open", "service:files?instance=files-1", "--new"]) == layout.EXIT_ERROR
+    assert fake_workspace_rest.posted == []
+
+
+def test_open_new_surfaces_an_allocator_refusal(
+    fake_workspace_rest: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    apps_file = tmp_path / "apps.toml"
+    _write_apps_toml(apps_file, ["files"])
+    monkeypatch.setenv(layout.ENV_APPS_FILE, str(apps_file))
+    monkeypatch.setenv(layout.ENV_NO_WAIT_STABLE, "1")
+    fake_workspace_rest.allocate_refuses = True
+
+    exit_code = layout.main(["open", "files", "--new"])
+
+    assert exit_code == layout.EXIT_ERROR
+    assert "could not mint an instance" in capsys.readouterr().err
