@@ -8,7 +8,6 @@ import {
   getAvailableProjects,
   getAwaitingShortcutIds,
   getSidebarRows,
-  moveMemberRowToProjects,
   openAppShortcut,
   openMemberRow,
   openNewOfShortcut,
@@ -126,9 +125,6 @@ export function App(): m.Component {
               },
               onAddRowToProjects: (row: SidebarTabRow) => {
                 addMemberRowToProjects(row);
-              },
-              onMoveRowToProjects: (row: SidebarTabRow) => {
-                moveMemberRowToProjects(row);
               },
               onStopRow: (row: SidebarTabRow) => {
                 stopChatRow(row);

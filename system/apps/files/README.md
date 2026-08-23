@@ -2,13 +2,25 @@
 
 The workspace's file viewer: the app behind the rail's File Viewer row.
 
-There is no code here -- the server is [dufs](https://github.com/sigoden/dufs),
-a single static binary installed at image build by
-`system/scripts/install_dufs.sh` (version and per-arch sha256 pinned there).
-supervisord's `[program:files]` runs it over `data/` -- the workspace's
-user-facing file tree -- bound to loopback with all operations enabled
-(browse, preview, upload, rename, delete): the workspace origin is what gates
-access, exactly as for every other registered app.
+The server is [dufs](https://github.com/sigoden/dufs), a single static binary
+installed at image build by `system/scripts/install_dufs.sh` (version and
+per-arch sha256 pinned there). supervisord's `[program:files]` runs it over
+`data/` -- the workspace's user-facing file tree -- bound to loopback with all
+operations enabled (browse, preview, upload, rename, delete): the workspace
+origin is what gates access, exactly as for every other registered app.
 
-This directory holds only the registered icon (`icon.svg`, passed to
-`forward_port.py --icon-file` at service start) and this note.
+Beyond the registered icon (`icon.svg`, passed to `forward_port.py
+--icon-file` at service start), this directory holds `assets/`: a vendored
+copy of dufs's own frontend (its `assets/` directory at the pinned release,
+served via `--assets`), carrying one workspace patch -- a toolbox toggle that
+hides "system files" (any path whose name, or any segment of a search result's
+path, starts with `.`) by default, with the choice kept in the browser's
+localStorage. Hiding is purely client-side: the server lists everything, so
+flipping the toggle needs no reload and direct navigation into dotted paths
+keeps working. The patched blocks are marked with `minds patch` comments in
+`assets/index.js` / the `.toggle-hidden-files` control in `assets/index.html`.
+
+When `install_dufs.sh` bumps the pinned dufs version, re-vendor `assets/` from
+the new tag and re-apply the marked patches -- the vendored frontend and the
+binary must come from the same release, since dufs's HTML placeholders and
+listing JSON are version-coupled.

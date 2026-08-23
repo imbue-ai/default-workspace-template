@@ -419,7 +419,9 @@ def _make_production_oauth_client(
 
 
 def _run_oauth_callback(client: TestClient) -> httpx.Response:
-    start = client.get("/accounts/oauth/google/start?next=%2F", follow_redirects=False)
+    # terms=1 models the signup tab's Google button (the terms gate is
+    # exercised by accounts_web_test; here the IP gate is under test).
+    start = client.get("/accounts/oauth/google/start?next=%2F&terms=1", follow_redirects=False)
     assert start.status_code == 302
     state = parse_qs(urlsplit(start.headers["location"]).query)["state"][0]
     return client.get(

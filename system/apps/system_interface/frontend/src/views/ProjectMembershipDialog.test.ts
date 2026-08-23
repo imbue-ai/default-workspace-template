@@ -71,7 +71,6 @@ function makeDialog(attrs: ProjectMembershipDialogAttrs): { render: () => unknow
 function makeAttrs(overrides: Partial<ProjectMembershipDialogAttrs> = {}): ProjectMembershipDialogAttrs {
   return {
     memberLabel: "Chat 1",
-    mode: "add",
     projects: PROJECTS,
     memberProjectIds: ["alpha"],
     onConfirm: vi.fn(),
@@ -81,7 +80,7 @@ function makeAttrs(overrides: Partial<ProjectMembershipDialogAttrs> = {}): Proje
 }
 
 describe("ProjectMembershipDialog", () => {
-  it("add mode fixes the projects already showing the object and starts with nothing else checked", () => {
+  it("fixes the projects already showing the object and starts with nothing else checked", () => {
     const dialog = makeDialog(makeAttrs());
     const tree = dialog.render();
     const alpha = checkboxByLabel(tree, "Alpha");
@@ -92,37 +91,18 @@ describe("ProjectMembershipDialog", () => {
     expect(beta?.attrs?.disabled).toBe(false);
   });
 
-  it("add mode enables the confirm only once a new project is checked, then reports it", () => {
+  it("enables the confirm only once a new project is checked, then reports the checked set", () => {
     const attrs = makeAttrs();
     const dialog = makeDialog(attrs);
     expect(confirmButton(dialog.render())?.attrs?.disabled).toBe(true);
 
     setChecked(checkboxByLabel(dialog.render(), "Beta")!, true);
+    setChecked(checkboxByLabel(dialog.render(), "Gamma")!, true);
+    setChecked(checkboxByLabel(dialog.render(), "Gamma")!, false);
     const confirm = confirmButton(dialog.render());
     expect(confirm?.attrs?.disabled).toBe(false);
     (confirm?.attrs?.onclick as () => void)();
     expect(attrs.onConfirm).toHaveBeenCalledWith(["beta"]);
-  });
-
-  it("move mode starts from the current memberships, all editable", () => {
-    const dialog = makeDialog(makeAttrs({ mode: "move" }));
-    const tree = dialog.render();
-    const alpha = checkboxByLabel(tree, "Alpha");
-    expect(alpha?.attrs?.checked).toBe(true);
-    expect(alpha?.attrs?.disabled).toBe(false);
-    // An untouched selection would change nothing, so the confirm stands down.
-    expect(confirmButton(tree)?.attrs?.disabled).toBe(true);
-  });
-
-  it("move mode reports the full wanted set, removals included", () => {
-    const attrs = makeAttrs({ mode: "move" });
-    const dialog = makeDialog(attrs);
-    setChecked(checkboxByLabel(dialog.render(), "Alpha")!, false);
-    setChecked(checkboxByLabel(dialog.render(), "Gamma")!, true);
-    const confirm = confirmButton(dialog.render());
-    expect(confirm?.attrs?.disabled).toBe(false);
-    (confirm?.attrs?.onclick as () => void)();
-    expect(attrs.onConfirm).toHaveBeenCalledWith(["gamma"]);
   });
 
   it("dismisses on a primary mouse DOWN on the backdrop, never on a click that merely ended there", () => {

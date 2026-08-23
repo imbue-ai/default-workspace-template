@@ -102,10 +102,9 @@ export function isRenameableKind(kind: ObjectMenuKind): boolean {
  * way the surface calling this currently displays it, and only the caller
  * knows what that is right now.
  *
- * ``addToProjects`` and ``moveToProjects`` each open the project-picking
- * dialog over the object (add: also show it in the chosen projects; move: show
- * it in exactly the chosen projects and no others). Null omits them, for a
- * panel with no member ref to file (a terminal still allocating its session).
+ * ``addToProjects`` opens the project-picking dialog over the object (also
+ * show it in the chosen projects). Null omits it, for a panel with no member
+ * ref to file (a terminal still allocating its session).
  *
  * ``stop`` is the reversible process-level verb for a chat: ``mngr stop`` on
  * the agent, which a later message or start brings back. Distinct from the
@@ -125,7 +124,6 @@ export interface ObjectMenuActions {
   rename: () => void;
   hideTab: (() => void) | null;
   addToProjects: (() => void) | null;
-  moveToProjects: (() => void) | null;
   removeFromProject: (() => void) | null;
   stop: { label: string; run: () => void } | null;
   quit: { label: string; run: () => void; isDestructive?: boolean } | null;
@@ -165,14 +163,11 @@ export function objectMenuEntries(kind: ObjectMenuKind, actions: ObjectMenuActio
   if (actions.hideTab !== null) {
     closing.push({ label: "Hide tab", iconName: "close", run: actions.hideTab });
   }
-  // The filing pair sits directly above "Remove from project": all three act
-  // on where the object shows rather than on the object itself, and reading
-  // them together is what tells the group apart from the process verbs below.
+  // Sits directly above "Remove from project": both act on where the object
+  // shows rather than on the object itself, and reading them together is what
+  // tells the filing group apart from the process verbs below.
   if (actions.addToProjects !== null) {
     closing.push({ label: "Add to project...", iconName: "folder-plus", run: actions.addToProjects });
-  }
-  if (actions.moveToProjects !== null) {
-    closing.push({ label: "Move to project...", iconName: "folder-input", run: actions.moveToProjects });
   }
   // Sits above the destroy, which is the one it is easily confused with: this
   // takes the object out of one view and leaves it running, filed in Everything

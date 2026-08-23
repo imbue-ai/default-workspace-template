@@ -11,7 +11,6 @@ function fullActions(overrides: Partial<ObjectMenuActions> = {}): ObjectMenuActi
     rename: vi.fn(),
     hideTab: vi.fn(),
     addToProjects: vi.fn(),
-    moveToProjects: vi.fn(),
     removeFromProject: vi.fn(),
     stop: { label: "Stop Chat 1", run: vi.fn() },
     quit: { label: "Delete Chat 1", run: vi.fn() },
@@ -57,7 +56,6 @@ describe("objectMenuEntries", () => {
       ...fullActions(),
       hideTab: null,
       addToProjects: null,
-      moveToProjects: null,
       removeFromProject: null,
       stop: null,
       quit: null,
@@ -147,11 +145,10 @@ describe("objectMenuEntries", () => {
     expect(entries[dividerIndex + 1]).not.toBe(OBJECT_MENU_DIVIDER);
   });
 
-  it("puts the filing pair directly ahead of Remove from project", () => {
+  it("puts the filing verb directly ahead of Remove from project", () => {
     const shown = labels(objectMenuEntries("chat", fullActions()));
     const removeIndex = shown.indexOf("Remove from project");
-    expect(shown[removeIndex - 2]).toBe("Add to project...");
-    expect(shown[removeIndex - 1]).toBe("Move to project...");
+    expect(shown[removeIndex - 1]).toBe("Add to project...");
   });
 
   it("puts the reversible stop ahead of the delete, never as the destructive row", () => {
@@ -179,11 +176,10 @@ describe("objectMenuEntries", () => {
     expect((stopSlot as { isDestructive?: boolean }).isDestructive).toBe(false);
   });
 
-  it("omits the filing pair and the stop when the caller has none to give", () => {
-    const entries = objectMenuEntries("chat", fullActions({ addToProjects: null, moveToProjects: null, stop: null }));
+  it("omits the filing verb and the stop when the caller has none to give", () => {
+    const entries = objectMenuEntries("chat", fullActions({ addToProjects: null, stop: null }));
     const shown = labels(entries);
     expect(shown).not.toContain("Add to project...");
-    expect(shown).not.toContain("Move to project...");
     expect(shown).not.toContain("Stop Chat 1");
   });
 
@@ -194,7 +190,6 @@ describe("objectMenuEntries", () => {
       "Rename",
       "Hide tab",
       "Add to project...",
-      "Move to project...",
       "Remove from project",
       "Stop Chat 1",
       "Delete Chat 1",
@@ -205,7 +200,6 @@ describe("objectMenuEntries", () => {
       OBJECT_MENU_DIVIDER,
       "Hide tab",
       "Add to project...",
-      "Move to project...",
       "Remove from project",
       "Delete Chat 1",
     ]);

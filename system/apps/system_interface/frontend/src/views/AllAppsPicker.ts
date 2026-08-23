@@ -337,7 +337,7 @@ export function AllAppsPicker(): m.Component<AllAppsPickerAttrs> {
         apps.length === 0
           ? [
               m("p", "No apps are running on this machine."),
-              m("p", { class: "mt-2" }, "Create a chat and tell Minds to create one!"),
+              m("p", { class: "mt-2" }, "Tell Minds to create one via chat!"),
             ]
           : visibleApps.length === 0
             ? `No apps match "${query}".`
