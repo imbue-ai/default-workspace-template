@@ -84,12 +84,19 @@ const StoppedAppPlaceholder: m.Component<{ app: AppEntry }> = {
                   "si-stopped-app-start mt-1 flex h-8 cursor-pointer items-center rounded-md border " +
                   "border-border px-4 text-[13px] font-medium text-text-primary hover:bg-bg-hover",
                 onclick: () => {
-                  void fetch(apiUrl(`/api/apps/${encodeURIComponent(app.name)}/start`), { method: "POST" }).catch(
-                    () => {
-                      // The `apps_updated` push is the authority either way; a
-                      // failed request simply leaves the placeholder in place.
-                    },
-                  );
+                  // The `apps_updated` push is the authority on success; a
+                  // failed request leaves the placeholder (and the button, for
+                  // a retry) in place, logged rather than alerted -- this pane
+                  // is deliberately minimal.
+                  void fetch(apiUrl(`/api/apps/${encodeURIComponent(app.name)}/start`), { method: "POST" })
+                    .then(async (response) => {
+                      if (response.ok) return;
+                      const data = (await response.json().catch(() => ({}))) as { detail?: string };
+                      console.warn(`Failed to start ${app.name}: ${data.detail ?? `HTTP ${response.status}`}`);
+                    })
+                    .catch((e: Error) => {
+                      console.warn(`Failed to start ${app.name}: ${e.message}`);
+                    });
                 },
               },
               `Start ${label}`,
