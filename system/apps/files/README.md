@@ -24,3 +24,10 @@ When `install_dufs.sh` bumps the pinned dufs version, re-vendor `assets/` from
 the new tag and re-apply the marked patches -- the vendored frontend and the
 binary must come from the same release, since dufs's HTML placeholders and
 listing JSON are version-coupled.
+
+dufs serves the js/css/favicon with a year-long immutable cache under a path
+that encodes only ITS version, so a change to the vendored assets is invisible
+to any browser that has already loaded the viewer. `index.html` (which dufs
+serves no-cache) therefore references the assets with a `?v=minds-N` query:
+bump that revision in all three URLs whenever anything under `assets/`
+changes, patch or re-vendor alike.
