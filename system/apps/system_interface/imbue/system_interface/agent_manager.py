@@ -70,6 +70,7 @@ from imbue.system_interface.harnesses.registry import get_harness_spec
 from imbue.system_interface.harnesses.registry import get_model_state_path
 from imbue.system_interface.harnesses.session import AgentHarnessSession
 from imbue.system_interface.harnesses.session import SessionDeps
+from imbue.system_interface.liveness import probe_app_liveness
 from imbue.system_interface.models import AgentCreationError
 from imbue.system_interface.models import AgentNameConflictError
 from imbue.system_interface.models import AgentRenameError
@@ -102,6 +103,12 @@ _DEFAULT_MESSENGER: Final[MngrMessenger] = MngrMessenger()
 
 
 _COMPLETION_SIGNAL_PUT_TIMEOUT_SECONDS = 5.0
+
+# How often the liveness sweep re-derives each app's ``is_running``. Stop and
+# start land through our own endpoints (which nudge the sweep), so the poll
+# only has to catch out-of-band transitions -- supervisorctl from a terminal,
+# a crashed program -- for which a few seconds of lag is fine.
+_LIVENESS_POLL_INTERVAL_SECONDS: Final[float] = 3.0
 
 # How long one ``mngr rename`` / ``mngr label`` may take. Both edit the
 # provider's persisted agent data (rename also moves the tmux session on a live
@@ -473,6 +480,15 @@ class AgentManager:
     # before/after key diff drives the per-agent membership side-effects.
     _agent_details_by_id: dict[str, AgentDetails]
     _agents: dict[str, AgentStateItem]
+    # Derives each app's ``is_running`` (see ``liveness.probe_app_liveness``);
+    # injectable so tests control liveness without a supervisord or open ports.
+    _liveness_prober: Callable[[str, str], bool]
+    # The liveness sweep's own lifecycle: ``_liveness_stop`` ends the loop,
+    # ``_liveness_wake`` cuts the current poll interval short (a registry
+    # change, a stop/start endpoint) so the next probe lands promptly.
+    _liveness_stop: threading.Event
+    _liveness_wake: threading.Event
+    _liveness_thread: threading.Thread | None
     # agent id -> its discovered location (host/provider), maintained from the
     # observe snapshot/discovered/destroy events so messaging can resolve an
     # agent's location without a fresh find_all_agents discovery. Best-effort:
@@ -546,6 +562,7 @@ class AgentManager:
         messenger: MngrMessenger = _DEFAULT_MESSENGER,
         mngr_binary: str = _DEFAULT_MNGR_BINARY,
         auth_gate: Callable[[HarnessAuthCheck | None], str | None] = find_unauthenticated_harness_reason,
+        liveness_prober: Callable[[str, str], bool] = probe_app_liveness,
     ) -> "AgentManager":
         """Build an AgentManager with the given broadcaster.
 
@@ -553,12 +570,18 @@ class AgentManager:
         real mngr discover/send. Tests pass one whose ``discover``/``send`` are
         fakes to avoid touching mngr. ``mngr_binary`` is the path or name of the
         mngr executable used for the stream-events observe subprocess and for
-        agent-creation commands.
+        agent-creation commands. ``liveness_prober`` derives one app's
+        ``is_running`` from its (program, url); tests inject a fake so liveness
+        needs neither a supervisord nor an open port.
         """
         manager = cls.__new__(cls)
         manager._broadcaster = broadcaster
         manager._messenger = messenger
         manager._lock = threading.Lock()
+        manager._liveness_prober = liveness_prober
+        manager._liveness_stop = threading.Event()
+        manager._liveness_wake = threading.Event()
+        manager._liveness_thread = None
         manager._agent_details_by_id = {}
         manager._agents = {}
         manager._match_by_agent_id = {}
@@ -606,6 +629,7 @@ class AgentManager:
         self._initial_discover()
         self._seed_oom_prioritizer()
         self._oom_prioritizer.start()
+        self._start_liveness_sweep()
         self._start_observe()
 
     def start_without_observe(self) -> None:
@@ -616,6 +640,12 @@ class AgentManager:
         """Stop the observe subprocess, file watchers, and creation threads."""
         self._shutdown_event.set()
         self._oom_prioritizer.stop()
+
+        self._liveness_stop.set()
+        self._liveness_wake.set()
+        if self._liveness_thread is not None:
+            self._liveness_thread.join(timeout=5)
+            self._liveness_thread = None
 
         if self._observe_cg is not None:
             self._observe_cg.shutdown()
@@ -878,9 +908,61 @@ class AgentManager:
                     "label": app.label,
                     "icon": app.icon,
                     "internal": app.internal,
+                    "program": app.program,
+                    "is_running": app.is_running,
                 }
                 for app in self._apps
             ]
+
+    def get_app_by_name(self, app_name: str) -> AppEntry | None:
+        """Look up one registered app by its service name."""
+        with self._lock:
+            for app in self._apps:
+                if app.name == app_name:
+                    return app
+            return None
+
+    def _start_liveness_sweep(self) -> None:
+        """Start the background sweep that keeps ``AppEntry.is_running`` honest."""
+        thread = threading.Thread(target=self._run_liveness_sweep, daemon=True, name="app-liveness-sweep")
+        self._liveness_thread = thread
+        thread.start()
+
+    def _run_liveness_sweep(self) -> None:
+        while not self._liveness_stop.is_set():
+            self.refresh_app_liveness()
+            self._liveness_wake.wait(timeout=_LIVENESS_POLL_INTERVAL_SECONDS)
+            self._liveness_wake.clear()
+
+    def refresh_app_liveness(self) -> None:
+        """Re-derive every app's ``is_running`` and broadcast when any changed.
+
+        The probes run outside the lock (each is a blocking connect or RPC
+        call), against a snapshot of the list; results are folded back in by
+        name so a registry change mid-probe simply keeps its carried-over state
+        until the next pass. Public so the stop/start endpoints can land the
+        transition in the same request that caused it.
+        """
+        with self._lock:
+            probe_targets = [(app.name, app.program, app.url) for app in self._apps]
+        is_running_by_name = {
+            name: self._liveness_prober(program, url) for name, program, url in probe_targets
+        }
+        is_changed = False
+        with self._lock:
+            updated_apps: list[AppEntry] = []
+            for app in self._apps:
+                probed = is_running_by_name.get(app.name)
+                if probed is None or probed == app.is_running:
+                    updated_apps.append(app)
+                else:
+                    updated_apps.append(
+                        app.model_copy_update(to_update(app.field_ref().is_running, probed))
+                    )
+                    is_changed = True
+            self._apps = updated_apps
+        if is_changed:
+            self._broadcaster.broadcast_apps_updated(self.get_apps_serialized())
 
     def get_service_url(self, service_name: str) -> str | None:
         """Return the local backend URL for a service, or None if it isn't registered."""
@@ -2057,7 +2139,12 @@ class AgentManager:
         self._recompute_activity_state(agent_id, broadcast_on_change=True)
 
     def _read_apps(self, toml_path: Path) -> None:
-        """Read and parse data/.state/apps.toml for the primary agent."""
+        """Read and parse data/.state/apps.toml for the primary agent.
+
+        ``is_running`` is derived state rather than registry state, so each
+        re-read carries the previous probe result forward (new rows default to
+        running) and nudges the liveness sweep to re-probe promptly.
+        """
         apps: list[AppEntry] = []
         if toml_path.exists():
             try:
@@ -2068,10 +2155,29 @@ class AgentManager:
                     label = entry.get("label", "")
                     icon = _accepted_icon(str(entry.get("icon", "")))
                     internal = bool(entry.get("internal", False))
+                    program = str(entry.get("program", ""))
                     if name and url:
-                        apps.append(AppEntry(name=name, url=url, label=label, icon=icon, internal=internal))
+                        apps.append(
+                            AppEntry(
+                                name=name,
+                                url=url,
+                                label=label,
+                                icon=icon,
+                                internal=internal,
+                                program=program,
+                            )
+                        )
             except (OSError, tomllib.TOMLDecodeError, KeyError, ValueError) as e:
                 _loguru_logger.opt(exception=e).error("Failed to parse {}", toml_path)
 
         with self._lock:
-            self._apps = apps
+            previous_is_running_by_name = {app.name: app.is_running for app in self._apps}
+            self._apps = [
+                app.model_copy_update(
+                    to_update(app.field_ref().is_running, previous_is_running_by_name[app.name])
+                )
+                if app.name in previous_is_running_by_name
+                else app
+                for app in apps
+            ]
+        self._liveness_wake.set()

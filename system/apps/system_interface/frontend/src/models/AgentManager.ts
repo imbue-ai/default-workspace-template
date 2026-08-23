@@ -97,6 +97,15 @@ export interface AppEntry {
   // no page of its own (e.g. owner-exec, a loopback exec server the share
   // gateway routes through). Consumers offering apps to open must exclude it.
   internal?: boolean;
+  // The supervisord program running this app, registered via ``forward_port.py
+  // --program``. Its presence is what makes the app stoppable/startable from
+  // the workspace; absent/empty means unsupervised (or registered before the
+  // field existed).
+  program?: string;
+  // Backend-derived liveness: supervisord's process state for ``program``
+  // rows, a TCP probe of the backend URL otherwise. Absent reads as running
+  // (see ``isAppRunning``).
+  is_running?: boolean;
 }
 
 // A live tmux terminal session (any tmux session whose name does NOT start

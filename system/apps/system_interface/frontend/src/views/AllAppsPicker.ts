@@ -42,6 +42,7 @@
 import m from "mithril";
 import type { AppEntry } from "../models/AgentManager";
 import { getApps } from "../models/AgentManager";
+import { appStoppedDetail, isAppRunning } from "../models/appLiveness";
 import { displayNameForMember } from "../models/MemberTitles";
 import { memberRef } from "../models/Projects";
 import type { ShortcutName } from "../models/Projects";
@@ -239,14 +240,19 @@ export function AllAppsPicker(): m.Component<AllAppsPickerAttrs> {
     // surface still calling it by its registration. The row's `key` stays the
     // service name -- that is its identity, and a rename must not remount it.
     const label = appDisplayName(app);
+    // A stopped app stays listed (identity is not liveness) but reads dimmed,
+    // with the tooltip saying why it is not answering.
+    const isStopped = !isAppRunning(app);
     return m(
       "div",
       {
         key: app.name,
         class:
-          "project-rail-app group flex w-full items-center gap-2 px-3 text-left text-text-primary " +
+          "project-rail-app group flex w-full items-center gap-2 px-3 text-left " +
+          (isStopped ? "project-rail-app-stopped text-text-faint " : "text-text-primary ") +
           "transition-all duration-150 " +
           (isFadingOut ? "h-0 overflow-hidden opacity-0" : "h-8 cursor-pointer opacity-100 hover:bg-bg-hover"),
+        ...(isStopped && !isFadingOut ? hoverTooltipAttrs(`${label} — ${appStoppedDetail(app)}`) : {}),
         onclick: isFadingOut ? undefined : () => attrs.onOpenApp(app),
       },
       [
