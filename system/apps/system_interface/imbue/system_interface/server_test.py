@@ -3770,7 +3770,7 @@ def test_create_project_slugifies_and_registers(
         "glyph": 6,
         "has_content": False,
         "members": [],
-        "unpinned_shortcuts": [],
+        "shortcut_overrides": {},
     }
     list_response = client.get("/api/projects")
     assert [project["project_id"] for project in list_response.get_json()["projects"]] == [
@@ -3907,7 +3907,7 @@ def test_update_project_settings_keeps_id_content_and_members(
         "glyph": 7,
         "has_content": True,
         "members": ["terminal:terminal-1"],
-        "unpinned_shortcuts": [],
+        "shortcut_overrides": {},
     }
     assert client.get("/api/projects/alpha").get_json()["layout"] == layout_data
     unknown = client.post("/api/projects/gone/settings", json={"name": "Gone", "color": "#F0603A", "glyph": 0})
@@ -4108,7 +4108,7 @@ def test_set_project_shortcut_without_a_primary_agent_degrades_gracefully(monkey
 
     response = test_client.post("/api/projects/project-1/shortcuts", json={"shortcut": "chat", "is_pinned": False})
     assert response.status_code == 200
-    assert response.get_json() == {"project_id": "project-1", "unpinned_shortcuts": []}
+    assert response.get_json() == {"project_id": "project-1", "shortcut_overrides": {}}
 
     bad_body = test_client.post("/api/projects/project-1/shortcuts", json={"shortcut": "chat"})
     assert bad_body.status_code == 400
@@ -4123,16 +4123,39 @@ def test_set_project_shortcut_moves_it_between_the_rail_and_all_apps(
 
     unpin = client.post("/api/projects/project-1/shortcuts", json={"shortcut": "terminal", "is_pinned": False})
     assert unpin.status_code == 200
-    assert unpin.get_json() == {"project_id": "project-1", "unpinned_shortcuts": ["terminal"]}
+    assert unpin.get_json() == {"project_id": "project-1", "shortcut_overrides": {"terminal": {"is_pinned": False}}}
 
     listed = next(p for p in client.get("/api/projects").get_json()["projects"] if p["project_id"] == "project-1")
-    assert listed["unpinned_shortcuts"] == ["terminal"]
+    assert listed["shortcut_overrides"] == {"terminal": {"is_pinned": False, "mode": None}}
 
     again = client.post("/api/projects/project-1/shortcuts", json={"shortcut": "terminal", "is_pinned": False})
-    assert again.get_json()["unpinned_shortcuts"] == ["terminal"]
+    assert again.get_json()["shortcut_overrides"] == {"terminal": {"is_pinned": False}}
 
     repin = client.post("/api/projects/project-1/shortcuts", json={"shortcut": "terminal", "is_pinned": True})
-    assert repin.get_json() == {"project_id": "project-1", "unpinned_shortcuts": []}
+    assert repin.get_json() == {"project_id": "project-1", "shortcut_overrides": {}}
+
+
+def test_set_project_shortcut_records_a_mode_flip_and_app_modes(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Modes ride the same endpoint as pinning, sparsely: only deviations from
+    the code-side defaults (chat -> new, everything else -> focus) persist."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    url = "/api/projects/project-1/shortcuts"
+
+    flipped = client.post(url, json={"shortcut": "chat", "mode": "focus"})
+    assert flipped.status_code == 200
+    assert flipped.get_json() == {"project_id": "project-1", "shortcut_overrides": {"chat": {"mode": "focus"}}}
+
+    app_mode = client.post(url, json={"shortcut": "app:docs", "mode": "new"})
+    assert app_mode.status_code == 200
+    assert app_mode.get_json()["shortcut_overrides"] == {"chat": {"mode": "focus"}, "app:docs": {"mode": "new"}}
+
+    # Flipping back to the defaults clears the entries back out.
+    assert client.post(url, json={"shortcut": "chat", "mode": "new"}).status_code == 200
+    back = client.post(url, json={"shortcut": "app:docs", "mode": "focus"})
+    assert back.get_json() == {"project_id": "project-1", "shortcut_overrides": {}}
 
 
 def test_set_project_shortcut_refuses_a_bad_body_or_an_unknown_target(
@@ -4145,6 +4168,10 @@ def test_set_project_shortcut_refuses_a_bad_body_or_an_unknown_target(
     assert client.post(url, json={"shortcut": "", "is_pinned": False}).status_code == 400
     assert client.post(url, json={"shortcut": "terminal"}).status_code == 400
     assert client.post(url, json={"shortcut": "terminal", "is_pinned": "no"}).status_code == 400
+    assert client.post(url, json={"shortcut": "terminal", "mode": 7}).status_code == 400
+    assert client.post(url, json={"shortcut": "terminal", "mode": "sometimes"}).status_code == 400
+    # An app's pin is its membership, so an app: key refuses is_pinned.
+    assert client.post(url, json={"shortcut": "app:docs", "is_pinned": False}).status_code == 400
     # Not a shortcut: refused rather than stored, since it would hide nothing
     # while riding every list response.
     assert client.post(url, json={"shortcut": "made-up", "is_pinned": False}).status_code == 400
@@ -4966,7 +4993,7 @@ def test_project_mutations_broadcast_to_every_client(app: Flask) -> None:
         "glyph": 2,
         "has_content": False,
         "members": [],
-        "unpinned_shortcuts": [],
+        "shortcut_overrides": {},
     }
 
     assert client.post("/api/projects/alpha", json={"layout": {}, "client_id": "client-1"}).status_code == 200

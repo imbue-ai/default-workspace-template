@@ -30,7 +30,7 @@ from imbue.system_interface.projects import read_project_content
 from imbue.system_interface.projects import ProjectShortcutError
 from imbue.system_interface.projects import list_projects
 from imbue.system_interface.projects import remove_member
-from imbue.system_interface.projects import set_shortcut_pinned
+from imbue.system_interface.projects import set_shortcut_override
 from imbue.system_interface.projects import remove_panel_from_all_projects
 from imbue.system_interface.projects import set_last_active_id
 from imbue.system_interface.projects import slugify_project_name
@@ -432,14 +432,18 @@ def test_refs_in_no_project_are_filed_nowhere(tmp_path: Path) -> None:
     assert all_members(tmp_path) == {}
 
 
-def _unpinned(layout_dir: Path, project_id: str) -> tuple[str, ...]:
-    return next(p.unpinned_shortcuts for p in list_projects(layout_dir) if p.project_id == project_id)
+def _overrides(layout_dir: Path, project_id: str) -> dict[str, dict[str, object]]:
+    info = next(p for p in list_projects(layout_dir) if p.project_id == project_id)
+    return {
+        shortcut_id: override.model_dump(exclude_none=True)
+        for shortcut_id, override in info.shortcut_overrides.items()
+    }
 
 
-def test_a_project_shows_every_shortcut_until_one_is_unpinned(tmp_path: Path) -> None:
-    """Absence has to mean the default, or every project written before this would lose its rail."""
+def test_a_project_shows_every_shortcut_until_one_is_overridden(tmp_path: Path) -> None:
+    """Absence has to mean the defaults, or every project written before this would lose its rail."""
     create_project(tmp_path, "Research", "#12B5A5", 4)
-    assert _unpinned(tmp_path, "research") == ()
+    assert _overrides(tmp_path, "research") == {}
 
 
 def test_unpinning_a_shortcut_records_it_against_that_project_only(tmp_path: Path) -> None:
@@ -448,57 +452,127 @@ def test_unpinning_a_shortcut_records_it_against_that_project_only(tmp_path: Pat
     create_project(tmp_path, "Research", "#12B5A5", 4)
     create_project(tmp_path, "Coding", "#16A34A", 1)
 
-    set_shortcut_pinned(tmp_path, "research", "terminal", False)
+    set_shortcut_override(tmp_path, "research", "terminal", False, None)
 
-    assert _unpinned(tmp_path, "research") == ("terminal",)
-    assert _unpinned(tmp_path, "coding") == ()
+    assert _overrides(tmp_path, "research") == {"terminal": {"is_pinned": False}}
+    assert _overrides(tmp_path, "coding") == {}
 
 
 def test_pinning_a_shortcut_back_returns_it_to_the_rail(tmp_path: Path) -> None:
     create_project(tmp_path, "Research", "#12B5A5", 4)
-    set_shortcut_pinned(tmp_path, "research", "files", False)
-    set_shortcut_pinned(tmp_path, "research", "files", True)
-    assert _unpinned(tmp_path, "research") == ()
+    set_shortcut_override(tmp_path, "research", "files", False, None)
+    set_shortcut_override(tmp_path, "research", "files", True, None)
+    assert _overrides(tmp_path, "research") == {}
 
 
 def test_setting_a_shortcut_to_what_it_already_is_changes_nothing(tmp_path: Path) -> None:
     create_project(tmp_path, "Research", "#12B5A5", 4)
-    set_shortcut_pinned(tmp_path, "research", "chat", False)
-    assert set_shortcut_pinned(tmp_path, "research", "chat", False) == ["chat"]
-    assert _unpinned(tmp_path, "research") == ("chat",)
+    set_shortcut_override(tmp_path, "research", "chat", False, None)
+    assert set_shortcut_override(tmp_path, "research", "chat", False, None) == {"chat": {"is_pinned": False}}
+    assert _overrides(tmp_path, "research") == {"chat": {"is_pinned": False}}
 
 
-def test_an_unknown_shortcut_is_refused_rather_than_stored(tmp_path: Path) -> None:
+def test_a_shortcut_mode_flip_is_stored_sparsely(tmp_path: Path) -> None:
+    """Only deviations from the defaults are stored: chat's default is new, the
+    rest default to focus, so flipping back to a default clears the field."""
+    create_project(tmp_path, "Research", "#12B5A5", 4)
+
+    set_shortcut_override(tmp_path, "research", "chat", None, "focus")
+    set_shortcut_override(tmp_path, "research", "terminal", None, "new")
+    assert _overrides(tmp_path, "research") == {"chat": {"mode": "focus"}, "terminal": {"mode": "new"}}
+
+    set_shortcut_override(tmp_path, "research", "chat", None, "new")
+    set_shortcut_override(tmp_path, "research", "terminal", None, "focus")
+    assert _overrides(tmp_path, "research") == {}
+
+
+def test_an_app_shortcut_stores_only_mode(tmp_path: Path) -> None:
+    """App pinning IS membership, so an app: key carries mode and refuses a pin."""
+    create_project(tmp_path, "Research", "#12B5A5", 4)
+
+    set_shortcut_override(tmp_path, "research", "app:docs", None, "new")
+    assert _overrides(tmp_path, "research") == {"app:docs": {"mode": "new"}}
+
+    with pytest.raises(ProjectShortcutError):
+        set_shortcut_override(tmp_path, "research", "app:docs", False, None)
+
+
+def test_pin_and_mode_land_in_one_override_entry(tmp_path: Path) -> None:
+    create_project(tmp_path, "Research", "#12B5A5", 4)
+    set_shortcut_override(tmp_path, "research", "browser", False, "new")
+    assert _overrides(tmp_path, "research") == {"browser": {"is_pinned": False, "mode": "new"}}
+
+
+def test_an_unknown_shortcut_or_mode_is_refused_rather_than_stored(tmp_path: Path) -> None:
     # Storing one would hide nothing while riding every list response forever.
     create_project(tmp_path, "Research", "#12B5A5", 4)
     with pytest.raises(ProjectShortcutError):
-        set_shortcut_pinned(tmp_path, "research", "not-a-shortcut", False)
-    assert _unpinned(tmp_path, "research") == ()
+        set_shortcut_override(tmp_path, "research", "not-a-shortcut", False, None)
+    with pytest.raises(ProjectShortcutError):
+        set_shortcut_override(tmp_path, "research", "chat", None, "sometimes")
+    assert _overrides(tmp_path, "research") == {}
 
 
-def test_a_hand_edited_shortcut_name_is_ignored_on_read(tmp_path: Path) -> None:
-    """The registry is hand-editable, so a name that is not a shortcut must not survive a read."""
+def test_hand_edited_override_junk_is_ignored_on_read(tmp_path: Path) -> None:
+    """The registry is hand-editable, so junk keys, values, and default-restating
+    fields must not survive a read."""
     create_project(tmp_path, "Research", "#12B5A5", 4)
-    set_shortcut_pinned(tmp_path, "research", "browser", False)
+    set_shortcut_override(tmp_path, "research", "browser", False, None)
     meta_path = tmp_path / "projects_meta.json"
     meta = json.loads(meta_path.read_text())
-    meta["project_by_id"]["research"]["unpinned_shortcuts"] = ["browser", "made-up", 7]
+    meta["project_by_id"]["research"]["shortcut_overrides"] = {
+        "browser": {"is_pinned": False},
+        "made-up": {"is_pinned": False},
+        "chat": {"mode": "sometimes"},
+        # Restating a default stores nothing.
+        "terminal": {"is_pinned": True, "mode": "focus"},
+        # An app: key's is_pinned is ignored outright.
+        "app:docs": {"is_pinned": False},
+        "files": "not-an-object",
+    }
     meta_path.write_text(json.dumps(meta))
 
-    assert _unpinned(tmp_path, "research") == ("browser",)
+    assert _overrides(tmp_path, "research") == {"browser": {"is_pinned": False}}
 
 
-def test_update_project_keeps_the_unpinned_shortcuts(tmp_path: Path) -> None:
-    # A settings save rebuilds the registry entry, and it must carry the pin
-    # state through the same way it carries the member list -- or renaming a
-    # project would silently put every shortcut it had unpinned back in its rail.
+def test_a_legacy_unpinned_shortcuts_list_is_read_and_migrated_on_first_write(tmp_path: Path) -> None:
+    """A registry from the projects follow-up stored the unpinned set as a list;
+    it reads as {name: {is_pinned: false}} and the first write of any override
+    rewrites the entry to the new shape and drops the legacy key."""
     create_project(tmp_path, "Research", "#12B5A5", 4)
-    set_shortcut_pinned(tmp_path, "research", "terminal", False)
+    meta_path = tmp_path / "projects_meta.json"
+    meta = json.loads(meta_path.read_text())
+    entry = meta["project_by_id"]["research"]
+    del entry["shortcut_overrides"]
+    entry["unpinned_shortcuts"] = ["terminal", "made-up"]
+    meta_path.write_text(json.dumps(meta))
+
+    assert _overrides(tmp_path, "research") == {"terminal": {"is_pinned": False}}
+
+    set_shortcut_override(tmp_path, "research", "chat", None, "focus")
+
+    stored = json.loads(meta_path.read_text())["project_by_id"]["research"]
+    assert "unpinned_shortcuts" not in stored
+    assert stored["shortcut_overrides"] == {
+        "terminal": {"is_pinned": False},
+        "chat": {"mode": "focus"},
+    }
+
+
+def test_update_project_keeps_the_shortcut_overrides(tmp_path: Path) -> None:
+    # A settings save rebuilds the registry entry, and it must carry the
+    # shortcut state through the same way it carries the member list -- or
+    # renaming a project would silently put every shortcut it had unpinned
+    # back in its rail.
+    create_project(tmp_path, "Research", "#12B5A5", 4)
+    set_shortcut_override(tmp_path, "research", "terminal", False, None)
 
     updated = update_project(tmp_path, "research", "Research Renamed", "#16A34A", 2)
 
-    assert updated.unpinned_shortcuts == ("terminal",)
-    assert _unpinned(tmp_path, "research") == ("terminal",)
+    assert {k: v.model_dump(exclude_none=True) for k, v in updated.shortcut_overrides.items()} == {
+        "terminal": {"is_pinned": False}
+    }
+    assert _overrides(tmp_path, "research") == {"terminal": {"is_pinned": False}}
 
 
 def test_remove_member_leaves_other_projects_alone(tmp_path: Path) -> None:

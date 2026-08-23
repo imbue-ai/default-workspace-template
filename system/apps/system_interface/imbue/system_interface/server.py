@@ -1606,17 +1606,21 @@ def _broadcast_members_changed(project_ids: list[str]) -> None:
 
 
 def _set_project_shortcut_endpoint(project_id: str) -> Response:
-    """Pin one of the rail's built-in shortcut rows into this project, or unpin it.
+    """Record one shortcut's pin or mode override on this project.
 
-    Which starting points a project keeps to hand is a property of that
-    project, so this is stored per project rather than per user. It moves where
-    the row is offered -- the rail when pinned, the All apps menu when not --
-    and changes nothing about what clicking it does.
+    Which starting points a project keeps to hand -- and what clicking each
+    does (focus the most recent member of its kind, or always create) -- are
+    properties of that project, so both are stored per project rather than per
+    user. The body is ``{shortcut, is_pinned?, mode?}`` with at least one of
+    the optional fields present; ``shortcut`` accepts the built-in names and
+    ``app:<service-name>`` (whose pinning stays membership, so only ``mode``
+    applies there). The response carries the project's full effective override
+    map, so clients settle on one authoritative answer.
 
-    Not a member call: none of the four is an object with a ref. "chat" is a
-    create, and the terminal and browser services are fleets reached by making
-    a session rather than by opening the service, so there is no membership
-    here to add or drop and this rides its own field instead.
+    Not a member call: none of the built-ins is an object with a ref. "chat"
+    is a create, and the terminal and browser services are fleets reached by
+    making a session rather than by opening the service, so there is no
+    membership here to add or drop and this rides its own field instead.
 
     No primary agent configured (dev/test) means nothing persists, so after
     validating the body this answers the same soft no-op the add-member
@@ -1627,15 +1631,22 @@ def _set_project_shortcut_endpoint(project_id: str) -> Response:
         return body
     shortcut = body.get("shortcut")
     is_pinned = body.get("is_pinned")
+    mode = body.get("mode")
     if not isinstance(shortcut, str) or not shortcut.strip():
         return _json_response(ErrorResponse(detail="'shortcut' must be a non-empty string").model_dump(), 400)
-    if not isinstance(is_pinned, bool):
+    if is_pinned is not None and not isinstance(is_pinned, bool):
         return _json_response(ErrorResponse(detail="'is_pinned' must be a boolean").model_dump(), 400)
+    if mode is not None and not isinstance(mode, str):
+        return _json_response(ErrorResponse(detail="'mode' must be a string").model_dump(), 400)
+    if is_pinned is None and mode is None:
+        return _json_response(
+            ErrorResponse(detail="At least one of 'is_pinned' and 'mode' must be present").model_dump(), 400
+        )
     layout_dir = _primary_agent_layout_dir()
     if layout_dir is None:
-        return _json_response({"project_id": project_id, "unpinned_shortcuts": []})
+        return _json_response({"project_id": project_id, "shortcut_overrides": {}})
     try:
-        unpinned = projects.set_shortcut_pinned(layout_dir, project_id, shortcut.strip(), is_pinned)
+        overrides = projects.set_shortcut_override(layout_dir, project_id, shortcut.strip(), is_pinned, mode)
     except projects.ProjectNotFoundError:
         return _project_not_found_response(project_id)
     except projects.ProjectShortcutError as e:
@@ -1643,7 +1654,7 @@ def _set_project_shortcut_endpoint(project_id: str) -> Response:
     # The same broadcast a membership change rides: both move what a project's
     # rail shows, and a client with the project unmounted still has to catch up.
     _broadcast_members_changed([project_id])
-    return _json_response({"project_id": project_id, "unpinned_shortcuts": unpinned})
+    return _json_response({"project_id": project_id, "shortcut_overrides": overrides})
 
 
 def _add_project_member_endpoint(project_id: str) -> Response:

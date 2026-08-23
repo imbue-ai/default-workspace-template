@@ -49,6 +49,14 @@ export function isEverythingView(viewId: string): boolean {
   return viewId === EVERYTHING_VIEW_ID;
 }
 
+/** One shortcut's stored deviations from the code-side defaults. Sparse on the
+ *  wire: an absent entry (or field) means the default, and the server may spell
+ *  an unset field as null. */
+export interface ShortcutOverride {
+  is_pinned?: boolean | null;
+  mode?: string | null;
+}
+
 export interface ProjectInfo {
   project_id: string;
   name: string;
@@ -59,12 +67,13 @@ export interface ProjectInfo {
   // added. Not derived from the layout: a member with no panel is still here.
   // The same ref may appear in other projects' lists too.
   members: string[];
-  // Which of the rail's four built-in shortcut rows this project has moved into
-  // its All apps menu. Recorded as the ones taken OUT rather than the ones
-  // kept, so a project that has never touched this -- which is every project
-  // until it does -- shows all four. Optional here for the same reason: a
-  // server that predates the field is a server where none are unpinned.
-  unpinned_shortcuts?: string[];
+  // Per-shortcut deviations from the defaults, keyed by a built-in name or
+  // ``app:<service-name>``: ``is_pinned: false`` moves a built-in row into the
+  // All apps menu (app pinning IS membership, so app: keys never carry it),
+  // and ``mode`` flips what clicking the row does. Sparse so a project that
+  // has never touched this -- which is every project until it does -- keeps
+  // every default; optional for the same reason on a server predating it.
+  shortcut_overrides?: Record<string, ShortcutOverride>;
 }
 
 /** The rail's built-in shortcut rows, in the order the rail offers them.
@@ -74,10 +83,38 @@ export const SHORTCUT_NAMES = ["chat", "files", "browser", "terminal"] as const;
 
 export type ShortcutName = (typeof SHORTCUT_NAMES)[number];
 
+/** A shortcut's two modes: focus goes to the most recently used member of the
+ *  kind in the active view (creating only when it shows none), new always
+ *  creates. */
+export type ShortcutMode = "focus" | "new";
+
+/** The shortcut-override key for one pinned app, mirroring the server's
+ *  ``app:<service-name>`` grammar. */
+export function appShortcutId(serviceName: string): string {
+  return `app:${serviceName}`;
+}
+
+/** The code-side mode default per shortcut: chat starts in new mode ("New
+ *  Chat" -- multi-chat discoverability is the point), everything else --
+ *  files, browser, terminal, and every app -- in focus mode. Matching the
+ *  server's ``default_shortcut_mode``, since only deviations are stored. */
+export function defaultShortcutMode(shortcutId: string): ShortcutMode {
+  return shortcutId === "chat" ? "new" : "focus";
+}
+
 /** Whether this project keeps ``shortcut`` in its rail. Absent means all four,
  *  so a project the server told us nothing about shows the full set. */
 export function isShortcutPinned(project: ProjectInfo | null, shortcut: ShortcutName): boolean {
-  return !(project?.unpinned_shortcuts ?? []).includes(shortcut);
+  return project?.shortcut_overrides?.[shortcut]?.is_pinned !== false;
+}
+
+/** The effective mode of one shortcut in one project: the stored override when
+ *  there is a valid one, else the code-side default. Everything (a null
+ *  project) has no entry to store against, so it is always the defaults. */
+export function shortcutModeForProject(project: ProjectInfo | null, shortcutId: string): ShortcutMode {
+  const mode = project?.shortcut_overrides?.[shortcutId]?.mode;
+  if (mode === "focus" || mode === "new") return mode;
+  return defaultShortcutMode(shortcutId);
 }
 
 export interface ProjectsListResponse {
@@ -191,28 +228,33 @@ export async function updateProjectSettings(
 }
 
 /**
- * Move one built-in shortcut row between this project's rail and its All apps
- * menu. Project-scoped: which starting points a project keeps to hand belongs
- * to that project, not to the user or the device.
+ * Record one shortcut's pin or mode override on this project -- the one write
+ * path the UI and the agent-facing `layout.py shortcut set` share.
+ * Project-scoped: which starting points a project keeps to hand, and what
+ * clicking each does, belong to that project, not to the user or the device.
  *
- * Returns the project's resulting unpinned set. Throws with the server's
- * detail on rejection (an unknown project, a name that is not a shortcut).
+ * At least one of `isPinned` / `mode` must be given. Returns the project's
+ * resulting full override map. Throws with the server's detail on rejection
+ * (an unknown project, a bad shortcut id or mode, a pin on an app: key).
  */
-export async function setShortcutPinned(
+export async function setShortcutOverride(
   projectId: string,
-  shortcut: ShortcutName,
-  isPinned: boolean,
-): Promise<string[]> {
+  shortcutId: string,
+  override: { isPinned?: boolean; mode?: ShortcutMode },
+): Promise<Record<string, ShortcutOverride>> {
+  const body: Record<string, unknown> = { shortcut: shortcutId };
+  if (override.isPinned !== undefined) body.is_pinned = override.isPinned;
+  if (override.mode !== undefined) body.mode = override.mode;
   const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(projectId)}/shortcuts`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ shortcut, is_pinned: isPinned }),
+    body: JSON.stringify(body),
   });
   if (!response.ok) {
     throw new Error(await errorDetailFromResponse(response));
   }
-  const data = (await response.json()) as { unpinned_shortcuts?: string[] };
-  return data.unpinned_shortcuts ?? [];
+  const data = (await response.json()) as { shortcut_overrides?: Record<string, ShortcutOverride> };
+  return data.shortcut_overrides ?? {};
 }
 
 /** Delete a project. This is a pure view operation: only the project's

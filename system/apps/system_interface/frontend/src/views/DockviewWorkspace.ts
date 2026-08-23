@@ -153,14 +153,14 @@ import {
   projectForViewId,
   removeMember,
   serviceNameFromRef,
-  setShortcutPinned,
+  setShortcutOverride,
   removePanelFromAllProjects,
   shareMember,
   type MachineInventory,
   type MemberKind,
   type ProjectInfo,
 } from "../models/Projects";
-import type { ShortcutName } from "../models/Projects";
+import type { ShortcutMode, ShortcutName } from "../models/Projects";
 import { appStoppedDetail, isAppRunning, isAppStoppable, stoppedAppForServiceName } from "../models/appLiveness";
 
 const AUTOSAVE_DEBOUNCE_MS = 1500;
@@ -2054,10 +2054,30 @@ export function setShortcutPinnedInView(shortcut: ShortcutName, isPinned: boolea
   if (viewId === null || isEverythingView(viewId)) return;
   void (async () => {
     try {
-      await setShortcutPinned(viewId, shortcut, isPinned);
+      await setShortcutOverride(viewId, shortcut, { isPinned });
       await refreshProjectsList();
     } catch (e) {
       alert(`Failed to ${isPinned ? "pin" : "unpin"} ${shortcut}: ${(e as Error).message}`);
+    }
+    m.redraw();
+  })();
+}
+
+/**
+ * Flip one shortcut's mode in the active project -- focus <-> new. The
+ * sibling of ``setShortcutPinnedInView`` for the other stored field; the
+ * shortcut menu is its only caller. A no-op under Everything, whose shortcut
+ * menu never offers the flip (there is no entry to store it against).
+ */
+export function setShortcutModeInView(shortcutId: string, mode: ShortcutMode): void {
+  const viewId = mountedViewId;
+  if (viewId === null || isEverythingView(viewId)) return;
+  void (async () => {
+    try {
+      await setShortcutOverride(viewId, shortcutId, { mode });
+      await refreshProjectsList();
+    } catch (e) {
+      alert(`Failed to change the ${shortcutId} shortcut: ${(e as Error).message}`);
     }
     m.redraw();
   })();

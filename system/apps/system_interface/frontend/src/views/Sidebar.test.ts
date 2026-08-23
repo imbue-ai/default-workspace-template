@@ -714,7 +714,7 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
   });
 
   it("drops a shortcut this project unpinned, and keeps the rest", () => {
-    const unpinned: ProjectInfo = { ...PROJECT_A, unpinned_shortcuts: ["terminal"] };
+    const unpinned: ProjectInfo = { ...PROJECT_A, shortcut_overrides: { terminal: { is_pinned: false } } };
     const { root, redraw } = mountSidebar(
       makeAttrs({ projects: [unpinned, PROJECT_B], activeViewId: unpinned.project_id }),
     );
