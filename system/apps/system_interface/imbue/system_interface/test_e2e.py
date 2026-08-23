@@ -1827,7 +1827,7 @@ def test_shut_down_terminal_leaves_no_resurrected_tab_in_everything(tmp_path: Pa
             expect(terminal_tab).to_be_visible(timeout=15000)
             terminal_tab.hover()
             terminal_tab.locator('.dv-custom-tab-action[aria-label="Tab options"]').click()
-            page.locator("[role='menuitem']", has_text=f"Quit {terminal_title}").click()
+            page.locator("[role='menuitem']", has_text=f"Delete {terminal_title}").click()
             page.locator(".destroy-dialog-btn-destroy").click()
 
             # The whole blast radius. The tab leaves the mounted project ...
