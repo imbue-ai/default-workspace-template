@@ -56,9 +56,15 @@ _CRON_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 # is visible here at the next boot.
 UPDATE_APPLY_MARKER = STATE_DIR / "update-apply" / "marker.json"
 UPDATE_APPLY_SCRIPT = Path(".agents/skills/update-self/scripts/update_self.py")
-# Bound on the boot-time rollback: git restores plus plain file copies of the
-# pre-apply snapshots (the venv copy is the big one).
+# Bound on the boot-time rollback: git restores, plain file copies of the
+# pre-apply snapshots (the venv copy is the big one), and -- when the apply had
+# reached its provisioner step -- a re-run of setup_system.sh, which does reach
+# the network for the pinned toolchain.
 _UPDATE_RECOVER_TIMEOUT_SECONDS = 900.0
+# Bound on each of the two `mngr` calls that re-engage the DRI agent after a
+# boot-time rollback. Nothing downstream depends on the wake, so a wake that
+# takes longer than this is one that is already failing.
+_DRI_WAKE_TIMEOUT_SECONDS = 120.0
 
 # Signal file gating exactly-once creation of the initial chat agent. Lives
 # under data/.state/, which persists with the container volume.
@@ -772,7 +778,20 @@ def _wake_update_dri_agent(agent_name: str) -> None:
         ["mngr", "start", agent_name],
         ["mngr", "message", agent_name, "-m", message],
     ):
-        result = subprocess.run(argv, capture_output=True, text=True, check=False)
+        try:
+            result = subprocess.run(
+                argv,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=_DRI_WAKE_TIMEOUT_SECONDS,
+            )
+        except (OSError, subprocess.TimeoutExpired) as e:
+            # `mngr` missing is a live possibility here -- an apply interrupted
+            # mid `uv tool install` of the vendored mngr is exactly why this
+            # runs -- and boot must survive it.
+            logger.warning("{} could not run ({})", " ".join(argv[:2]), e)
+            return
         if result.returncode != 0:
             logger.warning(
                 "{} failed (rc={}): {}",

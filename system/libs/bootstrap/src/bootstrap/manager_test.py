@@ -6,6 +6,7 @@ import io
 import json
 import os
 import subprocess
+from collections.abc import Callable
 from contextlib import redirect_stdout
 from pathlib import Path
 
@@ -19,6 +20,8 @@ from bootstrap.manager import (
     UPDATE_APPLY_MARKER,
     UPDATE_APPLY_SCRIPT,
     TimezoneFetchError,
+    _DRI_WAKE_TIMEOUT_SECONDS,
+    _UPDATE_RECOVER_TIMEOUT_SECONDS,
     _apply_container_timezone,
     _build_create_chat_command,
     _configure_git_global,
@@ -730,18 +733,25 @@ class _RecordingSubprocess:
 
     ``on_recover`` (when set) runs when the recover invocation is seen -- used
     to model the script clearing the marker on a successful rollback.
+    ``raise_on`` maps a token in the argv to the exception that call raises,
+    for the "the executable is missing / hangs" paths.
     """
 
     def __init__(self, returncode: int = 0) -> None:
         self.returncode = returncode
         self.calls: list[list[str]] = []
-        self.on_recover = None
+        self.kwargs: list[dict[str, object]] = []
+        self.on_recover: Callable[[], None] | None = None
+        self.raise_on: dict[str, BaseException] = {}
 
     def run(self, cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-        del kwargs
         self.calls.append(cmd)
+        self.kwargs.append(dict(kwargs))
         if "recover" in cmd and self.on_recover is not None:
             self.on_recover()
+        for token, error in self.raise_on.items():
+            if token in cmd:
+                raise error
         return subprocess.CompletedProcess(
             args=cmd, returncode=self.returncode, stdout="", stderr=""
         )
@@ -795,6 +805,48 @@ def test_recover_rolls_back_and_wakes_the_dri_agent(
     # The DRI agent named in the marker is started and handed the finding.
     assert ["mngr", "start", "agent-omega"] == stub.calls[1]
     assert stub.calls[2][:3] == ["mngr", "message", "agent-omega"]
+
+
+def test_recover_survives_an_unrunnable_mngr_so_boot_continues(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # `mngr` missing is a live possibility on this path -- an apply interrupted
+    # mid `uv tool install` of the vendored mngr is exactly why the recovery
+    # runs. main() does not wrap this call, so an escaping FileNotFoundError
+    # would kill bootstrap before supervisord starts and boot the container
+    # with no services at all.
+    monkeypatch.chdir(tmp_path)
+    _write_apply_marker("agent-omega")
+    stub = _RecordingSubprocess()
+    stub.on_recover = lambda: UPDATE_APPLY_MARKER.unlink()
+    stub.raise_on = {"start": FileNotFoundError("mngr")}
+    monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
+
+    _recover_interrupted_update()
+
+    # The rollback still ran, the wake was attempted, and nothing propagated.
+    assert "recover" in stub.calls[0]
+    assert stub.calls[1] == ["mngr", "start", "agent-omega"]
+    assert len(stub.calls) == 2  # the message is skipped once the start failed
+
+
+def test_recover_bounds_every_command_it_runs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Both the rollback and the wake gate boot, so neither may hang forever.
+    monkeypatch.chdir(tmp_path)
+    _write_apply_marker("agent-omega")
+    stub = _RecordingSubprocess()
+    stub.on_recover = lambda: UPDATE_APPLY_MARKER.unlink()
+    monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
+
+    _recover_interrupted_update()
+
+    assert [kwargs.get("timeout") for kwargs in stub.kwargs] == [
+        _UPDATE_RECOVER_TIMEOUT_SECONDS,
+        _DRI_WAKE_TIMEOUT_SECONDS,
+        _DRI_WAKE_TIMEOUT_SECONDS,
+    ]
 
 
 def test_recover_does_not_wake_anyone_when_the_guard_noops(
