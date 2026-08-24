@@ -158,7 +158,13 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
           return m(
             "div.pv-permission",
             { key: `perm-${item.event.event_id}` },
-            renderPermissionItem(item.event, toolResults, agentId, item.resolution),
+            renderPermissionItem(
+              item.event,
+              toolResults,
+              agentId,
+              item.resolutionsByRequestId,
+              item.fallbackResolution,
+            ),
           );
         }
         // chip

@@ -108,6 +108,14 @@ _RESOLUTION_GRANTED_RE = re.compile(r"^Your\b.*\brequest\b.*\bwas granted\b")
 _RESOLUTION_DENIED_RE = re.compile(r"^Your\b.*\brequest\b.*\bwas denied\b")
 _RESOLUTION_ERROR_RE = re.compile(r"^Your\b.*\brequest\b.*\bcould not be completed\b")
 
+# The same handlers append "(request_id: <id>)" after the human-readable text (see
+# ``format_resolution_notice`` in the mngr repo's ``latchkey/handlers/messaging.py`) so the
+# frontend can attach a verdict to the exact card it belongs to instead of guessing from
+# arrival order -- two requests resolved out of (creation) order used to land their verdicts
+# on the wrong cards. Absent on a resolution recorded before that handler shipped; the
+# frontend falls back to its old order-based correlation for those.
+_RESOLUTION_REQUEST_ID_RE = re.compile(r"\(request_id:\s*([^)\s]+)\)")
+
 
 class MessageDisplay(FrozenModel):
     """One user message's render decision, as it goes on the wire."""
@@ -120,6 +128,10 @@ class MessageDisplay(FrozenModel):
     display_body: str | None = None
     # PERMISSION_RESOLUTION only: granted / denied / error.
     resolution: str | None = Field(default=None, pattern="^(granted|denied|error)$")
+    # PERMISSION_RESOLUTION only: the resolved request's own id, when the notice carries
+    # one (see _RESOLUTION_REQUEST_ID_RE). None for a notice recorded before request-id
+    # embedding shipped.
+    request_id: str | None = None
 
     def apply_to(self, event: dict[str, Any]) -> None:
         """Stamp the decision's present fields onto ``event`` (absent fields stay absent)."""
@@ -219,7 +231,9 @@ def _match_permission_resolution(content: str) -> MessageDisplay | None:
         resolution = "error"
     else:
         return None
-    return MessageDisplay(display=DisplayKind.PERMISSION_RESOLUTION, resolution=resolution)
+    request_id_match = _RESOLUTION_REQUEST_ID_RE.search(content)
+    request_id = request_id_match.group(1) if request_id_match is not None else None
+    return MessageDisplay(display=DisplayKind.PERMISSION_RESOLUTION, resolution=resolution, request_id=request_id)
 
 
 # Most-specific first; classify_user_message takes the first match.
