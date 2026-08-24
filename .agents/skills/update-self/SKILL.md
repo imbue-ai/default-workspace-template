@@ -638,6 +638,22 @@ matching the pre-update revision, with the worker branch intact. As above, that
 is a forward revert rather than a rewind, so re-running the apply of that same
 merge is refused; a retry means a fresh worker pass off the current HEAD.
 
+One carve-out, and it applies exactly once per workspace: both unattended
+triggers live in the *running* container, not in the merge being applied.
+Bootstrap's boot-time check is the code that booted this container, and the
+recovery cron is the entry that bootstrap wrote at that boot -- so on the very
+first apply that lands this machinery into a workspace, neither exists yet, and
+an interruption before it restarts is only recoverable by re-running the apply
+by hand. Say so to the user if that is the update you are running; every apply
+after it is covered.
+
+**If the rollback itself could not restore a healthy workspace** (exit 3), the
+apply leaves an `emergency.json` beside the marker naming the reason and where
+the pre-apply copies were kept, and the system interface shows a banner reading
+it until an apply or a `recover` confirms health again. That state does not
+resolve on its own -- it is the one that wants a person -- so treat the record
+as the starting point rather than re-running anything blind.
+
 ### 5c. Carry out the report-driven remainder
 
 The apply covers everything deterministic. What is left is exactly what needs
@@ -650,6 +666,16 @@ the worker's impact analysis, so work the report:
   already restart. Restart that service (usually `mngr start --restart
   system-services`, then `python3 system/scripts/refresh_workspace_view.py` so
   open views reload; skip both when the apply already restarted).
+
+  This is the one land-then-activate gap the apply deliberately keeps. A
+  supervisord-programmed service (`system/services/**`) goes on running its
+  pre-merge code until its program restarts, and the apply does not restart it:
+  the only restart it owns is the services agent's, which bounces *every*
+  program and blips the user's UI -- far too blunt for, say, a backup-service
+  change. Activating these precisely means restarting the individual programs a
+  change actually touches, which the apply cannot infer from paths alone; until
+  it can, that judgement is the report's and the restart is yours. Say so to
+  the user rather than implying the merge alone made it live.
 - **`Dockerfile`** -- apply the live-applicable hunks the report calls out
   (canonically a `CLAUDE_CODE_VERSION` bump -> `CLAUDE_CODE_VERSION=<v> bash
   system/scripts/setup_system.sh`, keeping `agent_types.claude.version` in
