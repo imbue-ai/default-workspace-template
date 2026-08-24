@@ -71,10 +71,16 @@ _IRRELEVANT_PATHS = (
         ("system/libs/tk_command_parsing/src/tk_command_parsing/parser.py", True),
         # A workspace library this process does not import.
         ("system/libs/bootstrap/src/bootstrap/manager.py", False),
-        # The vendored mngr, imported in-process and shelled out to ...
+        # The vendored mngr, imported in-process and shelled out to. Broader
+        # than `.py` on purpose: this process reads that tree at runtime
+        # through more than its Python.
         ("system/vendor/mngr/libs/mngr/imbue/mngr/api/list.py", True),
-        # ... except its documentation, which nothing holds in memory.
+        ("system/vendor/mngr/libs/mngr/imbue/mngr/help/topics.toml", True),
+        # ... except its documentation and its tests, which nothing holds in
+        # memory -- and of which that tree has thousands.
         ("system/vendor/mngr/libs/mngr/README.md", False),
+        ("system/vendor/mngr/libs/mngr/imbue/mngr/api/list_test.py", False),
+        ("system/vendor/mngr/libs/mngr/imbue/mngr/test_end_to_end.py", False),
         # The frontend: its bundle is rebuilt on disk without a restart.
         ("system/apps/system_interface/frontend/src/views/App.ts", False),
         # Things minds commit constantly and are never staler for.
