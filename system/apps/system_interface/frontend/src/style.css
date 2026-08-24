@@ -2267,6 +2267,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 }
 
 .custom-url-dialog-cancel,
+.custom-url-dialog-danger,
 .custom-url-dialog-open {
   padding: 6px 16px;
   font-family: var(--font-family-base);
@@ -2283,23 +2284,22 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   color: var(--color-text-primary);
 }
 
-.custom-url-dialog-cancel:hover {
+.custom-url-dialog-cancel:hover:not(:disabled) {
   background: var(--color-bg-hover);
+}
+
+.custom-url-dialog-cancel:disabled,
+.custom-url-dialog-danger:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 /* Force, on the send-failure notice: it restarts the agent, ending any turn in progress and
    losing that work, so it must not look like the easy button next to Cancel and Retry. */
 .custom-url-dialog-danger {
-  padding: 6px 16px;
-  font-family: var(--font-family-base);
-  font-size: 13px;
-  font-weight: 500;
-  border-radius: var(--radius-base);
-  cursor: pointer;
-  transition: background 100ms;
   background: white;
   color: #dc2626;
-  border: 1px solid #fecaca;
+  border-color: #fecaca;
 }
 
 .custom-url-dialog-danger:hover:not(:disabled) {

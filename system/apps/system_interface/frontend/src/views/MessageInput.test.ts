@@ -143,8 +143,16 @@ function findByClass(node: unknown, className: string): AnyVnode | undefined {
   });
 }
 
-function findByTooltip(node: unknown, tooltip: string): AnyVnode | undefined {
-  return flatten(node).find((vnode) => (vnode.attrs ?? {})["data-tooltip"] === tooltip);
+/** Let queued promise callbacks run. The notice's buttons are `() => void action()`, which is
+ *  right for mithril but discards the promise, so awaiting the handler does not await the work. */
+async function flushAsync(): Promise<void> {
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+}
+
+/** Find a button by its visible label. The tooltip is not inspectable -- hoverTooltipAttrs
+ *  returns lifecycle hooks rather than an attribute -- so the label is the stable handle. */
+function findButton(node: unknown, label: string): AnyVnode | undefined {
+  return flatten(node).find((vnode) => vnode.tag === "button" && renderedText(vnode).includes(label));
 }
 
 function findByTag(node: unknown, tag: string): AnyVnode | undefined {
@@ -404,18 +412,31 @@ describe("MessageInput send failure notice", () => {
     expect(text).toContain("Force");
   });
 
-  it("does not restore the message to the composer until Cancel is taken", async () => {
-    // Restoring at failure time would leave a copy in the box while the notice offers to
-    // resend the same text, so Retry would send it and strand a duplicate.
+  it("puts the message back in the composer immediately, not only on Cancel", async () => {
+    // The recovery record is closure state, so holding the message only there would lose it on
+    // a reload or a closed tab. It is persisted the moment the send fails (contract A1a).
     mocks.sendMessage.mockRejectedValueOnce("nope");
-    const component = MessageInput();
-    const after = await typeAndSend(component, "agent-1", "hello there");
-    expect(localStorage.getItem("message-text:agent-1")).toBeNull();
-
-    const cancel = findByClass(after, "custom-url-dialog-cancel");
-    (cancel!.attrs!.onclick as () => void)();
+    await typeAndSend(MessageInput(), "agent-1", "hello there");
     expect(localStorage.getItem("message-text:agent-1")).toContain("hello there");
   });
+
+  it("prepends the failed message above a draft typed while the send was in flight", async () => {
+    // The newer draft lands in storage while the request is in flight, which is exactly the
+    // case the old "restore only into an empty composer" guard existed for.
+    mocks.sendMessage.mockImplementationOnce(async () => {
+      localStorage.setItem("message-text:agent-1", "newer draft");
+      throw "nope";
+    });
+    await typeAndSend(MessageInput(), "agent-1", "failed message");
+    const restored = localStorage.getItem("message-text:agent-1") ?? "";
+    expect(restored).toContain("failed message");
+    expect(restored).toContain("newer draft");
+    expect(restored.indexOf("failed message")).toBeLessThan(restored.indexOf("newer draft"));
+  });
+
+  // Escape-dismisses-as-Cancel is not covered here: these tests render vnodes with no DOM, so
+  // there is no document to dispatch a keydown at. The handler delegates to the same function
+  // the Cancel button calls, which is the whole of the fix.
 
   it("retries the same message through the ordinary send", async () => {
     mocks.sendMessage.mockRejectedValueOnce("nope");
@@ -423,8 +444,9 @@ describe("MessageInput send failure notice", () => {
     const after = await typeAndSend(component, "agent-1", "hello");
     mocks.sendMessage.mockClear();
 
-    const retry = findByTooltip(after, "Sends the message again");
-    await (retry!.attrs!.onclick as () => Promise<void>)();
+    const retry = findButton(after, "Retry");
+    (retry!.attrs!.onclick as () => void)();
+    await flushAsync();
     expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "hello");
   });
 
@@ -435,8 +457,10 @@ describe("MessageInput send failure notice", () => {
     mocks.sendMessage.mockClear();
     mocks.interruptAgent.mockClear();
 
-    const force = findByTooltip(after, "Restarts the agent and sends the message");
-    await (force!.attrs!.onclick as () => Promise<void>)();
+    const force = findButton(after, "Force");
+    (force!.attrs!.onclick as () => void)();
+    await flushAsync();
+    expect(mocks.drainToComposer).toHaveBeenCalledWith("agent-1");
     expect(mocks.interruptAgent).toHaveBeenCalledWith("agent-1");
     expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "hello");
   });
@@ -448,8 +472,9 @@ describe("MessageInput send failure notice", () => {
     mocks.sendMessage.mockClear();
     mocks.interruptAgent.mockRejectedValueOnce("restart refused");
 
-    const force = findByTooltip(after, "Restarts the agent and sends the message");
-    await (force!.attrs!.onclick as () => Promise<void>)();
+    const force = findButton(after, "Force");
+    (force!.attrs!.onclick as () => void)();
+    await flushAsync();
     expect(mocks.sendMessage).not.toHaveBeenCalled();
     const shown = component.view!({ attrs: { agentId: "agent-1" } } as never);
     expect(renderedText(shown)).toContain("restart refused");
