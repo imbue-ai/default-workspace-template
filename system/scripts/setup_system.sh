@@ -368,8 +368,18 @@ fi
 # plain python3 directly (never the automations/agent machinery: the rollback
 # must work precisely when those are broken), from the fixed workspace root all
 # supervised services assume.
+#
+# The PATH line is load-bearing and not boilerplate. cron does NOT inherit the
+# image's ENV PATH; a /etc/cron.d drop-in gets cron's compiled-in
+# /usr/bin:/bin. When this guard actually acts it takes `recover`'s live path,
+# which shells out to `mngr` and `uv` (/root/.local/bin) and `npm`
+# (/usr/local/bin) to put the running state back -- and a FileNotFoundError
+# there is swallowed, so without this the tree would be rolled back and the
+# live workspace silently left broken. Scoped to this drop-in, so no other job
+# is affected.
 cat > /etc/cron.d/update-apply-recover << 'CRON'
-*/5 * * * * root cd /home/user/workspace && python3 .agents/skills/update-self/scripts/update_self.py recover --if-stale >> /var/log/update-apply-recover.log 2>&1
+PATH=/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+*/5 * * * * root cd /home/user/workspace && python3 .agents/skills/update-self/scripts/update_self.py recover --if-stale >> /var/log/supervisor/update-apply-recover.log 2>&1
 CRON
 chmod 0644 /etc/cron.d/update-apply-recover
 
