@@ -598,9 +598,12 @@ Interpret the exit code and report it per the §5a composition rules:
   below for what to tell the user. The same already-broken-frontend variant
   applies here.
 - **`3` -- emergency.** Even the rollback could not restore a healthy
-  workspace. Escalate immediately; the stderr names the kept pre-apply copies
-  under `data/.state/update-apply/snapshots/` (putting the bundle copy back is
-  a plain file copy needing neither npm nor a registry).
+  workspace. Escalate immediately. The pre-apply copies are kept under
+  `data/.state/update-apply/snapshots/`, and when the apply touched the
+  frontend the stderr names the bundle copy -- putting that one back is a plain
+  file copy needing neither npm nor a registry, so pass the path on with the
+  escalation. Read the stderr rather than assuming a path is there: after a
+  backend-only or provisioner-only apply it names none.
 - **`1` -- precondition; nothing changed.** A dirty tree, a refused
   fast-forward (`HEAD` moved under the pass -- treat as stale per
   `.agents/shared/references/harden-contention.md` and re-dispatch off the
@@ -683,16 +686,24 @@ starts at some later version), offer both in the same breath: "I can apply
 
 ## 6. Teardown
 
-**Only after a successful apply (exit 0).** After a rollback the retry path is
-the worker: its branch, worktree, and report are what make a diagnosed retry a
-quick re-land, so do not destroy the worker or consume the report until the
-retry is resolved with the user (release the leases either way, so another
-pass is not blocked while you wait).
+**Tear the previews down either way.** A preview outlives the pass it belongs
+to if you leave it up, and `update-system-interface`'s preview guard refuses
+the next pass while one is registered. If you stood up a system-interface
+preview in 5a:
 
-If you tore into a preview in 5a (the system interface, or another service),
-tear it down: `unpreview` / stop its isolated instance and close its tab
-(`python3 system/scripts/layout.py close <name>`).
-Then:
+```bash
+python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py unpreview --slug update-self
+python3 system/scripts/layout.py close si-preview
+```
+
+and for a preview of any other service, stop its isolated instance and close
+its tab (`python3 system/scripts/layout.py close <name>`).
+
+**The rest of this section is only for a successful apply (exit 0).** After a
+rollback the retry path is the worker: its branch, worktree, and report are
+what make a diagnosed retry a quick re-land, so do not destroy the worker or
+consume the report until the retry is resolved with the user (release the
+leases either way, so another pass is not blocked while you wait). Then:
 
 ```bash
 mkdir -p data/.tasks/update-self/reports/consumed
