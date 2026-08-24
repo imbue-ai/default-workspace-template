@@ -67,7 +67,11 @@ vi.mock("../models/attachments", () => ({
   buildMessageWithAttachments: (text: string) => text,
   formatFileSize: () => "0 B",
 }));
-vi.mock("../models/request-error", () => ({ describeRequestError: (e: unknown) => String(e) }));
+vi.mock("../models/request-error", () => ({
+  describeRequestError: (e: unknown) => String(e),
+  describeRequestErrorKind: (e: unknown) =>
+    typeof e === "object" && e !== null && "kind" in e ? (e as { kind: string }).kind : "unknown",
+}));
 vi.mock("../models/ModelSettings", () => ({
   effectiveChoice: () => null,
   isPickInFlight: () => false,
@@ -421,6 +425,25 @@ describe("MessageInput send failure notice", () => {
     expect(text).toContain("didn't upload");
     expect(text).toContain("notes.pdf");
     expect(mocks.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("withholds Retry when the agent is unreachable, since it cannot help", async () => {
+    // A pane that is gone will not be there on the next attempt. Force restarts the agent, which
+    // is the only thing that can deliver the message, so it stays.
+    mocks.sendMessage.mockRejectedValueOnce({ kind: "agent_unreachable", toString: () => "pane is gone" });
+    const after = await typeAndSend(MessageInput(), "agent-1", "hello");
+    const text = renderedText(after);
+    expect(text).toContain("Force");
+    expect(text).not.toContain("Retry");
+    expect(text).toContain("restarting it is the only way");
+  });
+
+  it("keeps Retry for a blocked input, which a person can clear", async () => {
+    mocks.sendMessage.mockRejectedValueOnce({ kind: "input_blocked", toString: () => "a dialog is open" });
+    const after = await typeAndSend(MessageInput(), "agent-1", "hello");
+    const text = renderedText(after);
+    expect(text).toContain("Retry");
+    expect(text).toContain("Force");
   });
 
   it("shows nothing when the send succeeds", async () => {

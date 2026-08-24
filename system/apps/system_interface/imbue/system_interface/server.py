@@ -831,8 +831,9 @@ def _send_message_endpoint(agent_id: str) -> Response:
         # The harness said why it refused, in words written for the person who has to fix it
         # ("the agent is in shell mode with an unsubmitted command"). Pass that through rather
         # than the generic failure below -- it is the only thing here the user can act on.
-        failure = ErrorResponse(detail=send_failure.detail)
-        return _json_response(failure.model_dump(), status_code=500)
+        # The kind travels beside the detail so the chat can decide what to offer: trying again
+        # can clear a blocked input and cannot help when there is nothing left to talk to.
+        return _json_response({"detail": send_failure.detail, "kind": send_failure.kind}, status_code=500)
     if outcome is SendOutcome.NOT_READY:
         failure = ErrorResponse(
             detail=f"Agent '{agent_info.name}' is not ready to receive messages yet (its daemon is starting)."

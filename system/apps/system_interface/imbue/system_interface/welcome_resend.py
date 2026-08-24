@@ -63,8 +63,8 @@ class WelcomeResendError(RuntimeError):
 
 ResolveAgentFn = Callable[[str], AgentInfo | None]
 TranscriptReadFn = Callable[[AgentInfo], str | None]
-# Returns None when the message was delivered, or the reason it was not.
-MessageSendFn = Callable[[AgentId, str], str | None]
+# Returns None when the message was delivered, or the failure describing why it was not.
+MessageSendFn = Callable[[AgentId, str], object | None]
 
 
 def _strip_frontmatter(body: str) -> str:

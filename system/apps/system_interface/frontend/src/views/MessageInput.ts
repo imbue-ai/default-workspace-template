@@ -1,5 +1,6 @@
 import m from "mithril";
 import { NoticeDialog } from "./NoticeDialog";
+import type { SendFailureKind } from "../models/request-error";
 import {
   clearComposerAttachments,
   getComposerAttachments,
@@ -14,7 +15,7 @@ import type { ComposerAttachment } from "../models/ComposerAttachments";
 import { buildMessageWithAttachments, formatFileSize } from "../models/attachments";
 import { drainToComposer, interruptAgent, sendMessage } from "../models/Response";
 import { addOutgoing, clearOutgoing, dropOutgoing, getOutgoingMessages } from "../models/OutgoingMessages";
-import { describeRequestError } from "../models/request-error";
+import { describeRequestError, describeRequestErrorKind } from "../models/request-error";
 import { openAgentAuth } from "../models/AgentAuth";
 import { ensureHarnessCatalogs, findComposerPopup, getHarnessCatalog } from "../models/HarnessCatalog";
 import { getAgentById } from "../models/AgentManager";
@@ -130,6 +131,8 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
   let actionFailureRecovery: SendRecovery | null = null;
   // Which recovery action is mid-flight, so the buttons disable rather than fire twice.
   let actionFailureInFlight: "retry" | "force" | null = null;
+  // mngr's classification of the failure, which decides which recoveries are worth offering.
+  let actionFailureKind: SendFailureKind = "unknown";
   // Retry for a failure raised by a sibling view, which knows how to repeat its own operation.
   let externalRetry: (() => Promise<void>) | null = null;
   let fileInputElement: HTMLInputElement | null = null;
@@ -338,6 +341,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
           if (currentAgentId === agentId) {
             actionFailureTitle = "Couldn't send your message";
             actionFailureDetail = detail;
+            actionFailureKind = describeRequestErrorKind(err);
             actionFailureRecovery = { agentId, text: sentText, sentText: finalText, attachments: sentAttachments };
           }
           m.redraw();
@@ -472,6 +476,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         actionFailureRecovery = null;
         actionFailureInFlight = null;
         externalRetry = null;
+        actionFailureKind = "unknown";
       }
 
       /** Cancel: give the message back and close. Also what Escape and a backdrop press do. */
@@ -583,16 +588,24 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
 
       function renderActionFailureNotice(detail: string): m.Children {
         const recovery = actionFailureRecovery;
-        const isRepeatable = recovery !== null || externalRetry !== null;
+        // A pane that is gone is not going to be there on the next attempt, so Retry is not
+        // offered at all rather than offered and guaranteed to fail. Every other kind -- and
+        // anything unclassified -- keeps it.
+        const canRetryHelp = actionFailureKind !== "agent_unreachable";
+        const isRepeatable = (recovery !== null || externalRetry !== null) && canRetryHelp;
         return m(NoticeDialog, {
           title: actionFailureTitle,
           body: [
             detail,
             // Many of these are resolved in seconds by someone looking at the pane -- an
             // unsubmitted shell command, a dialog wanting a real answer -- so say so.
-            isRepeatable ? "You can open the agent's terminal, fix it there, then Retry." : null,
+            actionFailureKind === "agent_unreachable"
+              ? "The agent's terminal is gone, so restarting it is the only way to deliver this."
+              : isRepeatable
+                ? "You can open the agent's terminal, fix it there, then Retry."
+                : null,
           ],
-          dismissLabel: isRepeatable ? "Cancel" : "OK",
+          dismissLabel: isRepeatable || recovery !== null ? "Cancel" : "OK",
           isDismissable: actionFailureInFlight === null,
           onDismiss: dismissActionFailureNotice,
           actions: [
@@ -607,6 +620,8 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
                 ]
               : []),
             // Force needs a message to send afterwards, so it is offered only for our own send.
+            // It is the ONLY thing that helps an unreachable agent, which is why it is not
+            // gated on canRetryHelp.
             ...(recovery === null
               ? []
               : [
