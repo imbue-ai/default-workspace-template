@@ -56,6 +56,11 @@ _CRON_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 # is visible here at the next boot.
 UPDATE_APPLY_MARKER = STATE_DIR / "update-apply" / "marker.json"
 UPDATE_APPLY_SCRIPT = Path(".agents/skills/update-self/scripts/update_self.py")
+# The fixed workspace root every supervised service assumes. Needed in absolute
+# form only for the recovery cron line below, which runs with cron's cwd rather
+# than this process's.
+WORKSPACE_ROOT_DIR = Path("/home/user/workspace")
+UPDATE_RECOVER_CRON_NAME = "update-apply-recover"
 # Bound on the boot-time rollback: git restores, plain file copies of the
 # pre-apply snapshots (the venv copy is the big one), and -- when the apply had
 # reached its provisioner step -- a re-run of setup_system.sh, which does reach
@@ -569,6 +574,54 @@ def _apply_container_timezone(
     return True
 
 
+def _write_update_recovery_cron_entry(target_dir: Path = Path("/etc/cron.d")) -> None:
+    """Install the permanent update-apply recovery guard into /etc/cron.d.
+
+    Written here, at every boot, rather than once by ``setup_system.sh``:
+    /etc/cron.d lives on the container rootfs, so an entry laid down at
+    provision time is gone the moment the container is recreated -- and this
+    guard is the only thing that recovers an apply killed hard WITHOUT a
+    restart, whose driving agent is also gone. Writing it from the one place
+    that already knows where the script lives also keeps the path from being
+    spelled out a second time.
+
+    Code-owned, so it goes straight to ``target_dir`` rather than into the
+    user-editable ``RUNTIME_CRON_DIR``. It is written before those entries are
+    installed, so a deliberate same-named entry there still wins.
+
+    Two details are load-bearing rather than boilerplate. cron does NOT inherit
+    the image's PATH; a drop-in gets cron's compiled-in ``/usr/bin:/bin``, and
+    when this guard acts it takes ``recover``'s live path, which shells out to
+    ``mngr`` and ``uv`` (/root/.local/bin) and ``npm`` (/usr/local/bin) -- a
+    FileNotFoundError there is swallowed, so without the PATH line the tree
+    would be rolled back and the live workspace silently left broken. And
+    ``flock -n`` keeps two ticks off one git index: an acting tick rebuilds
+    environments, re-runs the provisioner and waits out health probes,
+    routinely longer than the five minutes until the next one, and ``--if-stale``
+    reads the dead apply's pid from a marker ``recover`` never restamps, so
+    nothing else would stop them overlapping.
+    """
+    command = (
+        f"cd {WORKSPACE_ROOT_DIR} && python3 {UPDATE_APPLY_SCRIPT} recover --if-stale"
+    )
+    entry = (
+        "PATH=/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"
+        f"*/5 * * * * root flock -n /var/lock/{UPDATE_RECOVER_CRON_NAME}.lock "
+        f"-c '{command}' "
+        f">> {SUPERVISOR_LOG_DIR}/{UPDATE_RECOVER_CRON_NAME}.log 2>&1\n"
+    )
+    target = target_dir / UPDATE_RECOVER_CRON_NAME
+    try:
+        target.write_text(entry)
+        target.chmod(0o644)
+    except OSError as e:
+        # Never fatal: this runs on the path to supervisord, and a boot that
+        # reaches the services is worth more than the recovery guard.
+        logger.warning("Failed to install the update-recovery cron entry: {}", e)
+        return
+    logger.info("Installed the update-recovery cron entry at {}", target)
+
+
 def _install_runtime_cron_entries(target_dir: Path = Path("/etc/cron.d")) -> None:
     """Install data/.state/cron.d/* into /etc/cron.d (mode 0644).
 
@@ -965,9 +1018,12 @@ def main() -> None:
     if update_dri_agent:
         _wake_update_dri_agent(update_dri_agent)
 
-    # Reinstall any cron entries persisted under data/.state/cron.d (e.g.
-    # the Caretaker's schedule) so they survive container recreation. Must
-    # precede _exec_supervisord so entries exist before cron starts.
+    # Lay down the update-recovery guard, then reinstall any cron entries
+    # persisted under data/.state/cron.d (e.g. the Caretaker's schedule) so
+    # they survive container recreation. Both must precede _exec_supervisord so
+    # the entries exist before cron starts; the guard goes first so a
+    # deliberate same-named runtime entry still overrides it.
+    _write_update_recovery_cron_entry()
     _install_runtime_cron_entries()
 
     # Make sure supervisord's log directory exists, then hand off: replace this

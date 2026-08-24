@@ -21,6 +21,8 @@ from bootstrap.manager import (
     INITIAL_CHAT_AGENT_ID_FILENAME,
     UPDATE_APPLY_MARKER,
     UPDATE_APPLY_SCRIPT,
+    UPDATE_RECOVER_CRON_NAME,
+    WORKSPACE_ROOT_DIR,
     TimezoneFetchError,
     _apply_container_timezone,
     _build_create_chat_command,
@@ -37,6 +39,7 @@ from bootstrap.manager import (
     _read_update_marker_dri_agent,
     _recover_interrupted_update,
     _wake_update_dri_agent,
+    _write_update_recovery_cron_entry,
 )
 
 # --- _configure_git_global ---
@@ -580,6 +583,50 @@ def test_install_runtime_cron_entries_tolerates_unwritable_target(
     (source / "minds-caretaker").write_text("* * * * * root true\n")
     # Target dir does not exist: the per-file OSError is logged, not raised.
     _install_runtime_cron_entries(target_dir=tmp_path / "missing")
+
+
+# --- _write_update_recovery_cron_entry ---
+
+
+def test_update_recovery_cron_entry_is_rewritten_every_boot(tmp_path: Path) -> None:
+    # The whole point of moving this off setup_system.sh: /etc/cron.d does not
+    # survive container recreation, so the guard has to be laid down again at
+    # each boot rather than once at provision time.
+    target = tmp_path / "etc-cron-d"
+    target.mkdir()
+    installed = target / UPDATE_RECOVER_CRON_NAME
+
+    _write_update_recovery_cron_entry(target_dir=target)
+    first = installed.read_text()
+    installed.unlink()
+    _write_update_recovery_cron_entry(target_dir=target)
+
+    assert installed.read_text() == first
+    assert (installed.stat().st_mode & 0o777) == 0o644
+
+
+def test_update_recovery_cron_entry_can_run_from_cron(tmp_path: Path) -> None:
+    # cron gives a drop-in its own compiled-in /usr/bin:/bin and its own cwd,
+    # and `recover`'s live path shells out to mngr, uv and npm -- so an entry
+    # without a PATH line or an absolute cd rolls the tree back and leaves the
+    # live workspace broken, silently.
+    target = tmp_path / "etc-cron-d"
+    target.mkdir()
+    _write_update_recovery_cron_entry(target_dir=target)
+    entry = (target / UPDATE_RECOVER_CRON_NAME).read_text()
+
+    assert entry.startswith("PATH=/root/.local/bin:")
+    assert f"cd {WORKSPACE_ROOT_DIR} &&" in entry
+    # Composed from the one constant that says where the script lives, so the
+    # path cannot drift from the boot-time recovery's own invocation.
+    assert str(UPDATE_APPLY_SCRIPT) in entry
+    assert "flock -n" in entry
+
+
+def test_update_recovery_cron_entry_tolerates_an_unwritable_target(tmp_path: Path) -> None:
+    # This runs on the path to supervisord; a boot that reaches the services is
+    # worth more than the guard.
+    _write_update_recovery_cron_entry(target_dir=tmp_path / "missing")
 
 
 # --- _apply_container_timezone ---
