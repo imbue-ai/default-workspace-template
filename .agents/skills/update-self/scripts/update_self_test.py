@@ -2098,53 +2098,45 @@ def _plant_emergency(repo_root: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("diff", "is_build_failing", "expected_code"),
-    [(_BACKEND_DIFF, False, 0), (_FRONTEND_DIFF, True, 2)],
-    ids=["applied", "rolled-back"],
+    ("page_responder", "is_record_kept"),
+    [(_built_app_page, False), (_placeholder_page, True)],
+    ids=["healthy-ui", "broken-ui"],
 )
-def test_an_outcome_that_confirms_health_clears_a_stale_emergency_record(
-    apply_repo: Path, diff: str, is_build_failing: bool, expected_code: int
-) -> None:
-    # The banner keys off the record's mere presence, so every outcome that
-    # ends with the workspace confirmed healthy has to take it down -- a
-    # rollback that puts known-good code back just as much as an apply that
-    # lands. A clear that quietly stopped happening would leave a workspace
-    # saying it may be broken forever, with nothing else to contradict it.
-    _plant_emergency(apply_repo)
-    runner = _apply_runner(diff, apply_repo)
-    if is_build_failing:
-        runner.respond(("npm", "run", "build"), _Result(returncode=1, stderr="boom"))
-
-    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
-
-    assert code == expected_code
-    assert not update_self.emergency_path(apply_repo).exists()
-
-
 @pytest.mark.parametrize(
     ("diff", "is_build_failing", "expected_code"),
     [(_BACKEND_DIFF, False, 0), (_FRONTEND_DIFF, True, 2)],
     ids=["applied", "rolled-back"],
 )
-def test_an_outcome_over_a_broken_ui_leaves_the_emergency_record_standing(
-    apply_repo: Path, diff: str, is_build_failing: bool, expected_code: int
+def test_the_emergency_record_comes_down_only_over_a_confirmed_ui(
+    apply_repo: Path,
+    diff: str,
+    is_build_failing: bool,
+    expected_code: int,
+    page_responder: Callable[[str], update_self.FetchedPage],
+    is_record_kept: bool,
 ) -> None:
-    # The other half of the rule, and the case that actually happens: a UI that
-    # is already broken is the usual aftermath of the failure that wrote the
-    # record. Neither outcome probes its way back to a working one -- the
-    # backend answers, the closing line names the breakage, and the user still
-    # cannot see the workspace -- so clearing on that would take the banner
-    # away from the one workspace that still needs it.
+    # The banner keys off the record's mere presence, so an outcome that ends
+    # with the workspace confirmed healthy has to take it down -- a rollback
+    # that puts known-good code back just as much as an apply that lands, which
+    # is why the outcome axis here is crossed rather than nested: the rule turns
+    # on the UI alone. A clear that quietly stopped happening would leave a
+    # workspace saying it may be broken forever, with nothing to contradict it.
+    # The broken-UI half is the case that actually happens, since a UI that is
+    # already down is the usual aftermath of the failure that wrote the record:
+    # neither outcome probes its way back to a working one -- the backend
+    # answers, the closing line names the breakage, and the user still cannot
+    # see the workspace -- so clearing on that would take the banner away from
+    # the one workspace that still needs it.
     _plant_emergency(apply_repo)
     runner = _apply_runner(diff, apply_repo)
     if is_build_failing:
         runner.respond(("npm", "run", "build"), _Result(returncode=1, stderr="boom"))
-    http = _FakeHttp(_all_healthy, page_responder=_placeholder_page)
+    http = _FakeHttp(_all_healthy, page_responder=page_responder)
 
     code = _apply(runner, http, _FakeSpawner(), apply_repo)
 
     assert code == expected_code
-    assert update_self.emergency_path(apply_repo).exists()
+    assert update_self.emergency_path(apply_repo).exists() is is_record_kept
 
 
 def test_a_regressed_frontend_is_rolled_back(apply_repo: Path) -> None:
