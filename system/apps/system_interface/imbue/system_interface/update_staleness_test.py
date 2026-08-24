@@ -1,6 +1,7 @@
 """Tests for the update-staleness tracker and its app-shell surfacing."""
 
 import re
+import shutil
 import subprocess
 import tomllib
 from pathlib import Path
@@ -185,10 +186,32 @@ def test_tracker_reports_an_interrupted_apply_over_a_moved_tree(tmp_path: Path) 
     assert tracker.staleness() == STALENESS_UPDATE_INTERRUPTED
 
 
-def test_tracker_degrades_to_not_stale_outside_a_repo(tmp_path: Path) -> None:
+def test_tracker_degrades_to_not_stale_outside_a_repo(
+    tmp_path: Path, loguru_records: list[str]
+) -> None:
     tracker = UpdateStalenessTracker.capture(repo_root=tmp_path / "not-a-repo")
     assert tracker.startup_head is None
     assert tracker.staleness() is None
+    # A detector that fails silently is worse than no detector: the whole point
+    # is to make an invisible skew visible, so its own breakage must be
+    # findable in the log rather than showing up as a banner that never comes.
+    assert any("update-staleness" in record for record in loguru_records)
+
+
+def test_a_git_failure_after_startup_is_logged_not_swallowed(
+    tmp_path: Path, loguru_records: list[str]
+) -> None:
+    repo = _make_repo(tmp_path)
+    tracker = UpdateStalenessTracker.capture(repo_root=repo)
+    assert tracker.startup_head is not None
+    loguru_records.clear()
+    # The repo goes away under the running server -- standing in for the wedged
+    # index or corrupt repo that would otherwise silence the banner forever.
+    shutil.rmtree(repo / ".git")
+
+    assert tracker.staleness() is None
+
+    assert any("update-staleness" in record for record in loguru_records)
 
 
 def test_app_shell_carries_the_staleness_header(tmp_path: Path) -> None:
