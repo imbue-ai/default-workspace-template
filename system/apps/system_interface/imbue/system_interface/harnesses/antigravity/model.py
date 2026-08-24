@@ -69,7 +69,13 @@ ANTIGRAVITY_STATE_RELATIVE_PATH: Final[Path] = Path(".")
 
 ANTIGRAVITY_CATALOG: Final[HarnessCatalog] = HarnessCatalog(
     options=tuple(
-        ModelOption(id=model_id, label=label, efforts=(), supports_fast=False)
+        # ``harness_reported_model_id`` is the LABEL, not the id: agy's statusline payload
+        # reports its model as a display name ("Gemini 3.7 Flash (High)"), not the
+        # `gemini-3.7-flash-high` slug it lists in `agy models` -- verified against a live
+        # 1.1.19 payload. The id stays the slug because that is agy's own identifier; this
+        # field is exactly the seam for a harness whose reported id differs from it (claude
+        # sets it for the same reason).
+        ModelOption(id=model_id, label=label, harness_reported_model_id=label, efforts=(), supports_fast=False)
         for model_id, label in _MODEL_ROWS
     ),
     switch_mode=SwitchMode.READ_ONLY,
@@ -97,12 +103,21 @@ def derived_option(model_id: str) -> ModelOption:
     shrug and tell the user nothing; a slightly-wrong name is strictly better than that. It is
     marked ``in_picker=False`` because it is a rendering fallback, not an offer.
     """
+    # agy reports a DISPLAY NAME, so the common case needs no reconstruction at all -- use it
+    # verbatim. The slug path below stays for an id that really is a slug (a hand-set
+    # settings.json, or a future agy that reports one).
+    if " " in model_id:
+        return ModelOption(
+            id=model_id, label=model_id, harness_reported_model_id=model_id,
+            efforts=(), supports_fast=False, in_picker=False,
+        )
     words = _VERSION_PAIR_RE.sub(".", model_id).split("-")
     tier = words.pop().title() if len(words) > 1 and words[-1] in _TIER_SUFFIXES else None
     label = " ".join(word.title() for word in words)
     return ModelOption(
         id=model_id,
         label=f"{label} ({tier})" if tier else label,
+        harness_reported_model_id=model_id,
         efforts=(),
         supports_fast=False,
         in_picker=False,
