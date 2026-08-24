@@ -18,6 +18,7 @@ import httpx
 from pydantic import BaseModel
 from pydantic import ConfigDict
 
+from imbue.modal_app_kit.metrics import emit_metric
 from imbue.remote_service_connector.cloudflare import CF_BASE_URL
 from imbue.remote_service_connector.cloudflare import cf_check
 from imbue.remote_service_connector.relays import RELAY_HEALTHY
@@ -187,8 +188,10 @@ def run_relay_health_sweep(
         )
         if new_health != row["health"]:
             counters["transitions"] += 1
-            # Error level on purpose: these lines are the alerting signal for
-            # relay outages until log-based alerting is wired.
+            emit_metric("relay_health_transition", 1, {"region": str(row["region"]), "to": new_health})
+            # Error level on purpose: a relay health transition is the
+            # alerting signal for relay outages, reported to the tier's
+            # error tracker at top priority.
             logger.error(
                 "Relay %s (%s, %s) transitioned %s -> %s",
                 row["relay_id"],
@@ -210,8 +213,10 @@ def run_relay_health_sweep(
         for record_name in region_dns_record_names(region, content_domain):
             if reconcile_a_record_set(dns_ops, record_name, desired_ips):
                 counters["dns_record_sets_changed"] += 1
-                # Error level on purpose, even for benign changes (e.g. a new
-                # relay's IP joining the set): any DNS answer change is part of
-                # the alerting signal until log-based alerting is wired.
-                logger.error("Reconciled DNS record set for %s to %s", record_name, desired_ips)
+                emit_metric("relay_dns_record_set_changed", 1, {"record_name": record_name})
+                # Warning level on purpose, even for benign changes (e.g. a
+                # new relay's IP joining the set): any DNS answer change is
+                # part of the alerting signal, but a change is not itself an
+                # outage -- the health transition above carries error level.
+                logger.warning("Reconciled DNS record set for %s to %s", record_name, desired_ips)
     return counters

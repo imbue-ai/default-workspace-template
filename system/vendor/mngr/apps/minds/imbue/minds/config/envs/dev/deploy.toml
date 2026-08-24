@@ -51,6 +51,14 @@ modal_env_strategy = "PER_ENV"
 writes_local_state = true
 tracks_generation = false
 
+# Workspace stop/start knobs stamped over the Vault ``storage`` entry at
+# deploy time. Dev envs keep the retention window (halted local VM held for
+# instant restart-in-place before the slot is freed) short so stop/start
+# iteration and the opt-in release test see the retention finalize land in
+# minutes; production/staging keep the default hour.
+[storage]
+stop_retention_seconds = 300
+
 # Default paid-access entries seeded (seed-if-absent) into the connector's
 # paid_domains table after migrations, so the imbue team can use paid features
 # (host pool, LiteLLM keys, R2 buckets) on a fresh env without manual setup.
@@ -64,6 +72,14 @@ domains = ["imbue.com"]
 # `minds-admin account set-plan / set-quota`. The same values are
 # committed for every tier; tests that need small limits override per-user
 # via the admin API.
+[plans.free]
+max_remote_workspaces = 1
+max_total_workspaces = 5
+max_buckets = 5
+max_total_bucket_gb = 25
+monthly_llm_spend_usd = 0
+max_active_synced_workspaces = 200
+
 [plans.explorer]
 max_remote_workspaces = 2
 max_total_workspaces = 10
@@ -90,3 +106,11 @@ max_active_synced_workspaces = 200
 #   MINDS_WEB_TEMPLATE_REF=<branch-or-tag> uv run minds-admin env deploy
 [web_workspaces]
 template_repo = "github.com/imbue-ai/default-workspace-template"
+
+# Whether this tier deploys the analytics app (analytics-<tier>): the
+# gold-table aggregation + lake maintenance crons. Off until the tier's
+# analytics bringup (apps/analytics/docs/bringup.md) has provisioned the
+# Neon project, R2 buckets, and Vault entry. Dev envs can opt in per-env
+# with the sticky `minds env deploy --with-analytics` flag.
+[analytics]
+is_deployed = false

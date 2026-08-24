@@ -27,6 +27,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 import tomlkit
+from loguru import logger
 from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import SecretStr
@@ -96,6 +97,8 @@ def write_client_config(
         doc["lima_image_base_url"] = str(config.lima_image_base_url)
     if config.lima_image_minisign_public_key is not None:
         doc["lima_image_minisign_public_key"] = config.lima_image_minisign_public_key
+    if config.update_feed_base_url is not None:
+        doc["update_feed_base_url"] = str(config.update_feed_base_url)
 
     tmp = target.with_suffix(target.suffix + ".tmp")
     tmp.write_text(tomlkit.dumps(doc))
@@ -198,3 +201,36 @@ def client_config_exists(name: DevEnvName) -> bool:
     (the special ``~/.minds/`` row).
     """
     return client_config_file(name).is_file()
+
+
+# Sticky per-env analytics override, set by `minds-admin env deploy --with-analytics`
+# / `--without-analytics` and consulted on later deploys of the same env (so
+# the flag needn't be re-passed). Absent = follow the tier's deploy.toml.
+_ANALYTICS_OVERRIDE_FILENAME = "analytics_override"
+
+
+def write_analytics_override(name: DevEnvName, is_enabled: bool) -> Path:
+    """Persist the env's sticky analytics enablement override."""
+    root = env_root_dir(name)
+    root.mkdir(parents=True, exist_ok=True)
+    target = root / _ANALYTICS_OVERRIDE_FILENAME
+    target.write_text("true" if is_enabled else "false")
+    return target
+
+
+def read_analytics_override(name: DevEnvName) -> bool | None:
+    """The env's sticky analytics override, or None when never set.
+
+    A malformed value (hand-edited file) is treated as unset, loudly: the
+    tier default then applies, which is the safe direction (off).
+    """
+    target = env_root_dir(name) / _ANALYTICS_OVERRIDE_FILENAME
+    if not target.is_file():
+        return None
+    raw_value = target.read_text().strip().lower()
+    if raw_value == "true":
+        return True
+    if raw_value == "false":
+        return False
+    logger.warning("Ignoring malformed analytics override at {}: {!r}", target, raw_value)
+    return None

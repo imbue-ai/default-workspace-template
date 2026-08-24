@@ -5,6 +5,8 @@ never go to the network; this isolates the tests from connector availability
 and makes them deterministic.
 """
 
+import ast
+import inspect
 import json as _json
 
 import httpx
@@ -13,11 +15,13 @@ from pydantic import AnyUrl
 from pydantic import Field
 from pydantic import SecretStr
 
+from imbue.mngr_imbue_cloud.connector import client as connector_client_module
 from imbue.mngr_imbue_cloud.connector.client import CLIENT_ID_HEADER
 from imbue.mngr_imbue_cloud.connector.client import ImbueCloudConnectorClient
 from imbue.mngr_imbue_cloud.connector.client import create_litellm_key_rotating_on_exists
 from imbue.mngr_imbue_cloud.data_types import LeaseAttributes
 from imbue.mngr_imbue_cloud.errors import ImbueCloudAccountError
+from imbue.mngr_imbue_cloud.errors import ImbueCloudAccountSuspendedError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudAuthError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudBucketExistsError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudBucketLimitError
@@ -613,12 +617,17 @@ def test_admin_account_endpoints_use_admin_paths(monkeypatch: pytest.MonkeyPatch
                     "llm_budget_resets_at": None,
                     "active_synced_workspaces": 0,
                 },
+                "suspended_at": "2026-08-22 00:00:00+00:00",
+                "suspended_reason": "abuse",
             },
         )
 
     client = _install_mock_httpx(monkeypatch, handler)
     info = client.admin_get_account(SecretStr("adm"), "alice@imbue.com")
     assert info.plan_name == "explorer"
+    # The operator view carries the suspension state (what `account show` renders).
+    assert info.suspended_at == "2026-08-22 00:00:00+00:00"
+    assert info.suspended_reason == "abuse"
     client.admin_set_account_plan(SecretStr("adm"), "alice@imbue.com", "ally")
     client.admin_set_account_quota(SecretStr("adm"), "alice@imbue.com", "max_buckets", 60)
     assert seen == [
@@ -802,6 +811,80 @@ def test_get_workspace_retries_transient_transport_error(monkeypatch: pytest.Mon
     workspace = client.get_workspace(SecretStr("tok"), "00000000-0000-0000-0000-000000000042")
     assert workspace.status == WorkspaceStatus.RUNNING
     assert state["calls"] == 2
+
+
+# -- Modal 303 long-request redirects --
+#
+# The connector is a Modal web function: a synchronous request that runs long
+# is answered with ``303 See Other`` pointing at an attempt-token URL the
+# client must GET to fetch the eventual result. Every call path must follow
+# it, or a slow-but-successful operation reads as a failure.
+
+
+def test_release_host_follows_modal_303_redirect_to_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen_paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_paths.append(request.url.path)
+        if request.url.path == "/hosts/db-1/release":
+            assert request.method == "POST"
+            return httpx.Response(303, headers={"Location": "/attempts/tok-303"})
+        assert request.url.path == "/attempts/tok-303"
+        assert request.method == "GET"
+        return httpx.Response(200, json={"status": "released"})
+
+    client = _install_mock_httpx(monkeypatch, handler)
+    # A slow release that Modal parked behind an attempt URL still reads as
+    # success -- before follow_redirects the bare 303 raised here.
+    client.release_host(SecretStr("tok"), "db-1")
+    assert seen_paths == ["/hosts/db-1/release", "/attempts/tok-303"]
+
+
+def test_send_follows_modal_303_redirect_to_result() -> None:
+    seen_paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_paths.append(request.url.path)
+        if request.url.path == "/workspaces/00000000-0000-0000-0000-000000000042":
+            return httpx.Response(303, headers={"Location": "/attempts/tok-303"})
+        assert request.url.path == "/attempts/tok-303"
+        assert request.method == "GET"
+        return httpx.Response(200, json=_workspace_entry("running"))
+
+    client = ImbueCloudConnectorClient(base_url=AnyUrl("https://example.com"), transport=httpx.MockTransport(handler))
+    workspace = client.get_workspace(SecretStr("tok"), "00000000-0000-0000-0000-000000000042")
+    assert workspace.status == WorkspaceStatus.RUNNING
+    assert seen_paths == ["/workspaces/00000000-0000-0000-0000-000000000042", "/attempts/tok-303"]
+
+
+def test_every_module_level_httpx_call_in_client_follows_redirects() -> None:
+    """The client mixes ``_send``-routed calls with direct module-level httpx
+    calls, so "every connector call follows redirects" holds only if each
+    direct call site carries the flag itself. A new endpoint written in the
+    direct-call style without it would silently reintroduce the 303 bug for
+    that endpoint, so pin the invariant over the module source."""
+    tree = ast.parse(inspect.getsource(connector_client_module))
+    lines_missing_follow_redirects: list[int] = []
+    checked_call_count = 0
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        is_module_level_httpx_verb = (
+            isinstance(func, ast.Attribute)
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "httpx"
+            and func.attr in ("get", "post", "put", "delete")
+        )
+        if not is_module_level_httpx_verb:
+            continue
+        checked_call_count += 1
+        if "follow_redirects" not in {keyword.arg for keyword in node.keywords}:
+            lines_missing_follow_redirects.append(node.lineno)
+    # A floor well below the current count, purely to prove the scan matched
+    # real call sites rather than passing vacuously after a refactor.
+    assert checked_call_count >= 5
+    assert lines_missing_follow_redirects == []
 
 
 # -- Workspace sync methods --
@@ -1681,3 +1764,41 @@ def test_workspace_with_unrecognized_status_coerces_to_unknown(monkeypatch: pyte
 
     assert len(workspaces) == 1
     assert workspaces[0].status is WorkspaceStatus.UNKNOWN
+
+
+def test_admin_suspension_endpoints_hit_the_right_paths(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[tuple[str, str, dict[str, object] | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = _json.loads(request.content) if request.content else None
+        seen.append((request.method, request.url.path, body))
+        return httpx.Response(200, json={"status": "ok", "steps": {}})
+
+    client = _install_mock_httpx(monkeypatch, handler)
+    client.admin_revoke_sessions(SecretStr("adm"), "alice@imbue.com")
+    client.admin_suspend_account(SecretStr("adm"), "alice@imbue.com", "abuse", block_storage=True)
+    client.admin_unsuspend_account(SecretStr("adm"), "alice@imbue.com")
+    client.admin_stop_workspace(SecretStr("adm"), "11111111-2222-3333-4444-555566667777")
+    assert seen == [
+        ("POST", "/admin/accounts/alice@imbue.com/revoke-sessions", None),
+        ("POST", "/admin/accounts/alice@imbue.com/suspend", {"reason": "abuse", "block_storage": True}),
+        ("POST", "/admin/accounts/alice@imbue.com/unsuspend", None),
+        ("POST", "/admin/workspaces/11111111-2222-3333-4444-555566667777/stop", None),
+    ]
+
+
+def test_account_suspended_403_raises_the_typed_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403,
+            json={
+                "detail": {
+                    "code": "account_suspended",
+                    "message": "This account is suspended. Contact support@imbue.com.",
+                }
+            },
+        )
+
+    client = _install_mock_httpx(monkeypatch, handler)
+    with pytest.raises(ImbueCloudAccountSuspendedError, match="support@imbue.com"):
+        client.auth_device_token("code-1", "verifier-1", "http://127.0.0.1:1234/callback")

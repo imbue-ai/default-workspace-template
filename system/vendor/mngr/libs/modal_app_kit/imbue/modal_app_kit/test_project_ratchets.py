@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 from imbue.modal_app_kit.testing import imported_module_names
+from imbue.modal_app_kit.testing import is_module_within_package
 from imbue.modal_app_kit.testing import shipped_module_files
 
 _PACKAGE_DIR = Path(__file__).parent
@@ -30,6 +31,10 @@ def test_shipped_modules_import_only_stdlib_and_modal() -> None:
         for module_name in imported_module_names(path):
             root = module_name.split(".")[0]
             if root in sys.stdlib_module_names or root in _ALLOWED_NON_STDLIB_ROOTS or root in module_allowed_roots:
+                continue
+            # Intra-package imports are fine: the whole package ships as one
+            # source mount, so a sibling module always exists in the container.
+            if is_module_within_package(module_name, "imbue.modal_app_kit"):
                 continue
             violations.append(f"{path.name}: {module_name}")
     assert not violations, (

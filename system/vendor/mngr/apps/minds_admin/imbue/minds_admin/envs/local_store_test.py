@@ -20,8 +20,10 @@ from imbue.minds_admin.envs.local_store import DevEnvSecretsModel
 from imbue.minds_admin.envs.local_store import client_config_exists
 from imbue.minds_admin.envs.local_store import delete_env_root
 from imbue.minds_admin.envs.local_store import env_root_exists
+from imbue.minds_admin.envs.local_store import read_analytics_override
 from imbue.minds_admin.envs.local_store import read_client_config_file
 from imbue.minds_admin.envs.local_store import read_secrets_file
+from imbue.minds_admin.envs.local_store import write_analytics_override
 from imbue.minds_admin.envs.local_store import write_client_config
 from imbue.minds_admin.envs.local_store import write_secrets_file
 
@@ -75,6 +77,25 @@ def test_write_client_config_omits_lima_image_fields_when_unset(_isolated_home: 
     raw = tomllib.loads(target.read_text())
     assert "lima_image_base_url" not in raw
     assert "lima_image_minisign_public_key" not in raw
+
+
+def test_write_client_config_round_trips_update_feed_base_url(_isolated_home: Path) -> None:
+    """When set, the release-channel manifest host is written + reloaded."""
+    config = ClientEnvConfig(
+        connector_url=AnyUrl("https://test-connector.modal.run"),
+        litellm_proxy_url=AnyUrl("https://test-litellm.modal.run"),
+        update_feed_base_url=AnyUrl("https://releases.example.com/minds"),
+    )
+    write_client_config(config, name=DevEnvName("dev-channels"))
+    loaded = read_client_config_file(DevEnvName("dev-channels"))
+    assert str(loaded.update_feed_base_url) == "https://releases.example.com/minds"
+
+
+def test_write_client_config_omits_update_feed_base_url_when_unset(_isolated_home: Path) -> None:
+    """An env with no channel manifests writes no key, so the app offers stable only."""
+    target = write_client_config(_make_client(), name=DevEnvName("dev-nochannels"))
+    raw = tomllib.loads(target.read_text())
+    assert "update_feed_base_url" not in raw
 
 
 def test_write_client_config_is_loadable_as_client_config(_isolated_home: Path) -> None:
@@ -202,3 +223,21 @@ def test_dev_env_secrets_model_rejects_extra_keys() -> None:
     """
     with pytest.raises(ValidationError):
         DevEnvSecretsModel.model_validate({"secrets": {}, "extra_key": "oops"})
+
+
+def test_analytics_override_round_trips_and_defaults_to_none(_isolated_home: Path) -> None:
+    env_name = DevEnvName("dev-analytics-override")
+
+    assert read_analytics_override(env_name) is None
+    write_analytics_override(env_name, True)
+    assert read_analytics_override(env_name) is True
+    write_analytics_override(env_name, False)
+    assert read_analytics_override(env_name) is False
+
+
+def test_analytics_override_treats_a_malformed_value_as_unset(_isolated_home: Path) -> None:
+    env_name = DevEnvName("dev-analytics-mangled")
+    override_path = write_analytics_override(env_name, True)
+    override_path.write_text("maybe?")
+
+    assert read_analytics_override(env_name) is None

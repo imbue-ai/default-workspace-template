@@ -598,10 +598,10 @@ def test_list_hosts_returns_leased_hosts(monkeypatch: pytest.MonkeyPatch) -> Non
     assert host_ids == {"00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000003"}
 
 
-def test_route_lease_host_succeeds_for_unpaid_explorer_account(
+def test_route_lease_host_succeeds_for_unpaid_free_account(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An unpaid account resolves to the explorer plan and can still lease (quota permitting)."""
+    """An unpaid account backfills to the free plan and can still lease (quota permitting)."""
     client, backend, entitlements_store, _litellm = _make_pool_quota_test_client(monkeypatch)
     backend.add_available_host(host_id=UUID("00000000-0000-0000-0000-000000000001"), version="v0.1.0")
     backend.add_paid_email(_USER_STUB_EMAIL, is_paid=False)
@@ -616,10 +616,10 @@ def test_route_lease_host_succeeds_for_unpaid_explorer_account(
     )
     assert resp.status_code == 200
     assert backend.pool_rows[0].status == "leased"
-    # The lazily-created row is on explorer (unpaid email).
+    # The lazily-created row is on free (unpaid email, no explicit choice).
     row = entitlements_store.get_entitlements(_USER_STUB_USER_ID)
     assert row is not None
-    assert row["plan_name"] == "explorer"
+    assert row["plan_name"] == "free"
 
 
 def test_route_lease_host_returns_quota_403_at_workspace_cap(
@@ -688,11 +688,20 @@ def test_slice_name_env_owner_parses_stamped_instance_and_disk_names() -> None:
     assert hosts_mod.slice_name_env_owner(f"mngr-slice-dev-josh-foo-{host_hex}-data") == "dev-josh-foo"
 
 
+def test_slice_name_env_owner_parses_truncated_host_hex_names() -> None:
+    # Slices baked since the host-id truncation carry a 16-char host hex
+    # (mirroring mngr_imbue_cloud's SLICE_HOST_ID_HEX_LENGTH).
+    host_hex = "0123456789abcdef"
+    assert hosts_mod.slice_name_env_owner(f"mngr-slice-dev-josh-foo-{host_hex}") == "dev-josh-foo"
+    assert hosts_mod.slice_name_env_owner(f"mngr-slice-dev-josh-foo-{host_hex}-data") == "dev-josh-foo"
+
+
 def test_slice_name_env_owner_returns_none_for_legacy_and_non_slice_names() -> None:
-    host_hex = "0123456789abcdef0123456789abcdef"
-    # Legacy un-stamped slice names have no env owner (must be left untouched).
-    assert hosts_mod.slice_name_env_owner(f"mngr-slice-{host_hex}") is None
-    assert hosts_mod.slice_name_env_owner(f"mngr-slice-{host_hex}-data") is None
+    # Legacy un-stamped slice names -- full-hex or truncated -- have no env
+    # owner (must be left untouched).
+    for host_hex in ("0123456789abcdef0123456789abcdef", "0123456789abcdef"):
+        assert hosts_mod.slice_name_env_owner(f"mngr-slice-{host_hex}") is None
+        assert hosts_mod.slice_name_env_owner(f"mngr-slice-{host_hex}-data") is None
     # Non-slice lima names are never attributed to an env.
     assert hosts_mod.slice_name_env_owner("default") is None
     assert hosts_mod.slice_name_env_owner("some-other-vm") is None
@@ -827,3 +836,21 @@ def test_build_container_file_write_command_seed_only_creates_when_absent_and_sk
     target.write_text(edited)
     _run_container_file_write_command(target, seed, is_seed_only=True)
     assert target.read_text() == edited
+
+
+def test_split_box_health_output_reports_missing_transfer_binaries() -> None:
+    output = (
+        "md0 : active raid1 sda1[0] sdb1[1]\nMNGR_BOX_HEALTH_SPLIT\n"
+        "Filename Type Size Used Priority\nMNGR_BOX_HEALTH_SPLIT\n"
+        "s5cmd\nage\n"
+    )
+    mdstat_text, proc_swaps_text, missing_binaries = hosts_mod._split_box_health_output(output)
+    assert "md0" in mdstat_text
+    assert "Filename" in proc_swaps_text
+    assert missing_binaries == ["s5cmd", "age"]
+
+
+def test_split_box_health_output_reports_no_missing_binaries_on_a_healthy_box() -> None:
+    output = "md0 : active raid1 sda1[0] sdb1[1]\nMNGR_BOX_HEALTH_SPLIT\nswaps\nMNGR_BOX_HEALTH_SPLIT\n"
+    _mdstat, _swaps, missing_binaries = hosts_mod._split_box_health_output(output)
+    assert missing_binaries == []

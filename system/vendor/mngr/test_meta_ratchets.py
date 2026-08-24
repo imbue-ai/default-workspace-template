@@ -34,7 +34,10 @@ _IS_SOURCE_OF_TRUTH = (_REPO_ROOT / "mirror").exists()
 _EXCLUDED_PROJECTS: frozenset[str] = frozenset()
 
 _SELF_EXCLUSION: tuple[str, ...] = ("test_meta_ratchets.py",)
-_DATA_FILE_EXCLUSION: tuple[str, ...] = ("*.jsonl",)
+# Machine-generated data files whose contents are not human-written text:
+# npm lockfiles carry random base64 integrity hashes that can contain any
+# short letter run (e.g. "mng"), so they are excluded from content scans.
+_DATA_FILE_EXCLUSION: tuple[str, ...] = ("*.jsonl", "package-lock.json")
 _MIGRATION_SCRIPT_EXCLUSION: tuple[str, ...] = (
     "migrate_code_mng_to_mngr.sh",
     "migrate_state_mng_to_mngr.sh",
@@ -267,6 +270,47 @@ def test_cli_docs_are_up_to_date() -> None:
     assert result.returncode == 0, (
         "Generated CLI docs are out of date. Run `uv run python scripts/make_cli_docs.py` "
         f"and commit the result.\n{result.stdout}{result.stderr}"
+    )
+
+
+_NUMBERED_MIGRATION_RE = re.compile(r"^(\d+)_.+\.sql$")
+
+
+def test_numbered_sql_migrations_have_unique_numbers() -> None:
+    """Ensure no migrations/ directory holds two ``NNN_*.sql`` files with the same number.
+
+    The schema_migrations runners record applied migrations by *filename*, so
+    two files sharing a number both apply -- but their relative order degrades
+    to a lexicographic accident, and the duplicate breaks the "highest number
+    is the newest schema" convention operators and reviewers rely on. This is
+    exactly what concurrent branches produce (it happened once in the
+    connector: two branches each landed an 029), so it is checked repo-wide
+    for every directory named ``migrations`` that contains numbered SQL files.
+    """
+    migration_files_by_dir: dict[Path, list[Path]] = {}
+    for sql_file in _get_all_files_with_extension(_REPO_ROOT, ".sql"):
+        if sql_file.parent.name == "migrations" and _NUMBERED_MIGRATION_RE.match(sql_file.name):
+            migration_files_by_dir.setdefault(sql_file.parent, []).append(sql_file)
+    # The check must actually be exercising something; if the discovery ever
+    # finds no numbered migrations at all, the glob logic has rotted.
+    assert migration_files_by_dir, "No numbered SQL migrations found anywhere; the discovery logic is broken"
+
+    duplicate_descriptions: list[str] = []
+    for migrations_dir, files in sorted(migration_files_by_dir.items()):
+        # Keyed on the numeric value, not the raw prefix, so a padding mismatch
+        # (29_foo.sql vs 029_bar.sql) still counts as the same number.
+        files_by_number: dict[int, list[str]] = {}
+        for migration_file in files:
+            match = _NUMBERED_MIGRATION_RE.match(migration_file.name)
+            assert match is not None
+            files_by_number.setdefault(int(match.group(1)), []).append(migration_file.name)
+        for number, names in sorted(files_by_number.items()):
+            if len(names) > 1:
+                relative_dir = migrations_dir.relative_to(_REPO_ROOT)
+                duplicate_descriptions.append(f"  {relative_dir}: {number} -> {sorted(names)}")
+    assert len(duplicate_descriptions) == 0, (
+        "Duplicate migration numbers found (renumber the newer file to the next free number):\n"
+        + "\n".join(duplicate_descriptions)
     )
 
 
@@ -932,6 +976,11 @@ def test_offload_version_pinned_consistently() -> None:
 def _collect_class_defs_for_model_config_checks() -> tuple[dict[str, set[str]], dict[str, list[str]]]:
     """Collect, repo-wide, each class's base names and any extra="forbid" declarations in its body.
 
+    Cached: three tests share this repo-wide AST walk, and the meta-ratchet
+    xdist group runs them in one process, so the repo is parsed once instead
+    of three times (the walk alone can approach a 10s timeout on a loaded CI
+    sandbox).
+
     Returns ``(base_names_by_class, forbid_locations_by_class)``. Classes are keyed
     by bare name; two same-named classes in different files have their bases merged,
     which can only over-approximate a base's subclass set (acceptable for guards
@@ -1019,6 +1068,8 @@ def _config_value_sets_extra_forbid(value: ast.expr) -> bool:
     return False
 
 
+# Repo-wide AST walk (cached, but the first caller pays it); the default 10s
+# timeout is too tight on a loaded CI sandbox.
 @pytest.mark.flaky
 @pytest.mark.timeout(60)
 def test_event_envelope_subclasses_never_re_forbid_extra() -> None:
@@ -1048,6 +1099,8 @@ def test_event_envelope_subclasses_never_re_forbid_extra() -> None:
     )
 
 
+# Repo-wide AST walk (cached, but the first caller pays it); the default 10s
+# timeout is too tight on a loaded CI sandbox.
 @pytest.mark.flaky
 @pytest.mark.timeout(60)
 def test_wire_model_subclasses_never_re_forbid_extra() -> None:
@@ -1078,6 +1131,8 @@ def test_wire_model_subclasses_never_re_forbid_extra() -> None:
     )
 
 
+# Repo-wide AST walk (cached, but the first caller pays it); the default 10s
+# timeout is too tight on a loaded CI sandbox.
 @pytest.mark.flaky
 @pytest.mark.timeout(60)
 def test_wire_types_files_contain_only_wire_models_and_wire_enums() -> None:

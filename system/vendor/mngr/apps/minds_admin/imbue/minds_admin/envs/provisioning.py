@@ -53,14 +53,17 @@ from pydantic import SecretStr
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.logging import info_span
+from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
 from imbue.minds.build_info import DEFAULT_WEB_TEMPLATE_REPO_KEY
 from imbue.minds.build_info import FALLBACK_BRANCH
+from imbue.minds.config.data_types import AnalyticsDeployConfig
 from imbue.minds.config.data_types import ClientEnvConfig
 from imbue.minds.config.data_types import DeployEnvConfig
 from imbue.minds.config.data_types import DeployLifecycleConfig
 from imbue.minds.config.data_types import ModalEnvStrategy
 from imbue.minds.config.data_types import OriginsConfig
+from imbue.minds.config.data_types import StorageDeployConfig
 from imbue.minds.config.data_types import WebWorkspacesConfig
 from imbue.minds.config.loader import EnvConfigError
 from imbue.minds.config.loader import load_client_config
@@ -70,6 +73,7 @@ from imbue.minds.envs.paths import env_root_dir
 from imbue.minds.envs.paths import list_env_root_dirs
 from imbue.minds.envs.primitives import DeployStrategy
 from imbue.minds.envs.primitives import DevEnvName
+from imbue.minds.envs.primitives import SecretTemplateValidationError
 from imbue.minds.errors import MindError
 from imbue.minds.errors import WebTemplateRefRequiredError
 from imbue.minds_admin.envs.generation import GENERATION_ID_KEY
@@ -77,6 +81,7 @@ from imbue.minds_admin.envs.local_store import client_config_exists
 from imbue.minds_admin.envs.local_store import delete_env_root
 from imbue.minds_admin.envs.local_store import env_root_exists
 from imbue.minds_admin.envs.local_store import read_client_config_file
+from imbue.minds_admin.envs.local_store import read_secrets_file
 from imbue.minds_admin.envs.local_store import write_client_config
 from imbue.minds_admin.envs.local_store import write_secrets_file
 from imbue.minds_admin.envs.mngr_agent_cleanup import DestroyMngrAgentsFn
@@ -94,6 +99,11 @@ from imbue.minds_admin.envs.per_env_deploy import push_per_env_modal_secret
 from imbue.minds_admin.envs.per_env_deploy import stop_modal_app
 from imbue.minds_admin.envs.per_env_deploy import tier_connector_url
 from imbue.minds_admin.envs.per_env_deploy import tier_litellm_proxy_url
+from imbue.minds_admin.envs.providers.analytics_stack import AnalyticsStackRecord
+from imbue.minds_admin.envs.providers.analytics_stack import AnalyticsStackRequest
+from imbue.minds_admin.envs.providers.analytics_stack import analytics_secret_values_from_record
+from imbue.minds_admin.envs.providers.analytics_stack import local_secret_values_from_record
+from imbue.minds_admin.envs.providers.analytics_stack import record_from_local_secrets
 from imbue.minds_admin.envs.providers.neon_db import NeonProjectRecord
 from imbue.minds_admin.envs.providers.supertokens_app import SuperTokensAppRecord
 from imbue.minds_admin.envs.providers.supertokens_app import app_id_from_connection_uri
@@ -202,6 +212,22 @@ class ProviderCredentials(FrozenModel):
     )
     supertokens_core_url: str = Field(description="Dev-tier SuperTokens core base URL.")
     supertokens_api_key: SecretStr = Field(description="Dev-tier SuperTokens admin API key.")
+    cloudflare_account_id: str = Field(
+        default="",
+        description=(
+            "Cloudflare account id from the tier's ``cloudflare`` Vault entry. Used only by "
+            "per-env-resource tiers (``creates_resources=true``) to provision / tear down the "
+            "env's analytics R2 buckets and tokens; may be empty elsewhere (and on dev tiers "
+            "whose cloudflare entry is not yet populated -- enabling analytics then fails loudly)."
+        ),
+    )
+    cloudflare_api_token: SecretStr = Field(
+        default=SecretStr(""),
+        description=(
+            "Account-owned Cloudflare API token from the tier's ``cloudflare`` Vault entry "
+            "(R2 bucket + account-token edit scope). Same applicability as cloudflare_account_id."
+        ),
+    )
 
 
 # Tiers whose default deploy strategy is RECREATE: dev (every personal
@@ -282,6 +308,20 @@ DeployModalAppFn = Callable[[str, str, int, int, str, DeployStrategy, Concurrenc
 # domain hosts from the tier's ``[origins]`` block; empty = none).
 # (modal_env, tier, min_containers, scaledown_window, deploy_id, custom_domains, strategy, cg) -> deployed URL.
 DeployConnectorAppFn = Callable[[str, str, int, int, str, tuple[str, ...], DeployStrategy, ConcurrencyGroup], AnyUrl]
+# (modal_env, tier, deploy_id, strategy, cg) -> None. Deploys the cron-only
+# analytics app (``analytics-<tier>``); no URL to return (the app has no web
+# endpoint) and no warm-pool knobs (crons don't keep containers).
+DeployAnalyticsAppFn = Callable[[str, str, str, DeployStrategy, ConcurrencyGroup], None]
+# (request) -> AnalyticsStackRecord. Provisions (adopt-or-create, rotating
+# credentials) the per-env analytics stack: Neon project ``analytics-<env>``,
+# the two analytics R2 buckets + their scoped tokens, the read-only token on
+# the tier's OpenObserve bucket, and the analytics_reader role on the env's
+# host_pool DB. Only called for creates_resources tiers with analytics enabled.
+CreateAnalyticsStackFn = Callable[[AnalyticsStackRequest], AnalyticsStackRecord]
+# (name, neon_org_id, neon_api_token, cloudflare_account_id, cloudflare_api_token)
+# -> None. Tears the same stack down (idempotent; fast no-op for envs that
+# never enabled analytics). Called unconditionally by creates_resources destroys.
+DeleteAnalyticsStackFn = Callable[[DevEnvName, str, SecretStr, str, SecretStr], None]
 # (app_name, modal_env, cg) -> None. Used by tier destroys to ``modal
 # app stop`` each deployed app. Idempotent in the underlying call.
 StopModalAppFn = Callable[[str, str, ConcurrencyGroup], None]
@@ -396,6 +436,34 @@ class Providers(FrozenModel):
         description=(
             "(modal_env, tier, min_containers, scaledown_window, deploy_id, custom_domains, strategy, cg) "
             "-> `modal deploy` the connector app into ``modal_env``."
+        ),
+    )
+    create_analytics_stack: CreateAnalyticsStackFn = Field(
+        description=(
+            "(request) -> AnalyticsStackRecord. Provisions the per-env analytics resources "
+            "(Neon project, R2 buckets + tokens, reader role). Only called for "
+            "creates_resources tiers whose deploy enables analytics and has no persisted stack."
+        ),
+    )
+    delete_analytics_stack: DeleteAnalyticsStackFn = Field(
+        description=(
+            "(name, neon_org_id, neon_api_token, cloudflare_account_id, cloudflare_api_token) -> None. "
+            "Tears down the per-env analytics resources; idempotent no-op for envs that never "
+            "enabled analytics."
+        ),
+    )
+    deploy_analytics: DeployAnalyticsAppFn = Field(
+        description=(
+            "(modal_env, tier, deploy_id, strategy, cg) -> `modal deploy` the cron-only "
+            "analytics app into ``modal_env``. Only called when the resolved analytics "
+            "config enables it for the env."
+        ),
+    )
+    apply_analytics_migrations: ApplyPoolHostsMigrationsFn = Field(
+        description=(
+            "(analytics_ops_dsn, cg) -> tuple of applied migration files. "
+            "Runs the schema_migrations runner against the analytics ops DB "
+            "(apps/analytics/migrations). Only called when analytics is enabled."
         ),
     )
     stop_modal_app: StopModalAppFn = Field(
@@ -564,6 +632,33 @@ class DevEnvSummary(FrozenModel):
     )
 
 
+@pure
+def resolve_analytics_enablement(
+    explicit_flag: bool | None,
+    persisted_override: bool | None,
+    tier_default: bool,
+) -> bool:
+    """Effective analytics enablement for one deploy: flag > sticky override > deploy.toml.
+
+    ``explicit_flag`` is this invocation's --with-analytics / --without-analytics
+    (None when neither was passed); ``persisted_override`` is the env's sticky
+    local-state choice from an earlier flag (None when never set).
+    """
+    if explicit_flag is not None:
+        return explicit_flag
+    if persisted_override is not None:
+        return persisted_override
+    return tier_default
+
+
+@pure
+def with_analytics_enablement(deploy_config: DeployEnvConfig, is_deployed: bool) -> DeployEnvConfig:
+    """The deploy config with its analytics block replaced by the resolved enablement."""
+    return deploy_config.model_copy_update(
+        to_update(deploy_config.field_ref().analytics, AnalyticsDeployConfig(is_deployed=is_deployed)),
+    )
+
+
 def deploy_env(
     name: DevEnvName,
     *,
@@ -711,6 +806,40 @@ def _deploy_env_locked(
                 credentials.supertokens_core_url,
                 credentials.supertokens_api_key,
             )
+
+    # Step 1b: the per-env analytics stack, only for tiers whose deploys own
+    # their resources AND only when this deploy enables analytics. A complete
+    # persisted stack (the env's secrets.toml) is reused as-is; anything less
+    # provisions from scratch (adopt-or-create with credential rotation, so a
+    # partial earlier run converges instead of duplicating). Shared tiers
+    # (staging / production) never enter this branch -- their stack comes from
+    # the operator bringup runbook via the per-tier ``analytics`` Vault entry.
+    analytics_record: AnalyticsStackRecord | None = None
+    if lifecycle.creates_resources and deploy_config.analytics.is_deployed:
+        assert neon_record is not None, "creates_resources deploys populate neon_record before this point"
+        analytics_record = record_from_local_secrets(read_secrets_file(name).secrets)
+        if analytics_record is not None:
+            logger.info("Reusing the persisted analytics stack for env {!r}", str(name))
+        else:
+            observability_values = providers.read_per_env_secret_values(
+                "observability",
+                tier_vault_prefix,
+                {},
+                False,
+                parent_concurrency_group,
+            )
+            with info_span("Provisioning the per-env analytics stack for {!r}", str(name)):
+                analytics_record = providers.create_analytics_stack(
+                    AnalyticsStackRequest(
+                        name=name,
+                        neon_org_id=credentials.neon_org_id,
+                        neon_api_token=credentials.neon_api_token,
+                        cloudflare_account_id=credentials.cloudflare_account_id,
+                        cloudflare_api_token=credentials.cloudflare_api_token,
+                        logs_bucket=observability_values.get("OPENOBSERVE_R2_BUCKET", ""),
+                        host_pool_admin_dsn=neon_record.host_pool_dsn,
+                    )
+                )
 
     # Capture pre-deploy Modal app versions BEFORE any further mutation
     # so the recover-target carries them. None for never-deployed apps
@@ -911,6 +1040,7 @@ def _deploy_env_locked(
         expected_connector_url=expected_connector_url,
         expected_litellm_proxy_url=expected_litellm_proxy_url,
         origins=deploy_config.origins,
+        storage=deploy_config.storage,
     )
     litellm_master_key = _read_litellm_master_key(tier_vault_prefix, providers, parent_concurrency_group)
     with info_span("Pushing per-env Modal Secrets into env {!r}", modal_env):
@@ -994,6 +1124,44 @@ def _deploy_env_locked(
                 modal_env,
                 parent_concurrency_group,
             )
+        # The analytics secret is pushed only when the env deploys the
+        # analytics app. For per-env-resource tiers its values come from the
+        # stack this deploy provisioned (or reused) above, scoped to this env
+        # via the logs env filter; for shared tiers it is read from the
+        # per-tier Vault entry the operator bringup populated, and is then
+        # always required -- a missing/incomplete entry aborts the deploy
+        # loudly rather than shipping a placeholder. Kept out of
+        # ``[secrets].services`` so disabled envs never need the entry.
+        analytics_secret_values: dict[str, str] = {}
+        if deploy_config.analytics.is_deployed:
+            if lifecycle.creates_resources:
+                assert analytics_record is not None, "analytics-enabled creates_resources deploys build the stack"
+                # No collection-interval override: auto-provisioned stacks
+                # keep the production default from imbue.analytics.settings
+                # (per-tier overrides can come later, e.g. for CI envs).
+                analytics_secret_values = analytics_secret_values_from_record(
+                    analytics_record,
+                    logs_env_filter=str(name),
+                    collection_interval_seconds=None,
+                )
+            else:
+                analytics_secret_values = providers.read_per_env_secret_values(
+                    "analytics",
+                    tier_vault_prefix,
+                    {},
+                    True,
+                    parent_concurrency_group,
+                )
+            analytics_secret_name = timestamped_secret_name("analytics", tier, deploy_id)
+            with info_span(
+                "Pushing per-env Modal Secret {!r} ({} values)", analytics_secret_name, len(analytics_secret_values)
+            ):
+                providers.push_per_env_modal_secret(
+                    analytics_secret_name,
+                    analytics_secret_values,
+                    modal_env,
+                    parent_concurrency_group,
+                )
 
     # Step 5: modal deploys.
     litellm_proxy_min_containers = int(deploy_config.min_containers.litellm_proxy)
@@ -1047,6 +1215,26 @@ def _deploy_env_locked(
         actual=connector_url, expected=expected_connector_url, app=f"rsc-{tier}", modal_workspace=modal_workspace
     )
 
+    # Step 5b: the analytics app, when this env deploys it. Migrations run
+    # against the analytics ops DB first (so the crons never fire against a
+    # missing schema), then the cron-only app deploys -- no URL assertion and
+    # no health-check participation, because it exposes no web endpoint.
+    if deploy_config.analytics.is_deployed:
+        analytics_ops_dsn = analytics_secret_values.get("ANALYTICS_OPS_DATABASE_URL", "")
+        if not analytics_ops_dsn:
+            raise SecretTemplateValidationError(
+                "Analytics is enabled for this env but the 'analytics' Vault entry has no "
+                "ANALYTICS_OPS_DATABASE_URL value; run the bringup runbook "
+                "(apps/analytics/docs/bringup.md) before enabling analytics."
+            )
+        with info_span("Applying analytics ops migrations for env {!r}", str(name)):
+            applied_analytics = providers.apply_analytics_migrations(
+                SecretStr(analytics_ops_dsn), parent_concurrency_group
+            )
+            logger.info("Applied {} analytics ops migration(s).", len(applied_analytics))
+        with info_span("Deploying analytics-{} into env {!r} (strategy={})", tier, modal_env, deploy_strategy.value):
+            providers.deploy_analytics(modal_env, tier, deploy_id, deploy_strategy, parent_concurrency_group)
+
     # Step 6a: health check -- poll both apps' health endpoints until
     # they return 200. Failure raises ``HealthCheckFailedError`` which
     # the CLI surfaces with the same "run `minds-admin env recover`" guidance
@@ -1074,17 +1262,22 @@ def _deploy_env_locked(
         )
         public_config = ClientEnvConfig(connector_url=connector_url, litellm_proxy_url=litellm_proxy_url)
         client_config_path = str(write_client_config(public_config, name=name))
-        secrets_path = str(
-            write_secrets_file(
-                {
-                    "NEON_HOST_POOL_DSN": neon_record.host_pool_dsn,
-                    "NEON_LITELLM_DSN": neon_record.litellm_cost_dsn,
-                    "SUPERTOKENS_CONNECTION_URI": SecretStr(supertokens_record.connection_uri),
-                    "SUPERTOKENS_API_KEY": supertokens_record.api_key,
-                },
-                name=name,
-            )
-        )
+        # The analytics stack values persist alongside the rest so re-deploys
+        # reuse them (token secrets are only derivable at mint time). An env
+        # deploying with analytics off keeps any previously persisted stack --
+        # the resources still exist until env destroy tears them down.
+        local_secrets: dict[str, SecretStr] = {
+            "NEON_HOST_POOL_DSN": neon_record.host_pool_dsn,
+            "NEON_LITELLM_DSN": neon_record.litellm_cost_dsn,
+            "SUPERTOKENS_CONNECTION_URI": SecretStr(supertokens_record.connection_uri),
+            "SUPERTOKENS_API_KEY": supertokens_record.api_key,
+        }
+        if analytics_record is not None:
+            local_secrets.update(local_secret_values_from_record(analytics_record))
+        else:
+            persisted = read_secrets_file(name).secrets
+            local_secrets.update({key: value for key, value in persisted.items() if key.startswith("ANALYTICS_")})
+        secrets_path = str(write_secrets_file(local_secrets, name=name))
 
     # Deploy reached its happy path: delete the snapshot branch (best-
     # effort: keeping it around just clutters the project), then delete
@@ -1265,6 +1458,7 @@ def _compute_secret_overrides(
     expected_connector_url: AnyUrl,
     expected_litellm_proxy_url: AnyUrl,
     origins: OriginsConfig | None,
+    storage: StorageDeployConfig | None,
 ) -> dict[str, dict[str, str]]:
     """Build the per-service Modal Secret override dict for one deploy.
 
@@ -1300,6 +1494,12 @@ def _compute_secret_overrides(
     # tier bucket.
     if lifecycle.modal_env_strategy == ModalEnvStrategy.PER_ENV:
         overrides["storage"] = {"WORKSPACE_STORAGE_KEY_PREFIX": _workspace_storage_key_prefix(name, lifecycle)}
+    # Git-owned storage knobs win over stale Vault values, so deploy.toml is
+    # the source of truth for the tier's retention window.
+    if storage is not None and storage.stop_retention_seconds is not None:
+        overrides.setdefault("storage", {})["WORKSPACE_STOP_RETENTION_SECONDS"] = str(
+            int(storage.stop_retention_seconds)
+        )
     if lifecycle.creates_resources:
         assert neon_record is not None
         assert supertokens_record is not None
@@ -1440,6 +1640,18 @@ def destroy_env(
     # teardown of both DBs + roles + endpoints; shared tiers DROP SCHEMA
     # on the operator-managed DB they keep across destroy/redeploy).
     if lifecycle.creates_resources:
+        # Step 3a: the per-env analytics stack (its own Neon project, R2
+        # buckets, account tokens). Unconditional -- an env that enabled
+        # analytics once and later deployed --without-analytics still owns
+        # the resources; a never-enabled env makes this a fast no-op.
+        with info_span("Deleting analytics stack for env {!r}", str(name)):
+            providers.delete_analytics_stack(
+                name,
+                credentials.neon_org_id,
+                credentials.neon_api_token,
+                credentials.cloudflare_account_id,
+                credentials.cloudflare_api_token,
+            )
         with info_span("Deleting Neon project for env {!r}", str(name)):
             providers.delete_neon_project(name, credentials.neon_org_id, credentials.neon_api_token)
     else:
@@ -1462,7 +1674,10 @@ def destroy_env(
             providers.delete_modal_env(name, parent_concurrency_group)
     else:
         with info_span("Stopping Modal apps for env {!r} in Modal env {!r}", str(name), modal_env_for_tier_ops):
-            for app_name in (f"llm-{tier}", f"rsc-{tier}"):
+            # analytics-<tier> is stopped unconditionally: stop_modal_app is
+            # idempotent on absent apps, so envs that never deployed it are a
+            # cheap no-op.
+            for app_name in (f"llm-{tier}", f"rsc-{tier}", f"analytics-{tier}"):
                 providers.stop_modal_app(app_name, modal_env_for_tier_ops, parent_concurrency_group)
         # Delete every timestamped Modal Secret matching ``<svc>-<tier>-*``
         # in the tier's Modal env. Re-uses the same GC helper as deploy,

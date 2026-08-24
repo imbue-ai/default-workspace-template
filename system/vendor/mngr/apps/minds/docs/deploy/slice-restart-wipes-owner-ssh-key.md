@@ -34,8 +34,11 @@ them, are now closed:
   from the container's own copy.
 - **Fixed.** `LatchkeyDiscoveryHandler` warns on `UNAUTHENTICATED` instead of
   skipping the host in silence. It still skips.
-- **Open.** `recovery_probe` still lets the inner system-interface probe
-  auto-dismiss a terminal host state.
+- **Open.** A terminal host state can still be auto-dismissed by a
+  container-level probe. `recovery_probe` itself is gone -- the exec probe it
+  ran had no consumer and was deleted -- but the dismissal came from the
+  background health tracker's own probe flipping the workspace back to HEALTHY,
+  and that path is unchanged.
 - **Open.** The RSA -> Ed25519 key migration still runs against `RUNNING` hosts
   only, so it still skips the machines that most need it.
 
@@ -181,8 +184,8 @@ Each of these is a direct consequence, and each is independently worth fixing.
 3. **Recovery is a no-op.** Both the stop and start steps of the host restart go
    over outer SSH and fail, so every recovery attempt fails by construction.
 
-4. **The recovery page flaps instead of sticking.** `recovery_probe`
-   (`apps/minds/imbue/minds/desktop_client/recovery_probe.py:772`) correctly maps
+4. **The recovery page flaps instead of sticking.** The exec probe then in place
+   (`recovery_probe`, since deleted) correctly mapped
    `UNAUTHENTICATED` to `backend_unreachable` with a terminal reason, but the inner
    system-interface probe then succeeds and the page auto-dismisses. Observed one
    second apart: probe reason logged at `21:25:01.709`, `restart_failed -> HEALTHY
@@ -263,8 +266,9 @@ longer drop the key.
   container path already re-asserts it on rebuild.
 - Treat `UNAUTHENTICATED` distinctly from stopped/paused/crashed in
   `LatchkeyDiscoveryHandler`, and warn rather than returning silently.
-- Do not let a container-level probe auto-dismiss a terminal host state in
-  `recovery_probe`.
+- Do not let a container-level probe auto-dismiss a terminal host state. The exec
+  probe this was written against is gone; the dismissal now comes from the
+  background health tracker's own probe.
 - Reconsider the `RUNNING`-only gate on the RSA -> Ed25519 migration.
 
 ## Resolution of this instance

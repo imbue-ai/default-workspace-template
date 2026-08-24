@@ -226,9 +226,14 @@ tmr-behaviors-minds *args:
 # and apps/minds/deployment_tests/README.md for the full design + usage.
 
 # Full run: shared env stand-up + sequential pytest x2 + teardown.
+# MINDS_ALLOW_EMPTY_POOL=1: this flow mints a fresh shared env with no bake
+# stage, so its pool is empty by construction -- the pool-consuming tests skip
+# here instead of failing (use `minds-test-deployment-up` + `bake-ci-slices`
+# to run them for real; the CI release flow never sets this, where an empty
+# pool means the bake stage broke and must fail).
 [group("minds test")]
 minds-test-deployment *args:
-  uv run python apps/minds_admin/scripts/test_deployments.py run {{args}}
+  MINDS_ALLOW_EMPTY_POOL=1 uv run python apps/minds_admin/scripts/test_deployments.py run {{args}}
 
 # Wipe everything from prior runs that the ledger still tracks as active or leaked.
 [group("minds test")]
@@ -246,9 +251,24 @@ minds-test-deployment-down role="default":
   uv run python apps/minds_admin/scripts/test_deployments.py down "{{role}}"
 
 # Point minds_services tests at an already-deployed dev env (e.g. dev-josh).
+# MINDS_ALLOW_EMPTY_POOL=1: an arbitrary dev env may legitimately have no baked
+# pool capacity, so the pool-consuming tests skip there instead of failing (the
+# CI release flow never sets it -- an empty pool there means the bake stage
+# broke and must fail). See specs/remote-workspaces-in-ci.md.
 [group("minds test")]
 minds-test-services-against env_name *tests:
-  uv run python apps/minds_admin/scripts/test_deployments.py services-against "{{env_name}}" {{tests}}
+  MINDS_ALLOW_EMPTY_POOL=1 uv run python apps/minds_admin/scripts/test_deployments.py services-against "{{env_name}}" {{tests}}
+
+# Pre-bake leasable pool slices for the env `minds-test-deployment-up` stood up
+# (the local twin of CI's bake stage): sweep stale CI slices, import the standing
+# CI boxes into the env's DB, bake from the given template ref (or --template-dir),
+# and record the stamped repo_branch_or_tag for the pool tests to lease against.
+# Slices are CONSUMED by each test's release, so top up between re-runs (warm
+# content re-bakes in minutes). See specs/remote-workspaces-in-ci.md.
+#   just bake-ci-slices --count 2 --template-dir "$PWD/.external_worktrees/default-workspace-template"
+[group("minds test")]
+bake-ci-slices *args:
+  uv run python apps/minds_admin/scripts/test_deployments.py bake-pool {{args}}
 
 # Run only the minds_deployment pytest batch (each test mints its own ephemeral env).
 # No shared env stand-up, no mail.tm account -- fast iteration for the deploy tests.
@@ -363,7 +383,8 @@ default-workspace-template-worktree branch="" base="origin/main":
 # checkout at the exact commit you want to vendor first -- your release PR branch
 # HEAD / the verified release SHA, NOT blindly `main`, which can drift past it
 # between verification and merge. The recipe archives HEAD, replaces system/vendor/mngr/
-# with that snapshot, and commits in DEFAULT_WORKSPACE_TEMPLATE. Does not push. Aborts if DEFAULT_WORKSPACE_TEMPLATE is dirty.
+# with that snapshot, relocks DEFAULT_WORKSPACE_TEMPLATE's root uv.lock, and commits both there.
+# Does not push. Aborts if DEFAULT_WORKSPACE_TEMPLATE is dirty.
 # Full release flow: apps/minds/docs/deploy/release.md.
 [group("minds dev")]
 sync-vendor-mngr default_workspace_template="":
@@ -406,9 +427,12 @@ sync-vendor-mngr default_workspace_template="":
     rm -rf ./* ./.[!.]*
     tar -xf "$tarball"
     cd "$default_workspace_template"
-    git add -A system/vendor/mngr/
-    if git diff --cached --quiet -- system/vendor/mngr/; then
-        echo "system/vendor/mngr already in sync with mngr ${short}; nothing to commit"
+    # The template's root uv.lock pins the vendored mngr libs as editable path
+    # deps, so a refresh that moves their dependencies strands it.
+    uv lock
+    git add -A system/vendor/mngr/ uv.lock
+    if git diff --cached --quiet -- system/vendor/mngr/ uv.lock; then
+        echo "system/vendor/mngr and uv.lock already in sync with mngr ${short}; nothing to commit"
         exit 0
     fi
     git commit -m "Sync system/vendor/mngr to ${branch} (${short})" -m "Tracks ${full} in mngr."
@@ -1631,15 +1655,6 @@ setup-server server_id *extra_args:
 [group("minds ops")]
 prep-server server_id *extra_args:
     uv run minds-admin server prep --server-id "{{server_id}}" {{extra_args}}
-
-# Backfill the volume-gated minds-autostart units onto every existing slice VM
-# of the activated env's fleet (reboot-resilience rollout Step 2; see
-# apps/minds/docs/deploy/reboot-resilience-rollout.md). Idempotent and safe on running
-# workspaces. Pass --dry-run to list the per-VM plan first, or
-# --server-id <id> (repeatable) to scope to specific boxes.
-#   just backfill-autostart --dry-run
-backfill-autostart *extra_args:
-    uv run minds-admin server backfill-autostart {{extra_args}}
 
 # One-time host-key backfill for the activated minds env. Keyscans every
 # pre-existing pool host + bare-metal box whose recorded sshd host key columns

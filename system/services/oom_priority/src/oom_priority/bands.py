@@ -182,8 +182,9 @@ def chat_agent_oom_score_adj(
 # hurts: the two authority paths into the workspace (owner-exec, then the
 # terminal) come first, then the UI, then the sharing stack, then the
 # runtime-state sync (github-sync, opt-in) and the host backup, then the job
-# scheduler and the app-watcher, and last the browser stack (its X display, then
-# the coordinator). ``user`` is the single band every *user-created* service shares;
+# scheduler and the app-watcher, then the browser stack (its X display, then
+# the coordinator), and last the file viewer.
+# ``user`` is the single band every *user-created* service shares;
 # it sits above every built-in service so a user's own service is shed before any
 # built-in one, while staying below USER_AGENT.
 #
@@ -244,6 +245,10 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # below SHARED_BROWSER, where those Chromium processes live: a coordinator
     # ranked above them would be picked first every time and free nothing.
     "browser": 70,
+    # The file viewer (dufs): a tiny static file server holding almost no
+    # memory, restarted by supervisord if shed, so it is the most expendable
+    # built-in service of all.
+    "files": 75,
     "user": USER_SERVICE,
 }
 
@@ -365,3 +370,21 @@ def set_oom_score_adj(pid: int, adj: int) -> bool:
     except OSError:
         return False
     return True
+
+
+def oom_tag_shell_prefix(adj: int) -> str:
+    """A shell statement that bands the running shell into ``adj``, for prefixing.
+
+    For the callers that cannot write ``/proc`` themselves because the process
+    they are banding does not exist yet: they hand a shell this statement plus
+    their own command, and everything the shell then spawns (or ``exec``s)
+    inherits the band.
+
+    The write is gated on ``test -w`` so that on a host without a writable
+    ``/proc/self/oom_score_adj`` (e.g. macOS, which has no ``/proc``) the prefix
+    is a clean no-op that emits nothing -- a bare ``> /proc/...`` redirect would
+    otherwise leak a shell "no such file or directory" error past ``2>/dev/null``.
+    It ends with ``;`` rather than ``&&`` so what follows runs whether or not the
+    tag applied.
+    """
+    return f"test -w /proc/self/oom_score_adj && echo {adj} > /proc/self/oom_score_adj 2>/dev/null; "

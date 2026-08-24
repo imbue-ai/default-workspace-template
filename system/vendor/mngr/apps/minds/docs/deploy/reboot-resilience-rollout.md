@@ -1,5 +1,14 @@
 # Reboot-resilience rollout: slice autostart on box boot + volume-gated workspace autostart
 
+> **This rollout is complete.** Both sweeps ran fleet-wide during the
+> minds-v0.3.17 deploy (`prep-server` on all 21 boxes; the in-VM backfill
+> verified 188/188 VMs -- see
+> [history/minds-v0.3.17.md](./history/minds-v0.3.17.md)), and every slice
+> baked since gets the installer at host create. The one-time backfill sweep
+> tool (`minds-admin server backfill-autostart` / `just backfill-autostart`)
+> has been removed; this document remains as the design record and for the
+> per-VM recovery procedure at the bottom.
+
 One-time operator runbook for deploying the two reboot-resilience fixes from
 the August 2026 all-slices-down incident (production box `9ef5ab2e` /
 147.135.97.121 was hard-reset; all 12 leased slice VMs stayed down ~19 hours
@@ -44,7 +53,8 @@ Requires operator action:
   runs when you run it).
 - Backfilling the in-VM units on every existing slice VM (the installer only
   runs at host create, so the existing fleet keeps its old racy oneshot until
-  backfilled). Run the sweep via `just backfill-autostart` -- see Step 2.
+  backfilled). This was done via the since-removed `just backfill-autostart`
+  sweep -- see Step 2.
 
 Already done (during incident response and verification):
 
@@ -101,10 +111,9 @@ service (`systemctl restart --no-block`) -- starting the path unit alone
 never re-runs a service the old installer's boot-time oneshot left latched
 active, which is exactly the state of a wedge-recovered VM.
 
-Run the sweep (`just backfill-autostart`, wrapping
-`minds-admin server backfill-autostart`; start with `--dry-run`
-to see the per-VM plan). Do not hand-loop over the fleet; the sweep
-handles:
+The sweep that did this (`just backfill-autostart`, wrapping
+`minds-admin server backfill-autostart`) has been removed now that the
+fleet-wide backfill completed at minds-v0.3.17. For the record, it handled:
 
 - **Per-generation services-agent script.** The installer's relaunch step
   probes the known in-container locations itself
@@ -132,7 +141,7 @@ handles:
 No database migrations are needed for any of this: neither fix touches the
 `pool_hosts` schema or the connector.
 
-Verify per VM (the sweep already checks all of this; for spot checks):
+Verify per VM (the sweep checked all of this itself; for spot checks):
 
 ```bash
 systemctl is-active minds-autostart.path        # -> active
@@ -152,7 +161,19 @@ test -f /mngr-btrfs/.minds-volume-ready && echo ok
 ## If a workspace is still down after a box reboot
 
 Re-running the merged in-VM installer on that VM is the supported recovery
-(it revives dead units and re-fires the start). The box side is
+(it revives dead units and re-fires the start). The installer text is the
+`post_host_create_outer_command__extend` block of the pool/slice provider
+templates in default-workspace-template's `.mngr/settings.toml` (the source
+of truth). Apply it as root inside the VM through the box's lima user:
+
+```bash
+# installer.sh = the template block's script text, verbatim
+ssh <lima-user>@<box-address> limactl shell --workdir / <instance-name> sudo bash -s < installer.sh
+```
+
+It is idempotent and safe on a healthy running workspace (`docker start` /
+`mngr start` are no-ops), and it refuses to run while the VM's data volume is
+not mounted -- investigate that rather than bypassing it. The box side is
 `systemctl start mngr-slices-autostart.service` (idempotent; only starts
 stopped slices). Slice data disks survive reboots intact, so recovery is
 never data-destructive.

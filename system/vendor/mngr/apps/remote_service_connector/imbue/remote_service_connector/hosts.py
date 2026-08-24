@@ -160,10 +160,12 @@ class LeasedHostInfo(BaseModel):
 
 # The workspace lifecycle statuses a user's row can hold. "Running" rows hold
 # (or are about to hold) a bare-metal slot: leased, plus the in-flight stopping
-# (VM halted but slot retained until the upload finalizes) and starting
-# transitions. "Total" adds stopped rows, whose VM exists only as encrypted
-# objects in the tier bucket. Shared by the quota checks and the /account
-# usage display so the two can never drift.
+# (VM halted, upload in flight) and starting transitions. "Total" adds stopped
+# rows, whose durable VM exists only as encrypted objects in the tier bucket
+# (a just-stopped row also keeps its halted local VM -- and thus a slot --
+# until the retention window closes, but counts as stopped for quotas; pool
+# capacity itself is enforced by real slot occupancy on the boxes). Shared by
+# the quota checks and the /account usage display so the two can never drift.
 RUNNING_WORKSPACE_STATUSES: Final[tuple[str, ...]] = ("leased", "stopping", "starting")
 TOTAL_WORKSPACE_STATUSES: Final[tuple[str, ...]] = RUNNING_WORKSPACE_STATUSES + ("stopped",)
 
@@ -343,12 +345,19 @@ def clean_up_slice_on_box(
 
 
 # Slice lima resources are named ``mngr-slice-<env>-<host-hex>`` (the data disk
-# adds a ``-data`` suffix). The host hex is a hyphen-free uuid, so the env stamp is
-# everything between the prefix and the trailing ``-<host-hex>``. Mirrors
-# ``mngr_imbue_cloud.slices.bare_metal`` (the connector has no dependency on it).
+# adds a ``-data`` suffix). The host hex is a hyphen-free uuid -- truncated to 16
+# chars on current slices so long (CI) env names fit limactl's name budget, the
+# full 32 on slices baked before the truncation -- so the env stamp is everything
+# between the prefix and the trailing ``-<host-hex>``. Longest-first so a legacy
+# env that happens to end in ``-<16 hex>`` still parses as the 32-hex shape.
+# Mirrors ``mngr_imbue_cloud.slices.bare_metal`` (the connector has no dependency
+# on it).
 _SLICE_LIMA_PREFIX = "mngr-slice-"
 _SLICE_LIMA_DISK_SUFFIX = "-data"
-_STAMPED_SLICE_CORE_RE = re.compile(r"^(?P<env>.+)-(?P<host>[0-9a-f]{32})$")
+_STAMPED_SLICE_CORE_RES = (
+    re.compile(r"^(?P<env>.+)-(?P<host>[0-9a-f]{32})$"),
+    re.compile(r"^(?P<env>.+)-(?P<host>[0-9a-f]{16})$"),
+)
 # Non-login SSH may not source the lima user's profile, so set PATH explicitly
 # (limactl is extracted to /usr/local/bin by box prep).
 _BOX_LIMACTL_PATH_PREFIX = "PATH=/usr/local/bin:$HOME/.local/bin:$PATH"
@@ -361,8 +370,11 @@ def slice_name_env_owner(name: str) -> str | None:
     core = name[len(_SLICE_LIMA_PREFIX) :]
     if core.endswith(_SLICE_LIMA_DISK_SUFFIX):
         core = core[: -len(_SLICE_LIMA_DISK_SUFFIX)]
-    match = _STAMPED_SLICE_CORE_RE.match(core)
-    return match.group("env") if match else None
+    for pattern in _STAMPED_SLICE_CORE_RES:
+        match = pattern.match(core)
+        if match is not None:
+            return match.group("env")
+    return None
 
 
 def _list_box_lima_names(client: paramiko.SSHClient, host: str, json_subcommand: str) -> set[str]:
@@ -404,7 +416,17 @@ def _list_box_lima_names(client: paramiko.SSHClient, host: str, json_subcommand:
 # swap). Both files are world-readable, and one exec keeps the probe a single
 # round-trip.
 _BOX_HEALTH_SPLIT_MARKER: Final = "MNGR_BOX_HEALTH_SPLIT"
-_BOX_HEALTH_COMMAND: Final = f"cat /proc/mdstat && echo {_BOX_HEALTH_SPLIT_MARKER} && cat /proc/swaps"
+# Binaries the workspace stop/start transfer scripts need on every box (the
+# prep script installs the pinned age + s5cmd releases; zstd comes from apt).
+# A box missing one silently fails every upload/restore that lands on it, so
+# the sweep surfaces the drift -- the 15.204.140.221 box shipped exactly this
+# way (prepped before the transfer tooling existed, never re-prepped).
+_BOX_TRANSFER_BINARIES: Final = ("s5cmd", "age", "zstd")
+_BOX_HEALTH_COMMAND: Final = (
+    f"cat /proc/mdstat && echo {_BOX_HEALTH_SPLIT_MARKER} && cat /proc/swaps"
+    f" && echo {_BOX_HEALTH_SPLIT_MARKER} && export PATH=/usr/local/bin:$HOME/.local/bin:$PATH"
+    + "".join(f" && (command -v {binary} >/dev/null || echo {binary})" for binary in _BOX_TRANSFER_BINARIES)
+)
 
 # /proc/mdstat structure: an array header line (``md3 : active raid1 ...``)
 # followed by a status line whose ``[expected/active]`` bracket reports member
@@ -449,8 +471,8 @@ def _parse_raw_swap_devices(proc_swaps_text: str) -> list[str]:
     return raw_devices
 
 
-def _read_box_health_texts(client: paramiko.SSHClient, host: str) -> tuple[str, str]:
-    """Return the box's (/proc/mdstat, /proc/swaps) contents in one exec round-trip.
+def _read_box_health_texts(client: paramiko.SSHClient, host: str) -> tuple[str, str, list[str]]:
+    """Return (/proc/mdstat, /proc/swaps, missing transfer binaries) in one exec round-trip.
 
     Runs over the caller's already-connected management SSH ``client`` (``host`` is
     for error messages only). Raises ``PoolHostCleanupError`` on a non-zero exit so
@@ -462,8 +484,14 @@ def _read_box_health_texts(client: paramiko.SSHClient, host: str) -> tuple[str, 
     output = stdout.read().decode()
     if exit_status != 0:
         raise PoolHostCleanupError(f"box health probe on {host} failed (exit {exit_status}): {stderr.read().decode()}")
-    mdstat_text, _, proc_swaps_text = output.partition(f"{_BOX_HEALTH_SPLIT_MARKER}\n")
-    return mdstat_text, proc_swaps_text
+    return _split_box_health_output(output)
+
+
+def _split_box_health_output(output: str) -> tuple[str, str, list[str]]:
+    mdstat_text, _, remainder = output.partition(f"{_BOX_HEALTH_SPLIT_MARKER}\n")
+    proc_swaps_text, _, missing_binaries_text = remainder.partition(f"{_BOX_HEALTH_SPLIT_MARKER}\n")
+    missing_binaries = [line.strip() for line in missing_binaries_text.splitlines() if line.strip()]
+    return mdstat_text, proc_swaps_text, missing_binaries
 
 
 def reconcile_slice_boxes(conn: Any, env_name: str) -> int:
@@ -533,7 +561,7 @@ def reconcile_slice_boxes(conn: Any, env_name: str) -> int:
             timeout_seconds=30,
             expected_host_public_key=box_host_public_key,
         ) as box_client:
-            mdstat_text, proc_swaps_text = _read_box_health_texts(box_client, public_address)
+            mdstat_text, proc_swaps_text, missing_binaries = _read_box_health_texts(box_client, public_address)
             for degraded_array in _parse_degraded_md_arrays(mdstat_text):
                 divergence_count += 1
                 logger.error(
@@ -549,6 +577,14 @@ def reconcile_slice_boxes(conn: Any, env_name: str) -> int:
                     "(a disk death loses its pages and SIGBUS-kills processes); re-run box prep to retire it",
                     public_address,
                     raw_swap_device,
+                )
+            if missing_binaries:
+                divergence_count += 1
+                logger.error(
+                    "Box health on %s: workspace transfer tooling missing (%s) -- every stop upload and "
+                    "restore that lands on this box fails; re-run box prep to install it",
+                    public_address,
+                    ", ".join(missing_binaries),
                 )
             box_instances = _list_box_lima_names(box_client, public_address, "list --json")
         with conn.cursor() as cur:
@@ -853,10 +889,12 @@ def release_host(request: Request, host_db_id: UUID) -> dict[str, object]:
                 # leased/stopping rows always have a VM, so teardown runs --
                 # and fails loudly on corrupt bookkeeping -- exactly as before.
                 # For every other status the box link itself says whether a VM
-                # exists: it is NULL after a stop finalizes (stopped/crashed)
-                # and during a restore before its final CAS places the VM
-                # (starting, and removing rows descended from such a release,
-                # including crashed ones -- the flip below clears the link).
+                # exists: it is NULL once the retention finalize frees the slot
+                # (a stopped row keeps its link -- and its halted local VM --
+                # until then) and during a restore before its final CAS places
+                # the VM (starting, and removing rows descended from such a
+                # release, including crashed ones -- the flip below clears the
+                # link).
                 # With a NULL link there is nothing the connector could ever
                 # tear down, so forcing teardown would just wedge the row in
                 # 'removing' forever; the artifacts (if any) are the only

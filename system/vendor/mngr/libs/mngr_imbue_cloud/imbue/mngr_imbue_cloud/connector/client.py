@@ -32,6 +32,7 @@ from imbue.imbue_common.mutable_model import MutableModel
 from imbue.mngr_imbue_cloud.data_types import LeaseAttributes
 from imbue.mngr_imbue_cloud.errors import CLIENT_TOO_OLD_FALLBACK_MESSAGE
 from imbue.mngr_imbue_cloud.errors import ImbueCloudAccountError
+from imbue.mngr_imbue_cloud.errors import ImbueCloudAccountSuspendedError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudAuthError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudBucketError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudBucketExistsError
@@ -54,6 +55,7 @@ from imbue.mngr_imbue_cloud.errors import WorkspacesEndpointUnavailableError
 from imbue.mngr_imbue_cloud.wire import parse_wire_entries
 from imbue.mngr_imbue_cloud.wire import validate_wire
 from imbue.mngr_imbue_cloud.wire_types import AccountInfo
+from imbue.mngr_imbue_cloud.wire_types import AdminAccountInfo
 from imbue.mngr_imbue_cloud.wire_types import AuthRawResponse
 from imbue.mngr_imbue_cloud.wire_types import LeaseResult
 from imbue.mngr_imbue_cloud.wire_types import LeasedHostInfo
@@ -204,6 +206,16 @@ class ImbueCloudConnectorClient(MutableModel):
                 email=email if isinstance(email, str) else None,
             )
 
+    def _raise_if_account_suspended(self, response: httpx.Response) -> None:
+        """Raise the typed suspension error when a 403 carries the connector's structured detail."""
+        if response.status_code != 403:
+            return
+        detail = _detail_dict_from_response(response)
+        if detail is not None and detail.get("code") == "account_suspended":
+            raise ImbueCloudAccountSuspendedError(
+                str(detail.get("message", "This account is suspended. Contact support@imbue.com."))
+            )
+
     def _raise_if_grant_budget_exhausted(self, response: httpx.Response) -> None:
         """Raise the typed grant-budget error when a 403 carries the connector's structured detail."""
         if response.status_code != 403:
@@ -234,6 +246,7 @@ class ImbueCloudConnectorClient(MutableModel):
         self._raise_if_quota_exceeded(response)
         self._raise_if_grant_budget_exhausted(response)
         self._raise_if_email_not_verified(response)
+        self._raise_if_account_suspended(response)
         if response.status_code in (401, 403):
             raise ImbueCloudAuthError(f"Unauthenticated ({response.status_code}): {response.text[:300]}")
         if response.status_code in (200, 201, 202, 204):
@@ -252,18 +265,24 @@ class ImbueCloudConnectorClient(MutableModel):
         cached reference) so tests that monkeypatch those functions still
         intercept the request. When an explicit ``transport`` is injected
         (the preferred test seam), the call goes through it instead.
+
+        Redirects are always followed: the connector is a Modal web function,
+        and when a synchronous request runs long Modal answers ``303 See
+        Other`` pointing at an attempt-token URL the client must GET to fetch
+        the eventual result (``curl -L`` semantics). Without following it, a
+        slow-but-successful operation reads as a failure.
         """
         if self.transport is not None:
             with httpx.Client(transport=self.transport) as injected_client:
-                return injected_client.request(method, url, **kwargs)
+                return injected_client.request(method, url, follow_redirects=True, **kwargs)
         if method == "GET":
-            return httpx.get(url, **kwargs)
+            return httpx.get(url, follow_redirects=True, **kwargs)
         if method == "POST":
-            return httpx.post(url, **kwargs)
+            return httpx.post(url, follow_redirects=True, **kwargs)
         if method == "PUT":
-            return httpx.put(url, **kwargs)
+            return httpx.put(url, follow_redirects=True, **kwargs)
         if method == "DELETE":
-            return httpx.delete(url, **kwargs)
+            return httpx.delete(url, follow_redirects=True, **kwargs)
         raise SwitchError(f"Unsupported HTTP method: {method}")
 
     def _send(
@@ -321,6 +340,7 @@ class ImbueCloudConnectorClient(MutableModel):
             headers=_client_id_headers(),
             json={"email": email, "password": password},
             timeout=self.timeout_seconds,
+            follow_redirects=True,
         )
         return validate_wire(AuthRawResponse, self._check(response, ImbueCloudAuthError))
 
@@ -330,6 +350,7 @@ class ImbueCloudConnectorClient(MutableModel):
             headers=_client_id_headers(),
             json={"email": email, "password": password},
             timeout=self.timeout_seconds,
+            follow_redirects=True,
         )
         return validate_wire(AuthRawResponse, self._check(response, ImbueCloudAuthError))
 
@@ -490,6 +511,7 @@ class ImbueCloudConnectorClient(MutableModel):
             headers=_client_id_headers(),
             json={"email": email},
             timeout=self.timeout_seconds,
+            follow_redirects=True,
         )
         self._check(response, ImbueCloudAuthError)
 
@@ -499,6 +521,7 @@ class ImbueCloudConnectorClient(MutableModel):
             headers=_client_id_headers(),
             json={"token": token, "new_password": new_password},
             timeout=self.timeout_seconds,
+            follow_redirects=True,
         )
         self._check(response, ImbueCloudAuthError)
 
@@ -507,6 +530,7 @@ class ImbueCloudConnectorClient(MutableModel):
             self._url(f"/auth/users/{user_id}"),
             headers=_client_id_headers(),
             timeout=self.timeout_seconds,
+            follow_redirects=True,
         )
         return self._check(response, ImbueCloudAuthError)
 
@@ -537,6 +561,7 @@ class ImbueCloudConnectorClient(MutableModel):
             headers=self._bearer(access_token),
             json=body,
             timeout=self.timeout_seconds,
+            follow_redirects=True,
         )
         if response.status_code == 503:
             try:
@@ -563,6 +588,7 @@ class ImbueCloudConnectorClient(MutableModel):
                 self._url(f"/hosts/{host_db_id}/release"),
                 headers=self._bearer(access_token),
                 timeout=self.timeout_seconds,
+                follow_redirects=True,
             )
         except httpx.HTTPError as exc:
             raise ImbueCloudConnectorError(
@@ -587,6 +613,7 @@ class ImbueCloudConnectorClient(MutableModel):
                 headers=self._bearer(access_token),
                 json={"host_name": host_name},
                 timeout=self.timeout_seconds,
+                follow_redirects=True,
             )
         except httpx.HTTPError as exc:
             raise ImbueCloudConnectorError(
@@ -607,6 +634,7 @@ class ImbueCloudConnectorClient(MutableModel):
                 self._url(f"/hosts/{host_db_id}/enable-sharing"),
                 headers=self._bearer(access_token),
                 timeout=self.timeout_seconds,
+                follow_redirects=True,
             )
         except httpx.HTTPError as exc:
             raise ImbueCloudConnectorError(
@@ -619,6 +647,7 @@ class ImbueCloudConnectorClient(MutableModel):
             self._url("/hosts"),
             headers=self._bearer(access_token),
             timeout=self.timeout_seconds,
+            follow_redirects=True,
         )
         body = self._check(response, ImbueCloudConnectorError)
         items = body.get("hosts") if isinstance(body, dict) else body
@@ -659,6 +688,7 @@ class ImbueCloudConnectorClient(MutableModel):
             self._url("/workspaces"),
             headers=self._bearer(access_token),
             timeout=self.timeout_seconds,
+            follow_redirects=True,
         )
         self._check_workspaces_supported(response)
         body = self._check(response, ImbueCloudConnectorError)
@@ -681,7 +711,7 @@ class ImbueCloudConnectorClient(MutableModel):
         return validate_wire(WorkspaceInfo, body)
 
     def stop_workspace(self, access_token: SecretStr, host_db_id: str) -> WorkspaceStatus:
-        """Begin stopping a workspace (VM halt + upload + slot free); returns its status.
+        """Begin stopping a workspace (VM halt + upload, slot freed after retention); returns its status.
 
         Asynchronous and idempotent server-side (a retried POST joins the
         in-flight stop): the returned status is ``stopping`` when the request
@@ -755,6 +785,7 @@ class ImbueCloudConnectorClient(MutableModel):
                 headers=self._bearer(access_token),
                 json=body,
                 timeout=KEY_OP_TIMEOUT_SECONDS,
+                follow_redirects=True,
             )
         except httpx.HTTPError as exc:
             raise ImbueCloudKeyError(f"Key creation HTTP request failed: {exc}") from exc
@@ -767,6 +798,7 @@ class ImbueCloudConnectorClient(MutableModel):
                 self._url("/keys"),
                 headers=self._bearer(access_token),
                 timeout=KEY_OP_TIMEOUT_SECONDS,
+                follow_redirects=True,
             )
         except httpx.HTTPError as exc:
             raise ImbueCloudKeyError(f"Key list HTTP request failed: {exc}") from exc
@@ -778,6 +810,7 @@ class ImbueCloudConnectorClient(MutableModel):
             self._url(f"/keys/{key_id}"),
             headers=self._bearer(access_token),
             timeout=KEY_OP_TIMEOUT_SECONDS,
+            follow_redirects=True,
         )
         body = self._check(response, ImbueCloudKeyError)
         return validate_wire(LiteLLMKeyInfo, body)
@@ -797,6 +830,7 @@ class ImbueCloudConnectorClient(MutableModel):
             headers=self._bearer(access_token),
             json=body,
             timeout=KEY_OP_TIMEOUT_SECONDS,
+            follow_redirects=True,
         )
         self._check(response, ImbueCloudKeyError)
 
@@ -805,6 +839,7 @@ class ImbueCloudConnectorClient(MutableModel):
             self._url(f"/keys/{key_id}"),
             headers=self._bearer(access_token),
             timeout=KEY_OP_TIMEOUT_SECONDS,
+            follow_redirects=True,
         )
         self._check(response, ImbueCloudKeyError)
 
@@ -936,6 +971,7 @@ class ImbueCloudConnectorClient(MutableModel):
             headers=self._bearer(access_token),
             json={"name": name, "access": access},
             timeout=KEY_OP_TIMEOUT_SECONDS,
+            follow_redirects=True,
         )
         return validate_wire(R2BucketCreateResult, self._check_bucket(response))
 
@@ -944,6 +980,7 @@ class ImbueCloudConnectorClient(MutableModel):
             self._url("/buckets"),
             headers=self._bearer(access_token),
             timeout=self.timeout_seconds,
+            follow_redirects=True,
         )
         body = self._check_bucket(response)
         return parse_wire_entries(R2BucketInfo, body, "GET /buckets", ImbueCloudBucketError)
@@ -953,6 +990,7 @@ class ImbueCloudConnectorClient(MutableModel):
             self._url(f"/buckets/{name}"),
             headers=self._bearer(access_token),
             timeout=self.timeout_seconds,
+            follow_redirects=True,
         )
         return validate_wire(R2BucketInfo, self._check_bucket(response))
 
@@ -961,6 +999,7 @@ class ImbueCloudConnectorClient(MutableModel):
             self._url(f"/buckets/{name}"),
             headers=self._bearer(access_token),
             timeout=KEY_OP_TIMEOUT_SECONDS,
+            follow_redirects=True,
         )
         self._check_bucket(response)
 
@@ -970,6 +1009,7 @@ class ImbueCloudConnectorClient(MutableModel):
             self._url(f"/buckets/{name}/roll-key"),
             headers=self._bearer(access_token),
             timeout=KEY_OP_TIMEOUT_SECONDS,
+            follow_redirects=True,
         )
         return validate_wire(R2KeyMaterial, self._check_bucket(response))
 
@@ -980,6 +1020,7 @@ class ImbueCloudConnectorClient(MutableModel):
             self._url(path),
             headers=self._bearer(access_token),
             timeout=self.timeout_seconds,
+            follow_redirects=True,
         )
         body = self._check_bucket(response)
         return parse_wire_entries(R2KeyInfo, body, f"GET {path}", ImbueCloudBucketError)
@@ -1136,7 +1177,7 @@ class ImbueCloudConnectorClient(MutableModel):
         """
         return f"/admin/accounts/{quote(email, safe='@')}"
 
-    def admin_get_account(self, admin_api_key: SecretStr, email: str) -> AccountInfo:
+    def admin_get_account(self, admin_api_key: SecretStr, email: str) -> AdminAccountInfo:
         response = self._send(
             "GET",
             self._url(self._admin_account_path(email)),
@@ -1144,7 +1185,7 @@ class ImbueCloudConnectorClient(MutableModel):
             headers=self._bearer(admin_api_key),
             timeout=KEY_OP_TIMEOUT_SECONDS,
         )
-        return validate_wire(AccountInfo, self._check(response, ImbueCloudAccountError))
+        return validate_wire(AdminAccountInfo, self._check(response, ImbueCloudAccountError))
 
     def admin_set_account_plan(self, admin_api_key: SecretStr, email: str, plan: str) -> dict[str, Any]:
         # Always resets to the plan's defaults, so a retried request lands in
@@ -1173,6 +1214,53 @@ class ImbueCloudConnectorClient(MutableModel):
             timeout=self.timeout_seconds,
         )
         return self._check(response, ImbueCloudAccountError)
+
+    def admin_revoke_sessions(self, admin_api_key: SecretStr, email: str) -> dict[str, Any]:
+        """Revoke every SuperTokens session of the addressed account (safe to retry)."""
+        response = self._send(
+            "POST",
+            self._url(f"{self._admin_account_path(email)}/revoke-sessions"),
+            exc_cls=ImbueCloudAccountError,
+            headers=self._bearer(admin_api_key),
+            timeout=self.timeout_seconds,
+        )
+        return self._check(response, ImbueCloudAccountError)
+
+    def admin_suspend_account(
+        self, admin_api_key: SecretStr, email: str, reason: str, block_storage: bool
+    ) -> dict[str, Any]:
+        """Suspend the account (idempotent fan-out; re-running converges / escalates)."""
+        response = self._send(
+            "POST",
+            self._url(f"{self._admin_account_path(email)}/suspend"),
+            exc_cls=ImbueCloudAccountError,
+            headers=self._bearer(admin_api_key),
+            json={"reason": reason, "block_storage": block_storage},
+            timeout=KEY_OP_TIMEOUT_SECONDS,
+        )
+        return self._check(response, ImbueCloudAccountError)
+
+    def admin_unsuspend_account(self, admin_api_key: SecretStr, email: str) -> dict[str, Any]:
+        """Lift the account's suspension (idempotent restore fan-out)."""
+        response = self._send(
+            "POST",
+            self._url(f"{self._admin_account_path(email)}/unsuspend"),
+            exc_cls=ImbueCloudAccountError,
+            headers=self._bearer(admin_api_key),
+            timeout=KEY_OP_TIMEOUT_SECONDS,
+        )
+        return self._check(response, ImbueCloudAccountError)
+
+    def admin_stop_workspace(self, admin_api_key: SecretStr, host_db_id: str) -> dict[str, Any]:
+        """Operator force-stop of one workspace (idempotent, like the owner stop)."""
+        response = self._send(
+            "POST",
+            self._url(f"/admin/workspaces/{host_db_id}/stop"),
+            exc_cls=ImbueCloudConnectorError,
+            headers=self._bearer(admin_api_key),
+            timeout=self.timeout_seconds,
+        )
+        return self._check(response, ImbueCloudConnectorError)
 
     def admin_run_r2_sweep(self, admin_api_key: SecretStr, email: str | None) -> dict[str, Any]:
         """Run one R2 storage-quota sweep pass on demand; ``email`` scopes it to one account.
@@ -1317,6 +1405,7 @@ class ImbueCloudConnectorClient(MutableModel):
             headers=self._bearer(admin_api_key),
             params={"paid_only": "true" if paid_only else "false"},
             timeout=self.timeout_seconds,
+            follow_redirects=True,
         )
         body = self._check(response, ImbueCloudPaidListError)
         if not isinstance(body, list):
@@ -1335,6 +1424,7 @@ class ImbueCloudConnectorClient(MutableModel):
             headers=self._bearer(admin_api_key),
             json={"value": value},
             timeout=self.timeout_seconds,
+            follow_redirects=True,
         )
         return self._check(response, ImbueCloudPaidListError)
 

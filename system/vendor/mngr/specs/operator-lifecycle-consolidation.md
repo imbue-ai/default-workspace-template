@@ -65,7 +65,7 @@ Reference: https://github.com/imbue-ai/mngr-internal/issues/496
   - NOT added to `mirror/copy.bara.sky` -- private by default.
 - Moves **from `libs/mngr_imbue_cloud`** into `apps/minds_admin` (imports flipped to the new package; public lib keeps no re-exports):
   - `cli/admin.py`, `cli/server.py`, `cli/paid.py`, `cli/accounts_admin.py`, `cli/workspaces_admin.py`, `cli/sweep_admin.py`, `cli/relays_admin.py`, `cli/repair_keys_admin.py` (reworked from `mngr imbue_cloud admin <x>` groups into env-aware `minds-admin <x>` groups).
-  - `bake/` (pool_bake, bake_source) and the operator-only slices modules: `bare_metal_db.py`, `bare_metal_prep.py`, `ordering.py`, `pricing.py`, `key_repair.py`, `autostart_backfill.py`.
+  - `bake/` (pool_bake, bake_source) and the operator-only slices modules: `bare_metal_db.py`, `bare_metal_prep.py`, `ordering.py`, `pricing.py`, `key_repair.py`, `autostart_backfill.py` (the last has since been deleted outright, after its one-time rollout completed at minds-v0.3.17).
   - The operator-relevant parts of `cli/_common.py` (`resolve_pool_database_url`, `emit_json`, `fail_with_json`) -- move or split, whichever leaves the public user CLI self-contained.
   - Stays public (used by the slice provider backend or the user surface): `providers/**`, `plugin/**` (minus the deleted admin CLI registration), `slices/bare_metal.py` (sizing/naming), `slices/lima_slice.py`, `slices/lima_slice_client.py`, `slices/box_image_cache.py`, `slices/lima_box_image_cache.py`, `connector/**`, `wire*`, user CLI modules, `config.py`, `data_types.py`, `primitives.py`.
   - `cli/root.py`: drop the `admin` group and all admin imports; minor version bump; changelog entry noting the removal.
