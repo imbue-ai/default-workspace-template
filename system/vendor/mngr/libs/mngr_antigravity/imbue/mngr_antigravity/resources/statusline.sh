@@ -47,6 +47,7 @@ fi
 
 marker_file="$MNGR_AGENT_STATE_DIR/active"
 root_file="$MNGR_AGENT_STATE_DIR/root_conversation"
+model_state_file="$MNGR_AGENT_STATE_DIR/model_state.json"
 
 payload=$(cat)
 
@@ -71,6 +72,30 @@ conv_id=$(
 # keeps `root_conversation` pointed at the true root for resume.
 if [ -n "$conv_id" ]; then
     printf '%s' "$conv_id" > "$root_file"
+fi
+
+# Parse the model agy reports, and mirror it to the uniform model_state.json the
+# workspace's model bar reads. agy has no separate effort or fast axis (the tier is baked
+# into the model id, e.g. gemini-3.7-flash-high), so only `model` is written; the reader
+# treats the other two as absent.
+#
+# Tolerant by design: if agy ever renames or nests this field the match below simply finds
+# nothing, no file is written, and the bar falls back to showing no model -- the same as
+# before this existed. It must never break the lifecycle work above, which is the load-bearing
+# part of this script.
+#
+# Written on EVERY invocation rather than only on change: agy calls this on each agent-state
+# change, so a rewrite is cheap, and it means an in-agy `/model` is reflected without needing
+# to diff anything. Written via a temp file + mv so a reader never sees a half-written file.
+agy_model=$(
+    printf '%s' "$payload" \
+        | grep -oE '"model"[[:space:]]*:[[:space:]]*"[^"]*"' \
+        | head -n 1 \
+        | sed -E 's/.*:[[:space:]]*"([^"]*)".*/\1/'
+)
+if [ -n "$agy_model" ]; then
+    printf '{"model": "%s"}' "$agy_model" > "$model_state_file.tmp" 2>/dev/null \
+        && mv -f "$model_state_file.tmp" "$model_state_file" 2>/dev/null
 fi
 
 # Shared common-transcript helpers: mngr_common_transcript_flush forces a
