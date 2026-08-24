@@ -47,9 +47,15 @@ WORKSPACE_ROOT_DIRECTORY = Path(__file__).resolve().parents[5]
 # ``.agents/skills/update-self/scripts/update_self.py``): present exactly while
 # an apply is mid-motion or was interrupted before recovery.
 UPDATE_APPLY_MARKER_REL = "data/.state/update-apply/marker.json"
+# The apply's emergency record: written when a rollback could not put a healthy
+# workspace back, and cleared only when a later apply or recovery confirms one.
+# Unlike the marker it is not transient -- it names a workspace that needs a
+# person -- so it outranks both other variants.
+UPDATE_APPLY_EMERGENCY_REL = "data/.state/update-apply/emergency.json"
 
-# The two staleness variants, also the values of the response header and the
+# The three staleness variants, also the values of the response header and the
 # meta tag the frontend renders its banner from.
+STALENESS_UPDATE_EMERGENCY = "update-emergency"
 STALENESS_UPDATE_INTERRUPTED = "update-interrupted"
 STALENESS_TREE_MOVED = "updated-not-activated"
 
@@ -203,6 +209,12 @@ class UpdateStalenessTracker(FrozenModel):
     def staleness(self) -> str | None:
         """The staleness variant to surface, or ``None`` when consistent.
 
+        The emergency record outranks everything: a rollback that could not
+        restore health is the one state here that will not resolve itself, and
+        it is invisible to the other two checks -- it comes with no marker (the
+        apply clears it on the way out) and a tree the rollback has already put
+        back, so both would read as consistent.
+
         The marker outranks the moved-tree comparison: while it exists the
         honest description is "an update was interrupted" (recovery is coming,
         or the same apply is being resumed), not merely "the tree moved". The
@@ -212,6 +224,8 @@ class UpdateStalenessTracker(FrozenModel):
         ledger commit, a frontend-only apply -- that this server is fully
         current for.
         """
+        if (self.repo_root / UPDATE_APPLY_EMERGENCY_REL).exists():
+            return STALENESS_UPDATE_EMERGENCY
         if (self.repo_root / UPDATE_APPLY_MARKER_REL).exists():
             return STALENESS_UPDATE_INTERRUPTED
         if self.startup_head is None:

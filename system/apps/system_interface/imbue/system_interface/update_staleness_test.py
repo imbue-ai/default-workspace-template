@@ -14,7 +14,9 @@ from imbue.system_interface.server import _inject_update_staleness_meta_tag
 from imbue.system_interface.server import create_application
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.update_staleness import STALENESS_TREE_MOVED
+from imbue.system_interface.update_staleness import STALENESS_UPDATE_EMERGENCY
 from imbue.system_interface.update_staleness import STALENESS_UPDATE_INTERRUPTED
+from imbue.system_interface.update_staleness import UPDATE_APPLY_EMERGENCY_REL
 from imbue.system_interface.update_staleness import UPDATE_APPLY_MARKER_REL
 from imbue.system_interface.update_staleness import UPDATE_STALENESS_HEADER
 from imbue.system_interface.update_staleness import UPDATE_STALENESS_META_TAG
@@ -140,6 +142,12 @@ def _write_marker(repo: Path) -> None:
     marker.write_text('{"dri_agent": "lead", "phase": "merged"}')
 
 
+def _write_emergency(repo: Path) -> None:
+    record = repo / UPDATE_APPLY_EMERGENCY_REL
+    record.parent.mkdir(parents=True, exist_ok=True)
+    record.write_text('{"reason": "rollback could not restore health"}')
+
+
 def test_tracker_reports_nothing_while_the_tree_is_unmoved(git_work_dir: Path) -> None:
     repo = git_work_dir
     tracker = UpdateStalenessTracker.capture(repo_root=repo)
@@ -178,6 +186,32 @@ def test_tracker_reads_a_landed_then_reverted_range_as_consistent(
     _commit_files(repo, "the apply's merge", _RELEVANT_PATH)
     _git(repo, "revert", "--no-edit", "HEAD")
     assert tracker.staleness() is None
+
+
+def test_tracker_reports_an_emergency_a_completed_rollback_leaves_invisible(
+    git_work_dir: Path,
+) -> None:
+    # The state the other two checks cannot see, and the reason the record
+    # exists: the apply clears its marker on the emergency exit, and its
+    # rollback has already put the tree content back -- so a workspace whose
+    # rollback failed to restore health looks, to both of them, consistent.
+    repo = git_work_dir
+    tracker = UpdateStalenessTracker.capture(repo_root=repo)
+    _commit_files(repo, "the failed apply's merge", _RELEVANT_PATH)
+    _git(repo, "revert", "--no-edit", "HEAD")
+    assert tracker.staleness() is None
+    _write_emergency(repo)
+    assert tracker.staleness() == STALENESS_UPDATE_EMERGENCY
+
+
+def test_tracker_reports_an_emergency_over_an_interrupted_apply(git_work_dir: Path) -> None:
+    # An emergency does not resolve itself, so it must not be described as an
+    # apply that is still part-way through and will finish or undo itself.
+    repo = git_work_dir
+    tracker = UpdateStalenessTracker.capture(repo_root=repo)
+    _write_marker(repo)
+    _write_emergency(repo)
+    assert tracker.staleness() == STALENESS_UPDATE_EMERGENCY
 
 
 def test_tracker_reports_an_interrupted_apply_over_a_moved_tree(git_work_dir: Path) -> None:
