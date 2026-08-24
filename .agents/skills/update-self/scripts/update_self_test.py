@@ -2541,6 +2541,46 @@ def test_recover_no_restart_restores_disk_state_only(apply_repo: Path) -> None:
     assert not _marker_exists(apply_repo)
 
 
+def test_recover_no_restart_keeps_the_copies_it_could_not_put_back(
+    apply_repo: Path, capsys
+) -> None:
+    """A copy that would not restore is kept, and the report says so.
+
+    Deleting it would destroy the only remaining way back -- a restore that
+    failed for anything but a missing copy leaves the copy sitting right there.
+    """
+    snapshots_root = (
+        apply_repo / update_self.STATE_DIR_REL / update_self.SNAPSHOTS_DIRNAME
+    )
+    copy = snapshots_root / "bundle"
+    copy.mkdir(parents=True)
+    (copy / "index.html").write_text("the pre-apply bundle")
+    # The restore cannot land: the destination's own parent is a regular file.
+    (apply_repo / "blocked").write_text("not a directory")
+    _write_recover_marker(
+        apply_repo,
+        snapshots=[
+            update_self.SnapshotRecord(
+                name="bundle",
+                source=str(apply_repo / "blocked" / "static"),
+                copy=str(copy),
+            )
+        ],
+    )
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+
+    code = _recover(runner, _FakeHttp(_all_healthy), apply_repo, no_restart=True)
+
+    assert code == 0
+    assert not _marker_exists(apply_repo)
+    assert (copy / "index.html").read_text() == "the pre-apply bundle"
+    err = capsys.readouterr().err
+    assert "could not restore: bundle" in err
+    assert str(snapshots_root) in err
+    # Never the unqualified "the tree and pre-apply state are rolled back".
+    assert "pre-apply state is NOT" in err
+
+
 def test_recover_reaches_the_same_end_state_as_the_in_process_rollback(
     tmp_path: Path,
 ) -> None:

@@ -3041,12 +3041,21 @@ def recover(
                     f"(exit {result.returncode}); the globally pinned tools may be left "
                     "ahead of the tree.\n"
                 )
+        clear_marker(repo_root)
         if failed:
+            # The copies stay, for the same reason the emergency path keeps
+            # them: a restore that failed for anything other than a missing
+            # copy (a full disk, a permission fault) leaves the copy sitting
+            # right there, and putting it back by hand is the way out. Deleting
+            # them here would destroy the only remaining route.
             sys.stderr.write(
                 f"recover: could not restore: {', '.join(sorted(failed))}. The tree is "
-                "rolled back; the DRI agent must rebuild what is missing.\n"
+                "rolled back but the pre-apply state is NOT -- the copies are kept at "
+                f"{_snapshots_root(repo_root)}, so copying one back by hand is the "
+                "quickest repair; whatever has no copy left has to be rebuilt. "
+                "Services will boot against that mismatch.\n"
             )
-        clear_marker(repo_root)
+            return 0
         discard_snapshots(repo_root)
         sys.stderr.write(
             "recovered: the tree and pre-apply state are rolled back; services will "
