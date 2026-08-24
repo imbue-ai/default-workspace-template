@@ -324,26 +324,35 @@ def test_persist_initial_chat_agent_id_skips_when_host_dir_unset(
     assert not (tmp_path / INITIAL_CHAT_AGENT_ID_FILENAME).exists()
 
 
-# --- _maybe_create_initial_chat ---
+# --- the shared subprocess double (chat creation, the recovery path, the DRI wake)
 
 
 class _StubSubprocess:
-    """Capture-and-replay double for subprocess.run used by the chat-create call."""
+    """Capture-and-replay double for ``subprocess.run``.
+
+    ``calls`` and ``kwargs`` record each invocation. ``on_command`` (when set)
+    runs for every argv, which is how the recovery tests model the script
+    clearing the apply marker on a successful rollback. ``raise_on`` maps a
+    token in the argv to the exception that call raises, for the "the
+    executable is missing / hangs" paths.
+    """
 
     def __init__(self, returncode: int = 0, stdout: str = "") -> None:
         self.returncode = returncode
         self.stdout = stdout
         self.calls: list[list[str]] = []
+        self.kwargs: list[dict[str, object]] = []
+        self.on_command: Callable[[list[str]], None] | None = None
+        self.raise_on: dict[str, BaseException] = {}
 
-    def run(
-        self,
-        cmd: list[str],
-        capture_output: bool = False,
-        text: bool = False,
-        check: bool = False,
-    ) -> subprocess.CompletedProcess[str]:
-        del capture_output, text, check  # keyword-only signature mirrors stdlib.
+    def run(self, cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         self.calls.append(cmd)
+        self.kwargs.append(dict(kwargs))
+        if self.on_command is not None:
+            self.on_command(cmd)
+        for token, error in self.raise_on.items():
+            if token in cmd:
+                raise error
         return subprocess.CompletedProcess(
             args=cmd, returncode=self.returncode, stdout=self.stdout, stderr=""
         )
@@ -369,6 +378,9 @@ def _bootstrap_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
         json.dumps({"labels": {"workspace": "my-workspace", "is_primary": "true"}})
     )
     return tmp_path
+
+
+# --- _maybe_create_initial_chat ---
 
 
 def test_maybe_create_initial_chat_creates_and_writes_signal(
@@ -729,33 +741,12 @@ def test_parse_timezone_response_rejects_a_non_json_body() -> None:
 # --- _recover_interrupted_update ---
 
 
-class _RecordingSubprocess:
-    """Capture-and-replay double for subprocess.run used by the recovery path.
-
-    ``on_recover`` (when set) runs when the recover invocation is seen -- used
-    to model the script clearing the marker on a successful rollback.
-    ``raise_on`` maps a token in the argv to the exception that call raises,
-    for the "the executable is missing / hangs" paths.
-    """
-
-    def __init__(self, returncode: int = 0) -> None:
-        self.returncode = returncode
-        self.calls: list[list[str]] = []
-        self.kwargs: list[dict[str, object]] = []
-        self.on_recover: Callable[[], None] | None = None
-        self.raise_on: dict[str, BaseException] = {}
-
-    def run(self, cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-        self.calls.append(cmd)
-        self.kwargs.append(dict(kwargs))
-        if "recover" in cmd and self.on_recover is not None:
-            self.on_recover()
-        for token, error in self.raise_on.items():
-            if token in cmd:
-                raise error
-        return subprocess.CompletedProcess(
-            args=cmd, returncode=self.returncode, stdout="", stderr=""
-        )
+def _clear_marker_on_recover(cmd: list[str]) -> None:
+    """Model the recovery script clearing the marker on a successful rollback --
+    the signal the bootstrap reads as "a rollback really happened", as opposed to
+    the guard declining."""
+    if "recover" in cmd:
+        UPDATE_APPLY_MARKER.unlink()
 
 
 def _write_apply_marker(dri_agent: str = "the-lead") -> None:
@@ -788,7 +779,7 @@ def test_recover_skips_entirely_without_a_marker(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    stub = _RecordingSubprocess()
+    stub = _StubSubprocess()
     monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
 
     assert _recover_interrupted_update() == ""
@@ -801,10 +792,10 @@ def test_recover_rolls_back_and_names_the_dri_agent_to_wake(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     _write_apply_marker("agent-omega")
-    stub = _RecordingSubprocess()
+    stub = _StubSubprocess()
     # A successful recovery clears the marker; that clearing is what tells the
     # bootstrap a rollback really happened (vs the guard's silent no-op).
-    stub.on_recover = lambda: UPDATE_APPLY_MARKER.unlink()
+    stub.on_command = _clear_marker_on_recover
     monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
 
     dri_agent = _recover_interrupted_update()
@@ -825,7 +816,7 @@ def test_recover_rolls_back_and_names_the_dri_agent_to_wake(
 def test_wake_starts_the_agent_and_hands_it_the_finding(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    stub = _RecordingSubprocess()
+    stub = _StubSubprocess()
     monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
 
     _wake_update_dri_agent("agent-omega")
@@ -849,7 +840,7 @@ def test_wake_survives_an_unrunnable_mngr_so_boot_continues(
     # runs. main() does not wrap this call, so an escaping FileNotFoundError
     # would kill bootstrap before supervisord starts and boot the container
     # with no services at all.
-    stub = _RecordingSubprocess()
+    stub = _StubSubprocess()
     stub.raise_on = {"start": FileNotFoundError("mngr")}
     monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
 
@@ -861,7 +852,7 @@ def test_wake_survives_an_unrunnable_mngr_so_boot_continues(
 def test_wake_skips_the_message_when_the_start_failed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    stub = _RecordingSubprocess(returncode=1)
+    stub = _StubSubprocess(returncode=1)
     monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
 
     _wake_update_dri_agent("agent-omega")
@@ -877,7 +868,7 @@ def test_recover_names_nobody_when_the_guard_noops(
     # messaged about a rollback.
     monkeypatch.chdir(tmp_path)
     _write_apply_marker("agent-omega")
-    stub = _RecordingSubprocess()
+    stub = _StubSubprocess()
     monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
 
     assert _recover_interrupted_update() == ""
@@ -890,7 +881,7 @@ def test_recover_names_nobody_when_the_rollback_itself_failed(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     _write_apply_marker("agent-omega")
-    stub = _RecordingSubprocess()
+    stub = _StubSubprocess()
     stub.raise_on = {"recover": OSError("no python3")}
     monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
 
@@ -903,7 +894,7 @@ def test_recover_failure_does_not_wake_or_raise(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     _write_apply_marker("agent-omega")
-    stub = _RecordingSubprocess(returncode=1)
+    stub = _StubSubprocess(returncode=1)
     monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
 
     # Must not raise: boot continues regardless, and nobody is woken.
@@ -919,8 +910,8 @@ def test_recover_names_nobody_when_the_marker_recorded_no_agent(
     # happens; there is simply nobody to hand the finding to.
     monkeypatch.chdir(tmp_path)
     _write_apply_marker("")
-    stub = _RecordingSubprocess()
-    stub.on_recover = lambda: UPDATE_APPLY_MARKER.unlink()
+    stub = _StubSubprocess()
+    stub.on_command = _clear_marker_on_recover
     monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
 
     assert _recover_interrupted_update() == ""
