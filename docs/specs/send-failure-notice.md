@@ -86,6 +86,8 @@ If the structured follow-up lands, the harness still contributes nothing to this
 
 # Recovering from a failed send, not just being told about it
 
+**Status: implemented.** What follows is the design as built.
+
 The notice above reports. This section gives it actions, so the user can resolve the failure from the chat instead of being handed a sentence and a dead end.
 
 ## Generalizing

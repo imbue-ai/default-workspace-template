@@ -40,6 +40,7 @@ const mocks = vi.hoisted(() => {
   return {
     sendMessage: vi.fn(async () => {}),
     drainToComposer: vi.fn(async () => ({ block: "" })),
+    interruptAgent: vi.fn(async () => {}),
     openAgentAuth: vi.fn(),
     listeners,
     agent,
@@ -49,6 +50,7 @@ const mocks = vi.hoisted(() => {
 vi.mock("../models/Response", () => ({
   sendMessage: mocks.sendMessage,
   drainToComposer: mocks.drainToComposer,
+  interruptAgent: mocks.interruptAgent,
 }));
 vi.mock("../models/ComposerAttachments", () => ({
   clearComposerAttachments: vi.fn(),
@@ -139,6 +141,10 @@ function findByClass(node: unknown, className: string): AnyVnode | undefined {
     const attrs = vnode.attrs ?? {};
     return [attrs.class, attrs.className].some((v) => typeof v === "string" && v.includes(className));
   });
+}
+
+function findByTooltip(node: unknown, tooltip: string): AnyVnode | undefined {
+  return flatten(node).find((vnode) => (vnode.attrs ?? {})["data-tooltip"] === tooltip);
 }
 
 function findByTag(node: unknown, tag: string): AnyVnode | undefined {
@@ -361,7 +367,8 @@ describe("MessageInput send failure notice", () => {
     const text = renderedText(after);
     expect(text).toContain("Couldn't send your message");
     expect(text).toContain("shell mode with an unsubmitted command");
-    expect(text).toContain("OK");
+    // A failed send is recoverable, so it offers actions rather than a bare acknowledgement.
+    expect(text).toContain("Cancel");
   });
 
   it("dismisses on OK, leaving the restored draft alone", async () => {
@@ -386,5 +393,65 @@ describe("MessageInput send failure notice", () => {
   it("shows nothing when the send succeeds", async () => {
     const after = await typeAndSend(MessageInput(), "agent-1", "hello");
     expect(renderedText(after)).not.toContain("Couldn't send your message");
+  });
+
+  it("offers Cancel, Retry and Force for a failed send", async () => {
+    mocks.sendMessage.mockRejectedValueOnce("nope");
+    const after = await typeAndSend(MessageInput(), "agent-1", "hello");
+    const text = renderedText(after);
+    expect(text).toContain("Cancel");
+    expect(text).toContain("Retry");
+    expect(text).toContain("Force");
+  });
+
+  it("does not restore the message to the composer until Cancel is taken", async () => {
+    // Restoring at failure time would leave a copy in the box while the notice offers to
+    // resend the same text, so Retry would send it and strand a duplicate.
+    mocks.sendMessage.mockRejectedValueOnce("nope");
+    const component = MessageInput();
+    const after = await typeAndSend(component, "agent-1", "hello there");
+    expect(localStorage.getItem("message-text:agent-1")).toBeNull();
+
+    const cancel = findByClass(after, "custom-url-dialog-cancel");
+    (cancel!.attrs!.onclick as () => void)();
+    expect(localStorage.getItem("message-text:agent-1")).toContain("hello there");
+  });
+
+  it("retries the same message through the ordinary send", async () => {
+    mocks.sendMessage.mockRejectedValueOnce("nope");
+    const component = MessageInput();
+    const after = await typeAndSend(component, "agent-1", "hello");
+    mocks.sendMessage.mockClear();
+
+    const retry = findByTooltip(after, "Sends the message again");
+    await (retry!.attrs!.onclick as () => Promise<void>)();
+    expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "hello");
+  });
+
+  it("force restarts the agent before sending, in that order", async () => {
+    mocks.sendMessage.mockRejectedValueOnce("nope");
+    const component = MessageInput();
+    const after = await typeAndSend(component, "agent-1", "hello");
+    mocks.sendMessage.mockClear();
+    mocks.interruptAgent.mockClear();
+
+    const force = findByTooltip(after, "Restarts the agent and sends the message");
+    await (force!.attrs!.onclick as () => Promise<void>)();
+    expect(mocks.interruptAgent).toHaveBeenCalledWith("agent-1");
+    expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "hello");
+  });
+
+  it("does not send when the restart itself fails", async () => {
+    mocks.sendMessage.mockRejectedValueOnce("nope");
+    const component = MessageInput();
+    const after = await typeAndSend(component, "agent-1", "hello");
+    mocks.sendMessage.mockClear();
+    mocks.interruptAgent.mockRejectedValueOnce("restart refused");
+
+    const force = findByTooltip(after, "Restarts the agent and sends the message");
+    await (force!.attrs!.onclick as () => Promise<void>)();
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+    const shown = component.view!({ attrs: { agentId: "agent-1" } } as never);
+    expect(renderedText(shown)).toContain("restart refused");
   });
 });
