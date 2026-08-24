@@ -770,8 +770,11 @@ def _wake_update_dri_agent(agent_name: str) -> None:
     The recovered workspace is back on its pre-update revision, but only an
     agent can verify state and talk to the user about retrying -- so start the
     DRI agent the marker named and hand it the finding. Failures are logged and
-    swallowed: the rollback already restored the workspace, and the system
-    interface's interrupted-update banner is the fallback channel to the user.
+    swallowed: the rollback already restored the workspace, so the cost of a
+    failed wake is that nobody tells the user about it. There is no other
+    channel on this path -- the system interface's interrupted-update banner
+    keys off the marker, which a successful rollback has already cleared -- so
+    the warning below is what a human has to find in the boot log.
     """
     message = (
         "A workspace update you were applying was interrupted (the container "
