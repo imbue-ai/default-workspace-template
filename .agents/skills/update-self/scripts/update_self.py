@@ -596,6 +596,14 @@ def classify_path(path: str) -> PathClass:
     no live process holds documentation in memory (mngr's own help topics are
     read from disk per request through the editable install), and bouncing the
     services agent blips the user's UI.
+
+    A supervisord-programmed ``system/services/**`` change is the deliberate
+    exception: it leaves that program running pre-merge code, but the only
+    restart this flag can ask for is the services agent's, which bounces every
+    program at once. Activating one service precisely means restarting the
+    individual programs a change touches, which cannot be inferred from paths
+    alone -- so it stays with the worker's impact analysis and the lead (see
+    the update-self skill's 5c), and this returns ``False``.
     """
     is_manifest = Path(path).name in _MANIFEST_BASENAMES
     project = _project_for_path(path)
