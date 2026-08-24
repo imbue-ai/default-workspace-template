@@ -94,10 +94,13 @@ command. Keep the two ends of that contract in step.
 
 The SDK is documented in the package's `dist/core/extensions/types.d.ts`; we do NOT modify it.
 
-**Minds-only, by construction.** The pi extension is loaded via the `-e` flag mngr adds *only*
-to a managed agent's launch command (`plugin.py::assemble_command`). A user running plain `pi`
-never loads it, and a nested `pi` the agent spawns via the bash tool (no `-e`) never runs these
-handlers. Normal pi behavior and the pi SDK are untouched.
+**Which pi runs which extension.** mngr's lifecycle extension is loaded via the `-e` flag mngr
+adds *only* to a managed agent's launch command (`plugin.py::assemble_command`), so a user
+running plain `pi`, or a nested `pi` the agent spawns via the bash tool, never runs its
+handlers. This repo's two extensions are the opposite by design: pi auto-discovers
+`.pi/extensions/` from the project (it is one of the cwd trust inputs pi asks about), so any pi
+that runs *here* — managed or not — is held to the guards and the step discipline. Normal pi
+behavior and the pi SDK are untouched either way.
 
 ## Output contracts (the reference the mapping below relies on)
 
