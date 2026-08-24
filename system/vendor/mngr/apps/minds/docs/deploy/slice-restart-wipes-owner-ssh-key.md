@@ -18,7 +18,7 @@ them, are now closed:
 - **Fixed.** `build_root_authorized_keys_block` appends if absent instead of
   truncating, so a VM carved from here on keeps every key it was given. A VM
   carved *before* that change keeps the truncating script in its stored
-  `lima.yaml` until the `mngr imbue_cloud admin repair-keys` sweep patches it
+  `lima.yaml` until the `minds-admin repair-keys` sweep patches it
   (see below).
 - **Fixed.** The outer `authorized_keys` now has a standing writer, but a
   client-side one rather than the server-side reconcile cron this investigation
@@ -29,13 +29,16 @@ them, are now closed:
   `authorized_keys` on every boot, after cloud-init's replay -- so a restart
   can no longer orphan an adopted host's owner. For hosts already wiped (whose
   owner cannot SSH in to adopt), the operator-run
-  `mngr imbue_cloud admin repair-keys` sweep patches each slice's stored
+  `minds-admin repair-keys` sweep patches each slice's stored
   `lima.yaml` provision block and restores the VM root's `authorized_keys`
   from the container's own copy.
 - **Fixed.** `LatchkeyDiscoveryHandler` warns on `UNAUTHENTICATED` instead of
   skipping the host in silence. It still skips.
-- **Open.** `recovery_probe` still lets the inner system-interface probe
-  auto-dismiss a terminal host state.
+- **Open.** A terminal host state can still be auto-dismissed by a
+  container-level probe. `recovery_probe` itself is gone -- the exec probe it
+  ran had no consumer and was deleted -- but the dismissal came from the
+  background health tracker's own probe flipping the workspace back to HEALTHY,
+  and that path is unchanged.
 - **Open.** The RSA -> Ed25519 key migration still runs against `RUNNING` hosts
   only, so it still skips the machines that most need it.
 
@@ -181,8 +184,8 @@ Each of these is a direct consequence, and each is independently worth fixing.
 3. **Recovery is a no-op.** Both the stop and start steps of the host restart go
    over outer SSH and fail, so every recovery attempt fails by construction.
 
-4. **The recovery page flaps instead of sticking.** `recovery_probe`
-   (`apps/minds/imbue/minds/desktop_client/recovery_probe.py:772`) correctly maps
+4. **The recovery page flaps instead of sticking.** The exec probe then in place
+   (`recovery_probe`, since deleted) correctly mapped
    `UNAUTHENTICATED` to `backend_unreachable` with a terminal reason, but the inner
    system-interface probe then succeeds and the page auto-dismisses. Observed one
    second apart: probe reason logged at `21:25:01.709`, `restart_failed -> HEALTHY
@@ -219,7 +222,7 @@ machines that most need it are exactly the ones it skips.
 
 ## Repairing an affected machine (no recreate needed)
 
-The supported repair is now `mngr imbue_cloud admin repair-keys` (fleet-wide, or
+The supported repair is now `minds-admin repair-keys` (fleet-wide, or
 scoped to one box/VM for break-glass): it patches the slice's stored `lima.yaml`
 provision block so future restarts stop truncating, and restores the VM root's
 `authorized_keys` from the container's own copy. The manual procedure below is
@@ -234,7 +237,7 @@ from the user.
    `vault kv get -format=json secrets/minds/<tier>/pool-ssh/POOL_SSH_PRIVATE_KEY`
 2. Get the owner's fingerprint from their machine:
    `ssh-keygen -lf ~/.minds/mngr/profiles/<profile>/providers/imbue_cloud/<provider>/hosts/<host_id>/ssh_key.pub`
-3. Get the outer port and box address from `minds pool list` (`ssh_port`, not
+3. Get the outer port and box address from `minds-admin pool list` (`ssh_port`, not
    `container_ssh_port`).
 4. SSH the VM as root with the pool key, find the line in
    `docker exec <cid> cat /root/.ssh/authorized_keys` whose fingerprint matches,
@@ -263,8 +266,9 @@ longer drop the key.
   container path already re-asserts it on rebuild.
 - Treat `UNAUTHENTICATED` distinctly from stopped/paused/crashed in
   `LatchkeyDiscoveryHandler`, and warn rather than returning silently.
-- Do not let a container-level probe auto-dismiss a terminal host state in
-  `recovery_probe`.
+- Do not let a container-level probe auto-dismiss a terminal host state. The exec
+  probe this was written against is gone; the dismissal now comes from the
+  background health tracker's own probe.
 - Reconsider the `RUNNING`-only gate on the RSA -> Ed25519 migration.
 
 ## Resolution of this instance

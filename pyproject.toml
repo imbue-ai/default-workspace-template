@@ -68,9 +68,11 @@ override-dependencies = ["openai>=2.20.0"]
 # libraries, background services, and apps (built-in and user-built alike) --
 # so a newly scaffolded or adopted app joins the workspace without editing
 # this list. The terminal app is excluded: it is a shell-script wrapper around
-# the vendored mngr_ttyd plugin, not a Python package.
+# the vendored mngr_ttyd plugin, not a Python package. The files app likewise:
+# it is the pinned dufs binary (see system/scripts/install_dufs.sh) plus its
+# registered icon, with no Python of its own.
 members = ["system/libs/*", "system/services/*", "system/apps/*"]
-exclude = ["system/apps/terminal"]
+exclude = ["system/apps/terminal", "system/apps/files"]
 
 [tool.uv.sources]
 bootstrap = { workspace = true }

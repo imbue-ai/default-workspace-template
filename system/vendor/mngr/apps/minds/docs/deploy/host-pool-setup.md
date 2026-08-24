@@ -2,6 +2,11 @@
 
 How to set up the infrastructure for the imbue-cloud-leased pool host flow.
 
+**Note:** the CI tier's standing boxes (used by the remote-workspace release
+tests) follow this same flow with a standing "infra" DB as the canonical box
+registry; their runbook lives in
+[`specs/remote-workspaces-in-ci.md`](../../../../specs/remote-workspaces-in-ci.md).
+
 Pool hosts are **bare-metal slices**: lima/QEMU VMs carved on bare-metal boxes we
 operate. (The boxes are currently rented from OVH, but that is an internal
 implementation detail of the slice backend; other suppliers may be added later.)
@@ -10,7 +15,7 @@ implementation detail of the slice backend; other suppliers may be added later.)
 
 - Neon PostgreSQL database (two connection strings: pooled for runtime, direct for migrations)
 - One or more **bare-metal boxes** registered + prepped via the
-  `mngr imbue_cloud admin server` commands (see
+  `minds-admin server` commands (see
   [Step 5](#step-5-bake-one-or-more-pool-hosts)). Slice baking targets an
   explicitly-chosen `ready` box.
 - Bare-metal box supplier credentials (currently OVH API AK / AS / CK). These
@@ -19,7 +24,7 @@ implementation detail of the slice backend; other suppliers may be added later.)
 
 ## Step 1: Create the database schema
 
-**For dev envs:** skip this step. `minds env deploy` (against a dev
+**For dev envs:** skip this step. `minds-admin env deploy` (against a dev
 env) provisions a brand-new Neon project per env and applies the
 schema automatically by replaying
 `apps/remote_service_connector/migrations/*.sql` against the new
@@ -55,9 +60,9 @@ ssh-keygen -t ed25519 -f .minds/production/pool_management_key/id_ed25519 -N ""
 ```
 
 The private key goes into Vault at `secrets/minds/production/pool-ssh`
-(step 3), from which `minds env deploy` pushes it to the
+(step 3), from which `minds-admin env deploy` pushes it to the
 `pool-ssh-production` Modal secret (for the connector's lease-time SSH) and
-`minds pool create` uses it to authorize the pool key on each slice at carve
+`minds-admin pool create` uses it to authorize the pool key on each slice at carve
 time. You no longer pass the public key to the bake by hand.
 
 ## Step 3: Populate the tier's Vault entries
@@ -93,10 +98,12 @@ file itself never leaves the operator's laptop.)
 ### secrets/minds/<tier>/ovh
 
 The shared per-tier bare-metal box supplier credentials (currently OVH
-AK / AS / CK). Sourced by the operator when running `mngr imbue_cloud
-admin server` (to order + manage the bare-metal boxes that slices run
-on). NOT pushed to Modal and NOT read by `minds env deploy` / `destroy`
--- no deployed service makes supplier API calls at runtime.
+AK / AS / CK). The `minds-admin server` commands (order + manage the
+bare-metal boxes that slices run on) resolve them from this entry
+automatically when the tier is activated; exporting the `OVH_*` env vars
+remains the non-activated one-off override. NOT pushed to Modal and NOT
+read by `minds-admin env deploy` / `destroy` -- no deployed service makes
+supplier API calls at runtime.
 
 Generate the trio once per tier at
 <https://api.us.ovhcloud.com/createApp> (endpoint `ovh-us`; pick
@@ -118,11 +125,11 @@ per-developer dev envs.
 ## Step 4: Push the Vault changes to Modal and redeploy
 
 ```bash
-eval "$(uv run minds env activate --deploy production)"
-uv run minds env deploy --yes-i-mean-production
+eval "$(uv run minds-admin env activate --deploy production)"
+uv run minds-admin env deploy --yes-i-mean-production
 ```
 
-`minds env deploy` pushes every tier secret from Vault into Modal
+`minds-admin env deploy` pushes every tier secret from Vault into Modal
 Secrets (`<service>-production` for every service named in
 `apps/minds/imbue/minds/config/envs/production/deploy.toml`) and then
 ``modal deploy``s both the connector and the LiteLLM proxy against
@@ -138,27 +145,32 @@ Pool hosts are baked as bare-metal slices. A slice bake carves a lima VM on a
 --template pool_host` to build + bake the agent state inside it, then writes a
 `pool_hosts` row.
 
-First register + prep the bare-metal box(es) the slices will be carved on (the
-box must be `ready` and have a free slot):
+First order + set up the bare-metal box(es) the slices will be carved on (the
+box must be `ready` and have a free slot). All of these are env-aware: with the
+tier activated they resolve the OVH credentials, pool DSN, and pool SSH key
+from Vault / the env's local state, so nothing is hand-exported:
 
 ```bash
-# Order / register / set up a bare-metal box; see `--help` on each subcommand.
-# (These need OVH supplier creds and are not minds-wrapped.)
-uv run mngr imbue_cloud admin server order   ...   # order a box from the supplier
-uv run mngr imbue_cloud admin server register ...  # record it in bare_metal_servers
-uv run mngr imbue_cloud admin server setup --server-id <id>   # reinstall (injects our host key) + prep -> `ready`
+just order-server --dry-run --plan-code ... --region ...  # price/spec preview, no charge
+just order-server --plan-code ... --region ...            # order a box from the supplier
+just await-delivery <bare-metal-server-id>                # wait for the serviceName + IP
+just setup-server <bare-metal-server-id>                  # reinstall (injects our host key) + composed prep -> `ready`
+uv run minds-admin server register ...                    # (alternative) record an already-provisioned box
 
-# Inspect / (re-)prep with the env-aware wrappers (tier activated; DSN + pool SSH
-# key resolved automatically, no manual exports):
+# Inspect / (re-)prep:
 just list-servers                                  # find the ready box's id
 just prep-server <bare-metal-server-id>            # re-run just the prep step
 ```
 
-`just prep-server <id>` (wrapping `mngr imbue_cloud admin server prep`) re-runs
-just the prep step (qemu/lima/tooling + image staging + the per-box DEFAULT_WORKSPACE_TEMPLATE image
-cache dir). It SSHes the box with strict host-key pinning, so the box's sshd
+`just prep-server <id>` (wrapping `minds-admin server prep`) re-runs just the
+prep step: qemu/lima/tooling + image staging + the per-box DEFAULT_WORKSPACE_TEMPLATE image
+cache dir, plus the observability collector when the tier has a boxes ingest
+credential in Vault (installed and verified active, fail-closed; no credential
+= clean skip). `just setup-server <id>` runs the same composed prep after its
+destructive OS reinstall, so a `ready` box always matches the prep's desired
+state. Both SSH the box with strict host-key pinning, so the box's sshd
 host key must already be recorded on its `bare_metal_servers` row -- which
-`server setup` does at OS reinstall, or `admin pool backfill-host-keys` captures
+`server setup` does at OS reinstall, or `minds-admin pool backfill-host-keys` captures
 once for a box installed out of band. `prep` fails closed (no trust-on-first-use)
 if no host key is recorded.
 
@@ -169,13 +181,13 @@ that production (`--from-tag`) bakes require -- re-run `just prep-server <id>`
 Then bake slices onto a chosen box, after activating the tier:
 
 ```bash
-eval "$(uv run minds env activate production)"   # or `staging`
+eval "$(uv run minds-admin env activate production)"   # or `staging`
 just bake-slice-prod US-WEST-OR v0.3.0 1 --server-id <bare-metal-server-id>
 ```
 
-The `just bake-slice-{dev,prod}` recipes wrap `minds pool create`
-(`apps/minds/imbue/minds/cli/pool.py`), the env-aware layer that, from the
-activated tier:
+The `just bake-slice-{dev,prod}` recipes wrap `minds-admin pool create`
+(`apps/minds_admin/imbue/minds_admin/cli/pool.py`), the env-aware command
+that, from the activated tier:
 
 - reads the pool SSH private key from the tier's
   `secrets/minds/<tier>/pool-ssh/POOL_SSH_PRIVATE_KEY` Vault leaf -- the same
@@ -202,9 +214,10 @@ set for a more constrained pool generation; they're only required on the row whe
 the lease request also includes them. For slices, the per-slice size
 (`memory_gb` / `cpus`) is computed from the box and stamped automatically.
 
-Under the hood `minds pool create` shells out to `mngr imbue_cloud admin pool
-create` (in `libs/mngr_imbue_cloud`), the provider-generic host-creation step.
-Call it directly only for non-minds / one-off baking outside an activated env.
+`minds-admin pool create` runs the host-creation step in-process (the
+bake machinery in `apps/minds_admin/imbue/minds_admin/bake/`). For one-off
+baking outside an activated env, pass the `--database-url` /
+`POOL_SSH_PRIVATE_KEY` overrides explicitly.
 
 ### Fast path vs. slow path
 
@@ -295,7 +308,7 @@ host's `attributes.repo_branch_or_tag` must match. Bake against your dev env
 live mngr tree into the DEFAULT_WORKSPACE_TEMPLATE worktree's `system/vendor/mngr/` for the bake):
 
 ```bash
-eval "$(uv run minds env activate dev-<your-user>)"
+eval "$(uv run minds-admin env activate dev-<your-user>)"
 just bake-slice-dev \
     US-WEST-OR \
     "$PWD/.external_worktrees/default-workspace-template" \

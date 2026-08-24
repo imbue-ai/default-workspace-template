@@ -1,0 +1,1 @@
+The eval box's docker entrypoint now activates the minds env via `minds-admin env activate` (the `minds env` group moved to the private `minds-admin` operator CLI and was deleted from `minds`). No behavior change beyond the command spelling.

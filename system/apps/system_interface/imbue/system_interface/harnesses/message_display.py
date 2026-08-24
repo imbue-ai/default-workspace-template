@@ -52,8 +52,27 @@ _BROWSER_FLEET_RE = re.compile(rf"^\s*<{BROWSER_FLEET_TAG}>([\s\S]*)</{BROWSER_F
 # commands; the harness records the command plus a <local-command-stdout> confirmation,
 # and never a model reply -- neither is a conversational turn.
 _COMPOSER_COMMAND_RE = re.compile(r"^/(model|fast|effort)\b")
-_LOCAL_COMMAND_STDOUT_OPEN = "<local-command-stdout>"
-_COMPOSER_STDOUT_RE = re.compile(r"Set model to|Set effort level to|Fast mode")
+
+# Claude Code wraps the output of ANY local slash command in these. Hiding is keyed on
+# the wrapper alone, not on the text inside it: the wrapper is by construction machine
+# output rather than a human turn, so every command that produces one should be silent.
+# This used to additionally require the text to be one of the model bar's three
+# confirmations ("Set model to" / "Set effort level to" / "Fast mode"), which left every
+# OTHER allowed command -- /clear, /compact, /export, /rewind, /plugin, /version, /tui --
+# rendering its raw output with the XML wrapper visible in a user bubble.
+_LOCAL_COMMAND_OUTPUT_OPENS = ("<local-command-stdout>", "<local-command-stderr>")
+
+# Claude Code's bash mode (a message typed as ``!ls``) records the command and its output
+# as ordinary user messages wrapped in these tags -- NOT flagged isMeta, so nothing else
+# hides them and they would otherwise render as a bare user bubble full of raw XML. They
+# are shown rather than hidden (the user asked for this output), just not as prose: a
+# collapsed chip renders its body in a <pre><code>, which is what makes it read as
+# terminal output instead of conversation.
+_BASH_INPUT_RE = re.compile(r"<bash-input>([\s\S]*?)</bash-input>")
+_BASH_OUTPUT_RE = re.compile(r"<bash-(?:stdout|stderr)>([\s\S]*?)</bash-(?:stdout|stderr)>")
+_BASH_ANY_OPEN = ("<bash-input>", "<bash-stdout>", "<bash-stderr>")
+_BASH_INPUT_LABEL = "Bash"
+_BASH_OUTPUT_LABEL = "Output"
 
 # Chip label for the post-auto-compaction summary.
 _COMPACTION_SUMMARY_LABEL = "Summary of earlier conversation"
@@ -158,14 +177,36 @@ def _match_composer_command(content: str) -> MessageDisplay | None:
     return MessageDisplay(display=DisplayKind.HIDDEN)
 
 
-def _match_composer_command_output(content: str) -> MessageDisplay | None:
-    """The ``<local-command-stdout>`` confirmation for a model-bar command."""
+def _match_local_command_output(content: str) -> MessageDisplay | None:
+    """Any local slash command's captured output -- machine text, never a turn."""
     trimmed = content.lstrip()
-    if not trimmed.startswith(_LOCAL_COMMAND_STDOUT_OPEN):
-        return None
-    if _COMPOSER_STDOUT_RE.search(content) is None:
+    if not trimmed.startswith(_LOCAL_COMMAND_OUTPUT_OPENS):
         return None
     return MessageDisplay(display=DisplayKind.HIDDEN)
+
+
+def _match_bash_block(content: str) -> MessageDisplay | None:
+    """A bash-mode command or its output, shown as a chip rather than as prose.
+
+    Claude Code emits the command (``<bash-input>``) and its result
+    (``<bash-stdout>`` plus a ``<bash-stderr>`` that is usually empty) as separate
+    user messages. Both become a collapsed chip, whose body renders in a
+    ``<pre><code>`` -- the point is that terminal output stops looking like the user
+    said it, not that stdout and stderr are styled apart, so the two streams are
+    joined in the order they appear and share one chip.
+    """
+    trimmed = content.lstrip()
+    if not trimmed.startswith(_BASH_ANY_OPEN):
+        return None
+    inputs = _BASH_INPUT_RE.findall(content)
+    if inputs:
+        body = "\n".join(part.strip() for part in inputs if part.strip())
+        return MessageDisplay(display=DisplayKind.CHIP, display_label=_BASH_INPUT_LABEL, display_body=body)
+    streams = [part.strip() for part in _BASH_OUTPUT_RE.findall(content) if part.strip()]
+    # An empty result still gets a chip: the alternative is a bare bubble of raw XML.
+    return MessageDisplay(
+        display=DisplayKind.CHIP, display_label=_BASH_OUTPUT_LABEL, display_body="\n".join(streams)
+    )
 
 
 def _match_permission_resolution(content: str) -> MessageDisplay | None:
@@ -189,7 +230,8 @@ _DETECTORS = (
     _match_task_notification,
     _match_browser_fleet,
     _match_composer_command,
-    _match_composer_command_output,
+    _match_local_command_output,
+    _match_bash_block,
     _match_permission_resolution,
 )
 
@@ -244,14 +286,20 @@ def is_non_turn_tail(content: str, *, is_meta: bool = False) -> bool:
     """True for a user message that is NOT a genuine turn awaiting a reply.
 
     The activity path's signal: a transcript ending on one of these must not pin the
-    indicator on "Thinking...", since no model reply is coming for it. Two signals, exactly
-    the pre-existing set: the harness's own framework flag (``is_meta``), and model-bar
-    traffic (a /model, /effort, or /fast command or its confirmation -- the harness handles
-    those locally and never replies). Deliberately NOT derived from :class:`DisplayKind`:
-    display is how a message renders, this is whether a reply follows, and the two disagree
-    (a hidden ``/welcome`` gets a reply; an is_meta stop-hook chip does not).
+    indicator on "Thinking...", since no model reply is coming for it. Two signals: the
+    harness's own framework flag (``is_meta``), and a locally-handled slash command -- the
+    command itself, or the output the harness captured for it. The output half is any
+    ``<local-command-stdout>`` / ``<local-command-stderr>``, not just the model bar's three
+    confirmations; a command the harness ran itself never gets a model reply whichever one
+    it was. Deliberately NOT derived from :class:`DisplayKind`: display is how a message
+    renders, this is whether a reply follows, and the two disagree (a hidden ``/welcome``
+    gets a reply; an is_meta stop-hook chip does not).
+
+    Bash-mode blocks are deliberately NOT counted here. They plausibly belong -- claude
+    runs ``!ls`` locally too -- but that was not verified against a live agent, and a wrong
+    True strands the indicator on a turn that IS coming.
     """
     if is_meta:
         return True
-    # The two model-bar detectors themselves, so this can never drift from rendering.
-    return _match_composer_command(content) is not None or _match_composer_command_output(content) is not None
+    # The detectors themselves, so this can never drift from rendering.
+    return _match_composer_command(content) is not None or _match_local_command_output(content) is not None

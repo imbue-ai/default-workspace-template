@@ -31,6 +31,7 @@ import psycopg2.extras
 from pydantic import BaseModel
 from pydantic import Field
 
+from imbue.modal_app_kit.metrics import emit_metric
 from imbue.remote_service_connector import db
 
 logger = logging.getLogger(__name__)
@@ -107,27 +108,34 @@ def sanitize_touch(raw_touch: Any) -> dict[str, str] | None:
 
 
 def parse_attribution_cookie(cookie_value: str | None) -> AttributionCookie | None:
-    """Parse the marketing cookie; malformed or oversized values log a warning and count as absent.
+    """Parse the marketing cookie; malformed or oversized values count as absent (and as a metric).
 
     The cookie is percent-encoded JSON (see the contract doc). It is pure
     client input, so parsing is tolerant: any structural surprise degrades to
-    "no cookie" rather than failing the request that carried it.
+    "no cookie" rather than failing the request that carried it. Rejections
+    are expected internet junk -- counted via the attribution_cookie_rejected
+    metric (so a rate change, e.g. a schema rollout gone wrong, is visible)
+    and logged at info, not reported as errors.
     """
     if not cookie_value:
         return None
     if len(cookie_value) > _MAX_COOKIE_CHARS:
-        logger.warning("Ignoring an oversized imbue_attribution cookie (%d chars)", len(cookie_value))
+        emit_metric("attribution_cookie_rejected", 1, {"reason": "oversized"})
+        logger.info("Ignoring an oversized imbue_attribution cookie (%d chars)", len(cookie_value))
         return None
     try:
         payload = json.loads(unquote(cookie_value))
     except ValueError as exc:
-        logger.warning("Ignoring an unparseable imbue_attribution cookie: %s", exc)
+        emit_metric("attribution_cookie_rejected", 1, {"reason": "unparseable"})
+        logger.info("Ignoring an unparseable imbue_attribution cookie: %s", exc)
         return None
     if not isinstance(payload, dict):
-        logger.warning("Ignoring a non-object imbue_attribution cookie")
+        emit_metric("attribution_cookie_rejected", 1, {"reason": "non_object"})
+        logger.info("Ignoring a non-object imbue_attribution cookie")
         return None
     if payload.get("v") != ATTRIBUTION_COOKIE_SCHEMA_VERSION:
-        logger.warning("Ignoring an imbue_attribution cookie with unknown schema version %r", payload.get("v"))
+        emit_metric("attribution_cookie_rejected", 1, {"reason": "unknown_schema_version"})
+        logger.info("Ignoring an imbue_attribution cookie with unknown schema version %r", payload.get("v"))
         return None
     return AttributionCookie(
         visitor_id=_clamped_string(payload.get("id"), _MAX_VISITOR_ID_CHARS),
@@ -314,7 +322,7 @@ def record_account_attribution(
             signup_method=signup_method,
         )
     except (psycopg2.Error, KeyError) as exc:
-        logger.warning("Could not record account attribution for user %s: %s", user_id, exc)
+        logger.warning("Could not record account attribution for user %s", user_id, exc_info=exc)
 
 
 def record_download_event(
@@ -342,4 +350,4 @@ def record_download_event(
             user_agent=clamped_user_agent,
         )
     except (psycopg2.Error, KeyError) as exc:
-        logger.warning("Could not record a download event for platform %s: %s", platform, exc)
+        logger.warning("Could not record a download event for platform %s", platform, exc_info=exc)

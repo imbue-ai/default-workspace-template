@@ -1,6 +1,8 @@
 ---
 name: update-system-interface
 description: Canonical flow for changing the system interface (the web workspace UI at system/apps/system_interface) -- its frontend (dockview shell, chat rendering, progress view) or backend (Flask server, agent discovery, layout ops). Use whenever the user wants to edit, fix, restyle, or add to the workspace UI / chat interface / dockview.
+metadata:
+  author: imbue
 ---
 
 # Updating the system interface

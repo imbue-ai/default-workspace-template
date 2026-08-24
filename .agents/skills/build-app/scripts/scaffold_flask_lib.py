@@ -226,10 +226,16 @@ app = Flask("{package}", static_folder=None)
 
 @app.route("/")
 def index() -> Response:
+    # The location beacon: post the path being viewed one hop up (to the
+    # workspace shell embedding this page) on each page load, so the shell can
+    # reopen this app's tab at the same place. Keep the line on every page you
+    # serve; the shell validates the sender's origin and ignores the rest.
     return Response(
         "<!doctype html><html><body>"
         "<h1>{name}</h1>"
         "<p>{description}</p>"
+        "<script>if (window.parent !== window) window.parent.postMessage("
+        '{{type: "minds-location", path: location.pathname + location.search}}, "*");</script>'
         "</body></html>",
         mimetype="text/html",
     )
@@ -400,7 +406,7 @@ def _update_root_pyproject(repo_root: Path, name: str, package: str) -> None:
 
 _SUPERVISORD_PROGRAM_TEMPLATE = """\
 [program:{name}]
-command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:{port} --name {name} && uv run {name}"
+command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:{port} --name {name} --program {name} && uv run {name}"
 directory=/home/user/workspace
 autostart=true
 autorestart=true

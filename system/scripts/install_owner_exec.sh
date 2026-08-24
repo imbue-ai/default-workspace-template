@@ -30,8 +30,12 @@ base_url="https://github.com/${OWNER_EXEC_REPO}/releases/download/${OWNER_EXEC_V
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-curl -fsSL --retry 3 --retry-delay 2 -o "${tmp}/${asset}" "${base_url}/${asset}"
-curl -fsSL --retry 2 -o "${tmp}/${asset}.sha256" "${base_url}/${asset}.sha256"
+# --retry-all-errors: curl's --retry alone only covers "transient" failures
+# (timeouts, 5xx), not protocol-level ones like HTTP/2 PROTOCOL_ERROR (exit 92),
+# which GitHub's CDN produces intermittently. Retrying on any error is safe here
+# because the sha256 check below guards integrity.
+curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors -o "${tmp}/${asset}" "${base_url}/${asset}"
+curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors -o "${tmp}/${asset}.sha256" "${base_url}/${asset}.sha256"
 ( cd "$tmp" && sha256sum -c "${asset}.sha256" >/dev/null )
 
 install -m 0755 "${tmp}/${asset}" "${INSTALL_PATH}.new"

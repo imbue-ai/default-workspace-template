@@ -17,6 +17,7 @@ services = [
     "supertokens",
     "sharing",
     "storage",
+    "sentry",
 ]
 
 [lifecycle]
@@ -40,9 +41,17 @@ domains = ["imbue.com"]
 # every deploy -- git is the source of truth for plan defaults. Existing
 # per-user entitlement rows (copied from a plan at assignment) are never
 # touched by this; adjust individual users via
-# `mngr imbue_cloud admin account set-plan / set-quota`. The same values are
+# `minds-admin account set-plan / set-quota`. The same values are
 # committed for every tier; tests that need small limits override per-user
 # via the admin API.
+[plans.free]
+max_remote_workspaces = 1
+max_total_workspaces = 5
+max_buckets = 5
+max_total_bucket_gb = 25
+monthly_llm_spend_usd = 0
+max_active_synced_workspaces = 200
+
 [plans.explorer]
 max_remote_workspaces = 2
 max_total_workspaces = 10
@@ -81,3 +90,11 @@ max_active_synced_workspaces = 200
 accounts_origin = "https://accounts.imbue-staging.com"
 chrome_origin = "https://minds.imbue-staging.com"
 cookie_domain = "imbue-staging.com"
+
+# Whether this tier deploys the analytics app (analytics-<tier>): the
+# gold-table aggregation + lake maintenance crons. Off until the tier's
+# analytics bringup (apps/analytics/docs/bringup.md) has provisioned the
+# Neon project, R2 buckets, and Vault entry. Dev envs can opt in per-env
+# with the sticky `minds env deploy --with-analytics` flag.
+[analytics]
+is_deployed = false

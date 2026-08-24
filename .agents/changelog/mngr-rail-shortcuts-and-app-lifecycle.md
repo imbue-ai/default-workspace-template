@@ -1,0 +1,3 @@
+The `build-app` skill's scaffolded supervisord block, escape-hatch examples, and `forward_port.py` CLI reference now pass `--program <name>` (program-name-equals-service-name), so newly built apps are stoppable/startable from the workspace. The scaffolder script emits the flag too.
+
+The `manage-projects` skill documents the new per-project shortcut surface (`layout.py shortcuts` / `shortcut set`, pins and focus/new modes) and the app lifecycle verb change: the UI's app verb is now the reversible service-level Stop/Start rather than the deregister-flavored Quit, with real removal staying `update-app`'s job.

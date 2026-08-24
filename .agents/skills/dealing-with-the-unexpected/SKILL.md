@@ -1,6 +1,8 @@
 ---
 name: dealing-with-the-unexpected
 description: Handle unexpected situations where things are not working as expected. Use when you encounter errors, confusing state, or behavior that contradicts your docs and prompts.
+metadata:
+  author: imbue
 ---
 
 # Dealing with the unexpected

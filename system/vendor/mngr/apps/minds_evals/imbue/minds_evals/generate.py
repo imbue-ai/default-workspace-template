@@ -32,7 +32,7 @@ from imbue.minds_evals.data_types import DEFAULT_TIMEOUT_SECONDS
 from imbue.minds_evals.data_types import EvalConfig
 from imbue.minds_evals.data_types import PersonaCase
 from imbue.minds_evals.errors import EvalConfigError
-from imbue.minds_evals.errors import MngrSourceError
+from imbue.minds_evals.errors import GitSourceError
 
 MNGR_REPO: Final[str] = "https://github.com/imbue-ai/mngr-internal.git"
 
@@ -121,7 +121,8 @@ def load_eval_config(config_path: Path) -> EvalConfig:
 
 def resolve_remote_tip(repo: str, branch: str) -> str:
     """The branch's current tip SHA on the remote, via plain `git ls-remote` -- git uses your own
-    credentials, and a real auth/network failure surfaces as-is."""
+    credentials, and a real auth/network failure surfaces as-is. Every pinned input goes through
+    here (mngr and the workspace template alike), so the messages name the repo they are about."""
     try:
         result = subprocess.run(
             ["git", "ls-remote", repo, "refs/heads/{}".format(branch)],
@@ -130,23 +131,23 @@ def resolve_remote_tip(repo: str, branch: str) -> str:
             timeout=60,
         )
     except subprocess.TimeoutExpired:
-        raise MngrSourceError("timed out reaching the mngr remote {} -- check your network/VPN".format(repo)) from None
+        raise GitSourceError("timed out reaching the remote {} -- check your network/VPN".format(repo)) from None
     if result.returncode != 0:
         # A failed ls-remote (offline, auth, DNS) is NOT a missing branch -- surface the real reason.
         detail = (result.stderr or "").strip() or "git ls-remote failed"
-        raise MngrSourceError(
-            "could not reach the mngr remote {} -- check your network + git auth ({})".format(repo, detail[:200])
+        raise GitSourceError(
+            "could not reach the remote {} -- check your network + git auth ({})".format(repo, detail[:200])
         )
     ref = (result.stdout or "").split("\t")[0].strip()
     if not ref:
-        raise MngrSourceError("mngr branch {!r} not found on the remote".format(branch))
+        raise GitSourceError("branch {!r} not found on the remote {}".format(branch, repo))
     return ref
 
 
 def _run_git(*args: str) -> None:
     result = subprocess.run(["git", *args], capture_output=True, text=True, timeout=600)
     if result.returncode != 0:
-        raise MngrSourceError("`git {}` failed: {}".format(" ".join(args[:2]), (result.stderr or "").strip()[:300]))
+        raise GitSourceError("`git {}` failed: {}".format(" ".join(args[:2]), (result.stderr or "").strip()[:300]))
 
 
 def fetch_mngr_source(repo: str, ref: str, dest: Path) -> None:
@@ -159,7 +160,7 @@ def fetch_mngr_source(repo: str, ref: str, dest: Path) -> None:
 
 
 @pure
-def build_case_config(config: EvalConfig, case: PersonaCase, mngr_sha: str) -> CaseConfig:
+def build_case_config(config: EvalConfig, case: PersonaCase, mngr_sha: str, dwt_sha: str) -> CaseConfig:
     return CaseConfig(
         case_id=case.case_id,
         persona=case.persona,
@@ -169,6 +170,7 @@ def build_case_config(config: EvalConfig, case: PersonaCase, mngr_sha: str) -> C
         mngr_sha=mngr_sha,
         dwt_repo=config.dwt_repo,
         dwt_branch=config.dwt_branch,
+        dwt_sha=dwt_sha,
         avg_word_count_baseline=config.avg_word_count_baseline,
     )
 
@@ -188,6 +190,7 @@ def render_task_toml(template_text: str, case_config: CaseConfig) -> str:
             "mngr_sha": case_config.mngr_sha,
             "dwt_repo": case_config.dwt_repo,
             "dwt_branch": case_config.dwt_branch,
+            "dwt_sha": case_config.dwt_sha,
             "agent_timeout_sec": str(case_config.timeout_seconds + AGENT_TIMEOUT_GRACE_SECONDS),
         },
     )
@@ -233,6 +236,8 @@ def render_solve_script(template_text: str, case_config: CaseConfig) -> str:
     state = {
         "eval_name": "oracle",
         "case_name": case_config.case_id,
+        "mngr_sha": case_config.mngr_sha,
+        "dwt_sha": case_config.dwt_sha,
         "waits_done": turn_count,
         "num_turns": turn_count,
         "test_state": "finished",
@@ -291,6 +296,11 @@ def generate_dataset(config_path: Path, output_dir: Path, mngr_repo: str) -> lis
     config = load_eval_config(config_path)
     mngr_sha = resolve_remote_tip(mngr_repo, config.mngr_branch)
     logger.info("Resolved mngr {}@{}", config.mngr_branch, mngr_sha[:12])
+    # The workspace template is pinned the same way as mngr: the dataset records the
+    # exact SHA and the box clones that, so the same dataset builds the same
+    # workspaces however long after generation it is run.
+    dwt_sha = resolve_remote_tip(config.dwt_repo, config.dwt_branch)
+    logger.info("Resolved dwt {}@{}", config.dwt_branch, dwt_sha[:12])
 
     if output_dir.exists() and any(output_dir.iterdir()):
         raise EvalConfigError(
@@ -306,7 +316,7 @@ def generate_dataset(config_path: Path, output_dir: Path, mngr_repo: str) -> lis
         logger.info("Fetching mngr source at {} (shallow clone)", mngr_sha[:12])
         fetch_mngr_source(mngr_repo, mngr_sha, mngr_source)
         for case in config.cases:
-            case_config = build_case_config(config, case, mngr_sha)
+            case_config = build_case_config(config, case, mngr_sha, dwt_sha)
             task_dir = output_dir / case.case_id
             logger.info("Writing task {}", task_dir)
             write_task_dir(task_dir, case_config, mngr_source)

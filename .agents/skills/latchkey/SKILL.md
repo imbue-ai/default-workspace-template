@@ -2,6 +2,8 @@
 name: latchkey
 description: Use whenever you want to use latchkey commands or interact with third-party or self-hosted services (Slack, Google Workspace, Dropbox, GitHub, Linear, Coolify...) using their HTTP APIs on the user's behalf.
 compatibility: Requires node.js, curl and latchkey (npm install -g latchkey).
+metadata:
+  author: imbue
 ---
 
 # Latchkey
@@ -163,6 +165,7 @@ routed to the user's computer so they will fail if it's offline.
 - All curl arguments are passed through unchanged
 - Return code, stdout and stderr are passed back from curl
 - Unless the user explicitly asks about it, don't discuss Latchkey or the technical details (it's easy for the user to get confused).
+- Do not ask the user to run Latchkey commands.
 - Unless the user explicitly asks you to do that, do not directly call `latchkey auth browser` or `latchkey auth browser-prepare`. (The Minds app is supposed to do that as part of the permission request approval process.)
 
 ## Currently supported services

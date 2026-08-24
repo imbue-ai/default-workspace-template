@@ -1,6 +1,7 @@
 import m from "mithril";
 import { apiUrl } from "../base-path";
 import type { TranscriptEvent, SubagentMetadata } from "../models/Response";
+import { describeRequestError } from "../models/request-error";
 import { parseJsonMessage } from "../models/ws-json";
 import { computeTranscriptSlices } from "../models/virtualWindow";
 import { OVERSCAN_PX } from "./row-measurement";
@@ -75,11 +76,7 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
       loading = false;
     } catch (error) {
       loading = false;
-      // mithril attaches the parsed JSON error body to `.response`; the server
-      // sends the human-readable reason there as `detail`. Reading `.message`
-      // alone surfaces the raw body object as "[object Object]".
-      const errResp = (error as { response?: { detail?: string } }).response;
-      loadingError = errResp?.detail ?? (error as Error).message ?? String(error);
+      loadingError = describeRequestError(error);
     }
   }
 

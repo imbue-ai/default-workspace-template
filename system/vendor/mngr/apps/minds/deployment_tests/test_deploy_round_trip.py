@@ -1,13 +1,13 @@
 """``minds_deployment`` test: full create / destroy round-trip of a CI ephemeral env.
 
-Asserts that ``minds env deploy`` from clean creates every expected
-cloud-side resource and that ``minds env destroy`` removes every one of
+Asserts that ``minds-admin env deploy`` from clean creates every expected
+cloud-side resource and that ``minds-admin env destroy`` removes every one of
 them. The shared-env stand-up the orchestrator already does is itself a
 "deploy works" smoke; this test pairs it with an explicit destroy
 assertion that the shared envs never exercise.
 
 The ephemeral_env fixture has already done the deploy and given us a
-handle; this body asserts the post-deploy state, then runs ``minds env
+handle; this body asserts the post-deploy state, then runs ``minds-admin env
 destroy`` explicitly and asserts the post-destroy state. The fixture's
 teardown ``destroy`` then no-ops (env root already gone).
 """
@@ -118,10 +118,10 @@ def test_deploy_then_destroy_round_trip(ephemeral_env: EphemeralEnvHandle) -> No
 
 
 def _run_minds_env_destroy(name) -> None:
-    """Shell out to ``uv run minds env destroy`` for ``name`` and assert success."""
+    """Shell out to ``uv run minds-admin env destroy`` for ``name`` and assert success."""
     sub_env = build_minds_env_subprocess_env(name)
     completed = subprocess.run(
-        ["uv", "run", "minds", "env", "destroy"],
+        ["uv", "run", "minds-admin", "env", "destroy"],
         env=sub_env,
         cwd=str(_REPO_ROOT),
         capture_output=True,
@@ -132,5 +132,5 @@ def _run_minds_env_destroy(name) -> None:
     logger.info("=== destroy stdout ({}) ===\n{}", name, completed.stdout)
     logger.info("=== destroy stderr ({}) ===\n{}", name, completed.stderr)
     assert completed.returncode == 0, (
-        f"`minds env destroy` for {name!r} exited {completed.returncode}. Stderr tail:\n{completed.stderr[-2000:]}"
+        f"`minds-admin env destroy` for {name!r} exited {completed.returncode}. Stderr tail:\n{completed.stderr[-2000:]}"
     )

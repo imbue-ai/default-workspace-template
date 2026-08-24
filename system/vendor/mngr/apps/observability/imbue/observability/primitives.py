@@ -1,6 +1,7 @@
 import re
 from enum import auto
 from typing import Final
+from typing import Self
 
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.primitives import InvalidPrimitiveValueError
@@ -30,14 +31,14 @@ class ObservabilityTierName(NonEmptyStr):
         return instance
 
 
-class TelemetryHostname(NonEmptyStr):
-    """The public ingest hostname of one tier's instance (e.g. ``telemetry.minds-dev.com``).
+class PublicIngestHostname(NonEmptyStr):
+    """A Cloudflare-proxied public ingest hostname of one tier's instance.
 
-    Rendered into the Caddyfile, DNS upserts, and every sender's exporter
-    config, so it must be a real DNS name: dot-joined lowercase DNS labels.
+    Rendered into Caddyfiles, DNS upserts, and every sender's config, so it
+    must be a real DNS name: dot-joined lowercase DNS labels.
     """
 
-    def __new__(cls, value: str) -> "TelemetryHostname":
+    def __new__(cls, value: str) -> Self:
         instance = super().__new__(cls, value)
         if any(_DNS_LABEL_RE.match(label) is None for label in str(instance).split(".")):
             raise InvalidPrimitiveValueError(
@@ -45,6 +46,14 @@ class TelemetryHostname(NonEmptyStr):
                 f"(alphanumeric runs joined by single hyphens); got {value!r}"
             )
         return instance
+
+
+class TelemetryHostname(PublicIngestHostname):
+    """The OpenObserve instance's public OTLP ingest hostname (e.g. ``telemetry.minds-dev.com``)."""
+
+
+class ErrorsHostname(PublicIngestHostname):
+    """The Bugsink instance's public Sentry-protocol ingest hostname (e.g. ``errors.minds-dev.com``)."""
 
 
 class CollectorRole(UpperCaseStrEnum):
@@ -76,6 +85,11 @@ class SenderClass(UpperCaseStrEnum):
 # loopback, and operators reach the UI at it through an SSH tunnel.
 OPENOBSERVE_HTTP_PORT: Final[int] = 5080
 
+# The Bugsink (gunicorn) HTTP port, same split-plane shape: caddy
+# reverse-proxies only the Sentry-protocol ingest routes to it on loopback,
+# and operators reach the Django UI at it through an SSH tunnel.
+BUGSINK_HTTP_PORT: Final[int] = 8300
+
 # One OpenObserve organization per instance -- the tier IS the isolation
 # boundary, so the built-in default org suffices everywhere.
 OPENOBSERVE_ORGANIZATION: Final[str] = "default"
@@ -88,6 +102,12 @@ OPENOBSERVE_ORGANIZATION: Final[str] = "default"
 # streams are overridden down per stream at provisioning time.
 METRICS_RETENTION_DAYS: Final[int] = 760
 LOGS_RETENTION_DAYS: Final[int] = 90
+
+# Bugsink instance-wide event retention (MAX_EVENT_AGE_DAYS), enforced at
+# digest time under eager mode. Short retention is the compensating control
+# for prompt-bearing LiteLLM failure payloads; issue rows (titles, counts,
+# first/last-seen) survive event deletion (spec: minds-bugsink-error-tracking.md).
+BUGSINK_EVENT_RETENTION_DAYS: Final[int] = 30
 
 # The log stream each sender class ships into (via the ``stream-name`` header
 # OpenObserve reads on its OTLP HTTP logs endpoint). Modal's is set as an

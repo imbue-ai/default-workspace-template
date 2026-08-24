@@ -93,8 +93,8 @@ from imbue.minds.desktop_client.startup_reconcile import StartupHostReconciler
 from imbue.minds.desktop_client.state import get_state
 from imbue.minds.desktop_client.supertokens_routes import bounce_latchkey_forward_supervisor
 from imbue.minds.desktop_client.sync_scheduler import WorkspaceSyncScheduler
+from imbue.minds.desktop_client.system_interface_health import BackendFailureRecorder
 from imbue.minds.desktop_client.system_interface_health import SystemInterfaceHealthTracker
-from imbue.minds.desktop_client.system_interface_health import should_enroll_suspect_for_backend_failure
 from imbue.minds.desktop_client.workspace_defaults import DEFAULT_WORKSPACE_TEMPLATE_GIT_URL
 from imbue.minds.desktop_client.workspace_defaults import FALLBACK_BRANCH
 from imbue.minds.desktop_client.workspace_defaults import is_local_workspace_defaults_opt_in
@@ -183,9 +183,9 @@ MINDS_API_PROXY_KEY_ENV_VAR: Final[str] = "LATCHKEY_EXTENSION_MINDS_API_KEY"
     envvar="MINDS_CLIENT_CONFIG_PATH",
     help=(
         "Path to the per-env client config TOML. Falls back to the "
-        "MINDS_CLIENT_CONFIG_PATH env var (set by `minds env activate <name>`); "
+        "MINDS_CLIENT_CONFIG_PATH env var (set by `minds-admin env activate <name>`); "
         "no implicit default beyond that. Refuses to start when neither is set "
-        '-- run `eval "$(minds env activate <name>)"` first. Bundled Electron '
+        '-- run `eval "$(minds-admin env activate <name>)"` first. Bundled Electron '
         "builds pass this flag explicitly from MINDS_CLIENT_CONFIG_BUNDLE."
     ),
 )
@@ -201,7 +201,7 @@ def run(
     if config_file is None:
         raise click.ClickException(
             "No client config file is set. Activate an env first: "
-            '`eval "$(uv run minds env activate <name>)"` (e.g. '
+            '`eval "$(uv run minds-admin env activate <name>)"` (e.g. '
             "`dev-<your-user>`, `staging`, or `production`), then re-run."
         )
     root_name = resolve_minds_root_name()
@@ -219,7 +219,7 @@ def run(
     # read live, so a change takes effect without restarting. Manual bug reports are always sent (with
     # full diagnostics) regardless of ``report_unexpected_errors``.
     #
-    # The activated minds env (from `minds env activate`) selects the Sentry DSN and, for
+    # The activated minds env (from `minds-admin env activate`) selects the Sentry DSN and, for
     # production/staging, which S3 attachment bucket: production and staging each get their own, while
     # every other env (dev-*, ci-*, or no activated env) reports to the dev project. We treat "not
     # activated" as dev so an un-activated `minds run` never accidentally reports to the production
@@ -408,6 +408,7 @@ def run(
     imbue_cloud_cli = ImbueCloudCli(
         mngr_caller=mngr_caller,
         connector_url=client_env_config.connector_url,
+        accounts_base_url=client_env_config.accounts_base_url,
     )
     workspace_record_store = WorkspaceRecordStore(
         paths=paths,
@@ -419,7 +420,13 @@ def run(
         device_label=read_device_label(),
     )
     session_store = MultiAccountSessionStore(
-        data_dir=data_directory, cli=imbue_cloud_cli, record_store=workspace_record_store
+        data_dir=data_directory,
+        cli=imbue_cloud_cli,
+        record_store=workspace_record_store,
+        # Lets the identity cache detect out-of-band `mngr imbue_cloud auth
+        # signin`/`signout` runs (a terminal under this host dir) by
+        # fingerprinting the plugin's on-disk sessions directory.
+        mngr_host_dir=mngr_host_dir,
     )
     backup_reaper = BackupReaperManager(
         paths=paths,
@@ -496,11 +503,11 @@ def run(
     # 5xx, enroll a suspect -- application errors (and UNRESOLVED, a routeless
     # warm-up) are left alone. STALLED enrolls despite not reporting a failed
     # request at all: a wedged backend and a slow one look identical until the
-    # probe adjudicates.
+    # probe adjudicates. The connection-class ones additionally record which
+    # cause the plugin classified, which is what the recovery surfaces read to
+    # avoid blaming the workspace for a failure on this device's side.
     consumer.add_on_system_interface_backend_failure_callback(
-        lambda agent_id, reason, status_code: system_interface_health_tracker.record_failure(agent_id)
-        if should_enroll_suspect_for_backend_failure(reason, status_code)
-        else None
+        BackendFailureRecorder(tracker=system_interface_health_tracker)
     )
 
     # All callbacks registered -- now safe to start the envelope reader
