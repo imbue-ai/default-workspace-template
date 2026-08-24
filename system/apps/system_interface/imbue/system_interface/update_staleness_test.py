@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tomllib
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -418,7 +419,7 @@ def test_the_banner_has_a_message_for_every_variant_and_no_others() -> None:
     }
 
 
-def _load_apply_script() -> object:
+def _load_apply_script() -> ModuleType:
     """Import the stdlib-only apply script by path.
 
     The app cannot depend on it (it is a skill script, staged and run on trees
