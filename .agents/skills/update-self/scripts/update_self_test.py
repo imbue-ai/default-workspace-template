@@ -3272,6 +3272,18 @@ def _commit_count(repo: Path) -> int:
     return int(out)
 
 
+def test_the_starter_this_recreates_is_the_one_the_template_ships() -> None:
+    # `publish-template`, `update-installed-template` and
+    # update-published-template's ledger-entry reference all instruct an agent
+    # to recreate a ledger "byte-identical to the shipped root file", and point
+    # at this constant for the exact block. Nothing else compares the two, so a
+    # preamble edited on one side alone would silently make that instruction
+    # impossible to follow and hand a recreated ledger a different header.
+    shipped = (_WORKSPACE_ROOT / update_self._VERSION_HISTORY_REL).read_text()
+
+    assert shipped == update_self._VERSION_HISTORY_STARTER
+
+
 def test_ledger_creates_starter_seeds_origin_and_appends_idempotently(
     tmp_path: Path,
 ) -> None:
