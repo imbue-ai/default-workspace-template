@@ -22,6 +22,7 @@ mngr lifecycle (RUNNING) plus the transcript tail. Two things differ from claude
 
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.activity_state import ActivityState
+from imbue.system_interface.activity_state import is_transcript_tail_stale
 
 
 @pure
@@ -31,27 +32,40 @@ def derive(
     has_pending_tool_use: bool,
     tail_event_type: str | None,
     tail_is_final_answer: bool,
+    tail_event_at: float | None = None,
+    process_started_at: float | None = None,
 ) -> ActivityState:
     """Derive an ``ActivityState`` for an agy agent from lifecycle + transcript signals.
 
-    ``is_agent_running`` reflects the mngr lifecycle (the ``active`` marker). ``tail_is_final_answer``
-    is True only when the tail event is an ``assistant_message`` carrying real answer text.
+    Deliberately claude's ladder, rung for rung, with ONE rung inserted -- see 3a. Keeping the
+    shapes identical is the point: agy has no turn markers either, so any divergence beyond the
+    one agy genuinely needs would be an accident rather than a decision.
+
+    ``is_agent_running`` reflects the mngr lifecycle (the ``active`` marker agy's statusLine
+    maintains). ``tail_event_at`` / ``process_started_at`` feed
+    :func:`activity_state.is_transcript_tail_stale` to drop a turn abandoned by a prior process
+    (a mid-turn restart) -- which matters MORE for agy than for claude, because agy resumes its
+    own conversation store, so the dead process's unmatched tool call is still present.
 
     Priority:
-      0. agent not running -> IDLE (also closes off a lingering async run_command and an
-         interrupted turn -- no synthetic marker needed).
-      1. a tool call in flight (dispatched, result not yet in) -> TOOL_RUNNING.
-      2. tail is ``user_message`` / ``tool_result`` -> THINKING.
-      3. tail is an empty planner step (thinking, no text) mid-turn -> THINKING.
-      4. tail is a substantive assistant answer -> IDLE.
-      5. otherwise -> IDLE.
+      0. agent not running -> IDLE.
+      1. transcript tail predates the current process (stale) -> IDLE.
+      2. unmatched tool call -> TOOL_RUNNING.
+      3. last transcript event is ``user_message`` or ``tool_result`` -> THINKING.
+      3a. AGY ONLY: last event is an ``assistant_message`` with no text -> THINKING. agy writes
+          an empty PLANNER_RESPONSE ("deciding what to do next") before each tool call; claude's
+          rung 4 would read that as a finished answer and flicker the dot to IDLE between every
+          single tool.
+      4. otherwise (a substantive ``assistant_message``, or empty) -> IDLE.
     """
     if not is_agent_running:
+        return ActivityState.IDLE
+    if is_transcript_tail_stale(tail_event_at=tail_event_at, process_started_at=process_started_at):
         return ActivityState.IDLE
     if has_pending_tool_use:
         return ActivityState.TOOL_RUNNING
     if tail_event_type in ("user_message", "tool_result"):
         return ActivityState.THINKING
-    if tail_event_type == "assistant_message":
-        return ActivityState.IDLE if tail_is_final_answer else ActivityState.THINKING
+    if tail_event_type == "assistant_message" and not tail_is_final_answer:
+        return ActivityState.THINKING
     return ActivityState.IDLE
