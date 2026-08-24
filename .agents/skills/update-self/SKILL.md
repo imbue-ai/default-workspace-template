@@ -633,8 +633,10 @@ every step tolerates re-entry -- so when you come back, simply **re-run the
 exact same `apply` command**; it resumes from the recorded state. If nobody
 comes back, the workspace heals itself: bootstrap rolls a stale marker back at
 the next container start, and a recovery cron (`recover --if-stale`) does the
-same within minutes for a kill without a restart -- both then leave the
-workspace on the pre-update revision with the worker branch intact.
+same within minutes for a kill without a restart -- both then leave the tree
+matching the pre-update revision, with the worker branch intact. As above, that
+is a forward revert rather than a rewind, so re-running the apply of that same
+merge is refused; a retry means a fresh worker pass off the current HEAD.
 
 ### 5c. Carry out the report-driven remainder
 
