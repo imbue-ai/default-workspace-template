@@ -648,11 +648,23 @@ by hand. Say so to the user if that is the update you are running; every apply
 after it is covered.
 
 **If the rollback itself could not restore a healthy workspace** (exit 3), the
-apply leaves an `emergency.json` beside the marker naming the reason and where
-the pre-apply copies were kept, and the system interface shows a banner reading
-it until an apply or a `recover` confirms health again. That state does not
-resolve on its own -- it is the one that wants a person -- so treat the record
-as the starting point rather than re-running anything blind.
+apply leaves an `emergency.json` beside the marker naming the reason, the agent
+that was driving the apply, and where the pre-apply copies were kept, and the
+system interface shows a banner reading it. That state does not resolve on its
+own -- it is the one that wants a person -- so treat the record as the starting
+point rather than re-running anything blind.
+
+Nothing takes that record down by itself, and the banner keys off its mere
+presence, so **clearing it is part of the repair**. A later update that lands
+and confirms health clears it, and so does a `recover` that rolls back a *new*
+interruption; neither describes the ordinary case. This exit already cleared
+the marker and its rollback already put the tree content back, so a bare
+`recover` finds nothing to do, and re-running the same `apply` is refused (the
+merge is landed-and-rolled-back). So when the repair was by hand: verify the
+workspace is actually healthy, then delete
+`data/.state/update-apply/emergency.json` and tell the user what happened.
+Leaving it in place means a workspace that is fine still telling its user it
+may be broken.
 
 ### 5c. Carry out the report-driven remainder
 
