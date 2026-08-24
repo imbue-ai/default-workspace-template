@@ -339,7 +339,7 @@ end to end: trial-merge conflict triage, complete the merge (preserving the
 `data/.tasks/update-self/skill-at-target/.agents/skills/update-self` path is the copy
 of the update-self flow shipped with the version being updated to (staged by the
 lead and synced into your worktree with this runtime dir) -- run *all* its
-`update_self.py` calls from its `system/scripts/` too. Your target is the `target_ref` in
+`update_self.py` calls from its `scripts/` too. Your target is the `target_ref` in
 this file's frontmatter (already fetched into `upstream`).
 
 ## Reporting back
