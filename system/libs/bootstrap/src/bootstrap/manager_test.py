@@ -770,6 +770,10 @@ def test_read_update_marker_dri_agent(monkeypatch: pytest.MonkeyPatch, tmp_path:
     assert _read_update_marker_dri_agent() == "agent-omega"
     UPDATE_APPLY_MARKER.write_text("not json {")
     assert _read_update_marker_dri_agent() == ""  # corrupt marker degrades
+    # A write torn mid-multibyte -- the failure mode an interrupted apply
+    # actually produces -- must degrade too, not raise out of boot.
+    UPDATE_APPLY_MARKER.write_bytes(b'{"dri_agent": "\xff\xfe')
+    assert _read_update_marker_dri_agent() == ""
 
 
 def test_recover_skips_entirely_without_a_marker(
