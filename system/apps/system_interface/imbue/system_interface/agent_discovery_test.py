@@ -225,9 +225,7 @@ def test_unknown_config_field_degrades_to_a_warning_not_a_failure(
     """
     config_dir = tmp_path / "cfg"
     config_dir.mkdir()
-    (config_dir / "settings.toml").write_text(
-        'is_allowed_in_pytest = true\nfield_from_a_newer_mngr = "surprise"\n'
-    )
+    (config_dir / "settings.toml").write_text('is_allowed_in_pytest = true\nfield_from_a_newer_mngr = "surprise"\n')
     monkeypatch.setenv("MNGR_PROJECT_CONFIG_DIR", str(config_dir))
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path / "host"))
 

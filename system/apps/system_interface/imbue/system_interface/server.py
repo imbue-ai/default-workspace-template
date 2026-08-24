@@ -620,9 +620,7 @@ def _index() -> Response:
         html_content = _inject_update_staleness_meta_tag(html_content, staleness)
         if config.javascript_plugin_basenames:
             html_content = _inject_plugin_script_tags(html_content, config.javascript_plugin_basenames, root_path)
-        return _stamp_update_staleness(
-            _shell_response(html_content, is_frontend_built=True), staleness
-        )
+        return _stamp_update_staleness(_shell_response(html_content, is_frontend_built=True), staleness)
     return _stamp_update_staleness(_frontend_not_built_response(), staleness)
 
 
