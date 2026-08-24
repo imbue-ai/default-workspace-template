@@ -78,6 +78,28 @@ The chain only works because layer 2 stopped flattening its reason into a bool. 
 - "the user should be told differently" -> layer 3.
 - "the user should be able to do something about it" -> layer 4.
 
+## Layer 0 -- the terminal underneath, and who decides what the user sees
+
+Below all four sits the tmux pipeline the send-keys harnesses drive (claude and antigravity; codex and pi subclass `BaseAgent` directly and use none of it). Two failures live there, specified in mngr's `specs/tmux-pane-lockdown/spec.md`: a pane in a mode swallows `send-keys` while `paste-buffer` still delivers, and `session:window` resolves to the window's *active* pane, so one split delivers into another shell silently. Both are fixed by targeting the agent's pane ID, stored in a tmux session user-option, and clearing modes before every send.
+
+**That layer also settles who names the buttons.** A pane that no longer exists cannot be recovered from the chat -- Retry is guaranteed to fail, and only a restart helps. But mngr must not be the one saying "offer Force": it is the terminal interface, and Force, Cancel and "returned to the composer" are workspace concepts that mean nothing to `mngr message`. So mngr names the KIND of failure and the workspace maps kinds to buttons:
+
+| kind | means | workspace offers |
+| --- | --- | --- |
+| `agent_unreachable` | the pane is gone | Cancel, Force -- Retry withheld, it cannot work |
+| `input_blocked` | a dialog or shell mode holds the input | Cancel, Retry, Force |
+| `not_ready` | the harness is still coming up | Cancel, Retry |
+| `unknown` | unclassified | Cancel, Retry, Force (today's behaviour) |
+
+The blocker is that `MessageResult.failed_agents` carries only `(name, message)` strings, so a kind has no way out of mngr today. See that spec for the options; the recommendation is a parallel field rather than widening a public tuple.
+
+## What Retry and Force actually are
+
+Neither is a new behaviour invented for the notice, and they must not become one:
+
+- **Retry is the send button** -- the same call the composer makes, re-running preflight, able to fail again with a different reason.
+- **Force is a guaranteed restart, then that same send.** Deliberately not what Stop does: Stop's `drainToComposer` dispatches to the harness's own interrupt-to-composer, which for claude can be a native chord that never restarts the process, and a wedged agent is exactly what Force is for. It takes Stop's queue rescue first (best-effort, since the agent being forced is often the stuck one) and then restarts regardless -- the restart SIGKILLs the agent and would otherwise take the queue with it.
+
 ## The two known rough edges
 
 **A stray Enter can answer a dialog nobody looked at.** `submit_message_and_confirm` re-sends Enter while it cannot confirm delivery, gated on the pane still showing the pasted message. That gate is a substring test: `/effort` normalizes to `effort`, and the picker it opens is headed **Effort**, so the gate reads the open picker as an unsent message and presses Enter at it -- confirming whatever row was highlighted. `/model` has the same shape. The gate's own comment states the assumption that fails: a stray Enter on an empty input row is a no-op, but on a selector it picks a row.
