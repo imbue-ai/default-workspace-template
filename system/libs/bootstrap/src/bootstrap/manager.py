@@ -600,6 +600,18 @@ def _write_update_recovery_cron_entry(target_dir: Path = Path("/etc/cron.d")) ->
     routinely longer than the five minutes until the next one, and ``--if-stale``
     reads the dead apply's pid from a marker ``recover`` never restamps, so
     nothing else would stop them overlapping.
+
+    This is also the one cron entry that deliberately does NOT go through
+    ``system/libs/automations/with_agent_env.sh`` (which every other job,
+    built-in or user-added, is required to use, and which would supply that
+    PATH and cwd for free). The wrapper reconstructs the agent environment by
+    sourcing ``/home/user/.mngr/env`` and parsing the host dir with ``jq``, and
+    exits non-zero when either is missing -- and a workspace left mid-apply is
+    exactly where that assumption is least safe. The guard needs no agent
+    environment beyond PATH: everything it shells out to resolves from ``$HOME``
+    (which is ``/home/user`` for root here, so mngr finds its host dir), so it
+    carries its own two lines instead and keeps working when the wrapper would
+    not.
     """
     command = (
         f"cd {WORKSPACE_ROOT_DIR} && python3 {UPDATE_APPLY_SCRIPT} recover --if-stale"
