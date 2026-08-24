@@ -1464,7 +1464,7 @@ def _plant_marker(
     live_service_restarted: bool = False,
     provisioner_ran: bool = False,
     snapshots: list | None = None,
-    frontend_expected: bool = True,
+    frontend_expected: bool | None = True,
 ) -> "update_self.ApplyMarker":
     """Write the marker an interrupted apply would have left behind."""
     marker = update_self.ApplyMarker(
@@ -3672,16 +3672,27 @@ def test_recover_clears_the_emergency_record_when_it_confirms_health(
     assert not update_self.emergency_path(apply_repo).exists()
 
 
-def test_recover_over_an_already_broken_ui_leaves_the_record_standing(
-    apply_repo: Path, capsys
+@pytest.mark.parametrize(
+    ("frontend_expected", "expected_account"),
+    [
+        (False, "was not serving a working frontend when that apply began either"),
+        (None, "killed before it recorded whether the live UI"),
+    ],
+    ids=["baseline-broken", "baseline-unmeasured"],
+)
+def test_recover_without_a_confirmed_frontend_leaves_the_record_standing(
+    apply_repo: Path, capsys, frontend_expected: bool | None, expected_account: str
 ) -> None:
-    # An interrupted apply whose baseline was already broken is recovered on
-    # the backend's health alone -- the frontend is never probed -- so this
-    # recovery has no evidence that the state the record describes is over,
-    # and its closing line must not sign off on a UI nobody looked at. That
-    # line is often the only account of an unattended recovery.
+    # An interrupted apply with no working frontend to hold the rollback to is
+    # recovered on the backend's health alone -- the frontend is never probed
+    # -- so this recovery has no evidence that the state the record describes
+    # is over, and its closing line must not sign off on a UI nobody looked
+    # at. That line is often the only account of an unattended recovery, and
+    # the two ways to get here are not the same account: a baseline measured
+    # broken is a UI already down, while an unmeasured one (the apply was
+    # killed before the probe, which follows the merge) says nothing about it.
     _plant_emergency(apply_repo)
-    _plant_snapshotted_marker(apply_repo, frontend_expected=False)
+    _plant_snapshotted_marker(apply_repo, frontend_expected=frontend_expected)
     runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
     http = _FakeHttp(_all_healthy, page_responder=_placeholder_page)
 
@@ -3690,6 +3701,7 @@ def test_recover_over_an_already_broken_ui_leaves_the_record_standing(
     closing_line = capsys.readouterr().err.strip().splitlines()[-1]
     assert "confirmed healthy" not in closing_line
     assert "cannot confirm it" in closing_line
+    assert expected_account in closing_line
 
 
 def test_recover_provisioner_failure_still_counts_as_recovered(
