@@ -147,6 +147,22 @@ def test_app_shell_names_the_interrupted_variant_from_the_marker(tmp_path: Path)
     assert response.headers[UPDATE_STALENESS_HEADER] == STALENESS_UPDATE_INTERRUPTED
 
 
+def test_the_placeholders_head_poll_does_not_ask_for_staleness(tmp_path: Path) -> None:
+    # The "frontend not built" placeholder polls this same route with HEAD
+    # every ten seconds per open tab for the length of an outage, and that
+    # response is deliberately built without reading anything. An outage is
+    # exactly when the tree has moved, so asking here would fork git twice per
+    # poll per tab. A real GET still carries the header.
+    repo = _make_repo(tmp_path)
+    state = build_test_state()
+    state.update_staleness = UpdateStalenessTracker.capture(repo_root=repo)
+    _commit_files(repo, "moved after startup", _RELEVANT_PATH)
+    client = create_application(state).test_client()
+
+    assert UPDATE_STALENESS_HEADER not in client.head("/").headers
+    assert client.get("/").headers[UPDATE_STALENESS_HEADER] == STALENESS_TREE_MOVED
+
+
 def test_a_consistent_workspace_gets_no_header(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     state = build_test_state()

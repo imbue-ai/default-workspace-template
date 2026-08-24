@@ -144,9 +144,11 @@ class UpdateStalenessTracker(FrozenModel):
     """Remembers the tree HEAD this server started from and compares later.
 
     Built once per process via :meth:`capture` (a field on
-    ``SystemInterfaceState``); ``staleness`` is asked per app-shell request,
-    which is a page load -- infrequent enough that a bounded ``git rev-parse``
-    per call costs nothing noticeable.
+    ``SystemInterfaceState``); ``staleness`` is asked once per rendered app
+    shell -- a page load -- which is infrequent enough that a bounded ``git
+    rev-parse`` per call costs nothing noticeable. The caller is responsible
+    for keeping it to that: the not-built placeholder's ``HEAD`` poll also
+    reaches the shell route, ten seconds apart per open tab, and must not ask.
     """
 
     repo_root: Path = Field(description="The workspace root this server serves from")
