@@ -61,7 +61,7 @@ latchkey curl http://latchkey-self.invalid/permissions/self | jq .rules
 ```
 
 Then ask for the missing permissions. This one goes in a tool call of its own,
-with nothing else in it and its output untouched -- see the rule below:
+with nothing else in it and its output untouched.
 
 ```bash
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
