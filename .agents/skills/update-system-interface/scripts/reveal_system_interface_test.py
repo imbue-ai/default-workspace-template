@@ -4,9 +4,11 @@ Run via: ``uv run pytest .agents/skills/update-system-interface/scripts/reveal_s
 
 The tests inject a recording ``Runner`` so no real subprocess runs (except the
 one end-to-end wiring test, which proves the shared serve script resolves to a
-runnable stdlib script). The apply/reveal machinery this file used to cover
-lives in ``.agents/skills/update-self/scripts/update_self.py`` now, tested by
-``update_self_test.py``.
+runnable stdlib script). The apply/reveal machinery this file used to cover --
+the snapshots, the dependency and uv-tool refresh, the pre-flight, the
+frontend probe, the rollback and its emergency exit -- lives in
+``.agents/skills/update-self/scripts/update_self.py`` now, and its tests moved
+with it into ``update_self_test.py``.
 """
 
 from __future__ import annotations

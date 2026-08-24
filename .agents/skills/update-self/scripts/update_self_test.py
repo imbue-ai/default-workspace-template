@@ -14,6 +14,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Sequence
@@ -1582,6 +1583,24 @@ def test_plan_apply_does_not_mistake_nested_paths_for_manifests(path: str) -> No
 @pytest.mark.parametrize(
     "path",
     [
+        "system/apps/system_interface/frontend/src/views/Chat.ts",
+        # Everything under frontend/ counts, not just src/: the entry
+        # document, the build configs and the public assets all change the
+        # emitted bundle.
+        "system/apps/system_interface/frontend/index.html",
+        "system/apps/system_interface/frontend/vite.config.ts",
+        "system/apps/system_interface/frontend/tsconfig.json",
+        "system/apps/system_interface/frontend/public/logo.svg",
+    ],
+)
+def test_plan_apply_counts_every_frontend_file_not_just_src(path: str) -> None:
+    plan = update_self.plan_apply([path])
+    assert plan.frontend_src and not plan.frontend_manifest
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
         "system/apps/system_interface/imbue/system_interface/server_test.py",
         "system/apps/system_interface/imbue/system_interface/test_layout_pipeline.py",
     ],
@@ -2558,6 +2577,18 @@ def test_marker_comes_down_before_the_view_refresh(apply_repo: Path) -> None:
 
     assert code == 0
     assert seen["marker_at_refresh"] is False
+    # And it comes after the restart, for the same reason it comes after the
+    # probes: a reload issued earlier would put every open view back on the
+    # build that is about to be replaced.
+    restart_at = next(
+        index for index, c in enumerate(runner.calls) if tuple(c[:4]) == _RESTART
+    )
+    refresh_at = next(
+        index
+        for index, c in enumerate(runner.calls)
+        if c[:1] == [sys.executable] and c[1].endswith("refresh_workspace_view.py")
+    )
+    assert restart_at < refresh_at
 
 
 def test_marker_is_gone_before_the_post_success_bookkeeping(apply_repo: Path) -> None:
@@ -3092,6 +3123,87 @@ def test_a_missing_snapshot_target_degrades_to_a_note(tmp_path: Path, capsys) ->
 
     assert snapshots == []
     assert "nothing to copy aside" in capsys.readouterr().err
+
+
+def test_a_copy_that_cannot_be_taken_degrades_to_a_warning(
+    tmp_path: Path, capsys
+) -> None:
+    # Copying aside is a precaution, not a precondition: a workspace where it
+    # cannot be done still gets its update, and a failed rollback falls back to
+    # rebuilding. Refusing here instead would make the precaution the thing
+    # that blocks the repair.
+    repo_root = _make_apply_repo(tmp_path)
+    _write_bundle(repo_root)
+    # The copies' destination cannot be created: its parent is a regular file.
+    (repo_root / update_self.STATE_DIR_REL).mkdir(parents=True)
+    (repo_root / update_self.STATE_DIR_REL / update_self.SNAPSHOTS_DIRNAME).write_text(
+        "not a directory"
+    )
+    plan = update_self.plan_apply(["system/apps/system_interface/frontend/src/App.ts"])
+
+    snapshots = update_self.take_snapshots(plan, repo_root, _RecordingRunner(), [])
+
+    assert snapshots == []
+    assert "could not copy 'bundle' aside" in capsys.readouterr().err
+    assert _bundle_exists(repo_root)  # the original is untouched
+
+
+def test_the_recovery_rebuild_does_not_run_npm_ci_over_a_restored_node_modules(
+    unbuilt_apply_repo: Path,
+) -> None:
+    # `npm ci` deletes node_modules before it installs, so running it during
+    # recovery over the copy just put back would destroy the one thing the
+    # rollback restored -- and then need a registry to get it back. This
+    # workspace has never built a bundle, so recovery takes the rebuild branch
+    # (there is no bundle copy to restore) with node_modules already back.
+    node_modules = unbuilt_apply_repo / update_self.FRONTEND_DIR / "node_modules"
+    node_modules.mkdir(parents=True)
+    (node_modules / "left-pad.js").write_text("restored")
+    runner = _apply_runner(_FRONTEND_MANIFEST_DIFF + _FRONTEND_DIFF, unbuilt_apply_repo)
+    # Only the forward build fails; recovery's rebuild of the known-good tree
+    # succeeds, as it must for the rollback to be confirmed.
+    runner.respond(
+        ("npm", "run", "build"), [_Result(returncode=1, stderr="boom"), _Result()]
+    )
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), unbuilt_apply_repo)
+
+    assert code == 2
+    assert len(runner.argvs_starting("npm", "run", "build")) == 2  # forward, recovery
+    # The forward pass ran the only `npm ci`; recovery rebuilt against the
+    # restored node_modules rather than wiping it.
+    assert len(runner.argvs_starting("npm", "ci")) == 1
+    assert (node_modules / "left-pad.js").read_text() == "restored"
+
+
+def test_the_spawner_captures_both_streams_of_a_real_child(tmp_path: Path) -> None:
+    # The capture has to survive a real Popen: stderr is redirected onto
+    # stdout's file and the parent closes its handle while the child keeps
+    # writing. This models the case that matters -- a backend that dies on
+    # import, whose traceback is the whole reason the pre-flight rejected the
+    # merge, and which nothing else would ever record.
+    output_path = tmp_path / "boot.log"
+
+    spawned = update_self.Spawner().spawn(
+        [
+            sys.executable,
+            "-c",
+            "import sys; print('on stdout'); print('on stderr', file=sys.stderr)",
+        ],
+        cwd=str(tmp_path),
+        env=dict(os.environ),
+        output_path=output_path,
+    )
+    for _ in range(500):
+        if spawned.has_exited():
+            break
+        time.sleep(0.01)
+    spawned.terminate()
+
+    assert spawned.has_exited()
+    captured = spawned.read_output()
+    assert "on stdout" in captured
+    assert "on stderr" in captured
 
 
 # --- the version-history ledger (real git) ------------------------------------
