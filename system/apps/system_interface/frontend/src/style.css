@@ -4062,9 +4062,11 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   cursor: default;
 }
 
-/* Terminal lifecycle banner: a thin bar above each terminal tab explaining
-   that terminal state lives in memory only. */
-.terminal-banner {
+/* The workspace's two thin notice bars -- the terminal lifecycle banner above
+   each terminal tab, and the update-staleness banner at the top of the shell.
+   They are the same box; each names its own surface colours below. */
+.terminal-banner,
+.update-staleness-banner {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -4073,6 +4075,11 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   padding: 6px 10px;
   font-size: 0.8125rem;
   line-height: 1.4;
+}
+
+/* Terminal lifecycle banner: explains that terminal state lives in memory
+   only. */
+.terminal-banner {
   color: var(--color-text-secondary);
   background: var(--color-bg-secondary, #f8fafc);
   border-bottom: 1px solid var(--color-border, #e5e7eb);
@@ -4094,8 +4101,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   flex: 0 0 auto;
 }
 
-/* The two banners' text and dismiss/action chrome are the same; only the
-   surface colours above differ. */
+/* Both banners' dismiss buttons. */
 .terminal-banner-btn,
 .update-staleness-banner-btn {
   padding: 2px 8px;
@@ -4112,18 +4118,10 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   background: var(--color-bg-hover, #eef2f7);
 }
 
-/* Update-staleness banner: a thin amber bar at the top of the shell shown when
-   the workspace's on-disk code has moved under the running interface (an
-   interrupted or not-yet-activated update). Informational only. */
+/* Update-staleness banner: amber, shown when the workspace's on-disk code has
+   moved under the running interface (an interrupted, not-yet-activated, or
+   emergency-exited update). Informational only. */
 .update-staleness-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex: 0 0 auto;
-  padding: 6px 10px;
-  font-size: 0.8125rem;
-  line-height: 1.4;
   color: var(--color-text-primary, #1f2937);
   background: var(--color-warning-bg, #fef3c7);
   border-bottom: 1px solid var(--color-warning-border, #f59e0b);
