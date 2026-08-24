@@ -123,13 +123,29 @@ class HarnessPopup(FrozenModel):
 # it back. Kept as its own popup rather than folded into a harness's declined tuple so
 # the distinct rationale survives: those tuples are measured-against-a-live-agent lists,
 # and a future re-measure would find these three send fine and drop them.
-_MODEL_BAR_COMMANDS: Final[tuple[str, ...]] = ("/model", "/effort", "/fast")
-_MODEL_BAR_NOTICE: Final[str] = "Use the model picker below the chat to change the model, effort, or speed."
+# Split by whether the harness HAS a fast mode. /model and /effort are universal, but
+# only claude and codex can launch fast (they are the harnesses declaring
+# ``_FAST_MODE_PROMPT_POPUP``), and their catalogs are the only ones carrying
+# ``supports_fast``. Declining /fast on a harness with no fast mode would point the user at
+# a picker control that is not rendered for it -- worse than letting the text through.
+_MODEL_BAR_COMMANDS: Final[tuple[str, ...]] = ("/model", "/effort")
+_MODEL_BAR_COMMANDS_WITH_FAST: Final[tuple[str, ...]] = (*_MODEL_BAR_COMMANDS, "/fast")
+_MODEL_BAR_NOTICE: Final[str] = "Use the model picker below the chat to change the model or effort."
+_MODEL_BAR_NOTICE_WITH_FAST: Final[str] = (
+    "Use the model picker below the chat to change the model, effort, or speed."
+)
 _MODEL_BAR_POPUP: Final[HarnessPopup] = HarnessPopup(
     trigger=PopupTrigger.COMPOSER_COMMAND,
     commands=_MODEL_BAR_COMMANDS,
     action=PopupAction.NOTICE,
     notice_body=_MODEL_BAR_NOTICE,
+)
+# For the fast-capable harnesses; pairs with ``_FAST_MODE_PROMPT_POPUP`` on the same spec.
+_MODEL_BAR_POPUP_WITH_FAST: Final[HarnessPopup] = HarnessPopup(
+    trigger=PopupTrigger.COMPOSER_COMMAND,
+    commands=_MODEL_BAR_COMMANDS_WITH_FAST,
+    action=PopupAction.NOTICE,
+    notice_body=_MODEL_BAR_NOTICE_WITH_FAST,
 )
 
 
@@ -315,7 +331,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
             HarnessPopup(
                 trigger=PopupTrigger.COMPOSER_COMMAND, commands=_CLAUDE_DECLINED_COMMANDS, action=PopupAction.NOTICE
             ),
-            _MODEL_BAR_POPUP,
+            _MODEL_BAR_POPUP_WITH_FAST,
             _FAST_MODE_PROMPT_POPUP,
         ),
         auth_modal=AuthModalKind.MANAGED,
@@ -351,7 +367,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
             HarnessPopup(
                 trigger=PopupTrigger.COMPOSER_COMMAND, commands=_CODEX_DECLINED_COMMANDS, action=PopupAction.NOTICE
             ),
-            _MODEL_BAR_POPUP,
+            _MODEL_BAR_POPUP_WITH_FAST,
             _FAST_MODE_PROMPT_POPUP,
         ),
         auth_instructions=(
