@@ -281,7 +281,9 @@ def send_key_keystroke(agent: BaseAgent[Any], tmux_target: TmuxWindowTarget, key
     ``key`` is a tmux key name, not literal text, so it is spliced into the
     command unquoted (as tmux expects). Raises SendMessageError on failure.
     """
-    send_cmd = f"tmux send-keys -t {tmux_target.as_shell_arg()} {key}"
+    # The agent's pane, not the window's active one: a split would otherwise send this keystroke
+    # into whatever shell the user just opened.
+    send_cmd = f"tmux send-keys -t {agent._send_target_arg(tmux_target)} {key}"
     result = agent.host.execute_stateful_command(send_cmd)
     if not result.success:
         raise SendMessageError(
@@ -326,7 +328,7 @@ def _build_probe_check_lines(probes: tuple[SubmissionEvidenceProbe, ...]) -> lis
 
 @pure
 def _build_enter_retry_lines(
-    tmux_target: TmuxWindowTarget,
+    tmux_target: TmuxWindowTarget | str,
     normalized_pane_probe: str,
     retry_offsets: tuple[int, ...],
 ) -> list[str]:
@@ -341,17 +343,17 @@ def _build_enter_retry_lines(
     input row is a no-op for every TUI we drive. Each slot is consumed whether
     or not Enter was re-sent, bounding the pane captures to one per slot.
     """
+    target_arg = tmux_target if isinstance(tmux_target, str) else tmux_target.as_shell_arg()
     if normalized_pane_probe == "":
         retry_action = (
-            f"tmux send-keys -t {tmux_target.as_shell_arg()} Enter 2>/dev/null; "
-            f"printf '%s %s\\n' {_RETRY_MARKER} \"$elapsed\""
+            f"tmux send-keys -t {target_arg} Enter 2>/dev/null; printf '%s %s\\n' {_RETRY_MARKER} \"$elapsed\""
         )
     else:
         retry_action = (
-            f'pane="$( tmux capture-pane -p -t {tmux_target.as_shell_arg()} 2>/dev/null '
+            f'pane="$( tmux capture-pane -p -t {target_arg} 2>/dev/null '
             "| tr -cd '[:alnum:]' | tr '[:upper:]' '[:lower:]' )\"; "
             f'case "$pane" in *{shlex.quote(normalized_pane_probe)}*) '
-            f"tmux send-keys -t {tmux_target.as_shell_arg()} Enter 2>/dev/null; "
+            f"tmux send-keys -t {target_arg} Enter 2>/dev/null; "
             f"printf '%s %s\\n' {_RETRY_MARKER} \"$elapsed\" ;; *) : ;; esac"
         )
     return [
@@ -375,7 +377,7 @@ def _build_timeout_diagnostic_lines(probes: tuple[SubmissionEvidenceProbe, ...])
 
 @pure
 def build_confirmation_command(
-    tmux_target: TmuxWindowTarget,
+    tmux_target: TmuxWindowTarget | str,
     probes: tuple[SubmissionEvidenceProbe, ...],
     normalized_pane_probe: str,
     window_seconds: int,
@@ -390,7 +392,10 @@ def build_confirmation_command(
     construction. Evidence is checked immediately after Enter and then every
     ``poll_interval_seconds`` until ``window_seconds`` elapse.
     """
-    target_arg = tmux_target.as_shell_arg()
+    # Accepts a rendered target so the caller can hand in the agent's pane ID. Everything this
+    # script does -- the Enter, the retries, the pane reads gating them -- must address the same
+    # pane the paste went to, or a split turns the retry gate into a reading of another shell.
+    target_arg = tmux_target if isinstance(tmux_target, str) else tmux_target.as_shell_arg()
     lines: list[str] = []
     # Capture every probe's baseline BEFORE Enter so evidence produced by this
     # submission always reads as a change against it.
@@ -493,7 +498,7 @@ def submit_message_and_confirm(
     window_seconds = max(1, int(timeout_seconds))
     normalized_pane_probe = build_normalized_message_probe(message)
     command = build_confirmation_command(
-        tmux_target=tmux_target,
+        tmux_target=agent._send_target_arg(tmux_target),
         probes=probes,
         normalized_pane_probe=normalized_pane_probe,
         window_seconds=window_seconds,

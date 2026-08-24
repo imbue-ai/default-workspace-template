@@ -87,19 +87,24 @@ class TmuxWindowTarget(FrozenModel):
         return shlex.quote(f"={self.session_name}:{self.window}")
 
 
-def build_tmux_capture_pane_command(target: TmuxWindowTarget, include_scrollback: bool = False) -> str:
+def build_tmux_capture_pane_command(target: TmuxWindowTarget | str, include_scrollback: bool = False) -> str:
     """Build the tmux command string to capture pane content for a target.
+
+    ``target`` may be an already-rendered ``-t`` argument (the agent's pane ID, resolved by the
+    send path) as well as a window target, so a capture can be pointed at the same pane the sends
+    go to rather than at whichever pane is active.
 
     When include_scrollback is True, uses ``-S -`` to capture from the start of the
     scrollback buffer instead of just the visible pane.
     """
+    target_arg = target if isinstance(target, str) else target.as_shell_arg()
     scrollback_flag = " -S -" if include_scrollback else ""
-    return f"tmux capture-pane -t {target.as_shell_arg()}{scrollback_flag} -p"
+    return f"tmux capture-pane -t {target_arg}{scrollback_flag} -p"
 
 
 def capture_tmux_pane_content(
     host: OnlineHostInterface,
-    target: TmuxWindowTarget,
+    target: TmuxWindowTarget | str,
     timeout_seconds: float = _DEFAULT_CAPTURE_PANE_TIMEOUT_SECONDS,
     include_scrollback: bool = False,
 ) -> str | None:

@@ -24,6 +24,7 @@ from typing import assert_never
 import click
 from loguru import logger
 from pydantic import Field
+from pydantic import field_validator
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.concurrency_group.errors import ProcessSetupError
@@ -137,8 +138,11 @@ from imbue.mngr_claude.claude_config import is_source_directory_trusted
 from imbue.mngr_claude.claude_config import read_claude_config
 from imbue.mngr_claude.claude_config import remove_claude_trust_for_path
 from imbue.mngr_claude.claude_config import resolve_shared_claude_config_dir
+from imbue.mngr_claude.dialogs import ALL_RECOGNIZED_NONBENIGN
+from imbue.mngr_claude.dialogs import DANGEROUS_ALL_NONBENIGN_INCLUDING_UNRECOGNIZED
 from imbue.mngr_claude.dialogs import DialogBlocked
 from imbue.mngr_claude.dialogs import INPUT_PROMPT_GLYPH
+from imbue.mngr_claude.dialogs import SELECTABLE_NICKNAMES
 from imbue.mngr_claude.dialogs import SELECTOR_HIGHLIGHTED_OPTION_RE
 from imbue.mngr_claude.dialogs import Unrecognized
 from imbue.mngr_claude.dialogs import classify
@@ -390,6 +394,26 @@ class ClaudeAgentConfig(AgentTypeConfig):
         "mngr answers is reached by cycling the selector onto a named option, never by pressing "
         "Enter on whatever happens to be highlighted.",
     )
+
+    @field_validator("sensibly_deal_with_dialogs")
+    @classmethod
+    def _check_dialog_nicknames(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        """Reject a nickname mngr does not know, rather than silently answering nothing.
+
+        The failure mode this prevents is quiet: a typo, or the "*" this field used to take,
+        matches no dialog, so mngr refuses every send it was told to answer and the operator has
+        no way to tell that from the feature not working.
+        """
+        allowed = SELECTABLE_NICKNAMES | {ALL_RECOGNIZED_NONBENIGN, DANGEROUS_ALL_NONBENIGN_INCLUDING_UNRECOGNIZED}
+        unknown = [entry for entry in value if entry not in allowed]
+        if unknown:
+            raise UnknownDialogNicknameError(
+                f"Unknown entries in sensibly_deal_with_dialogs: {sorted(unknown)}. "
+                f"Valid nicknames: {sorted(SELECTABLE_NICKNAMES)}, or the tokens "
+                f"{ALL_RECOGNIZED_NONBENIGN!r} / {DANGEROUS_ALL_NONBENIGN_INCLUDING_UNRECOGNIZED!r}."
+            )
+        return value
+
     post_submit_dialog_observe_seconds: Annotated[float, Field(gt=0)] = Field(
         default=POST_SUBMIT_DIALOG_OBSERVE_SECONDS,
         description="How long (seconds) to keep observing the pane after a message is delivered before "
@@ -1571,6 +1595,15 @@ def extract_blocking_selector_block(pane_content: str) -> str | None:
         if _SELECTOR_ANY_OPTION_RE.match(lines[idx]):
             last_option_idx = idx
     return "\n".join(lines[rule_idx : last_option_idx + 1]).strip()
+
+
+class UnknownDialogNicknameError(ConfigError, ValueError):
+    """An entry in ``sensibly_deal_with_dialogs`` names no dialog mngr knows.
+
+    Inherits ValueError as well as the package base because pydantic only treats a ValueError as
+    a field validation failure -- anything else escapes the model as a raw exception instead of a
+    readable "invalid config" report.
+    """
 
 
 class DialogDetectedError(SendMessageError):

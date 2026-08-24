@@ -725,13 +725,18 @@ def deal_with_dialogs(pane: DialogPane, max_passes: int = _MAX_DIALOG_PASSES) ->
     Every keypress the pane performs waits for the pane to change before returning (tmux
     ``send-keys`` is asynchronous), so a pass never reads a screen that has not caught up.
     """
-    previous_nickname: str | None = None
+    previous_pane: str | None = None
     for _ in range(max_passes):
-        blocking = classify(pane.capture())
+        pane_content = pane.capture()
+        blocking = classify(pane_content)
         if blocking is None:
             return
-        if blocking.get_nickname() == previous_nickname:
+        # Compare the PANE, not the nickname. GenericBenign covers every dismissible surface, so
+        # it answers to one nickname for all of them -- and a genuine chain (the model picker
+        # revealing the effort picker beneath it) would look identical to being stuck. An
+        # unchanged pane after dealing with it is the honest signal that nothing moved.
+        if pane_content == previous_pane:
             raise DialogBlocked(blocking.get_nickname(), blocking.get_message())
         blocking.deal_with(pane)
-        previous_nickname = blocking.get_nickname()
-    raise DialogBlocked(previous_nickname or "Unrecognized", Unrecognized().get_message())
+        previous_pane = pane_content
+    raise DialogBlocked(Unrecognized().get_nickname(), Unrecognized().get_message())

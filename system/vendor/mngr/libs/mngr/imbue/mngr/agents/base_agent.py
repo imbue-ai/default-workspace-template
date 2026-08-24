@@ -67,12 +67,6 @@ def quote_agent_args(agent_args: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(shlex.quote(arg) for arg in agent_args)
 
 
-# Resolved send targets by session name. The pane ID is written once at session creation and
-# fixed for that session's life, so this is a cache of an immutable fact rather than state --
-# and a session name is unique to one agent run, so a restarted agent resolves afresh.
-_CACHED_SEND_TARGETS: dict[str, str] = {}
-
-
 class BaseAgent(AgentInterface[AgentConfigT]):
     """Concrete agent implementation that stores data on the host filesystem."""
 
@@ -428,11 +422,54 @@ class BaseAgent(AgentInterface[AgentConfigT]):
         )
         return self._capture_pane_content(target, include_scrollback=include_scrollback)
 
+    def _send_target_arg(self, tmux_target: TmuxWindowTarget) -> str:
+        """The tmux ``-t`` argument every send should use: the agent's own pane, by ID.
+
+        ``session:window`` resolves to whichever pane is ACTIVE, so one split silently delivers
+        the message into the new shell instead. The pane ID recorded at session creation is
+        unique for that pane's life and fails loudly once it is gone, which is what we want -- a
+        misrouted message is far worse than a refused one.
+
+        Falls back to the window target when the option is absent, which is how a session created
+        before this existed keeps working.
+
+        Deliberately NOT cached. A session name is reused when an agent restarts -- which the
+        chat's Force button does on purpose -- so a remembered pane ID outlives the pane it names
+        and the next send would type into a pane that no longer exists, or into whichever pane
+        inherited that ID after a tmux server restart. One tmux call per send is the price of
+        addressing the pane that exists now.
+        """
+        session_arg = shlex.quote(f"={tmux_target.session_name}:")
+        result = self.host.execute_stateful_command(f"tmux show-options -v -t {session_arg} {AGENT_PANE_ID_OPTION}")
+        pane_id = result.stdout.strip() if result.success else ""
+        return shlex.quote(pane_id) if pane_id else tmux_target.as_shell_arg()
+
+    def _clear_pane_modes(self, target_arg: str) -> None:
+        """Leave copy-mode (or any other mode) before typing into the pane.
+
+        tmux modes -- copy, clock, choose-tree, customize -- intercept keys, so ``send-keys`` into
+        a pane in one is swallowed entirely. ``paste-buffer`` is NOT, which is what makes this
+        nasty rather than merely broken: a long message pastes into the input box and the Enter
+        after it disappears, leaving the text sitting there unsent rather than failing.
+
+        Users reach copy-mode by accident constantly -- with ``mouse on``, one wheel-up enters it
+        with no obvious indicator. ``copy-mode -q`` clears every mode type in one call and is a
+        silent no-op when the pane is in none, so it needs no ``#{pane_in_mode}`` check. Best
+        effort: if it fails, the send that follows will report the real problem.
+        """
+        self.host.execute_stateful_command(f"tmux copy-mode -q -t {target_arg}")
+
     def _capture_pane_content(self, tmux_target: TmuxWindowTarget, include_scrollback: bool = False) -> str | None:
-        """Capture the current pane content, returning None on failure."""
+        """Capture the agent pane's content, returning None on failure.
+
+        Reads the same pane the sends write to. A window target resolves to whichever pane is
+        ACTIVE, so after a split this would read the wrong pane -- and every decision built on a
+        capture (is a dialog up, did the paste land, is the TUI ready) would be about a shell the
+        agent is not in.
+        """
         return capture_tmux_pane_content(
             self.host,
-            tmux_target,
+            self._send_target_arg(tmux_target),
             timeout_seconds=_CAPTURE_PANE_TIMEOUT_SECONDS,
             include_scrollback=include_scrollback,
         )
@@ -712,46 +749,6 @@ class SendKeysAgent(InteractiveAgentMixin, SupportsKeyChordMixin, BaseAgent[Agen
                 raise SendMessageError(
                     str(self.name), f"tmux send-keys {key} failed: {result.stderr or result.stdout}"
                 )
-
-    def _send_target_arg(self, tmux_target: TmuxWindowTarget) -> str:
-        """The tmux ``-t`` argument every send should use: the agent's own pane, by ID.
-
-        ``session:window`` resolves to whichever pane is ACTIVE, so one split silently delivers
-        the message into the new shell instead. The pane ID recorded at session creation is
-        unique for that pane's life and fails loudly once it is gone, which is what we want -- a
-        misrouted message is far worse than a refused one.
-
-        Falls back to the window target when the option is absent, which is how a session created
-        before this existed keeps working.
-
-        Resolved once per agent object and remembered: the option is written at session creation
-        and cannot change while that session lives, so re-reading it would spend a round trip per
-        send to learn the same answer -- and on a remote host that is not free.
-        """
-        cached = _CACHED_SEND_TARGETS.get(self.session_name)
-        if cached is not None:
-            return cached
-        session_arg = shlex.quote(f"={tmux_target.session_name}:")
-        result = self.host.execute_stateful_command(f"tmux show-options -v -t {session_arg} {AGENT_PANE_ID_OPTION}")
-        pane_id = result.stdout.strip() if result.success else ""
-        target_arg = shlex.quote(pane_id) if pane_id else tmux_target.as_shell_arg()
-        _CACHED_SEND_TARGETS[self.session_name] = target_arg
-        return target_arg
-
-    def _clear_pane_modes(self, target_arg: str) -> None:
-        """Leave copy-mode (or any other mode) before typing into the pane.
-
-        tmux modes -- copy, clock, choose-tree, customize -- intercept keys, so ``send-keys`` into
-        a pane in one is swallowed entirely. ``paste-buffer`` is NOT, which is what makes this
-        nasty rather than merely broken: a long message pastes into the input box and the Enter
-        after it disappears, leaving the text sitting there unsent rather than failing.
-
-        Users reach copy-mode by accident constantly -- with ``mouse on``, one wheel-up enters it
-        with no obvious indicator. ``copy-mode -q`` clears every mode type in one call and is a
-        silent no-op when the pane is in none, so it needs no ``#{pane_in_mode}`` check. Best
-        effort: if it fails, the send that follows will report the real problem.
-        """
-        self.host.execute_stateful_command(f"tmux copy-mode -q -t {target_arg}")
 
     def send_message(self, message: str) -> None:
         """Send a message to the running agent.

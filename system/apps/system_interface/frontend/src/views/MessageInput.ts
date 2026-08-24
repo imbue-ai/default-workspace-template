@@ -1,5 +1,5 @@
 import m from "mithril";
-import { NoticeDialog } from "./NoticeDialog";
+import { makeNoticeDialog } from "./NoticeDialog";
 import type { SendFailureKind } from "../models/request-error";
 import {
   clearComposerAttachments,
@@ -131,6 +131,11 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
   let actionFailureRecovery: SendRecovery | null = null;
   // Which recovery action is mid-flight, so the buttons disable rather than fire twice.
   let actionFailureInFlight: "retry" | "force" | null = null;
+  // One notice instance each: the component closes over its own dismiss handler, so sharing one
+  // between notices would let whichever rendered last answer the others' Escape.
+  const actionFailureNotice = makeNoticeDialog();
+  const declinedCommandNotice = makeNoticeDialog();
+  const authCommandNotice = makeNoticeDialog();
   // mngr's classification of the failure, which decides which recoveries are worth offering.
   let actionFailureKind: SendFailureKind = "unknown";
   // Retry for a failure raised by a sibling view, which knows how to repeat its own operation.
@@ -217,6 +222,8 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         actionFailureDetail = null;
         actionFailureRecovery = null;
         actionFailureInFlight = null;
+        actionFailureKind = "unknown";
+        externalRetry = null;
       }
 
       // A sibling view (a native tap whose resend failed) merged a returned block into this agent's
@@ -456,18 +463,40 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         // put the failed message first and any draft typed during the send after it, and neither
         // is lost.
         prependToComposer(forAgentId, text);
-        restoreComposerAttachments(forAgentId, attachments);
+        // Merge rather than replace: restoreComposerAttachments overwrites, and anything attached
+        // while the send was in flight would go with it.
+        const existingAttachments = getComposerAttachments(forAgentId);
+        const existingIds = new Set(existingAttachments.map((attachment) => attachment.localId));
+        restoreComposerAttachments(forAgentId, [
+          ...attachments.filter((attachment) => !existingIds.has(attachment.localId)),
+          ...existingAttachments,
+        ]);
         if (currentAgentId === forAgentId) {
           messageText = localStorage.getItem(messageTextKey(forAgentId)) ?? text;
         }
       }
 
-      /** Drop the restored copy once a repeat send has actually landed. */
-      function clearRestoredMessage(forAgentId: string): void {
-        localStorage.removeItem(messageTextKey(forAgentId));
-        clearComposerAttachments(forAgentId);
+      /** Remove just the restored copy once a repeat send has landed, leaving the rest alone. */
+      function clearRestoredMessage(forAgentId: string, restoredText: string): void {
+        // Emphatically NOT "clear the composer". By this point the box can also hold a draft
+        // typed while the send was failing, and -- after Force -- the queue block drained out of
+        // the harness so the restart would not destroy it. Wiping it wholesale would throw away
+        // the very messages this feature exists to protect. Remove the one copy that was just
+        // delivered, and leave everything else exactly where it is.
+        const current = localStorage.getItem(messageTextKey(forAgentId)) ?? "";
+        const withoutRestored = current.startsWith(`${restoredText}\n`)
+          ? current.slice(restoredText.length + 1)
+          : current === restoredText
+            ? ""
+            : current;
+        if (withoutRestored) {
+          localStorage.setItem(messageTextKey(forAgentId), withoutRestored);
+        } else {
+          localStorage.removeItem(messageTextKey(forAgentId));
+          clearComposerAttachments(forAgentId);
+        }
         if (currentAgentId === forAgentId) {
-          messageText = "";
+          messageText = withoutRestored;
         }
       }
 
@@ -477,6 +506,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         actionFailureInFlight = null;
         externalRetry = null;
         actionFailureKind = "unknown";
+        actionFailureTitle = "Couldn't send your message";
       }
 
       /** Cancel: give the message back and close. Also what Escape and a backdrop press do. */
@@ -533,7 +563,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         try {
           await sendMessage(recovery.agentId, recovery.sentText);
           // Landed, so take the restored copy back out of the composer.
-          clearRestoredMessage(recovery.agentId);
+          clearRestoredMessage(recovery.agentId, recovery.text);
           clearActionFailureNotice();
           focusMessageTextarea();
         } catch (err) {
@@ -593,7 +623,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         // anything unclassified -- keeps it.
         const canRetryHelp = actionFailureKind !== "agent_unreachable";
         const isRepeatable = (recovery !== null || externalRetry !== null) && canRetryHelp;
-        return m(NoticeDialog, {
+        return m(actionFailureNotice, {
           title: actionFailureTitle,
           body: [
             detail,
@@ -638,7 +668,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
       }
 
       function renderDeclinedCommandNotice(declined: { command: string; body: string | null }): m.Children {
-        return m(NoticeDialog, {
+        return m(declinedCommandNotice, {
           title: `${declined.command} can't be sent from chat`,
           body: [declined.body ?? "You can still send it from the agent's terminal."],
           dismissLabel: "OK",
@@ -647,7 +677,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
       }
 
       function renderAuthCommandNotice(command: string): m.Children {
-        return m(NoticeDialog, {
+        return m(authCommandNotice, {
           title: command === "/logout" ? "Sign-out is managed here" : "Sign-in is managed here",
           body: [
             `Sending ${command} to the agent would run its own auth flow inside the agent's terminal, ` +

@@ -39,65 +39,79 @@ export interface NoticeDialogAttrs {
   onDismiss: () => void;
 }
 
-export const NoticeDialog: m.Component<NoticeDialogAttrs> = {
-  view(vnode) {
-    const { title, body, dismissLabel, actions = [], isDismissable = true, onDismiss } = vnode.attrs;
-    const dismiss = (): void => {
-      if (isDismissable) onDismiss();
-    };
-    return m(
-      "div.custom-url-dialog-overlay",
-      {
-        oncreate() {
-          document.addEventListener("keydown", handleKeydown);
-        },
-        onremove() {
-          document.removeEventListener("keydown", handleKeydown);
-        },
-        ...backdropDismissAttrs(dismiss),
-      },
-      m(
-        "div.custom-url-dialog",
-        {
-          onclick(e: MouseEvent) {
-            e.stopPropagation();
-          },
-        },
-        [
-          m("h3.custom-url-dialog-title", title),
-          ...body
-            .filter((line): line is string => line !== null && line !== "")
-            .map((line) => m("p.logout-notice-body", line)),
-          m("div.custom-url-dialog-actions", [
-            m(
-              "button.custom-url-dialog-cancel",
-              {
-                // Focused on open: the dismissive button is the only one that does not act, so it
-                // is the safe thing for Enter and Space to land on.
-                oncreate: (buttonVnode: m.VnodeDOM) => (buttonVnode.dom as HTMLButtonElement).focus(),
-                disabled: !isDismissable,
-                onclick: dismiss,
-              },
-              dismissLabel,
-            ),
-            ...actions.map((action) =>
-              m(
-                action.isDestructive ? "button.custom-url-dialog-danger" : "button.custom-url-dialog-open",
-                {
-                  ...(action.tooltip === undefined ? {} : hoverTooltipAttrs(action.tooltip)),
-                  disabled: action.isDisabled === true,
-                  onclick: () => action.run(),
-                },
-                action.label,
-              ),
-            ),
-          ]),
-        ],
-      ),
-    );
+/**
+ * Closure state, so the Escape listener registered in ``oncreate`` is the SAME function object
+ * ``onremove`` unregisters. A handler defined inside ``view`` is a new closure on every redraw,
+ * which ``removeEventListener`` cannot match -- so every redraw would leave another live listener
+ * behind, and each one would keep dismissing long after its notice was gone.
+ */
+export function makeNoticeDialog(): m.Component<NoticeDialogAttrs> {
+  let dismiss: () => void = () => {};
 
-    function handleKeydown(event: KeyboardEvent): void {
-      if (event.key === "Escape") dismiss();
-    }
-  },
-};
+  function handleKeydown(event: KeyboardEvent): void {
+    if (event.key === "Escape") dismiss();
+  }
+
+  return {
+    view(vnode) {
+      const { title, body, dismissLabel, actions = [], isDismissable = true, onDismiss } = vnode.attrs;
+      dismiss = (): void => {
+        if (isDismissable) onDismiss();
+      };
+      return m(
+        "div.custom-url-dialog-overlay",
+        {
+          oncreate() {
+            document.addEventListener("keydown", handleKeydown);
+          },
+          onremove() {
+            document.removeEventListener("keydown", handleKeydown);
+          },
+          ...backdropDismissAttrs(dismiss),
+        },
+        m(
+          "div.custom-url-dialog",
+          {
+            onclick(e: MouseEvent) {
+              e.stopPropagation();
+            },
+          },
+          [
+            m("h3.custom-url-dialog-title", title),
+            ...body
+              .filter((line): line is string => line !== null && line !== "")
+              .map((line) => m("p.logout-notice-body", line)),
+            m("div.custom-url-dialog-actions", [
+              m(
+                "button.custom-url-dialog-cancel",
+                {
+                  // Focused on open: the dismissive button is the only one that does not act, so it
+                  // is the safe thing for Enter and Space to land on.
+                  oncreate: (buttonVnode: m.VnodeDOM) => (buttonVnode.dom as HTMLButtonElement).focus(),
+                  disabled: !isDismissable,
+                  onclick: dismiss,
+                },
+                dismissLabel,
+              ),
+              ...actions.map((action) =>
+                m(
+                  action.isDestructive ? "button.custom-url-dialog-danger" : "button.custom-url-dialog-open",
+                  {
+                    ...(action.tooltip === undefined ? {} : hoverTooltipAttrs(action.tooltip)),
+                    disabled: action.isDisabled === true,
+                    onclick: () => action.run(),
+                  },
+                  action.label,
+                ),
+              ),
+            ]),
+          ],
+        ),
+      );
+    },
+  };
+}
+
+// Deliberately no shared instance: the factory holds the dismiss handler its Escape listener
+// closes over, so two notices sharing one would have the second overwrite the first's. Each
+// render site makes its own.

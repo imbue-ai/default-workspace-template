@@ -127,7 +127,7 @@ def test_send_message_waits_for_ready_indicator_before_pasting() -> None:
     agent = _make_recording_agent(pane)
     agent.send_message(_RESUME_MESSAGE)
     assert agent.steps == ["preflight", "paste"]
-    host_commands = cast(ScriptedHost, agent.host).captured
+    host_commands = cast(ScriptedHost, agent.host).sent_commands
     assert host_commands == ["tmux send-keys -t =s:0 Enter"]
 
 
