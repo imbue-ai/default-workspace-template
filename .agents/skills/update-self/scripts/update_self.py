@@ -3189,23 +3189,29 @@ def recover(
     if is_recovered:
         clear_marker(repo_root)
         discard_snapshots(repo_root)
-        # Same rule again: an interrupted apply whose baseline was already
-        # broken is recovered on the backend's health alone, which is not the
-        # confirmation the record is held to.
+        # Same rule again, and it decides both what this clears and what it
+        # may claim: the frontend is probed only when one was expected, so a
+        # recovery of an apply that had no working UI to be held to has
+        # confirmed the backend and nothing else. This line is often the only
+        # account of an unattended recovery, so it must not sign off on a UI
+        # nobody looked at -- and an apply killed before it measured its
+        # baseline (the marker predates the merge, the baseline probe follows
+        # it) has no observation of that UI to report at all.
         if marker.frontend_expected:
             clear_emergency(repo_root)
-        # The same two arms ``_report_rolled_back`` uses, for the same reason:
-        # the frontend is probed only when one was expected, so a recovery of
-        # an apply that began over a broken UI has confirmed the backend and
-        # nothing else. This line is often the only account of an unattended
-        # recovery, so it must not sign off on a UI nobody looked at.
-        confirmation = (
-            "the live workspace is confirmed healthy"
-            if marker.frontend_expected
-            else "the backend is healthy, but the live UI was not serving a working "
-            "frontend when that apply began either, so this rollback was not held to "
-            "that standard and cannot confirm it"
-        )
+            confirmation = "the live workspace is confirmed healthy"
+        else:
+            unheld = (
+                "the live UI was not serving a working frontend when that apply began "
+                "either"
+                if marker.frontend_expected is False
+                else "that apply was killed before it recorded whether the live UI was "
+                "serving a working frontend"
+            )
+            confirmation = (
+                f"the backend is healthy, but {unheld}, so this rollback was not held "
+                "to that standard and cannot confirm it"
+            )
         sys.stderr.write(
             f"recovered: the interrupted apply is rolled back and {confirmation}. The "
             "worker branch and its report are kept, so a diagnosed retry is a quick "
