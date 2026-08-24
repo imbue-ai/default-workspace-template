@@ -5,8 +5,10 @@ import shutil
 import subprocess
 import tomllib
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
+from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.server import _inject_update_staleness_meta_tag
 from imbue.system_interface.server import create_application
 from imbue.system_interface.testing import build_test_state
@@ -15,6 +17,7 @@ from imbue.system_interface.update_staleness import STALENESS_UPDATE_INTERRUPTED
 from imbue.system_interface.update_staleness import UPDATE_APPLY_MARKER_REL
 from imbue.system_interface.update_staleness import UPDATE_STALENESS_HEADER
 from imbue.system_interface.update_staleness import UPDATE_STALENESS_META_TAG
+from imbue.system_interface.update_staleness import WORKSPACE_ROOT_DIRECTORY
 from imbue.system_interface.update_staleness import UpdateStalenessTracker
 from imbue.system_interface.update_staleness import _is_path_relevant_to_this_server
 
@@ -91,8 +94,8 @@ def test_every_imported_workspace_package_is_covered() -> None:
     would leave a real skew showing no banner -- a silent failure the rest of
     the suite cannot see, because nothing else knows what this process imports.
     """
-    app_root = Path(__file__).resolve().parents[2]
-    repo_root = app_root.parents[2]
+    repo_root = WORKSPACE_ROOT_DIRECTORY
+    app_root = repo_root / "system/apps/system_interface"
     dependencies = set(
         tomllib.loads((app_root / "pyproject.toml").read_text())["project"]["dependencies"]
     )
@@ -209,12 +212,22 @@ def test_a_git_failure_after_startup_is_logged_not_swallowed(
     assert any("update-staleness" in record for record in loguru_records)
 
 
+def _tracking_state(repo: Path) -> SystemInterfaceState:
+    """A test state whose staleness tracker watches ``repo``.
+
+    ``build_test_state`` captures against the developer's real checkout, which
+    is never the tree a test moves.
+    """
+    state = build_test_state()
+    state.update_staleness = UpdateStalenessTracker.capture(repo_root=repo)
+    return state
+
+
 def test_app_shell_carries_the_staleness_header(git_work_dir: Path) -> None:
     # The header rides on every app-shell response -- the built app and the
     # not-built placeholder alike -- so this needs no particular bundle state.
     repo = git_work_dir
-    state = build_test_state()
-    state.update_staleness = UpdateStalenessTracker.capture(repo_root=repo)
+    state = _tracking_state(repo)
     _commit_files(repo, "moved after startup", _RELEVANT_PATH)
 
     client = create_application(state).test_client()
@@ -226,8 +239,7 @@ def test_app_shell_carries_the_staleness_header(git_work_dir: Path) -> None:
 
 def test_app_shell_names_the_interrupted_variant_from_the_marker(git_work_dir: Path) -> None:
     repo = git_work_dir
-    state = build_test_state()
-    state.update_staleness = UpdateStalenessTracker.capture(repo_root=repo)
+    state = _tracking_state(repo)
     _write_marker(repo)
 
     client = create_application(state).test_client()
@@ -243,8 +255,7 @@ def test_the_placeholders_head_poll_does_not_ask_for_staleness(git_work_dir: Pat
     # exactly when the tree has moved, so asking here would fork git twice per
     # poll per tab. A real GET still carries the header.
     repo = git_work_dir
-    state = build_test_state()
-    state.update_staleness = UpdateStalenessTracker.capture(repo_root=repo)
+    state = _tracking_state(repo)
     _commit_files(repo, "moved after startup", _RELEVANT_PATH)
     client = create_application(state).test_client()
 
@@ -254,13 +265,40 @@ def test_the_placeholders_head_poll_does_not_ask_for_staleness(git_work_dir: Pat
 
 def test_a_consistent_workspace_gets_no_header(git_work_dir: Path) -> None:
     repo = git_work_dir
-    state = build_test_state()
-    state.update_staleness = UpdateStalenessTracker.capture(repo_root=repo)
+    state = _tracking_state(repo)
 
     client = create_application(state).test_client()
     response = client.get("/")
 
     assert UPDATE_STALENESS_HEADER not in response.headers
+
+
+def test_the_built_app_shell_carries_the_staleness_meta_tag(
+    git_work_dir: Path, tmp_path: Path
+) -> None:
+    """The meta tag is the only thing the banner reads, and only the *built*
+    shell carries one -- every other server test here runs against the
+    not-built placeholder, where nothing is injected at all.
+    """
+    repo = git_work_dir
+    state = _tracking_state(repo)
+    _commit_files(repo, "moved after startup", _RELEVANT_PATH)
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    (static_dir / "index.html").write_text("<html><head></head><body>app</body></html>")
+
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
+        response = create_application(state).test_client().get("/")
+        # A workspace consistent with what it is serving gets no tag at all:
+        # the tag's presence is the difference between banner and no banner.
+        consistent = create_application(_tracking_state(repo)).test_client().get("/")
+
+    assert response.status_code == 200
+    assert (
+        f'<meta name="{UPDATE_STALENESS_META_TAG}" content="{STALENESS_TREE_MOVED}">'
+        in response.text
+    )
+    assert UPDATE_STALENESS_META_TAG not in consistent.text
 
 
 def test_meta_tag_injection_names_the_variant_and_skips_when_consistent() -> None:
