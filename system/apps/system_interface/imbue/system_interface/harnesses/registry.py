@@ -24,6 +24,10 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.activity import HarnessActivityTracker
 from imbue.system_interface.harnesses.antigravity.activity import AntigravityActivityTracker
+from imbue.system_interface.harnesses.antigravity.model import ANTIGRAVITY_CATALOG
+from imbue.system_interface.harnesses.antigravity.model import ANTIGRAVITY_STATE_RELATIVE_PATH
+from imbue.system_interface.harnesses.antigravity.model import AntigravityModelResolver
+from imbue.system_interface.harnesses.antigravity.session import AntigravityHarnessSession
 from imbue.system_interface.harnesses.antigravity.watcher import AntigravitySessionWatcher
 from imbue.system_interface.harnesses.auth_check import ANTIGRAVITY_AUTH_CHECK
 from imbue.system_interface.harnesses.auth_check import CODEX_AUTH_CHECK
@@ -437,12 +441,13 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         watcher_class=AntigravitySessionWatcher,
         tracker_class=AntigravityActivityTracker,
         process_started_marker_filename=AntigravityActivityTracker.marker_filename,
-        # Model bar only. agy reads and switches its model through its own settings, and the
-        # uniform ``model_state.json`` it should write is not wired on the mngr side yet, so
-        # the resolver and catalog stay inert while the transcript above is real.
-        resolver_class=PlaceholderModelResolver,
-        catalog_factory=lambda: EMPTY_CATALOG,
-        model_state_relative_path=Path("."),
+        # Display-only model bar: agy's `/model` is an interactive TUI picker with no
+        # scriptable one-shot form, so the bar reflects and never drives. The session subclass
+        # exists only to absorb catalog staleness -- see its switch_options.
+        resolver_class=AntigravityModelResolver,
+        catalog_factory=lambda: ANTIGRAVITY_CATALOG,
+        session_class=AntigravityHarnessSession,
+        model_state_relative_path=ANTIGRAVITY_STATE_RELATIVE_PATH,
         special_kinds=frozenset(),
         popups=(_MODEL_BAR_POPUP,),
         auth_check=ANTIGRAVITY_AUTH_CHECK,
