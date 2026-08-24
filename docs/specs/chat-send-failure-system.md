@@ -52,9 +52,11 @@ The reason now travels: `send_to_agent` returns the harness's own words rather t
 
 **Deliberately not a harness popup**, though it looks like one. The `composer_command` and `turn_check` triggers both fire in the frontend, before a send, off what the user typed. A send failure is the backend reporting, after the fact, that something refused -- and every harness can fail a send, so declaring it per harness would be wrong.
 
-### 4. Recovery actions -- proposed, not built
+### 4. Recovery actions -- built
 
-The notice reports and leaves the user there. The proposal is Cancel / Retry / Force, specified in `send-failure-notice.md`.
+Cancel returns the message to the composer, Retry repeats the operation, Force restarts the agent and sends. Specified in `send-failure-notice.md`.
+
+**One notice, one way in.** `NoticeDialog` owns the overlay, the Escape listener, the backdrop press and the focus rule, so every notice in the chat dismisses identically -- previously each was hand-copied and they had already drifted, with one of them not answering Escape at all. A view that is not the composer raises a failure through `raiseFailureNotice`, so the queued-message flush reports into the same notice rather than a system alert. Nothing in the send path calls `alert` any more.
 
 The load-bearing decision: **actions attach to the operation, not the failure.** Any send can fail, and in every case the same three ways out apply, so there is no per-failure branching -- only the explanation varies, and that already arrives from layer 2. A failed *interrupt*, which shares this notice, is not repeatable and keeps a single OK.
 
@@ -81,6 +83,8 @@ The chain only works because layer 2 stopped flattening its reason into a bool. 
 **A stray Enter can answer a dialog nobody looked at.** `submit_message_and_confirm` re-sends Enter while it cannot confirm delivery, gated on the pane still showing the pasted message. That gate is a substring test: `/effort` normalizes to `effort`, and the picker it opens is headed **Effort**, so the gate reads the open picker as an unsent message and presses Enter at it -- confirming whatever row was highlighted. `/model` has the same shape. The gate's own comment states the assumption that fails: a stray Enter on an empty input row is a no-op, but on a selector it picks a row.
 
 This is the exact thing layer 2 exists to prevent, happening one layer down, and it predates all of this.
+
+**An attachment that fails to upload now refuses the send** and names the file, rather than being dropped from the message with its chip cleared a moment later.
 
 **Bare `/effort` and `/model` are invisible.** Layer 1 lets them through by design, the display rules hide them, and layer 2 will Escape the picker at the next send -- so the user's action produces a picker that appears, does nothing, and vanishes.
 

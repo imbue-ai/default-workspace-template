@@ -1,5 +1,5 @@
 import m from "mithril";
-import { backdropDismissAttrs } from "./modalBackdrop";
+import { NoticeDialog } from "./NoticeDialog";
 import {
   clearComposerAttachments,
   getComposerAttachments,
@@ -37,6 +37,28 @@ function messageTextKey(agentId: string): string {
 // merge-not-drop rule Stop's drain-to-composer uses. Persisted to localStorage regardless, so the text
 // survives even if the composer is not currently mounted -- never swallowed (contract A1a).
 const pendingComposerPrepends = new Map<string, string>();
+
+/** A failure raised from OUTSIDE this component, waiting for the composer to show it. */
+interface PendingFailureNotice {
+  title: string;
+  detail: string;
+  /** Repeated by Retry. Omitted when the operation cannot be repeated. */
+  retry?: () => Promise<void>;
+}
+const pendingFailureNotices = new Map<string, PendingFailureNotice>();
+
+/**
+ * Raise the chat's failure notice for ``agentId`` from a sibling view.
+ *
+ * The composer owns the notice because it owns the composer -- Cancel means "the message is back
+ * in the box, go look at it". A sibling that fails a send hands the failure here rather than
+ * putting up its own dialog, so one shape of failure gets one shape of answer no matter which
+ * button started it.
+ */
+export function raiseFailureNotice(agentId: string, notice: PendingFailureNotice): void {
+  pendingFailureNotices.set(agentId, notice);
+  m.redraw();
+}
 
 /** Hand ``block`` back to ``agentId``'s composer (prepended above any draft), from a sibling view. */
 export function prependToComposer(agentId: string, block: string): void {
@@ -102,9 +124,14 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
     attachments: readonly ComposerAttachment[];
   };
   let actionFailureDetail: string | null = null;
+  // A failed Stop shares this notice, and telling the user their message could not be sent when
+  // they clicked Stop is simply wrong copy.
+  let actionFailureTitle = "Couldn't send your message";
   let actionFailureRecovery: SendRecovery | null = null;
   // Which recovery action is mid-flight, so the buttons disable rather than fire twice.
   let actionFailureInFlight: "retry" | "force" | null = null;
+  // Retry for a failure raised by a sibling view, which knows how to repeat its own operation.
+  let externalRetry: (() => Promise<void>) | null = null;
   let fileInputElement: HTMLInputElement | null = null;
   let isInterruptInFlight = false;
 
@@ -112,29 +139,9 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
     messageTextareaElement?.focus();
   }
 
-  // The declined-command notice has nothing focusable to hang an onkeydown off, so Escape comes
-  // from a document listener while it is open (as the image lightbox does). Stable reference, for
-  // the same reason as the dropdown handler below.
-  function handleDeclinedNoticeKeydown(event: KeyboardEvent): void {
-    if (event.key === "Escape") {
-      declinedSlashCommand = null;
-      m.redraw();
-    }
-  }
-
   // Its own handler rather than the one above: each notice clears only its own state, and
   // registering one shared function reference from two overlays would be de-duplicated by
   // addEventListener and then torn down by whichever overlay closed first.
-  // Set by the notice while it is open, so Escape can run the same dismissal the button does.
-  // Clearing the state directly here instead would skip everything Cancel is responsible for.
-  let dismissActionFailureNoticeRef: (() => void) | null = null;
-
-  function handleActionFailureNoticeKeydown(event: KeyboardEvent): void {
-    if (event.key === "Escape") {
-      dismissActionFailureNoticeRef?.();
-    }
-  }
-
   function renderComposerAttachment(agentId: string, attachment: ComposerAttachment): m.Vnode {
     const isReadyImage = attachment.status === "ready" && attachment.isImage && attachment.uploaded !== undefined;
     const thumbnail = isReadyImage
@@ -211,6 +218,16 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
 
       // A sibling view (a native tap whose resend failed) merged a returned block into this agent's
       // persisted draft; adopt it into the live composer so it is visible at once, then clear the flag.
+      // A sibling view raised a failure for this agent; adopt it into the notice.
+      const pendingNotice = pendingFailureNotices.get(agentId);
+      if (pendingNotice !== undefined) {
+        pendingFailureNotices.delete(agentId);
+        clearActionFailureNotice();
+        actionFailureTitle = pendingNotice.title;
+        actionFailureDetail = pendingNotice.detail;
+        externalRetry = pendingNotice.retry ?? null;
+      }
+
       const pendingPrepend = pendingComposerPrepends.get(agentId);
       if (pendingPrepend !== undefined) {
         pendingComposerPrepends.delete(agentId);
@@ -250,7 +267,27 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
 
         const attachmentPaths = getReadyAttachmentPaths(agentId);
         const text = messageText;
+
+        // An upload that failed is dropped by getReadyAttachmentPaths and its chip is cleared
+        // below, so without this the file would leave the message silently and the only clue
+        // would be a small label that then disappears. Refuse the send and say which file.
+        const failedAttachments = getComposerAttachments(agentId).filter(
+          (attachment) => attachment.status === "error",
+        );
+        if (failedAttachments.length > 0) {
+          const names = failedAttachments.map((attachment) => attachment.fileName).join(", ");
+          actionFailureTitle =
+            failedAttachments.length === 1 ? "An attachment didn't upload" : "Some attachments didn't upload";
+          actionFailureDetail = `${names} could not be uploaded, so the message was not sent. Remove the attachment, or try again.`;
+          actionFailureRecovery = null;
+          externalRetry = null;
+          m.redraw();
+          return;
+        }
+
         if (!text.trim() && attachmentPaths.length === 0) {
+          // Nothing to send. Reachable by clicking Send with an empty box, which needs no
+          // explanation -- the button simply does nothing.
           return;
         }
 
@@ -299,6 +336,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
           // Only offer the actions if they are still looking at the agent that failed: the catch
           // runs after an await, so they may have switched, and the switch-clear has gone by.
           if (currentAgentId === agentId) {
+            actionFailureTitle = "Couldn't send your message";
             actionFailureDetail = detail;
             actionFailureRecovery = { agentId, text: sentText, sentText: finalText, attachments: sentAttachments };
           }
@@ -357,6 +395,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
           // Never inherit a previous send's recovery: an interrupt has nothing to repeat, and
           // leaving one attached would offer Retry bound to an unrelated message.
           clearActionFailureNotice();
+          actionFailureTitle = "Couldn't stop the agent";
           actionFailureDetail = detail;
         } finally {
           isInterruptInFlight = false;
@@ -432,6 +471,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         actionFailureDetail = null;
         actionFailureRecovery = null;
         actionFailureInFlight = null;
+        externalRetry = null;
       }
 
       /** Cancel: give the message back and close. Also what Escape and a backdrop press do. */
@@ -452,13 +492,30 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
 
       /** Retry: the ordinary send again, so it re-runs preflight and can fail again. */
       async function retryFailedSend(): Promise<void> {
+        if (actionFailureInFlight !== null) {
+          return;
+        }
         const recovery = actionFailureRecovery;
-        if (recovery === null || actionFailureInFlight !== null) {
+        const retryExternal = externalRetry;
+        if (recovery === null && retryExternal === null) {
           return;
         }
         actionFailureInFlight = "retry";
         m.redraw();
-        await repeatFailedSend(recovery);
+        if (recovery !== null) {
+          await repeatFailedSend(recovery);
+          return;
+        }
+        // A sibling's operation: it knows how to repeat itself, and reports its own failure the
+        // same way it reported the first one.
+        try {
+          await retryExternal!();
+          clearActionFailureNotice();
+        } catch (err) {
+          actionFailureDetail = describeRequestError(err);
+          actionFailureInFlight = null;
+        }
+        m.redraw();
       }
 
       /**
@@ -524,156 +581,77 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         await repeatFailedSend(recovery);
       }
 
-      function renderActionFailureNotice(detail: string): m.Vnode {
-        return m(
-          "div.custom-url-dialog-overlay",
-          {
-            oncreate() {
-              dismissActionFailureNoticeRef = dismissActionFailureNotice;
-              document.addEventListener("keydown", handleActionFailureNoticeKeydown);
-            },
-            onremove() {
-              dismissActionFailureNoticeRef = null;
-              document.removeEventListener("keydown", handleActionFailureNoticeKeydown);
-            },
-            ...backdropDismissAttrs(dismissActionFailureNotice),
-          },
-          m(
-            "div.custom-url-dialog",
-            {
-              onclick(e: MouseEvent) {
-                e.stopPropagation();
-              },
-            },
-            [
-              // The body already names the agent when the failure is agent-specific, so the
-              // title stays generic rather than repeating it.
-              m("h3.custom-url-dialog-title", "Couldn't send your message"),
-              m("p.logout-notice-body", detail),
-              // Many of these are resolved in seconds by someone looking at the pane -- an
-              // unsubmitted shell command, a dialog wanting a real answer -- so say so.
-              actionFailureRecovery !== null
-                ? m("p.logout-notice-body", "You can open the agent's terminal, fix it there, then Retry.")
-                : null,
-              m("div.custom-url-dialog-actions", [
-                m(
-                  "button.custom-url-dialog-cancel",
+      function renderActionFailureNotice(detail: string): m.Children {
+        const recovery = actionFailureRecovery;
+        const isRepeatable = recovery !== null || externalRetry !== null;
+        return m(NoticeDialog, {
+          title: actionFailureTitle,
+          body: [
+            detail,
+            // Many of these are resolved in seconds by someone looking at the pane -- an
+            // unsubmitted shell command, a dialog wanting a real answer -- so say so.
+            isRepeatable ? "You can open the agent's terminal, fix it there, then Retry." : null,
+          ],
+          dismissLabel: isRepeatable ? "Cancel" : "OK",
+          isDismissable: actionFailureInFlight === null,
+          onDismiss: dismissActionFailureNotice,
+          actions: [
+            ...(isRepeatable
+              ? [
                   {
-                    // Focused by default: the only choice that does not act.
-                    oncreate: (buttonVnode: m.VnodeDOM) => (buttonVnode.dom as HTMLButtonElement).focus(),
-                    disabled: actionFailureInFlight !== null,
-                    onclick: () => dismissActionFailureNotice(),
+                    label: actionFailureInFlight === "retry" ? "Retrying…" : "Retry",
+                    tooltip: "Tries the same thing again",
+                    isDisabled: actionFailureInFlight !== null,
+                    run: () => void retryFailedSend(),
                   },
-                  actionFailureRecovery === null ? "OK" : "Cancel",
-                ),
-                actionFailureRecovery !== null
-                  ? m(
-                      "button.custom-url-dialog-open",
-                      {
-                        ...hoverTooltipAttrs("Sends the message again"),
-                        disabled: actionFailureInFlight !== null,
-                        onclick: () => void retryFailedSend(),
-                      },
-                      actionFailureInFlight === "retry" ? "Retrying…" : "Retry",
-                    )
-                  : null,
-                actionFailureRecovery !== null
-                  ? m(
-                      "button.custom-url-dialog-danger",
-                      {
-                        // hoverTooltipAttrs, not data-tooltip: that attribute is only styled inside
-                        // the composer toolbar, so the warning on the destructive button would
-                        // never actually appear.
-                        ...hoverTooltipAttrs("Restarts the agent and sends the message"),
-                        disabled: actionFailureInFlight !== null,
-                        onclick: () => void forceFailedSend(),
-                      },
-                      actionFailureInFlight === "force" ? "Forcing…" : "Force",
-                    )
-                  : null,
-              ]),
-            ],
-          ),
-        );
+                ]
+              : []),
+            // Force needs a message to send afterwards, so it is offered only for our own send.
+            ...(recovery === null
+              ? []
+              : [
+                  {
+                    label: actionFailureInFlight === "force" ? "Forcing…" : "Force",
+                    tooltip: "Restarts the agent and sends the message",
+                    isDestructive: true,
+                    isDisabled: actionFailureInFlight !== null,
+                    run: () => void forceFailedSend(),
+                  },
+                ]),
+          ],
+        });
       }
 
-      function renderDeclinedCommandNotice(declined: { command: string; body: string | null }): m.Vnode {
-        return m(
-          "div.custom-url-dialog-overlay",
-          {
-            oncreate() {
-              document.addEventListener("keydown", handleDeclinedNoticeKeydown);
-            },
-            onremove() {
-              document.removeEventListener("keydown", handleDeclinedNoticeKeydown);
-            },
-            ...backdropDismissAttrs(dismissDeclinedCommandNotice),
-          },
-          m(
-            "div.custom-url-dialog",
-            {
-              onclick(e: MouseEvent) {
-                e.stopPropagation();
-              },
-            },
-            [
-              m("h3.custom-url-dialog-title", `${declined.command} can't be sent from chat`),
-              m("p.logout-notice-body", declined.body ?? "You can still send it from the agent's terminal."),
-              m("div.custom-url-dialog-actions", [
-                m(
-                  "button.custom-url-dialog-cancel",
-                  {
-                    // Focus it so Enter and Space dismiss too, and so the notice is reachable
-                    // without a mouse.
-                    oncreate: (buttonVnode: m.VnodeDOM) => (buttonVnode.dom as HTMLButtonElement).focus(),
-                    onclick: () => dismissDeclinedCommandNotice(),
-                  },
-                  "OK",
-                ),
-              ]),
-            ],
-          ),
-        );
+      function renderDeclinedCommandNotice(declined: { command: string; body: string | null }): m.Children {
+        return m(NoticeDialog, {
+          title: `${declined.command} can't be sent from chat`,
+          body: [declined.body ?? "You can still send it from the agent's terminal."],
+          dismissLabel: "OK",
+          onDismiss: dismissDeclinedCommandNotice,
+        });
       }
 
-      function renderAuthCommandNotice(command: string): m.Vnode {
-        const title = command === "/logout" ? "Sign-out is managed here" : "Sign-in is managed here";
-        const explanation =
-          `Sending ${command} to the agent would run its own auth flow inside the agent's terminal, ` +
-          "outside this workspace's managed sign-in. Use the agent auth screen instead.";
-        return m(
-          "div.custom-url-dialog-overlay",
-          {
-            ...backdropDismissAttrs(dismissAuthCommandNotice),
-          },
-          m(
-            "div.custom-url-dialog",
+      function renderAuthCommandNotice(command: string): m.Children {
+        return m(NoticeDialog, {
+          title: command === "/logout" ? "Sign-out is managed here" : "Sign-in is managed here",
+          body: [
+            `Sending ${command} to the agent would run its own auth flow inside the agent's terminal, ` +
+              "outside this workspace's managed sign-in. Use the agent auth screen instead.",
+          ],
+          dismissLabel: "Cancel",
+          onDismiss: dismissAuthCommandNotice,
+          actions: [
             {
-              onclick(e: MouseEvent) {
-                e.stopPropagation();
+              label: "Open agent auth",
+              run: () => {
+                dismissAuthCommandNotice();
+                if (agentId) {
+                  openAgentAuth(agentId);
+                }
               },
             },
-            [
-              m("h3.custom-url-dialog-title", title),
-              m("p.logout-notice-body", explanation),
-              m("div.custom-url-dialog-actions", [
-                m("button.custom-url-dialog-cancel", { onclick: () => dismissAuthCommandNotice() }, "Cancel"),
-                m(
-                  "button.custom-url-dialog-open",
-                  {
-                    onclick: () => {
-                      dismissAuthCommandNotice();
-                      if (agentId) {
-                        openAgentAuth(agentId);
-                      }
-                    },
-                  },
-                  "Open agent auth",
-                ),
-              ]),
-            ],
-          ),
-        );
+          ],
+        });
       }
 
       const attachments = getComposerAttachments(agentId);

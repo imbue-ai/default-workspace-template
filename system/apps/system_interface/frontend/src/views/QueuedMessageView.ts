@@ -20,7 +20,7 @@ import m from "mithril";
 import { getQueuedMessagesForAgent, getShoulderTapAvailableForAgent } from "../models/AgentManager";
 import type { QueuedMessage } from "../models/AgentManager";
 import { shoulderTap } from "../models/Response";
-import { prependToComposer } from "./MessageInput";
+import { prependToComposer, raiseFailureNotice } from "./MessageInput";
 import { describeRequestError } from "../models/request-error";
 
 const SHOULDER_TAP_TOOLTIP = "Gently interrupt your agent to send queued messages early";
@@ -50,7 +50,17 @@ async function shoulderTapQueuedMessages(agentId: string): Promise<void> {
   } catch (err) {
     const detail = describeRequestError(err);
     console.error(`Failed to send queued messages for agent ${agentId}: ${detail}`);
-    alert(`Failed to send queued messages: ${detail}`);
+    // Hand the failure to the composer's notice rather than putting up a system alert. One shape
+    // of failure gets one shape of answer, whichever button started it -- and Retry here means
+    // "flush the queue again", which is exactly what the user clicked in the first place.
+    raiseFailureNotice(agentId, {
+      title: "Couldn't send the queued messages",
+      detail,
+      retry: async () => {
+        inFlightAgentIds.delete(agentId);
+        await shoulderTapQueuedMessages(agentId);
+      },
+    });
   } finally {
     inFlightAgentIds.delete(agentId);
     m.redraw();

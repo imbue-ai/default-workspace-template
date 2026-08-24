@@ -40,6 +40,7 @@ const mocks = vi.hoisted(() => {
   return {
     sendMessage: vi.fn(async () => {}),
     drainToComposer: vi.fn(async () => ({ block: "" })),
+    getComposerAttachments: vi.fn(() => [] as unknown[]),
     interruptAgent: vi.fn(async () => {}),
     openAgentAuth: vi.fn(),
     listeners,
@@ -54,7 +55,7 @@ vi.mock("../models/Response", () => ({
 }));
 vi.mock("../models/ComposerAttachments", () => ({
   clearComposerAttachments: vi.fn(),
-  getComposerAttachments: () => [],
+  getComposerAttachments: mocks.getComposerAttachments,
   getReadyAttachmentPaths: () => [],
   hasReadyAttachments: () => false,
   removeComposerAttachment: vi.fn(),
@@ -123,6 +124,14 @@ function flatten(node: unknown): AnyVnode[] {
     return node.flatMap(flatten);
   }
   const vnode = node as AnyVnode;
+  // Descend into component vnodes by running their view. The notices are their own component now
+  // (NoticeDialog), so their markup does not exist in this tree until it is asked for -- without
+  // this, every assertion about a notice's wording or buttons would silently see nothing.
+  const tag = vnode.tag as unknown;
+  if (tag !== null && typeof tag === "object" && typeof (tag as { view?: unknown }).view === "function") {
+    const rendered = (tag as { view: (v: unknown) => unknown }).view({ attrs: vnode.attrs ?? {} });
+    return [vnode, ...flatten(rendered)];
+  }
   return [vnode, ...flatten(vnode.children)];
 }
 
@@ -363,6 +372,7 @@ describe("MessageInput send failure notice", () => {
     mocks.openAgentAuth.mockClear();
     mocks.agent.harness = "claude";
     mocks.agent.activity_state = undefined;
+    mocks.getComposerAttachments.mockReturnValue([]);
     localStorage.clear();
   });
 
@@ -396,6 +406,21 @@ describe("MessageInput send failure notice", () => {
     await typeAndSend(component, "agent-1", "hello");
     const otherAgent = component.view!({ attrs: { agentId: "agent-2" } } as never);
     expect(renderedText(otherAgent)).not.toContain("Couldn't send your message");
+  });
+
+  it("refuses to send when an attachment failed to upload, and names it", async () => {
+    // The failed upload is dropped from the message and its chip cleared, so without this the
+    // file would vanish with no explanation.
+    // Persistent, not Once: the view reads the attachments before handleSend does.
+    mocks.getComposerAttachments.mockReturnValue([
+      { localId: "a1", fileName: "notes.pdf", status: "error", error: "boom" },
+    ]);
+    const after = await typeAndSend(MessageInput(), "agent-1", "here you go");
+    mocks.getComposerAttachments.mockReturnValue([]);
+    const text = renderedText(after);
+    expect(text).toContain("didn't upload");
+    expect(text).toContain("notes.pdf");
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
   });
 
   it("shows nothing when the send succeeds", async () => {
