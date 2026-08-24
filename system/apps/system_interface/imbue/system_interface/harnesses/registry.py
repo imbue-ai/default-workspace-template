@@ -25,6 +25,7 @@ from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.activity import HarnessActivityTracker
 from imbue.system_interface.harnesses.antigravity.activity import AntigravityActivityTracker
 from imbue.system_interface.harnesses.antigravity.watcher import AntigravitySessionWatcher
+from imbue.system_interface.harnesses.auth_check import ANTIGRAVITY_AUTH_CHECK
 from imbue.system_interface.harnesses.auth_check import CODEX_AUTH_CHECK
 from imbue.system_interface.harnesses.auth_check import HarnessAuthCheck
 from imbue.system_interface.harnesses.auth_check import PI_AUTH_CHECK
@@ -406,6 +407,9 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         # (claude/pi's value) so the shared reader looks somewhere harmless until it is.
         model_state_relative_path=Path("."),
         special_kinds=frozenset(),
+        # The model bar owns these three on every harness, so the composer declines them
+        # here too -- they would otherwise be typed straight at the harness.
+        popups=(_MODEL_BAR_POPUP,),
     ),
     HarnessType.ANTIGRAVITY: HarnessSpec(
         name=HarnessType.ANTIGRAVITY,
@@ -424,6 +428,11 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         catalog_factory=lambda: EMPTY_CATALOG,
         model_state_relative_path=Path("."),
         special_kinds=frozenset(),
+        popups=(_MODEL_BAR_POPUP,),
+        auth_check=ANTIGRAVITY_AUTH_CHECK,
+        # No `/login` popup, unlike codex and pi: agy has no such command. Signing in is what
+        # a bare `agy` does on first launch, which is what the instructions below say.
+        auth_instructions="Open the agent's terminal and run `agy` (no arguments) to sign in.",
     ),
 }
 
