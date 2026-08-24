@@ -47,6 +47,8 @@ latchkey curl -s -X PROPFIND -H "Depth: 1" http://latchkey-self.invalid/minds-ap
 When a request comes back with the "request not permitted by the user" message, ask the user for permission:
 
 ```bash
+# 2. Ask for the necessary missing permissions.
+# (Never pipe the output through jq because frontend rendering depends on seeing the full output from your tool.)
 # The request goes in a tool call of its own, with nothing else in it and its
 # output untouched -- see "File exactly one permission request per tool call"
 # in the `latchkey` skill for why.
