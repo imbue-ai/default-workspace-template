@@ -35,8 +35,8 @@ Environment:
 
 Exit codes:
     0  Success (preview is up / torn down).
-    1  The preview failed to build or boot (and tore itself down), or a bad
-       argument / unreadable state file.
+    1  The preview failed to boot (and tore itself down), or names a
+       work_dir that carries no built bundle.
 """
 
 from __future__ import annotations
@@ -52,7 +52,6 @@ from typing import Sequence
 # a worker that skipped its build, and the preview refuses it rather than boot
 # the backend's "Frontend not built" placeholder.
 APP_DIR = "system/apps/system_interface"
-FRONTEND_DIR = f"{APP_DIR}/frontend"
 STATIC_DIR = f"{APP_DIR}/imbue/system_interface/static"
 FRONTEND_BUILD_INDEX = f"{STATIC_DIR}/index.html"
 TOOL_NAME = "system-interface"
