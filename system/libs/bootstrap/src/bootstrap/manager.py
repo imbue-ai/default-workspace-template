@@ -758,10 +758,26 @@ def _read_update_marker_dri_agent() -> str:
     """
     try:
         raw = json.loads(UPDATE_APPLY_MARKER.read_text())
-    except (OSError, ValueError):
+    except (OSError, ValueError) as e:
+        logger.warning(
+            "The update-apply marker at {} could not be read ({}); the rollback still "
+            "runs, but nobody will be re-engaged afterwards",
+            UPDATE_APPLY_MARKER,
+            e,
+        )
         return ""
     dri_agent = raw.get("dri_agent") if isinstance(raw, dict) else None
-    return dri_agent if isinstance(dri_agent, str) else ""
+    if isinstance(dri_agent, str):
+        # "" is ordinary, not corruption: an apply driven outside an agent
+        # records no name. _recover_interrupted_update reports that case.
+        return dri_agent
+    logger.warning(
+        "The update-apply marker at {} carries no usable dri_agent ({!r}); the "
+        "rollback still runs, but nobody will be re-engaged afterwards",
+        UPDATE_APPLY_MARKER,
+        dri_agent,
+    )
+    return ""
 
 
 def _wake_update_dri_agent(agent_name: str) -> None:
@@ -862,19 +878,33 @@ def _recover_interrupted_update() -> str:
     except (OSError, subprocess.TimeoutExpired) as e:
         logger.error("update-apply recovery could not run ({}); continuing boot", e)
         return ""
-    if result.stderr.strip():
-        logger.info("update-apply recovery output: {}", result.stderr.strip()[-1000:])
+    recovery_output = result.stderr.strip()[-1000:]
     if result.returncode != 0:
         logger.error(
             "update-apply recovery failed (rc={}); continuing boot with the "
-            "workspace as the rollback left it",
+            "workspace as the rollback left it: {}",
             result.returncode,
+            recovery_output,
         )
         return ""
     # A cleared marker is what distinguishes "rolled back" from the guard's
     # silent no-op; only a real rollback warrants re-engaging the DRI agent.
     if UPDATE_APPLY_MARKER.exists():
+        logger.warning(
+            "The recovery guard declined to roll the apply back (the marker at {} is "
+            "still there); continuing boot with the workspace as it was left",
+            UPDATE_APPLY_MARKER,
+        )
         return ""
+    # A rollback really happened, so the whole of what it did belongs in the boot
+    # log at a level someone scanning for trouble will see: a partial restore is
+    # reported in that output and nowhere else.
+    logger.warning("Rolled back an interrupted update apply: {}", recovery_output)
+    if not dri_agent:
+        logger.warning(
+            "That apply's marker named no agent to re-engage, so nothing will tell "
+            "the user the update was undone"
+        )
     return dri_agent
 
 
