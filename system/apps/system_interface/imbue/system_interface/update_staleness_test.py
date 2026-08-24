@@ -8,7 +8,6 @@ import subprocess
 import sys
 import tomllib
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
@@ -318,11 +317,13 @@ def test_the_built_app_shell_carries_the_staleness_meta_tag(git_work_dir: Path, 
     static_dir.mkdir()
     (static_dir / "index.html").write_text("<html><head></head><body>app</body></html>")
 
-    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
-        response = create_application(state).test_client().get("/")
-        # A workspace consistent with what it is serving gets no tag at all:
-        # the tag's presence is the difference between banner and no banner.
-        consistent = create_application(_tracking_state(repo)).test_client().get("/")
+    state.static_directory = static_dir
+    response = create_application(state).test_client().get("/")
+    # A workspace consistent with what it is serving gets no tag at all: the
+    # tag's presence is the difference between banner and no banner.
+    consistent_state = _tracking_state(repo)
+    consistent_state.static_directory = static_dir
+    consistent = create_application(consistent_state).test_client().get("/")
 
     assert response.status_code == 200
     assert f'<meta name="{UPDATE_STALENESS_META_TAG}" content="{STALENESS_TREE_MOVED}">' in response.text
