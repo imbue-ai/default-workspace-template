@@ -945,13 +945,12 @@ def _cmd_bootstrap_skill(args: argparse.Namespace) -> int:
 # reverts the entire merge and restores the pre-apply snapshots -- a recovery
 # path needing no network, no package manager, and no working ``mngr``.
 #
-# The machinery below is the ``update-system-interface`` reveal generalized:
-# the same snapshot/pre-flight/probe/rollback core, driven by the whole-repo
-# ``classify_path`` table rather than the system-interface-only classifier, and
-# extended with environment snapshots (the root venv, the two uv tool
-# environments, ``node_modules``), the provisioner step, and a persistent
-# marker that makes an interrupted apply detectable and recoverable
-# (``recover``).
+# It serves every update flow, not just update-self: ``update-system-interface``
+# hands it an ordinary merge and its own already-built bundle, so both flows
+# land the same way. What it must protect is therefore whole-repo -- the root
+# venv, the two uv tool environments, ``node_modules`` and the built bundle are
+# all copied aside first -- and what it must survive includes its own death,
+# which is what the persistent marker and ``recover`` are for.
 
 # The served app, the editable tool the live service runs from, and the build
 # surfaces. These mirror system/scripts/build_workspace.sh -- the source of
@@ -1708,7 +1707,7 @@ def discard_snapshots(repo_root: Path) -> None:
     shutil.rmtree(_snapshots_root(repo_root), ignore_errors=True)
 
 
-# --- Probes and helpers (ported from the reveal flow) --------------------------
+# --- Probes and helpers --------------------------------------------------------
 
 
 def find_free_port() -> int:
@@ -2176,8 +2175,9 @@ _WORKSPACE_HEADING = "## Workspace"
 _LEDGER_NOTE_WIDTH = 26
 
 # The canonical starter, recreated when the file was deleted since creation.
-# ``publish-template`` and ``update-published-template`` recreate it by
-# reference to here (this block moved in from the update-self SKILL's Step 5b).
+# Byte-identical to the ``docs/VERSION_HISTORY.md`` the template ships;
+# ``publish-template``, ``update-published-template`` and
+# ``update-installed-template`` all recreate it by reference to here.
 _VERSION_HISTORY_STARTER = """\
 # Version history
 
