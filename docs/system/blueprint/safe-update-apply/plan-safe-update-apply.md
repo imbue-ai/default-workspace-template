@@ -27,7 +27,7 @@
 
 - The script writes a marker under `data/.state/` at apply start — DRI agent (from its environment), rollback point, last completed phase, PID — and clears it on every exit path. A concurrent `apply` refuses to start while a live marker exists.
 - Container restart: bootstrap checks the marker and runs the rollback directly (no agent or UI needed, and dependency-free except for the provisioner re-run noted above), then wakes and messages the DRI agent to verify state and talk to the user.
-- Killed without a restart and the DRI agent gone too: a permanent cron entry (installed at provision time, every ~5 minutes) runs `recover` with an only-if-stale guard — marker present, recorded PID dead, older than a grace period — and is a silent no-op in every normal state. It invokes the stdlib-only script directly, never the automations/agent machinery.
+- Killed without a restart and the DRI agent gone too: a permanent cron entry (written by the bootstrap at each boot, every ~5 minutes) runs `recover` with an only-if-stale guard — marker present, recorded PID dead, older than a grace period — and is a silent no-op in every normal state. It invokes the stdlib-only script directly, never the automations/agent machinery.
 - The DRI agent, when alive, simply re-runs the idempotent `apply`; every step tolerates re-entry.
 
 ### Memory pressure
@@ -40,7 +40,7 @@
 
 - The system interface reads mngr config with `strict=False` at its single `load_config` call site, so a settings file written for a newer mngr degrades to a logged warning instead of a 500 on every send — the lockout that made the geebspace incident self-locking. `mngr config set` and all CLI paths keep strict parsing.
 - The change classifier treats vendored-mngr *source* changes and `.mngr/settings.toml` changes as restart-requiring, so nothing live keeps reading config newer than its own code after an apply completes.
-- The system interface records the tree HEAD it started from and stamps a response header when the live tree has moved under it; an informational banner tells the user "parts of this workspace were updated but not yet activated" or, from the marker, that an update is part-way through and finishes or undoes itself. The marker-variant copy deliberately does not announce a rollback: the marker is present for the whole of a *healthy* apply too. Acting on it stays with the agent.
+- The system interface records the tree HEAD it started from and stamps a response header when the live tree has moved under it; an informational banner tells the user "parts of this workspace were updated but not yet activated" or, from the marker, that an update is part-way through and finishes or undoes itself. The marker-variant copy deliberately does not announce a rollback: the marker is present for the whole of a *healthy* apply too. A third variant reads the apply's emergency record and outranks both — a rollback that could not restore health is the one state here that will not resolve itself, and the one neither other check can see. Acting on any of them stays with the agent.
 
 ### Concurrency
 
@@ -94,7 +94,7 @@
 
 - `imbue/system_interface/agent_discovery.py`: `strict=False` at the `load_config` call in `_get_mngr_context` (line ~69), covering all four read paths through it.
 - `imbue/system_interface/server.py`: record the tree HEAD at startup; stamp a staleness header on app-shell responses when the live HEAD differs; read the apply marker for the "update interrupted" variant; expose the state to the frontend (meta-tag injection like the existing base-path tag) for an informational banner.
-- Frontend: a small banner component rendering the two staleness messages; informational only.
+- Frontend: a small banner component rendering the three staleness messages; informational only.
 
 ### `system/services/oom_priority/src/oom_priority/bands.py`
 
@@ -102,8 +102,7 @@
 
 ### Boot and provisioning
 
-- Bootstrap (`system/libs/bootstrap`): at container start, invoke `update_self.py recover --if-stale`; on a recovery, wake and message the DRI agent named in the marker (`mngr start` + `mngr message`, best-effort).
-- `system/scripts/setup_system.sh` (or `build_workspace.sh`): install the permanent recovery cron entry (every ~5 minutes, plain `python3` invocation of `recover --if-stale`).
+- Bootstrap (`system/libs/bootstrap`): at container start, invoke `update_self.py recover --if-stale`; on a recovery, wake and message the DRI agent named in the marker (`mngr start` + `mngr message`, best-effort). It also writes the permanent recovery cron entry (every ~5 minutes, plain `python3` invocation of `recover --if-stale`) at each boot, since `/etc/cron.d` lives on the container rootfs and does not survive the container being recreated.
 
 ### Changelogs
 
