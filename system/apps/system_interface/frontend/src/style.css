@@ -1,3 +1,20 @@
+/* ============================================================================
+ * DESIGN SYSTEM — read before adding styles.  (rules: ../style_guide.md)
+ *
+ * Use the tokens below; do NOT hardcode values:
+ *   - Colour:  var(--color-*)           never a raw #hex / rgb() / rgba()
+ *   - Radius:  var(--radius-base) etc.  never a raw 6px
+ *   - Type / spacing / shadow / z-index: reuse a token or an existing value;
+ *     don't invent new literals.
+ *   - Components: extend a shared class/primitive; don't hand-roll another
+ *     button / modal / badge / toggle / spinner.
+ *
+ * Deviate only when a token genuinely can't express it: mark the site with a
+ * "design-system-exception: <reason>" comment AND bump the matching baseline
+ * in src/design-system-ratchet.test.ts (it only ratchets down).
+ *
+ * Prove no regression:  node gallery/visual-diff.mjs diff-refs main
+ * ==========================================================================*/
 @import "tailwindcss";
 @import "dockview-core/dist/styles/dockview.css";
 

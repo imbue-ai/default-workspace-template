@@ -26,6 +26,18 @@ npm install
 npm run dev
 ```
 
+## Design system (read before styling)
+
+The frontend has a token layer (`@theme` in `frontend/src/style.css`) and shared
+component classes. **Use them; do not hardcode colours/spacing/radii or hand-roll
+another button/modal.** The enforceable rules and the escape hatch are in
+[`frontend/style_guide.md`](frontend/style_guide.md); the full assessment, target
+token set, and migration plan are in
+[`docs/design-system.md`](docs/design-system.md). A ratchet
+(`frontend/src/design-system-ratchet.test.ts`) fails the suite when raw values
+grow, and a visual before/after harness (`frontend/gallery/`,
+`node gallery/visual-diff.mjs diff-refs main`) proves a CSS change is a no-op.
+
 ## Updating the running UI (canonical flow)
 
 The deployed system interface is the live web UI the user is looking at, so
