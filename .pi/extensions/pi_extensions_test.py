@@ -65,8 +65,14 @@ process.stdout.write(JSON.stringify({ result: result ?? null }));
 
 # Stub `ticket`: its `steps` output is driven by env so a test can model any step
 # state. Exits non-zero with no output (like the real tk) when the requested set is
-# empty -- the extension reads that as "consulted, no steps".
+# empty -- the extension reads that as "consulted, no steps". With
+# STUB_ECHO_TICKETS_DIR set it instead reports the TICKETS_DIR the child process
+# actually received, so a test can pin what the extension exports to it.
 _STUB_TICKET = """#!/usr/bin/env bash
+if [[ "$1" == "steps" && -n "${STUB_ECHO_TICKETS_DIR:-}" ]]; then
+  printf 'tickets_dir=%s' "${TICKETS_DIR:-unset}"
+  exit 0
+fi
 if [[ "$1" == "steps" && "$2" == "--status=in_progress" ]]; then
   printf '%s' "${STUB_INPROGRESS:-}"
   [[ -n "${STUB_INPROGRESS:-}" ]] && exit 0 || exit 2
@@ -352,6 +358,28 @@ def test_carryover_appends_open_steps_to_the_turns_system_prompt(
 
 def test_carryover_is_silent_when_no_steps_are_open(tmp_path: Path) -> None:
     assert _tk_result(tmp_path, "before_agent_start", {"systemPrompt": "BASE"}) is None
+
+
+def test_the_spawned_tk_child_reads_the_tickets_dir_the_handler_resolved(
+    tmp_path: Path,
+) -> None:
+    """With TICKETS_DIR unset the handler resolves the WORK_DIR fallback for its own
+    existence gate, and must hand that SAME dir to the tk it spawns -- as the shell hooks
+    it mirrors do -- or the child re-resolves by parent-walk and can consult a different
+    tickets dir than the one that was checked. The stub echoes back what it received."""
+    work_dir = _tk_work_dir(tmp_path)
+    result = _event_result(
+        _run_event(
+            tmp_path,
+            _TK_WORKFLOW,
+            "before_agent_start",
+            {"systemPrompt": "BASE"},
+            work_dir=work_dir,
+            env={"STUB_ECHO_TICKETS_DIR": "1"},
+        )
+    )
+    assert result is not None
+    assert f"tickets_dir={work_dir / '.tickets'}" in result["systemPrompt"]
 
 
 @pytest.mark.parametrize(
