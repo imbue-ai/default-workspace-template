@@ -2211,6 +2211,237 @@ def test_only_the_hungry_forward_steps_are_expendable_and_recovery_is_not(
     assert recovery_uv, "recovery should have refreshed the envs without the tag"
 
 
+# --- apply: the uv tool environments ------------------------------------------------
+#
+# The refresh rebuilds the two uv tool environments the workspace runs from.
+# ``uv tool install --reinstall`` rebuilds a tool from its base package alone,
+# so both halves of this are load-bearing: WHICH installation is rebuilt
+# (``_uv_tool_env``, from the console script's own shebang) and WHAT it is
+# rebuilt with (``_tool_extras``, read back out of uv's receipt). For the mngr
+# tool those extras ARE its plugins.
+
+
+def _with_receipt(
+    runner: _RecordingRunner, tool_dir: Path, tool: str, body: str
+) -> None:
+    """Point ``uv tool dir`` at ``tool_dir`` and give ``tool`` a receipt there."""
+    runner.respond(("uv", "tool", "dir"), _Result(stdout=f"{tool_dir}\n"))
+    (tool_dir / tool).mkdir(parents=True, exist_ok=True)
+    (tool_dir / tool / update_self._RECEIPT).write_text(body)
+
+
+def _install_argv(runner: _RecordingRunner, source_dir: str) -> list[str]:
+    """The ``uv tool install`` call that re-pins ``source_dir``."""
+    return next(
+        argv
+        for argv in runner.argvs_starting("uv", "tool", "install")
+        if source_dir in argv
+    )
+
+
+def test_the_refresh_preserves_a_tools_registered_plugins(
+    apply_repo: Path, tmp_path: Path
+) -> None:
+    # A bare --reinstall rebuilds a tool from its base package alone. For the
+    # mngr tool the extras ARE its plugins, so dropping them leaves a CLI that
+    # cannot parse its own plugin config -- an update that breaks the workspace
+    # in a new way while reporting success.
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    _with_receipt(
+        runner,
+        tmp_path / "tools",
+        update_self.MNGR_TOOL_NAME,
+        """
+        [tool]
+        requirements = [
+            { name = "imbue-mngr", editable = "/repo/system/vendor/mngr/libs/mngr" },
+            { name = "imbue-mngr-claude", editable = "/repo/system/vendor/mngr/libs/mngr_claude" },
+            { name = "imbue-mngr-wait", editable = "/repo/system/vendor/mngr/libs/mngr_wait" },
+        ]
+        """,
+    )
+
+    assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
+
+    assert _install_argv(runner, update_self.MNGR_DIR) == [
+        "uv",
+        "tool",
+        "install",
+        "-e",
+        update_self.MNGR_DIR,
+        "--with-editable",
+        "/repo/system/vendor/mngr/libs/mngr_claude",
+        "--with-editable",
+        "/repo/system/vendor/mngr/libs/mngr_wait",
+        "--reinstall",
+    ]
+
+
+def test_the_refresh_repins_the_base_to_the_in_tree_source(
+    apply_repo: Path, tmp_path: Path
+) -> None:
+    # A receipt that has lost its editable marker must not make us re-resolve
+    # the base from the index -- that would silently swap the workspace's own
+    # vendored code for a published release.
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    _with_receipt(
+        runner,
+        tmp_path / "tools",
+        update_self.MNGR_TOOL_NAME,
+        '[tool]\nrequirements = [{ name = "imbue-mngr" }]\n',
+    )
+
+    assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
+
+    assert _install_argv(runner, update_self.MNGR_DIR) == [
+        "uv",
+        "tool",
+        "install",
+        "-e",
+        update_self.MNGR_DIR,
+        "--reinstall",
+    ]
+
+
+def test_the_refresh_targets_the_installation_actually_on_path(
+    apply_repo: Path, tmp_path: Path
+) -> None:
+    # uv's default tool directory follows $HOME, which is not the one
+    # build_workspace.sh installed under -- so defaulting rebuilds a shadow
+    # copy nothing on PATH runs, and reports the stale tool everyone actually
+    # executes as successfully refreshed.
+    bin_dir = tmp_path / "root" / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    tools = tmp_path / "root" / ".local" / "share" / "uv" / "tools"
+    (bin_dir / update_self.MNGR_EXECUTABLE).write_text(
+        f"#!{tools}/{update_self.MNGR_TOOL_NAME}/bin/python3\nimport sys\n"
+    )
+    (tools / update_self.MNGR_TOOL_NAME).mkdir(parents=True)
+    (tools / update_self.MNGR_TOOL_NAME / update_self._RECEIPT).write_text(
+        "[tool]\nrequirements = []\n"
+    )
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    runner.executables[update_self.MNGR_EXECUTABLE] = str(
+        bin_dir / update_self.MNGR_EXECUTABLE
+    )
+
+    assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
+
+    envs = {
+        argv[4]: env
+        for argv, env in zip(runner.calls, runner.envs)
+        if argv[:4] == ["uv", "tool", "install", "-e"] and env is not None
+    }
+    assert envs[update_self.MNGR_DIR]["UV_TOOL_DIR"] == str(tools)
+    assert envs[update_self.MNGR_DIR]["UV_TOOL_BIN_DIR"] == str(bin_dir)
+    # Targeting is per executable, not global: the other tool is not on PATH
+    # here, so its install is left to uv's own default rather than aimed at the
+    # directory that happens to hold mngr.
+    assert "UV_TOOL_DIR" not in envs[update_self.APP_DIR]
+
+
+def test_the_refresh_survives_a_tool_with_no_receipt(apply_repo: Path) -> None:
+    # No readable receipt means the tool is not installed (or predates
+    # receipts); the refresh must still run as the plain install it would
+    # otherwise be, for both tools.
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    runner.respond(("uv", "tool", "dir"), _Result(returncode=1))
+
+    assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
+
+    assert len(runner.argvs_starting("uv", "tool", "install")) == 2
+
+
+def test_the_refresh_reports_a_receipt_it_cannot_read(
+    apply_repo: Path, tmp_path: Path, capsys
+) -> None:
+    # A garbled receipt is not the fresh-install case: we had a tool and lost
+    # the record of what it was installed with, so the reinstall below rebuilds
+    # it without its plugins. Degrading silently would hand back exactly the
+    # plugin-less CLI this refresh exists to prevent, and report success.
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    _with_receipt(
+        runner,
+        tmp_path / "tools",
+        update_self.MNGR_TOOL_NAME,
+        "[tool]\nrequirements = [",
+    )
+
+    assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
+
+    assert _install_argv(runner, update_self.MNGR_DIR) == [
+        "uv",
+        "tool",
+        "install",
+        "-e",
+        update_self.MNGR_DIR,
+        "--reinstall",
+    ]
+    reported = capsys.readouterr().err
+    assert update_self.MNGR_TOOL_NAME in reported and "drops any plugins" in reported
+
+
+def test_tool_location_comes_from_the_console_scripts_shebang(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "root" / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    tools = tmp_path / "root" / ".local" / "share" / "uv" / "tools"
+    script = bin_dir / update_self.MNGR_EXECUTABLE
+    script.write_text(
+        f"#!{tools}/{update_self.MNGR_TOOL_NAME}/bin/python3\n"
+        "# -*- coding: utf-8 -*-\nimport sys\n"
+    )
+    (tools / update_self.MNGR_TOOL_NAME).mkdir(parents=True)
+    (tools / update_self.MNGR_TOOL_NAME / update_self._RECEIPT).write_text(
+        "[tool]\nrequirements = []\n"
+    )
+
+    location = update_self._tool_location(script, update_self.MNGR_TOOL_NAME)
+
+    assert location == (tools, bin_dir)
+
+
+@pytest.mark.parametrize(
+    "contents",
+    [
+        "import sys\n",  # no shebang at all
+        "#!\n",  # a shebang naming no interpreter
+        "#!/python3\n",  # too shallow to name a tool directory
+    ],
+    ids=["no-shebang", "empty-shebang", "shallow-interpreter"],
+)
+def test_tool_location_declines_what_it_cannot_read(
+    contents: str, tmp_path: Path
+) -> None:
+    # Anything we cannot interpret means we do not know which installation this
+    # is, and the caller falls back to letting uv decide -- guessing a directory
+    # would be worse than uv's own default.
+    script = tmp_path / update_self.MNGR_EXECUTABLE
+    script.write_text(contents)
+
+    assert update_self._tool_location(script, update_self.MNGR_TOOL_NAME) is None
+
+
+def test_tool_location_declines_the_workspace_venvs_console_script(
+    tmp_path: Path,
+) -> None:
+    # Both tool names are also `uv sync` members, so PATH can resolve to the
+    # venv's own entrypoint. Deriving a "tool directory" from that would build a
+    # tool environment inside the served checkout -- dirtying the tree the next
+    # apply refuses to run on. No receipt, no deal.
+    venv_bin = tmp_path / "workspace" / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    script = venv_bin / update_self.TOOL_NAME
+    script.write_text(f"#!{venv_bin}/python3\nimport sys\n")
+
+    assert update_self._tool_location(script, update_self.TOOL_NAME) is None
+
+
+def test_tool_location_declines_a_script_it_cannot_open(tmp_path: Path) -> None:
+    missing = tmp_path / "does-not-exist"
+
+    assert update_self._tool_location(missing, update_self.MNGR_TOOL_NAME) is None
+
+
 # --- snapshots (real directories) --------------------------------------------------
 
 
