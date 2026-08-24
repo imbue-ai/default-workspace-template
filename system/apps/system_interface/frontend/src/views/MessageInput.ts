@@ -627,7 +627,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
               : [
                   {
                     label: actionFailureInFlight === "force" ? "Forcing…" : "Force",
-                    tooltip: "Restarts the agent and sends the message",
+                    tooltip: "Restarts agent to reset it & resends message",
                     isDestructive: true,
                     isDisabled: actionFailureInFlight !== null,
                     run: () => void forceFailedSend(),

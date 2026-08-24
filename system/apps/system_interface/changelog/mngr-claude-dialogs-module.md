@@ -14,3 +14,5 @@ Every notice in the chat is now one component. The overlay, the Escape key, the 
 Extended the layer map with the tmux pipeline underneath it, and with who decides which buttons a failure earns: mngr names the kind of failure, the workspace maps kinds to buttons, so a missing pane offers a restart rather than a Retry that cannot work. Also records what Retry and Force actually are, so neither drifts from the behaviour it mirrors.
 
 A failed send now says what KIND of failure it was, and the chat offers only the recoveries that can actually work. An agent whose terminal is gone no longer offers Retry -- it would fail every time -- and says that restarting is the only way to deliver the message; a blocked input keeps Retry, because a person can clear it. mngr classifies the situation and stops there, since it has no notion of a button; the mapping from a kind to what the user is offered lives in the workspace. Anything mngr did not classify behaves exactly as before.
+
+Force now says what it does on hover: "Restarts agent to reset it & resends message".
