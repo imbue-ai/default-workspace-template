@@ -9,6 +9,7 @@
  */
 
 import m from "mithril";
+import { backdropDismissAttrs } from "./modalBackdrop";
 import { hoverTooltipAttrs } from "./hoverTooltip";
 
 interface ShareModalAttrs {
@@ -19,38 +20,30 @@ interface ShareModalAttrs {
 export const ShareModal: m.Component<ShareModalAttrs> = {
   view(vnode) {
     const { serviceName, onClose } = vnode.attrs;
-    return m(
-      "div.share-modal-overlay",
-      {
-        onclick: (e: Event) => {
-          if (e.target === e.currentTarget) onClose();
-        },
-      },
-      [
-        m("div.share-modal", [
-          m("div.share-modal-header", [
-            m("h3.share-modal-title", `Share "${serviceName}"`),
-            m("button.share-modal-close-x", { onclick: onClose, ...hoverTooltipAttrs("Close") }, "x"),
-          ]),
-          m("div", { style: "padding: 8px 0; color: #444; font-size: 14px; line-height: 1.5;" }, [
-            m("p", { style: "margin: 0 0 12px 0;" }, [
-              "To share this service externally, open the Minds desktop app, go to ",
-              m("strong", "workspace settings"),
-              ", and enable sharing for the ",
-              m("strong", `"${serviceName}"`),
-              " service.",
-            ]),
-            m(
-              "p",
-              { style: "margin: 0; color: #666;" },
-              "Shared traffic is encrypted end-to-end into this workspace, and access is granted per email address.",
-            ),
-          ]),
-          m("div.share-modal-footer", [
-            m("button.share-modal-btn.share-modal-btn-secondary", { onclick: onClose }, "Close"),
-          ]),
+    return m("div.share-modal-overlay", backdropDismissAttrs(onClose), [
+      m("div.share-modal", [
+        m("div.share-modal-header", [
+          m("h3.share-modal-title", `Share "${serviceName}"`),
+          m("button.share-modal-close-x", { onclick: onClose, ...hoverTooltipAttrs("Close") }, "x"),
         ]),
-      ],
-    );
+        m("div", { style: "padding: 8px 0; color: #444; font-size: 14px; line-height: 1.5;" }, [
+          m("p", { style: "margin: 0 0 12px 0;" }, [
+            "To share this service externally, open the Minds desktop app, go to ",
+            m("strong", "workspace settings"),
+            ", and enable sharing for the ",
+            m("strong", `"${serviceName}"`),
+            " service.",
+          ]),
+          m(
+            "p",
+            { style: "margin: 0; color: #666;" },
+            "Shared traffic is encrypted end-to-end into this workspace, and access is granted per email address.",
+          ),
+        ]),
+        m("div.share-modal-footer", [
+          m("button.share-modal-btn.share-modal-btn-secondary", { onclick: onClose }, "Close"),
+        ]),
+      ]),
+    ]);
   },
 };

@@ -129,10 +129,54 @@ def test_model_bar_stdout_confirmations_are_hidden() -> None:
         assert decision.display is DisplayKind.HIDDEN, line
 
 
-def test_look_alike_commands_and_unrelated_stdout_are_untouched() -> None:
+def test_look_alike_commands_are_untouched() -> None:
     assert classify_user_message("/models") is None
     assert classify_user_message("model the data for me") is None
-    assert classify_user_message("<local-command-stdout>Total cost: $1.23</local-command-stdout>") is None
+    # Prose that merely mentions the wrapper is not the wrapper: the match is anchored.
+    assert classify_user_message("the agent printed <local-command-stdout> at me") is None
+
+
+def test_any_local_command_output_is_hidden_not_just_the_model_bars() -> None:
+    # This used to additionally require the text to be one of the model bar's three
+    # confirmations, which left every other allowed command (/cost here, plus /clear,
+    # /compact, /export, /rewind, /plugin, /version, /tui) rendering raw XML in a bubble.
+    for line in (
+        "<local-command-stdout>Total cost: $1.23</local-command-stdout>",
+        "<local-command-stdout>Set model to Fable 5</local-command-stdout>",
+        "<local-command-stderr>something went wrong</local-command-stderr>",
+    ):
+        decision = classify_user_message(line)
+        assert decision is not None, line
+        assert decision.display is DisplayKind.HIDDEN, line
+
+
+def test_bash_blocks_become_chips_rather_than_bubbles() -> None:
+    # Bash mode is NOT flagged isMeta, so without a detector these render as a user
+    # bubble full of raw XML. They stay visible -- the user asked for that output -- but
+    # as a chip, whose body renders in a <pre><code> so it reads as terminal output.
+    command = classify_user_message("<bash-input>ls -la</bash-input>")
+    assert command is not None
+    assert command.display is DisplayKind.CHIP
+    assert command.display_label == "Bash"
+    assert command.display_body == "ls -la"
+
+    # stdout and stderr arrive together in ONE message, the stderr half usually empty.
+    output = classify_user_message("<bash-stdout>test</bash-stdout><bash-stderr></bash-stderr>")
+    assert output is not None
+    assert output.display is DisplayKind.CHIP
+    assert output.display_label == "Output"
+    assert output.display_body == "test"
+
+    # Both streams present: joined in order, not styled apart.
+    both = classify_user_message("<bash-stdout>ok</bash-stdout><bash-stderr>boom</bash-stderr>")
+    assert both is not None
+    assert both.display_body == "ok\nboom"
+
+    # An empty result still chips rather than falling through to a raw-XML bubble.
+    empty = classify_user_message("<bash-stdout></bash-stdout><bash-stderr></bash-stderr>")
+    assert empty is not None
+    assert empty.display is DisplayKind.CHIP
+    assert empty.display_body == ""
 
 
 def test_permission_resolutions_carry_the_verdict() -> None:

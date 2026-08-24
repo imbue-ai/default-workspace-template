@@ -8,7 +8,15 @@ vi.hoisted(() => {
     setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
 });
 
-import { equalTabWidth, isTitleTruncated, preferredChatRefForView, refForShortcutFocus } from "./DockviewWorkspace";
+import {
+  displayNameForView,
+  equalTabWidth,
+  isTitleTruncated,
+  memberRefForPanelParams,
+  refForShortcutFocus,
+} from "./DockviewWorkspace";
+import type { ProjectInfo } from "../models/Projects";
+import type { PanelParams } from "./liveSurfaces";
 
 describe("equalTabWidth", () => {
   it("shares what is left of a strip once the '+' is accounted for", () => {
@@ -77,103 +85,154 @@ describe("isTitleTruncated", () => {
 });
 
 describe("refForShortcutFocus", () => {
-  const PRIMARY_CHAT = "chat:agent-primary";
-
   it("finds nothing to focus in a view with no chat, so the shortcut creates", () => {
     const refs = ["terminal:work", "service:web", "service:browser?session=1"];
-    expect(refForShortcutFocus(refs, "chat", PRIMARY_CHAT)).toBeNull();
+    expect(refForShortcutFocus(refs, "chat", {})).toBeNull();
   });
 
   it("goes to the one chat a view lists", () => {
-    expect(refForShortcutFocus(["service:web", "chat:agent-a"], "chat", null)).toBe("chat:agent-a");
+    expect(refForShortcutFocus(["service:web", "chat:agent-a"], "chat", {})).toBe("chat:agent-a");
   });
 
-  it("prefers the named chat over the others", () => {
-    const refs = ["chat:agent-a", PRIMARY_CHAT, "chat:agent-b"];
-    expect(refForShortcutFocus(refs, "chat", PRIMARY_CHAT)).toBe(PRIMARY_CHAT);
+  it("goes to the most recently used chat among several", () => {
+    const refs = ["chat:agent-a", "chat:agent-b", "chat:agent-c"];
+    const recency = { "chat:agent-b": 2_000, "chat:agent-a": 1_000 };
+    expect(refForShortcutFocus(refs, "chat", recency)).toBe("chat:agent-b");
   });
 
-  it("falls back to the first chat the view lists when the named one is not among them", () => {
+  it("ranks members with no recency data behind any that have some", () => {
     const refs = ["chat:agent-a", "chat:agent-b"];
-    expect(refForShortcutFocus(refs, "chat", PRIMARY_CHAT)).toBe("chat:agent-a");
+    expect(refForShortcutFocus(refs, "chat", { "chat:agent-b": 5 })).toBe("chat:agent-b");
   });
 
-  it("takes the first chat when the view names none", () => {
-    expect(refForShortcutFocus(["chat:agent-a", "chat:agent-b"], "chat", null)).toBe("chat:agent-a");
+  it("takes the first listed when nothing has recency data", () => {
+    expect(refForShortcutFocus(["chat:agent-a", "chat:agent-b"], "chat", {})).toBe("chat:agent-a");
   });
 
-  it("ignores a preferred ref of another kind", () => {
-    // A view's own chat can never be a browser, but the two shortcuts share
-    // this function and a mismatch must not leak across them.
-    const refs = ["chat:agent-a", "service:browser?session=2"];
-    expect(refForShortcutFocus(refs, "browser", "chat:agent-a")).toBe("service:browser?session=2");
+  it("ignores recency entries of other kinds", () => {
+    // A terminal used moments ago must not steal the chat shortcut's focus.
+    const refs = ["chat:agent-a", "terminal:work"];
+    const recency = { "terminal:work": 9_000, "chat:agent-a": 1 };
+    expect(refForShortcutFocus(refs, "chat", recency)).toBe("chat:agent-a");
   });
 
   it("finds nothing to focus in a view with no browser", () => {
-    expect(refForShortcutFocus(["chat:agent-a", "terminal:work"], "browser", null)).toBeNull();
+    expect(refForShortcutFocus(["chat:agent-a", "terminal:work"], "browser", {})).toBeNull();
   });
 
-  it("goes to the one browser a view lists", () => {
-    const refs = ["chat:agent-a", "service:browser?session=2"];
-    expect(refForShortcutFocus(refs, "browser", null)).toBe("service:browser?session=2");
-  });
-
-  it("takes the first browser when a view lists several", () => {
-    // A browser has no per-view singleton, so listing order decides.
+  it("goes to the most recently used browser a view lists", () => {
     const refs = ["service:browser?session=2", "service:browser?session=5"];
-    expect(refForShortcutFocus(refs, "browser", null)).toBe("service:browser?session=2");
+    const recency = { "service:browser?session=5": 10 };
+    expect(refForShortcutFocus(refs, "browser", recency)).toBe("service:browser?session=5");
   });
 
   it("keeps browsers apart from the apps and terminals sharing their ref scheme", () => {
     const refs = ["service:web", "service:terminal", "service:browser?session=1"];
-    expect(refForShortcutFocus(refs, "browser", null)).toBe("service:browser?session=1");
+    expect(refForShortcutFocus(refs, "browser", {})).toBe("service:browser?session=1");
   });
 });
 
-describe("preferredChatRefForView", () => {
-  const PRIMARY = "agent-primary";
-  // Which project each chat agent was started in, keyed by the chat's ref.
-  const ORIGINS = { "chat:agent-own": "project-1", "chat:agent-other": "project-2" };
-
-  it("names the chat a project was made with, whatever else the project holds", () => {
-    const refs = ["chat:agent-other", "service:web", "chat:agent-own"];
-    expect(preferredChatRefForView(refs, "project-1", ORIGINS, PRIMARY)).toBe("chat:agent-own");
+describe("memberRefForPanelParams", () => {
+  it("files a chat under its stable agent id", () => {
+    const params: PanelParams = { panelType: "chat", agentId: "agent-1", chatAgentId: "agent-1" };
+    expect(memberRefForPanelParams(params)).toBe("chat:agent-1");
   });
 
-  it("keeps naming it once the project has been given other chats", () => {
-    // Membership is many-to-many, so a project may show chats started
-    // elsewhere -- including the primary agent's. The shortcut is still a
-    // singleton pointing at the project's own chat.
-    const refs = [`chat:${PRIMARY}`, "chat:agent-other", "chat:agent-own"];
-    expect(preferredChatRefForView(refs, "project-1", ORIGINS, PRIMARY)).toBe("chat:agent-own");
+  it("files a chat with no resolvable agent id nowhere", () => {
+    expect(memberRefForPanelParams({ panelType: "chat", agentId: "" })).toBeNull();
   });
 
-  it("names nothing when the project's own chat is not one it shows", () => {
-    // Removed from the project, or destroyed: listing order decides again, and
-    // a project showing no chat at all has the shortcut create one.
-    expect(preferredChatRefForView(["chat:agent-other"], "project-1", ORIGINS, PRIMARY)).toBeNull();
-    expect(preferredChatRefForView([], "project-1", ORIGINS, PRIMARY)).toBeNull();
+  it("files a persistent terminal under its tmux session name", () => {
+    const params: PanelParams = {
+      panelType: "iframe",
+      agentId: "agent-primary",
+      terminalSessionName: "terminal-2",
+      terminalId: "term-abc",
+    };
+    expect(memberRefForPanelParams(params)).toBe("terminal:terminal-2");
   });
 
-  it("names nothing while the project's chat is still starting up", () => {
-    // A proto agent carries no label yet, so it is absent from the map.
-    expect(preferredChatRefForView(["chat:agent-starting"], "project-1", ORIGINS, PRIMARY)).toBeNull();
+  it("files an app pane under the instance it shows", () => {
+    const params: PanelParams = {
+      panelType: "iframe",
+      agentId: "agent-primary",
+      serviceName: "web",
+      serviceInstanceId: "web-2",
+    };
+    expect(memberRefForPanelParams(params)).toBe("service:web?instance=web-2");
   });
 
-  it("names the primary agent's chat in Everything, which has no chat of its own", () => {
-    const refs = ["chat:agent-own", `chat:${PRIMARY}`];
-    expect(preferredChatRefForView(refs, "everything", ORIGINS, PRIMARY)).toBe(`chat:${PRIMARY}`);
+  it("files nothing for an app pane whose instance has not landed yet", () => {
+    // Mid-mint (or mid-adoption of a pre-instances layout) the pane is not an
+    // object yet, exactly as a terminal before its session name is allocated.
+    const params: PanelParams = { panelType: "iframe", agentId: "agent-primary", serviceName: "web" };
+    expect(memberRefForPanelParams(params)).toBeNull();
   });
 
-  it("names nothing in Everything when the primary agent id is unknown", () => {
-    // The id comes off a meta tag, which an embedder may not have written.
-    expect(preferredChatRefForView(["chat:agent-own"], "everything", ORIGINS, "")).toBeNull();
+  it("files a browser fleet pane under its session, parsed off the url's query", () => {
+    const params: PanelParams = {
+      panelType: "iframe",
+      agentId: "agent-primary",
+      serviceName: "browser",
+      url: "https://browser.example/?session=browser-2",
+    };
+    expect(memberRefForPanelParams(params)).toBe("service:browser?session=browser-2");
   });
 
-  it("does not let a project inherit Everything's preference", () => {
-    // The primary agent's chat is a member here but was started elsewhere, so
-    // it is not this project's chat.
-    const refs = [`chat:${PRIMARY}`];
-    expect(preferredChatRefForView(refs, "project-1", ORIGINS, PRIMARY)).toBeNull();
+  it("files a launcher nowhere -- it is a question about a pane, not an object", () => {
+    expect(memberRefForPanelParams({ panelType: "launcher", agentId: "agent-primary" })).toBeNull();
+  });
+
+  it("files nothing when there are no params at all", () => {
+    expect(memberRefForPanelParams(undefined)).toBeNull();
+  });
+
+  it("no longer files an ad-hoc URL page under a url:<hash> ref", () => {
+    // Previously fell back to memberRef("url", await shortHash(panelId)): a
+    // ref that named the PANEL rather than anything durable about the page.
+    // A panel with none of a chat's agent id, a terminal's session name, or a
+    // service name is not a persistent object the way the four real member
+    // kinds are, so it now files nothing.
+    const params: PanelParams = {
+      panelType: "iframe",
+      agentId: "agent-primary",
+      url: "https://example.com/",
+      title: "Example",
+    };
+    expect(memberRefForPanelParams(params)).toBeNull();
+  });
+
+  it("files nothing for a subagent view either, which sets none of the three identifying fields", () => {
+    const params: PanelParams = { panelType: "subagent", agentId: "agent-primary", subagentSessionId: "sub-1" };
+    expect(memberRefForPanelParams(params)).toBeNull();
+  });
+
+  it("does not yet file a terminal still allocating its tmux session name", () => {
+    // terminalId is set synchronously at creation; terminalSessionName lands
+    // once the backend hands back a free name (see addPanelForRef's
+    // service:terminal branch, which re-files the panel once it does).
+    const params: PanelParams = { panelType: "iframe", agentId: "agent-primary", terminalId: "term-abc", url: "" };
+    expect(memberRefForPanelParams(params)).toBeNull();
+  });
+});
+
+describe("displayNameForView", () => {
+  const PROJECTS: ProjectInfo[] = [
+    { project_id: "project-1", name: "Alpha", color: "#3B82F6", glyph: 0, has_content: true, members: [] },
+  ];
+
+  it("names a project in the registry", () => {
+    expect(displayNameForView("project-1", PROJECTS)).toBe("Alpha");
+  });
+
+  it("names Everything without looking it up -- it has no registry entry to find", () => {
+    // The fallback a delete reports once the last project goes, so the one
+    // message announcing zero projects must not read `switched to "everything"`.
+    expect(displayNameForView("everything", PROJECTS)).toBe("Everything");
+    expect(displayNameForView("everything", [])).toBe("Everything");
+  });
+
+  it("falls back to the bare id for a project the registry no longer holds", () => {
+    expect(displayNameForView("gone", PROJECTS)).toBe("gone");
   });
 });
