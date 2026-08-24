@@ -3651,11 +3651,13 @@ def test_recover_clears_the_emergency_record_when_it_confirms_health(
 
 
 def test_recover_over_an_already_broken_ui_leaves_the_record_standing(
-    apply_repo: Path,
+    apply_repo: Path, capsys
 ) -> None:
     # An interrupted apply whose baseline was already broken is recovered on
     # the backend's health alone -- the frontend is never probed -- so this
-    # recovery has no evidence that the state the record describes is over.
+    # recovery has no evidence that the state the record describes is over,
+    # and its closing line must not sign off on a UI nobody looked at. That
+    # line is often the only account of an unattended recovery.
     _plant_emergency(apply_repo)
     _plant_snapshotted_marker(apply_repo, frontend_expected=False)
     runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
@@ -3663,6 +3665,9 @@ def test_recover_over_an_already_broken_ui_leaves_the_record_standing(
 
     assert _recover(runner, http, apply_repo) == 0
     assert update_self.emergency_path(apply_repo).exists()
+    closing_line = capsys.readouterr().err.strip().splitlines()[-1]
+    assert "confirmed healthy" not in closing_line
+    assert "cannot confirm it" in closing_line
 
 
 def test_recover_provisioner_failure_still_counts_as_recovered(

@@ -3194,10 +3194,22 @@ def recover(
         # confirmation the record is held to.
         if marker.frontend_expected:
             clear_emergency(repo_root)
+        # The same two arms ``_report_rolled_back`` uses, for the same reason:
+        # the frontend is probed only when one was expected, so a recovery of
+        # an apply that began over a broken UI has confirmed the backend and
+        # nothing else. This line is often the only account of an unattended
+        # recovery, so it must not sign off on a UI nobody looked at.
+        confirmation = (
+            "the live workspace is confirmed healthy"
+            if marker.frontend_expected
+            else "the backend is healthy, but the live UI was not serving a working "
+            "frontend when that apply began either, so this rollback was not held to "
+            "that standard and cannot confirm it"
+        )
         sys.stderr.write(
-            "recovered: the interrupted apply is rolled back and the live workspace is "
-            "confirmed healthy. The worker branch and its report are kept, so a "
-            "diagnosed retry is a quick re-land.\n"
+            f"recovered: the interrupted apply is rolled back and {confirmation}. The "
+            "worker branch and its report are kept, so a diagnosed retry is a quick "
+            "re-land.\n"
         )
         return 0
     clear_marker(repo_root)
