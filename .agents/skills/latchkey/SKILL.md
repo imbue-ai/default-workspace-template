@@ -81,26 +81,7 @@ For example: `-d '{... "payload": {"scope": ..., "permissions": ..., "account": 
 When not sure (and if applicable), prefer the `*-read-all` permission variants as they are relatively safe and obvious.
 
 **File exactly one permission request per tool call, as the only command in that
-call, and leave its output alone.** The chat turns the call into the card the user
-approves or denies, and builds it out of that single call: what to show comes from
-the command, and the button that opens the approval dialog comes from the request
-object the gateway echoes on stdout. So a second request batched into the same call
-is never shown to the user, and `> /tmp/req.json` or `| jq .request_id` takes the
-echoed object away and leaves the card with no button. A PreToolUse hook blocks
-those forms, and every other way of putting a second command in the call
-(`| tee ...`, `&& echo done`, a leading `cd`) along with them -- the request has to
-be the whole tool call. It also blocks any redirection of the command's *input*,
-so pass the body inline with `-d '{...}'` rather than through a heredoc or
-`-d @- < body.json`. Run it in the foreground, too: a background tool call
-(`run_in_background: true`) returns a shell id instead of the echo, which leaves
-the card just as buttonless, so the hook blocks that as well.
-
-Need permissions for two scopes? That is two tool calls, and you can send them
-back to back -- there is no need to wait for the first verdict before filing the
-second. The rule is one request per call, not one request at a time.
-
-Once you have filed everything you need, wait for the automated system messages
-carrying the user's decisions before using the APIs you asked for.
+call, and leave its output alone.** 
 
 
 ### Git operations on GitHub (clone / fetch / push)
