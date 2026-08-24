@@ -1415,8 +1415,29 @@ def _all_healthy(_url: str) -> int:
     return 200
 
 
+def _no_sleep(_seconds: float) -> None:
+    return None
+
+
 def _is_live(url: str) -> bool:
     return url.startswith(_LIVE_BASE)
+
+
+def _snapshot_copy(repo_root: Path, name: str) -> Path:
+    return repo_root / update_self.STATE_DIR_REL / update_self.SNAPSHOTS_DIRNAME / name
+
+
+def _placeholder_after(runner: _RecordingRunner, *prefix: str):
+    """A page responder that serves the placeholder once ``prefix`` has run.
+
+    The shape every regression test needs: a healthy app shell for the
+    baseline probe, and a broken one from the step under test onwards.
+    """
+
+    def page_responder(url: str) -> update_self.FetchedPage:
+        return _placeholder_page(url) if runner.ran(*prefix) else _built_app_page(url)
+
+    return page_responder
 
 
 def _refreshed_the_view(runner: _RecordingRunner, repo_root: Path) -> bool:
@@ -1922,6 +1943,338 @@ def test_a_regressed_frontend_is_rolled_back(apply_repo: Path) -> None:
     assert code == 2
     assert runner.ran("git", "checkout", _ROLLBACK, "--")
     assert _bundle_exists(apply_repo)  # restored from the pre-apply copy
+
+
+def test_a_build_that_writes_no_bundle_is_a_failure_not_a_success(
+    apply_repo: Path,
+) -> None:
+    # A build tool killed after emptying its output directory can still exit 0.
+    # Trusting the exit code alone would report success on an empty bundle and
+    # hand the user a blank page.
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+    runner.is_build_output_written = False
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 2
+    assert _bundle_exists(apply_repo)  # the pre-apply copy is back
+
+
+def test_a_rollback_whose_own_git_fails_is_an_emergency_that_keeps_the_copies(
+    apply_repo: Path, capsys
+) -> None:
+    # The rollback's git steps run with check=True. An escape there would
+    # surface as a traceback over a part-restored tree whose bundle the failed
+    # build already destroyed, and would take the emergency record and the
+    # copies with it. Not recovering is what exit 3 is for, and the copies are
+    # what make it survivable.
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+    runner.respond(("npm", "run", "build"), _Result(returncode=1, stderr="type error"))
+    runner.respond(
+        ("git", "checkout"),
+        subprocess.CalledProcessError(1, ["git", "checkout"], stderr="index.lock"),
+    )
+
+    assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 3
+
+    assert _read_emergency(apply_repo)["reason"]
+    kept = _snapshot_copy(apply_repo, "bundle")
+    assert (kept / "index.html").exists()
+    assert str(kept) in capsys.readouterr().err
+
+
+def test_a_backend_only_emergency_is_not_pointed_at_the_bundle_copy(
+    apply_repo: Path, capsys
+) -> None:
+    # Same exit 3, but nothing here ever wrote the bundle directory: the build
+    # is the only step that empties it, and the rollback restores tracked files
+    # while it is untracked output. So the copy is byte-identical to what is
+    # already being served, and offering it would send someone whose UI is down
+    # for a backend reason off to copy a bundle over itself.
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    http = _FakeHttp(_all_healthy, page_responder=_placeholder_after(runner, *_RESTART))
+
+    assert _apply(runner, http, _FakeSpawner(), apply_repo) == 3
+
+    assert "bundle was kept" not in capsys.readouterr().err
+
+
+# --- apply: the already-broken-frontend baseline ------------------------------------
+#
+# The apply is answerable for *regressions*: a workspace that was not serving a
+# working frontend before it started does not get its update rolled back for
+# still not serving one afterwards -- that would lose the change without fixing
+# anything. The baseline is measured once, before any destructive step, and the
+# closing report is held to it either way.
+
+
+def test_a_frontend_already_broken_beforehand_is_reported_not_rolled_back(
+    unbuilt_apply_repo: Path, capsys
+) -> None:
+    runner = _apply_runner(_BACKEND_DIFF, unbuilt_apply_repo)
+    http = _FakeHttp(_all_healthy, page_responder=_placeholder_page)
+
+    code = _apply(runner, http, _FakeSpawner(), unbuilt_apply_repo)
+
+    assert code == 0
+    assert not runner.ran("git", "checkout", _ROLLBACK, "--")
+    # The lead relays the closing line to the user, so it must not sign off on
+    # a UI we have just established they cannot see -- which is exactly what
+    # the backend's own health check cannot tell us.
+    closing_line = capsys.readouterr().err.strip().splitlines()[-1]
+    assert "confirmed healthy" not in closing_line
+    assert "not serving a working frontend" in closing_line
+
+
+def test_a_rollback_does_not_claim_health_over_an_already_broken_frontend(
+    apply_repo: Path, capsys
+) -> None:
+    # The same rule on the rollback path, which never probes the frontend a
+    # second time: the health it confirms is the backend's, so the closing line
+    # has to say what it could not confirm rather than claim the UI is fine.
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+    runner.respond(("npm", "run", "build"), _Result(returncode=1, stderr="type error"))
+    http = _FakeHttp(_all_healthy, page_responder=_placeholder_page)
+
+    code = _apply(runner, http, _FakeSpawner(), apply_repo)
+
+    assert code == 2
+    closing_line = capsys.readouterr().err.strip().splitlines()[-1]
+    assert "confirmed healthy" not in closing_line
+    assert "cannot confirm it" in closing_line
+
+
+def test_a_blip_on_the_baseline_probe_does_not_disarm_the_regression_check(
+    apply_repo: Path,
+) -> None:
+    # The baseline probe decides whether the apply is answerable for the
+    # frontend at all, and it is wrong in only one direction: a single
+    # unanswered request would conclude "already broken" and silently downgrade
+    # every later rollback into a warning. So a non-answer is retried, and this
+    # apply -- which really does break the frontend -- is still rolled back.
+    unanswered: list[str] = []
+
+    def before_the_build(url: str) -> update_self.FetchedPage | None:
+        if not unanswered:
+            unanswered.append(url)
+            return None
+        return _built_app_page(url)
+
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+
+    def page_responder(url: str) -> update_self.FetchedPage | None:
+        if runner.ran("npm", "run", "build"):
+            return _placeholder_page(url)
+        return before_the_build(url)
+
+    code = _apply(
+        runner,
+        _FakeHttp(_all_healthy, page_responder=page_responder),
+        _FakeSpawner(),
+        apply_repo,
+    )
+
+    # Rolled back (and escalated, because the fake keeps serving the
+    # placeholder afterwards) rather than exiting 0 with a warning.
+    assert code == 3
+    assert unanswered  # the blip really did happen
+
+
+# --- the frontend probe ------------------------------------------------------------
+#
+# The probe asks the two questions a browser would -- is this the real app
+# shell, and does its module script load as JavaScript -- because the backend's
+# own health endpoint answers 200 for both the not-built placeholder and an
+# unserved /assets path.
+
+
+def _html(body: str, **headers: str) -> update_self.FetchedPage:
+    return update_self.FetchedPage(
+        status=200, body=body, headers={"content-type": "text/html", **headers}
+    )
+
+
+_SHELL_WITH_SCRIPT = _html(
+    f'<!doctype html><script type="module" src="/assets/{_ASSET_NAME}"></script>'
+)
+
+
+@pytest.mark.parametrize(
+    ("shell", "asset", "expected", "is_answered"),
+    [
+        (None, None, "did not answer a request for the app shell", False),
+        (
+            update_self.FetchedPage(status=503, body="", headers={}),
+            None,
+            "returned HTTP 503",
+            True,
+        ),
+        (
+            _html("not built", **{update_self.FRONTEND_BUILT_HEADER: "false"}),
+            None,
+            "'frontend not built' placeholder",
+            True,
+        ),
+        (
+            _html("<!doctype html><p>no script here</p>"),
+            None,
+            "loads no bundled script",
+            True,
+        ),
+        (
+            _SHELL_WITH_SCRIPT,
+            None,
+            "did not answer a request for the bundled script",
+            False,
+        ),
+        (
+            _SHELL_WITH_SCRIPT,
+            update_self.FetchedPage(status=404, body="", headers={}),
+            "returned HTTP 404",
+            True,
+        ),
+        # The blank-screen mode: the shell is the real app, but its module
+        # script comes back as the SPA fallback HTML, which the browser refuses.
+        (_SHELL_WITH_SCRIPT, _html("<!doctype html>"), "rather than JavaScript", True),
+    ],
+    ids=[
+        "no-answer",
+        "shell-error",
+        "placeholder",
+        "no-script",
+        "asset-no-answer",
+        "asset-missing",
+        "asset-is-html",
+    ],
+)
+def test_probe_frontend_names_each_way_the_ui_can_be_broken(
+    shell: update_self.FetchedPage | None,
+    asset: update_self.FetchedPage | None,
+    expected: str,
+    is_answered: bool,
+) -> None:
+    def page_responder(url: str) -> update_self.FetchedPage | None:
+        return asset if url.endswith(".js") else shell
+
+    probe = update_self.probe_frontend(
+        _FakeHttp(_all_healthy, page_responder=page_responder), _LIVE_BASE
+    )
+
+    assert probe.failure is not None and expected in probe.failure
+    # Only an unanswered request is worth asking again; every other shape is
+    # the service telling us the frontend really is broken.
+    assert probe.is_answered is is_answered
+
+
+def test_a_healthy_built_app_is_no_failure_at_all() -> None:
+    probe = update_self.probe_frontend(
+        _FakeHttp(_all_healthy, page_responder=_built_app_page), _LIVE_BASE
+    )
+
+    assert probe.failure is None and probe.is_answered
+
+
+def test_the_frontend_probe_retries_a_non_answer_but_not_a_verdict() -> None:
+    # The two halves of one rule. A non-answer says nothing about the frontend,
+    # so it is worth asking again; a verdict -- here the placeholder, arriving
+    # as a perfectly healthy 200 -- is the service telling us the frontend is
+    # broken, and asking again only spends the budget to reach the same answer.
+    answers: list[update_self.FetchedPage | None] = [None, None, _built_app_page("/")]
+    retried = _FakeHttp(
+        _all_healthy,
+        page_responder=lambda url: answers.pop(0) if answers else _built_app_page(url),
+    )
+
+    assert update_self.describe_frontend_failure(retried, _LIVE_BASE, _no_sleep) is None
+    assert not answers  # it kept asking until it got an answer
+
+    verdict = _FakeHttp(_all_healthy, page_responder=_placeholder_page)
+
+    assert (
+        update_self.describe_frontend_failure(verdict, _LIVE_BASE, _no_sleep)
+        is not None
+    )
+    assert len(verdict.page_urls) == 1
+
+
+def test_a_service_that_never_answers_spends_the_budget_and_still_names_a_failure() -> (
+    None
+):
+    # Exhausting the retries has to leave a usable answer behind: the caller
+    # turns it into the rollback message, and a UI that will not answer is one
+    # the user cannot see either.
+    silent = _FakeHttp(_all_healthy, page_responder=lambda _url: None)
+
+    failure = update_self.describe_frontend_failure(silent, _LIVE_BASE, _no_sleep)
+
+    assert failure is not None
+    assert len(silent.page_urls) == update_self._FRONTEND_PROBE_ATTEMPTS
+
+
+# --- the view refresh ---------------------------------------------------------------
+#
+# The refresh runs last, after the apply has already landed and the live
+# workspace is confirmed healthy. It is the one step that must never fail the
+# apply: a non-zero exit there reads to the lead as "the update did not land".
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        OSError("Cannot allocate memory"),
+        # Capturing the helper's output decodes what the child wrote, and bytes
+        # the stdio encoding cannot decode raise UnicodeDecodeError -- a
+        # ValueError, which neither OSError nor SubprocessError covers.
+        UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte"),
+    ],
+    ids=["unspawnable", "undecodable-output"],
+)
+def test_a_refresh_that_cannot_run_does_not_fail_an_apply_that_landed(
+    apply_repo: Path, failure: Exception, capsys
+) -> None:
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    runner.respond((sys.executable,), failure)
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    assert _refreshed_the_view(runner, apply_repo)  # attempted, not skipped
+    assert "an open view may still be showing" in capsys.readouterr().err
+
+
+# --- tree restoration ----------------------------------------------------------------
+
+
+def test_restore_tree_removes_adds_and_checks_out_the_rest(tmp_path: Path) -> None:
+    # `--no-renames` makes the diff pure adds/modifies/deletes, and the two
+    # halves need opposite treatment: a file the update added has no
+    # known-good version to check out, so it has to be removed instead.
+    runner = _RecordingRunner()
+
+    update_self._restore_tree(
+        [
+            ("A", "system/apps/system_interface/imbue/system_interface/new_module.py"),
+            ("M", "system/apps/system_interface/imbue/system_interface/server.py"),
+            ("D", "system/apps/system_interface/frontend/src/old.ts"),
+        ],
+        _ROLLBACK,
+        tmp_path,
+        runner,
+    )
+
+    assert runner.argvs_starting("git", "rm") == [
+        [
+            "git",
+            "rm",
+            "--force",
+            "--ignore-unmatch",
+            "system/apps/system_interface/imbue/system_interface/new_module.py",
+        ]
+    ]
+    assert [c[-1] for c in runner.argvs_starting("git", "checkout")] == [
+        "system/apps/system_interface/imbue/system_interface/server.py",
+        "system/apps/system_interface/frontend/src/old.ts",
+    ]
 
 
 # --- apply: marker lifecycle ------------------------------------------------------
