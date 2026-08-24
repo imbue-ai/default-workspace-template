@@ -774,6 +774,14 @@ def test_read_update_marker_dri_agent(monkeypatch: pytest.MonkeyPatch, tmp_path:
     # actually produces -- must degrade too, not raise out of boot.
     UPDATE_APPLY_MARKER.write_bytes(b'{"dri_agent": "\xff\xfe')
     assert _read_update_marker_dri_agent() == ""
+    # Well-formed JSON of the wrong shape degrades the same way.
+    UPDATE_APPLY_MARKER.write_text(json.dumps([{"dri_agent": "agent-omega"}]))
+    assert _read_update_marker_dri_agent() == ""
+    UPDATE_APPLY_MARKER.write_text(json.dumps({"dri_agent": 7}))
+    assert _read_update_marker_dri_agent() == ""
+    # An apply driven outside an agent records no name; that is not corruption.
+    UPDATE_APPLY_MARKER.write_text(json.dumps({"dri_agent": ""}))
+    assert _read_update_marker_dri_agent() == ""
 
 
 def test_recover_skips_entirely_without_a_marker(
@@ -783,7 +791,7 @@ def test_recover_skips_entirely_without_a_marker(
     stub = _RecordingSubprocess()
     monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
 
-    _recover_interrupted_update()
+    assert _recover_interrupted_update() == ""
 
     assert stub.calls == []
 
@@ -898,6 +906,24 @@ def test_recover_failure_does_not_wake_or_raise(
     stub = _RecordingSubprocess(returncode=1)
     monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
 
-    _recover_interrupted_update()  # must not raise: boot continues regardless
+    # Must not raise: boot continues regardless, and nobody is woken.
+    assert _recover_interrupted_update() == ""
 
     assert len(stub.calls) == 1
+
+
+def test_recover_names_nobody_when_the_marker_recorded_no_agent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # An apply driven outside an agent records dri_agent="". The rollback still
+    # happens; there is simply nobody to hand the finding to.
+    monkeypatch.chdir(tmp_path)
+    _write_apply_marker("")
+    stub = _RecordingSubprocess()
+    stub.on_recover = lambda: UPDATE_APPLY_MARKER.unlink()
+    monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
+
+    assert _recover_interrupted_update() == ""
+
+    assert len(stub.calls) == 1  # the recover invocation, and no mngr calls
+    assert not UPDATE_APPLY_MARKER.exists()
