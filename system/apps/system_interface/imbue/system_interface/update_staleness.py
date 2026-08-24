@@ -111,25 +111,46 @@ def _is_path_relevant_to_this_server(path: str) -> bool:
     return False
 
 
-def _read_head(repo_root: Path) -> str | None:
-    """The tree HEAD at ``repo_root``, or ``None`` when it cannot be read.
+def _read_git(command: list[str], repo_root: Path) -> str | None:
+    """Run a read-only git command, or ``None`` when it could not be run.
 
-    Everything degrades to ``None``: a workspace where HEAD cannot be read (no
-    git, a corrupt repo) has bigger problems than a missing banner, and a
-    false banner would erode the trust the real one needs.
+    Everything degrades to ``None``: a workspace where git cannot be read (no
+    git, a corrupt repo, a wedged index) has bigger problems than a missing
+    banner, and a false banner would erode the trust the real one needs. But
+    the degrading is logged, because this feature exists to make a silent skew
+    visible and a permanently silent detector is the worst way for it to fail.
     """
     try:
         result = run_local_command_modern_version(
-            command=["git", "rev-parse", "HEAD"],
+            command=command,
             cwd=repo_root,
             is_checked=False,
             timeout=_GIT_TIMEOUT_SECONDS,
         )
-    except (ProcessError, OSError):
+    except (ProcessError, OSError) as e:
+        logger.warning(
+            "update-staleness: `{}` could not run in {} ({}); no banner this request.",
+            " ".join(command),
+            repo_root,
+            e,
+        )
         return None
     if result.returncode != 0:
+        logger.warning(
+            "update-staleness: `{}` exited {} in {} ({}); no banner this request.",
+            " ".join(command),
+            result.returncode,
+            repo_root,
+            result.stderr.strip()[-300:],
+        )
         return None
-    return result.stdout.strip() or None
+    return result.stdout
+
+
+def _read_head(repo_root: Path) -> str | None:
+    """The tree HEAD at ``repo_root``, or ``None`` when it cannot be read."""
+    output = _read_git(["git", "rev-parse", "HEAD"], repo_root)
+    return output.strip() or None if output is not None else None
 
 
 def _read_changed_paths(repo_root: Path, since_head: str) -> list[str] | None:
@@ -140,18 +161,10 @@ def _read_changed_paths(repo_root: Path, since_head: str) -> list[str] | None:
     ``None`` when the diff cannot be taken (``since_head`` gone, a wedged git):
     like :func:`_read_head`, everything degrades to "no banner".
     """
-    try:
-        result = run_local_command_modern_version(
-            command=["git", "diff", "--name-only", since_head, "HEAD"],
-            cwd=repo_root,
-            is_checked=False,
-            timeout=_GIT_TIMEOUT_SECONDS,
-        )
-    except (ProcessError, OSError):
+    output = _read_git(["git", "diff", "--name-only", since_head, "HEAD"], repo_root)
+    if output is None:
         return None
-    if result.returncode != 0:
-        return None
-    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    return [line.strip() for line in output.splitlines() if line.strip()]
 
 
 class UpdateStalenessTracker(FrozenModel):
