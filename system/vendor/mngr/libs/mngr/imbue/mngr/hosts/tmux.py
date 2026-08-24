@@ -53,6 +53,12 @@ class TmuxSessionTarget(FrozenModel):
         return shlex.quote(self.as_target_arg())
 
 
+# The tmux session user-option holding the agent pane's ID. `@`-prefixed names are tmux's user
+# namespace: tmux stores the string and never interprets it, and the value dies with the session,
+# so it describes exactly as long as the thing it describes exists.
+AGENT_PANE_ID_OPTION: Final[str] = "@mngr_agent_pane"
+
+
 class TmuxWindowTarget(FrozenModel):
     """Structured tmux ``-t`` target for commands whose target resolves as a window or pane.
 

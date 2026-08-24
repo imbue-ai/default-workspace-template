@@ -349,7 +349,13 @@ def _send_message_to_agent(
                     ensure_agent_started(agent, host, is_start_desired=True)
             except MngrError as e:
                 error_msg = str(e)
-                _record_agent_failure(result, result_lock, agent_name, error_msg, on_error)
+                # The agent was stopped and would not start, so there is nothing to type into.
+                # This is the path a chat send actually takes when an agent has died -- it asks
+                # for a start rather than failing on the stopped state above -- so leaving it
+                # unclassified is what would offer a retry that cannot work.
+                _record_agent_failure(
+                    result, result_lock, agent_name, error_msg, on_error, SendFailureKind.AGENT_UNREACHABLE
+                )
                 if error_behavior == ErrorBehavior.ABORT:
                     raise MngrError(error_msg) from e
                 return

@@ -29,6 +29,7 @@ from imbue.mngr.errors import UserInputError
 from imbue.mngr.hosts.common import check_agent_type_known
 from imbue.mngr.hosts.common import determine_lifecycle_probe_result
 from imbue.mngr.hosts.common import get_agent_state_dir_path
+from imbue.mngr.hosts.tmux import AGENT_PANE_ID_OPTION
 from imbue.mngr.hosts.tmux import LONG_MESSAGE_THRESHOLD
 from imbue.mngr.hosts.tmux import TmuxSessionTarget
 from imbue.mngr.hosts.tmux import TmuxWindowTarget
@@ -64,6 +65,12 @@ def quote_agent_args(agent_args: tuple[str, ...]) -> tuple[str, ...]:
     and so already arrive shell-safe.
     """
     return tuple(shlex.quote(arg) for arg in agent_args)
+
+
+# Resolved send targets by session name. The pane ID is written once at session creation and
+# fixed for that session's life, so this is a cache of an immutable fact rather than state --
+# and a session name is unique to one agent run, so a restarted agent resolves afresh.
+_CACHED_SEND_TARGETS: dict[str, str] = {}
 
 
 class BaseAgent(AgentInterface[AgentConfigT]):
@@ -697,13 +704,54 @@ class SendKeysAgent(InteractiveAgentMixin, SupportsKeyChordMixin, BaseAgent[Agen
         it is given.
         """
         with self._message_lock(), log_span("Pressing key chord {} to agent {}", key, self.name):
-            target_arg = self.tmux_target.as_shell_arg()
+            target_arg = self._send_target_arg(self.tmux_target)
+            self._clear_pane_modes(target_arg)
             send_cmd = f"tmux send-keys -t {target_arg} {shlex.quote(key)}"
             result = self.host.execute_stateful_command(send_cmd)
             if not result.success:
                 raise SendMessageError(
                     str(self.name), f"tmux send-keys {key} failed: {result.stderr or result.stdout}"
                 )
+
+    def _send_target_arg(self, tmux_target: TmuxWindowTarget) -> str:
+        """The tmux ``-t`` argument every send should use: the agent's own pane, by ID.
+
+        ``session:window`` resolves to whichever pane is ACTIVE, so one split silently delivers
+        the message into the new shell instead. The pane ID recorded at session creation is
+        unique for that pane's life and fails loudly once it is gone, which is what we want -- a
+        misrouted message is far worse than a refused one.
+
+        Falls back to the window target when the option is absent, which is how a session created
+        before this existed keeps working.
+
+        Resolved once per agent object and remembered: the option is written at session creation
+        and cannot change while that session lives, so re-reading it would spend a round trip per
+        send to learn the same answer -- and on a remote host that is not free.
+        """
+        cached = _CACHED_SEND_TARGETS.get(self.session_name)
+        if cached is not None:
+            return cached
+        session_arg = shlex.quote(f"={tmux_target.session_name}:")
+        result = self.host.execute_stateful_command(f"tmux show-options -v -t {session_arg} {AGENT_PANE_ID_OPTION}")
+        pane_id = result.stdout.strip() if result.success else ""
+        target_arg = shlex.quote(pane_id) if pane_id else tmux_target.as_shell_arg()
+        _CACHED_SEND_TARGETS[self.session_name] = target_arg
+        return target_arg
+
+    def _clear_pane_modes(self, target_arg: str) -> None:
+        """Leave copy-mode (or any other mode) before typing into the pane.
+
+        tmux modes -- copy, clock, choose-tree, customize -- intercept keys, so ``send-keys`` into
+        a pane in one is swallowed entirely. ``paste-buffer`` is NOT, which is what makes this
+        nasty rather than merely broken: a long message pastes into the input box and the Enter
+        after it disappears, leaving the text sitting there unsent rather than failing.
+
+        Users reach copy-mode by accident constantly -- with ``mouse on``, one wheel-up enters it
+        with no obvious indicator. ``copy-mode -q`` clears every mode type in one call and is a
+        silent no-op when the pane is in none, so it needs no ``#{pane_in_mode}`` check. Best
+        effort: if it fails, the send that follows will report the real problem.
+        """
+        self.host.execute_stateful_command(f"tmux copy-mode -q -t {target_arg}")
 
     def send_message(self, message: str) -> None:
         """Send a message to the running agent.
@@ -737,7 +785,8 @@ class SendKeysAgent(InteractiveAgentMixin, SupportsKeyChordMixin, BaseAgent[Agen
         the host and uses ``tmux load-buffer`` + ``tmux paste-buffer`` to avoid
         the tmux "command too long" error.
         """
-        target_arg = tmux_target.as_shell_arg()
+        target_arg = self._send_target_arg(tmux_target)
+        self._clear_pane_modes(target_arg)
         if len(message) < LONG_MESSAGE_THRESHOLD:
             send_msg_cmd = f"tmux send-keys -t {target_arg} -l -- {shlex.quote(message)}"
             result = self.host.execute_stateful_command(send_msg_cmd)
@@ -770,7 +819,9 @@ class SendKeysAgent(InteractiveAgentMixin, SupportsKeyChordMixin, BaseAgent[Agen
         """Send a message directly without waiting for paste confirmation."""
         self._send_tmux_literal_keys(tmux_target, message)
 
-        send_enter_cmd = f"tmux send-keys -t {tmux_target.as_shell_arg()} Enter"
+        enter_target_arg = self._send_target_arg(tmux_target)
+        self._clear_pane_modes(enter_target_arg)
+        send_enter_cmd = f"tmux send-keys -t {enter_target_arg} Enter"
         result = self.host.execute_stateful_command(send_enter_cmd)
         if not result.success:
             raise SendMessageError(str(self.name), f"tmux send-keys Enter failed: {result.stderr or result.stdout}")
