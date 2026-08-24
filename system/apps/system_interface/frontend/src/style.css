@@ -2287,6 +2287,25 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   background: var(--color-bg-hover);
 }
 
+/* Force, on the send-failure notice: it restarts the agent, ending any turn in progress and
+   losing that work, so it must not look like the easy button next to Cancel and Retry. */
+.custom-url-dialog-danger {
+  padding: 6px 16px;
+  font-family: var(--font-family-base);
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: var(--radius-base);
+  cursor: pointer;
+  transition: background 100ms;
+  background: white;
+  color: #dc2626;
+  border: 1px solid #fecaca;
+}
+
+.custom-url-dialog-danger:hover:not(:disabled) {
+  background: #fef2f2;
+}
+
 .custom-url-dialog-open {
   background: var(--color-accent);
   color: #fff;
