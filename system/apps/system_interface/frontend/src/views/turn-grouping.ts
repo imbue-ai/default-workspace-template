@@ -69,12 +69,8 @@ import type {
   ToolCall,
 } from "../models/Response";
 import type { PermissionResolution } from "./message-classification";
-import {
-  isNonBoundaryUserMessage,
-  isFiledPermissionRequest,
-  isSystemChipUserMessage,
-  resolutionOf,
-} from "./message-classification";
+import { isFiledPermissionRequest } from "./permission-card";
+import { isNonBoundaryUserMessage, isSystemChipUserMessage, resolutionOf } from "./message-classification";
 
 export type StepStatus = "pending" | "active" | "done";
 

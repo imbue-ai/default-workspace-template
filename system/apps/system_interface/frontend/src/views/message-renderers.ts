@@ -9,8 +9,8 @@ import type { TranscriptEvent, AssistantMessageEvent, ToolResultEvent, ToolCall 
 import { openSubagentTab } from "./DockviewWorkspace";
 import { hoverTooltipAttrs } from "./hoverTooltip";
 import type { PermissionResolution } from "./message-classification";
-import { isFiledPermissionRequest, isSkillExpansionUserMessage } from "./message-classification";
-import { PermissionCard } from "./permission-card";
+import { isSkillExpansionUserMessage } from "./message-classification";
+import { PermissionCard, isFiledPermissionRequest } from "./permission-card";
 
 // Per-kind user_message rendering lives in user-message-display.ts (the display
 // half of the classify/display split). Re-exported here so existing importers --
