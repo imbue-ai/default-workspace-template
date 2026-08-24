@@ -202,6 +202,24 @@ export function parsePermissionRequest(
   return parsed === null ? null : detailsFromResponseObject(parsed);
 }
 
+/** True when a permission-request call has something for the user to answer.
+ *
+ *  Filing one is a plain HTTP POST, and plenty of ways to fail leave a tool call
+ *  that looks like a filing but created nothing: a PreToolUse guard refusing the
+ *  command, or the gateway rejecting the body (`curl` exits 0 on a 4xx, so the
+ *  call does not even read as failed). Rendering those as a permission card sends
+ *  the user to a Permissions tab that has nothing in it, so they render as the
+ *  ordinary tool calls they are -- with whatever the error was.
+ *
+ *  A call with no result YET does count: that is the request in flight, which is
+ *  exactly when it most needs to be visible.
+ */
+export function isFiledPermissionRequest(toolCall: ToolCall, toolResult: ToolResultEvent | null): boolean {
+  if (!isPermissionRequestCall(toolCall)) return false;
+  if (toolResult === null) return true;
+  return parsePermissionRequest(toolCall, toolResult) !== null;
+}
+
 /**
  * Ask the outer Minds app to open its permission-request modal. The chat UI
  * runs inside an iframe, so we hand the request id to the embedding chrome

@@ -5,9 +5,9 @@ import { resetEmbedEndpointForTesting } from "../embed";
 import type { ToolCall, ToolResultEvent } from "../models/Response";
 import type { ScopeInfo } from "./latchkey-scope-info";
 import type { PermissionResolution } from "./message-classification";
-import { isFiledPermissionRequest } from "./message-classification";
 import {
   PermissionCard,
+  isFiledPermissionRequest,
   initShellPermissionResolutions,
   openPermissionRequest,
   parsePermissionRequest,
@@ -496,6 +496,16 @@ describe("isFiledPermissionRequest", () => {
   it("does not count a call the harness refused", () => {
     const blocked = makeResult("PreToolUse:Bash hook error: Blocked: file ONE latchkey permission request", true);
     expect(isFiledPermissionRequest(call, blocked)).toBe(false);
+  });
+
+  it("does not count a body the gateway rejected", () => {
+    // curl exits 0 on a 4xx, so this does not even read as a failed call -- but no
+    // request was created, so there is nothing in the Permissions tab to send the
+    // user to. Verbatim from a gateway that refused a malformed payload.
+    const rejected = makeResult(
+      '{\n  "error": "Invalid request body: payload.\'scope\' is required and must be a non-empty string."\n}',
+    );
+    expect(isFiledPermissionRequest(call, rejected)).toBe(false);
   });
 
   it("does not count an ordinary tool call", () => {
