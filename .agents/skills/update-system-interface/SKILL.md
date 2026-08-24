@@ -298,7 +298,11 @@ Interpret the exit code and report it to the user:
   frontend the stderr names the bundle copy -- copying it back over
   `system/apps/system_interface/imbue/system_interface/static/` needs neither
   `npm` nor a registry, so pass that path on with the escalation. Read the
-  stderr rather than assuming a path is there.
+  stderr rather than assuming a path is there. This exit also leaves a durable
+  `data/.state/update-apply/emergency.json` (reason, the agent that drove the
+  apply, where the copies are) and the system interface shows a banner off it
+  until it is gone, so deleting that file once the workspace is verified
+  healthy is part of the repair -- see the update-self skill's exit-3 guidance.
 - `1` -- precondition error; nothing was changed. A dirty tree, a merge
   conflict, another apply in flight, an interrupted apply of a *different*
   merge (run `recover` first, per the stderr), or this merge having already
