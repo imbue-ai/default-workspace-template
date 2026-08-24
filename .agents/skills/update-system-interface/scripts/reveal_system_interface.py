@@ -15,11 +15,11 @@ worker is a local git-worktree sub-agent whose work_dir is a folder it has
 already built, and it must still exist at preview time.
 
 The *apply* step -- landing the merged change and revealing it to the live UI,
-with auto-rollback -- is NOT here anymore. It moved to the general update
-apply, ``.agents/skills/update-self/scripts/update_self.py apply``, which owns
-the whole reveal machinery (snapshots, dependency refresh, pre-flight, health
+with auto-rollback -- belongs to the general update apply,
+``.agents/skills/update-self/scripts/update_self.py apply``, which owns the
+whole reveal machinery (snapshots, dependency refresh, pre-flight, health
 probes, rollback, the interruption marker) for every update flow. This script
-keeps only the pre-merge preview, whose gating on the user's judgment is the
+covers only the pre-merge preview, whose gating on the user's judgment is the
 non-deterministic part that stays with the agent.
 
 Run via bare ``python3`` (stdlib-only) -- it orchestrates the environment, so
