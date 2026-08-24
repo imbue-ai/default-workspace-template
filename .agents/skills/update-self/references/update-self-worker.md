@@ -334,9 +334,9 @@ tests, or exercise its scripts -- and called out in the report.
   can close.
 - **Playwright** for a web surface -- system interface *or* a user service -- only
   when the merge needed nontrivial merge work there (not a clean pull). For the
-  system interface, build it in your worktree (`cd system/apps/system_interface && uv
-  sync && npm run build`) so your work_dir is a built instance the lead can
-  preview, then drive it per
+  system interface, build it in your worktree (`uv sync --all-packages`, then
+  `cd system/apps/system_interface/frontend && npm ci && npm run build`) so your
+  work_dir is a built instance the lead can preview, then drive it per
   `.agents/shared/worker/references/web-frontend-testing.md`. That built bundle
   is also what the lead's apply installs live (`--worker-bundle`), so the exact
   build the user previewed is what ships -- name its location in your report
