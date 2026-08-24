@@ -58,12 +58,9 @@ latchkey curl http://latchkey-self.invalid/permissions/available/discord
 
 # 2. Retrieve the list of your existing permissions if necessary.
 latchkey curl http://latchkey-self.invalid/permissions/self | jq .rules
-```
 
-Then ask for the missing permissions. This one goes in a tool call of its own,
-with nothing else in it and its output untouched.
-
-```bash
+# 3. Ask for the missing permissions.
+# This one must go in a tool call of its own, with nothing else in it and its output untouched.
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
   -H 'Content-Type: application/json' \
   -d '{"agent_id": "'"$MNGR_AGENT_ID"'", "type": "predefined", "payload": {"scope": "discord-api", "permissions": ["discord-read-all"]}, "rationale": "I'"'"'d like to access your Discord account to read server and channel information so I can help you summarize conversations."}'
@@ -79,9 +76,6 @@ specify the optional third field on the `payload`: `account` (which should be a 
 For example: `-d '{... "payload": {"scope": ..., "permissions": ..., "account": "bob@example.com"}}'.
 
 When not sure (and if applicable), prefer the `*-read-all` permission variants as they are relatively safe and obvious.
-
-File exactly one permission request per tool call, as the only command in that
-call, and leave its output alone.
 
 After posting, wait for an automated system message indicating whether the user
 approved or denied the permission request.
