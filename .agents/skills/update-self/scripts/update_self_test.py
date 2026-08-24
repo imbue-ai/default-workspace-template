@@ -893,7 +893,7 @@ def test_bootstrap_skill_reports_no_difference_when_local_matches_tag(
 
 
 def test_bootstrap_skill_ignores_untracked_build_artifacts(tmp_path, capsys) -> None:
-    # Importing the script drops __pycache__/*.pyc into system/scripts/. Those are
+    # Importing the script drops __pycache__/*.pyc into the skill's scripts/. Those are
     # untracked, so `git diff` ignores them and they must not register as a
     # spurious difference -- otherwise the "identical -> stay on the local flow"
     # branch would be dead in every real checkout (where the module has been
