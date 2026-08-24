@@ -38,8 +38,10 @@ from imbue.imbue_common.frozen_model import FrozenModel
 logger = _loguru_logger
 
 # The workspace root this server serves from, walked back out of
-# ``system/apps/system_interface/imbue/system_interface``.
-_WORKSPACE_ROOT_DIRECTORY = Path(__file__).resolve().parents[5]
+# ``system/apps/system_interface/imbue/system_interface``. Declared here rather
+# than in ``server.py`` (which imports it back) so the walk exists once: two
+# copies of a ``parents[5]`` count break silently when a directory level moves.
+WORKSPACE_ROOT_DIRECTORY = Path(__file__).resolve().parents[5]
 
 # The update apply's in-flight marker (see
 # ``.agents/skills/update-self/scripts/update_self.py``): present exactly while
@@ -185,7 +187,7 @@ class UpdateStalenessTracker(FrozenModel):
     )
 
     @classmethod
-    def capture(cls, repo_root: Path = _WORKSPACE_ROOT_DIRECTORY) -> "UpdateStalenessTracker":
+    def capture(cls, repo_root: Path = WORKSPACE_ROOT_DIRECTORY) -> "UpdateStalenessTracker":
         """Snapshot the current tree HEAD as this process's startup baseline."""
         startup_head = _read_head(repo_root)
         if startup_head is None:

@@ -110,6 +110,7 @@ from imbue.system_interface.models import StopAgentResponse
 from imbue.system_interface.models import TerminalSessionInfo
 from imbue.system_interface.plugins import get_plugin_manager
 from imbue.system_interface.update_staleness import UPDATE_STALENESS_HEADER
+from imbue.system_interface.update_staleness import WORKSPACE_ROOT_DIRECTORY
 from imbue.system_interface.update_staleness import UPDATE_STALENESS_META_TAG
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
@@ -394,8 +395,7 @@ _SERVICE_REF_PREFIX = "service:"
 # the workspace root, exactly as ``.agents/shared/scripts/serve_isolated_instance.py``
 # invokes it. The root is this package's own location walked back out of
 # ``system/apps/system_interface/imbue/system_interface``.
-_WORKSPACE_ROOT_DIRECTORY = Path(__file__).resolve().parents[5]
-_FORWARD_PORT_SCRIPT = _WORKSPACE_ROOT_DIRECTORY / "system" / "scripts" / "forward_port.py"
+_FORWARD_PORT_SCRIPT = WORKSPACE_ROOT_DIRECTORY / "system" / "scripts" / "forward_port.py"
 
 # Generous: the registration script runs under ``uv run``, which may have to
 # resolve the workspace environment before the (near-instant) TOML rewrite.
@@ -2421,7 +2421,7 @@ def _run_forward_port_removal(name: str) -> str | None:
     """
     result = run_local_command_modern_version(
         command=["uv", "run", "python3", str(_FORWARD_PORT_SCRIPT), "--remove", "--name", name],
-        cwd=_WORKSPACE_ROOT_DIRECTORY,
+        cwd=WORKSPACE_ROOT_DIRECTORY,
         is_checked=False,
         timeout=_FORWARD_PORT_TIMEOUT_SECONDS,
     )

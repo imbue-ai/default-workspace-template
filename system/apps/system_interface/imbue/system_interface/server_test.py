@@ -67,7 +67,7 @@ from imbue.system_interface.server import _FORWARD_PORT_SCRIPT
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_ARGV
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_COMMAND
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_MNGR_COMMAND
-from imbue.system_interface.server import _WORKSPACE_ROOT_DIRECTORY
+from imbue.system_interface.update_staleness import WORKSPACE_ROOT_DIRECTORY
 from imbue.system_interface.server import _agent_switch_options
 from imbue.system_interface.server import _build_destroy_command
 from imbue.system_interface.server import _build_fast_mode_answered_label_command
@@ -250,7 +250,7 @@ def _chat_create_template() -> dict[str, object]:
     the loader would fold in user and local layers that a workspace being repaired
     may not have. ``server.py`` resolves the workspace root the same way.
     """
-    settings = tomllib.loads((_WORKSPACE_ROOT_DIRECTORY / ".mngr" / "settings.toml").read_text())
+    settings = tomllib.loads((WORKSPACE_ROOT_DIRECTORY / ".mngr" / "settings.toml").read_text())
     return settings["create_templates"]["chat"]
 
 
