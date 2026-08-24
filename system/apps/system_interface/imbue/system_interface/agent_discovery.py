@@ -211,14 +211,19 @@ class SendFailedError(Exception):
     Raised on the chat path only, where the reason has somewhere to go: the endpoint turns it
     into the failure the composer shows. The other callers of ``send_message_to_agent`` check
     the returned reason instead, so this changes nothing for them.
+
+    ``kind`` is mngr's classification of the failure, which is what lets the chat decide what to
+    offer: trying again can clear a blocked input and cannot conjure back a pane that is gone.
+    Unknown when mngr did not classify it, which the chat treats as it always has.
     """
 
-    def __init__(self, detail: str) -> None:
+    def __init__(self, detail: str, kind: str = "unknown") -> None:
         self.detail = detail
+        self.kind = kind
         super().__init__(detail)
 
 
-def delivered_or_raise(failure_reason: str | None) -> bool:
+def delivered_or_raise(failure: SendFailure | None) -> bool:
     """Turn a send's reason into an exception, or report delivery.
 
     ``SessionDeps.send_to_harness`` is typed as returning a bool and is shared with paths that
@@ -226,22 +231,32 @@ def delivered_or_raise(failure_reason: str | None) -> bool:
     The session's send already treats an exception as an expected exit (it resolves its
     in-flight record in a ``finally`` and lets the request fail with the draft kept).
     """
-    if failure_reason is not None:
-        raise SendFailedError(failure_reason)
+    if failure is not None:
+        raise SendFailedError(failure.reason, failure.kind)
     return True
 
 
-def _first_failure_reason(result: MessageResult) -> str:
+class SendFailure(FrozenModel):
+    """Why a send did not land: the harness's own words, plus mngr's classification of them."""
+
+    reason: str
+    kind: str
+
+
+def _first_failure(result: MessageResult) -> SendFailure:
     """Why a send that reached no agent failed, in the harness's own words.
 
     ``failed_agents`` pairs an agent name with the error mngr raised; the message is the half
     worth showing, since it is written for the person who has to fix it. A send can fail with
     no entry at all (nothing matched the id), which is its own answer.
     """
-    for _agent_name, error_message in result.failed_agents:
+    kinds = dict(result.failed_agent_kinds)
+    for agent_name, error_message in result.failed_agents:
         if error_message:
-            return error_message
-    return "The agent could not be reached."
+            return SendFailure(reason=error_message, kind=kinds.get(agent_name, "unknown"))
+    # Nothing matched the id at all, which is its own answer -- and trying again will not change
+    # it, so it is classified the same as a pane that is gone.
+    return SendFailure(reason="The agent could not be reached.", kind="agent_unreachable")
 
 
 def _press_to(matches: Sequence[AgentMatch], key: str, mngr_ctx: MngrContext) -> MessageResult:
@@ -272,7 +287,9 @@ class MngrMessenger(FrozenModel):
     send: SendFn = _send_to
     press: PressFn = _press_to
 
-    def send_to_agent(self, agent_id: AgentId, message: str, known_locations: Sequence[AgentMatch]) -> str | None:
+    def send_to_agent(
+        self, agent_id: AgentId, message: str, known_locations: Sequence[AgentMatch]
+    ) -> SendFailure | None:
         """Send to the agent with ``agent_id`` at ``known_locations``, else discovery.
 
         Returns None when the message was delivered, or the reason it was not. The reason is
@@ -297,7 +314,7 @@ class MngrMessenger(FrozenModel):
             result = self.send(matches, message, mngr_ctx)
             if result.successful_agents:
                 return None
-            return _first_failure_reason(result)
+            return _first_failure(result)
         finally:
             cg.__exit__(None, None, None)
 

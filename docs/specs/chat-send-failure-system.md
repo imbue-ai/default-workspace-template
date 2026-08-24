@@ -91,7 +91,7 @@ Below all four sits the tmux pipeline the send-keys harnesses drive (claude and 
 | `not_ready` | the harness is still coming up | Cancel, Retry |
 | `unknown` | unclassified | Cancel, Retry, Force (today's behaviour) |
 
-The blocker is that `MessageResult.failed_agents` carries only `(name, message)` strings, so a kind has no way out of mngr today. See that spec for the options; the recommendation is a parallel field rather than widening a public tuple.
+**Built.** `MessageResult` carries `failed_agent_kinds` parallel to `failed_agents` -- parallel rather than a third element in that public tuple, which `mngr message`'s exit code reads. The kind travels through `SendFailure`, the send endpoint returns it beside the detail, and the chat maps it: `agent_unreachable` withholds Retry, since a pane that is gone will not be there on the next attempt, and offers Force, which is the only thing that can help. Anything unclassified reads as `unknown` and behaves exactly as it did before kinds existed.
 
 ## What Retry and Force actually are
 

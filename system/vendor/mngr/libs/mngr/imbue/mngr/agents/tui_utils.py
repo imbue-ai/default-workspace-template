@@ -33,6 +33,7 @@ from imbue.imbue_common.logging import log_span
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
 from imbue.mngr.agents.base_agent import BaseAgent
+from imbue.mngr.errors import SendFailureKind
 from imbue.mngr.errors import SendMessageError
 from imbue.mngr.hosts.tmux import TmuxWindowTarget
 from imbue.mngr.utils.polling import poll_until
@@ -244,6 +245,7 @@ def wait_for_tui_ready(
         raise SendMessageError(
             str(agent.name),
             f"Timeout waiting for TUI to be ready (waited {timeout_seconds:.1f}s)",
+            SendFailureKind.NOT_READY,
         )
 
 

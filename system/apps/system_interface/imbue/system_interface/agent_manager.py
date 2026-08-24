@@ -47,6 +47,7 @@ from imbue.system_interface.activity_state import is_lifecycle_dead
 from imbue.system_interface.activity_state import parse_iso_timestamp_to_epoch
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_discovery import MngrMessenger
+from imbue.system_interface.agent_discovery import SendFailure
 from imbue.system_interface.agent_discovery import delivered_or_raise
 from imbue.system_interface.agent_discovery import discover_agents
 from imbue.system_interface.agent_discovery import get_host_dir
@@ -775,14 +776,14 @@ class AgentManager:
             match = self._match_by_agent_id.get(agent_id)
             return [match] if match is not None else []
 
-    def send_message_to_agent(self, agent_id: AgentId, message: str) -> str | None:
+    def send_message_to_agent(self, agent_id: AgentId, message: str) -> SendFailure | None:
         """Send a message to the agent with ``agent_id``, using the live location cache.
 
         The single entry point for messaging an agent: it reads this manager's
         event-fed location for the id and hands it to the `MngrMessenger`, so the
         message skips a fresh mngr discovery whenever the location is already known.
-        Returns None when the message was delivered, or the reason it was not -- the
-        harness's own words, meant to be shown to the user.
+        Returns None when the message was delivered, or the failure -- the harness's own words
+        plus mngr's classification of them, which is what lets the chat decide what to offer.
         """
         return self._messenger.send_to_agent(agent_id, message, self.get_agent_matches_by_id(str(agent_id)))
 

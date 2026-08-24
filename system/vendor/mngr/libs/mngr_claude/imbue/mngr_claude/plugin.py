@@ -67,6 +67,7 @@ from imbue.mngr.errors import AgentStartError
 from imbue.mngr.errors import ConfigError
 from imbue.mngr.errors import NoCommandDefinedError
 from imbue.mngr.errors import PluginMngrError
+from imbue.mngr.errors import SendFailureKind
 from imbue.mngr.errors import SendMessageError
 from imbue.mngr.errors import UserInputError
 from imbue.mngr.hosts.common import classify_waiting_reason
@@ -1593,6 +1594,9 @@ class DialogDetectedError(SendMessageError):
             f"Something is holding the agent's input ({dialog_description} detected in terminal). "
             + (f"{recovery} " if recovery else "")
             + f"Connect with 'mngr connect {agent_name}' to resolve it.",
+            # Something is holding the input, which a person can clear in the terminal -- so a
+            # client may offer to try again, unlike a failure where there is nothing to talk to.
+            SendFailureKind.INPUT_BLOCKED,
         )
 
 

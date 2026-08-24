@@ -209,7 +209,11 @@ def test_returns_a_reason_when_nothing_reachable() -> None:
         return MessageResult(successful_agents=[])
 
     messenger = MngrMessenger(discover=_discover, send=_send)
-    assert messenger.send_to_agent(_AGENT_ID, "hi", ()) == "The agent could not be reached."
+    failure = messenger.send_to_agent(_AGENT_ID, "hi", ())
+    assert failure is not None
+    assert failure.reason == "The agent could not be reached."
+    # Nothing matched the id, and trying again will not change that.
+    assert failure.kind == "agent_unreachable"
 
 
 @pytest.mark.usefixtures("isolated_mngr_env")
@@ -226,7 +230,15 @@ def test_reports_the_harness_reason_for_a_refused_send() -> None:
         return (_make_match(),)
 
     def _send(matches: Sequence[AgentMatch], message: str, ctx: MngrContext) -> MessageResult:
-        return MessageResult(successful_agents=[], failed_agents=[("alpha", refusal)])
+        return MessageResult(
+            successful_agents=[],
+            failed_agents=[("alpha", refusal)],
+            failed_agent_kinds=[("alpha", "input_blocked")],
+        )
 
     messenger = MngrMessenger(discover=_discover, send=_send)
-    assert messenger.send_to_agent(_AGENT_ID, "hi", ()) == refusal
+    failure = messenger.send_to_agent(_AGENT_ID, "hi", ())
+    assert failure is not None
+    assert failure.reason == refusal
+    # mngr classified it, and that classification comes through beside the words.
+    assert failure.kind == "input_blocked"

@@ -21,6 +21,7 @@ from imbue.mngr.errors import AgentNotFoundOnHostError
 from imbue.mngr.errors import HostOfflineError
 from imbue.mngr.errors import MessageDeliveredButBlockedError
 from imbue.mngr.errors import MngrError
+from imbue.mngr.errors import SendFailureKind
 from imbue.mngr.errors import SendMessageError
 from imbue.mngr.interfaces.agent import AgentInterface
 from imbue.mngr.interfaces.agent import require_interactive_agent
@@ -41,6 +42,14 @@ class MessageResult(MutableModel):
     )
     failed_agents: list[tuple[str, str]] = Field(
         default_factory=list, description="List of (agent_name, error_message) tuples"
+    )
+    failed_agent_kinds: list[tuple[str, str]] = Field(
+        default_factory=list,
+        description="List of (agent_name, SendFailureKind) tuples, parallel to failed_agents. The "
+        "message in failed_agents is written for a human and varies per harness; this is the "
+        "machine-readable half, so a client can tell a blocked input from an agent that is gone "
+        "without reading prose. A parallel field rather than a third element in failed_agents, "
+        "which is public and read by mngr message's exit code",
     )
     blocked_agents: list[tuple[str, str]] = Field(
         default_factory=list,
@@ -183,14 +192,18 @@ def _record_agent_failure(
     agent_name: str,
     error_msg: str,
     on_error: Callable[[str, str], None] | None,
+    kind: SendFailureKind = SendFailureKind.UNKNOWN,
 ) -> None:
     """Record one agent as not having received the message.
 
     ``failed_agents`` is what carries a failure into ``mngr message``'s exit code, and
-    ``on_error`` is what carries it into the streamed ``--format jsonl`` output.
+    ``on_error`` is what carries it into the streamed ``--format jsonl`` output. ``kind``
+    is recorded in parallel for a client that must choose what to offer the user -- trying
+    again helps a blocked input and cannot help an agent that is gone.
     """
     with result_lock:
         result.failed_agents.append((agent_name, error_msg))
+        result.failed_agent_kinds.append((agent_name, str(kind)))
     if on_error:
         on_error(agent_name, error_msg)
 
@@ -342,7 +355,9 @@ def _send_message_to_agent(
                 return
         else:
             error_msg = f"Agent is not running (state: {lifecycle_state.value})"
-            _record_agent_failure(result, result_lock, agent_name, error_msg, on_error)
+            _record_agent_failure(
+                result, result_lock, agent_name, error_msg, on_error, SendFailureKind.AGENT_UNREACHABLE
+            )
             if error_behavior == ErrorBehavior.ABORT:
                 raise MngrError(f"Cannot send message to {agent_name}: {error_msg}")
             return
@@ -367,7 +382,10 @@ def _send_message_to_agent(
             raise
     except MngrError as e:
         error_msg = str(e)
-        _record_agent_failure(result, result_lock, agent_name, error_msg, on_error)
+        # A harness that classified its own failure says so on the exception; anything else is
+        # unclassified, which the client treats exactly as it does today.
+        kind = e.kind if isinstance(e, SendMessageError) else SendFailureKind.UNKNOWN
+        _record_agent_failure(result, result_lock, agent_name, error_msg, on_error, kind)
         if error_behavior == ErrorBehavior.ABORT:
             raise MngrError(error_msg) from e
 
