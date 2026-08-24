@@ -322,9 +322,9 @@ function bakeBuildInfo() {
  *   - MINDS_CLIENT_CONFIG_BUNDLE: absolute or relative path to the
  *     client.toml the build should embed. For staging / production
  *     builds, this is the in-repo
- *     apps/minds/imbue/minds/config/envs/<tier>/client.toml. For beta
- *     builds, it can point anywhere -- the build does not interpret
- *     the file, just copies it verbatim into _bundled/client.toml.
+ *     apps/minds/imbue/minds/config/envs/<tier>/client.toml. A one-off
+ *     build can point it anywhere -- the build does not interpret the
+ *     file, just copies it verbatim into _bundled/client.toml.
  *
  *   - MINDS_ROOT_NAME_BUNDLE: the MINDS_ROOT_NAME the runtime should
  *     export before launching `minds run`. Production builds use
@@ -335,7 +335,7 @@ function bakeBuildInfo() {
  *
  * When both are unset, leaves _bundled/ empty -- this is the
  * `uv run minds run` / dev-mode case where the user is expected to
- * activate an env in their shell (`minds env activate <name>`) before
+ * activate an env in their shell (`minds-admin env activate <name>`) before
  * invoking the backend. The packaged Electron startup refuses to run
  * without a bundled config if it was built without these vars set,
  * which surfaces the missing build-time config loudly instead of

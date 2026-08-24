@@ -136,14 +136,11 @@ jobs:
       - name: Run release tests
         run: |
           export IS_RELEASE=1
-          # Exclude the whole minds tree by path: all minds release tests run
-          # from their own minds jobs in ci.yml (manual dispatch).
-          if [ "$RUNNER_OS" = "macOS" ]; then
-            # macOS runners don't have Docker; skip Docker-marked tests
-            uv run pytest -n 0 --timeout 90 --override-ini='addopts=-n 0' --no-cov -v --tb=short --splits 12 --group ${{ matrix.group }} --splitting-algorithm=least_duration --ignore apps/minds -m 'release and not docker and not docker_sdk'
-          else
-            uv run pytest -n 0 --timeout 90 --override-ini='addopts=-n 0' --no-cov -v --tb=short --splits 12 --group ${{ matrix.group }} --splitting-algorithm=least_duration --ignore apps/minds
-          fi
+          # IS_RELEASE alone would cap the whole suite at 600s; budget per shard.
+          export PYTEST_MAX_DURATION_SECONDS=2700
+          # minds release tests run from ci.yml; docker-marked ones from
+          # test-mngr-release-docker, which provisions the daemon they need.
+          uv run pytest -n 0 --timeout 90 --override-ini='addopts=-n 0' --no-cov -v --tb=short --splits 12 --group ${{ matrix.group }} --splitting-algorithm=least_duration --ignore apps/minds -m 'release and not docker and not docker_sdk'
 
       - name: Upload test timing data
         if: always()

@@ -67,11 +67,17 @@ class UiWorkspaceEntry(FrozenModel):
         default=False,
         description="This machine's backend is unreachable, by the same verdict the recovery card renders",
     )
+    is_device_cannot_connect: bool = Field(
+        default=False,
+        description="This device, not the machine, is what cannot connect -- again the card's own verdict",
+    )
     provider_label: str = Field(
         default="", description="Friendly name of the provider hosting this workspace; empty when unknown"
     )
     supports_shutdown: bool = Field(default=False, description="Whether minds can stop/start this workspace's host")
-    liveness: str = Field(default="", description="RUNNING / STOPPED / UNKNOWN when supports_shutdown, else empty")
+    liveness: str = Field(
+        default="", description="RUNNING / STOPPED / STOPPING / STARTING / UNKNOWN when supports_shutdown, else empty"
+    )
     account: str = Field(default="", description="Owning account email, when known")
     create_attempt_state: str = Field(
         default="", description="creating / interrupted / failed for create-attempt rows; empty for real workspaces"
@@ -157,6 +163,25 @@ class UiHealthMessage(FrozenModel):
     agent_id: str = Field(description="Workspace agent id")
     status: AgentHealth = Field(description="Current health classification")
     error: str | None = Field(default=None, description="Last restart error, present for RESTART_FAILED")
+    is_restart_a_no_op: bool = Field(
+        default=False,
+        description=(
+            "Whether this episode's dispatched start reported it booted nothing. A row that reads "
+            "RESTART_FAILED with this set has no failed restart behind it -- the machine simply never "
+            "answered -- so the badge says so rather than blaming a restart that never ran."
+        ),
+    )
+    is_restart_start_only: bool | None = Field(
+        default=None,
+        description=(
+            "Whether an in-flight restart skips the stop step, or None outside one. A full stop+start "
+            "bounce only ever comes from the user's own click, so False is what makes 'Restarting' an "
+            "honest claim; anything else may no-op against a machine that is already up. Carried here "
+            "because the machines list has to make the same call the recovery card does, off the same "
+            "evidence -- the recovery-info route already reports it, and two surfaces reading one "
+            "episode must not describe it differently."
+        ),
+    )
     # A client that acts on transitions has to tell a replay from a live edge,
     # and position in the frame sequence is not something the wire format
     # promises.

@@ -6,14 +6,17 @@ pip set is installed from a committed hash-locked export of the workspace
 ``uv.lock`` (each app's ``[dependency-groups] image``), and even the uv that
 performs the install inside the build is version-pinned. Regenerate the
 committed exports with ``just export-image-requirements``; per-app drift tests
-and the ``minds env deploy`` preflight fail when an export no longer matches
+and the ``minds-admin env deploy`` preflight fail when an export no longer matches
 ``uv.lock``. See libs/modal_app_kit/README.md for the full deployment model.
 
 This module holds only the modal-SDK side. The pure export machinery
 (the canonical ``uv export`` command, app registry, and paths) lives in
-``imbue.imbue_common.modal_image_requirements`` so the public mirror's
-``minds env deploy`` preflight can use it without this private package;
-shipped modal_app_kit code cannot import it back (stdlib+modal only), hence
+``imbue.imbue_common.modal_image_requirements`` -- kept in the public
+``imbue_common`` even though its consumers (the private ``minds-admin env
+deploy`` preflight and the private Modal apps' drift tests) are private, so
+the mirror's ``imbue_common`` stays self-contained without this private
+package; shipped modal_app_kit code cannot import it back (stdlib+modal
+only), hence
 the mirrored ``IMAGE_REQUIREMENTS_FILENAME`` constant below (equality is
 asserted by ``image_test.py``).
 """

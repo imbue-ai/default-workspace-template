@@ -58,7 +58,7 @@ As a safety valve, `mngr destroy --force` with a bare *id* that matches multiple
 
 ### Plugins
 
-- `mngr_forward`: the resolver, stream manager, per-agent event streams, service-map cache, and `resolver_snapshot` envelope are instance-keyed; per-agent `mngr event` subprocesses address `ID@HOST`.
+- `mngr_forward`: the resolver, stream manager, per-agent event streams, service-map cache, and (until it was removed) the `resolver_snapshot` envelope are instance-keyed; per-agent `mngr event` subprocesses address `ID@HOST`.
   Known limitation: the reverse-tunnel handler (`reverse_handler.py`) still tracks tunnels by bare agent id (its discovered/destroyed callbacks receive the bare id), so during a migration window a destroy on one host can tear down the tracked tunnels for a same-id agent on another host; re-key it when reverse tunnels need to survive that window.
 - `mngr_latchkey`: pending-setup tracking and reverse-tunnel tags use instance keys; the destroyed callback carries the host id.
 - `mngr_notifications`: the RUNNING-before-UNKNOWN bit is instance-keyed (falling back to the bare id for old event lines without host details).
@@ -68,14 +68,14 @@ As a safety valve, `mngr destroy --force` with a bare *id* that matches multiple
 
 Minds only adapts to the changed mngr surfaces in this change; its workspace-level policy ("the ACTIVE record's machine is the workspace's current machine") is deliberately deferred to the migration work.
 
-- `forward_cli.py`: consumes the instance-keyed aggregator/delta API; tolerates both bare-id and instance-keyed `resolver_snapshot` payload keys (normalizing to its own bare-id view, with a warning when instances collide).
+- `forward_cli.py`: consumes the instance-keyed aggregator/delta API. It also tolerated both bare-id and instance-keyed `resolver_snapshot` payload keys, normalizing to its own bare-id view; that envelope has since been removed, along with the normalization.
 - `backend_resolver.py`: logs a warning when a workspace agent id resolves to multiple machines, so an unexpected duplicate is visible instead of silently first-matched.
 
 ### Wire-format compatibility rules
 
 - All cross-process JSON surfaces evolve additively: new fields (e.g. `AgentRemovedEvent.host_id`) may be added, and readers must tolerate their absence.
 - Replay semantics changed without a schema change: discovery events already carried `host_id` everywhere it is now needed.
-- The forward plugin's `resolver_snapshot` envelope and on-disk service-map cache switch to instance keys.
+- The forward plugin's `resolver_snapshot` envelope (since removed) and on-disk service-map cache switch to instance keys.
   Old cache entries simply fail to seed (a benign startup slowdown that self-corrects); old/new minds and mngr ship together in the desktop app, and minds parses both key forms.
 
 ## Edge cases and failure modes
@@ -111,4 +111,4 @@ These are the known pieces required to actually ship workspace migration on top 
    Preserved-session dirs (`preserved/<name>--<id>`) intentionally overwrite newest-wins when both instances are eventually destroyed.
 6. **kanpan data-source field maps** (`KanpanDataSource.fetch` and the cached-fields store) remain keyed by bare agent id; during a migration window a data-source column may mix the two instances' values.
    Display-only; re-key when kanpan grows real multi-instance usage.
-7. **Forward `resolver_snapshot` schema**: once minds' workspace-level policy lands, migrate minds to consume the instance-keyed map directly and drop its bare-id normalization.
+7. **Forward `resolver_snapshot` schema**: settled by removal. The envelope had no consumer left once minds' recovery diagnostics probe was deleted, so it and minds' bare-id normalization of it are both gone; the resolver's own service-map cache is untouched and still instance-keyed.

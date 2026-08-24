@@ -13,10 +13,14 @@ from imbue.imbue_common.pure import pure
 from imbue.share_relay.data_types import RelayConfiguration
 
 # The frps server-plugin protocol subscribes a plugin to named operations; we
-# authorize exactly the two that gate a workspace tunnel: ``Login`` (a frpc
+# authorize the two that gate a workspace tunnel -- ``Login`` (a frpc
 # connecting / reconnecting) and ``NewProxy`` (that client registering its
-# hostname claim). Visitor connections and requests never call the connector.
-_PLUGIN_OPS: Final[tuple[str, ...]] = ("Login", "NewProxy")
+# hostname claim) -- plus ``Ping`` (the workspace's 10s heartbeat), which is
+# what lets the connector sever a LIVE tunnel: rejecting a heartbeat makes
+# frpc close its session, and the follow-up Login is refused for any share
+# that is no longer active (unshared or account-suspended). Visitor
+# connections and requests never call the connector.
+_PLUGIN_OPS: Final[tuple[str, ...]] = ("Login", "NewProxy", "Ping")
 
 
 @pure

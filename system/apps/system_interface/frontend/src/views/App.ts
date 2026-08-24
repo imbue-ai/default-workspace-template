@@ -1,19 +1,29 @@
 import m from "mithril";
 import {
   DockviewWorkspace,
+  addMemberRowToProjects,
   destroyMemberRow,
+  focusLastOfShortcut,
   getActiveViewId,
   getAvailableProjects,
+  getAwaitingShortcutIds,
   getSidebarRows,
-  openAppTab,
+  openAppShortcut,
   openMemberRow,
+  openNewOfShortcut,
   openTabOfType,
+  refreshMemberRow,
   refreshProjects,
   removeMemberRow,
+  renameMemberRowWithAlert,
   setAppPinnedInView,
+  setShortcutModeInView,
+  setShortcutPinnedInView,
   shareMemberRow,
   startProjectChat,
+  stopChatRow,
   switchToView,
+  toggleAppLifecycle,
 } from "./DockviewWorkspace";
 import { ClaudeLoginModal } from "./ClaudeLoginModal";
 import { AgentAuthInstructionsModal } from "./AgentAuthInstructionsModal";
@@ -42,7 +52,16 @@ export function App(): m.Component {
           // The whole content area is one grey surface with the rail sitting on
           // it, directly left of the dock. Which view you are in is said by the
           // rail's own header now, so there is no bar above this row.
-          m("div", { class: "app-main flex flex-1 min-w-80" }, [
+          //
+          // min-h-0: a flex item's automatic minimum size is its content's, so
+          // without this the row can grow with the viewport but never shrink
+          // back. The dock then keeps the height it was laid out at, and
+          // everything it positions in pixels -- the panes, and the live
+          // surfaces mirroring them -- hangs below the viewport with the
+          // composer's model bar clipped off the bottom. The minds shell
+          // shrinking this window for its recovery band is how that happens
+          // without the user touching the window.
+          m("div", { class: "app-main flex min-h-0 flex-1 min-w-80" }, [
             // Every attr is read straight off the workspace on each draw rather
             // than cached: the registry loads asynchronously, and a rename, a
             // new tab or another client's change all arrive as a redraw, so the
@@ -63,28 +82,56 @@ export function App(): m.Component {
                 // Mount the new project, THEN start the one chat it is made
                 // with: the mount tears the dock down and rebuilds it, so a
                 // chat tab opened before it lands would be swept away with the
-                // outgoing layout. One chat per project, which is what the
-                // rail's Chat shortcut then goes to instead of starting
-                // another.
+                // outgoing layout.
                 void switchToView(projectId).then(() => startProjectChat(projectId));
               },
               onOpenTabType: (tabType: QuickAddTabType) => {
                 openTabOfType(tabType);
               },
               onOpenApp: (app: AppEntry) => {
-                openAppTab(app);
+                // Mode-aware: focus (the default) goes to the app's existing
+                // pane, new opens another pane on the same service.
+                openAppShortcut(app);
               },
               onSetAppPinned: (app: AppEntry, isPinned: boolean) => {
                 setAppPinnedInView(app, isPinned);
               },
+              onSetShortcutPinned: (shortcut: QuickAddTabType, isPinned: boolean) => {
+                setShortcutPinnedInView(shortcut, isPinned);
+              },
+              onSetShortcutMode: (shortcutId: string, mode) => {
+                setShortcutModeInView(shortcutId, mode);
+              },
+              onNewOfKind: (shortcutId: string) => {
+                openNewOfShortcut(shortcutId);
+              },
+              onFocusLastOfKind: (shortcutId: string) => {
+                focusLastOfShortcut(shortcutId);
+              },
+              awaitingShortcutIds: getAwaitingShortcutIds(),
               onOpenRow: (row: SidebarTabRow) => {
                 openMemberRow(row);
+              },
+              onRefreshRow: (row: SidebarTabRow) => {
+                refreshMemberRow(row);
+              },
+              onRenameRow: (row: SidebarTabRow, title: string) => {
+                renameMemberRowWithAlert(row, title);
               },
               onRemoveFromView: (row: SidebarTabRow) => {
                 removeMemberRow(row);
               },
               onShareApp: (row: SidebarTabRow) => {
                 shareMemberRow(row);
+              },
+              onAddRowToProjects: (row: SidebarTabRow) => {
+                addMemberRowToProjects(row);
+              },
+              onStopRow: (row: SidebarTabRow) => {
+                stopChatRow(row);
+              },
+              onServiceLifecycle: (serviceName: string) => {
+                toggleAppLifecycle(serviceName);
               },
               onDeleteFromMachine: (row: SidebarTabRow) => {
                 destroyMemberRow(row);

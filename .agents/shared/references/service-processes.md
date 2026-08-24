@@ -39,7 +39,7 @@ Key fields:
   other shell syntax must be wrapped in `bash -c "..."`:
 
   ```ini
-  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:8090 --name foo && uv run foo"
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:8090 --name foo --program foo && uv run foo"
   ```
 
   The `python3 system/services/oom_priority/bin/oom_tag_service.py user` prefix is the **OOM band tag**
@@ -49,7 +49,11 @@ Key fields:
   (`http://<name>.<workspace-host>/`), so it must be DNS-safe: lowercase
   letters/digits with single hyphens (underscores are tolerated only for
   legacy names like `system_interface`), not `localhost`, and not starting
-  with `host-` or `agent-`.
+  with `host-` or `agent-`. The `--program` names the supervisord program
+  running the app (program-name-equals-service-name, so pass the app's own
+  name); its presence on the registry entry is what lets the workspace offer
+  Stop/Start for the app, so pass it for every supervised app and never for
+  unsupervised instances (previews, isolated test servers).
 - `directory=/home/user/workspace` -- run from the repo root, so cwd-relative paths
   (`data/...`, `system/scripts/...`) resolve. Set this on every program.
 - `autostart=true` -- start when supervisord boots.

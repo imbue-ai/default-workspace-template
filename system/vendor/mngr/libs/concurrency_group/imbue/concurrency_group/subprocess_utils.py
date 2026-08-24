@@ -28,6 +28,14 @@ SUBPROCESS_STOPPED_BY_REQUEST_EXIT_CODE: Final[int] = -9999
 
 _READ_SIZE: Final[int] = 2**20
 
+# Wall-clock bound on the final drain of a killed process's pipes. The drain runs
+# with the shutdown short-circuit disabled, so this is its only escape hatch, and it
+# needs one: only the direct child is signalled, and a grandchild that inherited the
+# pipes keeps the write ends open and can keep producing output indefinitely. The
+# data the drain is actually after is already sitting in the pipe buffers, so it
+# never needs more than a moment.
+_POST_KILL_DRAIN_TIMEOUT_SECONDS: Final[float] = 2.0
+
 # Stands in for stdout/stderr on a FinishedProcess produced with
 # ``is_output_accumulated=False``. Never an empty string: "we did not keep this"
 # must not be mistaken for "the process printed nothing".
@@ -154,10 +162,25 @@ class OutputGatherer:
             shutdown_event=shutdown_event,
         )
 
-    def gather_output(self) -> None:
+    def gather_output(self, is_draining_after_exit: bool = False) -> None:
+        """Read whatever the pipes currently hold into the output containers.
+
+        A gather normally stops early once the shutdown event is set, so the
+        poll loop notices a shutdown request promptly instead of looping while
+        a live child keeps producing output. ``is_draining_after_exit`` skips
+        that short-circuit for the final drain of an already-dead process --
+        the event is set in exactly the shutdown case that drain exists for --
+        and bounds that drain by ``_POST_KILL_DRAIN_TIMEOUT_SECONDS`` instead,
+        so a grandchild still writing to the inherited pipes cannot hold it.
+        """
         is_more_from_stdout = True
         is_more_from_stderr = True
-        while not self.shutdown_event.is_set() and (is_more_from_stdout or is_more_from_stderr):
+        drain_deadline = time.monotonic() + _POST_KILL_DRAIN_TIMEOUT_SECONDS if is_draining_after_exit else None
+        while (
+            (is_draining_after_exit or not self.shutdown_event.is_set())
+            and not _is_timeout(drain_deadline)
+            and (is_more_from_stdout or is_more_from_stderr)
+        ):
             partial_stdout = self.stdout.read(_READ_SIZE)
             if partial_stdout is not None:
                 self.stdout_container.write(partial_stdout)
@@ -221,10 +244,21 @@ def _shutdown_popen(process: subprocess.Popen[bytes], shutdown_timeout_sec: floa
 
 
 def _is_timeout(timeout_time: float | None = None) -> bool:
+    """Whether a deadline stamped by :func:`run_local_command_modern_version` has passed.
+
+    Read off the monotonic clock, which does not advance while the machine is
+    suspended -- so a laptop that sleeps mid-command spends none of the budget
+    it was frozen for. Wall clock would: the process cannot notice its own
+    deadline while it is not running, so two fifteen-minute sleeps would burn a
+    twenty-one minute budget in a couple of hundred seconds of running time and
+    the command would be killed and reported as timed out at the wake. True on
+    both platforms this runs on -- Darwin's ``mach_absolute_time`` and Linux's
+    ``CLOCK_MONOTONIC`` both exclude suspend.
+    """
     if timeout_time is None:
         return False
     else:
-        return time.time() > timeout_time
+        return time.monotonic() > timeout_time
 
 
 def run_local_command_modern_version(
@@ -309,7 +343,7 @@ def run_local_command_modern_version(
             is_output_accumulated=is_output_accumulated,
         )
 
-        timeout_time = time.time() + timeout if timeout is not None else None
+        timeout_time = time.monotonic() + timeout if timeout is not None else None
 
         while not shutdown_event.wait(poll_time) and not _is_timeout(timeout_time):
             maybe_exit_code = process.poll()
@@ -323,6 +357,14 @@ def run_local_command_modern_version(
             else:
                 shutdown_reason = "the parent requested cleanup (shutdown_event was set)"
             exit_code = _shutdown_popen(process, shutdown_timeout_sec, shutdown_reason)
+            # Drain what the child wrote between the last poll and its death --
+            # including anything it printed while handling the shutdown signal.
+            # For a timeout kill this is the tail that diagnoses where the
+            # command was stuck, and get_output only returns what was gathered.
+            # The drain must ignore the shutdown event: it is set in exactly
+            # the shutdown-kill case this drain covers. It is deadline-bounded
+            # instead (see _POST_KILL_DRAIN_TIMEOUT_SECONDS).
+            gatherer.gather_output(is_draining_after_exit=True)
 
         stdout, stderr = gatherer.get_output()
 

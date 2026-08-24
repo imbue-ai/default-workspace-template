@@ -11,7 +11,7 @@ vi.mock("mithril", () => ({
 }));
 
 import { loadSnapshotWithStream } from "./StreamingMessage";
-import { getEventsForAgent, type TranscriptEvent } from "./Response";
+import { getConversationLoadState, getEventsForAgent, type TranscriptEvent } from "./Response";
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -120,6 +120,30 @@ describe("snapshot retry after reconnect", () => {
 
       const ids = getEventsForAgent(agentId).map((event) => event.event_id);
       expect(ids).toContain("missed");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears the recorded load error once the retry lands", async () => {
+    // The panel renders that error, and this loop is the only thing still
+    // trying: a chat whose first load 503'd through a reconnecting tunnel used
+    // to sit on the error screen with a fully re-synced transcript behind it,
+    // recoverable only by reloading the page.
+    vi.useFakeTimers();
+    try {
+      const agentId = `agent-${agentCounter++}`;
+      mockRequest.mockRejectedValueOnce(Object.assign(new Error(String(null)), { code: 503, response: null }));
+      await expect(loadSnapshotWithStream(agentId)).rejects.toThrow();
+      expect(getConversationLoadState(agentId).error).toBe("request failed (HTTP 503)");
+
+      mockRequest.mockResolvedValueOnce({ events: [makeEvent("after-recovery", "backend answered")] });
+      const deadSource = FakeEventSource.instances[FakeEventSource.instances.length - 1];
+      deadSource?.onerror?.();
+      await vi.advanceTimersByTimeAsync(6000);
+
+      expect(getConversationLoadState(agentId)).toEqual({ phase: "idle", error: null });
+      expect(getEventsForAgent(agentId).map((event) => event.event_id)).toContain("after-recovery");
     } finally {
       vi.useRealTimers();
     }

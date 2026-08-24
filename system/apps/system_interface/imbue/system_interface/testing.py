@@ -17,9 +17,13 @@ from __future__ import annotations
 import fcntl
 import os
 import socket
+import socketserver
 import sys
 import threading
 import time
+import xmlrpc.client
+from xmlrpc.server import SimpleXMLRPCDispatcher
+from xmlrpc.server import SimpleXMLRPCRequestHandler
 from collections.abc import Generator
 from collections.abc import Iterator
 from collections.abc import Sequence
@@ -53,6 +57,90 @@ from imbue.system_interface.wsgi import make_threaded_server
 # this binary explicitly via ``executable_path`` (see the
 # ``browser_type_launch_args`` fixture override in ``conftest.py``).
 FORTRESS_CHROMIUM_PATH = Path("/opt/fortress/tilion-fortress/tilion")
+
+
+class _FakeSupervisorRequestHandler(SimpleXMLRPCRequestHandler):
+    """XML-RPC request handler usable over a unix socket."""
+
+    # TCP_NODELAY is meaningless (and an error) on a unix socket.
+    disable_nagle_algorithm = False
+
+    def address_string(self) -> str:
+        # A unix socket has no peer address; the base implementation indexes
+        # into an empty client_address and dies mid-request.
+        return "unix-socket"
+
+
+class _UnixSocketXmlRpcServer(socketserver.ThreadingUnixStreamServer, SimpleXMLRPCDispatcher):
+    """A minimal XML-RPC server over a unix socket."""
+
+    # Read by SimpleXMLRPCRequestHandler on every request.
+    logRequests = False
+
+    def __init__(self, socket_path: str) -> None:
+        SimpleXMLRPCDispatcher.__init__(self, allow_none=False, encoding=None)
+        socketserver.ThreadingUnixStreamServer.__init__(self, socket_path, _FakeSupervisorRequestHandler)
+
+
+# supervisord's own fault codes (supervisor.xmlrpc.Faults), restated for the fake.
+_SUPERVISOR_FAULT_BAD_NAME = 10
+_SUPERVISOR_FAULT_ALREADY_STARTED = 60
+_SUPERVISOR_FAULT_NOT_RUNNING = 70
+
+
+class FakeSupervisorServer:
+    """A supervisord-shaped XML-RPC server over a unix socket.
+
+    Implements exactly the slice of the supervisor RPC namespace the liveness
+    module uses -- ``getProcessInfo`` / ``startProcess`` / ``stopProcess`` --
+    over ``statename_by_program``, with the same fault codes supervisord
+    answers, so both the probe and the stop/start actions are tested against
+    the real transport rather than a faked-out client.
+    """
+
+    def __init__(self, socket_path: Path) -> None:
+        self.socket_path = socket_path
+        self.statename_by_program: dict[str, str] = {}
+        self._server = _UnixSocketXmlRpcServer(str(socket_path))
+        self._server.register_function(self._get_process_info, "supervisor.getProcessInfo")
+        self._server.register_function(self._start_process, "supervisor.startProcess")
+        self._server.register_function(self._stop_process, "supervisor.stopProcess")
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._server.shutdown()
+        self._server.server_close()
+        self._thread.join(timeout=5)
+
+    # The dispatch protocol hands every RPC argument over as a marshallable
+    # value, so the handlers take ``object`` and stringify -- exactly what the
+    # wire delivers.
+    def _get_process_info(self, name: object) -> dict[str, str]:
+        program = str(name)
+        if program not in self.statename_by_program:
+            raise xmlrpc.client.Fault(_SUPERVISOR_FAULT_BAD_NAME, f"BAD_NAME: {program}")
+        return {"name": program, "statename": self.statename_by_program[program]}
+
+    def _start_process(self, name: object, _wait: object) -> bool:
+        program = str(name)
+        if program not in self.statename_by_program:
+            raise xmlrpc.client.Fault(_SUPERVISOR_FAULT_BAD_NAME, f"BAD_NAME: {program}")
+        if self.statename_by_program[program] in ("RUNNING", "STARTING"):
+            raise xmlrpc.client.Fault(_SUPERVISOR_FAULT_ALREADY_STARTED, f"ALREADY_STARTED: {program}")
+        self.statename_by_program[program] = "RUNNING"
+        return True
+
+    def _stop_process(self, name: object, _wait: object) -> bool:
+        program = str(name)
+        if program not in self.statename_by_program:
+            raise xmlrpc.client.Fault(_SUPERVISOR_FAULT_BAD_NAME, f"BAD_NAME: {program}")
+        if self.statename_by_program[program] not in ("RUNNING", "STARTING"):
+            raise xmlrpc.client.Fault(_SUPERVISOR_FAULT_NOT_RUNNING, f"NOT_RUNNING: {program}")
+        self.statename_by_program[program] = "STOPPED"
+        return True
 
 
 @contextmanager

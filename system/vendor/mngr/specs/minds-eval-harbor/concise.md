@@ -49,9 +49,9 @@ These four forks were decided with the user before writing this spec.
 
 ## Task generation
 
-* The generator resolves `mngr_branch` to an exact SHA at generation time (port of `box.remote_tip`) and records it in each task's `[metadata]`.
+* The generator resolves `mngr_branch` to an exact SHA at generation time (port of `box.remote_tip`) and records it in each task's `[metadata]`. `dwt_branch` is pinned the same way (`dwt_sha`), and the box clones that SHA, so a dataset's workspace template is fixed at generation time rather than at trial time.
 * Each task directory is named after the case id; `[task].name = "minds-evals/<case-id>"`.
-* `instruction.md` carries the persona and prompt list in prose plus a fenced JSON block with the full case config (persona, prompts, `timeout_seconds`, `mngr_sha`, `dwt_repo`, `dwt_branch`). The driver parses that block out of the `instruction` argument to `run()`, which is necessary because custom harbor agents do not receive the task directory.
+* `instruction.md` carries the persona and prompt list in prose plus a fenced JSON block with the full case config (persona, prompts, `timeout_seconds`, `mngr_sha`, `dwt_repo`, `dwt_branch`, `dwt_sha`). The driver parses that block out of the `instruction` argument to `run()`, which is necessary because custom harbor agents do not receive the task directory.
 * The same case data is also written to `tests/case.json` for the verifier's programmatic checks (expected turn counts).
 * `environment/` is identical across all tasks in a dataset: an adapted copy of the box `Dockerfile` and `entrypoint.sh` (owned by the new app) plus a staged shallow clone of mngr-internal at the resolved SHA (port of `box._fetch_mngr_source`).
 * The old harness's in-box app overlay (`box._stage_app_overlay`, and the Dockerfile's `rm -rf`/`COPY` of `apps/mngr_minds_eval`) is dropped from the adapted Dockerfile: the driver is host-side, so no harness code runs inside the box.
@@ -62,7 +62,7 @@ These four forks were decided with the user before writing this spec.
   * `[environment]`: `cpus = 6`, `memory_mb = 16384`, `workdir = "/work/mngr"`.
   * `[agent]`: `timeout_sec = <timeout_seconds from config>`.
   * `[verifier]`: `timeout_sec = 600`, `environment_mode = "separate"`, `env = { ANTHROPIC_API_KEY = "${ANTHROPIC_API_KEY}" }` (host-templated; `harbor run` needs `-y` or interactive approval for it).
-  * `[metadata]`: `mngr_branch`, `mngr_sha`, `dwt_repo`, `dwt_branch`, case id.
+  * `[metadata]`: `mngr_branch`, `mngr_sha`, `dwt_repo`, `dwt_branch`, `dwt_sha`, case id.
 * There is no `[environment.env]` section: the driver starts the backend itself (see below) and supplies all secrets and per-trial env at that exec, which exec'd processes inherit.
 * The driver parses the Modal token pair out of `~/.modal.toml` on the host (direct port of `box._modal_token_env`), so nothing secret is required in the shell environment or in task files.
 

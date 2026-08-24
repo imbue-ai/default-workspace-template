@@ -1,0 +1,1 @@
+Replace the repo-root local-dev LiteLLM proxy config's per-model entries with a single catch-all (`model_name: "*"` forwarding to `anthropic/*`) and drop its inline per-token pricing, mirroring `apps/modal_litellm/app.py`. Pricing now comes from litellm's remotely-fetched model-cost map, so new Anthropic models are routable and priced without a config change.

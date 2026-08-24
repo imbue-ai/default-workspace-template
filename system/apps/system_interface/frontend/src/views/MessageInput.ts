@@ -1,4 +1,5 @@
 import m from "mithril";
+import { backdropDismissAttrs } from "./modalBackdrop";
 import {
   clearComposerAttachments,
   getComposerAttachments,
@@ -82,7 +83,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
   let interceptedAuthCommand: string | null = null;
   // A slash command the chat declines to deliver, because it would change the agent's terminal
   // rather than start a turn. It still works from that terminal, which the notice says.
-  let declinedSlashCommand: string | null = null;
+  let declinedSlashCommand: { command: string; body: string | null } | null = null;
   // Why the last send or interrupt failed, in the harness's own words, shown as a notice.
   // Component state like the notices above, NOT module state: every open chat panel mounts its
   // own MessageInput, and a module-level value would raise the notice in all of them at once.
@@ -213,7 +214,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
             if (match.popup.action === "open_auth") {
               interceptedAuthCommand = match.command;
             } else {
-              declinedSlashCommand = match.command;
+              declinedSlashCommand = { command: match.command, body: match.popup.notice_body ?? null };
             }
             m.redraw();
             return;
@@ -392,11 +393,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
             onremove() {
               document.removeEventListener("keydown", handleActionFailureNoticeKeydown);
             },
-            onclick(e: MouseEvent) {
-              if ((e.target as HTMLElement).classList.contains("custom-url-dialog-overlay")) {
-                dismissActionFailureNotice();
-              }
-            },
+            ...backdropDismissAttrs(dismissActionFailureNotice),
           },
           m(
             "div.custom-url-dialog",
@@ -425,7 +422,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         );
       }
 
-      function renderDeclinedCommandNotice(command: string): m.Vnode {
+      function renderDeclinedCommandNotice(declined: { command: string; body: string | null }): m.Vnode {
         return m(
           "div.custom-url-dialog-overlay",
           {
@@ -435,11 +432,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
             onremove() {
               document.removeEventListener("keydown", handleDeclinedNoticeKeydown);
             },
-            onclick(e: MouseEvent) {
-              if ((e.target as HTMLElement).classList.contains("custom-url-dialog-overlay")) {
-                dismissDeclinedCommandNotice();
-              }
-            },
+            ...backdropDismissAttrs(dismissDeclinedCommandNotice),
           },
           m(
             "div.custom-url-dialog",
@@ -449,8 +442,8 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
               },
             },
             [
-              m("h3.custom-url-dialog-title", `${command} can't be sent from chat`),
-              m("p.logout-notice-body", "You can still send it from the agent's terminal."),
+              m("h3.custom-url-dialog-title", `${declined.command} can't be sent from chat`),
+              m("p.logout-notice-body", declined.body ?? "You can still send it from the agent's terminal."),
               m("div.custom-url-dialog-actions", [
                 m(
                   "button.custom-url-dialog-cancel",
@@ -476,11 +469,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         return m(
           "div.custom-url-dialog-overlay",
           {
-            onclick(e: MouseEvent) {
-              if ((e.target as HTMLElement).classList.contains("custom-url-dialog-overlay")) {
-                dismissAuthCommandNotice();
-              }
-            },
+            ...backdropDismissAttrs(dismissAuthCommandNotice),
           },
           m(
             "div.custom-url-dialog",

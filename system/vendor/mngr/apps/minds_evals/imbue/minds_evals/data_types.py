@@ -50,7 +50,8 @@ class CaseConfig(FrozenModel):
     mngr_branch: str = Field(description="The mngr branch the box was built from")
     mngr_sha: str = Field(description="Exact mngr SHA resolved at generation time")
     dwt_repo: str = Field(description="Workspace template repo")
-    dwt_branch: str = Field(description="Workspace template branch")
+    dwt_branch: str = Field(description="Workspace template branch the SHA was resolved from")
+    dwt_sha: str = Field(description="Exact workspace template SHA resolved at generation time")
     avg_word_count_baseline: float = Field(description="Baseline for the verifier's wordiness guard")
 
 

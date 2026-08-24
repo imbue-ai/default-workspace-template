@@ -65,7 +65,7 @@ An earlier design converted the assembled raw to qcow2 with a bundled `qemu-img`
 Boots a Lima VM, installs the toolchain inside it, shuts it down, and flattens the VM's disk into an image. This runs on a maintainer's machine, where a Homebrew `qemu-img` is available -- it is a bake-time tool and never ships.
 
 ```bash
-uv run python scripts/lima_image/publish.py --version "$VERSION" --arch aarch64 \
+uv run python -m scripts.lima_image.publish --version "$VERSION" --arch aarch64 \
   --raw-image scripts/lima_image/output-*/mngr-lima-*.raw --bucket ... --secret-key-file ...
 ```
 

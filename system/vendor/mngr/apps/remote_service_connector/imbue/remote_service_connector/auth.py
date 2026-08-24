@@ -17,6 +17,7 @@ from supertokens_python.recipe.session.exceptions import SuperTokensSessionError
 from supertokens_python.recipe.session.syncio import get_session_without_request_response
 from supertokens_python.syncio import get_user
 
+from imbue.modal_app_kit.metrics import emit_metric
 from imbue.remote_service_connector import db
 from imbue.remote_service_connector.errors import EmailNotVerifiedError
 
@@ -36,6 +37,10 @@ class UserAuth(BaseModel):
     # must check this via ``require_verified_email``; everything else accepts
     # unverified accounts.
     is_email_verified: bool = False
+    # The full SuperTokens user id, when the authentication path resolved one
+    # (the SuperTokens session paths always do). None only for callers that
+    # construct a UserAuth from a bare prefix.
+    user_id: str | None = None
 
     @property
     def verified_email(self) -> str | None:
@@ -43,18 +48,39 @@ class UserAuth(BaseModel):
         return self.email if self.is_email_verified else None
 
 
-def authenticate_request(request: Request) -> UserAuth:
+def stash_authenticated_user_for_access_log(request: Request, user_id: str) -> None:
+    """Expose the resolved identity to the outermost access-log middleware.
+
+    ``request.state`` is backed by ASGI scope state, which the shared
+    ``RequestLoggingMiddleware`` (outermost) reads back after the response --
+    so authenticated requests carry their full user id on the JSON access-log
+    line while unauthenticated ones omit the field.
+    """
+    request.state.authenticated_user_id = user_id
+
+
+def authenticate_request(request: Request, check_database: bool = False) -> UserAuth:
     """Authenticate a request via its SuperTokens JWT Bearer token.
 
     Raises ``HTTPException(401)`` when the Bearer credentials are missing or
     the token is not a valid SuperTokens session. Email verification is NOT
     required here -- endpoints that authorize by email ownership must
     additionally call :func:`require_verified_email`.
+
+    ``check_database=True`` verifies the session against the SuperTokens core
+    rather than by signature alone, so a revoked-but-unexpired access token is
+    rejected immediately. State-modifying routes pass it (via
+    ``resolve_web_user_identity``'s method inference); read routes keep the
+    cheap stateless validation and let revoked tokens drain out over their
+    remaining lifetime.
     """
     auth_header = request.headers.get("authorization", "")
     if not auth_header.lower().startswith("bearer "):
         raise HTTPException(status_code=401, detail="Missing Bearer credentials")
-    return _authenticate_supertokens(auth_header[7:])
+    user = _authenticate_supertokens(auth_header[7:], check_database=check_database)
+    if user.user_id is not None:
+        stash_authenticated_user_for_access_log(request, user.user_id)
+    return user
 
 
 def require_verified_email(user: UserAuth) -> None:
@@ -108,7 +134,8 @@ def resolve_account_email(
     try:
         user = resolved_getter(user_id)
     except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
-        logger.warning("Failed to fetch SuperTokens user %s: %s", user_id[:8], exc)
+        emit_metric("supertokens_user_fetch_failed", 1, {"caller": "resolve_account_email"})
+        logger.warning("Failed to fetch SuperTokens user %s", user_id[:8], exc_info=exc)
         return None, False
     if user is None:
         return None, False
@@ -130,7 +157,7 @@ def get_backfill_email(
     """Return the email to feed an entitlements-row backfill for ``user_id``.
 
     The backfill's paid-list check may only consume verified emails, but a
-    user who merely lacks verification must still get a (explorer) row -- so
+    user who merely lacks verification must still get a (free) row -- so
     an existing-but-unverified user maps to ``""`` (create the row, skip the
     paid check) while a missing/unresolvable user maps to ``None`` (do not
     create anything).
@@ -139,7 +166,8 @@ def get_backfill_email(
     try:
         user = resolved_getter(user_id)
     except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
-        logger.warning("Failed to fetch SuperTokens user %s: %s", user_id[:8], exc)
+        emit_metric("supertokens_user_fetch_failed", 1, {"caller": "get_backfill_email"})
+        logger.warning("Failed to fetch SuperTokens user %s", user_id[:8], exc_info=exc)
         return None
     if user is None:
         return None
@@ -153,6 +181,7 @@ def _authenticate_supertokens(
     token: str,
     session_getter: Callable[..., Any] = get_session_without_request_response,
     email_resolver: Callable[[str], tuple[str | None, bool]] = resolve_account_email,
+    check_database: bool = False,
 ) -> UserAuth:
     """Validate a SuperTokens JWT access token. Returns UserAuth carrying the derived user-id prefix and email."""
     connection_uri = os.environ.get("SUPERTOKENS_CONNECTION_URI")
@@ -169,6 +198,7 @@ def _authenticate_supertokens(
         session = session_getter(
             access_token=token,
             anti_csrf_check=False,
+            check_database=check_database,
             override_global_claim_validators=lambda *_args, **_kwargs: [],
         )
     except (ValueError, TypeError, SuperTokensSessionError, SuperTokensGeneralError) as exc:
@@ -190,7 +220,7 @@ def _authenticate_supertokens(
     if email is None:
         raise HTTPException(status_code=401, detail="Account has no email address")
 
-    return UserAuth(user_id_prefix=user_id_prefix, email=email, is_email_verified=is_email_verified)
+    return UserAuth(user_id_prefix=user_id_prefix, email=email, is_email_verified=is_email_verified, user_id=user_id)
 
 
 def get_user_id_from_bearer_header(request: Request) -> str:
@@ -205,7 +235,9 @@ def get_user_id_from_bearer_header(request: Request) -> str:
     auth_header = request.headers.get("authorization", "")
     if not auth_header.lower().startswith("bearer "):
         raise HTTPException(status_code=401, detail="Missing Bearer credentials")
-    return get_user_id_from_access_token(auth_header[7:])
+    user_id = get_user_id_from_access_token(auth_header[7:])
+    stash_authenticated_user_for_access_log(request, user_id)
+    return user_id
 
 
 def get_user_id_from_access_token(token: str) -> str:
@@ -369,7 +401,7 @@ def require_ally_eligible(
     try:
         is_paid = paid_checker(email)
     except psycopg2.Error as exc:
-        logger.warning("Paid-status lookup failed for %s: %s", email, exc)
+        logger.warning("Paid-status lookup failed for %s", email, exc_info=exc)
         raise HTTPException(
             status_code=403,
             detail="Could not verify ally-plan eligibility (database error); please try again",

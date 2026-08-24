@@ -48,12 +48,14 @@ from imbue.modal_app_kit.deploy import stamped_secret
 from imbue.modal_app_kit.image import locate_image_requirements
 from imbue.modal_app_kit.image import pinned_image
 from imbue.modal_app_kit.request_logging import RequestLoggingMiddleware
+from imbue.modal_app_kit.request_logging import deployed_minds_env_name
+from imbue.modal_app_kit.sentry import capture_and_reraise
+from imbue.modal_app_kit.sentry import init_sentry
 from imbue.modal_app_kit.source_mount import shipped_python_source_ignore
 from imbue.remote_service_connector import db
 from imbue.remote_service_connector.auth_proxy import EnsureAsgiRootPathMiddleware
 from imbue.remote_service_connector.auth_proxy import PartitionedCookieMiddleware
 from imbue.remote_service_connector.auth_proxy import init_supertokens
-from imbue.remote_service_connector.cloudflare import current_minds_env_name
 from imbue.remote_service_connector.errors import MissingShareConfigError
 from imbue.remote_service_connector.hosts import reconcile_slice_boxes
 from imbue.remote_service_connector.r2.sweep import run_r2_quota_sweep
@@ -77,7 +79,7 @@ _DEPLOY_ENV = read_deploy_env()
 # property the timestamped-secret rollback model needs.
 _MINDS_DEPLOY_ID = read_deploy_id()
 
-# Warm-pool size for the deployed function. ``minds env deploy`` reads
+# Warm-pool size for the deployed function. ``minds-admin env deploy`` reads
 # the tier's ``[min_containers].connector`` from its committed
 # ``deploy.toml`` and threads the value here at ``modal deploy`` time --
 # which is when this module is imported and the function spec is
@@ -86,7 +88,7 @@ _MINDS_DEPLOY_ID = read_deploy_id()
 _MIN_CONTAINERS = read_min_containers("MINDS_CONNECTOR_MIN_CONTAINERS")
 
 # How long (seconds) an idle container stays alive before Modal scales it
-# down. ``minds env deploy`` threads the tier's
+# down. ``minds-admin env deploy`` threads the tier's
 # ``[scaledown_window].connector`` from its committed ``deploy.toml`` here
 # at ``modal deploy`` time. Dev tiers set this high (~10 min) so the
 # no-warm-pool connector stays hot across a dev session instead of
@@ -97,13 +99,17 @@ _MIN_CONTAINERS = read_min_containers("MINDS_CONNECTOR_MIN_CONTAINERS")
 _SCALEDOWN_WINDOW = read_scaledown_window("MINDS_CONNECTOR_SCALEDOWN_WINDOW")
 
 # Modal custom domains for the web function (the tier's user-facing accounts +
-# web-chrome hosts). ``minds env deploy`` threads the tier's ``[origins]``
+# web-chrome hosts). ``minds-admin env deploy`` threads the tier's ``[origins]``
 # hosts from its committed ``deploy.toml`` here at ``modal deploy`` time.
 # Every named domain must already be registered and verified in the deploying
 # Modal workspace (dashboard -> Domains) or the deploy fails. None (the
 # default) deploys with only the ``*.modal.run`` URL -- dev/ci tiers and any
 # deploy outside the wrapper.
 _CUSTOM_DOMAINS = read_custom_domains("MINDS_CONNECTOR_CUSTOM_DOMAINS")
+
+# The `service` tag / server_name Bugsink events carry, distinguishing this
+# app from the other reporters on the tier's shared instance.
+_SENTRY_SERVICE_NAME = "remote-service-connector"
 
 # All build steps (the hash-locked pip install onto the digest-pinned base --
 # see ``imbue.modal_app_kit.image``) come first and are cached; local source is
@@ -114,7 +120,7 @@ _CUSTOM_DOMAINS = read_custom_domains("MINDS_CONNECTOR_CUSTOM_DOMAINS")
 # excluded from the package mount by ``shipped_python_source_ignore``.
 #
 # The built accounts frontend bundle (login/signup/account pages) is attached
-# the same way: ``minds env deploy`` runs the Vite build before ``modal
+# the same way: ``minds-admin env deploy`` runs the Vite build before ``modal
 # deploy``, and the dist directory rides along as a container-startup mount at
 # the path ``accounts_web.frontend_dist_dir`` reads. The directory may be
 # absent on a bare ``modal deploy`` from a checkout that never built it -- the
@@ -144,6 +150,7 @@ def _connector_secrets() -> list[modal.Secret]:
         stamped_secret("litellm-connector", _DEPLOY_ENV, _MINDS_DEPLOY_ID),
         stamped_secret("sharing", _DEPLOY_ENV, _MINDS_DEPLOY_ID),
         stamped_secret("storage", _DEPLOY_ENV, _MINDS_DEPLOY_ID),
+        stamped_secret("sentry", _DEPLOY_ENV, _MINDS_DEPLOY_ID),
         deploy_metadata_secret(_DEPLOY_ENV, _MINDS_DEPLOY_ID),
     ]
 
@@ -177,6 +184,10 @@ def _connector_secrets() -> list[modal.Secret]:
 @modal.concurrent(max_inputs=8)
 @modal.asgi_app(custom_domains=_CUSTOM_DOMAINS)
 def fastapi_app() -> FastAPI:
+    # Error reporting to the tier's Bugsink instance; a no-op until the
+    # tier's `sentry` Vault entry carries RSC_SENTRY_DSN. Initialized before
+    # anything that can fail so startup errors are reported too.
+    init_sentry(_SENTRY_SERVICE_NAME, "RSC_SENTRY_DSN")
     init_supertokens()
     # The SuperTokens middleware serves the accounts surface's browser-session
     # machinery (cookie attachment, the refresh route under
@@ -215,6 +226,12 @@ def fastapi_app() -> FastAPI:
     timeout=900,
 )
 def cleanup_removing_pool_hosts() -> dict[str, int]:
+    init_sentry(_SENTRY_SERVICE_NAME, "RSC_SENTRY_DSN")
+    with capture_and_reraise():
+        return _cleanup_removing_pool_hosts()
+
+
+def _cleanup_removing_pool_hosts() -> dict[str, int]:
     conn = db.get_pool_db_connection()
     try:
         # Audit this env's slices on every box against the DB (alert-only: it never
@@ -222,7 +239,7 @@ def cleanup_removing_pool_hosts() -> dict[str, int]:
         # it is safe on a box shared by multiple dev envs. A reconcile failure (DB,
         # SSH, or a missing POOL_SSH_PRIVATE_KEY while boxes exist) is a real failure:
         # let it propagate and fail the cron run rather than silently swallowing it.
-        divergence_count = reconcile_slice_boxes(conn, current_minds_env_name())
+        divergence_count = reconcile_slice_boxes(conn, deployed_minds_env_name())
     finally:
         conn.close()
     logger.info("Slice reconcile done: slice_divergences=%d", divergence_count)
@@ -246,6 +263,12 @@ def _init_supertokens_once() -> None:
     timeout=900,
 )
 def r2_quota_sweep() -> dict[str, int]:
+    init_sentry(_SENTRY_SERVICE_NAME, "RSC_SENTRY_DSN")
+    with capture_and_reraise():
+        return _r2_quota_sweep()
+
+
+def _r2_quota_sweep() -> dict[str, int]:
     _init_supertokens_once()
     counters = run_r2_quota_sweep(
         cloudflare_module.get_cloudflare_ctx().ops,
@@ -267,6 +290,12 @@ def r2_quota_sweep() -> dict[str, int]:
     timeout=900,
 )
 def backup_retention_reap() -> dict[str, int]:
+    init_sentry(_SENTRY_SERVICE_NAME, "RSC_SENTRY_DSN")
+    with capture_and_reraise():
+        return _backup_retention_reap()
+
+
+def _backup_retention_reap() -> dict[str, int]:
     counters = run_backup_retention_reap(
         cloudflare_module.get_cloudflare_ctx().ops,
         sync_module.get_sync_store(),
@@ -292,6 +321,12 @@ def backup_retention_reap() -> dict[str, int]:
     timeout=120,
 )
 def relay_health_sweep() -> dict[str, int]:
+    init_sentry(_SENTRY_SERVICE_NAME, "RSC_SENTRY_DSN")
+    with capture_and_reraise():
+        return _relay_health_sweep()
+
+
+def _relay_health_sweep() -> dict[str, int]:
     # A tier with relays registered but no sharing config is a deploy mistake;
     # skip (visibly) rather than crash-loop the cron every minute.
     try:
@@ -315,8 +350,14 @@ def relay_health_sweep() -> dict[str, int]:
     memory=512,
     timeout=7200,
 )
-def workspace_transition_supervisor(host_db_id: str) -> str:
-    outcome = run_transition_supervisor(host_db_id)
+def workspace_transition_supervisor(host_db_id: str, transition_id: str) -> str:
+    init_sentry(_SENTRY_SERVICE_NAME, "RSC_SENTRY_DSN")
+    with capture_and_reraise():
+        return _workspace_transition_supervisor(host_db_id, transition_id)
+
+
+def _workspace_transition_supervisor(host_db_id: str, transition_id: str) -> str:
+    outcome = run_transition_supervisor(host_db_id, transition_id)
     logger.info("Transition supervisor for %s finished: %s", host_db_id, outcome)
     return outcome
 
@@ -324,8 +365,8 @@ def workspace_transition_supervisor(host_db_id: str) -> str:
 # The stop/start endpoints (and the watchdog) spawn supervisors through this
 # hook. Wired here because only the entrypoint may import ``modal``: the
 # shipped modules hold the seam, the entrypoint provides the implementation.
-def _spawn_transition_supervisor(host_db_id: str) -> None:
-    workspace_transition_supervisor.spawn(host_db_id)
+def _spawn_transition_supervisor(host_db_id: str, transition_id: str) -> None:
+    workspace_transition_supervisor.spawn(host_db_id, transition_id)
 
 
 stop_start_module.spawner.hook = _spawn_transition_supervisor
@@ -336,12 +377,20 @@ stop_start_module.spawner.hook = _spawn_transition_supervisor
     secrets=_connector_secrets(),
     # Hourly watchdog for orphaned transitions: rows stuck in stopping/starting
     # (or stopped-with-a-leftover-VM) whose supervisor heartbeat went stale
-    # (connector redeploy, Modal eviction, supervisor timeout) get a fresh
-    # supervisor. Every step is idempotent, so re-driving always converges.
+    # (connector redeploy, Modal eviction, supervisor timeout) are taken over
+    # under a fresh fencing token and re-driven, with an exponential backoff
+    # in the transition's consecutive-failure count and an ops alert once a
+    # transition has clearly stopped converging.
     schedule=modal.Cron("45 * * * *"),
     timeout=900,
 )
 def workspace_transition_watchdog() -> dict[str, int]:
+    init_sentry(_SENTRY_SERVICE_NAME, "RSC_SENTRY_DSN")
+    with capture_and_reraise():
+        return _workspace_transition_watchdog()
+
+
+def _workspace_transition_watchdog() -> dict[str, int]:
     redriven_count = run_transition_watchdog()
     logger.info("Transition watchdog done: redriven=%d", redriven_count)
     return {"redriven": redriven_count}

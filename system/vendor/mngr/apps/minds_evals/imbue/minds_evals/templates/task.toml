@@ -22,6 +22,7 @@ mngr_branch = "$mngr_branch"
 mngr_sha = "$mngr_sha"
 dwt_repo = "$dwt_repo"
 dwt_branch = "$dwt_branch"
+dwt_sha = "$dwt_sha"
 
 [agent]
 # The case budget plus grace so the driver's own deadline (timeout_seconds)

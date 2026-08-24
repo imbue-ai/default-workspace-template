@@ -6,13 +6,13 @@ full set of slices on each at the release tag.
 
 This playbook is **production-only**. For dev / staging you do *not* buy new
 boxes each release -- free capacity by destroying old slices
-(`just destroy-pool-host` / `minds env destroy`) and re-bake on the existing
+(`just destroy-pool-hosts` / `minds-admin env destroy`) and re-bake on the existing
 boxes.
 
 ## What each deployment adds
 
 Every release we add **one `24sys032-us` box in each of the two US regions**
-(the row we standardized on from `admin server pricing`):
+(the row we standardized on from `minds-admin server pricing`):
 
 | Region label (lease) | OVH datacenter code | Box | RAM | Storage | Slices/box |
 |---|---|---|---|---|---|
@@ -37,13 +37,19 @@ fast path.
   `modal token set --profile minds-production ...`). This is what authorizes the
   Step 1 deploy. **Modal deploy auth is deliberately NOT in Vault** -- only the
   application secrets the deployed apps read at runtime live in Vault (pushed into
-  Modal as `*-production` Secrets by the deploy). `minds env activate --deploy
+  Modal as `*-production` Secrets by the deploy). `minds-admin env activate --deploy
   production` pins `MODAL_PROFILE=minds-production` and the deploy fails closed if
   that profile is missing or does not match the tier's `modal_workspace`, so a
   misroute to the wrong workspace is caught before anything ships.
 - The `24sys032-us` boxes are ordered fresh each release; nothing pre-exists.
 
-### Step 0 -- pick the version and export credentials
+### Step 0 -- pick the version, load the Vault token, activate the tier
+
+Every `minds-admin server` command below is env-aware: with production
+activated it resolves the OVH credentials (`secrets/minds/production/ovh`),
+the pool DSN (`.../neon`), the pool SSH key (`.../pool-ssh`), and the box
+observability credential (`.../observability`) from Vault itself. There is
+nothing to hand-export beyond the Vault token.
 
 ```bash
 cd <repo-root>
@@ -56,31 +62,21 @@ cd <repo-root>
 export REL_VERSION=0.3.6
 export REL_TAG="minds-v${REL_VERSION}"
 
-# --- Vault: point at the HCP cluster and load the production token ---
+# Vault auth. The `minds-admin` commands default VAULT_ADDR / VAULT_NAMESPACE to
+# the imbue HCP cluster themselves; export them anyway for the raw `vault` CLI
+# (the sanity check below, `vault login`), which defaults to localhost.
 export VAULT_ADDR="https://vault-cluster-public-vault-df29b16f.9b573ab7.z1.hashicorp.cloud:8200"
 export VAULT_NAMESPACE="admin"
 export VAULT_TOKEN="$(cat ~/.vault-tokens/production.token)"
 
-# --- OVH supplier creds (for `admin server` order/await/setup/list) ---
-export OVH_APPLICATION_KEY="$(vault kv get -mount=secrets -field=value minds/production/ovh/OVH_APPLICATION_KEY)"
-export OVH_APPLICATION_SECRET="$(vault kv get -mount=secrets -field=value minds/production/ovh/OVH_APPLICATION_SECRET)"
-export OVH_CONSUMER_KEY="$(vault kv get -mount=secrets -field=value minds/production/ovh/OVH_CONSUMER_KEY)"
-
-# --- Pool DB DSN + pool SSH key (raw `admin server` commands are not env-aware) ---
-# production keeps no local secrets.toml, so the raw server commands need these
-# from Vault. (The bake step in Step 6 uses `minds pool create`, which resolves
-# both from Vault itself once the tier is activated -- these exports just cover
-# the raw `admin server` commands in Steps 3-5 and `server list`.)
-export MINDS_HOST_POOL_DSN="$(vault kv get -mount=secrets -field=value minds/production/neon/DATABASE_URL)"
-export POOL_SSH_PRIVATE_KEY="$(vault kv get -mount=secrets -field=value minds/production/pool-ssh/POOL_SSH_PRIVATE_KEY)"
+# Activate the tier (use-mode; Step 1's deploy subshell re-activates with --deploy).
+eval "$(uv run minds-admin env activate production)"
 ```
 
-Sanity check the token and that the OVH creds resolved:
+Sanity check:
 
 ```bash
 vault token lookup >/dev/null && echo "vault ok"
-[ -n "$OVH_APPLICATION_KEY" ] && [ -n "$OVH_CONSUMER_KEY" ] && echo "ovh creds ok"
-[ -n "$MINDS_HOST_POOL_DSN" ] && echo "dsn ok"
 ```
 
 ## Step 1 -- start the production deploy (in the background)
@@ -97,8 +93,8 @@ the deploy off **in the background** so it runs while you confirm the order
 git fetch origin
 git checkout main && git pull --ff-only
 
-( eval "$(uv run minds env activate --deploy production)" \
-  && uv run minds env deploy --yes-i-mean-production ) \
+( eval "$(uv run minds-admin env activate --deploy production)" \
+  && uv run minds-admin env deploy --yes-i-mean-production ) \
   > /tmp/minds-deploy-${REL_VERSION}.log 2>&1 &
 DEPLOY_PID=$!
 echo "deploy running in background (pid ${DEPLOY_PID}); log: /tmp/minds-deploy-${REL_VERSION}.log"
@@ -119,7 +115,7 @@ before the boxes ordered below are delivered.
 
 Print OVH's **real** price preview (base + mandatory add-ons + one-time setup)
 and the exact server specs for both regions **without charging**, using
-`order --dry-run` (builds + assigns a non-committal cart, prints the preview, then
+`--dry-run` (builds + assigns a non-committal cart, prints the preview, then
 deletes the cart -- no charge, no prompt, no DB write):
 
 `24sys032-us` has **two mandatory option families** that each offer a choice, so
@@ -134,7 +130,7 @@ errors and lists the offers + monthly prices until every such family is chosen):
 ```bash
 for DC in vin hil; do
   echo "===== ${DC} ====="
-  uv run mngr imbue_cloud admin server order --dry-run \
+  just order-server --dry-run \
       --plan-code 24sys032-us \
       --region "${DC}" \
       --memory-gb 128 \
@@ -165,13 +161,13 @@ approved (the background deploy keeps running). Since you've already reviewed th
 preview, use `--yes` to skip the interactive confirm:
 
 ```bash
-uv run mngr imbue_cloud admin server order --yes \
+just order-server --yes \
     --plan-code 24sys032-us --region vin \
     --memory-gb 128 --storage softraid-2x960nvme \
     --option bandwidth-1000-24sys-us \
     --option vrack-bandwidth-500-24sys-us
 
-uv run mngr imbue_cloud admin server order --yes \
+just order-server --yes \
     --plan-code 24sys032-us --region hil \
     --memory-gb 128 --storage softraid-2x960nvme \
     --option bandwidth-1000-24sys-us \
@@ -192,8 +188,8 @@ Delivery for `24sys032-us` is usually ~1h (the pricing table showed `~1h` /
 high stock). Resumable; a no-op once delivered.
 
 ```bash
-uv run mngr imbue_cloud admin server await-delivery --server-id "$SRV_VIN"
-uv run mngr imbue_cloud admin server await-delivery --server-id "$SRV_HIL"
+just await-delivery "$SRV_VIN"
+just await-delivery "$SRV_HIL"
 ```
 
 Each flips the row to `delivered` and records the serviceName + public IP.
@@ -211,19 +207,22 @@ wait "$DEPLOY_PID" \
 
 Then provision both delivered boxes to `ready`.
 
-`setup` reinstalls Debian with our injected SSH host key (destructive, expected),
-waits for SSH, then installs qemu/lima/tooling and stages the slice guest image.
-Resumable via status.
+`setup-server` reinstalls Debian with our injected SSH host key (destructive,
+expected), waits for SSH, then runs the composed prep: qemu/lima/tooling, the
+staged slice guest image, **and the observability collector** (production has a
+boxes ingest credential in Vault, so the collector is installed and its
+`otelcol-contrib` unit verified active -- a failed collector fails the setup
+and the box is NOT marked ready). Resumable via status.
 
 ```bash
-uv run mngr imbue_cloud admin server setup --server-id "$SRV_VIN"
-uv run mngr imbue_cloud admin server setup --server-id "$SRV_HIL"
+just setup-server "$SRV_VIN"
+just setup-server "$SRV_HIL"
 ```
 
 Both end at status `ready`. Confirm:
 
 ```bash
-uv run mngr imbue_cloud admin server list
+just list-servers
 ```
 
 You should see both new boxes `ready`, plan `24sys032-us`, 14 slots each, in
@@ -231,13 +230,10 @@ their regions.
 
 ## Step 6 -- bake 14 slices per box at the release tag
 
-Activate the production tier (use-mode is enough; the bake resolves the pool key
-+ DSN from Vault). Then bake a full box's worth of slices, at the release DEFAULT_WORKSPACE_TEMPLATE
-tag, pinned to each box by `--server-id`:
+Bake a full box's worth of slices, at the release DEFAULT_WORKSPACE_TEMPLATE tag, pinned to each
+box by `--server-id` (the tier is already activated from Step 0):
 
 ```bash
-eval "$(uv run minds env activate production)"
-
 # US-EAST-VA slices onto the vin box
 just bake-slice-prod US-EAST-VA "${REL_TAG}" 14 --server-id "$SRV_VIN"
 
@@ -264,7 +260,7 @@ Notes:
 just list-pool-hosts
 
 # boxes healthy + slot accounting
-uv run mngr imbue_cloud admin server list
+just list-servers
 ```
 
 Optionally exercise a real production create against the new tag from the minds
@@ -276,18 +272,13 @@ rebuild).
 - A bake that fails mid-flight rolls back its own VM; re-run the same
   `bake-slice-prod` to top the box back up to 14 (it bakes into free slots).
 - To retire capacity later: `just list-pool-hosts` to find row ids, then
-  `just destroy-pool-host <id>` (tears down the slice VM, frees the slot, drops
+  `just destroy-pool-hosts <id>` (tears down the slice VM, frees the slot, drops
   the row). To decommission a whole box: destroy all its slices, then
-  `mngr imbue_cloud admin server` teardown (manual OVH cancel).
+  `minds-admin server` teardown (manual OVH cancel).
 - OVH classic billing: cancelling a box stops renewal but you keep it (and pay)
   until its expiration date; there's no proration.
 
 ## Open questions / future improvements
 
-- Consider adding first-class justfile recipes for the server lifecycle
-  (`order` / `await-delivery` / `setup`) so the whole protocol is
-  `just`-driven, mirroring `bake-slice-prod` / `list-pool-hosts`.
 - Consider a single wrapper recipe (e.g. `just deploy-release <version>`) that
   chains Steps 2-6 for both regions with the right server-id plumbing.
-</content>
-</invoke>
