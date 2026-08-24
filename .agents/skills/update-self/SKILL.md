@@ -656,15 +656,17 @@ point rather than re-running anything blind.
 
 Nothing takes that record down by itself, and the banner keys off its mere
 presence, so **clearing it is part of the repair**. Only an outcome that ends
-with the live workspace *confirmed healthy* clears it: a later update that
-lands, or a `recover` of a *new* interruption that probes the workspace
-afterwards. Neither describes the ordinary case, and the boot-time recovery is
-not one of them -- it runs before anything is up, so it has nothing to probe
-and leaves the record alone. This exit already cleared
-the marker and its rollback already put the tree content back, so a bare
-`recover` finds nothing to do, and re-running the same `apply` is refused (the
-merge is landed-and-rolled-back). So when the repair was by hand: verify the
-workspace is actually healthy, then delete
+with the live workspace *confirmed healthy* clears it, and the frontend counts:
+a later update that lands over a UI it could confirm, or a `recover` of a *new*
+interruption that probes the workspace afterwards. Neither describes the
+ordinary case, and two nearby outcomes are deliberately not among them -- the
+boot-time recovery runs before anything is up, so it has nothing to probe, and
+an apply over a UI that was already broken exits `0` naming that breakage
+rather than confirming health. Both leave the record alone. This exit already
+cleared the marker and its rollback already put the tree content back, so a
+bare `recover` finds nothing to do, and re-running the same `apply` is refused
+(the merge is landed-and-rolled-back). So when the repair was by hand: verify
+the workspace is actually healthy, then delete
 `data/.state/update-apply/emergency.json` and tell the user what happened.
 Leaving it in place means a workspace that is fine still telling its user it
 may be broken.

@@ -2121,6 +2121,32 @@ def test_an_outcome_that_confirms_health_clears_a_stale_emergency_record(
     assert not update_self.emergency_path(apply_repo).exists()
 
 
+@pytest.mark.parametrize(
+    ("diff", "is_build_failing", "expected_code"),
+    [(_BACKEND_DIFF, False, 0), (_FRONTEND_DIFF, True, 2)],
+    ids=["applied", "rolled-back"],
+)
+def test_an_outcome_over_a_broken_ui_leaves_the_emergency_record_standing(
+    apply_repo: Path, diff: str, is_build_failing: bool, expected_code: int
+) -> None:
+    # The other half of the rule, and the case that actually happens: a UI that
+    # is already broken is the usual aftermath of the failure that wrote the
+    # record. Neither outcome probes its way back to a working one -- the
+    # backend answers, the closing line names the breakage, and the user still
+    # cannot see the workspace -- so clearing on that would take the banner
+    # away from the one workspace that still needs it.
+    _plant_emergency(apply_repo)
+    runner = _apply_runner(diff, apply_repo)
+    if is_build_failing:
+        runner.respond(("npm", "run", "build"), _Result(returncode=1, stderr="boom"))
+    http = _FakeHttp(_all_healthy, page_responder=_placeholder_page)
+
+    code = _apply(runner, http, _FakeSpawner(), apply_repo)
+
+    assert code == expected_code
+    assert update_self.emergency_path(apply_repo).exists()
+
+
 def test_a_regressed_frontend_is_rolled_back(apply_repo: Path) -> None:
     # The app-shell probe answers, in order: built (the pre-apply baseline),
     # the placeholder (the apply regressed it), built again (the rollback
@@ -3622,6 +3648,21 @@ def test_recover_clears_the_emergency_record_when_it_confirms_health(
 
     assert _recover(runner, _FakeHttp(_all_healthy), apply_repo) == 0
     assert not update_self.emergency_path(apply_repo).exists()
+
+
+def test_recover_over_an_already_broken_ui_leaves_the_record_standing(
+    apply_repo: Path,
+) -> None:
+    # An interrupted apply whose baseline was already broken is recovered on
+    # the backend's health alone -- the frontend is never probed -- so this
+    # recovery has no evidence that the state the record describes is over.
+    _plant_emergency(apply_repo)
+    _plant_snapshotted_marker(apply_repo, frontend_expected=False)
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+    http = _FakeHttp(_all_healthy, page_responder=_placeholder_page)
+
+    assert _recover(runner, http, apply_repo) == 0
+    assert update_self.emergency_path(apply_repo).exists()
 
 
 def test_recover_provisioner_failure_still_counts_as_recovered(

@@ -1617,7 +1617,14 @@ def write_emergency(
 
 
 def clear_emergency(repo_root: Path) -> None:
-    """Drop the emergency record; the live workspace is confirmed healthy again."""
+    """Drop the emergency record; the live workspace is confirmed healthy again.
+
+    Call only from an outcome that actually confirmed that -- the frontend
+    included. A backend answering over a UI that is still down is not it: a
+    broken UI is the usual aftermath of the failure that wrote the record, so
+    clearing on the backend alone would take the banner away from the one
+    workspace that still needs it.
+    """
     emergency_path(repo_root).unlink(missing_ok=True)
 
 
@@ -2926,7 +2933,13 @@ def apply_update(
             # and env-converge are both safely re-runnable without a marker).
             clear_marker(repo_root)
             discard_snapshots(repo_root)
-            clear_emergency(repo_root)
+            # The emergency record only comes down on confirmed health, which
+            # is more than this exit code carries: an apply over a UI that was
+            # already broken lands, exits 0 naming the breakage, and leaves a
+            # user who still cannot see the workspace -- exactly the state the
+            # record exists to keep visible.
+            if is_frontend_expected and unresolved_frontend_failure is None:
+                clear_emergency(repo_root)
             _refresh_workspace_view(repo_root, runner)
         except ApplyFailed as exc:
             sys.stderr.write(
@@ -2961,7 +2974,11 @@ def apply_update(
             if is_recovered:
                 clear_marker(repo_root)
                 discard_snapshots(repo_root)
-                clear_emergency(repo_root)
+                # Same rule as the success path: the frontend is the half
+                # ``_recover_running_state`` only probes when one was expected,
+                # so that is the only case whose health it confirms.
+                if is_frontend_expected:
+                    clear_emergency(repo_root)
                 _report_rolled_back(is_frontend_expected)
                 return 2
             # The marker is cleared even on the emergency path: this is a
@@ -3172,7 +3189,11 @@ def recover(
     if is_recovered:
         clear_marker(repo_root)
         discard_snapshots(repo_root)
-        clear_emergency(repo_root)
+        # Same rule again: an interrupted apply whose baseline was already
+        # broken is recovered on the backend's health alone, which is not the
+        # confirmation the record is held to.
+        if marker.frontend_expected:
+            clear_emergency(repo_root)
         sys.stderr.write(
             "recovered: the interrupted apply is rolled back and the live workspace is "
             "confirmed healthy. The worker branch and its report are kept, so a "
