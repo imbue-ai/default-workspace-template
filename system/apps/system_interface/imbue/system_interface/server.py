@@ -580,11 +580,25 @@ def _stamp_update_staleness(response: Response, staleness: str | None) -> Respon
     return response
 
 
+def _shell_update_staleness() -> str | None:
+    """The staleness variant to stamp on this app-shell response, if any.
+
+    Asked per shell request, so a tree that moved -- or an apply marker that
+    appeared -- after this process started is still seen. Skipped for ``HEAD``:
+    that is the not-built placeholder's own poll, once every ten seconds per
+    open tab for the length of an outage (see
+    :func:`_frontend_not_built_response`, which short-circuits it for the same
+    reason). Reading staleness forks git, and an outage is precisely when the
+    tree has moved and both of its reads run.
+    """
+    if request.method == "HEAD":
+        return None
+    return get_state().update_staleness.staleness()
+
+
 def _index() -> Response:
     index_path = STATIC_DIRECTORY / "index.html"
-    # Asked per shell request (a page load), so a tree that moved -- or an
-    # apply marker that appeared -- after this process started is still seen.
-    staleness = get_state().update_staleness.staleness()
+    staleness = _shell_update_staleness()
     if index_path.exists():
         config: Config = get_state().config
         root_path = (request.script_root or "").rstrip("/")
