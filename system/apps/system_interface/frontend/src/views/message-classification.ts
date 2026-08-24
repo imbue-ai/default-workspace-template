@@ -11,7 +11,7 @@
  * specially-rendered message is a backend rule, not a frontend regex.
  */
 
-import type { ToolCall, UserMessageEvent } from "../models/Response";
+import type { ToolCall, UserMessageEvent, ToolResultEvent } from "../models/Response";
 import { KIND_SPEC, Rail, UserMessageKind } from "./message-kinds";
 
 /** The slice of a user_message the classification reads. */
@@ -99,6 +99,22 @@ export function isHiddenUserMessage(event: ClassifiableUserMessage): boolean {
  *  which is exactly when the user most needs to see and act on it. */
 export function isPermissionRequestCall(tc: ToolCall): boolean {
   return tc.display === "permission_request";
+}
+
+/** True when such a call actually FILED a request -- the only ones with anything
+ *  for the user to answer.
+ *
+ *  A call that failed never reached the gateway, so no request exists: a
+ *  PreToolUse guard that refused the command is the common case, and rendering
+ *  its block as a permission card sends the user to a Permissions tab that has
+ *  nothing in it. Those read as the failed tool call they are, block message and
+ *  all.
+ *
+ *  A call with no result YET does count. That is the request in flight, which is
+ *  exactly when the user most needs to see it. */
+export function isFiledPermissionRequest(tc: ToolCall, result: ToolResultEvent | null): boolean {
+  if (!isPermissionRequestCall(tc)) return false;
+  return result === null || result.is_error !== true;
 }
 
 // --- Permission RESOLUTION (a user_message verdict) -------------------------
