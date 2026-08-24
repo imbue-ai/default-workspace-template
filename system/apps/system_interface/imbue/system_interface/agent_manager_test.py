@@ -2674,7 +2674,7 @@ def _codex_model_entry(model: str, effort: str, *, priority: bool = False) -> Co
 
 
 def test_codex_model_options_is_none_without_a_cache_or_a_sidecar(agent_manager: AgentManager) -> None:
-    # No in-memory set and no sidecar on disk -> empty (the chip goes logo-only).
+    # No in-memory set and no sidecar on disk -> empty (the chip renders nothing).
     _seed_agent(agent_manager, "agent-1", harness=HarnessType.CODEX)
     session = agent_manager._build_session("agent-1", HarnessType.CODEX)
     assert session.switch_options() == ()

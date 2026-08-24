@@ -209,7 +209,7 @@ def read_model_identity(state_path: Path) -> ModelIdentity | None:
 
     Reads the uniform ``{"model", "effort", "fast"}`` schema every harness writes. Returns
     None when the file is absent, unparseable, or records no model yet (the bar shows
-    logo-only). Unknown keys are ignored, so an older writer emitting a different effort/tier
+    no slots). Unknown keys are ignored, so an older writer emitting a different effort/tier
     schema still lights the model chip (``model`` is unchanged) with effort None / fast off
     rather than crashing.
     """
