@@ -66,12 +66,15 @@ _GIT_TIMEOUT_SECONDS = 10.0
 # What makes THIS running process stale: the code it holds in memory, the
 # manifests its environment was resolved from, and the settings file it
 # re-reads with long-lived parsing code. Deliberately NOT the frontend (the
-# served bundle is rebuilt on disk without a restart), docs, skills, or
-# anything else agents routinely commit -- and deliberately narrower than the
-# update apply's restart classification (``plan_apply``/``classify_path`` in
+# served bundle is rebuilt on disk without a restart), docs, skills, tests, or
+# anything else agents routinely commit -- and narrower than the update apply's
+# restart classification (``plan_apply``/``classify_path`` in
 # ``.agents/skills/update-self/scripts/update_self.py``, a skill script this
 # app cannot import), which also covers paths that leave *other* live
-# processes stale.
+# processes stale. The one place it is not narrower is the vendored mngr: that
+# tree is read at runtime through more than its ``.py`` files (this process
+# both imports it and shells out to it), so everything there but docs and tests
+# counts -- a missed skew is the failure this whole detector exists to prevent.
 #
 # The imported-source prefixes are every workspace tree this process runs code
 # from: its own backend, the vendored mngr (imported in-process and shelled
@@ -107,7 +110,7 @@ def _is_path_relevant_to_this_server(path: str) -> bool:
     if path == _LIVE_SETTINGS_FILE or path in _BACKEND_MANIFESTS:
         return True
     if path.startswith(_VENDORED_MNGR_PREFIX):
-        return not path.endswith(".md")
+        return not path.endswith(".md") and not _is_test_file(path)
     if path.startswith(_IMPORTED_SOURCE_PREFIXES):
         return path.endswith(".py") and not _is_test_file(path)
     return False
