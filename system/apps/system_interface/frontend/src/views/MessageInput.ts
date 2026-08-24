@@ -331,12 +331,12 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
           const detail = describeRequestError(err);
           console.error(`Failed to send message to agent ${agentId}: ${detail}`);
           dropOutgoing(agentId, outgoingId);
-          // The message is NOT put back in the composer here -- that is Cancel's job now.
-          // Restoring it at this point would leave a copy in the box while the notice offers to
-          // resend the same text, so taking Retry would send it and strand a duplicate. Until
-          // the user chooses, the only place the message lives is this recovery record.
+          // Put the message straight back in the composer. It must not live only in the recovery
+          // record, which is closure state a reload or a closed tab would take with it -- so the
+          // box is where it waits, and a repeat send removes that copy once it has actually
+          // landed.
           //
-          // Only if they are still looking at the agent that failed: the catch runs after an
+          // The notice is only offered if they are still looking at the agent that failed: the catch runs after an
           // await, so they may have switched, and the switch-clear above has already gone by.
           // Put the text back in the composer NOW rather than holding it only in the recovery
           // record: that record is closure state, so a reload or a closed tab would take the
@@ -476,6 +476,20 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         }
       }
 
+      /** Drop the first occurrence of ``block`` from ``text``, tidying the separator it left. */
+      function removeFirstBlock(text: string, block: string): string {
+        const at = text.indexOf(block);
+        if (at === -1) {
+          return text;
+        }
+        const before = text.slice(0, at);
+        const after = text.slice(at + block.length);
+        return `${before}${after}`
+          .replace(/^\n+/, "")
+          .replace(/\n{3,}/g, "\n\n")
+          .trimEnd();
+      }
+
       /** Remove just the restored copy once a repeat send has landed, leaving the rest alone. */
       function clearRestoredMessage(forAgentId: string, restoredText: string): void {
         // Emphatically NOT "clear the composer". By this point the box can also hold a draft
@@ -483,12 +497,13 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         // the harness so the restart would not destroy it. Wiping it wholesale would throw away
         // the very messages this feature exists to protect. Remove the one copy that was just
         // delivered, and leave everything else exactly where it is.
+        // Removed wherever it sits, not just at the front: Force drains the harness queue back
+        // into the composer BEFORE sending, so by now the delivered message usually has that
+        // block above it and a prefix-only strip would leave it behind -- sent, and still in the
+        // box. Only the first occurrence goes, so a user who genuinely typed the same text twice
+        // keeps their copy.
         const current = localStorage.getItem(messageTextKey(forAgentId)) ?? "";
-        const withoutRestored = current.startsWith(`${restoredText}\n`)
-          ? current.slice(restoredText.length + 1)
-          : current === restoredText
-            ? ""
-            : current;
+        const withoutRestored = removeFirstBlock(current, restoredText);
         if (withoutRestored) {
           localStorage.setItem(messageTextKey(forAgentId), withoutRestored);
         } else {
@@ -572,6 +587,9 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
           // The message is already back in that agent's composer either way.
           if (currentAgentId === recovery.agentId) {
             actionFailureDetail = describeRequestError(err);
+            // The reason can change between attempts -- a blocked input can become an agent that
+            // is gone -- and the buttons follow the kind, so it has to be re-read with the text.
+            actionFailureKind = describeRequestErrorKind(err);
             actionFailureInFlight = null;
           } else {
             clearActionFailureNotice();

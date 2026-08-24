@@ -446,6 +446,24 @@ describe("MessageInput send failure notice", () => {
     expect(text).toContain("Force");
   });
 
+  it("removes the delivered message even when Force drained a queue block above it", async () => {
+    // Force prepends the rescued queue block BEFORE sending, so the delivered message is no
+    // longer at the front of the composer -- a prefix-only strip would leave it there, sent and
+    // still in the box.
+    mocks.sendMessage.mockRejectedValueOnce("nope");
+    const component = MessageInput();
+    const after = await typeAndSend(component, "agent-1", "my message");
+    mocks.drainToComposer.mockResolvedValueOnce({ block: "queued one" });
+
+    const force = findButton(after, "Force");
+    (force!.attrs!.onclick as () => void)();
+    await flushAsync();
+
+    const composer = localStorage.getItem("message-text:agent-1") ?? "";
+    expect(composer).toContain("queued one");
+    expect(composer).not.toContain("my message");
+  });
+
   it("shows nothing when the send succeeds", async () => {
     const after = await typeAndSend(MessageInput(), "agent-1", "hello");
     expect(renderedText(after)).not.toContain("Couldn't send your message");

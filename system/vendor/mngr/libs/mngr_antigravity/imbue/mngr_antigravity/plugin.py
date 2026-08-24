@@ -100,6 +100,7 @@ from typing import Final
 import click
 from loguru import logger
 from pydantic import Field
+from pydantic import model_validator
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.imbue_common.logging import log_span
@@ -128,6 +129,7 @@ from imbue.mngr.api.preservation import run_adopt_session_preflight
 from imbue.mngr.api.preservation import transfer_cloned_agent_session_store
 from imbue.mngr.config.data_types import AgentTypeConfig
 from imbue.mngr.config.data_types import MngrContext
+from imbue.mngr.errors import ConfigError
 from imbue.mngr.errors import UserInputError
 from imbue.mngr.hosts.common import copy_on_host
 from imbue.mngr.hosts.common import symlink_on_host
@@ -471,6 +473,38 @@ class AntigravityAgentConfig(AgentTypeConfig):
         description="When True, auto-trust the source repo without prompting. "
         "When False (default), the user is prompted interactively.",
     )
+    # CLEANUP: remove once no settings.toml in the wild still says auto_dismiss_dialogs (the name
+    # this carried before it was clarified to say WHEN it applies). Accepted as an alias rather
+    # than rejected because the config model forbids unknown fields, so an old file does not warn
+    # -- it fails the whole load, and the agent will not start at all.
+    auto_dismiss_dialogs: bool | None = Field(
+        default=None,
+        description="DEPRECATED: the old name for auto_dismiss_dialogs_at_startup; set that instead. "
+        "Both names mean the same thing -- dialogs dismissed before the agent starts, never at "
+        "send time -- and the new one says so.",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _fold_deprecated_auto_dismiss_dialogs(cls, data: Any) -> Any:
+        """Accept the old ``auto_dismiss_dialogs`` name as the new one.
+
+        Folded in before construction so nothing downstream has to know the old name existed.
+        Setting both to different values is contradictory and is left to fail rather than picking
+        a winner silently.
+        """
+        if not isinstance(data, dict) or data.get("auto_dismiss_dialogs") is None:
+            return data
+        deprecated = data.pop("auto_dismiss_dialogs")
+        current = data.get("auto_dismiss_dialogs_at_startup")
+        if current is not None and current != deprecated:
+            raise ConfigError(
+                "auto_dismiss_dialogs and auto_dismiss_dialogs_at_startup are the same setting under "
+                "two names and were given different values; set only auto_dismiss_dialogs_at_startup."
+            )
+        data["auto_dismiss_dialogs_at_startup"] = deprecated
+        return data
+
     check_installation: bool = Field(
         default=True,
         description="Check whether agy is installed and install it if missing (if False, assume it is already present).",

@@ -666,6 +666,9 @@ DIALOGS: Final[tuple[Dialog, ...]] = (
 # it meaning "all the ones you know", and it must not be possible to opt into guessing by
 # reaching for the obvious shorthand.
 ALL_RECOGNIZED_NONBENIGN: Final[str] = "ALL_RECOGNIZED_NONBENIGN"
+# NOT accepted by the config yet. Answering an unrecognised surface means guessing at an option
+# nobody has looked at, and nothing implements it -- Unrecognized refuses without consulting this.
+# The name is reserved here so the eventual feature does not have to invent a different one.
 DANGEROUS_ALL_NONBENIGN_INCLUDING_UNRECOGNIZED: Final[str] = "DANGEROUS_ALL_NONBENIGN_INCLUDING_UNRECOGNIZED"
 
 # The complete set of nicknames an operator may put in `sensibly_deal_with_dialogs`.

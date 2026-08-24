@@ -190,7 +190,7 @@ def _check_paste_content(pane_content: str, message: str) -> bool:
 
 def _pane_matches(
     agent: BaseAgent[Any],
-    tmux_target: TmuxWindowTarget,
+    tmux_target: TmuxWindowTarget | str,
     indicator: str | re.Pattern[str] | Callable[[str], bool],
 ) -> bool:
     content = agent._capture_pane_content(tmux_target)
@@ -229,13 +229,16 @@ def wait_for_tui_ready(
         # the alternatives (a Protocol carrying one, or getattr) buy a function name that says
         # no more here than this does.
         label = "a readiness predicate over the pane"
+    # Resolved once: this polls every half second for up to thirty, and resolving the pane inside
+    # each iteration would spend a tmux round trip per poll to learn the same answer.
+    resolved_target = agent._send_target_arg(tmux_target)
     with log_span("Waiting for TUI to be ready (looking for: {})", label):
         if poll_until(
-            lambda: _pane_matches(agent, tmux_target, indicator),
+            lambda: _pane_matches(agent, resolved_target, indicator),
             timeout=timeout_seconds,
         ):
             return
-        pane_content = agent._capture_pane_content(tmux_target)
+        pane_content = agent._capture_pane_content(resolved_target)
         if pane_content is not None:
             logger.error("TUI ready timeout -- remote pane content:\n{}", pane_content)
         else:

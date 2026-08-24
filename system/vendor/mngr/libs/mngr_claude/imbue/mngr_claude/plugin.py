@@ -25,6 +25,7 @@ import click
 from loguru import logger
 from pydantic import Field
 from pydantic import field_validator
+from pydantic import model_validator
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.concurrency_group.errors import ProcessSetupError
@@ -139,7 +140,6 @@ from imbue.mngr_claude.claude_config import read_claude_config
 from imbue.mngr_claude.claude_config import remove_claude_trust_for_path
 from imbue.mngr_claude.claude_config import resolve_shared_claude_config_dir
 from imbue.mngr_claude.dialogs import ALL_RECOGNIZED_NONBENIGN
-from imbue.mngr_claude.dialogs import DANGEROUS_ALL_NONBENIGN_INCLUDING_UNRECOGNIZED
 from imbue.mngr_claude.dialogs import DialogBlocked
 from imbue.mngr_claude.dialogs import INPUT_PROMPT_GLYPH
 from imbue.mngr_claude.dialogs import SELECTABLE_NICKNAMES
@@ -371,6 +371,38 @@ class ClaudeAgentConfig(AgentTypeConfig):
         description="Automatically dismiss all Claude startup dialogs (trust, effort callout, onboarding) "
         "before startup. When False, the interactive flow prompts.",
     )
+    # CLEANUP: remove once no settings.toml in the wild still says auto_dismiss_dialogs (the name
+    # this carried before it was clarified to say WHEN it applies). Accepted as an alias rather
+    # than rejected because the config model forbids unknown fields, so an old file does not warn
+    # -- it fails the whole load, and the agent will not start at all.
+    auto_dismiss_dialogs: bool | None = Field(
+        default=None,
+        description="DEPRECATED: the old name for auto_dismiss_dialogs_at_startup; set that instead. "
+        "Both names mean the same thing -- dialogs dismissed before the agent starts, never at "
+        "send time -- and the new one says so.",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _fold_deprecated_auto_dismiss_dialogs(cls, data: Any) -> Any:
+        """Accept the old ``auto_dismiss_dialogs`` name as the new one.
+
+        Folded in before construction so nothing downstream has to know the old name existed.
+        Setting both to different values is contradictory and is left to fail rather than picking
+        a winner silently.
+        """
+        if not isinstance(data, dict) or data.get("auto_dismiss_dialogs") is None:
+            return data
+        deprecated = data.pop("auto_dismiss_dialogs")
+        current = data.get("auto_dismiss_dialogs_at_startup")
+        if current is not None and current != deprecated:
+            raise UnknownDialogNicknameError(
+                "auto_dismiss_dialogs and auto_dismiss_dialogs_at_startup are the same setting under "
+                "two names and were given different values; set only auto_dismiss_dialogs_at_startup."
+            )
+        data["auto_dismiss_dialogs_at_startup"] = deprecated
+        return data
+
     auto_allow_permissions: bool = Field(
         default=False,
         description="When True, adds a PermissionRequest hook that auto-allows all permission dialogs. "
@@ -404,13 +436,17 @@ class ClaudeAgentConfig(AgentTypeConfig):
         matches no dialog, so mngr refuses every send it was told to answer and the operator has
         no way to tell that from the feature not working.
         """
-        allowed = SELECTABLE_NICKNAMES | {ALL_RECOGNIZED_NONBENIGN, DANGEROUS_ALL_NONBENIGN_INCLUDING_UNRECOGNIZED}
+        # DANGEROUS_ALL_NONBENIGN_INCLUDING_UNRECOGNIZED is deliberately NOT accepted yet: it
+        # promises to answer surfaces mngr cannot name, and nothing implements that -- Unrecognized
+        # refuses without ever consulting this setting. Accepting it would let an operator opt into
+        # a behaviour that silently does not happen.
+        allowed = SELECTABLE_NICKNAMES | {ALL_RECOGNIZED_NONBENIGN}
         unknown = [entry for entry in value if entry not in allowed]
         if unknown:
             raise UnknownDialogNicknameError(
                 f"Unknown entries in sensibly_deal_with_dialogs: {sorted(unknown)}. "
                 f"Valid nicknames: {sorted(SELECTABLE_NICKNAMES)}, or the tokens "
-                f"{ALL_RECOGNIZED_NONBENIGN!r} / {DANGEROUS_ALL_NONBENIGN_INCLUDING_UNRECOGNIZED!r}."
+                f"{ALL_RECOGNIZED_NONBENIGN!r}."
             )
         return value
 

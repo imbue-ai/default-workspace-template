@@ -416,11 +416,15 @@ class BaseAgent(AgentInterface[AgentConfigT]):
         When window is None, captures the agent's primary window (window 0).
         Otherwise, captures the given tmux window (by index or name) in the
         agent's session.
+
+        A named window is captured as WRITTEN, not resolved to the agent's recorded pane: someone
+        asking for another window means that window, and handing back the agent's pane instead
+        would answer a question they did not ask.
         """
-        target = (
-            self.tmux_target if window is None else TmuxWindowTarget(session_name=self.session_name, window=window)
-        )
-        return self._capture_pane_content(target, include_scrollback=include_scrollback)
+        if window is not None:
+            other_window = TmuxWindowTarget(session_name=self.session_name, window=window)
+            return self._capture_pane_content(other_window.as_shell_arg(), include_scrollback=include_scrollback)
+        return self._capture_pane_content(self.tmux_target, include_scrollback=include_scrollback)
 
     def _send_target_arg(self, tmux_target: TmuxWindowTarget) -> str:
         """The tmux ``-t`` argument every send should use: the agent's own pane, by ID.
@@ -433,11 +437,18 @@ class BaseAgent(AgentInterface[AgentConfigT]):
         Falls back to the window target when the option is absent, which is how a session created
         before this existed keeps working.
 
-        Deliberately NOT cached. A session name is reused when an agent restarts -- which the
-        chat's Force button does on purpose -- so a remembered pane ID outlives the pane it names
-        and the next send would type into a pane that no longer exists, or into whichever pane
-        inherited that ID after a tmux server restart. One tmux call per send is the price of
-        addressing the pane that exists now.
+        Only the agent's own window resolves to a pane. A caller asking about another window --
+        `mngr capture -w <window>` -- means that window, and answering with the agent pane would
+        show them the wrong thing entirely.
+
+        Resolved per call, and deliberately not memoised on the agent. A session name is reused when an agent restarts -- which the
+        chat's Force button does on purpose -- so a remembered ID outlives the pane it names, and
+        the next send would type into a pane that no longer exists or into whichever pane
+        inherited that ID. Reading it is one tmux call, and that is the price of addressing the
+        pane that exists now rather than the one that did.
+
+        Callers that read the pane in a loop (the readiness and dialog polls) should resolve once
+        and pass the result down, rather than paying this per iteration.
         """
         session_arg = shlex.quote(f"={tmux_target.session_name}:")
         result = self.host.execute_stateful_command(f"tmux show-options -v -t {session_arg} {AGENT_PANE_ID_OPTION}")
@@ -459,17 +470,23 @@ class BaseAgent(AgentInterface[AgentConfigT]):
         """
         self.host.execute_stateful_command(f"tmux copy-mode -q -t {target_arg}")
 
-    def _capture_pane_content(self, tmux_target: TmuxWindowTarget, include_scrollback: bool = False) -> str | None:
+    def _capture_pane_content(
+        self, tmux_target: TmuxWindowTarget | str, include_scrollback: bool = False
+    ) -> str | None:
         """Capture the agent pane's content, returning None on failure.
 
         Reads the same pane the sends write to. A window target resolves to whichever pane is
         ACTIVE, so after a split this would read the wrong pane -- and every decision built on a
         capture (is a dialog up, did the paste land, is the TUI ready) would be about a shell the
         agent is not in.
+
+        Accepts an already-resolved target so a polling caller can look the pane up once instead
+        of once per iteration; a readiness wait can capture sixty times, and resolving inside each
+        would triple the round trips it costs.
         """
         return capture_tmux_pane_content(
             self.host,
-            self._send_target_arg(tmux_target),
+            tmux_target if isinstance(tmux_target, str) else self._send_target_arg(tmux_target),
             timeout_seconds=_CAPTURE_PANE_TIMEOUT_SECONDS,
             include_scrollback=include_scrollback,
         )
