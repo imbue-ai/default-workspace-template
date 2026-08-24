@@ -1868,6 +1868,36 @@ def test_emergency_when_rollback_cannot_restore_health(
     assert record["snapshots_dir"] == str(bundle_copy.parent)
 
 
+def _plant_emergency(repo_root: Path) -> None:
+    update_self.write_emergency(
+        repo_root, "an earlier apply's rollback failed", "the-lead", lambda: 1.0
+    )
+
+
+@pytest.mark.parametrize(
+    ("diff", "is_build_failing", "expected_code"),
+    [(_BACKEND_DIFF, False, 0), (_FRONTEND_DIFF, True, 2)],
+    ids=["applied", "rolled-back"],
+)
+def test_an_outcome_that_confirms_health_clears_a_stale_emergency_record(
+    apply_repo: Path, diff: str, is_build_failing: bool, expected_code: int
+) -> None:
+    # The banner keys off the record's mere presence, so every outcome that
+    # ends with the workspace confirmed healthy has to take it down -- a
+    # rollback that puts known-good code back just as much as an apply that
+    # lands. A clear that quietly stopped happening would leave a workspace
+    # saying it may be broken forever, with nothing else to contradict it.
+    _plant_emergency(apply_repo)
+    runner = _apply_runner(diff, apply_repo)
+    if is_build_failing:
+        runner.respond(("npm", "run", "build"), _Result(returncode=1, stderr="boom"))
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == expected_code
+    assert not update_self.emergency_path(apply_repo).exists()
+
+
 def test_a_regressed_frontend_is_rolled_back(apply_repo: Path) -> None:
     # The app-shell probe answers, in order: built (the pre-apply baseline),
     # the placeholder (the apply regressed it), built again (the rollback
@@ -2686,6 +2716,21 @@ def test_recover_reports_an_emergency_when_it_cannot_restore_health(
     record = _read_emergency(apply_repo)
     assert record["dri_agent"] == "the-lead"
     assert _MERGE_REF in record["reason"]
+
+
+def test_recover_clears_the_emergency_record_when_it_confirms_health(
+    apply_repo: Path,
+) -> None:
+    # The other half of the record's life: a recovery that ends with the live
+    # workspace confirmed healthy is exactly the evidence the record is stale.
+    _plant_emergency(apply_repo)
+    plan = update_self.plan_apply(["system/apps/system_interface/frontend/src/App.ts"])
+    snapshots = update_self.take_snapshots(plan, apply_repo, _RecordingRunner(), [])
+    _write_recover_marker(apply_repo, snapshots=snapshots)
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+
+    assert _recover(runner, _FakeHttp(_all_healthy), apply_repo) == 0
+    assert not update_self.emergency_path(apply_repo).exists()
 
 
 def test_recover_provisioner_failure_still_counts_as_recovered(
