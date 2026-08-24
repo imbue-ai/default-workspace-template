@@ -21,6 +21,13 @@ def test_the_bar_is_read_only() -> None:
     assert ANTIGRAVITY_CATALOG.switch_mode is SwitchMode.READ_ONLY
 
 
+def test_the_harness_credit_is_declared_whole() -> None:
+    """The harness declares the ENTIRE credit string, prefix included -- the frontend renders
+    it verbatim and adds nothing. It is a pure function of the harness, so it shows even
+    while the model bar has no slots to render (before agy's first statusline fire)."""
+    assert ANTIGRAVITY_CATALOG.powered_by_text == "Powered by Antigravity"
+
+
 def test_every_model_is_one_slot() -> None:
     """agy bakes the tier into the model id and has no fast mode, so the bar shows the model
     chip alone -- the shown slots are decided purely by the matched option's data."""
@@ -100,5 +107,9 @@ def test_an_unknown_model_is_rendered_instead_of_shrugged(tmp_path: Path) -> Non
 
 
 def test_no_model_state_leaves_the_catalog_alone(tmp_path: Path) -> None:
-    """Before agy's first statusline fire there is no file; the bar shows logo-only."""
+    """Before agy's first statusline fire there is no file, so the bar renders no slots.
+
+    The "Powered by Antigravity" credit is unaffected -- it is a pure function of the
+    harness and deliberately does not vanish when the model bar has nothing to show.
+    """
     assert _session(tmp_path / "absent.json").switch_options() == ANTIGRAVITY_CATALOG.options
