@@ -1,10 +1,9 @@
 """End-to-end workspace stop/start against a real env (box + bucket + connector).
 
 Leases a pool host, stops it through the connector's workspace lifecycle
-(VM halt + artifact upload, then the retention finalize frees the slot),
-starts it again (a restore onto a same-region box, since the finalize has
-already reaped the local VM), verifies the restored coordinates answer SSH,
-and releases the lease.
+(VM halt + artifact upload + slot free), starts it again (in-place restart
+or a restore onto a same-region box), verifies the restored coordinates
+answer SSH, and releases the lease.
 
 Needs a pool with at least one available baked slice AND workspace storage
 configured for the env. An empty pool FAILS by default (the CI release flow
@@ -25,7 +24,6 @@ test runs only where an operator explicitly opts in.
 import os
 import socket
 from collections.abc import Callable
-from typing import Any
 
 import httpx
 import pytest
@@ -44,19 +42,13 @@ pytestmark = [pytest.mark.release, pytest.mark.minds_services]
 _STOP_START_OPT_IN = os.environ.get("MINDS_STOP_START_RELEASE_TEST") == "1"
 
 _HTTP_TIMEOUT_SECONDS = 60.0
-# The row lands on "stopped" the moment the upload verifies. Measured against
-# the standing CI box, the ~13GB upload ran at ~1.4MB/s effective (~2.6h), so
-# the deadline budgets that plus margin. The start downloads at ~1 GB/s and
-# boots in seconds.
+# The stop uploads the whole artifact concurrently with the env's
+# local-retention window (default WORKSPACE_STOP_RETENTION_SECONDS is 3600s)
+# and only reports "stopped" once BOTH have elapsed. Measured against the
+# standing CI box, the ~13GB upload ran at ~1.4MB/s effective (~2.6h), so the
+# deadline budgets that plus margin -- which also dwarfs the retention
+# ceiling. The start downloads at ~1 GB/s and boots in seconds.
 _STOP_DEADLINE_SECONDS = 3.5 * 3600.0
-# After "stopped" the halted local VM (and the slot) is kept until the env's
-# local-retention window -- which runs concurrently with the upload, from the
-# stop request -- closes and the retention finalize clears the placement.
-# ci/dev tiers stamp a short window via deploy.toml ([storage]
-# stop_retention_seconds), so on the envs this test runs against the wait is
-# minutes at most; the budget still covers the connector's 3600s default so
-# the test also passes against an env without the stamp.
-_SLOT_FREE_DEADLINE_SECONDS = 3600.0 + 15 * 60.0
 _START_DEADLINE_SECONDS = 20 * 60.0
 _POLL_INTERVAL_SECONDS = 15.0
 
@@ -67,22 +59,6 @@ def _connector_url(env: SharedEnvHandle) -> str:
 
 def _auth_header(user: VerifiedUserHandle) -> dict[str, str]:
     return {"Authorization": f"Bearer {user.session_token.get_secret_value()}"}
-
-
-def _read_workspace(
-    client: httpx.Client,
-    connector_url: str,
-    user: VerifiedUserHandle,
-    host_db_id: str,
-    last_out: dict[str, Any],
-) -> dict:
-    """One authenticated workspace read; records the body into ``last_out`` for failure messages."""
-    response = client.get(f"{connector_url}/workspaces/{host_db_id}", headers=_auth_header(user))
-    assert response.status_code == 200, f"workspace poll failed: {response.status_code} {response.text[:300]}"
-    body = response.json()
-    last_out.clear()
-    last_out.update(body)
-    return body
 
 
 def _poll_workspace_until(
@@ -96,7 +72,11 @@ def _poll_workspace_until(
     last: dict = {}
 
     def read_workspace_if_target() -> dict | None:
-        body = _read_workspace(client, connector_url, user, host_db_id, last)
+        response = client.get(f"{connector_url}/workspaces/{host_db_id}", headers=_auth_header(user))
+        assert response.status_code == 200, f"workspace poll failed: {response.status_code} {response.text[:300]}"
+        body = response.json()
+        last.clear()
+        last.update(body)
         if body["status"] == target_status:
             return body
         # A start that failed lands back on stopped with the error recorded.
@@ -111,37 +91,15 @@ def _poll_workspace_until(
     return reached
 
 
-def _poll_workspace_until_slot_freed(
-    client: httpx.Client,
-    connector_url: str,
-    user: VerifiedUserHandle,
-    host_db_id: str,
-) -> dict:
-    """Poll a stopped workspace until the retention finalize clears its placement."""
-    last: dict = {}
-
-    def read_workspace_if_freed() -> dict | None:
-        body = _read_workspace(client, connector_url, user, host_db_id, last)
-        assert body["status"] == "stopped", f"workspace left stopped while awaiting finalize: {body['status']}"
-        return body if body["vps_address"] is None else None
-
-    freed, _poll_count, _elapsed = poll_for_value(
-        read_workspace_if_freed, timeout=_SLOT_FREE_DEADLINE_SECONDS, poll_interval=_POLL_INTERVAL_SECONDS
-    )
-    assert freed is not None, f"slot was never freed within {_SLOT_FREE_DEADLINE_SECONDS:.0f}s; last: {last}"
-    return freed
-
-
 def _assert_ssh_banner(address: str, port: int) -> None:
     with socket.create_connection((address, port), timeout=10) as sock:
         banner = sock.recv(4)
     assert banner.startswith(b"SSH"), f"{address}:{port} did not answer with an SSH banner: {banner!r}"
 
 
-# The stop deadline (3.5h) plus the slot-free (1.25h) and start (20min)
-# deadlines plus lease/SSH/poll overhead; the test is opt-in (see above), so
-# this long budget never holds up a default run.
-@pytest.mark.timeout(6 * 3600)
+# The stop deadline plus the start deadline plus lease/SSH/poll overhead; the
+# test is opt-in (see above), so this long budget never holds up a default run.
+@pytest.mark.timeout(4 * 3600)
 @pytest.mark.skipif(
     not _STOP_START_OPT_IN,
     reason=(
@@ -176,16 +134,14 @@ def test_workspace_stop_uploads_frees_slot_and_start_restores(
                 pytest.skip("workspace storage is not configured for this env")
             assert stop.status_code in (200, 202), f"stop refused: {stop.status_code} {stop.text[:400]}"
 
-            # "stopped" lands the moment the upload verifies; the halted local
-            # VM (and the slot) is kept through the retention window.
-            _poll_workspace_until(client, connector_url, verified_user, host_db_id, "stopped", _STOP_DEADLINE_SECONDS)
-            # Wait out the retention finalize too: once it clears the
-            # placement, the slot is freed, the VM exists only as encrypted
-            # objects in the tier bucket, and the start below always
-            # exercises the restore path.
-            freed = _poll_workspace_until_slot_freed(client, connector_url, verified_user, host_db_id)
-            assert freed["ssh_port"] is None
-            assert freed["container_ssh_port"] is None
+            stopped = _poll_workspace_until(
+                client, connector_url, verified_user, host_db_id, "stopped", _STOP_DEADLINE_SECONDS
+            )
+            # A stopped workspace holds no placement: its slot is freed and its
+            # VM exists only as encrypted objects in the tier bucket.
+            assert stopped["vps_address"] is None
+            assert stopped["ssh_port"] is None
+            assert stopped["container_ssh_port"] is None
 
             start = client.post(f"{connector_url}/workspaces/{host_db_id}/start", headers=_auth_header(verified_user))
             assert start.status_code in (200, 202), f"start refused: {start.status_code} {start.text[:400]}"

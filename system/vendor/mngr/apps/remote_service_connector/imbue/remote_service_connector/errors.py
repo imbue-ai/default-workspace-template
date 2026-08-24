@@ -225,16 +225,6 @@ class EmailNotVerifiedError(ConnectorError, PermissionError):
         )
 
 
-class AccountSuspendedError(ConnectorError, PermissionError):
-    """Raised when a suspended account attempts a gated action (signing in, minting a session).
-
-    Mapped to a structured 403 (``code: account_suspended``) so clients can
-    show the generic suspended message. The operator-recorded suspension
-    reason is deliberately NOT included -- it is internal; users get the
-    generic support-contact message.
-    """
-
-
 class QuotaExceededError(ConnectorError, RuntimeError):
     """Raised when an operation would exceed one of the account's entitlements.
 

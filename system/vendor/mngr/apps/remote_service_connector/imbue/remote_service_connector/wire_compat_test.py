@@ -404,9 +404,6 @@ _EXEMPT_ROUTES: dict[tuple[str, str], str] = {
     ("GET", "/signup"): _BROWSER_ONLY,
     ("GET", "/manage"): _BROWSER_ONLY,
     ("GET", "/check-inbox"): _BROWSER_ONLY,
-    ("GET", "/terms-of-service"): _BROWSER_ONLY,
-    ("GET", "/code-of-conduct"): _BROWSER_ONLY,
-    ("GET", "/privacy-policy"): _BROWSER_ONLY,
     ("GET", "/web"): _WEB_BUNDLE,
     ("GET", "/web/assets/{asset_path:path}"): _WEB_BUNDLE,
     ("GET", "/web/{page_path:path}"): _WEB_BUNDLE,
@@ -421,9 +418,6 @@ _EXEMPT_ROUTES: dict[tuple[str, str], str] = {
     ("GET", "/admin/accounts/{email}"): _OPERATOR,
     ("POST", "/admin/accounts/{email}/plan"): _OPERATOR,
     ("POST", "/admin/accounts/{email}/quota"): _OPERATOR,
-    ("POST", "/admin/accounts/{email}/revoke-sessions"): _OPERATOR,
-    ("POST", "/admin/accounts/{email}/suspend"): _OPERATOR,
-    ("POST", "/admin/accounts/{email}/unsuspend"): _OPERATOR,
     ("GET", "/admin/relays"): _OPERATOR,
     ("POST", "/admin/relays"): _OPERATOR,
     ("DELETE", "/admin/relays/{relay_id}"): _OPERATOR,
@@ -431,7 +425,6 @@ _EXEMPT_ROUTES: dict[tuple[str, str], str] = {
     ("POST", "/admin/sweep/r2"): _OPERATOR,
     ("POST", "/admin/test-signup"): _OPERATOR,
     ("POST", "/admin/workspaces/{host_db_id}/abandon"): _OPERATOR,
-    ("POST", "/admin/workspaces/{host_db_id}/stop"): _OPERATOR,
 }
 
 

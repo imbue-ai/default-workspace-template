@@ -109,11 +109,9 @@ The reporting policy:
 
 Resource access is governed by per-account quotas ("entitlements"), not by a paid/unpaid gate:
 
-- The `plans` table holds the plan definitions ("free", "explorer", and "ally" today). It is **git-owned**: `minds-admin env deploy` writes (overwriting) the `[plans]` blocks from the tier's `deploy.toml` after migrations, so deploy.toml is the source of truth for plan defaults.
+- The `plans` table holds the plan definitions ("explorer" and "ally" today). It is **git-owned**: `minds-admin env deploy` writes (overwriting) the `[plans]` blocks from the tier's `deploy.toml` after migrations, so deploy.toml is the source of truth for plan defaults.
 - The `account_entitlements` table holds one row per account, created lazily on the account's first quota-relevant request. The row's values are copied wholesale from the plan at assignment and are the adjustable source of truth thereafter -- changing a plan's defaults never retroactively changes existing rows.
-- The hosted signup form offers "free" and "explorer" (explorer recommended and preselected); the chosen plan's row is created at account creation, on both the password and Google paths (the choice rides the OAuth state JWT). The write fails open: a lost choice degrades to the lazy backfill below.
-- Lazy-creation backfill rule: accounts whose SuperTokens `time_joined` predates the feature-ship cutoff get "ally" when their email is paid-listed; every other account without a recorded signup choice backfills as "free". Explorer-plan membership is the in-workspace analytics-collection consent (see `specs/minds-analytics/spec.md`), so it is only ever assigned by an explicit user choice -- the signup selector or a later plan switch -- never by a fallback.
-- Account creation also requires agreeing to the Terms of Service and Code of Conduct. The signup form gates both creation paths client-side; for Google, the agreement rides the OAuth state, and a new-account exchange arriving without it (the sign-in tab's button) is rolled back and bounced to the login page's `terms_required` banner. The linked documents are static HTML pages shipped in the accounts bundle and served at `/terms-of-service`, `/code-of-conduct`, and `/privacy-policy` (the plan selector's "Learn more" target).
+- Lazy-creation backfill rule: accounts whose SuperTokens `time_joined` predates the feature-ship cutoff get "ally" when their email is paid-listed; every newer account starts as "explorer".
 - Quota rejections are HTTP 403 with structured detail: `{"code": "quota_exceeded", "entitlement": "<name>", "limit": N, "current": N, "message": "..."}`.
 - Quotas are checked when a resource is *granted* (lease, bucket, sync record, key, share). Lowering a quota below current usage never revokes existing resources; the two continuous exceptions are the monthly LLM budget (enforced per-request by LiteLLM user budgets) and R2 storage (enforced by the hourly sweep, see "R2 storage-quota sweep" below).
 
@@ -188,7 +186,7 @@ Every resource-granting endpoint checks the caller's entitlements (see "Plans an
 
 - `POST /hosts/lease` -- `max_remote_workspaces` (strict: a per-user advisory lock serializes concurrent leases; stopped workspaces still hold their lease and count). Also requires a verified email, like `POST /hosts/claim` (see "Email verification is non-blocking" above).
 - `POST /buckets` -- `max_buckets`, plus `max_total_bucket_bytes` against live REST-measured usage (an account already over its storage quota cannot create new buckets; an unreadable usage number fails open). New keys minted while the owner is enforced-over-quota (bucket creation and roll-key's fresh mint) come out read-only with the downgrade recorded, so a fresh mint can never bypass the sweep.
-- `POST /keys/create` -- refused outright when `monthly_llm_spend_usd` is 0 (e.g. the free and explorer plans); otherwise the account's LiteLLM user-level budget is upserted before minting, so LiteLLM caps aggregate spend across all the account's keys.
+- `POST /keys/create` -- refused outright when `monthly_llm_spend_usd` is 0 (e.g. the explorer plan); otherwise the account's LiteLLM user-level budget is upserted before minting, so LiteLLM caps aggregate spend across all the account's keys.
 - `PUT /sync/records/{host_id}` -- `max_active_synced_workspaces` when the push would create a new ACTIVE record.
 
 ### Paid-list admin API (`/paid/*`)
@@ -211,7 +209,7 @@ A shared workspace lives at `<service>.<host-id>.<user-label>.<region>.<content-
 - `DELETE /shares/{host_id}` -- Disable sharing (share goes `inactive`, relay token deleted).
 - `GET /shares/{host_id}/status` -- One share's domain, tunnel-liveness signal, certificate expiry, and the chrome's entry label.
 - `POST /shares/cert` -- Sign the workspace's CSR via ACME DNS-01 (authenticated by the share's relay token; the workspace keeps its private key).
-- `POST /frps/auth/{plugin_secret}` -- The frps server-plugin callback authorizing relay `Login` / `NewProxy` / `Ping` operations. An allowed `NewProxy` also records the workspace's shell-service label as the share's chrome entry origin (the connector never reads anything from inside the workspace). A `Ping` (the workspace's ~10s heartbeat) is rejected when its relay token no longer resolves to an active share -- severing the LIVE tunnel of a suspended or freshly unshared workspace within one heartbeat interval -- and fails open on connector-internal errors so tunnel uptime is coupled only to the connector being reachable.
+- `POST /frps/auth/{plugin_secret}` -- The frps server-plugin callback authorizing relay `Login` / `NewProxy` operations. An allowed `NewProxy` also records the workspace's shell-service label as the share's chrome entry origin (the connector never reads anything from inside the workspace).
 - `GET /share/authorize`, `GET /share/jwks.json` -- the accounts broker: authorizes a visit to a shared workspace against the hosted accounts surface's browser session and mints the short-lived handoff JWT (`GET /share/login` survives only as a permanent redirect to the merged `/login` page).
 
 ### Buckets (signed-in user only)
@@ -268,13 +266,9 @@ Destroyed workspaces' backups (bucket + workspace record) are retained for 30 da
 
 Email-addressed operator management of per-account entitlements, authenticated by the same fixed `MINDS_ADMIN_KEY` as the paid-list CRUD (and exposed as `minds-admin account ...`):
 
-- `GET /admin/accounts/{email}` -- One account's plan, entitlements, live usage, and suspension state (lazily creates the row).
+- `GET /admin/accounts/{email}` -- One account's plan, entitlements, and live usage (lazily creates the row).
 - `POST /admin/accounts/{email}/plan` -- Body `{"plan": "..."}`; always resets to the plan's defaults (the operator's way to wipe manual bumps; skips the ally eligibility check).
 - `POST /admin/accounts/{email}/quota` -- Body `{"entitlement": "...", "value": N}`; bump a single entitlement.
-- `POST /admin/accounts/{email}/revoke-sessions` -- Revoke every SuperTokens session of the account (standalone; sign-in stays possible). State-modifying routes verify Bearer sessions against the core per request, so a revoked session is refused within one round-trip while read access drains out over the access token's remaining ~1h lifetime.
-- `POST /admin/accounts/{email}/suspend` -- Body `{"reason": "...", "block_storage": bool}`. Reversible, data-preserving suspension: sets the flag (every session-creation/refresh path then answers the structured `account_suspended` refusal), revokes all sessions, force-stops leased workspaces, blocks LiteLLM keys, flips R2 tokens read-only (or disables them outright under `block_storage` -- reads included), and suspends shares by state (relay tokens kept). Idempotent and re-runnable with a per-step report; re-running with `block_storage` escalates, re-running without it never de-escalates. The reason is operator-internal; users see a generic message with the support contact.
-- `POST /admin/accounts/{email}/unsuspend` -- Clear the flag and restore what suspend changed (unblock keys, restore R2 access per the quota state, reactivate shares -- tunnels resume on their own once the workspace runs, since the workspace still holds its relay token). Workspaces stay stopped until the user starts them; the user signs in fresh.
-- `POST /admin/workspaces/{host_db_id}/stop` -- Operator force-stop of one workspace (the owner stop transition without the ownership check; used by suspension, migrations, and future idle shutdown).
 
 There is deliberately **no account-deletion endpoint** here: fully removing a user (its SuperTokens identity plus every connector-DB row keyed to it) is a destructive operator action done out-of-band, not something the connected clients need. Use the local operator tool `scripts/delete_accounts.py` (repo root) for that -- see "Fully deleting accounts" below.
 

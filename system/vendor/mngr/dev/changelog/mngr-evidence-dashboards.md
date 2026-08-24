@@ -1,1 +1,0 @@
-Excluded npm `package-lock.json` files from the repo-wide old-name content ratchet: their random base64 integrity hashes can contain any short letter run, which misfired on the new analytics dashboards prototype's lockfile.

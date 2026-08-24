@@ -28,12 +28,7 @@ IMAGE_REQUIREMENTS_FILENAME: Final[str] = "image_requirements.txt"
 
 # The uv workspace package names (pyproject [project] name) of the apps whose
 # images install from a committed, hash-locked export.
-IMAGE_PINNED_PACKAGE_NAMES: Final[tuple[str, ...]] = (
-    "remote-service-connector",
-    "modal-litellm",
-    "oauth-redirector",
-    "analytics",
-)
+IMAGE_PINNED_PACKAGE_NAMES: Final[tuple[str, ...]] = ("remote-service-connector", "modal-litellm", "oauth-redirector")
 
 
 class ImageRequirementsExportError(Exception):

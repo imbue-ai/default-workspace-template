@@ -47,7 +47,6 @@ from urllib.parse import urlsplit
 
 import httpx
 import jwt as pyjwt
-import psycopg2
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import APIRouter
@@ -87,9 +86,7 @@ from supertokens_python.types import RecipeUserId
 
 import imbue.remote_service_connector.auth as auth_module
 import imbue.remote_service_connector.auth_proxy as auth_proxy_module
-import imbue.remote_service_connector.entitlements as entitlements_module
 import imbue.remote_service_connector.signup_hardening as signup_hardening_module
-import imbue.remote_service_connector.suspension as suspension_module
 from imbue.modal_app_kit.metrics import emit_metric
 from imbue.remote_service_connector import db
 from imbue.remote_service_connector.attribution import ATTRIBUTION_COOKIE_NAME
@@ -100,8 +97,6 @@ from imbue.remote_service_connector.auth_proxy import AUTH_TENANT_ID
 from imbue.remote_service_connector.auth_proxy import AuthUser
 from imbue.remote_service_connector.auth_proxy import build_session_tokens
 from imbue.remote_service_connector.auth_proxy import require_supertokens_configured
-from imbue.remote_service_connector.entitlements import SIGNUP_SELECTABLE_PLAN_NAMES
-from imbue.remote_service_connector.entitlements import create_entitlements_row_from_plan
 from imbue.remote_service_connector.errors import MissingShareConfigError
 from imbue.remote_service_connector.http_api import handle_endpoint_errors
 
@@ -155,11 +150,6 @@ _OAUTH_NONCE_COOKIE_NAME: Final[str] = "imbue_oauth_nonce"
 # renaming it would require re-registering every tier.
 OAUTH_GOOGLE_CALLBACK_PATH: Final[str] = "/share/oauth/google/callback"
 
-# The only ``x-forwarded-proto`` values ``accounts_public_base_url`` will trust
-# (the header is client-controlled behind Modal's ingress); anything else falls
-# back to the ASGI scheme rather than being spliced into the base URL verbatim.
-_TRUSTED_FORWARDED_SCHEMES: Final[frozenset[str]] = frozenset({"http", "https"})
-
 # Stable per-platform installer links for GET /download. ToDesktop's channel
 # URLs always resolve to the latest published build, so nothing here changes
 # per release; "source" is the escape hatch for platforms without builds.
@@ -177,7 +167,6 @@ _DOWNLOAD_PLATFORM_BY_ALIAS: Final[dict[str, str]] = {
 # state rides Google's authorize URL, so keep it comfortably small.
 _OAUTH_STATE_MAX_PAGE_QUERY_CHARS: Final[int] = 512
 _OAUTH_STATE_MAX_PAGE_PATH_CHARS: Final[int] = 256
-_OAUTH_STATE_MAX_PLAN_CHARS: Final[int] = 32
 
 
 # ---------------------------------------------------------------------------
@@ -290,44 +279,25 @@ def authenticate_web_request(request: Request) -> auth_module.UserAuth:
     return resolve_web_user_identity(request)[0]
 
 
-def resolve_web_user_identity(
-    request: Request,
-    # Force the against-the-core session check on a read route whose response
-    # is sensitive enough to warrant it (no current route needs this; the
-    # state-modifying methods below always get it).
-    is_database_check_required: bool = False,
-) -> tuple[auth_module.UserAuth, str]:
+def resolve_web_user_identity(request: Request) -> tuple[auth_module.UserAuth, str]:
     """Return ``(UserAuth, full user_id)`` from a Bearer token or the browser session.
 
     The full user id is what share coordinates and LiteLLM keys are scoped by
     (a ``UserAuth`` alone only carries the 16-hex prefix).
-
-    State-modifying methods (anything but GET/HEAD/OPTIONS) verify the Bearer
-    session against the SuperTokens core (``check_database``), so a revoked
-    session is refused within one request instead of coasting on its
-    signature-valid access token for up to ~1h. Read methods keep the cheap
-    stateless validation. The browser branch always checks the core (see
-    ``_sdk_get_browser_session``), so the two credential paths agree on
-    state-modifying requests.
     """
-    is_state_modifying = request.method not in ("GET", "HEAD", "OPTIONS")
     if request.headers.get("authorization", "").lower().startswith("bearer "):
-        user = auth_module.authenticate_request(
-            request, check_database=is_state_modifying or is_database_check_required
-        )
+        user = auth_module.authenticate_request(request)
         return user, auth_module.get_user_id_from_bearer_header(request)
-    if is_state_modifying:
+    if request.method not in ("GET", "HEAD", "OPTIONS"):
         _reject_cross_site_post(request)
     identity = _resolve_browser_identity(request)
     if identity is None:
         raise HTTPException(status_code=401, detail="Missing Bearer credentials")
     user_id, email, is_verified = identity
-    auth_module.stash_authenticated_user_for_access_log(request, user_id)
     user = auth_module.UserAuth(
         user_id_prefix=auth_module.derive_user_id_prefix(user_id),
         email=email,
         is_email_verified=is_verified,
-        user_id=user_id,
     )
     return user, user_id
 
@@ -351,16 +321,11 @@ _PLACEHOLDER_PAGE = (
 )
 
 
-def _serve_frontend_page(filename: str) -> HTMLResponse | FileResponse:
-    """Serve one file from the built accounts bundle (the SPA index or a static doc page)."""
-    page_path = frontend_dist_dir() / filename
-    if not page_path.is_file():
-        return HTMLResponse(_PLACEHOLDER_PAGE, status_code=503)
-    return FileResponse(page_path, media_type="text/html")
-
-
 def _serve_frontend_index() -> HTMLResponse | FileResponse:
-    return _serve_frontend_page("index.html")
+    index_path = frontend_dist_dir() / "index.html"
+    if not index_path.is_file():
+        return HTMLResponse(_PLACEHOLDER_PAGE, status_code=503)
+    return FileResponse(index_path, media_type="text/html")
 
 
 def _configured_accounts_origin() -> str:
@@ -490,28 +455,6 @@ def accounts_verify_email_page() -> HTMLResponse | FileResponse:
 def accounts_check_inbox_page() -> HTMLResponse | FileResponse:
     """The share flow's check-your-inbox page (an unverified visitor was just emailed a link)."""
     return _serve_frontend_index()
-
-
-@router.get("/terms-of-service", response_model=None)
-def terms_of_service_page() -> HTMLResponse | FileResponse:
-    """The Terms of Service, linked from the signup form's agreement checkbox.
-
-    A plain static HTML document shipped in the accounts bundle
-    (``frontend/public/terms-of-service.html``), not part of the SPA.
-    """
-    return _serve_frontend_page("terms-of-service.html")
-
-
-@router.get("/code-of-conduct", response_model=None)
-def code_of_conduct_page() -> HTMLResponse | FileResponse:
-    """The Code of Conduct, linked from the signup form's agreement checkbox."""
-    return _serve_frontend_page("code-of-conduct.html")
-
-
-@router.get("/privacy-policy", response_model=None)
-def privacy_policy_page() -> HTMLResponse | FileResponse:
-    """The privacy policy, linked from the plan selector's per-plan descriptions."""
-    return _serve_frontend_page("privacy-policy.html")
 
 
 @router.get("/accounts/assets/{asset_path:path}")
@@ -657,41 +600,10 @@ def _verify_turnstile_token(token: str, remote_ip: str | None) -> bool:
         return False
 
 
-def _record_signup_plan_choice(user_id: str, plan_name: str) -> None:
-    """Create the just-created account's entitlements row from the signup plan selector.
-
-    Fails open: a failed write logs a warning and account creation proceeds --
-    the lazy backfill then assigns the free plan, which never grants analytics
-    consent, so a lost explorer choice costs benefits rather than privacy (the
-    user can re-select the plan on their Accounts page). An empty or unknown
-    plan (frontends predating the selector, crafted values) writes nothing.
-    KeyError covers a missing DATABASE_URL, like the attribution writer.
-    """
-    normalized_plan = plan_name.strip().lower()
-    if normalized_plan not in SIGNUP_SELECTABLE_PLAN_NAMES:
-        if normalized_plan:
-            logger.warning("Ignoring an unknown signup plan choice %r for user %s", normalized_plan, user_id[:8])
-        return
-    try:
-        create_entitlements_row_from_plan(
-            entitlements_module.get_entitlements_store(),
-            user_id=user_id,
-            user_id_prefix=auth_module.derive_user_id_prefix(user_id),
-            plan_name=normalized_plan,
-        )
-    except (psycopg2.Error, KeyError) as exc:
-        emit_metric("signup_plan_choice_write_failed", 1, {"plan": normalized_plan})
-        logger.warning("Could not record the signup plan choice for user %s", user_id[:8], exc_info=exc)
-
-
 class BrowserSignupRequest(BaseModel):
     email: str = Field(description="Email address to register")
     password: str = Field(description="Password for the new account")
     turnstile_token: str = Field(default="", description="Cloudflare Turnstile response token")
-    plan: str = Field(
-        default="",
-        description="The signup plan selector's choice ('explorer' or 'free'); empty from older frontends",
-    )
     # Marketing-attribution context from the signup page itself (all
     # optional; released frontends that predate attribution omit them).
     attribution_page_query: str = Field(
@@ -802,13 +714,6 @@ def accounts_signup(request: Request, body: BrowserSignupRequest) -> BrowserAuth
                 )
             if not isinstance(result, EPSignUpOkResult):
                 return BrowserAuthResponse(status="ERROR", message="Sign-up failed")
-            # Defensive: a just-created account has no suspension row, but every
-            # session-creation path carries the gate so none can be missed.
-            if suspension_module.is_user_suspended_at_gate(result.user.id, gate="browser_signup"):
-                return BrowserAuthResponse(
-                    status=suspension_module.ACCOUNT_SUSPENDED_STATUS,
-                    message=suspension_module.SUSPENDED_USER_MESSAGE,
-                )
             _sdk_create_browser_session(request, result.user.id)
         except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
             logger.error("SuperTokens SDK error during browser signup", exc_info=exc)
@@ -824,9 +729,6 @@ def accounts_signup(request: Request, body: BrowserSignupRequest) -> BrowserAuth
             next_path=body.attribution_next,
             signup_method="password",
         )
-        # Record the plan the signup form selected (fails open inside; an
-        # unrecorded choice degrades to the consent-free lazy default).
-        _record_signup_plan_choice(result.user.id, body.plan)
         return BrowserAuthResponse(status="OK", user=AuthUser(user_id=result.user.id, email=email))
 
 
@@ -845,11 +747,6 @@ def accounts_signin(request: Request, body: BrowserSigninRequest) -> BrowserAuth
                 return BrowserAuthResponse(status="WRONG_CREDENTIALS", message="Incorrect email or password")
             if not isinstance(result, EPSignInOkResult):
                 return BrowserAuthResponse(status="ERROR", message="Sign-in failed")
-            if suspension_module.is_user_suspended_at_gate(result.user.id, gate="browser_signin"):
-                return BrowserAuthResponse(
-                    status=suspension_module.ACCOUNT_SUSPENDED_STATUS,
-                    message=suspension_module.SUSPENDED_USER_MESSAGE,
-                )
             _sdk_create_browser_session(request, result.user.id)
         except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
             logger.error("SuperTokens SDK error during browser signin", exc_info=exc)
@@ -1143,9 +1040,6 @@ def device_token_exchange(body: DeviceTokenRequest) -> dict[str, object]:
         if body.redirect_uri != row["redirect_uri"]:
             raise HTTPException(status_code=400, detail="redirect_uri does not match the authorized request")
         user_id = str(row["user_id"])
-        # The account may have been suspended between the browser authorize
-        # step and this exchange; refuse rather than mint a device session.
-        suspension_module.require_not_suspended(user_id, gate="device_token_exchange")
         email, _is_verified = auth_module.resolve_account_email(user_id)
         if email is None:
             raise HTTPException(status_code=400, detail="Account no longer resolvable")
@@ -1209,13 +1103,7 @@ def accounts_public_base_url(request: Request) -> str:
     configured = _configured_accounts_origin()
     if configured:
         return configured
-    # Clamp the forwarded scheme (see _TRUSTED_FORWARDED_SCHEMES): an untrusted
-    # value must never reach the f-string below, where it could change the
-    # constructed URL's effective host (e.g. ``https://evil/?`` yields a URL
-    # whose host parses as ``evil``). A ``minds://`` custom scheme is an
-    # OS-level deep link, never an inbound request scheme, so it is not trusted.
-    forwarded_scheme = request.headers.get("x-forwarded-proto", "").strip().lower()
-    scheme = forwarded_scheme if forwarded_scheme in _TRUSTED_FORWARDED_SCHEMES else request.url.scheme
+    scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
     return f"{scheme}://{request.url.netloc}"
 
 
@@ -1239,8 +1127,6 @@ def mint_oauth_state(
     callback_url: str,
     page_query: str,
     page_path: str,
-    plan: str,
-    is_terms_accepted: bool,
 ) -> str:
     """Mint the self-contained OAuth state: browser nonce + post-login path + our callback URL.
 
@@ -1250,12 +1136,10 @@ def mint_oauth_state(
     instead) to know which env's connector to forward the callback to. The
     ``pq``/``pp`` claims carry the login page's own query string and path
     across the provider round-trip so a Google *signup* can be attributed to
-    the campaign params the page was opened with; ``pl``/``ta`` carry the
-    signup form's plan choice and terms agreement the same way (both only
-    consumed when the exchange CREATES an account).
+    the campaign params the page was opened with.
     """
     now = datetime.now(timezone.utc)
-    payload: dict[str, Any] = {
+    payload = {
         "purpose": _OAUTH_STATE_PURPOSE,
         "nonce": nonce,
         "next": next_path,
@@ -1267,10 +1151,6 @@ def mint_oauth_state(
         payload["pq"] = page_query[:_OAUTH_STATE_MAX_PAGE_QUERY_CHARS]
     if page_path:
         payload["pp"] = page_path[:_OAUTH_STATE_MAX_PAGE_PATH_CHARS]
-    if plan:
-        payload["pl"] = plan[:_OAUTH_STATE_MAX_PLAN_CHARS]
-    if is_terms_accepted:
-        payload["ta"] = True
     return pyjwt.encode(payload, signing_key, algorithm=_OAUTH_STATE_ALGORITHM)
 
 
@@ -1281,10 +1161,6 @@ class VerifiedOAuthState(BaseModel):
     next_path: str = Field(description="The sanitized post-login path")
     page_query: str = Field(default="", description="The login page's query string at OAuth start")
     page_path: str = Field(default="", description="The login page's path at OAuth start")
-    plan: str = Field(default="", description="The signup form's plan choice at OAuth start ('' when absent)")
-    is_terms_accepted: bool = Field(
-        default=False, description="Whether the signup form's terms checkbox was checked at OAuth start"
-    )
 
 
 def verify_oauth_state(public_key: rsa.RSAPublicKey, state: str) -> VerifiedOAuthState | None:
@@ -1301,14 +1177,11 @@ def verify_oauth_state(public_key: rsa.RSAPublicKey, state: str) -> VerifiedOAut
         return None
     page_query = claims.get("pq")
     page_path = claims.get("pp")
-    plan = claims.get("pl")
     return VerifiedOAuthState(
         nonce=nonce,
         next_path=sanitize_local_next_path(next_path),
         page_query=page_query if isinstance(page_query, str) else "",
         page_path=page_path if isinstance(page_path, str) else "",
-        plan=plan if isinstance(plan, str) else "",
-        is_terms_accepted=claims.get("ta") is True,
     )
 
 
@@ -1326,18 +1199,6 @@ def _login_redirect(next_path: str, error_code: str = "") -> RedirectResponse:
         params["error"] = error_code
     suffix = f"?{urlencode(params)}" if params else ""
     return RedirectResponse(url=f"/login{suffix}", status_code=303)
-
-
-def _roll_back_oauth_created_account(user: AuthUser, refusal: str) -> None:
-    """Delete the SuperTokens user a refused OAuth exchange just created.
-
-    Best-effort: the refusal stands either way; a surviving account got no
-    session and is inert until a clean signup or sign-in.
-    """
-    try:
-        delete_user(user.user_id)
-    except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
-        logger.warning("Could not roll back a %s OAuth-signup account %s: %s", refusal, user.user_id[:8], exc)
 
 
 def _oauth_signup_ip_gate_redirect(request: Request, user: AuthUser, next_path: str) -> RedirectResponse | None:
@@ -1363,22 +1224,14 @@ def _oauth_signup_ip_gate_redirect(request: Request, user: AuthUser, next_path: 
         else signup_hardening_module.SignupGateOutcome.BLOCKED
     )
     signup_hardening_module.record_signup_attempt(assessment, user.email, "google", outcome)
-    _roll_back_oauth_created_account(user, "refused")
+    try:
+        # Roll back the SuperTokens user this OAuth exchange just created.
+        delete_user(user.user_id)
+    except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
+        # The refusal stands either way; the surviving account got no session
+        # and is inert until a (clean-IP) sign-in.
+        logger.warning("Could not roll back a refused OAuth-signup account %s: %s", user.user_id[:8], exc)
     return _login_redirect(next_path, "signup_blocked")
-
-
-def _oauth_terms_gate_redirect(user: AuthUser, next_path: str) -> RedirectResponse:
-    """Refuse a Google exchange that CREATED an account without the terms agreement.
-
-    Account creation requires agreeing to the Terms of Service and Code of
-    Conduct. The signup tab's Google button carries the checked box through
-    the OAuth state (``ta``); a new-account exchange arriving without it (the
-    sign-in tab's Google button on an email with no account yet) is rolled
-    back and bounced to the login page's ``terms_required`` banner, whose
-    remedy is the Create-account tab.
-    """
-    _roll_back_oauth_created_account(user, "terms-refused")
-    return _login_redirect(next_path, "terms_required")
 
 
 @router.get("/accounts/oauth/google/start", response_model=None)
@@ -1413,10 +1266,6 @@ def accounts_oauth_start(request: Request) -> RedirectResponse | HTMLResponse:
             # was opened with.
             page_query=request.query_params.get("pq", ""),
             page_path=request.query_params.get("pp", ""),
-            # The signup form's plan choice and terms agreement, consumed by
-            # the callback only when the exchange creates a new account.
-            plan=request.query_params.get("plan", ""),
-            is_terms_accepted=request.query_params.get("terms") == "1",
         )
         redirect = _supertokens_sync_run(
             provider.get_authorisation_redirect_url(
@@ -1496,14 +1345,6 @@ def accounts_oauth_callback(request: Request) -> RedirectResponse:
             oauth_gate_redirect = _oauth_signup_ip_gate_redirect(request, auth_result.user, next_path)
             if oauth_gate_redirect is not None:
                 return oauth_gate_redirect
-            # Account creation requires the terms agreement, which only the
-            # signup tab's Google button carries; without it the exchange is
-            # rolled back (returning sign-ins never reach this).
-            if not verified_state.is_terms_accepted:
-                return _oauth_terms_gate_redirect(auth_result.user, next_path)
-
-        if suspension_module.is_user_suspended_at_gate(auth_result.user.user_id, gate="browser_oauth"):
-            return _login_redirect(next_path, "account_suspended")
 
         _sdk_create_browser_session(request, auth_result.user.user_id)
         if auth_result.is_new_account:
@@ -1518,9 +1359,6 @@ def accounts_oauth_callback(request: Request) -> RedirectResponse:
                 next_path=next_path,
                 signup_method="google",
             )
-            # Record the plan the signup form selected (fails open inside; an
-            # unrecorded choice degrades to the consent-free lazy default).
-            _record_signup_plan_choice(auth_result.user.user_id, verified_state.plan)
         # This login IS the account confirmation, so the handoff proceeds
         # without a second interstitial.
         resume_path = _mark_next_confirmed(next_path)

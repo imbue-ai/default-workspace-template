@@ -25,15 +25,12 @@ from imbue.remote_service_connector.accounts_web import _mark_next_confirmed
 from imbue.remote_service_connector.accounts_web import compute_pkce_challenge
 from imbue.remote_service_connector.accounts_web import is_valid_loopback_redirect_uri
 from imbue.remote_service_connector.attribution import ATTRIBUTION_COOKIE_NAME
-from imbue.remote_service_connector.auth import UserAuth
-from imbue.remote_service_connector.auth import derive_user_id_prefix
 from imbue.remote_service_connector.testing import FakeProvider
 from imbue.remote_service_connector.testing import FakeSuperTokensBackend
 from imbue.remote_service_connector.testing import InMemoryDeviceAuthCodeStore
 from imbue.remote_service_connector.testing import TEST_OAUTH_SIGNING_KEY
 from imbue.remote_service_connector.testing import TEST_OAUTH_SIGNING_KEY_PEM
 from imbue.remote_service_connector.testing import _make_accounts_web_test_client
-from imbue.remote_service_connector.testing import _make_share_test_client_with_fakes
 from imbue.remote_service_connector.testing import encode_attribution_cookie
 
 
@@ -564,16 +561,8 @@ def _make_oauth_client(
     return client, st_backend
 
 
-def _start_oauth(client: TestClient, next_path: str, is_terms_accepted: bool = True, plan: str = "") -> str:
-    # Terms ride the start URL by default (the signup tab's button always
-    # carries them); pass False to model the sign-in tab's button. A non-empty
-    # plan models the signup tab's plan selector.
-    terms_suffix = "&terms=1" if is_terms_accepted else ""
-    plan_suffix = f"&plan={quote(plan, safe='')}" if plan else ""
-    resp = client.get(
-        f"/accounts/oauth/google/start?next={quote(next_path, safe='')}{terms_suffix}{plan_suffix}",
-        follow_redirects=False,
-    )
+def _start_oauth(client: TestClient, next_path: str) -> str:
+    resp = client.get(f"/accounts/oauth/google/start?next={quote(next_path, safe='')}", follow_redirects=False)
     assert resp.status_code == 302
     return parse_qs(urlsplit(resp.headers["location"]).query)["state"][0]
 
@@ -644,72 +633,6 @@ def test_oauth_start_404s_when_not_configured(monkeypatch: pytest.MonkeyPatch) -
     resp = client.get("/accounts/oauth/google/start?next=%2F", follow_redirects=False)
 
     assert resp.status_code == 404
-
-
-def _make_base_url_request(scheme: str, host: str, forwarded_proto: str | None) -> Request:
-    """A minimal ASGI request for exercising ``accounts_public_base_url`` directly."""
-    headers: list[tuple[bytes, bytes]] = [(b"host", host.encode("latin-1"))]
-    if forwarded_proto is not None:
-        headers.append((b"x-forwarded-proto", forwarded_proto.encode("latin-1")))
-    scope = {
-        "type": "http",
-        "method": "GET",
-        "scheme": scheme,
-        "path": "/",
-        "query_string": b"",
-        "headers": headers,
-        "server": (host, 443 if scheme == "https" else 80),
-    }
-    return Request(scope)
-
-
-def test_accounts_public_base_url_prefers_configured_origin(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ACCOUNTS_BASE_URL", "https://accounts.example.com")
-    request = _make_base_url_request("https", "rsc-dev.modal.run", forwarded_proto="http")
-
-    assert accounts_web_module.accounts_public_base_url(request) == "https://accounts.example.com"
-
-
-def test_accounts_public_base_url_trusts_a_plain_forwarded_scheme(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("ACCOUNTS_BASE_URL", raising=False)
-    # Modal terminates TLS at ingress, so the ASGI scheme is http and the
-    # https origin must be recovered from the forwarded-proto header.
-    request = _make_base_url_request("http", "rsc-dev.modal.run", forwarded_proto="https")
-
-    assert accounts_web_module.accounts_public_base_url(request) == "https://rsc-dev.modal.run"
-
-
-def test_accounts_public_base_url_falls_back_when_header_absent(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("ACCOUNTS_BASE_URL", raising=False)
-    request = _make_base_url_request("https", "rsc-dev.modal.run", forwarded_proto=None)
-
-    assert accounts_web_module.accounts_public_base_url(request) == "https://rsc-dev.modal.run"
-
-
-@pytest.mark.parametrize(
-    "poisoned_proto",
-    [
-        "https://evil.example/?",
-        "https://evil.example",
-        "javascript:alert(1)//",
-        "https ",
-        "ftp",
-        "minds",
-    ],
-)
-def test_accounts_public_base_url_rejects_a_poisoned_forwarded_scheme(
-    monkeypatch: pytest.MonkeyPatch, poisoned_proto: str
-) -> None:
-    """An untrusted forwarded-proto never reaches the f-string, so it can never
-    change the constructed URL's effective host."""
-    monkeypatch.delenv("ACCOUNTS_BASE_URL", raising=False)
-    request = _make_base_url_request("https", "rsc-dev.modal.run", forwarded_proto=poisoned_proto)
-
-    base_url = accounts_web_module.accounts_public_base_url(request)
-
-    # The clamp falls back to the ASGI scheme; the host stays the real request host.
-    assert base_url == "https://rsc-dev.modal.run"
-    assert urlsplit(base_url).hostname == "rsc-dev.modal.run"
 
 
 def test_oauth_callback_signs_in_and_marks_a_pending_authorize_confirmed(
@@ -865,127 +788,6 @@ def test_oauth_callback_refuses_an_email_registered_with_a_password(monkeypatch:
 
 
 # ---------------------------------------------------------------------------
-# Signup plan choice + terms agreement + the static doc pages
-# ---------------------------------------------------------------------------
-
-
-def test_browser_signup_records_the_selected_plan(monkeypatch: pytest.MonkeyPatch) -> None:
-    client, st_backend, _codes = _make_accounts_web_test_client(monkeypatch)
-
-    resp = client.post(
-        "/accounts/api/signup", json={"email": "new@example.com", "password": "pw-123456", "plan": "free"}
-    )
-
-    assert resp.json()["status"] == "OK"
-    user_id = resp.json()["user"]["user_id"]
-    row = st_backend.entitlements_store.get_entitlements(user_id)
-    assert row is not None
-    assert row["plan_name"] == "free"
-    assert row["user_id_prefix"] == user_id.replace("-", "")[:16]
-
-
-def test_browser_signup_ignores_an_unknown_or_absent_plan(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Only the signup selector's plans are honored; anything else defers to the lazy backfill."""
-    client, st_backend, _codes = _make_accounts_web_test_client(monkeypatch)
-
-    crafted = client.post(
-        "/accounts/api/signup", json={"email": "crafty@example.com", "password": "pw-123456", "plan": "ally"}
-    )
-    assert crafted.json()["status"] == "OK"
-
-    legacy = client.post("/accounts/api/signup", json={"email": "old-frontend@example.com", "password": "pw-123456"})
-    assert legacy.json()["status"] == "OK"
-
-    assert st_backend.entitlements_store.rows_by_user_id == {}
-
-
-def test_browser_signup_succeeds_when_the_plan_write_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The plan choice fails open: the lazy backfill's free default is consent-safe."""
-    client, st_backend, _codes = _make_accounts_web_test_client(monkeypatch)
-    st_backend.entitlements_store.raise_on_insert = psycopg2.OperationalError("neon is down")
-
-    resp = client.post(
-        "/accounts/api/signup", json={"email": "resilient@example.com", "password": "pw-123456", "plan": "explorer"}
-    )
-
-    assert resp.json()["status"] == "OK"
-    assert st_backend.entitlements_store.rows_by_user_id == {}
-
-
-def test_oauth_signup_carries_the_plan_and_terms_through_the_state(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The signup tab's Google button carries plan + terms; a new account gets its chosen row."""
-    client, st_backend = _make_oauth_client(monkeypatch)
-    state = _start_oauth(client, "/manage", plan="free")
-
-    resp = client.get(f"/share/oauth/google/callback?code=code-1&state={state}", follow_redirects=False)
-
-    assert resp.status_code == 303
-    assert resp.headers["location"] == "/manage"
-    account = st_backend.accounts_by_email["visitor@example.com"]
-    row = st_backend.entitlements_store.get_entitlements(account.user_id)
-    assert row is not None
-    assert row["plan_name"] == "free"
-
-
-def test_oauth_new_account_without_terms_is_rolled_back(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A Google exchange creating an account without the terms agreement (the sign-in
-    tab's button) is rolled back and bounced to the terms_required banner."""
-    client, st_backend = _make_oauth_client(monkeypatch)
-    state = _start_oauth(client, "/manage", is_terms_accepted=False)
-
-    resp = client.get(f"/share/oauth/google/callback?code=code-1&state={state}", follow_redirects=False)
-
-    assert resp.status_code == 303
-    assert resp.headers["location"].startswith("/login")
-    assert "error=terms_required" in resp.headers["location"]
-    # The just-created account was rolled back: no account, no session, no
-    # attribution, no entitlements row.
-    assert "visitor@example.com" not in st_backend.accounts_by_email
-    assert st_backend.last_browser_session is None
-    assert st_backend.attribution_store.account_rows == []
-    assert st_backend.entitlements_store.rows_by_user_id == {}
-
-
-def test_oauth_returning_signin_needs_no_terms(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The terms gate applies only to account CREATION; returning Google sign-ins are untouched."""
-    client, st_backend = _make_oauth_client(monkeypatch)
-    signup_state = _start_oauth(client, "/manage", plan="explorer")
-    created = client.get(f"/share/oauth/google/callback?code=code-1&state={signup_state}", follow_redirects=False)
-    assert created.status_code == 303
-    assert "error=" not in created.headers["location"]
-
-    # The same account signing in again from the sign-in tab (no plan/terms).
-    signin_state = _start_oauth(client, "/manage", is_terms_accepted=False)
-    returning = client.get(f"/share/oauth/google/callback?code=code-2&state={signin_state}", follow_redirects=False)
-
-    assert returning.status_code == 303
-    assert returning.headers["location"] == "/manage"
-    account = st_backend.accounts_by_email["visitor@example.com"]
-    row = st_backend.entitlements_store.get_entitlements(account.user_id)
-    assert row is not None
-    assert row["plan_name"] == "explorer"
-
-
-def test_terms_conduct_and_privacy_pages_serve_from_the_bundle(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    client, _st, _codes = _make_accounts_web_test_client(monkeypatch)
-    monkeypatch.setenv("ACCOUNTS_FRONTEND_DIST", str(tmp_path))
-    page_title_by_path = {
-        "/terms-of-service": "Terms of Service",
-        "/code-of-conduct": "Code of Conduct",
-        "/privacy-policy": "Privacy Policy",
-    }
-    for path, title in page_title_by_path.items():
-        # Missing from the dist (an unbuilt bundle) answers the 503 placeholder.
-        assert client.get(path).status_code == 503
-        (tmp_path / f"{path.lstrip('/')}.html").write_text(f"<!doctype html><h1>{title}</h1>")
-        served = client.get(path)
-        assert served.status_code == 200
-        assert title in served.text
-
-
-# ---------------------------------------------------------------------------
 # Marketing attribution (signup capture + the /download redirect)
 # ---------------------------------------------------------------------------
 
@@ -1084,7 +886,7 @@ def test_oauth_signup_records_attribution_but_returning_signin_does_not(monkeypa
     client, st_backend = _make_oauth_client(monkeypatch)
     _plant_attribution_cookie(client)
     start = client.get(
-        "/accounts/oauth/google/start?next=%2Fweb%2Foverview&pq=utm_source%3Dsignup-link&pp=%2Fsignup&terms=1",
+        "/accounts/oauth/google/start?next=%2Fweb%2Foverview&pq=utm_source%3Dsignup-link&pp=%2Fsignup",
         follow_redirects=False,
     )
     state = parse_qs(urlsplit(start.headers["location"]).query)["state"][0]
@@ -1171,79 +973,3 @@ def test_download_still_redirects_when_the_event_write_fails(monkeypatch: pytest
 
     assert resp.status_code == 302
     assert st_backend.attribution_store.download_rows == []
-
-
-def test_browser_signin_refused_for_suspended_account(monkeypatch: pytest.MonkeyPatch) -> None:
-    client, st_backend, _codes = _make_accounts_web_test_client(monkeypatch)
-    signup = st_backend.sign_up(tenant_id="public", email="banned@example.com", password="pw-123456")
-    assert isinstance(signup, EPSignUpOkResult)
-    st_backend.suspended_user_ids.add(signup.user.id)
-
-    resp = client.post("/accounts/api/signin", json={"email": "banned@example.com", "password": "pw-123456"})
-
-    body = resp.json()
-    assert body["status"] == "ACCOUNT_SUSPENDED"
-    assert "support@imbue.com" in body["message"]
-    # No session was minted for the refused sign-in.
-    assert st_backend.last_browser_session is None
-
-
-def test_device_token_exchange_refused_for_suspended_account(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A code authorized before the suspension must not be exchangeable after it."""
-    client, st_backend, _codes = _make_accounts_web_test_client(monkeypatch)
-    user_id = _sign_in_browser(client, st_backend)
-    verifier = secrets.token_urlsafe(32)
-    query = _authorize_query(verifier=verifier)
-    query["confirmed"] = "1"
-    authorize = client.get(f"/accounts/authorize?{urlencode(query)}", follow_redirects=False)
-    code = parse_qs(urlsplit(authorize.headers["location"]).query)["code"][0]
-    st_backend.suspended_user_ids.add(user_id)
-
-    exchange = client.post(
-        "/auth/device/token",
-        json={"code": code, "code_verifier": verifier, "redirect_uri": "http://127.0.0.1:8123/callback"},
-    )
-
-    assert exchange.status_code == 403
-    assert exchange.json()["detail"]["code"] == "account_suspended"
-
-
-def test_oauth_callback_refuses_a_suspended_account(monkeypatch: pytest.MonkeyPatch) -> None:
-    client, st_backend = _make_oauth_client(monkeypatch)
-    # First OAuth login creates the account.
-    first_state = _start_oauth(client, "/")
-    client.get(f"/share/oauth/google/callback?code=code-1&state={first_state}", follow_redirects=False)
-    account = st_backend.accounts_by_email["visitor@example.com"]
-    st_backend.suspended_user_ids.add(account.user_id)
-    st_backend.last_browser_session = None
-
-    second_state = _start_oauth(client, "/")
-    resp = client.get(f"/share/oauth/google/callback?code=code-2&state={second_state}", follow_redirects=False)
-
-    assert resp.status_code == 303
-    assert "error=account_suspended" in resp.headers["location"]
-    assert st_backend.last_browser_session is None
-
-
-def test_bearer_identity_checks_the_core_on_writes_and_not_on_reads(monkeypatch: pytest.MonkeyPatch) -> None:
-    """D3: resolve_web_user_identity infers check_database from the request method."""
-    checked_databases: list[bool] = []
-    user_id = "d3d3d3d3-1111-2222-3333-444455556666"
-
-    def _recording_authenticate_request(request: Request, check_database: bool = False) -> UserAuth:
-        checked_databases.append(check_database)
-        return UserAuth(user_id_prefix=derive_user_id_prefix(user_id), email="d3@example.com", is_email_verified=True)
-
-    client, _backend = _make_share_test_client_with_fakes(
-        monkeypatch,
-        {
-            "get_user_id_from_access_token": lambda token: user_id,
-            "authenticate_request": _recording_authenticate_request,
-        },
-    )
-    headers = {"Authorization": "Bearer d3-session-token"}
-
-    client.get("/shares", headers=headers)
-    client.post("/shares", json={"host_id": "host-" + "c" * 32}, headers=headers)
-
-    assert checked_databases == [False, True]

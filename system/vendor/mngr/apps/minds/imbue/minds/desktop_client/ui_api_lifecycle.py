@@ -92,7 +92,7 @@ class RecoveryInfoResponse(FrozenModel):
         description="Whether an in-flight restart skips the stop step; None outside a restart"
     )
     ssh_command: str = Field(description="Copy-pasteable SSH command for the host, empty when unknown")
-    is_host_offline: bool = Field(description="Whether discovery currently reads the host as stopped/stopping/crashed")
+    is_host_offline: bool = Field(description="Whether discovery currently reads the host as stopped/crashed")
     is_backend_unreachable: bool = Field(
         description="Whether the provider hosting this machine is unreachable or rejecting us"
     )
@@ -285,13 +285,7 @@ def _is_host_offline(backend_resolver: BackendResolverInterface, agent_id: Agent
     display_info = backend_resolver.get_agent_display_info(agent_id)
     if display_info is None:
         return False
-    # STOPPING counts: a mid-stop host is expectedly unreachable, and the
-    # recovery restart (which waits for stopped before starting) is its remedy.
-    return read_host_state(backend_resolver, display_info) in (
-        HostState.STOPPED,
-        HostState.STOPPING,
-        HostState.CRASHED,
-    )
+    return read_host_state(backend_resolver, display_info) in (HostState.STOPPED, HostState.CRASHED)
 
 
 def _handle_destroyed_workspaces() -> Response:

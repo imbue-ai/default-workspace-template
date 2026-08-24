@@ -67,8 +67,6 @@ import imbue.remote_service_connector.share_broker as share_broker_module
 import imbue.remote_service_connector.signup_hardening as signup_hardening_module
 import imbue.remote_service_connector.stop_start as stop_start_module
 import imbue.remote_service_connector.storage as connector_storage_module
-import imbue.remote_service_connector.suspension as suspension_module
-import imbue.remote_service_connector.suspension_admin as suspension_admin_module
 import imbue.remote_service_connector.sync as sync_mod
 from imbue.remote_service_connector.auth import UserAuth
 from imbue.remote_service_connector.auth import derive_user_id_prefix
@@ -182,17 +180,6 @@ class FakeCloudflareOps:
         token["bucket_name"] = bucket_name
         token["name"] = token_name
 
-    def set_bucket_token_status(
-        self, token_id: str, bucket_name: str, access: str, token_name: str, status: str
-    ) -> None:
-        token = self.account_tokens.get(token_id)
-        if token is None:
-            raise CloudflareApiError(status_code=404, errors=[{"message": f"token not found: {token_id}"}])
-        token["status"] = status
-        token["access"] = access
-        token["bucket_name"] = bucket_name
-        token["name"] = token_name
-
     def roll_bucket_token_value(self, token_id: str) -> dict[str, Any]:
         token = self.account_tokens.get(token_id)
         if token is None:
@@ -232,7 +219,6 @@ class InMemoryKeyStore:
             "alias": alias,
             "created_at": f"2026-01-01T00:00:{self._created_counter:02d}+00:00",
             "enforced_access": None,
-            "suspension_access": None,
         }
 
     def list_keys(self, owner_user_id: str, bucket_name: str | None = None) -> list[dict[str, Any]]:
@@ -258,11 +244,6 @@ class InMemoryKeyStore:
         row = self.keys_by_access_key_id.get(access_key_id)
         if row is not None:
             row["enforced_access"] = enforced_access
-
-    def set_suspension_access(self, access_key_id: str, suspension_access: str | None) -> None:
-        row = self.keys_by_access_key_id.get(access_key_id)
-        if row is not None:
-            row["suspension_access"] = suspension_access
 
     def delete_keys_for_bucket(self, owner_user_id: str, bucket_name: str) -> list[dict[str, Any]]:
         removed = [
@@ -501,10 +482,6 @@ class FakeSuperTokensBackend:
     device_code_store: "InMemoryDeviceAuthCodeStore"
     # In-memory attribution store installed onto the attribution module.
     attribution_store: "InMemoryAttributionStore"
-    # In-memory entitlements store (pre-seeded with the committed plans),
-    # installed onto accounts_web's get_entitlements_store seam so signup
-    # plan choices land somewhere assertable.
-    entitlements_store: "InMemoryEntitlementsStore"
     # In-memory signup-hardening stores/seams installed onto signup_hardening.
     signup_attempt_store: "InMemorySignupAttemptStore"
     ip_reputation_cache: "InMemoryIpReputationCache"
@@ -514,9 +491,6 @@ class FakeSuperTokensBackend:
     # test client's real socket peer is not a routable IP). None models an
     # underivable client IP.
     fake_client_ip: str | None
-    # Accounts the fake suspension seam reports as suspended -- the login
-    # gates consult this instead of the real entitlements DB.
-    suspended_user_ids: set[str]
 
     def install_on_app_module(self, app_mod: Any, monkeypatch: pytest.MonkeyPatch) -> None:
         """Swap every SuperTokens SDK call site with a fake.
@@ -528,13 +502,6 @@ class FakeSuperTokensBackend:
         (the SDK functions are referenced as module globals at call time, so
         patching the importing module's attribute is what takes effect).
         """
-        # If a quota test client already installed an in-memory entitlements
-        # store on the seam, adopt it rather than shadowing it: browser-signup
-        # writes and quota-endpoint reads must resolve one store, or
-        # cross-flow assertions lie.
-        already_installed_store = entitlements_mod.get_entitlements_store()
-        if isinstance(already_installed_store, InMemoryEntitlementsStore):
-            self.entitlements_store = already_installed_store
         fakes: dict[str, Any] = {
             "ep_sign_up": self.sign_up,
             "ep_sign_in": self.sign_in,
@@ -565,13 +532,11 @@ class FakeSuperTokensBackend:
             "_verify_turnstile_token": self.verify_turnstile_token,
             "_device_code_store": self.device_code_store,
             "_attribution_store": self.attribution_store,
-            "get_entitlements_store": lambda: self.entitlements_store,
             "_signup_attempt_store": self.signup_attempt_store,
             "_ip_reputation_cache": self.ip_reputation_cache,
             "_ip_reputation_provider": self.ip_reputation_provider,
             "_tor_exit_list": self.tor_exit_list,
             "_client_ip": self.client_ip,
-            "is_user_suspended": self.is_user_suspended_check,
         }
         target_modules = [
             app_mod,
@@ -582,11 +547,6 @@ class FakeSuperTokensBackend:
             accounts_web_module,
             attribution_module,
             signup_hardening_module,
-            suspension_module,
-            suspension_admin_module,
-            # accounts_web's signup plan recorder resolves the entitlements
-            # store through this module (the runtime-seam convention).
-            entitlements_mod,
         ]
         for name, fake in fakes.items():
             matching_modules = [module for module in target_modules if hasattr(module, name)]
@@ -834,14 +794,10 @@ class FakeSuperTokensBackend:
         access_token: str,
         anti_csrf_check: bool = False,
         session_required: bool = True,
-        check_database: bool | None = None,
         override_global_claim_validators: Any = None,
         user_context: dict[str, Any] | None = None,
     ) -> FakeSessionContainer | None:
-        # The fake's session map IS the "database": a revoked session is
-        # removed from it, so both stateless and check_database verification
-        # collapse to the same lookup here.
-        del anti_csrf_check, session_required, check_database, override_global_claim_validators, user_context
+        del anti_csrf_check, session_required, override_global_claim_validators, user_context
         return self.sessions_by_access_token.get(access_token)
 
     def list_users_by_account_info(
@@ -1002,15 +958,6 @@ class FakeSuperTokensBackend:
         del request
         return self.fake_client_ip
 
-    def is_user_suspended_check(self, user_id: str) -> bool:
-        """Fake for ``suspension.is_user_suspended``: driven by ``suspended_user_ids``.
-
-        Patched on the suspension module, so ``is_user_suspended_at_gate`` and
-        ``require_not_suspended`` (which resolve the check through the module
-        global) honor it too.
-        """
-        return user_id in self.suspended_user_ids
-
     def sdk_delete_user(self, user_id: str) -> None:
         """Fake for the SDK's ``delete_user`` (the refused-OAuth-signup rollback)."""
         self._raise_if_configured("delete_user")
@@ -1088,13 +1035,11 @@ def make_fake_supertokens_backend() -> FakeSuperTokensBackend:
     backend.is_turnstile_passing = True
     backend.device_code_store = InMemoryDeviceAuthCodeStore()
     backend.attribution_store = InMemoryAttributionStore()
-    backend.entitlements_store = make_fake_entitlements_store()
     backend.signup_attempt_store = InMemorySignupAttemptStore()
     backend.ip_reputation_cache = InMemoryIpReputationCache()
     backend.ip_reputation_provider = FakeIpReputationProvider()
     backend.tor_exit_list = FakeTorExitList()
     backend.fake_client_ip = "203.0.113.77"
-    backend.suspended_user_ids = set()
     return backend
 
 
@@ -1149,8 +1094,6 @@ class FakePoolRow:
     artifact_generation: int
     transition_heartbeat_at: datetime | None
     transition_error: str | None
-    transition_id: str | None
-    transition_failure_count: int
 
 
 def _row_attributes(row: "FakePoolRow") -> dict[str, Any]:
@@ -1225,8 +1168,6 @@ def _make_pool_row(
     row.artifact_generation = 0
     row.transition_heartbeat_at = None
     row.transition_error = None
-    row.transition_id = None
-    row.transition_failure_count = 0
     return row
 
 
@@ -1316,101 +1257,98 @@ class FakeCursor:
                     self._results.append(self._backend.workspace_info_tuple(row))
 
         elif query_lower.startswith("update pool_hosts set status = 'stopping', stop_requested_at"):
-            transition_id, raw_id = params
-            found = self._backend.find_pool_row(raw_id)
+            found = self._backend.find_pool_row(params[0])
             if found is not None and found.status == "leased":
                 found.status = "stopping"
                 found.stop_requested_at = datetime.now(timezone.utc)
                 found.transition_error = None
-                found.transition_failure_count = 0
-                found.transition_id = transition_id
-                found.transition_heartbeat_at = datetime.now(timezone.utc)
                 self.rowcount = 1
 
         elif query_lower.startswith("update pool_hosts set status = 'starting'"):
-            transition_id, raw_id = params
-            found = self._backend.find_pool_row(raw_id)
-            if found is not None and found.status == "stopped":
+            found = self._backend.find_pool_row(params[0])
+            if found is not None and found.status in ("stopped", "stopping"):
                 found.status = "starting"
                 found.transition_error = None
-                found.transition_failure_count = 0
-                found.transition_id = transition_id
-                found.transition_heartbeat_at = datetime.now(timezone.utc)
                 self.rowcount = 1
 
         elif query_lower.startswith("update pool_hosts set status = 'crashed'"):
-            reason, transition_id, raw_id = params
+            reason, raw_id = params
             found = self._backend.find_pool_row(raw_id)
             if found is not None and found.status in ("leased", "stopping", "stopped", "starting"):
                 found.status = "crashed"
                 found.transition_error = reason
-                found.transition_id = transition_id
                 self.rowcount = 1
 
         elif query_lower.startswith("update pool_hosts set transition_heartbeat_at"):
-            raw_id, transition_id, expected_status = params
-            found = self._backend.find_pool_row(raw_id)
-            if found is not None and found.transition_id == transition_id and found.status == expected_status:
+            found = self._backend.find_pool_row(params[0])
+            if found is not None:
                 found.transition_heartbeat_at = datetime.now(timezone.utc)
                 self.rowcount = 1
 
         elif query_lower.startswith("update pool_hosts set transition_error"):
-            message, raw_id, transition_id = params
+            message, raw_id = params
             found = self._backend.find_pool_row(raw_id)
-            if found is not None and found.transition_id == transition_id:
+            if found is not None:
                 found.transition_error = message
-                found.transition_failure_count = found.transition_failure_count + 1
                 self.rowcount = 1
 
         elif query_lower.startswith("update pool_hosts set wrapped_dek"):
-            wrapped, manifest_json, raw_id, transition_id = params
+            wrapped, manifest_json, raw_id = params
             found = self._backend.find_pool_row(raw_id)
-            if found is not None and found.status == "stopping" and found.transition_id == transition_id:
+            if found is not None and found.status == "stopping":
                 found.wrapped_dek = wrapped
                 found.artifact_manifest = json.loads(manifest_json)
                 self.rowcount = 1
 
         elif query_lower.startswith("update pool_hosts set status = 'stopped', stopped_at"):
-            manifest_json, generation, raw_id, transition_id = params
+            manifest_json, generation, raw_id = params
             found = self._backend.find_pool_row(raw_id)
-            if found is not None and found.status == "stopping" and found.transition_id == transition_id:
+            if found is not None and found.status == "stopping":
                 found.status = "stopped"
                 found.stopped_at = datetime.now(timezone.utc)
+                found.vps_address = None
+                found.ssh_port = None
+                found.container_ssh_port = None
                 found.artifact_manifest = json.loads(manifest_json)
                 found.artifact_generation = int(generation)
                 found.transition_error = None
-                found.transition_failure_count = 0
                 self.rowcount = 1
 
         elif query_lower.startswith("update pool_hosts set status = 'stopped', transition_error"):
-            message, raw_id, transition_id = params
+            message, raw_id = params
             found = self._backend.find_pool_row(raw_id)
-            if found is not None and found.status == "starting" and found.transition_id == transition_id:
+            if found is not None and found.status == "starting" and found.stopped_at is not None:
                 found.status = "stopped"
                 found.transition_error = message
-                found.transition_failure_count = found.transition_failure_count + 1
-                found.transition_heartbeat_at = None
+                found.vps_address = None
+                found.ssh_port = None
+                found.container_ssh_port = None
+                found.bare_metal_server_id = None
+                self.rowcount = 1
+
+        elif query_lower.startswith("update pool_hosts set status = 'stopping', transition_error"):
+            message, raw_id = params
+            found = self._backend.find_pool_row(raw_id)
+            if found is not None and found.status == "starting":
+                found.status = "stopping"
+                found.transition_error = message
                 self.rowcount = 1
 
         elif query_lower.startswith("update pool_hosts set status = 'leased', stop_requested_at = null"):
-            generation, raw_id, transition_id = params
-            found = self._backend.find_pool_row(raw_id)
-            if found is not None and found.status == "starting" and found.transition_id == transition_id:
+            found = self._backend.find_pool_row(params[0])
+            if found is not None and found.status == "starting":
                 found.status = "leased"
                 found.stop_requested_at = None
                 found.stopped_at = None
                 found.artifact_manifest = None
                 found.wrapped_dek = None
-                found.artifact_generation = int(generation)
                 found.transition_error = None
-                found.transition_failure_count = 0
-                found.transition_heartbeat_at = None
                 self.rowcount = 1
 
         elif query_lower.startswith("update pool_hosts set status = 'leased', vps_address"):
-            vps_address, ssh_port, container_ssh_port, server_id, raw_id, transition_id = params
+            vps_address, ssh_port, container_ssh_port, server_id, raw_id = params
             found = self._backend.find_pool_row(raw_id)
-            if found is not None and found.status == "starting" and found.transition_id == transition_id:
+            if found is not None and found.status == "starting":
                 found.status = "leased"
                 found.vps_address = vps_address
                 found.ssh_port = ssh_port
@@ -1419,59 +1357,24 @@ class FakeCursor:
                 found.stop_requested_at = None
                 found.stopped_at = None
                 found.transition_error = None
-                found.transition_failure_count = 0
-                found.transition_heartbeat_at = None
-                self.rowcount = 1
-
-        elif query_lower.startswith("update pool_hosts set vps_address = null"):
-            # Retention finalize, step 1: claim the VM for deletion by
-            # clearing the placement (guarded on ownership).
-            raw_id, transition_id = params
-            found = self._backend.find_pool_row(raw_id)
-            if found is not None and found.status == "stopped" and found.transition_id == transition_id:
-                found.vps_address = None
-                found.ssh_port = None
-                found.container_ssh_port = None
                 self.rowcount = 1
 
         elif query_lower.startswith("update pool_hosts set bare_metal_server_id = null"):
-            # Retention finalize, final step: drop the box link after the VM
-            # is gone (guarded on ownership).
-            raw_id, transition_id = params
-            found = self._backend.find_pool_row(raw_id)
-            if found is not None and found.status == "stopped" and found.transition_id == transition_id:
+            found = self._backend.find_pool_row(params[0])
+            if found is not None and found.status == "stopped":
                 found.bare_metal_server_id = None
                 found.transition_heartbeat_at = None
                 self.rowcount = 1
 
-        elif query_lower.startswith("update pool_hosts set transition_id"):
-            # Watchdog takeover: claim only an in-flight (or unfinalized-stop)
-            # row whose heartbeat is still stale.
-            transition_id, raw_id = params
-            found = self._backend.find_pool_row(raw_id)
-            if found is not None:
-                is_in_flight = found.status in ("stopping", "starting") or (
-                    found.status == "stopped" and found.bare_metal_server_id is not None
-                )
-                heartbeat = found.transition_heartbeat_at
-                age = None if heartbeat is None else (datetime.now(timezone.utc) - heartbeat).total_seconds()
-                if is_in_flight and (age is None or age >= stop_start_module.STALE_HEARTBEAT_SECONDS):
-                    found.transition_id = transition_id
-                    found.transition_heartbeat_at = datetime.now(timezone.utc)
-                    self.rowcount = 1
-
-        elif query_lower.startswith("select id, status, transition_failure_count"):
-            # Watchdog: every in-flight (or unfinalized-stop) row, with its
-            # failure count and heartbeat age (None when never stamped).
+        elif query_lower.startswith("select id from pool_hosts where") and "transition_heartbeat_at" in query_lower:
+            # Watchdog: in-flight rows whose supervisor heartbeat is stale.
+            # The fake treats "no heartbeat recorded" as stale.
             for row in self._backend.pool_rows:
                 is_in_flight = row.status in ("stopping", "starting") or (
                     row.status == "stopped" and row.bare_metal_server_id is not None
                 )
-                if not is_in_flight:
-                    continue
-                heartbeat = row.transition_heartbeat_at
-                age = None if heartbeat is None else (datetime.now(timezone.utc) - heartbeat).total_seconds()
-                self._results.append((row.host_id, row.status, row.transition_failure_count, age))
+                if is_in_flight and row.transition_heartbeat_at is None:
+                    self._results.append((row.host_id,))
 
         elif "from bare_metal_servers where id" in query_lower:
             box = self._backend.find_box_row(params[0])
@@ -1827,21 +1730,6 @@ class FakeCursor:
                 deactivated_share["state"] = "inactive"
                 deactivated_share["updated_at"] = _SHARE_ROW_UPDATED_AT
 
-        elif query_lower.startswith("update shares set state = 'suspended'"):
-            # Suspension: every active share of the user flips to suspended.
-            for share in self._backend.share_rows:
-                if share["user_id"] == params[0] and share["state"] == "active":
-                    share["state"] = "suspended"
-                    share["updated_at"] = _SHARE_ROW_UPDATED_AT
-                    self.rowcount += 1
-
-        elif query_lower.startswith("update shares set state = 'active'") and "state = 'suspended'" in query_lower:
-            for share in self._backend.share_rows:
-                if share["user_id"] == params[0] and share["state"] == "suspended":
-                    share["state"] = "active"
-                    share["updated_at"] = _SHARE_ROW_UPDATED_AT
-                    self.rowcount += 1
-
         elif query_lower.startswith("update shares set entry_label"):
             entry_label, host_id, user_label = params
             labeled_share = self._backend.find_share(host_id, user_label)
@@ -2163,7 +2051,6 @@ class FakePoolBackend:
     reserve_stdout: str
     reserve_stderr: str
     spawned_supervisors: list[str]
-    spawned_supervisor_tokens: list[tuple[str, str]]
     box_command_should_fail_matching: str | None
     box_command_callback: Any
     sleep_callback: Any
@@ -2433,8 +2320,6 @@ class FakePoolBackend:
             row.artifact_manifest,
             row.wrapped_dek,
             row.artifact_generation,
-            row.transition_id,
-            row.transition_failure_count,
         )
 
     def run_box_command_fake(
@@ -2484,9 +2369,8 @@ class FakePoolBackend:
         self.deleted_prefixes.append(prefix)
         return 0
 
-    def record_spawned_supervisor(self, host_db_id: str, transition_id: str) -> None:
+    def record_spawned_supervisor(self, host_db_id: str) -> None:
         self.spawned_supervisors.append(host_db_id)
-        self.spawned_supervisor_tokens.append((host_db_id, transition_id))
 
     def install_on_app_module(self, app_mod: Any, monkeypatch: pytest.MonkeyPatch) -> None:
         """Swap DB and SSH functions on their owning modules with fakes.
@@ -2871,7 +2755,6 @@ def make_fake_pool_backend() -> FakePoolBackend:
     backend.reserve_stdout = "MNGR_RESTORE_RESERVED 23000 23001\n"
     backend.reserve_stderr = ""
     backend.spawned_supervisors = []
-    backend.spawned_supervisor_tokens = []
     backend.box_command_should_fail_matching = None
     backend.box_command_callback = None
     backend.sleep_callback = None
@@ -3041,14 +2924,6 @@ def make_fake_orphan_bucket_store() -> InMemoryOrphanBucketStore:
 
 
 # Canonical plan values matching the committed deploy.toml [plans] blocks.
-FREE_PLAN_VALUES: Final[dict[str, float]] = {
-    "max_remote_workspaces": 1,
-    "max_total_workspaces": 5,
-    "max_buckets": 5,
-    "max_total_bucket_bytes": 25 * 1024**3,
-    "monthly_llm_spend_usd": 0.0,
-    "max_active_synced_workspaces": 200,
-}
 EXPLORER_PLAN_VALUES: Final[dict[str, float]] = {
     "max_remote_workspaces": 2,
     "max_total_workspaces": 10,
@@ -3068,18 +2943,13 @@ ALLY_PLAN_VALUES: Final[dict[str, float]] = {
 
 
 class InMemoryEntitlementsStore:
-    """In-memory EntitlementsStore for testing plans + per-account quota rows.
-
-    Set ``raise_on_insert`` to exercise the signup plan recorder's fail-open
-    path (the exception is raised by ``insert_entitlements_if_absent``).
-    """
+    """In-memory EntitlementsStore for testing plans + per-account quota rows."""
 
     def __init__(self) -> None:
         # plan_name -> {plan_name, <quota columns>}
         self.plans_by_name: dict[str, dict[str, Any]] = {}
         # user_id -> {user_id, user_id_prefix, plan_name, <quota columns>}
         self.rows_by_user_id: dict[str, dict[str, Any]] = {}
-        self.raise_on_insert: Exception | None = None
 
     def seed_plan(self, plan_name: str, values: dict[str, float]) -> None:
         self.plans_by_name[plan_name] = {"plan_name": plan_name, **values}
@@ -3102,8 +2972,6 @@ class InMemoryEntitlementsStore:
         return None
 
     def insert_entitlements_if_absent(self, row: dict[str, Any]) -> None:
-        if self.raise_on_insert is not None:
-            raise self.raise_on_insert
         self.rows_by_user_id.setdefault(row["user_id"], dict(row))
 
     def update_entitlements(self, user_id: str, values: dict[str, Any]) -> None:
@@ -3113,9 +2981,8 @@ class InMemoryEntitlementsStore:
 
 
 def make_fake_entitlements_store() -> InMemoryEntitlementsStore:
-    """Construct an in-memory entitlements store pre-seeded with the committed plans."""
+    """Construct an in-memory entitlements store pre-seeded with the two launch plans."""
     store = InMemoryEntitlementsStore()
-    store.seed_plan("free", FREE_PLAN_VALUES)
     store.seed_plan("explorer", EXPLORER_PLAN_VALUES)
     store.seed_plan("ally", ALLY_PLAN_VALUES)
     return store
@@ -3297,12 +3164,6 @@ class FakeLiteLLMBackend:
             for key_id in body.get("keys", []):
                 self.keys_by_id.pop(str(key_id), None)
             return _FakeLiteLLMResponse({"status": "deleted"})
-        if path in ("/key/block", "/key/unblock"):
-            key = self.keys_by_id.get(str(body.get("key", "")))
-            if key is None:
-                raise HTTPException(status_code=404, detail="LiteLLM error: key not found")
-            key["blocked"] = path == "/key/block"
-            return _FakeLiteLLMResponse({"token": key["key"], "blocked": key["blocked"]})
         raise HTTPException(status_code=404, detail=f"LiteLLM error: unhandled fake path {path}")
 
 
@@ -3346,7 +3207,7 @@ def _make_quota_test_client(
     Sets up the SuperTokens Bearer auth path so tests calling user-authenticated endpoints
     can authenticate with ``_user_headers()`` without needing a real JWT.
     Installs an in-memory paid-list backend seeded with the stub user email,
-    an entitlements store pre-seeded with the committed plans (with the stub
+    an entitlements store pre-seeded with the two launch plans (with the stub
     user's SuperTokens ``time_joined`` faked to 0, i.e. pre-cutoff, so the
     stub's lazy plan resolves to ally by default), and a fake LiteLLM admin
     API. The paid-status cache is disabled
@@ -3360,8 +3221,7 @@ def _make_quota_test_client(
     monkeypatch.setenv("LITELLM_PROXY_URL", "https://fake-litellm.example.com")
     fake_ctx = make_fake_cloudflare_ctx()
 
-    def _stub_supertokens(token: str, check_database: bool = False) -> UserAuth:
-        del check_database
+    def _stub_supertokens(token: str) -> UserAuth:
         if token != _USER_STUB_TOKEN:
             raise HTTPException(status_code=401, detail="Invalid token")
         # The stub user simulates a fully-verified account (it is paid-listed
@@ -3396,7 +3256,7 @@ def _make_test_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     return client
 
 
-_PLAN_VALUES_BY_NAME = {"free": FREE_PLAN_VALUES, "explorer": EXPLORER_PLAN_VALUES, "ally": ALLY_PLAN_VALUES}
+_PLAN_VALUES_BY_NAME = {"explorer": EXPLORER_PLAN_VALUES, "ally": ALLY_PLAN_VALUES}
 
 
 def _seed_entitlements_row(
@@ -3433,9 +3293,8 @@ def _make_pool_quota_test_client(
 
     The returned pool backend is seeded with the stub user email as paid, so
     the stub's lazily-created entitlements row resolves to the ally plan by
-    default; free-plan tests flip the entry via ``backend.add_paid_email``
-    (the lazy backfill never assigns explorer), and tests wanting any other
-    plan write a row into the entitlements store directly.
+    default; explorer-plan tests flip the entry via ``backend.add_paid_email``
+    or write a row into the entitlements store directly.
     """
     client, entitlements_store, litellm = _make_quota_test_client(monkeypatch)
     monkeypatch.setenv("POOL_SSH_PRIVATE_KEY", "fake-management-key-pem")
@@ -3467,8 +3326,6 @@ def _make_pool_quota_web_test_client(
     """
     client, backend, entitlements_store, litellm = _make_pool_quota_test_client(monkeypatch)
     st_backend = make_fake_supertokens_backend()
-    # install adopts the quota client's entitlements store, so both seams
-    # resolve one store.
     st_backend.install_on_app_module(app_mod, monkeypatch)
     return client, backend, entitlements_store, litellm, st_backend
 
@@ -3489,40 +3346,6 @@ def _sign_in_browser_user(client: TestClient, st_backend: FakeSuperTokensBackend
 
 def _admin_key_headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {_ADMIN_KEY_TEST_VALUE}"}
-
-
-def _make_suspension_admin_test_client(
-    monkeypatch: pytest.MonkeyPatch,
-) -> tuple[
-    TestClient,
-    FakePoolBackend,
-    InMemoryEntitlementsStore,
-    FakeLiteLLMBackend,
-    FakeSuperTokensBackend,
-    FakeCloudflareOps,
-    InMemoryKeyStore,
-]:
-    """Test client wiring every backend the suspend/unsuspend fan-out touches.
-
-    Pool backend (workspaces + shares SQL), entitlements store, LiteLLM admin
-    API, SuperTokens (email resolution + sessions), Cloudflare ops, and the
-    R2 key store -- plus the admin key env var.
-    """
-    client, backend, entitlements_store, litellm = _make_pool_quota_test_client(monkeypatch)
-    monkeypatch.setenv("MINDS_ADMIN_KEY", _ADMIN_KEY_TEST_VALUE)
-    fake_ctx = make_fake_cloudflare_ctx()
-    key_store = make_fake_key_store()
-    # Single-loop patching (same pattern as the other client helpers) so the
-    # monkeypatch ratchet only counts one occurrence.
-    suspension_fakes: list[tuple[object, str, object]] = [
-        (cloudflare_mod, "get_cloudflare_ctx", lambda: fake_ctx),
-        (r2_stores_mod, "get_key_store", lambda: key_store),
-    ]
-    for target_module, name, fake_impl in suspension_fakes:
-        monkeypatch.setattr(target_module, name, fake_impl)
-    st_backend = make_fake_supertokens_backend()
-    st_backend.install_on_app_module(app_mod, monkeypatch)
-    return client, backend, entitlements_store, litellm, st_backend, fake_ctx.fake, key_store
 
 
 def _make_paid_crud_test_client(monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, FakePoolBackend]:
@@ -3648,8 +3471,7 @@ def _make_share_test_client(monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient
 
     # The share endpoints resolve identity through the shared web-identity
     # path, whose Bearer leg also calls authenticate_request; stub both.
-    def _stub_authenticate_request(request: Any, check_database: bool = False) -> UserAuth:
-        del check_database
+    def _stub_authenticate_request(request: Any) -> UserAuth:
         auth_header = request.headers.get("authorization", "")
         if auth_header != f"Bearer {_SHARE_STUB_TOKEN}":
             raise HTTPException(status_code=401, detail="Invalid token")

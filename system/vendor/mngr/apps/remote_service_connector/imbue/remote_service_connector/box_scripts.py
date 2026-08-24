@@ -389,7 +389,7 @@ def build_cancel_and_restart_commands(instance_name: str) -> tuple[str, ...]:
 
 
 def build_finalize_stop_commands(instance_name: str, disk_name: str) -> tuple[str, ...]:
-    """Delete the local VM + data disk once the retention window closes (frees the slot)."""
+    """Delete the local VM + data disk after the upload is verified (frees the slot)."""
     td = transfer_dir(instance_name)
     quoted = shlex.quote(instance_name)
     quoted_disk = shlex.quote(disk_name)

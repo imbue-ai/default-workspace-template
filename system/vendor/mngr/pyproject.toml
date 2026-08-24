@@ -129,7 +129,6 @@ addopts = [
   "--cov=imbue.mngr_azure",
   "--cov=imbue.mngr_minds_eval",
   "--cov=imbue.minds_evals",
-  "--cov=imbue.analytics",
   # NOTE: no --cov-report/--coverage-to-file here. Per-run coverage reports
   # are expensive to generate (they walk every measured file) and are only
   # useful interactively, so the local recipes that want them
