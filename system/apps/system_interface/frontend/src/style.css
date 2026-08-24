@@ -4078,7 +4078,8 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   border-bottom: 1px solid var(--color-border, #e5e7eb);
 }
 
-.terminal-banner-text {
+.terminal-banner-text,
+.update-staleness-banner-text {
   min-width: 0;
 }
 
@@ -4093,7 +4094,10 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   flex: 0 0 auto;
 }
 
-.terminal-banner-btn {
+/* The two banners' text and dismiss/action chrome are the same; only the
+   surface colours above differ. */
+.terminal-banner-btn,
+.update-staleness-banner-btn {
   padding: 2px 8px;
   font-size: 0.75rem;
   color: var(--color-text-secondary);
@@ -4103,7 +4107,8 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   cursor: pointer;
 }
 
-.terminal-banner-btn:hover {
+.terminal-banner-btn:hover,
+.update-staleness-banner-btn:hover {
   background: var(--color-bg-hover, #eef2f7);
 }
 
@@ -4122,22 +4127,4 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   color: var(--color-text-primary, #1f2937);
   background: var(--color-warning-bg, #fef3c7);
   border-bottom: 1px solid var(--color-warning-border, #f59e0b);
-}
-
-.update-staleness-banner-text {
-  min-width: 0;
-}
-
-.update-staleness-banner-btn {
-  padding: 2px 8px;
-  font-size: 0.75rem;
-  color: var(--color-text-secondary);
-  background: transparent;
-  border: 1px solid var(--color-border, #e5e7eb);
-  border-radius: 4px;
-  cursor: pointer;
-}
-
-.update-staleness-banner-btn:hover {
-  background: var(--color-bg-hover, #eef2f7);
 }
