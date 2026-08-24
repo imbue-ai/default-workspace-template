@@ -749,10 +749,16 @@ def _run_env_converge_fast_phase() -> None:
 
 
 def _read_update_marker_dri_agent() -> str:
-    """The DRI agent recorded in the update-apply marker, or "" when unreadable."""
+    """The DRI agent recorded in the update-apply marker, or "" when unreadable.
+
+    ``ValueError`` rather than ``json.JSONDecodeError`` alone: a torn write is
+    the failure mode being defended against here (an interrupted apply is why
+    the marker is read at all), and a file flushed mid-multibyte makes
+    ``read_text`` raise ``UnicodeDecodeError``, which is a ``ValueError``.
+    """
     try:
         raw = json.loads(UPDATE_APPLY_MARKER.read_text())
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError):
         return ""
     dri_agent = raw.get("dri_agent") if isinstance(raw, dict) else None
     return dri_agent if isinstance(dri_agent, str) else ""
