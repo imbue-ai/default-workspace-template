@@ -206,18 +206,27 @@ gets a plain 404.
 A missing bundle is the loud version of a more general problem: an update lands
 by advancing the working tree, and this process only becomes consistent with it
 once it restarts into the merged code. The apply does both in one motion, but
-an interrupted apply, an emergency-path apply, or a hand merge outside the flow
-can leave a live server rendering old code over new on-disk state -- silently,
-which is the shape the geebspace incident took.
+an interrupted apply, a failed apply whose rollback could not restore health,
+or a hand merge outside the flow can leave a live server rendering old code
+over new on-disk state -- silently, which is the shape the geebspace incident
+took.
 
 So the server says so. It records the tree HEAD it started from and, when the
 live tree has moved *in a way that affects what this process runs*, stamps an
 `X-Workspace-Update-Staleness` header on the app shell and injects the same
 value as a `system-interface-update-staleness` meta tag, from which the
-frontend renders one dismissible informational line. Two values:
-`update-interrupted` when the apply's marker
-(`data/.state/update-apply/marker.json`) is present, and
-`updated-not-activated` otherwise.
+frontend renders one dismissible informational line. Three values, checked in
+this order:
+
+- `update-emergency` when the apply's emergency record
+  (`data/.state/update-apply/emergency.json`) is present -- a rollback that
+  could not put a healthy workspace back. It outranks the other two because it
+  is the one state here that does not resolve itself, and the one neither of
+  them can see: that exit clears the marker, and its rollback has already put
+  the tree content back, so both would read as consistent.
+- `update-interrupted` when the apply's marker
+  (`data/.state/update-apply/marker.json`) is present.
+- `updated-not-activated` otherwise.
 
 "Affects what this process runs" is the whole design (see `update_staleness.py`
 for the rules and their test table). A bare HEAD comparison would show the
