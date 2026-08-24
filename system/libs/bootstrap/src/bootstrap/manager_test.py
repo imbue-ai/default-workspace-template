@@ -36,6 +36,7 @@ from bootstrap.manager import (
     _read_main_agent_labels,
     _read_update_marker_dri_agent,
     _recover_interrupted_update,
+    _wake_update_dri_agent,
 )
 
 # --- _configure_git_global ---
@@ -783,7 +784,7 @@ def test_recover_skips_entirely_without_a_marker(
     assert stub.calls == []
 
 
-def test_recover_rolls_back_and_wakes_the_dri_agent(
+def test_recover_rolls_back_and_names_the_dri_agent_to_wake(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.chdir(tmp_path)
@@ -794,7 +795,7 @@ def test_recover_rolls_back_and_wakes_the_dri_agent(
     stub.on_recover = lambda: UPDATE_APPLY_MARKER.unlink()
     monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
 
-    _recover_interrupted_update()
+    dri_agent = _recover_interrupted_update()
 
     recover_call = stub.calls[0]
     assert recover_call[:2] == ["python3", str(UPDATE_APPLY_SCRIPT)]
@@ -802,54 +803,61 @@ def test_recover_rolls_back_and_wakes_the_dri_agent(
     # The boot path: disk state only, with the script's own staleness guard.
     assert "--no-restart" in recover_call
     assert "--if-stale" in recover_call
-    # The DRI agent named in the marker is started and handed the finding.
-    assert ["mngr", "start", "agent-omega"] == stub.calls[1]
-    assert stub.calls[2][:3] == ["mngr", "message", "agent-omega"]
+    assert stub.kwargs[0].get("timeout") == _UPDATE_RECOVER_TIMEOUT_SECONDS
+    # The agent is named back to main(), not started here: starting it would
+    # race _sync_workspace_venv, which runs after this.
+    assert dri_agent == "agent-omega"
+    assert len(stub.calls) == 1
 
 
-def test_recover_survives_an_unrunnable_mngr_so_boot_continues(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_wake_starts_the_agent_and_hands_it_the_finding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stub = _RecordingSubprocess()
+    monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
+
+    _wake_update_dri_agent("agent-omega")
+
+    assert stub.calls[0] == ["mngr", "start", "agent-omega"]
+    assert stub.calls[1][:3] == ["mngr", "message", "agent-omega"]
+    for argv in stub.calls:
+        assert_mngr_argv_valid(argv)
+    # Both gate boot, so neither may hang forever.
+    assert [kwargs.get("timeout") for kwargs in stub.kwargs] == [
+        _DRI_WAKE_TIMEOUT_SECONDS,
+        _DRI_WAKE_TIMEOUT_SECONDS,
+    ]
+
+
+def test_wake_survives_an_unrunnable_mngr_so_boot_continues(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # `mngr` missing is a live possibility on this path -- an apply interrupted
     # mid `uv tool install` of the vendored mngr is exactly why the recovery
     # runs. main() does not wrap this call, so an escaping FileNotFoundError
     # would kill bootstrap before supervisord starts and boot the container
     # with no services at all.
-    monkeypatch.chdir(tmp_path)
-    _write_apply_marker("agent-omega")
     stub = _RecordingSubprocess()
-    stub.on_recover = lambda: UPDATE_APPLY_MARKER.unlink()
     stub.raise_on = {"start": FileNotFoundError("mngr")}
     monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
 
-    _recover_interrupted_update()
+    _wake_update_dri_agent("agent-omega")
 
-    # The rollback still ran, the wake was attempted, and nothing propagated.
-    assert "recover" in stub.calls[0]
-    assert stub.calls[1] == ["mngr", "start", "agent-omega"]
-    assert len(stub.calls) == 2  # the message is skipped once the start failed
+    assert stub.calls == [["mngr", "start", "agent-omega"]]
 
 
-def test_recover_bounds_every_command_it_runs(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_wake_skips_the_message_when_the_start_failed(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Both the rollback and the wake gate boot, so neither may hang forever.
-    monkeypatch.chdir(tmp_path)
-    _write_apply_marker("agent-omega")
-    stub = _RecordingSubprocess()
-    stub.on_recover = lambda: UPDATE_APPLY_MARKER.unlink()
+    stub = _RecordingSubprocess(returncode=1)
     monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
 
-    _recover_interrupted_update()
+    _wake_update_dri_agent("agent-omega")
 
-    assert [kwargs.get("timeout") for kwargs in stub.kwargs] == [
-        _UPDATE_RECOVER_TIMEOUT_SECONDS,
-        _DRI_WAKE_TIMEOUT_SECONDS,
-        _DRI_WAKE_TIMEOUT_SECONDS,
-    ]
+    assert stub.calls == [["mngr", "start", "agent-omega"]]
 
 
-def test_recover_does_not_wake_anyone_when_the_guard_noops(
+def test_recover_names_nobody_when_the_guard_noops(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     # The marker surviving the recover call means the guard declined to act
@@ -860,9 +868,22 @@ def test_recover_does_not_wake_anyone_when_the_guard_noops(
     stub = _RecordingSubprocess()
     monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
 
-    _recover_interrupted_update()
+    assert _recover_interrupted_update() == ""
 
     assert len(stub.calls) == 1  # only the recover invocation, no mngr calls
+
+
+def test_recover_names_nobody_when_the_rollback_itself_failed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_apply_marker("agent-omega")
+    stub = _RecordingSubprocess()
+    stub.raise_on = {"recover": OSError("no python3")}
+    monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
+
+    # Boot continues even though the recovery could not run at all.
+    assert _recover_interrupted_update() == ""
 
 
 def test_recover_failure_does_not_wake_or_raise(

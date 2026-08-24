@@ -803,25 +803,35 @@ def _wake_update_dri_agent(agent_name: str) -> None:
     logger.info("Re-engaged update DRI agent {}", agent_name)
 
 
-def _recover_interrupted_update() -> None:
+def _recover_interrupted_update() -> str:
     """Roll back an update apply the previous container run left mid-motion.
+
+    Returns the DRI agent to re-engage afterwards, or ``""`` when there is
+    nobody to wake (no marker, the guard declined, the rollback failed, or the
+    marker named no agent). Waking is the caller's job and deliberately not
+    done here: it starts a live agent, which must not happen until the
+    workspace venv has been converged.
 
     The apply's marker persisting across a boot means the container stopped (or
     died) between the merge landing and the apply finishing -- the half-applied
-    state the update flow exists to prevent. The rollback is dependency-free by
-    design (git restores + snapshot copies), so it runs right here, before the
-    venv converge (which must converge against the *restored* tree, not the
-    half-applied one) and before any service or agent starts. ``--no-restart``
-    because nothing is running yet -- services boot fresh from the restored
-    state -- and ``--if-stale --grace-seconds 0`` so the script's own dead-
-    process guard still applies. Best-effort: a failure is logged loudly but
-    never blocks boot.
+    state the update flow exists to prevent. The rollback itself needs no
+    network, no package manager and no working ``mngr`` (git restores plus
+    plain copies of the pre-apply snapshots) -- with one exception: an apply
+    that had reached its provisioner step is rolled back by re-running
+    ``setup_system.sh``, which does reach the network. It runs right here,
+    before the venv converge (which must converge against the *restored* tree,
+    not the half-applied one) and before any service or agent starts.
+    ``--no-restart`` because nothing is running yet -- services boot fresh from
+    the restored state -- and ``--if-stale --grace-seconds 0`` so the script's
+    own dead-process guard still applies. Best-effort: a failure is logged
+    loudly but never blocks boot.
     """
     if not UPDATE_APPLY_MARKER.exists():
-        return
+        return ""
     dri_agent = _read_update_marker_dri_agent()
     logger.warning(
-        "An interrupted update apply left a marker at {}; rolling it back",
+        "An interrupted update apply left a marker at {}; asking the recovery "
+        "guard to roll it back",
         UPDATE_APPLY_MARKER,
     )
     try:
@@ -842,7 +852,7 @@ def _recover_interrupted_update() -> None:
         )
     except (OSError, subprocess.TimeoutExpired) as e:
         logger.error("update-apply recovery could not run ({}); continuing boot", e)
-        return
+        return ""
     if result.stderr.strip():
         logger.info("update-apply recovery output: {}", result.stderr.strip()[-1000:])
     if result.returncode != 0:
@@ -851,11 +861,12 @@ def _recover_interrupted_update() -> None:
             "workspace as the rollback left it",
             result.returncode,
         )
-        return
+        return ""
     # A cleared marker is what distinguishes "rolled back" from the guard's
     # silent no-op; only a real rollback warrants re-engaging the DRI agent.
-    if not UPDATE_APPLY_MARKER.exists() and dri_agent:
-        _wake_update_dri_agent(dri_agent)
+    if UPDATE_APPLY_MARKER.exists():
+        return ""
+    return dri_agent
 
 
 def _migrate_legacy_claude_state_best_effort() -> None:
@@ -888,8 +899,9 @@ def main() -> None:
 
     # Roll back any update apply the previous container run left mid-motion,
     # BEFORE the venv converge (which must run against the restored tree) and
-    # before any service or agent starts from half-applied state.
-    _recover_interrupted_update()
+    # before any service or agent starts from half-applied state. The agent to
+    # re-engage afterwards is woken further down, once the venv is converged.
+    update_dri_agent = _recover_interrupted_update()
 
     # Converge the workspace venv BEFORE the initial chat agent is created
     # (below) and before supervisord's `uv run` services start, so nothing
@@ -907,6 +919,12 @@ def main() -> None:
 
     # Overlay symlinks must exist before services start writing.
     _run_env_converge_fast_phase()
+
+    # Re-engage the agent whose update the boot-time rollback undid. Held until
+    # here on purpose: waking it starts a live agent running `uv run`, which
+    # must not race _sync_workspace_venv's rewrite of the venv above.
+    if update_dri_agent:
+        _wake_update_dri_agent(update_dri_agent)
 
     # Reinstall any cron entries persisted under data/.state/cron.d (e.g.
     # the Caretaker's schedule) so they survive container recreation. Must
