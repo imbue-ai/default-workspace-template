@@ -1,5 +1,6 @@
 """Tests for the update-staleness tracker and its app-shell surfacing."""
 
+import ast
 import re
 import shutil
 import subprocess
@@ -351,3 +352,64 @@ def test_meta_tag_injection_names_the_variant_and_skips_when_consistent() -> Non
     # A consistent workspace's shell carries no tag at all -- the frontend
     # banner keys off the tag's presence.
     assert _inject_update_staleness_meta_tag(shell, None) == shell
+
+
+def _evaluate_path_expression(node: ast.expr, known: dict[str, str]) -> str | None:
+    """Evaluate a string literal, a name, a ``Path(...)`` call, or a ``/`` join."""
+    if isinstance(node, ast.Constant):
+        return node.value if isinstance(node.value, str) else None
+    if isinstance(node, ast.Name):
+        return known.get(node.id)
+    if isinstance(node, ast.Call) and len(node.args) == 1:
+        return _evaluate_path_expression(node.args[0], known)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        left = _evaluate_path_expression(node.left, known)
+        right = _evaluate_path_expression(node.right, known)
+        return None if left is None or right is None else left + "/" + right
+    return None
+
+
+def _module_string_constants(source_path: Path) -> dict[str, str]:
+    """Module-level path constants, resolved in declaration order.
+
+    Read out of the source rather than imported: the three definitions of the
+    apply's state paths sit in three isolation domains on purpose -- a
+    stdlib-only skill script that must run when the tree around it is broken,
+    the bootstrap package, and this app -- and none of them may import
+    another. Reading is what is left, so a drift between them is at least
+    caught here rather than at 3am in a workspace that will not come back.
+    """
+    constants: dict[str, str] = {}
+    for node in ast.parse(source_path.read_text()).body:
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if not isinstance(target, ast.Name):
+            continue
+        value = _evaluate_path_expression(node.value, constants)
+        if value is not None:
+            constants[target.id] = value
+    return constants
+
+
+def test_the_three_definitions_of_the_apply_state_paths_agree() -> None:
+    """This app, bootstrap and the apply script must name the same files.
+
+    Each has its own copy because none can import another, so nothing but this
+    stops them drifting -- and a drift is silent in the worst way: the banner
+    would simply never fire, and the boot-time recovery would never find an
+    interrupted apply to roll back.
+    """
+    repo_root = WORKSPACE_ROOT_DIRECTORY
+    script = _module_string_constants(
+        repo_root / ".agents/skills/update-self/scripts/update_self.py"
+    )
+    bootstrap = _module_string_constants(
+        repo_root / "system/libs/bootstrap/src/bootstrap/manager.py"
+    )
+
+    state_dir = script["STATE_DIR_REL"]
+    assert state_dir + "/" + script["MARKER_FILENAME"] == UPDATE_APPLY_MARKER_REL
+    assert state_dir + "/" + script["EMERGENCY_FILENAME"] == UPDATE_APPLY_EMERGENCY_REL
+    # bootstrap composes its marker path from its own STATE_DIR.
+    assert bootstrap["UPDATE_APPLY_MARKER"] == UPDATE_APPLY_MARKER_REL
