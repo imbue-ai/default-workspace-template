@@ -55,17 +55,22 @@ describe("UpdateStalenessBanner", () => {
     expect(bannerIn(root)).toBeNull();
   });
 
-  it("renders nothing for a variant it does not know", () => {
-    // A newer backend's variant must degrade to no banner, not a blank one.
-    plantMetaTag("some-future-variant");
-    const { root } = mountBanner();
-    expect(bannerIn(root)).toBeNull();
-  });
+  // "toString" is the interesting one: an object-literal lookup would find it
+  // on Object.prototype and render "function toString() { [native code] }".
+  it.each(["some-future-variant", "toString", "constructor", "hasOwnProperty"])(
+    "renders nothing for the unknown variant %s",
+    (variant) => {
+      // A newer backend's variant must degrade to no banner, not a blank one.
+      plantMetaTag(variant);
+      const { root } = mountBanner();
+      expect(bannerIn(root)).toBeNull();
+    },
+  );
 
-  it.each(Object.keys(STALENESS_MESSAGES))("renders the %s message", (variant) => {
+  it.each([...STALENESS_MESSAGES.keys()])("renders the %s message", (variant) => {
     plantMetaTag(variant);
     const { root } = mountBanner();
-    expect(bannerIn(root)?.textContent).toContain(STALENESS_MESSAGES[variant]);
+    expect(bannerIn(root)?.textContent).toContain(STALENESS_MESSAGES.get(variant));
   });
 
   it("hides for the rest of the page load once dismissed", () => {
