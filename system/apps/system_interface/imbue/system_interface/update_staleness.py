@@ -201,8 +201,7 @@ class UpdateStalenessTracker(FrozenModel):
         startup_head = _read_head(repo_root)
         if startup_head is None:
             logger.warning(
-                "Could not read the tree HEAD at startup; update-staleness "
-                "detection is disabled for this process."
+                "Could not read the tree HEAD at startup; update-staleness detection is disabled for this process."
             )
         return cls(repo_root=repo_root, startup_head=startup_head)
 

@@ -38,9 +38,7 @@ _AS_TEST_AUTHOR = (
 
 
 def _git(repo: Path, *args: str) -> None:
-    subprocess.run(
-        ["git", *_AS_TEST_AUTHOR, *args], cwd=repo, check=True, capture_output=True
-    )
+    subprocess.run(["git", *_AS_TEST_AUTHOR, *args], cwd=repo, check=True, capture_output=True)
 
 
 # A path the running server holds in memory (vendored mngr is imported
@@ -107,9 +105,7 @@ def test_every_imported_workspace_package_is_covered() -> None:
     """
     repo_root = WORKSPACE_ROOT_DIRECTORY
     app_root = repo_root / "system/apps/system_interface"
-    dependencies = set(
-        tomllib.loads((app_root / "pyproject.toml").read_text())["project"]["dependencies"]
-    )
+    dependencies = set(tomllib.loads((app_root / "pyproject.toml").read_text())["project"]["dependencies"])
     # Requirement strings may carry a version specifier; the name is the head.
     names = {re.split(r"[<>=!~\[; ]", spec, maxsplit=1)[0] for spec in dependencies}
     local_packages = {
@@ -122,9 +118,7 @@ def test_every_imported_workspace_package_is_covered() -> None:
         name
         for name in sorted(names & set(local_packages))
         if name != "system-interface"
-        and not _is_path_relevant_to_this_server(
-            f"{local_packages[name].relative_to(repo_root)}/src/module.py"
-        )
+        and not _is_path_relevant_to_this_server(f"{local_packages[name].relative_to(repo_root)}/src/module.py")
     ]
 
     assert uncovered == []
@@ -227,9 +221,7 @@ def test_tracker_reports_an_interrupted_apply_over_a_moved_tree(git_work_dir: Pa
     assert tracker.staleness() == STALENESS_UPDATE_INTERRUPTED
 
 
-def test_tracker_degrades_to_not_stale_outside_a_repo(
-    tmp_path: Path, loguru_records: list[str]
-) -> None:
+def test_tracker_degrades_to_not_stale_outside_a_repo(tmp_path: Path, loguru_records: list[str]) -> None:
     tracker = UpdateStalenessTracker.capture(repo_root=tmp_path / "not-a-repo")
     assert tracker.startup_head is None
     assert tracker.staleness() is None
@@ -239,9 +231,7 @@ def test_tracker_degrades_to_not_stale_outside_a_repo(
     assert any("update-staleness" in record for record in loguru_records)
 
 
-def test_a_git_failure_after_startup_is_logged_not_swallowed(
-    git_work_dir: Path, loguru_records: list[str]
-) -> None:
+def test_a_git_failure_after_startup_is_logged_not_swallowed(git_work_dir: Path, loguru_records: list[str]) -> None:
     repo = git_work_dir
     tracker = UpdateStalenessTracker.capture(repo_root=repo)
     assert tracker.startup_head is not None
@@ -316,9 +306,7 @@ def test_a_consistent_workspace_gets_no_header(git_work_dir: Path) -> None:
     assert UPDATE_STALENESS_HEADER not in response.headers
 
 
-def test_the_built_app_shell_carries_the_staleness_meta_tag(
-    git_work_dir: Path, tmp_path: Path
-) -> None:
+def test_the_built_app_shell_carries_the_staleness_meta_tag(git_work_dir: Path, tmp_path: Path) -> None:
     """The meta tag is the only thing the banner reads, and only the *built*
     shell carries one -- every other server test here runs against the
     not-built placeholder, where nothing is injected at all.
@@ -337,20 +325,14 @@ def test_the_built_app_shell_carries_the_staleness_meta_tag(
         consistent = create_application(_tracking_state(repo)).test_client().get("/")
 
     assert response.status_code == 200
-    assert (
-        f'<meta name="{UPDATE_STALENESS_META_TAG}" content="{STALENESS_TREE_MOVED}">'
-        in response.text
-    )
+    assert f'<meta name="{UPDATE_STALENESS_META_TAG}" content="{STALENESS_TREE_MOVED}">' in response.text
     assert UPDATE_STALENESS_META_TAG not in consistent.text
 
 
 def test_meta_tag_injection_names_the_variant_and_skips_when_consistent() -> None:
     shell = "<html><head></head><body>app</body></html>"
     injected = _inject_update_staleness_meta_tag(shell, STALENESS_TREE_MOVED)
-    assert (
-        f'<meta name="{UPDATE_STALENESS_META_TAG}" content="{STALENESS_TREE_MOVED}">'
-        in injected
-    )
+    assert f'<meta name="{UPDATE_STALENESS_META_TAG}" content="{STALENESS_TREE_MOVED}">' in injected
     # A consistent workspace's shell carries no tag at all -- the frontend
     # banner keys off the tag's presence.
     assert _inject_update_staleness_meta_tag(shell, None) == shell
@@ -403,12 +385,8 @@ def test_the_three_definitions_of_the_apply_state_paths_agree() -> None:
     interrupted apply to roll back.
     """
     repo_root = WORKSPACE_ROOT_DIRECTORY
-    script = _module_string_constants(
-        repo_root / ".agents/skills/update-self/scripts/update_self.py"
-    )
-    bootstrap = _module_string_constants(
-        repo_root / "system/libs/bootstrap/src/bootstrap/manager.py"
-    )
+    script = _module_string_constants(repo_root / ".agents/skills/update-self/scripts/update_self.py")
+    bootstrap = _module_string_constants(repo_root / "system/libs/bootstrap/src/bootstrap/manager.py")
 
     state_dir = script["STATE_DIR_REL"]
     assert state_dir + "/" + script["MARKER_FILENAME"] == UPDATE_APPLY_MARKER_REL
@@ -458,9 +436,7 @@ _RESTART_REQUIRING_PATHS = (
 
 
 @pytest.mark.parametrize(("path", "leaves_this_server_stale"), _RESTART_REQUIRING_PATHS)
-def test_the_restart_rule_and_the_staleness_rule_stay_in_step(
-    path: str, leaves_this_server_stale: bool
-) -> None:
+def test_the_restart_rule_and_the_staleness_rule_stay_in_step(path: str, leaves_this_server_stale: bool) -> None:
     """Every path the apply restarts for is classified here too, one way or the other.
 
     Without this, adding a restart-requiring prefix to ``classify_path`` and

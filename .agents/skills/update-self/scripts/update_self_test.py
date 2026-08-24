@@ -1509,7 +1509,9 @@ def test_apply_backend_change_preflights_restarts_and_probes(
     # Pre-flight boots the bare tool on a throwaway port before the restart.
     assert spawner.spawns == [[update_self.TOOL_NAME]]
     assert runner.ran(*_RESTART)
-    assert any(_is_live(url) and update_self.HEALTH_PATH in url for url in http.get_urls)
+    assert any(
+        _is_live(url) and update_self.HEALTH_PATH in url for url in http.get_urls
+    )
     assert not runner.ran("npm", "run", "build")
 
 
@@ -1639,7 +1641,9 @@ def test_re_applying_an_already_applied_merge_is_still_a_no_op_not_a_refusal(
     runner = _apply_runner(_DOCS_DIFF, apply_repo)
     runner.respond(("git", "merge-base", "--is-ancestor"), _Result(returncode=0))
     runner.respond(("git", "diff", "--no-renames"), _Result(stdout=""))
-    runner.respond(("git", "log", "--format=%s"), _Result(stdout="version history: x\n"))
+    runner.respond(
+        ("git", "log", "--format=%s"), _Result(stdout="version history: x\n")
+    )
 
     code = _apply(
         runner,
@@ -1651,9 +1655,10 @@ def test_re_applying_an_already_applied_merge_is_still_a_no_op_not_a_refusal(
 
     assert code == 0
     assert not runner.ran("git", "merge", "--ff-only")
-    assert "updated to minds-v0.4.2" in (
-        apply_repo / "docs/VERSION_HISTORY.md"
-    ).read_text()
+    assert (
+        "updated to minds-v0.4.2"
+        in (apply_repo / "docs/VERSION_HISTORY.md").read_text()
+    )
 
 
 def test_apply_dirty_tree_refuses_before_touching_anything(apply_repo: Path) -> None:
@@ -1833,7 +1838,9 @@ def test_a_failed_provisioner_run_is_rerun_best_effort_during_recovery(
     assert "still counts as recovered" in capsys.readouterr().err
 
 
-def test_emergency_when_rollback_cannot_restore_health(apply_repo: Path, capsys) -> None:
+def test_emergency_when_rollback_cannot_restore_health(
+    apply_repo: Path, capsys
+) -> None:
     runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
     runner.respond(("npm", "run", "build"), _Result(returncode=1, stderr="boom"))
 
@@ -2112,7 +2119,12 @@ def test_only_the_hungry_forward_steps_are_expendable_and_recovery_is_not(
     # Frontend manifest + backend manifest + backend source, failing after the
     # restart, so both the forward steps and the recovery rebuild run. No
     # bundle existed to snapshot, so recovery takes the rebuild branch.
-    diff = _FRONTEND_MANIFEST_DIFF + _FRONTEND_DIFF + _BACKEND_MANIFEST_DIFF + _BACKEND_DIFF
+    diff = (
+        _FRONTEND_MANIFEST_DIFF
+        + _FRONTEND_DIFF
+        + _BACKEND_MANIFEST_DIFF
+        + _BACKEND_DIFF
+    )
     runner = _apply_runner(diff, unbuilt_apply_repo)
     restarts = {"seen": 0}
 
@@ -2148,7 +2160,11 @@ def test_only_the_hungry_forward_steps_are_expendable_and_recovery_is_not(
     # (the rebuild after the rollback) run under the orchestrator's protection.
     # Forward ran exactly one npm ci + one build wrapped; any further ones are
     # recovery's and must be unwrapped.
-    recovery_npm = [c for c in unwrapped if c[:2] == ["npm", "ci"] or c[:3] == ["npm", "run", "build"]]
+    recovery_npm = [
+        c
+        for c in unwrapped
+        if c[:2] == ["npm", "ci"] or c[:3] == ["npm", "run", "build"]
+    ]
     assert recovery_npm, "recovery should have rebuilt without the expendable tag"
     recovery_uv = [c for c in unwrapped if c[:1] == ["uv"]]
     assert recovery_uv, "recovery should have refreshed the envs without the tag"
@@ -2161,7 +2177,9 @@ def test_snapshots_roundtrip_bundle_envs_and_node_modules(tmp_path: Path) -> Non
     repo_root = _make_apply_repo(tmp_path)
     _write_bundle(repo_root)
     (repo_root / update_self.FRONTEND_DIR / "node_modules").mkdir(parents=True)
-    (repo_root / update_self.FRONTEND_DIR / "node_modules" / "left-pad.js").write_text("old")
+    (repo_root / update_self.FRONTEND_DIR / "node_modules" / "left-pad.js").write_text(
+        "old"
+    )
     (repo_root / ".venv").mkdir()
     (repo_root / ".venv" / "marker.txt").write_text("old-venv")
     plan = update_self.plan_apply(
@@ -2225,7 +2243,9 @@ def _make_real_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "real-repo"
     repo.mkdir()
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "t@example.com"], cwd=repo, check=True
+    )
     subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
     subprocess.run(
         ["git", "commit", "--allow-empty", "-q", "-m", "Initial workspace commit"],
@@ -2237,7 +2257,11 @@ def _make_real_repo(tmp_path: Path) -> Path:
 
 def _head_sha(repo: Path) -> str:
     return subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
     ).stdout.strip()
 
 
@@ -2467,9 +2491,7 @@ def test_recover_if_stale_truth_table(apply_repo: Path) -> None:
     # Dead process but within the grace period: still a no-op -- the DRI agent
     # gets its window to simply re-run the idempotent apply.
     assert (
-        _recover(
-            runner, http, apply_repo, if_stale=True, now=lambda: 1000.0 + 60.0
-        )
+        _recover(runner, http, apply_repo, if_stale=True, now=lambda: 1000.0 + 60.0)
         == 0
     )
     assert runner.calls == []
@@ -2502,9 +2524,7 @@ def test_recover_restores_snapshots_and_restarts_when_the_apply_had(
     plan = update_self.plan_apply(["system/apps/system_interface/frontend/src/App.ts"])
     snapshots = update_self.take_snapshots(plan, apply_repo, _RecordingRunner(), [])
     shutil.rmtree(apply_repo / update_self.STATIC_DIR)
-    _write_recover_marker(
-        apply_repo, snapshots=snapshots, live_service_restarted=True
-    )
+    _write_recover_marker(apply_repo, snapshots=snapshots, live_service_restarted=True)
     runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
 
     code = _recover(runner, _FakeHttp(_all_healthy), apply_repo)
@@ -2608,7 +2628,9 @@ def test_recover_reaches_the_same_end_state_as_the_in_process_rollback(
     repo_b = tmp_path / "b" / "repo"
     (repo_b / update_self.FRONTEND_DIR).mkdir(parents=True)
     _write_bundle(repo_b)
-    plan = update_self.plan_apply(["system/apps/system_interface/frontend/src/views/Chat.ts"])
+    plan = update_self.plan_apply(
+        ["system/apps/system_interface/frontend/src/views/Chat.ts"]
+    )
     snapshots = update_self.take_snapshots(plan, repo_b, _RecordingRunner(), [])
     shutil.rmtree(repo_b / update_self.STATIC_DIR)
     _write_recover_marker(
@@ -2762,7 +2784,10 @@ def test_recover_aborts_a_merge_killed_before_it_committed(
     assert not (repo / "from-upstream.txt").exists()
     assert _git_in(repo, "status", "--porcelain") == ""
     # The merge is genuinely undone, not landed under the rollback's subject.
-    assert subprocess.run(
-        ["git", "merge-base", "--is-ancestor", "worker", "HEAD"], cwd=repo
-    ).returncode != 0
+    assert (
+        subprocess.run(
+            ["git", "merge-base", "--is-ancestor", "worker", "HEAD"], cwd=repo
+        ).returncode
+        != 0
+    )
     assert not _marker_exists(repo)
