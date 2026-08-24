@@ -3279,7 +3279,17 @@ def test_the_starter_this_recreates_is_the_one_the_template_ships() -> None:
     # at this constant for the exact block. Nothing else compares the two, so a
     # preamble edited on one side alone would silently make that instruction
     # impossible to follow and hand a recreated ledger a different header.
-    shipped = (_WORKSPACE_ROOT / update_self._VERSION_HISTORY_REL).read_text()
+    ledger = _WORKSPACE_ROOT / update_self._VERSION_HISTORY_REL
+    # Only in a tree that still ships the starter, which is the one the two can
+    # actually drift apart in. This file ships into every workspace made from
+    # the template, and there the same path is that workspace's own ledger:
+    # entries are appended to it (and a published template drops it entirely),
+    # so an entry of any kind means this is not the shipped block any more.
+    if not ledger.exists():
+        pytest.skip("no ledger here: a published template drops it")
+    shipped = ledger.read_text()
+    if any(line.startswith(("- ", "### ")) for line in shipped.splitlines()):
+        pytest.skip("this ledger has entries: a live workspace's, not the starter")
 
     assert shipped == update_self._VERSION_HISTORY_STARTER
 
