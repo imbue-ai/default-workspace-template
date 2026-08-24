@@ -5,6 +5,7 @@ import { resetEmbedEndpointForTesting } from "../embed";
 import type { ToolCall, ToolResultEvent } from "../models/Response";
 import type { ScopeInfo } from "./latchkey-scope-info";
 import type { PermissionResolution } from "./message-classification";
+import { isFiledPermissionRequest } from "./message-classification";
 import {
   PermissionCard,
   initShellPermissionResolutions,
@@ -476,6 +477,31 @@ const LOCK_RECT = '<rect x="3" y="11"';
 // A predefined request naming a service the workspace bundles no artwork for.
 const UNBUNDLED_SERVICE_OUTPUT =
   '{"request_id":"x1","request_type":"predefined","rationale":"look something up","payload":{"scope":"madeup-api"}}';
+
+describe("isFiledPermissionRequest", () => {
+  // A PreToolUse guard refusing the command is the common way this happens: the
+  // harness returns the block message as an errored result and nothing ever
+  // reaches the gateway. Rendering that as a permission card sent the user to a
+  // Permissions tab with nothing in it.
+  const call = makeToolCall(PERMISSION_INPUT, "permission_request");
+
+  it("counts a request whose result has not arrived yet", () => {
+    expect(isFiledPermissionRequest(call, null)).toBe(true);
+  });
+
+  it("counts a request the gateway answered", () => {
+    expect(isFiledPermissionRequest(call, makeResult(PERMISSION_OUTPUT))).toBe(true);
+  });
+
+  it("does not count a call the harness refused", () => {
+    const blocked = makeResult("PreToolUse:Bash hook error: Blocked: file ONE latchkey permission request", true);
+    expect(isFiledPermissionRequest(call, blocked)).toBe(false);
+  });
+
+  it("does not count an ordinary tool call", () => {
+    expect(isFiledPermissionRequest(makeToolCall('{"command":"echo hi"}'), null)).toBe(false);
+  });
+});
 
 describe("renderPermissionCard", () => {
   it("shows the eyebrow, title, rationale, and review button on a pending card", () => {

@@ -71,7 +71,7 @@ import type {
 import type { PermissionResolution } from "./message-classification";
 import {
   isNonBoundaryUserMessage,
-  isPermissionRequestCall,
+  isFiledPermissionRequest,
   isSystemChipUserMessage,
   resolutionOf,
 } from "./message-classification";
@@ -178,9 +178,12 @@ function isTkLifecycleCall(tc: ToolCall): boolean {
   return tc.display === "hidden";
 }
 
-/** True when an assistant message issues a permission request. */
-function hasPermissionRequest(e: AssistantMessageEvent): boolean {
-  return e.tool_calls.some(isPermissionRequestCall);
+/** True when an assistant message FILED a permission request -- one the user can
+ *  still answer. A call the harness refused never reached the gateway, so it
+ *  neither breaks out of its step nor takes a place in the queue a later verdict
+ *  is matched against. */
+function hasPermissionRequest(e: AssistantMessageEvent, toolResults: Map<string, ToolResultEvent>): boolean {
+  return e.tool_calls.some((tc) => isFiledPermissionRequest(tc, toolResults.get(tc.tool_call_id) ?? null));
 }
 
 /** The Bash command string for a tool call, or null if not a Bash call (or its
@@ -494,7 +497,7 @@ export function buildSections(
         if (t.status === "in_progress") lastOpened = t.id;
       }
       if (parsed.render !== null && (parsed.render.text || parsed.render.tool_calls.length > 0)) {
-        if (hasPermissionRequest(parsed.render)) {
+        if (hasPermissionRequest(parsed.render, toolResults)) {
           // A permission request breaks out of any open step: it must always be
           // directly visible, never collapsed inside a step node. The step stays
           // open (current_step_id is untouched), so work resumed after the user
