@@ -21,6 +21,21 @@ def workspaces_admin() -> None:
     """Operator workspace-lifecycle management (requires MINDS_ADMIN_KEY)."""
 
 
+@workspaces_admin.command(name="stop")
+@click.argument("host_db_id")
+@paid_auth_options
+@handle_imbue_cloud_errors
+def admin_stop_workspace(host_db_id: str, connector_url: str | None, api_key: str | None) -> None:
+    """Force-stop the workspace HOST_DB_ID (halt VM, upload artifact, free the slot).
+
+    The same data-preserving transition the owner's stop runs, without the
+    ownership check: used for suspensions, migrations, and clearing a box.
+    Idempotent -- a workspace already stopping/stopped reports its status.
+    """
+    client = make_admin_connector_client(connector_url)
+    emit_json(client.admin_stop_workspace(resolve_admin_api_key(api_key), host_db_id))
+
+
 @workspaces_admin.command(name="abandon")
 @click.argument("host_db_id")
 @click.option("--reason", required=True, help="Why the workspace is being abandoned (recorded on the row)")

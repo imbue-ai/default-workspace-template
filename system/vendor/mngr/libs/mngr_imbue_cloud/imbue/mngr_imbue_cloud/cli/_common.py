@@ -17,11 +17,13 @@ from typing import NoReturn
 import click
 from pydantic import AnyUrl
 
+from imbue.mngr_imbue_cloud.config import ACCOUNTS_URL_ENV_VAR
 from imbue.mngr_imbue_cloud.config import CONNECTOR_URL_ENV_VAR
 from imbue.mngr_imbue_cloud.config import get_active_profile_dir
 from imbue.mngr_imbue_cloud.config import get_sessions_dir
 from imbue.mngr_imbue_cloud.connector.client import ImbueCloudConnectorClient
 from imbue.mngr_imbue_cloud.connector.session_store import ImbueCloudSessionStore
+from imbue.mngr_imbue_cloud.errors import ImbueCloudAccountSuspendedError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudClientTooOldError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudEmailNotVerifiedError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudError
@@ -72,6 +74,21 @@ def resolve_connector_url(override: str | None) -> str:
         error_class="UsageError",
         exit_code=2,
     )
+
+
+def resolve_accounts_url(override: str | None) -> str | None:
+    """Resolve the browser accounts-origin URL: explicit flag > env var > None.
+
+    None means the tier has no dedicated accounts origin (dev/CI tiers), so
+    browser pages are served on the connector host itself and callers should
+    fall back to the connector URL.
+    """
+    if override:
+        return override.rstrip("/")
+    env_value = os.environ.get(ACCOUNTS_URL_ENV_VAR)
+    if env_value:
+        return env_value.rstrip("/")
+    return None
 
 
 def make_connector_client(connector_url: str | None) -> ImbueCloudConnectorClient:
@@ -155,6 +172,14 @@ def handle_imbue_cloud_errors(func):
                 error_class=type(exc).__name__,
                 code="email_not_verified",
                 email=exc.email,
+            )
+        except ImbueCloudAccountSuspendedError as exc:
+            # The message carries the support contact; the code lets callers
+            # (e.g. the minds desktop client) key off the refusal structurally.
+            fail_with_json(
+                str(exc),
+                error_class=type(exc).__name__,
+                code="account_suspended",
             )
         except ImbueCloudClientTooOldError as exc:
             fail_with_json(

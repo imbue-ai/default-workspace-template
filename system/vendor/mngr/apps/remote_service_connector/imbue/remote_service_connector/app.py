@@ -48,6 +48,7 @@ from imbue.modal_app_kit.deploy import stamped_secret
 from imbue.modal_app_kit.image import locate_image_requirements
 from imbue.modal_app_kit.image import pinned_image
 from imbue.modal_app_kit.request_logging import RequestLoggingMiddleware
+from imbue.modal_app_kit.request_logging import deployed_minds_env_name
 from imbue.modal_app_kit.sentry import capture_and_reraise
 from imbue.modal_app_kit.sentry import init_sentry
 from imbue.modal_app_kit.source_mount import shipped_python_source_ignore
@@ -55,7 +56,6 @@ from imbue.remote_service_connector import db
 from imbue.remote_service_connector.auth_proxy import EnsureAsgiRootPathMiddleware
 from imbue.remote_service_connector.auth_proxy import PartitionedCookieMiddleware
 from imbue.remote_service_connector.auth_proxy import init_supertokens
-from imbue.remote_service_connector.cloudflare import current_minds_env_name
 from imbue.remote_service_connector.errors import MissingShareConfigError
 from imbue.remote_service_connector.hosts import reconcile_slice_boxes
 from imbue.remote_service_connector.r2.sweep import run_r2_quota_sweep
@@ -239,7 +239,7 @@ def _cleanup_removing_pool_hosts() -> dict[str, int]:
         # it is safe on a box shared by multiple dev envs. A reconcile failure (DB,
         # SSH, or a missing POOL_SSH_PRIVATE_KEY while boxes exist) is a real failure:
         # let it propagate and fail the cron run rather than silently swallowing it.
-        divergence_count = reconcile_slice_boxes(conn, current_minds_env_name())
+        divergence_count = reconcile_slice_boxes(conn, deployed_minds_env_name())
     finally:
         conn.close()
     logger.info("Slice reconcile done: slice_divergences=%d", divergence_count)
@@ -350,14 +350,14 @@ def _relay_health_sweep() -> dict[str, int]:
     memory=512,
     timeout=7200,
 )
-def workspace_transition_supervisor(host_db_id: str) -> str:
+def workspace_transition_supervisor(host_db_id: str, transition_id: str) -> str:
     init_sentry(_SENTRY_SERVICE_NAME, "RSC_SENTRY_DSN")
     with capture_and_reraise():
-        return _workspace_transition_supervisor(host_db_id)
+        return _workspace_transition_supervisor(host_db_id, transition_id)
 
 
-def _workspace_transition_supervisor(host_db_id: str) -> str:
-    outcome = run_transition_supervisor(host_db_id)
+def _workspace_transition_supervisor(host_db_id: str, transition_id: str) -> str:
+    outcome = run_transition_supervisor(host_db_id, transition_id)
     logger.info("Transition supervisor for %s finished: %s", host_db_id, outcome)
     return outcome
 
@@ -365,8 +365,8 @@ def _workspace_transition_supervisor(host_db_id: str) -> str:
 # The stop/start endpoints (and the watchdog) spawn supervisors through this
 # hook. Wired here because only the entrypoint may import ``modal``: the
 # shipped modules hold the seam, the entrypoint provides the implementation.
-def _spawn_transition_supervisor(host_db_id: str) -> None:
-    workspace_transition_supervisor.spawn(host_db_id)
+def _spawn_transition_supervisor(host_db_id: str, transition_id: str) -> None:
+    workspace_transition_supervisor.spawn(host_db_id, transition_id)
 
 
 stop_start_module.spawner.hook = _spawn_transition_supervisor
@@ -377,8 +377,10 @@ stop_start_module.spawner.hook = _spawn_transition_supervisor
     secrets=_connector_secrets(),
     # Hourly watchdog for orphaned transitions: rows stuck in stopping/starting
     # (or stopped-with-a-leftover-VM) whose supervisor heartbeat went stale
-    # (connector redeploy, Modal eviction, supervisor timeout) get a fresh
-    # supervisor. Every step is idempotent, so re-driving always converges.
+    # (connector redeploy, Modal eviction, supervisor timeout) are taken over
+    # under a fresh fencing token and re-driven, with an exponential backoff
+    # in the transition's consecutive-failure count and an ops alert once a
+    # transition has clearly stopped converging.
     schedule=modal.Cron("45 * * * *"),
     timeout=900,
 )

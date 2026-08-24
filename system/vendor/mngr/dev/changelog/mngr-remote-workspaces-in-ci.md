@@ -1,0 +1,15 @@
+Add `specs/remote-workspaces-in-ci.md`: release tests exercise real remote workspace allocation (imbue_cloud bare-metal slices) in CI, via standing CI-tier boxes, a per-run slice pre-allocation stage in the opt-in release tier, a content-addressed per-box image cache, and CI slice sweeps.
+
+Record the now-superseded deferred items of `specs/minds-deployment-tests.md` in `uncertainties.md`.
+
+Wire the release tier's pool bake into CI: `ci.yml` gains `template_ref` / `minds_pool_slice_count` / `minds_release_test_filter` dispatch inputs, a pre-bake step in `build-minds-ci-env`, a template-checkout step + `-k` filter for the `minds_services` run, a CI slice sweep in `destroy-minds-ci-env`, and a conditional workflow-level `minds-remote-release` concurrency group that serializes release dispatches without touching normal CI.
+
+New `just bake-ci-slices` recipe; `just minds-test-services-against` and `just minds-test-deployment` now set `MINDS_ALLOW_EMPTY_POOL=1` so pool-consuming tests skip (rather than fail) against envs without baked capacity (a dev env without a baked box, or the full-run flow's fresh env, whose pool is empty by construction).
+
+Fix the release tier's first live dispatch failures: `build-minds-ci-env` and `test-minds-release` install node + pnpm (the env deploy builds the connector's hosted pages with pnpm and refused to run without it), and `test-minds-release` builds the minds SPA bundle before the plain release tests (the desktop client serves the built bundle from `static/ui/`, so `test_sse_redirect` got 503 "frontend not built" on the bare runner).
+
+The `test-minds-snapshot` template-checkout step now reads the template deploy key from the env's per-run Vault path (`minds/ci/runs/<env>/pool/DWT_READ_KEY_B64`, written by the bake stage) instead of the static `minds/ci/dwt` entry, which the `minds_ci_test_gh` role is not allowed to read; the fetch is gated on the env config actually carrying pool info.
+
+The `minds_services` step now receives its per-env secrets (SuperTokens, Neon DSNs, CI test-user credentials) as injected env vars fetched by the use-vault-secrets action immediately before the step: the previous design relied on the fixtures' in-process Vault fallback, but the `minds_ci_test_gh` role's 60-second token TTL expires before pytest's fixtures run, which silently skipped every secret-needing services test (including the new pool tests). The pytest invocation also gains `-rs` so future skips show their reasons in the log.
+
+Both direct pytest steps (the `minds_services` run and the plain minds release tests) now set `PYTEST_MAX_DURATION_SECONDS=3600`: the imbue_common session guard's 150-second default was guaranteed to fail these many-minute live suites even with every test passing, and its `pytest.exit` also suppressed the failure tracebacks. The plain release step also gains `-rs` (matching the services step) so skip reasons show in the log, and the services fetch step additionally exports the per-run `MINDS_ADMIN_KEY` for the admin-authenticated deployment tests.

@@ -260,7 +260,8 @@ def test_admin_get_account_lazily_creates_row(monkeypatch: pytest.MonkeyPatch) -
     assert resp.status_code == 200
     body = resp.json()
     assert body["email"] == "somebody@example.com"
-    assert body["plan_name"] == "explorer"
+    # A brand-new account with no explicit signup choice backfills as free.
+    assert body["plan_name"] == "free"
     assert entitlements_store.get_entitlements(body["user_id"]) is not None
 
 
@@ -438,9 +439,25 @@ def test_route_get_account_reports_plan_entitlements_and_usage(monkeypatch: pyte
     assert body["usage"]["remote_workspaces"] == 1
     assert body["usage"]["llm_spend_usd_this_period"] == 12.5
     assert body["usage"]["llm_budget_resets_at"] == "2026-08-01T00:00:00Z"
-    assert sorted(body["available_plans"]) == ["ally", "explorer"]
+    assert sorted(body["available_plans"]) == ["ally", "explorer", "free"]
     # CLEANUP: drop with the deprecated tunnel compat fields (see accounts.py).
     # v0.3.11 clients require these tunnel-era fields with no defaults.
     assert body["entitlements"]["max_tunnels"] == 0
     assert body["entitlements"]["max_services_per_tunnel"] == 0
     assert body["usage"]["tunnels"] == 0
+
+
+def test_admin_get_account_reports_suspension_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, entitlements_store, _litellm, st_backend = _make_account_admin_test_client(monkeypatch)
+    st_backend.sign_up(tenant_id="public", email="somebody@example.com", password="password123")
+
+    fresh = client.get("/admin/accounts/somebody@example.com", headers=_admin_key_headers()).json()
+    assert fresh["suspended_at"] is None
+    assert fresh["suspended_reason"] is None
+
+    entitlements_store.update_entitlements(
+        fresh["user_id"], {"suspended_at": "2026-08-22T00:00:00+00:00", "suspended_reason": "abuse"}
+    )
+    suspended = client.get("/admin/accounts/somebody@example.com", headers=_admin_key_headers()).json()
+    assert suspended["suspended_at"] == "2026-08-22T00:00:00+00:00"
+    assert suspended["suspended_reason"] == "abuse"

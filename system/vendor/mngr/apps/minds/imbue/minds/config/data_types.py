@@ -119,6 +119,17 @@ class ClientEnvConfig(FrozenModel):
         ),
     )
 
+    def accounts_origin_url(self) -> str:
+        """The tier's browser accounts origin, without a trailing slash.
+
+        Prefers ``accounts_base_url`` (production: https://accounts.imbue.com)
+        and falls back to ``connector_url``, which serves the same pages on
+        tiers without a dedicated accounts domain.
+        """
+        if self.accounts_base_url is not None:
+            return str(self.accounts_base_url).rstrip("/")
+        return str(self.connector_url).rstrip("/")
+
 
 class DeploySecretsConfig(FrozenModel):
     """The ``[secrets]`` subtable of a ``deploy.toml`` -- which Vault-backed services this tier needs.
@@ -261,6 +272,22 @@ class MinContainersConfig(FrozenModel):
     )
 
 
+class AnalyticsDeployConfig(FrozenModel):
+    """Whether the tier deploys the analytics app (``analytics-<tier>``).
+
+    The tier default: off everywhere until the once-per-tier bringup runbook
+    (apps/analytics/docs/bringup.md) has provisioned the Neon project, R2
+    buckets, and Vault entry the app needs. Dynamic dev envs override the
+    tier default with the sticky ``minds env deploy --with-analytics`` /
+    ``--without-analytics`` flag (persisted in the env's local state).
+    """
+
+    is_deployed: bool = Field(
+        default=False,
+        description="Deploy the analytics app (push its Modal Secret, run its ops migrations, `modal deploy`).",
+    )
+
+
 class ScaledownWindowConfig(FrozenModel):
     """Idle-before-scaledown windows (seconds) for each Modal app the tier ships.
 
@@ -286,6 +313,27 @@ class ScaledownWindowConfig(FrozenModel):
     litellm_proxy: NonNegativeInt = Field(
         default=NonNegativeInt(0),
         description="Idle seconds before ``llm-<tier>`` scales a container down (0 = Modal default).",
+    )
+
+
+class StorageDeployConfig(FrozenModel):
+    """The ``[storage]`` block of a ``deploy.toml`` -- git-owned workspace-storage knobs.
+
+    The tier's storage *credentials* stay in Vault (the ``storage`` service
+    entry); this block carries only the deploy-time-owned settings stamped
+    over them into the pushed Modal Secret.
+    """
+
+    stop_retention_seconds: NonNegativeInt | None = Field(
+        default=None,
+        description=(
+            "Seconds a stopped workspace's halted VM lingers on its box for instant "
+            "restart-in-place before the retention finalize frees the slot. Stamped as "
+            "``WORKSPACE_STOP_RETENTION_SECONDS`` over the Vault entry at deploy time; "
+            "unset defers to the Vault value (or the connector's 3600s default). ci/dev "
+            "set this low so stop/start tests finish in minutes rather than waiting out "
+            "an hour-long window."
+        ),
     )
 
 
@@ -489,6 +537,14 @@ class DeployEnvConfig(FrozenModel):
             "0 means use Modal's own default."
         ),
     )
+    analytics: AnalyticsDeployConfig = Field(
+        default_factory=AnalyticsDeployConfig,
+        description=(
+            "Whether this tier deploys the analytics app. Off by default (and in every "
+            "committed deploy.toml) until the tier's analytics bringup has run; dynamic dev "
+            "envs override via the sticky --with-analytics deploy flag."
+        ),
+    )
     paid: PaidDefaultsConfig = Field(
         default_factory=PaidDefaultsConfig,
         description=(
@@ -509,6 +565,13 @@ class DeployEnvConfig(FrozenModel):
         description=(
             "Pinned template + blessed compute shape for browser-driven workspace creation "
             "(the connector's POST /hosts/claim). None (the default) disables web creates on the tier."
+        ),
+    )
+    storage: StorageDeployConfig | None = Field(
+        default=None,
+        description=(
+            "Git-owned workspace-storage knobs stamped over the Vault ``storage`` entry at "
+            "deploy time. None (the default) leaves the Vault values untouched."
         ),
     )
     origins: OriginsConfig | None = Field(

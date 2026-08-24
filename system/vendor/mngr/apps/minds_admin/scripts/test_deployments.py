@@ -25,12 +25,17 @@ for Phase 2 and log a clear "not implemented yet" warning rather than
 silently no-op-ing.
 """
 
+import base64
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 from collections.abc import Iterable
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -42,6 +47,7 @@ from uuid import uuid4
 
 import click
 import httpx
+import psycopg2
 from loguru import logger
 from pydantic import AnyUrl
 from pydantic import Field
@@ -49,14 +55,19 @@ from pydantic import SecretStr
 
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.primitives import NonEmptyStr
 from imbue.minds.config.loader import load_client_config
 from imbue.minds.deployment_tests.data_types import DefaultWorkspaceTemplateRef
 from imbue.minds.deployment_tests.data_types import DeploymentEnvsConfig
+from imbue.minds.deployment_tests.data_types import PoolProvisionInfo
 from imbue.minds.deployment_tests.data_types import SharedEnvUrls
+from imbue.minds.deployment_tests.helpers import POOL_DWT_READ_KEY_SECRET_KEY
 from imbue.minds.deployment_tests.helpers import build_minds_env_subprocess_env
 from imbue.minds.deployment_tests.helpers import create_verified_user_via_admin_api
+from imbue.minds.deployment_tests.helpers import delete_pool_secrets
 from imbue.minds.deployment_tests.helpers import delete_shared_env_secrets
+from imbue.minds.deployment_tests.helpers import publish_pool_secrets
 from imbue.minds.deployment_tests.helpers import publish_shared_env_secrets
 from imbue.minds.deployment_tests.helpers import read_ci_test_user_credentials
 from imbue.minds.deployment_tests.helpers import read_shared_env_secrets
@@ -71,6 +82,7 @@ from imbue.minds.envs.paths import env_root_dir
 from imbue.minds.envs.paths import secrets_file
 from imbue.minds.envs.primitives import DevEnvName
 from imbue.minds.envs.vault_reader import VaultPath
+from imbue.minds.envs.vault_reader import admin_key_from_supertokens_secret
 from imbue.minds.envs.vault_reader import read_vault_kv
 from imbue.minds.errors import MindError
 from imbue.minds.utils.output import write_stdout_line
@@ -83,7 +95,11 @@ from imbue.minds_admin.envs.r2_cleanup import CloudflareR2Credentials
 from imbue.minds_admin.envs.r2_cleanup import R2CleanupError
 from imbue.minds_admin.envs.r2_cleanup import SuperTokensCoreCredentials
 from imbue.minds_admin.envs.r2_cleanup import sweep_orphaned_r2_buckets
+from imbue.minds_admin.slices.bare_metal_db import fetch_servers
 from imbue.mngr.utils.testing import get_short_random_string
+from imbue.mngr_imbue_cloud.primitives import OVH_DATACENTER_CODE_BY_US_REGION
+from imbue.mngr_imbue_cloud.repo_identity import canonicalize_repo_source
+from imbue.mngr_imbue_cloud.slices.bare_metal import find_first_ready_server_in_datacenter
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -108,6 +124,28 @@ _DEFAULT_SHARED_ENV_ROLES: Final[tuple[SharedEnvRole, ...]] = (SharedEnvRole("de
 
 _MINDS_DEPLOY_TIMEOUT_SECONDS: Final[int] = 15 * 60
 _MINDS_DESTROY_TIMEOUT_SECONDS: Final[int] = 10 * 60
+# The bake's long pole is one cold workspace-image build (seed phase) plus the
+# per-slice carve + docker load fan-out; warm-content runs finish far sooner.
+_MINDS_BAKE_TIMEOUT_SECONDS: Final[int] = 90 * 60
+# The warm verb is at most one cold seed build (one throwaway slice, bounded
+# retries); nothing in the workflow waits on it, so the cap only bounds runner
+# spend when it wedges.
+_MINDS_WARM_TIMEOUT_SECONDS: Final[int] = 45 * 60
+# Cap on how many slices the CI bake fan-out runs at once. The measured warm
+# path (carve + docker load + bootstrap) is minutes per slice, so baking the
+# whole default roster concurrently avoids a second wave; capped so a large
+# --count re-run cannot over-contend the box.
+_MAX_CI_BAKE_CONCURRENCY: Final[int] = 8
+_MINDS_SWEEP_TIMEOUT_SECONDS: Final[int] = 15 * 60
+_GIT_TIMEOUT_SECONDS: Final[int] = 600
+# Remote-workspace release test roster (lease/isolation, fast-path create,
+# stop/start) plus two spares for flaky retries and post-run debugging.
+_DEFAULT_CI_POOL_SLICE_COUNT: Final[int] = 5
+_DEFAULT_CI_POOL_REGION: Final[str] = "US-EAST-VA"
+_DEFAULT_WORKSPACE_TEMPLATE_HTTPS_URL: Final[str] = "https://github.com/imbue-ai/default-workspace-template.git"
+# Base64 private key (read-only deploy key on the template repo) the CI bake
+# stage clones with; local operators rely on ambient git credentials instead.
+_DWT_READ_KEY_ENV_VAR: Final[str] = "MINDS_CI_DWT_KEY_B64"
 # Global pytest-session deadline for the deployment/services suites. They each
 # stand up real cloud envs and legitimately run for many minutes (the three
 # minds_deployment tests together are ~10-12 min), far beyond the default.
@@ -389,6 +427,11 @@ def _mint_shared_env_name(*, run_id: RunId, role: SharedEnvRole) -> DevEnvName:
     re-run within a single second of the prior one). The role -- when
     not ``default`` -- is appended LAST so the timestamp stays at
     position 2 and the sweep regex matches every shape uniformly.
+
+    The default-role name (``ci-`` + 16-char timestamp + ``-`` + 8-hex suffix,
+    28 chars) must stay within ``MAX_SLICE_ENV_NAME_LENGTH`` -- the env is
+    stamped into every pool slice's lima names, whose length limactl caps (the
+    pool bake fails fast past the cap).
     """
     short = get_short_random_string()
     if role == SharedEnvRole("default"):
@@ -440,7 +483,13 @@ def _deploy_shared_env(*, name: DevEnvName, role: SharedEnvRole) -> SharedEnvUrl
     secrets_model = read_secrets_file(name)
     secrets = {key: value.get_secret_value() for key, value in secrets_model.secrets.items()}
     _create_ci_test_user(secrets=secrets, connector_url=str(client_config.connector_url), name=name)
-    publish_shared_env_secrets(env_name=name, role=role, secrets=secrets)
+    # The tier's fixed admin key rides along with the per-env secrets: the CI
+    # test job's Vault role cannot read the static supertokens entry, and the
+    # admin-authenticated deployment tests (the backup-retention reap) need it.
+    admin_key = admin_key_from_supertokens_secret(
+        read_vault_kv(VaultPath(f"{_CI_VAULT_PREFIX}/supertokens")), _CI_VAULT_PREFIX
+    )
+    publish_shared_env_secrets(env_name=name, role=role, secrets={**secrets, "MINDS_ADMIN_KEY": admin_key})
     logger.info("Shared env {!r} deployed; connector={}", name, urls.connector_url)
     return urls
 
@@ -494,6 +543,10 @@ def _destroy_env(name: DevEnvName, *, run_id: RunId) -> None:
             delete_shared_env_secrets(env_name=name, role=role)
         except (MindError, httpx.HTTPError) as exc:
             logger.warning("Failed to delete per-env Vault secrets for env {!r} role {!r}: {}", name, role, exc)
+    try:
+        delete_pool_secrets(env_name=name)
+    except (MindError, httpx.HTTPError) as exc:
+        logger.warning("Failed to delete per-env pool Vault secrets for env {!r}: {}", name, exc)
     _mark_status(NonEmptyStr(str(name)), kind=LedgerKind.ENV, run_id=run_id, status=LedgerStatus.DESTROYED)
 
 
@@ -947,6 +1000,396 @@ def up(role: str) -> None:
         f"  {DEPLOYMENT_ENVS_JSON_ENV_VAR}={state_path} uv run pytest -m minds_services apps/minds/deployment_tests/"
     )
     write_stdout_line("Tear down with: just minds-test-deployment-down")
+
+
+@cli.command(name="bake-pool")
+@click.option(
+    "--state-file",
+    default=str(_ITERATE_STATE_DIR / "iterate-default.json"),
+    show_default=True,
+    help="The deployment_envs.json written by `up` for the env to provision the pool for.",
+)
+@click.option(
+    "--count",
+    type=int,
+    default=_DEFAULT_CI_POOL_SLICE_COUNT,
+    show_default=True,
+    help="Slices to bake (remote-workspace test roster + spares).",
+)
+@click.option(
+    "--template-ref",
+    default=None,
+    help=(
+        "default-workspace-template ref to bake (branch, tag, or full SHA); frozen to a SHA at bake "
+        "time. Defaults to main. Mutually exclusive with --template-dir (a local checkout bakes as-is "
+        "at its current HEAD)."
+    ),
+)
+@click.option(
+    "--template-dir",
+    default=None,
+    type=click.Path(exists=True),
+    help="Bake from this local template checkout instead of cloning --template-ref.",
+)
+@click.option(
+    "--region",
+    default=_DEFAULT_CI_POOL_REGION,
+    show_default=True,
+    help="Lease-region label stamped on the rows; also selects which CI box (by datacenter) to bake on.",
+)
+def bake_pool(state_file: str, count: int, template_ref: str | None, template_dir: str | None, region: str) -> None:
+    """Pre-provision leasable pool slices for an up'd ci env (the CI release flow's bake stage).
+
+    Sweeps stale CI slices off the standing boxes, imports the ready box rows from
+    the CI infra DB into the env's own host_pool DB, bakes ``count`` slices from the
+    requested template content (content-addressed image cache, so identical content
+    re-bakes warm), and records the stamped ``(repo_url, repo_branch_or_tag)``
+    identity into the state file for the tests to lease fast-path against. See
+    specs/remote-workspaces-in-ci.md.
+    """
+    if template_ref is not None and template_dir is not None:
+        raise click.UsageError(
+            "--template-ref and --template-dir are mutually exclusive: a local --template-dir checkout "
+            "bakes as-is at its current HEAD, so an explicit ref would be silently ignored"
+        )
+    state_path = Path(state_file)
+    if not state_path.is_file():
+        raise click.ClickException(f"No state file at {state_path}; run `up` first.")
+    config = DeploymentEnvsConfig.model_validate_json(state_path.read_text())
+    default_role = SharedEnvRole("default")
+    if default_role not in config.shared_envs:
+        raise click.ClickException(f"State file {state_path} has no 'default' shared env to bake for.")
+    env_name = config.shared_envs[default_role].env_name
+
+    infra_dsn = _read_ci_infra_pool_dsn()
+    target_dsn = _read_env_host_pool_dsn(env_name)
+    sub_env = build_minds_env_subprocess_env(env_name)
+
+    # 1. Sweep stale CI slices first, so a wedged prior run cannot eat the slots
+    #    this bake needs. Sweep failures are non-fatal here (the bake's own
+    #    capacity check reports precisely if slots are genuinely short).
+    sweep_rc = _run_minds_admin_streaming(
+        ["server", "sweep-ci-slices", "--database-url", infra_dsn],
+        sub_env=sub_env,
+        timeout_seconds=_MINDS_SWEEP_TIMEOUT_SECONDS,
+    )
+    if sweep_rc != 0:
+        logger.warning("CI slice sweep exited {} (continuing; the bake's capacity check is authoritative)", sweep_rc)
+
+    # 2. Make the standing boxes leasable from this env.
+    import_rc = _run_minds_admin_streaming(
+        ["server", "import-boxes", "--source-database-url", infra_dsn, "--database-url", target_dsn],
+        sub_env=sub_env,
+        timeout_seconds=_MINDS_SWEEP_TIMEOUT_SECONDS,
+    )
+    if import_rc != 0:
+        raise click.ClickException(f"`minds-admin server import-boxes` exited {import_rc}")
+    server_id = _select_ci_box_for_region(target_dsn, region=region)
+
+    # 3. Hand the template read key to the (separately-authorized) test runner
+    #    via the env's per-run Vault path: the CI test job's Vault role cannot
+    #    read the static minds/ci/dwt entry, only minds/ci/runs/* (see
+    #    publish_pool_secrets). Published BEFORE the bake: the CI job's Vault
+    #    token TTL (30 min) would expire across a cold bake. Only the CI clone
+    #    path needs this -- a local --template-dir iterate run already has the
+    #    checkout, and the operator's token may lack runs/* write. An orphan
+    #    entry from a failed bake is deleted by env destroy (and the test job
+    #    only reads it when the state file carries pool info).
+    if template_dir is None:
+        dwt_key_b64 = os.environ.get(_DWT_READ_KEY_ENV_VAR) or _read_dwt_key_from_vault_or_none()
+    else:
+        dwt_key_b64 = None
+    if dwt_key_b64:
+        publish_pool_secrets(env_name=env_name, secrets={POOL_DWT_READ_KEY_SECRET_KEY: dwt_key_b64})
+
+    # 4. Bake. The stamped repo_branch_or_tag is the resolved template SHA, so a
+    #    fast-path lease from this run can only adopt this run's own bake.
+    with _resolved_template_checkout(
+        template_ref=template_ref or "main", template_dir=template_dir, key_b64=dwt_key_b64
+    ) as (
+        workspace_dir,
+        resolved_sha,
+    ):
+        # The same canonical repo identity `pool create` stamps on the rows
+        # (derived from the checkout's origin); recorded so fast-path tests
+        # request exactly the (repo_url, repo_branch_or_tag) pair that matches.
+        stamped_repo_url = canonicalize_repo_source(str(workspace_dir))
+        bake_rc = _run_minds_admin_streaming(
+            [
+                "pool",
+                "create",
+                "--count",
+                str(count),
+                "--region",
+                region,
+                "--workspace-dir",
+                str(workspace_dir),
+                "--repo-branch-or-tag",
+                resolved_sha,
+                "--mngr-source",
+                str(_REPO_ROOT),
+                "--content-addressed-cache",
+                "--server-id",
+                server_id,
+                "--database-url",
+                target_dsn,
+                # Bake the whole roster in one wave: with the tar warmed (or seeded
+                # once), each slice is carve + docker load + finalize, and a second
+                # wave would serialize minutes for no contention benefit.
+                "--max-concurrency",
+                str(min(count, _MAX_CI_BAKE_CONCURRENCY)),
+            ],
+            sub_env=sub_env,
+            timeout_seconds=_MINDS_BAKE_TIMEOUT_SECONDS,
+        )
+    if bake_rc != 0:
+        raise click.ClickException(f"`minds-admin pool create` exited {bake_rc}")
+
+    updated_config = config.model_copy_update(
+        to_update(
+            config.field_ref().pool,
+            PoolProvisionInfo(
+                repo_url=NonEmptyStr(stamped_repo_url),
+                repo_branch_or_tag=NonEmptyStr(resolved_sha),
+                region=NonEmptyStr(region),
+                slice_count=count,
+            ),
+        ),
+    )
+    state_path.write_text(updated_config.model_dump_json(indent=2))
+    write_stdout_line(f"Baked {count} slice(s) for env {env_name!r} at template {resolved_sha} (region {region}).")
+
+
+@cli.command(name="warm-pool-cache")
+@click.option(
+    "--template-ref",
+    default=None,
+    help=(
+        "default-workspace-template ref whose content to pre-warm (branch, tag, or full SHA); frozen to "
+        "a SHA at clone time. Defaults to main. Mutually exclusive with --template-dir."
+    ),
+)
+@click.option(
+    "--template-dir",
+    default=None,
+    type=click.Path(exists=True),
+    help="Warm from this local template checkout instead of cloning --template-ref.",
+)
+@click.option(
+    "--region",
+    default=_DEFAULT_CI_POOL_REGION,
+    show_default=True,
+    help="Lease region whose CI box to warm (must match the bake stage's --region so both pick the same box).",
+)
+def warm_pool_cache(template_ref: str | None, template_dir: str | None, region: str) -> None:
+    """Pre-warm the CI box's image cache for the run's template content (the CI warm job's entrypoint).
+
+    Selects the same box the bake stage will select (shared deterministic rule over the
+    infra DB's rows, which import-boxes copies id-preserving into the per-run env), then
+    runs ``minds-admin pool warm-cache`` against it so the run's cold seed build overlaps
+    the env deploy instead of following it. Needs no minds env: the box row is read from
+    the CI infra DB and the pool key is handed to the subprocess from the ci tier's Vault
+    entry. Exit status mirrors the verb's, and the CI job treats it as advisory (the bake
+    stage's own seed phase is the fallback). See specs/remote-workspaces-in-ci.md.
+    """
+    if template_ref is not None and template_dir is not None:
+        raise click.UsageError(
+            "--template-ref and --template-dir are mutually exclusive: a local --template-dir checkout "
+            "warms as-is at its current content, so an explicit ref would be silently ignored"
+        )
+    infra_dsn = _read_ci_infra_pool_dsn()
+    server_id = _select_ci_box_for_region(infra_dsn, region=region)
+    pool_key = read_vault_kv(VaultPath(f"{_CI_VAULT_PREFIX}/pool-ssh")).get("POOL_SSH_PRIVATE_KEY", "")
+    if not pool_key:
+        raise MindError(
+            f"Vault entry {_CI_VAULT_PREFIX}/pool-ssh is missing POOL_SSH_PRIVATE_KEY; cannot SSH the CI box."
+        )
+    sub_env = dict(os.environ)
+    sub_env["POOL_SSH_PRIVATE_KEY"] = pool_key
+    if template_dir is None:
+        dwt_key_b64 = os.environ.get(_DWT_READ_KEY_ENV_VAR) or _read_dwt_key_from_vault_or_none()
+    else:
+        dwt_key_b64 = None
+    with _resolved_template_checkout(
+        template_ref=template_ref or "main", template_dir=template_dir, key_b64=dwt_key_b64
+    ) as (
+        workspace_dir,
+        resolved_sha,
+    ):
+        logger.info("Warming the CI box {} image cache for template {}", server_id, resolved_sha)
+        warm_rc = _run_minds_admin_streaming(
+            [
+                "pool",
+                "warm-cache",
+                "--server-id",
+                server_id,
+                "--workspace-dir",
+                str(workspace_dir),
+                "--mngr-source",
+                str(_REPO_ROOT),
+                "--content-addressed-cache",
+                "--database-url",
+                infra_dsn,
+            ],
+            sub_env=sub_env,
+            timeout_seconds=_MINDS_WARM_TIMEOUT_SECONDS,
+        )
+    sys.exit(warm_rc)
+
+
+def _read_ci_infra_pool_dsn() -> str:
+    """The CI infra DB's pooled DSN (the canonical registry of the standing CI boxes)."""
+    secrets = read_vault_kv(VaultPath(f"{_CI_VAULT_PREFIX}/neon"))
+    dsn = secrets.get("DATABASE_URL", "")
+    if not dsn:
+        raise MindError(
+            f"Vault entry {_CI_VAULT_PREFIX}/neon is missing DATABASE_URL; the CI infra pool DB is not "
+            "set up -- see specs/remote-workspaces-in-ci.md (phase 0)."
+        )
+    return dsn
+
+
+def _read_env_host_pool_dsn(env_name: DevEnvName) -> str:
+    """The up'd env's own host_pool DSN, from the secrets.toml its deploy wrote."""
+    _reconstruct_env_secrets_file(env_name)
+    secrets_model = read_secrets_file(env_name)
+    dsn_secret = secrets_model.secrets.get("NEON_HOST_POOL_DSN")
+    if dsn_secret is None or not dsn_secret.get_secret_value():
+        raise MindError(f"Env {env_name!r} secrets.toml has no NEON_HOST_POOL_DSN; was its deploy successful?")
+    return dsn_secret.get_secret_value()
+
+
+def _run_minds_admin_streaming(args: list[str], *, sub_env: dict[str, str], timeout_seconds: int) -> int:
+    """Run a ``minds-admin`` subcommand streaming to our stdout/stderr; return its exit code.
+
+    The logged command line redacts DSN values: several of these subcommands take
+    ``--database-url`` arguments whose values are credentials, and this log line
+    lands in CI logs.
+    """
+    cmd = ["uv", "run", "minds-admin", *args]
+    redacted = [re.sub(r"postgres(?:ql)?://\S+", r"postgresql://<redacted>", part) for part in cmd]
+    logger.info("Running: {}", " ".join(redacted))
+    completed = subprocess.run(cmd, env=sub_env, cwd=str(_REPO_ROOT), timeout=timeout_seconds, check=False)
+    return completed.returncode
+
+
+def _select_ci_box_for_region(target_dsn: str, *, region: str) -> str:
+    """Pick the ready box (by id) in the requested lease region's datacenter.
+
+    The selection itself is the shared deterministic rule
+    (:func:`find_first_ready_server_in_datacenter`), so the warm job (selecting
+    against the infra DB) and the bake stage (selecting against the per-run env's
+    DB, whose rows import-boxes copied id-preserving from the infra DB) always
+    pick the same box.
+    """
+    datacenter = OVH_DATACENTER_CODE_BY_US_REGION.get(region)
+    if datacenter is None:
+        raise click.ClickException(
+            f"--region {region!r} has no known datacenter mapping; pass one of "
+            f"{sorted(OVH_DATACENTER_CODE_BY_US_REGION)}"
+        )
+    conn = psycopg2.connect(target_dsn)
+    try:
+        servers = fetch_servers(conn)
+    finally:
+        conn.close()
+    chosen = find_first_ready_server_in_datacenter(servers, datacenter)
+    if chosen is None:
+        raise click.ClickException(
+            f"No ready CI box in datacenter {datacenter!r} ({region}) in this pool DB; "
+            "check the CI infra DB's bare_metal_servers rows (and, for the bake stage, that "
+            "import-boxes ran)."
+        )
+    return str(chosen.id)
+
+
+@contextmanager
+def _resolved_template_checkout(
+    *, template_ref: str, template_dir: str | None, key_b64: str | None
+) -> Iterator[tuple[Path, str]]:
+    """Yield ``(workspace_dir, resolved_sha)`` for the template content to bake.
+
+    A local ``template_dir`` is used as-is (its HEAD SHA is the stamp; uncommitted
+    changes bake but the stamp stays the SHA, matching dev-bake looseness). Without
+    one, the template repo is cloned to the standard
+    ``.external_worktrees/default-workspace-template`` location -- kept in place so
+    the fast-path create tests can run ``mngr create`` from it later -- with the
+    ref checked out detached, authenticated by the ``key_b64`` read-only deploy
+    key (the caller resolves it from ``MINDS_CI_DWT_KEY_B64`` or Vault), falling
+    back to ambient git credentials when it is None. An operator who already has
+    a checkout there must pass it explicitly via ``--template-dir`` (this never
+    mutates an existing checkout).
+    """
+    if template_dir is not None:
+        checkout = Path(template_dir).resolve()
+        sha = _git_head_sha(checkout)
+        yield checkout, sha
+        return
+    checkout = _DEFAULT_WORKSPACE_TEMPLATE_WORKTREE_PATH
+    if checkout.exists():
+        raise click.ClickException(
+            f"{checkout} already exists; pass it explicitly with --template-dir {checkout} "
+            "(bake-pool never checks out a different ref under an existing checkout)."
+        )
+    clone_env = dict(os.environ)
+    clone_url = _DEFAULT_WORKSPACE_TEMPLATE_HTTPS_URL
+    key_dir: Path | None = None
+    try:
+        if key_b64:
+            key_dir = Path(tempfile.mkdtemp(prefix="minds-ci-dwt-key-"))
+            key_path = key_dir / "id"
+            key_path.write_bytes(base64.b64decode(key_b64))
+            key_path.chmod(0o600)
+            clone_env["GIT_SSH_COMMAND"] = (
+                f"ssh -i {key_path} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+            )
+            clone_url = _DEFAULT_WORKSPACE_TEMPLATE_REMOTE_URL
+        checkout.parent.mkdir(parents=True, exist_ok=True)
+        _run_git_checked(["clone", "--quiet", clone_url, str(checkout)], env=clone_env)
+        # Try the ref as-is (tag / SHA / local branch), then as a remote branch.
+        if _run_git(["-C", str(checkout), "checkout", "--quiet", "--detach", template_ref], env=clone_env) != 0:
+            _run_git_checked(
+                ["-C", str(checkout), "checkout", "--quiet", "--detach", f"origin/{template_ref}"], env=clone_env
+            )
+        sha = _git_head_sha(checkout)
+        logger.info("Resolved template ref {!r} to {} at {}", template_ref, sha, checkout)
+        yield checkout, sha
+    finally:
+        if key_dir is not None:
+            shutil.rmtree(key_dir, ignore_errors=True)
+
+
+def _read_dwt_key_from_vault_or_none() -> str | None:
+    """The read-only template-repo deploy key from Vault, or None (fall back to ambient git creds)."""
+    try:
+        return read_vault_kv(VaultPath(f"{_CI_VAULT_PREFIX}/dwt")).get("DWT_READ_KEY_B64") or None
+    except MindError as exc:
+        logger.info("No template deploy key in Vault ({}); using ambient git credentials", exc)
+        return None
+
+
+def _git_head_sha(checkout: Path) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(checkout), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        timeout=_GIT_TIMEOUT_SECONDS,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise MindError(f"`git rev-parse HEAD` in {checkout} exited {result.returncode}: {result.stderr.strip()}")
+    return result.stdout.strip()
+
+
+def _run_git(args: list[str], *, env: dict[str, str]) -> int:
+    completed = subprocess.run(["git", *args], env=env, timeout=_GIT_TIMEOUT_SECONDS, check=False)
+    return completed.returncode
+
+
+def _run_git_checked(args: list[str], *, env: dict[str, str]) -> None:
+    return_code = _run_git(args, env=env)
+    if return_code != 0:
+        raise MindError(f"`git {' '.join(args)}` exited {return_code}")
 
 
 @cli.command()

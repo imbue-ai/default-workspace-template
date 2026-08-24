@@ -157,20 +157,16 @@ def ci_test_user() -> tuple[NonEmptyStr, SecretStr]:
         pytest.skip(f"CI test-user credentials not in env vars and Vault read failed: {exc}")
 
 
-@pytest.fixture
-def verified_user(
-    shared_env: Callable[[str], SharedEnvHandle],
-) -> Generator[VerifiedUserHandle, None, None]:
-    """Function-scoped pre-verified user against the ``default`` shared env's SuperTokens.
+def _provision_verified_user(handle: SharedEnvHandle) -> Generator[VerifiedUserHandle, None, None]:
+    """Create a throwaway pre-verified user against ``handle``'s SuperTokens; delete it on close.
 
-    Implementation calls the env's SuperTokens admin API to create the
-    user + mark the email verified + mint a session token; teardown
-    deletes the user. Tests that need a user against a different shared
-    env should call ``shared_env('<other-role>')`` themselves and invoke
-    the same provisioning code directly (or we add a second fixture
-    parametrized on role once that need actually materializes).
+    The shared body of the ``verified_user`` / ``second_verified_user``
+    fixtures: mint a random email + password, create the user + mark the email
+    verified + mint a session token via the env's SuperTokens admin API, and
+    delete the user in teardown (tolerating failures -- the session-scoped
+    sweep + the shared env's SuperTokens app teardown at run-end are the
+    safety nets).
     """
-    handle = shared_env("default")
     email = NonEmptyStr(f"test-{get_short_random_string()}@example.test")
     password = SecretStr(f"pw-{uuid4().hex}")
     user_id, session_token = create_verified_user_via_admin_api(
@@ -201,6 +197,30 @@ def verified_user(
                 email,
                 exc,
             )
+
+
+@pytest.fixture
+def verified_user(
+    shared_env: Callable[[str], SharedEnvHandle],
+) -> Generator[VerifiedUserHandle, None, None]:
+    """Function-scoped pre-verified user against the ``default`` shared env's SuperTokens.
+
+    Implementation calls the env's SuperTokens admin API to create the
+    user + mark the email verified + mint a session token; teardown
+    deletes the user. Tests that need a user against a different shared
+    env should call ``shared_env('<other-role>')`` themselves and invoke
+    the same provisioning code directly (or we add a second fixture
+    parametrized on role once that need actually materializes).
+    """
+    yield from _provision_verified_user(shared_env("default"))
+
+
+@pytest.fixture
+def second_verified_user(
+    shared_env: Callable[[str], SharedEnvHandle],
+) -> Generator[VerifiedUserHandle, None, None]:
+    """A second pre-verified user against the ``default`` shared env, for cross-user isolation tests."""
+    yield from _provision_verified_user(shared_env("default"))
 
 
 @pytest.fixture

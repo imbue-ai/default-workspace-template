@@ -1,0 +1,1 @@
+Carries the per-tier Bugsink VPS instance tooling (provisioning, hash-locked install, caddy ingest gate rendering, REST-API project provisioning, and the `observability bugsink` CLI) via a merge of `mngr/env-tier-sentry`, so that the error-reporting conversion work on this branch can build on it before that branch lands on main.

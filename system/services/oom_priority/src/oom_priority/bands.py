@@ -182,8 +182,9 @@ def chat_agent_oom_score_adj(
 # hurts: the two authority paths into the workspace (owner-exec, then the
 # terminal) come first, then the UI, then the sharing stack, then the
 # runtime-state sync (github-sync, opt-in) and the host backup, then the job
-# scheduler and the app-watcher, and last the browser stack (its X display, then
-# the coordinator). ``user`` is the single band every *user-created* service shares;
+# scheduler and the app-watcher, then the browser stack (its X display, then
+# the coordinator), and last the file viewer.
+# ``user`` is the single band every *user-created* service shares;
 # it sits above every built-in service so a user's own service is shed before any
 # built-in one, while staying below USER_AGENT.
 #
@@ -244,6 +245,10 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # below SHARED_BROWSER, where those Chromium processes live: a coordinator
     # ranked above them would be picked first every time and free nothing.
     "browser": 70,
+    # The file viewer (dufs): a tiny static file server holding almost no
+    # memory, restarted by supervisord if shed, so it is the most expendable
+    # built-in service of all.
+    "files": 75,
     "user": USER_SERVICE,
 }
 

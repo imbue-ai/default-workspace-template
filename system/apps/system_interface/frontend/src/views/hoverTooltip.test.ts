@@ -42,4 +42,43 @@ describe("placeTooltip", () => {
     const anchor = { left: 400, top: 300, bottom: 320, width: 40 };
     expect(placeTooltip(anchor, { width: 1200, height: 20 }, VIEWPORT).left).toBe(6);
   });
+
+  it('defaults to the same result as an explicit "below" placement', () => {
+    const anchor = { left: 400, top: 300, bottom: 320, width: 40 };
+    expect(placeTooltip(anchor, BUBBLE, VIEWPORT)).toEqual(placeTooltip(anchor, BUBBLE, VIEWPORT, "below"));
+  });
+});
+
+describe("placeTooltip right placement", () => {
+  it("sits beside the trigger with a 6px gap, vertically centered on it", () => {
+    const anchor = { left: 400, top: 300, bottom: 320, width: 40 };
+    expect(placeTooltip(anchor, BUBBLE, VIEWPORT, "right")).toEqual({ left: 446, top: 300 });
+  });
+
+  it("flips to the trigger's left when the bubble would overflow the right edge", () => {
+    const anchor = { left: 950, top: 300, bottom: 320, width: 40 };
+    expect(placeTooltip(anchor, BUBBLE, VIEWPORT, "right")).toEqual({ left: 844, top: 300 });
+  });
+
+  it("never runs off the right edge even when the left flip has nowhere to go either", () => {
+    // A bubble wide enough that neither the trigger's right nor its left has
+    // room: the right-hand position wins (as the primary side), but the
+    // right-edge clamp still pulls it back the last two pixels so the bubble
+    // ends flush with the margin instead of hanging off the viewport.
+    const anchor = { left: 50, top: 300, bottom: 320, width: 40 };
+    expect(placeTooltip(anchor, { width: 900, height: 20 }, VIEWPORT, "right")).toEqual({ left: 94, top: 300 });
+  });
+
+  it("clamps to 6px from the top for a trigger scrolled off the top", () => {
+    const anchor = { left: 400, top: -10, bottom: 10, width: 40 };
+    expect(placeTooltip(anchor, BUBBLE, VIEWPORT, "right")).toEqual({ left: 446, top: 6 });
+  });
+
+  it("clamps to the bottom margin for a trigger against the bottom edge", () => {
+    // Unlike the "below" placement's flip axis, right-placement clamps its
+    // perpendicular (vertical) axis on both sides, so a low trigger cannot
+    // push the bubble past the viewport's bottom edge either.
+    const anchor = { left: 400, top: 790, bottom: 810, width: 40 };
+    expect(placeTooltip(anchor, BUBBLE, VIEWPORT, "right")).toEqual({ left: 446, top: 774 });
+  });
 });

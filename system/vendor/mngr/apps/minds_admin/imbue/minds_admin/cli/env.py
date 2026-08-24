@@ -70,14 +70,18 @@ from imbue.minds_admin.envs.generation import delete_generation_id as real_delet
 from imbue.minds_admin.envs.generation import ensure_generation_id as real_ensure_generation_id
 from imbue.minds_admin.envs.health_check import await_apps_healthy as real_await_apps_healthy
 from imbue.minds_admin.envs.local_store import env_root_exists
+from imbue.minds_admin.envs.local_store import read_analytics_override
+from imbue.minds_admin.envs.local_store import write_analytics_override
 from imbue.minds_admin.envs.migrations import apply_pool_hosts_migrations as real_apply_pool_hosts_migrations
 from imbue.minds_admin.envs.migrations import seed_paid_list_defaults as real_seed_paid_list_defaults
 from imbue.minds_admin.envs.migrations import write_plan_defaults as real_write_plan_defaults
 from imbue.minds_admin.envs.mngr_agent_cleanup import destroy_all_mngr_agents_in_env
 from imbue.minds_admin.envs.mngr_agent_cleanup import real_destroy_mngr_agents
 from imbue.minds_admin.envs.per_env_deploy import active_modal_token_workspace
+from imbue.minds_admin.envs.per_env_deploy import analytics_migrations_dir
 from imbue.minds_admin.envs.per_env_deploy import build_per_env_secret_values
 from imbue.minds_admin.envs.per_env_deploy import delete_modal_secret as real_delete_modal_secret
+from imbue.minds_admin.envs.per_env_deploy import deploy_analytics_app as real_deploy_analytics_app
 from imbue.minds_admin.envs.per_env_deploy import deploy_litellm_proxy as real_deploy_litellm_proxy
 from imbue.minds_admin.envs.per_env_deploy import (
     deploy_remote_service_connector as real_deploy_remote_service_connector,
@@ -88,6 +92,10 @@ from imbue.minds_admin.envs.per_env_deploy import modal_token_workspace_mismatch
 from imbue.minds_admin.envs.per_env_deploy import push_per_env_modal_secret as real_push_per_env_modal_secret
 from imbue.minds_admin.envs.per_env_deploy import rollback_modal_app as real_rollback_modal_app
 from imbue.minds_admin.envs.per_env_deploy import stop_modal_app as real_stop_modal_app
+from imbue.minds_admin.envs.providers.analytics_stack import AnalyticsStackRecord
+from imbue.minds_admin.envs.providers.analytics_stack import AnalyticsStackRequest
+from imbue.minds_admin.envs.providers.analytics_stack import create_analytics_stack as real_create_analytics_stack
+from imbue.minds_admin.envs.providers.analytics_stack import delete_analytics_stack as real_delete_analytics_stack
 from imbue.minds_admin.envs.providers.modal_env import delete_modal_env as real_delete_modal_env
 from imbue.minds_admin.envs.providers.neon_db import NeonProjectRecord
 from imbue.minds_admin.envs.providers.neon_db import create_neon_project
@@ -115,6 +123,8 @@ from imbue.minds_admin.envs.provisioning import Providers
 from imbue.minds_admin.envs.provisioning import deploy_env
 from imbue.minds_admin.envs.provisioning import destroy_env
 from imbue.minds_admin.envs.provisioning import list_dev_envs
+from imbue.minds_admin.envs.provisioning import resolve_analytics_enablement
+from imbue.minds_admin.envs.provisioning import with_analytics_enablement
 from imbue.minds_admin.envs.recover import NotInMonorepoError
 from imbue.minds_admin.envs.recover import RecoverFailedError
 from imbue.minds_admin.envs.recover import RecoverTargetMissingError
@@ -251,6 +261,46 @@ def _deploy_connector_for_provider(
     )
 
 
+def _deploy_analytics_for_provider(
+    modal_env: str,
+    tier: str,
+    deploy_id: str,
+    strategy: DeployStrategy,
+    cg: ConcurrencyGroup,
+) -> None:
+    real_deploy_analytics_app(
+        modal_env=modal_env,
+        tier=tier,
+        deploy_id=deploy_id,
+        strategy=strategy,
+        parent_cg=cg,
+    )
+
+
+def _apply_analytics_migrations_for_provider(analytics_ops_dsn: SecretStr, cg: ConcurrencyGroup) -> tuple[Path, ...]:
+    return real_apply_pool_hosts_migrations(analytics_ops_dsn, migrations_dir=analytics_migrations_dir(), parent_cg=cg)
+
+
+def _create_analytics_stack_for_provider(request: AnalyticsStackRequest) -> AnalyticsStackRecord:
+    return real_create_analytics_stack(request)
+
+
+def _delete_analytics_stack_for_provider(
+    name: DevEnvName,
+    neon_org_id: str,
+    neon_api_token: SecretStr,
+    cloudflare_account_id: str,
+    cloudflare_api_token: SecretStr,
+) -> None:
+    real_delete_analytics_stack(
+        name,
+        neon_org_id=neon_org_id,
+        neon_api_token=neon_api_token,
+        cloudflare_account_id=cloudflare_account_id,
+        cloudflare_api_token=cloudflare_api_token,
+    )
+
+
 def _stop_modal_app_for_provider(app_name: str, modal_env: str, parent_cg: ConcurrencyGroup) -> None:
     real_stop_modal_app(app_name=app_name, modal_env=modal_env, parent_cg=parent_cg)
 
@@ -352,10 +402,14 @@ def _build_real_providers() -> Providers:
         push_per_env_modal_secret=_push_per_env_modal_secret_for_provider,
         deploy_litellm_proxy=_deploy_litellm_proxy_for_provider,
         deploy_remote_service_connector=_deploy_connector_for_provider,
+        deploy_analytics=_deploy_analytics_for_provider,
+        create_analytics_stack=_create_analytics_stack_for_provider,
+        delete_analytics_stack=_delete_analytics_stack_for_provider,
         stop_modal_app=_stop_modal_app_for_provider,
         delete_modal_secret=_delete_modal_secret_for_provider,
         list_modal_secrets=_list_modal_secrets_for_provider,
         apply_pool_hosts_migrations=_apply_pool_hosts_migrations_for_provider,
+        apply_analytics_migrations=_apply_analytics_migrations_for_provider,
         seed_paid_list_defaults=_seed_paid_list_defaults_for_provider,
         write_plan_defaults=_write_plan_defaults_for_provider,
         get_modal_app_latest_version=_get_modal_app_latest_version_for_provider,
@@ -394,9 +448,23 @@ def _load_dev_credentials_from_vault(vault_prefix: str, *, cg: ConcurrencyGroup)
     - ``<vault_prefix>/supertokens`` -- ``SUPERTOKENS_CONNECTION_URI``,
       ``SUPERTOKENS_API_KEY`` (read from the Modal-pushed entry; safe to
       read here because the connector also legitimately needs both keys)
+    - ``<vault_prefix>/cloudflare`` -- ``CLOUDFLARE_ACCOUNT_ID``,
+      ``CLOUDFLARE_API_TOKEN`` (used only by per-env analytics stack
+      provisioning / teardown; tolerated absent, in which case enabling
+      analytics fails loudly at provisioning time)
     """
     neon_admin = read_vault_kv(VaultPath(f"{vault_prefix}/neon-admin"), parent_concurrency_group=cg)
     supertokens = read_vault_kv(VaultPath(f"{vault_prefix}/supertokens"), parent_concurrency_group=cg)
+    # The cloudflare entry is needed only by per-env analytics provisioning /
+    # teardown, so a missing or partial entry is tolerated here: enabling
+    # analytics on an env then fails loudly inside create_analytics_stack.
+    try:
+        cloudflare = read_vault_kv(VaultPath(f"{vault_prefix}/cloudflare"), parent_concurrency_group=cg)
+    except VaultReadError as exc:
+        logger.warning(
+            "Could not read {}/cloudflare from Vault ({}); analytics provisioning unavailable.", vault_prefix, exc
+        )
+        cloudflare = {}
 
     org_id = neon_admin.get("NEON_ORG_ID", "")
     api_token = neon_admin.get("NEON_API_TOKEN", "")
@@ -432,6 +500,8 @@ def _load_dev_credentials_from_vault(vault_prefix: str, *, cg: ConcurrencyGroup)
         neon_project_id=neon_project_id,
         supertokens_core_url=core_url,
         supertokens_api_key=SecretStr(core_api_key),
+        cloudflare_account_id=cloudflare.get("CLOUDFLARE_ACCOUNT_ID", ""),
+        cloudflare_api_token=SecretStr(cloudflare.get("CLOUDFLARE_API_TOKEN", "")),
     )
 
 
@@ -1141,6 +1211,17 @@ def _preflight_modal_token_workspace(tier: str) -> None:
         "deployed yet not actually serving traffic for several minutes."
     ),
 )
+@click.option(
+    "--with-analytics/--without-analytics",
+    "with_analytics",
+    default=None,
+    help=(
+        "Override whether this env deploys the analytics app (default: the tier's "
+        "deploy.toml [analytics] block). Sticky for envs with local state (dev/ci): "
+        "the choice is persisted in the env root and applies to later deploys until "
+        "overridden again."
+    ),
+)
 @click.pass_context
 def env_deploy(
     ctx: click.Context,
@@ -1148,6 +1229,7 @@ def env_deploy(
     yes_i_mean_staging: bool,
     hard: bool,
     soft: bool,
+    with_analytics: bool | None,
 ) -> None:
     """Provision or upgrade the currently-activated env.
 
@@ -1212,6 +1294,23 @@ def env_deploy(
         deploy_config = load_deploy_config(tier)
     except EnvConfigError as exc:
         raise click.ClickException(str(exc)) from exc
+
+    # Resolve analytics enablement (flag > sticky per-env override > tier
+    # default) and bake it into the deploy config so deploy_env only ever
+    # reads one place. The sticky override exists only for envs that keep
+    # local state (dev/ci); shared tiers follow deploy.toml unless the flag
+    # is passed explicitly for this one deploy.
+    persisted_analytics_override = (
+        read_analytics_override(DevEnvName(env_name)) if deploy_config.lifecycle.writes_local_state else None
+    )
+    is_analytics_deployed = resolve_analytics_enablement(
+        explicit_flag=with_analytics,
+        persisted_override=persisted_analytics_override,
+        tier_default=deploy_config.analytics.is_deployed,
+    )
+    if with_analytics is not None and deploy_config.lifecycle.writes_local_state:
+        write_analytics_override(DevEnvName(env_name), with_analytics)
+    deploy_config = with_analytics_enablement(deploy_config, is_analytics_deployed)
 
     # Preflight the "must run from monorepo" check up front, BEFORE
     # reading vault credentials or building providers. ``deploy_env``

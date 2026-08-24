@@ -41,7 +41,34 @@ const LOGIN_ERROR_COPY: Record<string, string> = {
   nonce_mismatch: "This sign-in attempt could not be verified. Please try again.",
   password_account: "An account with this email already signs in with a password. Use the email and password form.",
   oauth_failed: "Google sign-in failed. Please try again.",
+  signup_blocked: "Sign-ups from this network are not accepted. Please try a different network connection.",
+  terms_required:
+    "Creating an account requires agreeing to the Terms of Service and Code of Conduct. " +
+    "Please check the box below and try again.",
+  account_suspended: "This account is suspended. If you believe this is a mistake, contact support@imbue.com.",
 };
+
+// The plans the signup form offers. Explorer is the recommended default; its
+// description is the plain-language consent for the product-data sharing that
+// comes with it, so it must always render alongside the selector.
+const SIGNUP_PLANS: { value: string; label: string; description: string }[] = [
+  {
+    value: "explorer",
+    label: "Explorer (2 free cloud workspaces)",
+    description:
+      "You agree to share product data from those workspaces with Imbue to help improve Minds.",
+  },
+  {
+    value: "free",
+    label: "Free (1 free cloud workspace)",
+    description:
+      "Your workspace may be temporarily paused when idle or when capacity is low. " +
+      "Our goal is to make your data private and secure.",
+  },
+];
+const DEFAULT_SIGNUP_PLAN = "explorer";
+const TERMS_REQUIRED_COPY =
+  "To create an account, please check the box agreeing to the Terms of Service and Code of Conduct.";
 
 function loginErrorCopy(code: string | null): string {
   if (!code) return "";
@@ -64,6 +91,11 @@ interface PageState {
   isEmailSignupFormRevealed: boolean;
   turnstileToken: string;
   turnstileWidgetId: string | null;
+  // The signup form's plan selector and terms checkbox. They gate BOTH
+  // creation paths (the Google button and the email/password form), so they
+  // live in page state rather than the credentials form.
+  selectedPlan: string;
+  isTermsAccepted: boolean;
 }
 
 function navigateTo(path: string): void {
@@ -90,18 +122,22 @@ function finishSignin(state: PageState): void {
 function googleStartHref(state: PageState): string {
   // pq/pp carry the page's campaign context through the OAuth round-trip
   // (the server folds them into attribution only when a NEW account is
-  // created by the exchange).
+  // created by the exchange). On the signup tab, plan/terms carry the plan
+  // selector's choice and the checked agreement box the same way -- the
+  // server consumes them only when the exchange creates a new account.
   const attribution = signupAttribution(state);
-  return (
+  const base =
     `/accounts/oauth/google/start?next=${encodeURIComponent(state.next)}` +
-    `&pq=${encodeURIComponent(attribution.page_query)}&pp=${encodeURIComponent(attribution.page_path)}`
-  );
+    `&pq=${encodeURIComponent(attribution.page_query)}&pp=${encodeURIComponent(attribution.page_path)}`;
+  if (state.tab !== "signup") return base;
+  return `${base}&plan=${encodeURIComponent(state.selectedPlan)}${state.isTermsAccepted ? "&terms=1" : ""}`;
 }
 
 function resetTurnstile(state: PageState): void {
-  // Turnstile response tokens are single-use (the server verifies them before
-  // any other signup check) and short-lived, so a failed submit must issue a
-  // fresh challenge for the retry.
+  // Turnstile response tokens are single-use and short-lived, and a failed
+  // submit may or may not have consumed the token (the server checks the IP
+  // gate before verifying Turnstile), so unconditionally issue a fresh
+  // challenge for the retry.
   state.turnstileToken = "";
   if (state.turnstileWidgetId !== null) {
     window.turnstile?.reset(state.turnstileWidgetId);
@@ -114,18 +150,25 @@ async function submitCredentials(state: PageState, email: string, password: stri
     state.error = "Email and password are required.";
     return;
   }
+  if (state.tab === "signup" && !state.isTermsAccepted) {
+    state.error = TERMS_REQUIRED_COPY;
+    return;
+  }
   state.isBusy = true;
   m.redraw();
   try {
     const result =
       state.tab === "signin"
         ? await signIn(email, password)
-        : await signUp(email, password, state.turnstileToken, signupAttribution(state));
+        : await signUp(email, password, state.turnstileToken, signupAttribution(state), state.selectedPlan);
     if (result.status === "OK") {
       finishSignin(state);
       return;
     }
     state.error = result.message || "Something went wrong. Please try again.";
+    // The server stepped this visitor up to OAuth-only: re-collapse the
+    // email/password fields so Continue with Google is the visible path.
+    if (result.status === "OAUTH_ONLY") state.isEmailSignupFormRevealed = false;
     if (state.tab === "signup") resetTurnstile(state);
   } catch {
     state.error = "Could not reach the sign-in service. Check your connection and try again.";
@@ -271,12 +314,77 @@ function CredentialsForm(state: PageState): m.Vnode {
   );
 }
 
+function DocLink(href: string, label: string): m.Vnode {
+  return m("a", { href, target: "_blank", rel: "noopener", class: LINK_CLASS }, label);
+}
+
+function PlanSelector(state: PageState): m.Vnode {
+  const selected = SIGNUP_PLANS.find((plan) => plan.value === state.selectedPlan) ?? SIGNUP_PLANS[0];
+  return m("div", { class: "mb-4" }, [
+    m("label", { class: "block type-label mb-1", for: "plan-select" }, "Plan"),
+    m(
+      "select",
+      {
+        id: "plan-select",
+        name: "plan",
+        class: INPUT_CLASS + " mb-2",
+        onchange: (event: Event) => {
+          state.selectedPlan = (event.target as HTMLSelectElement).value;
+        },
+      },
+      SIGNUP_PLANS.map((plan) =>
+        m("option", { value: plan.value, selected: plan.value === state.selectedPlan }, plan.label),
+      ),
+    ),
+    m("p", { class: "type-helper text-tertiary" }, [
+      selected.description,
+      " ",
+      DocLink("/privacy-policy", "Learn more."),
+    ]),
+  ]);
+}
+
+function TermsCheckbox(state: PageState): m.Vnode {
+  // Starts unchecked on purpose: agreement must be an affirmative action.
+  return m("label", { class: "flex items-start gap-2 mb-4 type-helper text-secondary cursor-pointer" }, [
+    m("input", {
+      id: "terms-checkbox",
+      type: "checkbox",
+      checked: state.isTermsAccepted,
+      class: "mt-0.5 accent-current cursor-pointer",
+      onchange: (event: Event) => {
+        state.isTermsAccepted = (event.target as HTMLInputElement).checked;
+        if (state.isTermsAccepted) state.error = "";
+      },
+    }),
+    m("span", [
+      "I have read and agree to the ",
+      DocLink("/terms-of-service", "Terms of Service"),
+      " and the ",
+      DocLink("/code-of-conduct", "Code of Conduct"),
+      ".",
+    ]),
+  ]);
+}
+
 function GoogleButton(state: PageState): m.Vnode {
   // Google leads on both tabs: it is the visually dominant way to create an
-  // account and the topmost sign-in option.
+  // account and the topmost sign-in option. On the signup tab it is gated on
+  // the terms checkbox like the email/password form (account creation must
+  // never proceed without the agreement).
   return m(
     "a",
-    { href: googleStartHref(state), class: BTN_SECONDARY, id: "google-signin-btn" },
+    {
+      href: googleStartHref(state),
+      class: BTN_SECONDARY,
+      id: "google-signin-btn",
+      onclick: (event: MouseEvent) => {
+        if (state.tab === "signup" && !state.isTermsAccepted) {
+          event.preventDefault();
+          state.error = TERMS_REQUIRED_COPY;
+        }
+      },
+    },
     [GoogleLogo(), "Continue with Google"],
   );
 }
@@ -318,7 +426,8 @@ function FormView(state: PageState): m.Vnode {
   // Sign-in always shows the credentials form (Google on top). Sign-up leads
   // with Google alone and keeps email/password collapsed behind the reveal
   // link; without Google configured (some dev tiers) the form is the only
-  // option, so it renders expanded.
+  // option, so it renders expanded. The plan selector and terms checkbox sit
+  // above both creation paths because they gate both.
   const isGoogleShown = !!state.config?.google_enabled;
   const isEmailFormShown = !isGoogleShown || state.tab === "signin" || state.isEmailSignupFormRevealed;
   return CenteredCard(
@@ -327,6 +436,8 @@ function FormView(state: PageState): m.Vnode {
     ErrorBanner(state.error),
     SuccessNote(state.notice),
     TabBar(state),
+    state.tab === "signup" ? PlanSelector(state) : null,
+    state.tab === "signup" ? TermsCheckbox(state) : null,
     isGoogleShown ? GoogleButton(state) : null,
     isGoogleShown && isEmailFormShown ? OrDivider() : null,
     isEmailFormShown ? CredentialsForm(state) : RevealEmailFormLink(state),
@@ -463,6 +574,8 @@ export function AuthPage(): m.Component {
     isEmailSignupFormRevealed: false,
     turnstileToken: "",
     turnstileWidgetId: null,
+    selectedPlan: DEFAULT_SIGNUP_PLAN,
+    isTermsAccepted: false,
   };
 
   async function initialize(): Promise<void> {
@@ -480,9 +593,9 @@ export function AuthPage(): m.Component {
         // A pre-existing session requires the explicit confirmation.
         state.view = "interstitial";
       } else {
-        // Already signed in with nothing to authorize: the account page is
-        // the natural landing spot.
-        navigateTo("/manage");
+        // Already signed in: land wherever the pending next points (the web
+        // client when none was given), same as a fresh sign-in would.
+        navigateTo(state.next);
         return;
       }
     } else {

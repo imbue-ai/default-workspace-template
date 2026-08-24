@@ -9,7 +9,7 @@ import m from "mithril";
 import { getAppContext } from "../../app-context";
 import { electronBridge } from "../../electron-bridge";
 import type { LandingExtras, MindLiveness } from "../../models/create";
-import { MindLivenessTracker, fetchLandingExtras, recoveryRoute } from "../../models/create";
+import { MIND_LIVENESS_LABELS, MindLivenessTracker, fetchLandingExtras, recoveryRoute } from "../../models/create";
 import type { UiWorkspaceEntry } from "../../channel/messages";
 import type { UiProviderEntry } from "../../generated/ui";
 import { Button, ButtonLink } from "../components/Button";
@@ -18,7 +18,7 @@ import { Icon16 } from "../components/Icon";
 import { PageContainer } from "../components/Layout";
 import { Notice } from "../components/Notice";
 import { routeLinkAttrs } from "../components/route-link";
-import { isMachineStateKnown, mindControlsFor, rowClickActionFor } from "./landing-controls";
+import { healthBadgeLabelFor, isMachineStateKnown, mindControlsFor, rowClickActionFor } from "./landing-controls";
 import { Spinner } from "../components/Spinner";
 import { StatusBadge } from "../components/StatusBadge";
 
@@ -195,14 +195,7 @@ export const LandingPage: m.ClosureComponent = () => {
 
   function livenessBadge(liveness: MindLiveness): m.Children {
     if (liveness === "RUNNING") return null;
-    const label =
-      liveness === "STOPPED"
-        ? "Stopped"
-        : liveness === "STOPPING"
-          ? "Stopping…"
-          : liveness === "STARTING"
-            ? "Starting…"
-            : "Status unknown";
+    const label = MIND_LIVENESS_LABELS[liveness] ?? "Status unknown";
     const tone =
       liveness === "STOPPING" || liveness === "STARTING"
         ? "bg-warning/15 text-warning"
@@ -218,10 +211,14 @@ export const LandingPage: m.ClosureComponent = () => {
     // is the app's, not theirs. The page's notice names it once instead of
     // every row repeating a symptom.
     if (!isMachineStateKnown(getAppContext().stores.health.discoveryHealth)) return null;
-    const health = getAppContext().stores.health.statusFor(entry.id);
-    if (health === "healthy") return null;
-    const label =
-      health === "stuck" ? "Server not responding" : health === "restarting" ? "Restarting..." : "Restart failed";
+    const healthStore = getAppContext().stores.health;
+    const label = healthBadgeLabelFor(
+      healthStore.statusFor(entry.id),
+      healthStore.isRestartANoOpFor(entry.id),
+      healthStore.isRestartStartOnlyFor(entry.id),
+      entry.is_device_cannot_connect ?? false,
+    );
+    if (label === null) return null;
     return m("span", { class: `${BADGE_CLASS} bg-warning/15 text-warning landing-health-badge` }, label);
   }
 

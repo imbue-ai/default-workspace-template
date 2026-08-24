@@ -187,6 +187,7 @@ routed to the user's computer so they will fail if it's offline.
 - All curl arguments are passed through unchanged
 - Return code, stdout and stderr are passed back from curl
 - Unless the user explicitly asks about it, don't discuss Latchkey or the technical details (it's easy for the user to get confused).
+- Do not ask the user to run Latchkey commands.
 - Unless the user explicitly asks you to do that, do not directly call `latchkey auth browser` or `latchkey auth browser-prepare`. (The Minds app is supposed to do that as part of the permission request approval process.)
 
 ## Currently supported services

@@ -120,10 +120,11 @@ def test_prevent_namedtuple() -> None:
 def test_prevent_yaml_usage() -> None:
     # All matches are references to lima's mandated ``lima.yaml`` /
     # cloud-init YAML in the slice key-repair sweep (which patches the VM's
-    # stored lima.yaml provision block) and its tests -- third-party file
-    # formats we cannot pick TOML for, caught by the ratchet's ``r"yaml"``
+    # stored lima.yaml provision block), the CI slice sweep (which stats each
+    # instance's lima.yaml for its on-box age), and their tests -- third-party
+    # file formats we cannot pick TOML for, caught by the ratchet's ``r"yaml"``
     # substring regex, not YAML configuration of our own.
-    rc.check_yaml_usage(_DIR, snapshot(56))
+    rc.check_yaml_usage(_DIR, snapshot(62))
 
 
 def test_prevent_functools_partial() -> None:

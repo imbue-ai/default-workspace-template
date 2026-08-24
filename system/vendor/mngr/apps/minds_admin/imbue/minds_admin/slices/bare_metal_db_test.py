@@ -6,8 +6,10 @@ from imbue.minds_admin.slices.bare_metal_db import _COUNT_SLICES_SQL
 from imbue.minds_admin.slices.bare_metal_db import _INSERT_BARE_METAL_SERVER_SQL
 from imbue.minds_admin.slices.bare_metal_db import _INSERT_SLICE_POOL_HOST_SQL
 from imbue.minds_admin.slices.bare_metal_db import _SELECT_UNLEASED_SLICE_TEARDOWN_ROW_IDS_SQL
+from imbue.minds_admin.slices.bare_metal_db import _UPSERT_BARE_METAL_SERVER_SQL
 from imbue.minds_admin.slices.bare_metal_db import _server_from_row
 from imbue.minds_admin.slices.bare_metal_db import build_bare_metal_server_insert_values
+from imbue.minds_admin.slices.bare_metal_db import build_bare_metal_server_upsert_values
 from imbue.minds_admin.slices.bare_metal_db import build_slice_pool_host_insert_values
 from imbue.minds_admin.slices.bare_metal_db import claim_pool_host_for_removal
 from imbue.minds_admin.slices.bare_metal_db import destroy_eligible_pool_host_statuses
@@ -70,6 +72,28 @@ def test_server_insert_values_are_in_column_order() -> None:
         "limahost",
         "ready",
     )
+
+
+def test_server_upsert_placeholder_count_matches_builder() -> None:
+    # Every %s placeholder must line up with exactly one builder value.
+    values = build_bare_metal_server_upsert_values(_ready_server())
+    assert _UPSERT_BARE_METAL_SERVER_SQL.count("%s") == len(values)
+
+
+def test_server_upsert_values_are_the_insert_values_plus_the_pinned_host_key() -> None:
+    # The upsert column list is the insert's plus box_host_public_key LAST: an
+    # imported row must arrive lease-ready with its pinned host key intact.
+    server = _ready_server()
+    values = build_bare_metal_server_upsert_values(server)
+    assert values == build_bare_metal_server_insert_values(server) + ("ssh-ed25519 AAAAbox",)
+
+
+def test_server_upsert_converges_on_the_source_row_by_id() -> None:
+    # import-boxes must be id-preserving and idempotent: conflicting on id and
+    # updating (not ignoring) is what makes a re-run converge the target on the
+    # source after a box changed (address, host key, status).
+    assert "ON CONFLICT (id) DO UPDATE SET" in _UPSERT_BARE_METAL_SERVER_SQL
+    assert "box_host_public_key = EXCLUDED.box_host_public_key" in _UPSERT_BARE_METAL_SERVER_SQL
 
 
 def test_slice_pool_host_insert_placeholder_count_matches_builder() -> None:
