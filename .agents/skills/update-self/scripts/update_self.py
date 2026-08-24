@@ -1758,6 +1758,45 @@ def _assert_clean_tree(repo_root: Path, runner: Runner) -> None:
         )
 
 
+def _abort_in_progress_merge(repo_root: Path, runner: Runner) -> bool:
+    """Undo a ``git merge`` that was killed before it committed; report whether
+    there was one.
+
+    ``git merge`` writes ``MERGE_HEAD`` before it resolves anything and drops it
+    only when the merge commit lands, so an apply killed anywhere inside its
+    merge step leaves the merge *staged but uncommitted*: ``HEAD`` is still the
+    rollback point, and the index holds the merged content. That state has to be
+    undone before anything else commits, because git turns the next commit into
+    the merge commit -- so the rollback's own commit would land the very merge it
+    exists to undo, under a subject saying it was rolled back. (With conflicts
+    still unresolved git refuses to commit at all, wedging every later recovery
+    instead.) ``git merge --abort`` is a plain index/worktree reset back to
+    ``HEAD``: no network, no package manager, exactly what the rollback is
+    allowed to need.
+    """
+    merge_head = runner.run(
+        ["git", "rev-parse", "--verify", "--quiet", "MERGE_HEAD"],
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if getattr(merge_head, "returncode", 0) != 0:
+        return False
+    sys.stderr.write(
+        "an interrupted merge is still staged (MERGE_HEAD is present); aborting it "
+        "before restoring the tree.\n"
+    )
+    runner.run(
+        ["git", "merge", "--abort"],
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return True
+
+
 def _run_checked(
     runner: Runner,
     argv: Sequence[str],
@@ -2603,6 +2642,12 @@ def apply_update(
         marker.ff_only = ff_only
         marker.target_ref = target_ref
         marker.worker_bundle = worker_bundle
+        # A kill inside ``git merge`` leaves the merge staged but uncommitted.
+        # That half-motion is this apply's own, so undo it and re-merge from a
+        # clean tree rather than refusing on the dirt it left. Only here: on a
+        # fresh apply an in-progress merge belongs to someone else, and the
+        # clean-tree refusal below is the right answer.
+        _abort_in_progress_merge(repo_root, runner)
 
     _assert_clean_tree(repo_root, runner)
 
@@ -2962,6 +3007,10 @@ def recover(
     name_status = _diff_name_status(repo_root, marker.rollback_to, runner)
     plan = plan_apply([path for _, path in name_status])
     try:
+        # Before anything commits: an apply killed inside its merge left the
+        # merge staged, and committing on top of that would land it instead of
+        # rolling it back.
+        _abort_in_progress_merge(repo_root, runner)
         _restore_tree(name_status, marker.rollback_to, repo_root, runner)
         _commit_rollback(
             repo_root,
