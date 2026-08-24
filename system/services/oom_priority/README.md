@@ -22,7 +22,11 @@ into one of a few bands.
   `CHAT_AGENT_BASE` (560, idle but recently used, and the launch band) up to
   `CHAT_AGENT_STALE_CEILING` (800, untouched long enough to count as abandoned).
   The system_interface prioritizer moves a chat within that range from live
-  engagement and elapsed idle time (see "Dynamic chat band" below).
+  engagement and elapsed idle time (see "Dynamic chat band" below). One band in
+  the service window is not a service: `UPDATE_APPLY` (15) is what the update
+  apply orchestrator puts *itself* into, above the system interface it may be
+  replacing and below only the authority paths that would repair a failed
+  apply (owner-exec at 5, the terminal at 10).
   Bands are positive-only: a negative value (true "never kill")
   needs `CAP_SYS_RESOURCE`, which the container does not have, so the never-kill
   infrastructure (sshd, supervisord, earlyoom, tini, tmux) simply keeps the
