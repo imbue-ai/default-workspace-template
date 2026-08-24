@@ -113,3 +113,27 @@ def test_no_model_state_leaves_the_catalog_alone(tmp_path: Path) -> None:
     harness and deliberately does not vanish when the model bar has nothing to show.
     """
     assert _session(tmp_path / "absent.json").switch_options() == ANTIGRAVITY_CATALOG.options
+
+
+def test_the_reported_display_name_matches_the_catalog() -> None:
+    """agy reports a DISPLAY NAME, not its slug: a live 1.1.19 statusline payload carries
+    ``"model":{"id":"Gemini 3.7 Flash (High)",...}``. Matching on that is the whole reason the
+    options set ``harness_reported_model_id``; without it every agy model shrugs."""
+    identity = ModelIdentity(model_id="Gemini 3.7 Flash (High)", effort=None, fast=False)
+    matched = match_option(identity, ANTIGRAVITY_CATALOG.options)
+    assert matched is not None
+    assert matched.id == "gemini-3.7-flash-high"
+
+
+def test_an_effort_would_shrug_which_is_why_none_is_written() -> None:
+    """The payload also carries ``"effort":"high"``, and the statusline deliberately does not
+    write it: agy's options declare no efforts, and match_option rejects an effort its matched
+    option does not declare. Pinned so nobody "helpfully" starts writing it."""
+    identity = ModelIdentity(model_id="Gemini 3.7 Flash (High)", effort="high", fast=False)
+    assert match_option(identity, ANTIGRAVITY_CATALOG.options) is None
+
+
+def test_an_unknown_display_name_is_used_verbatim() -> None:
+    """A model newer than the list is already human-readable as reported, so it needs no
+    reconstruction -- unlike a slug."""
+    assert derived_option("Gemini 4.2 Ultra (High)").label == "Gemini 4.2 Ultra (High)"

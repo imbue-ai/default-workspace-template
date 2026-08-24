@@ -74,25 +74,43 @@ if [ -n "$conv_id" ]; then
     printf '%s' "$conv_id" > "$root_file"
 fi
 
-# Parse the model agy reports, and mirror it to the uniform model_state.json the
-# workspace's model bar reads. agy has no separate effort or fast axis (the tier is baked
-# into the model id, e.g. gemini-3.7-flash-high), so only `model` is written; the reader
-# treats the other two as absent.
+# Parse the model agy reports and mirror it to the uniform model_state.json the workspace's
+# model bar reads. VERIFIED against a live agy 1.1.19 payload, which carries an OBJECT:
 #
-# Tolerant by design: if agy ever renames or nests this field the match below simply finds
-# nothing, no file is written, and the bar falls back to showing no model -- the same as
-# before this existed. It must never break the lifecycle work above, which is the load-bearing
-# part of this script.
+#   "model":{"id":"Gemini 3.7 Flash (High)","display_name":"...","effort":"high"}
 #
-# Written on EVERY invocation rather than only on change: agy calls this on each agent-state
-# change, so a rewrite is cheap, and it means an in-agy `/model` is reflected without needing
-# to diff anything. Written via a temp file + mv so a reader never sees a half-written file.
-agy_model=$(
+# so `id` is a DISPLAY NAME, not agy's `gemini-3.7-flash-high` slug. The consumer matches it
+# via the catalog's harness-reported id.
+#
+# `effort` is deliberately NOT written even though the payload carries it: agy has no separate
+# effort axis (the tier is already inside that display name), its catalog options declare no
+# efforts, and a consumer rejects an effort its matched option does not declare -- writing it
+# would make every model unrecognized.
+#
+# Two passes because there is no jq here: isolate the model object (it has no nested braces),
+# then take its `id`. Falls back to a bare string value, so an agy that ever reports
+# "model":"..." still works. Tolerant throughout: no match writes nothing and the bar shows no
+# model, which must never disturb the lifecycle work above.
+agy_model_object=$(
     printf '%s' "$payload" \
-        | grep -oE '"model"[[:space:]]*:[[:space:]]*"[^"]*"' \
-        | head -n 1 \
-        | sed -E 's/.*:[[:space:]]*"([^"]*)".*/\1/'
+        | grep -oE '"model"[[:space:]]*:[[:space:]]*\{[^}]*\}' \
+        | head -n 1
 )
+if [ -n "$agy_model_object" ]; then
+    agy_model=$(
+        printf '%s' "$agy_model_object" \
+            | grep -oE '"id"[[:space:]]*:[[:space:]]*"[^"]*"' \
+            | head -n 1 \
+            | sed -E 's/.*:[[:space:]]*"([^"]*)".*/\1/'
+    )
+else
+    agy_model=$(
+        printf '%s' "$payload" \
+            | grep -oE '"model"[[:space:]]*:[[:space:]]*"[^"]*"' \
+            | head -n 1 \
+            | sed -E 's/.*:[[:space:]]*"([^"]*)".*/\1/'
+    )
+fi
 if [ -n "$agy_model" ]; then
     printf '{"model": "%s"}' "$agy_model" > "$model_state_file.tmp" 2>/dev/null \
         && mv -f "$model_state_file.tmp" "$model_state_file" 2>/dev/null
