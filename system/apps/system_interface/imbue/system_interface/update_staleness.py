@@ -61,16 +61,30 @@ UPDATE_STALENESS_META_TAG = "system-interface-update-staleness"
 # bound only keeps a wedged git from stalling the app shell.
 _GIT_TIMEOUT_SECONDS = 10.0
 
-# What makes THIS running process stale. A deliberate mirror of the update
-# apply's restart classification (``plan_apply``/``classify_path`` in
-# ``.agents/skills/update-self/scripts/update_self.py`` -- a skill script this
-# app cannot import): the backend code held in memory, the manifests its
-# environment was resolved from, the vendored mngr it imports in-process and
-# shells out to, and the settings file it re-reads with long-lived parsing
-# code. Deliberately NOT the frontend (the served bundle is rebuilt on disk
-# without a restart), docs, skills, or anything else agents routinely commit.
+# What makes THIS running process stale: the code it holds in memory, the
+# manifests its environment was resolved from, and the settings file it
+# re-reads with long-lived parsing code. Deliberately NOT the frontend (the
+# served bundle is rebuilt on disk without a restart), docs, skills, or
+# anything else agents routinely commit -- and deliberately narrower than the
+# update apply's restart classification (``plan_apply``/``classify_path`` in
+# ``.agents/skills/update-self/scripts/update_self.py``, a skill script this
+# app cannot import), which also covers paths that leave *other* live
+# processes stale.
+#
+# The imported-source prefixes are every workspace tree this process runs code
+# from: its own backend, the vendored mngr (imported in-process and shelled
+# out to), the OOM banding library (``agent_manager``, ``oom_prioritizer``) and
+# the tk command parser (the claude/codex/pi-coding tool labels). All are
+# editable installs resolving straight into these trees, so the moment one
+# advances this process is running old code. ``test_every_imported_workspace_
+# package_is_covered`` holds this list to the app's actual dependencies.
 _APP_BACKEND_PREFIX = "system/apps/system_interface/imbue/"
 _VENDORED_MNGR_PREFIX = "system/vendor/mngr/"
+_IMPORTED_SOURCE_PREFIXES = (
+    _APP_BACKEND_PREFIX,
+    "system/services/oom_priority/",
+    "system/libs/tk_command_parsing/",
+)
 _LIVE_SETTINGS_FILE = ".mngr/settings.toml"
 _BACKEND_MANIFESTS = frozenset(
     {
@@ -92,7 +106,7 @@ def _is_path_relevant_to_this_server(path: str) -> bool:
         return True
     if path.startswith(_VENDORED_MNGR_PREFIX):
         return not path.endswith(".md")
-    if path.startswith(_APP_BACKEND_PREFIX):
+    if path.startswith(_IMPORTED_SOURCE_PREFIXES):
         return path.endswith(".py") and not _is_test_file(path)
     return False
 

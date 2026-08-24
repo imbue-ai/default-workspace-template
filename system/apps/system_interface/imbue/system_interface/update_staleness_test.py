@@ -1,8 +1,11 @@
 """Tests for the update-staleness tracker and its app-shell surfacing."""
 
+import re
 import subprocess
+import tomllib
 from pathlib import Path
 
+import pytest
 from imbue.system_interface.server import _inject_update_staleness_meta_tag
 from imbue.system_interface.server import create_application
 from imbue.system_interface.testing import build_test_state
@@ -12,6 +15,7 @@ from imbue.system_interface.update_staleness import UPDATE_APPLY_MARKER_REL
 from imbue.system_interface.update_staleness import UPDATE_STALENESS_HEADER
 from imbue.system_interface.update_staleness import UPDATE_STALENESS_META_TAG
 from imbue.system_interface.update_staleness import UpdateStalenessTracker
+from imbue.system_interface.update_staleness import _is_path_relevant_to_this_server
 
 
 def _make_repo(tmp_path: Path) -> Path:
@@ -42,6 +46,73 @@ _IRRELEVANT_PATHS = (
     "system/apps/system_interface/frontend/src/views/App.ts",
     ".agents/skills/update-self/SKILL.md",
 )
+
+
+@pytest.mark.parametrize(
+    ("path", "is_relevant"),
+    [
+        # The settings file the long-lived mngr config parser re-reads.
+        (".mngr/settings.toml", True),
+        # Every manifest the served environment was resolved from.
+        ("pyproject.toml", True),
+        ("uv.lock", True),
+        ("system/apps/system_interface/pyproject.toml", True),
+        # The backend this process is running.
+        ("system/apps/system_interface/imbue/system_interface/server.py", True),
+        # ... but not its tests, which no running process holds.
+        ("system/apps/system_interface/imbue/system_interface/server_test.py", False),
+        ("system/apps/system_interface/imbue/system_interface/test_layout_pipeline.py", False),
+        # Workspace libraries imported in-process through editable installs.
+        ("system/services/oom_priority/src/oom_priority/bands.py", True),
+        ("system/libs/tk_command_parsing/src/tk_command_parsing/parser.py", True),
+        # A workspace library this process does not import.
+        ("system/libs/bootstrap/src/bootstrap/manager.py", False),
+        # The vendored mngr, imported in-process and shelled out to ...
+        ("system/vendor/mngr/libs/mngr/imbue/mngr/api/list.py", True),
+        # ... except its documentation, which nothing holds in memory.
+        ("system/vendor/mngr/libs/mngr/README.md", False),
+        # The frontend: its bundle is rebuilt on disk without a restart.
+        ("system/apps/system_interface/frontend/src/views/App.ts", False),
+        # Things minds commit constantly and are never staler for.
+        ("docs/VERSION_HISTORY.md", False),
+        (".agents/skills/update-self/SKILL.md", False),
+        ("data-notes.md", False),
+    ],
+)
+def test_relevance_rules(path: str, is_relevant: bool) -> None:
+    assert _is_path_relevant_to_this_server(path) is is_relevant
+
+
+def test_every_imported_workspace_package_is_covered() -> None:
+    """Every workspace package the app depends on must make it stale.
+
+    The prefix list is hand-maintained, and a dependency added without a prefix
+    would leave a real skew showing no banner -- a silent failure the rest of
+    the suite cannot see, because nothing else knows what this process imports.
+    """
+    app_root = Path(__file__).resolve().parents[2]
+    repo_root = app_root.parents[2]
+    dependencies = set(
+        tomllib.loads((app_root / "pyproject.toml").read_text())["project"]["dependencies"]
+    )
+    # Requirement strings may carry a version specifier; the name is the head.
+    names = {re.split(r"[<>=!~\[; ]", spec, maxsplit=1)[0] for spec in dependencies}
+    local_packages = {
+        tomllib.loads((manifest).read_text())["project"]["name"]: manifest.parent
+        for parent in ("system/libs", "system/services", "system/apps", "system/vendor/mngr/libs")
+        for manifest in (repo_root / parent).glob("*/pyproject.toml")
+    }
+
+    uncovered = [
+        name
+        for name in sorted(names & set(local_packages))
+        if name != "system-interface"
+        and not _is_path_relevant_to_this_server(
+            f"{local_packages[name].relative_to(repo_root)}/src/module.py"
+        )
+    ]
+
+    assert uncovered == []
 
 
 def _commit_files(repo: Path, message: str, *relpaths: str) -> None:
