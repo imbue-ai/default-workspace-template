@@ -396,6 +396,28 @@ def test_the_three_definitions_of_the_apply_state_paths_agree() -> None:
     assert bootstrap["UPDATE_APPLY_MARKER"] == UPDATE_APPLY_MARKER_REL
 
 
+# The banner's message table, the other half of every variant this module
+# emits. Read as text because Python cannot import TypeScript.
+_BANNER_SOURCE_REL = "system/apps/system_interface/frontend/src/views/UpdateStalenessBanner.ts"
+
+
+def test_the_banner_has_a_message_for_every_variant_and_no_others() -> None:
+    """The variant strings are written twice, once per language.
+
+    Nothing else notices a rename: the backend would go on stamping the header
+    and the meta tag while the banner silently stopped rendering -- exactly the
+    silent skew this detector exists to make visible, and invisible to both
+    suites because each side is individually self-consistent.
+    """
+    source = (WORKSPACE_ROOT_DIRECTORY / _BANNER_SOURCE_REL).read_text()
+    table = source.partition("new Map<string, string>([")[2].partition("]);")[0]
+    assert set(re.findall(r'\[\s*"([^"]+)",', table)) == {
+        STALENESS_UPDATE_EMERGENCY,
+        STALENESS_UPDATE_INTERRUPTED,
+        STALENESS_TREE_MOVED,
+    }
+
+
 def _load_apply_script() -> object:
     """Import the stdlib-only apply script by path.
 
