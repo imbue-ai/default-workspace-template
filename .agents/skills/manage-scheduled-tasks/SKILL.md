@@ -237,8 +237,10 @@ The complete map of the scheduling machinery, for edits and debugging:
   provision time (so it has no durable `data/.state/cron.d/` copy; a rebuild
   reinstalls it), and it runs `update_self.py recover --if-stale` every five
   minutes to roll back an update apply that was killed without a container
-  restart. It is a silent no-op in every normal state and is not a user
-  schedule -- do not remove it.
+  restart. A tick that acts can outlast the next one, so the entry serializes
+  itself under a `flock` and a tick that finds the lock held skips silently. It
+  is a silent no-op in every normal state and is not a user schedule -- do not
+  remove it.
 - `/home/user/workspace/system/libs/automations/run_job.sh` -- the runner (cadence, catch-up,
   completion tracking, and retry -- with unit tests in
   `system/libs/automations/run_job_test.py`).

@@ -377,9 +377,21 @@ fi
 # there is swallowed, so without this the tree would be rolled back and the
 # live workspace silently left broken. Scoped to this drop-in, so no other job
 # is affected.
+#
+# The `flock -n` is load-bearing for the same reason: a tick that actually acts
+# takes that live path, which rebuilds environments, re-runs the provisioner and
+# waits out health probes -- routinely longer than the five minutes until the
+# next tick. Nothing else would stop the two overlapping, because `--if-stale`
+# reads the *dead apply's* pid and a marker `recover` never restamps, so a
+# second run would race the first over one git index and copy pre-apply state
+# back over a tree the first is still rebuilding. This is the guard
+# `system/libs/automations/run_job.sh` gives every other cron job; `flock(1)` is
+# plain util-linux, so taking it here needs none of the agent machinery this
+# entry deliberately avoids. `-n` makes a held lock a silent skip, and
+# /var/lock is tmpfs, so no lock survives a container restart.
 cat > /etc/cron.d/update-apply-recover << 'CRON'
 PATH=/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-*/5 * * * * root cd /home/user/workspace && python3 .agents/skills/update-self/scripts/update_self.py recover --if-stale >> /var/log/supervisor/update-apply-recover.log 2>&1
+*/5 * * * * root flock -n /var/lock/update-apply-recover.lock -c 'cd /home/user/workspace && python3 .agents/skills/update-self/scripts/update_self.py recover --if-stale' >> /var/log/supervisor/update-apply-recover.log 2>&1
 CRON
 chmod 0644 /etc/cron.d/update-apply-recover
 
