@@ -1578,8 +1578,17 @@ def emergency_path(repo_root: Path) -> Path:
     return repo_root / STATE_DIR_REL / EMERGENCY_FILENAME
 
 
-def write_emergency(repo_root: Path, reason: str, now: Callable[[], float]) -> None:
+def write_emergency(
+    repo_root: Path, reason: str, dri_agent: str, now: Callable[[], float]
+) -> None:
     """Record that a rollback left the workspace unhealthy, atomically.
+
+    ``dri_agent`` comes from the marker being cleared, never from this
+    process's environment: the paths that reach here unattended (the recovery
+    cron, bootstrap) carry no ``MNGR_AGENT_NAME`` at all, and an agent-driven
+    ``recover`` carries the *recovering* agent rather than the one whose apply
+    failed. The marker is the only other place that name lives and it comes
+    down on this same path.
 
     Best-effort: this runs on the way out of a failure that has already been
     written to stderr in full, so a filesystem that will not take the record
@@ -1594,7 +1603,7 @@ def write_emergency(repo_root: Path, reason: str, now: Callable[[], float]) -> N
                 {
                     "reason": reason,
                     "recorded_at": now(),
-                    "dri_agent": os.environ.get(ENV_DRI_AGENT, ""),
+                    "dri_agent": dri_agent,
                     "snapshots_dir": str(_snapshots_root(repo_root)),
                 },
                 indent=2,
@@ -2628,7 +2637,11 @@ def _report_rolled_back(is_frontend_expected: bool) -> None:
 
 
 def _report_emergency(
-    plan: ApplyPlan, repo_root: Path, reason: str, now: Callable[[], float]
+    plan: ApplyPlan,
+    repo_root: Path,
+    reason: str,
+    dri_agent: str,
+    now: Callable[[], float],
 ) -> None:
     sys.stderr.write(
         "EMERGENCY: rollback did not restore a healthy workspace. The system interface "
@@ -2636,7 +2649,7 @@ def _report_emergency(
     )
     # Durable, because stderr reaches whoever ran the apply and this state
     # outlives them: the banner reads this file, and so does the next agent.
-    write_emergency(repo_root, reason, now)
+    write_emergency(repo_root, reason, dri_agent, now)
     # The pre-apply copies outlive this failure on purpose: putting one back is
     # a plain file copy that needs neither npm nor a registry, so it is the way
     # out of exactly the failure that gets here. Only pointed at when the apply
@@ -2960,7 +2973,9 @@ def apply_update(
             _report_emergency(
                 plan,
                 repo_root,
-                f"apply of {merge_ref} failed and its rollback could not restore health",
+                f"apply of {merge_ref} failed and its rollback could not restore "
+                f"health: {exc.headline()}",
+                marker.dri_agent,
                 now,
             )
             return 3
@@ -3168,8 +3183,10 @@ def recover(
     _report_emergency(
         plan,
         repo_root,
-        "an interrupted apply was rolled back, but the live workspace could not be "
+        f"an interrupted apply of {marker.merge_ref} (last completed phase: "
+        f"{marker.phase}) was rolled back, but the live workspace could not be "
         "confirmed healthy",
+        marker.dri_agent,
         now,
     )
     return 1

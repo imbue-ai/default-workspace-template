@@ -1429,6 +1429,10 @@ def _marker_exists(repo_root: Path) -> bool:
     return update_self.marker_path(repo_root).exists()
 
 
+def _read_emergency(repo_root: Path) -> dict:
+    return json.loads(update_self.emergency_path(repo_root).read_text())
+
+
 _RESTART = ("mngr", "start", "--restart", "system-services")
 _PROVISION = ("bash", update_self.PROVISIONER_SCRIPT)
 
@@ -1839,8 +1843,9 @@ def test_a_failed_provisioner_run_is_rerun_best_effort_during_recovery(
 
 
 def test_emergency_when_rollback_cannot_restore_health(
-    apply_repo: Path, capsys
+    apply_repo: Path, capsys, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv("MNGR_AGENT_NAME", "the-lead")
     runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
     runner.respond(("npm", "run", "build"), _Result(returncode=1, stderr="boom"))
 
@@ -1855,6 +1860,12 @@ def test_emergency_when_rollback_cannot_restore_health(
     assert bundle_copy.exists()
     assert str(bundle_copy) in capsys.readouterr().err
     assert not _marker_exists(apply_repo)
+    # The marker is gone, so the record is the only thing left that can say who
+    # was driving this, what failed, and where the copies are.
+    record = _read_emergency(apply_repo)
+    assert record["dri_agent"] == "the-lead"
+    assert "boom" in record["reason"]
+    assert record["snapshots_dir"] == str(bundle_copy.parent)
 
 
 def test_a_regressed_frontend_is_rolled_back(apply_repo: Path) -> None:
@@ -2647,7 +2658,7 @@ def test_recover_reaches_the_same_end_state_as_the_in_process_rollback(
 
 
 def test_recover_reports_an_emergency_when_it_cannot_restore_health(
-    apply_repo: Path, capsys
+    apply_repo: Path, capsys, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # The counterpart of the apply's exit 3: the tree is rolled back but the
     # workspace will not come back healthy. The marker still comes down -- re-
@@ -2657,6 +2668,11 @@ def test_recover_reports_an_emergency_when_it_cannot_restore_health(
     snapshots = update_self.take_snapshots(plan, apply_repo, _RecordingRunner(), [])
     _write_recover_marker(apply_repo, snapshots=snapshots)
     runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+    # The environment is the wrong source for the record's DRI agent, and this
+    # is the path that proves it: cron and bootstrap set no MNGR_AGENT_NAME at
+    # all, and an agent running `recover` by hand is not the agent whose apply
+    # failed. Only the marker knows, and it comes down on this same path.
+    monkeypatch.setenv("MNGR_AGENT_NAME", "the-recovering-agent")
 
     code = _recover(runner, _FakeHttp(lambda _url: 500), apply_repo)
 
@@ -2667,6 +2683,9 @@ def test_recover_reports_an_emergency_when_it_cannot_restore_health(
     # The copies outlive the failure: putting one back needs no npm, no
     # registry and no working mngr.
     assert (apply_repo / update_self.STATE_DIR_REL / "snapshots" / "bundle").exists()
+    record = _read_emergency(apply_repo)
+    assert record["dri_agent"] == "the-lead"
+    assert _MERGE_REF in record["reason"]
 
 
 def test_recover_provisioner_failure_still_counts_as_recovered(
