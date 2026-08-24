@@ -604,8 +604,12 @@ Interpret the exit code and report it per the §5a composition rules:
 - **`1` -- precondition; nothing changed.** A dirty tree, a refused
   fast-forward (`HEAD` moved under the pass -- treat as stale per
   `.agents/shared/references/harden-contention.md` and re-dispatch off the
-  current `HEAD`, never hand-resolve), another apply in flight, or an
-  interrupted apply of a *different* merge that needs `recover` first.
+  current `HEAD`, never hand-resolve), another apply in flight, an
+  interrupted apply of a *different* merge that needs `recover` first, or this
+  merge having already been landed **and rolled back**. That last one is the
+  one to read carefully: the rollback is a forward revert, so the merge stays
+  in history while its content does not, and re-running the apply cannot
+  re-land it. Re-dispatch a fresh worker pass off the current `HEAD`.
 
 **If the apply is interrupted** (your chat crashes, the process is killed):
 nothing is stranded. The apply writes a marker under
