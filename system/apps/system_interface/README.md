@@ -193,13 +193,41 @@ there is no terminal to protect.
 Two things make that state recoverable rather than terminal. Every app-shell
 response carries an `X-Frontend-Built` header, so the placeholder is
 distinguishable from the real app without pattern-matching its markup -- that is
-what the reveal's frontend probe reads. And `/assets/<path>` is registered
+what the apply's frontend probe reads. And `/assets/<path>` is registered
 unconditionally rather than only when the bundle exists at startup: a route
 decided at construction time can never notice a bundle that appears later, and
 without it asset requests fall through to the SPA catch-all and come back as
 `index.html` with a `text/html` type, which the browser refuses as a module
 script -- a blank screen instead of the placeholder. A genuinely missing asset
 gets a plain 404.
+
+## When the served code is behind the tree
+
+A missing bundle is the loud version of a more general problem: an update lands
+by advancing the working tree, and this process only becomes consistent with it
+once it restarts into the merged code. The apply does both in one motion, but
+an interrupted apply, an emergency-path apply, or a hand merge outside the flow
+can leave a live server rendering old code over new on-disk state -- silently,
+which is the shape the geebspace incident took.
+
+So the server says so. It records the tree HEAD it started from and, when the
+live tree has moved *in a way that affects what this process runs*, stamps an
+`X-Workspace-Update-Staleness` header on the app shell and injects the same
+value as a `system-interface-update-staleness` meta tag, from which the
+frontend renders one dismissible informational line. Two values:
+`update-interrupted` when the apply's marker
+(`data/.state/update-apply/marker.json`) is present, and
+`updated-not-activated` otherwise.
+
+"Affects what this process runs" is the whole design (see `update_staleness.py`
+for the rules and their test table). A bare HEAD comparison would show the
+banner near-permanently -- minds commit their ordinary work in this repo
+constantly, the apply's own version-history commit lands after the restart, and
+a frontend-only apply rebuilds the served bundle without restarting -- so the
+check diffs the startup HEAD against the current one and reports only when a
+changed path is backend code this process imports, a manifest its environment
+was resolved from, the vendored mngr, or `.mngr/settings.toml`. The banner
+informs only; acting on it stays with the agent.
 
 ## Projects
 
