@@ -803,10 +803,14 @@ def _clear_marker_on_recover(cmd: list[str]) -> None:
 
 def _write_apply_marker(dri_agent: str = "the-lead") -> None:
     UPDATE_APPLY_MARKER.parent.mkdir(parents=True, exist_ok=True)
-    UPDATE_APPLY_MARKER.write_text(json.dumps({"dri_agent": dri_agent, "phase": "merged"}))
+    UPDATE_APPLY_MARKER.write_text(
+        json.dumps({"dri_agent": dri_agent, "phase": "merged"})
+    )
 
 
-def test_read_update_marker_dri_agent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_read_update_marker_dri_agent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.chdir(tmp_path)
     assert _read_update_marker_dri_agent() == ""  # no marker
     _write_apply_marker("agent-omega")
