@@ -52,9 +52,14 @@ class AntigravityActivityTracker(HarnessActivityTracker):
         # "the tail is a final answer" is False -- which derive reads as "not finished",
         # harmless because with no tail at all it falls through to IDLE anyway.
         tail_is_final = bool(self._extra[0]) if self._extra else False
+        # The same call claude's tracker makes, plus agy's one extra signal. The staleness
+        # inputs are passed even though the shared base has already applied that gate, so the
+        # two harnesses' derivations stay literally comparable.
         return derive(
             is_agent_running=resolve_is_agent_running(lifecycle_state, is_active_marker_present),
             has_pending_tool_use=self._has_pending_tool_use,
             tail_event_type=self._last_event_type,
             tail_is_final_answer=tail_is_final,
+            tail_event_at=self._tail_event_at,
+            process_started_at=process_started_at,
         )
