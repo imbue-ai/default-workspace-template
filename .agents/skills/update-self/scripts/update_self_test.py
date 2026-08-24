@@ -2353,7 +2353,7 @@ def _write_recover_marker(
     repo_root: Path,
     *,
     merge_ref: str = _MERGE_REF,
-    phase: str = "frontend_built",
+    phase: str = update_self.PHASE_BUILT,
     pid: int = 12345,
     updated_at: float = 1000.0,
     live_service_restarted: bool = False,
@@ -2533,7 +2533,9 @@ def test_recover_reaches_the_same_end_state_as_the_in_process_rollback(
     plan = update_self.plan_apply(["system/apps/system_interface/frontend/src/views/Chat.ts"])
     snapshots = update_self.take_snapshots(plan, repo_b, _RecordingRunner(), [])
     shutil.rmtree(repo_b / update_self.STATIC_DIR)
-    _write_recover_marker(repo_b, snapshots=snapshots, phase="snapshotted")
+    _write_recover_marker(
+        repo_b, snapshots=snapshots, phase=update_self.PHASE_SNAPSHOTTED
+    )
     runner_b = _apply_runner(_FRONTEND_DIFF, repo_b)
     assert _recover(runner_b, _FakeHttp(_all_healthy), repo_b) == 0
 
@@ -2542,6 +2544,29 @@ def test_recover_reaches_the_same_end_state_as_the_in_process_rollback(
     index_a = (repo_a / update_self.FRONTEND_BUILD_INDEX).read_text()
     index_b = (repo_b / update_self.FRONTEND_BUILD_INDEX).read_text()
     assert index_a == index_b
+
+
+def test_recover_reports_an_emergency_when_it_cannot_restore_health(
+    apply_repo: Path, capsys
+) -> None:
+    # The counterpart of the apply's exit 3: the tree is rolled back but the
+    # workspace will not come back healthy. The marker still comes down -- re-
+    # running the same failed rollback from cron would not help -- so this exit
+    # is the only signal, and the kept snapshots are the operator's way back.
+    plan = update_self.plan_apply(["system/apps/system_interface/frontend/src/App.ts"])
+    snapshots = update_self.take_snapshots(plan, apply_repo, _RecordingRunner(), [])
+    _write_recover_marker(apply_repo, snapshots=snapshots)
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+
+    code = _recover(runner, _FakeHttp(lambda _url: 500), apply_repo)
+
+    assert code == 1
+    err = capsys.readouterr().err
+    assert "EMERGENCY" in err
+    assert not _marker_exists(apply_repo)
+    # The copies outlive the failure: putting one back needs no npm, no
+    # registry and no working mngr.
+    assert (apply_repo / update_self.STATE_DIR_REL / "snapshots" / "bundle").exists()
 
 
 def test_recover_provisioner_failure_still_counts_as_recovered(
