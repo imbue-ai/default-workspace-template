@@ -28,6 +28,13 @@ from imbue.system_interface.agent_discovery import AgentInfo
 # Fanned out to the event queues (and so to the browser) and to the activity tracker.
 OnEventsCallback = Callable[[str, list[dict[str, Any]]], None]
 
+# Sends one message to the harness, returning whether it was accepted. Bound by the
+# composition root to the manager's send path (which resolves the agent's location).
+FlushSendCallback = Callable[[str], bool]
+
+# Whether the agent's process is currently alive -- see ``set_flush_hooks``.
+IsAliveCallback = Callable[[], bool]
+
 # Called with the full queued-message snapshot each time it changes. Harness-
 # agnostic wire shape (a list of ``{queued_id, content, timestamp}`` dicts); the
 # only harness-specific code is the populator that produces it (see
@@ -122,3 +129,17 @@ class AgentSessionWatcher(ABC):
     def notify_idle(self) -> list[dict[str, Any]]:
         """Apply the working->IDLE backstop and return the resulting snapshot (empty by default)."""
         return []
+
+    def set_flush_hooks(self, send: "FlushSendCallback", is_alive: "IsAliveCallback") -> None:
+        """Give a watcher the two capabilities it needs to DELIVER its own queue. No-op by default.
+
+        Only a harness that holds the queue on the agent's behalf needs these -- antigravity,
+        whose parked messages live invisibly inside its TUI, so nothing else can deliver them.
+        Every other harness's queue is consumed by the harness itself and needs no sender.
+
+        ``is_alive`` is not optional politeness: mngr's text send AUTO-STARTS a stopped agent,
+        and the working->IDLE signal cannot distinguish "turn finished" from "process died". A
+        flush that skipped this check would resurrect a stopped agent and deliver its queue,
+        which the contract forbids outright ("NEVER auto-sent on resume"; "the queue is empty
+        whenever the agent is stopped").
+        """

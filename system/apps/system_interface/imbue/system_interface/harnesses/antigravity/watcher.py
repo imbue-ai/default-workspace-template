@@ -24,15 +24,23 @@ import threading
 from pathlib import Path
 from typing import Any
 from typing import Callable
+from typing import Final
 
+from loguru import logger
 from watchdog.observers import Observer
 
 from imbue.system_interface.agent_discovery import AgentInfo
+from imbue.system_interface.harnesses.antigravity.queue_tracker import OUTBOX_FILENAME
+from imbue.system_interface.harnesses.antigravity.queue_tracker import AntigravityQueueTracker
+from imbue.system_interface.harnesses.antigravity.queue_tracker import drop_tracker
+from imbue.system_interface.harnesses.antigravity.queue_tracker import get_tracker
+from imbue.system_interface.harnesses.antigravity.queue_tracker import session_token
 from imbue.system_interface.harnesses.antigravity.agy_transcript import TruncatedError
 from imbue.system_interface.harnesses.antigravity.agy_transcript import decode_step
 from imbue.system_interface.harnesses.antigravity.session_parser import parse_step
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.harnesses.session_watcher import OnEventsCallback
+from imbue.system_interface.harnesses.session_watcher import QueueSnapshotCallback
 from imbue.system_interface.watcher_common import POLL_INTERVAL_SECONDS
 from imbue.system_interface.watcher_common import WakeOnChangeHandler
 
@@ -42,6 +50,11 @@ _CONVERSATIONS_RELATIVE = Path("plugin") / "antigravity" / "home" / ".gemini" / 
 _CONVERSATION_IDS_RELATIVE = Path("antigravity_conversation_ids")
 
 _STEPS_QUERY = "SELECT idx, step_type, status, step_payload FROM steps WHERE idx >= ? ORDER BY idx"
+
+
+# How long the flush worker waits for agy to be reachable before giving up on one attempt.
+# A failed attempt leaves the queue intact and re-arms, so this bounds a try, not the queue.
+_FLUSH_RETRY_SECONDS: Final[float] = 5.0
 
 
 class AntigravitySessionWatcher(AgentSessionWatcher):
@@ -58,6 +71,14 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
     _wake: threading.Event
     _stopping: threading.Event
     _thread: threading.Thread | None
+    # The queue we hold on agy's behalf, its delivery capabilities, and the worker that
+    # performs the delivery. See docs/design/antigravity-message-lifecycle-plan.md.
+    _queue: AntigravityQueueTracker
+    _queue_snapshot_callback: Any
+    _flush_send: Any
+    _flush_is_alive: Any
+    _flush_wake: threading.Event
+    _flush_thread: threading.Thread | None
     _observer: Any
 
     @classmethod
@@ -75,6 +96,17 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
         self._wake = threading.Event()
         self._stopping = threading.Event()
         self._thread: threading.Thread | None = None
+        # The session's identity: the marker mngr stamps on every launch/resume. A journal
+        # written under a different token belongs to a session that has since restarted, and
+        # the contract says such a queue is gone -- never replayed, never delivered.
+        self._queue = get_tracker(
+            self._agent_id, self._state_dir / OUTBOX_FILENAME, session_token(self._state_dir)
+        )
+        self._queue_snapshot_callback = None
+        self._flush_send = None
+        self._flush_is_alive = None
+        self._flush_wake = threading.Event()
+        self._flush_thread = None
         self._observer: Any = None
         return self
 
@@ -120,10 +152,17 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
         self._observer.start()
         self._thread = threading.Thread(target=self._run, name=f"agy-watcher-{self._agent_id}", daemon=True)
         self._thread.start()
+        # Its own thread: a flush runs mngr's send, which blocks on a lock and a bounded
+        # confirmation, and must never sit on the transcript thread.
+        self._flush_thread = threading.Thread(
+            target=self._run_flush_worker, name=f"agy-flush-{self._agent_id}", daemon=True
+        )
+        self._flush_thread.start()
 
     def stop(self) -> None:
         self._stopping.set()
         self._wake.set()
+        self._flush_wake.set()
         if self._observer is not None:
             self._observer.stop()
             self._observer.join(timeout=2.0)
@@ -131,6 +170,12 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
         if self._thread is not None:
             self._thread.join(timeout=2.0)
             self._thread = None
+        if self._flush_thread is not None:
+            # Longer than the transcript thread's: a flush may be inside mngr's send, and
+            # abandoning it mid-keystroke would leave a half-typed message in agy's composer.
+            self._flush_thread.join(timeout=10.0)
+            self._flush_thread = None
+        drop_tracker(self._agent_id)
 
     def _run(self) -> None:
         while not self._stopping.is_set():
@@ -240,3 +285,87 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
 
     def is_main_session_event(self, event: dict[str, Any]) -> bool:
         return True
+
+    # --- queued messages: the queue we hold on agy's behalf ---------------------------
+    #
+    # Every other harness mirrors a queue its harness keeps. agy parks mid-turn input
+    # invisibly inside its TUI, so instead we hold the messages and deliver them ourselves
+    # once agy goes idle. These overrides are what make the shared consumers -- the WS
+    # snapshot, stop's return block, the tap's availability gate -- see a real queue.
+
+    def set_queue_snapshot_callback(self, callback: QueueSnapshotCallback) -> None:
+        self._queue_snapshot_callback = callback
+
+    def set_flush_hooks(self, send: Any, is_alive: Any) -> None:
+        """Receive the ability to deliver, and to tell whether the agent is still alive."""
+        self._flush_send = send
+        self._flush_is_alive = is_alive
+
+    def get_queued_messages(self) -> list[dict[str, Any]]:
+        return self._queue.snapshot()
+
+    def get_queued_block(self) -> str:
+        return self._queue.concatenated_block()
+
+    def clear_queue(self) -> None:
+        """Drop the queue without delivering it (stop, or a dead agent)."""
+        self._queue.clear()
+        self._publish_queue()
+
+    def notify_idle(self) -> list[dict[str, Any]]:
+        """The working->IDLE backstop. For agy this ARMS the flush; it never delivers here.
+
+        Delivering on this call would run mngr's send -- a blocking lock, a TUI-ready wait,
+        and a confirmation bounded at 90s -- on whichever thread drove the recompute, which
+        is normally this watcher's own. That would stall transcript parsing and the activity
+        indicator for the duration. So this only wakes the worker and returns the snapshot
+        unchanged; the worker checks liveness and does the sending off-thread.
+        """
+        self._flush_wake.set()
+        return self._queue.snapshot()
+
+    def _publish_queue(self) -> None:
+        callback = self._queue_snapshot_callback
+        if callback is not None:
+            callback(self._queue.snapshot())
+
+    # --- the flush worker -------------------------------------------------------------
+
+    def _run_flush_worker(self) -> None:
+        """Deliver the held queue once agy is idle. Own thread, so a slow send stalls nothing."""
+        while not self._stopping.is_set():
+            self._flush_wake.wait(timeout=_FLUSH_RETRY_SECONDS)
+            self._flush_wake.clear()
+            if self._stopping.is_set():
+                return
+            try:
+                self._attempt_flush()
+            except Exception as error:  # never let one bad attempt kill the worker
+                logger.opt(exception=error).warning("antigravity: flush attempt failed for {}", self._agent_id)
+
+    def _attempt_flush(self) -> None:
+        send, is_alive = self._flush_send, self._flush_is_alive
+        if send is None or is_alive is None:
+            return
+        # Liveness FIRST, and never skipped: mngr's send auto-starts a stopped agent, so
+        # flushing a dead one would resurrect it and deliver a queue the contract says is
+        # already gone. Drop it instead -- "the queue is empty whenever the agent is stopped".
+        if not is_alive():
+            if self._queue.has_entries():
+                logger.info("antigravity: dropping {}'s queue -- the agent is not alive", self._agent_id)
+                self.clear_queue()
+            return
+        block, claimed = self._queue.begin_flush()
+        if not claimed:
+            return
+        # The entries stay on screen, rendered "Sending...", for the whole send.
+        self._publish_queue()
+        is_delivered = False
+        try:
+            is_delivered = bool(send(block))
+        finally:
+            # Not delivered means still queued -- never silently dropped.
+            self._queue.finish_flush(claimed, is_delivered=is_delivered)
+            self._publish_queue()
+            if not is_delivered:
+                self._flush_wake.set()

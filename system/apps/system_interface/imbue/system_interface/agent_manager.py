@@ -774,6 +774,18 @@ class AgentManager:
             match = self._match_by_agent_id.get(agent_id)
             return [match] if match is not None else []
 
+    def is_agent_alive(self, agent_id: str) -> bool:
+        """Whether the agent's process is not POSITIVELY dead.
+
+        Same rule the activity gate uses: everything outside the dead states counts as alive,
+        and an unknown/unobservable lifecycle is non-evidence rather than death. An agent we
+        have no record of is treated as dead -- the safe direction for the one caller, the
+        antigravity flush, which must never resurrect a stopped agent to deliver its queue.
+        """
+        with self._lock:
+            agent_state = self._agents.get(agent_id)
+        return agent_state is not None and not is_lifecycle_dead(agent_state.state)
+
     def send_message_to_agent(self, agent_id: AgentId, message: str) -> bool:
         """Send a message to the agent with ``agent_id``, using the live location cache.
 
