@@ -80,8 +80,11 @@ For example: `-d '{... "payload": {"scope": ..., "permissions": ..., "account": 
 
 When not sure (and if applicable), prefer the `*-read-all` permission variants as they are relatively safe and obvious.
 
-**File exactly one permission request per tool call, as the only command in that
-call, and leave its output alone.** 
+File exactly one permission request per tool call, as the only command in that
+call, and leave its output alone.
+
+After posting, wait for an automated system message indicating whether the user
+approved or denied the permission request.
 
 
 ### Git operations on GitHub (clone / fetch / push)
