@@ -591,17 +591,20 @@ def test_install_runtime_cron_entries_tolerates_unwritable_target(
 def test_update_recovery_cron_entry_is_rewritten_every_boot(tmp_path: Path) -> None:
     # The whole point of moving this off setup_system.sh: /etc/cron.d does not
     # survive container recreation, so the guard has to be laid down again at
-    # each boot rather than once at provision time.
+    # each boot rather than once at provision time -- and an entry already
+    # sitting there (a baked-in one, or a previous boot's) has to be replaced
+    # rather than left alone, or a workspace stays pinned to whatever its image
+    # shipped.
     target = tmp_path / "etc-cron-d"
     target.mkdir()
     installed = target / UPDATE_RECOVER_CRON_NAME
+    installed.write_text("*/5 * * * * root true  # a stale entry\n")
 
     _write_update_recovery_cron_entry(target_dir=target)
-    first = installed.read_text()
-    installed.unlink()
-    _write_update_recovery_cron_entry(target_dir=target)
 
-    assert installed.read_text() == first
+    entry = installed.read_text()
+    assert "stale entry" not in entry
+    assert str(UPDATE_APPLY_SCRIPT) in entry
     assert (installed.stat().st_mode & 0o777) == 0o644
 
 
