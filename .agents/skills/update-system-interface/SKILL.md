@@ -246,10 +246,16 @@ bundle (the very build the user just previewed), falling back to a live build.
 ## 5. Apply the change, then tear down the preview
 
 Run the general update apply -- the same script `update-self` lands releases
-with -- pointing it at the worker's branch and its already-built bundle
-(`$WORK_DIR` from Step 3):
+with -- pointing it at the worker's branch and its already-built bundle. Resolve
+the work_dir again in the same invocation: Step 3's `WORK_DIR` is long gone,
+because each bash call starts a fresh shell and the user's verdict sat between
+them. A bundle path that does not resolve is not an error -- the apply just
+falls back to a live build, silently losing the "what the user previewed is what
+ships" guarantee.
 
 ```bash
+WORK_DIR=$(mngr ls --include 'name == "update-<slug>"' --format json \
+    | python3 -c 'import sys, json; print(json.load(sys.stdin)["agents"][0]["work_dir"])')
 python3 .agents/skills/update-self/scripts/update_self.py apply \
     --merge-ref "mngr/update-$SLUG" \
     --worker-bundle "$WORK_DIR/system/apps/system_interface/imbue/system_interface/static"
