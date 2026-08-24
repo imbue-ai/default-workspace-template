@@ -98,7 +98,7 @@ class CodexLiveConnection:
     # The account's models from ``model/list``, fetched once on connect and cached for the whole
     # daemon generation. This is the per-agent model set the chip-match reads (via AgentManager) --
     # no daemon call in the hot recompute path. The picker re-fetches fresh per open (D2); this
-    # cache only backs the chip-match. Empty when the fetch failed (the chip still renders logo-only
+    # cache only backs the chip-match. Empty when the fetch failed (the chip renders nothing
     # or falls back to whatever the live state file already holds).
     _codex_models: tuple[CodexModel, ...]
 

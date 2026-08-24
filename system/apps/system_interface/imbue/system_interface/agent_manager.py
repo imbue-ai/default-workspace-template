@@ -533,7 +533,7 @@ class AgentManager:
     # re-derives it when the agent's model_state.json changes. The live read is
     # harness-neutral (the shared reader + the harness's registered state-file path), so
     # there is no per-agent resolver to cache -- the switch endpoint builds one inline.
-    # None = the harness has recorded no model yet -> the bar renders logo-only.
+    # None = the harness has recorded no model yet -> the bar renders no slots.
     _model_choice_by_agent: dict[str, ModelChoice | None]
     _model_watcher_by_agent: dict[str, PathWatcher]
     # Assist chats whose tab we have already auto-opened (or that existed at
@@ -1939,7 +1939,7 @@ class AgentManager:
             if agent_state is None:
                 return
             # identity is None when the harness has recorded no model yet (e.g. before a
-            # session's first statusline fire, or a remote agent) -> no choice, logo-only.
+            # session's first statusline fire, or a remote agent) -> no choice, no slots.
             if identity is None:
                 choice: ModelChoice | None = None
             else:

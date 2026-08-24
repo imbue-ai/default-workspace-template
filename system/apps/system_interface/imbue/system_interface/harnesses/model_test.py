@@ -57,7 +57,7 @@ def test_read_model_identity_fast_true(tmp_path: Path) -> None:
 
 
 def test_read_model_identity_none_when_file_absent(tmp_path: Path) -> None:
-    # Missing file -> None -> the bar shows logo-only.
+    # Missing file -> None -> the bar renders no slots.
     assert read_model_identity(tmp_path / "nope.json") is None
 
 
