@@ -532,15 +532,27 @@ it from inside that preview. Skip previews for services that came in clean.
 
 ### 5b. Apply the update (one atomic motion)
 
-**Surface rebuild-only findings before applying.** The apply is deterministic:
-it re-runs the provisioner whenever a provisioner-classified file changed. So
-if the worker's report flags a global-dependency bump coupled to a
-**user-created** dependent (unsafe to hot-apply -- upstream never tested that
-pairing), or a container build/launch parameter a running container cannot
-adopt, stop and put that to the user first: they can take the update knowing
-that piece needs a workspace recreate, defer the whole update, or -- for a
-genuinely breaking case -- take the migration path below. Do not run the apply
-over an unresolved rebuild-only warning.
+**Surface rebuild-only findings before applying.** The apply is deterministic
+and has no opt-outs: it re-runs the provisioner whenever a
+provisioner-classified file changed, and there is no flag to land the merge
+without that. So if the worker's report flags either of these, stop and put it
+to the user before you run anything:
+
+- **A global-dependency bump coupled to a user-created dependent.** The worker
+  classifies this "unsafe to hot-apply" -- upstream never tested their code
+  against the new dependency. Be exact about what taking the update means:
+  the apply *will* move the global tool under that code, because the
+  provisioner re-run is not optional. The clean landing is a workspace
+  recreate, which provisions the new substrate and re-runs their code against
+  it. So the real choice is take it and watch that dependent, or defer the
+  whole update until they can recreate.
+- **A container build/launch parameter a running container cannot adopt** (a
+  `build_arg` / `start_arg` / runtime flag). Here taking the update is safe --
+  nothing hot-applies -- but that one piece stays inert until a recreate, and
+  the user has to know that rather than assume it is live.
+
+For a genuinely breaking case, take the migration path below instead. Either
+way, do not run the apply over an unresolved rebuild-only warning.
 
 **When the update touches `system/apps/system_interface/` at all** (merged
 *or* pulled in), additionally take the `editing service system_interface`
