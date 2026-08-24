@@ -288,11 +288,12 @@ const RAIL_PATHS = {
   pin:
     '<path d="M9 4h6l-1 5 3 3v2H7v-2l3-3-1-5z" fill="currentColor" stroke="currentColor"/>' +
     '<line x1="12" y1="14" x2="12" y2="20" fill="none" stroke="currentColor"/>',
-  // The tab list's one-click "remove from project", matching the glyph the same
-  // verb wears in the row menu (icons.ts's `minus-circle`). Deliberately NOT
-  // the pushpin above: a pinned app sits in the shortcut strip and reads as
-  // pinned, while a tab-list row is simply filed here, and calling that
-  // "unpinning" would name a state the row never showed.
+  // The one-click "remove from project" a menu-less tab row (a legacy url
+  // member) keeps, matching the glyph the same verb wears in every other
+  // row's menu (icons.ts's `minus-circle`). Deliberately NOT the pushpin
+  // above: a pinned app sits in the shortcut strip and reads as pinned, while
+  // a tab-list row is simply filed here, and calling that "unpinning" would
+  // name a state the row never showed.
   "remove-from-view": '<circle cx="12" cy="12" r="9"/><path d="M8 12h8"/>',
 } as const;
 
@@ -508,9 +509,9 @@ export function nextGlyphIndex(usedGlyphs: readonly number[]): number {
  * The four consolidated kinds map straight across; a "url" row (an ad-hoc
  * page, no longer filed as a member going forward -- see objectMenu.ts's own
  * module docstring) gets no menu at all rather than a partial one. That does
- * not strand a legacy url member still on an older project's list: the row's
- * one-click remove is rendered for every kind (see `tabRow`), so unfiling it
- * is still one click, it just has no second verb to sit beside.
+ * not strand a legacy url member still on an older project's list: exactly
+ * because it has no menu, its row keeps the one-click remove (see `tabRow`),
+ * so unfiling it is still one click, it just has no second verb to sit beside.
  */
 function objectMenuKindForRow(row: SidebarTabRow): ObjectMenuKind | null {
   return row.kind === "url" ? null : row.kind;
@@ -1519,12 +1520,13 @@ export function Sidebar(): m.Component<SidebarAttrs> {
           { class: `min-w-0 flex-1 truncate ${ROW_TEXT_CLASS} whitespace-nowrap` },
           matchedLabel(row.label, ranges),
         ),
-        // One click for the verb people reach for most, beside the menu that
-        // also carries it. Absent in Everything, which is the home: an object
-        // leaves it only by being destroyed. An open app therefore has two of
-        // these -- this one and its shortcut's pushpin -- which is the same act
-        // reached from the two places the rail shows it.
-        isEverythingView(attrs.activeViewId)
+        // The one-click remove survives only on a row with no menu (a legacy
+        // "url" member, which would otherwise be unfilable from nowhere -- see
+        // objectMenuKindForRow). Every other kind's kebab menu carries "Remove
+        // from project", and a bare hover control this close to the row was
+        // too easy to hit by accident. Absent in Everything, which is the
+        // home: an object leaves it only by being destroyed.
+        isEverythingView(attrs.activeViewId) || hasMenu
           ? null
           : m(
               "button",

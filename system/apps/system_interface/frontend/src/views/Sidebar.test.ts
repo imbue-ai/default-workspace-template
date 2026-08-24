@@ -707,8 +707,17 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
     }
   });
 
-  it("removes in one click from the row itself, without opening it", () => {
+  it("shows no one-click remove on a row whose menu carries the verb", () => {
     const attrs = makeAttrs({ rows: [{ ref: "chat:agent-1", kind: "chat", label: "Chat 1", isOpen: true }] });
+    const { root, redraw } = mountSidebar(attrs);
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    redraw();
+
+    expect(root.querySelector(".project-rail-remove")).toBeNull();
+  });
+
+  it("keeps the one-click remove on a menu-less legacy url row, without opening it", () => {
+    const attrs = makeAttrs({ rows: [{ ref: "url:abc123", kind: "url", label: "Some Page", isOpen: false }] });
     const { root, redraw } = mountSidebar(attrs);
     root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
     redraw();
@@ -720,7 +729,7 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
   });
 
   it("shows no one-click remove in Everything", () => {
-    const rows: SidebarTabRow[] = [{ ref: "chat:agent-1", kind: "chat", label: "Chat 1", isOpen: true }];
+    const rows: SidebarTabRow[] = [{ ref: "url:abc123", kind: "url", label: "Some Page", isOpen: false }];
     const { root, redraw } = mountSidebar(makeAttrs({ rows, activeViewId: EVERYTHING_VIEW_ID }));
     root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
     redraw();

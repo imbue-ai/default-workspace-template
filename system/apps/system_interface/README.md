@@ -356,8 +356,10 @@ unpin (there is no registry entry to record one against) -- so a newly
 added app appears there automatically, and its All apps popover shows
 the already-pinned empty state; a search pill that filters rows by
 label and kind; and the view's tab list, open members as primary text
-and backgrounded ones as tertiary, each row with a one-click remove and
-a hover kebab -- or a right-click -- offering the verbs for its kind.
+and backgrounded ones as tertiary, each row with a hover kebab -- or a
+right-click -- offering the verbs for its kind ("Remove from project"
+included; only a menu-less legacy `url:` row keeps a one-click remove
+instead).
 The tab list holds app INSTANCES ("File Viewer 2"), never bare apps: a
 zero-instance app lives in the rail, the popover and the launcher tiles
 but has no tab-list row. A pinned app whose shortcut row is drawn above
