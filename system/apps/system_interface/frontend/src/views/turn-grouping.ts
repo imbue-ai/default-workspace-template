@@ -52,9 +52,15 @@
  * and treats the notification as a turn boundary (the agent blocked on the
  * request and is now resuming), so any open step carries over and continues in
  * the new turn rather than the same node resuming beneath the card. The raw text
- * isn't shown (its verdict is on the card). The notification carries no request
- * id, so it resolves the oldest still-open request (the agent blocks on a
- * request until answered, so in practice only one is open at a time).
+ * isn't shown (its verdict is on the card). The notification carries the
+ * resolved request's own id (see message-classification's resolutionRequestIdOf),
+ * so a card looks up its verdict by that id rather than by arrival order: two
+ * requests resolved out of the order they were created no longer swap their
+ * cards' verdicts, and a message that batches more than one permission request
+ * resolves each of its cards independently. A notification recorded before id
+ * embedding shipped carries no id; the walk falls back to attributing it to the
+ * oldest still-open request, exactly as it always did (in practice only one was
+ * open at a time in that older data).
  *
  * This module reads no timestamps. Pending placeholders are ordered by
  * transcript position; grouping and the positioning of any transitioned step
@@ -70,7 +76,12 @@ import type {
 } from "../models/Response";
 import type { PermissionResolution } from "./message-classification";
 import { isFiledPermissionRequest } from "./permission-card";
-import { isNonBoundaryUserMessage, isSystemChipUserMessage, resolutionOf } from "./message-classification";
+import {
+  isNonBoundaryUserMessage,
+  isSystemChipUserMessage,
+  resolutionOf,
+  resolutionRequestIdOf,
+} from "./message-classification";
 
 export type StepStatus = "pending" | "active" | "done";
 
@@ -109,10 +120,19 @@ export type TimelineItem =
   | { kind: "ungrouped"; key: string; events: AssistantMessageEvent[] }
   /** An agent permission request, lifted out of any open step so it always
    *  renders inline as a thread-breaking block. The user must be able to see and
-   *  act on it without expanding a step. `resolution` is set once a later
-   *  granted/denied notification is correlated to this request (see
-   *  buildSections); null while still awaiting a decision. */
-  | { kind: "permission"; event: AssistantMessageEvent; resolution: PermissionResolution | null }
+   *  act on it without expanding a step. `event` may carry more than one
+   *  permission-request tool call (a batched request); each card resolves its
+   *  own verdict by looking up its own request id in `resolutionsByRequestId`
+   *  (shared across the whole transcript, built once in buildSections), falling
+   *  back to `fallbackResolution` -- the legacy, arrival-order guess for a
+   *  notification recorded before id embedding shipped -- when its own id has no
+   *  entry. Both are null/empty while still awaiting a decision. */
+  | {
+      kind: "permission";
+      event: AssistantMessageEvent;
+      resolutionsByRequestId: ReadonlyMap<string, PermissionResolution>;
+      fallbackResolution: PermissionResolution | null;
+    }
   /** A non-boundary user message shown inline (e.g. a stop-hook chip). */
   | { kind: "chip"; event: UserMessageEvent };
 
@@ -404,13 +424,21 @@ export function buildSections(
   let current: SectionBuilder | null = null;
   // Steps open at the end of the prior section, to re-open as carryover.
   let carryover: string[] = [];
-  // Permission requests awaiting a decision, in transcript (creation) order, by
-  // the event id of the message that issued each. A granted/denied notification
-  // carries no request id, so it resolves the oldest still-open request -- the
-  // agent blocks on a request until it is answered, so in practice only one is
-  // open at a time. Resolutions are keyed by the resolved request's event id.
-  const unresolvedPermissions: string[] = [];
-  const resolutions = new Map<string, PermissionResolution>();
+  // The primary correlation path: every id-keyed verdict, keyed by the resolved
+  // request's own id (PermissionRequestDetails.requestId) -- shared across the
+  // whole transcript and looked up per-card at render time, so it is immune to
+  // requests being resolved out of the order they were created, and to more
+  // than one permission request being batched into one message.
+  const resolutionsByRequestId = new Map<string, PermissionResolution>();
+  // The legacy fallback: permission requests awaiting a decision, in transcript
+  // (creation) order, by the event id of the message that issued each. Used only
+  // for a granted/denied notification that carries no request id (recorded
+  // before id embedding shipped), which resolves the oldest still-open request --
+  // the agent blocks on a request until it is answered, so in practice only one
+  // was open at a time in that older data. Fallback verdicts are keyed by the
+  // resolved request's event id.
+  const unresolvedPermissionEventIds: string[] = [];
+  const fallbackResolutions = new Map<string, PermissionResolution>();
 
   const ensureSection = (user_event: UserMessageEvent | null, key: string): SectionBuilder => {
     const section = newSection(user_event, key);
@@ -426,23 +454,38 @@ export function buildSections(
   for (const e of events) {
     if (e.type === "user_message") {
       // A granted/denied notification for an earlier permission request. Record
-      // the verdict against the oldest open request (it reflects on that
-      // request's card, not as a user prompt), then treat the notification as
-      // the turn boundary it naturally is: the agent blocked on the request and
-      // is now resuming, so close the current section -- carrying any open step
-      // over -- and open a fresh one. The step then continues in the normal
-      // carryover way rather than the same node resuming inline beneath the
-      // card. The raw text is not shown (its verdict is on the card), so the new
-      // section has no user bubble. If no request is open to claim it (e.g. the
+      // the verdict (it reflects on that request's card, not as a user prompt),
+      // then treat the notification as the turn boundary it naturally is: the
+      // agent blocked on the request and is now resuming, so close the current
+      // section -- carrying any open step over -- and open a fresh one. The step
+      // then continues in the normal carryover way rather than the same node
+      // resuming inline beneath the card. The raw text is not shown (its verdict
+      // is on the card), so the new section has no user bubble.
+      //
+      // The notification's own request id is the primary correlation key --
+      // recorded unconditionally, regardless of whether its card is still
+      // tracked below (e.g. it scrolled out of the visible transcript), so a
+      // later-rendered card can still find its verdict by id. Only a notification
+      // with NO id falls back to the legacy, order-based guess, and only when a
+      // request is actually open to claim it; if nothing is open (e.g. the
       // request scrolled out of the visible transcript), fall through and let it
       // render as an ordinary user message.
       const resolution = resolutionOf(e);
-      if (resolution !== null && unresolvedPermissions.length > 0) {
-        const resolvedEventId = unresolvedPermissions.shift() as string;
-        resolutions.set(resolvedEventId, resolution);
-        carryover = current === null ? [] : openStepsAtEnd(current);
-        current = ensureSection(null, `section-after-${e.event_id}`);
-        continue;
+      if (resolution !== null) {
+        const requestId = resolutionRequestIdOf(e);
+        if (requestId !== null) {
+          resolutionsByRequestId.set(requestId, resolution);
+          carryover = current === null ? [] : openStepsAtEnd(current);
+          current = ensureSection(null, `section-after-${e.event_id}`);
+          continue;
+        }
+        if (unresolvedPermissionEventIds.length > 0) {
+          const resolvedEventId = unresolvedPermissionEventIds.shift() as string;
+          fallbackResolutions.set(resolvedEventId, resolution);
+          carryover = current === null ? [] : openStepsAtEnd(current);
+          current = ensureSection(null, `section-after-${e.event_id}`);
+          continue;
+        }
       }
       if (isNonBoundaryUserMessage(e)) {
         // Collapsed system chips -- Stop-hook feedback, browser-fleet nudges,
@@ -500,8 +543,9 @@ export function buildSections(
           // responds keeps grouping under it.
           current.entries.push({ kind: "permission", event: parsed.render });
           // Track it as awaiting a decision so a later granted/denied
-          // notification can be correlated back to this card by order.
-          unresolvedPermissions.push(parsed.render.event_id);
+          // notification with no request id of its own (the legacy fallback)
+          // can still be correlated back to this card by order.
+          unresolvedPermissionEventIds.push(parsed.render.event_id);
         } else {
           routeMessage(current, parsed.render, lastOpened ?? stepBefore);
         }
@@ -521,7 +565,15 @@ export function buildSections(
 
   const lastBuilder = builders[builders.length - 1];
   return builders.map((b) =>
-    finalizeSection(b, deco, resolutions, b === lastBuilder ? pending : [], agentIsIdle, b === lastBuilder),
+    finalizeSection(
+      b,
+      deco,
+      resolutionsByRequestId,
+      fallbackResolutions,
+      b === lastBuilder ? pending : [],
+      agentIsIdle,
+      b === lastBuilder,
+    ),
   );
 }
 
@@ -647,7 +699,8 @@ function collectEjectedProse(section: SectionBuilder, frontierId: string | null)
 function finalizeSection(
   section: SectionBuilder,
   deco: Map<string, Decoration>,
-  resolutions: Map<string, PermissionResolution>,
+  resolutionsByRequestId: ReadonlyMap<string, PermissionResolution>,
+  fallbackResolutions: Map<string, PermissionResolution>,
   pending: { id: string; title: string }[],
   agentIsIdle: boolean,
   is_tail: boolean,
@@ -757,13 +810,16 @@ function finalizeSection(
       }
     } else if (entry.kind === "permission") {
       // A permission break ends any in-flight ungrouped run and stands as its
-      // own always-visible item at its transcript position. Attach the verdict
-      // if a later notification resolved this request.
+      // own always-visible item at its transcript position. Each card looks up
+      // its own verdict in resolutionsByRequestId by its own request id;
+      // fallbackResolution supplies the legacy, arrival-order guess for a
+      // notification recorded before id embedding shipped.
       flushUngrouped();
       items.push({
         kind: "permission",
         event: entry.event,
-        resolution: resolutions.get(entry.event.event_id) ?? null,
+        resolutionsByRequestId,
+        fallbackResolution: fallbackResolutions.get(entry.event.event_id) ?? null,
       });
     } else if (entry.kind === "chip") {
       // Likewise a chip: it ends any in-flight ungrouped run and stands at its

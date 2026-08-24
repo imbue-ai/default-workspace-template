@@ -10,7 +10,23 @@ import { openSubagentTab } from "./DockviewWorkspace";
 import { hoverTooltipAttrs } from "./hoverTooltip";
 import type { PermissionResolution } from "./message-classification";
 import { isSkillExpansionUserMessage } from "./message-classification";
-import { PermissionCard, isFiledPermissionRequest } from "./permission-card";
+import { PermissionCard, isFiledPermissionRequest, parsePermissionRequest } from "./permission-card";
+
+/** A permission-request tool call's own verdict: its own request id's entry in
+ *  `resolutionsByRequestId` when parseable, else `fallbackResolution` -- the
+ *  legacy, arrival-order guess used for a notification recorded before id
+ *  embedding shipped (only ever correct when `event` carries a single
+ *  permission-request tool call, which is what that older data assumed). */
+function resolutionForCall(
+  toolCall: ToolCall,
+  toolResult: ToolResultEvent | null,
+  resolutionsByRequestId: ReadonlyMap<string, PermissionResolution>,
+  fallbackResolution: PermissionResolution | null,
+): PermissionResolution | null {
+  const details = parsePermissionRequest(toolCall, toolResult);
+  const byId = details ? resolutionsByRequestId.get(details.requestId) : undefined;
+  return byId ?? fallbackResolution;
+}
 
 // Per-kind user_message rendering lives in user-message-display.ts (the display
 // half of the classify/display split). Re-exported here so existing importers --
@@ -333,7 +349,8 @@ export function renderAssistantMessageChildren(
   event: AssistantMessageEvent,
   toolResults: Map<string, ToolResultEvent>,
   agentId: string,
-  permissionResolution: PermissionResolution | null = null,
+  resolutionsByRequestId: ReadonlyMap<string, PermissionResolution> = new Map(),
+  fallbackResolution: PermissionResolution | null = null,
 ): m.Children[] {
   const textContent = event.text || "";
   const toolCalls = event.tool_calls || [];
@@ -369,9 +386,12 @@ export function renderAssistantMessageChildren(
     // button, and the raw call) rather than a generic tool block.
     // Gated on the input-only predicate so the card shows even while the request
     // is still pending -- the same signal the timeline walk uses to lift it out
-    // of its step. The resolution (once the user decides) comes from the walk.
+    // of its step. The resolution (once the user decides) comes from the walk,
+    // looked up by this call's own request id so a message batching more than
+    // one permission request resolves each of its cards independently.
     if (isFiledPermissionRequest(toolCall, result)) {
-      children.push(m(PermissionCard, { toolCall, toolResult: result, resolution: permissionResolution }));
+      const resolution = resolutionForCall(toolCall, result, resolutionsByRequestId, fallbackResolution);
+      children.push(m(PermissionCard, { toolCall, toolResult: result, resolution }));
       continue;
     }
     children.push(renderToolCallBlock(toolCall, result));
@@ -390,7 +410,8 @@ export function renderPermissionItem(
   event: AssistantMessageEvent,
   toolResults: Map<string, ToolResultEvent>,
   agentId: string,
-  resolution: PermissionResolution | null,
+  resolutionsByRequestId: ReadonlyMap<string, PermissionResolution>,
+  fallbackResolution: PermissionResolution | null,
   domId: string = event.event_id,
 ): m.Vnode {
   // ``domId`` defaults to the event id but a top-level permission row passes its
@@ -401,6 +422,6 @@ export function renderPermissionItem(
   return m(
     "div",
     { id: domId, class: "message message-assistant", key: event.event_id },
-    renderAssistantMessageChildren(event, toolResults, agentId, resolution),
+    renderAssistantMessageChildren(event, toolResults, agentId, resolutionsByRequestId, fallbackResolution),
   );
 }

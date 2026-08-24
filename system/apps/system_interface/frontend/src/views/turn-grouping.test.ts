@@ -1183,7 +1183,18 @@ describe("permission request breaks", () => {
   });
 });
 
-type PermissionItem = { kind: "permission"; resolution: PermissionResolution | null };
+type PermissionItem = {
+  kind: "permission";
+  resolutionsByRequestId: ReadonlyMap<string, PermissionResolution>;
+  fallbackResolution: PermissionResolution | null;
+};
+
+/** The verdict a card would show: its own request's id looked up in the id-keyed
+ *  map (the primary correlation path), falling back to the legacy, arrival-order
+ *  guess -- mirrors resolutionForCall in message-renderers.ts. */
+function verdictFor(item: PermissionItem, requestId: string): PermissionResolution | null {
+  return item.resolutionsByRequestId.get(requestId) ?? item.fallbackResolution;
+}
 
 describe("permission resolutions", () => {
   // When the user grants/denies, the app injects a plain user message; the walk
@@ -1205,7 +1216,7 @@ describe("permission resolutions", () => {
     const sections = run(events);
     // The card (in the first turn) carries the verdict...
     expect(sections[0].items.map((i) => i.kind)).toEqual(["permission"]);
-    expect((sections[0].items[0] as PermissionItem).resolution).toBe("granted");
+    expect(verdictFor(sections[0].items[0] as PermissionItem, "r1")).toBe("granted");
     // ...and the notification opened a new turn rather than rendering as a
     // user prompt: a second section exists with no user bubble, and the raw
     // "was granted" text appears as no section's user message.
@@ -1260,10 +1271,13 @@ describe("permission resolutions", () => {
       ),
     ];
     const sections = run(events);
-    expect((sections[0].items[0] as PermissionItem).resolution).toBe("denied");
+    expect(verdictFor(sections[0].items[0] as PermissionItem, "r1")).toBe("denied");
   });
 
-  it("resolves the oldest open request first when several are outstanding", () => {
+  it("falls back to resolving the oldest open request first when neither notification carries a request id", () => {
+    // Legacy fallback path: a resolution recorded before request-id embedding
+    // shipped carries no id, so it is attributed to the oldest still-open
+    // request by arrival order (exactly as this walk always did).
     const events = [
       userMsg("2026-05-01T01:00:00Z", "go"),
       permissionMsg("2026-05-01T01:00:01Z", "perm1"),
@@ -1282,8 +1296,45 @@ describe("permission resolutions", () => {
     const sections = run(events);
     const perms = sections[0].items.filter((i) => i.kind === "permission") as PermissionItem[];
     expect(perms).toHaveLength(2);
-    expect(perms[0].resolution).toBe("granted"); // first request -> first verdict
-    expect(perms[1].resolution).toBe("denied");
+    expect(verdictFor(perms[0], "r1")).toBe("granted"); // first request -> first verdict
+    expect(verdictFor(perms[1], "r2")).toBe("denied");
+  });
+
+  it("attaches each verdict to its own card by request id, even when resolved out of order", () => {
+    // Regression for the verdict-swap bug: request A (Gmail) is created first,
+    // B (Slack) second, but B's verdict lands FIRST -- deny is fire-and-forget
+    // on the frontend while grant can block on a real OAuth browser flow, so
+    // denying the newer request while the older one's grant is still working
+    // through sign-in resolves them out of creation order. A stale positional
+    // (FIFO) correlation would attach B's "denied" to A's card and vice versa;
+    // id-based correlation must not.
+    const events = [
+      userMsg("2026-05-01T01:00:00Z", "go"),
+      permissionMsg("2026-05-01T01:00:01Z", "perm-a"),
+      result("2026-05-01T01:00:01Z", "perm-a", '{"request_id":"req-a"}'),
+      permissionMsg("2026-05-01T01:00:02Z", "perm-b"),
+      result("2026-05-01T01:00:02Z", "perm-b", '{"request_id":"req-b"}'),
+      // B (created second) resolves first.
+      userMsg("2026-05-01T01:00:03Z", "Your permission request for Slack was denied. (request_id: req-b)", "u-res-b", {
+        display: "permission_resolution",
+        resolution: "denied",
+        request_id: "req-b",
+      }),
+      userMsg(
+        "2026-05-01T01:00:04Z",
+        "Your permission request for Gmail was granted with the following permissions: gmail.readonly. " +
+          "(request_id: req-a)",
+        "u-res-a",
+        { display: "permission_resolution", resolution: "granted", request_id: "req-a" },
+      ),
+    ];
+    const sections = run(events);
+    const perms = sections.flatMap((s) => s.items).filter((i) => i.kind === "permission") as PermissionItem[];
+    expect(perms).toHaveLength(2);
+    // A (created first) shows its OWN verdict -- granted -- not B's.
+    expect(verdictFor(perms[0], "req-a")).toBe("granted");
+    // B (created second, resolved first) shows its OWN verdict -- denied.
+    expect(verdictFor(perms[1], "req-b")).toBe("denied");
   });
 
   it("resolves a workspace-phrased grant so later verdicts don't land one card late", () => {
@@ -1313,8 +1364,8 @@ describe("permission resolutions", () => {
     const sections = run(events);
     const perms = sections.flatMap((s) => s.items).filter((i) => i.kind === "permission") as PermissionItem[];
     expect(perms).toHaveLength(2);
-    expect(perms[0].resolution).toBe("granted"); // the workspace card, from its own notification
-    expect(perms[1].resolution).toBe("denied"); // the Slack card -- not shifted onto the workspace one
+    expect(verdictFor(perms[0], "r-ws")).toBe("granted"); // the workspace card, from its own notification
+    expect(verdictFor(perms[1], "r-slack")).toBe("denied"); // the Slack card -- not shifted onto the workspace one
   });
 
   it("leaves a notification with no open request to render as a normal turn", () => {

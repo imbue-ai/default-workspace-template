@@ -198,6 +198,20 @@ def test_permission_resolutions_carry_the_verdict() -> None:
         assert decision is not None, content
         assert decision.display is DisplayKind.PERMISSION_RESOLUTION
         assert decision.resolution == verdict
+        assert decision.request_id is None
+
+
+def test_permission_resolutions_carry_the_request_id_when_present() -> None:
+    # format_resolution_notice (mngr repo's latchkey/handlers/messaging.py) appends this
+    # exact "(request_id: ...)" suffix after the human-readable message.
+    decision = classify_user_message(
+        "Your permission request for GitHub was granted with the following permissions: "
+        "repo. (request_id: a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4)"
+    )
+    assert decision is not None
+    assert decision.display is DisplayKind.PERMISSION_RESOLUTION
+    assert decision.resolution == "granted"
+    assert decision.request_id == "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"
 
 
 def test_apply_to_stamps_only_present_fields() -> None:
