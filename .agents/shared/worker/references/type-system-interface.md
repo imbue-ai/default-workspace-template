@@ -16,6 +16,30 @@ It is what the user is looking at *right now*, so you always work against an
   + mithril/dockview). Build output goes to the gitignored
   `system/apps/system_interface/imbue/system_interface/static/`.
 
+## Design system: use it, don't drift
+
+Any change that adds or edits styling must follow the frontend design system.
+The rules and the escape hatch are in
+`system/apps/system_interface/frontend/style_guide.md` (short and enforceable);
+the full assessment and token set are in
+`system/apps/system_interface/docs/design-system.md`. In brief:
+
+- **Use tokens, never raw values.** Colours are `var(--color-*)` from the
+  `@theme` block at the top of `src/style.css` (never a raw `#hex`/`rgb`/`rgba`);
+  radius is `var(--radius-base)` etc.; for type/spacing/shadow/z-index reuse a
+  token or an existing value rather than inventing a new literal.
+- **Reuse shared components.** Extend an existing button/modal/badge/toggle/
+  spinner class or add a variant modifier; do not hand-roll another per-feature
+  copy. Interactive elements are real `<button>`/`<a>`, not clickable `<div>`s.
+- **Deviate only when a token genuinely can't express it**, and then mark the
+  site with a `design-system-exception: <reason>` comment and bump the matching
+  baseline in `src/design-system-ratchet.test.ts` (it only ratchets down) in the
+  same change. The ratchet runs under `npm run test`, so a new raw value fails
+  the suite until you either tokenize it or justify it this way.
+- **Prove no visual regression** for a CSS change with the before/after harness:
+  `node gallery/visual-diff.mjs diff-refs main` (see `frontend/gallery/README.md`).
+  A token-only refactor should report every section `identical`.
+
 ## Running and testing
 
 The isolated-instance and rendered-page rules are in `web-frontend-testing.md`.

@@ -253,18 +253,22 @@ open gallery/.visual-diff/report-main-vs-WORKING.html
 
 ---
 
-## 7. Ratchet (stop the sprawl regrowing)
+## 7. Ratchet + contribution rules (stop the sprawl regrowing)
 
-After P1, add a **vitest** guard (the frontend uses vitest, not pytest) that
-greps `src/style.css` and fails when raw values exceed a recorded baseline:
+**In place now** (did not wait for P1):
 
-- count of hex colours outside the `@theme` block,
-- count of raw `px` in `font-size` / `border-radius` declarations,
-- count of raw `z-index` numeric literals.
-
-The count may only decrease. Model it on the repo's `test_ratchets.py` philosophy
-(a monotonically-decreasing counter with a `rule_description` explaining the
-principle). Record the baseline at P0/P1 so it can only improve from there.
+- **Contribution rules:** `frontend/style_guide.md` — the short, enforceable
+  "use tokens/primitives, here's the escape hatch" guide agents auto-read as the
+  project style guide. Cross-linked from the app README, the `style.css` banner,
+  and `.agents/shared/worker/references/type-system-interface.md`.
+- **Ratchet:** `frontend/src/design-system-ratchet.test.ts` — a vitest guard
+  that scans `src/style.css` and fails when these exceed a recorded baseline:
+  hex colours outside `@theme`, raw `px` in `font-size` / `border-radius`
+  declarations, and raw numeric `z-index`. The baselines only ratchet down; a
+  deviation must bump the baseline with a comment (the escape hatch), mirroring
+  the repo's `test_ratchets.py` philosophy. Baselines were recorded at the
+  current (pre-sweep) state, so the sprawl can only shrink from here — tighten
+  them after each phase.
 
 ---
 
