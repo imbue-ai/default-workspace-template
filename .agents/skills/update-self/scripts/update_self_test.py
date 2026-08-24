@@ -1452,6 +1452,52 @@ def _marker_exists(repo_root: Path) -> bool:
     return update_self.marker_path(repo_root).exists()
 
 
+def _plant_marker(
+    repo_root: Path,
+    *,
+    dri_agent: str = "the-lead",
+    merge_ref: str = _MERGE_REF,
+    phase: str = update_self.PHASE_BUILT,
+    pid: int = 12345,
+    updated_at: float = 1000.0,
+    live_service_restarted: bool = False,
+    provisioner_ran: bool = False,
+    snapshots: list | None = None,
+    frontend_expected: bool = True,
+) -> "update_self.ApplyMarker":
+    """Write the marker an interrupted apply would have left behind."""
+    marker = update_self.ApplyMarker(
+        dri_agent=dri_agent,
+        rollback_to=_ROLLBACK,
+        merge_ref=merge_ref,
+        target_ref=None,
+        ff_only=True,
+        worker_bundle=None,
+        phase=phase,
+        pid=pid,
+        started_at=updated_at - 10,
+        updated_at=updated_at,
+        provisioner_ran=provisioner_ran,
+        live_service_restarted=live_service_restarted,
+        frontend_expected=frontend_expected,
+        snapshots=snapshots or [],
+    )
+    update_self.write_marker(marker, repo_root, now=lambda: updated_at)
+    return marker
+
+
+def _plant_snapshotted_marker(repo_root: Path, **kwargs) -> list:
+    """Take a real pre-apply copy of the bundle, then plant a marker naming it.
+
+    The state a frontend apply killed after its snapshot step leaves behind,
+    and the starting point of every recover test that has something to restore.
+    """
+    plan = update_self.plan_apply(["system/apps/system_interface/frontend/src/App.ts"])
+    snapshots = update_self.take_snapshots(plan, repo_root, _RecordingRunner(), [])
+    _plant_marker(repo_root, snapshots=snapshots, **kwargs)
+    return snapshots
+
+
 def _read_emergency(repo_root: Path) -> dict:
     return json.loads(update_self.emergency_path(repo_root).read_text())
 
@@ -1566,7 +1612,7 @@ def test_apply_frontend_only_builds_and_refreshes_without_restart(
     assert _bundle_exists(apply_repo)
     # Every exit path clears the marker; success also discards the snapshots.
     assert not _marker_exists(apply_repo)
-    assert not (apply_repo / update_self.STATE_DIR_REL / "snapshots").exists()
+    assert not _snapshot_copy(apply_repo, "bundle").parent.exists()
 
 
 def test_apply_backend_change_preflights_restarts_and_probes(
@@ -2014,7 +2060,7 @@ def test_emergency_when_rollback_cannot_restore_health(
 
     assert code == 3
     # The pre-apply copies are the operator's way back: kept, and named.
-    bundle_copy = apply_repo / update_self.STATE_DIR_REL / "snapshots" / "bundle"
+    bundle_copy = _snapshot_copy(apply_repo, "bundle")
     assert bundle_copy.exists()
     assert str(bundle_copy) in capsys.readouterr().err
     assert not _marker_exists(apply_repo)
@@ -2437,7 +2483,16 @@ def test_marker_is_written_before_the_merge_lands(apply_repo: Path) -> None:
 def test_marker_records_the_dri_agent_and_phases(
     apply_repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    # A plan that reaches every phase, so the sequence below is the whole
+    # ladder rather than the subset a narrower diff happens to walk.
+    diff = (
+        _FRONTEND_DIFF
+        + _FRONTEND_MANIFEST_DIFF
+        + _BACKEND_DIFF
+        + _BACKEND_MANIFEST_DIFF
+        + "M\tsystem/scripts/setup_system.sh\n"
+    )
+    runner = _apply_runner(diff, apply_repo)
     phases: list[str] = []
     dri: list[str] = []
 
@@ -2465,9 +2520,21 @@ def test_marker_records_the_dri_agent_and_phases(
 
     assert code == 0
     assert "test-lead-agent" in dri
-    # The phase advanced monotonically through the apply.
-    assert update_self.PHASE_MERGED in phases
-    assert update_self.PHASE_RESTARTED in phases
+    # Every phase this plan reaches is recorded, and never out of order: an
+    # interrupted apply is read back from the last phase the marker names, so a
+    # phase that is skipped or stamped early sends recovery to the wrong place.
+    ladder = [
+        update_self.PHASE_STARTED,
+        update_self.PHASE_MERGED,
+        update_self.PHASE_SNAPSHOTTED,
+        update_self.PHASE_REFRESHED,
+        update_self.PHASE_PROVISIONED,
+        update_self.PHASE_BUILT,
+        update_self.PHASE_RESTARTED,
+    ]
+    assert set(phases) == set(ladder)
+    ranks = [ladder.index(phase) for phase in phases]
+    assert ranks == sorted(ranks)
 
 
 def test_marker_comes_down_before_the_view_refresh(apply_repo: Path) -> None:
@@ -2524,19 +2591,7 @@ def test_marker_is_gone_before_the_post_success_bookkeeping(apply_repo: Path) ->
 
 
 def test_a_live_marker_blocks_a_concurrent_apply(apply_repo: Path) -> None:
-    marker = update_self.ApplyMarker(
-        dri_agent="other-agent",
-        rollback_to=_ROLLBACK,
-        merge_ref=_MERGE_REF,
-        target_ref=None,
-        ff_only=True,
-        worker_bundle=None,
-        phase=update_self.PHASE_MERGED,
-        pid=12345,
-        started_at=1.0,
-        updated_at=1.0,
-    )
-    update_self.write_marker(marker, apply_repo, now=lambda: 2.0)
+    _plant_marker(apply_repo, dri_agent="other-agent")
     runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
 
     code = _apply(
@@ -2553,19 +2608,7 @@ def test_a_live_marker_blocks_a_concurrent_apply(apply_repo: Path) -> None:
 
 
 def test_a_dead_marker_for_the_same_merge_is_resumed(apply_repo: Path) -> None:
-    marker = update_self.ApplyMarker(
-        dri_agent="earlier-run",
-        rollback_to=_ROLLBACK,
-        merge_ref=_MERGE_REF,
-        target_ref=None,
-        ff_only=True,
-        worker_bundle=None,
-        phase=update_self.PHASE_MERGED,
-        pid=12345,
-        started_at=1.0,
-        updated_at=1.0,
-    )
-    update_self.write_marker(marker, apply_repo, now=lambda: 2.0)
+    _plant_marker(apply_repo, dri_agent="earlier-run", phase=update_self.PHASE_MERGED)
     runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
     # The interrupted run already landed the merge.
     runner.respond(("git", "merge-base", "--is-ancestor"), _Result(returncode=0))
@@ -2583,19 +2626,7 @@ def test_a_dead_marker_for_the_same_merge_is_resumed(apply_repo: Path) -> None:
 def test_resuming_an_apply_killed_mid_merge_aborts_the_half_merge_first(
     apply_repo: Path,
 ) -> None:
-    marker = update_self.ApplyMarker(
-        dri_agent="earlier-run",
-        rollback_to=_ROLLBACK,
-        merge_ref=_MERGE_REF,
-        target_ref=None,
-        ff_only=True,
-        worker_bundle=None,
-        phase=update_self.PHASE_STARTED,
-        pid=12345,
-        started_at=1.0,
-        updated_at=1.0,
-    )
-    update_self.write_marker(marker, apply_repo, now=lambda: 2.0)
+    _plant_marker(apply_repo, dri_agent="earlier-run", phase=update_self.PHASE_STARTED)
     runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
     # The interrupted run died inside `git merge`: the merge is staged
     # (MERGE_HEAD present) but never became a commit.
@@ -2619,19 +2650,7 @@ def test_resuming_an_apply_killed_mid_merge_aborts_the_half_merge_first(
 def test_a_dead_marker_for_a_different_merge_refuses_and_points_at_recover(
     apply_repo: Path, capsys
 ) -> None:
-    marker = update_self.ApplyMarker(
-        dri_agent="earlier-run",
-        rollback_to=_ROLLBACK,
-        merge_ref="mngr/update-other",
-        target_ref=None,
-        ff_only=True,
-        worker_bundle=None,
-        phase=update_self.PHASE_MERGED,
-        pid=12345,
-        started_at=1.0,
-        updated_at=1.0,
-    )
-    update_self.write_marker(marker, apply_repo, now=lambda: 2.0)
+    _plant_marker(apply_repo, dri_agent="earlier-run", merge_ref="mngr/update-other")
     runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
 
     code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
@@ -3149,7 +3168,6 @@ def test_ledger_creates_starter_seeds_origin_and_appends_idempotently(
         text=True,
     ).stdout.strip()
     assert subject == "version history: updated to minds-v0.4.2"
-    assert not subject.startswith("update-self:")
 
     # A retried landing is a no-op: same note + same sha appends nothing and
     # commits nothing.
@@ -3250,38 +3268,6 @@ def test_env_converge_failure_is_a_warning_not_a_rollback(
 # --- recover -------------------------------------------------------------------
 
 
-def _write_recover_marker(
-    repo_root: Path,
-    *,
-    merge_ref: str = _MERGE_REF,
-    phase: str = update_self.PHASE_BUILT,
-    pid: int = 12345,
-    updated_at: float = 1000.0,
-    live_service_restarted: bool = False,
-    provisioner_ran: bool = False,
-    snapshots: list | None = None,
-    frontend_expected: bool = True,
-) -> "update_self.ApplyMarker":
-    marker = update_self.ApplyMarker(
-        dri_agent="the-lead",
-        rollback_to=_ROLLBACK,
-        merge_ref=merge_ref,
-        target_ref=None,
-        ff_only=True,
-        worker_bundle=None,
-        phase=phase,
-        pid=pid,
-        started_at=updated_at - 10,
-        updated_at=updated_at,
-        provisioner_ran=provisioner_ran,
-        live_service_restarted=live_service_restarted,
-        frontend_expected=frontend_expected,
-        snapshots=snapshots or [],
-    )
-    update_self.write_marker(marker, repo_root, now=lambda: updated_at)
-    return marker
-
-
 def _recover(
     runner: _RecordingRunner,
     http: _FakeHttp,
@@ -3310,41 +3296,53 @@ def _recover(
     )
 
 
-def test_recover_if_stale_truth_table(apply_repo: Path) -> None:
+@pytest.mark.parametrize(
+    ("has_marker", "is_pid_live", "now", "does_act"),
+    [
+        (False, False, 10_000.0, False),
+        (True, True, 10_000.0, False),
+        (True, False, 1000.0 + 60.0, False),
+        (True, False, 10_000.0, True),
+    ],
+    ids=[
+        "no-marker",
+        "process-still-live",
+        "within-the-grace-period",
+        "dead-and-stale",
+    ],
+)
+def test_recover_if_stale_acts_only_on_a_marker_that_is_really_stale(
+    apply_repo: Path, has_marker: bool, is_pid_live: bool, now: float, does_act: bool
+) -> None:
+    # The unattended guard runs from cron every five minutes forever, so it has
+    # to be a silent no-op in every normal state: a marker whose process is
+    # still alive is a healthy apply mid-motion, and one that only just died is
+    # the DRI agent's window to re-run the idempotent apply itself.
+    if has_marker:
+        _plant_marker(apply_repo)  # updated_at = 1000.0
     runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
-    http = _FakeHttp(_all_healthy)
 
-    # No marker: silent no-op.
-    assert _recover(runner, http, apply_repo, if_stale=True) == 0
-    assert runner.calls == []
-
-    # Marker with a live process: silent no-op.
-    _write_recover_marker(apply_repo)
-    assert (
-        _recover(runner, http, apply_repo, if_stale=True, is_pid_live=lambda pid: True)
-        == 0
+    code = _recover(
+        runner,
+        _FakeHttp(_all_healthy),
+        apply_repo,
+        if_stale=True,
+        now=lambda: now,
+        is_pid_live=lambda pid: is_pid_live,
     )
-    assert runner.calls == []
-    assert _marker_exists(apply_repo)
 
-    # Dead process but within the grace period: still a no-op -- the DRI agent
-    # gets its window to simply re-run the idempotent apply.
-    assert (
-        _recover(runner, http, apply_repo, if_stale=True, now=lambda: 1000.0 + 60.0)
-        == 0
-    )
-    assert runner.calls == []
-    assert _marker_exists(apply_repo)
-
-    # Dead and past the grace period: the rollback runs and the marker clears.
-    assert _recover(runner, http, apply_repo, if_stale=True) == 0
-    assert runner.ran("git", "checkout", _ROLLBACK, "--")
-    assert runner.ran("git", "commit", "--no-verify")
-    assert not _marker_exists(apply_repo)
+    assert code == 0
+    if does_act:
+        assert runner.ran("git", "checkout", _ROLLBACK, "--")
+        assert runner.ran("git", "commit", "--no-verify")
+        assert not _marker_exists(apply_repo)
+    else:
+        assert runner.calls == []
+        assert _marker_exists(apply_repo) is has_marker
 
 
 def test_explicit_recover_refuses_a_live_apply(apply_repo: Path, capsys) -> None:
-    _write_recover_marker(apply_repo)
+    _plant_marker(apply_repo)
     runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
 
     code = _recover(
@@ -3359,11 +3357,9 @@ def test_explicit_recover_refuses_a_live_apply(apply_repo: Path, capsys) -> None
 def test_recover_restores_snapshots_and_restarts_when_the_apply_had(
     apply_repo: Path,
 ) -> None:
-    # Take a real snapshot, then wreck the bundle, as a kill mid-build leaves it.
-    plan = update_self.plan_apply(["system/apps/system_interface/frontend/src/App.ts"])
-    snapshots = update_self.take_snapshots(plan, apply_repo, _RecordingRunner(), [])
+    _plant_snapshotted_marker(apply_repo, live_service_restarted=True)
+    # Wreck the bundle, as a kill mid-build leaves it.
     shutil.rmtree(apply_repo / update_self.STATIC_DIR)
-    _write_recover_marker(apply_repo, snapshots=snapshots, live_service_restarted=True)
     runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
 
     code = _recover(runner, _FakeHttp(_all_healthy), apply_repo)
@@ -3376,15 +3372,10 @@ def test_recover_restores_snapshots_and_restarts_when_the_apply_had(
 
 
 def test_recover_no_restart_restores_disk_state_only(apply_repo: Path) -> None:
-    plan = update_self.plan_apply(["system/apps/system_interface/frontend/src/App.ts"])
-    snapshots = update_self.take_snapshots(plan, apply_repo, _RecordingRunner(), [])
-    shutil.rmtree(apply_repo / update_self.STATIC_DIR)
-    _write_recover_marker(
-        apply_repo,
-        snapshots=snapshots,
-        live_service_restarted=True,
-        provisioner_ran=True,
+    _plant_snapshotted_marker(
+        apply_repo, live_service_restarted=True, provisioner_ran=True
     )
+    shutil.rmtree(apply_repo / update_self.STATIC_DIR)
     runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
     http = _FakeHttp(_all_healthy)
 
@@ -3416,7 +3407,7 @@ def test_recover_no_restart_keeps_the_copies_it_could_not_put_back(
     (copy / "index.html").write_text("the pre-apply bundle")
     # The restore cannot land: the destination's own parent is a regular file.
     (apply_repo / "blocked").write_text("not a directory")
-    _write_recover_marker(
+    _plant_marker(
         apply_repo,
         snapshots=[
             update_self.SnapshotRecord(
@@ -3467,14 +3458,8 @@ def test_recover_reaches_the_same_end_state_as_the_in_process_rollback(
     repo_b = tmp_path / "b" / "repo"
     (repo_b / update_self.FRONTEND_DIR).mkdir(parents=True)
     _write_bundle(repo_b)
-    plan = update_self.plan_apply(
-        ["system/apps/system_interface/frontend/src/views/Chat.ts"]
-    )
-    snapshots = update_self.take_snapshots(plan, repo_b, _RecordingRunner(), [])
+    _plant_snapshotted_marker(repo_b, phase=update_self.PHASE_SNAPSHOTTED)
     shutil.rmtree(repo_b / update_self.STATIC_DIR)
-    _write_recover_marker(
-        repo_b, snapshots=snapshots, phase=update_self.PHASE_SNAPSHOTTED
-    )
     runner_b = _apply_runner(_FRONTEND_DIFF, repo_b)
     assert _recover(runner_b, _FakeHttp(_all_healthy), repo_b) == 0
 
@@ -3492,9 +3477,7 @@ def test_recover_reports_an_emergency_when_it_cannot_restore_health(
     # workspace will not come back healthy. The marker still comes down -- re-
     # running the same failed rollback from cron would not help -- so this exit
     # is the only signal, and the kept snapshots are the operator's way back.
-    plan = update_self.plan_apply(["system/apps/system_interface/frontend/src/App.ts"])
-    snapshots = update_self.take_snapshots(plan, apply_repo, _RecordingRunner(), [])
-    _write_recover_marker(apply_repo, snapshots=snapshots)
+    _plant_snapshotted_marker(apply_repo)
     runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
     # The environment is the wrong source for the record's DRI agent, and this
     # is the path that proves it: cron and bootstrap set no MNGR_AGENT_NAME at
@@ -3510,7 +3493,7 @@ def test_recover_reports_an_emergency_when_it_cannot_restore_health(
     assert not _marker_exists(apply_repo)
     # The copies outlive the failure: putting one back needs no npm, no
     # registry and no working mngr.
-    assert (apply_repo / update_self.STATE_DIR_REL / "snapshots" / "bundle").exists()
+    assert _snapshot_copy(apply_repo, "bundle").exists()
     record = _read_emergency(apply_repo)
     assert record["dri_agent"] == "the-lead"
     assert _MERGE_REF in record["reason"]
@@ -3522,9 +3505,7 @@ def test_recover_clears_the_emergency_record_when_it_confirms_health(
     # The other half of the record's life: a recovery that ends with the live
     # workspace confirmed healthy is exactly the evidence the record is stale.
     _plant_emergency(apply_repo)
-    plan = update_self.plan_apply(["system/apps/system_interface/frontend/src/App.ts"])
-    snapshots = update_self.take_snapshots(plan, apply_repo, _RecordingRunner(), [])
-    _write_recover_marker(apply_repo, snapshots=snapshots)
+    _plant_snapshotted_marker(apply_repo)
     runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
 
     assert _recover(runner, _FakeHttp(_all_healthy), apply_repo) == 0
@@ -3534,9 +3515,7 @@ def test_recover_clears_the_emergency_record_when_it_confirms_health(
 def test_recover_provisioner_failure_still_counts_as_recovered(
     apply_repo: Path, capsys
 ) -> None:
-    plan = update_self.plan_apply(["system/apps/system_interface/frontend/src/App.ts"])
-    snapshots = update_self.take_snapshots(plan, apply_repo, _RecordingRunner(), [])
-    _write_recover_marker(apply_repo, snapshots=snapshots, provisioner_ran=True)
+    _plant_snapshotted_marker(apply_repo, provisioner_ran=True)
     runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
     runner.respond(("bash",), _Result(returncode=1, stderr="no network"))
 
