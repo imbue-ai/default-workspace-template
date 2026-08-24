@@ -4,9 +4,10 @@
 # ///
 """Deterministic helpers for the safe, background-worker-driven update-self flow.
 
-The update-self orchestration is mostly agent judgement (triage conflicts, decide
-validation depth, reveal by change class). This script owns the parts that are
-*deterministic* and therefore belong in tested code rather than agent prose:
+The update-self orchestration is mostly agent judgement (triage conflicts,
+decide validation depth, work the report's impact analysis). This script owns
+the parts that are *deterministic* and therefore belong in tested code rather
+than agent prose:
 
 ``resolve-target``
     Resolve the ref to update to. Default is the latest **stable** ``minds-v*``
@@ -39,8 +40,9 @@ validation depth, reveal by change class). This script owns the parts that are
     Split the files upstream changed into the reconciled **merged** set (local
     also diverged there -- validate) vs the clean **pulled-in** set (local left
     it untouched, so the merge just took upstream -- trust as upstream-tested),
-    and map each file onto its reveal class and its test project. This drives
-    both validation depth (merged set) and reveal-by-class. ``has_merge_work``
+    and map each file onto its change class and its test project. This drives
+    both validation depth (merged set) and what ``apply`` must do to make the
+    live workspace consistent with the merge. ``has_merge_work``
     is the mechanical half of the review-gate rule: true whenever the merged
     set is non-empty (any merge work at all happened). A false value is
     necessary but not sufficient to skip the gates -- the worker's impact
@@ -487,9 +489,8 @@ CLASS_OTHER = "other"
 # rather than at runtime. A change to one never reaches a *live* workspace by
 # restarting a service (nothing running imports it): it needs the provisioning
 # step re-run live (these scripts are idempotent) or a workspace rebuild. Split
-# out of ``shared_runtime``/``other`` so the reveal can flag that downstream
-# impact instead of concluding "nothing to reveal". See the skill's
-# ``provisioner`` reveal class.
+# out of ``shared_runtime``/``other`` so the apply re-runs the provisioner for
+# them instead of concluding there is nothing live to do.
 _PROVISIONER_SCRIPTS = frozenset(
     {
         "system/scripts/setup_system.sh",  # pinned global toolchain (latchkey, uv, claude, ...)
@@ -517,9 +518,12 @@ _MANIFEST_BASENAMES = frozenset(
 
 
 class PathClass(NamedTuple):
-    """How one changed path should be revealed and validated.
+    """How one changed path should be applied and validated.
 
-    ``reveal_class`` selects the go-live action; ``project`` is the pytest
+    ``reveal_class`` selects the go-live action -- named for the reveal step
+    the atomic ``apply`` replaced, and kept because it is the wire name in
+    ``classify-merge``'s JSON, which the skill and worker prose read;
+    ``project`` is the pytest
     project whose suite covers the path (``.`` = the root workspace,
     ``system/apps/system_interface`` and ``system/vendor/mngr`` run their own suites);
     ``is_manifest`` flags a dependency-manifest change that needs an env refresh;
@@ -548,12 +552,14 @@ def _project_for_path(path: str) -> str:
 
 
 def classify_path(path: str) -> PathClass:
-    """Map a repo-relative path to its reveal class, test project, and manifest flag.
+    """Map a repo-relative path to its change class, test project, and manifest flag.
 
-    The classes drive reveal-by-class in the skill:
+    The classes drive what ``apply`` does, and what the worker's report has to
+    cover for the lead to finish the rest:
 
-    - ``system_interface`` -- ``system/apps/system_interface/**``; revealed via
-      ``reveal_system_interface.py`` (which owns its own manifest refresh).
+    - ``system_interface`` -- ``system/apps/system_interface/**``; the apply
+      rebuilds or installs the bundle and refreshes the backend's environment
+      on a manifest change (:func:`_refresh_backend_dependencies`).
     - ``service`` -- ``system/supervisord.conf`` and ``system/libs/bootstrap/**``; applied by
       restarting the services agent (``mngr start --restart system-services``,
       then ``system/scripts/refresh_workspace_view.py`` to rebuild the user's
@@ -567,7 +573,7 @@ def classify_path(path: str) -> PathClass:
     - ``provisioner`` -- the pinned-toolchain scripts and the ``.mngr/`` create
       config (see :func:`_is_provisioner`); shapes image-build / create-time
       provisioning, so a change is re-run live (idempotent scripts) or flagged
-      for a workspace rebuild, never revealed by a service restart.
+      for a workspace rebuild, never applied by a service restart alone.
     - ``dockerfile`` -- ``system/Dockerfile``; split by hunk into live-applicable
       vs rebuild-only by worker judgement.
     - ``docs`` -- a ``README.md`` or a ``changelog/*.md`` entry wherever it lives,
@@ -607,8 +613,8 @@ def classify_path(path: str) -> PathClass:
     # Provisioning files are matched before the generic ``system/scripts/`` and
     # catch-all rules below: a toolchain script lives under ``system/scripts/`` (would
     # otherwise read as ``shared_runtime``) and ``.mngr/settings.toml`` would
-    # otherwise fall through to ``other`` -- either way the reveal would miss its
-    # build/create-time impact.
+    # otherwise fall through to ``other`` -- either way the apply would miss
+    # its build/create-time impact.
     if _is_provisioner(path):
         return PathClass(
             CLASS_PROVISIONER, project, is_manifest, path == ".mngr/settings.toml"
@@ -1003,9 +1009,8 @@ PHASE_PROVISIONED = "provisioned"
 PHASE_BUILT = "frontend_built"
 PHASE_RESTARTED = "restarted"
 
-# The shared post-change refresh motion, repo-relative (see the reveal flow's
-# original: it owns *how* a changed interface is revealed to whoever is
-# looking; this script only decides *when*).
+# The shared post-change refresh motion, repo-relative. It owns *how* a changed
+# interface is pushed to whoever is looking; this script only decides *when*.
 _REFRESH_SCRIPT = "system/scripts/refresh_workspace_view.py"
 _REFRESH_TIMEOUT_SECONDS = 120.0
 
@@ -1022,7 +1027,7 @@ _ASSET_REFERENCE_PATTERN = re.compile(r"/assets/([A-Za-z0-9._-]+\.js)")
 HEALTH_PATH = "/api/agents"
 SERVE_PATH = "/"
 
-# Poll budgets, identical to the reveal flow's.
+# Poll budgets.
 _HEALTH_ATTEMPTS = 30
 _HEALTH_INTERVAL_SECONDS = 1.0
 _PREFLIGHT_ATTEMPTS = 30
@@ -1093,7 +1098,8 @@ def _protect_from_memory_shed(repo_root: Path) -> None:
     band = getattr(_BANDS, "UPDATE_APPLY", None)
     if band is None:
         # An older tree's bands module predates the update-apply band: use the
-        # system interface's own service band, the reveal flow's precedent.
+        # system interface's own service band, which the pre-apply reveal
+        # flow this generalizes used for the same reason.
         band = _BANDS.SERVICE_BANDS.get("system_interface", 20)
     if not _BANDS.set_oom_score_adj(os.getpid(), band):
         sys.stderr.write(
@@ -1317,8 +1323,9 @@ def _is_test_file(path: str) -> bool:
 class ApplyPlan(NamedTuple):
     """What one apply must do, derived from the merged diff's paths.
 
-    The system-interface split (frontend vs backend, source vs manifest) keeps
-    the reveal flow's semantics; the rest rides on :func:`classify_path` --
+    The system-interface split (frontend vs backend, source vs manifest) is
+    finer than :func:`classify_path`'s single ``system_interface`` class,
+    because those four need different work; the rest rides on it --
     ``provisioner`` for the pinned-toolchain re-run and ``requires_restart``
     for the paths a live process must be bounced over (vendored-mngr source,
     ``.mngr/settings.toml``, the service class).
@@ -1943,9 +1950,10 @@ def _refresh_workspace_view(repo_root: Path, runner: Runner) -> None:
 def _tool_location(script: Path, tool_name: str) -> tuple[Path, Path] | None:
     """Return ``(tool_dir, bin_dir)`` for the uv tool that owns console
     ``script``, resolved from the script's shebang; ``None`` when it cannot be
-    confirmed (see the reveal flow's original for the full rationale: uv's
-    default tool dir follows ``$HOME``, which is not the one the workspace was
-    built under, and a venv console script must not masquerade as a tool)."""
+    confirmed. Resolved from the shebang rather than asked of uv, for two
+    reasons: uv's default tool dir follows ``$HOME``, which is not the one the
+    workspace was built under, and a venv console script must not masquerade
+    as a tool."""
     try:
         shebang = script.read_text(errors="replace").split("\n", 1)[0]
     except OSError:
