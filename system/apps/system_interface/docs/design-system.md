@@ -1,0 +1,278 @@
+# System Interface design system — assessment & plan
+
+Status: **proposal / not yet started.** This document is the durable hand-off so
+any agent can pick the work up cold. It records (a) how the UI is built today,
+(b) a measured inventory of the visual sprawl, (c) a concrete target token set
+and component primitives, and (d) a phased, low-risk migration plan. A visual
+before/after harness ships alongside it (`frontend/gallery/`) so every step can
+be proven to change only what it intends to.
+
+All line/rule counts below were measured from `frontend/src/style.css`
+(4,108 lines, 512 rule blocks) and the `frontend/src/**` view modules at the
+time of writing. Re-measure before trusting them if the tree has moved on.
+
+---
+
+## 1. How the UI is built (as-built architecture)
+
+The entire workspace UI is one app: `system/apps/system_interface/frontend`.
+
+- **No React/Vue.** Views are **Mithril** hyperscript (`m(...)`) modules under
+  `src/views/`; state/models under `src/models/`.
+- **dockview-core** provides the tab/panel shell (`views/DockviewWorkspace.ts`,
+  the largest module).
+- **marked + dompurify** render chat markdown.
+- **Styling is split across four parallel mechanisms** — this is the core
+  problem:
+
+  | Mechanism | Where | Rough scale |
+  |---|---|---|
+  | Hand-written semantic CSS | `src/style.css` | 512 rules, ~29 feature silos |
+  | Tailwind v4 utilities | inline in `.ts` views | `text-` x82, `flex` x67, `px-` x13, `bg-` x9 … |
+  | Inline `style:` objects | 11 view files | 28 sites |
+  | Overrides of dockview's vendored CSS | `style.css` (`dv-`/`dockview-`) | ~142 rules |
+
+  There is no single authoritative layer, and no shared component library.
+
+- The CSS is namespaced **by feature, not by component**. The prefixes are the
+  de-facto components: `claude` (91 rules), `dv`/`dockview` (~142), `pv`
+  (progress view, 57), `message` (40), `markdown` (39), `share` (32), `tool`
+  (27), `permission` (27), `model` (23), `fast` (22), `composer` (21), `queued`
+  (19), `subagent` (12), `destroy` (10), `image` (8), `terminal` (6)…
+
+- **There is a partial token layer already**: a Tailwind v4 `@theme` block at the
+  top of `style.css` with ~37 tokens — 24 colors, 3 font families, 3 radii, 4
+  widths, 1 spacing (`--spacing-page`), 1 duration, a logo hook. Color and a few
+  layout widths are tokenized. **Type, spacing, elevation, motion, and z-index
+  are not.**
+
+---
+
+## 2. Measured inventory of the sprawl
+
+Every value below is repeated raw throughout the stylesheet with no token.
+
+| Dimension | Distinct values | Tell-tale problem |
+|---|---|---|
+| Font size | **29** | mixed `px`/`rem`/`em`; `13px` typed 28x; `0.8125rem` and `13px` are the *same size*, both present |
+| Spacing (padding/margin/gap) | **23 atoms** | `8px` x67, `6px` x36, `4px` x31, `12px` x31; off-grid strays `7px`, `9px`, `7.5px`, `35px` |
+| Border radius | **18** | `6px` typed raw 15x *and* `var(--radius-base)` 12x — same value, two ways; `8px` (13x) has no token |
+| Box-shadow | **7** | all hand-mixed, e.g. `0 8px 32px rgba(0,0,0,0.2)` x4 |
+| Motion timing | **18** | mixed units — `120ms` and `0.12s` both present (identical duration); only 1 token |
+| Z-index | **7 magic numbers** | `10001`, `10000`, `1000`, `100`, `50`, `2`, `1` — unmanaged, classic stacking-bug source |
+| Font weight | 5 | no tokens |
+| Raw hex colors (outside `@theme`) | **45** | ~18 are *exact duplicates* of existing tokens (e.g. `#2f6b4f` = `--color-accent`, `#666666` = `--color-text-secondary`) |
+| rgba/rgb | 26 | two translucency bases mixed: `rgba(0,0,0,…)` vs Notion-charcoal `rgba(55,53,47,…)` |
+
+Two recurring failure modes: **(a) a token exists but is bypassed** (radius,
+accent color re-typed as hex), and **(b) a whole category has no tokens and grew
+a semantic palette by accident** — a full destructive-red / warning-amber /
+success-green / info-slate palette lives entirely as ~30 scattered raw hexes.
+
+### Buttons & states (the headline count)
+
+- ~**38 button-related CSS selectors**, collapsing to ~**15 bespoke button
+  families** — essentially one per feature (`claude-login-button`,
+  `destroy-dialog-btn`, `fast-mode-modal-btn`, `share-modal-btn`,
+  `permission-request-button`, `message-input-send/stop/attach-button`,
+  `queued-action`, `terminal-banner-btn`, `composer-under-bar-action`,
+  `image-lightbox-iconbtn`, dockview tab actions…).
+- **Only one family** (`.claude-login-button`) has a real variant system:
+  `--primary / --ghost / --link / --block`. Every other button is a one-off.
+- **162 `onclick` handlers** across the views vs. a small number of semantic
+  `<button>` elements — many "buttons" are clickable `div`/`span`s (a11y +
+  consistency gap).
+
+States actually styled across all interactive elements:
+
+| State | Occurrences | Notes |
+|---|---|---|
+| `:hover` | 60 | near-universal |
+| `:disabled` | 15 | |
+| `:focus-visible` / `:focus` / `:focus-within` | 13 / 3 / 2 | |
+| `:active` (pressed) | **0** | nothing has a pressed state |
+| selected / "active" | bespoke | spelled 4 ways: `--selected`, `--active`, `-current-mode`, `.dv-active-tab` |
+
+### Other components, all reinvented per feature
+
+- **Modals/dialogs: 6+ independent implementations** (`claude-login-modal`,
+  `custom-url-dialog`, `destroy-dialog`, `fast-mode-modal`, `share-modal`,
+  `image-lightbox`), each re-deriving overlay + centered card + title +
+  action-row + buttons. **Biggest single consolidation win.**
+- **Spinners: 4–5** implementations with **3 near-identical `@keyframes spin`**
+  (`claude-login-spin`, `composer-attachment-spin`, `pv-spin`).
+- **Toggles: 4+** families (`fast-toggle` with `--inline/--on/--readonly`,
+  `claude-login-*-toggle`, `permission-request-*-toggle`, generic `.toggle`).
+- **Badges: ~10** bespoke; **Tooltips: 2 systems** (JS `.minds-tooltip` +
+  CSS `[data-tooltip]::after`, used 18x).
+- **Icons: 18 inline SVGs** in `views/icons.ts` — the one genuinely
+  systematized set; use it as the model for the rest.
+- **Keyframes: 10** total, with the spinner duplication noted above.
+
+---
+
+## 3. Target token system (concrete additions to `@theme`)
+
+Add these to the existing `@theme` block. Names follow Tailwind v4 conventions so
+they are usable both as `var(--…)` and as generated utilities.
+
+```css
+/* Type scale — replaces 29 ad-hoc sizes, one unit (px) */
+--text-2xs: 11px;  --text-xs: 12px;  --text-sm: 13px;
+--text-base: 14px; --text-md: 15px;  /* 15px is today's body default */
+--text-lg: 16px;   --text-xl: 17px;  --text-2xl: 18px;
+
+/* Spacing scale — 4px base, replaces 23 atoms; snap 7/9/7.5/22/35 to nearest */
+--space-0_5: 2px; --space-1: 4px; --space-1_5: 6px; --space-2: 8px;
+--space-3: 12px;  --space-4: 16px; --space-5: 20px; --space-6: 24px; --space-8: 32px;
+
+/* Radii — --radius-base (6px) already exists; ban raw 6px in favour of it */
+--radius-sm: 3px; --radius-md: 8px; --radius-lg: 12px;
+--radius-pill: 999px; --radius-circle: 50%;
+
+/* Elevation — replaces 7 hand-mixed shadows */
+--shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+--shadow-md: 0 2px 10px rgba(0, 0, 0, 0.08);
+--shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.2);
+--shadow-overlay: 0 8px 40px rgba(0, 0, 0, 0.5);
+
+/* Motion — one unit (ms), replaces 18 timings */
+--dur-fast: 80ms; --dur-base: 120ms; --dur-slow: 200ms;
+--ease-standard: cubic-bezier(0.2, 0, 0, 1);
+
+/* Z-index — names the 7 magic numbers */
+--z-content: 1; --z-sticky: 100; --z-dropdown: 1000;
+--z-overlay: 10000; --z-tooltip: 10001;
+
+/* Semantic colour — promotes the accidental red/amber/green/slate palettes */
+--color-danger: #dc2626; --color-danger-hover: #b91c1c;
+--color-danger-bg: #fef2f2; --color-danger-border: #fecaca;
+--color-warning: #b45309; --color-warning-bg: #fde68a;
+--color-success: #22a06b;
+--color-info: #2563eb;
+/* Neutral/slate family already half-present as --color-stop-button(#64748b)/-hover(#475569);
+   fold #334155/#1e293b/#e2e8f0/#f1f5f9/#f8fafc into --color-neutral-{700..50}. */
+
+/* Font weight */
+--font-normal: 400; --font-medium: 500; --font-semibold: 600; --font-bold: 700;
+```
+
+**Caveat — Tailwind default-token collisions.** Tailwind v4's `@import "tailwindcss"`
+already defines `--text-{xs,sm,base,lg,xl,2xl}`, `--radius-{sm,md,lg}`,
+`--shadow-*`, and a `--spacing` base. Some of the names proposed above therefore
+*override* a Tailwind default with a different value (e.g. Tailwind's
+`--radius-sm` is 0.25rem/4px, not the 3px proposed here; `--text-sm` is 0.875rem,
+not 13px). Decide per token whether to (a) adopt Tailwind's value, (b) intentionally
+override it in `@theme`, or (c) pick a non-colliding name (e.g. `--text-body`,
+`--radius-card`). Verified via the gallery, which renders whatever the compiled
+CSS resolves — the collisions are visible there.
+
+## 4. Component primitives to extract
+
+Since there is no component lib, these are small Mithril view helpers (return
+`m(...)` trees) plus their CSS, generalized from the existing best example in
+each category. `views/icons.ts` and `.claude-login-button`'s variant scheme are
+the templates.
+
+1. **Button** — `Button({variant, size, state, icon, label, onclick})`.
+   Variants: `primary | secondary | ghost | destructive | icon`.
+   Sizes: `sm | md`. States: default / hover / focus-visible / disabled /
+   **pressed (add `:active`)** / selected. Generalize `.claude-login-button`.
+2. **Modal** — `openModal({title, body, actions})` → overlay + card + header +
+   body + actions footer. Collapses the 6 modal implementations. Highest value,
+   highest risk (do last).
+3. **Toggle / Switch** — generalize `fast-toggle`.
+4. **Badge** — `Badge({tone, size})`, tones `neutral | accent | danger | warning | success`.
+5. **Tooltip** — pick ONE mechanism. Keep the CSS `[data-tooltip]` for simple
+   text; reserve `hoverTooltip.ts` for rich content only.
+6. **Spinner** — one keyframe + size prop; delete the 3 duplicate `@keyframes`.
+7. **Input / Field** — one text-input style; generalize the per-modal inputs.
+
+---
+
+## 5. Phased migration plan
+
+Each phase is independently shippable. **P1 and P2 must be provable visual
+no-ops** via the harness in section 6 (every gallery section reports
+`identical`). Later phases have intentional diffs, reviewed section by section.
+
+- **P0 — scaffold (no visual change).** Add the full token set to `@theme`
+  (unused for now), commit the gallery + visual-diff harness + this doc, and
+  add the ratchet (section 7) at its current baseline counts.
+- **P1 — mechanical sweep (visual no-op).** Replace the ~18 duplicate hexes with
+  their existing `var(--color-*)` tokens; replace raw `6px` radius with
+  `var(--radius-base)`; snap spacing/type/radius values to the nearest new
+  token. Verify: `diff-refs` report is all `identical`.
+- **P2 — semantic colour (near visual no-op).** Migrate the red/amber/green/slate
+  raw hexes to the new semantic tokens. Verify per-section.
+- **P3 — primitives.** Extract Button, Badge, Spinner, Toggle, Input; migrate
+  call sites feature by feature. Intentional, reviewed diffs.
+- **P4 — Modal primitive.** Migrate the 6 modals onto `openModal`. Highest risk.
+  Consider promoting the gallery into a living reference **app tab** here (use
+  the `build-app` skill) so the system is self-documenting.
+
+**Acceptance criteria (P1/P2):** the visual-diff report shows 0 changed pixels
+in every section except any deliberately touched one.
+
+---
+
+## 6. Visual before/after harness (`frontend/gallery/`)
+
+A static, dev-server-free harness proves each change renders identically (or
+shows exactly what moved). See `frontend/gallery/README.md` for full usage.
+
+- `gallery/gallery.html` — a static catalog page rendering every token swatch,
+  button family + state, badge, toggle, input, modal surface, tooltip and
+  spinner. Each block is a `<section data-shot="slug">` so it can be screenshot
+  in isolation. It uses the real class names from `style.css`.
+- `gallery/visual-diff.mjs` — a Node CLI (uses the frontend's Playwright +
+  `@tailwindcss/cli` + `pixelmatch`/`pngjs`):
+  - `capture --label <name> [--css <path>]` — compile a `style.css` with the
+    Tailwind CLI, render the gallery against it, screenshot each section.
+  - `compare <a> <b>` — pixel-diff two captures → `report-<a>-vs-<b>.html`
+    (side-by-side + diff overlay + per-section `identical`/`differs` verdict and
+    changed-pixel count). Report UX mirrors mngr's `scripts/visual_diff.py`.
+  - `diff-refs <before-ref> [<after-ref|WORKING>]` — one-command before/after:
+    extracts each ref's `style.css` via `git show <ref>:<path>` (WORKING = the
+    on-disk file), captures both, compares. No worktree needed, because only the
+    CSS varies — the gallery markup is constant.
+
+Prior art deliberately mirrored: `system/vendor/mngr/apps/minds/scripts/visual_diff.py`
+(same capture→compare→HTML-report-with-lightbox shape). We do **not** reuse it
+directly because it runs on Python Playwright + the monorepo root venv (broken on
+macOS dev boxes — the `pcmflux` package is Linux-only) and targets the minds SPA.
+
+Typical use for a token-sweep PR:
+
+```
+cd system/apps/system_interface/frontend
+pnpm install                       # one-time; node_modules is gitignored
+node gallery/visual-diff.mjs diff-refs main
+open gallery/.visual-diff/report-main-vs-WORKING.html
+```
+
+---
+
+## 7. Ratchet (stop the sprawl regrowing)
+
+After P1, add a **vitest** guard (the frontend uses vitest, not pytest) that
+greps `src/style.css` and fails when raw values exceed a recorded baseline:
+
+- count of hex colours outside the `@theme` block,
+- count of raw `px` in `font-size` / `border-radius` declarations,
+- count of raw `z-index` numeric literals.
+
+The count may only decrease. Model it on the repo's `test_ratchets.py` philosophy
+(a monotonically-decreasing counter with a `rule_description` explaining the
+principle). Record the baseline at P0/P1 so it can only improve from there.
+
+---
+
+## 8. Open questions for the user
+
+- Dark mode: there is none today (single light theme). Completing the token set
+  makes a dark theme cheap later — is that wanted, or explicitly out of scope?
+- Should the gallery become a permanent in-app "reference" tab (P4), or stay a
+  dev-only harness?
+- Tailwind-utility vs semantic-class direction: do we standardize on one, or
+  keep both with a rule for when each applies?
