@@ -655,9 +655,12 @@ own -- it is the one that wants a person -- so treat the record as the starting
 point rather than re-running anything blind.
 
 Nothing takes that record down by itself, and the banner keys off its mere
-presence, so **clearing it is part of the repair**. A later update that lands
-and confirms health clears it, and so does a `recover` that rolls back a *new*
-interruption; neither describes the ordinary case. This exit already cleared
+presence, so **clearing it is part of the repair**. Only an outcome that ends
+with the live workspace *confirmed healthy* clears it: a later update that
+lands, or a `recover` of a *new* interruption that probes the workspace
+afterwards. Neither describes the ordinary case, and the boot-time recovery is
+not one of them -- it runs before anything is up, so it has nothing to probe
+and leaves the record alone. This exit already cleared
 the marker and its rollback already put the tree content back, so a bare
 `recover` finds nothing to do, and re-running the same `apply` is refused (the
 merge is landed-and-rolled-back). So when the repair was by hand: verify the
