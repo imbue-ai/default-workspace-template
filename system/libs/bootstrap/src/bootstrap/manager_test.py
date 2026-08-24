@@ -16,12 +16,12 @@ from imbue.mngr.cli.output_helpers import write_json_line
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 
 from bootstrap.manager import (
+    _DRI_WAKE_TIMEOUT_SECONDS,
+    _UPDATE_RECOVER_TIMEOUT_SECONDS,
     INITIAL_CHAT_AGENT_ID_FILENAME,
     UPDATE_APPLY_MARKER,
     UPDATE_APPLY_SCRIPT,
     TimezoneFetchError,
-    _DRI_WAKE_TIMEOUT_SECONDS,
-    _UPDATE_RECOVER_TIMEOUT_SECONDS,
     _apply_container_timezone,
     _build_create_chat_command,
     _configure_git_global,

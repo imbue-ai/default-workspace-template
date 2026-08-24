@@ -110,8 +110,8 @@ from imbue.system_interface.models import StopAgentResponse
 from imbue.system_interface.models import TerminalSessionInfo
 from imbue.system_interface.plugins import get_plugin_manager
 from imbue.system_interface.update_staleness import UPDATE_STALENESS_HEADER
-from imbue.system_interface.update_staleness import WORKSPACE_ROOT_DIRECTORY
 from imbue.system_interface.update_staleness import UPDATE_STALENESS_META_TAG
+from imbue.system_interface.update_staleness import WORKSPACE_ROOT_DIRECTORY
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 _LOOPBACK_CLIENT_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
