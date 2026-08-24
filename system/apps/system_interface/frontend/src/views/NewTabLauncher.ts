@@ -32,7 +32,9 @@
 
 import m from "mithril";
 import { buildEverythingMembers, partitionByMembership, serviceNameFromRef } from "../models/Projects";
+import { getApps } from "../models/AgentManager";
 import type { ChatHarness } from "../models/AgentManager";
+import { appStoppedDetail, stoppedAppForServiceName } from "../models/appLiveness";
 import type { MachineInventory, MemberKind } from "../models/Projects";
 import { serviceIconMarkup } from "./appIcon";
 import { areIntroductoryAgentsEnabled, areOtherHarnessesEnabled } from "../base-path";
@@ -337,11 +339,25 @@ export function openNewTiles(): readonly LaunchTile[] {
   return tiles;
 }
 
-// No file-viewer app exists on this machine yet, so the tile is present but
-// cannot act. It is marked aria-disabled rather than `disabled`: a disabled
-// button receives no pointer events in Chromium, which would swallow the very
-// hover that explains why it does nothing.
+// Shown on the files tile only where no "files" app is registered (a workspace
+// from before the dufs service shipped): the tile is present but cannot act.
+// It is marked aria-disabled rather than `disabled`: a disabled button
+// receives no pointer events in Chromium, which would swallow the very hover
+// that explains why it does nothing.
 const FILE_VIEWER_TOOLTIP = "A file viewer is coming — no app backs it yet";
+
+// Replaces the "Open new" heading while a create this pane asked for is in
+// flight. The heading carries it rather than a spinner over the tiles: the
+// tiles are already visibly stood down, and what the user needs to know is
+// that the click landed.
+const STARTING_TITLE = "Starting…";
+
+/** Whether a registered app backs the File viewer tile. A workspace built
+ *  before the dufs "files" service shipped has none, and the tile renders
+ *  disabled there rather than pretending to work. */
+function isFileViewerBacked(): boolean {
+  return getApps().some((app) => app.name === "files");
+}
 
 export interface NewTabLauncherAttrs {
   // Everything the machine holds, already flattened (see buildLauncherRows).
@@ -357,7 +373,12 @@ export interface NewTabLauncherAttrs {
   // "Now" for the recency column. Defaults to the wall clock; passed in by
   // tests so the rendered ages are deterministic.
   nowMs?: number;
-  // Start a new object of this kind in this pane. Never fired for "files".
+  // Whether this pane is waiting on a create it already asked for. The tiles
+  // stand down and say so: `mngr create` takes seconds, and a launcher that
+  // looked untouched invited a second click that started a second object.
+  isAwaitingCreate?: boolean;
+  // Start a new object of this kind in this pane. Fired for "files" only
+  // where a registered app backs the tile.
   onOpenNew: (target: LaunchTarget) => void;
   // Open an object the active view already shows. Membership does not change.
   onOpenMember: (row: LauncherRow) => void;
@@ -484,8 +505,11 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
     );
   }
 
-  /** One row: kind glyph, label, kind column, recency column. */
+  /** One row: kind glyph, label, kind column, recency column. A stopped app's
+   *  row stays clickable (opening it shows the stopped state) but reads dimmed,
+   *  with the tooltip saying why it is not answering. */
   function memberRow(row: LauncherRow, nowMs: number, onOpen: (row: LauncherRow) => void): m.Vnode {
+    const stoppedApp = row.kind === "app" ? stoppedAppForServiceName(getApps(), serviceNameFromRef(row.ref)) : null;
     return m(
       "button",
       {
@@ -493,7 +517,9 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
         type: "button",
         class:
           "new-tab-launcher-row flex h-9 w-full cursor-pointer items-center gap-3 rounded-md px-2 text-left " +
-          "text-[13px] text-text-primary hover:bg-bg-hover",
+          "text-[13px] hover:bg-bg-hover " +
+          (stoppedApp !== null ? "new-tab-launcher-row-stopped text-text-faint opacity-60" : "text-text-primary"),
+        ...(stoppedApp !== null ? hoverTooltipAttrs(`${row.label} — ${appStoppedDetail(stoppedApp)}`) : {}),
         onclick: () => onOpen(row),
       },
       [
@@ -557,12 +583,22 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
 
       return m("div", { class: "new-tab-launcher bg-surface h-full w-full overflow-y-auto px-6 py-5" }, [
         m("div", { class: "mx-auto w-full max-w-4xl" }, [
-          m("h2", { class: `${SECTION_HEADING_CLASS} mb-2 px-2` }, OPEN_NEW_TITLE),
+          m(
+            "h2",
+            { class: `${SECTION_HEADING_CLASS} mb-2 px-2` },
+            attrs.isAwaitingCreate === true ? STARTING_TITLE : OPEN_NEW_TITLE,
+          ),
           m(
             "div",
             { class: "flex gap-2 px-2" },
             openNewTiles().map((tile) => {
-              const isDisabled = tile.target.kind === "files";
+              // A tile stands down while this pane is starting something --
+              // both so a second click cannot start a second object, and so
+              // the wait is visible at all. The files tile additionally stands
+              // down when no app backs it (a workspace from before the dufs
+              // service shipped).
+              const isUnbackedFilesTile = tile.target.kind === "files" && !isFileViewerBacked();
+              const isDisabled = isUnbackedFilesTile || attrs.isAwaitingCreate === true;
               return m(
                 "button",
                 {
@@ -572,13 +608,19 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
                   type: "button",
                   "aria-disabled": isDisabled ? "true" : undefined,
                   class:
-                    "new-tab-launcher-tile border-border flex h-9 flex-1 items-center justify-center gap-2 " +
+                    "new-tab-launcher-tile border-border flex h-9 min-w-0 flex-1 items-center justify-center gap-2 " +
                     "rounded-lg border px-4 text-[13px] font-medium " +
                     (isDisabled
                       ? "text-text-faint cursor-not-allowed"
                       : "text-text-primary hover:bg-bg-hover cursor-pointer"),
                   onclick: isDisabled ? undefined : () => attrs.onOpenNew(tile.target),
-                  ...(isDisabled ? hoverTooltipAttrs(FILE_VIEWER_TOOLTIP) : {}),
+                  // Keyed on the unbacked file viewer itself rather than on
+                  // `isDisabled`: every tile is disabled while a create is in
+                  // flight, and "a file viewer is coming" is not the reason
+                  // for any of the others.
+                  ...(isUnbackedFilesTile && attrs.isAwaitingCreate !== true
+                    ? hoverTooltipAttrs(FILE_VIEWER_TOOLTIP)
+                    : {}),
                 },
                 [
                   m(
@@ -586,7 +628,10 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
                     { class: "text-text-faint flex shrink-0 items-center" },
                     m.trust(launcherIcon(tile.target.kind, GLYPH_SIZE)),
                   ),
-                  tile.label,
+                  // Truncates rather than wrapping: a second line would change
+                  // the tile's height and break the row of tiles out of its
+                  // rhythm, and the label is the only part that can overflow.
+                  m("span", { class: "min-w-0 truncate" }, tile.label),
                 ],
               );
             }),
