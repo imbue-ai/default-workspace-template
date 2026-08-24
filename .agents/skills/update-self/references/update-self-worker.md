@@ -3,8 +3,8 @@
 You are the background worker for a safe update-self pass, in your own worktree
 branched off the lead's `HEAD`. Merge the target upstream ref, triage the
 conflicts, validate what reconciled, and report a "what's new" summary. **You
-never restart a live service or reveal anything** -- you validate in isolation
-and report; the lead applies the update.
+never restart a live service or apply anything to the live workspace** -- you
+validate in isolation and report; the lead runs the apply.
 
 The deterministic pieces (target resolution, merged-vs-pulled classification,
 changelog gathering) live in
@@ -183,19 +183,20 @@ set like this:
 
 **Provisioning files always count as impacted -- and you best-effort apply them.**
 A change to `system/scripts/setup_system.sh`, `system/scripts/install_secret_scanners.sh`,
-`system/scripts/_provision_guard.sh`, or `.mngr/**` (the `provisioner` reveal class) has
+`system/scripts/_provision_guard.sh`, or `.mngr/**` (the `provisioner` change class) has
 no *running* consumer to grep for -- nothing imports it -- yet it installs and
 configures the global toolchain (the latchkey CLI, uv, claude, modal, the secret
 scanners) and the `mngr create` config every live agent, service, and future
-sub-agent runs on. So never conclude "nothing to reveal" for one. Work each
-provisioning change through, most-live-applicable first, and record the plan in
-your report so the lead can carry it out (you stay in your worktree -- you make
-the in-repo edits an apply implies, but the lead runs the live restarts):
+sub-agent runs on. So never conclude "nothing to apply" for one. Work each
+provisioning change through, most-live-applicable first, and record what you
+found in your report (you stay in your worktree -- you make the in-repo edits
+an apply implies; the apply script runs the provisioner and the restarts):
 
 - **Toolchain-script pins** (`setup_system.sh` / `install_secret_scanners.sh`) --
-  a pinned-version bump (e.g. `LATCHKEY_VERSION`) is **live-applicable**: the lead
-  re-runs the idempotent provisioner (`bash system/scripts/setup_system.sh`) to install
-  the new version. A hunk only a fresh image build reproduces is **rebuild-only**.
+  a pinned-version bump (e.g. `LATCHKEY_VERSION`) is **live-applicable**: the
+  apply re-runs the idempotent provisioner (`bash system/scripts/setup_system.sh`),
+  before any restart, to install the new version. A hunk only a fresh image
+  build reproduces is **rebuild-only**.
 - **`.mngr/**` settings** -- `.mngr/settings.toml` only governs `mngr create`, so
   the merged file governs every *future* create automatically (a new workspace,
   and the sub-agents `launch-task` spawns). But the *current* workspace was built
@@ -275,10 +276,9 @@ template rather than added locally.
   *together*, so it's safe to apply on the same "trust upstream's testing" basis
   the whole pulled-in set rides on. Not rebuild-only. **You do not run the bump
   yourself:** re-running the provisioner is a live, host-global toolchain mutation
-  you can't (and mustn't) do from your worktree -- it's the **lead's** action at
-  reveal. Your job here is only to judge it safe-to-apply and say so in the report
-  (name the provisioner re-run + the built-in service the lead should restart); you
-  don't validate the built-in against the new dep either, because you're trusting
+  you can't (and mustn't) do from your worktree -- the apply does it. Your job
+  here is only to judge it safe-to-apply and say so in the report; you don't
+  validate the built-in against the new dep either, because you're trusting
   upstream's testing rather than re-doing it.
 - **Dependent is user-created** (absent from upstream -- built in this workspace:
   a `build-app` app in its own `system/apps/` package, a crystallized skill's scripts
@@ -417,14 +417,14 @@ Per `.agents/shared/references/worker-reporting.md` (`<TASK_FILE_GLOB>` ->
   a conflict to the user and answers a process question itself. Push and stop;
   resume on the lead's reply.
 - `done` (`type: status`) -- merged, triaged, validated on `mngr/update-self`. Body
-  gives the lead everything for the approval gate and reveal:
+  gives the lead everything for the approval gate and the apply:
   - **What's new** -- a digest of the changelog entries.
   - **Conflicts** -- each one and how you resolved it. For any conflict where
     one side was taken wholesale (or where you claim the kept side subsumes the
     other), list what the discarded side changed and where each of those
     changes ended up -- present in the kept version, or dropped -- grounded in
     the base-diff accounting Step 2 requires, not asserted from memory.
-  - **Merged vs pulled-in** -- which reveal classes reconciled vs came in clean.
+  - **Merged vs pulled-in** -- which change classes reconciled vs came in clean.
   - **Merge work per web surface** -- for the system interface and each user web
     service: "none" (upstream strictly newer, clean pull) or "nontrivial" with a
     sentence on what had to be reconciled. The lead previews a surface if and
@@ -437,18 +437,22 @@ Per `.agents/shared/references/worker-reporting.md` (`<TASK_FILE_GLOB>` ->
     user previewed is the one installed live. Omit the field when you did not
     build (the apply falls back to a live build).
   - **Impact analysis** -- the impacted services and skills from 4a, what you
-    checked and how, and which services the lead must restart.
+    checked and how, and any live service depending on a changed file that the
+    apply does not already restart. The apply restarts the services agent for
+    the system-interface backend, vendored-mngr source, `.mngr/settings.toml`,
+    supervisord and bootstrap; anything beyond that is the lead's to carry
+    out, and only your analysis can name it.
   - **Dockerfile split** (if it merged) -- each hunk as live-applicable (e.g. a
     `CLAUDE_CODE_VERSION` bump) or image-level (needs a manual rebuild).
   - **Provisioning changes** (if any `provisioner`-class file changed) -- per the
-    impact analysis above, each change with its apply plan: **live-applicable**
-    (the in-branch edits you made to mirror it + the exact restart the lead runs,
-    e.g. a `LATCHKEY_VERSION` bump -> re-run `setup_system.sh`; an env var or
-    `[agent_types]` change -> mirrored into the live env/pin + `mngr start
-    --restart system-services`) or **rebuild-only for the current workspace** (only
-    a `build_arg` / `start_arg` / runtime-flag change a running container can't
-    adopt). A genuinely-breaking, unapplyable change is a `stuck` report, not a
-    `done`.
+    impact analysis above, each change classified: **live-applicable** (name the
+    in-branch edits you made to mirror it, e.g. an env var or `[agent_types]`
+    change mirrored into the live env/pin -- the apply's own provisioner re-run
+    and services restart then carry it) or **rebuild-only for the current
+    workspace** (only a `build_arg` / `start_arg` / runtime-flag change a
+    running container can't adopt, which the lead must put to the user before
+    applying). A genuinely-breaking, unapplyable change is a `stuck` report,
+    not a `done`.
   - **Global-dependency bump with a dependent** (if the merge bumps a global dep
     that something depends on) -- the version delta and what your online research
     turned up, **which dependent(s)** and whether each is **built-in** (its code is
