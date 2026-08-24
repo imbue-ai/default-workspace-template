@@ -992,6 +992,13 @@ ENV_DRI_AGENT = "MNGR_AGENT_NAME"
 STATE_DIR_REL = "data/.state/update-apply"
 MARKER_FILENAME = "marker.json"
 SNAPSHOTS_DIRNAME = "snapshots"
+# The emergency record, written when a rollback could not put a healthy
+# workspace back. The marker cannot carry this: it comes down on the emergency
+# path (that exit is deliberate and fully reported, and re-running the same
+# failed rollback from cron would not help), and the rollback has made the tree
+# content match the pre-apply HEAD again -- so without a separate file the one
+# state that most needs to speak is the one nothing can see.
+EMERGENCY_FILENAME = "emergency.json"
 
 # The apply's phases, recorded in the marker as each completes so an
 # interrupted apply can be read (by recovery, and by the system interface's
@@ -1551,6 +1558,42 @@ def write_marker(marker: ApplyMarker, repo_root: Path, now: Callable[[], float])
 
 def clear_marker(repo_root: Path) -> None:
     marker_path(repo_root).unlink(missing_ok=True)
+
+
+def emergency_path(repo_root: Path) -> Path:
+    return repo_root / STATE_DIR_REL / EMERGENCY_FILENAME
+
+
+def write_emergency(repo_root: Path, reason: str, now: Callable[[], float]) -> None:
+    """Record that a rollback left the workspace unhealthy, atomically.
+
+    Best-effort: this runs on the way out of a failure that has already been
+    written to stderr in full, so a filesystem that will not take the record
+    must not turn a reported emergency into a traceback.
+    """
+    path = emergency_path(repo_root)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        scratch = path.with_suffix(".json.tmp")
+        scratch.write_text(
+            json.dumps(
+                {
+                    "reason": reason,
+                    "recorded_at": now(),
+                    "dri_agent": os.environ.get(ENV_DRI_AGENT, ""),
+                    "snapshots_dir": str(_snapshots_root(repo_root)),
+                },
+                indent=2,
+            )
+        )
+        scratch.replace(path)
+    except OSError as exc:
+        sys.stderr.write(f"warning: could not record the emergency at {path} ({exc}).\n")
+
+
+def clear_emergency(repo_root: Path) -> None:
+    """Drop the emergency record; the live workspace is confirmed healthy again."""
+    emergency_path(repo_root).unlink(missing_ok=True)
 
 
 def _default_is_pid_a_live_apply(pid: int) -> bool:
@@ -2563,11 +2606,16 @@ def _report_rolled_back(is_frontend_expected: bool) -> None:
         )
 
 
-def _report_emergency(plan: ApplyPlan, repo_root: Path) -> None:
+def _report_emergency(
+    plan: ApplyPlan, repo_root: Path, reason: str, now: Callable[[], float]
+) -> None:
     sys.stderr.write(
         "EMERGENCY: rollback did not restore a healthy workspace. The system interface "
         "may be down; manual intervention is required.\n"
     )
+    # Durable, because stderr reaches whoever ran the apply and this state
+    # outlives them: the banner reads this file, and so does the next agent.
+    write_emergency(repo_root, reason, now)
     # The pre-apply copies outlive this failure on purpose: putting one back is
     # a plain file copy that needs neither npm nor a registry, so it is the way
     # out of exactly the failure that gets here. Only pointed at when the apply
@@ -2842,6 +2890,7 @@ def apply_update(
             # and env-converge are both safely re-runnable without a marker).
             clear_marker(repo_root)
             discard_snapshots(repo_root)
+            clear_emergency(repo_root)
             _refresh_workspace_view(repo_root, runner)
         except ApplyFailed as exc:
             sys.stderr.write(
@@ -2876,14 +2925,21 @@ def apply_update(
             if is_recovered:
                 clear_marker(repo_root)
                 discard_snapshots(repo_root)
+                clear_emergency(repo_root)
                 _report_rolled_back(is_frontend_expected)
                 return 2
             # The marker is cleared even on the emergency path: this is a
             # deliberate, fully-reported exit, and re-running the same failed
             # rollback from cron would not help. The snapshots are kept -- they
-            # are the operator's way back.
+            # are the operator's way back, and so is the emergency record the
+            # report writes in the marker's place.
             clear_marker(repo_root)
-            _report_emergency(plan, repo_root)
+            _report_emergency(
+                plan,
+                repo_root,
+                f"apply of {merge_ref} failed and its rollback could not restore health",
+                now,
+            )
             return 3
     else:
         sys.stderr.write("nothing live needed to change for this merge.\n")
@@ -3078,6 +3134,7 @@ def recover(
     if is_recovered:
         clear_marker(repo_root)
         discard_snapshots(repo_root)
+        clear_emergency(repo_root)
         sys.stderr.write(
             "recovered: the interrupted apply is rolled back and the live workspace is "
             "confirmed healthy. The worker branch and its report are kept, so a "
@@ -3085,7 +3142,13 @@ def recover(
         )
         return 0
     clear_marker(repo_root)
-    _report_emergency(plan, repo_root)
+    _report_emergency(
+        plan,
+        repo_root,
+        "an interrupted apply was rolled back, but the live workspace could not be "
+        "confirmed healthy",
+        now,
+    )
     return 1
 
 
