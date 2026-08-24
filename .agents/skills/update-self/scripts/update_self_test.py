@@ -1366,6 +1366,8 @@ def _apply_runner(name_status: str, repo_root: Path) -> _RecordingRunner:
     )
     # Not yet merged: the merge-base ancestor check answers "no".
     runner.respond(("git", "merge-base", "--is-ancestor"), _Result(returncode=1))
+    # No merge left staged by a killed apply (the MERGE_HEAD lookup).
+    runner.respond(("git", "rev-parse", "--verify"), _Result(returncode=1))
     runner.respond(("git", "rev-parse", "--short=7"), _Result(stdout="abc1234"))
     runner.respond(("git", "rev-parse", "HEAD"), _Result(stdout=_ROLLBACK))
     runner.respond(("git", "rev-parse", _MERGE_REF), _Result(stdout="fedcba9876543"))
@@ -2040,6 +2042,42 @@ def test_a_dead_marker_for_the_same_merge_is_resumed(apply_repo: Path) -> None:
     assert not _marker_exists(apply_repo)
 
 
+def test_resuming_an_apply_killed_mid_merge_aborts_the_half_merge_first(
+    apply_repo: Path,
+) -> None:
+    marker = update_self.ApplyMarker(
+        dri_agent="earlier-run",
+        rollback_to=_ROLLBACK,
+        merge_ref=_MERGE_REF,
+        target_ref=None,
+        ff_only=True,
+        worker_bundle=None,
+        phase=update_self.PHASE_STARTED,
+        pid=12345,
+        started_at=1.0,
+        updated_at=1.0,
+    )
+    update_self.write_marker(marker, apply_repo, now=lambda: 2.0)
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+    # The interrupted run died inside `git merge`: the merge is staged
+    # (MERGE_HEAD present) but never became a commit.
+    runner.respond(("git", "rev-parse", "--verify"), _Result(returncode=0))
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    # The half-merge is undone before the clean-tree check can refuse over it,
+    # and before anything commits -- a commit on top of a staged merge lands it.
+    order = [tuple(c[:3]) for c in runner.calls]
+    assert ("git", "merge", "--abort") in order
+    assert order.index(("git", "merge", "--abort")) < order.index(
+        ("git", "status", "--porcelain")
+    )
+    # Then the resume re-merges from the clean tree.
+    assert runner.ran("git", "merge", "--ff-only")
+    assert not _marker_exists(apply_repo)
+
+
 def test_a_dead_marker_for_a_different_merge_refuses_and_points_at_recover(
     apply_repo: Path, capsys
 ) -> None:
@@ -2584,3 +2622,107 @@ def test_recover_provisioner_failure_still_counts_as_recovered(
     err = capsys.readouterr().err
     assert "still counts as recovered" in err
     assert not _marker_exists(apply_repo)
+
+
+# --- recover: an apply killed inside `git merge` (real git) ---------------------
+
+
+def _git_in(repo: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+def _repo_left_mid_merge(tmp_path: Path, *, is_conflicting: bool) -> tuple[Path, str]:
+    """A real repo left exactly as an apply killed inside ``git merge`` leaves one.
+
+    ``git merge`` writes MERGE_HEAD before it resolves anything, so the merge is
+    staged in the index while HEAD is still the rollback point. Returns the repo
+    and that rollback point.
+    """
+    repo = _make_real_repo(tmp_path)
+    (repo / "shared.txt").write_text("base\n")
+    # As in a real workspace, where the marker this test writes lives under the
+    # gitignored data/ tree rather than showing up as an uncommitted change.
+    (repo / ".gitignore").write_text("data/\n")
+    _git_in(repo, "add", "-A")
+    _git_in(repo, "commit", "-q", "-m", "base")
+    local_branch = _git_in(repo, "rev-parse", "--abbrev-ref", "HEAD")
+
+    _git_in(repo, "checkout", "-q", "-b", "worker")
+    upstream_file = "shared.txt" if is_conflicting else "from-upstream.txt"
+    (repo / upstream_file).write_text("upstream\n")
+    _git_in(repo, "add", "-A")
+    _git_in(repo, "commit", "-q", "-m", "upstream change")
+
+    _git_in(repo, "checkout", "-q", local_branch)
+    (repo / "shared.txt").write_text("local\n")
+    _git_in(repo, "commit", "-q", "-am", "local change")
+    rollback_to = _head_sha(repo)
+
+    # The kill: the merge is staged, no merge commit was ever created.
+    subprocess.run(
+        ["git", "merge", "--no-commit", "--no-ff", "worker"],
+        cwd=repo,
+        capture_output=True,
+    )
+    assert _git_in(repo, "rev-parse", "--verify", "--quiet", "MERGE_HEAD")
+    assert _head_sha(repo) == rollback_to
+    return repo, rollback_to
+
+
+def _recover_boot_path(repo: Path) -> int:
+    """``recover --no-restart``: the boot path, which touches only disk state."""
+    return update_self.recover(
+        repo,
+        if_stale=False,
+        grace_seconds=600.0,
+        no_restart=True,
+        runner=update_self.Runner(),
+        http=_FakeHttp(_all_healthy),
+        sleeper=lambda _s: None,
+        base_url=_LIVE_BASE,
+    )
+
+
+@pytest.mark.parametrize("is_conflicting", [False, True])
+def test_recover_aborts_a_merge_killed_before_it_committed(
+    tmp_path: Path, is_conflicting: bool
+) -> None:
+    """A staged-but-uncommitted merge must be aborted, never committed.
+
+    Committing on top of one makes git turn that commit into *the merge commit*,
+    so the rollback would land the very merge it exists to undo -- and under a
+    subject ``_has_rollback_since`` then reads as "already rolled back", which
+    refuses every retry. The conflicting variant cannot be committed at all, so
+    without the abort recovery never makes progress.
+    """
+    repo, rollback_to = _repo_left_mid_merge(tmp_path, is_conflicting=is_conflicting)
+    update_self.write_marker(
+        update_self.ApplyMarker(
+            dri_agent="the-lead",
+            rollback_to=rollback_to,
+            merge_ref="worker",
+            target_ref=None,
+            ff_only=False,
+            worker_bundle=None,
+            phase=update_self.PHASE_STARTED,
+            pid=12345,
+            started_at=1.0,
+            updated_at=1.0,
+        ),
+        repo,
+        now=lambda: 2.0,
+    )
+
+    assert _recover_boot_path(repo) == 0
+
+    assert _head_sha(repo) == rollback_to
+    assert (repo / "shared.txt").read_text() == "local\n"
+    assert not (repo / "from-upstream.txt").exists()
+    assert _git_in(repo, "status", "--porcelain") == ""
+    # The merge is genuinely undone, not landed under the rollback's subject.
+    assert subprocess.run(
+        ["git", "merge-base", "--is-ancestor", "worker", "HEAD"], cwd=repo
+    ).returncode != 0
+    assert not _marker_exists(repo)
