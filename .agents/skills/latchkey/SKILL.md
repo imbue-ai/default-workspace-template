@@ -80,6 +80,9 @@ When not sure (and if applicable), prefer the `*-read-all` permission variants a
 After posting, wait for an automated system message indicating whether the user
 approved or denied the permission request.
 
+Do not ask the user to tell you when they respond to a request. Just mention
+that you'll continue once they do if that's something you need to wait on.
+
 
 ### Git operations on GitHub (clone / fetch / push)
 
