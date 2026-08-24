@@ -1,0 +1,521 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>System Interface — component gallery</title>
+    <!--
+      The compiled app stylesheet. visual-diff.mjs writes compiled.css beside a
+      copy of this file (Tailwind CLI output from src/style.css) before shooting.
+      When opening this file directly for authoring, run:
+        node gallery/visual-diff.mjs build-css --out gallery/compiled.css
+    -->
+    <link rel="stylesheet" href="./compiled.css" />
+    <style>
+      /* Gallery scaffold only. Namespaced .gy-* so it never touches app tokens,
+         and pins its own font/background so the frame around each section is
+         identical across before/after runs (only the app-styled content moves). */
+      .gy-body {
+        margin: 0;
+        background: #ffffff;
+        color: #111;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      }
+      .gy-shell {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 24px;
+      }
+      .gy-title {
+        font-size: 22px;
+        font-weight: 700;
+        margin: 0 0 4px;
+      }
+      .gy-sub {
+        font-size: 13px;
+        color: #666;
+        margin: 0 0 24px;
+      }
+      .gy-section {
+        border: 1px solid #e5e5e5;
+        border-radius: 8px;
+        margin: 0 0 20px;
+        overflow: hidden;
+        background: #fff;
+      }
+      .gy-section > h2 {
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: #444;
+        margin: 0;
+        padding: 10px 14px;
+        background: #f6f6f6;
+        border-bottom: 1px solid #eee;
+      }
+      .gy-pad {
+        padding: 18px;
+      }
+      .gy-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 14px;
+        align-items: flex-end;
+      }
+      .gy-stack {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .gy-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+        gap: 10px;
+      }
+      .gy-item {
+        font-size: 11px;
+        color: #555;
+      }
+      .gy-swatch {
+        height: 44px;
+        border-radius: 6px;
+        border: 1px solid rgba(0, 0, 0, 0.12);
+      }
+      .gy-name {
+        font-family: ui-monospace, "SF Mono", monospace;
+        font-size: 11px;
+        color: #222;
+        margin-top: 5px;
+        word-break: break-all;
+      }
+      .gy-val {
+        font-family: ui-monospace, "SF Mono", monospace;
+        font-size: 10px;
+        color: #888;
+      }
+      .gy-label {
+        font-size: 11px;
+        color: #888;
+        margin-bottom: 6px;
+        font-family: ui-monospace, monospace;
+      }
+      .gy-cell {
+        border: 1px dashed #e0e0e0;
+        border-radius: 6px;
+        padding: 12px;
+      }
+      .gy-spacer-box {
+        background: var(--color-accent, #2f6b4f);
+        height: 14px;
+        border-radius: 2px;
+      }
+      .gy-radius-box {
+        width: 64px;
+        height: 44px;
+        background: #e9f2ee;
+        border: 1px solid var(--color-accent, #2f6b4f);
+      }
+      .gy-shadow-box {
+        width: 90px;
+        height: 44px;
+        background: #fff;
+        border-radius: 8px;
+      }
+      .gy-type-sample {
+        color: #202020;
+      }
+      .gy-note {
+        font-size: 11px;
+        color: #999;
+        padding: 0 14px 12px;
+      }
+    </style>
+  </head>
+  <body class="gy-body">
+    <div class="gy-shell">
+      <div class="gy-title">System Interface — component gallery</div>
+      <p class="gy-sub">
+        Every token and shared surface, rendered against the real
+        <code>style.css</code>. Token sections are read live from the compiled CSS, so a changed token value shows up
+        here automatically. Used by <code>visual-diff.mjs</code> to compare before/after.
+      </p>
+
+      <!-- ── Colour tokens ─────────────────────────────────────────────── -->
+      <section class="gy-section" data-shot="tokens-color">
+        <h2>Colour tokens</h2>
+        <div class="gy-pad"><div class="gy-grid" id="gy-colors"></div></div>
+        <div class="gy-note" id="gy-colors-empty" hidden>No <code>--color-*</code> tokens found.</div>
+      </section>
+
+      <!-- ── Type scale ────────────────────────────────────────────────── -->
+      <section class="gy-section" data-shot="tokens-type">
+        <h2>Type scale</h2>
+        <div class="gy-pad"><div class="gy-stack" id="gy-type"></div></div>
+        <div class="gy-note">
+          Body default is 15px. Proposed <code>--text-*</code> tokens appear here once added to <code>@theme</code>.
+        </div>
+      </section>
+
+      <!-- ── Spacing scale ─────────────────────────────────────────────── -->
+      <section class="gy-section" data-shot="tokens-spacing">
+        <h2>Spacing scale</h2>
+        <div class="gy-pad"><div class="gy-stack" id="gy-spacing"></div></div>
+      </section>
+
+      <!-- ── Radii ─────────────────────────────────────────────────────── -->
+      <section class="gy-section" data-shot="tokens-radius">
+        <h2>Radii</h2>
+        <div class="gy-pad"><div class="gy-row" id="gy-radius"></div></div>
+      </section>
+
+      <!-- ── Elevation / shadows ───────────────────────────────────────── -->
+      <section class="gy-section" data-shot="tokens-shadow">
+        <h2>Elevation</h2>
+        <div class="gy-pad"><div class="gy-row" id="gy-shadow"></div></div>
+      </section>
+
+      <!-- ── Buttons: the claude-login variant matrix (the one real system) ─ -->
+      <section class="gy-section" data-shot="buttons-variants">
+        <h2>Buttons — variant matrix (claude-login-button)</h2>
+        <div class="gy-pad">
+          <div class="gy-row">
+            <div class="gy-cell">
+              <div class="gy-label">--primary</div>
+              <button class="claude-login-button claude-login-button--primary">Continue</button>
+            </div>
+            <div class="gy-cell">
+              <div class="gy-label">--ghost</div>
+              <button class="claude-login-button claude-login-button--ghost">Cancel</button>
+            </div>
+            <div class="gy-cell">
+              <div class="gy-label">--link</div>
+              <button class="claude-login-button claude-login-button--link">Learn more</button>
+            </div>
+            <div class="gy-cell">
+              <div class="gy-label">--primary :disabled</div>
+              <button class="claude-login-button claude-login-button--primary" disabled>Continue</button>
+            </div>
+            <div class="gy-cell">
+              <div class="gy-label">--block</div>
+              <button class="claude-login-button claude-login-button--primary claude-login-button--block">
+                Sign in
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Buttons: the per-feature bespoke families ─────────────────── -->
+      <section class="gy-section" data-shot="buttons-bespoke">
+        <h2>Buttons — bespoke per-feature families</h2>
+        <div class="gy-pad">
+          <div class="gy-row">
+            <div class="gy-cell">
+              <div class="gy-label">destroy-dialog (destroy / cancel)</div>
+              <button class="destroy-dialog-btn destroy-dialog-btn-destroy">Destroy</button>
+              <button class="destroy-dialog-btn destroy-dialog-btn-cancel">Cancel</button>
+            </div>
+            <div class="gy-cell">
+              <div class="gy-label">share-modal (primary / secondary / destructive)</div>
+              <button class="share-modal-btn">Share</button>
+              <button class="share-modal-btn share-modal-btn-secondary">Copy link</button>
+              <button class="share-modal-btn share-modal-btn-destructive">Remove</button>
+            </div>
+            <div class="gy-cell">
+              <div class="gy-label">fast-mode-modal</div>
+              <button class="fast-mode-modal-btn fast-mode-modal-btn-fast">Fast</button>
+              <button class="fast-mode-modal-btn fast-mode-modal-btn-standard">Standard</button>
+            </div>
+          </div>
+          <div class="gy-row" style="margin-top: 14px">
+            <div class="gy-cell">
+              <div class="gy-label">permission-request</div>
+              <button class="permission-request-button">Allow</button>
+            </div>
+            <div class="gy-cell">
+              <div class="gy-label">queued-action (+ :disabled)</div>
+              <button class="queued-action">Shoulder tap</button>
+              <button class="queued-action" disabled>Shoulder tap</button>
+            </div>
+            <div class="gy-cell">
+              <div class="gy-label">terminal-banner</div>
+              <button class="terminal-banner-btn">Reconnect</button>
+            </div>
+            <div class="gy-cell">
+              <div class="gy-label">composer-under-bar-action</div>
+              <button class="composer-under-bar-action">Attach</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Message surfaces ──────────────────────────────────────────── -->
+      <section class="gy-section" data-shot="message-bubble">
+        <h2>Message surfaces</h2>
+        <div class="gy-pad" style="background: var(--color-bg-chat, #fff)">
+          <div class="message message-user">
+            <div class="message-user-bubble">
+              A user message bubble with a bit of text, and some <code>inline code</code> inside it.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Badges ────────────────────────────────────────────────────── -->
+      <section class="gy-section" data-shot="badges">
+        <h2>Badges</h2>
+        <div class="gy-pad">
+          <div class="gy-row" style="align-items: center">
+            <span class="app-header-model-badge">claude-opus-4-8</span>
+            <span class="permission-request-badge">Permission</span>
+            <span class="permission-request-badge permission-request-badge--sm">sm</span>
+            <span class="subagent-card-type-badge">subagent</span>
+            <span class="pv-tl-id-badge">cod-1a2b</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Toggles ───────────────────────────────────────────────────── -->
+      <section class="gy-section" data-shot="toggles">
+        <h2>Toggles</h2>
+        <div class="gy-pad">
+          <div class="gy-row" style="align-items: center">
+            <div class="gy-cell">
+              <div class="gy-label">fast-toggle</div>
+              <span class="fast-toggle"><span class="fast-toggle-knob"></span></span>
+            </div>
+            <div class="gy-cell">
+              <div class="gy-label">fast-toggle--on</div>
+              <span class="fast-toggle fast-toggle--on"><span class="fast-toggle-knob"></span></span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Inputs ────────────────────────────────────────────────────── -->
+      <section class="gy-section" data-shot="inputs">
+        <h2>Inputs</h2>
+        <div class="gy-pad">
+          <div class="gy-stack" style="max-width: 360px">
+            <input class="share-modal-email-input" placeholder="name@example.com" />
+            <input class="custom-url-dialog-input" placeholder="https://example.com" />
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Spinner ───────────────────────────────────────────────────── -->
+      <section class="gy-section" data-shot="spinner">
+        <h2>Spinner</h2>
+        <div class="gy-pad">
+          <div class="gy-row" style="align-items: center">
+            <span class="pv-spinner"></span>
+            <span class="claude-login-spinner"></span>
+            <span class="composer-attachment-spinner"></span>
+          </div>
+        </div>
+        <div class="gy-note">
+          Three separate implementations with near-identical <code>@keyframes</code> — a consolidation target.
+        </div>
+      </section>
+
+      <!-- ── Modal card (rendered inline, not overlaid) ────────────────── -->
+      <section class="gy-section" data-shot="modal-card">
+        <h2>Modal card (destroy-dialog)</h2>
+        <div class="gy-pad" style="background: #efefef">
+          <div class="destroy-dialog">
+            <div class="destroy-dialog-title">Destroy this workspace?</div>
+            <div class="destroy-dialog-message">
+              This permanently deletes the workspace and all of its data. This cannot be undone.
+            </div>
+            <div class="destroy-dialog-actions">
+              <button class="destroy-dialog-btn destroy-dialog-btn-cancel">Cancel</button>
+              <button class="destroy-dialog-btn destroy-dialog-btn-destroy">Destroy</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <script>
+      // Data-driven token rendering: read each token's RESOLVED value from the
+      // compiled CSS on :root, so this gallery reflects whatever style.css
+      // currently defines (and picks up new tokens as they are added). Any token
+      // whose value changes between two captures produces a visible pixel diff.
+      const root = document.documentElement;
+      const cs = getComputedStyle(root);
+      const val = (name) => cs.getPropertyValue(name).trim();
+
+      const COLOR_TOKENS = [
+        "--color-bg",
+        "--color-bg-sidebar",
+        "--color-bg-hover",
+        "--color-bg-active",
+        "--color-bg-user-bubble",
+        "--color-bg-composer",
+        "--color-bg-chat",
+        "--color-bg-code",
+        "--color-text-primary",
+        "--color-text-secondary",
+        "--color-text-faint",
+        "--color-border",
+        "--color-border-faint",
+        "--color-border-code",
+        "--color-accent",
+        "--color-accent-hover",
+        "--color-accent-light",
+        "--color-surface",
+        "--color-surface-secondary",
+        "--color-stop-button",
+        "--color-stop-button-hover",
+        // Proposed semantic tokens — render only once they exist.
+        "--color-danger",
+        "--color-danger-hover",
+        "--color-danger-bg",
+        "--color-danger-border",
+        "--color-warning",
+        "--color-warning-bg",
+        "--color-success",
+        "--color-info",
+      ];
+      const colorHost = document.getElementById("gy-colors");
+      let colorCount = 0;
+      for (const name of COLOR_TOKENS) {
+        const v = val(name);
+        if (!v) continue;
+        colorCount++;
+        const item = document.createElement("div");
+        item.className = "gy-item";
+        const sw = document.createElement("div");
+        sw.className = "gy-swatch";
+        sw.style.background = v;
+        const nm = document.createElement("div");
+        nm.className = "gy-name";
+        nm.textContent = name;
+        const vv = document.createElement("div");
+        vv.className = "gy-val";
+        vv.textContent = v;
+        item.append(sw, nm, vv);
+        colorHost.append(item);
+      }
+      if (colorCount === 0) document.getElementById("gy-colors-empty").hidden = false;
+
+      // Type scale: proposed --text-* tokens plus the literal body sizes in use.
+      const TYPE_TOKENS = [
+        "--text-2xs",
+        "--text-xs",
+        "--text-sm",
+        "--text-base",
+        "--text-md",
+        "--text-lg",
+        "--text-xl",
+        "--text-2xl",
+      ];
+      const typeHost = document.getElementById("gy-type");
+      const presentType = TYPE_TOKENS.filter((t) => val(t));
+      const typeList = presentType.length
+        ? presentType.map((t) => ({ label: t, size: val(t) }))
+        : // Fallback: the literal sizes actually used today, so the section is
+          // never empty before the token scale lands.
+          ["11px", "12px", "13px", "14px", "15px", "16px", "17px", "18px"].map((s) => ({ label: s, size: s }));
+      for (const { label, size } of typeList) {
+        const row = document.createElement("div");
+        row.className = "gy-type-sample";
+        row.style.fontSize = size;
+        row.textContent = label + " — The quick brown fox jumps over the lazy dog";
+        typeHost.append(row);
+      }
+
+      // Spacing scale: proposed --space-* tokens; fall back to the common atoms.
+      const SPACE_TOKENS = [
+        "--space-0_5",
+        "--space-1",
+        "--space-1_5",
+        "--space-2",
+        "--space-3",
+        "--space-4",
+        "--space-5",
+        "--space-6",
+        "--space-8",
+      ];
+      const spaceHost = document.getElementById("gy-spacing");
+      const presentSpace = SPACE_TOKENS.filter((t) => val(t));
+      const spaceList = presentSpace.length
+        ? presentSpace.map((t) => ({ label: t, w: val(t) }))
+        : ["2px", "4px", "6px", "8px", "12px", "16px", "20px", "24px", "32px"].map((s) => ({ label: s, w: s }));
+      for (const { label, w } of spaceList) {
+        const row = document.createElement("div");
+        row.style.display = "flex";
+        row.style.alignItems = "center";
+        row.style.gap = "10px";
+        const box = document.createElement("div");
+        box.className = "gy-spacer-box";
+        box.style.width = w;
+        const lab = document.createElement("div");
+        lab.className = "gy-name";
+        lab.textContent = label + " (" + w + ")";
+        row.append(box, lab);
+        spaceHost.append(row);
+      }
+
+      // Radii: proposed + existing radius tokens.
+      const RADIUS_TOKENS = [
+        "--radius-sm",
+        "--radius-base",
+        "--radius-md",
+        "--radius-lg",
+        "--radius-bubble",
+        "--radius-composer",
+        "--radius-pill",
+        "--radius-circle",
+      ];
+      const radiusHost = document.getElementById("gy-radius");
+      for (const t of RADIUS_TOKENS) {
+        const v = val(t);
+        if (!v) continue;
+        const cell = document.createElement("div");
+        cell.className = "gy-item";
+        const box = document.createElement("div");
+        box.className = "gy-radius-box";
+        box.style.borderRadius = v;
+        const nm = document.createElement("div");
+        nm.className = "gy-name";
+        nm.textContent = t + " (" + v + ")";
+        cell.append(box, nm);
+        radiusHost.append(cell);
+      }
+
+      // Elevation: proposed --shadow-* tokens.
+      const SHADOW_TOKENS = ["--shadow-sm", "--shadow-md", "--shadow-lg", "--shadow-overlay"];
+      const shadowHost = document.getElementById("gy-shadow");
+      let shadowCount = 0;
+      for (const t of SHADOW_TOKENS) {
+        const v = val(t);
+        if (!v) continue;
+        shadowCount++;
+        const cell = document.createElement("div");
+        cell.className = "gy-item";
+        const box = document.createElement("div");
+        box.className = "gy-shadow-box";
+        box.style.boxShadow = v;
+        const nm = document.createElement("div");
+        nm.className = "gy-name";
+        nm.textContent = t;
+        cell.append(box, nm);
+        shadowHost.append(cell);
+      }
+      if (shadowCount === 0) {
+        const note = document.createElement("div");
+        note.className = "gy-name";
+        note.textContent = "No --shadow-* tokens yet (7 hand-mixed shadows in use).";
+        shadowHost.append(note);
+      }
+
+      // Freeze animations so spinner sections diff deterministically.
+      const freeze = document.createElement("style");
+      freeze.textContent =
+        "*, *::before, *::after { animation-play-state: paused !important; transition: none !important; }";
+      document.head.append(freeze);
+    </script>
+  </body>
+</html>
