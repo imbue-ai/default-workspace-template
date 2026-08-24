@@ -287,7 +287,12 @@ def test_prevent_init_methods_in_non_exception_classes() -> None:
     # holds a ``threading.Lock``, mutable presence sets, a recency-timestamp
     # dict mutated under that lock, and injected callables -- runtime state
     # that is not a natural fit for a Pydantic model.
-    rc.check_init_methods_in_non_exception_classes(_DIR, snapshot(6))
+    # +2 for liveness.py's ``_UnixSocketHttpConnection`` and
+    # ``_UnixSocketTransport``: both subclass stdlib classes
+    # (``http.client.HTTPConnection`` / ``xmlrpc.client.Transport``) whose
+    # construction contract is fixed by the stdlib, so a Pydantic model cannot
+    # stand in and the socket path has to arrive through ``__init__``.
+    rc.check_init_methods_in_non_exception_classes(_DIR, snapshot(8))
 
 
 def test_prevent_cast_usage() -> None:

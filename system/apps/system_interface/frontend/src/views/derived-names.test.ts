@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { browserDisplayName, chatDisplayName, terminalDisplayName } from "./derived-names";
+import { appServiceDisplayName, browserDisplayName, chatDisplayName, terminalDisplayName } from "./derived-names";
 
 describe("chatDisplayName", () => {
   it("prefers the display_name label mngr holds for the agent", () => {
@@ -40,5 +40,16 @@ describe("browserDisplayName", () => {
     // still has to say it is a browser.
     expect(browserDisplayName("alex-smith")).toBe("Browser alex-smith");
     expect(browserDisplayName("browser-abc")).toBe("Browser browser-abc");
+  });
+});
+
+describe("appServiceDisplayName", () => {
+  it("calls the built-in files service what its rail row does", () => {
+    expect(appServiceDisplayName("files")).toBe("File Viewer");
+  });
+
+  it("shows every other app as its registered name", () => {
+    expect(appServiceDisplayName("docs")).toBe("docs");
+    expect(appServiceDisplayName("my-files")).toBe("my-files");
   });
 });

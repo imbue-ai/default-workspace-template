@@ -274,7 +274,14 @@ def _save_apps(path: Path, doc: tomlkit.TOMLDocument) -> None:
         raise
 
 
-def _upsert(path: Path, name: str, url: str, icon: str | None = None, internal: bool = False) -> None:
+def _upsert(
+    path: Path,
+    name: str,
+    url: str,
+    icon: str | None = None,
+    internal: bool = False,
+    program: str | None = None,
+) -> None:
     """Register ``name`` at ``url``, optionally setting its icon markup.
 
     ``icon`` is None when the caller said nothing about an icon, which leaves
@@ -286,6 +293,12 @@ def _upsert(path: Path, name: str, url: str, icon: str | None = None, internal: 
     registration call either always passes or always omits, so every call is
     authoritative and simply sets it -- unlike the icon, there is no "leave it
     as it was" case to preserve.
+
+    ``program`` names the supervisord program that runs this app, and its
+    presence is the capability grant "this app can be stopped and started
+    through supervisord". Like ``internal``, every call is authoritative:
+    passing it sets the field and omitting it clears it, so a registration
+    that stops passing it cannot leave a stale capability behind.
     """
     doc = _load_apps(path)
     apps = doc.get("apps", [])
@@ -304,13 +317,17 @@ def _upsert(path: Path, name: str, url: str, icon: str | None = None, internal: 
                 app["internal"] = True
             elif "internal" in app:
                 del app["internal"]
+            if program is not None:
+                app["program"] = program
+            elif "program" in app:
+                del app["program"]
             _save_apps(path, doc)
             return
 
-    # No existing entry -- append with a freshly-minted label. The ``icon`` and
-    # ``internal`` keys are omitted entirely when there is nothing to say, so
-    # the common row keeps the shape it has always had (a missing key reads as
-    # "no icon" / "not internal").
+    # No existing entry -- append with a freshly-minted label. The ``icon``,
+    # ``internal``, and ``program`` keys are omitted entirely when there is
+    # nothing to say, so the common row keeps the shape it has always had (a
+    # missing key reads as "no icon" / "not internal" / "not supervised").
     entry = tomlkit.table()
     entry.add("name", name)
     entry.add("url", url)
@@ -319,6 +336,8 @@ def _upsert(path: Path, name: str, url: str, icon: str | None = None, internal: 
         entry.add("icon", icon)
     if internal:
         entry.add("internal", True)
+    if program is not None:
+        entry.add("program", program)
     apps.append(entry)
     _save_apps(path, doc)
 
@@ -367,6 +386,17 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--program",
+        help=(
+            "Name of the supervisord program that runs this app. Its presence "
+            "on the entry is the capability grant 'this app can be stopped and "
+            "started through supervisord'. Authoritative per call: passing it "
+            "sets the field, omitting it clears any previously-stored value. "
+            "Never set it for unsupervised instances (previews, isolated "
+            "test servers), which own their own teardown."
+        ),
+    )
+    parser.add_argument(
         "--remove",
         action="store_true",
         help="Remove the named app instead of adding it",
@@ -393,6 +423,12 @@ def main() -> None:
     if args.remove and (args.icon is not None or args.icon_file is not None):
         parser.error("--icon and --icon-file cannot be combined with --remove")
 
+    if args.remove and args.program is not None:
+        parser.error("--program cannot be combined with --remove")
+
+    if args.program is not None and not args.program.strip():
+        parser.error("--program must not be empty")
+
     name_error = validate_service_name(args.name)
     if name_error is not None:
         parser.error(name_error)
@@ -418,7 +454,14 @@ def main() -> None:
             if args.remove:
                 _remove(apps_file, args.name)
             else:
-                _upsert(apps_file, args.name, args.url, icon, internal=args.internal)
+                _upsert(
+                    apps_file,
+                    args.name,
+                    args.url,
+                    icon,
+                    internal=args.internal,
+                    program=args.program.strip() if args.program is not None else None,
+                )
         finally:
             fcntl.flock(lock_file, fcntl.LOCK_UN)
 

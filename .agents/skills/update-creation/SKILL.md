@@ -1,6 +1,8 @@
 ---
 name: update-creation
 description: "Change an existing skill, app, service, or shared script/reference (under .agents/shared/) -- extend it, refactor it, or just verify it still works. Invoke at turn-end when a skill ran but you had to do extra repeatable work by hand, or when you and the user discussed a change to it and applied it live."
+metadata:
+  author: imbue
 ---
 
 # Updating an existing creation

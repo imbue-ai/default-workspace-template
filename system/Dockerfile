@@ -7,7 +7,7 @@ ENV PATH="/root/.local/bin:$PATH"
 # Pin Claude Code; passed to setup_system.sh and recorded for the runtime version
 # check. Keep in sync with agent_types.claude.version in .mngr/settings.toml and
 # the default in system/scripts/setup_system.sh. Bump deliberately, not by accident.
-ARG CLAUDE_CODE_VERSION=2.1.207
+ARG CLAUDE_CODE_VERSION=2.1.227
 ENV CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION}
 
 # Pin Codex CLI; passed to setup_system.sh. Keep in sync with the default in
@@ -71,6 +71,13 @@ RUN chmod +x /usr/local/bin/default-workspace-template-setup-system /usr/local/b
 # only this small layer.
 COPY system/scripts/install_owner_exec.sh /usr/local/bin/default-workspace-template-install-owner-exec
 RUN chmod +x /usr/local/bin/default-workspace-template-install-owner-exec && default-workspace-template-install-owner-exec
+
+# Install the pinned dufs static binary (the file-viewer server behind the
+# rail's File Viewer row; supervisord's [program:files] serves data/ with it).
+# Pin + per-arch sha256 verification live in the script; a version bump there
+# rebuilds only this small layer.
+COPY system/scripts/install_dufs.sh /usr/local/bin/default-workspace-template-install-dufs
+RUN chmod +x /usr/local/bin/default-workspace-template-install-dufs && default-workspace-template-install-dufs
 
 # /var/cache/user is the off-volume cache target, pinned via ENV so BOTH the
 # build layers below (dependency pre-warm) and the runtime container cache to
