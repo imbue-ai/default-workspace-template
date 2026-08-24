@@ -233,14 +233,16 @@ The complete map of the scheduling machinery, for edits and debugging:
 - `/etc/cron.d/minds-caretaker` -- the Caretaker's drop-in (only exists
   while the Caretaker is enabled; see enable-caretaker/disable-caretaker).
 - `/etc/cron.d/update-apply-recover` -- the update-apply recovery guard, the
-  one permanently-installed built-in entry. `setup_system.sh` writes it at
-  provision time (so it has no durable `data/.state/cron.d/` copy; a rebuild
-  reinstalls it), and it runs `update_self.py recover --if-stale` every five
-  minutes to roll back an update apply that was killed without a container
-  restart. A tick that acts can outlast the next one, so the entry serializes
-  itself under a `flock` and a tick that finds the lock held skips silently. It
-  is a silent no-op in every normal state and is not a user schedule -- do not
-  remove it.
+  one permanently-installed built-in entry. The bootstrap writes it at each
+  boot (so it has no durable `data/.state/cron.d/` copy -- `/etc/cron.d` lives
+  on the container rootfs, and this guard has to be back the moment the
+  container is recreated), just before it installs the `data/.state/cron.d/`
+  entries, so a deliberate same-named entry there still overrides it. It runs
+  `update_self.py recover --if-stale` every five minutes to roll back an update
+  apply that was killed without a container restart. A tick that acts can
+  outlast the next one, so the entry serializes itself under a `flock` and a
+  tick that finds the lock held skips silently. It is a silent no-op in every
+  normal state and is not a user schedule -- do not remove it.
 - `/home/user/workspace/system/libs/automations/run_job.sh` -- the runner (cadence, catch-up,
   completion tracking, and retry -- with unit tests in
   `system/libs/automations/run_job_test.py`).
