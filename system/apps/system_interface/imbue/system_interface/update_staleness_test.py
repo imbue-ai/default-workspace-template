@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.server import _inject_update_staleness_meta_tag
 from imbue.system_interface.server import create_application
@@ -17,10 +18,9 @@ from imbue.system_interface.update_staleness import STALENESS_UPDATE_INTERRUPTED
 from imbue.system_interface.update_staleness import UPDATE_APPLY_MARKER_REL
 from imbue.system_interface.update_staleness import UPDATE_STALENESS_HEADER
 from imbue.system_interface.update_staleness import UPDATE_STALENESS_META_TAG
-from imbue.system_interface.update_staleness import WORKSPACE_ROOT_DIRECTORY
 from imbue.system_interface.update_staleness import UpdateStalenessTracker
+from imbue.system_interface.update_staleness import WORKSPACE_ROOT_DIRECTORY
 from imbue.system_interface.update_staleness import _is_path_relevant_to_this_server
-
 
 # The shared `git_work_dir` fixture leaves an initialized repo with one commit
 # but no committer identity in its config, so every later commit carries one.
