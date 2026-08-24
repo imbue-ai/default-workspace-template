@@ -81,3 +81,78 @@ A send failure is the opposite: it is the backend reporting, after the fact, tha
 Declaring it per harness would also be wrong on its face -- every harness can fail a send, and the failures worth showing are not harness-specific.
 
 If the structured follow-up lands, the harness still contributes nothing to this path: the title comes from the error, which the harness plugin already wrote.
+
+---
+
+# Recovering from a failed send, not just being told about it
+
+The notice above reports. This section gives it actions, so the user can resolve the failure from the chat instead of being handed a sentence and a dead end.
+
+## Generalizing
+
+The three actions are not dialog-specific and must not be. Any send can fail -- a dialog holding the input, a readiness timeout, an unconfirmed submission, a transport error -- and in every one of those cases the same three things are worth offering. What differs is only the explanation, which the backend already supplies in the harness's own words.
+
+So the notice keeps one shape for every failure:
+
+- **Title** -- "Couldn't send your message".
+- **Body** -- the failure text as received, unchanged. This is the part that varies, and it is the reason the actions can be uniform: the user is told what went wrong, then offered the same three ways out.
+- **A line inviting them to fix it themselves**, naming the agent's terminal. Many failures (an unsubmitted shell command, a dialog needing a real answer) are resolved in seconds by someone looking at the pane, and the current notice never says so.
+- **Actions** -- Cancel, Retry, Force.
+
+**What decides whether actions appear is the operation, not the failure.** A failed *send* is repeatable, so it gets all three. A failed *interrupt* -- which shares this notice today -- is not a send: retrying it means retrying the interrupt, and forcing it is meaningless. So the notice takes an optional recovery descriptor; an operation that supplies none renders exactly today's single OK button.
+
+## The actions
+
+### Cancel
+
+Closes the notice and returns the user to the composer with their message text restored, **prepended** to whatever is already there, and their attachments restored.
+
+Today's catch block already restores text, but only when the composer is empty -- it deliberately refuses to clobber a newer draft typed during the in-flight send. Prepending is what makes that guard unnecessary: the failed message goes in front, the newer draft follows, nothing is lost either way. Separate the two with a newline so they do not run together into one line.
+
+### Retry
+
+Runs the same send again, with the same text and attachments, from the same code path. No special casing: it is the ordinary send, so it re-runs preflight and can fail again, re-opening this notice with whatever the new failure says.
+
+Retrying the exact thing that just failed will usually fail again -- that is expected and worth keeping, because the common case it does fix is a failure the user resolved by hand in the terminal before clicking it. The button should read as "I've dealt with it, try again", so keep it as the second action, after Cancel.
+
+While the retry is in flight, disable all three buttons rather than closing the notice, so a double-click cannot start two sends.
+
+### Force
+
+Restarts the agent, then sends the message.
+
+- Tooltip: **"Restarts the agent and sends the message"**.
+- The restart already exists: `POST /api/agents/<id>/interrupt` runs `mngr start <agent> --restart --no-resume`, which stops the agent, ending any in-progress turn, and starts it fresh without a resume message. That is precisely "stop the agent, start the agent".
+- On success, send the message exactly as Retry does.
+- If the restart itself fails, the notice stays open and shows the restart's error instead. Do not attempt the send.
+
+**Force is destructive and must read that way.** It ends whatever turn the agent was in the middle of, and that work is not recoverable. Give it the visual weight of a destructive action -- last position, distinct styling -- rather than making it the easiest button to reach. It exists because the failures worth forcing (a wedged pane, a surface mngr cannot name) are exactly the ones where nothing gentler works.
+
+The `is_primary=true` refusal on that endpoint applies unchanged: the services agent must never be restarted this way, and the endpoint already refuses. Surface that refusal as the notice's new body if it happens.
+
+## Implementation
+
+### Frontend -- `MessageInput.ts`
+
+- Replace `actionFailureDetail: string | null` with a small record: the detail, and an optional recovery describing how to repeat the operation (the text and attachments to resend, and the agent id). Component-closure state, as now.
+- The send catch block populates the recovery; the interrupt catch block does not, so it keeps a single OK button.
+- **Do not restore the composer in the catch block any more.** Restoration becomes Cancel's job, so the text is not sitting in the composer while the notice offers to resend it -- otherwise Retry would send it and leave a copy behind.
+- Render two or four buttons off the same markup already used, with the focused default on Cancel, since it is the only non-acting choice. Escape and backdrop-click do what Cancel does, including restoring the text -- dismissing must never lose the message.
+- Disable the buttons while a retry or force is in flight; show which one is running.
+
+### Backend
+
+No new endpoint. Force composes the existing interrupt and message endpoints, in that order, from the frontend -- keeping the "stop, start, send" sequence visible where the user triggered it rather than hidden behind a new fused route that would need its own partial-failure semantics.
+
+## Testing
+
+- A failed send opens the notice with three actions; a failed interrupt opens it with one.
+- Cancel restores the failed text prepended to an existing draft, with attachments, and closes.
+- Escape and backdrop-click behave as Cancel, including the restore.
+- Retry re-invokes the send with the original text; a second failure re-opens the notice with the new text.
+- Force calls interrupt then send, in that order; a failed interrupt shows the restart error and does not send.
+- Buttons are disabled while an action is in flight.
+
+## Open question
+
+Whether Retry should be offered at all for a failure that cannot plausibly resolve itself (a pending shell command needs a human either way). Offering it uniformly is simpler and never wrong -- the user is the one who decides whether they have fixed it -- so start uniform and only special-case if the button proves misleading in practice.
