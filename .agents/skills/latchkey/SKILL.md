@@ -80,6 +80,15 @@ When not sure (and if applicable), prefer the `*-read-all` permission variants a
 After posting, wait for an automated system message indicating whether the user
 approved or denied the permission request.
 
+Post the request directly -- do not ask the user in chat first. The Minds app
+shows them the request with Approve and Deny buttons, so checking with them
+beforehand asks the same question twice.
+
+Approved permissions persist: the grant is written to your permissions file and
+enforced from then on, so a scope the user has already allowed will not prompt
+them again. Make the call first, and only post a request if it comes back
+blocked.
+
 
 ### Git operations on GitHub (clone / fetch / push)
 
