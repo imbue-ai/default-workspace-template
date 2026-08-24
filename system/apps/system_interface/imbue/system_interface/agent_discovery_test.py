@@ -4,7 +4,6 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
-from loguru import logger as _loguru_logger
 
 from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.api.message import MessageResult
@@ -213,7 +212,7 @@ def test_returns_false_when_nothing_reachable() -> None:
 
 
 def test_unknown_config_field_degrades_to_a_warning_not_a_failure(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, loguru_records: list[str]
 ) -> None:
     """A settings file written for a newer mngr must not lock this server out.
 
@@ -232,18 +231,11 @@ def test_unknown_config_field_degrades_to_a_warning_not_a_failure(
     monkeypatch.setenv("MNGR_PROJECT_CONFIG_DIR", str(config_dir))
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path / "host"))
 
-    warnings: list[str] = []
-    sink_id = _loguru_logger.add(
-        lambda message: warnings.append(str(message)), level="WARNING"
-    )
-    try:
-        # Local provider only: the point is the config-parse path every listing
-        # goes through, not remote-provider discovery.
-        agents = discover_agents(provider_names=("local",))
-    finally:
-        _loguru_logger.remove(sink_id)
+    # Local provider only: the point is the config-parse path every listing
+    # goes through, not remote-provider discovery.
+    agents = discover_agents(provider_names=("local",))
 
     # The listing survived (a fresh empty host dir simply has no agents), and
     # the unknown field was reported rather than swallowed silently.
     assert agents == []
-    assert any("field_from_a_newer_mngr" in warning for warning in warnings)
+    assert any("field_from_a_newer_mngr" in record for record in loguru_records)

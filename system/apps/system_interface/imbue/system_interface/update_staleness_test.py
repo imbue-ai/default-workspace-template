@@ -19,19 +19,19 @@ from imbue.system_interface.update_staleness import UpdateStalenessTracker
 from imbue.system_interface.update_staleness import _is_path_relevant_to_this_server
 
 
-def _make_repo(tmp_path: Path) -> Path:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
-    _commit(repo, "initial")
-    return repo
+# The shared `git_work_dir` fixture leaves an initialized repo with one commit
+# but no committer identity in its config, so every later commit carries one.
+_AS_TEST_AUTHOR = (
+    "-c",
+    "user.name=Test",
+    "-c",
+    "user.email=t@example.com",
+)
 
 
-def _commit(repo: Path, message: str) -> None:
+def _git(repo: Path, *args: str) -> None:
     subprocess.run(
-        ["git", "commit", "--allow-empty", "-q", "-m", message], cwd=repo, check=True
+        ["git", *_AS_TEST_AUTHOR, *args], cwd=repo, check=True, capture_output=True
     )
 
 
@@ -121,8 +121,8 @@ def _commit_files(repo: Path, message: str, *relpaths: str) -> None:
         target = repo / relpath
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(f"changed for {message}\n")
-        subprocess.run(["git", "add", relpath], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", message], cwd=repo, check=True)
+        _git(repo, "add", relpath)
+    _git(repo, "commit", "-q", "-m", message)
 
 
 def _write_marker(repo: Path) -> None:
@@ -131,55 +131,50 @@ def _write_marker(repo: Path) -> None:
     marker.write_text('{"dri_agent": "lead", "phase": "merged"}')
 
 
-def test_tracker_reports_nothing_while_the_tree_is_unmoved(tmp_path: Path) -> None:
-    repo = _make_repo(tmp_path)
+def test_tracker_reports_nothing_while_the_tree_is_unmoved(git_work_dir: Path) -> None:
+    repo = git_work_dir
     tracker = UpdateStalenessTracker.capture(repo_root=repo)
     assert tracker.staleness() is None
 
 
-def test_tracker_reports_a_tree_that_moved_under_the_server(tmp_path: Path) -> None:
-    repo = _make_repo(tmp_path)
+def test_tracker_reports_a_tree_that_moved_under_the_server(git_work_dir: Path) -> None:
+    repo = git_work_dir
     tracker = UpdateStalenessTracker.capture(repo_root=repo)
     _commit_files(repo, "an update landed after this server started", _RELEVANT_PATH)
     assert tracker.staleness() == STALENESS_TREE_MOVED
 
 
-def test_tracker_ignores_moves_that_leave_this_server_current(tmp_path: Path) -> None:
+def test_tracker_ignores_moves_that_leave_this_server_current(git_work_dir: Path) -> None:
     # The workspace repo moves constantly for reasons the running server is
     # fully current for: minds commit their ordinary work here, the apply's
     # own version-history commit lands after the restart, and a frontend-only
     # apply rebuilds the served bundle without restarting. None of those may
     # show the banner -- a near-permanent false banner would erode the trust
     # the real one needs.
-    repo = _make_repo(tmp_path)
+    repo = git_work_dir
     tracker = UpdateStalenessTracker.capture(repo_root=repo)
     _commit_files(repo, "ordinary work and bookkeeping", *_IRRELEVANT_PATHS)
     assert tracker.staleness() is None
 
 
 def test_tracker_reads_a_landed_then_reverted_range_as_consistent(
-    tmp_path: Path,
+    git_work_dir: Path,
 ) -> None:
     # The comparison diffs trees, not commits: an apply that landed and was
     # then auto-reverted leaves HEAD moved but the content identical to what
     # this server started from.
-    repo = _make_repo(tmp_path)
+    repo = git_work_dir
     _commit_files(repo, "pre-existing state", _RELEVANT_PATH)
     tracker = UpdateStalenessTracker.capture(repo_root=repo)
     _commit_files(repo, "the apply's merge", _RELEVANT_PATH)
-    subprocess.run(
-        ["git", "revert", "--no-edit", "HEAD"],
-        cwd=repo,
-        check=True,
-        capture_output=True,
-    )
+    _git(repo, "revert", "--no-edit", "HEAD")
     assert tracker.staleness() is None
 
 
-def test_tracker_reports_an_interrupted_apply_over_a_moved_tree(tmp_path: Path) -> None:
+def test_tracker_reports_an_interrupted_apply_over_a_moved_tree(git_work_dir: Path) -> None:
     # The marker outranks the moved-tree comparison: while it exists the honest
     # description is "an update was interrupted", not merely "the tree moved".
-    repo = _make_repo(tmp_path)
+    repo = git_work_dir
     tracker = UpdateStalenessTracker.capture(repo_root=repo)
     _commit_files(repo, "the interrupted apply's merge", _RELEVANT_PATH)
     _write_marker(repo)
@@ -199,9 +194,9 @@ def test_tracker_degrades_to_not_stale_outside_a_repo(
 
 
 def test_a_git_failure_after_startup_is_logged_not_swallowed(
-    tmp_path: Path, loguru_records: list[str]
+    git_work_dir: Path, loguru_records: list[str]
 ) -> None:
-    repo = _make_repo(tmp_path)
+    repo = git_work_dir
     tracker = UpdateStalenessTracker.capture(repo_root=repo)
     assert tracker.startup_head is not None
     loguru_records.clear()
@@ -214,10 +209,10 @@ def test_a_git_failure_after_startup_is_logged_not_swallowed(
     assert any("update-staleness" in record for record in loguru_records)
 
 
-def test_app_shell_carries_the_staleness_header(tmp_path: Path) -> None:
+def test_app_shell_carries_the_staleness_header(git_work_dir: Path) -> None:
     # The header rides on every app-shell response -- the built app and the
     # not-built placeholder alike -- so this needs no particular bundle state.
-    repo = _make_repo(tmp_path)
+    repo = git_work_dir
     state = build_test_state()
     state.update_staleness = UpdateStalenessTracker.capture(repo_root=repo)
     _commit_files(repo, "moved after startup", _RELEVANT_PATH)
@@ -229,8 +224,8 @@ def test_app_shell_carries_the_staleness_header(tmp_path: Path) -> None:
     assert response.headers[UPDATE_STALENESS_HEADER] == STALENESS_TREE_MOVED
 
 
-def test_app_shell_names_the_interrupted_variant_from_the_marker(tmp_path: Path) -> None:
-    repo = _make_repo(tmp_path)
+def test_app_shell_names_the_interrupted_variant_from_the_marker(git_work_dir: Path) -> None:
+    repo = git_work_dir
     state = build_test_state()
     state.update_staleness = UpdateStalenessTracker.capture(repo_root=repo)
     _write_marker(repo)
@@ -241,13 +236,13 @@ def test_app_shell_names_the_interrupted_variant_from_the_marker(tmp_path: Path)
     assert response.headers[UPDATE_STALENESS_HEADER] == STALENESS_UPDATE_INTERRUPTED
 
 
-def test_the_placeholders_head_poll_does_not_ask_for_staleness(tmp_path: Path) -> None:
+def test_the_placeholders_head_poll_does_not_ask_for_staleness(git_work_dir: Path) -> None:
     # The "frontend not built" placeholder polls this same route with HEAD
     # every ten seconds per open tab for the length of an outage, and that
     # response is deliberately built without reading anything. An outage is
     # exactly when the tree has moved, so asking here would fork git twice per
     # poll per tab. A real GET still carries the header.
-    repo = _make_repo(tmp_path)
+    repo = git_work_dir
     state = build_test_state()
     state.update_staleness = UpdateStalenessTracker.capture(repo_root=repo)
     _commit_files(repo, "moved after startup", _RELEVANT_PATH)
@@ -257,8 +252,8 @@ def test_the_placeholders_head_poll_does_not_ask_for_staleness(tmp_path: Path) -
     assert client.get("/").headers[UPDATE_STALENESS_HEADER] == STALENESS_TREE_MOVED
 
 
-def test_a_consistent_workspace_gets_no_header(tmp_path: Path) -> None:
-    repo = _make_repo(tmp_path)
+def test_a_consistent_workspace_gets_no_header(git_work_dir: Path) -> None:
+    repo = git_work_dir
     state = build_test_state()
     state.update_staleness = UpdateStalenessTracker.capture(repo_root=repo)
 
