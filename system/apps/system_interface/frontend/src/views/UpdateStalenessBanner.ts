@@ -22,9 +22,12 @@ export function getUpdateStalenessVariant(): string {
 }
 
 export const STALENESS_MESSAGES: Record<string, string> = {
+  // The marker this variant reads is present for the *whole* apply, not only
+  // after an interruption, so the copy must be true of a healthy in-flight
+  // update too -- it must not announce a rollback that may not be happening.
   "update-interrupted":
-    "A workspace update was interrupted before it finished and is being rolled back automatically. " +
-    "If this notice is still here in a few minutes, ask your agent about it.",
+    "A workspace update is part-way through, so you may be looking at the previous version. " +
+    "It finishes or undoes itself automatically; if this notice is still here in a few minutes, ask your agent about it.",
   "updated-not-activated":
     "Parts of this workspace were updated but not yet activated, so you may be looking at the previous version. " +
     "If this notice persists, ask your agent about it.",
