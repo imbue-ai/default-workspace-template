@@ -1228,7 +1228,12 @@ class _RecordingRunner(update_self.Runner):
         return result
 
     def _canned_result(self, argv_list: list[str]) -> _Result:
-        for prefix, result in self._responses.items():
+        # Longest prefix wins, so a test can narrow one of the broad defaults
+        # `_apply_runner` registers (e.g. ("git", "log")) for a single command.
+        by_specificity = sorted(
+            self._responses.items(), key=lambda item: len(item[0]), reverse=True
+        )
+        for prefix, result in by_specificity:
             if tuple(argv_list[: len(prefix)]) == prefix:
                 if isinstance(result, list):
                     result = result.pop(0) if len(result) > 1 else result[0]
@@ -1590,6 +1595,63 @@ def test_apply_refused_merge_changes_nothing_and_exits_1(apply_repo: Path) -> No
     assert not runner.ran("npm")
     assert not runner.ran(*_RESTART)
     assert not _marker_exists(apply_repo)
+
+
+def test_re_applying_a_rolled_back_merge_refuses_instead_of_claiming_success(
+    apply_repo: Path,
+) -> None:
+    # The rollback is a *forward revert*, so the reverted merge stays an
+    # ancestor of HEAD. Without the guard, a re-run skips the merge, sees an
+    # empty rollback_to..HEAD diff, reports "nothing live needed to change",
+    # exits 0 and writes a version-history line for an update the tree does not
+    # contain -- and the documented post-rollback retry is exactly a re-run.
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+    runner.respond(("git", "merge-base", "--is-ancestor"), _Result(returncode=0))
+    runner.respond(("git", "diff", "--no-renames"), _Result(stdout=""))
+    runner.respond(
+        ("git", "log", "--format=%s"),
+        _Result(stdout="Roll back update apply (restore to abc123def456)\n"),
+    )
+
+    with pytest.raises(update_self.ApplyPreconditionError) as raised:
+        _apply(
+            runner,
+            _FakeHttp(_all_healthy),
+            _FakeSpawner(),
+            apply_repo,
+            target_ref="minds-v0.4.2",
+        )
+
+    assert "rolled back" in str(raised.value)
+    assert not (apply_repo / "docs/VERSION_HISTORY.md").exists()
+    assert not runner.ran("uv", "run", "env-converge")
+    assert not _marker_exists(apply_repo)
+
+
+def test_re_applying_an_already_applied_merge_is_still_a_no_op_not_a_refusal(
+    apply_repo: Path,
+) -> None:
+    # The other side of the same guard: a merge that landed and stayed landed
+    # has no rollback commit on top, so a re-run (e.g. after a kill between the
+    # marker clear and the ledger write) still completes the bookkeeping.
+    runner = _apply_runner(_DOCS_DIFF, apply_repo)
+    runner.respond(("git", "merge-base", "--is-ancestor"), _Result(returncode=0))
+    runner.respond(("git", "diff", "--no-renames"), _Result(stdout=""))
+    runner.respond(("git", "log", "--format=%s"), _Result(stdout="version history: x\n"))
+
+    code = _apply(
+        runner,
+        _FakeHttp(_all_healthy),
+        _FakeSpawner(),
+        apply_repo,
+        target_ref="minds-v0.4.2",
+    )
+
+    assert code == 0
+    assert not runner.ran("git", "merge", "--ff-only")
+    assert "updated to minds-v0.4.2" in (
+        apply_repo / "docs/VERSION_HISTORY.md"
+    ).read_text()
 
 
 def test_apply_dirty_tree_refuses_before_touching_anything(apply_repo: Path) -> None:

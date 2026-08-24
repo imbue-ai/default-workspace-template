@@ -293,9 +293,14 @@ Interpret the exit code and report it to the user:
   `system/apps/system_interface/imbue/system_interface/static/` needs neither
   `npm` nor a registry, so pass that path on with the escalation. Read the
   stderr rather than assuming a path is there.
-- `1` -- precondition error (a dirty tree, a merge conflict, another apply in
-  flight); nothing was changed. A conflicted merge is aborted -- resolve it
-  through a fresh worker pass, never by hand.
+- `1` -- precondition error; nothing was changed. A dirty tree, a merge
+  conflict, another apply in flight, an interrupted apply of a *different*
+  merge (run `recover` first, per the stderr), or this merge having already
+  been landed and rolled back. A conflicted merge is aborted -- resolve it
+  through a fresh worker pass, never by hand; and a rolled-back merge cannot be
+  re-landed by re-running the apply (the rollback is a forward revert, so the
+  merge stays in history while its content does not), so that one also needs a
+  fresh worker pass off the current `HEAD`.
 
 Once you no longer need the preview (after a successful apply, *or* after a
 rejection where nothing was merged), tear it down:

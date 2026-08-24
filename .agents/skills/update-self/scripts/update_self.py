@@ -2117,6 +2117,14 @@ def _restore_tree(
             )
 
 
+# The subject every rollback commit carries. Load-bearing, not cosmetic: the
+# rollback is a *forward* revert, so the reverted merge stays in HEAD's
+# ancestry and an ancestry check alone cannot tell "already applied" from
+# "applied and undone". This prefix is how :func:`_has_rollback_since` tells
+# them apart.
+_ROLLBACK_SUBJECT_PREFIX = "Roll back update apply"
+
+
 def _commit_rollback(
     repo_root: Path, runner: Runner, rollback_to: str, reason: str
 ) -> None:
@@ -2131,7 +2139,9 @@ def _commit_rollback(
     )
     if not status.stdout.strip():
         return
-    message = f"Roll back update apply (restore to {rollback_to[:12]})\n\n{reason}"
+    message = (
+        f"{_ROLLBACK_SUBJECT_PREFIX} (restore to {rollback_to[:12]})\n\n{reason}"
+    )
     runner.run(
         ["git", "commit", "--no-verify", "-m", message],
         cwd=str(repo_root),
@@ -2324,6 +2334,21 @@ def _is_merge_landed(merge_ref: str, repo_root: Path, runner: Runner) -> bool:
         stderr = (getattr(result, "stderr", "") or "").strip()
         raise ApplyPreconditionError(f"could not resolve {merge_ref}: {stderr}")
     return returncode == 0
+
+
+def _has_rollback_since(merge_ref: str, repo_root: Path, runner: Runner) -> bool:
+    """Whether a rollback commit sits between ``merge_ref`` and ``HEAD``.
+
+    The one signal that distinguishes an already-*applied* merge from an
+    already-*undone* one, both of which are ancestors of ``HEAD``: only the
+    undone one has a :data:`_ROLLBACK_SUBJECT_PREFIX` commit on top of it.
+    Scoped to ``merge_ref..HEAD``, and matching a subject this script itself
+    writes, so ordinary workspace commits can never trip it.
+    """
+    log = _git_out(runner, repo_root, ["log", "--format=%s", f"{merge_ref}..HEAD"])
+    return any(
+        line.startswith(_ROLLBACK_SUBJECT_PREFIX) for line in log.splitlines()
+    )
 
 
 def _assert_bundle_built(repo_root: Path, *, live_service_restarted: bool) -> None:
@@ -2586,6 +2611,18 @@ def apply_update(
     # a needless `recover`. (A *resumed* apply's pre-existing marker survives
     # the raise, which is right: `recover` must still be able to roll it back.)
     is_merge_landed = _is_merge_landed(merge_ref, repo_root, runner)
+    # A rolled-back merge is still an *ancestor* of HEAD -- the rollback is a
+    # forward revert -- so without this an apply of it would skip the merge,
+    # find an empty diff, and report "nothing live needed to change" plus a
+    # version-history line for an update the tree does not contain. Re-running
+    # the apply genuinely cannot re-land reverted content, so say so and stop.
+    if is_merge_landed and _has_rollback_since(merge_ref, repo_root, runner):
+        raise ApplyPreconditionError(
+            f"{merge_ref} was landed and then rolled back, so its content is no "
+            "longer in the tree even though the commit is still in history. "
+            "Re-running the apply cannot re-land it: re-dispatch a fresh worker "
+            "pass off the current HEAD instead. Nothing was changed."
+        )
     write_marker(marker, repo_root, now)
 
     # --- Land the merge (skipped when already landed: idempotent re-entry). ---
