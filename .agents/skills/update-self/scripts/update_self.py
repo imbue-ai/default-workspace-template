@@ -384,7 +384,9 @@ def already_current_message(
 # permissions baseline (``minds-app-version-read``), so this needs no grant and
 # never raises a permission dialog -- which matters because update-self resolves
 # its target from a background worker, with nobody watching to approve one.
-_MINDS_APP_VERSION_URL = "http://latchkey-self.invalid/minds-api-proxy/api/v1/app/version"
+_MINDS_APP_VERSION_URL = (
+    "http://latchkey-self.invalid/minds-api-proxy/api/v1/app/version"
+)
 
 # Bounds the gateway round-trip, at the house network default (the style guide's
 # 60s, matching this repo's other ``latchkey curl``, ``github_sync``'s
@@ -1545,11 +1547,15 @@ def read_marker(repo_root: Path) -> ApplyMarker | None:
     try:
         return ApplyMarker.from_json(text)
     except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
-        sys.stderr.write(f"warning: {path} is not a valid marker ({exc}); ignoring it.\n")
+        sys.stderr.write(
+            f"warning: {path} is not a valid marker ({exc}); ignoring it.\n"
+        )
         return None
 
 
-def write_marker(marker: ApplyMarker, repo_root: Path, now: Callable[[], float]) -> None:
+def write_marker(
+    marker: ApplyMarker, repo_root: Path, now: Callable[[], float]
+) -> None:
     """Persist ``marker`` atomically (write-then-rename), stamping ``updated_at``.
 
     Atomic so a reader (the recovery cron, the banner) never sees a torn file,
@@ -1596,7 +1602,9 @@ def write_emergency(repo_root: Path, reason: str, now: Callable[[], float]) -> N
         )
         scratch.replace(path)
     except OSError as exc:
-        sys.stderr.write(f"warning: could not record the emergency at {path} ({exc}).\n")
+        sys.stderr.write(
+            f"warning: could not record the emergency at {path} ({exc}).\n"
+        )
 
 
 def clear_emergency(repo_root: Path) -> None:
@@ -1623,7 +1631,9 @@ def _default_is_pid_a_live_apply(pid: int) -> bool:
         return False
     cmdline_path = Path("/proc") / str(pid) / "cmdline"
     try:
-        cmdline = cmdline_path.read_bytes().replace(b"\0", b" ").decode(errors="replace")
+        cmdline = (
+            cmdline_path.read_bytes().replace(b"\0", b" ").decode(errors="replace")
+        )
     except OSError:
         return True  # No /proc (macOS): liveness is the best answer available.
     return "update_self" in cmdline
@@ -2180,7 +2190,9 @@ def _refresh_backend_dependencies(
     """Re-resolve the three backend environments from the current tree,
     mirroring ``build_workspace.sh``: the vendored ``mngr`` tool, the
     ``system-interface`` tool, and the workspace venv (``uv sync``)."""
-    _reinstall_tool(MNGR_TOOL_NAME, MNGR_EXECUTABLE, MNGR_DIR, repo_root, runner, expend)
+    _reinstall_tool(
+        MNGR_TOOL_NAME, MNGR_EXECUTABLE, MNGR_DIR, repo_root, runner, expend
+    )
     _reinstall_tool(TOOL_NAME, TOOL_NAME, APP_DIR, repo_root, runner, expend)
     _run_checked(
         runner,
@@ -2243,9 +2255,7 @@ def _commit_rollback(
     )
     if not status.stdout.strip():
         return
-    message = (
-        f"{_ROLLBACK_SUBJECT_PREFIX} (restore to {rollback_to[:12]})\n\n{reason}"
-    )
+    message = f"{_ROLLBACK_SUBJECT_PREFIX} (restore to {rollback_to[:12]})\n\n{reason}"
     runner.run(
         ["git", "commit", "--no-verify", "-m", message],
         cwd=str(repo_root),
@@ -2308,9 +2318,7 @@ def _insert_under_workspace(lines: list[str], new_line: str, *, first: bool) -> 
     end = heading + 1
     while end < len(lines) and not lines[end].startswith("## "):
         end += 1
-    entries = [
-        index for index in range(heading + 1, end) if lines[index].strip() != ""
-    ]
+    entries = [index for index in range(heading + 1, end) if lines[index].strip() != ""]
     if first or not entries:
         position = entries[0] if entries else heading + 2
         # An empty section is ``## Workspace`` + a blank line; landing past the
@@ -2347,7 +2355,9 @@ def _origin_line(repo_root: Path, runner: Runner) -> str:
     version uses ``git describe`` (reachability), never ``--points-at``: no tag
     is ever *on* a template base, only on an ancestor of it.
     """
-    log = _git_out(runner, repo_root, ["log", "--first-parent", "--format=%H %s", "HEAD"])
+    log = _git_out(
+        runner, repo_root, ["log", "--first-parent", "--format=%H %s", "HEAD"]
+    )
     creation = ""
     for line in log.splitlines():
         sha, _, subject = line.partition(" ")
@@ -2368,7 +2378,9 @@ def _origin_line(repo_root: Path, runner: Runner) -> str:
         check=False,
     )
     version = (getattr(describe, "stdout", "") or "").strip()
-    note = f"created from {version}" if version else "created from the workspace template"
+    note = (
+        f"created from {version}" if version else "created from the workspace template"
+    )
     return _ledger_line(date, note, short)
 
 
@@ -2451,9 +2463,7 @@ def _has_rollback_since(merge_ref: str, repo_root: Path, runner: Runner) -> bool
     writes, so ordinary workspace commits can never trip it.
     """
     log = _git_out(runner, repo_root, ["log", "--format=%s", f"{merge_ref}..HEAD"])
-    return any(
-        line.startswith(_ROLLBACK_SUBJECT_PREFIX) for line in log.splitlines()
-    )
+    return any(line.startswith(_ROLLBACK_SUBJECT_PREFIX) for line in log.splitlines())
 
 
 def _assert_bundle_built(repo_root: Path, *, live_service_restarted: bool) -> None:
@@ -2556,7 +2566,10 @@ def _recover_running_state(
             if plan.frontend_manifest and "node_modules" not in restored:
                 _run_checked(runner, ["npm", "ci"], repo_root / FRONTEND_DIR, "npm ci")
             _run_checked(
-                runner, ["npm", "run", "build"], repo_root / FRONTEND_DIR, "npm run build"
+                runner,
+                ["npm", "run", "build"],
+                repo_root / FRONTEND_DIR,
+                "npm run build",
             )
             _assert_bundle_built(repo_root, live_service_restarted=False)
         if plan.backend_manifest and "venv" not in restored:
@@ -2829,7 +2842,9 @@ def apply_update(
                 write_marker(marker, repo_root, now)
 
             if plan.frontend:
-                _install_or_build_bundle(marker.worker_bundle, repo_root, runner, expend)
+                _install_or_build_bundle(
+                    marker.worker_bundle, repo_root, runner, expend
+                )
                 _assert_bundle_built(repo_root, live_service_restarted=False)
                 marker.phase = PHASE_BUILT
                 write_marker(marker, repo_root, now)

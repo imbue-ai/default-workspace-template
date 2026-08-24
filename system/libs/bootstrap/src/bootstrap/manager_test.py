@@ -623,7 +623,9 @@ def test_update_recovery_cron_entry_can_run_from_cron(tmp_path: Path) -> None:
     assert "flock -n" in entry
 
 
-def test_update_recovery_cron_entry_tolerates_an_unwritable_target(tmp_path: Path) -> None:
+def test_update_recovery_cron_entry_tolerates_an_unwritable_target(
+    tmp_path: Path,
+) -> None:
     # This runs on the path to supervisord; a boot that reaches the services is
     # worth more than the guard.
     _write_update_recovery_cron_entry(target_dir=tmp_path / "missing")
