@@ -1756,6 +1756,14 @@ body {
   --si-pane-surface: #ffffff;
   --si-pane-border: rgba(0, 0, 0, 0.09);
   --si-pane-radius: 12px;
+  /* A tab's own insets. Named because the drag ghost has to restate them from
+     outside the theme root -- see `body > .dv-tab.dv-dragged .dv-default-tab`
+     -- and the two must not drift. */
+  --si-tab-padding: 6px 12px;
+  --si-tab-gap: 4px;
+  /* The attention flash (see `si-tab-flash`). Amber is deliberately not in the
+     palette's working set: it can only mean "look here for a moment". */
+  --si-tab-flash-color: #fde68a;
   /* Half of the 4px separator: each of the two neighbours contributes its own
      inset, and the outermost panes get the same half against the canvas edge. */
   --si-pane-inset: 2px;
@@ -1918,6 +1926,45 @@ body {
   border-radius: var(--si-pane-radius) var(--si-pane-radius) 0 0;
 }
 
+/* The attention flash: what a tab does when it is opened again while already
+   open. The click has to answer for itself, and the answer cannot be "the tab
+   is now active" -- it usually already was, which is the whole reason nothing
+   appeared to happen.
+
+   A wash of colour rather than the opacity blink this used to be: fading the
+   tab out and back read as the tab going away, which is the opposite of "here
+   it is". Amber because it is the one hue this workspace does not otherwise
+   use -- the accent means active and green, and grey is every resting state --
+   so the flash cannot be mistaken for a state the tab has entered and stayed
+   in. It paints ONLY for the animation's length, so the standing rule that an
+   inactive tab carries no background is untouched.
+
+   Driven by a class rather than the Web Animations API so the keyframes sit
+   with the rest of the tab's appearance, and so `prefers-reduced-motion` can
+   reach it. */
+@keyframes si-tab-flash {
+  0%,
+  100% {
+    background-color: transparent;
+  }
+  25%,
+  75% {
+    background-color: var(--si-tab-flash-color);
+  }
+}
+
+.dockview-theme-light .dv-tab.si-tab-flash {
+  animation: si-tab-flash 320ms ease-in-out 2;
+}
+
+/* Reduced motion still needs the acknowledgement, just not the pulsing: one
+   hold and release rather than two round trips. */
+@media (prefers-reduced-motion: reduce) {
+  .dockview-theme-light .dv-tab.si-tab-flash {
+    animation: si-tab-flash 320ms ease-in-out 1;
+  }
+}
+
 /* The drag ghost: dockview-core clones the dragged `.dv-tab` (tab.js,
    `dragHandler.onDragStart`), copies its FULL computed style onto the clone
    as inline styles, and appends the clone as a direct child of `<body>`
@@ -1934,6 +1981,20 @@ body > .dv-tab.dv-dragged {
   border-radius: var(--si-pane-radius) !important;
 }
 
+/* The ghost's INSIDE, for the same reason and with a sharper edge to it: the
+   clone carries the outer `.dv-tab`'s computed style as inline styles, but
+   only that element's -- its descendants keep their classes and lose every
+   rule that was scoped under `.dockview-theme-light`, because the clone hangs
+   off `<body>` and no longer has that ancestor. `padding` and `gap` are not
+   inherited, so the inner `.dv-default-tab` rendered with neither: the icon
+   sat flush against the ghost's left edge with the title against it. Restated
+   here from the same variables the live tab uses, so a dragged tab looks like
+   the tab it came from. */
+body > .dv-tab.dv-dragged .dv-default-tab {
+  padding: var(--si-tab-padding);
+  gap: var(--si-tab-gap);
+}
+
 .dockview-theme-light .dv-tab.dv-active-tab {
   border-color: var(--si-pane-border);
 }
@@ -1941,10 +2002,11 @@ body > .dv-tab.dv-dragged {
 /* Hovering an inactive tab paints NOTHING. A fill at the strip's edges always
    fights the pane's rounded corner below it (two attempts at that shape both
    read as a boxy cutoff), so the hover affordance is everything except a
-   background: the pointer cursor, the title going bold, and the tab's own
-   action buttons appearing -- which the strip already reveals on hover.
-   Spelled out down the whole chain because that is the shape dockview paints
-   tab states with, and a shorter selector would simply lose to it. */
+   background: the pointer cursor, the icon and title recoloring to the
+   primary text color, and the tab's own action buttons appearing -- which the
+   strip already reveals on hover. Spelled out down the whole chain because
+   that is the shape dockview paints tab states with, and a shorter selector
+   would simply lose to it. */
 .dockview-theme-light
   .dv-groupview
   > .dv-tabs-and-actions-container
@@ -2006,11 +2068,14 @@ body > .dv-tab.dv-dragged {
   font-weight: 600;
 }
 
-/* Bolding is confined to the title span. The tab's width is fixed by the
-   equal-width rule, so the heavier face cannot reflow the strip -- at worst a
-   long title fades a character earlier while hovered. */
+/* Recoloring, not bolding: color needs no fixed-width guard the way weight
+   did (a heavier face is physically wider; a different color is not), and it
+   is precisely the kind of affordance that is not a fill -- see the comment
+   above this tab strip's other hover rule for why a fill is off the table.
+   Both the icon and the title move to the primary text color together. */
+.dockview-theme-light .dv-tab.dv-inactive-tab:hover .dv-custom-tab-icon,
 .dockview-theme-light .dv-tab.dv-inactive-tab:hover .dv-default-tab-content {
-  font-weight: 600;
+  color: var(--color-text-primary);
 }
 
 /* dockview outlines a focused tab in the (now transparent) divider color, so
@@ -2025,7 +2090,7 @@ body > .dv-tab.dv-dragged {
   font-family: var(--font-family-base);
   font-size: 13px;
   font-weight: 500;
-  padding: 6px 12px;
+  padding: var(--si-tab-padding);
   gap: 8px;
 }
 
@@ -2263,9 +2328,16 @@ body > .dv-tab.dv-dragged {
     0 0 0 4px var(--color-accent);
 }
 
-/* ── Custom tab renderer ── */
-.dv-custom-tab {
-  gap: 4px;
+/* ── Custom tab renderer ──
+   4px normalizes the tab's internal spacing (icon to title, and title to the
+   hover-revealed actions) to the sidebar's own icon-to-label gap (`gap-1` on
+   the rail's row classes in Sidebar.ts). The selector has to repeat both
+   classes: `createCustomTab` sets `className = "dv-default-tab dv-custom-tab"`
+   on the same element, so a bare `.dv-custom-tab` here loses on specificity to
+   `.dockview-theme-light .dv-default-tab`'s own `gap: 8px` above -- which is
+   what left this at 8px despite this rule. */
+.dockview-theme-light .dv-default-tab.dv-custom-tab {
+  gap: var(--si-tab-gap);
 }
 
 /* Per-agent liveness dot on chat tabs, reflecting the agent's mngr lifecycle

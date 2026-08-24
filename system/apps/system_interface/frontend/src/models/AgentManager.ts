@@ -97,6 +97,15 @@ export interface AppEntry {
   // no page of its own (e.g. owner-exec, a loopback exec server the share
   // gateway routes through). Consumers offering apps to open must exclude it.
   internal?: boolean;
+  // The supervisord program running this app, registered via ``forward_port.py
+  // --program``. Its presence is what makes the app stoppable/startable from
+  // the workspace; absent/empty means unsupervised (or registered before the
+  // field existed).
+  program?: string;
+  // Backend-derived liveness: supervisord's process state for ``program``
+  // rows, a TCP probe of the backend URL otherwise. Absent reads as running
+  // (see ``isAppRunning``).
+  is_running?: boolean;
 }
 
 // A live tmux terminal session (any tmux session whose name does NOT start
@@ -244,6 +253,15 @@ type WsEvent =
       type: "member_last_used_changed";
       ref: string;
       at_ms: number | null;
+    }
+  | {
+      // One object beaconed where it is looking, machine-wide; ``path`` is
+      // null when the entry was dropped (the object was destroyed, or it
+      // beaconed a blank). A location belongs to the object rather than to a
+      // panel, so this reaches clients that could open it anywhere.
+      type: "member_location_changed";
+      ref: string;
+      path: string | null;
     };
 
 /** Agent-driven view-switch requests pushed over the WebSocket (the ``load``
@@ -290,6 +308,13 @@ export type MemberTitleListener = (ref: string, title: string | null) => void;
  */
 export type MemberLastUsedListener = (ref: string, atMs: number | null) => void;
 
+/**
+ * Notified when one object's machine-wide beaconed location changed; ``path``
+ * is null when the entry was dropped. Delivered to every client, because a
+ * location is a fact about the machine rather than about any one view.
+ */
+export type MemberLocationListener = (ref: string, path: string | null) => void;
+
 export type LayoutOpListener = (event: LayoutOpEvent) => void;
 export type AgentsUpdatedListener = (agents: AgentState[]) => void;
 /**
@@ -327,6 +352,7 @@ let layoutSyncListeners: LayoutSyncListener[] = [];
 let projectSyncListeners: ProjectSyncListener[] = [];
 let memberTitleListeners: MemberTitleListener[] = [];
 let memberLastUsedListeners: MemberLastUsedListener[] = [];
+let memberLocationListeners: MemberLocationListener[] = [];
 let agentsUpdatedListeners: AgentsUpdatedListener[] = [];
 let terminalSessionListeners: TerminalSessionListener[] = [];
 let agentActivityListeners: AgentActivityListener[] = [];
@@ -552,6 +578,12 @@ function handleEvent(event: WsEvent): void {
         listener(event.ref, event.at_ms);
       }
       break;
+
+    case "member_location_changed":
+      for (const listener of memberLocationListeners) {
+        listener(event.ref, event.path);
+      }
+      break;
   }
 }
 
@@ -729,6 +761,14 @@ export function addMemberLastUsedListener(listener: MemberLastUsedListener): voi
 
 export function removeMemberLastUsedListener(listener: MemberLastUsedListener): void {
   memberLastUsedListeners = memberLastUsedListeners.filter((l) => l !== listener);
+}
+
+export function addMemberLocationListener(listener: MemberLocationListener): void {
+  memberLocationListeners.push(listener);
+}
+
+export function removeMemberLocationListener(listener: MemberLocationListener): void {
+  memberLocationListeners = memberLocationListeners.filter((l) => l !== listener);
 }
 
 export function addAgentsUpdatedListener(listener: AgentsUpdatedListener): void {

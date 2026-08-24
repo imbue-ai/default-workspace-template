@@ -251,6 +251,58 @@ def test_reregistering_without_internal_clears_a_previously_internal_entry(tmp_p
     assert "internal" not in rows[0]
 
 
+def test_register_without_program_omits_the_key(tmp_path: Path) -> None:
+    apps_file = tmp_path / "apps.toml"
+    result = _run(["--name", "web", "--url", "http://localhost:8000"], apps_file)
+    assert result.returncode == 0, result.stderr
+    rows = _read_apps(apps_file)
+    assert "program" not in rows[0]
+
+
+def test_register_with_program_stores_the_supervisord_program_name(tmp_path: Path) -> None:
+    apps_file = tmp_path / "apps.toml"
+    result = _run(
+        ["--name", "web", "--url", "http://localhost:8000", "--program", "web"], apps_file
+    )
+    assert result.returncode == 0, result.stderr
+    rows = _read_apps(apps_file)
+    assert rows[0]["program"] == "web"
+
+
+def test_reregistering_without_program_clears_a_previously_stored_one(tmp_path: Path) -> None:
+    """Like ``internal`` (and unlike the icon), every registration call is
+    authoritative about ``program``: a block that stops passing it must not
+    leave a stale stop/start capability behind."""
+    apps_file = tmp_path / "apps.toml"
+    result = _run(
+        ["--name", "web", "--url", "http://localhost:8000", "--program", "web"], apps_file
+    )
+    assert result.returncode == 0, result.stderr
+
+    result = _run(["--name", "web", "--url", "http://localhost:8001"], apps_file)
+    assert result.returncode == 0, result.stderr
+    rows = _read_apps(apps_file)
+    assert len(rows) == 1
+    assert "program" not in rows[0]
+
+
+def test_an_empty_program_is_rejected(tmp_path: Path) -> None:
+    apps_file = tmp_path / "apps.toml"
+    result = _run(
+        ["--name", "web", "--url", "http://localhost:8000", "--program", "  "], apps_file
+    )
+    assert result.returncode != 0
+    assert "--program must not be empty" in result.stderr
+    assert not apps_file.exists()
+
+
+def test_program_cannot_be_combined_with_remove(tmp_path: Path) -> None:
+    apps_file = tmp_path / "apps.toml"
+    result = _run(["--remove", "--name", "web", "--program", "web"], apps_file)
+    assert result.returncode != 0
+    assert "cannot be combined with --remove" in result.stderr
+
+
 def test_an_oversized_icon_is_rejected(tmp_path: Path) -> None:
     apps_file = tmp_path / "apps.toml"
     forward_port = _load_module("_forward_port_icon_cap", _SCRIPT)
