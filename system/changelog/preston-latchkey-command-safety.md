@@ -1,0 +1,21 @@
+A latchkey permission request now has to be filed one per tool call, and the agent is told so when it tries otherwise.
+
+New PreToolUse guard `system/scripts/agent_latchkey_request_standalone.sh` (with the tokenizing in `agent_latchkey_request_check.py`) hard-blocks a Bash call that POSTs to the reserved `latchkey-self.invalid/permission-requests` host when it batches a second request, chains or pipes another command onto it, redirects its output, or runs in the background. The block message explains why and shows the single-request form to re-run, and says outright that the next request can follow immediately in its own call -- the rule is one request per call, not one request at a time.
+
+This closes two ways a request could silently fail to reach the user: the chat renders one permission card per tool call and reads only the first request object echoed in the result, so a batched second request was never shown (it sat unanswered in the minds inbox), and a `> /tmp/req.json` or `| jq .request_id` took the echoed object away, leaving a card with no button to open the approval dialog.
+
+"Redirects its output" covers curl's own write-the-body-to-a-file flags, in every spelling that names the flag as a whole word: `-o out.json`, `-oout.json`, `--output`, `--output=`, `-O`, `--remote-name`, and bundled short-flag clusters like `-so out.json` or `-fsSLo out.json`. It also covers redirecting the command's *input* -- a heredoc or `-d @- < body.json` -- so write the body inline with `-d '{...}'`, which is the form every skill documents.
+
+"Runs in the background" is the one violation that is not in the command text: a tool call made with `run_in_background: true` returns a shell id, so the echoed object lands in a later `BashOutput` call rather than in the card's own result -- the same dead card a trailing `&` produces. The hook reads that flag out of its payload and blocks it too, so filing a request is always a plain foreground call.
+
+Reading the queue and every other `latchkey curl` are untouched and may still be piped or chained.
+
+The guard is wired for claude in `.claude/settings.json`; codex and pi run the same checker (see `system/scripts/POLICY_HOOKS.md`, where it is now hook 3 and the later hooks are renumbered accordingly).
+
+The cross-harness scripts in `system/scripts/` are now `agent_*` rather than `claude_*`: claude, codex, and pi all run them, and the old prefix read as though they were claude's. `claude_status_line.sh` and `claude_update_plugin.sh` keep theirs -- those are Claude Code features with no counterpart on the other harnesses.
+
+On pi, `.pi/extensions/policy_guards.ts` now checks the command the agent wrote rather than whatever is on the event by the time it runs. mngr's extension rewrites that field in place, prepending the OOM tag and git identity as their own `;`-joined commands, and pi runs both extensions' handlers on one shared event in an order neither of them chooses -- so the guards could be handed a command that reads as "another command runs before it" and refuse every permission request and every `tk start`/`tk close`. mngr now records the pre-rewrite command on the event and this guard prefers it, which comes out right in either order. claude and codex get the same guarantee from hook order alone: the rewriter runs last.
+
+A second new test, `.pi/extensions/pi_extensions_test.py`, covers what the two pi extensions actually do: it drives the real `.ts` files through Node with synthetic events, running `policy_guards.ts` against the real checkers in `system/scripts/` (so the bridge and its wiring are exercised together) and `tk_workflow.ts` against a stub `ticket` whose step state each case chooses. It replaces the coverage that came across with this code from mngr, and pins the `mngrOriginalCommand` fallback above. It skips itself where Node cannot import TypeScript.
+
+A new test, `system/scripts/agent_hook_wiring_test.py`, holds the three harnesses' wiring together: every `system/scripts/` path named in `.claude/settings.json`, `.codex/hooks.json`, and `.pi/extensions/policy_guards.ts` has to resolve, and the two hook configs have to carry the same PreToolUse guard set. A hook naming a script that has moved fails silently -- it just never runs -- so a rename that misses one of those files was previously invisible.

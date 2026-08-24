@@ -33,7 +33,7 @@ export TICKETS_DIR="$tickets_dir"
 # would abort this script with that non-zero code -- breaking the "exits 0
 # always" contract (and, on codex, an exit 2 on Stop is read as a continuation
 # request, re-engaging the agent). `|| true` keeps the count at 0 and the exit
-# clean. Mirrors the same guard in claude_open_tickets_reminder.sh.
+# clean. Mirrors the same guard in agent_open_tickets_reminder.sh.
 open_count=$("$tk_script" steps 2>/dev/null | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ' || true)
 
 if [[ "${open_count:-0}" -gt 0 ]]; then

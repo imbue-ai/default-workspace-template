@@ -16,7 +16,7 @@
 # reminder begins with `[Open task reminder...]`, so plain text is rejected as a
 # hook failure there. Passing `--codex` emits the reminder via
 # `hookSpecificOutput.additionalContext` JSON instead, which both harnesses add
-# to context (mirrors the `--codex` flag on claude_rewrite_bash_command.py).
+# to context (mirrors the `--codex` flag on agent_rewrite_bash_command.py).
 set -euo pipefail
 
 emit_as_codex=0
