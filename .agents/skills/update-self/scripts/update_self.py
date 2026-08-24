@@ -1060,7 +1060,14 @@ def _load_bands(repo_root: Path):
     sys.path.insert(0, str(bands_src))
     try:
         from oom_priority import bands
-    except ImportError:
+    except ImportError as exc:
+        # Distinct from the expected "this tree predates the package" case the
+        # check above covers: the module is right there and would not import,
+        # so the apply is about to run unbanded and nobody would know.
+        sys.stderr.write(
+            f"warning: {bands_src} carries an oom_priority package that could not be "
+            f"imported ({exc}); this apply runs unprotected from memory shedding.\n"
+        )
         return None
     finally:
         sys.path.remove(str(bands_src))
