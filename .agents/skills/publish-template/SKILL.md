@@ -150,9 +150,12 @@ Ask the user, in plain language. Never enumerate files at them:
 - what they want to include -- an app or feature, but equally a skill, a chat
   customization or behavior, a workflow, a service, config, or seed data:
   anything committable that lives in the repo tree. You translate this into a set
-  of repo-root-relative include paths (e.g. `system/apps/slack_inbox`
-  plus their service wiring, or `.agents/skills/<name>` for a skill) -- you reason
-  about the backing paths, the user does not;
+  of repo-root-relative include paths (e.g. `system/apps/slack_inbox` plus its
+  supervisord program at `system/supervisord.conf.d/slack-inbox.conf`, or
+  `.agents/skills/<name>` for a skill) -- you reason about the backing paths,
+  the user does not. Include the program's own drop-in, never
+  `system/supervisord.conf`: that file is the daemon's config plus every other
+  program the mind happens to run, none of which belongs in this snapshot;
 - what data should be included -- and this is NOT an all-or-nothing default.
   Judge each candidate data path by whether it is **personal**: information
   about the user or specific real people (names, emails, accounts, messages,

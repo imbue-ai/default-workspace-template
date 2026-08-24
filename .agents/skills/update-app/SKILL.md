@@ -8,7 +8,7 @@ metadata:
 # Changing an existing app or service
 
 Both apps and background services run as a `[program:<name>]` under
-supervisord (see `system/supervisord.conf`). They differ only in whether
+supervisord (one program per file under `system/supervisord.conf.d/`). They differ only in whether
 there's a tab to refresh:
 
 - **App** -- the user opens it as a tab rendering at the service's own
@@ -147,7 +147,8 @@ process restarts:
   markup. Skip straight to the refresh.
 
 - **Change to the service *definition*** (its port, its `command`, its log
-  config, or adding/removing a program): edit `system/supervisord.conf`, then
+  config, or adding/removing a program): edit the program's own
+  `system/supervisord.conf.d/<name>.conf`, then
   `supervisorctl reread && supervisorctl update`. The full program schema,
   the add/remove/inspect mechanics, and the `forward_port.py` wiring live
   in [`.agents/shared/references/service-processes.md`](../../shared/references/service-processes.md).
