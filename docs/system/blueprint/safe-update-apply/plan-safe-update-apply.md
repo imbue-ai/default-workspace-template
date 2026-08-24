@@ -21,18 +21,18 @@
 - On any failure the script reverts the entire merge as a forward revert commit and restores the pre-apply snapshots: built bundle, root `.venv`, both uv tool environments, `node_modules`. All restores are file copies to their original absolute paths — no network, no `npm`/`uv`, no `mngr` required.
 - Globally pinned tools (the `setup_system.sh` tier) roll back by re-running the provisioner from the restored tree, only when the apply had run it; if that re-run fails (e.g. no network), the rollback still counts as recovered and the closing report names the tools left ahead of the tree.
 - `env-converge` runs post-success only, so a failed apply never moved apt state.
-- The retry path survives every rollback: worker branch, worktree, and report are kept, so a diagnosed retry is a seconds-long re-land. The DRI agent's message offers exactly that.
+- The retry path survives every rollback: worker branch, worktree, and report are kept, so a diagnosed retry is a quick re-land. The DRI agent's message offers exactly that.
 
 ### Interruption (hard kill) and recovery
 
 - The script writes a marker under `data/.state/` at apply start — DRI agent (from its environment), rollback point, last completed phase, PID — and clears it on every exit path. A concurrent `apply` refuses to start while a live marker exists.
-- Container restart: bootstrap checks the marker, runs the dependency-free rollback directly (no agent or UI needed), then wakes and messages the DRI agent to verify state and talk to the user.
+- Container restart: bootstrap checks the marker and runs the rollback directly (no agent or UI needed, and dependency-free except for the provisioner re-run noted above), then wakes and messages the DRI agent to verify state and talk to the user.
 - Killed without a restart and the DRI agent gone too: a permanent cron entry (installed at provision time, every ~5 minutes) runs `recover` with an only-if-stale guard — marker present, recorded PID dead, older than a grace period — and is a silent no-op in every normal state. It invokes the stdlib-only script directly, never the automations/agent machinery.
 - The DRI agent, when alive, simply re-runs the idempotent `apply`; every step tolerates re-entry.
 
 ### Memory pressure
 
-- The apply orchestrator is close to OOM-exempt: it bands itself well above every agent, chat, and ordinary service — losing a build is an ordinary failure the rollback absorbs, but losing the apply mid-motion is the half-applied state this design exists to prevent. Only the authority paths that would repair a failed apply (owner-exec, the terminal) stay below it.
+- The apply orchestrator is close to OOM-exempt: every agent, chat, and ordinary service is shed before it — losing a build is an ordinary failure the rollback absorbs, but losing the apply mid-motion is the half-applied state this design exists to prevent. Only the authority paths that would repair a failed apply (owner-exec, the terminal) sit below it and would go first.
 - Subprocesses inherit that protection by default, which is what the recovery-critical steps need: git operations, snapshot copies and restores, service restarts, the provisioner, `mngr` invocations. During the forward apply, only the genuinely memory-hungry, cleanly recoverable steps — `npm ci` / `npm run build`, the uv installs, the pre-flight boot — are tagged back to the expendable band.
 - During rollback and `recover`, nothing is tagged expendable: there is no further rollback to absorb a shed, so every recovery step keeps the orchestrator's protection.
 
@@ -40,7 +40,7 @@
 
 - The system interface reads mngr config with `strict=False` at its single `load_config` call site, so a settings file written for a newer mngr degrades to a logged warning instead of a 500 on every send — the lockout that made the geebspace incident self-locking. `mngr config set` and all CLI paths keep strict parsing.
 - The change classifier treats vendored-mngr *source* changes and `.mngr/settings.toml` changes as restart-requiring, so nothing live keeps reading config newer than its own code after an apply completes.
-- The system interface records the tree HEAD it started from and stamps a response header when the live tree has moved under it; an informational banner tells the user "parts of this workspace were updated but not yet activated" or "an update was interrupted" (from the marker). Acting on it stays with the agent.
+- The system interface records the tree HEAD it started from and stamps a response header when the live tree has moved under it; an informational banner tells the user "parts of this workspace were updated but not yet activated" or, from the marker, that an update is part-way through and finishes or undoes itself. The marker-variant copy deliberately does not announce a rollback: the marker is present for the whole of a *healthy* apply too. Acting on it stays with the agent.
 
 ### Concurrency
 
@@ -127,10 +127,5 @@
 
 ## Open questions
 
-- Exact insertion point in bootstrap's startup sequence for the marker check (read `system/libs/bootstrap` before phase 4).
-- Is crond present and running in all containers? If not, provision it alongside the cron entry.
-- The DRI wake when `mngr` is still broken post-recovery (snapshots should have restored it; if the wake fails anyway, the banner is the fallback — is that enough?).
-- The new band's exact value and name in `bands.py` relative to the owner-exec/terminal bands.
-- Should `apply` also take the tk lease itself as defense-in-depth when the prose forgot, or is marker-based refusal enough?
-- How the worker's report names its built-bundle path (explicit report field vs a work_dir convention the lead resolves).
+- The DRI wake when `mngr` is still broken post-recovery (snapshots should have restored it; if the wake fails anyway, the boot log is the only fallback — is that enough?).
 - Whether the banner needs any affordance beyond text (e.g. "ask your agent about this") without becoming an action surface.
