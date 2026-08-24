@@ -2,14 +2,7 @@
 //
 // The banner keys entirely off a meta tag the backend injects into the app
 // shell, so these tests need a real document to plant that tag in.
-import { afterEach, describe, expect, it, vi } from "vitest";
-
-// Mithril captures `requestAnimationFrame` at import time so it can schedule
-// redraws; ensure one exists before the import below.
-vi.hoisted(() => {
-  globalThis.requestAnimationFrame ??= ((cb: FrameRequestCallback): number =>
-    setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
-});
+import { afterEach, describe, expect, it } from "vitest";
 
 import m from "mithril";
 
@@ -26,13 +19,14 @@ function plantMetaTag(content: string): void {
 
 /** Mounts a fresh banner into a detached root, driven with plain `m.render`
  *  (not `m.mount`'s RAF-scheduled auto-redraw) so the dismiss click's state
- *  change lands synchronously on the next explicit redraw. */
+ *  change lands synchronously on the next explicit redraw. The closure factory
+ *  is handed to mithril rather than called here, so the per-instance `hidden`
+ *  state is held the same way `App.ts` holds it. */
 function mountBanner(): { root: HTMLElement; redraw: () => void } {
   const root = document.createElement("div");
   document.body.appendChild(root);
-  const component = UpdateStalenessBanner();
   const redraw = (): void => {
-    m.render(root, m(component));
+    m.render(root, m(UpdateStalenessBanner));
   };
   redraw();
   return { root, redraw };
