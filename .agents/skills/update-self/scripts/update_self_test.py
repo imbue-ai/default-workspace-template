@@ -21,6 +21,8 @@ from typing import Callable, Sequence
 import pytest
 
 _MODULE_PATH = Path(__file__).with_name("update_self.py")
+# ``.agents/skills/update-self/scripts/`` -> the workspace root.
+_WORKSPACE_ROOT = _MODULE_PATH.parents[4]
 _spec = importlib.util.spec_from_file_location("update_self", _MODULE_PATH)
 assert _spec is not None and _spec.loader is not None
 update_self = importlib.util.module_from_spec(_spec)
@@ -1498,6 +1500,52 @@ def test_plan_apply_docs_only_needs_nothing() -> None:
     assert not plan.any
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        # The app's own manifest, and the root ones the whole workspace
+        # environment is resolved from.
+        "system/apps/system_interface/pyproject.toml",
+        "pyproject.toml",
+        "uv.lock",
+        # The vendored mngr is an editable install the backend imports, so its
+        # workspace root and each of its libraries move the same closure.
+        "system/vendor/mngr/pyproject.toml",
+        "system/vendor/mngr/libs/mngr/pyproject.toml",
+    ],
+)
+def test_plan_apply_counts_every_backend_manifest(path: str) -> None:
+    # Missing one of these means skipping `uv sync` and restarting the
+    # workspace against an environment resolved for the pre-merge tree.
+    assert update_self.plan_apply([path]).backend_manifest
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        # Not a manifest: a source file nested where one would be.
+        "system/vendor/mngr/libs/mngr/imbue/mngr/api/list.py",
+        # A pyproject one level deeper than a vendored library's own root.
+        "system/vendor/mngr/libs/mngr/imbue/pyproject.toml",
+    ],
+)
+def test_plan_apply_does_not_mistake_nested_paths_for_manifests(path: str) -> None:
+    assert not update_self.plan_apply([path]).backend_manifest
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "system/apps/system_interface/imbue/system_interface/server_test.py",
+        "system/apps/system_interface/imbue/system_interface/test_layout_pipeline.py",
+    ],
+)
+def test_plan_apply_ignores_backend_test_files(path: str) -> None:
+    # No running process imports these, so they cannot leave the live backend
+    # stale -- and bouncing the services agent for one blips the user's UI.
+    assert not update_self.plan_apply([path]).backend_src
+
+
 # --- apply: happy paths per change class ---------------------------------------
 
 
@@ -1800,6 +1848,95 @@ def test_failed_preflight_never_restarts_the_live_service(apply_repo: Path) -> N
     assert code == 2
     assert not runner.ran(*_RESTART)
     assert runner.ran("git", "checkout", _ROLLBACK, "--")
+
+
+def test_a_failed_preflight_reports_why_the_backend_did_not_boot(
+    apply_repo: Path, capsys
+) -> None:
+    # The whole point of the pre-flight is that the merged code never reaches
+    # the live service -- so its output is the only evidence of *why* it was
+    # rejected. Without it an exit 2 is indistinguishable from a slow boot, and
+    # whoever picks it up diagnoses a cause they cannot see.
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    spawner = _FakeSpawner(
+        output=(
+            "starting up\nDEBUG loading agents\nTraceback (most recent call last):\n"
+            "ModuleNotFoundError: No module named 'frontmatter'\n"
+        ),
+        exited=True,
+    )
+
+    code = _apply(
+        runner,
+        _FakeHttp(lambda url: 200 if _is_live(url) else None),
+        spawner,
+        apply_repo,
+    )
+
+    assert code == 2
+    # stderr gets all of it -- whoever ran the apply is looking right now.
+    reported = capsys.readouterr().err
+    assert "ModuleNotFoundError: No module named 'frontmatter'" in reported
+    assert "DEBUG loading agents" in reported
+    # The rollback commit carries only the line that names the cause, so the
+    # reason survives in git history after that terminal is gone without
+    # writing a backend's startup log into the repository.
+    commit = runner.argvs_starting("git", "commit")[0]
+    message = next(arg for arg in commit if "auto-reverted" in arg)
+    assert "ModuleNotFoundError: No module named 'frontmatter'" in message
+    assert "DEBUG loading agents" not in message
+    assert "starting up" not in message
+
+
+def test_a_failed_preflight_that_produced_no_output_says_so(
+    apply_repo: Path, capsys
+) -> None:
+    # A silent failure is itself a finding (the tool never got far enough to
+    # log), and must not read as "the output was dropped again".
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+
+    _apply(
+        runner,
+        _FakeHttp(lambda url: 200 if _is_live(url) else None),
+        _FakeSpawner(exited=True),
+        apply_repo,
+    )
+
+    assert "wrote nothing at all" in capsys.readouterr().err
+
+
+def test_preflight_output_is_tailed_to_the_interesting_end() -> None:
+    # A backend that logs its way to a crash would otherwise bury the traceback
+    # under startup chatter, so keep the end and say what was dropped.
+    limit = update_self._PREFLIGHT_OUTPUT_TAIL_LINES
+
+    tailed = update_self._tail(
+        "\n".join([f"chatter {index}" for index in range(limit + 10)] + ["the error"]),
+        limit,
+    )
+
+    assert tailed.splitlines()[-1] == "the error"
+    assert len(tailed.splitlines()) == limit + 1  # the omission notice
+    assert "11 earlier line(s) omitted" in tailed
+    assert "chatter 0" not in tailed
+
+
+def test_preflight_stops_polling_once_the_backend_has_died(apply_repo: Path) -> None:
+    # A backend that died on import will not become healthy, so the apply must
+    # not sit out the rest of the deadline before rolling back.
+    probes: list[str] = []
+
+    def record(url: str) -> int | None:
+        probes.append(url)
+        return 200 if _is_live(url) else None
+
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+
+    code = _apply(runner, _FakeHttp(record), _FakeSpawner(exited=True), apply_repo)
+
+    assert code == 2
+    # One pre-flight probe, not _PREFLIGHT_ATTEMPTS of them.
+    assert len([url for url in probes if not _is_live(url)]) == 1
 
 
 def test_failed_post_restart_health_rolls_back_and_restarts_into_known_good(
@@ -2562,6 +2699,83 @@ def test_only_the_hungry_forward_steps_are_expendable_and_recovery_is_not(
     assert recovery_npm, "recovery should have rebuilt without the expendable tag"
     recovery_uv = [c for c in unwrapped if c[:1] == ["uv"]]
     assert recovery_uv, "recovery should have refreshed the envs without the tag"
+
+
+def test_the_expendable_wrapper_hands_the_command_its_argv_intact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The real wrapper, not the test's stand-in: `exec "$@"` must not re-split
+    # or glob what it is handed. It is a shell, so an argument carrying a space
+    # or a metacharacter is exactly where this would go wrong -- and it would
+    # go wrong silently, as a build that ran against the wrong path.
+    bands = update_self._load_bands(_WORKSPACE_ROOT)
+    assert bands is not None, "the in-tree oom_priority package should be importable"
+    monkeypatch.setattr(update_self, "_BANDS", bands)
+
+    wrapped = update_self.as_expendable(["npm", "run", "build --out dir", "*"])
+
+    assert wrapped[:2] == ["sh", "-c"]
+    # argv is passed positionally, never interpolated into the script.
+    assert "build --out dir" not in wrapped[2]
+    assert wrapped[2].endswith('exec "$@"')
+    assert wrapped[3:] == ["sh", "npm", "run", "build --out dir", "*"]
+    # And the counterpart wrapper leaves the command exactly as it was.
+    assert update_self.keep_protected(wrapped) == wrapped
+
+
+def test_a_tree_without_the_bands_package_runs_unbanded_rather_than_failing(
+    tmp_path: Path,
+) -> None:
+    # The apply is staged and run against older trees by design, and one that
+    # predates `oom_priority` must degrade to no banding -- with `as_expendable`
+    # falling back to a plain passthrough rather than a wrapper naming a band
+    # that does not exist.
+    assert update_self._load_bands(tmp_path) is None
+    assert update_self.as_expendable(["npm", "ci"]) == ["npm", "ci"]
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    [
+        (["apply", "--merge-ref", "x"], "cwd"),
+        (["recover", "--if-stale", "--grace-seconds", "0"], "cwd"),
+        (["--repo-root", "/w", "apply", "--merge-ref", "x"], "/w"),
+        (["apply", "--repo-root", "/w", "--merge-ref", "x"], "/w"),
+        (["apply", "--repo-root=/w"], "/w"),
+        # Only the two motions that can be interrupted half-way through
+        # replacing what the workspace runs band themselves.
+        (["resolve-target", "--local-tags"], None),
+        (["classify-merge", "--target", "main"], None),
+        ([], None),
+        # A flag *value* that happens to spell a banded subcommand must not
+        # promote a read-only command into a banded one.
+        (["bootstrap-skill", "--ref", "apply"], None),
+    ],
+    ids=[
+        "apply",
+        "recover",
+        "repo-root-before",
+        "repo-root-after",
+        "repo-root-equals",
+        "resolve-target",
+        "classify-merge",
+        "no-args",
+        "apply-as-a-flag-value",
+    ],
+)
+def test_only_apply_and_recover_band_themselves(
+    argv: list[str], expected: str | None
+) -> None:
+    # Getting this wrong runs the apply unbanded, so a memory shed can kill the
+    # orchestrator mid-motion -- the half-applied state the marker and the
+    # snapshots exist to prevent. It is a crude parse because banding has to
+    # happen before argparse does anything.
+    target = update_self._shed_protection_target(argv)
+
+    if expected is None:
+        assert target is None
+    else:
+        assert target == (Path.cwd() if expected == "cwd" else Path(expected))
 
 
 # --- apply: the uv tool environments ------------------------------------------------
