@@ -136,7 +136,7 @@ def test_pending_shell_command_refuses() -> None:
     pane = FakePane([_SHELL_PENDING_PANE])
     with pytest.raises(DialogBlocked) as excinfo:
         PendingShellCommand().deal_with(pane)
-    assert "Enter to run it" in excinfo.value.message
+    assert "Enter in its terminal to run it" in excinfo.value.message
     assert pane.keys == []
 
 

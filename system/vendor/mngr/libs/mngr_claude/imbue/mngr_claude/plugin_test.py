@@ -2075,10 +2075,12 @@ def test_preflight_refuses_a_pending_shell_command(
     with pytest.raises(DialogDetectedError) as exc_info:
         agent._preflight_send_message(_TARGET)
     message = str(exc_info.value)
-    # Same recovery PR #397 gave: what state the agent is in, which keys resolve it, and the
-    # command that gets you there. Only the error's type changed, not what it tells the user.
+    # The actionable error the feature promises, and the same recovery PR #397 gave: what state
+    # the agent is in and which keys resolve it. The 'mngr connect' clause #397 also carried is
+    # deliberately gone -- it named a CLI command inside a string Minds renders in a modal, next
+    # to a terminal tab, and the sentence before it already says to use the terminal.
     assert "shell mode" in message and "Enter" in message and "Escape" in message
-    assert "mngr connect" in message
+    assert "mngr connect" not in message
 
     # A bare-`!` empty strand is NOT refused: mngr's own send is the only thing that can
     # produce it, so preflight backspaces out of it and carries on. It classifies as the

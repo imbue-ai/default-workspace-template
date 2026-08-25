@@ -410,7 +410,7 @@ class ModelSwitchWarning(MatchesPattern, Answerable):
         return "Yes, switch to"
 
     def get_message(self) -> str:
-        return "Claude is asking you to confirm a model switch. Accept it in the agent's terminal."
+        return "Claude is waiting for you to confirm a model switch. Answer it in the agent's terminal."
 
 
 class EffortSwitchWarning(MatchesPattern, Answerable):
@@ -426,7 +426,7 @@ class EffortSwitchWarning(MatchesPattern, Answerable):
         return "Yes, switch to"
 
     def get_message(self) -> str:
-        return "Claude is asking you to confirm an effort-level change. Accept it in the agent's terminal."
+        return "Claude is waiting for you to confirm an effort-level change. Answer it in the agent's terminal."
 
 
 class UsageLimitReached(MatchesPattern, Answerable):
@@ -443,7 +443,7 @@ class UsageLimitReached(MatchesPattern, Answerable):
         return "Stop and wait for limit to reset"
 
     def get_message(self) -> str:
-        return "Claude has hit its usage limit and is asking how to proceed. Answer it in the agent's terminal."
+        return "Claude has hit its usage limit and is waiting for you to choose how to proceed. Answer it in the agent's terminal."
 
 
 class LspPluginInstall(MatchesPattern, Answerable):
@@ -460,7 +460,7 @@ class LspPluginInstall(MatchesPattern, Answerable):
         return "No, and don't show plugin installation hints again"
 
     def get_message(self) -> str:
-        return "Claude is asking whether to install an LSP plugin. Answer it in the agent's terminal."
+        return "Claude is waiting for you to say whether to install an LSP plugin. Answer it in the agent's terminal."
 
 
 # ---------------------------------------------------------------------------
@@ -592,8 +592,8 @@ class PendingShellCommand(Blocking):
 
     def get_message(self) -> str:
         return (
-            "The agent is in shell mode with an unsubmitted command. Open its terminal and "
-            "press Enter to run it, or Escape to cancel it, then send again."
+            "The agent is in shell mode with an unsubmitted command. Press Enter in its terminal "
+            "to run it, or Escape to cancel it."
         )
 
     def matches(self, pane_content: str) -> bool:
@@ -622,7 +622,9 @@ class Unrecognized(Blocking):
         return "Unrecognized"
 
     def get_message(self) -> str:
-        return "Claude is waiting on something in its terminal. Open it to continue."
+        return (
+            "Claude is waiting on something in its terminal that mngr does not recognise. Open the terminal to see it."
+        )
 
     def matches(self, pane_content: str) -> bool:
         # Reached by classify() when nothing else matched and the input prompt is gone.

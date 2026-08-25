@@ -1548,19 +1548,20 @@ class DialogDetectedError(SendMessageError):
     because the description is interpolated into a sentence here -- passing a whole sentence as
     the description reads as one message wedged inside another.
 
-    The ``mngr connect`` line is appended either way. A dialog's own wording has to suit every
-    client (a Minds user opens a terminal tab and has no CLI), so it names no command; this
-    error is raised on the CLI path, where naming one is the difference between advice and an
-    instruction.
+    The reason is the dialog's own advice VERBATIM, with nothing wrapped around it. Every layer
+    below already names the failure -- ``SendMessageError`` prefixes "Failed to send message to
+    agent X", and a client puts that in a title of its own -- so a preamble here restated what
+    the reader had already been told twice, and the nickname wedged into it was internal
+    vocabulary leaking. The dialog says what is wrong and what clears it, once. How to REACH the
+    terminal is the client's to say: a Minds user has a tab, a CLI user has ``mngr connect``, and
+    a line naming one of those is wrong wherever the other is true.
     """
 
     def __init__(self, agent_name: str, dialog_description: str, recovery: str | None = None) -> None:
         self.dialog_description = dialog_description
         super().__init__(
             agent_name,
-            f"Something is holding the agent's input ({dialog_description} detected in terminal). "
-            + (f"{recovery} " if recovery else "")
-            + f"Connect with 'mngr connect {agent_name}' to resolve it.",
+            recovery or f"A dialog ({dialog_description}) is open in the agent's terminal. Clear it there.",
             # Something is holding the input, which a person can clear in the terminal -- so a
             # client may offer to try again, unlike a failure where there is nothing to talk to.
             SendFailureKind.INPUT_BLOCKED,
@@ -2574,7 +2575,11 @@ class ClaudeAgent(
         something visible in the pane, so no amount of pane reading would find it.
         """
         if self._check_file_exists(self._get_agent_dir() / PERMISSIONS_WAITING_FILENAME):
-            raise DialogDetectedError(str(self.name), "permission dialog")
+            raise DialogDetectedError(
+                str(self.name),
+                "permission dialog",
+                "Claude is waiting for you to answer a permission request. Answer it in the agent's terminal.",
+            )
         self._deal_with_blocking_input(tmux_target)
 
     def _dialog_pane(self, tmux_target: TmuxWindowTarget) -> "_ClaudeDialogPane":
