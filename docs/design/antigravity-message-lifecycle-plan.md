@@ -228,7 +228,7 @@ A conservation storm test, with **interrupt-during-flush as a required case**.
 One thing to size honestly: the existing storms drive the real executors and
 simulate the harness by replaying the real bytes the executor wrote — claude writes
 JSONL, pi writes `pi_inbox`, codex writes a control file. **agy's executor writes
-tmux keystrokes**, so there are no bytes to replay and the only durable artifact is
+tmux keystrokes**, so there are no bytes to replay and the only durable record is
 a protobuf SQLite store agy itself writes. agy's storm therefore needs a different
 simulation seam than the other three. This is the largest unestimated item in the
 plan.

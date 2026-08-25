@@ -50,6 +50,10 @@ from imbue.system_interface.harnesses.claude.tap import ClaudeTapStatus
 from imbue.system_interface.harnesses.claude.tap import execute_claude_shoulder_tap
 from imbue.system_interface.harnesses.claude.tap import execute_claude_stop_to_composer
 from imbue.system_interface.harnesses.claude.watcher import ClaudeSessionWatcher
+from imbue.system_interface.activity_state import ACTIVE_MARKER_FILENAME
+from imbue.system_interface.harnesses.antigravity.queue_tracker import AntigravityQueueTracker
+from imbue.system_interface.harnesses.antigravity.tap import AntigravityAtomicShoulderTap
+from imbue.system_interface.harnesses.antigravity.tap import AntigravityInterruptToComposer
 from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.interrupt import MESSAGE_LOCK_FILENAME
 from imbue.system_interface.harnesses.interrupt import restart_drain
@@ -825,3 +829,204 @@ def test_claude_conservation_storm_tap_and_stop_executors(tmp_path: Path) -> Non
         assert on_disk_user_turns.get(text, 0) == 0, (
             f"{text!r} was returned/killed yet appears as a delivered user turn\n{ledger.replay_note()}"
         )
+
+
+# =============================================================================
+# antigravity: the stop + tap executors over the REAL held-queue tracker
+# =============================================================================
+#
+# agy is the only harness whose queue is OURS: it parks mid-turn input invisibly inside its
+# TUI, so we never let it park anything and hold the messages backend-side instead (contract
+# Part C). That inverts what the storm has to simulate. The other storms replay the real bytes
+# an executor wrote, because their harness consumes a file. agy's executor writes tmux
+# keystrokes, which leave no bytes -- so the scripted world here plays agy itself: it owns the
+# ``active`` marker, and "commits" a delivered block exactly as agy would, merging the whole
+# block into ONE turn.
+
+
+class _AgyWorld:
+    """The scripted agy: the busy marker, and the turns it commits."""
+
+    def __init__(self, agent_state_dir: Path, ledger: _Ledger) -> None:
+        self.dir = agent_state_dir
+        self.dir.mkdir(parents=True, exist_ok=True)
+        self.ledger = ledger
+        self.queue = AntigravityQueueTracker.build(self.dir / "agy_outbox.jsonl", "storm-session")
+        self._counter = 0
+
+    # --- the simulated agy ---------------------------------------------------------------
+
+    @property
+    def marker(self) -> Path:
+        return self.dir / ACTIVE_MARKER_FILENAME
+
+    def begin_turn(self) -> None:
+        self.marker.write_text("")
+
+    def end_turn(self) -> None:
+        self.marker.unlink(missing_ok=True)
+
+    def is_busy(self) -> bool:
+        return self.marker.exists()
+
+    def commit(self, block: str) -> None:
+        """agy receives a block and commits it as ONE turn -- every line is delivered."""
+        for text in _block_texts(block):
+            self.ledger.delivered.append(text)
+
+    # --- the ops -------------------------------------------------------------------------
+
+    def new_text(self) -> str:
+        self._counter += 1
+        return f"agy-msg-{self._counter}"
+
+    def send(self, text: str) -> None:
+        """The real hold-vs-type rule: hold while a turn is open, deliver straight through when not."""
+        self.ledger.accepted.append(text)
+        if self.is_busy():
+            self.queue.enqueue(text, _iso_timestamp(time.time()))
+        else:
+            self.begin_turn()
+            self.commit(text)
+
+    def flush(self) -> None:
+        """The idle flush: deliver the whole held block as one turn."""
+        block, claimed = self.queue.begin_flush()
+        if not claimed:
+            return
+        self.begin_turn()
+        self.commit(block)
+        self.queue.finish_flush(claimed, is_delivered=True)
+
+
+class _AgyStormWatcher(_StormWatcherBase):
+    """Exposes the REAL tracker through the queue surface the executors read."""
+
+    def __init__(self, world: _AgyWorld) -> None:
+        self._world = world
+
+    def get_queued_messages(self) -> list[dict[str, Any]]:
+        return self._world.queue.snapshot()
+
+    def get_queued_block(self) -> str:
+        return self._world.queue.concatenated_block()
+
+    def clear_queue(self) -> None:
+        self._world.queue.clear()
+
+    def get_subagent_metadata(self, subagent_session_id: str) -> dict[str, str] | None:
+        return None
+
+    def is_main_session_event(self, event: dict[str, Any]) -> bool:
+        return True
+
+
+def _agy_agent_info(agent_state_dir: Path) -> AgentInfo:
+    return AgentInfo(
+        id="agent-agy-storm",
+        name="Agy-storm",
+        harness=HarnessType.ANTIGRAVITY,
+        agent_state_dir=agent_state_dir,
+    )
+
+
+def _run_agy_stop(world: _AgyWorld, watcher: _AgyStormWatcher, agent_info: AgentInfo, send_mode: str) -> None:
+    """Drive the REAL stop executor and account for every message in its returned block."""
+    in_flight_text = ""
+    in_flight: _InFlightSend | None = None
+    if send_mode != _SEND_MODE_NONE:
+        in_flight_text = world.new_text()
+        world.ledger.accepted.append(in_flight_text)
+        hold = STOP_LOCK_WAIT_SECONDS + 0.5 if send_mode == _SEND_MODE_SLOW else 0.05
+        if send_mode == _SEND_MODE_SLOW:
+            # Staged slow-send corner (contract E2): stop hammers past the bounded wait, so
+            # this message is allowed to die -- and ONLY because the storm staged it.
+            world.ledger.killable.add(in_flight_text)
+        in_flight = _InFlightSend(world.dir, hold, lambda: None)
+
+    def restart_process() -> None:
+        world.end_turn()
+        if send_mode == _SEND_MODE_SLOW and in_flight_text:
+            world.ledger.killed.append(in_flight_text)
+
+    def press_chord() -> bool:
+        world.end_turn()  # a single ctrl+c ends agy's turn; its statusline drops the marker
+        return True
+
+    executor = AntigravityInterruptToComposer.build(agent_info)
+    block = executor.drain_to_composer(
+        watcher,
+        restart_process,
+        lambda: None,
+        press_chord,
+        lambda: in_flight_text if (send_mode == _SEND_MODE_FAST and in_flight_text) else "",
+    )
+    for text in _block_texts(block):
+        world.ledger.returned.append(text)
+    if in_flight is not None:
+        in_flight.join()
+    # A fast in-flight send that stop did NOT return still parked, so agy committed it.
+    if send_mode == _SEND_MODE_FAST and in_flight_text and in_flight_text not in world.ledger.returned:
+        world.ledger.delivered.append(in_flight_text)
+    world.end_turn()
+
+
+def _run_agy_tap(world: _AgyWorld, watcher: _AgyStormWatcher, agent_info: AgentInfo) -> None:
+    """Drive the REAL tap executor: it must DELIVER the block, never return it."""
+    if not world.is_busy():
+        world.begin_turn()
+    executor = AntigravityAtomicShoulderTap.build(agent_info)
+    outcome = executor.tap(watcher, lambda: (world.end_turn(), True)[1], _tap_send(world))
+    assert outcome.status != "chord_failed", world.ledger.replay_note()
+    world.end_turn()
+
+
+def _tap_send(world: _AgyWorld) -> Callable[[str], bool]:
+    def send_recovery(block: str) -> bool:
+        world.begin_turn()
+        world.commit(block)
+        return True
+
+    return send_recovery
+
+
+def test_antigravity_conservation_storm_stop_and_tap_executors(tmp_path: Path) -> None:
+    """Seeded rounds of interleaved agy sends / stops / taps under real lock contention.
+
+    The property is the same as the other storms (contract A1): every accepted message ends in
+    exactly one terminal state. agy's specific risk is its MERGING -- one committed turn
+    discharges the whole held block -- so a bug here shows up as duplicates (a block counted
+    twice) or losses (a block cleared without being committed), which the ledger catches.
+    """
+    ledger = _Ledger("antigravity")
+    world = _AgyWorld(tmp_path / "agy", ledger)
+    watcher = _AgyStormWatcher(world)
+    agent_info = _agy_agent_info(world.dir)
+    for round_index in range(_ROUND_COUNT):
+        rng = random.Random(_BASE_SEED + round_index)
+        ledger.log(f"round {round_index}:")
+        for op_index in range(rng.randint(2, 4)):
+            if round_index in _STOP_HAMMER_ROUNDS and op_index == 0:
+                op = "stop:" + _SEND_MODE_SLOW
+            else:
+                op = rng.choice(("send", "send", "busy_send", "tap", "flush",
+                                 "stop:" + _SEND_MODE_NONE, "stop:" + _SEND_MODE_FAST))
+            ledger.log(f"  {op}")
+            if op == "send":
+                world.send(world.new_text())
+            elif op == "busy_send":
+                # The case the whole design exists for: a send while a turn is open.
+                world.begin_turn()
+                world.send(world.new_text())
+            elif op == "tap":
+                _run_agy_tap(world, watcher, agent_info)
+            elif op == "flush":
+                world.flush()
+            elif op.startswith("stop:"):
+                _run_agy_stop(world, watcher, agent_info, op.split(":", 1)[1])
+            else:
+                pytest.fail(f"unknown agy op {op}")
+        # Settle: agy finishes its turn, and anything still held drains as one merged turn.
+        world.end_turn()
+        world.flush()
+        ledger.verify()

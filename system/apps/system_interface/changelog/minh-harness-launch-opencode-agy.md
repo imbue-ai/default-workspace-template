@@ -27,3 +27,5 @@ Agy chats show which model they are running. The bar is display-only for Agy -- 
 Messages sent to a busy Agy agent now show up as queued instead of being swallowed. Agy only accepts a new message once it has fully finished a turn, and it silently merges anything typed at it mid-turn into a single block -- so a second message would arrive but leave its bubble stuck on "Sending..." forever. The workspace now holds those messages itself and delivers them the moment Agy is free, so what the chat shows matches what Agy actually has.
 
 Stop and shoulder tap work on Agy. Stop ends the current turn and puts everything that had not been sent yet back in the composer, in order, without restarting the agent. Shoulder tap ends the turn and sends the waiting messages straight away instead of waiting for Agy to finish.
+
+The message lifecycle for Agy is covered by the same conservation test the other harnesses have: randomised rounds of sending, stopping and tapping, checking after every round that each message ended up in exactly one place -- delivered, or back in the composer -- never lost and never duplicated.
