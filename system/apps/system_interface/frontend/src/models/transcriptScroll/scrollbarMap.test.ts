@@ -48,11 +48,11 @@ describe("resolveTrackFraction", () => {
     expect(resolveTrackFraction(mapping, 0.15)).toEqual({ kind: "virtual-index", index: 150 });
   });
 
-  it("resolves a physical-region position to exact content pixels", () => {
-    // The physical band is 30%..70%; halfway through it is half the content height.
+  it("resolves a physical-region position to a fraction through the region", () => {
+    // The physical band is 30%..70%; halfway through it is halfway through the content.
     const target = resolveTrackFraction(mapping, 0.5);
-    expect(target.kind).toBe("physical-px");
-    expect(target.kind === "physical-px" && target.contentTopPx).toBeCloseTo(7500, 6);
+    expect(target.kind).toBe("physical-fraction");
+    expect(target.kind === "physical-fraction" && target.fraction).toBeCloseTo(0.5, 6);
   });
 
   it("maps 70% of an all-virtual track to the event 70% of the way through", () => {
@@ -62,7 +62,7 @@ describe("resolveTrackFraction", () => {
 
   it("is continuous at segment boundaries", () => {
     const atPhysicalStart = resolveTrackFraction(mapping, 0.3);
-    expect(atPhysicalStart).toEqual({ kind: "physical-px", contentTopPx: 0 });
+    expect(atPhysicalStart).toEqual({ kind: "physical-fraction", fraction: 0 });
     const justBelow = resolveTrackFraction(mapping, 0.2999);
     expect(justBelow.kind).toBe("virtual-index");
   });

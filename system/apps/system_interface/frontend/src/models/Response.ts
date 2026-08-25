@@ -192,8 +192,6 @@ interface EventsResponse {
   total?: number;
 }
 
-const BACKFILL_PAGE_SIZE = 50;
-
 // Hard cap on every transcript fetch. A request that never settles (e.g. a
 // proxy holding the connection through a tunnel outage) would otherwise pin
 // the panel's single-fetch-at-a-time guard forever, freezing all paging until
@@ -206,14 +204,10 @@ function applyEventsRequestTimeout(xhr: XMLHttpRequest): XMLHttpRequest {
   return xhr;
 }
 
-// Upper bound on events held client-side per agent. Far above any viewport
-// window; bounds JS memory for an arbitrarily long conversation while leaving
-// generous scrollback resident. Eviction (see evictOldEvents) only trims the
-// oldest events and only when the caller is following the live tail.
-export const MAX_HELD_EVENTS = 1500;
-// Target size to trim down to when evicting, so eviction runs in batches rather
-// than on every appended event once at the cap.
-export const EVICT_TARGET_EVENTS = 1000;
+// Client-side memory for a transcript is bounded by the scroll engine's fill
+// planner (see models/transcriptScroll/fillPlanner), which drives loading up to
+// its physical cap and issues explicit evictions beyond it; the store itself
+// imposes no cap.
 
 // All per-agent transcript state is owned by one TranscriptStore instance per
 // agent (see storeByAgent below). The held events are a single contiguous window
@@ -397,25 +391,30 @@ class TranscriptStore {
   }
 
   /**
-   * Drop the oldest events beyond EVICT_TARGET_EVENTS to bound client memory,
-   * returning the number removed (0 if under the cap). The window start advances by
-   * that count, so the dropped history (still on the server) is re-fetched via
-   * backfill on a later scroll-up. Callers evict only while following the live tail,
-   * since removing already-rendered older rows would shift a scrolled-up viewport.
+   * Drop `count` events from one end of the window (the scroll engine's fill
+   * planner decides which side and how many). Evicting older events advances the
+   * window start, so the dropped history (still on the server) reads as
+   * backfillable again; evicting newer events pulls the window off the live tail,
+   * so it reads as forward-pageable.
    */
-  evict(): number {
+  evict(side: "older" | "newer", count: number): number {
     let removeCount = 0;
     this.#commit(() => {
-      if (this.#events.length <= MAX_HELD_EVENTS) {
+      removeCount = Math.min(Math.max(0, count), this.#events.length);
+      if (removeCount === 0) {
         return false;
       }
-      removeCount = this.#events.length - EVICT_TARGET_EVENTS;
-      const removed = this.#events.slice(0, removeCount);
+      const removed =
+        side === "older" ? this.#events.slice(0, removeCount) : this.#events.slice(this.#events.length - removeCount);
       for (const event of removed) {
         this.#byId.delete(event.event_id);
       }
-      this.#events = this.#events.slice(removeCount);
-      this.#firstOffset += removeCount;
+      if (side === "older") {
+        this.#events = this.#events.slice(removeCount);
+        this.#firstOffset += removeCount;
+      } else {
+        this.#events = this.#events.slice(0, this.#events.length - removeCount);
+      }
       return true;
     });
     return removeCount;
@@ -617,8 +616,12 @@ export function appendForwardEvents(agentId: string, newerEvents: TranscriptEven
   }
 }
 
-export function evictOldEvents(agentId: string): number {
-  return storeFor(agentId).evict();
+export function evictEvents(agentId: string, side: "older" | "newer", count: number): number {
+  const removed = storeFor(agentId).evict(side, count);
+  if (removed > 0) {
+    m.redraw();
+  }
+  return removed;
 }
 
 function placeWindow(agentId: string, result: EventsResponse): void {
@@ -678,12 +681,12 @@ export async function fetchEvents(agentId: string): Promise<TranscriptEvent[]> {
 
 /** Jump the window to an arbitrary global offset in one request (e.g. a scrollbar
  *  drag far from the loaded window), replacing the held events. */
-export async function fetchWindowAtOffset(agentId: string, offset: number): Promise<void> {
+export async function fetchWindowAtOffset(agentId: string, offset: number, limit: number): Promise<void> {
   try {
     const result = await m.request<EventsResponse>({
       method: "GET",
       url: apiUrl("/api/agents/:agentId/events"),
-      params: { agentId, offset: String(Math.max(0, offset)), limit: String(BACKFILL_PAGE_SIZE) },
+      params: { agentId, offset: String(Math.max(0, offset)), limit: String(limit) },
       config: applyEventsRequestTimeout,
     });
     placeWindow(agentId, result);
@@ -692,7 +695,7 @@ export async function fetchWindowAtOffset(agentId: string, offset: number): Prom
   }
 }
 
-export async function fetchBackfillEvents(agentId: string): Promise<void> {
+export async function fetchBackfillEvents(agentId: string, limit: number): Promise<void> {
   if (!hasMoreBefore(agentId)) {
     return;
   }
@@ -705,7 +708,7 @@ export async function fetchBackfillEvents(agentId: string): Promise<void> {
     const result = await m.request<EventsResponse>({
       method: "GET",
       url: apiUrl("/api/agents/:agentId/events"),
-      params: { agentId, before: firstEventId, limit: String(BACKFILL_PAGE_SIZE) },
+      params: { agentId, before: firstEventId, limit: String(limit) },
       config: applyEventsRequestTimeout,
     });
     // Staleness fence: if the window changed while this page was in flight
@@ -731,7 +734,7 @@ export async function fetchBackfillEvents(agentId: string): Promise<void> {
   }
 }
 
-export async function fetchForwardEvents(agentId: string): Promise<void> {
+export async function fetchForwardEvents(agentId: string, limit: number): Promise<void> {
   if (!hasMoreAfter(agentId)) {
     return;
   }
@@ -744,7 +747,7 @@ export async function fetchForwardEvents(agentId: string): Promise<void> {
     const result = await m.request<EventsResponse>({
       method: "GET",
       url: apiUrl("/api/agents/:agentId/events"),
-      params: { agentId, after: lastEventId, limit: String(BACKFILL_PAGE_SIZE) },
+      params: { agentId, after: lastEventId, limit: String(limit) },
       config: applyEventsRequestTimeout,
     });
     // Staleness fence, mirroring fetchBackfillEvents: discard the page if the
@@ -775,11 +778,28 @@ export function mintMessageId(): string {
     : `msg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
+// Subscribers told when the user submits a message for an agent. The scroll
+// engine snaps back to following the tail on send (MESSAGE_SENT transition);
+// routing the signal through here covers every send path without the composer
+// knowing about scrolling.
+const messageSentListeners = new Set<(agentId: string) => void>();
+
+export function addMessageSentListener(listener: (agentId: string) => void): void {
+  messageSentListeners.add(listener);
+}
+
+export function removeMessageSentListener(listener: (agentId: string) => void): void {
+  messageSentListeners.delete(listener);
+}
+
 export async function sendMessage(agentId: string, message: string, messageId?: string): Promise<string> {
   const trimmed = message.trim();
   const id = messageId ?? mintMessageId();
   if (!trimmed) {
     return id;
+  }
+  for (const listener of messageSentListeners) {
+    listener(agentId);
   }
 
   // The client identity rides along so the server can record which browser
