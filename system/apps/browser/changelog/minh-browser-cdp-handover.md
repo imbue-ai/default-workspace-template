@@ -33,10 +33,13 @@ SSRF guard on `act_navigate`) is gone -- `Runtime.evaluate` cannot be filtered, 
 be preserved, and it never protected the key from an agent that can already `cat` it. Recorded
 here deliberately rather than discovered later.
 
-**Extensions are now pinned.** browser-use downloaded three extensions from the Chrome Web Store
-at runtime, unpinned, into the browser holding the user's real logins. uBlock Origin Lite and
-"I still don't care about cookies" are now vendored and version-pinned in the Fortress env.d
-unit; "Force Background Tab" is dropped (it fought the pane's active-tab follow).
+**Extensions move from a dependency's runtime download to our own converge step.** browser-use
+fetched three from the Chrome Web Store on a user's FIRST browser launch, into the browser
+holding their real logins, chosen by the dependency. uBlock Origin Lite and "I still don't care
+about cookies" are now fetched once at converge and chosen here; "Force Background Tab" is
+dropped (it fought the pane's active-tab follow). Not version-pinned: the CRX endpoint only
+serves the current build for an id, so a pin could only be a post-hoc mismatch log. What this
+fixes is the timing and the ownership, not the version.
 
 **Pre-existing bugs fixed along the way.**
 
