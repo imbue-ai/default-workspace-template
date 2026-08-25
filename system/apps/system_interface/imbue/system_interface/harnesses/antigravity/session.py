@@ -18,12 +18,12 @@ from typing import Any
 
 from loguru import logger
 
-from imbue.system_interface.activity_state import ACTIVE_MARKER_FILENAME
 from imbue.system_interface.harnesses.antigravity.model import derived_option
 from imbue.system_interface.harnesses.antigravity.queue_tracker import AntigravityQueueTracker
 from imbue.system_interface.harnesses.antigravity.queue_tracker import OUTBOX_FILENAME
 from imbue.system_interface.harnesses.antigravity.queue_tracker import get_tracker
 from imbue.system_interface.harnesses.antigravity.queue_tracker import session_token
+from imbue.system_interface.harnesses.antigravity.turn_state import get_turn_state
 from imbue.system_interface.harnesses.interrupt import try_hold_message_lock
 from imbue.system_interface.harnesses.model import ModelOption
 from imbue.system_interface.harnesses.model import match_option
@@ -73,7 +73,12 @@ class AntigravityHarnessSession(FileHarnessSession):
         the deadlock described below.
         """
         with try_hold_message_lock(self._deps.state_dir, wait_seconds=0.0) as is_lock_held:
-            is_busy = (not is_lock_held) or (self._deps.state_dir / ACTIVE_MARKER_FILENAME).exists()
+            # NOT the marker alone: agy removes it for the whole of every tool call, so a
+            # marker-only check reads "idle" mid-chain and types into a live turn -- the
+            # swallow this whole design exists to prevent. See turn_state.
+            is_busy = (not is_lock_held) or get_turn_state(self._deps.state_dir.name).is_turn_open(
+                self._deps.state_dir
+            )
         # The delegation MUST happen after the lock is released. mngr's own send takes this
         # same message.lock, and flock is per open-file-description, so a second exclusive
         # acquire from this process blocks forever -- delegating while still holding it

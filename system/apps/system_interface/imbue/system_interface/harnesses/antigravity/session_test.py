@@ -12,6 +12,8 @@ from imbue.system_interface.harnesses.antigravity.queue_tracker import drop_trac
 from imbue.system_interface.harnesses.antigravity.queue_tracker import get_tracker
 from imbue.system_interface.harnesses.antigravity.queue_tracker import session_token
 from imbue.system_interface.harnesses.antigravity.session import AntigravityHarnessSession
+from imbue.system_interface.harnesses.antigravity.turn_state import drop_turn_state
+from imbue.system_interface.harnesses.antigravity.turn_state import get_turn_state
 from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.interrupt import MESSAGE_LOCK_FILENAME
 from imbue.system_interface.harnesses.session import SendOutcome
@@ -22,6 +24,7 @@ def _session(state_dir: Path, sent: list[str]) -> AntigravityHarnessSession:
     state_dir.mkdir(parents=True, exist_ok=True)
     # Each test gets a fresh queue for this agent id.
     drop_tracker(state_dir.name)
+    drop_turn_state(state_dir.name)
     unused: Any = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unused"))
     return AntigravityHarnessSession.build(
         SessionDeps(
@@ -133,3 +136,23 @@ def test_in_flight_entries_are_not_returned_twice(tmp_path: Path) -> None:
     assert block == "beep"
     assert tracker.concatenated_block() == "beep", "a claimed entry is still in the queue"
     assert session.in_flight_block() == "", "would be concatenated with the queued block"
+
+
+def test_a_tool_chain_holds_the_message_even_with_no_marker(tmp_path: Path) -> None:
+    """The production swallow, as a regression.
+
+    Mid-tool-chain agy removes its ``active`` marker (its statusLine knows only idle and
+    thinking). The send path used to read that as idle and type the message into the running
+    turn, where agy merged it and it never got a turn of its own -- contract A1a.
+    """
+    sent: list[str] = []
+    state_dir = tmp_path / "agent-tool-chain"
+    state_dir.mkdir(parents=True)
+    session = _session(state_dir, sent)
+    # No marker on disk: exactly what a tool call looks like from outside.
+    assert not (state_dir / ACTIVE_MARKER_FILENAME).exists()
+    get_turn_state(state_dir.name).publish(is_open_by_tail=True)
+
+    assert session.send("mid-chain", "m1") is SendOutcome.OK
+    assert sent == [], "a message must NOT be typed into a running tool chain"
+    assert [entry["content"] for entry in session.switch_queue_snapshot()] == ["mid-chain"]

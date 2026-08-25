@@ -11,7 +11,7 @@ from typing import Any
 from typing import ClassVar
 
 from imbue.system_interface.activity_state import ActivityState
-from imbue.system_interface.activity_state import resolve_is_agent_running
+from imbue.system_interface.activity_state import is_lifecycle_dead
 from imbue.system_interface.harnesses.activity import HarnessActivityTracker
 from imbue.system_interface.harnesses.antigravity.activity_state import derive
 
@@ -56,7 +56,12 @@ class AntigravityActivityTracker(HarnessActivityTracker):
         # inputs are passed even though the shared base has already applied that gate, so the
         # two harnesses' derivations stay literally comparable.
         return derive(
-            is_agent_running=resolve_is_agent_running(lifecycle_state, is_active_marker_present),
+            # NOT resolve_is_agent_running: that folds the marker into liveness, and agy's
+            # marker is absent for the whole of every tool call (its statusLine reports only
+            # idle/thinking). Passing the two apart lets the ladder keep the marker as a
+            # supporting rung instead of an override -- see activity_state.derive.
+            is_agent_alive=not is_lifecycle_dead(lifecycle_state),
+            is_active_marker_present=is_active_marker_present,
             has_pending_tool_use=self._has_pending_tool_use,
             tail_event_type=self._last_event_type,
             tail_is_final_answer=tail_is_final,

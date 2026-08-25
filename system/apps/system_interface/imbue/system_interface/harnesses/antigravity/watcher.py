@@ -38,6 +38,10 @@ from imbue.system_interface.harnesses.antigravity.queue_tracker import drop_trac
 from imbue.system_interface.harnesses.antigravity.queue_tracker import get_tracker
 from imbue.system_interface.harnesses.antigravity.queue_tracker import session_token
 from imbue.system_interface.harnesses.antigravity.session_parser import parse_step
+from imbue.system_interface.harnesses.antigravity.turn_state import TurnState
+from imbue.system_interface.harnesses.antigravity.turn_state import drop_turn_state
+from imbue.system_interface.harnesses.antigravity.turn_state import get_turn_state
+from imbue.system_interface.harnesses.antigravity.turn_state import is_turn_open_by_tail
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.harnesses.session_watcher import OnEventsCallback
 from imbue.system_interface.harnesses.session_watcher import QueueSnapshotCallback
@@ -74,6 +78,7 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
     # The queue we hold on agy's behalf, its delivery capabilities, and the worker that
     # performs the delivery. See docs/design/antigravity-message-lifecycle-plan.md.
     _queue: AntigravityQueueTracker
+    _turn_state: TurnState
     _queue_snapshot_callback: Any
     _flush_send: Any
     _flush_is_alive: Any
@@ -100,6 +105,7 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
         # written under a different token belongs to a session that has since restarted, and
         # the contract says such a queue is gone -- never replayed, never delivered.
         self._queue = get_tracker(self._agent_id, self._state_dir / OUTBOX_FILENAME, session_token(self._state_dir))
+        self._turn_state = get_turn_state(self._agent_id)
         self._queue_snapshot_callback = None
         self._flush_send = None
         self._flush_is_alive = None
@@ -174,6 +180,7 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
             self._flush_thread.join(timeout=10.0)
             self._flush_thread = None
         drop_tracker(self._agent_id)
+        drop_turn_state(self._agent_id)
 
     def _run(self) -> None:
         while not self._stopping.is_set():
@@ -183,6 +190,9 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
                 return
             with self._lock:
                 pending = self._collect_new_events()
+                # Publish inside the lock, from the same events the emit used: the send
+                # decision and the dot must never read different transcripts.
+                self._turn_state.publish(is_open_by_tail=is_turn_open_by_tail(self._events))
             if pending:
                 self._on_events(self._agent_id, pending)
 

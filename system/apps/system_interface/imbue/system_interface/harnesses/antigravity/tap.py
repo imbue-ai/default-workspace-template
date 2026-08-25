@@ -22,6 +22,7 @@ from loguru import logger
 
 from imbue.system_interface.activity_state import ACTIVE_MARKER_FILENAME
 from imbue.system_interface.agent_discovery import AgentInfo
+from imbue.system_interface.harnesses.antigravity.turn_state import get_turn_state
 from imbue.system_interface.harnesses.interrupt import InterruptToComposer
 from imbue.system_interface.harnesses.interrupt import PressChord
 from imbue.system_interface.harnesses.interrupt import RestartProcess
@@ -44,9 +45,19 @@ _SEND_IN_FLIGHT: Final[str] = "send_in_flight"
 _FLUSHED: Final[str] = "flushed"
 
 
-def _is_turn_open(agent_info: AgentInfo) -> bool:
-    """Whether agy is mid-turn, per the marker its own statusline maintains."""
+def _is_marker_present(agent_info: AgentInfo) -> bool:
+    """agy's raw busy marker: true only while agy reports ``thinking``."""
     return (agent_info.agent_state_dir / ACTIVE_MARKER_FILENAME).exists()
+
+
+def _is_turn_open(agent_info: AgentInfo) -> bool:
+    """Whether agy is mid-turn, per the transcript first and the marker second.
+
+    The marker alone is absent throughout every tool call (agy reports only idle/thinking),
+    which would make a stop mid-chain skip the cancel key entirely and a tap report
+    "no open turn" while a tool chain runs. See turn_state.
+    """
+    return get_turn_state(agent_info.agent_state_dir.name).is_turn_open(agent_info.agent_state_dir)
 
 
 def _wait_for_turn_to_end(agent_info: AgentInfo, *, sleep: Callable[[float], None] = time.sleep) -> bool:
@@ -56,13 +67,20 @@ def _wait_for_turn_to_end(agent_info: AgentInfo, *, sleep: Callable[[float], Non
     interrupt and has to distinguish "aborted" from "turn ended" via transcript sentinels.
     agy's statusline clears the marker itself on the idle edge, so the marker going away IS
     the confirmation.
+
+    Deliberately the MARKER, not :func:`_is_turn_open`. The two ask different questions and
+    only look alike. "Should I act on this turn?" must survive agy dropping the marker
+    mid-tool-chain, so it consults the transcript. "Did the cancel I just sent land?" wants
+    exactly the marker's idle edge -- and if a cancelled tool chain leaves its last tool call
+    unmatched forever, a transcript-based wait here would never be satisfied and every
+    mid-chain stop would time out into the restart hammer.
     """
     deadline = time.monotonic() + _ABORT_DEADLINE_SECONDS
     while time.monotonic() < deadline:
-        if not _is_turn_open(agent_info):
+        if not _is_marker_present(agent_info):
             return True
         sleep(_ABORT_POLL_SECONDS)
-    return not _is_turn_open(agent_info)
+    return not _is_marker_present(agent_info)
 
 
 class AntigravityInterruptToComposer(InterruptToComposer):
