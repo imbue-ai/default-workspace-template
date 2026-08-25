@@ -102,6 +102,12 @@ testpaths = ["."]
 # enumerate the dot-directories to skip explicitly, so .agents is still recursed into.
 norecursedirs = [
     "*.egg",
+    # Runtime scratch, never part of the suite. Flow-internal state under
+    # data/.tasks/ can stage copies of skill test files (update-self stages
+    # update_self_test.py under data/.tasks/update-self/skill-at-target/), and
+    # collecting one alongside the in-tree copy kills a bare `uv run pytest`
+    # with an import-file basename collision.
+    "data",
     ".git",
     ".claude",
     ".github",
