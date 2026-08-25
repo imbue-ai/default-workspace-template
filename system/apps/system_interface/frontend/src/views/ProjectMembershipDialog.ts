@@ -9,14 +9,14 @@
  * offered: it is the home, lists the whole machine, and an object leaves it
  * only by being deleted.
  *
- * Shell and class names follow the shared `.custom-url-dialog` markup, with
- * the shared backdrop-mousedown dismissal and a document-level Escape (as
- * ProjectSettingsModal does, and for the same reason: focus sits on a
+ * Built on the shared Modal shell (views/Modal.ts): its backdrop-mousedown
+ * dismissal, and a document-level Escape wired through the shell's `overlay`
+ * hook (as ProjectSettingsModal does, and for the same reason: focus sits on a
  * checkbox row as easily as anywhere).
  */
 
 import m from "mithril";
-import { backdropDismissAttrs } from "./modalBackdrop";
+import { Modal } from "./Modal";
 import type { ProjectInfo } from "../models/Projects";
 import { squiggleMarkup } from "./squiggles";
 
@@ -93,45 +93,41 @@ export function ProjectMembershipDialog(): m.Component<ProjectMembershipDialogAt
       latestAttrs = attrs;
 
       return m(
-        "div.custom-url-dialog-overlay",
+        Modal,
         {
-          oncreate() {
-            document.addEventListener("keydown", handleKeydown);
+          onDismiss: attrs.onCancel,
+          overlay: {
+            oncreate() {
+              document.addEventListener("keydown", handleKeydown);
+            },
+            onremove() {
+              document.removeEventListener("keydown", handleKeydown);
+            },
           },
-          onremove() {
-            document.removeEventListener("keydown", handleKeydown);
-          },
-          ...backdropDismissAttrs(attrs.onCancel),
+          title: "Add to project",
+          actions: [
+            m("button.btn.btn--secondary", { onclick: attrs.onCancel }, "Cancel"),
+            m(
+              "button.btn.btn--primary",
+              {
+                disabled: selected.size === 0,
+                onclick() {
+                  attrs.onConfirm([...selected]);
+                },
+              },
+              "Add",
+            ),
+          ],
         },
         [
-          m("div.custom-url-dialog", [
-            m("h3.custom-url-dialog-title", "Add to project"),
-            m("p.destroy-dialog-message", [
-              "Choose the projects that should also show ",
-              m("strong", attrs.memberLabel),
-              ".",
-            ]),
-            attrs.projects.length === 0
-              ? m("p", { class: "py-2 text-[13px] text-text-faint" }, "There are no projects on this machine yet.")
-              : m(
-                  "div",
-                  { class: "mb-3 flex max-h-[40vh] flex-col gap-0.5 overflow-y-auto" },
-                  attrs.projects.map((project) => projectRow(attrs, project)),
-                ),
-            m("div.custom-url-dialog-actions", [
-              m("button.custom-url-dialog-cancel", { onclick: attrs.onCancel }, "Cancel"),
-              m(
-                "button.custom-url-dialog-open",
-                {
-                  disabled: selected.size === 0,
-                  onclick() {
-                    attrs.onConfirm([...selected]);
-                  },
-                },
-                "Add",
+          m("p.modal-message", ["Choose the projects that should also show ", m("strong", attrs.memberLabel), "."]),
+          attrs.projects.length === 0
+            ? m("p", { class: "py-2 text-[13px] text-text-faint" }, "There are no projects on this machine yet.")
+            : m(
+                "div",
+                { class: "mb-3 flex max-h-[40vh] flex-col gap-0.5 overflow-y-auto" },
+                attrs.projects.map((project) => projectRow(attrs, project)),
               ),
-            ]),
-          ]),
         ],
       );
     },
