@@ -67,8 +67,10 @@ from imbue.mngr.hosts.offline_host import BaseHost
 from imbue.mngr.hosts.offline_host import apply_rename_to_agent_data
 from imbue.mngr.hosts.outer_host import ActiveRemoteLock
 from imbue.mngr.hosts.outer_host import OuterHost
+from imbue.mngr.hosts.outer_host import SSH_CHANNEL_OPEN_TIMEOUT_SECONDS
 from imbue.mngr.hosts.outer_host import is_transient_ssh_error
 from imbue.mngr.hosts.outer_host import retry_on_transient_ssh_error
+from imbue.mngr.hosts.tmux import AGENT_PANE_ID_OPTION
 from imbue.mngr.hosts.tmux import TmuxSessionTarget
 from imbue.mngr.hosts.tmux import TmuxWindowTarget
 from imbue.mngr.interfaces.agent import AgentInterface
@@ -1006,7 +1008,9 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
         self._ensure_connected()
         transport = self._get_paramiko_transport()
         try:
-            channel = transport.open_session()
+            # Bounded open: a wedged sshd that accepts TCP but no longer
+            # services channel opens would otherwise hang here forever.
+            channel = transport.open_session(timeout=SSH_CHANNEL_OPEN_TIMEOUT_SECONDS)
         except (OSError, EOFError, SSHException) as e:
             if is_transient_ssh_error(e):
                 logger.debug("Transient SSH error opening host-lock channel: {}, disconnecting for retry", e)
@@ -1168,14 +1172,22 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
         )
         self._ensure_connected()
         transport = self._get_paramiko_transport()
-        channel = transport.open_session()
+        channel = transport.open_session(timeout=SSH_CHANNEL_OPEN_TIMEOUT_SECONDS)
+        # The confirmation is one round trip on a healthy sshd, so bound the read on
+        # the same budget as the open: an sshd that accepts the channel but stops
+        # servicing it would otherwise block here forever.
+        channel.settimeout(SSH_CHANNEL_OPEN_TIMEOUT_SECONDS)
         try:
             channel.exec_command(command)
             # Wait for the launch confirmation so the holder forks before we release.
             marker_bytes = _LOCK_HOLDER_LAUNCHED_MARKER.encode()
             buffer = b""
             while marker_bytes not in buffer:
-                chunk = channel.recv(4096)
+                try:
+                    chunk = channel.recv(4096)
+                except TimeoutError:
+                    logger.warning("Detached host-lock holder did not confirm launch within the read timeout")
+                    break
                 if not chunk:
                     logger.warning("Detached host-lock holder did not confirm launch")
                     break
@@ -4017,6 +4029,23 @@ def _build_start_agent_shell_command(
     steps.append(f"(tmux source-file {shlex.quote(str(tmux_config_path))} || true)")
 
     quoted_exact_agent_window = TmuxWindowTarget(session_name=session_name, window=primary_window_name).as_shell_arg()
+
+    # Record the agent pane's ID, so every later send targets THAT pane rather than whichever
+    # pane happens to be active. `session:window` resolves to the active pane, so a single split
+    # sends the message into the new shell instead -- silently, with no error. `session:window.0`
+    # is no better, because panes renumber when one closes. A pane ID is unique for the pane's
+    # life and fails loudly once it is gone, which is the behaviour we want.
+    #
+    # A tmux session user-option is the right home: `@`-prefixed names are tmux's user namespace
+    # (stored, never interpreted), and the value lives and dies with the session -- so there is no
+    # file to go stale, nothing to clean up, and a restarted agent writes a fresh ID rather than
+    # inheriting a dead one. `|| true` because an agent whose pane cannot be read must still
+    # start; the send path falls back to the window target when the option is missing.
+    quoted_exact_agent_session = f"{shlex.quote('=' + session_name + ':')}"
+    steps.append(
+        f"(tmux set-option -t {quoted_exact_agent_session} {AGENT_PANE_ID_OPTION}"
+        f" \"$(tmux display-message -p -t {quoted_exact_agent_window} '#{{pane_id}}')\" || true)"
+    )
 
     # Pin the agent window to a stable, usable geometry. tmux's default window-size
     # policy ("latest") sizes a window to the most recent client -- and a brand-new

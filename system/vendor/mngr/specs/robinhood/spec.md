@@ -22,7 +22,7 @@ You'll probably need to experiment a little bit with claude -p in order to see t
 * Spawns a regular `claude` agent type via `mngr create --no-connect --transfer none --message <first-prompt>` (auto-generated agent name with `robinhood-` prefix AND `created-by=robinhood` label, local host, current cwd). For follow-up turns in stream-json input mode, uses `mngr message`. Each turn's reply is harvested from `mngr transcript --format jsonl`.
 * The agent is ephemeral: destroyed on exit (success, failure, or signal).
 * End-of-turn detection: inline polling of `agent.get_lifecycle_state()` waiting for `WAITING` (premature `STOPPED`/`DONE` returns `EXIT_CLAUDE_ERROR=1`).
-* Sets `mngr_claude`'s existing unattended config vars (`auto_dismiss_dialogs=True`, `auto_allow_permissions=True`, plus `settings_overrides.skipDangerousModePermissionPrompt=true` and `settings_overrides.bypassPermissionsModeAccepted=true`) via `mngr create -S` settings overrides; no new permission semantics introduced. The two `settings_overrides.*` flags are normally added by `mngr_claude` only when `not host.is_local`; robinhood always runs on the local host, so we set them explicitly to avoid hangs on those prompts.
+* Sets `mngr_claude`'s existing unattended config vars (`auto_dismiss_dialogs_at_startup=True`, `auto_allow_permissions=True`, plus `settings_overrides.skipDangerousModePermissionPrompt=true` and `settings_overrides.bypassPermissionsModeAccepted=true`) via `mngr create -S` settings overrides; no new permission semantics introduced. The two `settings_overrides.*` flags are normally added by `mngr_claude` only when `not host.is_local`; robinhood always runs on the local host, so we set them explicitly to avoid hangs on those prompts.
 * Working directory: user's cwd, in-place; implies `--no-ensure-clean` so a dirty tree is OK.
 * `session_preserve_on_destroy` stays at its default (`True`); per-invocation session files remain on disk for debugging.
 * Pass through all `claude` flags as agent args via `--` to `mngr create`, except:
@@ -135,7 +135,7 @@ You'll probably need to experiment a little bit with claude -p in order to see t
     8. Map any `MngrError` / `UserInputError` / `BaseException` to the appropriate exit code in a top-level try/except.
   - `def destroy_run(run: RobinhoodRun, mngr_ctx: MngrContext) -> None` — best-effort destroy; logs and swallows errors so signal cleanup never raises.
   - Settings overrides applied via `mngr create -S` (passed through `MngrContext.config`):
-    - `agent_types.claude.auto_dismiss_dialogs = true`
+    - `agent_types.claude.auto_dismiss_dialogs_at_startup = true`
     - `agent_types.claude.auto_allow_permissions = true`
     - `agent_types.claude.settings_overrides.skipDangerousModePermissionPrompt = true`
     - `agent_types.claude.settings_overrides.bypassPermissionsModeAccepted = true`
