@@ -45,10 +45,14 @@ function checkboxByLabel(tree: unknown, label: string): VnodeLike | undefined {
   return checkboxes(tree).find((vnode) => vnode.attrs?.["aria-label"] === label);
 }
 
+// The confirm ("Add") button now lives in the shared Modal's `actions` prop
+// rather than in the dialog's own children, so it is reached through the root
+// Modal vnode's attrs. It carries the shared primary-button primitive class.
 function confirmButton(tree: unknown): VnodeLike | undefined {
-  for (const vnode of walk(tree)) {
+  const actions = (tree as VnodeLike).attrs?.actions;
+  for (const vnode of walk(actions)) {
     const classes = vnode.attrs?.className;
-    if (typeof classes === "string" && classes.split(/\s+/).includes("custom-url-dialog-open")) {
+    if (typeof classes === "string" && classes.split(/\s+/).includes("btn--primary")) {
       return vnode;
     }
   }
@@ -105,24 +109,14 @@ describe("ProjectMembershipDialog", () => {
     expect(attrs.onConfirm).toHaveBeenCalledWith(["beta"]);
   });
 
-  it("dismisses on a primary mouse DOWN on the backdrop, never on a click that merely ended there", () => {
-    // Selecting text inside the dialog and releasing past its edge fires a
-    // click whose target is the overlay; only a press that STARTS on the
-    // overlay may close it (see modalBackdrop.ts). And only a PRIMARY press:
-    // a right-click on the backdrop reaches for a context menu, not "close".
+  it("delegates backdrop dismissal to the shared modal shell, wired to onCancel", () => {
+    // The dialog no longer owns the backdrop mechanics: it renders the shared
+    // Modal, handing it onCancel as the dismissal handler. The mousedown-not-
+    // click, primary-button-only behaviour lives in modalBackdrop.ts (covered
+    // by modalBackdrop.test.ts), so here we only assert the wiring.
     const attrs = makeAttrs();
     const tree = makeDialog(attrs).render() as VnodeLike;
     expect(tree.attrs?.onclick).toBeUndefined();
-    const onmousedown = tree.attrs?.onmousedown as (e: {
-      button: number;
-      target: unknown;
-      currentTarget: unknown;
-    }) => void;
-    expect(onmousedown).toBeTypeOf("function");
-    const overlay = {};
-    onmousedown({ button: 2, target: overlay, currentTarget: overlay });
-    expect(attrs.onCancel).not.toHaveBeenCalled();
-    onmousedown({ button: 0, target: overlay, currentTarget: overlay });
-    expect(attrs.onCancel).toHaveBeenCalledOnce();
+    expect(tree.attrs?.onDismiss).toBe(attrs.onCancel);
   });
 });
