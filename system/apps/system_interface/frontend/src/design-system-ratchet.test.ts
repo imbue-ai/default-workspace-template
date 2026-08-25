@@ -22,7 +22,12 @@ const STYLE_CSS = new URL("./style.css", import.meta.url).pathname;
 // Baselines recorded at the pre-sweep state (design-system phase P0). Lower is
 // better; tighten after each migration phase.
 const BASELINES = {
-  hexOutsideTheme: 52,
+  // Tightened after the semantic-colour phase: status reds/ambers/greens, the
+  // neutral/slate scale, and on-accent white now use var(--color-*). The 16 that
+  // remain are two unresolved palettes (the warm login/composer error red, the
+  // minds-tooltip black/white, the progress-block warm greys) pending a
+  // unify-or-tokenize decision.
+  hexOutsideTheme: 16,
   // Tightened after the type-system phase: all text font-sizes now use
   // var(--font-size-*). The remaining 4 are icon glyphs (chevrons, +, ×) that
   // are sized independently of the text scale, each marked design-system-exception.
