@@ -16,6 +16,7 @@ import pytest
 
 from imbue.system_interface import welcome_resend
 from imbue.system_interface.agent_discovery import AgentInfo
+from imbue.system_interface.agent_discovery import SendFailure
 from imbue.system_interface.welcome_resend import WelcomeResender
 
 # A well-formed agent id (AgentId validates the `agent-<32 hex>` shape).
@@ -115,7 +116,7 @@ def test_check_and_resend_welcome_resends_when_transcript_missing_welcome(
     _set_up_host(tmp_path, _AGENT_ID, monkeypatch)
     send_calls: list[tuple[str, str]] = []
 
-    def _record_send(agent_id: str, message: str) -> str | None:
+    def _record_send(agent_id: str, message: str) -> SendFailure | None:
         send_calls.append((agent_id, message))
         return None
 
@@ -140,7 +141,7 @@ def test_check_and_resend_welcome_resolves_by_persisted_id(tmp_path: Path, monke
         resolved_ids.append(agent_id)
         return _agent_info(agent_id)
 
-    def _record_send(agent_id: str, message: str) -> str | None:
+    def _record_send(agent_id: str, message: str) -> SendFailure | None:
         send_calls.append((agent_id, message))
         return None
 
@@ -168,7 +169,7 @@ def test_check_and_resend_welcome_skips_when_transcript_has_welcome(
     _set_up_host(tmp_path, _AGENT_ID, monkeypatch)
     send_calls: list[tuple[str, str]] = []
 
-    def _record_send(agent_id: str, message: str) -> str | None:
+    def _record_send(agent_id: str, message: str) -> SendFailure | None:
         send_calls.append((agent_id, message))
         return None
 
@@ -190,7 +191,7 @@ def test_check_and_resend_welcome_resends_when_transcript_unavailable(
     _set_up_host(tmp_path, _AGENT_ID, monkeypatch)
     send_calls: list[tuple[str, str]] = []
 
-    def _record_send(agent_id: str, message: str) -> str | None:
+    def _record_send(agent_id: str, message: str) -> SendFailure | None:
         send_calls.append((agent_id, message))
         return None
 
@@ -212,7 +213,7 @@ def test_check_and_resend_welcome_skips_when_id_unresolved(tmp_path: Path, monke
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     send_calls: list[tuple[str, str]] = []
 
-    def _record_send(agent_id: str, message: str) -> str | None:
+    def _record_send(agent_id: str, message: str) -> SendFailure | None:
         send_calls.append((agent_id, message))
         return None
 
@@ -232,7 +233,7 @@ def test_check_and_resend_welcome_skips_when_agent_not_found(tmp_path: Path, mon
     _set_up_host(tmp_path, _AGENT_ID, monkeypatch)
     send_calls: list[tuple[str, str]] = []
 
-    def _record_send(agent_id: str, message: str) -> str | None:
+    def _record_send(agent_id: str, message: str) -> SendFailure | None:
         send_calls.append((agent_id, message))
         return None
 

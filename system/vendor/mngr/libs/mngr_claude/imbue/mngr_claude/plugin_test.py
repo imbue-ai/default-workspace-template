@@ -127,7 +127,6 @@ from imbue.mngr_claude.plugin import agent_field_generators
 from imbue.mngr_claude.plugin import approve_api_key_for_claude
 from imbue.mngr_claude.plugin import compute_claude_json_flags
 from imbue.mngr_claude.plugin import compute_settings_json_flags
-from imbue.mngr_claude.plugin import extract_blocking_selector_block
 from imbue.mngr_claude.plugin import get_files_for_deploy
 from imbue.mngr_claude.plugin import on_before_create
 from imbue.mngr_claude.plugin import on_before_host_destroy
@@ -1867,37 +1866,6 @@ _CLEARED_PANE = "● all done\n❯ "
 _TARGET = TmuxWindowTarget(session_name="test-session", window=0)
 
 
-def test_extract_blocking_selector_block_detects_model_switch_dialog() -> None:
-    """The /model confirmation selector is detected and the block spans the rule line to the options."""
-    block = extract_blocking_selector_block(_MODEL_SELECTOR_PANE)
-    assert block is not None
-    assert block.startswith("─")
-    assert "❯ 1. Yes, switch to Fable 5" in block
-    assert "2. No, go back" in block
-    # The command echo above the rule line is not part of the block.
-    assert "/model fable" not in block
-
-
-def test_extract_blocking_selector_block_detects_model_picker() -> None:
-    """The bare-/model picker (▔-ruled) is detected even though its rule glyph differs from ─."""
-    block = extract_blocking_selector_block(_MODEL_PICKER_PANE)
-    assert block is not None
-    assert block.startswith("▔")
-    assert "❯ 5. Haiku ✔" in block
-    # The command echo above the rule line is not part of the block.
-    assert "/model" not in block
-
-
-def test_extract_blocking_selector_block_ignores_input_row_and_bare_arrows() -> None:
-    """Detection needs a rule line AND an indented highlighted numbered option -- no false positives."""
-    # Plain input row (glyph at column 0) is not a selector.
-    assert extract_blocking_selector_block("● done\n❯ ") is None
-    # An indented arrow with no preceding rule line / number is not a selector.
-    assert extract_blocking_selector_block("steps:\n  ❯ do the thing\n❯ ") is None
-    # A rule line with no highlighted numbered option is not a selector.
-    assert extract_blocking_selector_block("────────\n  some prose\n❯ ") is None
-
-
 def test_has_input_prompt_line_matches_only_column_zero_glyph() -> None:
     """The input prompt is a column-0 glyph; an indented selector option is not it."""
     assert has_input_prompt_line("output\n❯ ") is True
@@ -1971,7 +1939,17 @@ class _ScriptedPaneClaudeAgent(ClaudeAgent):
     # past) this position (i.e. after enough Enter-accepts). A large value means it never appears.
     session_started_ready_at_position: int = Field(default=0)
 
-    def _capture_pane_content(self, tmux_target: TmuxWindowTarget, include_scrollback: bool = False) -> str | None:
+    def _send_target_arg(self, tmux_target: TmuxWindowTarget) -> str:
+        # This double stands in for the pane's CONTENT, not for tmux. Resolving the real pane
+        # would shell out to a tmux server these tests neither have nor want.
+        return tmux_target.as_shell_arg()
+
+    def _clear_pane_modes(self, target_arg: str) -> None:
+        return None
+
+    def _capture_pane_content(
+        self, tmux_target: TmuxWindowTarget | str, include_scrollback: bool = False
+    ) -> str | None:
         return self.scripted_panes[min(self.pane_position, len(self.scripted_panes) - 1)]
 
     def _unpainted_pane_grace_seconds(self) -> float:
@@ -2002,7 +1980,9 @@ class _PaintsLaterClaudeAgent(_ScriptedPaneClaudeAgent):
     rather than when its TUI has drawn.
     """
 
-    def _capture_pane_content(self, tmux_target: TmuxWindowTarget, include_scrollback: bool = False) -> str | None:
+    def _capture_pane_content(
+        self, tmux_target: TmuxWindowTarget | str, include_scrollback: bool = False
+    ) -> str | None:
         pane = self.scripted_panes[min(self.pane_position, len(self.scripted_panes) - 1)]
         self.pane_position += 1
         return pane

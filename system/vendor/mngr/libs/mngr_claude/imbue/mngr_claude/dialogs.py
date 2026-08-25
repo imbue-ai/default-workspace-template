@@ -56,7 +56,7 @@ INPUT_PROMPT_GLYPH: Final[str] = "❯"
 INPUT_PROMPT_LINE_RE: Final[re.Pattern[str]] = re.compile(rf"^{INPUT_PROMPT_GLYPH}", re.MULTILINE)
 # The highlighted option of a selector: indented, arrow, number, dot -- e.g. "  ❯ 1.".
 # The required leading whitespace is what distinguishes it from the column-0 input prompt.
-SELECTOR_HIGHLIGHTED_OPTION_RE: Final[re.Pattern[str]] = re.compile(r"^[ \t]+❯[ \t]*\d+\.")
+SELECTOR_HIGHLIGHTED_OPTION_RE: Final[re.Pattern[str]] = re.compile(r"^[ \t]+❯[ \t]*\d+\.", re.MULTILINE)
 
 # Claude Code's shell (bash) mode: typing `!` at an empty prompt swaps the column-0 `❯`
 # input glyph for `!` and shows the shell-mode footer, and submitting an empty shell line
@@ -189,7 +189,7 @@ def is_option_highlighted(pane_content: str, option_label: str) -> bool:
     highlighted: str | None = None
     for line in pane_content.splitlines():
         if SELECTOR_HIGHLIGHTED_OPTION_RE.match(line):
-            # The LAST one, matching ``extract_blocking_selector_block``: an earlier
+            # The LAST one: an earlier
             # arrow row is a stale selector scrolled above the live dialog.
             highlighted = line
     return highlighted is not None and option_label in highlighted
@@ -251,6 +251,13 @@ def cycle_to_option(pane: DialogPane, option_label: str, max_steps: int = _MAX_O
     if option_label not in pane_content:
         # Not on screen at all. Refuse before pressing anything: cycling would leave the
         # user's selector parked on an arbitrary row before we tell them to answer it.
+        return False
+    if SELECTOR_HIGHLIGHTED_OPTION_RE.search(pane_content) is None:
+        # The words are on screen but there is no selector to move. That happens when the text
+        # is transcript rather than a dialog -- UsageLimitReached's caption IS its option label,
+        # so an agent explaining the usage limit contains both -- and without this the walk below
+        # would press Down a dozen times into whatever has the input, which for a live composer
+        # means a dozen keystrokes the user never typed.
         return False
     for _ in range(max_steps):
         if is_option_highlighted(pane_content, option_label):

@@ -5,16 +5,17 @@ from typing import Any
 import pytest
 
 from imbue.system_interface.projects import DEFAULT_PROJECT_COLOR
-from imbue.system_interface.projects import EVERYTHING_VIEW_ID
 from imbue.system_interface.projects import DEFAULT_PROJECT_ID
 from imbue.system_interface.projects import DEFAULT_PROJECT_NAME
+from imbue.system_interface.projects import EVERYTHING_VIEW_ID
 from imbue.system_interface.projects import ProjectColorError
 from imbue.system_interface.projects import ProjectConflictError
-from imbue.system_interface.projects import ProjectGlyphError
 from imbue.system_interface.projects import ProjectDeviceError
+from imbue.system_interface.projects import ProjectGlyphError
 from imbue.system_interface.projects import ProjectMemberRefError
 from imbue.system_interface.projects import ProjectNameError
 from imbue.system_interface.projects import ProjectNotFoundError
+from imbue.system_interface.projects import ProjectShortcutError
 from imbue.system_interface.projects import add_member
 from imbue.system_interface.projects import all_members
 from imbue.system_interface.projects import content_contains_panel
@@ -27,12 +28,10 @@ from imbue.system_interface.projects import member_refs_from_content
 from imbue.system_interface.projects import project_content_path
 from imbue.system_interface.projects import projects_showing
 from imbue.system_interface.projects import read_project_content
-from imbue.system_interface.projects import ProjectShortcutError
-from imbue.system_interface.projects import list_projects
 from imbue.system_interface.projects import remove_member
-from imbue.system_interface.projects import set_shortcut_override
 from imbue.system_interface.projects import remove_panel_from_all_projects
 from imbue.system_interface.projects import set_last_active_id
+from imbue.system_interface.projects import set_shortcut_override
 from imbue.system_interface.projects import slugify_project_name
 from imbue.system_interface.projects import strip_panel_from_content
 from imbue.system_interface.projects import update_project

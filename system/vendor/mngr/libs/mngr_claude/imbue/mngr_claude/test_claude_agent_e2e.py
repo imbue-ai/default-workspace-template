@@ -67,7 +67,7 @@ from imbue.mngr.utils.testing import get_subprocess_test_env
 from imbue.mngr.utils.testing import init_git_repo
 from imbue.mngr.utils.testing import run_git_command
 from imbue.mngr.utils.testing import run_mngr_subprocess
-from imbue.mngr_claude.plugin import extract_blocking_selector_block
+from imbue.mngr_claude.dialogs import classify
 from imbue.mngr_claude.plugin import has_input_prompt_line
 
 # claude's native resumable session store, relative to the agent state dir: the
@@ -338,7 +338,7 @@ def test_claude_model_picker_does_not_leave_agent_stuck(tmp_path: Path) -> None:
     the input until a choice is made, and the real-world manifestation of the bug the dialog
     hardening addresses (a ``/model`` prompt silently blocking the client). Against a real haiku
     agent this asserts the user-facing outcome: the send exits 0, the picker is gone afterward (no
-    blocking selector remains in the pane -- ``extract_blocking_selector_block`` returns None), and
+    blocking selector remains in the pane -- ``classify`` returns None), and
     a subsequent normal message is still delivered and processed. If the picker had wedged the
     agent, the follow-up message would never reach the transcript.
 
@@ -364,8 +364,10 @@ def test_claude_model_picker_does_not_leave_agent_stuck(tmp_path: Path) -> None:
             f"expected /model to deliver and exit 0, got {result.returncode}:\n{result.stdout}\n{result.stderr}"
         )
         pane = _capture_agent_pane(ctx, agent_name)
-        assert extract_blocking_selector_block(pane) is None, (
-            f"the /model picker was not dismissed; a blocking selector still remains in the pane:\n{pane}"
+        # `classify` is what the send path itself uses to decide whether anything holds the
+        # input, so asserting through it tests the same judgement the product makes.
+        assert classify(pane) is None, (
+            f"the /model picker was not dismissed; something still holds the pane's input:\n{pane}"
         )
         # The agent must still accept and process a normal message -- i.e. it is not wedged on the picker.
         token = f"AFTERMODEL-{run_id}"

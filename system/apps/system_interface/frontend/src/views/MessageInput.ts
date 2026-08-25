@@ -491,7 +491,12 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
       }
 
       /** Remove just the restored copy once a repeat send has landed, leaving the rest alone. */
-      function clearRestoredMessage(forAgentId: string, restoredText: string): void {
+      function clearRestoredMessage(
+        forAgentId: string,
+        restoredText: string,
+        deliveredAttachments: readonly ComposerAttachment[],
+      ): void {
+        const deliveredIds = new Set(deliveredAttachments.map((attachment) => attachment.localId));
         // Emphatically NOT "clear the composer". By this point the box can also hold a draft
         // typed while the send was failing, and -- after Force -- the queue block drained out of
         // the harness so the restart would not destroy it. Wiping it wholesale would throw away
@@ -508,8 +513,14 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
           localStorage.setItem(messageTextKey(forAgentId), withoutRestored);
         } else {
           localStorage.removeItem(messageTextKey(forAgentId));
-          clearComposerAttachments(forAgentId);
         }
+        // The delivered attachments go regardless of whether text remains. Keying this off the
+        // text emptying meant a Retry after the user had typed something left the files behind,
+        // to be sent again with whatever they wrote next.
+        restoreComposerAttachments(
+          forAgentId,
+          getComposerAttachments(forAgentId).filter((attachment) => !deliveredIds.has(attachment.localId)),
+        );
         if (currentAgentId === forAgentId) {
           messageText = withoutRestored;
         }
@@ -575,13 +586,17 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
        * not the typed prose, which would drop the attachments silently.
        */
       async function repeatFailedSend(recovery: SendRecovery): Promise<void> {
+        // Paint the same optimistic bubble the normal send path paints, so a retried message is
+        // not simply absent from the transcript until the backend catches up.
+        const outgoingId = addOutgoing(recovery.agentId, recovery.text);
         try {
           await sendMessage(recovery.agentId, recovery.sentText);
           // Landed, so take the restored copy back out of the composer.
-          clearRestoredMessage(recovery.agentId, recovery.text);
+          clearRestoredMessage(recovery.agentId, recovery.text, recovery.attachments);
           clearActionFailureNotice();
           focusMessageTextarea();
         } catch (err) {
+          dropOutgoing(recovery.agentId, outgoingId);
           // Failed again. Only re-open the notice if they are still on that agent -- otherwise
           // it would surface this agent's error over a different chat, with no way to act on it.
           // The message is already back in that agent's composer either way.
@@ -667,10 +682,11 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
                   },
                 ]
               : []),
-            // Force needs a message to send afterwards, so it is offered only for our own send.
-            // It is the ONLY thing that helps an unreachable agent, which is why it is not
-            // gated on canRetryHelp.
-            ...(recovery === null
+            // Force needs a message to send afterwards, so it is offered only for our own send --
+            // and never for an agent that is merely still starting, where restarting would
+            // discard the session it was about to finish bringing up. It is the only thing that
+            // helps an agent that is GONE, which is why it survives Retry being withheld.
+            ...(recovery === null || actionFailureKind === "not_ready"
               ? []
               : [
                   {

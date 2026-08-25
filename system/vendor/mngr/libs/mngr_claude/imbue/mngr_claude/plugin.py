@@ -7,7 +7,6 @@ import importlib.resources
 import json
 import os
 import random
-import re
 import shlex
 from collections.abc import Mapping
 from collections.abc import Sequence
@@ -25,7 +24,6 @@ import click
 from loguru import logger
 from pydantic import Field
 from pydantic import field_validator
-from pydantic import model_validator
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.concurrency_group.errors import ProcessSetupError
@@ -143,7 +141,6 @@ from imbue.mngr_claude.dialogs import ALL_RECOGNIZED_NONBENIGN
 from imbue.mngr_claude.dialogs import DialogBlocked
 from imbue.mngr_claude.dialogs import INPUT_PROMPT_GLYPH
 from imbue.mngr_claude.dialogs import SELECTABLE_NICKNAMES
-from imbue.mngr_claude.dialogs import SELECTOR_HIGHLIGHTED_OPTION_RE
 from imbue.mngr_claude.dialogs import Unrecognized
 from imbue.mngr_claude.dialogs import classify
 from imbue.mngr_claude.dialogs import deal_with_dialogs
@@ -371,37 +368,6 @@ class ClaudeAgentConfig(AgentTypeConfig):
         description="Automatically dismiss all Claude startup dialogs (trust, effort callout, onboarding) "
         "before startup. When False, the interactive flow prompts.",
     )
-    # CLEANUP: remove once no settings.toml in the wild still says auto_dismiss_dialogs (the name
-    # this carried before it was clarified to say WHEN it applies). Accepted as an alias rather
-    # than rejected because the config model forbids unknown fields, so an old file does not warn
-    # -- it fails the whole load, and the agent will not start at all.
-    auto_dismiss_dialogs: bool | None = Field(
-        default=None,
-        description="DEPRECATED: the old name for auto_dismiss_dialogs_at_startup; set that instead. "
-        "Both names mean the same thing -- dialogs dismissed before the agent starts, never at "
-        "send time -- and the new one says so.",
-    )
-
-    @model_validator(mode="before")
-    @classmethod
-    def _fold_deprecated_auto_dismiss_dialogs(cls, data: Any) -> Any:
-        """Accept the old ``auto_dismiss_dialogs`` name as the new one.
-
-        Folded in before construction so nothing downstream has to know the old name existed.
-        Setting both to different values is contradictory and is left to fail rather than picking
-        a winner silently.
-        """
-        if not isinstance(data, dict) or data.get("auto_dismiss_dialogs") is None:
-            return data
-        deprecated = data.pop("auto_dismiss_dialogs")
-        current = data.get("auto_dismiss_dialogs_at_startup")
-        if current is not None and current != deprecated:
-            raise UnknownDialogNicknameError(
-                "auto_dismiss_dialogs and auto_dismiss_dialogs_at_startup are the same setting under "
-                "two names and were given different values; set only auto_dismiss_dialogs_at_startup."
-            )
-        data["auto_dismiss_dialogs_at_startup"] = deprecated
-        return data
 
     auto_allow_permissions: bool = Field(
         default=False,
@@ -1591,48 +1557,6 @@ def _has_api_credentials_available(
     return False
 
 
-# A line consisting of a horizontal rule. Claude renders one just above a selector's body. Two
-# rule glyphs occur in practice: confirmation dialogs (e.g. "Switch model?") use box-drawing
-# dashes (─, U+2500), while the model picker (bare /model) uses an upper-eighth block (▔, U+2594).
-# Match either so both selector styles are recognized.
-_SELECTOR_RULE_RE: Final[re.Pattern[str]] = re.compile(r"^\s*[─▔]{4,}")
-# Any numbered option of a selector (highlighted or not): indented number, dot -- e.g. "    2.".
-_SELECTOR_ANY_OPTION_RE: Final[re.Pattern[str]] = re.compile(r"^[ \t]+(?:❯[ \t]*)?\d+\.")
-
-
-@pure
-def extract_blocking_selector_block(pane_content: str) -> str | None:
-    """Return the text block of a blocking numbered selector if one is open, else None.
-
-    Recognizes Claude Code's interactive multiple-choice dialog: a horizontal-rule line
-    (``────`` for confirmation dialogs, ``▔▔▔▔`` for the model picker) followed below by an
-    indented, highlighted ``❯``-arrow numbered option (``  ❯ 1. ...``). The leading indentation
-    on the option distinguishes a real selector from the input prompt row (glyph at column 0),
-    and requiring a preceding rule line guards against ordinary output that merely contains an
-    arrow. Returns the block from the rule line through the last option line, for logging /
-    diagnostics.
-    """
-    lines = pane_content.splitlines()
-    highlighted_option_idx: int | None = None
-    for idx, line in enumerate(lines):
-        if SELECTOR_HIGHLIGHTED_OPTION_RE.match(line):
-            highlighted_option_idx = idx
-    if highlighted_option_idx is None:
-        return None
-    rule_idx: int | None = None
-    for idx in range(highlighted_option_idx - 1, -1, -1):
-        if _SELECTOR_RULE_RE.match(lines[idx]):
-            rule_idx = idx
-            break
-    if rule_idx is None:
-        return None
-    last_option_idx = highlighted_option_idx
-    for idx in range(highlighted_option_idx + 1, len(lines)):
-        if _SELECTOR_ANY_OPTION_RE.match(lines[idx]):
-            last_option_idx = idx
-    return "\n".join(lines[rule_idx : last_option_idx + 1]).strip()
-
-
 class UnknownDialogNicknameError(ConfigError, ValueError):
     """An entry in ``sensibly_deal_with_dialogs`` names no dialog mngr knows.
 
@@ -2407,10 +2331,22 @@ class _ClaudeDialogPane(FrozenModel):
     agent: "ClaudeAgent"
     tmux_target: TmuxWindowTarget
 
+    def _resolved_target(self) -> str:
+        """The agent's pane, resolved once for this pane object rather than per capture.
+
+        This loop captures repeatedly -- once per settle poll, several times per pass -- and
+        resolving inside each would spend a tmux round trip to learn the same answer.
+        """
+        return self.agent._send_target_arg(self.tmux_target)
+
     def capture(self) -> str:
-        return self.agent._capture_pane_content(self.tmux_target) or ""
+        return self.agent._capture_pane_content(self._resolved_target()) or ""
 
     def _press_and_settle(self, send: Callable[[], None]) -> None:
+        # Leave copy-mode first. A pane in a mode swallows keys AND shows scrollback rather than
+        # the live screen, so without this the loop would read a stale screen, press into nothing,
+        # and conclude the surface was stuck.
+        self.agent._clear_pane_modes(self._resolved_target())
         before = self.capture()
         send()
         poll_until(
