@@ -252,16 +252,34 @@
 
       <!-- ── Toggles ───────────────────────────────────────────────────── -->
       <section class="gy-section" data-shot="toggles">
-        <h2>Toggles</h2>
+        <h2>Toggles — unified .toggle primitive</h2>
         <div class="gy-pad">
           <div class="gy-row" style="align-items: center">
             <div class="gy-cell">
-              <div class="gy-label">fast-toggle</div>
-              <span class="fast-toggle"><span class="fast-toggle-knob"></span></span>
+              <div class="gy-label">.toggle (off)</div>
+              <button class="toggle" aria-label="Enable fast mode">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+              </button>
             </div>
             <div class="gy-cell">
-              <div class="gy-label">fast-toggle--on</div>
-              <span class="fast-toggle fast-toggle--on"><span class="fast-toggle-knob"></span></span>
+              <div class="gy-label">.toggle--on</div>
+              <button class="toggle toggle--on" aria-label="Disable fast mode">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+              </button>
+            </div>
+            <div class="gy-cell">
+              <div class="gy-label">.toggle--readonly</div>
+              <button class="toggle toggle--readonly" aria-disabled="true">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+              </button>
+            </div>
+            <div class="gy-cell">
+              <div class="gy-label">--inline (in text)</div>
+              <span>with the
+                <span class="toggle toggle--on toggle--inline" aria-hidden="true">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+                </span>
+                button</span>
             </div>
           </div>
         </div>

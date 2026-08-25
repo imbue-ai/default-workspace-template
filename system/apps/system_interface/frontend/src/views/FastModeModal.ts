@@ -69,7 +69,7 @@ export function FastModeModal(): m.Component {
                 // point at. Decorative: hidden from assistive tech, which gets the
                 // sentence on its own.
                 m(
-                  "span.fast-toggle.fast-toggle--on.fast-toggle--inline",
+                  "span.toggle.toggle--on.toggle--inline",
                   { "aria-hidden": "true" },
                   m.trust(icon("zap", { size: 16 })),
                 ),

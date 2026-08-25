@@ -361,6 +361,70 @@ body {
   --spinner-arc: transparent;
 }
 
+/* ── Toggle primitive ────────────────────────────────────────────────────────
+ * One on/off icon-toggle button, generalized from the composer's fast-mode
+ * toggle. A real <button> whose pressed state is the accent tint. Use:
+ *   .toggle [.toggle--on] [.toggle--readonly] [.toggle--inline]
+ * States: default / hover / :focus-visible / :disabled + [aria-disabled] /
+ * on (--on) / read-only (--readonly, non-interactive but keeps its tooltip, so
+ * NOT `disabled`). .toggle--inline is a smaller, non-interactive copy for
+ * pointing at the control inside running text. (The disclosure "toggles" on the
+ * login and permission cards are text/caret expanders, not on/off switches, so
+ * they are deliberately not folded in here.) */
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  color: var(--color-text-secondary);
+  background: none;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition:
+    color 120ms,
+    background 120ms;
+  flex-shrink: 0;
+}
+.toggle:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+}
+.toggle:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+.toggle:disabled,
+.toggle[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.toggle--on,
+.toggle--on:hover {
+  color: var(--color-accent);
+  background: var(--color-accent-light);
+}
+/* Read-only: default cursor, no hover brighten. `:not(--on)` so a read-only
+   control that is currently on still shows the accent. */
+.toggle--readonly {
+  cursor: default;
+}
+.toggle--readonly:not(.toggle--on):hover {
+  color: var(--color-text-secondary);
+  background: none;
+}
+/* Non-interactive inline copy, set in running text so a sentence about "the
+   button" can show which one. Reuses the rules above so it cannot drift from
+   the real control. */
+.toggle--inline {
+  width: 26px;
+  height: 26px;
+  cursor: default;
+  vertical-align: -0.45em;
+}
+
 /* Spacer for the Minds desktop client title bar. When running inside the
    Electron shell, --minds-titlebar-height is set to the title bar height
    (38px). Outside the shell the variable is unset and the spacer collapses
@@ -1200,56 +1264,8 @@ body {
   background: none;
 }
 
-/* ── Composer fast-mode toggle (icon button in the toolbar) ── */
-.fast-toggle {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  color: var(--color-text-secondary);
-  background: none;
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
-  transition:
-    color 120ms,
-    background 120ms;
-  flex-shrink: 0;
-}
-
-.fast-toggle:hover {
-  color: var(--color-text-primary);
-  background: var(--color-bg-hover);
-}
-
-.fast-toggle--on,
-.fast-toggle--on:hover {
-  color: var(--color-accent);
-  background: var(--color-accent-light);
-}
-
-/* Read-only fast toggle: not `disabled` (keeps its tooltip), default cursor, no hover
-   brighten. `:not(--on)` so a read-only harness with fast enabled still shows the accent. */
-.fast-toggle--readonly {
-  cursor: default;
-}
-
-.fast-toggle--readonly:not(.fast-toggle--on):hover {
-  color: var(--color-text-secondary);
-  background: none;
-}
-
-/* A non-interactive copy of the toggle, set inline in running text so a sentence
-   about "the button" can show which one. Reuses the rules above rather than
-   restating them, so the copy cannot drift from the real control. */
-.fast-toggle--inline {
-  width: 26px;
-  height: 26px;
-  cursor: default;
-  vertical-align: -0.45em;
-}
+/* Composer fast-mode toggle: now the shared .toggle primitive (.toggle,
+   .toggle--on, .toggle--readonly, .toggle--inline). See the Toggle primitive. */
 
 /* ── Markdown content styling ── */
 .markdown-content {

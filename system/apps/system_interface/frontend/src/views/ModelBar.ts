@@ -415,8 +415,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
             "button",
             {
               type: "button",
-              class:
-                `fast-toggle${currentFast ? " fast-toggle--on" : ""}` + (interactive ? "" : " fast-toggle--readonly"),
+              class: `toggle${currentFast ? " toggle--on" : ""}` + (interactive ? "" : " toggle--readonly"),
               // Not `disabled` for read-only (see the trigger above: disabled kills the tooltip).
               "data-tooltip": !interactive
                 ? READ_ONLY_TOOLTIP
