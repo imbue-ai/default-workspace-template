@@ -40,6 +40,23 @@
   --color-surface-secondary: #f3f2ef;
   --color-stop-button: #64748b;
   --color-stop-button-hover: #475569;
+  /* Semantic status colours (promoted from scattered raw hexes). */
+  --color-danger: #dc2626;
+  --color-danger-hover: #b91c1c;
+  --color-danger-bg: #fef2f2;
+  --color-danger-border: #fecaca;
+  --color-warning: #b45309;
+  --color-warning-bg: #fde68a;
+  --color-success: #22a06b;
+  --color-info: #2563eb;
+  /* Neutral / slate scale (share-modal buttons, terminal); 500/600 = stop-button. */
+  --color-neutral-50: #f8fafc;
+  --color-neutral-100: #f1f5f9;
+  --color-neutral-200: #e2e8f0;
+  --color-neutral-700: #334155;
+  --color-neutral-900: #1e293b;
+  /* Foreground on accent/coloured surfaces (e.g. white button text). */
+  --color-text-on-accent: #ffffff;
   --font-family-base: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --font-family-heading: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --font-family-mono: "SF Mono", "Cascadia Code", ui-monospace, monospace;
@@ -291,7 +308,7 @@ body {
   padding: 6px 9px;
   border-radius: var(--radius-base);
   background: var(--color-text-primary);
-  color: #fff;
+  color: var(--color-text-on-accent);
   font-size: var(--font-size-helper);
   font-weight: 400;
   line-height: 1.4;
@@ -361,7 +378,7 @@ body {
   padding: 6px 9px;
   border-radius: var(--radius-base);
   background: var(--color-text-primary);
-  color: #fff;
+  color: var(--color-text-on-accent);
   font-size: var(--font-size-helper);
   font-weight: 400;
   line-height: 1.4;
@@ -561,7 +578,7 @@ body {
   padding: 6px 9px;
   border-radius: var(--radius-base);
   background: var(--color-text-primary);
-  color: #fff;
+  color: var(--color-text-on-accent);
   font-family: var(--font-family-base);
   font-size: var(--font-size-helper);
   font-weight: 400;
@@ -589,7 +606,7 @@ body {
   width: 32px;
   height: 32px;
   padding: 0;
-  color: #fff;
+  color: var(--color-text-on-accent);
   background: var(--color-accent);
   border: none;
   border-radius: 50%;
@@ -612,7 +629,7 @@ body {
   width: 28px;
   height: 28px;
   padding: 0;
-  color: #fff;
+  color: var(--color-text-on-accent);
   background: var(--color-stop-button);
   border: none;
   border-radius: 50%;
@@ -1439,7 +1456,7 @@ body {
 }
 
 .tool-call-output--error pre code {
-  color: #dc2626;
+  color: var(--color-danger);
 }
 
 /* ── Model API error (e.g. "API Error: 529 Overloaded") ── */
@@ -1449,7 +1466,7 @@ body {
   border-radius: var(--radius-base);
   padding: 0.5em 0.75em;
   background: rgba(220, 38, 38, 0.08);
-  color: #dc2626;
+  color: var(--color-danger);
 }
 
 .message-api-error-note {
@@ -1674,7 +1691,7 @@ body {
 .permission-request-button {
   font-size: var(--font-size-body);
   font-weight: 500;
-  color: #fff;
+  color: var(--color-text-on-accent);
   background: var(--color-accent);
   border: none;
   border-radius: var(--radius-base);
@@ -1746,7 +1763,7 @@ body {
 }
 
 .permission-request-verdict--error {
-  color: #b45309;
+  color: var(--color-warning);
 }
 
 .permission-request-verdict-icon {
@@ -1817,7 +1834,7 @@ body {
    settled it belongs here, as a `prefers-color-scheme` override. */
 .app-main {
   --si-canvas: rgb(245 245 245);
-  --si-pane-surface: #ffffff;
+  --si-pane-surface: var(--color-surface);
   --si-pane-border: rgba(0, 0, 0, 0.09);
   --si-pane-radius: 12px;
   /* A tab's own insets. Named because the drag ghost has to restate them from
@@ -1827,7 +1844,7 @@ body {
   --si-tab-gap: 4px;
   /* The attention flash (see `si-tab-flash`). Amber is deliberately not in the
      palette's working set: it can only mean "look here for a moment". */
-  --si-tab-flash-color: #fde68a;
+  --si-tab-flash-color: var(--color-warning-bg);
   /* Half of the 4px separator: each of the two neighbours contributes its own
      inset, and the outermost panes get the same half against the canvas edge. */
   --si-pane-inset: 2px;
@@ -2353,7 +2370,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 
 .custom-url-dialog-open {
   background: var(--color-accent);
-  color: #fff;
+  color: var(--color-text-on-accent);
   border-color: var(--color-accent);
 }
 
@@ -2620,13 +2637,13 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 }
 
 .destroy-dialog-btn-destroy {
-  background: #dc2626;
-  color: #fff;
-  border-color: #dc2626;
+  background: var(--color-danger);
+  color: var(--color-text-on-accent);
+  border-color: var(--color-danger);
 }
 
 .destroy-dialog-btn-destroy:hover {
-  background: #b91c1c;
+  background: var(--color-danger-hover);
 }
 
 /* ── Fast-mode grace-period prompt ── */
@@ -2721,7 +2738,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
    backdrop and Escape also take -- so it carries the accent. */
 .fast-mode-modal-btn-standard {
   background: var(--color-accent);
-  color: #fff;
+  color: var(--color-text-on-accent);
   border-color: var(--color-accent);
 }
 
@@ -2779,7 +2796,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 
 .share-modal-error {
   font-size: var(--font-size-body);
-  color: #dc2626;
+  color: var(--color-danger);
   margin: 0 0 12px;
 }
 
@@ -2815,12 +2832,12 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   border-radius: var(--radius-base);
   cursor: pointer;
   border: none;
-  background: #1e293b;
+  background: var(--color-neutral-900);
   color: white;
 }
 
 .share-modal-btn:hover:not(:disabled) {
-  background: #334155;
+  background: var(--color-neutral-700);
 }
 
 .share-modal-btn:disabled {
@@ -2830,22 +2847,22 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 
 .share-modal-btn-secondary {
   background: white;
-  color: #1e293b;
-  border: 1px solid #e2e8f0;
+  color: var(--color-neutral-900);
+  border: 1px solid var(--color-neutral-200);
 }
 
 .share-modal-btn-secondary:hover:not(:disabled) {
-  background: #f1f5f9;
+  background: var(--color-neutral-100);
 }
 
 .share-modal-btn-destructive {
   background: white;
-  color: #dc2626;
-  border: 1px solid #fecaca;
+  color: var(--color-danger);
+  border: 1px solid var(--color-danger-border);
 }
 
 .share-modal-btn-destructive:hover:not(:disabled) {
-  background: #fef2f2;
+  background: var(--color-danger-bg);
 }
 
 .share-modal-section {
@@ -2885,7 +2902,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 }
 
 .share-modal-email-remove:hover {
-  color: #dc2626;
+  color: var(--color-danger);
   background: rgba(220, 38, 38, 0.1);
 }
 
@@ -3656,7 +3673,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   height: 18px;
   border-radius: 50%;
   background: var(--color-accent);
-  color: #fff;
+  color: var(--color-text-on-accent);
   font-size: var(--font-size-helper);
   font-weight: 600;
 }
@@ -3851,7 +3868,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 }
 
 .claude-login-checklist-item--done .claude-login-checklist-icon {
-  color: var(--color-success, #22a06b);
+  color: var(--color-success);
 }
 
 .claude-login-checklist-item--active {
@@ -3935,7 +3952,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 
 .claude-login-button--primary {
   background: var(--color-accent);
-  color: #fff;
+  color: var(--color-text-on-accent);
   border-color: var(--color-accent);
 }
 
@@ -4105,7 +4122,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 
 .image-lightbox-iconbtn:hover {
   background: rgba(255, 255, 255, 0.15);
-  color: #fff;
+  color: var(--color-text-on-accent);
 }
 
 .image-lightbox-body {
@@ -4138,8 +4155,8 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   font-size: var(--font-size-body);
   line-height: 1.4;
   color: var(--color-text-secondary);
-  background: var(--color-bg-secondary, #f8fafc);
-  border-bottom: 1px solid var(--color-border, #e5e7eb);
+  background: var(--color-neutral-50);
+  border-bottom: 1px solid var(--color-border);
 }
 
 .terminal-banner-text {
@@ -4147,7 +4164,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 }
 
 .terminal-banner-link {
-  color: var(--color-accent, #2563eb);
+  color: var(--color-accent);
   text-decoration: underline;
 }
 
@@ -4162,11 +4179,11 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   font-size: var(--font-size-helper);
   color: var(--color-text-secondary);
   background: transparent;
-  border: 1px solid var(--color-border, #e5e7eb);
+  border: 1px solid var(--color-border);
   border-radius: 4px;
   cursor: pointer;
 }
 
 .terminal-banner-btn:hover {
-  background: var(--color-bg-hover, #eef2f7);
+  background: var(--color-bg-hover);
 }
