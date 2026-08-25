@@ -135,8 +135,12 @@ body {
 /* ── Button primitive ────────────────────────────────────────────────────────
  * One button system replacing the ~15 bespoke families. Use the Button() helper
  * (views/Button.ts) or these classes directly:
- *   .btn .btn--{primary|secondary|ghost|destructive|icon} [.btn--sm] [.btn--selected]
- * States: hover, :focus-visible, :disabled/[aria-disabled], :active (pressed). */
+ *   .btn .btn--{primary|secondary|ghost|destructive|inverse|stop|icon}
+ *       [.btn--sm] [.btn--round] [.btn--selected] [.btn--block]
+ * Icon buttons are ghost by default; compose a fill variant for a filled icon
+ * button (e.g. .btn--icon.btn--round.btn--primary = accent send button) and
+ * .btn--round for a circle. States: hover, :focus-visible, :disabled/
+ * [aria-disabled], :active (pressed). */
 .btn {
   display: inline-flex;
   align-items: center;
@@ -226,18 +230,45 @@ body {
   background: var(--color-inverse-surface-hover);
   border-color: var(--color-inverse-surface-hover);
 }
+/* Stop/interrupt treatment: the composer's slate fill. Composes on an icon
+   button (.btn--icon.btn--stop) or a text button alike. */
+.btn--stop {
+  background: var(--color-stop-button);
+  color: var(--color-text-on-accent);
+  border-color: var(--color-stop-button);
+}
+.btn--stop:hover:not(:disabled) {
+  background: var(--color-stop-button-hover);
+  border-color: var(--color-stop-button-hover);
+}
+/* Icon button: SHAPE + SIZE only (square: width = the btn height, no h-padding).
+   The colour comes from the default ghost palette below OR, when a fill variant
+   (.btn--primary / --destructive / --inverse / --stop / --secondary) is composed,
+   from that variant -- so .btn--icon.btn--primary renders an accent-filled icon
+   button and a bare .btn--icon renders ghost. Add .btn--round for a circle. */
 .btn--icon {
   width: 34px;
   padding: 0;
-  background: transparent;
-  color: var(--color-text-secondary);
 }
 .btn--icon.btn--sm {
   width: 28px;
 }
-.btn--icon:hover:not(:disabled) {
+/* Default (ghost) icon palette. Guarded by :where(:not(...)) so it (a) never
+   applies when a fill variant is present and (b) keeps a single-class specificity
+   -- the :where() adds none -- so a per-context override (e.g. the lightbox's
+   dark-backdrop palette) still wins by source order, exactly as before. */
+.btn--icon:where(:not(.btn--primary, .btn--secondary, .btn--destructive, .btn--inverse, .btn--stop)) {
+  color: var(--color-text-secondary);
+}
+.btn--icon:where(:not(.btn--primary, .btn--secondary, .btn--destructive, .btn--inverse, .btn--stop)):hover:not(
+    :disabled
+  ) {
   background: var(--color-bg-hover);
   color: var(--color-text-primary);
+}
+/* Circular icon button (composer send/stop/attach, etc.). */
+.btn--round {
+  border-radius: 50%;
 }
 .btn--selected {
   background: var(--color-accent-light);
@@ -679,48 +710,9 @@ body {
   visibility: visible;
 }
 
-.message-input-send-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  color: var(--color-text-on-accent);
-  background: var(--color-accent);
-  border: none;
-  border-radius: 50%;
-  cursor: pointer;
-  transition:
-    background 120ms,
-    opacity 150ms,
-    visibility 150ms;
-  flex-shrink: 0;
-}
-
-.message-input-send-button:hover:not(:disabled) {
-  background: var(--color-accent-hover);
-}
-
-.message-input-stop-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  color: var(--color-text-on-accent);
-  background: var(--color-stop-button);
-  border: none;
-  border-radius: 50%;
-  cursor: pointer;
-  transition: background 120ms;
-  flex-shrink: 0;
-}
-
-.message-input-stop-button:hover:not(:disabled) {
-  background: var(--color-stop-button-hover);
-}
+/* The composer send / stop / attach buttons now use the shared .btn primitive
+   (.btn--icon.btn--round, with --primary for send and --stop for interrupt).
+   Only .message-input-logo remains here. */
 
 .message-input-logo {
   width: 32px;
@@ -752,29 +744,6 @@ body {
 
 .message-input-file-input {
   display: none;
-}
-
-.message-input-attach-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  color: var(--color-text-secondary);
-  background: none;
-  border: none;
-  border-radius: 50%;
-  cursor: pointer;
-  transition:
-    color 120ms,
-    background 120ms;
-  flex-shrink: 0;
-}
-
-.message-input-attach-button:hover {
-  color: var(--color-text-primary);
-  background: var(--color-bg-hover);
 }
 
 .message-input-attachments {
@@ -2911,21 +2880,8 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   margin: 0;
 }
 
-.share-modal-close-x {
-  background: none;
-  border: none;
-  color: var(--color-text-secondary);
-  font-size: 18px; /* design-system-exception: icon glyph (× close), not text */
-  cursor: pointer;
-  padding: 4px 8px;
-  border-radius: 4px;
-  line-height: 1;
-}
-
-.share-modal-close-x:hover {
-  background: var(--color-bg-hover);
-  color: var(--color-text-primary);
-}
+/* The share-modal close "×" now uses the shared .btn primitive
+   (.btn--icon.btn--sm, ghost). */
 
 .share-modal-footer {
   display: flex;

@@ -24,7 +24,11 @@ export const ShareModal: m.Component<ShareModalAttrs> = {
       m("div.share-modal", [
         m("div.share-modal-header", [
           m("h3.share-modal-title", `Share "${serviceName}"`),
-          m("button.share-modal-close-x", { onclick: onClose, ...hoverTooltipAttrs("Close") }, "x"),
+          m(
+            "button.btn.btn--icon.btn--sm",
+            { type: "button", "aria-label": "Close", onclick: onClose, ...hoverTooltipAttrs("Close") },
+            "×",
+          ),
         ]),
         m("div", { style: "padding: 8px 0; color: #444; font-size: 14px; line-height: 1.5;" }, [
           m("p", { style: "margin: 0 0 12px 0;" }, [

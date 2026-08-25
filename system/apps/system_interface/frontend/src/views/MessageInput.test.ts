@@ -145,6 +145,11 @@ function findByTag(node: unknown, tag: string): AnyVnode | undefined {
   return flatten(node).find((vnode) => vnode.tag === tag);
 }
 
+/** Find a vnode by an exact attribute value (e.g. a stable aria-label). */
+function findByAttr(node: unknown, attr: string, value: string): AnyVnode | undefined {
+  return flatten(node).find((vnode) => (vnode.attrs ?? {})[attr] === value);
+}
+
 /** Render the composer for one agent, type `text`, then press the send button. */
 async function typeAndSend(component: m.Component<{ agentId: string | null }>, agentId: string, text: string) {
   const render = () => component.view!({ attrs: { agentId } } as never);
@@ -152,7 +157,7 @@ async function typeAndSend(component: m.Component<{ agentId: string | null }>, a
   const oninput = textarea?.attrs?.oninput as ((event: unknown) => void) | undefined;
   oninput?.({ target: { value: text, style: {}, scrollHeight: 10 } });
 
-  const sendButton = findByClass(render(), "message-input-send-button");
+  const sendButton = findByAttr(render(), "aria-label", "Send message");
   const onclick = sendButton?.attrs?.onclick as (() => Promise<void>) | undefined;
   expect(onclick, "send button should be present once text is typed").toBeTruthy();
   await onclick!();
@@ -312,7 +317,7 @@ describe("MessageInput stop-to-composer handback", () => {
     agentId: string,
   ): Promise<AnyVnode | undefined> {
     const render = () => component.view!({ attrs: { agentId } } as never);
-    const stopButton = findByClass(render(), "message-input-stop-button");
+    const stopButton = findByAttr(render(), "aria-label", "Interrupt and bring queued messages to the composer");
     const onclick = stopButton?.attrs?.onclick as (() => Promise<void>) | undefined;
     expect(onclick, "stop button should be present while the agent works").toBeTruthy();
     await onclick!();
