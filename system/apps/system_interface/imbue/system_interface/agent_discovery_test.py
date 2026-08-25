@@ -6,8 +6,10 @@ from pathlib import Path
 import pytest
 
 from imbue.mngr.api.find import AgentMatch
+from imbue.mngr.api.message import AgentSendFailure
 from imbue.mngr.api.message import MessageResult
 from imbue.mngr.config.data_types import MngrContext
+from imbue.mngr.errors import SendFailureKind
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import AgentName
 from imbue.mngr.primitives import HostId
@@ -232,8 +234,7 @@ def test_reports_the_harness_reason_for_a_refused_send() -> None:
     def _send(matches: Sequence[AgentMatch], message: str, ctx: MngrContext) -> MessageResult:
         return MessageResult(
             successful_agents=[],
-            failed_agents=[("alpha", refusal)],
-            failed_agent_kinds=[("alpha", "input_blocked")],
+            failures=[AgentSendFailure(agent_name="alpha", reason=refusal, kind=SendFailureKind.INPUT_BLOCKED)],
         )
 
     messenger = MngrMessenger(discover=_discover, send=_send)
