@@ -96,6 +96,7 @@ jobs:
         run: |
           npm ci
           npm run build
+          npm test
 
       - name: Run root tests
         run: PYTEST_MAX_DURATION_SECONDS=300 uv run pytest
