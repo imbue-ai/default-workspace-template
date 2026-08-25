@@ -87,7 +87,6 @@ from pydantic import Field
 from pydantic import PrivateAttr
 
 from imbue.concurrency_group.subprocess_utils import ProcessSetupError
-from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
@@ -96,6 +95,7 @@ from imbue.mngr.cli.exit_codes import EXIT_CODE_PROVIDER_INACCESSIBLE
 from imbue.mngr.utils.env_utils import parse_env_file
 from imbue.mngr_claude.claude_config import find_user_config_in_unisolated_mode
 from imbue.mngr_claude.claude_config import get_claude_config_dir
+from imbue.system_interface.subprocess_runner import run_detached_command
 
 logger = _loguru_logger
 
@@ -184,7 +184,13 @@ _MNGR_COMMAND_TIMEOUT_SECONDS: Final = 60.0
 # on the background restart thread, so the generous ceiling costs nothing
 # in the request path.
 _MNGR_RESTART_TIMEOUT_SECONDS: Final = 600.0
-_CLAUDE_AUTH_STATUS_TIMEOUT_SECONDS: Final = 10.0
+# `claude auth status` is offline -- it reads ~/.claude/.credentials.json and prints -- so a
+# warm run takes well under a second. What it really waits on is cold start: paging in a 256MB
+# single-file binary plus node, on a container that is a VM guest whose memory the host reclaims
+# while it sleeps. Measured across one workspace's access log, the first check after an idle gap
+# routinely took 3-8s and was seen to exceed the old 10s budget (3 timeouts in 60 calls). Stays
+# under mngr_forward's 30s stall notice, so a slow check cannot make the workspace look wedged.
+_CLAUDE_AUTH_STATUS_TIMEOUT_SECONDS: Final = 25.0
 
 # Agent types whose window-0 process is a real claude binary and therefore
 # holds credentials frozen from process start: every claude-parented type in
@@ -225,7 +231,7 @@ PexpectSpawner = Callable[..., Any]
 
 
 def _default_command_runner(command: list[str], timeout: float, env: Mapping[str, str] | None = None) -> Any:
-    return run_local_command_modern_version(command=command, is_checked=False, timeout=timeout, cwd=None, env=env)
+    return run_detached_command(command=command, timeout=timeout, cwd=None, env=env)
 
 
 def _default_pexpect_spawner(executable: str, args: list[str], timeout: float) -> Any:
@@ -311,6 +317,10 @@ class AuthStatus(FrozenModel):
     restart_reason: str | None = Field(
         default=None,
         description="Why the restart is running: 'credentials_saved', 'subscription_switch', 'console_switch'",
+    )
+    is_status_unknown: bool = Field(
+        default=False,
+        description="The check did not finish, so `logged_in` is a default and not an answer about this workspace",
     )
 
 
@@ -922,7 +932,10 @@ class ClaudeAuthService(MutableModel):
 
         Returns `logged_in=False` if the `claude` binary is missing or
         doesn't produce output, rather than raising, since the whole point
-        of the modal is to recover from broken auth state.
+        of the modal is to recover from broken auth state. A check that ran
+        out of time is different: it says nothing about this workspace, so
+        it comes back with `is_status_unknown` set, and a caller that needs
+        a real answer must refuse to act on the `logged_in` default.
 
         The managed env currently in settings.json is overlaid on the
         status subprocess's environment (with `extra_env` layered on top):
@@ -949,6 +962,10 @@ class ClaudeAuthService(MutableModel):
         except ProcessSetupError as e:
             logger.warning("claude auth status failed to launch: {}", e)
             return self._with_derived_mode(AuthStatus(logged_in=False), combined_extra)
+
+        if result.is_timed_out:
+            logger.warning("claude auth status did not finish within {}s", _CLAUDE_AUTH_STATUS_TIMEOUT_SECONDS)
+            return self._with_derived_mode(AuthStatus(logged_in=False, is_status_unknown=True), combined_extra)
 
         stdout = result.stdout.strip() if isinstance(result.stdout, str) else ""
         if not stdout:

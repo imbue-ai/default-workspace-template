@@ -1458,7 +1458,7 @@ def test_interrupt_agent_success(client: FlaskClient) -> None:
     with (
         patch("imbue.system_interface.server._find_agent", return_value=agent_info),
         patch(
-            "imbue.system_interface.server.run_local_command_modern_version",
+            "imbue.system_interface.server.run_detached_command",
             return_value=fake_result,
         ) as mock_run,
         patch.object(AgentManager, "reset_activity_state") as mock_reset,
@@ -1495,7 +1495,7 @@ def test_interrupt_agent_rejects_is_primary_agent(client: FlaskClient) -> None:
     )
     with (
         patch("imbue.system_interface.server._find_agent", return_value=services_agent),
-        patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
+        patch("imbue.system_interface.server.run_detached_command") as mock_run,
     ):
         response = client.post("/api/agents/services-1/interrupt")
 
@@ -1524,7 +1524,7 @@ def test_interrupt_agent_returns_500_on_failure(client: FlaskClient) -> None:
     with (
         patch("imbue.system_interface.server._find_agent", return_value=agent_info),
         patch(
-            "imbue.system_interface.server.run_local_command_modern_version",
+            "imbue.system_interface.server.run_detached_command",
             return_value=fake_result,
         ),
     ):
@@ -1625,7 +1625,7 @@ def test_flush_queue_restarts_and_resends_the_concatenated_block(client: FlaskCl
         patch("imbue.system_interface.server._find_agent", return_value=_agent_info()),
         patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
         patch(
-            "imbue.system_interface.server.run_local_command_modern_version", return_value=_restart_ok()
+            "imbue.system_interface.server.run_detached_command", return_value=_restart_ok()
         ) as mock_run,
         patch.object(AgentManager, "reset_activity_state"),
         patch.object(AgentManager, "send_message_to_agent", return_value=True) as mock_send,
@@ -1647,7 +1647,7 @@ def test_flush_queue_is_a_noop_when_the_queue_is_empty(client: FlaskClient) -> N
     with (
         patch("imbue.system_interface.server._find_agent", return_value=_agent_info()),
         patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
-        patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
+        patch("imbue.system_interface.server.run_detached_command") as mock_run,
         patch.object(AgentManager, "send_message_to_agent") as mock_send,
     ):
         response = client.post("/api/agents/agent-123/flush-queue")
@@ -1663,7 +1663,7 @@ def test_flush_queue_rejects_is_primary_agent(client: FlaskClient) -> None:
             "imbue.system_interface.server._find_agent",
             return_value=_agent_info(agent_id="services-1", name="system-services", labels={"is_primary": "true"}),
         ),
-        patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
+        patch("imbue.system_interface.server.run_detached_command") as mock_run,
     ):
         response = client.post("/api/agents/services-1/flush-queue")
 
@@ -1684,7 +1684,7 @@ def test_flush_queue_returns_500_on_restart_failure(client: FlaskClient) -> None
     with (
         patch("imbue.system_interface.server._find_agent", return_value=_agent_info()),
         patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
-        patch("imbue.system_interface.server.run_local_command_modern_version", return_value=failed),
+        patch("imbue.system_interface.server.run_detached_command", return_value=failed),
         patch.object(AgentManager, "send_message_to_agent") as mock_send,
     ):
         response = client.post("/api/agents/agent-123/flush-queue")
@@ -1782,7 +1782,7 @@ def test_shoulder_tap_atomic_claude_nothing_queued_is_a_noop(client: FlaskClient
     with (
         patch("imbue.system_interface.server._find_agent", return_value=agent_info),
         patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=watcher),
-        patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
+        patch("imbue.system_interface.server.run_detached_command") as mock_run,
     ):
         response = client.post("/api/agents/agent-123/shoulder-tap-atomic")
 
@@ -1808,7 +1808,7 @@ def test_shoulder_tap_atomic_claude_flushed_presses_chord_and_never_restarts(
     with (
         patch("imbue.system_interface.server._find_agent", return_value=agent_info),
         patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=watcher),
-        patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
+        patch("imbue.system_interface.server.run_detached_command") as mock_run,
     ):
         response = app.test_client().post(f"/api/agents/{agent_id}/shoulder-tap-atomic")
 
@@ -1841,7 +1841,7 @@ def test_shoulder_tap_atomic_claude_no_ops_benignly_when_a_send_is_in_flight(
         patch("imbue.system_interface.harnesses.interrupt.STOP_LOCK_WAIT_SECONDS", 0.1),
         patch("imbue.system_interface.server._find_agent", return_value=agent_info),
         patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=watcher),
-        patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
+        patch("imbue.system_interface.server.run_detached_command") as mock_run,
     ):
         response = app.test_client().post(f"/api/agents/{agent_id}/shoulder-tap-atomic")
 
@@ -1859,7 +1859,7 @@ def test_shoulder_tap_atomic_writes_sentinel_for_pi(client: FlaskClient, tmp_pat
     agent_info = _agent_info(name="pi-agent", harness=HarnessType.PI_CODING, agent_state_dir=tmp_path)
     with (
         patch("imbue.system_interface.server._find_agent", return_value=agent_info),
-        patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
+        patch("imbue.system_interface.server.run_detached_command") as mock_run,
     ):
         response = client.post("/api/agents/agent-123/shoulder-tap-atomic")
 
@@ -1954,7 +1954,7 @@ def test_drain_to_composer_claude_nonempty_queue_delegates_to_base_restart(
         patch("imbue.system_interface.server._find_agent", return_value=agent_info),
         patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
         patch(
-            "imbue.system_interface.server.run_local_command_modern_version", return_value=_restart_ok()
+            "imbue.system_interface.server.run_detached_command", return_value=_restart_ok()
         ) as mock_run,
         patch.object(AgentManager, "reset_activity_state"),
         patch.object(AgentManager, "send_message_to_agent") as mock_send,
@@ -1992,7 +1992,7 @@ def test_drain_to_composer_claude_empty_queue_uses_the_chord_not_a_restart(tmp_p
     with (
         patch("imbue.system_interface.server._find_agent", return_value=agent_info),
         patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
-        patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
+        patch("imbue.system_interface.server.run_detached_command") as mock_run,
         patch(
             "imbue.system_interface.harnesses.claude.tap.mark_claude_agent_idle",
             side_effect=lambda *_a, **_k: idle_marks.append(True),
@@ -2019,7 +2019,7 @@ def test_drain_to_composer_pi_appends_retract_sentinel_and_returns_block(client:
     with (
         patch("imbue.system_interface.server._find_agent", return_value=agent_info),
         patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
-        patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
+        patch("imbue.system_interface.server.run_detached_command") as mock_run,
     ):
         response = client.post("/api/agents/agent-123/drain-to-composer")
 
@@ -2047,7 +2047,7 @@ def test_drain_to_composer_pi_empty_mirror_still_appends_and_returns_empty(
     with (
         patch("imbue.system_interface.server._find_agent", return_value=agent_info),
         patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
-        patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
+        patch("imbue.system_interface.server.run_detached_command") as mock_run,
     ):
         response = client.post("/api/agents/agent-123/drain-to-composer")
 
@@ -2072,7 +2072,7 @@ def test_drain_to_composer_pi_native_retract_does_not_fold_in_flight_block(
     with (
         patch("imbue.system_interface.server._find_agent", return_value=agent_info),
         patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
-        patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
+        patch("imbue.system_interface.server.run_detached_command") as mock_run,
     ):
         response = client.post("/api/agents/agent-123/drain-to-composer")
 
@@ -2126,7 +2126,7 @@ def test_drain_to_composer_pi_falls_back_to_restart_when_a_send_is_in_flight(
         patch("imbue.system_interface.server._find_agent", return_value=agent_info),
         patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
         patch(
-            "imbue.system_interface.server.run_local_command_modern_version", return_value=_restart_ok()
+            "imbue.system_interface.server.run_detached_command", return_value=_restart_ok()
         ) as mock_run,
         patch.object(AgentManager, "reset_activity_state"),
     ):
@@ -2161,7 +2161,7 @@ def test_drain_to_composer_claude_falls_back_to_restart_when_a_send_is_in_flight
         patch("imbue.system_interface.server._find_agent", return_value=agent_info),
         patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
         patch(
-            "imbue.system_interface.server.run_local_command_modern_version", return_value=_restart_ok()
+            "imbue.system_interface.server.run_detached_command", return_value=_restart_ok()
         ) as mock_run,
         patch.object(AgentManager, "reset_activity_state"),
     ):
@@ -2196,7 +2196,7 @@ def test_drain_to_composer_claude_returns_in_flight_send_when_the_lock_stays_hel
         patch("imbue.system_interface.harnesses.interrupt.STOP_LOCK_WAIT_SECONDS", 0.1),
         patch("imbue.system_interface.server._find_agent", return_value=agent_info),
         patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
-        patch("imbue.system_interface.server.run_local_command_modern_version", return_value=_restart_ok()),
+        patch("imbue.system_interface.server.run_detached_command", return_value=_restart_ok()),
         patch.object(AgentManager, "reset_activity_state"),
     ):
         response = app.test_client().post(f"/api/agents/{agent_id}/drain-to-composer")
@@ -4015,7 +4015,7 @@ def test_delete_project_never_touches_its_members(tmp_path: Path, monkeypatch: p
         # verifiably untouched by the delete below.
         assert test_client.post("/api/projects/project-1/members", json={"ref": ref}).status_code == 200
 
-    with patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run:
+    with patch("imbue.system_interface.server.run_detached_command") as mock_run:
         response = test_client.post("/api/projects/scratch/delete")
 
     assert response.status_code == 200
@@ -4226,7 +4226,7 @@ def test_remove_member_unfiles_it_without_touching_the_object(
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
     assert client.post("/api/projects/project-1/members", json={"ref": "terminal:terminal-1"}).status_code == 200
 
-    with patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run:
+    with patch("imbue.system_interface.server.run_detached_command") as mock_run:
         response = client.post("/api/projects/project-1/members/remove", json={"ref": "terminal:terminal-1"})
 
     assert response.status_code == 200
@@ -4359,7 +4359,7 @@ def test_shut_down_terminal_sweeps_every_store_including_everything(
         is_output_already_logged=False,
     )
 
-    with patch("imbue.system_interface.server.run_local_command_modern_version", return_value=killed_session):
+    with patch("imbue.system_interface.server.run_detached_command", return_value=killed_session):
         destroy_response = client.post("/api/terminals/terminal-1/destroy")
     delete_response = client.post(
         "/api/projects/panels/terminal-session-terminal-1/delete", json={"ref": "terminal:terminal-1"}
@@ -4468,7 +4468,7 @@ def test_renaming_a_chat_renames_the_mngr_agent(
     (layout_dir / "member_titles.json").write_text(json.dumps({"title_by_ref": {"chat:agent-7": "Chat 2"}}))
 
     with patch(
-        "imbue.system_interface.agent_manager.run_local_command_modern_version",
+        "imbue.system_interface.agent_manager.run_detached_command",
         return_value=_rename_result(0),
     ) as mock_run:
         response = client.post("/api/member-titles", json={"ref": "chat:agent-7", "title": "  Planning notes  "})
@@ -4502,7 +4502,7 @@ def test_display_only_chat_rename_rewrites_the_label_without_renaming(
     _register_agent(app, "agent-7", "Chat-2", "RUNNING")
 
     with patch(
-        "imbue.system_interface.agent_manager.run_local_command_modern_version",
+        "imbue.system_interface.agent_manager.run_detached_command",
         return_value=_rename_result(0),
     ) as mock_run:
         response = client.post("/api/member-titles", json={"ref": "chat:agent-7", "title": "Chat  2"})
@@ -4530,7 +4530,7 @@ def test_chat_rename_conflicting_with_another_agents_name_is_a_409(
     _register_agent(app, "agent-7", "Chat-2", "RUNNING")
     _register_agent(app, "agent-8", "Chat-3", "RUNNING")
 
-    with patch("imbue.system_interface.agent_manager.run_local_command_modern_version") as mock_run:
+    with patch("imbue.system_interface.agent_manager.run_detached_command") as mock_run:
         response = client.post("/api/member-titles", json={"ref": "chat:agent-7", "title": "chat 3"})
 
     assert response.status_code == 409
@@ -4548,7 +4548,7 @@ def test_renaming_a_non_chat_member_never_reaches_mngr(
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
 
-    with patch("imbue.system_interface.agent_manager.run_local_command_modern_version") as mock_run:
+    with patch("imbue.system_interface.agent_manager.run_detached_command") as mock_run:
         assert (
             client.post("/api/member-titles", json={"ref": "terminal:terminal-1", "title": "Build"}).status_code == 200
         )
@@ -4570,7 +4570,7 @@ def test_failed_chat_rename_leaves_both_names_untouched(
     _register_agent(app, "agent-7", "Chat-2", "RUNNING")
 
     with patch(
-        "imbue.system_interface.agent_manager.run_local_command_modern_version",
+        "imbue.system_interface.agent_manager.run_detached_command",
         return_value=_rename_result(1, stderr="name already taken"),
     ):
         response = client.post("/api/member-titles", json={"ref": "chat:agent-7", "title": "Planning"})
@@ -4592,7 +4592,7 @@ def test_clearing_a_chat_title_leaves_the_agent_named(
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
     _register_agent(app, "agent-7", "Chat-2", "RUNNING")
 
-    with patch("imbue.system_interface.agent_manager.run_local_command_modern_version") as mock_run:
+    with patch("imbue.system_interface.agent_manager.run_detached_command") as mock_run:
         response = client.post("/api/member-titles", json={"ref": "chat:agent-7", "title": "  "})
 
     assert response.status_code == 200
@@ -4608,7 +4608,7 @@ def test_over_long_chat_title_is_rejected_before_mngr_is_touched(
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
     _register_agent(app, "agent-7", "Chat-2", "RUNNING")
 
-    with patch("imbue.system_interface.agent_manager.run_local_command_modern_version") as mock_run:
+    with patch("imbue.system_interface.agent_manager.run_detached_command") as mock_run:
         response = client.post(
             "/api/member-titles",
             json={"ref": "chat:agent-7", "title": "n" * (MAX_MEMBER_TITLE_LENGTH + 1)},
@@ -4841,7 +4841,7 @@ def test_deregister_app_unregisters_it_and_unfiles_it_everywhere(
         )
 
     with patch(
-        "imbue.system_interface.server.run_local_command_modern_version",
+        "imbue.system_interface.server.run_detached_command",
         return_value=_forward_port_removal_result(0),
     ) as mock_run:
         response = test_client.post("/api/apps/docs-viewer/deregister")
@@ -4874,7 +4874,7 @@ def test_deregister_app_reports_a_registry_removal_that_failed(
     assert test_client.post("/api/projects/project-1/members", json={"ref": "service:docs-viewer"}).status_code == 200
 
     with patch(
-        "imbue.system_interface.server.run_local_command_modern_version",
+        "imbue.system_interface.server.run_detached_command",
         return_value=_forward_port_removal_result(2, "invalid app name"),
     ):
         response = test_client.post("/api/apps/docs-viewer/deregister")
@@ -4891,7 +4891,7 @@ def test_deregister_app_refuses_the_shell_and_unknown_names(tmp_path: Path, monk
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
     test_client = _app_with_registered_app("system_interface").test_client()
 
-    with patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run:
+    with patch("imbue.system_interface.server.run_detached_command") as mock_run:
         shell = test_client.post("/api/apps/system_interface/deregister")
         unknown = test_client.post("/api/apps/docs-viewer/deregister")
 
@@ -4910,7 +4910,7 @@ def test_deregister_app_broadcasts_the_projects_it_left(tmp_path: Path, monkeypa
     client_queue = _register_fake_client(workspace_app, "client-1", "desktop")
 
     with patch(
-        "imbue.system_interface.server.run_local_command_modern_version",
+        "imbue.system_interface.server.run_detached_command",
         return_value=_forward_port_removal_result(0),
     ):
         assert test_client.post("/api/apps/docs-viewer/deregister").status_code == 200

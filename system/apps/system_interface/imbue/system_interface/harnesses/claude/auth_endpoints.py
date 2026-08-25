@@ -61,12 +61,21 @@ def _error_response(detail: str, status_code: int = 400) -> Response:
 
 
 def get_status() -> Response:
-    """GET /api/claude-auth/status -- current auth state."""
+    """GET /api/claude-auth/status -- current auth state, or 503 if it could not be determined."""
     service: auth.ClaudeAuthService = get_state().claude_auth_service
     try:
         status = service.get_auth_status()
     except auth.ClaudeAuthError as e:
         return _error_response(str(e), status_code=500)
+    if status.is_status_unknown:
+        # A check that ran out of time is not a signed-out answer, and answering as if it were
+        # pops the login modal over a workspace that is signed in. Every caller of this endpoint
+        # already treats a failed request as "learned nothing this time", so refusing to answer
+        # is the honest outcome and also the quiet one.
+        return _error_response(
+            "Could not determine the Claude auth state: `claude auth status` did not finish in time.",
+            status_code=503,
+        )
     return _json_response(_status_to_response(status).model_dump())
 
 
