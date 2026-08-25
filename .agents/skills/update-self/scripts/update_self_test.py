@@ -808,6 +808,76 @@ def test_changelog_entries_collects_every_bucket_not_just_top_level(
     ]
 
 
+def test_classify_merge_refuses_a_local_that_already_contains_the_target(
+    tmp_path, capsys
+) -> None:
+    # After the worker adds any commit on top of its merge, the guide's
+    # `--local HEAD^1` re-run points at the merge commit itself -- which
+    # contains the target, so the merge base collapses to the target and the
+    # classification silently prints empty over a real merge (this reported
+    # zero changed files over an 818-file merge in a real incident). That
+    # degenerate invocation must be a loud error, not an empty answer.
+    def _git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
+
+    def _write(rel: str, text: str) -> None:
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    _git("init", "-q")
+    _git("config", "user.email", "test@example.com")
+    _git("config", "user.name", "test")
+    _write("shared.txt", "base\n")
+    _git("add", "-A")
+    _git("commit", "-q", "-m", "base")
+    _git("checkout", "-q", "-b", "upstream-line")
+    _write("upstream.txt", "upstream change\n")
+    _git("add", "-A")
+    _git("commit", "-q", "-m", "upstream")
+    _git("tag", "target")
+    _git("checkout", "-q", "-")
+    _git("merge", "-q", "--no-ff", "--no-edit", "target")
+    _write("extra.txt", "worker follow-up\n")
+    _git("add", "-A")
+    _git("commit", "-q", "-m", "follow-up")
+
+    # HEAD^1 is now the merge commit, which contains the target: refused.
+    code = update_self.main(
+        [
+            "classify-merge",
+            "--local",
+            "HEAD^1",
+            "--target",
+            "target",
+            "--repo-root",
+            str(tmp_path),
+        ]
+    )
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "already contains --target" in captured.err
+    assert "first parent" in captured.err
+    assert captured.out == ""
+
+    # The correct invocation -- the merge commit's own first parent -- still
+    # answers, and sees the upstream change.
+    code = update_self.main(
+        [
+            "classify-merge",
+            "--local",
+            "HEAD^^1",
+            "--target",
+            "target",
+            "--repo-root",
+            str(tmp_path),
+        ]
+    )
+    assert code == 0
+    result = json.loads(capsys.readouterr().out)
+    assert [entry["path"] for entry in result["pulled_in"]] == ["upstream.txt"]
+
+
 # --- bootstrap-skill --------------------------------------------------------
 
 

@@ -820,6 +820,32 @@ def _cmd_resolve_target(args: argparse.Namespace) -> int:
 
 def _cmd_classify_merge(args: argparse.Namespace) -> int:
     repo_root = _repo_root(args)
+    # A --local that already contains --target is a degenerate invocation: the
+    # merge base collapses to the target itself, the "upstream changed" diff is
+    # empty, and an 800-file merge silently classifies as nothing at all. This
+    # happens when the guide's post-merge `--local HEAD^1` is re-run after any
+    # commit was added on top of the merge (HEAD^1 is then the merge commit,
+    # not the pre-merge local). Refuse loudly instead of printing the empty
+    # classification.
+    contains = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", args.target, args.local],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+    if contains.returncode not in (0, 1):
+        contains.check_returncode()
+    if contains.returncode == 0:
+        print(
+            f"error: --local ({args.local}) already contains --target "
+            f"({args.target}), so the merge base collapses to the target and "
+            "every upstream change would classify as empty. Did you mean the "
+            "merge commit's first parent? While HEAD is the merge commit that "
+            "is --local HEAD^1; after further commits on top, name the merge "
+            "commit itself (--local <merge-sha>^1).",
+            file=sys.stderr,
+        )
+        return 1
     base = args.base or _git(["merge-base", args.local, args.target], repo_root)
     upstream_changed = _list_names(
         _git(["diff", "--name-only", base, args.target], repo_root)
