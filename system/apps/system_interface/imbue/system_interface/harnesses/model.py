@@ -262,7 +262,7 @@ def resolve_model_choice(identity: ModelIdentity, options: tuple[ModelOption, ..
     """
     matched = match_option(identity, options)
     if matched is not None and identity.fast and not matched.supports_fast:
-        identity = identity.model_copy(update={"fast": False})
+        identity = ModelIdentity(model_id=identity.model_id, effort=identity.effort, fast=False)
     return ModelChoice(identity=identity, matched=matched)
 
 
