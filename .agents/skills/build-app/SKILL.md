@@ -155,7 +155,14 @@ What gets generated:
   (defaults to this service's assigned port, overridable via the
   `<PACKAGE_UPPER>_PORT` env var) bound in `run_simple`. Both overrides
   are what let a future edit boot a throwaway instance on a spare port
-  against a data copy (see `update-app`).
+  against a data copy (see `update-app`). The scaffolded index page also
+  carries the **location beacon** one-liner -- a script that posts
+  `{type: "minds-location", path: location.pathname + location.search}`
+  to `window.parent` on page load. Keep that line on every page the app
+  serves: it is what lets the workspace shell reopen the app's tab at
+  the place it was showing (the shell validates the sender's origin and
+  stores the path per tab, machine-wide). An app that drops it simply
+  always reopens at its origin.
 - `system/apps/<package>/test_<package>_ratchets.py` -- standard ratchets at
   zero.
 - `system/apps/<package>/README.md` -- one-line description.
@@ -170,7 +177,7 @@ What gets updated:
 
   ```ini
   [program:<name>]
-  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:<port> --name <name> && uv run <name>"
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:<port> --name <name> --program <name> && uv run <name>"
   directory=/home/user/workspace
   autostart=true
   autorestart=true
@@ -433,7 +440,7 @@ shed before any built-in service under memory pressure (see
 
 ```ini
 [program:<name>]
-command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:<port> --name <name> && <existing_start_command>"
+command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:<port> --name <name> --program <name> && <existing_start_command>"
 directory=/home/user/workspace
 autostart=true
 autorestart=true
@@ -445,7 +452,7 @@ Two valid shapes:
 
   ```ini
   [program:docs-viewer]
-  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:8090 --name docs-viewer && jupyter notebook --port 8090 --ip 127.0.0.1 --no-browser"
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:8090 --name docs-viewer --program docs-viewer && jupyter notebook --port 8090 --ip 127.0.0.1 --no-browser"
   directory=/home/user/workspace
   autostart=true
   autorestart=true
@@ -457,7 +464,7 @@ Two valid shapes:
   # system/scripts/run_<name>.sh
   #!/usr/bin/env bash
   set -euo pipefail
-  python3 system/scripts/forward_port.py --url http://localhost:<port> --name <name>
+  python3 system/scripts/forward_port.py --url http://localhost:<port> --name <name> --program <name>
   exec <existing_start_command>
   ```
 
@@ -527,6 +534,15 @@ Flags:
   text beside it, and a transparent background is what keeps it from
   reading as a sticker in a row of line icons. Only use color if the
   user explicitly asks for a colored icon.
+- `--program`: name of the supervisord program that runs the app --
+  the program-name-equals-service-name convention both paths follow, so
+  pass the app's own name. Its presence on the registry entry is what
+  lets the workspace offer Stop/Start for the app (supervisord RPC);
+  omitting it clears any previously-stored value, so every registration
+  call is authoritative. Never pass it for unsupervised instances
+  (previews, `serve_isolated_instance.py` test servers) -- those own
+  their own teardown and must not offer a Stop that supervisord cannot
+  honor.
 - `--remove`: remove the named entry from
   `data/.state/apps.toml`. Use this when tearing down a service.
 

@@ -49,6 +49,14 @@ export function isEverythingView(viewId: string): boolean {
   return viewId === EVERYTHING_VIEW_ID;
 }
 
+/** One shortcut's stored deviations from the code-side defaults. Sparse on the
+ *  wire: an absent entry (or field) means the default, and the server may spell
+ *  an unset field as null. */
+export interface ShortcutOverride {
+  is_pinned?: boolean | null;
+  mode?: string | null;
+}
+
 export interface ProjectInfo {
   project_id: string;
   name: string;
@@ -59,6 +67,54 @@ export interface ProjectInfo {
   // added. Not derived from the layout: a member with no panel is still here.
   // The same ref may appear in other projects' lists too.
   members: string[];
+  // Per-shortcut deviations from the defaults, keyed by a built-in name or
+  // ``app:<service-name>``: ``is_pinned: false`` moves a built-in row into the
+  // All apps menu (app pinning IS membership, so app: keys never carry it),
+  // and ``mode`` flips what clicking the row does. Sparse so a project that
+  // has never touched this -- which is every project until it does -- keeps
+  // every default; optional for the same reason on a server predating it.
+  shortcut_overrides?: Record<string, ShortcutOverride>;
+}
+
+/** The rail's built-in shortcut rows, in the order the rail offers them.
+ *  Unlike an app, none of these is an object with a member ref, so which of
+ *  them a project shows is its own stored field rather than membership. */
+export const SHORTCUT_NAMES = ["chat", "files", "browser", "terminal"] as const;
+
+export type ShortcutName = (typeof SHORTCUT_NAMES)[number];
+
+/** A shortcut's two modes: focus goes to the most recently used member of the
+ *  kind in the active view (creating only when it shows none), new always
+ *  creates. */
+export type ShortcutMode = "focus" | "new";
+
+/** The shortcut-override key for one pinned app, mirroring the server's
+ *  ``app:<service-name>`` grammar. */
+export function appShortcutId(serviceName: string): string {
+  return `app:${serviceName}`;
+}
+
+/** The code-side mode default per shortcut: chat starts in new mode ("New
+ *  Chat" -- multi-chat discoverability is the point), everything else --
+ *  files, browser, terminal, and every app -- in focus mode. Matching the
+ *  server's ``default_shortcut_mode``, since only deviations are stored. */
+export function defaultShortcutMode(shortcutId: string): ShortcutMode {
+  return shortcutId === "chat" ? "new" : "focus";
+}
+
+/** Whether this project keeps ``shortcut`` in its rail. Absent means all four,
+ *  so a project the server told us nothing about shows the full set. */
+export function isShortcutPinned(project: ProjectInfo | null, shortcut: ShortcutName): boolean {
+  return project?.shortcut_overrides?.[shortcut]?.is_pinned !== false;
+}
+
+/** The effective mode of one shortcut in one project: the stored override when
+ *  there is a valid one, else the code-side default. Everything (a null
+ *  project) has no entry to store against, so it is always the defaults. */
+export function shortcutModeForProject(project: ProjectInfo | null, shortcutId: string): ShortcutMode {
+  const mode = project?.shortcut_overrides?.[shortcutId]?.mode;
+  if (mode === "focus" || mode === "new") return mode;
+  return defaultShortcutMode(shortcutId);
 }
 
 export interface ProjectsListResponse {
@@ -99,9 +155,27 @@ export async function fetchProjectContent(viewId: string): Promise<unknown | nul
   }
 }
 
+// What the tunnel in front of this server answers when the server itself is
+// not up: a workspace still provisioning, restarting, or shutting down. The
+// request never reached an endpoint, so nothing was read and nothing changed.
+const UNREACHABLE_STATUSES: ReadonlySet<number> = new Set([502, 503, 504]);
+
+/**
+ * Why a request failed, in terms the user can act on.
+ *
+ * The server's own ``detail`` when it gave one -- it knows best. Otherwise the
+ * bare status was being shown, and "HTTP 503" reads as a bug in the thing you
+ * just clicked when it actually means the workspace was not answering at all.
+ * Saying so, and saying that nothing changed, is the difference between "this
+ * feature is broken" and "try again in a moment".
+ */
 async function errorDetailFromResponse(response: Response): Promise<string> {
   const data = (await response.json().catch(() => ({}))) as { detail?: string };
-  return data.detail ?? `HTTP ${response.status}`;
+  if (data.detail) return data.detail;
+  if (UNREACHABLE_STATUSES.has(response.status)) {
+    return "the workspace is not responding right now, so nothing was changed — try again in a moment";
+  }
+  return `HTTP ${response.status}`;
 }
 
 /** Autosave the active view's content, EVERYTHING_VIEW_ID included, into this
@@ -153,12 +227,42 @@ export async function updateProjectSettings(
   return (await response.json()) as ProjectInfo;
 }
 
-/** Delete a project. Stopping the services behind its members is the server's
- *  half of this, and the confirmation that precedes it is the caller's, so by
- *  the time this is called the user has already seen what goes away. Throws
- *  with the server's detail on rejection (unknown project, or the last
- *  remaining project, which may not be deleted -- the dock always needs a real
- *  project behind it). */
+/**
+ * Record one shortcut's pin or mode override on this project -- the one write
+ * path the UI and the agent-facing `layout.py shortcut set` share.
+ * Project-scoped: which starting points a project keeps to hand, and what
+ * clicking each does, belong to that project, not to the user or the device.
+ *
+ * At least one of `isPinned` / `mode` must be given. Returns the project's
+ * resulting full override map. Throws with the server's detail on rejection
+ * (an unknown project, a bad shortcut id or mode, a pin on an app: key).
+ */
+export async function setShortcutOverride(
+  projectId: string,
+  shortcutId: string,
+  override: { isPinned?: boolean; mode?: ShortcutMode },
+): Promise<Record<string, ShortcutOverride>> {
+  const body: Record<string, unknown> = { shortcut: shortcutId };
+  if (override.isPinned !== undefined) body.is_pinned = override.isPinned;
+  if (override.mode !== undefined) body.mode = override.mode;
+  const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(projectId)}/shortcuts`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    throw new Error(await errorDetailFromResponse(response));
+  }
+  const data = (await response.json()) as { shortcut_overrides?: Record<string, ShortcutOverride> };
+  return data.shortcut_overrides ?? {};
+}
+
+/** Delete a project. This is a pure view operation: only the project's
+ *  registry entry, member list and saved content go, and the server never
+ *  touches the objects it showed -- they keep running, and stay in Everything
+ *  and in any other project already showing them. A machine may end up with
+ *  zero projects; Everything is always there. Throws with the server's detail
+ *  on rejection (unknown project). */
 export async function deleteProjectRequest(projectId: string): Promise<void> {
   const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(projectId)}/delete`), { method: "POST" });
   if (!response.ok) {
@@ -268,17 +372,22 @@ export async function fetchMemberMap(): Promise<Record<string, string[]>> {
 
 /**
  * Pick the view a client should mount on: its stored per-browser choice when
- * that view still exists, else the first project. Null only when no projects
- * exist at all, which means the registry could not be read.
+ * that view still exists, else the first project, else Everything.
+ *
+ * A machine may genuinely have zero projects now that deleting one is a pure
+ * view operation with no undeletable project left, and a registry that could
+ * not be read (server unreachable) looks the same as one holding none --
+ * either way Everything is always there to land on, so there is always a view
+ * to name and this never comes back empty-handed.
  *
  * A client last looking at Everything lands back on Everything: it is the home
  * and has a layout of its own, so there is nothing to fall back from.
  */
-export function chooseInitialViewId(projects: readonly ProjectInfo[], storedId: string): string | null {
+export function chooseInitialViewId(projects: readonly ProjectInfo[], storedId: string): string {
   if (isEverythingView(storedId)) return EVERYTHING_VIEW_ID;
   const stored = projects.find((project) => project.project_id === storedId);
   if (stored) return stored.project_id;
-  return projects.length === 0 ? null : projects[0].project_id;
+  return projects.length === 0 ? EVERYTHING_VIEW_ID : projects[0].project_id;
 }
 
 /**
@@ -306,7 +415,13 @@ export function projectForViewId(projects: readonly ProjectInfo[], viewId: strin
 }
 
 /** The kinds of object a member ref addresses: what the sidebar picks an icon
- *  for, and what its search matches against so "browser" keeps browsers. */
+ *  for, and what its search matches against so "browser" keeps browsers.
+ *
+ *  CLEANUP: drop "url" (and every branch that handles it) once the server's
+ *  legacy purge (``_purge_legacy_members_unlocked`` in projects.py) has
+ *  run on all supported workspaces -- ad-hoc pages are no longer filed as
+ *  members, and the purge deletes the entries older registries still hold, so
+ *  no client will ever see a "url" member again after that. */
 export type MemberKind = "chat" | "browser" | "terminal" | "app" | "url";
 
 const CHAT_REF_PREFIX = "chat:";
@@ -365,6 +480,14 @@ export function memberRef(kind: MemberKind, name: string): string {
   }
 }
 
+/** The stable agent id out of a `chat:<agent-id>` ref, or null for a ref that
+ *  addresses no chat. The inverse of `memberRef("chat", id)`. */
+export function chatAgentIdFromRef(ref: string): string | null {
+  if (!ref.startsWith(CHAT_REF_PREFIX)) return null;
+  const id = ref.substring(CHAT_REF_PREFIX.length);
+  return id === "" ? null : id;
+}
+
 /**
  * The service name a `service:<name>` ref addresses, or null for a ref that
  * addresses no service.
@@ -372,15 +495,72 @@ export function memberRef(kind: MemberKind, name: string): string {
  * The partial inverse of `memberRef("app", name)`, kept beside it so the
  * grammar stays written down in one place: the views that need to look an app
  * up from a row (its icon, say) ask here rather than slicing the ref
- * themselves. A fleet ref (`service:browser?session=...`) names the fleet's
- * service and not an installed app, so it answers null -- the browser and the
- * terminal are their own kinds everywhere else too.
+ * themselves. An app INSTANCE ref (`service:<name>?instance=<name>-<N>`)
+ * answers its service's name -- the instance is a page of that service, so
+ * its icon, liveness and share surface are the service's. A fleet ref
+ * (`service:browser?session=...`) names the fleet's service and not an
+ * installed app, so it answers null -- the browser and the terminal are
+ * their own kinds everywhere else too.
  */
 export function serviceNameFromRef(ref: string): string | null {
   if (!ref.startsWith(SERVICE_REF_PREFIX)) return null;
-  const name = ref.substring(SERVICE_REF_PREFIX.length);
-  if (name === "" || name.includes("?")) return null;
+  const body = ref.substring(SERVICE_REF_PREFIX.length);
+  const queryIndex = body.indexOf("?");
+  if (queryIndex === -1) {
+    return body === "" ? null : body;
+  }
+  const name = body.substring(0, queryIndex);
+  if (name === "" || instanceNameFromRef(ref) === null) return null;
   return name;
+}
+
+/** The query key an app instance's ref carries its canonical name under,
+ *  mirroring the backend's `app_instances.INSTANCE_QUERY_KEY`. */
+const INSTANCE_QUERY_KEY = "instance";
+
+/** The member ref one app instance is filed under:
+ *  `service:<service>?instance=<instance>` with the FULL canonical instance
+ *  name (`files-2`) in the query, mirroring the backend's
+ *  `app_instances.instance_ref`. Built without URL-encoding on purpose: the
+ *  allocator is the only writer, and a canonical name is a registered service
+ *  name (a DNS label) plus `-<N>`, which carries nothing the query-decoding
+ *  parsers would transform. */
+export function appInstanceRef(serviceName: string, instanceName: string): string {
+  return `${SERVICE_REF_PREFIX}${serviceName}?${INSTANCE_QUERY_KEY}=${instanceName}`;
+}
+
+/** The canonical instance name out of an instance ref, or null for a ref that
+ *  names no instance (a bare service ref -- an app's pin -- or the browser
+ *  fleet's `?session=` form). */
+export function instanceNameFromRef(ref: string): string | null {
+  if (!ref.startsWith(SERVICE_REF_PREFIX)) return null;
+  const body = ref.substring(SERVICE_REF_PREFIX.length);
+  const queryIndex = body.indexOf("?");
+  if (queryIndex === -1 || queryIndex === 0) return null;
+  const instanceName = new URLSearchParams(body.substring(queryIndex + 1)).get(INSTANCE_QUERY_KEY);
+  return instanceName === null || instanceName === "" ? null : instanceName;
+}
+
+/** `<service>-<N>`: the canonical instance name the allocator mints, always
+ *  the full registered service name plus a dash and a 1-based number -- so
+ *  the final `-<digits>` group always separates the two, even for a service
+ *  whose own name ends in digits. Mirrors the backend's
+ *  `app_instances._INSTANCE_NAME_PATTERN`. */
+const INSTANCE_NAME_PATTERN = /^(.+)-([1-9][0-9]*)$/;
+
+/** The 1-based number out of a canonical `<service>-<N>` instance name, or
+ *  null when the name does not carry one (a hand-edited ref). */
+export function instanceNumberFromName(instanceName: string): number | null {
+  const match = INSTANCE_NAME_PATTERN.exec(instanceName);
+  return match === null ? null : Number(match[2]);
+}
+
+/** The registered service name out of a canonical `<service>-<N>` instance
+ *  name, or null when the name does not parse. The inverse of the allocator's
+ *  mint, which always appends `-<N>` to the full service name. */
+export function serviceNameFromInstanceName(instanceName: string): string | null {
+  const match = INSTANCE_NAME_PATTERN.exec(instanceName);
+  return match === null ? null : match[1];
 }
 
 /** One object as the machine reports it, before it becomes a row: the name its
@@ -390,18 +570,35 @@ export interface MachineObject {
   label: string;
 }
 
+/** One app instance as the machine reports it: which service it is a page of,
+ *  its canonical instance name (the ref is built from both -- see
+ *  appInstanceRef), and what to call it in the UI. */
+export interface AppInstanceObject {
+  serviceName: string;
+  instanceName: string;
+  label: string;
+}
+
 /**
  * Everything the machine currently holds, gathered per kind from the source
  * that knows about it: chat agents from the agent list, terminals from the
- * tmux fleet, browsers from the browser fleet, apps from the registered
- * service list, and ad-hoc URL tabs from the layouts that host them.
+ * tmux fleet, browsers from the browser fleet, and app INSTANCES from the
+ * instance inventory (derived server-side from member lists and saved
+ * layouts -- see models/AppInstances). A registered app with no instances is
+ * openable (the rail, the popover, the launcher tiles all offer it) but is
+ * not an object here: the tab lists hold instances, never bare services.
+ *
+ * Those four kinds are the whole of it, because they are the four the machine
+ * can enumerate: an ad-hoc URL page exists only as a panel in some view's
+ * arrangement (see `memberRefForPanelParams` in DockviewWorkspace, which files
+ * none), so nothing here can report one and a `url:` ref only ever reaches a
+ * tab list through a migrated project's own member list.
  */
 export interface MachineInventory {
   chatAgents: readonly MachineObject[];
   terminals: readonly MachineObject[];
   browsers: readonly MachineObject[];
-  apps: readonly MachineObject[];
-  urlTabs: readonly MachineObject[];
+  appInstances: readonly AppInstanceObject[];
 }
 
 /** One row of a tab list: the object, what it is called, and which projects
@@ -414,12 +611,10 @@ export interface MemberRow {
   projectIds: string[];
 }
 
-const INVENTORY_KINDS: readonly { kind: MemberKind; key: keyof MachineInventory }[] = [
+const INVENTORY_KINDS: readonly { kind: MemberKind; key: "chatAgents" | "terminals" | "browsers" }[] = [
   { kind: "chat", key: "chatAgents" },
   { kind: "terminal", key: "terminals" },
   { kind: "browser", key: "browsers" },
-  { kind: "app", key: "apps" },
-  { kind: "url", key: "urlTabs" },
 ];
 
 /**
@@ -433,10 +628,10 @@ const INVENTORY_KINDS: readonly { kind: MemberKind; key: keyof MachineInventory 
  * projects showing it, for the row menu; a ref missing from it is filed
  * nowhere, not hidden.
  *
- * Kinds come out in inventory order (chats, terminals, browsers, apps, URL
- * tabs) and objects within a kind in the order their source listed them.
- * Duplicate refs collapse onto the first row for them, so a URL tab that the
- * layouts report twice does not list twice.
+ * Kinds come out in inventory order (chats, terminals, browsers, app
+ * instances) and objects within a kind in the order their source listed them.
+ * Duplicate refs collapse onto the first row for them, so an object a source
+ * reports twice does not list twice.
  */
 export function buildEverythingMembers(
   inventory: MachineInventory,
@@ -444,14 +639,23 @@ export function buildEverythingMembers(
 ): MemberRow[] {
   const rows: MemberRow[] = [];
   const seenRefs = new Set<string>();
+  const pushRow = (ref: string, kind: MemberKind, label: string): void => {
+    if (seenRefs.has(ref)) return;
+    seenRefs.add(ref);
+    rows.push({ ref, kind, label, projectIds: [...(projectsByRef[ref] ?? [])] });
+  };
   for (const { kind, key } of INVENTORY_KINDS) {
     for (const object of inventory[key]) {
       if (object.name === "") continue;
-      const ref = memberRef(kind, object.name);
-      if (seenRefs.has(ref)) continue;
-      seenRefs.add(ref);
-      rows.push({ ref, kind, label: object.label, projectIds: [...(projectsByRef[ref] ?? [])] });
+      pushRow(memberRef(kind, object.name), kind, object.label);
     }
+  }
+  // Apps list as their instances: an instance is the object the way a chat or
+  // a terminal is, while a zero-instance app has no tab-list row anywhere --
+  // the rail, the popover and the launcher tiles are where it stays openable.
+  for (const instance of inventory.appInstances) {
+    if (instance.serviceName === "" || instance.instanceName === "") continue;
+    pushRow(appInstanceRef(instance.serviceName, instance.instanceName), "app", instance.label);
   }
   return rows;
 }

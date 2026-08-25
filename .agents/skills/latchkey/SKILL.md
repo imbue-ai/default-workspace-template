@@ -20,7 +20,7 @@ Usage:
 2. **Pass through all regular curl arguments** - latchkey is a transparent wrapper.
 3. **Check for `latchkey services list`** to get a list of supported services. Use `--viable` to only show the currently configured ones.
 4. **Use `latchkey services info <service_name>`** to get information about a specific service (auth options, credentials status, API docs links, special requirements, etc.).
-5. **Submit a permission request to the user if necessary** by calling `latchkey curl -XPOST http://latchkey-self.invalid/permission-requests` (see the "Ask for user permission" example below) when either there are no valid credentials for the given service or the curl requests come back with the "request not permitted by the user" message.
+5. **Submit a permission request to the user if necessary** by calling `latchkey curl -XPOST http://latchkey-self.invalid/permission-requests` (see the "Ask for user permission" example below) when either there are no valid credentials for the given service or the curl requests come back with the "request not permitted by the user" message. One request per tool call, on its own, output untouched.
 6. **Look for the newest documentation of the desired public API online.** Avoid bot-only endpoints.
 
 
@@ -59,8 +59,8 @@ latchkey curl http://latchkey-self.invalid/permissions/available/discord
 # 2. Retrieve the list of your existing permissions if necessary.
 latchkey curl http://latchkey-self.invalid/permissions/self | jq .rules
 
-# 3. Ask for the necessary missing permissions.
-# (Never pipe the output through jq because frontend rendering depends on seeing the full output from your tool.)
+# 3. Ask for the missing permissions.
+# This one must go in a tool call of its own, with nothing else in it and its output untouched.
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
   -H 'Content-Type: application/json' \
   -d '{"agent_id": "'"$MNGR_AGENT_ID"'", "type": "predefined", "payload": {"scope": "discord-api", "permissions": ["discord-read-all"]}, "rationale": "I'"'"'d like to access your Discord account to read server and channel information so I can help you summarize conversations."}'
@@ -79,6 +79,9 @@ When not sure (and if applicable), prefer the `*-read-all` permission variants a
 
 After posting, wait for an automated system message indicating whether the user
 approved or denied the permission request.
+
+Do not ask the user to tell you when they respond to a request. Just mention
+that you'll continue once they do if that's something you need to wait on.
 
 
 ### Git operations on GitHub (clone / fetch / push)
@@ -165,6 +168,7 @@ routed to the user's computer so they will fail if it's offline.
 - All curl arguments are passed through unchanged
 - Return code, stdout and stderr are passed back from curl
 - Unless the user explicitly asks about it, don't discuss Latchkey or the technical details (it's easy for the user to get confused).
+- Do not ask the user to run Latchkey commands.
 - Unless the user explicitly asks you to do that, do not directly call `latchkey auth browser` or `latchkey auth browser-prepare`. (The Minds app is supposed to do that as part of the permission request approval process.)
 
 ## Currently supported services

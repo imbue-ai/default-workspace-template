@@ -78,6 +78,13 @@ def _apps_file() -> Path:
 # independently.
 _BROWSER_SESSION_QUERY_KEY = "session"
 
+# Query parameter that distinguishes a plain app's instances, riding the same
+# ``service:<name>?<query>`` grammar. Unlike the browser's session, the
+# instance name is carried on the pane's params (``serviceInstanceId``), not
+# in its URL -- the URL is the service origin plus wherever the instance is
+# looking -- so ``_resolve_ref`` reads it from there.
+_SERVICE_INSTANCE_QUERY_KEY = "instance"
+
 # Set of op names the endpoint dispatches on. Anything else is a 400.
 # ``context`` is a pure query over the client-activity event log; ``load``
 # broadcasts a layout-switch request to clients (handled outside the
@@ -494,16 +501,19 @@ def _resolve_ref(
     elif panel_type == "subagent":
         ref = f"subagent:{subagent_session_id or _short_hash(panel_id)}"
     elif panel_type == "iframe" and service_name:
-        # A service iframe is normally addressed as ``service:<name>``. The
-        # browser fleet is the exception: each browser pane points at the
-        # browser service's origin with a ``?session=<id>`` query and must be
-        # separately addressable, so we carry the ``?session=<id>`` query
-        # into the ref (``service:browser?session=2``). Two browser panes
-        # with different session ids thus get distinct refs and never collide
-        # in inspect / dedup / focus. Any other service iframe stays
-        # ``service:<name>``.
-        session_suffix = _service_session_suffix(url)
-        ref = f"service:{service_name}{session_suffix}"
+        # A service iframe is normally addressed as ``service:<name>``. Two
+        # exceptions carry a distinguishing query: an app instance's pane
+        # carries its canonical instance name in its params
+        # (``service:files?instance=files-2``), and a browser pane points at
+        # the browser service's origin with a ``?session=<id>`` query
+        # (``service:browser?session=2``). Either way, distinct panes get
+        # distinct refs and never collide in inspect / dedup / focus.
+        service_instance_id = params.get("serviceInstanceId")
+        if isinstance(service_instance_id, str) and service_instance_id:
+            ref = f"service:{service_name}?{_SERVICE_INSTANCE_QUERY_KEY}={service_instance_id}"
+        else:
+            session_suffix = _service_session_suffix(url)
+            ref = f"service:{service_name}{session_suffix}"
     elif (
         panel_type == "iframe"
         and isinstance(url, str)
