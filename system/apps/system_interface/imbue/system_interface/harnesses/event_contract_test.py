@@ -250,10 +250,7 @@ def test_codex_error_marker_survives_the_permission_rebuild() -> None:
     head with "...", so probing the truncated output would render a failed script as a
     clean success."""
     filler = "x" * 3000
-    output = (
-        "Script failed: boom\n" + filler
-        + '\n{"request_id": "req-9", "payload": {"kind": "predefined"}}'
-    )
+    output = "Script failed: boom\n" + filler + '\n{"request_id": "req-9", "payload": {"kind": "predefined"}}'
     event = codex_parse_lines(
         {
             "timestamp": "2026-01-01T00:00:05Z",

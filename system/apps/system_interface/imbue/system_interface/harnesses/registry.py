@@ -339,9 +339,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
             _MODEL_BAR_POPUP,
             _FAST_MODE_PROMPT_POPUP,
         ),
-        auth_instructions=(
-            "Open the agent's terminal and run /logout, then /login, to sign in or switch accounts."
-        ),
+        auth_instructions=("Open the agent's terminal and run /logout, then /login, to sign in or switch accounts."),
     ),
     HarnessType.PI_CODING: HarnessSpec(
         name=HarnessType.PI_CODING,

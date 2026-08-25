@@ -255,25 +255,6 @@ def _write_fast_mode_setting(settings_path: Path, is_enabled: bool) -> None:
     atomic_write(settings_path, json.dumps(settings))
 
 
-def _resolve_recorded_fast_mode(identity: ModelIdentity, axes: frozenset[ModelAxis]) -> bool | None:
-    """The ``fastMode`` value this switch must persist, or None to leave the record alone.
-
-    An explicit fast toggle wins outright -- it is the user saying what they want. Otherwise a
-    model switch onto a model without fast forces a recorded ``false``, because the setting
-    outlives the session while the model does not; leaving it would re-pair a stale ``true`` with
-    a model that cannot do fast on the next launch. A switch onto a model that DOES support fast
-    changes nothing, since the recorded value is still reachable there.
-    """
-    if ModelAxis.FAST in axes:
-        return identity.fast
-    if ModelAxis.MODEL not in axes:
-        return None
-    target = next((option for option in CLAUDE_CATALOG.options if option.id == identity.model_id), None)
-    if target is None or target.supports_fast:
-        return None
-    return False
-
-
 class ClaudeModelResolver(HarnessModelResolver):
     """Switches a Claude agent's model/effort/fast selection (the live read is shared)."""
 
@@ -305,21 +286,14 @@ class ClaudeModelResolver(HarnessModelResolver):
         if ModelAxis.FAST in axes:
             if not send("/fast on" if identity.fast else "/fast off"):
                 return SwitchResult(ok=False, detail="Failed to deliver /fast to the agent")
-        # Claude Code leaves no durable record of fast off, so record it into the agent's launch
-        # settings -- that is what a restart comes back with.
-        #
-        # A model switch has to record it too, not just a fast toggle. fastMode outlives the
-        # session that set it while the model does not, so moving onto a model without fast used
-        # to leave a stale `true` behind: invisible live (the session reports fast off for a model
-        # that cannot do it) and then re-applied on the next launch, where model + fast=true is a
-        # combination no live session ever had. `match_option` shrugs on exactly that, which is
-        # how a correct-looking model bar turned into an "Unrecognized model" after a restart.
-        # No /fast is sent for this -- the session already has it off; only the record is wrong.
-        recorded_fast = _resolve_recorded_fast_mode(identity, axes)
-        if recorded_fast is not None:
+            # Claude Code leaves no durable record of fast off, so record it into the
+            # agent's launch settings -- that is what a restart comes back with. Nothing
+            # reconciles it against a later model change, and nothing needs to: a fast
+            # flag that outlives the model it was chosen for is dropped when the choice is
+            # read (resolve_model_choice), for every harness, rather than repaired here.
             write_path = _get_agent_fast_mode_write_path(self._config_dir, self._state_dir)
             try:
-                _write_fast_mode_setting(write_path, recorded_fast)
+                _write_fast_mode_setting(write_path, identity.fast)
             except (FastModeSettingsError, OSError) as e:
                 logger.opt(exception=e).error("Failed to record fast mode at {}", write_path)
                 return SwitchResult(ok=False, detail="Applied the change but could not record fast mode")

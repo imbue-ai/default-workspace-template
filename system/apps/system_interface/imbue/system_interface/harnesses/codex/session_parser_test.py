@@ -130,7 +130,12 @@ def test_assistant_message_id_dedups_reserialised_copies() -> None:
     line = {
         "timestamp": "2026-07-19T10:00:02Z",
         "type": "response_item",
-        "payload": {"type": "message", "role": "assistant", "id": "msg_abc", "content": [{"type": "output_text", "text": "hi"}]},
+        "payload": {
+            "type": "message",
+            "role": "assistant",
+            "id": "msg_abc",
+            "content": [{"type": "output_text", "text": "hi"}],
+        },
     }
     first = parse_lines(line, 3, {})
     reread = parse_lines(line, 400, {})
@@ -281,7 +286,12 @@ def _assistant_line(msg_id: str, text: str) -> dict[str, Any]:
     return {
         "timestamp": "t",
         "type": "response_item",
-        "payload": {"type": "message", "role": "assistant", "id": msg_id, "content": [{"type": "output_text", "text": text}]},
+        "payload": {
+            "type": "message",
+            "role": "assistant",
+            "id": msg_id,
+            "content": [{"type": "output_text", "text": text}],
+        },
     }
 
 

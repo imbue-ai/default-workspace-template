@@ -42,6 +42,7 @@ from imbue.system_interface.harnesses.model import SwitchMode
 from imbue.system_interface.harnesses.model import match_option
 from imbue.system_interface.harnesses.model import model_state_path
 from imbue.system_interface.harnesses.model import read_model_identity
+from imbue.system_interface.harnesses.model import resolve_model_choice
 
 
 def _codex_model(
@@ -136,8 +137,12 @@ def test_live_identity_matches_the_per_agent_model_set(tmp_path: Path) -> None:
     assert matched is not None
     assert matched.id == "gpt-5.6-sol"
     assert matched.label == "GPT-5.6-Sol"
-    # fast on a no-priority model is a shrug (per-model fast, daemon-sourced).
-    assert match_option(ModelIdentity(model_id="gpt-5.2", effort="low", fast=True), options) is None
+    # fast on a no-priority model drops the flag rather than blanking the bar: the model is
+    # known, and a fast flag recorded for a different one is stale, not evidence of the unknown.
+    stale = resolve_model_choice(ModelIdentity(model_id="gpt-5.2", effort="low", fast=True), options)
+    assert stale.matched is not None
+    assert stale.matched.id == "gpt-5.2"
+    assert stale.identity.fast is False
 
 
 class _RecordingClient:

@@ -61,7 +61,7 @@ from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.harness_type import parse_harness
 from imbue.system_interface.harnesses.model import ModelChoice
 from imbue.system_interface.harnesses.model import ModelOption
-from imbue.system_interface.harnesses.model import match_option
+from imbue.system_interface.harnesses.model import resolve_model_choice
 from imbue.system_interface.harnesses.model import read_model_identity
 from imbue.system_interface.harnesses.path_watch import PathWatcher
 from imbue.system_interface.harnesses.registry import build_interrupt_to_composer
@@ -948,9 +948,7 @@ class AgentManager:
         """
         with self._lock:
             probe_targets = [(app.name, app.program, app.url) for app in self._apps]
-        is_running_by_name = {
-            name: self._liveness_prober(program, url) for name, program, url in probe_targets
-        }
+        is_running_by_name = {name: self._liveness_prober(program, url) for name, program, url in probe_targets}
         is_changed = False
         with self._lock:
             updated_apps: list[AppEntry] = []
@@ -959,9 +957,7 @@ class AgentManager:
                 if probed is None or probed == app.is_running:
                     updated_apps.append(app)
                 else:
-                    updated_apps.append(
-                        app.model_copy_update(to_update(app.field_ref().is_running, probed))
-                    )
+                    updated_apps.append(app.model_copy_update(to_update(app.field_ref().is_running, probed)))
                     is_changed = True
             self._apps = updated_apps
         if is_changed:
@@ -1946,8 +1942,7 @@ class AgentManager:
             if identity is None:
                 choice: ModelChoice | None = None
             else:
-                matched = match_option(identity, options)
-                choice = ModelChoice(identity=identity, matched=matched)
+                choice = resolve_model_choice(identity, options)
             old_choice = self._model_choice_by_agent.get(agent_id)
             if not force and old_choice == choice and agent_state.model_choice == choice:
                 return
@@ -2176,9 +2171,7 @@ class AgentManager:
         with self._lock:
             previous_is_running_by_name = {app.name: app.is_running for app in self._apps}
             self._apps = [
-                app.model_copy_update(
-                    to_update(app.field_ref().is_running, previous_is_running_by_name[app.name])
-                )
+                app.model_copy_update(to_update(app.field_ref().is_running, previous_is_running_by_name[app.name]))
                 if app.name in previous_is_running_by_name
                 else app
                 for app in apps
