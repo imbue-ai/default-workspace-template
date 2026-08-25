@@ -68,8 +68,15 @@
   --width-sidebar: 250px;
   --width-sidebar-collapsed: 3.25rem;
   --duration-sidebar-transition: 200ms;
-  /* Overlay stacking layer — modal backdrops and the image lightbox sit here. */
+  /* Z-index scale — names the workspace's stacking layers (see design-system.md).
+     Modal backdrops + the image lightbox sit at --z-overlay; the JS hover-tooltip
+     clears them at --z-tooltip. Two mid values (50, 2) have no layer name and stay
+     raw, marked design-system-exception at their sites. */
+  --z-content: 1;
+  --z-sticky: 100;
+  --z-dropdown: 1000;
   --z-overlay: 10000;
+  --z-tooltip: 10001;
   --radius-base: 6px;
   --radius-bubble: 18px;
   --radius-composer: 16px;
@@ -495,7 +502,7 @@ body {
   bottom: calc(100% + 8px);
   left: 50%;
   transform: translateX(-50%);
-  z-index: 1000;
+  z-index: var(--z-dropdown);
   width: max-content;
   max-width: 240px;
   padding: 6px 9px;
@@ -990,7 +997,7 @@ body {
 /* ── File attachments: chat drop overlay ── */
 
 .chat-drop-overlay {
-  z-index: 50;
+  z-index: 50; /* design-system-exception: mid-layer drop overlay; the z scale has no name for 50 (it sits above chat content but below the modal overlay stack) */
   background: color-mix(in srgb, var(--color-accent-light) 70%, transparent);
   border: 2px dashed var(--color-accent);
   border-radius: 12px;
@@ -1156,7 +1163,7 @@ body {
     0 4px 16px rgba(55, 53, 47, 0.1),
     0 1px 4px rgba(55, 53, 47, 0.06);
   padding: var(--_dropdown-padding);
-  z-index: 100;
+  z-index: var(--z-sticky);
   overflow: hidden;
 }
 
@@ -2084,7 +2091,7 @@ body {
   /* Above the (now empty) panel overlay standing in for it, which is a sibling
      at z-index 1 and comes later in the DOM. Drop targets sit at 1000/9999 and
      still paint over both. */
-  z-index: 2;
+  z-index: 2; /* design-system-exception: must be exactly one above dockview's own z-index:1 render-overlay (see comment above); the z scale has no "content + 1" layer */
 }
 
 /* While a tab is being dragged the surface stops taking pointer events, so the
@@ -2106,7 +2113,7 @@ body {
   /* Above the pane, so the active tab's white closes over the 1px of card
      border the negative margin above tucked under the strip. */
   position: relative;
-  z-index: 1;
+  z-index: var(--z-content);
 }
 
 /* The "+" belongs immediately after the pane's tabs; dockview's void container
@@ -2510,7 +2517,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
    reaches this iframe. */
 .minds-tooltip {
   position: fixed;
-  z-index: 10001;
+  z-index: var(--z-tooltip);
   display: none;
   align-items: center;
   gap: 6px;
@@ -2854,7 +2861,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 }
 .pv-tl-bullet {
   position: relative;
-  z-index: 1;
+  z-index: var(--z-content);
   background: var(--color-bg-chat);
   padding: 1px 0;
   flex-shrink: 0;
@@ -3041,7 +3048,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
    into the transcript instead of showing as a band. */
 .pv-stophook {
   position: relative;
-  z-index: 2;
+  z-index: 2; /* design-system-exception: lifts this block above the timeline thread; the z scale has no "content + 1" layer for 2 */
   margin: 6px 0 14px 0;
   background: var(--color-bg-chat);
 }
@@ -3052,7 +3059,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
    (opaque background + z-index) so the thread doesn't draw through it. */
 .pv-ungrouped {
   position: relative;
-  z-index: 2;
+  z-index: 2; /* design-system-exception: lifts this block above the timeline thread; the z scale has no "content + 1" layer for 2 */
   /* Top space as padding, not margin, so the white background extends up and
      masks a bit of the timeline line above the ungrouped run. */
   margin: 0 0 14px 0;
@@ -3068,7 +3075,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
    off-white --color-bg over the pure-white --color-bg-chat transcript). */
 .pv-permission {
   position: relative;
-  z-index: 2;
+  z-index: 2; /* design-system-exception: lifts the permission card above the timeline thread; the z scale has no "content + 1" layer for 2 */
   margin: 6px 0 14px 0;
 }
 
@@ -3126,7 +3133,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   background: rgba(20, 20, 20, 0.45);
   backdrop-filter: blur(3px);
   -webkit-backdrop-filter: blur(3px);
-  z-index: 50;
+  z-index: 50; /* design-system-exception: the Claude sign-in modal deliberately sits below the main modal overlay stack (--z-overlay); the z scale has no name for this mid layer */
   display: flex;
   align-items: center;
   justify-content: center;
