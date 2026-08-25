@@ -175,7 +175,7 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
           "Keep project",
         ),
         m(
-          "button.destroy-dialog-btn.destroy-dialog-btn-destroy",
+          "button.btn.btn--destructive",
           {
             class: "disabled:opacity-50",
             disabled: isDeleting,
@@ -270,7 +270,7 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
                 ? deleteConfirmation(attrs)
                 : m("div.custom-url-dialog-actions", [
                     m(
-                      "button.destroy-dialog-btn.destroy-dialog-btn-cancel",
+                      "button.btn.btn--secondary",
                       {
                         class: "mr-auto disabled:opacity-50",
                         disabled: isSaving || isDeleting,

@@ -83,7 +83,9 @@ describe("ProjectSettingsModal delete confirmation", () => {
       onDeleted: () => {},
       onCancel: () => {},
     });
-    const deleteButton = findByClass(modal.render(), "destroy-dialog-btn-cancel");
+    // The "Delete" trigger (reveals the confirmation) is the only secondary button
+    // in the initial render; it moved onto the shared .btn primitive.
+    const deleteButton = findByClass(modal.render(), "btn--secondary");
     expect(deleteButton).toBeDefined();
     clickVnode(deleteButton!);
 

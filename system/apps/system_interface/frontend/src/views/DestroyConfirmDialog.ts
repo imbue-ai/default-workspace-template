@@ -44,8 +44,8 @@ export const DestroyConfirmDialog: m.Component<DestroyConfirmDialogAttrs> = {
         m("p.destroy-dialog-message", question),
         details === undefined ? null : m("p.destroy-dialog-message", details),
         m("div.destroy-dialog-actions", [
-          m("button.destroy-dialog-btn.destroy-dialog-btn-cancel", { onclick: onCancel }, "Cancel"),
-          m("button.destroy-dialog-btn.destroy-dialog-btn-destroy", { onclick: onConfirm }, confirmLabel),
+          m("button.btn.btn--secondary", { onclick: onCancel }, "Cancel"),
+          m("button.btn.btn--destructive", { onclick: onConfirm }, confirmLabel),
         ]),
       ]),
     ]);
