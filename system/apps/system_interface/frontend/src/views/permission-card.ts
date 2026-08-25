@@ -413,7 +413,7 @@ export function renderPermissionCard(
       m(
         "button",
         {
-          class: "permission-request-button",
+          class: "btn btn--primary",
           type: "button",
           onclick(e: Event) {
             e.preventDefault();

@@ -443,9 +443,10 @@ function findByClass(
 }
 
 // The solid "Review & respond" button (distinct from the raw-disclosure toggle,
-// which is also a <button>).
+// which is also a <button>). It moved onto the shared .btn primitive; btn--primary
+// is unique to it in this render.
 function findReviewButton(node: unknown): { attrs?: Record<string, unknown>; children?: unknown } | null {
-  return findByClass(node, "permission-request-button");
+  return findByClass(node, "btn--primary");
 }
 
 // Every glyph on the card is an `m.trust`ed SVG string, which `findVnode` walks
