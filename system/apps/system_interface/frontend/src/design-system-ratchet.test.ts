@@ -34,9 +34,12 @@ const BASELINES = {
   // are sized independently of the text scale, each marked design-system-exception.
   fontSizePx: 4,
   // Tightened after the radius de-dup: raw 6px border-radii now use
-  // var(--radius-base). The remaining 40 are values with no token yet (8/12/…),
-  // handled when a radius scale lands (needs non-colliding names, like type).
-  borderRadiusPx: 40,
+  // var(--radius-base). Tightened again by the P3 button-primitive migration,
+  // which deleted four bespoke button families' raw-px radii (terminal-banner
+  // 4px; queued-action, composer-under-bar and claude-login 8px). The remaining
+  // 36 are values with no token yet (8/12/…), handled when a radius scale lands
+  // (needs non-colliding names, like type).
+  borderRadiusPx: 36,
   zIndexLiteral: 18,
 } as const;
 
