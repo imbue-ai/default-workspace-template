@@ -437,6 +437,11 @@ export function buildSections(
   // the agent blocks on a request until it is answered, so in practice only one
   // was open at a time in that older data. Fallback verdicts are keyed by the
   // resolved request's event id.
+  // CLEANUP: delete this arrival-order fallback (and `fallbackResolution` on the
+  // permission timeline item, and `resolutionForCall`'s fallback parameter in
+  // message-renderers.ts) once live transcripts predating id-embedded resolution
+  // notices (minds' format_resolution_notice) are gone -- misattribution then
+  // becomes structurally impossible.
   const unresolvedPermissionEventIds: string[] = [];
   const fallbackResolutions = new Map<string, PermissionResolution>();
 

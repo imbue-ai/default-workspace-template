@@ -33,6 +33,20 @@ export const PERMISSION_REQUEST_RESOLVED: "minds:permission-request-resolved" =
     ? embedContract.PERMISSION_REQUEST_RESOLVED
     : "minds:permission-request-resolved";
 
+// The contract-v3 verdict-hydration query pair, probed the same way. Sending
+// the query needs no vendored support (send does not validate types), so a
+// workspace ahead of its vendor snapshot still asks; the ANSWER is dropped by
+// a stale vendored endpoint's validator until the sync lands, and the cards
+// keep the transcript-driven flip in the meantime.
+export const QUERY_PERMISSION_RESOLUTIONS: "minds:query-permission-resolutions" =
+  "QUERY_PERMISSION_RESOLUTIONS" in embedContract
+    ? embedContract.QUERY_PERMISSION_RESOLUTIONS
+    : "minds:query-permission-resolutions";
+export const PERMISSION_RESOLUTIONS: "minds:permission-resolutions" =
+  "PERMISSION_RESOLUTIONS" in embedContract
+    ? embedContract.PERMISSION_RESOLUTIONS
+    : "minds:permission-resolutions";
+
 type EmbedderMessageHandler = (message: ContractMessage) => void;
 
 // One replaceable handler per embedder->workspace type, registered by the
@@ -60,6 +74,7 @@ function getEndpoint(): ContractEndpoint {
         [CLOSE_ACTIVE_TAB]: (message) => handlerByType[CLOSE_ACTIVE_TAB]?.(message),
         [OPEN_AI_KEYS_ACK]: (message) => handlerByType[OPEN_AI_KEYS_ACK]?.(message),
         [PERMISSION_REQUEST_RESOLVED]: (message) => handlerByType[PERMISSION_REQUEST_RESOLVED]?.(message),
+        [PERMISSION_RESOLUTIONS]: (message) => handlerByType[PERMISSION_RESOLUTIONS]?.(message),
       },
     });
   }
