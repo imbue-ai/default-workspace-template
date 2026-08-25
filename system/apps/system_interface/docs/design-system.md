@@ -1,11 +1,13 @@
 # System Interface design system — assessment & plan
 
-Status: **in progress.** This document is the durable hand-off so any agent can
-pick the work up cold. It records (a) how the UI is built today, (b) a measured
-inventory of the visual sprawl, (c) a concrete target token set and component
-primitives, and (d) a phased, low-risk migration plan. A visual before/after
-harness ships alongside it (`frontend/gallery/`) so every step can be proven to
-change only what it intends to.
+Status: **substantially complete.** All planned phases (P0–P4) have landed: the
+full token scaffold (type, colour, z-index, elevation, motion, spacing, radius),
+the mechanical/semantic sweeps, the component primitives (button, badge, spinner,
+toggle, input, tooltip), and the modal consolidation. What remains is a short
+follow-ups list (bottom of this log): off-grid spacing strays, a few defined-but-
+unused tokens, the medium-weight audit, and whether to build a dark theme. This
+document is the durable hand-off so any agent can pick the work up cold. A visual
+before/after harness ships alongside it (`frontend/gallery/`).
 
 ### Progress log
 
@@ -68,6 +70,36 @@ change only what it intends to.
   blurred backdrop would regress if forced onto the shared `.modal-*` classes,
   which the prompt forbids restructuring to fix). `borderRadiusPx` ratchet
   29 → 28, `zIndexLiteral` 12 → 11.
+- **Token scaffold completed — DONE (no-op).** Tokenized the last five raw
+  categories, each a value-exact no-op proven by the harness (component sections
+  identical; only the gallery's own token sections change, as they render the new
+  tokens): **z-index** (`--z-content/-sticky/-dropdown/-overlay/-tooltip`;
+  `zIndexLiteral` 11 → 6), **elevation** (`--elevation-sm/md/lg/overlay` — NOT
+  `--shadow-*`, which collide with Tailwind utilities used in views),
+  **motion** (`--dur-fast/base/slow` + `--ease-standard`; unified `120ms`/`0.12s`
+  etc.), **spacing** (`--space-0_5…8`; 150 on-grid declarations migrated),
+  and **radius** (value-named `--radius-3/4/8/10/12/-pill` — NOT `--radius-{sm,
+  md,lg}`, same Tailwind-collision reason as type; `borderRadiusPx` 28 → 2). Final
+  ratchets: hexOutsideTheme 0, fontSizePx 3, borderRadiusPx 2, zIndexLiteral 6
+  (the residuals are documented `design-system-exception` one-offs and icon glyphs).
+
+### Remaining follow-ups (not blocking; small, optional)
+
+- **Off-grid spacing strays** (~57 declarations using 9/10/14/18/22/28px etc.)
+  left raw — snapping them to the scale is a *visual* decision, not a no-op.
+- **Defined-but-unused tokens** kept to document the scale: `--elevation-md`,
+  `--ease-standard`, `--color-info`. Drop or adopt as desired. Also
+  `--duration-sidebar-transition` (200ms) now duplicates `--dur-slow`.
+- **Medium-weight (500) audit** — walk remaining `font-weight:500` sites now that
+  the type system is in (controls stay off medium).
+- **Two modals left off the shared shell** on purpose: the full-bleed image
+  lightbox and the multi-step Claude sign-in modal (forcing either onto `.modal-*`
+  would regress it).
+- **Dark mode** — tokens are structured for it (semantic, centralized) but no dark
+  theme is built. Open question from section 8.
+- **Harness upgrade** — a small pixel-diff threshold + click-to-zoom lightbox
+  would let it report clean "identical" through token additions (the reflow
+  artifact currently requires reasoning around).
 
 All line/rule counts below were measured from `frontend/src/style.css`
 (4,108 lines, 512 rule blocks) and the `frontend/src/**` view modules at the
