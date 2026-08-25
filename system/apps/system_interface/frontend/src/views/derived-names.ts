@@ -35,3 +35,12 @@ export function browserDisplayName(browserName: string): string {
   const match = NUMBERED_BROWSER_RE.exec(browserName);
   return match === null ? `Browser ${browserName}` : `Browser ${match[1]}`;
 }
+
+/** What a registered app is called before anyone renamed it. The one special
+ *  case is the built-in file viewer, whose rail row has always read "File
+ *  Viewer" (see Sidebar's SHORTCUT_ROWS) while its registered service name is
+ *  `files` -- its instances ("File Viewer 2") and its menu verbs should say
+ *  the same thing the row does. Every other app reads as its registered name. */
+export function appServiceDisplayName(serviceName: string): string {
+  return serviceName === "files" ? "File Viewer" : serviceName;
+}

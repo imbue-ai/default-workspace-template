@@ -10,6 +10,7 @@
  */
 
 import m from "mithril";
+import { backdropDismissAttrs } from "./modalBackdrop";
 import { getAgentById } from "../models/AgentManager";
 import { getFastModePromptAgentId, resolveFastModePrompt } from "../models/FastModePrompt";
 import { icon } from "./icons";
@@ -38,13 +39,7 @@ export function FastModeModal(): m.Component {
     view() {
       return m(
         "div.fast-mode-modal-overlay",
-        {
-          onclick: (event: Event) => {
-            if (event.target === event.currentTarget) {
-              resolveFastModePrompt(false);
-            }
-          },
-        },
+        backdropDismissAttrs(() => resolveFastModePrompt(false)),
         [
           m(
             "div.fast-mode-modal",
