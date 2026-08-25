@@ -60,7 +60,6 @@ import { TerminalBanner } from "./TerminalBanner";
 import { SubagentView } from "./SubagentView";
 import { DestroyConfirmDialog } from "./DestroyConfirmDialog";
 import { ProjectMembershipDialog } from "./ProjectMembershipDialog";
-import { ShareModal } from "./ShareModal";
 import { serviceIconMarkup } from "./appIcon";
 import { NewTabLauncher, buildLauncherRows } from "./NewTabLauncher";
 import type { LaunchTarget, LauncherRow } from "./NewTabLauncher";
@@ -72,7 +71,7 @@ import { effectiveLifecycleState, livenessCategoryForState } from "./agentLivene
 import { normalizeTabTitle } from "./tab-rename";
 import { attachHoverTooltip } from "./hoverTooltip";
 import { CLOSE_ACTIVE_TAB } from "@minds/embed-contract";
-import { setEmbedderMessageHandler } from "../embed";
+import { OPEN_SHARE_SETTINGS, sendToEmbedder, setEmbedderMessageHandler } from "../embed";
 import { reloadInterface } from "../reload";
 import { reportActivity } from "../models/activityReporter";
 import { icon } from "./icons";
@@ -316,10 +315,6 @@ let appInstanceDestroyPanelId: string | null = null;
 
 const DESTROY_APP_INSTANCE_DETAILS =
   "It is removed from every project that shows it, not just this one. The app itself keeps running.";
-
-// Share modal state
-let showShareModal = false;
-let shareServiceName: string | null = null;
 
 // Project-membership dialog state (the object menu's "Add to project...").
 // One dialog at a time, opened with the object's current memberships already
@@ -752,20 +747,22 @@ function tabMenuEntries(panelId: string): ObjectMenuEntry[] {
   // the bare service menu (share in the opening group, lifecycle in the
   // destructive slot).
   const isInstancePane = kind === "app" && params.serviceInstanceId !== undefined && params.serviceInstanceId !== "";
+  // A const rather than params.serviceName so the narrowing survives into the
+  // run closure.
+  const shareServiceName = kind === "app" ? params.serviceName : undefined;
   const shareAction =
-    kind === "app" && params.serviceName !== undefined
+    shareServiceName !== undefined
       ? {
           // Named the way the app is displayed, not the way the registry is.
           // The service name is the app's stable id (it keys apps.toml, the
           // supervisord program and the ref), and every other surface already
           // shows the chosen name over it. The share itself is still keyed by
           // the service name.
-          label: `Share ${appDisplayLabel(params.serviceName)}`,
-          run: () => {
-            shareServiceName = params.serviceName ?? null;
-            showShareModal = true;
-            m.redraw();
-          },
+          label: `Share ${appDisplayLabel(shareServiceName)}`,
+          // Ask the embedding minds chrome to open its Share tab on this app.
+          // Fire-and-forget: opened directly in a browser (no embedder), the
+          // send has no listener and the click is a no-op.
+          run: () => sendToEmbedder(OPEN_SHARE_SETTINGS, { serviceName: shareServiceName }),
         }
       : null;
   const actions: ObjectMenuActions = {
@@ -2360,15 +2357,15 @@ export async function removeMemberRefFromView(ref: string): Promise<void> {
   }
 }
 
-/** Open the machine's share surface for an app row -- the share is per
- *  registered service, so an instance row shares its service. */
+/** Ask the embedding minds chrome to open its Share tab for an app row -- the
+ *  share is per registered service, so an instance row shares its service.
+ *  Fire-and-forget: with no embedder (a direct browser visit) the send has no
+ *  listener and the click is a no-op. */
 export function shareMemberRow(row: SidebarTabRow): void {
   if (row.kind !== "app") return;
   const serviceName = serviceNameFromRef(row.ref);
   if (serviceName === null) return;
-  shareServiceName = serviceName;
-  showShareModal = true;
-  m.redraw();
+  sendToEmbedder(OPEN_SHARE_SETTINGS, { serviceName });
 }
 
 /**
@@ -5509,16 +5506,6 @@ export const DockviewWorkspace: m.Component = {
                 appInstanceDestroyRef = null;
                 appInstanceDestroyLabel = null;
                 appInstanceDestroyPanelId = null;
-              },
-            })
-          : null,
-
-        showShareModal && shareServiceName
-          ? m(ShareModal, {
-              serviceName: shareServiceName,
-              onClose() {
-                showShareModal = false;
-                shareServiceName = null;
               },
             })
           : null,
