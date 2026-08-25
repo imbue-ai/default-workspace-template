@@ -76,6 +76,17 @@ state; the frontend removes "Sending…" on that report, not before.
 Beyond "Sending…", the only other allowance is briefly HOLDING the last state the backend
 reported during a round-trip (lag, not invention) until the next update arrives.
 
+**Optimism is a symptom, not a feature.** A placeholder exists only because the send beneath it
+is not robust: if delivery were certain and immediate there would be nothing to paint over. So
+the amount of optimism a harness needs is a direct measure of how unreliable its send path is,
+and the way to reduce it is to make sending robust -- not to make the placeholder cleverer.
+Treat every optimistic state as debt owed by the layer below it.
+
+That is also why the frontend is forbidden from resolving it. A self-timer would hide the debt
+rather than pay it: the message stops being visible while the underlying send is still just as
+unreliable, which trades a confusing UI for a lost message. See E16 for what this costs when
+the send path does fail catastrophically.
+
 Keep both sides as simple as possible; push every decision down.
 
 ### A3. Queue fidelity — the UI queue IS the harness's own queue
@@ -471,3 +482,35 @@ a maximum age for an open-looking tail. Too short and a genuinely long tool call
 too long and a wedged agent takes that long to recover. Our own cancels are stamped exactly
 rather than inferred, so the common case needs no bound at all; the ceiling only covers an
 abandonment we did not cause and cannot see.
+
+### E16. all harnesses — a "Sending…" can persist through a catastrophe, and nothing rescues it
+**Accepted deliberately.** The frontend has no timer and never resolves its own placeholder
+(A2), so whatever the backend last reported is what stays on screen. Every bound therefore
+lives in the backend, and if the backend stops *reporting* — rather than stops working — the
+message reads "Sending…" until something republishes.
+
+In the ordinary failure modes this is bounded and self-correcting:
+
+- **claude / pi / codex:** the send blocks in-request, mngr confirms within
+  `DEFAULT_CONFIRMATION_TIMEOUT_SECONDS` (plus the TUI-ready wait), and the session resolves
+  its registry entry in a `finally` — so a failed send returns the message within ~2 minutes
+  whether or not mngr raised.
+- **antigravity:** the send is off-request, so the bound is the worker's: a bounded send, a
+  bounded delivery witness, and an attempt ceiling after which the entry stops being retried
+  and reads *Queued* rather than *Sending*. Its worker also republishes the queue on every
+  tick, level-triggered, so a stale snapshot is corrected as soon as any watcher exists.
+
+What is NOT bounded is the case where nothing is left to report: a watcher torn down while a
+send is still in flight (its publisher is detached, so the settle updates the queue but
+announces it to no one), an agent never re-watched afterwards, or a worker thread lost to
+something its handler cannot catch. The state is correct in the backend; only the last thing
+the UI heard is wrong.
+
+**Why there is no backstop.** A staleness timer that demoted a stuck "Sending…" would make the
+UI look right while the send path stayed exactly as unreliable — paying the symptom, not the
+debt (A2). The honest fix for a message stuck in this state is to make the send robust enough
+that it cannot get there, and the honest cost meanwhile is a confusing UI in a catastrophe. A
+reload re-reads real state; stopping the agent returns the message to the composer.
+
+The scope is deliberately minimal: this is reachable only when the backend keeps running but
+stops publishing for a given agent, which is not a state ordinary failures produce.
