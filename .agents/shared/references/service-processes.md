@@ -53,11 +53,7 @@ Key fields:
   running the app (program-name-equals-service-name, so pass the app's own
   name); its presence on the registry entry is what lets the workspace offer
   Stop/Start for the app, so pass it for every supervised app and never for
-  unsupervised instances (previews, isolated test servers). The `--icon-file`
-  registers the app's icon on every start; `forward_port.py` refuses to create
-  a brand-new pickable entry without an icon (pass `--no-icon` only for
-  machinery hidden from the app pickers) -- see the `build-app` skill for the
-  house style and CLI details.
+  unsupervised instances (previews, isolated test servers).
 - `directory=/home/user/workspace` -- run from the repo root, so cwd-relative paths
   (`data/...`, `system/scripts/...`) resolve. Set this on every program.
 - `autostart=true` -- start when supervisord boots.

@@ -146,9 +146,7 @@ if [ -n "${MNGR_AGENT_STATE_DIR:-}" ] && [ -f "$TTYD_CLIENT_GZ" ]; then
     fi
 fi
 
-# Register the terminal port before starting ttyd (port is known ahead of time).
-# --no-icon: terminal is hidden from the app pickers (it has its own shortcut
-# rows and glyph), so a registry icon would never be drawn.
+# Register the terminal port before starting ttyd (port is known ahead of time)
 uv run python3 "$REPO_ROOT/system/scripts/forward_port.py" --name terminal --url "http://localhost:$TTYD_PORT" --no-icon
 
 # Write server events for discovery. The "agent" sub-URL is intentionally not
