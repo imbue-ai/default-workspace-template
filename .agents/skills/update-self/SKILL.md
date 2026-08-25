@@ -619,13 +619,17 @@ Interpret the exit code and report it per the §5a composition rules:
   reason, the merge, the agent). That record is yours to close: diagnose the
   failure from the stderr excerpt (often no network, or a download that
   never completed), fix the cause, and re-run the provisioner by hand --
-  `bash system/scripts/setup_system.sh` -- which is idempotent; a later apply
-  whose provisioner run succeeds clears the record too, but do not leave it
-  for one. Tell the user plainly that the update is in and working but one
-  tool-install step is still pending, never that everything completed.
+  `bash system/scripts/setup_system.sh` -- which is idempotent. Only an
+  apply's own successful provisioner run clears the record automatically, so
+  once your manual run exits 0, remove it yourself
+  (`rm data/.state/update-apply/provision-incomplete.json`); do not leave it
+  for a later apply. Tell the user plainly that the update is in and working
+  but one tool-install step is still pending, never that everything
+  completed.
 
-  Every exit also prints one `apply phase timings:` line -- per-phase
-  durations from the apply marker. It is the benchmarking input for the
+  Every apply that had live work to do (a `0` after changes, a `2`, or a `3`;
+  not the "nothing live needed to change" exit) also prints one `apply phase
+  timings:` line -- per-phase durations from the apply marker. It is the benchmarking input for the
   apply's poll and step budgets; when an apply took unusually long, quote it
   in the report rather than guessing which step was slow.
 - **`2` -- automatically rolled back.** The apply reverted the **entire
