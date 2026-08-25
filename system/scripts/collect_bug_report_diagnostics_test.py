@@ -26,9 +26,9 @@ import pytest
 
 _SCRIPT_PATH = Path(__file__).parent / "collect_bug_report_diagnostics.py"
 
-# A supervisord.conf in the shape the workspace writes: every service wrapped in
-# oom_tag_service.py, user-created apps passing the literal band "user", and one
-# built-in (cron) with no wrapper at all.
+# A supervisord.conf in the realistic shape the workspace writes. The collector
+# only consumes it via ``supervisorctl -c`` for the report's metadata, so the
+# programs' commands are never parsed.
 _FIXTURE_SUPERVISORD_CONF = """\
 [supervisord]
 logfile=/var/log/supervisor/supervisord.log
