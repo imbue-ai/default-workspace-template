@@ -40,8 +40,20 @@ change only what it intends to.
   `prefers-color-scheme` rules, so no new token); the progress-block warm greys →
   the neutral `--color-text-secondary`/`-faint` (progress view greys are now
   neutral, a small deliberate shift). Note: `--color-info` is defined but unused.
-- **Primitives (P3) / Modal (P4) — not started** (below); out of scope for the
-  current pass (user chose "through P2").
+- **Primitives (P3) — Button DONE; Badge/Spinner/Toggle/Input still to come.**
+  Shipped the `.btn` primitive (variants `primary|secondary|ghost|destructive|
+  inverse|icon`, sizes `md|sm`, states incl. a new `:active` press and
+  `--selected`, plus the `.btn--ghost.btn--destructive` quiet-destructive combo)
+  and migrated every fittable button family onto it — fast-mode, destroy-dialog,
+  permission, terminal-banner, queued-action, composer actions, image-lightbox,
+  claude-login, and the (now informational) share modal. ~15 bespoke families →
+  one system; the old per-feature button CSS is deleted. **Deliberately left:**
+  the composer's send/stop/attach buttons are *circular* with an accent fill /
+  the stop-button slate, which the square light-background `.btn--icon` can't
+  express — they need a future `.btn--icon.btn--round` + send/stop colour
+  treatment. A few other icon buttons (share close-×, dockview tab actions) are
+  also not yet on the primitive. `borderRadiusPx` ratchet 40 → 36.
+- **Badge / Spinner / Toggle / Input primitives, Modal (P4) — not started.**
 
 All line/rule counts below were measured from `frontend/src/style.css`
 (4,108 lines, 512 rule blocks) and the `frontend/src/**` view modules at the

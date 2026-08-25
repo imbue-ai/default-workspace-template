@@ -38,10 +38,13 @@ so you don't have to reinvent — **reach for them first, every time.**
 
 3. **Components — reuse the shared class/primitive; do not hand-roll another**
    button, modal, badge, toggle, spinner, or input. Extend the existing one (or
-   add a variant modifier) instead of copying it under a new feature prefix. The
-   one real variant system today is `.claude-login-button`
-   (`--primary` / `--ghost` / `--link` / `--block`) — grow shared primitives in
-   that shape rather than making per-feature copies.
+   add a variant modifier) instead of copying it under a new feature prefix. For
+   buttons, use the `.btn` primitive: `.btn.btn--{primary|secondary|ghost|
+   destructive|inverse|icon}`, with `.btn--sm`, `.btn--selected`, and the
+   `.btn--ghost.btn--destructive` quiet-destructive combo. Grow shared primitives
+   in that shape rather than making per-feature copies. (Modal, badge, toggle,
+   spinner, and input primitives are still to come — until they land, generalize
+   the best existing example rather than adding another one-off.)
 
 4. **Prefer semantic tokens/classes over Tailwind utilities for anything
    themed** (colour, and spacing that should track the scale). Tailwind utilities
