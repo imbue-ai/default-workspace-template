@@ -1033,3 +1033,74 @@ def test_antigravity_conservation_storm_stop_and_tap_executors(tmp_path: Path) -
         world.end_turn()
         world.flush()
         ledger.verify()
+
+
+@pytest.mark.parametrize("is_flush_slow", (False, True))
+def test_antigravity_interrupt_during_a_flush_conserves_every_message(tmp_path: Path, is_flush_slow: bool) -> None:
+    """Plan section 8's required case: stop lands while a flush has the queue CLAIMED and in flight.
+
+    The storm's ops run one after another on a single thread, so it never stages this: the
+    flush hands its block to mngr's send, which holds ``message.lock`` for the whole
+    submission, and stop arrives during exactly that window. Both interleavings must conserve.
+
+    - fast flush: it releases inside stop's bounded wait, so stop acquires the lock and reads a
+      SETTLED queue -- the entries are delivered and gone, and stop returns nothing. This is the
+      direct regression test for capturing the block under the lock: captured before the wait
+      instead, both delivered messages would ALSO be handed back to the composer.
+    - slow flush: it outlives the bound, so stop hammers and the restart kills the send. The
+      block dies uncommitted, but the entries never left our queue, so stop returns them --
+      nothing is lost, and nothing needs staging as killable.
+    """
+    ledger = _Ledger(f"antigravity-interrupt-during-flush[slow={is_flush_slow}]")
+    world = _AgyWorld(tmp_path / "agy-flush", ledger)
+    watcher = _AgyStormWatcher(world)
+    agent_info = _agy_agent_info(world.dir)
+
+    # Two messages held behind an open turn, then claimed by a flush.
+    world.begin_turn()
+    for _ in range(2):
+        world.send(world.new_text())
+    block, claimed = world.queue.begin_flush()
+    assert claimed, "the flush must have something to claim"
+
+    restart_count = {"value": 0}
+
+    def deliver() -> None:
+        """mngr's send, completing while it still holds the lock (as _InFlightSend documents)."""
+        if restart_count["value"]:
+            # The hammer's restart landed mid-send: nothing committed. The entries were never
+            # removed from our queue on claim, so stop's block already handed them back -- they
+            # are Returned, NOT killed. This is where agy conserves better than claude's E2
+            # corner, whose in-flight text lives inside the harness and dies with it.
+            world.queue.finish_flush(claimed, is_delivered=False)
+            return
+        world.commit(block)
+        world.queue.finish_flush(claimed, is_delivered=True)
+
+    hold = _SLOW_HOLD_SECONDS if is_flush_slow else _FAST_HOLD_SECONDS
+    in_flight = _InFlightSend(world.dir, hold, deliver)
+
+    def restart_process() -> tuple[bool, str]:
+        restart_count["value"] += 1
+        world.end_turn()
+        return (True, "ok")
+
+    def press_chord() -> bool:
+        world.end_turn()
+        return True
+
+    executor = AntigravityInterruptToComposer.build(agent_info)
+    returned = executor.drain_to_composer(watcher, restart_process, lambda: None, press_chord, lambda: "")
+    for text in _block_texts(returned):
+        ledger.returned.append(text)
+    in_flight.join()
+
+    world.end_turn()
+    world.flush()
+    ledger.verify()
+    if is_flush_slow:
+        assert len(ledger.returned) == 2, "the hammer must hand the uncommitted block back"
+        assert ledger.delivered == []
+    else:
+        assert ledger.returned == [], "a flush that already delivered must not hand its block back"
+        assert len(ledger.delivered) == 2
