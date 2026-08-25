@@ -12,9 +12,15 @@ unmatched tool call, or a ``tool_result``/``user_message`` tail, or agy's empty
 PLANNER_RESPONSE. That is the same evidence :func:`activity_state.derive` climbs, kept here
 as one pure function so the dot and the send decision can never disagree.
 
-The marker is still worth OR-ing in: it is the only signal for a turn that committed between
-polls, and being wrong in that direction only holds a message (late, recoverable) instead of
-typing into a live turn (a swallow).
+The marker is still worth OR-ing in HERE, and deliberately nowhere else. This answers "should
+I hold this message?", where a wrong answer is asymmetric: a stale marker makes us hold a
+message (late, recoverable), while missing an open turn types into it (a swallow). The
+activity ladder answers a different question -- "what does the dot say?" -- and there the same
+OR is a bug: no watcher notifies on a marker-only change, so a dot the marker alone can turn
+on has no edge that turns it off, and it latches. See ``activity_state.derive``.
+
+The asymmetry is the point: this reads the marker live off disk on every call, so it is never
+stale in the way a cached activity state is.
 
 Published by the watcher because it is the component that reads the transcript; read through
 the module registry by the session and the tap, exactly as ``queue_tracker`` is shared.

@@ -29,7 +29,6 @@ from imbue.system_interface.activity_state import is_transcript_tail_stale
 def derive(
     *,
     is_agent_alive: bool,
-    is_active_marker_present: bool,
     has_pending_tool_use: bool,
     tail_event_type: str | None,
     tail_is_final_answer: bool,
@@ -65,10 +64,7 @@ def derive(
           an empty PLANNER_RESPONSE ("deciding what to do next") before each tool call; claude's
           rung 4 would read that as a finished answer and flicker the dot to IDLE between every
           single tool.
-      4. AGY ONLY: the ``active`` marker is present -> THINKING. agy is thinking about
-          something the transcript has not caught up to yet -- a turn committed between polls.
-          Reached only when the tail says "finished", so it cannot mask rungs 2/3.
-      5. otherwise (a substantive ``assistant_message``, or empty) -> IDLE.
+      4. otherwise (a substantive ``assistant_message``) -> IDLE.
     """
     if not is_agent_alive:
         return ActivityState.IDLE
@@ -79,7 +75,5 @@ def derive(
     if tail_event_type in ("user_message", "tool_result"):
         return ActivityState.THINKING
     if tail_event_type == "assistant_message" and not tail_is_final_answer:
-        return ActivityState.THINKING
-    if is_active_marker_present:
         return ActivityState.THINKING
     return ActivityState.IDLE
