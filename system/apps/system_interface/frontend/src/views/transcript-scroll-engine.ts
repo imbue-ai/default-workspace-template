@@ -75,8 +75,7 @@ import type {
   ScrollPositionState,
   Viewport,
 } from "../models/transcriptScroll/types";
-import { isSelectionActiveWithin } from "../models/scrollFollow";
-import { selectionStateWithin } from "./scroll-selection";
+import { isSelectionActiveWithin, selectionStateWithin } from "./scroll-selection";
 import { createOffscreenMeasurer } from "./offscreen-measure";
 import type { RowDescriptor } from "./conversation-rows";
 
@@ -112,9 +111,8 @@ export interface TranscriptScrollDataSource {
 
 export interface TranscriptScrollEngineConfig {
   dataSource: TranscriptScrollDataSource;
-  isVisible: () => boolean;
-  /** Persist scroll state under this agent key; null disables persistence. */
-  getPersistAgentKey: () => string | null;
+  /** Defaults to always-visible (SubagentView); ChatPanel feeds dockview's tab visibility. */
+  isVisible?: () => boolean;
 }
 
 export interface TranscriptRenderPlan {
@@ -159,7 +157,8 @@ function isTraceEnabled(): boolean {
 }
 
 export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfig): TranscriptScrollEngine {
-  const { dataSource, isVisible } = config;
+  const dataSource = config.dataSource;
+  const isVisible = config.isVisible ?? (() => true);
 
   // --- state machines -------------------------------------------------------
   let positionState: ScrollPositionState = FOLLOW_STATE;
@@ -186,6 +185,12 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
   let viewportHeightPx = 0;
   let lastListWidthPx: number | null = null;
   let resizeObserver: ResizeObserver | null = null;
+  // Observes the message list's box: content can resize outside any redraw
+  // (an image finishing loading, a late font swap), which would leave FOLLOW
+  // unpinned or an anchor unheld until something else redraws. A redraw runs
+  // afterRender, which repositions.
+  let listResizeObserver: ResizeObserver | null = null;
+  let observedListEl: Element | null = null;
   let pointerReleaseListener: (() => void) | null = null;
   let isPointerDown = false;
   let measureScheduled = false;
@@ -428,6 +433,11 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     const listEl = scrollEl.querySelector(".message-list");
     if (listEl === null) {
       return false;
+    }
+    if (listEl !== observedListEl && listResizeObserver !== null) {
+      listResizeObserver.disconnect();
+      listResizeObserver.observe(listEl);
+      observedListEl = listEl;
     }
     const widthPx = (listEl as HTMLElement).offsetWidth;
     if (widthPx > 0) {
@@ -732,6 +742,9 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       viewportHeightPx = element.clientHeight;
     }
     lastScrollHeightPx = element.scrollHeight;
+    listResizeObserver = new ResizeObserver(() => {
+      m.redraw();
+    });
     resizeObserver = new ResizeObserver(() => {
       if (scrollEl === null || !isVisible()) {
         return;
@@ -771,6 +784,9 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     }
     resizeObserver?.disconnect();
     resizeObserver = null;
+    listResizeObserver?.disconnect();
+    listResizeObserver = null;
+    observedListEl = null;
     scrollEl = null;
   }
 
