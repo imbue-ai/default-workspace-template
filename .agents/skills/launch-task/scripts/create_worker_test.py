@@ -1584,6 +1584,32 @@ def test_destroy_existing_with_no_predecessor_just_creates(tmp_path: Path) -> No
     assert any(argv[:2] == ["mngr", "create"] for argv in argvs)
 
 
+def test_destroy_existing_proceeds_to_create_when_the_listing_cannot_be_read(
+    tmp_path: Path,
+) -> None:
+    # A hung `mngr list` must degrade to `mngr create`'s own duplicate-name
+    # refusal (the documented backstop), not turn the launch into a traceback.
+    runtime, task, _ = _make_layout(tmp_path)
+    runner = _RecordingRunner()
+    runner.respond(
+        ("mngr", "list"), subprocess.TimeoutExpired(cmd="mngr list", timeout=60)
+    )
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=runner,
+        destroy_existing=True,
+    )
+
+    assert rc == 0
+    argvs = [c.argv for c in runner.calls]
+    assert not any(argv[:2] == ["mngr", "destroy"] for argv in argvs)
+    assert any(argv[:2] == ["mngr", "create"] for argv in argvs)
+
+
 def test_destroy_existing_argvs_accepted_by_live_cli(tmp_path: Path) -> None:
     runtime, task, _ = _make_layout(tmp_path)
     runner = _RecordingRunner()

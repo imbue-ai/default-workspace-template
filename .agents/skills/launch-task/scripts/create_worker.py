@@ -621,13 +621,16 @@ def _worker_state(worker_name: str, runner: Runner) -> str | None:
     """The mngr lifecycle state of ``worker_name``, or ``None`` when no such
     agent exists (or the listing could not be read -- the launch then proceeds
     to ``mngr create``, whose own duplicate-name refusal is the backstop)."""
-    result = runner.run(
-        ["mngr", "list", "--format", "jsonl", "--on-error", "continue"],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
-    )
+    try:
+        result = runner.run(
+            ["mngr", "list", "--format", "jsonl", "--on-error", "continue"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
     if getattr(result, "returncode", 0) != 0:
         return None
     for line in (getattr(result, "stdout", "") or "").splitlines():
