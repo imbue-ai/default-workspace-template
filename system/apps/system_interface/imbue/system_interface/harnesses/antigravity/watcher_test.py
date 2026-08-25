@@ -328,3 +328,49 @@ def test_a_claimed_queue_is_not_flushed_twice(tmp_path: Path) -> None:
     watcher._attempt_flush()
 
     assert sent == [], "the tap holds the claim; the worker must not send the same block"
+
+
+def test_the_queue_entry_departs_before_its_turn_arrives(tmp_path: Path) -> None:
+    """Contract A3b: for a real->real transition, remove the old state BEFORE showing the new.
+
+    The witness loop used to emit transcript events as it found them, so the committed turn
+    landed on screen while the entry was still rendered "Sending..." -- one message in two
+    states at once, seen live as "chat, then still queued, then it disappears".
+    """
+    conv = "conv-order"
+    sent: list[str] = []
+    order: list[str] = []
+
+    watcher = _make_watcher(tmp_path, [conv])
+    next_idx = [100]
+
+    def _send(text: str) -> bool:
+        sent.append(text)
+        append_step(_conv_db_path(tmp_path, conv), (next_idx[0], _TYPE_USER, _STATUS_DONE, _user_payload(text)))
+        next_idx[0] += 1
+        return True
+
+    watcher.set_flush_hooks(_send, lambda: True)
+    watcher.set_queue_snapshot_callback(lambda snap: order.append("queue-empty" if not snap else "queue-present"))
+    watcher._on_events = lambda _agent_id, events: order.append("transcript")
+
+    build_steps_db(
+        _conv_db_path(tmp_path, conv),
+        [
+            (0, _TYPE_USER, _STATUS_DONE, _user_payload("go")),
+            (1, _TYPE_PLANNER, _STATUS_DONE, _planner_payload("done")),
+        ],
+    )
+    watcher._collect_new_events()
+    watcher._publish_turn_state()
+    watcher._queue.attach(publish=watcher._publish_snapshot, wake=lambda: None)
+    watcher._queue.enqueue("deliver me", "t0")
+    order.clear()
+
+    watcher._attempt_flush()
+
+    assert sent == ["deliver me"]
+    assert "transcript" in order, "the committed turn must still be emitted"
+    assert order.index("queue-empty") < order.index("transcript"), (
+        f"the entry must leave the queue BEFORE its turn appears; got {order}"
+    )
