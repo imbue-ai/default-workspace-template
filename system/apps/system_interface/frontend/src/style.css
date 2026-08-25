@@ -207,6 +207,16 @@ body {
   background: var(--color-danger-hover);
   border-color: var(--color-danger-hover);
 }
+/* Quiet destructive: ghost + destructive (danger text, no fill; danger-bg tint on hover). */
+.btn--ghost.btn--destructive {
+  background: transparent;
+  color: var(--color-danger);
+  border-color: transparent;
+}
+.btn--ghost.btn--destructive:hover:not(:disabled) {
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+}
 .btn--inverse {
   background: var(--color-inverse-surface);
   color: var(--color-text-on-accent);
@@ -2723,34 +2733,8 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   gap: 8px;
 }
 
-.destroy-dialog-btn {
-  padding: 8px 16px;
-  font-family: var(--font-family-base);
-  font-size: var(--font-size-body);
-  font-weight: 500;
-  border-radius: var(--radius-base);
-  cursor: pointer;
-  border: 1px solid var(--color-border);
-}
-
-.destroy-dialog-btn-cancel {
-  background: var(--color-surface);
-  color: var(--color-text-primary);
-}
-
-.destroy-dialog-btn-cancel:hover {
-  background: var(--color-bg-hover);
-}
-
-.destroy-dialog-btn-destroy {
-  background: var(--color-danger);
-  color: var(--color-text-on-accent);
-  border-color: var(--color-danger);
-}
-
-.destroy-dialog-btn-destroy:hover {
-  background: var(--color-danger-hover);
-}
+/* Destroy-dialog buttons now use the shared .btn primitive
+   (btn--secondary = cancel/delete-trigger, btn--destructive = confirm). */
 
 /* ── Fast-mode grace-period prompt ── */
 .fast-mode-modal-overlay {
