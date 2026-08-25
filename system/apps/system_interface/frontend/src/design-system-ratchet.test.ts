@@ -48,7 +48,10 @@ const BASELINES = {
   // values with no token yet (8/12/…), handled when a radius scale lands (needs
   // non-colliding names, like type).
   borderRadiusPx: 32,
-  zIndexLiteral: 18,
+  // Tightened by the tooltip primitive: the three duplicated per-component
+  // `[data-tooltip]::after` bubbles (each with `z-index: 1000`) were consolidated
+  // into one generic `[data-tooltip]::after`, dropping two z-index literals.
+  zIndexLiteral: 16,
 } as const;
 
 interface Counts {

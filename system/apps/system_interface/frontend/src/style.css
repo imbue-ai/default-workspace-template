@@ -471,6 +471,52 @@ body {
   cursor: not-allowed;
 }
 
+/* ── Tooltip (simple text) primitive ─────────────────────────────────────────
+ * One shared CSS bubble for simple text tooltips, fed by a `data-tooltip`
+ * attribute (native `title=` is unreliable in the desktop webview). Every simple
+ * tooltip shares this single chrome definition; the per-placement rules at the
+ * call sites below only override POSITIONING (edge-anchoring, so a bubble never
+ * clips a panel edge) and wrapping.
+ *
+ * This is the CSS half of a deliberate two-mechanism split: rich / cross-
+ * container tooltips (dockview tabs, the project rail) instead use the JS
+ * `.minds-tooltip` path in views/hoverTooltip.ts, a body-level fixed bubble that
+ * escapes the tab strip's clipping and a CSS `::after` cannot. The two are not
+ * merged, but share the same --color-inverse-surface / --color-text-on-accent
+ * tokens so they look identical. */
+[data-tooltip] {
+  position: relative;
+}
+[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  width: max-content;
+  max-width: 240px;
+  padding: 6px 9px;
+  border-radius: var(--radius-base);
+  background: var(--color-inverse-surface);
+  color: var(--color-text-on-accent);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-helper);
+  font-weight: 400;
+  line-height: 1.4;
+  white-space: nowrap;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+[data-tooltip]:hover::after,
+[data-tooltip]:focus-visible::after {
+  opacity: 1;
+  visibility: visible;
+}
+
 /* Spacer for the Minds desktop client title bar. When running inside the
    Electron shell, --minds-titlebar-height is set to the title bar height
    (38px). Outside the shell the variable is unset and the spacer collapses
@@ -607,36 +653,16 @@ body {
   flex-shrink: 0;
 }
 
-/* CSS tooltip for the [Shoulder tap] button (native title= is unreliable in the
-   webview). Right-anchored so it never clips the panel's right edge; points down
-   from above the button, matching the progress-view marker tooltips. */
+/* Placement override for the [Shoulder tap] button's tooltip (chrome comes from
+   the shared [data-tooltip]::after primitive). Right-anchored so it never clips
+   the panel's right edge; wraps because the copy is a full sentence. */
 .queued-action[data-tooltip]::after {
-  content: attr(data-tooltip);
-  position: absolute;
   bottom: calc(100% + 7px);
+  left: auto;
   right: 0;
-  z-index: 1000;
-  width: max-content;
+  transform: none;
   max-width: 260px;
-  padding: 6px 9px;
-  border-radius: var(--radius-base);
-  background: var(--color-inverse-surface);
-  color: var(--color-text-on-accent);
-  font-size: var(--font-size-helper);
-  font-weight: 400;
-  line-height: 1.4;
   white-space: normal;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
-  opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
-  transition: opacity 0.12s ease;
-}
-
-.queued-action[data-tooltip]:hover::after,
-.queued-action[data-tooltip]:focus-visible::after {
-  opacity: 1;
-  visibility: visible;
 }
 
 /* A queued bubble reuses the user-bubble view but is marked as not-yet-sent: a
@@ -677,36 +703,16 @@ body {
   opacity: 1;
 }
 
-/* Its hover tooltip, same right-anchored CSS pattern as the [Shoulder tap] button
-   (native title= is unreliable in the webview). Left-anchored here since the icon
-   sits at the column's left edge, so the tooltip does not clip off-screen. */
+/* Placement override for the (i) info tooltip (chrome comes from the shared
+   [data-tooltip]::after primitive). Left-anchored since the icon sits at the
+   column's left edge, so the tooltip does not clip off-screen; wraps because the
+   copy is a full sentence. */
 .queued-info[data-tooltip]::after {
-  content: attr(data-tooltip);
-  position: absolute;
   bottom: calc(100% + 7px);
   left: 0;
-  z-index: 1000;
-  width: max-content;
+  transform: none;
   max-width: 300px;
-  padding: 6px 9px;
-  border-radius: var(--radius-base);
-  background: var(--color-inverse-surface);
-  color: var(--color-text-on-accent);
-  font-size: var(--font-size-helper);
-  font-weight: 400;
-  line-height: 1.4;
   white-space: normal;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
-  opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
-  transition: opacity 0.12s ease;
-}
-
-.queued-info[data-tooltip]:hover::after,
-.queued-info[data-tooltip]:focus-visible::after {
-  opacity: 1;
-  visibility: visible;
 }
 
 /* Optimistic "Sending…" bubble: shown at the tail the instant the user sends,
@@ -849,50 +855,10 @@ body {
 }
 
 /* Hover tooltips for the composer toolbar controls (model picker, fast-mode
-   toggle, attach, interrupt, send) and the under-bar row beneath the input
-   (the model/effort/fast slots live here, not in the toolbar). Uses the shared
-   CSS-tooltip pattern -- a `::after` bubble fed by `data-tooltip` -- rather than
-   native `title`, which is unreliable in the desktop webview (see
-   .pending-message-interrupt). Both rows sit at the composer's bottom, so the
-   bubble points upward. */
-.message-input-toolbar [data-tooltip],
-.composer-under-bar [data-tooltip] {
-  position: relative;
-}
-
-.message-input-toolbar [data-tooltip]::after,
-.composer-under-bar [data-tooltip]::after {
-  content: attr(data-tooltip);
-  position: absolute;
-  bottom: calc(100% + 8px);
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 1000;
-  width: max-content;
-  max-width: 240px;
-  padding: 6px 9px;
-  border-radius: var(--radius-base);
-  background: var(--color-inverse-surface);
-  color: var(--color-text-on-accent);
-  font-family: var(--font-family-base);
-  font-size: var(--font-size-helper);
-  font-weight: 400;
-  line-height: 1.4;
-  white-space: nowrap;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
-  opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
-  transition: opacity 0.12s ease;
-}
-
-.message-input-toolbar [data-tooltip]:hover::after,
-.message-input-toolbar [data-tooltip]:focus-visible::after,
-.composer-under-bar [data-tooltip]:hover::after,
-.composer-under-bar [data-tooltip]:focus-visible::after {
-  opacity: 1;
-  visibility: visible;
-}
+   toggle, attach, interrupt, send) and the under-bar model/effort/fast slots
+   now use the shared [data-tooltip]::after primitive (see the Tooltip primitive
+   near the top): centered above the control, which is exactly this row's needs,
+   so no per-placement override is required here. */
 
 /* The composer send / stop / attach buttons now use the shared .btn primitive
    (.btn--icon.btn--round, with --primary for send and --stop for interrupt).
