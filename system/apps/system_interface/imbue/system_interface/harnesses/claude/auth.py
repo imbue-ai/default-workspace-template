@@ -1479,10 +1479,13 @@ class ClaudeAuthService(MutableModel):
         managed_env = read_managed_auth_env()
         if provider is OAuthProvider.CLAUDEAI and not managed_env:
             self._clear_terminal_restart_progress()
-            status = self.get_auth_status()
+            # Before the status check, which can raise `AuthStatusUnavailableError`: the
+            # sign-in is already complete, so the hook is owed whether or not the check
+            # answers. The other paths hand the hook to `start_background_apply`, whose
+            # thread runs it regardless; this is the only one that runs it inline.
             if on_restart_complete is not None:
                 on_restart_complete()
-            return status
+            return self.get_auth_status()
         reason = (
             RestartReason.CONSOLE_SWITCH if provider is OAuthProvider.CONSOLE else RestartReason.SUBSCRIPTION_SWITCH
         )
