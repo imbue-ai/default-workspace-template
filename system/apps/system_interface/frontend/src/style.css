@@ -2725,15 +2725,18 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   margin: 0;
 }
 
+/* Dialog body copy reads at full strength by default -- it is the point of the
+   dialog. A specific line that is genuinely secondary (a footnote, a hint) opts
+   into --color-text-secondary/-faint at its own call site; the default does not. */
 .modal-body {
   font-size: var(--font-size-body);
-  color: var(--color-text-secondary);
+  color: var(--color-text-primary);
   line-height: 1.5;
 }
 
 .modal-message {
   font-size: var(--font-size-body);
-  color: var(--color-text-secondary);
+  color: var(--color-text-primary);
   line-height: 1.5;
   margin: 0 0 var(--space-4);
 }
