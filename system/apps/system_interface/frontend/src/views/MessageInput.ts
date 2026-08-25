@@ -43,6 +43,8 @@ const pendingComposerPrepends = new Map<string, string>();
 interface PendingFailureNotice {
   title: string;
   detail: string;
+  /** mngr's classification, so a sibling's failure earns the same buttons the composer's would. */
+  kind?: SendFailureKind;
   /** Repeated by Retry. Omitted when the operation cannot be repeated. */
   retry?: () => Promise<void>;
 }
@@ -57,6 +59,10 @@ const pendingFailureNotices = new Map<string, PendingFailureNotice>();
  * button started it.
  */
 export function raiseFailureNotice(agentId: string, notice: PendingFailureNotice): void {
+  // Only ever one pending per agent, and only for the agent it concerns: a composer that is not
+  // mounted cannot show this, and a stale entry would otherwise surface as a modal about
+  // something that failed long ago the next time the user opened that chat.
+  pendingFailureNotices.clear();
   pendingFailureNotices.set(agentId, notice);
   m.redraw();
 }
@@ -235,6 +241,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         clearActionFailureNotice();
         actionFailureTitle = pendingNotice.title;
         actionFailureDetail = pendingNotice.detail;
+        actionFailureKind = pendingNotice.kind ?? "unknown";
         externalRetry = pendingNotice.retry ?? null;
       }
 
@@ -285,6 +292,12 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
           (attachment) => attachment.status === "error",
         );
         if (failedAttachments.length > 0) {
+          // Same guard as the send-failure path: the upload wait above is awaited, so the user
+          // may have switched agents, and a notice about this agent's files must not land on
+          // another agent's chat.
+          if (currentAgentId !== agentId) {
+            return;
+          }
           const names = failedAttachments.map((attachment) => attachment.fileName).join(", ");
           actionFailureTitle =
             failedAttachments.length === 1 ? "An attachment didn't upload" : "Some attachments didn't upload";
@@ -331,20 +344,12 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
           const detail = describeRequestError(err);
           console.error(`Failed to send message to agent ${agentId}: ${detail}`);
           dropOutgoing(agentId, outgoingId);
-          // Put the message straight back in the composer. It must not live only in the recovery
-          // record, which is closure state a reload or a closed tab would take with it -- so the
-          // box is where it waits, and a repeat send removes that copy once it has actually
-          // landed.
-          //
-          // The notice is only offered if they are still looking at the agent that failed: the catch runs after an
-          // await, so they may have switched, and the switch-clear above has already gone by.
-          // Put the text back in the composer NOW rather than holding it only in the recovery
-          // record: that record is closure state, so a reload or a closed tab would take the
-          // message with it. Persisting immediately keeps contract A1a (never swallowed), and
-          // Retry/Force clear it again once the send actually lands.
+          // Back in the composer immediately: the recovery record is closure state, so a reload
+          // would take the message with it (contract A1a). A repeat send removes that copy once
+          // it has landed.
           restoreFailedMessageToComposer(agentId, sentText, sentAttachments);
-          // Only offer the actions if they are still looking at the agent that failed: the catch
-          // runs after an await, so they may have switched, and the switch-clear has gone by.
+          // Actions only if they are still on the agent that failed -- this catch runs after an
+          // await, so they may have switched and the switch-clear has already gone by.
           if (currentAgentId === agentId) {
             actionFailureTitle = "Couldn't send your message";
             actionFailureDetail = detail;
@@ -478,6 +483,11 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
 
       /** Drop the first occurrence of ``block`` from ``text``, tidying the separator it left. */
       function removeFirstBlock(text: string, block: string): string {
+        if (!block) {
+          // An attachments-only message has no text to remove, and indexOf("") matches at 0 --
+          // which would reformat a draft this never touched.
+          return text;
+        }
         const at = text.indexOf(block);
         if (at === -1) {
           return text;
@@ -626,10 +636,17 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         // have a button that quietly loses other people's. Best-effort on purpose: the agent we
         // are about to force is often the one that is stuck, so a drain that fails or is refused
         // must not stop the restart the user actually asked for.
+        // Rescue whatever is queued inside the harness before restarting, since the restart drops
+        // it. Best-effort: the agent being forced is often the stuck one, and a drain that fails
+        // must not stop the restart the user actually asked for.
+        let didDrainRestart = false;
         try {
           const drained = await drainToComposer(recovery.agentId);
           if (drained.block) {
             prependToComposer(recovery.agentId, drained.block);
+            // A non-empty queue means the drain took the restart path, so the agent has already
+            // been restarted and doing it again would cost a second one for nothing.
+            didDrainRestart = true;
           }
         } catch {
           // Nothing to do: the restart still goes ahead, and anything queued is lost with it.
@@ -639,7 +656,9 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
           // chord that never restarts the process, and a wedged agent is exactly what Force is
           // for. If this is refused (the services agent carries is_primary=true, say) that
           // refusal becomes the notice's text and nothing is sent.
-          await interruptAgent(recovery.agentId);
+          if (!didDrainRestart) {
+            await interruptAgent(recovery.agentId);
+          }
         } catch (err) {
           actionFailureDetail = describeRequestError(err);
           actionFailureInFlight = null;
