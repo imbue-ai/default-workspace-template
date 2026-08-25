@@ -40,8 +40,6 @@ import time
 import zipfile
 from collections.abc import Mapping, Sequence
 
-CONTRACT_VERSION = 1
-
 WORKSPACE_DIR = "/home/user/workspace"
 # The workspace's own service definitions, read for the supervisorctl status in
 # the report's metadata.
@@ -114,9 +112,12 @@ CHAT_MEMBER_DIR = "chats"
 ZIP_MIN_TIMESTAMP = 315532800
 ZIP_MAX_TIMESTAMP = 4354819199
 
-REASON_SCANNER_UNAVAILABLE = "scanner_unavailable"
-REASON_SECRETS_FOUND = "secrets_found"
-REASON_NO_CHAT_TRANSCRIPT = "no_chat_transcript"
+# Plain-words notes for the ``collection-notes.txt`` member. The archive is
+# the only channel back to the report, so anything withheld says so here.
+NOTES_MEMBER_NAME = "collection-notes.txt"
+NOTE_SCANNER_UNAVAILABLE = "withheld: the secret scanner could not run, so nothing it was to check was released"
+NOTE_SECRETS_FOUND = "withheld: the secret scan reported findings"
+NOTE_NO_CHAT_TRANSCRIPT = "no chat transcripts exist in this workspace"
 
 FINDING_MARKER = "SECRET SCAN FINDING"
 # Every marker scan_secrets.sh prints for "one of my two mandatory scanners did
@@ -324,35 +325,55 @@ def run_mngr(args: Sequence[str], timeout: float) -> str | None:
     return proc.stdout
 
 
-def list_agents(timeout: float) -> list[str]:
-    """Every agent's name -- chat, background worker, or the primary services agent.
+def list_agents(timeout: float) -> list[tuple[str, str]]:
+    """Every agent, as ``(name, pinned address)`` -- chat, worker, or the services agent.
 
-    Deliberately unfiltered: any agent's conversation can carry the bug, so all
-    of them are asked for a transcript (an agent with none simply contributes no
-    member, which is how the primary services agent usually drops out).
+    Deliberately unfiltered by kind: any agent's conversation can carry the bug,
+    so all of them are asked for a transcript (an agent with none simply
+    contributes no member, which is how the primary services agent usually
+    drops out).
+
+    Scoped to the local provider on purpose: every agent inside a workspace is
+    the inner mngr's own, and asking the cloud providers baked into the
+    settings only makes mngr probe backends that cannot answer from inside a
+    container -- that probing, not the listing, is what used to cost the
+    collection most of its budget. The returned ``name@host.provider`` address
+    pins each later ``mngr event`` the same way, so it skips the fan-out too.
 
     The pipe-delimited template is used rather than ``--format json``: inside a
     workspace container mngr cannot reach the providers that back its hosts, and
     the json path fails outright on that where the template still answers from
     local state.
     """
-    listed = run_mngr(["list", "--format", "{name}|{type}"], timeout)
+    listed = run_mngr(
+        [
+            "list",
+            "--provider",
+            "local",
+            "--format",
+            "{name}|{name}@{host.name}.{host.provider_name}",
+        ],
+        timeout,
+    )
     if listed is None:
         return []
-    agents: list[str] = []
+    agents: list[tuple[str, str]] = []
     for line in listed.splitlines():
         parts = line.split("|")
         if len(parts) != 2:
             continue
-        name, agent_type = (p.strip() for p in parts)
-        if not name or not agent_type:
+        name, address = (p.strip() for p in parts)
+        if not name or not address:
             continue
-        agents.append(name)
+        agents.append((name, address))
     return agents
 
 
-def fetch_transcript(name: str, timeout: float) -> str | None:
+def fetch_transcript(address: str, timeout: float) -> str | None:
     """One agent's conversation as raw JSONL, or None when it has none.
+
+    ``address`` is the pinned ``name@host.provider`` form from ``list_agents``,
+    so resolving it never fans out to the unreachable cloud providers.
 
     The harness is NOT derived from the agent's type: an agent of type ``chat``
     writes its events under ``claude/``, so the two do not map onto each other.
@@ -367,7 +388,7 @@ def fetch_transcript(name: str, timeout: float) -> str | None:
     events = run_mngr(
         [
             "event",
-            name,
+            address,
             "--include",
             'source.endsWith("common_transcript")',
             "--exclude",
@@ -439,8 +460,8 @@ def collect_transcript_members(timeout: float) -> list[tuple[str, str, float]]:
     """
     fetched = []
     used_names: set[str] = set()
-    for name in list_agents(timeout):
-        events = fetch_transcript(name, timeout)
+    for name, address in list_agents(timeout):
+        events = fetch_transcript(address, timeout)
         if events is None:
             continue
         member = transcript_member_name(name, transcript_source(events), used_names)
@@ -477,10 +498,7 @@ def build_zip(members: Sequence[tuple[str, str, float]]) -> bytes:
     return buffer.getvalue()
 
 
-def encode_zip(
-    log_members: Sequence[tuple[str, str, float]],
-    chat_members: Sequence[tuple[str, str, float]],
-) -> str | None:
+def encode_zip(members: Sequence[tuple[str, str, float]]) -> str | None:
     """Everything collected, packed and base64-encoded; None when there is nothing.
 
     Deliberately unbounded. The payload returns on the collector's stdout, which
@@ -491,10 +509,9 @@ def encode_zip(
     fails loudly as ``exec_timeout`` rather than quietly shipping a trimmed set
     a reader could not tell from a complete one.
     """
-    members = list(log_members) + list(chat_members)
     if not members:
         return None
-    return base64.b64encode(build_zip(members)).decode("ascii")
+    return base64.b64encode(build_zip(list(members))).decode("ascii")
 
 
 def scan_targets(
@@ -524,28 +541,28 @@ def scan_targets(
             argv, capture_output=True, text=True, timeout=timeout_seconds
         )
     except Exception:
-        return {path: REASON_SCANNER_UNAVAILABLE for path in target_paths}
+        return {path: NOTE_SCANNER_UNAVAILABLE for path in target_paths}
     if proc.returncode == 0:
         return {path: None for path in target_paths}
     # scan_secrets.sh reports on stderr, but stdout is folded in so that a
     # failure printed anywhere still counts against the scan.
     output = proc.stdout + "\n" + proc.stderr
     if any(marker in output for marker in SCANNER_MALFUNCTION_MARKERS):
-        return {path: REASON_SCANNER_UNAVAILABLE for path in target_paths}
+        return {path: NOTE_SCANNER_UNAVAILABLE for path in target_paths}
     if UNPARSEABLE_REPORT_MARKER in output:
-        return {path: REASON_SECRETS_FOUND for path in target_paths}
+        return {path: NOTE_SECRETS_FOUND for path in target_paths}
     finding_lines = [line for line in output.splitlines() if FINDING_MARKER in line]
     if not finding_lines:
-        return {path: REASON_SCANNER_UNAVAILABLE for path in target_paths}
+        return {path: NOTE_SCANNER_UNAVAILABLE for path in target_paths}
     verdicts = {}
     for path in target_paths:
         matched = [line for line in finding_lines if path in line]
-        verdicts[path] = REASON_SECRETS_FOUND if matched else None
+        verdicts[path] = NOTE_SECRETS_FOUND if matched else None
     unattributed = [
         line for line in finding_lines if not any(path in line for path in target_paths)
     ]
     if unattributed:
-        return {path: REASON_SECRETS_FOUND for path in target_paths}
+        return {path: NOTE_SECRETS_FOUND for path in target_paths}
     return verdicts
 
 
@@ -574,7 +591,10 @@ def parse_scan_timeout(flags: Sequence[str]) -> float:
 def main(argv: Sequence[str]) -> None:
     flags = set(argv)
     scan_timeout_seconds = parse_scan_timeout(list(flags))
-    omissions: dict[str, str] = {}
+    # Plain-words lines for the notes member: whenever something requested is
+    # not in the archive, one line here says so. The archive is the only
+    # channel back to the report.
+    notes: list[str] = []
 
     log_members: list[tuple[str, str, float]] = []
     if "--logs" in flags:
@@ -587,7 +607,7 @@ def main(argv: Sequence[str]) -> None:
     if "--transcript" in flags:
         chat_members = collect_transcript_members(scan_timeout_seconds)
         if not chat_members:
-            omissions[TRANSCRIPT_KEY] = REASON_NO_CHAT_TRANSCRIPT
+            notes.append("recent chats: " + NOTE_NO_CHAT_TRANSCRIPT)
 
     # Nothing leaves the container unscanned, so a payload that cannot even be
     # staged for the scanner is dropped exactly as one the scanner could not
@@ -615,7 +635,7 @@ def main(argv: Sequence[str]) -> None:
                 logs_staged.append(staged)
             if logs_staged is None:
                 log_members = []
-                omissions[WORKSPACE_LOGS_KEY] = REASON_SCANNER_UNAVAILABLE
+                notes.append("workspace logs: " + NOTE_SCANNER_UNAVAILABLE)
             else:
                 staged_by_key[WORKSPACE_LOGS_KEY] = logs_staged
         if chat_members:
@@ -632,7 +652,7 @@ def main(argv: Sequence[str]) -> None:
                 transcript_staged.append(staged)
             if transcript_staged is None:
                 chat_members = []
-                omissions[TRANSCRIPT_KEY] = REASON_SCANNER_UNAVAILABLE
+                notes.append("recent chats: " + NOTE_SCANNER_UNAVAILABLE)
             else:
                 staged_by_key[TRANSCRIPT_KEY] = transcript_staged
 
@@ -646,29 +666,30 @@ def main(argv: Sequence[str]) -> None:
                 # partial set of conversations, which a reader could not tell
                 # from the full set.
                 reasons = [
-                    verdicts.get(path, REASON_SCANNER_UNAVAILABLE) for path in paths
+                    verdicts.get(path, NOTE_SCANNER_UNAVAILABLE) for path in paths
                 ]
                 reason = next((r for r in reasons if r is not None), None)
                 if reason is not None:
                     if key == WORKSPACE_LOGS_KEY:
                         log_members = []
+                        notes.append("workspace logs: " + reason)
                     if key == TRANSCRIPT_KEY:
                         chat_members = []
-                    omissions[key] = reason
+                        notes.append("recent chats: " + reason)
     finally:
         shutil.rmtree(staging_dir, ignore_errors=True)
 
-    # Base64 because JSON holds no bytes; the host decodes it back and stages
-    # the archive verbatim. "zip" is absent -- never empty -- when nothing was
-    # collected.
-    encoded = encode_zip(log_members, chat_members)
-    payload: dict[str, object] = {
-        "contract_version": CONTRACT_VERSION,
-        "omissions": omissions,
-    }
+    # The notes ride inside the archive itself, so a reader learns what was
+    # withheld from the same file that holds what was not. Collector-authored
+    # text only -- no workspace content -- so it is not itself scanned.
+    members = list(log_members) + list(chat_members)
+    if notes:
+        members.append((NOTES_MEMBER_NAME, "\n".join(notes) + "\n", time.time()))
+    # Base64 because stdout is text; the host decodes the one line and stages
+    # the archive verbatim. Nothing prints when nothing was requested.
+    encoded = encode_zip(members)
     if encoded is not None:
-        payload["zip"] = encoded
-    print(json.dumps(payload))
+        print(encoded)
 
 
 if __name__ == "__main__":

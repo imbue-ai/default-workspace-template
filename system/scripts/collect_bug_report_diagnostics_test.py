@@ -143,13 +143,16 @@ def _write_mngr_stub(
 
     The collector asks mngr two things -- which agents exist, and what was said
     in one -- so the stub answers exactly those two shapes: the pipe template
-    ``{name}|{type}`` for ``list``, and raw JSONL for ``event``.
+    ``{name}|{name}@{host.name}.{host.provider_name}`` for ``list``, and raw
+    JSONL for ``event``. The event target arrives as the pinned
+    ``name@host.provider`` address the listing handed out, so the stub keys its
+    canned events by the name in front of the ``@``.
     """
     events_dir = tmp_path / "stub-events"
     events_dir.mkdir(parents=True, exist_ok=True)
     for agent_name, events in (events_by_agent or {}).items():
         (events_dir / agent_name).write_text(events, encoding="utf-8")
-    listing = "".join(f"{name}|chat\n" for name in agents)
+    listing = "".join(f"{name}|{name}@stub-host.local\n" for name in agents)
     listing_path = tmp_path / "stub-listing.txt"
     listing_path.write_text(listing, encoding="utf-8")
     argv_log = tmp_path / "stub-argv.log"
@@ -163,7 +166,8 @@ def _write_mngr_stub(
         "  exit 0\n"
         "fi\n"
         'if [ "$1" = "event" ]; then\n'
-        f'  f="{events_dir}/$2"\n'
+        '  agent_name="${2%%@*}"\n'
+        f'  f="{events_dir}/$agent_name"\n'
         '  if [ -f "$f" ]; then cat "$f"; fi\n'
         "  exit 0\n"
         "fi\n"
@@ -256,9 +260,17 @@ def _write_sleeping_stub_scan_gate(
     )
 
 
-def _zip_from_payload(payload: dict[str, Any]) -> zipfile.ZipFile:
-    """The archive a payload carries, decoded back out of its base64."""
-    return zipfile.ZipFile(io.BytesIO(base64.b64decode(payload["zip"], validate=True)))
+def _zip_from_stdout(stdout: str) -> zipfile.ZipFile:
+    """The archive main() printed: exactly one line, the base64 of a zip."""
+    assert stdout.endswith("\n") and stdout.count("\n") == 1, "the collector must print exactly one line"
+    return zipfile.ZipFile(io.BytesIO(base64.b64decode(stdout.strip(), validate=True)))
+
+
+def _notes_lines(archive: zipfile.ZipFile) -> list[str]:
+    """The collection-notes member's lines; empty when the archive carries none."""
+    if "collection-notes.txt" not in archive.namelist():
+        return []
+    return archive.read("collection-notes.txt").decode("utf-8").splitlines()
 
 
 # --- Caps and contract constants ---
@@ -284,7 +296,6 @@ def test_the_scan_gate_path_points_at_a_gate_that_exists_in_this_repo() -> None:
 
 def test_collector_caps_match_the_documented_limits() -> None:
     module = _load_collector()
-    assert module.CONTRACT_VERSION == 1
     assert module.MAX_LOG_FILES == 100
     assert module.MAX_LINES_PER_LOG == 200
     assert module.MIN_TRANSCRIPT_COUNT == 5
@@ -374,7 +385,11 @@ def test_every_agent_is_a_transcript_candidate(
     )
     collector = _load_collector(mngr_binary=stub)
 
-    assert collector.list_agents(5.0) == ["chatty", "system-services", "worker"]
+    assert collector.list_agents(5.0) == [
+        ("chatty", "chatty@stub-host.local"),
+        ("system-services", "system-services@stub-host.local"),
+        ("worker", "worker@stub-host.local"),
+    ]
 
 
 def test_a_transcript_is_named_for_the_harness_that_wrote_it_not_the_agent_type(
@@ -624,7 +639,7 @@ def test_scan_targets_drops_only_the_file_a_finding_names(tmp_path: Path) -> Non
 
     verdicts = module.scan_targets(["/tmp/logs.txt", "/tmp/transcript.txt"], 10)
 
-    assert verdicts == {"/tmp/logs.txt": None, "/tmp/transcript.txt": "secrets_found"}
+    assert verdicts == {"/tmp/logs.txt": None, "/tmp/transcript.txt": module.NOTE_SECRETS_FOUND}
 
 
 @pytest.mark.parametrize(
@@ -656,8 +671,8 @@ def test_scan_targets_disqualifies_every_file_when_a_scanner_did_not_complete(
     verdicts = module.scan_targets(["/tmp/logs.txt", "/tmp/transcript.txt"], 10)
 
     assert verdicts == {
-        "/tmp/logs.txt": "scanner_unavailable",
-        "/tmp/transcript.txt": "scanner_unavailable",
+        "/tmp/logs.txt": module.NOTE_SCANNER_UNAVAILABLE,
+        "/tmp/transcript.txt": module.NOTE_SCANNER_UNAVAILABLE,
     }
 
 
@@ -675,8 +690,8 @@ def test_scan_targets_drops_every_file_when_a_report_could_not_be_parsed(
     verdicts = module.scan_targets(["/tmp/logs.txt", "/tmp/transcript.txt"], 10)
 
     assert verdicts == {
-        "/tmp/logs.txt": "secrets_found",
-        "/tmp/transcript.txt": "secrets_found",
+        "/tmp/logs.txt": module.NOTE_SECRETS_FOUND,
+        "/tmp/transcript.txt": module.NOTE_SECRETS_FOUND,
     }
 
 
@@ -694,8 +709,8 @@ def test_scan_targets_drops_every_file_when_a_finding_names_none_of_them(
     verdicts = module.scan_targets(["/tmp/logs.txt", "/tmp/transcript.txt"], 10)
 
     assert verdicts == {
-        "/tmp/logs.txt": "secrets_found",
-        "/tmp/transcript.txt": "secrets_found",
+        "/tmp/logs.txt": module.NOTE_SECRETS_FOUND,
+        "/tmp/transcript.txt": module.NOTE_SECRETS_FOUND,
     }
 
 
@@ -708,7 +723,7 @@ def test_scan_targets_drops_every_file_when_a_failed_scan_said_nothing(
 
     verdicts = module.scan_targets(["/tmp/logs.txt"], 10)
 
-    assert verdicts == {"/tmp/logs.txt": "scanner_unavailable"}
+    assert verdicts == {"/tmp/logs.txt": module.NOTE_SCANNER_UNAVAILABLE}
 
 
 def test_scan_targets_fails_closed_when_the_scan_gate_is_absent(tmp_path: Path) -> None:
@@ -717,7 +732,7 @@ def test_scan_targets_fails_closed_when_the_scan_gate_is_absent(tmp_path: Path) 
 
     verdicts = module.scan_targets(["/tmp/logs.txt"], 10)
 
-    assert verdicts == {"/tmp/logs.txt": "scanner_unavailable"}
+    assert verdicts == {"/tmp/logs.txt": module.NOTE_SCANNER_UNAVAILABLE}
 
 
 def test_scan_targets_fails_closed_when_the_scan_times_out(tmp_path: Path) -> None:
@@ -728,8 +743,8 @@ def test_scan_targets_fails_closed_when_the_scan_times_out(tmp_path: Path) -> No
     verdicts = module.scan_targets(["/tmp/logs.txt", "/tmp/transcript.txt"], 0.5)
 
     assert verdicts == {
-        "/tmp/logs.txt": "scanner_unavailable",
-        "/tmp/transcript.txt": "scanner_unavailable",
+        "/tmp/logs.txt": module.NOTE_SCANNER_UNAVAILABLE,
+        "/tmp/transcript.txt": module.NOTE_SCANNER_UNAVAILABLE,
     }
 
 
@@ -739,9 +754,9 @@ def test_scan_targets_fails_closed_when_the_scan_times_out(tmp_path: Path) -> No
 def test_main_prints_only_the_contract_json_line_with_all_content_on_a_clean_scan(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The clean path: exactly one JSON line (no sentinels -- those belong to the
-    invoking shell), carrying one zip with the logs member and each recent chat
-    as its own member, newest chat first."""
+    """The clean path: exactly one line of base64, decoding to one zip with the
+    logs member and each recent chat as its own member, newest chat first, and
+    no notes member -- nothing was withheld, so there is nothing to say."""
     gate = tmp_path / "gate"
     _write_stub_scan_gate(gate, exit_code=0)
     log_dir = tmp_path / "supervisor"
@@ -769,14 +784,7 @@ def test_main_prints_only_the_contract_json_line_with_all_content_on_a_clean_sca
 
     module.main(["--logs", "--transcript"])
 
-    out = capsys.readouterr().out
-    assert out.endswith("\n") and out.count("\n") == 1, (
-        "the collector must print exactly one line"
-    )
-    payload = json.loads(out)
-    assert payload["contract_version"] == 1
-    assert payload["omissions"] == {}
-    with _zip_from_payload(payload) as archive:
+    with _zip_from_stdout(capsys.readouterr().out) as archive:
         assert archive.testzip() is None
         assert archive.namelist() == [
             "metadata.json",
@@ -814,19 +822,17 @@ def test_main_reports_no_chat_transcript_when_the_agent_tree_is_empty(
 
     module.main(["--transcript"])
 
-    payload = json.loads(capsys.readouterr().out)
-    assert payload == {
-        "contract_version": 1,
-        "omissions": {"transcript": "no_chat_transcript"},
-    }
-    assert "zip" not in payload
+    with _zip_from_stdout(capsys.readouterr().out) as archive:
+        assert archive.namelist() == ["collection-notes.txt"]
+        assert _notes_lines(archive) == ["recent chats: no chat transcripts exist in this workspace"]
 
 
 def test_main_omits_an_unrequested_content_type_from_both_zip_and_omissions(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """--logs alone must not mention the transcript anywhere, even in a workspace
-    that has chats -- an unrequested type simply does not appear."""
+    that has chats -- an unrequested type appears in neither the members nor the
+    notes."""
     gate = tmp_path / "gate"
     _write_stub_scan_gate(gate, exit_code=0)
     log_dir = tmp_path / "supervisor"
@@ -849,10 +855,8 @@ def test_main_omits_an_unrequested_content_type_from_both_zip_and_omissions(
 
     module.main(["--logs"])
 
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["omissions"] == {}
-    with _zip_from_payload(payload) as archive:
-        # Logs only: metadata plus the service logs, and no chats member at all.
+    with _zip_from_stdout(capsys.readouterr().out) as archive:
+        # Logs only: metadata plus the service logs -- no chats, and no notes.
         assert archive.namelist() == ["metadata.json", "logs/system_interface.log"]
 
 
@@ -879,12 +883,9 @@ def test_main_withholds_the_whole_archive_when_one_chat_carries_a_secret(
 
     module.main(["--transcript"])
 
-    payload = json.loads(capsys.readouterr().out)
-    assert payload == {
-        "contract_version": 1,
-        "omissions": {"transcript": "secrets_found"},
-    }
-    assert "zip" not in payload
+    with _zip_from_stdout(capsys.readouterr().out) as archive:
+        assert archive.namelist() == ["collection-notes.txt"]
+        assert _notes_lines(archive) == ["recent chats: withheld: the secret scan reported findings"]
 
 
 def test_main_scans_the_member_name_a_chat_will_be_archived_under(
@@ -906,11 +907,9 @@ def test_main_scans_the_member_name_a_chat_will_be_archived_under(
 
     module.main(["--transcript"])
 
-    payload = json.loads(capsys.readouterr().out)
-    assert payload == {
-        "contract_version": 1,
-        "omissions": {"transcript": "secrets_found"},
-    }
+    with _zip_from_stdout(capsys.readouterr().out) as archive:
+        assert archive.namelist() == ["collection-notes.txt"]
+        assert _notes_lines(archive) == ["recent chats: withheld: the secret scan reported findings"]
 
 
 def test_main_withholds_only_the_logs_when_the_finding_is_in_the_logs(
@@ -942,11 +941,11 @@ def test_main_withholds_only_the_logs_when_the_finding_is_in_the_logs(
 
     module.main(["--logs", "--transcript"])
 
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["omissions"] == {"workspace_logs": "secrets_found"}
-    with _zip_from_payload(payload) as archive:
-        # Every logs member goes, metadata included; the clean chat still ships.
-        assert archive.namelist() == ["chats/agent-clean-claude.jsonl"]
+    with _zip_from_stdout(capsys.readouterr().out) as archive:
+        # Every logs member goes, metadata included; the clean chat still
+        # ships, and the notes say what happened to the logs.
+        assert archive.namelist() == ["chats/agent-clean-claude.jsonl", "collection-notes.txt"]
+        assert _notes_lines(archive) == ["workspace logs: withheld: the secret scan reported findings"]
 
 
 def test_main_reports_everything_scanner_unavailable_when_the_gate_is_missing(
@@ -973,15 +972,12 @@ def test_main_reports_everything_scanner_unavailable_when_the_gate_is_missing(
 
     module.main(["--logs", "--transcript"])
 
-    payload = json.loads(capsys.readouterr().out)
-    assert payload == {
-        "contract_version": 1,
-        "omissions": {
-            "workspace_logs": "scanner_unavailable",
-            "transcript": "scanner_unavailable",
-        },
-    }
-    assert "zip" not in payload
+    with _zip_from_stdout(capsys.readouterr().out) as archive:
+        assert archive.namelist() == ["collection-notes.txt"]
+        assert _notes_lines(archive) == [
+            "workspace logs: withheld: the secret scanner could not run, so nothing it was to check was released",
+            "recent chats: withheld: the secret scanner could not run, so nothing it was to check was released",
+        ]
 
 
 # --- The size cap ---
@@ -1013,9 +1009,7 @@ def test_main_packs_every_collected_chat_with_no_size_cap(
 
     module.main(["--transcript"])
 
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["omissions"] == {}
-    with _zip_from_payload(payload) as archive:
+    with _zip_from_stdout(capsys.readouterr().out) as archive:
         assert archive.namelist() == [
             "chats/agent-c-claude.jsonl",
             "chats/agent-b-claude.jsonl",
