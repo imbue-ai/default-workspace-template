@@ -1406,6 +1406,7 @@ class _FakeSpawner(update_self.Spawner):
     exited: bool = False
     spawns: list[list[str]] = field(default_factory=list)
     raw_spawns: list[list[str]] = field(default_factory=list)
+    envs: list[dict] = field(default_factory=list)
     last: _FakeSpawned | None = None
 
     def spawn(
@@ -1413,6 +1414,7 @@ class _FakeSpawner(update_self.Spawner):
     ) -> _FakeSpawned:
         self.raw_spawns.append(list(argv))
         self.spawns.append(_unwrap_expendable(list(argv)))
+        self.envs.append(dict(env))
         self.last = _FakeSpawned(output=self.output, exited=self.exited)
         return self.last
 
@@ -2072,6 +2074,24 @@ def test_preflight_stops_polling_once_the_backend_has_died(apply_repo: Path) -> 
     assert code == 2
     # One pre-flight probe, not _PREFLIGHT_ATTEMPTS of them.
     assert len([url for url in probes if not _is_live(url)]) == 1
+
+
+def test_preflight_drops_the_callers_agent_identity(
+    apply_repo: Path, monkeypatch
+) -> None:
+    # The apply runs inside an agent, so its environment carries MNGR_AGENT_ID
+    # -- under which the throwaway pre-flight boot would persist layout state
+    # as that agent, clobbering the live layout.json (the preview flow drops it
+    # for exactly this reason).
+    monkeypatch.setenv("MNGR_AGENT_ID", "the-lead-agent-id")
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    spawner = _FakeSpawner()
+
+    code = _apply(runner, _FakeHttp(_all_healthy), spawner, apply_repo)
+
+    assert code == 0
+    assert spawner.envs, "the pre-flight boot never spawned"
+    assert all("MNGR_AGENT_ID" not in env for env in spawner.envs)
 
 
 def test_failed_post_restart_health_rolls_back_and_restarts_into_known_good(
