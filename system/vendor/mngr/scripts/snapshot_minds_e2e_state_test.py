@@ -157,14 +157,23 @@ def test_python_manifest_paths_cover_all_workspace_members() -> None:
     ``tools/*`` entry in ``[tool.uv.workspace].members``) would be missing
     from that layer and break the image build -- so the script's globs must
     cover every member pattern the root pyproject declares.
+
+    Directories the root pyproject excludes are standalone uv projects, not
+    members: uv never reads their manifests here, so they are expected to be
+    absent (and staging them would bust the layer cache on their dep churn).
     """
     root_pyproject = tomllib.loads((_REPO_ROOT / "pyproject.toml").read_text())
-    member_patterns: list[str] = root_pyproject["tool"]["uv"]["workspace"]["members"]
-    expected_member_manifests = {
+    workspace = root_pyproject["tool"]["uv"]["workspace"]
+    excluded_manifests = {
         path.relative_to(_REPO_ROOT).as_posix()
-        for pattern in member_patterns
+        for pattern in workspace.get("exclude", ())
         for path in _REPO_ROOT.glob(f"{pattern}/pyproject.toml")
     }
+    expected_member_manifests = {
+        path.relative_to(_REPO_ROOT).as_posix()
+        for pattern in workspace["members"]
+        for path in _REPO_ROOT.glob(f"{pattern}/pyproject.toml")
+    } - excluded_manifests
     assert expected_member_manifests, "no uv workspace members found -- is the test reading the right repo?"
     staged_paths = set(_python_manifest_relative_paths(_REPO_ROOT))
     assert "pyproject.toml" in staged_paths
@@ -174,6 +183,11 @@ def test_python_manifest_paths_cover_all_workspace_members() -> None:
         "These uv workspace member manifests are NOT staged into the snapshot image's python "
         f"manifests layer: {sorted(missing_manifests)}. Update _PY_WORKSPACE_MEMBER_MANIFEST_GLOBS "
         "in scripts/snapshot_minds_e2e_state.py to cover them."
+    )
+    staged_but_excluded = excluded_manifests & staged_paths
+    assert not staged_but_excluded, (
+        "These manifests belong to standalone projects excluded from the uv workspace, so uv does "
+        f"not read them here and staging them only busts the layer cache: {sorted(staged_but_excluded)}."
     )
 
 

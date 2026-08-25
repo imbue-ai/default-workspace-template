@@ -125,6 +125,74 @@ jobs:
         if: steps.worker-diff.outputs.changed == 'true'
         run: just test-apt-mirror-worker
 
+  # apps/minds_evals type check + tests. It is a standalone uv project rather
+  # than a workspace member (see the root [tool.uv.workspace].exclude), so
+  # test-offload's image -- built from `uv sync --all-packages` -- does not
+  # contain it, the root pytest run ignores it, and the root `ty check` excludes
+  # its modules (all but resources/, which runs in the box against the monorepo
+  # venv and is checked there instead). This job is the ONLY thing that exercises it; deleting or skipping it
+  # leaves the project entirely unverified. Runs on the orchestrator (not
+  # offload) because it needs its own lock/venv, and only when something it
+  # depends on changed -- the diff needs the real base ref, like check-changelog
+  # above.
+  test-minds-evals:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Fetch base branch and deepen HEAD for the path diff
+        run: |
+          if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+            git fetch --no-tags --unshallow origin "$(git rev-parse HEAD)"
+          fi
+          git fetch --no-tags origin \
+            "+refs/heads/${GITHUB_BASE_REF}:refs/remotes/origin/${GITHUB_BASE_REF}"
+
+      - name: Check whether minds_evals or anything it builds on changed
+        id: evals-diff
+        # The libs/ paths are the project's in-repo editable dependencies,
+        # direct and transitive: a change to any of them reaches this project's
+        # venv without touching apps/minds_evals. The list must equal the
+        # editable sources in apps/minds_evals/uv.lock, which
+        # test_meta_ratchets.py enforces -- add a path dep there and this gate
+        # fails until it is listed here.
+        run: |
+          if git diff --name-only "origin/${GITHUB_BASE_REF}...HEAD" -- \
+              apps/minds_evals \
+              libs/concurrency_group \
+              libs/imbue_common \
+              libs/mngr \
+              libs/mngr_usage \
+              libs/overlay \
+              libs/resource_guards \
+              justfile \
+              .github/workflows/ci.yml | grep -q .; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Python
+        if: steps.evals-diff.outputs.changed == 'true'
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        if: steps.evals-diff.outputs.changed == 'true'
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "latest"
+
+      - name: Install just
+        if: steps.evals-diff.outputs.changed == 'true'
+        uses: extractions/setup-just@v4
+
+      - name: Run minds_evals typecheck and tests
+        if: steps.evals-diff.outputs.changed == 'true'
+        run: just test-minds-evals
+
   # minds JS tests: the Electron shell's node:test units and the SPA frontend's
   # vitest. Run only when the code it covers changed.
   test-minds-js:

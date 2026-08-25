@@ -119,10 +119,13 @@ def test_prevent_namedtuple() -> None:
 
 
 def test_prevent_yaml_usage() -> None:
-    # 7: misfires on box_scripts/stop_start string literals naming lima's own
-    # ``lima.yaml`` instance files (which we transport verbatim, never author);
-    # no YAML is read, written, or configured by the connector.
-    rc.check_yaml_usage(_DIR, snapshot(7))
+    # Misfires on box_scripts/stop_start string literals naming lima's own
+    # ``lima.yaml`` instance files, which we transport verbatim, and on
+    # box_scripts_test staging that file to stand in for a lima instance. The
+    # rest is ``accounts_web`` reading electron-updater's channel manifest,
+    # whose ``.yml`` extension and YAML body are fixed by the shipped binary
+    # that consumes it. The connector configures nothing in YAML.
+    rc.check_yaml_usage(_DIR, snapshot(17))
 
 
 def test_prevent_functools_partial() -> None:
