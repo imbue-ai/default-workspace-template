@@ -274,6 +274,7 @@ def run_local_command_modern_version(
     env: Mapping[str, str] | None = None,
     # Open file descriptors to keep open in (and inherit into) the spawned child, by their fd numbers.
     pass_fds: Sequence[int] = (),
+    is_detached_from_terminal: bool = False,
     on_initialization_complete: Callable[[BaseException | None], None] = lambda success: None,
     name: str | None = None,
     is_output_accumulated: bool = True,
@@ -292,6 +293,17 @@ def run_local_command_modern_version(
     and whose full history would otherwise grow without bound. The returned
     ``FinishedProcess`` then carries ``OUTPUT_NOT_ACCUMULATED_PLACEHOLDER`` in place of its
     output, including in any ``ProcessError`` that ``is_checked`` raises.
+
+    ``is_detached_from_terminal=True`` puts the child in a new session, so it inherits neither
+    this process's controlling terminal nor its process group. Redirecting stdio is not enough
+    to keep a child off the terminal: the ``claude`` CLI opens ``/dev/tty`` directly even with
+    stdin on ``DEVNULL`` and stdout/stderr on pipes, and restores terminal modes while handling
+    the SIGTERM this function sends on timeout. A ``tcsetattr`` from a process group that is not
+    the terminal's foreground one makes the kernel deliver SIGTTOU to that *whole* group, which
+    stops the caller as well -- so any service running in a background process group (anything
+    under supervisord in a tmux pane, for instance) must detach the children it may have to kill.
+    Off by default because detaching also removes the child from the reach of an interactive
+    Ctrl-C, which a CLI relies on to take its children down with it.
     """
     try:
         shutdown_event = shutdown_event or Event()
@@ -306,6 +318,7 @@ def run_local_command_modern_version(
                 stderr=subprocess.PIPE,
                 env=env if env is not None else os.environ.copy(),
                 pass_fds=tuple(pass_fds),
+                start_new_session=is_detached_from_terminal,
             )
         except (OSError, ValueError) as e:
             raise ProcessSetupError(

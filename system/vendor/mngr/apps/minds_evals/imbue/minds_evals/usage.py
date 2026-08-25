@@ -19,9 +19,11 @@ looks cheaper than one that does the same work inline, which would make cost gam
 usage is captured, delegation is at least *detected*: any trial that delegates is marked
 ``is_cost_complete = False`` rather than quietly reporting a clean total.
 
-Both are priced with ``mngr_usage``'s table rather than a local copy, so these numbers stay bound to
-the prices the LiteLLM proxy bills at (``mngr_usage``'s litellm_pricing_test pins that table to
-litellm's own price map, which is what the proxy bills from).
+Both are priced with ``mngr_usage``'s table rather than a local copy, so these numbers and the
+in-box proxy's own are computed from one set of rates -- ``proxy_config`` builds the proxy's config
+from the same table. Those rates are pinned to litellm's map by ``litellm_pricing_test``, which
+covers the four flat per-token buckets; the fast-mode multiplier applied on top of them is this
+app's own and is pinned to nothing.
 
 **Speed tier and what it does to cost.** Fast mode bills the same tokens at twice the standard rate
 ($10/$50 per MTok against $5/$25 on Opus 5 and Opus 4.8), and it is chosen per request, so a model id

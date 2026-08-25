@@ -25,6 +25,7 @@ import os
 import re
 import secrets
 from collections.abc import Callable
+from collections.abc import Mapping
 from typing import Any
 from typing import Protocol
 
@@ -52,6 +53,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _SHARE_HOST_ID_RE = re.compile(r"^host-[a-f0-9]{32}$")
+# Same shape the LLM-key mint accepts for workspace ids (llm_keys._WORKSPACE_ID_RE).
+_SHARE_WORKSPACE_ID_RE = re.compile(r"^agent-[0-9a-f]{8,64}$")
 _SHARE_USER_LABEL_RE = re.compile(r"^[a-f0-9]{32}$")
 _SHARE_DNS_LABEL_RE = re.compile(r"^(?=.{1,63}$)[a-z0-9]+(?:-[a-z0-9]+)*$")
 
@@ -87,17 +90,28 @@ ASSIGNMENT_POLL_SECONDS = 60
 
 
 class ShareCoordinate(BaseModel):
-    """The hostname coordinates of one shared workspace."""
+    """The hostname coordinates of one shared workspace.
+
+    The row key (``host_id`` + ``user_label``) and the domain labels are
+    distinct: new shares lead with a random ``share_label`` and a hashed user
+    segment (so CT-logged certificate domains publicize no internal id),
+    while grandfathered rows lead with the machine's host id and the raw
+    user label. ``workspace_id`` is the owning workspace when known.
+    """
 
     host_id: str
+    workspace_id: str | None = None
+    share_label: str | None = None
+    leading_label: str
+    user_segment: str
     user_label: str
     region: str
     content_domain: str
 
     @property
     def workspace_domain(self) -> str:
-        """The bare workspace origin / registrable base, e.g. ``host-<hex>.<user-label>.<region>.<domain>``."""
-        return f"{self.host_id}.{self.user_label}.{self.region}.{self.content_domain}"
+        """The bare workspace origin, e.g. ``<share-label>.<user-hash>.<region>.<domain>``."""
+        return f"{self.leading_label}.{self.user_segment}.{self.region}.{self.content_domain}"
 
     @property
     def vhost_wildcard(self) -> str:
@@ -112,7 +126,7 @@ class ShareCoordinate(BaseModel):
     @property
     def registrable_site(self) -> str:
         """The per-user registrable site (the Public-Suffix-List-backed isolation boundary)."""
-        return f"{self.user_label}.{self.region}.{self.content_domain}"
+        return f"{self.user_segment}.{self.region}.{self.content_domain}"
 
 
 def derive_share_user_label(user_id: str) -> str:
@@ -128,16 +142,22 @@ def derive_share_user_label(user_id: str) -> str:
     return label
 
 
-def make_share_coordinate(host_id: str, user_label: str, region: str, content_domain: str) -> ShareCoordinate:
-    """Build a validated :class:`ShareCoordinate`.
+def derive_share_user_segment(user_id: str) -> str:
+    """The domain's per-user segment for new shares: the first 32 hex of SHA-256 of the user id.
 
-    Every component must be a legal hostname label (or label run) so the
-    resulting workspace domain is a valid, cert-issuable hostname.
+    One-way on purpose: certificate domains land in public CT logs, so the
+    segment must not reveal the SuperTokens user id (while staying stable per
+    account -- the registrable site groups all of one account's shares).
     """
-    if _SHARE_HOST_ID_RE.match(host_id) is None:
-        raise InvalidShareCoordinateError(f"host id must be 'host-<32hex>', got {host_id!r}")
-    if _SHARE_USER_LABEL_RE.match(user_label) is None:
-        raise InvalidShareCoordinateError(f"user label must be 32 hex characters, got {user_label!r}")
+    return hashlib.sha256(user_id.encode("utf-8")).hexdigest()[:32]
+
+
+def generate_share_label() -> str:
+    """Mint the random 32-hex leading label of a new share domain (persisted on the share row)."""
+    return secrets.token_hex(16)
+
+
+def _validate_share_domain_parts(region: str, content_domain: str) -> None:
     if _SHARE_DNS_LABEL_RE.match(region) is None:
         raise InvalidShareCoordinateError(f"region must be a DNS label, got {region!r}")
     domain_labels = content_domain.split(".")
@@ -145,7 +165,82 @@ def make_share_coordinate(host_id: str, user_label: str, region: str, content_do
         raise InvalidShareCoordinateError(
             f"content domain must be dot-joined lowercase DNS labels, got {content_domain!r}"
         )
-    return ShareCoordinate(host_id=host_id, user_label=user_label, region=region, content_domain=content_domain)
+
+
+def make_share_coordinate(host_id: str, user_label: str, region: str, content_domain: str) -> ShareCoordinate:
+    """Build a validated legacy-shape :class:`ShareCoordinate` (host-id-led domain).
+
+    Used for rows without a minted share label: shares created by clients
+    that predate workspace-keyed sharing.
+    """
+    if _SHARE_HOST_ID_RE.match(host_id) is None:
+        raise InvalidShareCoordinateError(f"host id must be 'host-<32hex>', got {host_id!r}")
+    if _SHARE_USER_LABEL_RE.match(user_label) is None:
+        raise InvalidShareCoordinateError(f"user label must be 32 hex characters, got {user_label!r}")
+    _validate_share_domain_parts(region, content_domain)
+    return ShareCoordinate(
+        host_id=host_id,
+        leading_label=host_id,
+        user_segment=user_label,
+        user_label=user_label,
+        region=region,
+        content_domain=content_domain,
+    )
+
+
+def make_workspace_share_coordinate(
+    host_id: str,
+    workspace_id: str,
+    share_label: str,
+    user_id: str,
+    region: str,
+    content_domain: str,
+) -> ShareCoordinate:
+    """Build a validated workspace-keyed :class:`ShareCoordinate` (share-label-led domain)."""
+    if _SHARE_HOST_ID_RE.match(host_id) is None:
+        raise InvalidShareCoordinateError(f"host id must be 'host-<32hex>', got {host_id!r}")
+    if _SHARE_USER_LABEL_RE.match(share_label) is None:
+        raise InvalidShareCoordinateError(f"share label must be 32 hex characters, got {share_label!r}")
+    _validate_share_domain_parts(region, content_domain)
+    return ShareCoordinate(
+        host_id=host_id,
+        workspace_id=workspace_id,
+        share_label=share_label,
+        leading_label=share_label,
+        user_segment=derive_share_user_segment(user_id),
+        user_label=derive_share_user_label(user_id),
+        region=region,
+        content_domain=content_domain,
+    )
+
+
+def coordinate_from_stored_share(
+    share_row: Mapping[str, Any],
+    user_label: str,
+    workspace_id_backfill: str | None = None,
+) -> ShareCoordinate:
+    """Rebuild the coordinate of an existing share row from its stored domain.
+
+    A re-share must never change an existing share's domain (grants, visitor
+    bookmarks, certificate SANs, and session cookies all hang off it), so the
+    stored ``workspace_domain`` -- not a re-derivation -- is authoritative.
+    """
+    domain = str(share_row["workspace_domain"])
+    labels = domain.split(".")
+    if len(labels) < 4:
+        raise InvalidShareCoordinateError(f"stored workspace domain is not label-shaped: {domain!r}")
+    workspace_id = share_row.get("workspace_id") or workspace_id_backfill
+    share_label = share_row.get("share_label")
+    return ShareCoordinate(
+        host_id=str(share_row["host_id"]),
+        workspace_id=str(workspace_id) if workspace_id else None,
+        share_label=str(share_label) if share_label else None,
+        leading_label=labels[0],
+        user_segment=labels[1],
+        user_label=user_label,
+        region=labels[2],
+        content_domain=".".join(labels[3:]),
+    )
 
 
 def generate_relay_token() -> str:
@@ -205,19 +300,23 @@ def resolve_share_region_for_share(
     """Pick the region for one share bring-up, sticky on the share's existing row.
 
     The region is baked into the workspace domain (DNS, PSL boundary, cert
-    SANs, session cookies), so a re-share must never silently move it: an
-    existing row's region wins as long as a relay still serves it. A fresh
-    share prefers the host's datacenter mapping (pool hosts); a host the
-    connector has no datacenter record of (a local workspace) may instead be
-    steered by the caller's ``preferred_region`` -- the desktop measures its
-    own latency to each relay, which is the best proximity signal available
-    for a workspace running on the user's machine. Unknown preferred regions
-    are ignored (not errors), so a stale client never breaks on fleet changes.
+    SANs, session cookies), so a re-share must never move it: an existing
+    row's region always wins, and when no relay serves that region any more
+    the bring-up fails loudly (:class:`NoActiveRelaysError`) rather than
+    answering with relays the stored domain could never use. A fresh share
+    prefers the host's datacenter mapping (pool hosts); a host the connector
+    has no datacenter record of (a local workspace) may instead be steered by
+    the caller's ``preferred_region`` -- the desktop measures its own latency
+    to each relay, which is the best proximity signal available for a
+    workspace running on the user's machine. Unknown preferred regions are
+    ignored (not errors), so a stale client never breaks on fleet changes.
     """
     if not eligible_regions:
         raise NoActiveRelaysError(None)
-    if existing_region is not None and existing_region in eligible_regions:
-        return existing_region
+    if existing_region is not None:
+        if existing_region in eligible_regions:
+            return existing_region
+        raise NoActiveRelaysError(existing_region)
     if datacenter is None and preferred_region is not None and preferred_region in eligible_regions:
         return preferred_region
     return resolve_share_region(datacenter, eligible_regions, host_id)
@@ -361,7 +460,8 @@ def _extract_frps_subdomain(content: dict[str, Any]) -> str:
 
 # Columns every share SELECT returns, so row-to-dict projection stays in one place.
 _SHARE_COLUMNS = (
-    "host_id, user_id, region, workspace_domain, state, created_at, updated_at, last_tunnel_login_at, entry_label"
+    "host_id, user_id, region, workspace_domain, state, created_at, updated_at, last_tunnel_login_at, entry_label, "
+    "workspace_id, share_label"
 )
 _SHARE_COLUMN_NAMES = tuple(name.strip() for name in _SHARE_COLUMNS.split(","))
 
@@ -379,6 +479,11 @@ class ShareStore(Protocol):
     """Abstraction over the shares / relay_tokens / issued_certs tables so endpoints are unit-testable."""
 
     def get_share(self, host_id: str, user_label: str) -> dict[str, Any] | None: ...
+
+    def get_share_by_workspace(self, workspace_id: str, user_label: str) -> dict[str, Any] | None:
+        """The user's share row for one workspace id, or None (rows from old clients have none)."""
+        ...
+
     def list_shares(self, user_label: str) -> list[dict[str, Any]]: ...
     def activate_share_and_rotate_token(
         self, coordinate: ShareCoordinate, max_active_shares: int, token_hash: str, entry_label: str | None
@@ -408,6 +513,19 @@ class ShareStore(Protocol):
 
 class PostgresShareStore:
     """ShareStore backed by the connector's existing Neon DB."""
+
+    def get_share_by_workspace(self, workspace_id: str, user_label: str) -> dict[str, Any] | None:
+        conn = db.get_pool_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT {_SHARE_COLUMNS} FROM shares WHERE workspace_id = %s AND user_id = %s",
+                    (workspace_id, user_label),
+                )
+                row = cur.fetchone()
+        finally:
+            conn.close()
+        return _share_row_to_dict(row) if row is not None else None
 
     def get_share(self, host_id: str, user_label: str) -> dict[str, Any] | None:
         conn = db.get_pool_db_connection()
@@ -458,18 +576,23 @@ class PostgresShareStore:
                     # desktop's client-side flow) must not erase one a previous
                     # bring-up recorded, hence the COALESCE.
                     cur.execute(
-                        "INSERT INTO shares (host_id, user_id, region, workspace_domain, state, entry_label) "
-                        "VALUES (%s, %s, %s, %s, 'active', %s) "
+                        "INSERT INTO shares (host_id, user_id, region, workspace_domain, state, entry_label, "
+                        "workspace_id, share_label) "
+                        "VALUES (%s, %s, %s, %s, 'active', %s, %s, %s) "
                         "ON CONFLICT (host_id, user_id) DO UPDATE SET "
                         "region = EXCLUDED.region, workspace_domain = EXCLUDED.workspace_domain, "
                         "state = 'active', updated_at = NOW(), "
-                        "entry_label = COALESCE(EXCLUDED.entry_label, shares.entry_label)",
+                        "entry_label = COALESCE(EXCLUDED.entry_label, shares.entry_label), "
+                        "workspace_id = COALESCE(EXCLUDED.workspace_id, shares.workspace_id), "
+                        "share_label = COALESCE(EXCLUDED.share_label, shares.share_label)",
                         (
                             coordinate.host_id,
                             coordinate.user_label,
                             coordinate.region,
                             coordinate.workspace_domain,
                             entry_label,
+                            coordinate.workspace_id,
+                            coordinate.share_label,
                         ),
                     )
                     # The token swap rides the SAME transaction (and the same
@@ -768,7 +891,16 @@ def entry_label_from_claimed_domains(workspace_domain: str, claimed_custom_domai
 
 
 class CreateShareRequest(BaseModel):
-    host_id: str = Field(description="The workspace's host coordinate (host-<32hex>) to share")
+    host_id: str = Field(description="The machine the workspace currently runs on (host-<32hex>)")
+    workspace_id: str | None = Field(
+        default=None,
+        description=(
+            "The workspace's id (agent-<32hex>). When present, the share is workspace-keyed: its "
+            "domain leads with a minted share label (persisted on the row) instead of the host id, "
+            "and re-shares resolve through the workspace id even if the machine changes. Absent "
+            "from old clients, whose shares keep the legacy host-led domains."
+        ),
+    )
     entry_label: str | None = Field(
         default=None,
         description=(
@@ -799,6 +931,16 @@ class CreateShareRequest(BaseModel):
             raise InvalidShareCoordinateError(f"entry_label must be a single origin label, got {value!r}")
         return normalized
 
+    @field_validator("workspace_id")
+    @classmethod
+    def _validate_workspace_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip().lower()
+        if _SHARE_WORKSPACE_ID_RE.match(normalized) is None:
+            raise InvalidShareCoordinateError(f"workspace_id must be 'agent-<hex>', got {value!r}")
+        return normalized
+
     @field_validator("preferred_region")
     @classmethod
     def _validate_preferred_region(cls, value: str | None) -> str | None:
@@ -817,6 +959,33 @@ class FrpsAuthRequest(BaseModel):
     content: dict[str, Any] = Field(default_factory=dict)
 
 
+def find_share_for_workspace(
+    store: ShareStore, host_id: str, user_label: str, workspace_id: str | None
+) -> dict[str, Any] | None:
+    """The existing share row a bring-up for this workspace should reuse, or None.
+
+    The workspace id is the share's durable key: prefer it so a re-share finds
+    the workspace's row (and keeps its domain) even if the machine changed. The
+    host-keyed fallback exists only for rows old clients created (workspace_id
+    NULL): a host-keyed row claimed by a DIFFERENT workspace belongs to that
+    workspace (the machine was reused), so reusing it would hand this
+    workspace the other one's domain and rotate its relay token away -- treat
+    it as absent instead. Callers that supply no workspace id (old clients)
+    can only key by host and keep the unrestricted lookup.
+    """
+    if workspace_id is not None:
+        row = store.get_share_by_workspace(workspace_id, user_label)
+        if row is not None:
+            return row
+    row = store.get_share(host_id, user_label)
+    if row is None:
+        return None
+    row_workspace_id = row.get("workspace_id")
+    if workspace_id is not None and row_workspace_id is not None and str(row_workspace_id) != workspace_id:
+        return None
+    return row
+
+
 @router.post("/shares")
 def create_share(request: Request, body: CreateShareRequest) -> dict[str, object]:
     """Enable sharing for one workspace: create (or reactivate) its share and mint a fresh relay token.
@@ -831,7 +1000,7 @@ def create_share(request: Request, body: CreateShareRequest) -> dict[str, object
         user_label = derive_share_user_label(user_id)
         store = get_share_store()
         relay_rows = active_relay_rows()
-        existing_share = store.get_share(body.host_id, user_label)
+        existing_share = find_share_for_workspace(store, body.host_id, user_label, body.workspace_id)
         region = resolve_share_region_for_share(
             existing_region=str(existing_share["region"]) if existing_share is not None else None,
             datacenter=store.get_pool_host_datacenter(body.host_id),
@@ -839,12 +1008,33 @@ def create_share(request: Request, body: CreateShareRequest) -> dict[str, object
             eligible_regions=relays_module.eligible_regions(relay_rows),
             host_id=body.host_id,
         )
-        coordinate = make_share_coordinate(
-            host_id=body.host_id,
-            user_label=user_label,
-            region=region,
-            content_domain=share_content_domain(),
-        )
+        if existing_share is not None:
+            # Re-share: the stored domain is authoritative (grants, visitor
+            # bookmarks, certs, and cookies hang off it); backfill the
+            # workspace id when a new client supplied it.
+            coordinate = coordinate_from_stored_share(
+                existing_share, user_label, workspace_id_backfill=body.workspace_id
+            )
+        elif body.workspace_id is not None:
+            coordinate = make_workspace_share_coordinate(
+                host_id=body.host_id,
+                workspace_id=body.workspace_id,
+                share_label=generate_share_label(),
+                user_id=user_id,
+                region=region,
+                content_domain=share_content_domain(),
+            )
+        else:
+            # An old client's first share of a workspace: keep the legacy
+            # host-led domain it expects. CLEANUP: drop this branch (and
+            # make_share_coordinate) once no in-window client omits
+            # workspace_id from POST /shares.
+            coordinate = make_share_coordinate(
+                host_id=body.host_id,
+                user_label=user_label,
+                region=region,
+                content_domain=share_content_domain(),
+            )
         relay_endpoints = relay_endpoints_for_share_region(relay_rows, region)
         relay_token = generate_relay_token()
         store.activate_share_and_rotate_token(
@@ -852,6 +1042,7 @@ def create_share(request: Request, body: CreateShareRequest) -> dict[str, object
         )
         return {
             "host_id": coordinate.host_id,
+            "workspace_id": coordinate.workspace_id,
             "workspace_domain": coordinate.workspace_domain,
             "region": region,
             "relay_endpoints": relay_endpoints,
@@ -945,6 +1136,7 @@ def get_share_status(request: Request, host_id: str) -> dict[str, object]:
         relay_logins = relays_module.get_relay_store().list_share_relay_logins(host_id, user_label)
         return {
             "host_id": share["host_id"],
+            "workspace_id": share.get("workspace_id"),
             "workspace_domain": share["workspace_domain"],
             "region": share["region"],
             "state": share["state"],

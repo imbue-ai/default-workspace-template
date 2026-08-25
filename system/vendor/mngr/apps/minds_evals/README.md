@@ -25,14 +25,20 @@ comparison and removal PRs land).
    (literal, or role-played by the decider model on `DECIDE_FROM_PERSONA`), wait for the reply,
    snapshot the workspace, and keep `/logs/agent/full_transcript.jsonl` + `state.json` current in
    the box.
-5. The **verifier** (pure rewardkit, separate container) scores the transcript: three 1-10 likert
+5. Once the last turn is done and while the workspace is still alive, the driver runs an
+   **evidence-collection** phase: it records what was actually delivered (the app registry,
+   supervisord's view of it, a file inventory, HTTP probes, declared test commands, and the
+   delivered repo as a git bundle) into `/logs/agent/verification/`. This has to happen here --
+   the verifier runs after the workspace is destroyed. See [Outcome verification](#outcome-verification).
+6. The **verifier** (pure rewardkit, separate container) scores the transcript: three 1-10 likert
    judge criteria (conciseness, nontechnical_language, proactive), a binary wordiness guard, and
    structural gates (transcript parses, the agent engaged with distinct non-stub replies, all turns
    completed, not timed out) that zero the reward when they fail. The judge grades a **message-by-
    message** rendering (`judge_transcript.txt`: one `[USER]` block per client turn, one
    `[AGENT · message N]` block per agent message) that a grade-time pre-step rebuilds from
    `full_transcript.jsonl`, so conciseness is judged per individual message and `harbor trial regrade`
-   re-scores captured trials under the current rendering. Timed-out trials score 0 with a
+   re-scores captured trials under the current rendering. Cases that declare `expectations` gain a
+   third `outcome` dimension over the collected evidence. Timed-out trials score 0 with a
    `timed_out` marker in `reward-details.json`; a judge/grading-infrastructure failure errors the
    trial instead of recording a fake 0.
 
@@ -164,12 +170,22 @@ like with like, and switching tier invalidates the prompt cache.
 input, output, cache read, cache write), per model, with costs. The buckets stay separate because
 Anthropic prices them differently -- a cache write costs 1.25x a plain input token and a cache read
 0.1x -- so a single "input tokens" number can neither produce a correct cost nor show cache
-behaviour. Prices come from `mngr_usage`'s table, which a drift test binds to the LiteLLM proxy's,
-and an unpriced model reports `cost_usd: null` rather than a misleading `0`. A LiteLLM model entry
-carries a single price, which has two consequences: the drift test covers the standard rates only,
-because the proxy has no fast-mode price to compare against, and the per-request `cost_usd` inside
-`usage_proxy.jsonl` is LiteLLM's own figure and always standard-rate. The trial's totals are the
-tier-aware ones.
+behaviour. Prices come from `mngr_usage`'s table, which `litellm_pricing_test` pins entry by entry
+against litellm's own price map, and an unpriced model reports `cost_usd: null` rather than a
+misleading `0`. `build_model_list` derives the in-box proxy's config from that same table, one
+flat-priced entry per model, so the per-request `cost_usd` inside `usage_proxy.jsonl` is a
+standard-rate figure computed from those four buckets; the trial's totals are the tier-aware ones,
+because `compute_cost` applies `FAST_MODE_PRICE_MULTIPLIER` on top.
+
+That multiplier is the seam worth knowing about. litellm's map carries the fast premium itself, as
+`provider_specific_entry.fast` -- so it *is* pinnable, and `litellm_pricing_test` does not pin it:
+that test compares the four flat buckets only. The map also carries dimensions nothing here mirrors,
+notably `cache_creation_input_token_cost_above_1hr` (the 1-hour cache-write rate, against the
+5-minute rate every figure here assumes) and a regional uplift. Measured against the map on
+2026-08-20, `FAST_MODE_MODELS` and `FAST_MODE_PRICE_MULTIPLIER` already disagree with it: litellm
+gives a fast entry to four Opus models where this table names two, and prices the fast tier on Opus
+4.6 and 4.7 at 6x rather than 2x. Neither is a model the eval runs today, so no recorded figure is
+affected -- but treat the fast-mode rate as unpinned rather than as verified.
 
 The cache-write rate above is the one for a 5-minute cache; Anthropic bills a 1-hour write at 2x an
 input token instead of 1.25x. Nothing in the chain carries the TTL, so every write here is priced as
@@ -209,15 +225,148 @@ The old harness's schema, unchanged:
   driver records that per-turn average as `average_words_per_turn` in the trial metadata and, for
   observability only (no gate), the finer `average_words_per_message` (words per individual agent
   message, before the per-turn merge).
+- `verification_timeout_seconds` (default 600) is the evidence-collection phase's own budget. It is
+  *added* to the task's `[agent].timeout_sec` (case timeout + verification budget + grace), so
+  verification never competes with the conversation for time.
+- Each persona entry may carry an `expectations` block; see below.
+
+## Outcome verification
+
+Without this, the eval grades only how the agent *talks*: an agent that chats beautifully and ships
+nothing outscores one that ships a working app in terse messages. A case that declares
+`expectations` is additionally graded on what it delivered.
+
+```json
+{
+  "id": "todo-app",
+  "persona": "...",
+  "prompts": ["Build me a simple to-do list web app: ...", "Sounds good."],
+  "expectations": {
+    "outcome": "A working to-do list web app, delivered as a running Minds app tab...",
+    "deliverable": {"kind": "minds-app"}
+  }
+}
+```
+
+- `outcome` (required) is the prose the outcome judge grades against -- the task description *for
+  the eval*, alongside the prompts *for the agent*.
+- `deliverable` is **required**. A block with none would lower to no programmatic checks, and
+  rewardkit only pools a programmatic reward when criteria exist -- so the outcome dimension would
+  silently become judge-only, carrying double the judge weight of every other case.
+- `minds-app` is a **kind with implied checks**, not a hand-written check list: at least one
+  *delivered* app registered in the workspace's `data/.state/apps.toml`, its supervisord service
+  running, an HTTP 200 from each delivered app's root path, and the delivered repo captured as a git
+  bundle. "Delivered" is narrower than "not a builtin" -- see below. Optional `min_registered_apps`, `http`, and `files` entries *refine* that set
+  rather than replacing it. Unknown kinds and unknown keys are rejected at generation time.
+- `test_commands` are run in the delivered repo and recorded for the judge, but never gated: gating
+  them would punish cases whose prompts never mentioned tests.
+- `ui_flows` and `fresh_env` are reserved: they are parsed and carried, but nothing executes them yet.
+
+The kind is lowered into its explicit check list **once**, in the generator, and the lowered form is
+written identically into `instruction.md` and `tests/case.json` -- which is what guarantees the
+collector cannot probe a different set of checks than the judge scores. The authored form rides
+alongside as `authored_expectations`.
+
+**Evidence, not live state.** The verifier is a separate container that runs after the workspace has
+been destroyed, so everything that needs the live app is captured at trial time into
+`/logs/agent/verification/` (declared as a directory artifact) and the grade-time criteria score the
+*record*:
+
+```
+verification/
+  manifest.json          # the index: every probe with a typed status
+  file_inventory.jsonl   # {path, size_bytes, mtime} per file (snapshot excludes + .git, 20k cap)
+  apps.toml              # verbatim registry capture
+  services.txt           # supervisorctl status output
+  repo_state.json        # HEAD sha, the base and dwt-tip shas, commit count, git status --porcelain
+  deliverable.bundle     # incremental `git bundle <clone HEAD>..HEAD` -- the agent's own commits
+  http/<n>_<app>.json    # per probe: status, headers, timing, body head (256 KB cap)
+  trace.jsonl            # every bridge command the collector ran, failures included
+```
+
+Every manifest entry carries a status where **`failed` means the workspace fell short and `error`
+means the harness could not find out** (the bridge died, a probe timed out). That distinction is
+load-bearing: `error` entries are excluded from the criteria they would have fed (and when a whole
+declared class is unmeasurable, `finalize.py` errors the trial rather than scoring it), so an agent
+is never charged for a broken instrument. It cuts the other way too, and that is the harder half: a
+workspace whose app registry exists and lists nothing is the agent shipping nothing, which must
+score as `failed`, not be waved off as evidence the harness could not gather.
+
+The registry/service/inventory capture runs for *every* trial
+that got as far as a workspace, including cases with no expectations, which is what makes a
+ships-nothing trial diagnosable; the expectation-driven probes are skipped on trials that never
+finished, whose structural gates already zero the reward.
+
+The harness probes the app **as delivered** and never starts it. Minds' promise to the client is a
+running app tab, so "built it but never started or registered it" is a delivery failure, not
+something for the harness to repair.
+
+**What counts as a delivered app.** Not every registry row is one. Rows the registry marks
+`internal = true` are machinery that forwards a port but has no page of its own to show -- the
+owner-exec daemon, for instance, which answers 404 on `/` by design. A live trial confirmed this is
+not hypothetical: counting it both inflated the delivered-app count and failed the implied root-path
+probe, charging the agent for a daemon it never shipped.
+
+A throwaway "isolated instance"
+preview server registers through the same `forward_port.py` path and leaves its row behind when
+abandoned, so counting it would both satisfy the app-registered check on something that was never the
+deliverable and fail the root-path probe on its dead port. Those rows are excluded by reading the
+instance runner's own state under `data/.state/isolated-instances/`, not by matching name patterns:
+instance names are chosen by whoever starts them, so a pattern would miss arbitrary ones and wrongly
+drop a real app named something like `recipes-test`.
+
+Nor is a registry name a supervisord program name -- a multi-port app registers extra origin rows
+(`<name>-admin`) that no program owns. The service-health check joins a row to its program through
+the `forward_port.py` invocations inside each `[program:*]` block of `system/supervisord.conf`. A
+delivered row that no program registers is recorded as `no_supervised_program`: the app was started
+by hand and would not survive a restart.
+
+The evidence directory is created at setup, before anything can fail, and is always declared as an
+artifact even when empty: harbor records a missing declared artifact path as a failed entry and
+refuses to regrade any trial carrying one, so a directory that only appeared when collection ran
+would make every trial that died earlier permanently non-regradable.
+
+The bundle's base is the eval-case commit the driver interposes (the template clone with
+`system/vendor/mngr` overwritten), made with **fixed author and committer dates** so an identical
+tree always yields the same sha. Without that the bundle could never be unbundled onto a regenerated
+clone, which is the only reason to capture it; the evidence records that base sha and the template
+tip it was built from so a replay can regenerate and verify the base.
+
+`trace.jsonl` is the collector's own flight recorder: it exists so a `failed` verdict can be
+attributed to the app rather than to the instrument, without re-running anything.
+
+Scoring adds a third rewardkit dimension, `tests/outcome/`, present only for expectation cases (the
+generator omits the directory otherwise, so rewardkit never emits a partial score for it). It holds
+one programmatic criterion per declared class -- `app_registered`, `http_expectations_met`,
+`files_expectations_met` -- plus a `works_as_expected` likert judge over the rendered expectations,
+the manifest, and the conversation. The conversation is in there deliberately: `DECIDE_FROM_PERSONA`
+turns are free-form, so a client who steers the build mid-conversation must be graded against the
+evolved ask.
+
+Reward composition changes only for expectation cases: `reward = gates_all_passed ? (0.5 * quality +
+0.5 * outcome) : 0`. The 50/50 split says "a great app described badly and a great description of no
+app are equally imperfect". It is a constant, not per-case configuration -- per-case weights would
+make rewards incomparable across cases.
+
+One new grading-infrastructure failure: an expectations case whose `state.json` says the conversation
+finished but which produced no evidence bundle errors the trial rather than scoring 0. An absent
+bundle on an unfinished or timed-out trial is expected and is not an error.
 
 ## Reward mapping
 
-`reward = weighted mean(conciseness, nontechnical_language, proactive, wordiness guard)` -- likert
+`quality = weighted mean(conciseness, nontechnical_language, proactive, wordiness guard)` -- likert
 criteria normalized as `(raw - 1) / 9`, so raw judge scores stay recoverable (`raw = 9 * normalized
-+ 1`; raw values are in `reward-details.json`) -- zeroed unless every structural gate passed. The
-gate composition lives in `tests/test.sh` (`finalize.py`) because rewardkit's `reward.toml`
-aggregations cannot express "binary gate zeroes a weighted mean"; all judging and scoring happens
-inside rewardkit.
++ 1`; raw values are in `reward-details.json`). `reward` is that score (or an even split of it with
+`outcome`, for expectation cases), zeroed unless every structural gate passed. The gate composition
+lives in `tests/test.sh` (`finalize.py`) because rewardkit's `reward.toml` aggregations cannot
+express "binary gate zeroes a weighted mean"; all judging and scoring happens inside rewardkit.
+
+Note how rewardkit weights a dimension, because it is easy to get backwards: every `.py` criterion
+in a dimension directory is averaged into **one** programmatic reward of weight 1.0, and each
+`judge.toml` is a **second** reward carrying its own `[judge].weight`. So the quality judge's
+`weight = 3.0` buys equal weight *per criterion* across its three judge criteria and the one
+programmatic guard, while the outcome judge's `weight = 1.0` is what makes it exactly half its
+dimension however many programmatic criteria the case declares.
 
 ## Notes
 
