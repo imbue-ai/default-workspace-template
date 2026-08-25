@@ -2268,40 +2268,189 @@ def test_failed_post_restart_health_rolls_back_and_restarts_into_known_good(
     assert len(runner.argvs_starting(*_RESTART)) == 2  # forward, then recovery
 
 
-def test_a_failed_provisioner_only_apply_reports_the_healthy_rollback_variant(
-    apply_repo: Path, capsys
+_PROVISIONER_DIFF = "M\tsystem/scripts/setup_system.sh\n"
+
+
+def _read_provision_incomplete(repo_root: Path) -> dict:
+    return json.loads(update_self.provision_incomplete_path(repo_root).read_text())
+
+
+def test_a_failed_provisioner_alone_lands_the_update_and_records_the_gap(
+    apply_repo: Path, capsys, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # A provisioner-only plan has no frontend or restart work, but the frontend
-    # baseline is still measured up front: the rollback's recovery and report
-    # are held to it, so a healthy UI must yield the ordinary "confirmed
-    # healthy" message -- never the already-broken variant.
-    runner = _apply_runner("M\tsystem/scripts/setup_system.sh\n", apply_repo)
-    runner.respond(("bash",), _Result(returncode=1, stderr="no network"))
+    # A failed tool install leaves the tree and services consistent, and
+    # re-running the provisioner later is cheap and merge-independent -- so it
+    # must not cost the whole release plus a fresh worker pass. The update
+    # lands, and the gap is loud: on stderr, and as a durable record for the
+    # skill to act on.
+    monkeypatch.setenv("MNGR_AGENT_NAME", "the-lead")
+    runner = _apply_runner(_PROVISIONER_DIFF, apply_repo)
+    runner.respond(("bash",), _Result(returncode=1, stderr="curl: (6) no network"))
 
     code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
 
-    assert code == 2
+    assert code == 0
+    assert not runner.ran("git", "checkout", _ROLLBACK, "--")
+    assert len(runner.argvs_starting(*_PROVISION)) == 1
+    record = _read_provision_incomplete(apply_repo)
+    assert "exit 1" in record["reason"] and "no network" in record["reason"]
+    assert record["dri_agent"] == "the-lead"
+    assert record["merge_ref"] == _MERGE_REF
     err = capsys.readouterr().err
-    assert "confirmed healthy" in err
-    assert "was not serving a working frontend" not in err
+    assert "applied with incomplete provisioning" in err
+    assert f"bash {update_self.PROVISIONER_SCRIPT}" in err
+    assert not _marker_exists(apply_repo)
 
 
-def test_a_failed_provisioner_run_is_rerun_best_effort_during_recovery(
+def test_a_hung_provisioner_is_a_named_failure_not_an_open_ended_wait(
+    apply_repo: Path,
+) -> None:
+    runner = _apply_runner(_PROVISIONER_DIFF, apply_repo)
+    runner.respond(
+        ("bash",), subprocess.TimeoutExpired(cmd="bash setup_system.sh", timeout=1800)
+    )
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    assert "did not finish within" in _read_provision_incomplete(apply_repo)["reason"]
+
+
+def test_a_clean_provisioner_run_clears_an_earlier_incomplete_record(
+    apply_repo: Path,
+) -> None:
+    update_self.write_provision_incomplete(
+        apply_repo, "an earlier failure", "someone", _MERGE_REF, lambda: 1.0
+    )
+    runner = _apply_runner(_PROVISIONER_DIFF, apply_repo)
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    assert not update_self.provision_incomplete_path(apply_repo).exists()
+
+
+def test_a_failed_provisioner_followed_by_a_failed_probe_still_rolls_back(
     apply_repo: Path, capsys
 ) -> None:
-    # The marker's provisioner flag is recorded before the run is attempted: a
-    # provisioner that failed part-way may already have moved global tool
-    # state, so recovery re-runs it from the restored tree even though the
-    # forward run never succeeded (best-effort -- its failure is a warning,
-    # not an emergency).
-    runner = _apply_runner("M\tsystem/scripts/setup_system.sh\n", apply_repo)
+    # A load-bearing provisioner change (a node bump, a new apt dependency)
+    # shows up as a failed pre-flight or probe, and that still rolls the whole
+    # merge back -- with the provisioner re-run best-effort from the restored
+    # tree, since its forward run may have moved global tool state. No
+    # provisioning-incomplete record: the update did not land.
+    runner = _apply_runner(_PROVISIONER_DIFF + _BACKEND_DIFF, apply_repo)
     runner.respond(("bash",), _Result(returncode=1, stderr="no network"))
+    spawner = _FakeSpawner(output="ImportError: node too old", exited=True)
+
+    def only_live_healthy(url: str) -> int | None:
+        return 200 if _is_live(url) else None
+
+    code = _apply(runner, _FakeHttp(only_live_healthy), spawner, apply_repo)
+
+    assert code == 2
+    assert runner.ran("git", "checkout", _ROLLBACK, "--")
+    assert len(runner.argvs_starting(*_PROVISION)) == 2  # forward, then recovery
+    assert not update_self.provision_incomplete_path(apply_repo).exists()
+    err = capsys.readouterr().err
+    assert "still counts as recovered" in err
+    assert "confirmed healthy" in err
+
+
+def test_the_provisioner_runs_under_the_image_builds_environment(
+    apply_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An agent's HOME is /home/user at runtime; installers that follow $HOME
+    # would land beside neither the checks nor the PATH the provisioner fixes
+    # to /root/.local. Forward run and recovery re-run alike get the canonical
+    # env, with everything else ambient preserved.
+    monkeypatch.setenv("HOME", "/home/user")
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.example:3128")
+    runner = _apply_runner(_PROVISIONER_DIFF + _BACKEND_DIFF, apply_repo)
+    spawner = _FakeSpawner(output="boom", exited=True)
+
+    def only_live_healthy(url: str) -> int | None:
+        return 200 if _is_live(url) else None
+
+    code = _apply(runner, _FakeHttp(only_live_healthy), spawner, apply_repo)
+
+    assert code == 2
+    provisioner_envs = [
+        env
+        for argv, env in zip(runner.calls, runner.envs)
+        if tuple(argv[: len(_PROVISION)]) == _PROVISION
+    ]
+    assert len(provisioner_envs) == 2
+    for env in provisioner_envs:
+        assert env is not None
+        assert env["HOME"] == "/root"
+        assert env["PATH"].startswith("/root/.local/bin:")
+        assert env["HTTPS_PROXY"] == "http://proxy.example:3128"
+
+
+def test_a_hung_forward_step_rolls_back_naming_the_step(
+    apply_repo: Path, capsys
+) -> None:
+    # The old reveal ran for 1h28m before anyone asked whether it was stuck.
+    # A forward step that outlives its budget is a failure with a name, and
+    # the rollback carries the per-phase timings that show where it hung.
+    runner = _apply_runner(_FRONTEND_MANIFEST_DIFF, apply_repo)
+    runner.respond(("npm", "ci"), subprocess.TimeoutExpired(cmd="npm ci", timeout=1200))
 
     code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
 
     assert code == 2
-    assert len(runner.argvs_starting(*_PROVISION)) == 2  # forward, then recovery
-    assert "still counts as recovered" in capsys.readouterr().err
+    assert runner.ran("git", "checkout", _ROLLBACK, "--")
+    err = capsys.readouterr().err
+    assert "npm ci did not finish within 1200s" in err
+    assert "apply phase timings:" in err
+    assert update_self.PHASE_SNAPSHOTTED in err
+
+
+def test_every_apply_reports_its_per_phase_timings(apply_repo: Path, capsys) -> None:
+    diff = _FRONTEND_DIFF + _BACKEND_DIFF + _PROVISIONER_DIFF
+    runner = _apply_runner(diff, apply_repo)
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    err = capsys.readouterr().err
+    timing_line = next(
+        line for line in err.splitlines() if line.startswith("apply phase timings:")
+    )
+    for phase in (
+        update_self.PHASE_MERGED,
+        update_self.PHASE_SNAPSHOTTED,
+        update_self.PHASE_REFRESHED,
+        update_self.PHASE_PROVISIONED,
+        update_self.PHASE_BUILT,
+        update_self.PHASE_RESTARTED,
+    ):
+        assert f"{phase} +" in timing_line
+
+
+def test_marker_phase_timings_roundtrip_and_tolerate_older_markers(
+    tmp_path: Path,
+) -> None:
+    marker = _plant_marker(tmp_path)
+    marker.phase_timings = {
+        update_self.PHASE_MERGED: 1001.0,
+        update_self.PHASE_BUILT: 1007.5,
+    }
+    update_self.write_marker(marker, tmp_path, now=lambda: 1010.0)
+    read = update_self.read_marker(tmp_path)
+    assert read is not None
+    assert read.phase_timings == {
+        update_self.PHASE_MERGED: 1001.0,
+        update_self.PHASE_BUILT: 1007.5,
+    }
+
+    # A marker written by an older apply carries no timings at all.
+    older = json.loads(update_self.marker_path(tmp_path).read_text())
+    del older["phase_timings"]
+    update_self.marker_path(tmp_path).write_text(json.dumps(older))
+    read = update_self.read_marker(tmp_path)
+    assert read is not None
+    assert read.phase_timings == {}
 
 
 def test_emergency_when_rollback_cannot_restore_health(
