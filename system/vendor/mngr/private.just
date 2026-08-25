@@ -321,7 +321,7 @@ minds-test-electron-flow *args:
 # per dataset.
 [group("minds evals")]
 minds-evals-generate config output="/tmp/minds-evals/datasets/generated":
-    uv run minds-evals-harbor generate --config "{{config}}" --output "{{output}}"
+    uv run --project apps/minds_evals minds-evals-harbor generate --config "{{config}}" --output "{{output}}"
 
 # Run a generated dataset on Modal with the persona driver. Requires
 # ANTHROPIC_API_KEY (decider + judge) and ~/.modal.toml. Each trial boots its
@@ -335,7 +335,10 @@ minds-evals-run dataset job_name concurrency="4" push_r2="false" *harbor_args=""
     #!/usr/bin/env bash
     set -euo pipefail
     : "${ANTHROPIC_API_KEY:?set ANTHROPIC_API_KEY -- the decider and judge call the Anthropic API}"
-    cmd=(uv run harbor run
+    # --project selects the standalone minds_evals venv (harbor and the driver
+    # package live only there); it leaves cwd at the repo root, so the
+    # root-relative -o/-p paths below stay correct.
+    cmd=(uv run --project apps/minds_evals harbor run
         -p "{{dataset}}"
         -a imbue.minds_evals.driver:MindsPersonaDriver
         -e modal

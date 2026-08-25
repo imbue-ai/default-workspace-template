@@ -1,6 +1,8 @@
 """Tests for the hosted accounts surface (browser auth, device handoff, OAuth, attribution)."""
 
+import http.client
 import secrets
+import urllib.error
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -21,6 +23,7 @@ from supertokens_python.recipe.session.exceptions import TryRefreshTokenError
 
 import imbue.remote_service_connector.accounts_web as accounts_web_module
 import imbue.remote_service_connector.share_broker as share_broker_module
+from imbue.remote_service_connector import accounts_web
 from imbue.remote_service_connector.accounts_web import _mark_next_confirmed
 from imbue.remote_service_connector.accounts_web import compute_pkce_challenge
 from imbue.remote_service_connector.accounts_web import is_valid_loopback_redirect_uri
@@ -35,6 +38,7 @@ from imbue.remote_service_connector.testing import TEST_OAUTH_SIGNING_KEY_PEM
 from imbue.remote_service_connector.testing import _make_accounts_web_test_client
 from imbue.remote_service_connector.testing import _make_share_test_client_with_fakes
 from imbue.remote_service_connector.testing import encode_attribution_cookie
+from imbue.remote_service_connector.testing import hold_stable_download_link
 
 
 def _sign_in_browser(
@@ -1112,15 +1116,19 @@ def test_oauth_signup_records_attribution_but_returning_signin_does_not(monkeypa
 
 def test_download_redirects_per_platform_and_404s_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
     client, _st, _codes = _make_accounts_web_test_client(monkeypatch)
+    # Resolved from a fixture manifest, so this covers routing rather than what
+    # stable happens to serve -- and so it does not reach the network.
+    _hold_stable_download(_STABLE_MANIFEST)
 
     mac = client.get("/download?platform=mac-arm64", follow_redirects=False)
     assert mac.status_code == 302
-    assert mac.headers["location"] == "https://dl.todesktop.com/26032588hqdzk/mac/dmg/arm64"
+    assert mac.headers["location"] == _STABLE_ARM64_DMG
 
     # The friendly alias resolves server-side to the same target.
     alias = client.get("/download?platform=mac", follow_redirects=False)
     assert alias.headers["location"] == mac.headers["location"]
 
+    # Only mac-arm64 resolves; every other platform keeps its declared target.
     source = client.get("/download?platform=source", follow_redirects=False)
     assert source.status_code == 302
     assert source.headers["location"] == "https://github.com/imbue-ai/mngr"
@@ -1171,6 +1179,159 @@ def test_download_still_redirects_when_the_event_write_fails(monkeypatch: pytest
 
     assert resp.status_code == 302
     assert st_backend.attribution_store.download_rows == []
+
+
+# /download is the link marketing hands to a person, so it has to serve what the
+# stable channel serves.
+
+# Shaped like the live feed: an arm64-only fixture would let a resolver that
+# picks any .dmg at all pass.
+_STABLE_MANIFEST = """version: 0.4.1
+files:
+  - url: https://download.todesktop.com/x/Minds%200.4.1%20-%20Build%20b1-x64-mac.zip
+    sha512: abc==
+    size: 303377197
+  - url: https://download.todesktop.com/x/Minds%200.4.1%20-%20Build%20b1-arm64-mac.zip
+    sha512: def==
+    size: 296819574
+  - url: https://download.todesktop.com/x/Minds%200.4.1%20-%20Build%20b1-x64.dmg
+    sha512: ghi==
+    size: 309416827
+  - url: https://download.todesktop.com/x/Minds%200.4.1%20-%20Build%20b1-arm64.dmg
+    sha512: jkl==
+    size: 302771815
+path: https://download.todesktop.com/x/Minds%200.4.1%20-%20Build%20b1-x64-mac.zip
+sha512: abc==
+releaseDate: '2026-08-18T23:46:47.920Z'
+"""
+
+
+_STABLE_ARM64_DMG = "https://download.todesktop.com/x/Minds%200.4.1%20-%20Build%20b1-arm64.dmg"
+
+
+def _resolve(manifest: str | None) -> str | None:
+    def fetch() -> str:
+        if manifest is None:
+            raise urllib.error.URLError("unreachable")
+        return manifest
+
+    return accounts_web.resolve_stable_mac_arm64_url(fetch=fetch)
+
+
+def _hold_stable_download(manifest: str | None) -> None:
+    """Seed what the route reads, so it stays off the network."""
+    hold_stable_download_link(_resolve(manifest))
+
+
+def test_the_download_link_is_the_dmg_stable_serves() -> None:
+    assert _resolve(_STABLE_MANIFEST) == _STABLE_ARM64_DMG
+
+
+def test_an_unreachable_manifest_leaves_the_fallback_in_place() -> None:
+    """Fails open like the attribution write beside it.
+
+    Returning None rather than raising is what lets the TTL cache hold the
+    failure, so an outage costs one read per window instead of one per request.
+    """
+    assert _resolve(None) is None
+
+
+def test_a_body_that_arrives_broken_fails_open_like_an_unreachable_one() -> None:
+    """Neither of these is an OSError."""
+
+    def truncated() -> str:
+        raise http.client.IncompleteRead(b"version: 0.4.1\n")
+
+    def undecodable() -> str:
+        return b"\xff\xfe".decode()
+
+    assert accounts_web.resolve_stable_mac_arm64_url(fetch=truncated) is None
+    assert accounts_web.resolve_stable_mac_arm64_url(fetch=undecodable) is None
+
+
+def test_a_manifest_naming_no_arm64_dmg_at_all_is_refused() -> None:
+    """The link is only correct if the manifest names exactly one arm64 .dmg."""
+    assert _resolve("version: 0.4.1\nfiles: []\n") is None
+
+
+def test_the_route_reads_a_cached_link_rather_than_the_feed() -> None:
+    """Otherwise every download click would put the feed in the request path."""
+    seeded = "https://download.todesktop.com/x/Seeded-arm64.dmg"
+    hold_stable_download_link(seeded)
+
+    assert accounts_web.stable_mac_arm64_url() == seeded
+    assert accounts_web.stable_mac_arm64_url() == seeded
+
+
+def test_download_serves_what_stable_serves_not_todesktops_own_latest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _st, _codes = _make_accounts_web_test_client(monkeypatch)
+    _hold_stable_download(_STABLE_MANIFEST)
+
+    resp = client.get("/download?platform=mac", follow_redirects=False)
+
+    assert resp.status_code == 302
+    assert resp.headers["location"] == _STABLE_ARM64_DMG
+
+
+def test_download_falls_back_when_stable_cannot_be_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, _st, _codes = _make_accounts_web_test_client(monkeypatch)
+    _hold_stable_download(None)
+
+    resp = client.get("/download?platform=mac", follow_redirects=False)
+
+    assert resp.status_code == 302
+    assert resp.headers["location"] == "https://dl.todesktop.com/26032588hqdzk/mac/dmg/arm64"
+
+
+def test_the_same_url_named_twice_is_still_one_answer() -> None:
+    """Two entries naming one artifact are not ambiguous."""
+    repeated = (
+        "version: 0.4.1\n"
+        "files:\n"
+        "  - url: https://download.todesktop.com/x/Only-arm64.dmg\n"
+        "    size: 1\n"
+        "  - url: https://download.todesktop.com/x/Only-arm64.dmg\n"
+        "    size: 1\n"
+    )
+    assert _resolve(repeated) == "https://download.todesktop.com/x/Only-arm64.dmg"
+
+
+def test_two_different_dmgs_are_ambiguous_and_refused() -> None:
+    two = (
+        "version: 0.4.1\n"
+        "files:\n"
+        "  - url: https://download.todesktop.com/x/One-arm64.dmg\n"
+        "    size: 1\n"
+        "  - url: https://download.todesktop.com/x/Two-arm64.dmg\n"
+        "    size: 2\n"
+    )
+    assert _resolve(two) is None
+
+
+def test_a_dmg_hosted_anywhere_but_todesktop_is_not_a_candidate() -> None:
+    """The feed says where to send people, so a compromised one must not be able to."""
+    elsewhere = "version: 0.4.1\nfiles:\n  - url: https://evil.example/Minds-arm64.dmg\n    size: 1\n"
+    assert _resolve(elsewhere) is None
+
+
+def test_a_bare_filename_is_not_a_candidate() -> None:
+    """electron-builder writes these; relative would resolve against the connector's own host."""
+    relative = "version: 0.4.1\nfiles:\n  - url: Minds-0.4.1-arm64.dmg\n    size: 1\n"
+    assert _resolve(relative) is None
+
+
+def test_an_arm64_dmg_under_another_key_is_not_an_artifact() -> None:
+    """Only `url:` names an artifact.
+
+    Scanning the document instead would see two urls here, call the manifest
+    ambiguous, and refuse a perfectly good one -- and would take whatever a
+    future key happened to hold.
+    """
+    decoy = _STABLE_MANIFEST + "path: https://download.todesktop.com/x/Something-Else-arm64.dmg\n"
+
+    assert _resolve(decoy) == "https://download.todesktop.com/x/Minds%200.4.1%20-%20Build%20b1-arm64.dmg"
 
 
 def test_browser_signin_refused_for_suspended_account(monkeypatch: pytest.MonkeyPatch) -> None:

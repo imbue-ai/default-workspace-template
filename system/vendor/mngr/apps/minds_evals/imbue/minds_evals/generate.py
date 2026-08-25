@@ -356,7 +356,8 @@ def generate(config_path: Path, output_dir: Path, mngr_repo: str) -> None:
     task_dirs = generate_dataset(config_path=config_path, output_dir=output_dir, mngr_repo=mngr_repo)
     logger.info("Generated {} task(s) in {}", len(task_dirs), output_dir)
     logger.info(
-        "Run them with: uv run harbor run -p {} -a imbue.minds_evals.driver:MindsPersonaDriver -e modal -y",
+        "Run them from the monorepo root with: uv run --project apps/minds_evals harbor run "
+        "-p {} -a imbue.minds_evals.driver:MindsPersonaDriver -e modal -y",
         output_dir,
     )
 
