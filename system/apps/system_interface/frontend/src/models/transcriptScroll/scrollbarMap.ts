@@ -83,7 +83,7 @@ export function resolveTrackFraction(mapping: ScrollbarMapping, fraction: number
   const width = segment.trackEnd - segment.trackStart;
   const relative = width > 0 ? (clamped - segment.trackStart) / width : 0;
   if (segment.kind === "physical") {
-    return { kind: "physical-px", contentTopPx: relative * segment.heightPx };
+    return { kind: "physical-fraction", fraction: relative };
   }
   const count = segment.endIndex - segment.firstIndex;
   const indexWithin = Math.min(count - 1, Math.floor(relative * count));

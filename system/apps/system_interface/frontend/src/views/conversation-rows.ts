@@ -35,9 +35,19 @@ import type { WindowSegment } from "../models/virtualWindow";
 // assistant estimates are shared (see row-measurement).
 export const ESTIMATED_PROGRESS_HEIGHT_PX = 360;
 
+// Layout for the centered message column. Shared by the live transcript views
+// and the offscreen measurer, whose rows must lay out identically to measure
+// identically.
+export const MESSAGE_LIST_CLASS = "message-list mx-auto w-full max-w-(--width-message-column) flex flex-col py-6";
+
 export interface RowDescriptor {
   key: string;
   estimate: number;
+  // The transcript event this row starts at, for mapping a row anchor to a
+  // global event index (scroll persistence and fill-planner focus). Null only
+  // for a turn section with no opening user message; consumers fall back to the
+  // previous row's event.
+  anchorEventId: string | null;
   // m.Children (not m.Vnode) because a row can be a component vnode
   // (ProgressBlock), whose typed attrs do not fit the bare Vnode<{}, {}>.
   render: () => m.Children;
@@ -96,6 +106,7 @@ function buildRows(
       rows.push({
         key: userEvent.event_id,
         estimate: ESTIMATED_USER_HEIGHT_PX,
+        anchorEventId: userEvent.event_id,
         render: () => renderUserMessage(userEvent) as m.Vnode,
       });
     }
@@ -106,6 +117,7 @@ function buildRows(
       rows.push({
         key,
         estimate: ESTIMATED_PROGRESS_HEIGHT_PX,
+        anchorEventId: userEvent?.event_id ?? null,
         render: () =>
           m(ProgressBlock, {
             id: key,
@@ -127,6 +139,7 @@ function buildRows(
           rows.push({
             key: event.event_id,
             estimate: ESTIMATED_ASSISTANT_HEIGHT_PX,
+            anchorEventId: event.event_id,
             render: () => renderAssistantMessage(event, toolResults, agentId),
           });
         }
@@ -139,6 +152,7 @@ function buildRows(
         rows.push({
           key: permKey,
           estimate: ESTIMATED_ASSISTANT_HEIGHT_PX,
+          anchorEventId: permissionEvent.event_id,
           // Pass the row key as the DOM id so the measured height is cached under
           // the same key the window math looks up (see renderPermissionItem).
           render: () => renderPermissionItem(permissionEvent, toolResults, agentId, resolution, permKey),
@@ -149,6 +163,7 @@ function buildRows(
           rows.push({
             key: chipEvent.event_id,
             estimate: ESTIMATED_USER_HEIGHT_PX,
+            anchorEventId: chipEvent.event_id,
             render: () => renderUserMessage(chipEvent) as m.Vnode,
           });
         }
@@ -158,6 +173,7 @@ function buildRows(
       rows.push({
         key: event.event_id,
         estimate: ESTIMATED_ASSISTANT_HEIGHT_PX,
+        anchorEventId: event.event_id,
         render: () => renderAssistantMessage(event, toolResults, agentId),
       });
     }
