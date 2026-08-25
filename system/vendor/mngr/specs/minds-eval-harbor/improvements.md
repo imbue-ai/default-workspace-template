@@ -78,11 +78,10 @@ GitHub runner only orchestrates -- all weight is on Modal -- so `ubuntu-latest` 
    requires `MINDS_EVAL_BUCKET` / `MINDS_EVAL_S3_ENDPOINT`, a local convention that does not exist on
    a runner. There is no `upload-artifact` step either. Sizing input: 92 MB per trial, nearly all of
    it the workspace snapshot tarball.
-7. **Install weight on every other job.** `apps/minds_evals` is a uv workspace member, so the
-   `uv sync --all-packages` that every CI job runs now builds harbor from git and pulls its
-   dependency tree (fastapi, uvicorn, supabase, litellm, dirhash, pathspec). See item 5 under
-   "Packaging" -- unpacking the workspace membership fixes this and the dependency-override problem
-   in one move.
+7. ~~**Install weight on every other job.**~~ **Done** -- while `apps/minds_evals` was a uv
+   workspace member, the `uv sync --all-packages` that every CI job runs built harbor from git and
+   pulled its dependency tree (fastapi, uvicorn, supabase, litellm, dirhash, pathspec) into every one
+   of them. The packaging fix in section 5 keeps that tree out of the root lock entirely.
 
 Timeout math is already sound: `--agent-setup-timeout-multiplier 3` against harbor's 360s default
 gives 1080s, comfortably over `BACKEND_BOOT_TIMEOUT_SECONDS = 600`, and the agent timeout is the case
@@ -213,8 +212,31 @@ carries none, which is what the eval's own comment claims and is correct.
    declared rich and modal, the root override disappears, the filelock/platformdirs bumps stop
    rippling into the `image_requirements.txt` files and the mirror lock, and every other CI job stops
    installing fastapi/supabase/litellm. Cost: the driver import path needs the monorepo packages
-   visible, solvable with a path dependency on what it actually imports (`imbue-common`). **Not yet
-   verified to resolve cleanly** -- worth an actual `uv lock` experiment before committing.
+   visible, solvable with a path dependency on what it actually imports (`imbue-common`).
+
+**Resolved, as proposed.** `apps/minds_evals` is a standalone uv project: the root
+`[tool.uv.workspace]` excludes it, and it carries its own `pyproject.toml`, `uv.lock`,
+`.python-version` and `.venv`, resolved under the same two-week cooldown policy as the root, stated as a
+rolling `exclude-newer` window so nothing has to advance it (a meta-ratchet holds the window equal to
+`DEPENDENCY_COOLDOWN`). It
+takes the genuine `harbor[modal]==0.21.0` and resolves rich 15.0.0 / modal 1.5.2, both above harbor's
+floors; the root `override-dependencies` entry is gone and the root lock drops 14 packages with no
+version change to anything that remains. The monorepo packages it needs come in as editable path
+sources rather than workspace members, so trial costs are still priced off this repo's
+`mngr_usage` table.
+
+The bill for isolation is that nothing in the root workspace's tooling reaches the project any more:
+`uv sync --all-packages` does not install it, the offload image does not contain it, root pytest
+ignores it via `collect_ignore_glob`, and the root `ty check` excludes it. What replaces that is
+`just test-minds-evals` (sync from its own lock, `ty check`, pytest) plus a path-gated
+`test-minds-evals` CI job that runs the recipe whenever the app *or any of the in-repo packages that
+land in its venv* changes -- a meta-ratchet checks that gate against the editable sources in the
+project's own lock, since a gate missing one reports green for code it never built.
+
+One caveat worth keeping in view: this buys a resolver-checkable claim, not a tested one. harbor ran
+on rich 13.9.4 (below its floor, smoke-verified) and now runs on rich 15.0.0 (above its floor,
+equally unverified by us). Item 2's substantive worry -- that a harbor bump starts calling a modal
+1.5 API -- is what actually goes away, because the resolver will now refuse rather than shrug.
 
 ## 6. Iteration friction
 

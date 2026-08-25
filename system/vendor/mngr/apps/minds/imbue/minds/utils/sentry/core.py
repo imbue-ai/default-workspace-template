@@ -84,6 +84,16 @@ _S3_ATTACHMENT_BUCKET_BY_ENVIRONMENT: Mapping[SentryDeployEnvironment, str | Non
 #   * ``electron.log.<ts>.gz``    -- rotated (gzipped) Electron main-process logs
 # The live/current files are uncompressed on disk (compressed on upload); the rotated ``*.gz``
 # files are already gzipped by the Electron rotation helper, so they are uploaded as-is.
+#
+# A manual bug report additionally *stages* up to two files into that same folder immediately
+# before it submits: ``bug-report-<collection slug>-workspace.zip`` (the archive the in-workspace
+# collector hands back, holding the workspace logs plus one ``.jsonl`` per recent chat -- staged
+# already compressed rather than as bare ``.jsonl`` files the backend-log groups above would sweep)
+# and ``bug-report-<collection slug>-console.log`` (the shell's captured console tail, staged
+# app-side). No group's glob matches either name -- ``*.jsonl`` and ``*.jsonl.*`` need a ``.jsonl``
+# that neither the ``.zip`` nor the ``.log`` has, and the remaining four are anchored on the exact
+# stems ``minds.log`` or ``electron.log`` -- so a staged file never joins a group and reaches only
+# the one report it was staged for (see the note below the groups).
 _MINDS_LOG_ATTACHMENT_GROUPS = (
     # The live Python backend jsonl log (mutable -- re-upload on every report).
     LogAttachmentGroup(
@@ -134,6 +144,15 @@ _MINDS_LOG_ATTACHMENT_GROUPS = (
         is_immutable=True,
     ),
 )
+
+# The bug-report staged files (``bug-report-<collection slug>-workspace.zip``
+# and its ``-console.log`` sibling) are deliberately NOT attachment groups:
+# groups are process-global and swept onto every event, so a group matching them
+# would carry one report's consented files onto every unrelated automatic error
+# for as long as they sat on disk. They reach exactly one event instead --
+# ``submit_manual_bug_report``'s ``report_file_paths`` for a collection that has
+# already finished, or ``report_file_uris`` for one still running, which names an
+# S3 key reserved for that report alone.
 
 
 def sentry_deploy_environment_from_minds_env_name(env_name: str | None) -> SentryDeployEnvironment:
@@ -239,17 +258,30 @@ def resolve_latchkey_forward_sentry_env(consent_file_path: Path, anonymous_user_
 
 
 def _external_log_attachment_groups(
-    latchkey_plugin_data_dir: Path, discovery_events_dir: Path
+    latchkey_plugin_data_dir: Path, discovery_events_dir: Path, mngr_cli_events_dir: Path
 ) -> tuple[LogAttachmentGroup, ...]:
     """Attachment groups for logs that live outside ``~/.minds/logs``.
 
     The detached ``mngr latchkey forward`` daemon (which runs discovery and the
-    reverse tunnels) logs into the latchkey plugin data dir, and the shared
-    discovery event stream persists under the mngr host dir -- both essential
-    for diagnosing discovery/replay problems, and both outside the flat minds
-    log folder that the default sweep covers.
+    reverse tunnels) logs into the latchkey plugin data dir, the shared
+    discovery event stream persists under the mngr host dir, and every ``mngr``
+    subprocess minds spawns (recovery restarts included) file-logs its
+    per-command step timeline into the mngr CLI events dir -- all essential for
+    diagnosis, and all outside the flat minds log folder that the default
+    sweep covers.
     """
     return (
+        # The per-command mngr CLI log: the only record of what a spawned mngr
+        # subprocess (e.g. a recovery restart that timed out and was killed)
+        # actually did step by step.
+        LogAttachmentGroup(
+            group_name="mngr_cli_events",
+            glob="events.jsonl",
+            max_file_count=1,
+            is_compressed=True,
+            is_immutable=False,
+            base_dir=mngr_cli_events_dir,
+        ),
         # The daemon's structured loguru log (mutable -- re-upload on every report).
         LogAttachmentGroup(
             group_name="latchkey_live_logs",
@@ -289,6 +321,7 @@ def setup_sentry(
     is_error_reporting_enabled: Callable[[], bool],
     latchkey_plugin_data_dir: Path,
     discovery_events_dir: Path,
+    mngr_cli_events_dir: Path,
 ) -> None:
     """Set up Sentry for the minds backend process (Flask integration + flat-log layout)."""
     _setup_sentry(
@@ -300,7 +333,7 @@ def setup_sentry(
         service_name=_MINDS_SENTRY_SERVICE_NAME,
         user_id=anonymous_user_id,
         log_attachment_groups=_MINDS_LOG_ATTACHMENT_GROUPS
-        + _external_log_attachment_groups(latchkey_plugin_data_dir, discovery_events_dir),
+        + _external_log_attachment_groups(latchkey_plugin_data_dir, discovery_events_dir, mngr_cli_events_dir),
         integrations=[FlaskIntegration()],
         is_error_reporting_enabled=is_error_reporting_enabled,
         s3_attachment_bucket=_s3_attachment_bucket_for_environment(environment),

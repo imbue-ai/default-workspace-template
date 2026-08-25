@@ -474,6 +474,48 @@ Drop `--dry-run` to write, and add `--allow-rollback` for the backwards case.
 Either way this only stops *new* installs: users who already took the withdrawn
 build stay on it, because `allowDowngrade` is false.
 
+## The public download link
+
+`https://minds.imbue.com/download?platform=mac-arm64` is the link to hand
+anyone who wants minds. It records a campaign-tagged download event (the
+`imbue_attribution` cookie, so a download can be tied to the account created
+later) and redirects to what the **stable channel** serves.
+
+Name the architecture when you share it: minds ships Apple Silicon only, and
+`mac-arm64` says so. `mac` resolves to exactly the same place and is what the
+marketing site's buttons use -- see `apps/remote_service_connector/docs/
+attribution-cookie-contract.md`, which is the contract with that site -- so it
+is not ours to remove.
+
+`accounts.imbue.com/download` answers identically, which is confusing rather
+than useful: both are Modal custom domains on the same connector, and the route
+happens to be reachable on either. They are not interchangeable elsewhere --
+`accounts` is the sign-in surface and the origin baked into password-reset
+links, `minds` is the hosted web chrome -- so share the `minds` one.
+
+Nothing to do at release time. The connector reads the arm64 `.dmg` out of
+`stable-mac.yml` and caches it briefly, so promoting stable moves the link by
+itself. The target is read rather than written here because the connector
+deploys on its own schedule: a value baked in during a release would not reach
+the running service until somebody redeployed it.
+
+If the manifest cannot be read the link falls back to ToDesktop's own channel
+URL -- whatever was last *Released* there, which has not tracked our stable
+channel since release channels landed. That failure is cached for the same
+minute a success is, so an outage costs one download the fetch timeout rather
+than all of them.
+
+So the two below disagreeing is what an outage looks like, not proof the link
+stopped tracking stable. The connector logs `Could not resolve the stable
+download` with the reason, and that log is what tells the two apart.
+
+To check the two agree:
+
+```bash
+curl -s https://updates.imbueminds.com/stable-mac.yml | grep -o 'https://[^ ]*arm64\.dmg'
+curl -s -o /dev/null -D - 'https://minds.imbue.com/download?platform=mac-arm64' | grep -i location
+```
+
 ## Failure modes worth knowing
 
 - **`gh workflow run` creates a duplicate run.** Always invoke from the mngr cwd (step 4).

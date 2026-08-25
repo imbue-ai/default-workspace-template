@@ -20,6 +20,8 @@ THIRD_PARTY_IMPORT_ROOTS: Final[frozenset[str]] = frozenset(
         "acme",
         "boto3",
         "botocore",
+        # A TTL cache with a real expiry and stampede protection.
+        "cachetools",
         "cryptography",
         "fastapi",
         "httpx",
@@ -34,5 +36,8 @@ THIRD_PARTY_IMPORT_ROOTS: Final[frozenset[str]] = frozenset(
         # directly.
         "sentry_sdk",
         "tenacity",
+        # electron-updater's channel manifests, whose format the shipped
+        # binary that reads them fixes.
+        "yaml",
     }
 )
