@@ -23,7 +23,6 @@ from typing import assert_never
 import click
 from loguru import logger
 from pydantic import Field
-from pydantic import field_validator
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.concurrency_group.errors import ProcessSetupError
@@ -137,10 +136,8 @@ from imbue.mngr_claude.claude_config import is_source_directory_trusted
 from imbue.mngr_claude.claude_config import read_claude_config
 from imbue.mngr_claude.claude_config import remove_claude_trust_for_path
 from imbue.mngr_claude.claude_config import resolve_shared_claude_config_dir
-from imbue.mngr_claude.dialogs import ALL_RECOGNIZED_NONBENIGN
 from imbue.mngr_claude.dialogs import DialogBlocked
 from imbue.mngr_claude.dialogs import INPUT_PROMPT_GLYPH
-from imbue.mngr_claude.dialogs import SELECTABLE_NICKNAMES
 from imbue.mngr_claude.dialogs import Unrecognized
 from imbue.mngr_claude.dialogs import classify
 from imbue.mngr_claude.dialogs import deal_with_dialogs
@@ -392,29 +389,6 @@ class ClaudeAgentConfig(AgentTypeConfig):
         "mngr answers is reached by cycling the selector onto a named option, never by pressing "
         "Enter on whatever happens to be highlighted.",
     )
-
-    @field_validator("sensibly_deal_with_dialogs")
-    @classmethod
-    def _check_dialog_nicknames(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        """Reject a nickname mngr does not know, rather than silently answering nothing.
-
-        The failure mode this prevents is quiet: a typo, or the "*" this field used to take,
-        matches no dialog, so mngr refuses every send it was told to answer and the operator has
-        no way to tell that from the feature not working.
-        """
-        # DANGEROUS_ALL_NONBENIGN_INCLUDING_UNRECOGNIZED is deliberately NOT accepted yet: it
-        # promises to answer surfaces mngr cannot name, and nothing implements that -- Unrecognized
-        # refuses without ever consulting this setting. Accepting it would let an operator opt into
-        # a behaviour that silently does not happen.
-        allowed = SELECTABLE_NICKNAMES | {ALL_RECOGNIZED_NONBENIGN}
-        unknown = [entry for entry in value if entry not in allowed]
-        if unknown:
-            raise UnknownDialogNicknameError(
-                f"Unknown entries in sensibly_deal_with_dialogs: {sorted(unknown)}. "
-                f"Valid nicknames: {sorted(SELECTABLE_NICKNAMES)}, or the tokens "
-                f"{ALL_RECOGNIZED_NONBENIGN!r}."
-            )
-        return value
 
     post_submit_dialog_observe_seconds: Annotated[float, Field(gt=0)] = Field(
         default=POST_SUBMIT_DIALOG_OBSERVE_SECONDS,
@@ -2336,17 +2310,14 @@ class _ClaudeDialogPane(FrozenModel):
     # so the pane it names cannot change underneath it.
     resolved_target: str
 
-    def _resolved_target(self) -> str:
-        return self.resolved_target
-
     def capture(self) -> str:
-        return self.agent._capture_pane_content(self._resolved_target()) or ""
+        return self.agent._capture_pane_content(self.resolved_target) or ""
 
     def _press_and_settle(self, send: Callable[[], None]) -> None:
         # Leave copy-mode first. A pane in a mode swallows keys AND shows scrollback rather than
         # the live screen, so without this the loop would read a stale screen, press into nothing,
         # and conclude the surface was stuck.
-        self.agent._clear_pane_modes(self._resolved_target())
+        self.agent._clear_pane_modes(self.resolved_target)
         before = self.capture()
         send()
         poll_until(
@@ -2747,8 +2718,8 @@ class ClaudeAgent(
             # (is_readiness_awaited=False): Claude's authoritative readiness signal is the
             # session_started marker polled below, a stronger signal than the input-prompt glyph.
             # Leaving the generic wait on would, for a freshly created agent, block for the full
-            # timeout if a startup dialog suppressed the column-0 prompt -- never reaching the
-            # dialog auto-accept fallback further down.
+            # timeout if a startup dialog suppressed the column-0 prompt -- before the
+            # session_started poll below ever got to see the marker that was already there.
             with log_span("Calling start_action..."):
                 super().wait_for_ready_signal(is_readiness_awaited=False, start_action=start_action, timeout=timeout)
 

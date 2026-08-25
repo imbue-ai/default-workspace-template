@@ -55,14 +55,17 @@ class _RecordingTuiAgent(_ProbeTuiAgent):
     def _message_lock(self) -> Generator[None, None, None]:
         yield
 
-    def _capture_pane_content(self, tmux_target: TmuxWindowTarget, include_scrollback: bool = False) -> str | None:
+    def _capture_pane_content(
+        self, tmux_target: TmuxWindowTarget | str, include_scrollback: bool = False
+    ) -> str | None:
         return self.pane_content
 
     def _preflight_send_message(self, tmux_target: TmuxWindowTarget) -> None:
         self.steps.append("preflight")
 
-    def _send_tmux_literal_keys(self, tmux_target: TmuxWindowTarget, message: str) -> None:
+    def _send_tmux_literal_keys(self, tmux_target: TmuxWindowTarget, message: str) -> str:
         self.steps.append("paste")
+        return tmux_target.as_shell_arg()
 
     def _build_submission_evidence_probes(
         self, message: str, policy: SubmissionConfirmationPolicy

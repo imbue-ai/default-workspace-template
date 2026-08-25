@@ -791,8 +791,11 @@ class SendKeysAgent(InteractiveAgentMixin, SupportsKeyChordMixin, BaseAgent[Agen
         and raise an appropriate error to abort the send.
         """
 
-    def _send_tmux_literal_keys(self, tmux_target: TmuxWindowTarget, message: str) -> None:
+    def _send_tmux_literal_keys(self, tmux_target: TmuxWindowTarget, message: str) -> str:
         """Send literal text to a tmux pane, choosing the best method by length.
+
+        Returns the resolved tmux target it sent to, so a caller following up with Enter can
+        reuse it rather than paying for a second lookup of the same pane.
 
         For short messages (< 1024 chars), uses ``tmux send-keys -l``.
         For long messages (>= 1024 chars), writes the text to a temp file on
@@ -828,14 +831,15 @@ class SendKeysAgent(InteractiveAgentMixin, SupportsKeyChordMixin, BaseAgent[Agen
                 self.host.execute_idempotent_command(
                     f"tmux delete-buffer -b {quoted_buffer} 2>/dev/null; rm -f {quoted_path}"
                 )
+        return target_arg
 
     def _send_message_simple(self, tmux_target: TmuxWindowTarget, message: str) -> None:
         """Send a message directly without waiting for paste confirmation."""
-        self._send_tmux_literal_keys(tmux_target, message)
+        target_arg = self._send_tmux_literal_keys(tmux_target, message)
 
-        # No resolve-and-clear here: the literal keys immediately above just did both, on the same
-        # pane, and nothing between them can have put it back into a mode.
-        send_enter_cmd = f"tmux send-keys -t {self._send_target_arg(tmux_target)} Enter"
+        # Reuses that target rather than resolving again: the literal keys immediately above
+        # cleared the modes too, and nothing between them can have put the pane back into one.
+        send_enter_cmd = f"tmux send-keys -t {target_arg} Enter"
         result = self.host.execute_stateful_command(send_enter_cmd)
         if not result.success:
             raise SendMessageError(str(self.name), f"tmux send-keys Enter failed: {result.stderr or result.stdout}")

@@ -694,7 +694,10 @@ def is_nonbenign_answer_allowed(nickname: str, configured: tuple[str, ...]) -> b
     Either token covers it, since both include everything recognised; the difference between
     them is only whether UNRECOGNISED surfaces are covered too, which is not this question.
     """
-    if DANGEROUS_ALL_NONBENIGN_INCLUDING_UNRECOGNIZED in configured or ALL_RECOGNIZED_NONBENIGN in configured:
+    # DANGEROUS_ALL_NONBENIGN_INCLUDING_UNRECOGNIZED is deliberately not consulted: it promises to
+    # answer surfaces mngr cannot name, nothing implements that, and honouring it here would grant
+    # a blanket opt-in to everything ELSE instead -- quietly more than was asked for.
+    if ALL_RECOGNIZED_NONBENIGN in configured:
         return True
     return nickname in configured
 
@@ -749,4 +752,7 @@ def deal_with_dialogs(pane: DialogPane, max_passes: int = _MAX_DIALOG_PASSES) ->
             raise DialogBlocked(blocking.get_nickname(), blocking.get_message())
         blocking.deal_with(pane)
         previous_pane = pane_content
-    raise DialogBlocked(Unrecognized().get_nickname(), Unrecognized().get_message())
+    # Report the dialog actually left on screen, not Unrecognized: something WAS recognised on
+    # every pass, and the caller reads that nickname to decide whether the pane simply had not
+    # painted yet -- a question a cycle between two known dialogs has already answered.
+    raise DialogBlocked(blocking.get_nickname(), blocking.get_message())

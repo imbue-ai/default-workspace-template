@@ -1364,7 +1364,7 @@ def test_send_targets_the_recorded_pane_and_leaves_copy_mode(
     lands, which is how a message ends up pasted into the input box with its Enter eaten.
     """
     stub = _StubHost(pane_id="%7")
-    agent = _create_named_agent_with_stub_host(temp_mngr_ctx, stub, "pane-target")
+    agent = _create_named_agent_with_stub_host(temp_mngr_ctx, stub, AgentName("pane-target"))
     agent.press_key_chord("M-q")
 
     commands = stub.executed_commands
@@ -1384,7 +1384,7 @@ def test_send_falls_back_to_the_window_target_on_an_older_session(
     mngr has always used -- so rolling this out does not strand agents that are already running.
     """
     stub = _StubHost(pane_id=None)
-    agent = _create_named_agent_with_stub_host(temp_mngr_ctx, stub, "pane-fallback")
+    agent = _create_named_agent_with_stub_host(temp_mngr_ctx, stub, AgentName("pane-fallback"))
     agent.press_key_chord("M-q")
 
     send_command = next(c for c in stub.executed_commands if "send-keys" in c)
