@@ -178,31 +178,22 @@
 
       <!-- ── Buttons: the claude-login variant matrix (the one real system) ─ -->
       <section class="gy-section" data-shot="buttons-variants">
-        <h2>Buttons — variant matrix (claude-login-button)</h2>
+        <h2>Buttons — unified .btn primitive</h2>
         <div class="gy-pad">
           <div class="gy-row">
-            <div class="gy-cell">
-              <div class="gy-label">--primary</div>
-              <button class="claude-login-button claude-login-button--primary">Continue</button>
-            </div>
-            <div class="gy-cell">
-              <div class="gy-label">--ghost</div>
-              <button class="claude-login-button claude-login-button--ghost">Cancel</button>
-            </div>
-            <div class="gy-cell">
-              <div class="gy-label">--link</div>
-              <button class="claude-login-button claude-login-button--link">Learn more</button>
-            </div>
-            <div class="gy-cell">
-              <div class="gy-label">--primary :disabled</div>
-              <button class="claude-login-button claude-login-button--primary" disabled>Continue</button>
-            </div>
-            <div class="gy-cell">
-              <div class="gy-label">--block</div>
-              <button class="claude-login-button claude-login-button--primary claude-login-button--block">
-                Sign in
-              </button>
-            </div>
+            <div class="gy-cell"><div class="gy-label">primary</div><button class="btn btn--primary">Continue</button></div>
+            <div class="gy-cell"><div class="gy-label">secondary</div><button class="btn btn--secondary">Cancel</button></div>
+            <div class="gy-cell"><div class="gy-label">ghost</div><button class="btn btn--ghost">Attach</button></div>
+            <div class="gy-cell"><div class="gy-label">destructive</div><button class="btn btn--destructive">Destroy</button></div>
+            <div class="gy-cell"><div class="gy-label">inverse</div><button class="btn btn--inverse">Share</button></div>
+            <div class="gy-cell"><div class="gy-label">icon</div><button class="btn btn--icon" aria-label="Close">&times;</button></div>
+          </div>
+          <div class="gy-row" style="margin-top: 14px">
+            <div class="gy-cell"><div class="gy-label">primary :disabled</div><button class="btn btn--primary" disabled>Continue</button></div>
+            <div class="gy-cell"><div class="gy-label">secondary :disabled</div><button class="btn btn--secondary" disabled>Cancel</button></div>
+            <div class="gy-cell"><div class="gy-label">selected</div><button class="btn btn--secondary btn--selected">Fast mode</button></div>
+            <div class="gy-cell"><div class="gy-label">primary · sm</div><button class="btn btn--primary btn--sm">Small</button></div>
+            <div class="gy-cell"><div class="gy-label">secondary · sm</div><button class="btn btn--secondary btn--sm">Small</button></div>
           </div>
         </div>
       </section>
