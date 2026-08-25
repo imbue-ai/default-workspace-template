@@ -431,9 +431,23 @@ def test_assemble_command_launches_agy_under_per_agent_home(antigravity_agent: A
     agent = antigravity_agent
     command = str(agent.assemble_command(agent.host, (), command_override=None))
     home = str(agent._get_agy_home_dir())
-    assert f"env HOME={home} agy " in command
-    # HOME relocation comes after the cd into the workspace symlink, right before agy.
+    # Asserted as "on the same env prefix as agy", not as adjacency: the prefix also carries
+    # the policy-shim PATH entry, and pinning the exact spacing makes an unrelated addition to
+    # that prefix look like a broken HOME relocation.
+    assert f"env HOME={home} " in command
+    # HOME relocation comes after the cd into the workspace symlink, and before agy.
     assert command.index(f"env HOME={home}") < command.index(" agy ")
+
+
+def test_assemble_command_puts_the_policy_shim_ahead_of_bash(antigravity_agent: AntigravityAgent) -> None:
+    """agy resolves `bash` from PATH for every tool call, which is where the workspace's
+    command guards run -- it has no usable PreToolUse hook. The entry must be on the agy
+    process only: setting it through the agent env file would follow the user into every
+    terminal they open in this agent's tmux session."""
+    agent = antigravity_agent
+    command = str(agent.assemble_command(agent.host, (), command_override=None))
+    assert "/system/scripts/agy_shim:$PATH" in command
+    assert command.index("agy_shim") < command.index(" agy ")
 
 
 def test_assemble_command_does_not_add_hooks_via_add_dir(antigravity_agent: AntigravityAgent) -> None:
