@@ -8,8 +8,7 @@ follow-ups list (bottom of this log): off-grid spacing strays, a few defined-but
 unused tokens, the medium-weight audit, and whether to build a dark theme. This
 document is the durable hand-off so any agent can pick the work up cold. The
 design-system ratchet (`frontend/src/design-system-ratchet.test.ts`) is the
-automated guard against the sprawl regrowing. (A dev-only visual-diff gallery
-was used during the migration and has since been removed — see section 6.)
+automated guard against the sprawl regrowing.
 
 ### Progress log
 
@@ -27,7 +26,7 @@ was used during the migration and has since been removed — see section 6.)
   `type-section` is live on the new-tab launcher's category headers. Ratchet
   `fontSizePx` tightened 80 → 4.
 - **Corner-radius de-dup — DONE.** 15 raw `6px` border-radii → `var(--radius-base)`;
-  provable exact no-op (harness: all sections identical). Ratchet `borderRadiusPx`
+  provable exact no-op (all surfaces verified identical). Ratchet `borderRadiusPx`
   55 → 40. A full radius *scale* (8/12/…) is deferred: like type, it needs
   non-colliding names (Tailwind's `rounded-md/lg` are used in the views).
 - **Semantic colour — DONE (no-op).** Added `--color-danger*/-warning*/-success/
@@ -73,9 +72,9 @@ was used during the migration and has since been removed — see section 6.)
   which the prompt forbids restructuring to fix). `borderRadiusPx` ratchet
   29 → 28, `zIndexLiteral` 12 → 11.
 - **Token scaffold completed — DONE (no-op).** Tokenized the last five raw
-  categories, each a value-exact no-op proven by the harness (component sections
-  identical; only the gallery's own token sections change, as they render the new
-  tokens): **z-index** (`--z-content/-sticky/-dropdown/-overlay/-tooltip`;
+  categories, each a value-exact no-op (component surfaces rendered identical;
+  only the token-preview surfaces changed, showing the new tokens): **z-index**
+  (`--z-content/-sticky/-dropdown/-overlay/-tooltip`;
   `zIndexLiteral` 11 → 6), **elevation** (`--elevation-sm/md/lg/overlay` — NOT
   `--shadow-*`, which collide with Tailwind utilities used in views),
   **motion** (`--dur-fast/base/slow` + `--ease-standard`; unified `120ms`/`0.12s`
@@ -261,8 +260,8 @@ already defines `--text-{xs,sm,base,lg,xl,2xl}`, `--radius-{sm,md,lg}`,
 `--radius-sm` is 0.25rem/4px, not the 3px proposed here; `--text-sm` is 0.875rem,
 not 13px). Decide per token whether to (a) adopt Tailwind's value, (b) intentionally
 override it in `@theme`, or (c) pick a non-colliding name (e.g. `--text-body`,
-`--radius-card`). Verified via the gallery, which renders whatever the compiled
-CSS resolves — the collisions are visible there.
+`--radius-card`). Verify against the compiled CSS, which resolves each name to a
+single value — the collisions surface there.
 
 **Note — the type system evolved (why it shipped role-based).** The `--text-*`
 collision above is exactly why the type scale did *not* ship as `--text-*`.
@@ -302,12 +301,12 @@ the templates.
 ## 5. Phased migration plan
 
 Each phase is independently shippable. **P1 and P2 must be provable visual
-no-ops** via the harness in section 6 (every gallery section reports
-`identical`). Later phases have intentional diffs, reviewed section by section.
+no-ops** — each replaced literal resolves to the same computed value. Later phases
+have intentional diffs, reviewed section by section.
 
 - **P0 — scaffold (no visual change).** Add the full token set to `@theme`
-  (unused for now), commit the gallery + visual-diff harness + this doc, and
-  add the ratchet (section 7) at its current baseline counts.
+  (unused for now), commit this doc, and add the ratchet (section 7) at its
+  current baseline counts.
 - **P1 — mechanical sweep (visual no-op).** Replace the ~18 duplicate hexes with
   their existing `var(--color-*)` tokens; replace raw `6px` radius with
   `var(--radius-base)`; snap spacing/type/radius values to the nearest new
@@ -318,23 +317,18 @@ no-ops** via the harness in section 6 (every gallery section reports
   call sites feature by feature. Intentional, reviewed diffs.
 - **P4 — Modal primitive.** Migrate the 6 modals onto `openModal`. Highest risk.
 
-**Acceptance criteria (P1/P2):** the visual-diff report shows 0 changed pixels
-in every section except any deliberately touched one.
+**Acceptance criteria (P1/P2):** no rendered value changes except in any
+deliberately touched surface.
 
 ---
 
-## 6. Visual before/after harness — removed
+## 6. Verifying a change
 
-During the migration a static component gallery + a `visual-diff.mjs` Node CLI
-(`frontend/gallery/`) proved each phase a pixel-level no-op: it compiled a given
-`style.css`, rendered the gallery, screenshotted each `[data-shot]` section, and
-pixel-diffed two git refs into an HTML report. It was **dev-only** (gitignored
-artifacts, extra devDependencies — `@tailwindcss/cli`, `playwright-core`,
-`pixelmatch`, `pngjs` — and excluded from the build) and has been **removed now
-that the migration is complete**; recover it from git history if a future large
-sweep wants it back. Going forward, the ratchet (section 7) + code review are the
-guard — a token-only refactor is a no-op when each replaced literal resolves to
-the same computed value.
+A token-only refactor is a visual no-op when each replaced literal resolves to the
+same computed value — check the compiled CSS / the diff to confirm nothing's value
+changed. The ratchet (section 7) is the automated guard against raw values
+regrowing, and it runs under the test suite. For an intentional visual change,
+review the diff and the running UI surface it touches.
 
 ---
 
