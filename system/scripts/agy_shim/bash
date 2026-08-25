@@ -14,7 +14,8 @@
 #
 # WHAT IT ENFORCES. The same four blockers claude runs, in claude's order, by feeding them the
 # claude-shaped payload they already parse -- so the guard logic and its wording stay
-# single-sourced across claude, codex and agy. See system/scripts/POLICY_HOOKS.md.
+# single-sourced across claude, codex and agy. The policies themselves are stated in
+# system/apps/system_interface/imbue/system_interface/harnesses/core-contracts/tool-call-policies.md.
 #
 # WHAT IT DOES NOT ENFORCE. The require-a-step nudge (#5) is deliberately absent: its skip list
 # is keyed on claude TOOL NAMES, and every call here is `Bash`, so it would nudge agy's
@@ -38,8 +39,8 @@ note() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >>"$SHIM_LOG" 2>
 # Outermost call only. A command the agent runs may itself invoke bash (a build, a test runner,
 # `xargs -n1 bash -c`), and policing those would block third-party code the agent did not write,
 # re-apply the rewrite prefix at every level, and pay the whole checker cost per nesting level.
-# Nested harnesses being unguarded is already the house norm (POLICY_HOOKS.md, "which pi runs
-# which extension"). MNGR_AGY_SHIM_OFF is the kill switch: no redeploy needed.
+# Nested harnesses being unguarded is already the house norm (see "which pi runs which
+# extension" in tool-call-policies-state-of-things.md). MNGR_AGY_SHIM_OFF is the kill switch.
 if [ -n "${MNGR_AGY_BASH_SHIM:-}" ] || [ -n "${MNGR_AGY_SHIM_OFF:-}" ] || [ ! -d "$SCRIPTS_DIR" ]; then
     exec "$REAL_BASH" "$@"
 fi
