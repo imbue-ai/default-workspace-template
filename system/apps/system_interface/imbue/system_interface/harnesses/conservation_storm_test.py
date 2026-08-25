@@ -1,6 +1,6 @@
 """Seeded message-conservation storms for the three harness stop/flush executors (invariant U1).
 
-THE PROPERTY (docs/design/harness-message-lifecycle-contract.md A1, U1): across any
+THE PROPERTY (system/apps/system_interface/imbue/system_interface/harnesses/core-contracts/messages-lifecycle-contract.md A1, U1): across any
 interleaving of send / park / stop / flush / restart, every accepted message ends in EXACTLY one
 terminal state -- delivered (a user turn on disk), or returned-to-composer (rides a captured stop
 block) -- never silently lost and never duplicated as a ghost re-queue after a replay. The one

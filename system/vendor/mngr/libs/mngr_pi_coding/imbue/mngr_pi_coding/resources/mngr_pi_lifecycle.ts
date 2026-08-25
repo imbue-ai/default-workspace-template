@@ -341,7 +341,7 @@ function partsFromContent(content: ContentBlock[] | undefined): Array<Record<str
   return parts;
 }
 
-// --- Shell-command safety guards (see system/scripts/POLICY_HOOKS.md). -------
+// --- Shell-command safety guards (see system/apps/system_interface/imbue/system_interface/harnesses/core-contracts/tool-call-policies.md). -------
 //
 // The same shell-command policies claude/codex enforce via PreToolUse hooks, in
 // the form pi's extension API allows: a `tool_call` handler that returns
@@ -425,7 +425,7 @@ function rewriteBashCommand(command: string): string {
   return gitIdentityPrefix() + oomTagPrefix() + command;
 }
 
-// --- tk workflow-discipline guards (see system/scripts/POLICY_HOOKS.md). -----
+// --- tk workflow-discipline guards (see system/apps/system_interface/imbue/system_interface/harnesses/core-contracts/tool-call-policies.md). -----
 //
 // The step/progress-view discipline claude enforces via its tk hooks, re-expressed
 // for pi. pi shells out to the vendored `ticket` binary for step state (the same
@@ -953,7 +953,7 @@ export default function mngrPiLifecycle(pi: PiApi): void {
 
   // Policy guard: block disallowed bash commands and rewrite the rest with the
   // oom self-tag + git identity (see the "Policy guards" section above and
-  // system/scripts/POLICY_HOOKS.md). NOT wrapped in safe() -- a guard that
+  // system/apps/system_interface/imbue/system_interface/harnesses/core-contracts/tool-call-policies.md). NOT wrapped in safe() -- a guard that
   // swallowed its error would fail OPEN. The block check is a pure regex over a
   // string and cannot throw; the best-effort rewrite is isolated so a failure
   // leaves the command unchanged rather than blocking a legitimate command.

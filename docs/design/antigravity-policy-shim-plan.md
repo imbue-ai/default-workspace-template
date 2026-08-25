@@ -1,6 +1,6 @@
-# agy policy parity: the bash shim (BUILT -- see POLICY_HOOKS.md for the live reference)
+# agy policy parity: the bash shim (BUILT -- see tool-call-policies.md for the live reference)
 
-How antigravity gets the guards in `system/scripts/POLICY_HOOKS.md`, given that its hook
+How antigravity gets the guards in `system/apps/system_interface/imbue/system_interface/harnesses/core-contracts/tool-call-policies.md`, given that its hook
 surface cannot carry them.
 
 ## 0. Why not hooks
@@ -56,7 +56,7 @@ stdin,
 ```
 
 and translate their claude-shaped replies back. Editing a guard keeps updating claude, codex
-and now agy at once -- the property POLICY_HOOKS.md's "keeping the three in step" section is
+and now agy at once -- the property tool-call-policies.md's "keeping the harnesses in step" section is
 built around. pi remains the only harness needing its own copy.
 
 **Not converted, deliberately:**
@@ -74,7 +74,7 @@ built around. pi remains the only harness needing its own copy.
 ## 3. Order
 
 Claude's order is load-bearing: the rewriter is deliberately the **last** PreToolUse hook so
-every blocker inspects the command the agent actually wrote. POLICY_HOOKS.md spends a section
+every blocker inspects the command the agent actually wrote. tool-call-policies.md spends a section
 on pi's inability to guarantee that, and the `mngrOriginalCommand` workaround it needed.
 
 The shim gets it for free, in one function:
@@ -117,7 +117,7 @@ The shim is a file named `bash` early on `PATH`, so it catches everything resolv
 by name in that environment -- including shells the agent spawns.
 
 - The shim is a **repo file** (`system/scripts/agy_shim/bash`). It enforces workspace policy,
-  so it must be editable without a mngr release -- POLICY_HOOKS.md's "nothing in mngr" rule.
+  so it must be editable without a mngr release -- tool-call-policies.md's "nothing in mngr" rule.
   The plugin contributes one `PATH` token on the existing `env` prefix in `assemble_command`.
 - Set on the launch command, NOT via `modify_env_vars`: that writes the agent env file, which
   the tmux session sources as its default-command, so the shim would follow the USER into
@@ -159,7 +159,7 @@ Review caught these before they shipped; each is now covered by a test:
 - **No outermost-only marker**: the shim would have policed the agent's whole process tree,
   blocking third-party code and re-applying the prefix per nesting level.
 - **Ownership**: the shim is a repo file, not a plugin file, or a guard edit would need a mngr
-  release -- which breaks POLICY_HOOKS.md's "nothing in mngr" rule.
+  release -- which breaks tool-call-policies.md's "nothing in mngr" rule.
 - **#5 dropped.** Its skip list is keyed on claude tool names; under the shim it inverts.
 
 Also settled by measurement rather than assumption: agy sets `WaitMsBeforeAsync` on every

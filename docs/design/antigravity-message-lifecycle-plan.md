@@ -1,7 +1,7 @@
 # Antigravity (agy) — bringing the chat lifecycle to parity
 
 Status: **plan, nothing built.** Implements
-`docs/design/harness-message-lifecycle-contract.md` for the `antigravity` harness.
+`system/apps/system_interface/imbue/system_interface/harnesses/core-contracts/messages-lifecycle-contract.md` for the `antigravity` harness.
 The contract is canonical; where this disagrees with it, this is wrong.
 
 ---

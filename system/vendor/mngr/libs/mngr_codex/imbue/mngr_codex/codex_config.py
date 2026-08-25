@@ -551,7 +551,7 @@ _RECORD_SESSION_POINTERS_COMMAND: str = f'bash "$MNGR_AGENT_STATE_DIR/commands/{
 # UserPromptSubmit "plain stdout is added to context" behavior -- so codex reuses the EXACT dwt
 # guard scripts claude runs, from the work dir (``$MNGR_AGENT_WORK_DIR``, set for every agent).
 # No copy into the state dir: the scripts already live in the repo checkout. These enforce the
-# same policies pi enforces via its extension handlers; see system/scripts/POLICY_HOOKS.md for
+# same policies pi enforces via its extension handlers; see system/apps/system_interface/imbue/system_interface/harnesses/core-contracts/tool-call-policies.md for
 # the full hook-by-hook mapping and the codex/pi output-contract tables.
 #
 # The one protocol divergence: codex (verified against codex-cli 0.146.0) rejects a
@@ -597,7 +597,7 @@ def build_codex_hooks_config() -> dict[str, Any]:
     the four tk workflow-discipline guards (the ``tk``-standalone block and
     require-steps reminder on ``PreToolUse``, the open-steps carryover on
     ``UserPromptSubmit``, and the open-steps nudge on ``Stop``). See
-    ``system/scripts/POLICY_HOOKS.md`` for the full hook-by-hook mapping.
+    ``system/apps/system_interface/imbue/system_interface/harnesses/core-contracts/tool-call-policies.md`` for the full hook-by-hook mapping.
 
     * ``UserPromptSubmit`` -> ``record_session_pointers.sh`` (record the rollout
       session id + transcript path), then the open-steps carryover reminder (its
@@ -614,7 +614,7 @@ def build_codex_hooks_config() -> dict[str, Any]:
             # PreToolUse policy guards, in order: the two blockers, the tk-standalone block,
             # the require-steps soft reminder, then the rewriter last (the only ``updatedInput``
             # emitter). All are the dwt scripts claude uses, run from the work dir.
-            # See system/scripts/POLICY_HOOKS.md.
+            # See system/apps/system_interface/imbue/system_interface/harnesses/core-contracts/tool-call-policies.md.
             "PreToolUse": [
                 {
                     "hooks": [
