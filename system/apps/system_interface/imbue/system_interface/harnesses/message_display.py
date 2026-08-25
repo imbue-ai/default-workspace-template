@@ -106,6 +106,8 @@ _RESOLUTION_TAG_RE = re.compile(r"\(resolution:\s*(granted|denied|error),\s*requ
 # Legacy notices predating the tag carry only prose (possibly with a bare request_id
 # suffix); recognise them loosely so historical transcripts keep their verdicts hidden
 # and classified. New notices never take this path.
+# CLEANUP: remove these prose fallbacks once no live workspace transcript predates the
+# tagged notices (minds desktop clients older than embed contract v3).
 _RESOLUTION_GRANTED_RE = re.compile(r"^Your\b.*\brequest\b.*\bwas granted\b")
 _RESOLUTION_DENIED_RE = re.compile(r"^Your\b.*\brequest\b.*\bwas denied\b")
 _RESOLUTION_ERROR_RE = re.compile(r"^Your\b.*\brequest\b.*\bcould not be completed\b")
