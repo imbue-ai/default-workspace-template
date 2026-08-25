@@ -923,10 +923,12 @@ class _AgyStormWatcher(_StormWatcherBase):
 
 def _agy_agent_info(agent_state_dir: Path) -> AgentInfo:
     return AgentInfo(
-        id="agent-agy-storm",
-        name="Agy-storm",
-        harness=HarnessType.ANTIGRAVITY,
+        id="agy-storm-agent",
+        name="agy-storm-agent",
+        state="RUNNING",
         agent_state_dir=agent_state_dir,
+        claude_config_dir=agent_state_dir / "unused",
+        harness=HarnessType.ANTIGRAVITY,
     )
 
 
