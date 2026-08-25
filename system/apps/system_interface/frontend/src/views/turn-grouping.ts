@@ -55,12 +55,11 @@
  * isn't shown (its verdict is on the card). The notification carries the
  * resolved request's own id (see message-classification's resolutionRequestIdOf),
  * so a card looks up its verdict by that id rather than by arrival order: two
- * requests resolved out of the order they were created no longer swap their
+ * requests resolved out of the order they were created never swap their
  * cards' verdicts, and a message that batches more than one permission request
- * resolves each of its cards independently. A notification recorded before id
- * embedding shipped carries no id; the walk falls back to attributing it to the
- * oldest still-open request, exactly as it always did (in practice only one was
- * open at a time in that older data).
+ * resolves each of its cards independently. A notification with no id (recorded
+ * before minds embedded ids) attributes nothing here -- an embedded page
+ * recovers such verdicts from the response log via the card's hydration query.
  *
  * This module reads no timestamps. Pending placeholders are ordered by
  * transcript position; grouping and the positioning of any transitioned step
@@ -123,15 +122,12 @@ export type TimelineItem =
    *  act on it without expanding a step. `event` may carry more than one
    *  permission-request tool call (a batched request); each card resolves its
    *  own verdict by looking up its own request id in `resolutionsByRequestId`
-   *  (shared across the whole transcript, built once in buildSections), falling
-   *  back to `fallbackResolution` -- the legacy, arrival-order guess for a
-   *  notification recorded before id embedding shipped -- when its own id has no
-   *  entry. Both are null/empty while still awaiting a decision. */
+   *  (shared across the whole transcript, built once in buildSections), which
+   *  has no entry while the request still awaits a decision. */
   | {
       kind: "permission";
       event: AssistantMessageEvent;
       resolutionsByRequestId: ReadonlyMap<string, PermissionResolution>;
-      fallbackResolution: PermissionResolution | null;
     }
   /** A non-boundary user message shown inline (e.g. a stop-hook chip). */
   | { kind: "chip"; event: UserMessageEvent };
@@ -430,21 +426,6 @@ export function buildSections(
   // requests being resolved out of the order they were created, and to more
   // than one permission request being batched into one message.
   const resolutionsByRequestId = new Map<string, PermissionResolution>();
-  // The legacy fallback: permission requests awaiting a decision, in transcript
-  // (creation) order, by the event id of the message that issued each. Used only
-  // for a granted/denied notification that carries no request id (recorded
-  // before id embedding shipped), which resolves the oldest still-open request --
-  // the agent blocks on a request until it is answered, so in practice only one
-  // was open at a time in that older data. Fallback verdicts are keyed by the
-  // resolved request's event id.
-  // CLEANUP: delete this arrival-order fallback (and `fallbackResolution` on the
-  // permission timeline item, and `resolutionForCall`'s fallback parameter in
-  // message-renderers.ts) once live transcripts predating id-embedded resolution
-  // notices (minds' format_resolution_notice) are gone -- misattribution then
-  // becomes structurally impossible.
-  const unresolvedPermissionEventIds: string[] = [];
-  const fallbackResolutions = new Map<string, PermissionResolution>();
-
   const ensureSection = (user_event: UserMessageEvent | null, key: string): SectionBuilder => {
     const section = newSection(user_event, key);
     // Re-open carried-over steps at the top of the new section.
@@ -467,30 +448,19 @@ export function buildSections(
       // resuming inline beneath the card. The raw text is not shown (its verdict
       // is on the card), so the new section has no user bubble.
       //
-      // The notification's own request id is the primary correlation key --
-      // recorded unconditionally, regardless of whether its card is still
-      // tracked below (e.g. it scrolled out of the visible transcript), so a
-      // later-rendered card can still find its verdict by id. Only a notification
-      // with NO id falls back to the legacy, order-based guess, and only when a
-      // request is actually open to claim it; if nothing is open (e.g. the
-      // request scrolled out of the visible transcript), fall through and let it
-      // render as an ordinary user message.
+      // The notification's own request id is the correlation key. A
+      // notification with NO id (recorded before minds embedded ids)
+      // attributes nothing -- guessing by arrival order is what swapped
+      // verdicts between cards, and an embedded page recovers the verdict
+      // from the response log instead (the card's hydration query). The
+      // break-with-no-bubble applies either way.
       const resolution = resolutionOf(e);
       if (resolution !== null) {
         const requestId = resolutionRequestIdOf(e);
-        if (requestId !== null) {
-          resolutionsByRequestId.set(requestId, resolution);
-          carryover = current === null ? [] : openStepsAtEnd(current);
-          current = ensureSection(null, `section-after-${e.event_id}`);
-          continue;
-        }
-        if (unresolvedPermissionEventIds.length > 0) {
-          const resolvedEventId = unresolvedPermissionEventIds.shift() as string;
-          fallbackResolutions.set(resolvedEventId, resolution);
-          carryover = current === null ? [] : openStepsAtEnd(current);
-          current = ensureSection(null, `section-after-${e.event_id}`);
-          continue;
-        }
+        if (requestId !== null) resolutionsByRequestId.set(requestId, resolution);
+        carryover = current === null ? [] : openStepsAtEnd(current);
+        current = ensureSection(null, `section-after-${e.event_id}`);
+        continue;
       }
       if (isNonBoundaryUserMessage(e)) {
         // Collapsed system chips -- Stop-hook feedback, browser-fleet nudges,
@@ -547,10 +517,6 @@ export function buildSections(
           // open (current_step_id is untouched), so work resumed after the user
           // responds keeps grouping under it.
           current.entries.push({ kind: "permission", event: parsed.render });
-          // Track it as awaiting a decision so a later granted/denied
-          // notification with no request id of its own (the legacy fallback)
-          // can still be correlated back to this card by order.
-          unresolvedPermissionEventIds.push(parsed.render.event_id);
         } else {
           routeMessage(current, parsed.render, lastOpened ?? stepBefore);
         }
@@ -570,15 +536,7 @@ export function buildSections(
 
   const lastBuilder = builders[builders.length - 1];
   return builders.map((b) =>
-    finalizeSection(
-      b,
-      deco,
-      resolutionsByRequestId,
-      fallbackResolutions,
-      b === lastBuilder ? pending : [],
-      agentIsIdle,
-      b === lastBuilder,
-    ),
+    finalizeSection(b, deco, resolutionsByRequestId, b === lastBuilder ? pending : [], agentIsIdle, b === lastBuilder),
   );
 }
 
@@ -705,7 +663,6 @@ function finalizeSection(
   section: SectionBuilder,
   deco: Map<string, Decoration>,
   resolutionsByRequestId: ReadonlyMap<string, PermissionResolution>,
-  fallbackResolutions: Map<string, PermissionResolution>,
   pending: { id: string; title: string }[],
   agentIsIdle: boolean,
   is_tail: boolean,
@@ -816,16 +773,9 @@ function finalizeSection(
     } else if (entry.kind === "permission") {
       // A permission break ends any in-flight ungrouped run and stands as its
       // own always-visible item at its transcript position. Each card looks up
-      // its own verdict in resolutionsByRequestId by its own request id;
-      // fallbackResolution supplies the legacy, arrival-order guess for a
-      // notification recorded before id embedding shipped.
+      // its own verdict in resolutionsByRequestId by its own request id.
       flushUngrouped();
-      items.push({
-        kind: "permission",
-        event: entry.event,
-        resolutionsByRequestId,
-        fallbackResolution: fallbackResolutions.get(entry.event.event_id) ?? null,
-      });
+      items.push({ kind: "permission", event: entry.event, resolutionsByRequestId });
     } else if (entry.kind === "chip") {
       // Likewise a chip: it ends any in-flight ungrouped run and stands at its
       // own transcript position.

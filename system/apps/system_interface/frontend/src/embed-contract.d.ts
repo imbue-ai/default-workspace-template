@@ -13,10 +13,10 @@ declare module "@minds/embed-contract" {
   export const BRING_APP_TO_FRONT: "minds:bring-app-to-front";
   export const CLOSE_ACTIVE_TAB: "minds:close-active-tab";
   export const OPEN_AI_KEYS_ACK: "minds:open-ai-keys-ack";
-  export const PERMISSION_REQUEST_RESOLVED: "minds:permission-request-resolved";
-  // The verdict-hydration query pair (contract v3). The vendored snapshot may
-  // predate these -- consumers probe the namespace before reading them (see
-  // embed.ts) rather than named-importing, which would fail the build.
+  // The verdict-resolution pair (contract v3; v3 also retired v2's
+  // permission-request-resolved). The vendored snapshot may predate these --
+  // consumers probe the namespace before reading them (see embed.ts) rather
+  // than named-importing, which would fail the build.
   export const QUERY_PERMISSION_RESOLUTIONS: "minds:query-permission-resolutions";
   export const PERMISSION_RESOLUTIONS: "minds:permission-resolutions";
   export const MAX_PERMISSION_RESOLUTION_QUERY_IDS: number;
