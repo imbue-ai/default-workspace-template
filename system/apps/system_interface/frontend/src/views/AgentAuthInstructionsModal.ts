@@ -44,7 +44,7 @@ export function AgentAuthInstructionsModal(): m.Component {
           title: "Sign-in runs in the terminal",
           actions: [
             m(
-              "button.btn.btn--secondary",
+              "button.btn.btn--primary",
               {
                 oncreate: (buttonVnode: m.VnodeDOM) => (buttonVnode.dom as HTMLButtonElement).focus(),
                 onclick: () => dismissAuthInstructions(),
