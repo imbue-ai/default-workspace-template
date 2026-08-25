@@ -16,7 +16,7 @@ Merging upstream can break the live workspace -- a settings-schema change the
 running `system_interface` can't parse, a bumped `system/vendor/mngr`, a new service.
 So, like `update-system-interface`, this flow never mutates the live tree from an
 unverified state: an isolated **worker** does the merge and validation on its own
-branch, and only a known-good, user-approved result is landed and applied.
+branch, and only a known-good, validated result is landed and applied.
 
 You are the **lead**, and the pass is **fully unattended**: once the user
 starts it, run it end to end -- resolve the target, dispatch the worker,
