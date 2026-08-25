@@ -41,8 +41,8 @@ required-version = ">=0.10"
 # rather than a pinned timestamp because nothing advances a pinned one here --
 # scripts/release.py moves the root's and the mirror overlay's, and this project is
 # neither. A copy would start rotting the day it was written; a window cannot.
-# Keep it equal to DEPENDENCY_COOLDOWN in scripts/utils.py, which
-# test_meta_ratchets.py enforces.
+# Keep it equal to DEPENDENCY_COOLDOWN in scripts/release.py, which
+# scripts/release_test.py enforces.
 exclude-newer = "14 days"
 
 [tool.uv.sources]
@@ -74,6 +74,12 @@ dev = [
     "resource-guards",
     "imbue-common[dev]",
     "ty>=0.0.39",
+    # Not imported by anything this project runs: it is here so the type checker
+    # can resolve templates/tests/, whose criteria import `rewardkit`. The
+    # verifier container installs it separately via uvx, so this pin must match
+    # the one in templates/tests/test.sh -- typecheck_coverage_test.py asserts
+    # that. Its only base dependency is litellm, already present via harbor.
+    "harbor-rewardkit==0.1.*",
 ]
 
 [build-system]
@@ -107,12 +113,16 @@ concurrency = ["multiprocessing", "thread"]
 omit = ["*_test.py", "test_*.py", "*/tests/*", "*/conftest.py", "*/templates/*", "*/resources/*"]
 
 [tool.ty.src]
-# These two directories are shipped as source into environments this project
-# does not resolve dependencies for, so their imports are unresolvable in this
-# project's venv by design: templates/ run in the verifier container (rewardkit
-# arrives there via uvx) and resources/ run inside the box (which has the
-# monorepo venv, hence litellm and mngr_forward).
-exclude = ["imbue/minds_evals/templates/", "imbue/minds_evals/resources/"]
+# resources/ is shipped as source into the eval box and runs against the monorepo
+# venv, importing mngr_forward and litellm, which this project does not depend on.
+# It is type-checked by the root workspace instead -- the box runs that venv, so it
+# is the accurate environment for it; the root [tool.ty.src] exclude deliberately
+# does not cover it, and typecheck_coverage_test.py holds both halves in place.
+#
+# templates/ is NOT excluded. Those files also run elsewhere (the verifier
+# container), but their only foreign import is rewardkit, which the dev group
+# installs, so the type checker can see all of them here.
+exclude = ["imbue/minds_evals/resources/"]
 
 [tool.inline-snapshot]
 default-flags=["report"]
