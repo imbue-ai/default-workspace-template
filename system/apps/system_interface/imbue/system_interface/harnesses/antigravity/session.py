@@ -24,11 +24,11 @@ from imbue.system_interface.harnesses.antigravity.queue_tracker import Antigravi
 from imbue.system_interface.harnesses.antigravity.queue_tracker import OUTBOX_FILENAME
 from imbue.system_interface.harnesses.antigravity.queue_tracker import get_tracker
 from imbue.system_interface.harnesses.antigravity.queue_tracker import session_token
+from imbue.system_interface.harnesses.interrupt import try_hold_message_lock
 from imbue.system_interface.harnesses.model import ModelOption
 from imbue.system_interface.harnesses.model import match_option
 from imbue.system_interface.harnesses.model import read_model_identity
 from imbue.system_interface.harnesses.sending_registry import SendingRegistry
-from imbue.system_interface.harnesses.interrupt import try_hold_message_lock
 from imbue.system_interface.harnesses.session import FileHarnessSession
 from imbue.system_interface.harnesses.session import SendOutcome
 from imbue.system_interface.harnesses.session import SessionDeps
@@ -85,6 +85,21 @@ class AntigravityHarnessSession(FileHarnessSession):
         self._deps.notify_agents_changed()
         logger.debug("antigravity: holding a message for the next flush ({})", queued_id)
         return SendOutcome.OK
+
+    def is_sending(self) -> bool:
+        """A flush in progress IS a send in flight, so the tap is withheld through it.
+
+        The base returns False (no send is ever "in flight" for a harness whose queue its
+        own process drains). agy's flush is ours and takes real time, so the gate has to
+        see it -- otherwise the button stays lit through the one window where pressing it
+        would ctrl+c the turn the flush is committing into.
+        """
+        return self._queue().is_sending()
+
+    # in_flight_block deliberately stays the base "". agy's claimed entries are NOT removed
+    # from the queue while they are in flight (that is what keeps them on screen), so they are
+    # already inside stop's queued_block -- returning them here as well would place every
+    # flushing message into the composer twice.
 
     def switch_queue_snapshot(self) -> list[dict[str, Any]]:
         """The held queue, for tests and diagnostics (the live wire copy goes through the
