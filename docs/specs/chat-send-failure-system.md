@@ -37,7 +37,7 @@ Three kinds, told apart by what answering one costs:
 
 Shell mode rides the same loop: an empty `!` strand self-clears with Backspace, a human's unsubmitted `!<command>` refuses.
 
-**The operator's consent is two named tokens**, not a wildcard. `ALL_RECOGNIZED_NONBENIGN` covers everything mngr can name, each on the option named for it, so the set grows with the catalogue without ever becoming a guess. `DANGEROUS_ALL_NONBENIGN_INCLUDING_UNRECOGNIZED` additionally covers surfaces nobody has looked at -- guessing -- and says so in its name.
+**The operator's consent is a named token**, not a wildcard. `ALL_KNOWN_DIALOGS` covers everything mngr can name, each on the option named for it, so the set grows with the catalogue without ever becoming a guess. A surface nobody has looked at is refused whatever the list says -- answering one would mean guessing, which would be a separate feature behind a flag of its own.
 
 **What makes any of this work is positional.** The input box is identified by being at the *bottom* of the pane, not by the `❯` glyph, because Claude renders every past user turn with that same glyph at column 0. A whole-pane search reports "the box is here" for any conversation with history, however the pane is really occupied -- which is why dialog detection silently did nothing before this was fixed.
 
