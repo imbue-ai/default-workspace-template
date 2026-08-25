@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from imbue.mngr_claude.dialogs import ALL_KNOWN_AND_UNKNOWN_DIALOGS
+from imbue.mngr_claude.dialogs import ALL_KNOWN_DIALOGS
 from imbue.mngr_claude.dialogs import Answerable
 from imbue.mngr_claude.dialogs import DIALOGS
 from imbue.mngr_claude.dialogs import DialogBlocked
@@ -21,6 +23,8 @@ from imbue.mngr_claude.dialogs import StatusWindow
 from imbue.mngr_claude.dialogs import Unrecognized
 from imbue.mngr_claude.dialogs import classify
 from imbue.mngr_claude.dialogs import cycle_to_option
+from imbue.mngr_claude.dialogs import deal_with_dialogs
+from imbue.mngr_claude.dialogs import is_nonbenign_answer_allowed
 from imbue.mngr_claude.dialogs import is_option_highlighted
 from imbue.mngr_claude.dialogs import is_pending_shell_command
 from imbue.mngr_claude.dialogs import is_stranded_in_empty_shell_mode
@@ -151,11 +155,63 @@ def test_benign_dialog_presses_escape() -> None:
     assert pane.keys == ["Escape"]
 
 
-def test_unrecognized_always_raises() -> None:
+_UNKNOWN_SELECTOR_PANE = " Choose a theme\n\n ❯ 1. Dark mode\n   2. Light mode\n"
+_UNKNOWN_SELECTOR_MOVED = " Choose a theme\n\n   1. Dark mode\n ❯ 2. Light mode\n"
+
+
+def test_unrecognized_refuses_when_not_opted_in() -> None:
+    """The default. Nothing is pressed at a surface nobody has named."""
+    pane = FakePane([_UNKNOWN_SELECTOR_PANE])
+    with pytest.raises(DialogBlocked):
+        Unrecognized().deal_with(pane)
+    assert pane.keys == []
+
+
+def test_unrecognized_presses_one_when_opted_in() -> None:
+    pane = FakePane([_UNKNOWN_SELECTOR_PANE], accepts=frozenset({"Unrecognized"}))
+    Unrecognized().deal_with(pane)
+    assert pane.keys == ["1"]
+
+
+def test_unrecognized_refuses_without_a_selector_even_when_opted_in() -> None:
+    """A digit is only an answer where there are numbered options.
+
+    Without this the "1" would be typed as text into whatever holds the input -- and since the
+    caller loops, it would be typed once per pass.
+    """
     pane = FakePane([_IDLE_PANE], accepts=frozenset({"Unrecognized"}))
     with pytest.raises(DialogBlocked):
         Unrecognized().deal_with(pane)
     assert pane.keys == []
+
+
+def test_unrecognized_refuses_when_pressing_one_changes_nothing() -> None:
+    """Pressing is not succeeding: an unchanged pane still refuses the send."""
+    pane = FakePane([_UNKNOWN_SELECTOR_PANE, _UNKNOWN_SELECTOR_PANE], accepts=frozenset({"Unrecognized"}))
+    with pytest.raises(DialogBlocked) as excinfo:
+        deal_with_dialogs(pane)
+    assert excinfo.value.nickname == "Unrecognized"
+    assert pane.keys == ["1"]
+
+
+def test_unrecognized_refuses_after_the_pass_budget() -> None:
+    """A surface that keeps changing but never clears is given up on, not pressed forever."""
+    # Two captures per pass: the loop's own, then deal_with's selector check. The loop's
+    # captures must differ from one another or the no-progress guard ends it early instead.
+    frames = [_UNKNOWN_SELECTOR_PANE, _UNKNOWN_SELECTOR_PANE, _UNKNOWN_SELECTOR_MOVED, _UNKNOWN_SELECTOR_MOVED] * 2
+    pane = FakePane(frames, accepts=frozenset({"Unrecognized"}))
+    with pytest.raises(DialogBlocked):
+        deal_with_dialogs(pane)
+    assert pane.keys == ["1", "1", "1", "1"]
+
+
+def test_unknown_token_grants_only_unknown_and_known_token_never_does() -> None:
+    assert is_nonbenign_answer_allowed("Unrecognized", (ALL_KNOWN_AND_UNKNOWN_DIALOGS,)) is True
+    assert is_nonbenign_answer_allowed("Unrecognized", (ALL_KNOWN_DIALOGS,)) is False
+    # Naming it literally does not opt in: guessing has to be asked for by the token.
+    assert is_nonbenign_answer_allowed("Unrecognized", ("Unrecognized",)) is False
+    # The broader token still covers everything the narrower one did.
+    assert is_nonbenign_answer_allowed("Model switch warning", (ALL_KNOWN_AND_UNKNOWN_DIALOGS,)) is True
 
 
 def test_accept_refuses_when_not_opted_in() -> None:

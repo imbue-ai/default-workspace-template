@@ -74,7 +74,7 @@ The mapping table lives in the workspace, not in mngr. `unknown` is the default 
 **The obstacle, stated plainly.** There is no channel for a kind today. `MessageResult.failed_agents` is `list[tuple[str, str]]` -- an agent name and an error *string* -- and that is the only way a failure leaves mngr's send, so a kind would be flattened into prose on the way out. Three ways through it:
 
 1. Widen the tuple to carry the kind. Honest, but `MessageResult` is public and `mngr message`'s exit code reads it.
-2. Add a parallel field (`failed_agent_kinds`). Additive, no existing consumer changes, slightly ugly. **Recommended.**
+2. Add a record per failure (`MessageResult.failures`, carrying agent/reason/kind), keeping `failed_agents` as a derived view so `mngr message`'s exit code and output are unchanged. **Built.**
 3. Have the workspace pattern-match the prose. No mngr change, and exactly the fragility removed when the reason stopped being flattened to a bool. Rejected.
 
 This is the one part of the plan that touches an mngr public type, so it is worth deciding before building rather than during.

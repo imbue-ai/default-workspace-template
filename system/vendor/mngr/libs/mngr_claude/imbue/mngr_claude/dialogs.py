@@ -605,7 +605,7 @@ class PendingShellCommand(Blocking):
 # ---------------------------------------------------------------------------
 
 
-class Unrecognized(Blocking):
+class Unrecognized(Dialog):
     """Something owns the input and nothing above matched.
 
     Detected by the ABSENCE of the column-0 prompt -- the same signal the shell predicates
@@ -614,12 +614,21 @@ class Unrecognized(Blocking):
     so a selector-shaped detector misses it entirely while the missing-prompt rule catches
     it.
 
-    Always raises. An unknown surface is unknown; pressing keys at a consequential prompt
-    we cannot name is damage nobody can see, so we ask the human.
+    Refuses by default. Under ALL_KNOWN_AND_UNKNOWN_DIALOGS it presses "1" instead, which is
+    a guess and is meant to read as one. Two things bound it, because the surface is unknown
+    and the cost of a wrong press is not:
+
+    * The digit is only sent to a pane showing a numbered selector. Without that check a "1"
+      would be typed as text into whatever holds the input -- and the caller loops, so it would
+      be typed repeatedly. This is the same guard that stopped the usage-limit caption from
+      being walked as if it were its own option list.
+    * Pressing is not succeeding. ``deal_with_dialogs`` re-classifies afterwards, refuses the
+      send if the pane did not change, and gives up after its pass budget. So "1" that answers
+      nothing still ends in the refusal this class started as.
     """
 
     def get_nickname(self) -> str:
-        return "Unrecognized"
+        return _UNRECOGNIZED_NICKNAME
 
     def get_message(self) -> str:
         return (
@@ -629,6 +638,14 @@ class Unrecognized(Blocking):
     def matches(self, pane_content: str) -> bool:
         # Reached by classify() when nothing else matched and the input prompt is gone.
         return False
+
+    def deal_with(self, pane: DialogPane) -> None:
+        if not pane.accepts(self.get_nickname()):
+            raise DialogBlocked(self.get_nickname(), self.get_message())
+        if SELECTOR_HIGHLIGHTED_OPTION_RE.search(pane.capture()) is None:
+            # Nothing a digit can answer. Refuse rather than type into it.
+            raise DialogBlocked(self.get_nickname(), self.get_message())
+        pane.press_key(UNKNOWN_DIALOG_ANSWER_KEY)
 
 
 # ---------------------------------------------------------------------------
@@ -661,14 +678,33 @@ DIALOGS: Final[tuple[Dialog, ...]] = (
     GenericBenign(),
 )
 
-# The one token `sensibly_deal_with_dialogs` accepts in place of a nickname.
+# The two tokens `sensibly_deal_with_dialogs` accepts in place of a nickname.
 #
-# It means "every dialog this module names, answered on the option it names". Each of those
-# options was chosen by a person who looked at that dialog, so the set grows as the catalogue
-# does without ever becoming a guess -- which is what an operator wants who is tired of listing
-# nicknames one at a time. There is deliberately no wildcard: `*` invites being written to mean
-# "all the ones you know", and a name that says which dialogs it covers cannot be misread that way.
+# ALL_KNOWN_DIALOGS means "every dialog this module names, answered on the option it names".
+# Each of those options was chosen by a person who looked at that dialog, so the set grows as
+# the catalogue does without ever becoming a guess.
+#
+# ALL_KNOWN_AND_UNKNOWN_DIALOGS is that plus a fallback for surfaces nobody has named: press
+# "1". It is a GUESS and is the one setting here that can be regretted -- an unnamed dialog's
+# first option is unknown by definition, and among the four we have named it would have been
+# wrong for two (the usage-limit prompt's first option buys credits, the LSP prompt's installs).
+# It is bounded rather than trusted: the digit is only sent to a pane that actually shows a
+# numbered selector, and if the surface does not go away the send still refuses.
+#
+# There is deliberately no wildcard: `*` invites being written to mean "all the ones you know",
+# and a name that says which dialogs it covers cannot be misread that way.
+# The nickname Unrecognized answers to. A module-level constant because the gate below has to
+# name it before the class exists.
+_UNRECOGNIZED_NICKNAME: Final[str] = "Unrecognized"
+
 ALL_KNOWN_DIALOGS: Final[str] = "ALL_KNOWN_DIALOGS"
+ALL_KNOWN_AND_UNKNOWN_DIALOGS: Final[str] = "ALL_KNOWN_AND_UNKNOWN_DIALOGS"
+
+# What an unnamed surface is answered with. A digit, not a cycle-then-Enter: locating "option 1"
+# by reading the highlight would need a pattern pinned to `1.`, and a highlighted `11.` row
+# contains `1.` -- so the walk could land on the wrong row and press Enter on it. One keystroke
+# has no such failure mode.
+UNKNOWN_DIALOG_ANSWER_KEY: Final[str] = "1"
 
 # The complete set of nicknames an operator may put in `sensibly_deal_with_dialogs`.
 # Only non-benign recognised dialogs are selectable: benign ones are always dealt with
@@ -683,11 +719,14 @@ SELECTABLE_NICKNAMES: Final[frozenset[str]] = frozenset(
 def is_nonbenign_answer_allowed(nickname: str, configured: tuple[str, ...]) -> bool:
     """Whether the operator opted into mngr answering the dialog called ``nickname``.
 
-    Only dialogs this module can name are answerable at all: an unrecognised surface is refused
-    no matter what this list says, since answering one means guessing at an option nobody has
-    looked at. That is a separate feature with a separate flag if it is ever built, not a value here.
+    An unnamed surface is covered ONLY by ALL_KNOWN_AND_UNKNOWN_DIALOGS, never by a token or a
+    nickname that reads as being about dialogs mngr knows. Answering one is a guess, and opting
+    into guessing has to be its own deliberate act rather than something a broader-sounding
+    setting quietly includes.
     """
-    if ALL_KNOWN_DIALOGS in configured:
+    if nickname == _UNRECOGNIZED_NICKNAME:
+        return ALL_KNOWN_AND_UNKNOWN_DIALOGS in configured
+    if ALL_KNOWN_DIALOGS in configured or ALL_KNOWN_AND_UNKNOWN_DIALOGS in configured:
         return True
     return nickname in configured
 
