@@ -104,7 +104,7 @@ class AntigravityInterruptToComposer(InterruptToComposer):
                 # the base restart-drain discards the in-flight block, which is why this does
                 # not delegate to it.
                 in_flight = get_in_flight_block()
-                restart_drain(watcher, restart_process, settle_activity)
+                restart_drain(self._agent_info, watcher, restart_process, settle_activity)
                 return _combine(queued_block, in_flight)
             if not _is_turn_open(self._agent_info):
                 # Nothing running. Still return the queue: those messages were never sent.
@@ -120,7 +120,7 @@ class AntigravityInterruptToComposer(InterruptToComposer):
             # Deliberately NOT a second press -- see the module docstring.
             logger.warning("antigravity: cancel did not settle for {}; restarting", self._agent_info.name)
             in_flight = get_in_flight_block()
-            restart_drain(watcher, restart_process, settle_activity)
+            restart_drain(self._agent_info, watcher, restart_process, settle_activity)
             return _combine(queued_block, in_flight)
         settle_activity()
         watcher.clear_queue()
@@ -168,9 +168,7 @@ class AntigravityAtomicShoulderTap(AtomicShoulderTap):
                 status="chord_failed", error_detail="Could not send the cancel key to antigravity."
             )
         if not _wait_for_turn_to_end(self._agent_info):
-            return ShoulderTapOutcome(
-                status="not_flushed", error_detail="Antigravity did not stop its turn in time."
-            )
+            return ShoulderTapOutcome(status="not_flushed", error_detail="Antigravity did not stop its turn in time.")
         if not send_recovery(block):
             # The queue is untouched, so the idle flush will retry it. Never dropped.
             return ShoulderTapOutcome(

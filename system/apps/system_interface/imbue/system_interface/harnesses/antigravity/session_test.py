@@ -17,7 +17,8 @@ from imbue.system_interface.harnesses.session import SessionDeps
 
 def _session(state_dir: Path, sent: list[str]) -> AntigravityHarnessSession:
     state_dir.mkdir(parents=True, exist_ok=True)
-    drop_tracker(state_dir.name)  # each test gets a fresh queue for this agent id
+    # Each test gets a fresh queue for this agent id.
+    drop_tracker(state_dir.name)
     unused: Any = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unused"))
     return AntigravityHarnessSession.build(
         SessionDeps(

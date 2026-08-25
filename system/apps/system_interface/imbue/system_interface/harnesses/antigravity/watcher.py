@@ -30,13 +30,13 @@ from loguru import logger
 from watchdog.observers import Observer
 
 from imbue.system_interface.agent_discovery import AgentInfo
-from imbue.system_interface.harnesses.antigravity.queue_tracker import OUTBOX_FILENAME
+from imbue.system_interface.harnesses.antigravity.agy_transcript import TruncatedError
+from imbue.system_interface.harnesses.antigravity.agy_transcript import decode_step
 from imbue.system_interface.harnesses.antigravity.queue_tracker import AntigravityQueueTracker
+from imbue.system_interface.harnesses.antigravity.queue_tracker import OUTBOX_FILENAME
 from imbue.system_interface.harnesses.antigravity.queue_tracker import drop_tracker
 from imbue.system_interface.harnesses.antigravity.queue_tracker import get_tracker
 from imbue.system_interface.harnesses.antigravity.queue_tracker import session_token
-from imbue.system_interface.harnesses.antigravity.agy_transcript import TruncatedError
-from imbue.system_interface.harnesses.antigravity.agy_transcript import decode_step
 from imbue.system_interface.harnesses.antigravity.session_parser import parse_step
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.harnesses.session_watcher import OnEventsCallback
@@ -99,9 +99,7 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
         # The session's identity: the marker mngr stamps on every launch/resume. A journal
         # written under a different token belongs to a session that has since restarted, and
         # the contract says such a queue is gone -- never replayed, never delivered.
-        self._queue = get_tracker(
-            self._agent_id, self._state_dir / OUTBOX_FILENAME, session_token(self._state_dir)
-        )
+        self._queue = get_tracker(self._agent_id, self._state_dir / OUTBOX_FILENAME, session_token(self._state_dir))
         self._queue_snapshot_callback = None
         self._flush_send = None
         self._flush_is_alive = None
@@ -340,7 +338,8 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
                 return
             try:
                 self._attempt_flush()
-            except Exception as error:  # never let one bad attempt kill the worker
+            # Never let one bad attempt kill the worker.
+            except Exception as error:
                 logger.opt(exception=error).warning("antigravity: flush attempt failed for {}", self._agent_id)
 
     def _attempt_flush(self) -> None:

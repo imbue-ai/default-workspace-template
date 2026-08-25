@@ -44,16 +44,16 @@ from typing import Any
 
 import pytest
 
+from imbue.system_interface.activity_state import ACTIVE_MARKER_FILENAME
 from imbue.system_interface.agent_discovery import AgentInfo
+from imbue.system_interface.harnesses.antigravity.queue_tracker import AntigravityQueueTracker
+from imbue.system_interface.harnesses.antigravity.tap import AntigravityAtomicShoulderTap
+from imbue.system_interface.harnesses.antigravity.tap import AntigravityInterruptToComposer
 from imbue.system_interface.harnesses.claude.session_parser import INTERRUPT_SENTINEL_TEXT
 from imbue.system_interface.harnesses.claude.tap import ClaudeTapStatus
 from imbue.system_interface.harnesses.claude.tap import execute_claude_shoulder_tap
 from imbue.system_interface.harnesses.claude.tap import execute_claude_stop_to_composer
 from imbue.system_interface.harnesses.claude.watcher import ClaudeSessionWatcher
-from imbue.system_interface.activity_state import ACTIVE_MARKER_FILENAME
-from imbue.system_interface.harnesses.antigravity.queue_tracker import AntigravityQueueTracker
-from imbue.system_interface.harnesses.antigravity.tap import AntigravityAtomicShoulderTap
-from imbue.system_interface.harnesses.antigravity.tap import AntigravityInterruptToComposer
 from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.interrupt import MESSAGE_LOCK_FILENAME
 from imbue.system_interface.harnesses.interrupt import restart_drain
@@ -817,9 +817,7 @@ def test_claude_conservation_storm_tap_and_stop_executors(tmp_path: Path) -> Non
     # set, once each -- and never a returned or killed message (U1 read straight off disk).
     events = world.watcher.get_all_events()
     on_disk_user_turns = Counter(
-        event["content"]
-        for event in events
-        if event.get("type") == "user_message" and event.get("display") is None
+        event["content"] for event in events if event.get("type") == "user_message" and event.get("display") is None
     )
     assert on_disk_user_turns == Counter(ledger.delivered), (
         f"on-disk user turns {on_disk_user_turns} != delivered ledger {Counter(ledger.delivered)}"
@@ -939,20 +937,22 @@ def _run_agy_stop(world: _AgyWorld, watcher: _AgyStormWatcher, agent_info: Agent
     if send_mode != _SEND_MODE_NONE:
         in_flight_text = world.new_text()
         world.ledger.accepted.append(in_flight_text)
-        hold = STOP_LOCK_WAIT_SECONDS + 0.5 if send_mode == _SEND_MODE_SLOW else 0.05
+        hold = _SLOW_HOLD_SECONDS if send_mode == _SEND_MODE_SLOW else _FAST_HOLD_SECONDS
         if send_mode == _SEND_MODE_SLOW:
             # Staged slow-send corner (contract E2): stop hammers past the bounded wait, so
             # this message is allowed to die -- and ONLY because the storm staged it.
             world.ledger.killable.add(in_flight_text)
         in_flight = _InFlightSend(world.dir, hold, lambda: None)
 
-    def restart_process() -> None:
+    def restart_process() -> tuple[bool, str]:
         world.end_turn()
         if send_mode == _SEND_MODE_SLOW and in_flight_text:
             world.ledger.killed.append(in_flight_text)
+        return (True, "ok")
 
     def press_chord() -> bool:
-        world.end_turn()  # a single ctrl+c ends agy's turn; its statusline drops the marker
+        # A single ctrl+c ends agy's turn; its statusline drops the marker.
+        world.end_turn()
         return True
 
     executor = AntigravityInterruptToComposer.build(agent_info)
@@ -1011,8 +1011,9 @@ def test_antigravity_conservation_storm_stop_and_tap_executors(tmp_path: Path) -
             if round_index in _STOP_HAMMER_ROUNDS and op_index == 0:
                 op = "stop:" + _SEND_MODE_SLOW
             else:
-                op = rng.choice(("send", "send", "busy_send", "tap", "flush",
-                                 "stop:" + _SEND_MODE_NONE, "stop:" + _SEND_MODE_FAST))
+                op = rng.choice(
+                    ("send", "send", "busy_send", "tap", "flush", "stop:" + _SEND_MODE_NONE, "stop:" + _SEND_MODE_FAST)
+                )
             ledger.log(f"  {op}")
             if op == "send":
                 world.send(world.new_text())
