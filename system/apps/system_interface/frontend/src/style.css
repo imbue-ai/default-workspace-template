@@ -380,34 +380,12 @@ body {
   white-space: nowrap;
 }
 
+/* Queued-action button now uses the shared .btn primitive (btn--secondary
+   btn--sm). The .queued-action class is retained only as the CSS-tooltip anchor
+   (position + [data-tooltip]::after below) and to hold its flex layout. */
 .queued-action {
   position: relative;
   flex-shrink: 0;
-  height: 28px;
-  padding: 0 12px;
-  font-family: var(--font-family-base);
-  font-size: var(--font-size-body);
-  color: var(--color-text-secondary);
-  background: none;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  cursor: pointer;
-  white-space: nowrap;
-  transition:
-    color 0.15s ease,
-    background 0.15s ease,
-    border-color 0.15s ease;
-}
-
-.queued-action:hover:not(:disabled) {
-  color: var(--color-accent);
-  border-color: var(--color-accent);
-  background: var(--color-accent-light);
-}
-
-.queued-action:disabled {
-  opacity: 0.5;
-  cursor: default;
 }
 
 /* CSS tooltip for the [Shoulder tap] button (native title= is unreliable in the
