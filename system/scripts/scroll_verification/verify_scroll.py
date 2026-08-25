@@ -62,7 +62,10 @@ RESULTS = []
 
 def check(name, ok, detail=""):
     RESULTS.append((name, bool(ok), detail))
-    print(f"{'PASS' if ok else 'FAIL'}: {name}{('  [' + str(detail) + ']') if detail else ''}", flush=True)
+    print(
+        f"{'PASS' if ok else 'FAIL'}: {name}{('  [' + str(detail) + ']') if detail else ''}",
+        flush=True,
+    )
 
 
 def make_stream_line(i):
@@ -74,7 +77,13 @@ def make_stream_line(i):
             "message": {
                 "role": "assistant",
                 "model": "claude-fable-5",
-                "content": [{"type": "text", "text": f"Streaming filler message {i} " + ("lorem ipsum " * 12)}],
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"Streaming filler message {i} "
+                        + ("lorem ipsum " * 12),
+                    }
+                ],
                 "stop_reason": "end_turn",
                 "usage": {"input_tokens": 1, "output_tokens": 1},
             },
@@ -125,18 +134,31 @@ def main():
         debug = None
         while time.time() < deadline:
             state = page.evaluate(GET_STATE)
-            debug = page.evaluate("window.__scrollDebugState ? window.__scrollDebugState() : null")
+            debug = page.evaluate(
+                "window.__scrollDebugState ? window.__scrollDebugState() : null"
+            )
             if state is None or debug is None:
                 time.sleep(0.5)
                 continue
 
-            if debug["extent"]["firstIndex"] == 0 and debug["spacerTopPx"] == 0 and debug["spacerBottomPx"] == 0:
+            if (
+                debug["extent"]["firstIndex"] == 0
+                and debug["spacerTopPx"] == 0
+                and debug["spacerBottomPx"] == 0
+            ):
                 break
             time.sleep(1.0)
         filled = (
-            debug and debug["extent"]["firstIndex"] == 0 and debug["spacerTopPx"] == 0 and debug["spacerBottomPx"] == 0
+            debug
+            and debug["extent"]["firstIndex"] == 0
+            and debug["spacerTopPx"] == 0
+            and debug["spacerBottomPx"] == 0
         )
-        check("A1 whole transcript filled into physical (virtual spacers -> 0)", filled, debug)
+        check(
+            "A1 whole transcript filled into physical (virtual spacers -> 0)",
+            filled,
+            debug,
+        )
         max_sustained_gap = page.evaluate("window.__maxSustainedGap")
         check(
             "A2 FOLLOW stayed pinned to the bottom during fill (no sustained painted gap)",
@@ -150,7 +172,9 @@ def main():
         )
 
         # --- B: wheel-up during streaming: disengage + no downward jumps ---
-        appender = threading.Thread(target=stream_appender, args=(15, 0.25), daemon=True)
+        appender = threading.Thread(
+            target=stream_appender, args=(15, 0.25), daemon=True
+        )
         appender.start()
         page.mouse.move(600, 400)
         page.mouse.wheel(0, -300)
@@ -176,11 +200,16 @@ def main():
             if now_top < last_top - 5:
                 violations.append((step, last_top, now_top))
             last_top = now_top
-        check("B3 no backwards jumps while wheel-scrolling up during streaming", len(violations) == 0, violations[:3])
+        check(
+            "B3 no backwards jumps while wheel-scrolling up during streaming",
+            len(violations) == 0,
+            violations[:3],
+        )
         state = page.evaluate(GET_STATE)
         check(
             "B4 still USER_CONTROLLED while streaming appends",
-            not state["transitions"] or not state["transitions"][-1].endswith("EVENTS_APPENDED"),
+            not state["transitions"]
+            or not state["transitions"][-1].endswith("EVENTS_APPENDED"),
             state["transitions"][-2:],
         )
         appender.join()
@@ -189,7 +218,9 @@ def main():
         state = page.evaluate(GET_STATE)
         witness = state["topRow"]["id"]
         start_top = row_top(page, witness)
-        appender2 = threading.Thread(target=stream_appender, args=(10, 0.2), daemon=True)
+        appender2 = threading.Thread(
+            target=stream_appender, args=(10, 0.2), daemon=True
+        )
         appender2.start()
         drift = 0.0
         for _ in range(12):
@@ -199,7 +230,11 @@ def main():
                 drift = max(drift, abs(now - start_top))
         appender2.join()
         state = page.evaluate(GET_STATE)
-        check("C1 anchored row pixel-stable while events stream in (drift <= 2px)", drift <= 2.0, f"drift={drift}")
+        check(
+            "C1 anchored row pixel-stable while events stream in (drift <= 2px)",
+            drift <= 2.0,
+            f"drift={drift}",
+        )
         check(
             "C2 clamp/echo suppression kept machine quiet (no spurious FOLLOW)",
             "USER_CONTROLLED->FOLLOW:USER_SCROLLED" not in state["transitions"][-6:],
@@ -227,7 +262,10 @@ def main():
             check(
                 "D1 dragging the thumb to the bottom re-enters FOLLOW",
                 state["bottomGap"] < 45
-                and any(t == "USER_CONTROLLED->FOLLOW:USER_SCROLLED" for t in state["transitions"]),
+                and any(
+                    t == "USER_CONTROLLED->FOLLOW:USER_SCROLLED"
+                    for t in state["transitions"]
+                ),
                 (state["bottomGap"], state["transitions"][-3:]),
             )
 
@@ -238,7 +276,11 @@ def main():
             page.wait_for_timeout(1500)
             state = page.evaluate(GET_STATE)
             near_top = state["scrollTop"] < state["scrollHeight"] * 0.05
-            check("E1 track click at 0% lands at the start of the conversation", near_top, state["scrollTop"])
+            check(
+                "E1 track click at 0% lands at the start of the conversation",
+                near_top,
+                state["scrollTop"],
+            )
             check(
                 "E2 no viewport left in a blank spacer after the jump",
                 state["topRow"] is not None and state["topRow"]["top"] < 200,
@@ -269,7 +311,9 @@ def main():
         page.wait_for_timeout(200)
         page.mouse.wheel(0, -1200)
         page.wait_for_timeout(700)  # persist debounce
-        saved = page.evaluate("localStorage.getItem('transcript-scroll:agent-scrollfix-1')")
+        saved = page.evaluate(
+            "localStorage.getItem('transcript-scroll:agent-scrollfix-1')"
+        )
         check(
             "F1 scroll state persisted to localStorage",
             saved is not None and '"USER_CONTROLLED"' in (saved or ""),
@@ -300,7 +344,8 @@ def main():
                 break
         check(
             "G1 sending a message snaps back to FOLLOW at the bottom",
-            any(t.endswith("MESSAGE_SENT") for t in state["transitions"]) and state["bottomGap"] < 45,
+            any(t.endswith("MESSAGE_SENT") for t in state["transitions"])
+            and state["bottomGap"] < 45,
             (state["bottomGap"], state["transitions"][-3:]),
         )
 
