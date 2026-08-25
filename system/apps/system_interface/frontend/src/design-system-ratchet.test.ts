@@ -40,10 +40,12 @@ const BASELINES = {
   // which deleted four bespoke button families' raw-px radii (terminal-banner
   // 4px; queued-action, composer-under-bar and claude-login 8px). Tightened again
   // by the icon-button migration, which dropped the share-modal close-×'s bespoke
-  // 4px radius (the round composer buttons use border-radius:50%, not px). The
-  // remaining 35 are values with no token yet (8/12/…), handled when a radius
-  // scale lands (needs non-colliding names, like type).
-  borderRadiusPx: 35,
+  // 4px radius (the round composer buttons use border-radius:50%, not px).
+  // Tightened again by the badge primitive, which folded three bespoke badges'
+  // radii (two 10px + one 4px) into the single .badge (one 10px). The remaining
+  // 33 are values with no token yet (8/12/…), handled when a radius scale lands
+  // (needs non-colliding names, like type).
+  borderRadiusPx: 33,
   zIndexLiteral: 18,
 } as const;
 

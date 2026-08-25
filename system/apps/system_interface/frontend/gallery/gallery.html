@@ -230,15 +230,23 @@
 
       <!-- ── Badges ────────────────────────────────────────────────────── -->
       <section class="gy-section" data-shot="badges">
-        <h2>Badges</h2>
+        <h2>Badges — unified .badge primitive</h2>
         <div class="gy-pad">
           <div class="gy-row" style="align-items: center">
-            <span class="app-header-model-badge">claude-opus-4-8</span>
-            <span class="permission-request-badge">Permission</span>
-            <span class="permission-request-badge permission-request-badge--sm">sm</span>
-            <span class="subagent-card-type-badge">subagent</span>
-            <span class="pv-tl-id-badge">cod-1a2b</span>
+            <span class="badge badge--neutral">neutral</span>
+            <span class="badge badge--accent">accent</span>
+            <span class="badge badge--danger">danger</span>
+            <span class="badge badge--warning">warning</span>
+            <span class="badge badge--success">success</span>
           </div>
+          <div class="gy-row" style="align-items: center; margin-top: 14px">
+            <span class="badge badge--neutral badge--mono">claude-opus-4-8</span>
+            <span class="badge badge--accent badge--mono">subagent</span>
+          </div>
+        </div>
+        <div class="gy-note">
+          The permission-request badge is a fixed-size icon container, not a text
+          chip, so it stays bespoke.
         </div>
       </section>
 
