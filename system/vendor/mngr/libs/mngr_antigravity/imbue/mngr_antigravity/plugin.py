@@ -263,6 +263,11 @@ _AGY_WORKSPACE_SYMLINK_PARENT: Final[str] = "/tmp/mngr_antigravity_workspaces"
 # pi_process_started); this is agy's.
 _PROCESS_STARTED_MARKER_FILENAME: Final[str] = "antigravity_process_started"
 
+# agy's busy marker, maintained by its statusLine. Cleared at launch (see assemble_command):
+# a process killed mid-turn cannot run the statusLine's idle branch, so it would otherwise
+# leave this behind forever.
+_ACTIVE_MARKER_FILENAME: Final[str] = "active"
+
 # OS-specific subpath (under ``$HOME``) of agy's ms-playwright-go cache. agy
 # downloads heavy playwright + browser binaries there on first real use; a fully
 # isolated per-agent ``$HOME`` would make every agent re-download them, so each
@@ -1455,8 +1460,19 @@ class AntigravityAgent(
         mkdir_cmd = f"mkdir -p {shlex.quote(str(log_file_path.parent))} {shlex.quote(_AGY_WORKSPACE_SYMLINK_PARENT)}"
         # Stamp the process-start marker in the same chain, so its mtime always reflects
         # THIS process rather than a previous one (see the constant).
+        #
+        # And CLEAR the busy marker, which mngr_claude and mngr_pi_coding both do and agy did
+        # not. Nothing else ever removes it except agy's own statusLine on the idle edge, so a
+        # process killed mid-turn -- `mngr stop`, a stop's restart hammer, a container kill --
+        # left it on disk indefinitely, across restarts. A consumer reading it as "a turn is
+        # open" then held every message sent to a freshly relaunched agent until agy's first
+        # idle sample. Clearing it here makes that whole class of edge disappear rather than be
+        # defended against downstream.
         marker_path = self._get_agent_dir() / _PROCESS_STARTED_MARKER_FILENAME
-        touch_cmd = f"touch {shlex.quote(str(marker_path))}"
+        active_marker_path = self._get_agent_dir() / _ACTIVE_MARKER_FILENAME
+        touch_cmd = (
+            f"rm -f {shlex.quote(str(active_marker_path))} 2>/dev/null || true; touch {shlex.quote(str(marker_path))}"
+        )
         ln_cmd = f"ln -sfn {shlex.quote(str(self.work_dir))} {shlex.quote(symlink_path)}"
         cd_cmd = f"cd {shlex.quote(symlink_path)}"
         home_prefix = f"env HOME={shlex.quote(str(agy_home))}"

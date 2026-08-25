@@ -1,6 +1,5 @@
-"""Unit tests for agy's hold-vs-type send decision."""
+"""Unit tests for agy's send: it enqueues, always, and never types."""
 
-import fcntl
 from pathlib import Path
 from typing import Any
 
@@ -13,16 +12,14 @@ from imbue.system_interface.harnesses.antigravity.queue_tracker import get_track
 from imbue.system_interface.harnesses.antigravity.queue_tracker import session_token
 from imbue.system_interface.harnesses.antigravity.session import AntigravityHarnessSession
 from imbue.system_interface.harnesses.antigravity.turn_state import drop_turn_state
-from imbue.system_interface.harnesses.antigravity.turn_state import get_turn_state
 from imbue.system_interface.harnesses.harness_type import HarnessType
-from imbue.system_interface.harnesses.interrupt import MESSAGE_LOCK_FILENAME
 from imbue.system_interface.harnesses.session import SendOutcome
 from imbue.system_interface.harnesses.session import SessionDeps
 
 
 def _session(state_dir: Path, sent: list[str]) -> AntigravityHarnessSession:
     state_dir.mkdir(parents=True, exist_ok=True)
-    # Each test gets a fresh queue for this agent id.
+    # Each test gets a fresh queue and reading for this agent id.
     drop_tracker(state_dir.name)
     drop_turn_state(state_dir.name)
     unused: Any = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unused"))
@@ -50,109 +47,80 @@ def _tracker(state_dir: Path) -> AntigravityQueueTracker:
     return get_tracker(state_dir.name, state_dir / OUTBOX_FILENAME, session_token(state_dir))
 
 
-def test_an_idle_agent_is_typed_into_directly(tmp_path: Path) -> None:
-    """No marker means no turn is open, so agy can act on the message immediately."""
+def _queued(session: AntigravityHarnessSession) -> list[str]:
+    return [str(entry["content"]) for entry in session.switch_queue_snapshot()]
+
+
+def test_an_idle_agent_is_still_only_enqueued(tmp_path: Path) -> None:
+    """One typist. The session never types, even into an agent that is plainly free -- that
+    decision is what had a window wide enough to land a message in a turn that just started."""
     sent: list[str] = []
     session = _session(tmp_path / "agent-idle", sent)
     assert session.send("beep", "m1") is SendOutcome.OK
-    assert sent == ["beep"]
+    assert sent == []
+    assert _queued(session) == ["beep"]
 
 
-def test_a_busy_agent_holds_the_message_instead_of_typing(tmp_path: Path) -> None:
-    """The whole point: typing here would park the message invisibly inside agy's TUI, where
-    it is merged into one turn and can never be resolved back."""
+def test_a_busy_agent_holds_the_message(tmp_path: Path) -> None:
     sent: list[str] = []
     state_dir = tmp_path / "agent-busy"
     state_dir.mkdir(parents=True)
     (state_dir / ACTIVE_MARKER_FILENAME).write_text("")
     session = _session(state_dir, sent)
     assert session.send("beep", "m1") is SendOutcome.OK
-    assert sent == [], "a message must NOT be typed into a busy agy"
-    assert [entry["content"] for entry in session.switch_queue_snapshot()] == ["beep"]
-
-
-def test_an_in_flight_send_means_busy_without_reading_the_marker(tmp_path: Path) -> None:
-    """A held message lock IS an in-flight send, so the agent is busy by definition -- even
-    before its marker has appeared. This is what makes two rapid sends safe."""
-    sent: list[str] = []
-    state_dir = tmp_path / "agent-inflight"
-    state_dir.mkdir(parents=True)
-    lock_path = state_dir / MESSAGE_LOCK_FILENAME
-    session = _session(state_dir, sent)
-    with lock_path.open("w") as lock_file:
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-        outcome = session.send("bop", "m2")
-    assert outcome is SendOutcome.OK
-    assert sent == [], "a send in flight means busy; the message must be held"
-    assert [entry["content"] for entry in session.switch_queue_snapshot()] == ["bop"]
+    assert sent == []
+    assert _queued(session) == ["beep"]
 
 
 def test_held_messages_keep_send_order(tmp_path: Path) -> None:
     sent: list[str] = []
     state_dir = tmp_path / "agent-order"
-    state_dir.mkdir(parents=True)
-    (state_dir / ACTIVE_MARKER_FILENAME).write_text("")
     session = _session(state_dir, sent)
     session.send("first", "m1")
     session.send("second", "m2")
-    assert [entry["content"] for entry in session.switch_queue_snapshot()] == ["first", "second"]
-    assert (state_dir / OUTBOX_FILENAME).exists(), "the queue must survive a backend restart"
+    assert _queued(session) == ["first", "second"]
+
+
+def test_a_send_journals_so_it_survives_a_backend_restart(tmp_path: Path) -> None:
+    sent: list[str] = []
+    state_dir = tmp_path / "agent-journal"
+    state_dir.mkdir(parents=True)
+    (state_dir / "antigravity_process_started").write_text("")
+    session = _session(state_dir, sent)
+    session.send("beep", "m1")
+    assert (state_dir / OUTBOX_FILENAME).exists()
 
 
 def test_the_tap_is_withheld_while_a_flush_is_in_flight(tmp_path: Path) -> None:
     """Contract Shoulder-tap: available iff something is queued AND nothing is Sending.
 
-    Without this the button stays lit through the flush, and pressing it would ctrl+c the
-    very turn the flush is committing our block into, then re-send that same block.
+    Without this the button stays lit through the flush, and pressing it would ctrl+c the very
+    turn the flush is committing our block into.
     """
     sent: list[str] = []
     state_dir = tmp_path / "agent-flushing"
-    state_dir.mkdir(parents=True)
-    (state_dir / ACTIVE_MARKER_FILENAME).write_text("")
     session = _session(state_dir, sent)
     session.send("beep", "m1")
     assert session.is_sending() is False
     assert session.is_tap_available(has_queued=True) is True
 
-    _, claimed = _tracker(state_dir).begin_flush()
+    _block, claimed, generation = _tracker(state_dir).begin_flush()
     assert session.is_sending() is True
     assert session.is_tap_available(has_queued=True) is False, "the tap must be withheld mid-flush"
 
-    _tracker(state_dir).finish_flush(claimed, is_delivered=True)
+    _tracker(state_dir).finish_flush(claimed, generation, delivered=claimed)
     assert session.is_sending() is False
 
 
 def test_in_flight_entries_are_not_returned_twice(tmp_path: Path) -> None:
     """A claimed entry stays IN the queue (that is what keeps it on screen), so stop already
-    returns it via the queued block. in_flight_block must stay empty or it doubles."""
+    accounts for it there; returning it here as well would double it in the composer."""
     sent: list[str] = []
     state_dir = tmp_path / "agent-double"
-    state_dir.mkdir(parents=True)
-    (state_dir / ACTIVE_MARKER_FILENAME).write_text("")
     session = _session(state_dir, sent)
     session.send("beep", "m1")
     tracker = _tracker(state_dir)
-    block, _claimed = tracker.begin_flush()
+    block, _claimed, _generation = tracker.begin_flush()
     assert block == "beep"
     assert tracker.concatenated_block() == "beep", "a claimed entry is still in the queue"
-    assert session.in_flight_block() == "", "would be concatenated with the queued block"
-
-
-def test_a_tool_chain_holds_the_message_even_with_no_marker(tmp_path: Path) -> None:
-    """The production swallow, as a regression.
-
-    Mid-tool-chain agy removes its ``active`` marker (its statusLine knows only idle and
-    thinking). The send path used to read that as idle and type the message into the running
-    turn, where agy merged it and it never got a turn of its own -- contract A1a.
-    """
-    sent: list[str] = []
-    state_dir = tmp_path / "agent-tool-chain"
-    state_dir.mkdir(parents=True)
-    session = _session(state_dir, sent)
-    # No marker on disk: exactly what a tool call looks like from outside.
-    assert not (state_dir / ACTIVE_MARKER_FILENAME).exists()
-    get_turn_state(state_dir.name).publish(is_open_by_tail=True)
-
-    assert session.send("mid-chain", "m1") is SendOutcome.OK
-    assert sent == [], "a message must NOT be typed into a running tool chain"
-    assert [entry["content"] for entry in session.switch_queue_snapshot()] == ["mid-chain"]
+    assert session.in_flight_block() == "", "nothing was typed, so nothing is in the registry"

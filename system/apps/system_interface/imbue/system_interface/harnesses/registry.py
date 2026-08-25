@@ -56,9 +56,6 @@ from imbue.system_interface.harnesses.model import HarnessCatalog
 from imbue.system_interface.harnesses.model import HarnessModelResolver
 from imbue.system_interface.harnesses.model import model_state_path
 from imbue.system_interface.harnesses.opencode.placeholder import OpenCodePlaceholderActivityTracker
-from imbue.system_interface.harnesses.placeholder import EMPTY_CATALOG
-from imbue.system_interface.harnesses.placeholder import PlaceholderModelResolver
-from imbue.system_interface.harnesses.placeholder import PlaceholderSessionWatcher
 from imbue.system_interface.harnesses.pi_coding.activity import PiActivityTracker
 from imbue.system_interface.harnesses.pi_coding.model import PI_STATE_RELATIVE_PATH
 from imbue.system_interface.harnesses.pi_coding.model import PiAtomicShoulderTap
@@ -66,6 +63,9 @@ from imbue.system_interface.harnesses.pi_coding.model import PiInterruptToCompos
 from imbue.system_interface.harnesses.pi_coding.model import PiModelResolver
 from imbue.system_interface.harnesses.pi_coding.model import get_catalog as get_pi_catalog
 from imbue.system_interface.harnesses.pi_coding.watcher import PiSessionWatcher
+from imbue.system_interface.harnesses.placeholder import EMPTY_CATALOG
+from imbue.system_interface.harnesses.placeholder import PlaceholderModelResolver
+from imbue.system_interface.harnesses.placeholder import PlaceholderSessionWatcher
 from imbue.system_interface.harnesses.session import AgentHarnessSession
 from imbue.system_interface.harnesses.session import AtomicShoulderTap
 from imbue.system_interface.harnesses.session import FileHarnessSession
@@ -137,9 +137,7 @@ class HarnessPopup(FrozenModel):
 _MODEL_BAR_COMMANDS: Final[tuple[str, ...]] = ("/model", "/effort")
 _MODEL_BAR_COMMANDS_WITH_FAST: Final[tuple[str, ...]] = (*_MODEL_BAR_COMMANDS, "/fast")
 _MODEL_BAR_NOTICE: Final[str] = "Use the model picker below the chat to change the model or effort."
-_MODEL_BAR_NOTICE_WITH_FAST: Final[str] = (
-    "Use the model picker below the chat to change the model, effort, or speed."
-)
+_MODEL_BAR_NOTICE_WITH_FAST: Final[str] = "Use the model picker below the chat to change the model, effort, or speed."
 _MODEL_BAR_POPUP: Final[HarnessPopup] = HarnessPopup(
     trigger=PopupTrigger.COMPOSER_COMMAND,
     commands=_MODEL_BAR_COMMANDS,
@@ -315,8 +313,10 @@ class HarnessSpec(FrozenModel):
     auth_instructions: str | None = None
     # The tmux key the cancel/tap actions deliver to end a live turn. Claude binds its own
     # ``meta+q`` chord (scoped to its chat context so a stray press cannot be reinterpreted);
-    # antigravity uses its NATIVE Escape, which needs no provisioning. Declared here rather
-    # than imported from a harness module, so the endpoints stay harness-neutral.
+    # antigravity uses a single native ``ctrl+c``, which needs no provisioning -- NOT escape,
+    # which is bound to the same action but carries text-editing meaning in too many contexts
+    # to deliver blind. Declared here rather than imported from a harness module, so the
+    # endpoints stay harness-neutral.
     cancel_chord: str = "M-q"
 
 
@@ -381,9 +381,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
             _MODEL_BAR_POPUP_WITH_FAST,
             _FAST_MODE_PROMPT_POPUP,
         ),
-        auth_instructions=(
-            "Open the agent's terminal and run /logout, then /login, to sign in or switch accounts."
-        ),
+        auth_instructions=("Open the agent's terminal and run /logout, then /login, to sign in or switch accounts."),
     ),
     HarnessType.PI_CODING: HarnessSpec(
         name=HarnessType.PI_CODING,
@@ -456,17 +454,20 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         session_class=AntigravityHarnessSession,
         model_state_relative_path=ANTIGRAVITY_STATE_RELATIVE_PATH,
         special_kinds=frozenset(),
-        # Stop and tap both end the live turn with a SINGLE ctrl+c. Neither needs to retrieve
-        # anything from inside agy: the queue is ours (see antigravity/session.py), so stop
-        # returns it by reading it and the tap delivers it by sending it.
+        # Stop and tap both end the live turn with a SINGLE ctrl+c. Neither retrieves anything
+        # from inside agy: the queue is ours (see antigravity/queue_tracker.py), so stop hands
+        # back what we were holding and the tap simply frees agy for the one typist -- the
+        # flush worker -- to deliver.
         #
         # DANGER, and the reason this is a named constant rather than a literal at the press
         # site: agy treats the FIRST ctrl+c as "interrupt the active operation" and a DOUBLE
         # press as "exit" -- and its own docs say that valve fires regardless of how the key
         # is remapped. One press is the interrupt we want; two in quick succession kill the
-        # agent. Every caller presses exactly once and never retries. Do not add a retry.
-        # (Escape is bound to the same `cli.escape` action and would avoid that hazard, but it
-        # carries text-editing meaning in too many contexts to deliver blind.)
+        # agent. Both callers press through a shared per-agent interlock that refuses a second
+        # press inside a fixed window (antigravity/turn_state.py), because a greyed button is
+        # not enough protection for a failure that destroys the process.
+        # (Escape is bound to the same `cli.escape` action and would avoid the double-press
+        # hazard, but it carries text-editing meaning in too many contexts to deliver blind.)
         interrupt_to_composer_class=AntigravityInterruptToComposer,
         shoulder_tap_class=AntigravityAtomicShoulderTap,
         cancel_chord="C-c",

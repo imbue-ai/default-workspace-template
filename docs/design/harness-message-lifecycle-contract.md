@@ -233,15 +233,19 @@ Delivered. The backend decides per id (A4); the frontend asks the backend what t
   `turn/start`/`turn/steer`, stop = `turn/interrupt`, queue = pending steers observed via
   events, delivered = the committed `userMessage`, reconciliation by the minted `clientId`.
 
-- **antigravity (the queue is OURS):** agy is the only harness whose queue cannot be observed
-  at all -- it parks mid-turn input inside its TUI, invisible on disk, and merges everything
-  parked into one turn. So it is never allowed to park anything: while a turn is open the
-  message is held backend-side and delivered as one newline-joined block when agy goes idle.
-  send = typed via tmux only when idle, queue = ours (journalled per-session so it survives a
-  backend restart but never the session), delivered = one block committing as one turn, stop =
-  a single ctrl+c plus handing our own list back, tap = ctrl+c then send the block. It needs no
-  restart on stop (nothing is parked inside agy to retract), keeping the restart only as the
-  bounded hammer when a send holds the message lock.
+- **antigravity (the queue is OURS, and one typist owns it):** agy is the only harness whose
+  queue cannot be observed at all -- it parks mid-turn input inside its TUI, invisible on disk,
+  and merges everything parked into one turn. So it is never allowed to park anything. `send`
+  does not type: it enqueues, publishes the chip inside the POST, and wakes the ONE typist, a
+  per-agent worker that delivers the whole block only when its bounded predicate says no turn
+  is open. queue = ours, journalled per-session so it survives a backend restart but never the
+  agy session. delivered = agy's own store gaining a user turn whose text is our block, NOT
+  mngr's ack (whose only probe is a busy-marker mtime that a parked message also advances).
+  stop = one ctrl+c plus handing back what we still hold, taking care not to take entries a
+  flush is mid-send with. tap = one ctrl+c, then wake the worker -- the tap never sends,
+  because a second typist could deliver the same block twice. It needs no restart to stop
+  (nothing is parked inside agy to retract), keeping the restart only as the hammer for a
+  cancel that cannot be trusted to have landed.
 
 The target is to make them converge on the clean, single-path shape; claude's heuristic
 path is what most needs to move toward it.
@@ -386,36 +390,84 @@ what stuck it on "Thinking".
 ### E11. antigravity — A3 identity is unreachable; the displayed queue is OURS
 **Structural, not a bug to fix.** Every other harness's queue is observable: codex's pending
 steers, claude's parked send queue, pi's inbox. agy's parked messages live inside its TUI and
-touch no file, so there is nothing to mirror. The design therefore inverts A3 rather than
-approximating it: agy is never allowed to park anything (a message is held backend-side while
-a turn is open), so the queue we display becomes the only queue that exists. The residual gap
-is other senders — a message typed into agy's own terminal, or `mngr message` from cron or a
-bot — which we neither see nor hold, and which we simply wait out.
+touch no file, so there is nothing to mirror. The design therefore inverts A3: agy is never
+allowed to park anything, so the queue we display becomes the only queue that exists.
 
-### E12. antigravity — delivery is not id-matched, and the send ack is not commit
-A4 wants a backend-minted id checked against the committed transcript. agy's protobuf
-transcript carries no client id, so delivery rests on having sent exactly one block and
-receiving exactly one turn — a 1:1 correspondence we control rather than an id we can look up.
-Separately, mngr's send returns when agy's busy marker advances, i.e. when agy became *busy*,
-not when the user step settled in its store. A turn cancelled between those two points is
-reported delivered though nothing committed. The mirror case also has no id to settle it: a
-send that times out on a prompt agy actually accepted reports failure, so the block returns to
-the queue and the next idle flush sends it again -- a duplicate rather than a loss, which is
-the safer of the two but still visible. Narrow, real, and recorded rather than papered over.
+"Never allowed to park" is enforced in exactly one place. `session.send` does not type at all —
+it enqueues — and a single flush worker is the only code that ever delivers, typing only when
+its bounded predicate says no turn is open. An earlier design let both the session and the
+worker type, and decided per-send whether to; that decision was a check-then-act whose window
+was wide enough to land a message in a turn that had just started.
 
-The same gap is why A6's "no overlap between Sending… and Thinking…" does not hold exactly
-during a flush: the marker advancing is both what starts the dot and what our send waits on,
-so the flushing entries read "Sending…" for the short remainder of that send while the turn is
-already generating. Holding them there is deliberate -- dropping them at hand-off instead would
-blink them off screen before the turn renders, which A1a forbids outright and which E1 records
-as the worse failure. This is the same shape codex's shoulder-tap resend already has, and it
-renders through the same path.
+Two residuals remain. **Other senders:** a message typed into agy's own terminal, or `mngr
+message` from cron, opens a real turn we neither see nor hold; we wait it out, and the turn it
+opens is visible in the transcript, so it correctly holds our queue. **The handoff window:**
+between our last observation and agy's input handler taking our Enter, another actor can open a
+turn and our block merges into it — see E12.
+
+### E12. antigravity — delivery is observed, not acked, and the ambiguous verdict resends
+A4 wants a backend-minted id checked against the committed transcript. agy's protobuf transcript
+carries no client id, and the only way to put one there would be to smuggle a marker into the
+user's text, which the model would see. So delivery is decided by observation.
+
+mngr's own ack cannot be that observation. Its sole submission probe is agy's `active` marker
+mtime, which `statusline.sh` touches on every busy sample — so a message that merely PARKED in
+agy's composer acks as delivered. Our proof would be true during the exact failure it is meant
+to detect. The verdict is instead: does agy's own store gain a user turn whose text is our
+block? That needs no id, and it works for turns we did not send.
+
+**"One block, one turn" is measured, not assumed** (agy 1.1.20): `tmux send-keys -l` with an
+embedded newline INSERTS a newline in the composer rather than submitting, and a single Enter
+then commits the whole block as exactly one `USER_INPUT` row. A prefix arm survives in the
+verdict as defence in depth, not because a partial submission has ever been seen.
+
+The residual is the ambiguous verdict. If no matching row appears we cannot distinguish "still
+parked in the composer" from "merged invisibly into someone else's turn", so we retry — which
+means the merge case delivers the text twice. We choose duplication over loss deliberately: a
+duplicate is visible and correctable, a swallow is neither. Retries are bounded (three
+attempts), after which the entry stops being retyped and stays on screen as failed, so the
+duplication is bounded too.
+
+Consequence for A6: during a flush the claimed entries read "Sending…" for the remainder of the
+send while the turn is already generating. Dropping them at hand-off instead would blink them
+off screen before the turn renders, which A1a forbids outright and which E1 records as the
+worse failure. Same shape as codex's shoulder-tap resend, same render path.
 
 ### E13. antigravity — the cancel key is a single ctrl+c, and a double press exits
 agy binds `cli.escape` to both `esc` and `ctrl+c`. `esc` carries text-editing meaning in too
-many TUI contexts to deliver blind; `ctrl+c` is unambiguous on the FIRST press, but agy treats
-a double press as exit and its docs say that valve fires regardless of remapping. Stop and tap
-each press exactly once and fall back to the restart rather than pressing again. A dedicated
-chord bound to `cli.escape` (claude's approach) would remove both hazards and remains the right
-end state; it is blocked on confirming where agy reads `keybindings.json`, since a write to the
-wrong path would silently no-op and leave stop and tap dead.
+many TUI contexts to deliver blind; `ctrl+c` is unambiguous on the FIRST press, but agy treats a
+double press as exit and its docs say that valve fires regardless of remapping.
+
+A greyed button is not sufficient protection for the only failure here that destroys the agent
+process, so both callers press through a shared per-agent interlock that refuses a second press
+inside a fixed window — per agent, not per caller, so stop and a tap racing cannot between them
+deliver the pair. Stop falls back to the restart when a press is refused or does not settle; the
+tap does not restart, it reports and leaves the queue intact.
+
+A dedicated chord bound to `cli.escape` (claude's approach) would remove the ambiguity and
+remains the right end state; it is blocked on confirming where agy reads `keybindings.json`,
+since a write to the wrong path would silently no-op and leave stop and tap dead.
+
+### E14. antigravity — a delivery that cannot be witnessed stays Queued, then fails visibly
+A flush whose block never appears as a user turn re-queues it and retries on the next wake, up
+to three attempts. After that the entry is no longer retyped: it stays visible as a queued
+message rather than being delivered or returned. Conservation holds — it is in exactly one
+state and always on screen — but Part B's "eventually either Delivered or Returned" is
+satisfied only by the user stopping the agent, which returns it to the composer.
+
+The alternative is worse: an unverifiable delivery retried without bound re-pastes the whole
+block on every attempt, so a message agy did receive arrives N times.
+
+### E15. antigravity — the turn-open predicate is bounded, so it can be wrong in both directions
+Every rung of "is a turn open?" carries a freshness bound, because an unbounded rung cannot
+terminate. Measured on agy 1.1.20: a single ctrl+c during a tool call settles that step as
+`CANCELED`, and the parser emits a `tool_result` for it, so the transcript tail reads "open"
+forever afterwards. A predicate that trusted the tail alone would make the first stop an agent
+receives hold every later message for the life of that agent — a silent per-agent outage, worse
+than the swallow it replaced.
+
+The bounds are therefore load-bearing, and they are guesses: a busy-marker freshness window and
+a maximum age for an open-looking tail. Too short and a genuinely long tool call is typed into;
+too long and a wedged agent takes that long to recover. Our own cancels are stamped exactly
+rather than inferred, so the common case needs no bound at all; the ceiling only covers an
+abandonment we did not cause and cannot see.

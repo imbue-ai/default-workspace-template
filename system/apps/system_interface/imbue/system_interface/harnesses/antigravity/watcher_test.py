@@ -8,7 +8,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from imbue.system_interface.activity_state import ACTIVE_MARKER_FILENAME
 from imbue.system_interface.agent_discovery import AgentInfo
+from imbue.system_interface.harnesses.antigravity.queue_tracker import drop_tracker
 from imbue.system_interface.harnesses.antigravity.testing import append_step
 from imbue.system_interface.harnesses.antigravity.testing import build_metadata
 from imbue.system_interface.harnesses.antigravity.testing import build_step_payload
@@ -18,6 +20,7 @@ from imbue.system_interface.harnesses.antigravity.testing import encode_varint
 from imbue.system_interface.harnesses.antigravity.testing import len_field
 from imbue.system_interface.harnesses.antigravity.testing import set_step_status
 from imbue.system_interface.harnesses.antigravity.testing import str_field
+from imbue.system_interface.harnesses.antigravity.turn_state import drop_turn_state
 from imbue.system_interface.harnesses.antigravity.watcher import AntigravitySessionWatcher
 
 _STATUS_RUNNING = 2
@@ -45,8 +48,13 @@ def _make_watcher(tmp_path: Path, conv_ids: list[str]) -> AntigravitySessionWatc
     (tmp_path / "plugin" / "antigravity" / "home" / ".gemini" / "antigravity-cli" / "conversations").mkdir(
         parents=True, exist_ok=True
     )
+    # Unique per test: the tracker and turn-state registries are keyed by agent id and live
+    # for the agent's life, so a shared id leaks one test's queue into the next.
+    agent_id = f"agent-{tmp_path.name}"
+    drop_tracker(agent_id)
+    drop_turn_state(agent_id)
     agent_info = AgentInfo(
-        id="agent-1",
+        id=agent_id,
         name="agy-test",
         state="RUNNING",
         agent_state_dir=tmp_path,
@@ -190,3 +198,133 @@ def _tag_len_overrun() -> bytes:
 
 def _tag(field: int, wire: int) -> bytes:
     return encode_varint((field << 3) | wire)
+
+
+# --- the flush worker: the only typist ----------------------------------------------------
+#
+# This code path had NO tests, which is why an ungated flush -- one that typed the held queue
+# into a live turn every 5 seconds -- shipped green.
+
+
+def _flushing_watcher(tmp_path: Path, conv: str, sent: list[str], *, is_alive: bool = True, does_commit: bool = True):
+    """A watcher whose send records the text and, like agy, commits it as a user turn.
+
+    ``does_commit=False`` is the parked case: mngr reports the send accepted (its probe is the
+    busy marker's mtime, which advances either way) but agy wrote no user row.
+    """
+    watcher = _make_watcher(tmp_path, [conv])
+    next_idx = [100]
+
+    def _send(text: str) -> bool:
+        sent.append(text)
+        if does_commit:
+            append_step(_conv_db_path(tmp_path, conv), (next_idx[0], _TYPE_USER, _STATUS_DONE, _user_payload(text)))
+            next_idx[0] += 1
+        return True
+
+    watcher.set_flush_hooks(_send, lambda: is_alive)
+    return watcher
+
+
+def test_the_flush_never_types_while_a_turn_is_open(tmp_path: Path) -> None:
+    """THE bug. A message held mid-turn must not be typed into that turn: agy parks it
+    invisibly, merges it into the running turn, and mngr's marker-mtime ack reports success."""
+    conv = "conv-open"
+    sent: list[str] = []
+    watcher = _flushing_watcher(tmp_path, conv, sent)
+    # A tool_result tail: agy has run a tool and is about to speak again -- mid-turn.
+    build_steps_db(
+        _conv_db_path(tmp_path, conv),
+        [(0, _TYPE_USER, _STATUS_DONE, _user_payload("go")), (1, _TYPE_RUN_COMMAND, _STATUS_DONE, _tool_payload())],
+    )
+    (tmp_path / ACTIVE_MARKER_FILENAME).write_text("")
+    watcher._collect_new_events()
+    watcher._publish_turn_state()
+    watcher.get_queued_messages()
+    watcher._queue.enqueue("also fix the tests", "t0")
+
+    watcher._attempt_flush()
+
+    assert sent == [], "a held message must never be typed into a live turn"
+    assert [e["content"] for e in watcher.get_queued_messages()] == ["also fix the tests"]
+
+
+def test_the_flush_delivers_once_the_turn_is_closed(tmp_path: Path) -> None:
+    conv = "conv-closed"
+    sent: list[str] = []
+    watcher = _flushing_watcher(tmp_path, conv, sent)
+    build_steps_db(
+        _conv_db_path(tmp_path, conv),
+        [
+            (0, _TYPE_USER, _STATUS_DONE, _user_payload("go")),
+            (1, _TYPE_PLANNER, _STATUS_DONE, _planner_payload("done")),
+        ],
+    )
+    watcher._collect_new_events()
+    watcher._publish_turn_state()
+    watcher._queue.enqueue("next thing", "t0")
+
+    watcher._attempt_flush()
+
+    assert sent == ["next thing"]
+
+
+def test_a_dead_agent_has_its_queue_returned_not_destroyed(tmp_path: Path) -> None:
+    """The queue is empty when an agent is stopped -- but the messages the user sent and saw
+    accepted must END UP somewhere. Deleting them is the swallow wearing a different hat."""
+    conv = "conv-dead"
+    sent: list[str] = []
+    watcher = _flushing_watcher(tmp_path, conv, sent, is_alive=False)
+    build_steps_db(_conv_db_path(tmp_path, conv), [(0, _TYPE_USER, _STATUS_DONE, _user_payload("go"))])
+    watcher._collect_new_events()
+    watcher._publish_turn_state()
+    watcher._queue.enqueue("stranded", "t0")
+
+    watcher._attempt_flush()
+
+    assert sent == [], "a dead agent is never typed into -- mngr's send would auto-start it"
+    assert watcher.get_queued_messages() == [], "and the queue does not linger"
+
+
+def test_the_flush_still_drains_after_a_cancelled_tool_chain(tmp_path: Path) -> None:
+    """Measured on agy 1.1.20: a cancelled tool call settles as CANCELED and the parser emits
+    a tool_result, so the tail reads 'open' forever. An unbounded gate would make the first
+    stop an agent receives wedge its queue permanently -- worse than the bug it replaced."""
+    conv = "conv-cancelled"
+    sent: list[str] = []
+    watcher = _flushing_watcher(tmp_path, conv, sent)
+    build_steps_db(
+        _conv_db_path(tmp_path, conv),
+        [(0, _TYPE_USER, _STATUS_DONE, _user_payload("go")), (1, _TYPE_RUN_COMMAND, _STATUS_DONE, _tool_payload())],
+    )
+    watcher._collect_new_events()
+    watcher._publish_turn_state()
+    watcher._queue.enqueue("after the stop", "t0")
+    # We cancelled: the tail is abandoned, not live.
+    watcher.turn_state().note_cancelled()
+
+    watcher._attempt_flush()
+
+    assert sent == ["after the stop"], "a cancelled turn must not hold the queue forever"
+
+
+def test_a_claimed_queue_is_not_flushed_twice(tmp_path: Path) -> None:
+    """The claim is the mutual exclusion between the worker and the tap."""
+    conv = "conv-claimed"
+    sent: list[str] = []
+    watcher = _flushing_watcher(tmp_path, conv, sent)
+    build_steps_db(
+        _conv_db_path(tmp_path, conv),
+        [
+            (0, _TYPE_USER, _STATUS_DONE, _user_payload("go")),
+            (1, _TYPE_PLANNER, _STATUS_DONE, _planner_payload("done")),
+        ],
+    )
+    watcher._collect_new_events()
+    watcher._publish_turn_state()
+    watcher._queue.enqueue("once", "t0")
+    watcher.claim_queue_for_tap()
+
+    watcher._attempt_flush()
+
+    assert sent == [], "the tap holds the claim; the worker must not send the same block"
