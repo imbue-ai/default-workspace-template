@@ -1417,3 +1417,26 @@ def test_profile_holder_probe_terminates_pgrep_options(monkeypatch: pytest.Monke
     monkeypatch.setattr(chrome_launcher.subprocess, "run", fake_run)
     chrome_launcher.profile_holder_pid(tmp_path)
     assert seen and seen[0][:3] == ["pgrep", "-f", "--"], seen
+
+
+def test_pane_follow_never_reasserts_a_stale_cached_tab() -> None:
+    # A human switches tabs inside Chrome via XTEST, which never reaches our CDP
+    # connection -- so `_active_target_id` still names the tab the AGENT was on. Falling
+    # back to it on the agent's next frame yanked the human off the tab they had chosen.
+    # Foreground only a target the agent actually named.
+    browser = _running_browser(browser_id="browser-1")
+    browser._active_target_id = "AGENTS-OLD-TAB"
+    activated: list[str] = []
+
+    async def fake_focus(self: bsession.LiveBrowser, target_id: str) -> None:
+        activated.append(target_id)
+
+    async def go() -> None:
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(bsession.LiveBrowser, "_focus_and_foreground", fake_focus)
+            await browser._on_proxy_activity(None)  # frame resolved to no target
+            assert activated == [], "must not re-assert the cached tab"
+            await browser._on_proxy_activity("THE-TAB-THE-AGENT-IS-ON")
+            assert activated == ["THE-TAB-THE-AGENT-IS-ON"]
+
+    asyncio.run(go())

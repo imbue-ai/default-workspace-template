@@ -87,17 +87,34 @@
   /* Cover shown until the FIRST streamed frame paints. Removed on first paint (NOT on
      the lifecycle=running control message): running means Chromium is up, but pixels
      may not be flowing yet, so revealing on running would show a blank canvas. */
-  #initoverlay { display: none; position: absolute; inset: 0; z-index: 15; background: #1e1e1e; flex-direction: column; align-items: center; justify-content: center; gap: 16px; text-align: center; padding: 24px; }
+  #initoverlay { display: none; position: absolute; inset: 0; z-index: 15; background: #1e1e1e; flex-direction: column; align-items: center; justify-content: center; gap: 13px; text-align: center; padding: 24px; }
   #initoverlay.show { display: flex; }
   /* Loading progress bar: the fill width tracks the real stage (Chromium coming up ->
-     view loading -> painted), with a moving shimmer so the wait reads as alive. Hidden
-     on terminal states (failed/closed) via the `.static` class -- there's no progress then. */
-  #initoverlay .bar { width: 220px; max-width: 60%; height: 6px; background: #333; border-radius: 3px; overflow: hidden; }
+     view loading -> painted). Hidden on terminal states (failed/closed) via the `.static`
+     class -- there's no progress then.
+
+     A hairline rather than a chunky bar, and one calm colour rather than a two-stop
+     gradient: this sits under a live browser for a couple of seconds, so it should read as
+     a quiet system state, not a download. The green is the workspace accent (#2f6b4f)
+     lifted to hold its chroma against the dark cover. The sweep is kept -- a bar that only
+     grows in steps reads as stalled between stages -- but at a third of the old opacity
+     and half the speed, so it's a breath rather than a strobe. */
+  #initoverlay .bar { width: 240px; max-width: 62%; height: 3px; background: rgba(255, 255, 255, 0.09); border-radius: 999px; overflow: hidden; }
   #initoverlay.static .bar { display: none; }
-  #initoverlay .bar .fill { height: 100%; width: 0; border-radius: 3px; background: linear-gradient(90deg, #0e639c, #4ec9b0); transition: width 0.4s ease; position: relative; }
-  #initoverlay .bar .fill::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.35), transparent); animation: shimmer 1.2s linear infinite; }
+  #initoverlay .bar .fill { height: 100%; width: 0; border-radius: 999px; background: #5fa37f; transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1); position: relative; }
+  #initoverlay .bar .fill::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.22), transparent); animation: shimmer 2.4s ease-in-out infinite; }
   @keyframes shimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
-  #initoverlay .msg { font-size: 15px; color: #ccc; font-weight: 600; }
+  /* The label is secondary to the bar: same size as the rest of the pane's small text,
+     medium weight, and dimmed so the eye lands on progress rather than on the word. */
+  #initoverlay .msg { font-size: 13px; color: rgba(255, 255, 255, 0.55); font-weight: 500; letter-spacing: 0.2px; }
+  /* Fade the whole thing in so opening a pane doesn't flash a bar at 0%. */
+  #initoverlay.show .bar, #initoverlay.show .msg { animation: initfade 260ms ease-out both; }
+  @keyframes initfade { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) {
+    #initoverlay .bar .fill::after { animation: none; }
+    #initoverlay.show .bar, #initoverlay.show .msg { animation: none; }
+    #initoverlay .bar .fill { transition: none; }
+  }
 
   /* Transient clipboard status chip ("Pasting…", "Copied from remote", errors). Bottom
      of the pane, fades in on activity and out after a moment. */
