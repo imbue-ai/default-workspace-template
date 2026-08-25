@@ -110,7 +110,12 @@ class AntigravityInterruptToComposer(InterruptToComposer):
                 # Nothing running. Still return the queue: those messages were never sent.
                 watcher.clear_queue()
                 return queued_block
-            is_pressed = press_chord()
+        # The chord is pressed with the lock RELEASED. ``press_chord`` goes through mngr, which
+        # takes this same message.lock, and flock is per open-file-description -- so pressing
+        # while still holding it would block this process against itself, forever. claude
+        # sequences it the same way, and calls the gap between release and press its accepted
+        # capture-window residual.
+        is_pressed = press_chord()
         if not is_pressed or not _wait_for_turn_to_end(self._agent_info):
             # Deliberately NOT a second press -- see the module docstring.
             logger.warning("antigravity: cancel did not settle for {}; restarting", self._agent_info.name)
@@ -156,7 +161,8 @@ class AntigravityAtomicShoulderTap(AtomicShoulderTap):
             if not is_lock_held:
                 # A send is in flight, so the queue is not settled. Benign no-op, as claude's.
                 return ShoulderTapOutcome(status=_SEND_IN_FLIGHT)
-            is_pressed = press_chord()
+        # Released before pressing -- see the note in the stop path above.
+        is_pressed = press_chord()
         if not is_pressed:
             return ShoulderTapOutcome(
                 status="chord_failed", error_detail="Could not send the cancel key to antigravity."

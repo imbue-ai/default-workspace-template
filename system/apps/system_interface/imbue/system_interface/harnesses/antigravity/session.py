@@ -59,14 +59,22 @@ class AntigravityHarnessSession(FileHarnessSession):
 
         Failing to take the lock means a send IS in flight, so the agent is busy by definition
         and the message is held.
+
+        Residual window, accepted: between releasing the lock and mngr re-taking it for the
+        real send, another send can start a turn, so we can type into an agy that just became
+        busy. The message is NOT lost when that happens -- agy parks it and delivers it at the
+        end of that turn -- it is simply shown as sent rather than queued, arriving later than
+        the UI implied. Closing it would mean holding the lock across the delegation, which is
+        the deadlock described below.
         """
-        held = try_hold_message_lock(self._deps.state_dir)
-        with held as is_lock_held:
+        with try_hold_message_lock(self._deps.state_dir) as is_lock_held:
             is_busy = (not is_lock_held) or (self._deps.state_dir / ACTIVE_MARKER_FILENAME).exists()
-            if not is_busy:
-                # Idle: hand it straight to agy, which starts a turn with it. Note the lock is
-                # released before delegating -- mngr takes it again for the real send.
-                return super().send(text, message_id)
+        # The delegation MUST happen after the lock is released. mngr's own send takes this
+        # same message.lock, and flock is per open-file-description, so a second exclusive
+        # acquire from this process blocks forever -- delegating while still holding it
+        # deadlocks every idle send.
+        if not is_busy:
+            return super().send(text, message_id)
         queued_id = self._queue().enqueue(text, _now_iso())
         self._deps.on_queue_snapshot(self._queue().snapshot())
         self._deps.notify_agents_changed()
