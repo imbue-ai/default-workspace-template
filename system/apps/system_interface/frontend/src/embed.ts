@@ -22,16 +22,12 @@ import {
 } from "@minds/embed-contract";
 import * as embedContract from "@minds/embed-contract";
 
-// The contract-v3 resolution pair postdates the vendored embed_contract
+// The contract-v3 resolutions type postdates the vendored embed_contract
 // snapshot (this repo does not edit system/vendor by hand); a named import of
 // a missing export fails the rollup build, so probe the namespace and fall
-// back to the literal. Sends need no vendored support, but a stale vendored
-// endpoint's validator drops the ANSWER until the sync lands -- cards keep
-// the transcript-driven flip in the meantime.
-export const QUERY_PERMISSION_RESOLUTIONS: "minds:query-permission-resolutions" =
-  "QUERY_PERMISSION_RESOLUTIONS" in embedContract
-    ? embedContract.QUERY_PERMISSION_RESOLUTIONS
-    : "minds:query-permission-resolutions";
+// back to the literal. A stale vendored endpoint's validator drops the
+// message until the sync lands -- cards keep the transcript-driven flip in
+// the meantime.
 export const PERMISSION_RESOLUTIONS: "minds:permission-resolutions" =
   "PERMISSION_RESOLUTIONS" in embedContract ? embedContract.PERMISSION_RESOLUTIONS : "minds:permission-resolutions";
 
