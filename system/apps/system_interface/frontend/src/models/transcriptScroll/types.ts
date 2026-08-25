@@ -119,7 +119,10 @@ export type ScrollbarInteractionEvent =
 
 /** What a track position resolves to through a mapping. */
 export type ScrollTarget =
-  | { readonly kind: "physical-px"; readonly contentTopPx: number } // exact px in physical content
+  // Fraction through the physical region; the engine scales it over the
+  // region's scrollable span (so fraction 1 lands the viewport at the bottom,
+  // not the last row's top).
+  | { readonly kind: "physical-fraction"; readonly fraction: number }
   | { readonly kind: "virtual-index"; readonly index: EventIndex }; // requires load/jump
 
 // --- Persistence ------------------------------------------------------------
