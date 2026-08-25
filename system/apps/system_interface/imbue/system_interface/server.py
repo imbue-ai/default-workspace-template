@@ -1245,8 +1245,9 @@ def _flush_queue_endpoint(agent_id: str) -> Response:
         agent_manager: AgentManager = get_state().agent_manager
         resend_failure = agent_manager.send_message_to_agent(AgentId(agent_info.id), block)
         if resend_failure is not None:
-            error = ErrorResponse(detail=f"Failed to resend queued messages to agent '{agent_info.name}'")
-            return _json_response(error.model_dump(), status_code=500)
+            # The harness said why; passing that on rather than a generic sentence is the whole
+            # point of carrying it this far.
+            return _json_response({"detail": resend_failure.reason, "kind": resend_failure.kind}, status_code=500)
 
     return _json_response(SendMessageResponse(status="ok").model_dump())
 

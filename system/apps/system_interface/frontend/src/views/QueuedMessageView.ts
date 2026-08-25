@@ -56,10 +56,8 @@ async function shoulderTapQueuedMessages(agentId: string): Promise<void> {
     raiseFailureNotice(agentId, {
       title: "Couldn't send the queued messages",
       detail,
-      retry: async () => {
-        inFlightAgentIds.delete(agentId);
-        await shoulderTapQueuedMessages(agentId);
-      },
+      // The finally below has already cleared the in-flight marker by the time this can run.
+      retry: () => shoulderTapQueuedMessages(agentId),
     });
   } finally {
     inFlightAgentIds.delete(agentId);

@@ -3,9 +3,9 @@
 from pathlib import Path
 
 from imbue.system_interface.agent_discovery import AgentInfo
-from imbue.system_interface.harnesses.claude.model import _CLAUDE_EFFORTS
 from imbue.system_interface.harnesses.claude.model import CLAUDE_CATALOG
 from imbue.system_interface.harnesses.claude.model import ClaudeModelResolver
+from imbue.system_interface.harnesses.claude.model import _CLAUDE_EFFORTS
 from imbue.system_interface.harnesses.model import ModelAxis
 from imbue.system_interface.harnesses.model import ModelIdentity
 from imbue.system_interface.harnesses.model import match_option

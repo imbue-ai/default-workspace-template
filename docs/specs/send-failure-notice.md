@@ -138,7 +138,7 @@ The `is_primary=true` refusal on that endpoint applies unchanged: the services a
 
 - Replace `actionFailureDetail: string | null` with a small record: the detail, and an optional recovery describing how to repeat the operation (the text and attachments to resend, and the agent id). Component-closure state, as now.
 - The send catch block populates the recovery; the interrupt catch block does not, so it keeps a single OK button.
-- **Do not restore the composer in the catch block any more.** Restoration becomes Cancel's job, so the text is not sitting in the composer while the notice offers to resend it -- otherwise Retry would send it and leave a copy behind.
+- **Restore the composer in the catch block, immediately.** The recovery record is closure state, so holding the message only there loses it to a reload or a closed tab -- the box is where it waits. Retry and Force remove that copy once the send has actually landed, taking care that Force has by then prepended the drained queue block above it.
 - Render two or four buttons off the same markup already used, with the focused default on Cancel, since it is the only non-acting choice. Escape and backdrop-click do what Cancel does, including restoring the text -- dismissing must never lose the message.
 - Disable the buttons while a retry or force is in flight; show which one is running.
 

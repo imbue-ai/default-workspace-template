@@ -20,6 +20,7 @@ from flask.testing import FlaskClient
 
 from imbue.system_interface import welcome_resend
 from imbue.system_interface.agent_discovery import AgentInfo
+from imbue.system_interface.agent_discovery import SendFailure
 from imbue.system_interface.harnesses.claude.auth import ClaudeAuthService
 from imbue.system_interface.harnesses.claude.auth import ProcessSetupError
 from imbue.system_interface.harnesses.claude.auth import RestartPhase
@@ -95,7 +96,7 @@ def _build_welcome_resender(host_dir: Path, welcome_calls: list[str]) -> Welcome
     skill_path = host_dir / "SKILL.md"
     skill_path.write_text("---\nname: w\n---\n\nIntro\n\n---\n\n### Welcome to Minds\n\nbody\n\n---\n")
 
-    def _record_welcome_send(agent_id: str, _message: str) -> str | None:
+    def _record_welcome_send(agent_id: str, _message: str) -> SendFailure | None:
         welcome_calls.append(agent_id)
         return None
 

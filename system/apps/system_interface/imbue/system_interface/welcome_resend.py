@@ -42,6 +42,7 @@ from loguru import logger as _loguru_logger
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.mngr.primitives import AgentId
 from imbue.system_interface.agent_discovery import AgentInfo
+from imbue.system_interface.agent_discovery import SendFailure
 from imbue.system_interface.harnesses.claude.watcher import ClaudeSessionWatcher
 
 logger = _loguru_logger
@@ -64,7 +65,7 @@ class WelcomeResendError(RuntimeError):
 ResolveAgentFn = Callable[[str], AgentInfo | None]
 TranscriptReadFn = Callable[[AgentInfo], str | None]
 # Returns None when the message was delivered, or the failure describing why it was not.
-MessageSendFn = Callable[[AgentId, str], object | None]
+MessageSendFn = Callable[[AgentId, str], SendFailure | None]
 
 
 def _strip_frontmatter(body: str) -> str:
