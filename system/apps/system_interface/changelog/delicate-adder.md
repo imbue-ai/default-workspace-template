@@ -24,12 +24,11 @@ system, not a pixel-identical render.
   project settings modal, composer command notices, and terminal sign-in notice
   all now render through it. Removed the dead custom-url-dialog CSS.
 
-- **Dialog emphasis.** Two "default to full emphasis" rules for the shared modal
-  shell. Buttons: a dialog's default action -- its confirm, or the sole
-  acknowledgement in a one-button notice -- now renders `.btn--primary`, and a
-  button is downgraded to secondary/ghost/destructive only when its content calls
-  for it (promoted the share notice's "Close", the terminal sign-in notice's
-  "OK", and the declined-command notice's "OK"); the rule is recorded in
+- **Dialog emphasis.** Buttons: a dialog's confirming action -- a real choice it
+  asks the user to make (Save, Continue, the default in a two-option prompt) --
+  is `.btn--primary`, while a button that only dismisses or acknowledges (a lone
+  OK/Close, a Cancel, a Back) stays quiet (`.btn--secondary`) and a destructive
+  confirm is `.btn--destructive`; the rule is recorded in
   `frontend/style_guide.md`. Body copy: `.modal-message` / `.modal-body` now read
   at `--color-text-primary` instead of the muted `--color-text-secondary`, so
   every dialog's body text reads at full strength; a genuinely secondary line

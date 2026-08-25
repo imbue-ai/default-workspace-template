@@ -38,9 +38,11 @@ stays consistent:
   primitive (`.btn--{primary|secondary|ghost|destructive|inverse|icon}`, plus
   `.btn--sm`, `.btn--selected`, and the `.btn--ghost.btn--destructive`
   quiet-destructive combo) or the modal/badge/toggle/spinner/input primitive,
-  rather than copying it under a new feature prefix. A dialog's default action
-  (its confirm, or the sole button in a one-button notice) is `.btn--primary`;
-  downgrade only when the content calls for it.
+  rather than copying it under a new feature prefix. A dialog's confirming
+  action — a real choice it asks the user to make (Save, Continue, the default in
+  a two-option prompt) — is `.btn--primary`; a button that only dismisses or
+  acknowledges (a lone OK/Close, a Cancel, a Back) stays quiet (`.btn--secondary`),
+  and a destructive confirm is `.btn--destructive`.
 - **Prefer semantic tokens/classes over Tailwind utilities for anything themed**
   (colour, and spacing that should track the scale). Utilities are fine for
   genuinely one-off layout (`flex`, `grid`, `gap`).
