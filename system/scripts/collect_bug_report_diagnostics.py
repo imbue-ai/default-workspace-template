@@ -67,8 +67,20 @@ LOADAVG_PATH = "/proc/loadavg"
 
 # How far back a chat counts as recent: every chat transcript written to inside
 # this window is attached, on the view that a bug is rarely about exactly one
-# conversation. Outside it, the single most relevant chat still rides along.
+# conversation.
 TRANSCRIPT_RECENCY_WINDOW_SECONDS = 2 * 60 * 60
+
+# The floor on how many conversations ride along: the newest
+# MIN_TRANSCRIPT_COUNT chats attach even when the recency window holds fewer,
+# because a bug filed from a quiet workspace still needs its recent history --
+# and a stale workspace is exactly where the conversation is hardest to
+# reconstruct from anything else. A workspace with fewer chats sends them all.
+MIN_TRANSCRIPT_COUNT = 5
+
+# How far back a service log still describes the workspace the bug was filed
+# from: a log nothing has written to in over a day is history, not diagnostics,
+# and only pads the archive.
+LOG_RECENCY_WINDOW_SECONDS = 24 * 60 * 60
 
 WORKSPACE_LOGS_KEY = "workspace_logs"
 TRANSCRIPT_KEY = "transcript"
@@ -210,8 +222,12 @@ def select_log_files(user_programs: set[str] | None) -> list[str]:
 
     A user app's logs are workspace content rather than diagnostics, so they never
     leave the container. ``user_programs`` of None means the classification could
-    not be made at all, and nothing is filtered -- the caller says so in the
-    payload rather than letting the omission pass unremarked.
+    not be made at all, and nothing is filtered by ownership -- the caller says so
+    in the payload rather than letting the omission pass unremarked.
+
+    Only logs written to inside ``LOG_RECENCY_WINDOW_SECONDS`` are sent: a
+    service that has been silent for over a day describes some earlier state of
+    the workspace, not the one the bug was filed from.
     """
     candidates = list(glob.glob(SUPERVISOR_LOG_DIR + "/*-stderr.log"))
     system_interface_stdout = SUPERVISOR_LOG_DIR + "/system_interface-stdout.log"
@@ -221,6 +237,8 @@ def select_log_files(user_programs: set[str] | None) -> list[str]:
         candidates = [
             p for p in candidates if program_name_for_log(p) not in user_programs
         ]
+    cutoff = time.time() - LOG_RECENCY_WINDOW_SECONDS
+    candidates = [p for p in candidates if safe_mtime(p) >= cutoff]
     candidates.sort(key=safe_mtime, reverse=True)
     return candidates[:MAX_LOG_FILES]
 
@@ -466,10 +484,10 @@ def collect_transcript_members(timeout: float) -> list[tuple[str, str, float]]:
     """The chats to attach, as ``(member name, content, last-written epoch)``.
 
     A bug is rarely about exactly one conversation, so every chat written to
-    inside the recency window rides along, newest first. When the window is
-    empty -- the workspace sat idle -- the report still carries its best single
-    context rather than nothing, since a stale workspace is exactly where the
-    conversation is hardest to reconstruct from anything else.
+    inside the recency window rides along, newest first -- and never fewer than
+    the ``MIN_TRANSCRIPT_COUNT`` newest (all of them, when the workspace holds
+    fewer), so a report filed from a quiet workspace still carries its recent
+    history rather than nothing.
     """
     fetched = []
     used_names: set[str] = set()
@@ -483,8 +501,10 @@ def collect_transcript_members(timeout: float) -> list[tuple[str, str, float]]:
         return []
     fetched.sort(key=lambda item: item[2], reverse=True)
     cutoff = time.time() - TRANSCRIPT_RECENCY_WINDOW_SECONDS
-    recent = [item for item in fetched if item[2] >= cutoff]
-    return recent if recent else fetched[:1]
+    # Sorted newest first, so the in-window chats are a prefix: one slice keeps
+    # every recent chat and tops up to the floor from the newest of the rest.
+    recent_count = sum(1 for item in fetched if item[2] >= cutoff)
+    return fetched[: max(recent_count, MIN_TRANSCRIPT_COUNT)]
 
 def build_zip(members: Sequence[tuple[str, str, float]]) -> bytes:
     """Deflate the members into one archive, returned as raw zip bytes.
