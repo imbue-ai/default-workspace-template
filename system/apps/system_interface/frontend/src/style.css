@@ -1,20 +1,18 @@
 /* ============================================================================
- * DESIGN SYSTEM — read before adding styles.  (rules: ../style_guide.md)
+ * DESIGN SYSTEM (optional) — how the DEFAULT UI stays coherent.
  *
- * Use the tokens below; do NOT hardcode values:
- *   - Colour:  var(--color-*)           never a raw #hex / rgb() / rgba()
- *   - Radius:  var(--radius-base) etc.  never a raw 6px
- *   - Type / spacing / shadow / z-index: reuse a token or an existing value;
- *     don't invent new literals.
- *   - Components: extend a shared class/primitive; don't hand-roll another
- *     button / modal / badge / toggle / spinner.
+ * The shipped default interface is built from the tokens below plus a set of
+ * shared component classes (buttons, modals, badges, toggles, spinners, inputs).
+ * When you extend or maintain the default look, prefer them over new one-offs:
+ *   - Colour:  var(--color-*)           rather than a raw #hex / rgb() / rgba()
+ *   - Radius:  var(--radius-base) etc.  rather than a raw 6px
+ *   - Type / spacing / shadow / z-index: reuse a token or an existing value.
+ *   - Components: extend a shared class/primitive rather than copying one.
  *
- * Deviate only when a token genuinely can't express it: mark the site with a
- * "design-system-exception: <reason>" comment AND bump the matching baseline
- * in src/design-system-ratchet.test.ts (it only ratchets down).
- *
- * The ratchet (src/design-system-ratchet.test.ts) runs under the test suite and
- * fails when raw hex/font-size/border-radius/z-index values grow.
+ * This is a convention for the default UI, not an enforced rule. If the user
+ * wants their interface restyled to their own taste, build exactly that and
+ * ignore these tokens freely — nothing enforces them. Background:
+ * ../style_guide.md and ../docs/design-system.md.
  * ==========================================================================*/
 @import "tailwindcss";
 @import "dockview-core/dist/styles/dockview.css";
