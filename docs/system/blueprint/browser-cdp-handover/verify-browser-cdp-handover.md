@@ -169,7 +169,7 @@ folder" -- expect 47, not 25.
 `mousewheel` scrolls at the **last mouse position, which defaults to (0,0)** -- the top-left
 corner. On a two-pane layout that is the sidebar, so the agent can scroll the wrong container and
 see nothing move. The fix is `hover <ref>` inside the intended pane first, and the
-`playwright-cli` skill says so. If you watch an agent scroll with nothing happening, this is the
+`agentic-browser-fleet` skill says so. If you watch an agent scroll with nothing happening, this is the
 first thing to check.
 
 ---
