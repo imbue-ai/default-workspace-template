@@ -138,7 +138,9 @@ Required:
   must not start with `host-` or `agent-`) -- it becomes the service's
   hostname label.
 - `--description`: becomes the lib `pyproject.toml` description.
-- `--icon-file`: the icon you drew in pre-flight. Validated up front
+- `--icon-file`: the icon you drew in pre-flight, as an `.svg` file
+  (SVG only -- never a PNG or other raster, so every app's glyph stays
+  in the same vector style). Validated up front
   (same rules as `forward_port.py`), copied to
   `system/apps/<package>/icon.svg`, and registered by the generated
   supervisord command on every start -- so editing that file and
@@ -538,11 +540,15 @@ Flags:
   app first starts. Re-registrations of an existing entry (the normal
   supervisord-restart case, and apps that predate the requirement) are
   exempt -- omitting both flags then leaves any stored icon in place.
-  `--icon` takes the markup itself; `--icon-file` takes a path whose
-  *contents* are read now and stored (the path is not recorded). Either
+  `--icon` takes the markup itself; `--icon-file` takes a path to an
+  `.svg` file whose *contents* are read now and stored (the path is not
+  recorded; non-`.svg` files are refused). Either
   way the registry holds the markup, which must be a single `<svg>`
   element with no script, style, event handler, or external reference,
   and at most 16384 characters -- registration fails loudly otherwise.
+  SVG is the only supported format: no PNG, JPEG, or other rasters (not
+  even wrapped in an `<svg>` via `data:` URIs, which the validator
+  rejects), so every app's glyph stays in the same vector style.
 
   **Draw the icon in the workspace's house style**: monochrome line
   art on a transparent background, exactly like the built-in glyphs.
