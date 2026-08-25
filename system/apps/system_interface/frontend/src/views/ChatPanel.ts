@@ -931,7 +931,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                       "button",
                       {
                         type: "button",
-                        class: "composer-under-bar-action",
+                        class: "btn btn--ghost btn--sm",
                         onclick: () => openAgentTerminalTab(agentId),
                       },
                       "Open agent terminal",
@@ -940,7 +940,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                     // auth modes without waiting for an auth error.
                     m(
                       "button",
-                      { type: "button", class: "composer-under-bar-action", onclick: () => openAgentAuth(agentId) },
+                      { type: "button", class: "btn btn--ghost btn--sm", onclick: () => openAgentAuth(agentId) },
                       "Agent auth",
                     ),
                   ]),
