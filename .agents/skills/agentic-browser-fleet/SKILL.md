@@ -11,8 +11,10 @@ Two tools, and the split matters:
 
 - **`agentic-browser-fleet`** (this skill) — *owns* browsers. Start one, list them, hand one to
   the human, give it back. Run from the repo root via `uv run`.
-- **`playwright-cli`** — *drives* them. Snapshot the page, click, type, scroll. See the
-  `playwright-cli` skill; everything about clicking a button lives there.
+- **`playwright-cli`** — *drives* them. Snapshot the page, click, type, scroll.
+  **`playwright-cli --help` is the command reference** — it ships with the pinned version, so
+  it is always right. The `playwright-cli` skill covers only the handful of things `--help`
+  cannot know about this workspace (what not to run, and why a failure means "run `ls`").
 
 ```bash
 uv run agentic-browser-fleet new
