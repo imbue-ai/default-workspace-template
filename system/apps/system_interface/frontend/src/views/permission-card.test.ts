@@ -68,6 +68,22 @@ function makeToolCall(inputPreview: string, display?: "permission_request"): Too
 }
 
 function makeResult(output: string, isError = false, permissionRequest?: Record<string, unknown>): ToolResultEvent {
+  // Mirror the backend: it parses the untruncated output and attaches the
+  // response object as `permission_request` whenever one is present. The card
+  // reads ONLY that field now, so the helper attaches it for parseable
+  // outputs unless a test passes one explicitly.
+  let derived = permissionRequest;
+  if (derived === undefined && !isError) {
+    const start = output.indexOf("{");
+    if (start >= 0) {
+      try {
+        const parsed: unknown = JSON.parse(output.slice(start));
+        if (typeof parsed === "object" && parsed !== null) derived = parsed as Record<string, unknown>;
+      } catch {
+        derived = undefined;
+      }
+    }
+  }
   return {
     timestamp: "2026-01-01T00:00:00Z",
     type: "tool_result",
@@ -78,7 +94,7 @@ function makeResult(output: string, isError = false, permissionRequest?: Record<
     tool_name: "Bash",
     output,
     is_error: isError,
-    ...(permissionRequest === undefined ? {} : { permission_request: permissionRequest }),
+    ...(derived === undefined ? {} : { permission_request: derived }),
   };
 }
 
@@ -139,75 +155,6 @@ const ACCOUNTS_OUTPUT = `{"request_id":"acct-1","rationale":"check which account
 // (`_MAX_PERMISSION_REQUEST_LENGTH`, 8000): such an event arrives with no
 // structured `permission_request` field and only this head-truncated body, so
 // these fixtures are exactly what the card sees then.
-const BACKEND_MAX_OUTPUT_LENGTH = 2000;
-
-function truncateAt(output: string, length: number): string {
-  return output.length <= length ? output : `${output.slice(0, length)}...`;
-}
-
-function truncateLikeBackend(output: string): string {
-  return truncateAt(output, BACKEND_MAX_OUTPUT_LENGTH);
-}
-
-// curl's progress meter, which precedes the body and eats into the budget.
-const CURL_METER =
-  "  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n" +
-  "                                 Dload  Upload   Total   Spent    Left  Speed\n" +
-  "100  2637  100  2399  100   317  12000   1687 --:--:-- --:--:-- --:--:-- 13000\n";
-
-const TRUNCATED_REQUEST_ID = "c1f0a4b78e9d4f2ab6c35d81e07f42a9";
-const TRUNCATED_RATIONALE = "Export a backup of the old workspace so I can diff its notes against this one.";
-const TRUNCATED_PERMISSIONS = ["minds-workspaces-backups-export", "minds-workspaces-read", "minds-workspaces-message"];
-
-/** One generated JSON-Schema fragment, the shape the gateway's `computeEffect`
- *  emits per granted verb. Several of these are what push a workspace request's
- *  response past the output cap. */
-function verbSchema(verb: string): Record<string, unknown> {
-  return {
-    name: verb,
-    schema: {
-      type: "object",
-      properties: {
-        target_workspace_id: { type: "string", description: "The workspace this verb acts on." },
-        confirm: { type: "boolean", description: "Whether the user confirmed this action." },
-      },
-      required: ["target_workspace_id"],
-      additionalProperties: false,
-    },
-  };
-}
-
-// The gateway's create response, in its real shape: pretty-printed at indent 2
-// (sendJson), request_id first, and the request's `target` and generated
-// `effect` last -- the two fields the card never reads, and the bulk of what
-// pushes the response past the cap. Spreading `overrides` last keeps each key in
-// the gateway's own order (see handleCreateRequest).
-function createResponseOutput(overrides: Record<string, unknown> = {}): string {
-  const body = {
-    request_id: TRUNCATED_REQUEST_ID,
-    agent_id: "agent-a3b7b469ee8341779c9ede1a798c447f",
-    rationale: TRUNCATED_RATIONALE,
-    request_type: "workspace",
-    payload: {
-      permissions: TRUNCATED_PERMISSIONS,
-      target_workspace_id: "agent-a3b7b469ee8341779c9ede1a798c447f",
-    },
-    target: "/home/user/.latchkey/permissions.json",
-    effect: {
-      rules: [{ "minds-workspaces::agent-a3b7b469ee8341779c9ede1a798c447f": ["minds-workspaces-backups-export"] }],
-      schemas: TRUNCATED_PERMISSIONS.map(verbSchema),
-    },
-    ...overrides,
-  };
-  return `${CURL_METER}${JSON.stringify(body, null, 2)}\n`;
-}
-
-/** The index just inside `key`'s value in a create response, for a test that
- *  needs the cut to land in a specific field. */
-function insideField(output: string, key: string): number {
-  return output.indexOf(`"${key}"`) + key.length + 8;
-}
-
 describe("parsePermissionRequest", () => {
   it("parses the rich details of a successful predefined creation POST", () => {
     const result = parsePermissionRequest(
@@ -308,102 +255,6 @@ describe("parsePermissionRequest", () => {
       path: null,
       access: null,
     });
-  });
-
-  it("the truncation fixture really does exceed the backend's output cap", () => {
-    // Guards the fixture: if it ever shrinks under the cap, the recovery tests
-    // below would silently start exercising the strict parse instead.
-    expect(createResponseOutput().length).toBeGreaterThan(BACKEND_MAX_OUTPUT_LENGTH);
-  });
-
-  it("recovers a response past the backend's preservation ceiling too", () => {
-    // The scan's real reason to exist: past _MAX_PERMISSION_REQUEST_LENGTH
-    // (8000) the backend deliberately refuses to preserve the object, so the
-    // event arrives with no structured field at all -- an agent's rationale has
-    // no length limit, and this is what such a request looks like. The id sits
-    // inside the head-truncated body, so the card can still name and open it.
-    const oversized = createResponseOutput({ rationale: "x".repeat(9000) });
-    expect(oversized.length).toBeGreaterThan(8000);
-
-    const details = parsePermissionRequest(
-      makeToolCall(PERMISSION_INPUT, "permission_request"),
-      makeResult(truncateLikeBackend(CURL_METER + oversized), false),
-    );
-    expect(details?.requestId).toBe(TRUNCATED_REQUEST_ID);
-  });
-
-  it("recovers the id, rationale, type and payload from a backend-truncated response", () => {
-    const result = parsePermissionRequest(
-      makeToolCall(PERMISSION_INPUT, "permission_request"),
-      makeResult(truncateLikeBackend(createResponseOutput())),
-    );
-    expect(result).toEqual({
-      requestId: TRUNCATED_REQUEST_ID,
-      requestType: "workspace",
-      rationale: TRUNCATED_RATIONALE,
-      scope: null,
-      permissions: TRUNCATED_PERMISSIONS,
-      path: null,
-      access: null,
-    });
-  });
-
-  it("drops fields that did not survive the cut instead of guessing at them", () => {
-    // A cut inside `payload` -- shorter than the real cap, to put the boundary
-    // in a chosen field. Recovery is subtractive: the members before it are
-    // returned verbatim and the half-written one is dropped, not reconstructed.
-    const output = createResponseOutput();
-    const result = parsePermissionRequest(
-      makeToolCall(PERMISSION_INPUT, "permission_request"),
-      makeResult(truncateAt(output, insideField(output, "payload"))),
-    );
-    expect(result).toMatchObject({
-      requestId: TRUNCATED_REQUEST_ID,
-      rationale: TRUNCATED_RATIONALE,
-      requestType: "workspace",
-      scope: null,
-      permissions: [],
-    });
-  });
-
-  it("is not fooled by braces, quotes, or commas inside the rationale", () => {
-    const rationale = 'Read {"a": 1}, then "summarise", ok?';
-    const output = createResponseOutput({
-      rationale,
-      request_type: "predefined",
-      payload: { scope: "slack-api", permissions: ["slack-read-all"] },
-    });
-    const result = parsePermissionRequest(
-      makeToolCall(PERMISSION_INPUT, "permission_request"),
-      makeResult(truncateLikeBackend(output)),
-    );
-    expect(result?.rationale).toBe(rationale);
-    expect(result?.scope).toBe("slack-api");
-  });
-
-  it("returns null when the cut falls before the first complete field", () => {
-    const output = createResponseOutput();
-    const cut = truncateAt(output, output.indexOf("{") + 40);
-    expect(parsePermissionRequest(makeToolCall(PERMISSION_INPUT, "permission_request"), makeResult(cut))).toBeNull();
-  });
-
-  it("returns null when a truncated body's request id is not gateway-generated", () => {
-    // The recovery path reconstructs the id's text, and that id is handed
-    // straight to the shell's modal, so it must look gateway-minted.
-    const output = createResponseOutput({ request_id: "not-a-uuid" });
-    expect(
-      parsePermissionRequest(
-        makeToolCall(PERMISSION_INPUT, "permission_request"),
-        makeResult(truncateLikeBackend(output)),
-      ),
-    ).toBeNull();
-  });
-
-  it("returns null for a truncated gateway error body", () => {
-    const errorBody = '{\n  "error": "Invalid request body.",\n  "status": 400,\n  "detail": "rat';
-    expect(
-      parsePermissionRequest(makeToolCall(PERMISSION_INPUT, "permission_request"), makeResult(errorBody)),
-    ).toBeNull();
   });
 });
 
@@ -573,76 +424,6 @@ describe("renderPermissionCard", () => {
     // The toggle is this state's only control, so it must not disappear with
     // the rest of the card.
     expect(findByClass(vnode, "permission-request-raw-toggle")).not.toBeNull();
-  });
-
-  it("renders a titled card with a working review button for a backend-truncated pending request", () => {
-    const vnode = renderCardFor(
-      makeToolCall(PERMISSION_INPUT, "permission_request"),
-      makeResult(truncateLikeBackend(createResponseOutput())),
-    );
-
-    expect(textOf(findByClass(vnode, "permission-request-title"))).toBe("Other machines");
-    expect(textOf(findByClass(vnode, "permission-request-reason"))).toBe(TRUNCATED_RATIONALE);
-    // The apologetic fallback is not what a still-pending request shows.
-    expect(findByClass(vnode, "permission-request-status")).toBeNull();
-
-    const button = findReviewButton(vnode) as { attrs?: { onclick?: (e: Event) => void } } | null;
-    expect(textOf(button)).toBe("Review & respond");
-    const postMessage = vi.fn();
-    withStubbedEmbedder({ postMessage }, () =>
-      button?.attrs?.onclick?.({ preventDefault() {}, stopPropagation() {} } as unknown as Event),
-    );
-    expect(postMessage).toHaveBeenCalledWith(
-      { type: "minds:open-request-modal", requestId: TRUNCATED_REQUEST_ID },
-      "*",
-    );
-  });
-
-  it("shows the rationale and button, and no redundant title, when the type was lost to the cut", () => {
-    // Cut inside `request_type`: the rationale survives but nothing names the
-    // subject, so a generic title row would only repeat the eyebrow.
-    const output = createResponseOutput();
-    const vnode = renderCardFor(
-      makeToolCall(PERMISSION_INPUT, "permission_request"),
-      makeResult(truncateAt(output, insideField(output, "request_type"))),
-    );
-
-    expect(findByClass(vnode, "permission-request-title")).toBeNull();
-    expect(textOf(findByClass(vnode, "permission-request-reason"))).toBe(TRUNCATED_RATIONALE);
-    expect(findByClass(vnode, "permission-request-status")).toBeNull();
-    expect(findReviewButton(vnode)).not.toBeNull();
-  });
-
-  it("falls back to the generic subject when neither a title nor a rationale survived", () => {
-    // Cut inside `rationale`: only the id came back, and the body must not be a
-    // bare badge, so the generic subject stands in.
-    const output = createResponseOutput();
-    const vnode = renderCardFor(
-      makeToolCall(PERMISSION_INPUT, "permission_request"),
-      makeResult(truncateAt(output, insideField(output, "rationale"))),
-    );
-
-    expect(textOf(findByClass(vnode, "permission-request-title"))).toBe("Permission request");
-    expect(findByClass(vnode, "permission-request-reason")).toBeNull();
-    expect(findReviewButton(vnode)).not.toBeNull();
-  });
-
-  it("keeps the raw disclosure on a truncated card so the dropped fields stay reachable", () => {
-    const vnode = renderCardFor(
-      makeToolCall(PERMISSION_INPUT, "permission_request"),
-      makeResult(truncateLikeBackend(createResponseOutput())),
-      null,
-      null,
-      true,
-    );
-
-    expect(textOf(findByClass(vnode, "permission-request-raw-toggle"))).toBe("Hide raw request");
-    const raw = findByClass(vnode, "permission-request-raw");
-    const rawTextNode = findVnode(
-      raw,
-      (v) => v.tag === "#" && typeof (v as { children?: unknown }).children === "string",
-    );
-    expect(rawTextNode?.children as string).toContain("...");
   });
 
   it("titles a file-sharing request 'Local files'", () => {

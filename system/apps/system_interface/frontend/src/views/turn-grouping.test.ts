@@ -137,6 +137,18 @@ function permissionMsg(ts: string, callId: string, text = "", id = `a-${callId}`
 }
 
 function result(ts: string, callId: string, output: string): ToolResultEvent {
+  // Mirror the backend: a parseable response object rides along structured as
+  // `permission_request`, the only field the card reads.
+  let permissionRequest: Record<string, unknown> | undefined;
+  const start = output.indexOf("{");
+  if (start >= 0) {
+    try {
+      const parsed: unknown = JSON.parse(output.slice(start));
+      if (typeof parsed === "object" && parsed !== null) permissionRequest = parsed as Record<string, unknown>;
+    } catch {
+      permissionRequest = undefined;
+    }
+  }
   return {
     timestamp: ts,
     type: "tool_result",
@@ -146,6 +158,7 @@ function result(ts: string, callId: string, output: string): ToolResultEvent {
     tool_name: "test",
     output,
     is_error: false,
+    ...(permissionRequest === undefined ? {} : { permission_request: permissionRequest }),
   };
 }
 
