@@ -68,6 +68,16 @@
   --width-sidebar: 250px;
   --width-sidebar-collapsed: 3.25rem;
   --duration-sidebar-transition: 200ms;
+  /* Motion scale — one unit (ms). Durations back the common UI transitions;
+     --ease-standard is the house easing (kept for future use -- the existing
+     `ease`/`ease-out` keywords and the modals' overshoot cubic-bezier are
+     different curves and are left as-is, so it has no consumer yet and is
+     tree-shaken from :root until used). Off-scale durations (100/150/300/320ms,
+     and the long looping animation timings) are left raw. */
+  --dur-fast: 80ms;
+  --dur-base: 120ms;
+  --dur-slow: 200ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
   /* Z-index scale — names the workspace's stacking layers (see design-system.md).
      Modal backdrops + the image lightbox sit at --z-overlay; the JS hover-tooltip
      clears them at --z-tooltip. Two mid values (50, 2) have no layer name and stay
@@ -176,9 +186,9 @@ body {
   cursor: pointer;
   white-space: nowrap;
   transition:
-    background 120ms ease,
-    border-color 120ms ease,
-    color 120ms ease;
+    background var(--dur-base) ease,
+    border-color var(--dur-base) ease,
+    color var(--dur-base) ease;
 }
 .btn--sm {
   height: 28px;
@@ -403,8 +413,8 @@ body {
   border-radius: 8px;
   cursor: pointer;
   transition:
-    color 120ms,
-    background 120ms;
+    color var(--dur-base),
+    background var(--dur-base);
   flex-shrink: 0;
 }
 .toggle:hover {
@@ -467,8 +477,8 @@ body {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-base);
   transition:
-    border-color 120ms ease,
-    box-shadow 120ms ease;
+    border-color var(--dur-base) ease,
+    box-shadow var(--dur-base) ease;
 }
 .input::placeholder {
   color: var(--color-text-faint);
@@ -530,7 +540,7 @@ body {
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
-  transition: opacity 0.12s ease;
+  transition: opacity var(--dur-base) ease;
 }
 [data-tooltip]:hover::after,
 [data-tooltip]:focus-visible::after {
@@ -845,7 +855,7 @@ body {
     0 -1px 6px rgba(55, 53, 47, 0.04);
   transition:
     border-color 150ms,
-    box-shadow 200ms;
+    box-shadow var(--dur-slow);
 }
 
 .message-input-box:focus-within {
@@ -1000,8 +1010,8 @@ body {
   cursor: pointer;
   flex-shrink: 0;
   transition:
-    color 120ms,
-    background 120ms;
+    color var(--dur-base),
+    background var(--dur-base);
 }
 
 .composer-attachment-remove:hover {
@@ -1072,8 +1082,8 @@ body {
   color: var(--color-text-primary);
   text-decoration: none;
   transition:
-    background 120ms,
-    border-color 120ms;
+    background var(--dur-base),
+    border-color var(--dur-base);
 }
 
 .message-attachment-file:hover {
@@ -1142,8 +1152,8 @@ body {
   padding: 0 8px;
   cursor: pointer;
   transition:
-    color 120ms,
-    background 120ms;
+    color var(--dur-base),
+    background var(--dur-base);
   user-select: none;
   white-space: nowrap;
 }
@@ -1204,8 +1214,8 @@ body {
   border-radius: 8px;
   background: var(--color-bg-hover);
   transition:
-    border-color 120ms,
-    background 120ms;
+    border-color var(--dur-base),
+    background var(--dur-base);
 }
 
 .model-selector-search:focus-within {
@@ -1264,7 +1274,7 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  transition: background 80ms;
+  transition: background var(--dur-fast);
 }
 
 .model-selector-option:hover {
@@ -1707,7 +1717,7 @@ body {
   text-decoration: none;
   white-space: nowrap;
   flex-shrink: 0;
-  transition: color 120ms;
+  transition: color var(--dur-base);
 }
 
 .subagent-card-link:hover {
@@ -1822,7 +1832,7 @@ body {
   border: none;
   padding: 0;
   cursor: pointer;
-  transition: color 120ms;
+  transition: color var(--dur-base);
 }
 
 .permission-request-raw-toggle:hover {
@@ -2434,7 +2444,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
    inline (the ring is the project's own color), leaving the grids' shared
    feedback here -- scoped to the shared .modal-card the settings modal now uses. */
 .modal-card button[aria-pressed] {
-  transition: transform 80ms ease-out;
+  transition: transform var(--dur-fast) ease-out;
 }
 
 .modal-card button[aria-pressed]:hover {
@@ -2603,8 +2613,8 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   cursor: pointer;
   border-radius: 3px;
   transition:
-    background 80ms,
-    color 80ms;
+    background var(--dur-fast),
+    color var(--dur-fast);
   flex-shrink: 0;
 }
 
@@ -2672,7 +2682,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   width: 420px;
   max-width: 90vw;
   box-shadow: var(--elevation-lg);
-  animation: modal-card-in 200ms cubic-bezier(0.16, 1, 0.3, 1);
+  animation: modal-card-in var(--dur-slow) cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .modal-header {
@@ -3177,7 +3187,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   box-shadow:
     0 1px 3px rgba(0, 0, 0, 0.06),
     0 16px 40px rgba(0, 0, 0, 0.18);
-  animation: claude-login-modal-in 200ms cubic-bezier(0.16, 1, 0.3, 1);
+  animation: claude-login-modal-in var(--dur-slow) cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .claude-login-header {
@@ -3321,7 +3331,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 
 .claude-login-alts-caret {
   display: inline-flex;
-  transition: transform 120ms ease;
+  transition: transform var(--dur-base) ease;
 }
 
 .claude-login-alts-caret--open {
