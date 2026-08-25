@@ -95,7 +95,7 @@ const ON_MACHINE_TITLE = "On this machine";
 
 // The small-caps heading over each block. Uppercasing is the stylesheet's job,
 // so the titles stay readable as text (and as test assertions).
-const SECTION_HEADING_CLASS = "text-text-faint text-[11px] font-semibold tracking-wider uppercase";
+const SECTION_HEADING_CLASS = "type-section text-text-faint";
 
 /** The order kinds are offered in, in the filter menu and in kindsInRows. */
 const KIND_ORDER: readonly MemberKind[] = ["chat", "browser", "terminal", "app", "url"];

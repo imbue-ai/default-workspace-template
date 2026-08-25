@@ -23,7 +23,10 @@ const STYLE_CSS = new URL("./style.css", import.meta.url).pathname;
 // better; tighten after each migration phase.
 const BASELINES = {
   hexOutsideTheme: 52,
-  fontSizePx: 80,
+  // Tightened after the type-system phase: all text font-sizes now use
+  // var(--font-size-*). The remaining 4 are icon glyphs (chevrons, +, ×) that
+  // are sized independently of the text scale, each marked design-system-exception.
+  fontSizePx: 4,
   borderRadiusPx: 55,
   zIndexLiteral: 18,
 } as const;

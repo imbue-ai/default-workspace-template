@@ -1,11 +1,28 @@
 # System Interface design system — assessment & plan
 
-Status: **proposal / not yet started.** This document is the durable hand-off so
-any agent can pick the work up cold. It records (a) how the UI is built today,
-(b) a measured inventory of the visual sprawl, (c) a concrete target token set
-and component primitives, and (d) a phased, low-risk migration plan. A visual
-before/after harness ships alongside it (`frontend/gallery/`) so every step can
-be proven to change only what it intends to.
+Status: **in progress.** This document is the durable hand-off so any agent can
+pick the work up cold. It records (a) how the UI is built today, (b) a measured
+inventory of the visual sprawl, (c) a concrete target token set and component
+primitives, and (d) a phased, low-risk migration plan. A visual before/after
+harness ships alongside it (`frontend/gallery/`) so every step can be proven to
+change only what it intends to.
+
+### Progress log
+
+- **Typography — DONE.** Shipped a role-based type system instead of the raw
+  `--text-*` numeric scale originally proposed in section 3 (see the "type system
+  evolved" note there for why). Six semantic classes — `.type-heading-lg`,
+  `.type-heading`, `.type-label`, `.type-body`, `.type-helper`, `.type-section` —
+  each bundling `font-size` + `font-weight` + line-height (+ uppercase/tracking
+  for section). Sizes come from four `--font-size-*` tokens (24/18/14/12) and
+  weights from `--weight-*` (400/500/600/700; `medium` = 500 is in the system but
+  intentionally **not** used on controls — see [medium-usage audit] follow-up).
+  103 `font-size` declarations were normalized onto the tokens (incl. the login
+  screen's whole `rem` scale); the body default dropped 15px → 14px. Left as
+  deliberate exceptions: markdown's relative `em` sizes and four icon glyphs.
+  `type-section` is live on the new-tab launcher's category headers. Ratchet
+  `fontSizePx` tightened 80 → 4.
+- **Colour de-dup, semantic colour, primitives — not yet started** (below).
 
 All line/rule counts below were measured from `frontend/src/style.css`
 (4,108 lines, 512 rule blocks) and the `frontend/src/**` view modules at the
@@ -117,10 +134,14 @@ Add these to the existing `@theme` block. Names follow Tailwind v4 conventions s
 they are usable both as `var(--…)` and as generated utilities.
 
 ```css
-/* Type scale — replaces 29 ad-hoc sizes, one unit (px) */
---text-2xs: 11px;  --text-xs: 12px;  --text-sm: 13px;
---text-base: 14px; --text-md: 15px;  /* 15px is today's body default */
---text-lg: 16px;   --text-xl: 17px;  --text-2xl: 18px;
+/* Type — SHIPPED as a role-based system, NOT this numeric scale. See note below.
+ * Four size tokens + four weight tokens back six .type-* classes:
+ *   --font-size-heading-lg: 24px; --font-size-heading: 18px;
+ *   --font-size-body: 14px;       --font-size-helper: 12px;
+ *   --weight-regular: 400; --weight-medium: 500;
+ *   --weight-semibold: 600; --weight-bold: 700;
+ * .type-heading-lg 24/700 · .type-heading 18/600 · .type-label 14/600 ·
+ * .type-body 14/400 · .type-helper 12/400 · .type-section 12/600 UPPERCASE. */
 
 /* Spacing scale — 4px base, replaces 23 atoms; snap 7/9/7.5/22/35 to nearest */
 --space-0_5: 2px; --space-1: 4px; --space-1_5: 6px; --space-2: 8px;
@@ -166,6 +187,18 @@ not 13px). Decide per token whether to (a) adopt Tailwind's value, (b) intention
 override it in `@theme`, or (c) pick a non-colliding name (e.g. `--text-body`,
 `--radius-card`). Verified via the gallery, which renders whatever the compiled
 CSS resolves — the collisions are visible there.
+
+**Note — the type system evolved (why it shipped role-based).** The `--text-*`
+collision above is exactly why the type scale did *not* ship as `--text-*`.
+Overriding `--text-{sm,lg}` in `@theme` would silently change every Tailwind
+`text-sm`/`text-lg` utility already used in the views (~22 real sites), so it
+could not be a visual no-op. Rather than force the numeric scale, we adopted a
+**role-based** system: semantic `.type-*` classes backed by non-colliding
+`--font-size-*` / `--weight-*` tokens (so Tailwind's own `text-*` utilities keep
+their values). Roles also read better at call sites (`type-body` says what the
+text *is*, not how big). Body default was set to 14px (was 15px). `medium` (500)
+is a real weight but is kept off interactive controls (button/tab weight comes
+with the Button/Tab primitive in P3); a follow-up audits the remaining 500 sites.
 
 ## 4. Component primitives to extract
 
