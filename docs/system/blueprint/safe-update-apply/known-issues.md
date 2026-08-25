@@ -19,9 +19,13 @@ one process gap surfaced during their investigation:
 
 The branch prevents most of Incident A outright and the redundant-work half of
 Incident B; the "Fixed by this branch" section at the bottom records that
-mapping. Everything above it is still open.
+mapping. The twelve issues below were open when this review was written and
+have since been fixed on this branch (dwt PR #454 plus the paired mngr branch
+for the CI job); each carries a "Fixed:" note saying how, and where the fix
+diverges from the direction agreed here it says so. The bug-report collector
+change under issue 4 is the one item deliberately left to a separate change.
 
-## Open issues
+## Issues (all fixed; original analysis kept for the record)
 
 Ordered by how badly they interact with the new atomic-apply flow. A key
 asymmetry to keep in mind for the first three: the worker validates the merge
@@ -49,6 +53,11 @@ location. Cheap, and it belongs in this release: the apply runs the *merged
 tree's* provisioner, so shipping the fix alongside safe-update-apply means the
 first new-flow update already runs the corrected script.
 
+**Fixed:** `setup_system.sh` exports `HOME=/root` at the top, so every
+installer that follows `$HOME` (claude, uv, `uv python`/`uv tool`) lands where
+the script's checks and PATH entries look, on every invocation -- the
+"single location" variant rather than a per-installer pin.
+
 ### 2. restic install races the live binary (ETXTBSY on re-provision)
 
 `setup_system.sh` writes the restic binary with `bunzip2 -c /tmp/restic.bz2 >
@@ -62,6 +71,10 @@ full rollback plus a fresh worker pass instead of a one-line retry.
 Fix: `bunzip2 -c /tmp/restic.bz2 > /tmp/restic.new && mv -f /tmp/restic.new
 /usr/local/bin/restic` (mv-over is what `install_downloaded_binary` does).
 Same ship-with-this-release logic as issue 1.
+
+**Fixed:** the restic install decompresses to a `mktemp` file beside the
+target and `mv -f`s over it, the same rename motion `install_downloaded_binary`
+uses.
 
 ### 3. Provisioner bugs have no pre-apply validation
 
@@ -95,6 +108,23 @@ which compose:
   provisioner changes (a node bump, a new apt dependency) still fail the
   probes and still roll back. This changes the exit-code contract and needs
   its own SKILL guidance.
+
+**Fixed, all three directions.** The CI job lives in mngr-internal CI (where
+the template image is actually built), not dwt CI: a new
+`minds_snapshot_resume` test in `apps/minds/test_snapshot_resume.py` re-runs
+the paired template's `setup_system.sh` inside the resumed workspace container
+with services up, under `HOME=/home/user` and with the provision guard cleared,
+while holding the pinned restic binary executing -- so both incident classes
+fail the PR that introduces them. The apply invokes the provisioner with a
+canonical env (`HOME=/root`, explicit PATH; `provisioner_env()`), on the
+forward run and both recovery re-runs. And a provisioner failure alone no
+longer rolls the merge back: the apply continues to the restart and probes; if
+they pass, the update lands with a durable
+`data/.state/update-apply/provision-incomplete.json` record (its own file
+rather than `emergency.json`, whose banner means "may be broken") and a loud
+stderr line, and SKILL 5b tells the lead to fix the cause and re-run the
+provisioner; if they fail, it rolls back as before. The exit code stays 0 for
+the landed-with-gap case; the stderr and the record are the contract.
 
 ### 4. Successful teardown destroys the worker the bug collector needs
 
@@ -138,6 +168,13 @@ memory but stays discoverable for the bug collector. Concretely:
   collector's design rejects in favour of asking mngr. Keeping the worker
   alive-but-stopped makes the mngr path sufficient.
 
+**Fixed (except the collector):** SKILL §6's success path runs `mngr stop
+update-self` directly (no new `stop` subcommand -- the mngr command is the
+right tool), and `create_worker.py launch --destroy-existing` destroys a
+previous STOPPED worker of the same name pre-flight while still refusing a
+RUNNING/WAITING one; SKILL §3b passes it. The bug-report collector change is
+being made separately.
+
 ### 5. `apply` runs `npm ci` live even when the worker's bundle will be installed
 
 In `apply_update`, `if plan.frontend_manifest:` triggers `npm ci`
@@ -149,6 +186,10 @@ passed. Incident A's best-supported failure hypothesis is exactly a live
 frontend build dying under load.
 
 Fix: gate `npm ci` on the live-build fallback actually being needed.
+
+**Fixed:** the apply decides up front whether the worker's bundle will be
+installed (index present and its source stamp matches the merged tree -- see
+issue 7) and skips `npm ci` when it will.
 
 ### 6. Flat 30-second pre-flight and health budgets
 
@@ -164,6 +205,9 @@ budgets -- generously -- and tune them down against live testing and
 benchmarking of real applies. A budget that is too long costs seconds on a
 genuinely broken change; one that is too short rolls back a whole release.
 The per-phase timings from issue 10 are the benchmarking input.
+
+**Fixed:** both raised to 240 x 1s, with the marker's per-phase timings
+(issue 10) as the input for tuning them down.
 
 ### 7. Nothing verifies the served bundle corresponds to the merged source
 
@@ -181,6 +225,22 @@ equal the merged tree's for the same directory -- and have
 `--worker-bundle` then fails the apply before restart instead of being
 served.
 
+**Fixed, with one divergence.** The frontend build stamps its output via an
+npm `postbuild` step (`static/.source-tree-hash` = `git rev-parse HEAD:./`
+from the frontend dir; best-effort, absent without a git repo), so worker
+builds and live builds carry it without any guide change. The apply compares
+it against `HEAD:system/apps/system_interface/frontend` of the merged tree.
+Divergence: a stale or unstamped `--worker-bundle` **falls back to a live
+build** (with a stderr note) rather than failing the apply -- the live build
+produces the correct bundle, and failing would have turned a passable apply
+into a whole-release rollback whose retry needs a fresh worker pass; it also
+handles update-system-interface's ordinary merge, where a local frontend
+change since the worker branched makes the worker's bundle legitimately
+stale. A *live build* whose bundle does not match the merged tree does fail
+the apply before restart, as agreed. When git cannot resolve the merged
+frontend tree, verification degrades to the old index-only acceptance with a
+warning.
+
 ### 8. Staged worker copy breaks bare `uv run pytest` (test-file basename collision)
 
 The staged skill-at-target copy under `data/.tasks/` ships
@@ -194,6 +254,8 @@ Fix: add `"data"` to `norecursedirs` in the template root `pyproject.toml`
 (it is runtime scratch, never part of the suite). A worker-guide note about
 `--ignore=data` is the fallback.
 
+**Fixed:** `"data"` added to the root `norecursedirs`.
+
 ### 9. `classify-merge` silently reports empty on a degenerate base
 
 The worker guide's `classify-merge --local HEAD^1` is only correct while HEAD
@@ -205,6 +267,10 @@ reports an empty impact set.
 
 Fix: a loud error in `_cmd_classify_merge` when `--local` already contains
 `--target` ("did you mean the merge commit's first parent?").
+
+**Fixed:** `_cmd_classify_merge` exits 1 with a plain `error:` line when
+`--target` is already an ancestor of `--local`, pointing at the merge commit's
+first parent.
 
 ### 10. The apply's duration is unbounded -- a hang looks like slowness
 
@@ -225,6 +291,14 @@ live `npm ci` (issue 5) removes the largest known cost from the critical
 path. Progress reporting to the chat is secondary: with (b), the command
 returns.
 
+**Fixed:** (a) the marker records `phase_timings` (phase -> epoch seconds at
+each transition), and every apply prints an `apply phase timings:` line on
+success and on rollback; (b) every forward step has a wall-clock budget
+(`npm ci`/build/each env refresh 1200s, provisioner 1800s, restart 600s,
+env-converge 1200s) whose expiry is an `ApplyFailed` naming the step -- the
+provisioner's expiry is a recorded provisioning-incomplete failure per issue
+3; recovery steps carry none; (c) issue 5's gating.
+
 ### 11. Pre-flight leaks the caller's agent env into the throwaway boot
 
 `_preflight` passes full `os.environ`, including `MNGR_AGENT_ID`, to the
@@ -232,12 +306,19 @@ throwaway backend boot. The old reveal's preview path deliberately dropped it
 so the preview could not clobber the live `layout.json`; the pre-flight never
 had that guard and still does not. Pre-existing, low priority.
 
+**Fixed:** `_preflight` drops `MNGR_AGENT_ID` from the boot env.
+
 ### 12. Worker-guide autofix scope is impractical for large merges (minor)
 
 Guide 4c asks for full-scope autofix; over an 818-file merge Incident B's
 worker sensibly scoped fix effort to the four reconciled files and flagged
 its own divergence. Codify that scoping so a well-behaved worker is not
 off-guide.
+
+**Fixed:** the worker guide's 4c run branch is scoped to every file whose
+merged content differs from the target release (hand-resolved conflicts,
+in-branch edits, regenerated lockfiles); widening is allowed, narrowing below
+that set is not, and the report names the scope.
 
 ## Fixed by this branch (for the record)
 
