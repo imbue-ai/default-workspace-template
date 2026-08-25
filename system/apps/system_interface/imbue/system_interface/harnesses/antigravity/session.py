@@ -23,6 +23,7 @@ from imbue.system_interface.harnesses.antigravity.queue_tracker import Antigravi
 from imbue.system_interface.harnesses.antigravity.queue_tracker import OUTBOX_FILENAME
 from imbue.system_interface.harnesses.antigravity.queue_tracker import get_tracker
 from imbue.system_interface.harnesses.antigravity.queue_tracker import session_token
+from imbue.system_interface.harnesses.antigravity.turn_state import get_turn_state
 from imbue.system_interface.harnesses.model import ModelOption
 from imbue.system_interface.harnesses.model import match_option
 from imbue.system_interface.harnesses.model import read_model_identity
@@ -65,7 +66,13 @@ class AntigravityHarnessSession(FileHarnessSession):
         state, so A2/A3b permit it, and it is strictly better A1a than the previous behaviour,
         where nothing represented the message until its turn committed.
         """
-        self._queue().enqueue(text, _now_iso())
+        # How it is PRESENTED depends on whether anything is actually in its way. With one
+        # typist, a message accepted against an idle agy is not parked -- the worker was woken
+        # inside the enqueue and is about to type it -- so it reads "Sending...", not as a
+        # queued chip. Reporting Queued there tells the user a message is waiting when it is
+        # already on its way, and flashes the shoulder-tap button on every ordinary send.
+        is_turn_open = get_turn_state(self._deps.state_dir.name).is_hold_required(self._deps.state_dir)
+        self._queue().enqueue(text, _now_iso(), is_turn_open=is_turn_open)
         self._deps.notify_agents_changed()
         logger.debug("antigravity: holding a message for the flush worker ({})", message_id)
         return SendOutcome.OK

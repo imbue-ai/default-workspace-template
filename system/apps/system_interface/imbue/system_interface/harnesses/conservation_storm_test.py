@@ -1258,3 +1258,35 @@ def test_antigravity_interrupt_during_a_flush_conserves_every_message(tmp_path: 
     assert not world.queue.has_entries(), "the queue must drain rather than strand"
     assert len(ledger.delivered) == 2, "both messages must reach agy exactly once"
     assert ledger.returned == [], "stop must not hand back a block whose flush it left running"
+
+
+def test_antigravity_tap_delivers_once_and_returns_nothing(tmp_path: Path) -> None:
+    """A tap must not hand its queue back to the composer.
+
+    ``ShoulderTapOutcome.block`` is a returned-to-composer handback for a tap that FAILED.
+    Returning the queue there on success made the frontend prepend every held message to the
+    composer while the worker was also delivering it -- sent AND drained back, seen live.
+    """
+    ledger = _Ledger("antigravity-tap-handback")
+    world = _AgyWorld(tmp_path / "agy-tap", ledger)
+    watcher = _AgyStormWatcher(world)
+    agent_info = _agy_agent_info(world.dir)
+
+    world.begin_turn()
+    for _ in range(2):
+        world.send(world.new_text())
+
+    def _must_not_send(_block: str) -> bool:
+        raise AssertionError("the tap must never send: the flush worker is the only typist")
+
+    outcome = AntigravityAtomicShoulderTap.build(agent_info).tap(
+        watcher, lambda: (world.cancel_turn(), True)[1], _must_not_send
+    )
+    assert outcome.status == "flushed"
+    assert outcome.block == "", "nothing goes back to the composer on a successful tap"
+    assert len(world.queue.snapshot()) == 2, "the queue is still the worker's to deliver"
+
+    _run_agy_worker(world)
+    assert len(ledger.delivered) == 2
+    ledger.verify()
+    assert not world.queue.has_entries()

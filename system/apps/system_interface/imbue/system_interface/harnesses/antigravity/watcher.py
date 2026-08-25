@@ -458,6 +458,9 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
             self._return_queue_to_composer()
             return
         if self.is_turn_open():
+            # A turn opened before we got here, so anything presented as "about to be typed"
+            # is genuinely parked now and must read as queued rather than Sending.
+            self._queue.demote_pending()
             return
         block, claimed, generation = self._queue.begin_flush()
         if not claimed:

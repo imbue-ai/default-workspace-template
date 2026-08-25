@@ -99,6 +99,9 @@ def test_the_tap_is_withheld_while_a_flush_is_in_flight(tmp_path: Path) -> None:
     """
     sent: list[str] = []
     state_dir = tmp_path / "agent-flushing"
+    state_dir.mkdir(parents=True)
+    # A turn must be open for the tap to be offered at all -- see is_tap_available.
+    (state_dir / ACTIVE_MARKER_FILENAME).write_text("")
     session = _session(state_dir, sent)
     session.send("beep", "m1")
     assert session.is_sending() is False
@@ -124,3 +127,52 @@ def test_in_flight_entries_are_not_returned_twice(tmp_path: Path) -> None:
     assert block == "beep"
     assert tracker.concatenated_block() == "beep", "a claimed entry is still in the queue"
     assert session.in_flight_block() == "", "nothing was typed, so nothing is in the registry"
+
+
+def test_a_message_accepted_against_an_idle_agy_reads_as_sending(tmp_path: Path) -> None:
+    """It is not parked -- the worker was woken inside the enqueue and is about to type it.
+
+    Reporting Queued here told the user a message was waiting when it was already on its way,
+    and flashed the shoulder-tap button on every ordinary send.
+    """
+    sent: list[str] = []
+    state_dir = tmp_path / "agent-idle-queue"
+    session = _session(state_dir, sent)
+    session.send("beep", "m1")
+    entries = session.switch_queue_snapshot()
+    assert [e["is_sending"] for e in entries] == [True], "presented as Sending, not Queued"
+    assert session.is_tap_available(has_queued=True) is False, "nothing for a tap to do"
+
+
+def test_a_message_accepted_mid_turn_reads_as_queued(tmp_path: Path) -> None:
+    """It really is parked behind a live turn, so a queued chip is the honest state."""
+    sent: list[str] = []
+    state_dir = tmp_path / "agent-mid-turn"
+    state_dir.mkdir(parents=True)
+    (state_dir / ACTIVE_MARKER_FILENAME).write_text("")
+    session = _session(state_dir, sent)
+    session.send("beep", "m1")
+    assert [e["is_sending"] for e in session.switch_queue_snapshot()] == [False]
+
+
+def test_a_failed_delivery_demotes_it_back_to_queued(tmp_path: Path) -> None:
+    """Once an attempt has failed it is genuinely waiting, so it stops reading as Sending."""
+    sent: list[str] = []
+    state_dir = tmp_path / "agent-failed"
+    session = _session(state_dir, sent)
+    session.send("beep", "m1")
+    tracker = _tracker(state_dir)
+    _block, claimed, generation = tracker.begin_flush()
+    tracker.finish_flush(claimed, generation, delivered=())
+    assert [e["is_sending"] for e in session.switch_queue_snapshot()] == [False]
+
+
+def test_a_turn_opening_first_demotes_it_back_to_queued(tmp_path: Path) -> None:
+    """The worker declined to take it because a turn opened in the gap, so it is parked now."""
+    sent: list[str] = []
+    state_dir = tmp_path / "agent-raced"
+    session = _session(state_dir, sent)
+    session.send("beep", "m1")
+    assert [e["is_sending"] for e in session.switch_queue_snapshot()] == [True]
+    assert _tracker(state_dir).demote_pending() is True
+    assert [e["is_sending"] for e in session.switch_queue_snapshot()] == [False]

@@ -89,6 +89,11 @@ class AntigravityQueueTracker:
     # changed. A ``finish_flush`` carrying a stale generation is a no-op, which is what makes
     # a detached worker (one that outlived its join) harmless instead of corrupting.
     _generation: int
+    # Accepted with no turn to wait behind, so the worker takes them immediately. They are
+    # *Sending*, not *Queued*: nothing is parked, and rendering them as a queued chip reports
+    # a message as waiting when it is already on its way. Demoted the moment that stops being
+    # true -- a turn opened first, or an attempt failed.
+    _pending_send: set[str]
     _attempts: dict[str, int]
     _publish: PublishCallback | None
     _wake: Callable[[], None] | None
@@ -102,6 +107,7 @@ class AntigravityQueueTracker:
         self._lock = threading.RLock()
         self._sending_ids = set()
         self._generation = 0
+        self._pending_send = set()
         self._attempts = {}
         self._publish = None
         self._wake = None
@@ -180,7 +186,13 @@ class AntigravityQueueTracker:
             self._publish(self._snapshot_locked())
 
     def _snapshot_locked(self) -> list[dict[str, Any]]:
-        return [{**entry, "is_sending": entry["queued_id"] in self._sending_ids} for entry in self._queued.snapshot()]
+        return [
+            {
+                **entry,
+                "is_sending": entry["queued_id"] in self._sending_ids or entry["queued_id"] in self._pending_send,
+            }
+            for entry in self._queued.snapshot()
+        ]
 
     # --- session identity ------------------------------------------------------------
 
@@ -200,6 +212,7 @@ class AntigravityQueueTracker:
                 logger.info("antigravity: discarding {} queued message(s) -- the agy session changed", len(dropped))
             self._queued.clear()
             self._sending_ids.clear()
+            self._pending_send.clear()
             self._attempts.clear()
             self._generation += 1
             self._session_token = token
@@ -209,15 +222,22 @@ class AntigravityQueueTracker:
 
     # --- mutations -------------------------------------------------------------------
 
-    def enqueue(self, content: str, timestamp: str) -> str:
+    def enqueue(self, content: str, timestamp: str, *, is_turn_open: bool = True) -> str:
         """Hold ``content`` for the next flush; returns its queued id.
 
-        Publishes and wakes the worker inside the lock: the chip exists before the POST
+        Publishes and wakes the worker inside the lock: the entry is on screen before the POST
         returns (contract A2's handoff), and the only typist starts immediately.
+
+        ``is_turn_open`` decides how it is PRESENTED, not how it is stored. False means there
+        is nothing to wait behind, so the worker will type it immediately and the honest state
+        is Sending -- the contract's "submitted, in flight, not yet confirmed". True means it
+        really is parked behind a live turn, which is Queued.
         """
         queued_id = f"agy-{uuid4().hex}"
         with self._lock:
             self._queued.add(queued_id, content, timestamp, False)
+            if not is_turn_open:
+                self._pending_send.add(queued_id)
             self._settled()
             wake = self._wake
         if wake is not None:
@@ -287,6 +307,9 @@ class AntigravityQueueTracker:
             settled = set(delivered or ())
             for queued_id in claimed:
                 self._sending_ids.discard(queued_id)
+                # Either way it stops being "about to be typed": delivered entries leave, and
+                # an entry whose attempt failed is genuinely waiting now, so it reads Queued.
+                self._pending_send.discard(queued_id)
                 if queued_id in settled:
                     self._queued.resolve(queued_id)
                     self._attempts.pop(queued_id, None)
@@ -307,6 +330,7 @@ class AntigravityQueueTracker:
             block = "\n".join(str(entry["content"]) for entry in entries)
             for queued_id in taken:
                 self._queued.resolve(queued_id)
+                self._pending_send.discard(queued_id)
                 self._attempts.pop(queued_id, None)
             # The generation is deliberately NOT bumped, and claims are deliberately NOT
             # cleared. This call leaves an in-flight flush alone, so voiding it would be
@@ -331,16 +355,32 @@ class AntigravityQueueTracker:
             block = "\n".join(str(entry["content"]) for entry in entries)
             self._queued.clear()
             self._sending_ids.clear()
+            self._pending_send.clear()
             self._attempts.clear()
             self._generation += 1
             self._settled()
             return block, taken
+
+    def demote_pending(self) -> bool:
+        """Stop presenting the not-yet-claimed entries as Sending; they are parked after all.
+
+        Called when a turn turns out to be open, so the worker declined to take them. Returns
+        True when anything changed, so the caller can skip a pointless publish.
+        """
+        with self._lock:
+            pending = self._pending_send - self._sending_ids
+            if not pending:
+                return False
+            self._pending_send -= pending
+            self._settled()
+            return True
 
     def clear(self) -> None:
         """Drop everything. Only for a session that no longer exists."""
         with self._lock:
             self._queued.clear()
             self._sending_ids.clear()
+            self._pending_send.clear()
             self._attempts.clear()
             self._generation += 1
             self._settled()
@@ -375,9 +415,13 @@ class AntigravityQueueTracker:
 
         The tap is offered only when nothing is Sending: tapping mid-flush would press ctrl+c
         through the very turn the flush is committing our block into.
+
+        Entries merely PENDING a send count too. They are about to be typed, so the tap has
+        nothing useful to do -- and offering the button in that window made it flash on every
+        ordinary send while the worker got to the message.
         """
         with self._lock:
-            return bool(self._sending_ids)
+            return bool(self._sending_ids or self._pending_send)
 
     def is_exhausted(self, queued_id: str) -> bool:
         with self._lock:
