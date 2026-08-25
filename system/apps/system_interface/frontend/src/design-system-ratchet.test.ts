@@ -30,16 +30,20 @@ const BASELINES = {
   // with a design-system-exception comment).
   hexOutsideTheme: 0,
   // Tightened after the type-system phase: all text font-sizes now use
-  // var(--font-size-*). The remaining 4 are icon glyphs (chevrons, +, ×) that
+  // var(--font-size-*). Tightened again by the P3 icon-button migration, which
+  // moved the share-modal close "×" onto the .btn--icon primitive (dropping its
+  // bespoke 18px glyph size). The remaining 3 are icon glyphs (chevrons, +) that
   // are sized independently of the text scale, each marked design-system-exception.
-  fontSizePx: 4,
+  fontSizePx: 3,
   // Tightened after the radius de-dup: raw 6px border-radii now use
   // var(--radius-base). Tightened again by the P3 button-primitive migration,
   // which deleted four bespoke button families' raw-px radii (terminal-banner
-  // 4px; queued-action, composer-under-bar and claude-login 8px). The remaining
-  // 36 are values with no token yet (8/12/…), handled when a radius scale lands
-  // (needs non-colliding names, like type).
-  borderRadiusPx: 36,
+  // 4px; queued-action, composer-under-bar and claude-login 8px). Tightened again
+  // by the icon-button migration, which dropped the share-modal close-×'s bespoke
+  // 4px radius (the round composer buttons use border-radius:50%, not px). The
+  // remaining 35 are values with no token yet (8/12/…), handled when a radius
+  // scale lands (needs non-colliding names, like type).
+  borderRadiusPx: 35,
   zIndexLiteral: 18,
 } as const;
 
