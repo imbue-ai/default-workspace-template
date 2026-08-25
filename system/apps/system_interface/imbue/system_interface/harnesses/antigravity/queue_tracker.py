@@ -96,7 +96,12 @@ class AntigravityQueueTracker:
         for line in lines[-_MAX_REPLAY_LINES:]:
             try:
                 entry = json.loads(line)
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as error:
+                # A torn last line is expected after a crash mid-append; anything else is
+                # corruption worth seeing. Either way the remaining lines still replay.
+                logger.opt(exception=error).warning(
+                    "antigravity: skipping unparsable outbox line in {}", self._outbox_path
+                )
                 continue
             if not isinstance(entry, dict) or entry.get("session") != self._session_token:
                 continue
@@ -174,7 +179,9 @@ class AntigravityQueueTracker:
 
     def snapshot(self) -> list[dict[str, Any]]:
         with self._lock:
-            return [{**entry, "is_sending": entry["queued_id"] in self._sending_ids} for entry in self._queued.snapshot()]
+            return [
+                {**entry, "is_sending": entry["queued_id"] in self._sending_ids} for entry in self._queued.snapshot()
+            ]
 
     def concatenated_block(self) -> str:
         with self._lock:
