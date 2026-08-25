@@ -353,7 +353,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
 
       function renderDeclinedCommandNotice(declined: { command: string; body: string | null }): m.Vnode {
         return m(
-          "div.custom-url-dialog-overlay",
+          "div.modal-overlay",
           {
             oncreate() {
               document.addEventListener("keydown", handleDeclinedNoticeKeydown);
@@ -363,30 +363,22 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
             },
             ...backdropDismissAttrs(dismissDeclinedCommandNotice),
           },
-          m(
-            "div.custom-url-dialog",
-            {
-              onclick(e: MouseEvent) {
-                e.stopPropagation();
-              },
-            },
-            [
-              m("h3.custom-url-dialog-title", `${declined.command} can't be sent from chat`),
-              m("p.logout-notice-body", declined.body ?? "You can still send it from the agent's terminal."),
-              m("div.custom-url-dialog-actions", [
-                m(
-                  "button.custom-url-dialog-cancel",
-                  {
-                    // Focus it so Enter and Space dismiss too, and so the notice is reachable
-                    // without a mouse.
-                    oncreate: (buttonVnode: m.VnodeDOM) => (buttonVnode.dom as HTMLButtonElement).focus(),
-                    onclick: () => dismissDeclinedCommandNotice(),
-                  },
-                  "OK",
-                ),
-              ]),
-            ],
-          ),
+          m("div.modal-card", [
+            m("div.modal-header", m("h3.modal-title", `${declined.command} can't be sent from chat`)),
+            m("p.modal-message", declined.body ?? "You can still send it from the agent's terminal."),
+            m("div.modal-actions", [
+              m(
+                "button.btn.btn--secondary",
+                {
+                  // Focus it so Enter and Space dismiss too, and so the notice is reachable
+                  // without a mouse.
+                  oncreate: (buttonVnode: m.VnodeDOM) => (buttonVnode.dom as HTMLButtonElement).focus(),
+                  onclick: () => dismissDeclinedCommandNotice(),
+                },
+                "OK",
+              ),
+            ]),
+          ]),
         );
       }
 
@@ -396,37 +388,29 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
           `Sending ${command} to the agent would run its own auth flow inside the agent's terminal, ` +
           "outside this workspace's managed sign-in. Use the agent auth screen instead.";
         return m(
-          "div.custom-url-dialog-overlay",
+          "div.modal-overlay",
           {
             ...backdropDismissAttrs(dismissAuthCommandNotice),
           },
-          m(
-            "div.custom-url-dialog",
-            {
-              onclick(e: MouseEvent) {
-                e.stopPropagation();
-              },
-            },
-            [
-              m("h3.custom-url-dialog-title", title),
-              m("p.logout-notice-body", explanation),
-              m("div.custom-url-dialog-actions", [
-                m("button.custom-url-dialog-cancel", { onclick: () => dismissAuthCommandNotice() }, "Cancel"),
-                m(
-                  "button.custom-url-dialog-open",
-                  {
-                    onclick: () => {
-                      dismissAuthCommandNotice();
-                      if (agentId) {
-                        openAgentAuth(agentId);
-                      }
-                    },
+          m("div.modal-card", [
+            m("div.modal-header", m("h3.modal-title", title)),
+            m("p.modal-message", explanation),
+            m("div.modal-actions", [
+              m("button.btn.btn--secondary", { onclick: () => dismissAuthCommandNotice() }, "Cancel"),
+              m(
+                "button.btn.btn--primary",
+                {
+                  onclick: () => {
+                    dismissAuthCommandNotice();
+                    if (agentId) {
+                      openAgentAuth(agentId);
+                    }
                   },
-                  "Open agent auth",
-                ),
-              ]),
-            ],
-          ),
+                },
+                "Open agent auth",
+              ),
+            ]),
+          ]),
         );
       }
 

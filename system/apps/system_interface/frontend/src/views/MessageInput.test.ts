@@ -210,7 +210,7 @@ describe("MessageInput send guard", () => {
     const component = MessageInput();
     const after = await typeAndSend(component, "agent-1", "/status");
     // Run the overlay's oncreate so the keydown listener registers, as mithril would on mount.
-    const overlay = findByClass(after, "custom-url-dialog-overlay");
+    const overlay = findByClass(after, "modal-overlay");
     (overlay?.attrs?.oncreate as (() => void) | undefined)?.();
 
     const keydownHandlers = mocks.listeners.get("keydown") ?? [];
@@ -224,7 +224,7 @@ describe("MessageInput send guard", () => {
   it("removes the keydown listener when the notice goes away", async () => {
     const component = MessageInput();
     const after = await typeAndSend(component, "agent-1", "/status");
-    const overlay = findByClass(after, "custom-url-dialog-overlay");
+    const overlay = findByClass(after, "modal-overlay");
     (overlay?.attrs?.oncreate as (() => void) | undefined)?.();
     const registered = (mocks.listeners.get("keydown") ?? []).length;
     (overlay?.attrs?.onremove as (() => void) | undefined)?.();
@@ -256,7 +256,7 @@ describe("MessageInput send guard", () => {
     expect(renderedText(after)).toContain("Sign-in is managed here");
 
     // "Open agent auth" routes through the per-harness dispatch.
-    const openButton = findByClass(after, "custom-url-dialog-open");
+    const openButton = findByClass(after, "btn--primary");
     (openButton?.attrs?.onclick as (() => void) | undefined)?.();
     expect(mocks.openAgentAuth).toHaveBeenCalledWith("agent-1");
   });
