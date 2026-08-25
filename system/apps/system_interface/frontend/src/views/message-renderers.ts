@@ -256,7 +256,7 @@ export function renderSubagentCard(toolCall: ToolCall, agentId: string, isRunnin
     m("div", { class: "subagent-card-header" }, [
       statusIndicator,
       m("span", { class: "subagent-card-description" }, description),
-      agentType ? m("span", { class: "subagent-card-type-badge" }, agentType) : null,
+      agentType ? m("span", { class: "badge badge--accent badge--mono shrink-0" }, agentType) : null,
     ]),
     // The click-through needs the subagent session_id, which only arrives once the call is
     // linked. The label stays "View conversation" throughout so it doesn't flip-flop; before

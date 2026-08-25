@@ -175,7 +175,7 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
 
       const header = m("header", { class: "app-header" }, [
         m("h1", { class: "app-header-title" }, title),
-        agentType ? m("span", { class: "app-header-model-badge" }, agentType) : null,
+        agentType ? m("span", { class: "badge badge--neutral badge--mono" }, agentType) : null,
       ]);
 
       let content: m.Vnode;

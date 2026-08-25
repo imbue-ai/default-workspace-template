@@ -280,6 +280,53 @@ body {
   width: 100%;
 }
 
+/* ── Badge primitive ─────────────────────────────────────────────────────────
+ * One small-label chip replacing the bespoke per-feature badges. Use:
+ *   .badge .badge--{neutral|accent|danger|warning|success} [.badge--mono]
+ * Sized off the helper type token. Neutral/accent are outline chips on a surface
+ * fill; the status tones carry a light tinted fill. .badge--mono for id-like
+ * labels (model id, agent type). */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  font-size: var(--font-size-helper);
+  font-weight: var(--weight-regular);
+  line-height: 1.4;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+.badge--mono {
+  font-family: var(--font-family-mono);
+}
+.badge--neutral {
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  border-color: var(--color-border);
+}
+.badge--accent {
+  background: var(--color-surface);
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+}
+.badge--danger {
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+  border-color: var(--color-danger-border);
+}
+.badge--warning {
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+  border-color: transparent;
+}
+.badge--success {
+  background: color-mix(in srgb, var(--color-success) 14%, transparent);
+  color: var(--color-success);
+  border-color: color-mix(in srgb, var(--color-success) 35%, transparent);
+}
+
 /* Spacer for the Minds desktop client title bar. When running inside the
    Electron shell, --minds-titlebar-height is set to the title bar height
    (38px). Outside the shell the variable is unset and the spacer collapses
@@ -311,15 +358,8 @@ body {
   color: var(--color-text-primary);
 }
 
-.app-header-model-badge {
-  font-size: var(--font-size-helper);
-  font-family: var(--font-family-mono);
-  color: var(--color-text-secondary);
-  background: var(--color-bg-sidebar);
-  padding: 2px 8px;
-  border-radius: 10px;
-  border: 1px solid var(--color-border);
-}
+/* The subagent header's model/type badge now uses the shared .badge primitive
+   (.badge--neutral.badge--mono). */
 
 /* ── Messages area ── */
 .app-content {
@@ -1581,17 +1621,8 @@ body {
   text-overflow: ellipsis;
 }
 
-.subagent-card-type-badge {
-  font-size: var(--font-size-helper);
-  font-family: var(--font-family-mono);
-  color: var(--color-accent);
-  background: var(--color-bg);
-  border: 1px solid var(--color-accent);
-  border-radius: 10px;
-  padding: 1px 8px;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
+/* The subagent-card type badge now uses the shared .badge primitive
+   (.badge--accent.badge--mono, plus shrink-0 for the card's flex row). */
 
 .subagent-card-link {
   font-size: var(--font-size-body);
@@ -3168,23 +3199,6 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 .pv-tl-narration li,
 .pv-tl-narration--static li {
   margin-bottom: 0.15em;
-}
-
-/* Id badge in front of regular-ticket titles. Visually subtle -- the
-   title is the primary thing the user reads; the badge is the secondary
-   "which tk ticket is this" handle for users / agents who care. */
-.pv-tl-id-badge {
-  display: inline-block;
-  margin-right: 8px;
-  padding: 0 6px;
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: var(--font-size-helper);
-  font-weight: 500;
-  letter-spacing: 0.01em;
-  color: var(--pv-fg-muted);
-  background: var(--pv-line-faint, rgba(127, 127, 127, 0.08));
-  border-radius: 4px;
-  vertical-align: middle;
 }
 
 /* Steps are creator-private progress markers -- they read like sub-items, so
