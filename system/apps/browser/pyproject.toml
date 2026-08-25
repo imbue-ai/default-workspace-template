@@ -1,7 +1,7 @@
 [project]
 name = "browser"
 version = "0.1.0"
-description = "Live Chromium with human-in-the-loop control and a browser-use agent"
+description = "Live Chromium with human-in-the-loop control, streamed, driven by agents over gated CDP"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -10,7 +10,6 @@ dependencies = [
     "oom-priority",
     "simple-websocket>=1.0",
     "werkzeug>=3.0",
-    "browser-use[core]==0.13.1",
     # Pixel transport for the live stream (see videopipe.py). pixelflux is the Rust
     # capture/encode engine behind Selkies; its native module dlopens libva/pixman
     # (baked via setup_system.sh).
@@ -20,21 +19,21 @@ dependencies = [
     # captures a PulseAudio sink monitor and Opus-encodes, silence-gated.
     "pcmflux>=2.0.0",
     # XTEST input injection + window resize for the pixelflux path (see xinput.py,
-    # ported from Selkies). Also a transitive browser-use dep; pinned here
-    # because we import it directly.
+    # ported from Selkies). Imported directly, so declared here.
     "python-xlib>=0.33",
     # Host resource sampling for the passive telemetry subsystem (see telemetry.py's
     # _ResourceSampler). Imported directly, so declared here rather than relied on
     # transitively.
     "psutil>=5.9",
-    # Firehose client for the standalone terminal telemetry dashboard
-    # (browser.telemetry_watch). Imported directly by that CLI.
+    # The fleet's own CDP client (cdp_client.py), the agent-facing CDP proxy
+    # (cdp_proxy.py), and the standalone telemetry dashboard (telemetry_watch.py).
     "websockets>=13",
 ]
 
-# Entry point is "browser-service", not "browser": browser-use ships its own
-# "browser" console script, which would otherwise shadow this one. The fleet CLI
-# (agentic-browser-fleet) is what agents call to drive the browsers.
+# Entry point is "browser-service", not "browser" (historically because browser-use
+# shipped its own "browser" console script; kept so the supervisord program and every
+# existing invocation keep working). The fleet CLI (agentic-browser-fleet) is what
+# agents call to own a browser; they DRIVE it with playwright-cli.
 [project.scripts]
 browser-service = "browser.runner:main"
 agentic-browser-fleet = "browser.fleet:main"
