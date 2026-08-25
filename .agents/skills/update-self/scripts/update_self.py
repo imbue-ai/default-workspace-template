@@ -1013,9 +1013,13 @@ FRONTEND_BUILD_INDEX = f"{STATIC_DIR}/index.html"
 # hash of the frontend source directory the build ran from (an npm `postbuild`
 # step in frontend/package.json; best-effort, absent when the build ran with no
 # git repo). The apply compares it against the merged tree's own frontend tree
-# hash, so a stale-but-populated bundle -- a wrong --worker-bundle path, or a
-# build that silently emitted nothing over an old bundle -- fails or falls back
-# instead of being served as if it were the merged source.
+# hash, so a populated bundle built from some other source -- a wrong
+# --worker-bundle path, an old worker's leftovers -- falls back to a live build
+# instead of being served as if it were the merged source. A live build in the
+# merged checkout stamps that same hash, so for it the comparison is only a
+# consistency check; the postbuild runs after any exit-0 build, and a build
+# that wrote nothing is caught by the index check (vite empties the output
+# directory first), not by the stamp.
 BUNDLE_STAMP_FILENAME = ".source-tree-hash"
 # The pinned-toolchain provisioner, re-run live when a provisioner-classified
 # path changed (idempotent; the content-addressed provision guard skips what
@@ -2744,13 +2748,14 @@ def _assert_bundle_built(
     source behind.
 
     A build tool that empties its output directory and then exits 0 without
-    writing passes an exit-code check while leaving nothing to serve -- and one
-    that wrote nothing over a *populated* directory leaves an old bundle that
-    serves fine while not matching the merged source at all. The stamp
-    comparison catches the second case; it is skipped when ``expected_hash`` is
-    ``None`` (recovery rebuilds on a rolled-back tree, where the pre-stamp
-    build is normal) and degrades to a warning when the bundle simply carries
-    no stamp (a build without a git repo writes none).
+    writing passes an exit-code check while leaving nothing to serve; the index
+    check catches that. The stamp comparison is the consistency check on top:
+    whatever is installed (a copied worker bundle, or a live build whose
+    postbuild stamped it) must have been built from the merged tree's frontend
+    source. It is skipped when ``expected_hash`` is ``None`` (recovery rebuilds
+    on a rolled-back tree, where the pre-stamp build is normal) and degrades to
+    a warning when the bundle simply carries no stamp (a build without a git
+    repo writes none).
     """
     index = repo_root / FRONTEND_BUILD_INDEX
     if not index.exists():
