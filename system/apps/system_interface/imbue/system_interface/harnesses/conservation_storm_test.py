@@ -855,11 +855,11 @@ class _AgyWorld:
     Two things this world must model honestly, because getting either wrong validates the
     wrong gate with a green test:
 
-    * **The marker stays present for the WHOLE turn**, tool calls included. That is what
-      ``statusline.sh``'s header records (75 consecutive busy samples across a ~29s subagent
-      run, zero mid-turn idle blips). An earlier version of this world deleted the marker on
-      every tool call and called it "the production shape"; it was not, and a flush gate
-      validated against it would be checking a signal agy never sends.
+    * **The marker can vanish mid-turn**, and does during a backgrounded tool call -- measured
+      on agy 1.1.20, 33.5 seconds of it, while the turn's answer had not arrived. So the marker
+      is modelled as evidence of busy only, never as proof of idle. (``statusline.sh``'s header
+      records the opposite for a SUBAGENT run on 1.0.6/1.0.7; both are true, the cases differ,
+      and a design that survives the harsher one survives both.)
     * **Typing into an open turn PARKS and MERGES.** agy does not reject it and does not give
       it its own turn -- the text is absorbed into the running turn, invisibly. So a mid-turn
       delivery is scored as a LOSS here, which is the only way a conservation ledger can see
@@ -899,10 +899,17 @@ class _AgyWorld:
         self._republish()
 
     def run_tool(self) -> None:
-        """A tool call mid-turn. The marker STAYS -- agy keeps reporting busy throughout."""
+        """A BACKGROUNDED tool call mid-turn: the marker VANISHES while the turn stays open.
+
+        Measured on agy 1.1.20 by sampling statusLine directly -- agy reports ``idle`` and stops
+        sampling for the duration (33.5s of silence observed), because it genuinely has nothing
+        to do while the command runs. The turn is not over: its answer has not arrived. This is
+        the shape that punishes anything treating the marker's absence as "no turn is open", so
+        it is the shape the storm models.
+        """
         if not self._is_turn_open:
             return
-        self.marker.write_text("")
+        self.marker.unlink(missing_ok=True)
         self._republish()
 
     def cancel_turn(self) -> None:

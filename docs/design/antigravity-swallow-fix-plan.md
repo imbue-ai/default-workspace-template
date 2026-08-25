@@ -20,11 +20,17 @@ tick. A message held mid-turn is typed into the live turn within 5s; agy merges 
 submission probe is the `active` marker's *mtime*, which `statusline.sh` touches on every busy
 sample — so the parked message **reports delivered**, entries resolve, chips vanish.
 
-Two earlier diagnoses were wrong and are retracted: the marker does **not** drop during tool
-calls (`statusline.sh`'s header records 75 consecutive busy samples across a ~29s subagent run,
-zero mid-turn idle blips, verified against agy 1.0.6/1.0.7), and `_turn_state` is not "read
-nowhere" — `session.send` and `tap.py` read it through the registry; only the flush worker
-never asks.
+One earlier diagnosis was wrong and is retracted: `_turn_state` is not "read nowhere" —
+`session.send` and `tap.py` read it through the registry; only the flush worker never asks.
+
+A second was retracted and is now **reinstated with a measurement**. The marker *does* vanish
+mid-turn: sampling agy 1.1.20's statusLine directly shows a vocabulary including `tool_use`,
+a ~300ms cadence, and — during a BACKGROUNDED tool call — agy reporting `idle` and ceasing to
+sample for 33.5 seconds while the turn's answer had not arrived. `statusline.sh`'s header
+records the opposite (75 consecutive busy samples, no idle blips) for a SUBAGENT run on
+1.0.6/1.0.7; both hold, the cases differ. The marker is therefore evidence of busy only, never
+proof of idle — which is what §2.2 already assumes, so the design is unaffected. It is the
+reason the transcript rung, not the marker, is what carries a turn through these windows.
 
 ## 1. Why the obvious fix is a worse bug
 

@@ -3,13 +3,22 @@
 Shared by the watcher (which publishes the transcript's answer), the flush worker (the only
 typist) and the tap/stop executors.
 
-WHY THE MARKER LEADS. agy's statusLine writes an ``active`` marker on every busy sample and
-removes it on the idle edge, and ``statusline.sh``'s header records that ``agent_state`` stays
-busy continuously through a whole turn -- 75 consecutive busy samples across a ~29s subagent
-run, zero mid-turn idle blips, verified against agy 1.0.6/1.0.7. So a FRESH marker is positive
-evidence of a live turn, and it is the strongest signal we have. It is used only in that
-direction: a marker's absence never proves idle, because it is also what a killed process
-leaves behind (until launch clears it -- see mngr_antigravity's assemble_command).
+WHY THE MARKER IS ONLY EVER EVIDENCE OF BUSY. agy's statusLine writes an ``active`` marker on
+every busy sample and removes it on the idle edge. A FRESH marker is therefore positive
+evidence of a live turn -- but its ABSENCE proves nothing, and that asymmetry is the whole
+design.
+
+Measured on agy 1.1.20, sampling statusLine directly: it fires about every 300ms, its
+vocabulary includes ``tool_use`` as well as ``idle`` and ``working``, and during a BACKGROUNDED
+tool call agy reports ``idle`` and stops sampling altogether -- 33.5 seconds of silence in the
+middle of a turn whose answer had not arrived. It is not lying; it genuinely has nothing to do
+while the command runs. But the marker is gone for that whole window, so anything treating its
+absence as "no turn is open" would type straight into that turn. (``statusline.sh``'s header
+records the opposite -- 75 consecutive busy samples, zero mid-turn idle blips -- measured
+against agy 1.0.6/1.0.7 across a SUBAGENT run. Both can be true: the two cases differ.)
+
+The transcript is what carries the turn through those windows, which is why the marker is a
+corroborator here and never the sole authority.
 
 WHY EVERY RUNG IS BOUNDED. The transcript corroborates during the marker's lag windows, but a
 transcript rung alone cannot terminate. Measured on agy 1.1.20: a single ctrl+c during a tool
