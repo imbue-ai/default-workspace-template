@@ -36,11 +36,13 @@ to propagate to a background service.
 The cost, which is deliberate: a detached child is out of reach of *any* process-group signal,
 supervisord's included, and ``[program:system_interface]`` sets ``stopasgroup``/``killasgroup``.
 A ``supervisorctl restart`` therefore no longer takes in-flight children down with the service.
-For the request-path commands that means a second or two of orphaned ``tmux``/``mngr``; for a
-``mngr start --restart`` on the auth restart thread it means a ten-minute budget that can
-outlive the restart meant to end it, holding host locks while it does. Staying in the service's
-process group is exactly the bug, so this half of the trade is forced, and mngr's host locks are
-built to be contended -- but the teardown behaviour really did change.
+Each child's own timeout is what bounds it instead: a second or two of orphaned ``tmux``/``mngr``
+for the request-path commands, up to the ten-minute budget of a ``mngr start --restart`` on the
+auth restart thread, which can outlive the restart meant to end it while holding host locks.
+The ``mngr observe`` child has no timeout at all, so its bound is the service's own teardown:
+``main.py`` turns SIGTERM into a clean exit and the ``atexit`` handler terminates it, but a
+service that never gets there -- SIGKILLed for overrunning ``stopwaitsecs``, or OOM-killed --
+now leaves it running for good, and the restart starts a second one.
 """
 
 from __future__ import annotations
@@ -67,8 +69,8 @@ def run_detached_command(
 ) -> FinishedProcess:
     """Run ``command`` to completion in its own session, returning how it went.
 
-    A non-zero exit is reported on the result rather than raised: callers here turn a failed
-    command into a response for the user, so every one of them reads ``returncode`` itself.
+    A failure is reported on the result, not raised: the caller reads ``returncode`` and
+    ``is_timed_out`` and decides what to tell the user.
     """
     return run_local_command_modern_version(
         command=command,
