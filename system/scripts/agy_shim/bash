@@ -1,0 +1,109 @@
+#!/bin/bash
+# antigravity's policy guards, as a `bash` shim on the agent's PATH.
+#
+# NOTE THE SHEBANG. It is `/bin/bash`, absolute, and must stay that way. Every other script in
+# system/scripts/ uses `#!/usr/bin/env bash`; copying that habit HERE is a fork bomb, because
+# this file IS `bash` on the agent's PATH, so `env bash` would resolve straight back to it.
+#
+# WHY A SHIM AND NOT A HOOK. agy declares PreToolUse/PostToolUse but never fires them (measured
+# on 1.1.20); the events that do fire carry no tool identity, and no hook output channel reaches
+# the model. agy runs shell tool calls as `bash -c "<CommandLine>"`, resolving `bash` from PATH,
+# so this is the only interposition point that can see a command -- and it can do all three
+# things the hooks were for: block (exit non-zero; stderr becomes the tool result), rewrite
+# (prepend, then exec), and inform.
+#
+# WHAT IT ENFORCES. The same four blockers claude runs, in claude's order, by feeding them the
+# claude-shaped payload they already parse -- so the guard logic and its wording stay
+# single-sourced across claude, codex and agy. See system/scripts/POLICY_HOOKS.md.
+#
+# WHAT IT DOES NOT ENFORCE. The require-a-step nudge (#5) is deliberately absent: its skip list
+# is keyed on claude TOOL NAMES, and every call here is `Bash`, so it would nudge agy's
+# read-only shell work while never seeing agy's own edit tool -- wrong in both directions. That
+# discipline lives in AGENTS.md for agy.
+#
+# FAIL OPEN. This sits on the path of every command the agent runs, so anything unexpected --
+# a missing script, no jq, a crashing checker -- logs and runs the command. Only an explicit
+# exit 2 from a checker blocks. That inverts the usual security default on purpose: these are a
+# seatbelt on an agent already trusted to run arbitrary commands, not a sandbox boundary, and a
+# dead shim bricks the agent. The agent could equally `rm` this file; nothing here is a
+# boundary.
+set -uo pipefail
+
+REAL_BASH=/bin/bash
+SCRIPTS_DIR="${MNGR_AGENT_WORK_DIR:-}/system/scripts"
+SHIM_LOG="${MNGR_AGENT_STATE_DIR:-/tmp}/agy_shim.log"
+
+note() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >>"$SHIM_LOG" 2>/dev/null || true; }
+
+# Outermost call only. A command the agent runs may itself invoke bash (a build, a test runner,
+# `xargs -n1 bash -c`), and policing those would block third-party code the agent did not write,
+# re-apply the rewrite prefix at every level, and pay the whole checker cost per nesting level.
+# Nested harnesses being unguarded is already the house norm (POLICY_HOOKS.md, "which pi runs
+# which extension"). MNGR_AGY_SHIM_OFF is the kill switch: no redeploy needed.
+if [ -n "${MNGR_AGY_BASH_SHIM:-}" ] || [ -n "${MNGR_AGY_SHIM_OFF:-}" ] || [ ! -d "$SCRIPTS_DIR" ]; then
+    exec "$REAL_BASH" "$@"
+fi
+
+# Only `bash -c <command>` carries a command to inspect. An interactive shell, `bash script.sh`,
+# `-lc`, a script on stdin: nothing to guard, pass through untouched. The log line is a canary --
+# if a future agy switches argv form, the guards stop silently, and this is what shows it.
+if [ "${1:-}" != "-c" ] || [ "$#" -lt 2 ]; then
+    note "passthrough argv0=${1:-<none>} argc=$#"
+    exec "$REAL_BASH" "$@"
+fi
+
+export MNGR_AGY_BASH_SHIM=1
+COMMAND=$2
+shift 2
+
+# Build the payload with jq -Rs, NEVER by interpolation. A command containing a quote, a
+# backslash or a newline would produce invalid JSON; the guards run under `set -e`, so jq's
+# parse error would exit non-zero, and fail-open would pass the command through -- letting the
+# agent defeat every guard by appending `# "` to it.
+PAYLOAD=$(printf '%s' "$COMMAND" | jq -Rs '{tool_name: "Bash", tool_input: {command: .}}' 2>/dev/null)
+if [ -z "$PAYLOAD" ]; then
+    note "payload build failed (jq missing or refused input); running unguarded"
+    exec "$REAL_BASH" -c "$COMMAND" "$@"
+fi
+
+# claude's PreToolUse order (.claude/settings.json), on the command the agent actually wrote --
+# the rewrite happens after, so no guard ever inspects a prefixed command. Getting that ordering
+# for free is the one thing this shim has over pi, which needs `mngrOriginalCommand` for it.
+for guard in \
+    agent_prevent_commit_rewrite.sh \
+    agent_block_pipe_tail_head.sh \
+    agent_latchkey_request_standalone.sh \
+    agent_tk_standalone.sh
+do
+    guard_path="$SCRIPTS_DIR/$guard"
+    if [ ! -f "$guard_path" ]; then
+        note "missing guard $guard"
+        continue
+    fi
+    # Invoked through an explicit /bin/bash so the guard's own `#!/usr/bin/env bash` cannot
+    # resolve back into this shim. BASH_ENV/ENV are cleared so a user startup file's output
+    # cannot end up quoted to the model as a block reason (pi clears them for the same reason).
+    guard_stderr=$(printf '%s' "$PAYLOAD" | env -u BASH_ENV -u ENV "$REAL_BASH" "$guard_path" 2>&1 >/dev/null)
+    guard_status=$?
+    case "$guard_status" in
+        0) ;;
+        2)
+            # The block reason, verbatim, on stderr: agy surfaces it as the tool result, which
+            # is how the model learns why. Only exit 2 speaks to the model -- a guard that
+            # writes to stderr and exits 0 (as the commit-rewrite one does on an empty command)
+            # must stay silent.
+            printf '%s\n' "$guard_stderr" >&2
+            exit 2
+            ;;
+        *) note "guard $guard exited $guard_status: $guard_stderr" ;;
+    esac
+done
+
+# The OOM self-tag and git identity (#4). --prefix-only keeps the command out of the JSON
+# round-trip: passing it back through would replace any non-UTF-8 byte with U+FFFD and strip
+# trailing newlines, i.e. run something the agent did not write. Empty output is the normal
+# no-op path, not an error.
+PREFIX=$(python3 "$SCRIPTS_DIR/agent_rewrite_bash_command.py" --prefix-only 2>/dev/null) || PREFIX=""
+
+# `bash -c CMD name arg...` sets $0 and the positional parameters; "$@" carries them through.
+exec "$REAL_BASH" -c "$PREFIX$COMMAND" "$@"

@@ -1,4 +1,4 @@
-# Agent policy hooks — how the guards work across claude / codex / pi
+# Agent policy hooks — how the guards work across claude / codex / pi / agy
 
 Minds runs a set of **hooks** on its agents: checkpoints fired around a tool call or a
 turn where we can block a command, rewrite it, or inject a reminder into the model's
@@ -16,18 +16,18 @@ codex reuses those scripts verbatim, pi runs their checkers or re-expresses them
 
 ## At a glance
 
-| # | Hook | Event | Kind | claude | codex | pi |
-|---|------|-------|------|--------|-------|----|
-| 1 | Block a command piping into `tail`/`head` | PreToolUse | safety | live | live | live |
-| 2 | Block `git rebase` / `commit --amend`/`--fixup` / `pull --rebase` | PreToolUse | safety | live | live | live |
-| 3 | Block a latchkey permission request that is batched, chained, or redirected | PreToolUse | safety | live | live | live |
-| 4 | Rewrite every Bash command: OOM self-tag + git identity | PreToolUse | safety | live | live | live |
-| 5 | Nudge when doing substantive work with no in-progress step | PreToolUse | workflow | live | live | live |
-| 6 | Block a `tk start`/`close` that is chained or redirected | PreToolUse | workflow | live | live | live |
-| 7 | Carry over still-open steps into the next turn | UserPromptSubmit | workflow | live | live | live |
-| 8 | Surface steps the previous turn left open | Stop (pi: at turn-start, via #7) | workflow | live | live | live |
-| 9 | Session-start setup (`uv sync`, tk-on-path, plugin update, shed notice) | SessionStart | setup | live | n/a | n/a |
-| 10 | Force the agent back to the repo root before it stops | Stop | workflow | live | n/a | n/a |
+| # | Hook | Event | Kind | claude | codex | pi | agy |
+|---|------|-------|------|--------|-------|----|-----|
+| 1 | Block a command piping into `tail`/`head` | PreToolUse | safety | live | live | live | live |
+| 2 | Block `git rebase` / `commit --amend`/`--fixup` / `pull --rebase` | PreToolUse | safety | live | live | live | live |
+| 3 | Block a latchkey permission request that is batched, chained, or redirected | PreToolUse | safety | live | live | live | live |
+| 4 | Rewrite every Bash command: OOM self-tag + git identity | PreToolUse | safety | live | live | live | live |
+| 5 | Nudge when doing substantive work with no in-progress step | PreToolUse | workflow | live | live | live | n/a |
+| 6 | Block a `tk start`/`close` that is chained or redirected | PreToolUse | workflow | live | live | live | live |
+| 7 | Carry over still-open steps into the next turn | UserPromptSubmit | workflow | live | live | live | n/a |
+| 8 | Surface steps the previous turn left open | Stop (pi: at turn-start, via #7) | workflow | live | live | live | n/a |
+| 9 | Session-start setup (`uv sync`, tk-on-path, plugin update, shed notice) | SessionStart | setup | live | n/a | n/a | n/a |
+| 10 | Force the agent back to the repo root before it stops | Stop | workflow | live | n/a | n/a | n/a |
 
 Hooks 1–4 (safety) and 5–8 (tk workflow discipline) are the cross-harness set. Hooks 9–10 are
 claude-only by construction — see the last section. Note the **Stop** event: claude runs two Stop
@@ -58,6 +58,46 @@ below) — never a mngr release.
 
 A project layer's hooks need the layer trusted and each hook trusted by hash; mngr already
 marks the work dir trusted and passes `--dangerously-bypass-hook-trust`, which covers both.
+
+### agy  (wiring: `system/scripts/agy_shim/bash` + one PATH entry from the plugin)
+agy has **no usable hook surface**. Measured on 1.1.20: it declares `PreToolUse`/`PostToolUse`
+but never fires them; the events that do fire (`SessionStart`, `PreInvocation`,
+`PostInvocation`, `Stop`) carry no tool identity -- no `tool_name`, no `tool_input`, no
+command -- and no hook output channel reaches the model (plain stdout and the binary's own
+`systemMessage` key were both tested; the model could not see the injected marker).
+
+It does, however, run every shell tool call as `bash -c "<CommandLine>"`, resolving `bash`
+from `PATH`. So the guards run from a **shim named `bash`**, early on the agent's PATH, which
+gets all three capabilities the hooks were for: block (exit 2; stderr becomes the tool
+result), rewrite (prepend, then `exec`), and inform.
+
+The shim feeds the **same scripts claude runs**, unmodified, by synthesising the payload they
+parse on stdin (`{"tool_name":"Bash","tool_input":{"command":…}}`) -- so editing a guard
+updates claude, codex and agy together. It runs them in claude's order on the command the
+agent wrote, then applies the rewrite prefix, so no guard ever inspects a prefixed command;
+pi needs `mngrOriginalCommand` for that property, the shim gets it from statement order.
+
+Three things about it are load-bearing:
+* **The shebang is `#!/bin/bash`, absolute.** Every other script here uses
+  `#!/usr/bin/env bash`; in a file that IS `bash` on PATH that is a fork bomb.
+* **The payload is built with `jq -Rs`, never interpolation.** A command containing a quote
+  would otherwise produce invalid JSON, exit non-zero under the guards' `set -e`, and be
+  passed through by fail-open -- letting the agent defeat every guard with a trailing `# "`.
+* **It fails OPEN.** It is on the path of every command; a dead shim bricks the agent. Only an
+  explicit exit 2 blocks. This is a seatbelt, not a boundary -- the agent could `rm` it.
+
+Only the outermost `bash -c` is guarded (`MNGR_AGY_BASH_SHIM` marks the environment), so a
+build's own nested shell is not policed -- the same "nested harness is unguarded" norm pi
+already sets. `MNGR_AGY_SHIM_OFF=1` disables it without a redeploy.
+
+**#5 is n/a on agy, not merely unwired.** Its skip list is keyed on claude TOOL NAMES; under
+the shim every call is `Bash`, so it would nudge agy's read-only shell work while never seeing
+agy's own edit tool -- wrong in both directions. That discipline lives in `AGENTS.md`.
+**#7 and #8 are n/a**: agy has no `UserPromptSubmit`, and its stderr goes to a tmux pane
+nobody reads -- the same conclusion pi reached for #8.
+**#3 is fully live**: agy sets `WaitMsBeforeAsync` on every `run_command` and runs the child
+synchronously, so there is no agent-controllable background flag and the `--backgrounded` arm
+has nothing to detect.
 
 ### pi  (wiring: `.pi/extensions/policy_guards.ts` in this repo)
 Pi has **no shell-hook surface** — its only extension point is a TypeScript module. It
@@ -298,9 +338,11 @@ When a rule changes, update every harness that carries it:
   prefix logic in `rewriteBashCommand()`. Keep it **last** in both hook configs, and keep
   mngr recording `mngrOriginalCommand` for pi — a blocker that inspects the rewritten
   command refuses everything (see "Which command a guard sees" above).
-- codex and pi wiring lives in **this repo**: `.codex/hooks.json` and
-  `.pi/extensions/policy_guards.ts`. A guard added to `.claude/settings.json` needs the
-  matching entry in both, and nothing in mngr.
+- codex, pi and agy wiring lives in **this repo**: `.codex/hooks.json`,
+  `.pi/extensions/policy_guards.ts` and `system/scripts/agy_shim/bash`. A guard added to
+  `.claude/settings.json` needs the matching entry in all three, and nothing in mngr. agy is
+  the cheapest of the three: adding a guard to the shim's loop is one line, because it runs
+  the claude script itself. mngr's only contribution is the PATH entry.
 - claude and codex share one runtime (shell + JSON) so they share files; pi is a separate
   runtime (in-process TypeScript), so its copy is unavoidable — but small, and its rules and
   reminder text are verbatim copies.

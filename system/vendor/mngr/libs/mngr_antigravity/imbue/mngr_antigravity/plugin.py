@@ -1475,7 +1475,19 @@ class AntigravityAgent(
         )
         ln_cmd = f"ln -sfn {shlex.quote(str(self.work_dir))} {shlex.quote(symlink_path)}"
         cd_cmd = f"cd {shlex.quote(symlink_path)}"
-        home_prefix = f"env HOME={shlex.quote(str(agy_home))}"
+        # The policy-guard shim, ahead of the real bash on PATH. agy declares PreToolUse but
+        # never fires it, and no hook payload carries a command, so a `bash` shim is the only
+        # place the workspace's guards can see one; agy runs tool commands as `bash -c "..."`,
+        # resolving bash from PATH. The shim itself is a WORKSPACE file (it enforces workspace
+        # policy and must be editable without a mngr release), so this contributes only the
+        # PATH entry -- a workspace without one just gets a PATH element that does not exist.
+        #
+        # Set here on the launch command rather than through ``modify_env_vars``: that writes
+        # the agent env file, which the tmux session sources as its default-command, so the
+        # shim would also be inherited by every terminal the USER opens in the agent's session.
+        # ``$PATH`` stays unquoted deliberately -- quoting it would make it a literal.
+        shim_dir = shlex.quote(f"{self.work_dir}/system/scripts/agy_shim")
+        home_prefix = f"env HOME={shlex.quote(str(agy_home))} PATH={shim_dir}:$PATH"
 
         # Resume the agent's main conversation via `agy --conversation`,
         # evaluated here in the shell because the stored command is replayed on
