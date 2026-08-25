@@ -679,7 +679,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
           "Your Anthropic API key",
         ]),
         m("div.claude-login-input-wrap", [
-          m("input.claude-login-input.claude-login-input--mono.claude-login-input--with-action", {
+          m("input.input.input--mono.input--with-action", {
             id: "claude-login-api-key-input",
             type: apiKeyRevealed ? "text" : "password",
             placeholder: "sk-ant-...",
@@ -743,7 +743,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
           m("span.claude-login-step-num", "2"),
           "Paste your credentials",
         ]),
-        m("textarea.claude-login-input.claude-login-input--mono.claude-login-textarea", {
+        m("textarea.input.input--mono.claude-login-textarea", {
           id: "claude-login-imbue-blob-input",
           rows: 3,
           placeholder: "ANTHROPIC_BASE_URL=...\nANTHROPIC_API_KEY=sk-...",
@@ -800,7 +800,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
       m("div.claude-login-step", [
         m("div.claude-login-step-label", [m("span.claude-login-step-num", "2"), "Approve, then paste the code shown"]),
         m("div.claude-login-subtle-body", [
-          m("input.claude-login-input.claude-login-input--mono", {
+          m("input.input.input--mono", {
             id: "claude-login-code-input",
             type: "text",
             placeholder: "CODE#STATE",
@@ -839,7 +839,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
         : m("div.claude-login-subtle", [
             tokenPasteExpanded
               ? m("div.claude-login-subtle-body", [
-                  m("input.claude-login-input.claude-login-input--mono", {
+                  m("input.input.input--mono", {
                     id: "claude-login-token-input",
                     type: "password",
                     placeholder: "sk-ant-oat01-...",

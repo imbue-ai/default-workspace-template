@@ -287,11 +287,23 @@
 
       <!-- ── Inputs ────────────────────────────────────────────────────── -->
       <section class="gy-section" data-shot="inputs">
-        <h2>Inputs</h2>
+        <h2>Inputs — unified .input primitive</h2>
         <div class="gy-pad">
           <div class="gy-stack" style="max-width: 360px">
-            <input class="share-modal-email-input" placeholder="name@example.com" />
-            <input class="custom-url-dialog-input" placeholder="https://example.com" />
+            <div class="gy-label">default</div>
+            <input class="input" placeholder="name@example.com" />
+            <div class="gy-label">focus (illustrative)</div>
+            <!-- The accent ring is what .input:focus-visible renders; drawn here with
+                 an inline style so the static screenshot shows the focused state. -->
+            <input
+              class="input"
+              placeholder="https://example.com"
+              style="border-color: var(--color-accent); outline: 2px solid var(--color-accent); outline-offset: 2px"
+            />
+            <div class="gy-label">.input--mono</div>
+            <input class="input input--mono" value="sk-ant-..." />
+            <div class="gy-label">:disabled</div>
+            <input class="input" placeholder="Disabled field" disabled />
           </div>
         </div>
       </section>

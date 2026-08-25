@@ -425,6 +425,52 @@ body {
   vertical-align: -0.45em;
 }
 
+/* ── Input primitive ─────────────────────────────────────────────────────────
+ * One text-field style replacing the per-modal inputs. Use on <input> or
+ * <textarea>:
+ *   .input [.input--mono] [.input--with-action]
+ * States: :focus-visible (accent ring, matching .btn:focus-visible; text fields
+ * are always focus-visible, so the ring also shows on click) and :disabled.
+ * .input--mono for id/token-like fields; .input--with-action reserves room at
+ * the right for a trailing inline action button (e.g. reveal/paste). Genuinely
+ * special fields stay bespoke: the composer textbox (message-input-textbox), the
+ * model-search field (borderless, inside a search-box wrapper), and the inline
+ * tab-rename editor (dv-custom-tab-title-input). */
+.input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 12px;
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-body);
+  color: var(--color-text-primary);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-base);
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease;
+}
+.input::placeholder {
+  color: var(--color-text-faint);
+}
+.input--mono {
+  font-family: var(--font-family-mono);
+  letter-spacing: 0.01em;
+}
+.input--with-action {
+  padding-right: 64px;
+}
+.input:focus-visible {
+  border-color: var(--color-accent);
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+.input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* Spacer for the Minds desktop client title bar. When running inside the
    Electron shell, --minds-titlebar-height is set to the title bar height
    (38px). Outside the shell the variable is unset and the spacer collapses
@@ -2426,24 +2472,8 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   margin-bottom: 4px;
 }
 
-.custom-url-dialog-input {
-  display: block;
-  width: 100%;
-  padding: 8px 12px;
-  font-family: var(--font-family-base);
-  font-size: var(--font-size-body);
-  color: var(--color-text-primary);
-  background: var(--color-bg);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-base);
-  margin-bottom: 12px;
-  outline: none;
-  box-sizing: border-box;
-}
-
-.custom-url-dialog-input:focus {
-  border-color: var(--color-accent);
-}
+/* The project-name field now uses the shared .input primitive; the row's
+   bottom spacing is applied at the call site (a utility class). */
 
 .custom-url-dialog-actions {
   display: flex;
@@ -2857,18 +2887,6 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   margin-bottom: 16px;
 }
 
-.share-modal-url-input {
-  flex: 1;
-  padding: 8px 12px;
-  font-family: var(--font-family-mono, monospace);
-  font-size: var(--font-size-body);
-  color: var(--color-text-primary);
-  background: var(--color-bg);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-base);
-  outline: none;
-}
-
 /* Share modal buttons now use the shared .btn primitive. The only live share
    button is "Close" (btn--secondary); the former base (dark), -destructive and
    -create variants had no remaining call sites, so their styling is deleted.
@@ -2920,22 +2938,6 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   display: flex;
   gap: 8px;
   margin-top: 8px;
-}
-
-.share-modal-email-input {
-  flex: 1;
-  padding: 6px 10px;
-  font-family: var(--font-family-base);
-  font-size: var(--font-size-body);
-  color: var(--color-text-primary);
-  background: var(--color-bg);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-base);
-  outline: none;
-}
-
-.share-modal-email-input:focus {
-  border-color: var(--color-accent);
 }
 
 .share-modal-header {
@@ -3701,35 +3703,10 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   display: flex;
 }
 
-.claude-login-input {
-  width: 100%;
-  padding: 9px 12px;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  font-size: var(--font-size-body);
-  color: var(--color-text-primary);
-  background: var(--color-surface);
-  transition:
-    border-color 80ms ease,
-    box-shadow 80ms ease;
-  font-family: inherit;
-}
-
-.claude-login-input--mono {
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-body);
-  letter-spacing: 0.01em;
-}
-
-.claude-login-input--with-action {
-  padding-right: 64px;
-}
-
-.claude-login-input:focus {
-  outline: none;
-  border-color: var(--color-accent);
-  box-shadow: 0 0 0 3px rgba(47, 107, 79, 0.15);
-}
+/* The login credential fields now use the shared .input primitive
+   (.input.input--mono, plus .input--with-action for the reveal/paste action).
+   Only the wrapper, the trailing action button, and the textarea sizing remain
+   login-specific. */
 
 .claude-login-input-action {
   position: absolute;
@@ -3877,7 +3854,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   margin-top: 6px;
 }
 
-.claude-login-subtle-body .claude-login-input {
+.claude-login-subtle-body .input {
   flex: 1;
 }
 
