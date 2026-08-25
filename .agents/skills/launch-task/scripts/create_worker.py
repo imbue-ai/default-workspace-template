@@ -680,7 +680,7 @@ def _worker_is_idle(worker_name: str) -> bool:
     "not idle" so a transient mngr hiccup can never abort a healthy await --
     the timeout remains the backstop.
     """
-    return _worker_state(worker_name, Runner()) in ("WAITING", "STOPPED")
+    return _worker_state(worker_name, Runner()) in ("WAITING", _STOPPED_STATE)
 
 
 def await_report(
