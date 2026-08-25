@@ -91,10 +91,12 @@ Triage each conflict, first rule that applies wins:
 - **No clear resolution -> gate, as a last resort.** Only after you have
   genuinely tried to reconcile and found no resolution that preserves both
   sides' intent (both rewrote the same region incompatibly and the answer
-  depends on what the user wants) do you write a `name: question` gate (Step 6)
-  describing the file, what each side did, and the options; push and stop. The
-  lead relays the user's decision; apply it and continue. Never gate on
-  anything the rules above or reasonable judgment can settle.
+  depends on intent you cannot see) do you write a `name: question` gate
+  (Step 6) describing the file, what each side did, and the options; push and
+  stop. The lead decides -- the flow is unattended, and its default is to
+  preserve this workspace's current behavior, with the decision reported to
+  the user afterwards -- and replies; apply the reply and continue. Never gate
+  on anything the rules above or reasonable judgment can settle.
 
 **Lockfiles need attention even without a conflict.** Git will happily
 auto-merge two divergent `uv.lock`s into a semantically invalid file (duplicate
@@ -179,7 +181,7 @@ set like this:
    genuinely workspace-added code is un-validated-by-upstream -- mislabeling
    built-in code as workspace-added misattributes pre-existing issues (a failing
    test or lint error) as the user's when they are the upstream release's, and
-   the lead's approval message repeats the error.
+   the lead's results message repeats the error.
 
 **Provisioning files always count as impacted -- and you best-effort apply them.**
 A change to `system/scripts/setup_system.sh`, `system/scripts/install_secret_scanners.sh`,
@@ -336,10 +338,10 @@ tests, or exercise its scripts -- and called out in the report.
   when the merge needed nontrivial merge work there (not a clean pull). For the
   system interface, build it in your worktree (`uv sync --all-packages`, then
   `cd system/apps/system_interface/frontend && npm ci && npm run build`) so your
-  work_dir is a built instance the lead can preview, then drive it per
+  work_dir is a built instance, then drive it per
   `.agents/shared/worker/references/web-frontend-testing.md`. That built bundle
   is also what the lead's apply installs live (`--worker-bundle`), so the exact
-  build the user previewed is what ships -- name its location in your report
+  build you validated is what ships -- name its location in your report
   (see §6). Your `npm ci` / `uv sync` runs here also pre-warm the shared uv and
   npm caches, which the live apply's own refresh then reuses, so the live
   motion is faster and less network-dependent than a cold one.
@@ -423,11 +425,13 @@ Per `.agents/shared/references/worker-reporting.md` (`<TASK_FILE_GLOB>` ->
   what each side did, the options. Also the channel for the 4c review-gate
   escape hatch, which is a *process* question rather than a conflict; body: the
   rule's conditions as you read them, what your situation is, and what you would
-  do instead. Say which of the two it is in the first line -- the lead escalates
-  a conflict to the user and answers a process question itself. Push and stop;
-  resume on the lead's reply.
+  do instead. Say which of the two it is in the first line -- the lead answers
+  both itself: a conflict by choosing a resolution (defaulting to this
+  workspace's current behavior), a process question by the §4c rule. Push and
+  stop; resume on the lead's reply.
 - `done` (`type: status`) -- merged, triaged, validated on `mngr/update-self`. Body
-  gives the lead everything for the approval gate and the apply:
+  gives the lead everything for the report audit, the apply, and the results
+  message:
   - **What's new** -- a digest of the changelog entries.
   - **Conflicts** -- each one and how you resolved it. For any conflict where
     one side was taken wholesale (or where you claim the kept side subsumes the
@@ -437,14 +441,15 @@ Per `.agents/shared/references/worker-reporting.md` (`<TASK_FILE_GLOB>` ->
   - **Merged vs pulled-in** -- which change classes reconciled vs came in clean.
   - **Merge work per web surface** -- for the system interface and each user web
     service: "none" (upstream strictly newer, clean pull) or "nontrivial" with a
-    sentence on what had to be reconciled. The lead previews a surface if and
-    only if you judged its merge work nontrivial, so judge this explicitly.
+    sentence on what had to be reconciled. The lead's results message points
+    the user at each surface you judged nontrivial (with the rollback offer
+    attached to it), so judge this explicitly.
   - **Built system-interface bundle** -- when you built the system interface
-    (for validation or the preview), the absolute path of the built bundle in
+    (for validation), the absolute path of the built bundle in
     your worktree
     (`<your work_dir>/system/apps/system_interface/imbue/system_interface/static`).
-    The lead passes it to the apply as `--worker-bundle`, so the build the
-    user previewed is the one installed live. Omit the field when you did not
+    The lead passes it to the apply as `--worker-bundle`, so the build you
+    validated is the one installed live. Omit the field when you did not
     build (the apply falls back to a live build).
   - **Impact analysis** -- the impacted services and skills from 4a, what you
     checked and how, and any live service depending on a changed file that the
