@@ -368,15 +368,25 @@ record which branch applied (with its evidence) in your report:
   user-created code in it (built-in impacts -- a service the lead must restart --
   do not block the skip), and no in-branch edits of your own.
 
-- **Otherwise run the real gates, at full scope**: follow the "Review gates"
-  section of `.agents/shared/worker/references/harden-creation.md` (unattended
-  `/autofix` over the whole merge, then judge each fix commit yourself -- keep
-  by default, revert only what undoes intended behavior -- plus the
-  architecture gates). Do not narrow the gate to the files you touched by hand
-  and do not substitute a review of your own design for it: this rule already
-  *is* the proportionality decision. "The merge is dominated by
-  upstream-tested code" licenses the skip branch above when its conditions
-  hold, and licenses nothing when they do not.
+- **Otherwise run the real gates, scoped to the locally-divergent content**:
+  follow the "Review gates" section of
+  `.agents/shared/worker/references/harden-creation.md` (unattended
+  `/autofix`, then judge each fix commit yourself -- keep by default, revert
+  only what undoes intended behavior -- plus the architecture gates). The
+  gate's scope is **every file whose merged content differs from the target
+  release**: the conflicts you resolved with any hand-written content, your
+  own in-branch edits (a 4a mirror edit), and any lockfile you regenerated.
+  That set, not the whole upstream diff, is what a review protects: a file
+  byte-identical to the release arrived exactly as upstream tested it, and a
+  fix to it would only manufacture local divergence (the disposition rule
+  below reverts such fixes anyway). Over an 800-file release this is the
+  difference between reviewing four reconciled files and reviewing
+  upstream's code. Name the scope you ran in your report. Widening it is
+  always allowed; narrowing it below that set, or substituting a review of
+  your own design for the gates, is not -- this rule already *is* the
+  proportionality decision. "The merge is dominated by upstream-tested code"
+  licenses the skip branch above when its conditions hold, and licenses
+  nothing when they do not.
 
   One disposition rule specific to update merges, for the keep/revert pass. The
   test is the file's merged **content**, not which set `classify-merge` put it
