@@ -57,8 +57,12 @@ def profile_holder_pid(profile_dir: Path) -> int | None:
     """
     marker = f"--user-data-dir={profile_dir}"
     try:
+        # `--` terminates pgrep's option parsing. Without it the pattern starts with `--`
+        # and pgrep reads it as an (unknown) option, silently matching NOTHING -- which
+        # made this guard a no-op that never reaped anything. Caught by running it against
+        # a real Fortress, not by any unit test.
         out = subprocess.run(
-            ["pgrep", "-f", marker], capture_output=True, text=True, timeout=5, check=False
+            ["pgrep", "-f", "--", marker], capture_output=True, text=True, timeout=5, check=False
         ).stdout
     except (OSError, subprocess.SubprocessError) as e:
         logger.debug("profile-holder probe failed ({})", e)

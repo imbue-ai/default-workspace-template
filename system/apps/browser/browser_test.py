@@ -1402,3 +1402,18 @@ def test_orphaned_chromium_is_reaped_before_a_second_one_launches(monkeypatch: p
 def test_reap_orphan_is_a_noop_when_no_one_holds_the_profile(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(chrome_launcher, "profile_holder_pid", lambda _d: None)
     assert chrome_launcher.reap_orphan(tmp_path) is False
+
+
+def test_profile_holder_probe_terminates_pgrep_options(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # `pgrep -f` read the leading `--` of `--user-data-dir=...` as an option and silently
+    # matched NOTHING, which made the orphan guard a no-op. `--` terminates option parsing.
+    # Only a live run against a real browser caught this; no unit test could have.
+    seen: list[list[str]] = []
+
+    def fake_run(argv: list[str], **_kw: object) -> Any:
+        seen.append(argv)
+        return type("R", (), {"stdout": ""})()
+
+    monkeypatch.setattr(chrome_launcher.subprocess, "run", fake_run)
+    chrome_launcher.profile_holder_pid(tmp_path)
+    assert seen and seen[0][:3] == ["pgrep", "-f", "--"], seen
