@@ -751,7 +751,7 @@ def test_scan_targets_fails_closed_when_the_scan_times_out(tmp_path: Path) -> No
 # --- End-to-end output shape ---
 
 
-def test_main_prints_only_the_contract_json_line_with_all_content_on_a_clean_scan(
+def test_main_prints_only_the_base64_zip_line_with_all_content_on_a_clean_scan(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """The clean path: exactly one line of base64, decoding to one zip with the
@@ -827,7 +827,7 @@ def test_main_reports_no_chat_transcript_when_the_agent_tree_is_empty(
         assert _notes_lines(archive) == ["recent chats: no chat transcripts exist in this workspace"]
 
 
-def test_main_omits_an_unrequested_content_type_from_both_zip_and_omissions(
+def test_main_omits_an_unrequested_content_type_from_both_members_and_notes(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """--logs alone must not mention the transcript anywhere, even in a workspace
