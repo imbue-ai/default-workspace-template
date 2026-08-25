@@ -18,9 +18,11 @@ def _derive(
     tail_event_type: str | None = "assistant_message",
     tail_is_final_answer: bool = True,
 ) -> ActivityState:
+    # Accepted and deliberately dropped: derive no longer reads the marker at all, and the
+    # tests below assert exactly that it cannot change the answer.
+    del is_active_marker_present
     return derive(
         is_agent_alive=is_agent_alive,
-        is_active_marker_present=is_active_marker_present,
         has_pending_tool_use=has_pending_tool_use,
         tail_event_type=tail_event_type,
         tail_is_final_answer=tail_is_final_answer,
@@ -96,12 +98,13 @@ def test_an_empty_planner_tail_survives_the_marker_dropping() -> None:
     )
 
 
-def test_the_marker_alone_still_means_thinking() -> None:
-    """A turn that committed between transcript polls: the tail still reads finished, but agy
-    is demonstrably working. Erring to THINKING here only ever holds a message."""
+def test_the_marker_can_never_hold_the_dot_on() -> None:
+    """The regression that latched the dot: a rung reading "marker present -> THINKING" has no
+    edge that leaves it, because no watcher notifies on a marker-only change. Every harness
+    keeps the marker gating toward IDLE only; the transcript decides the working side."""
     assert (
         _derive(is_active_marker_present=True, tail_event_type="assistant_message", tail_is_final_answer=True)
-        == ActivityState.THINKING
+        == ActivityState.IDLE
     )
 
 

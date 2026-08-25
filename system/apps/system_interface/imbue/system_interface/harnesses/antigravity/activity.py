@@ -58,10 +58,10 @@ class AntigravityActivityTracker(HarnessActivityTracker):
         return derive(
             # NOT resolve_is_agent_running: that folds the marker into liveness, and agy's
             # marker is absent for the whole of every tool call (its statusLine reports only
-            # idle/thinking). Passing the two apart lets the ladder keep the marker as a
-            # supporting rung instead of an override -- see activity_state.derive.
+            # idle/thinking), so it would force IDLE mid-chain. agy's dot is decided by the
+            # transcript alone; ``is_active_marker_present`` is deliberately unused here --
+            # see activity_state.derive for why the marker must never assert THINKING.
             is_agent_alive=not is_lifecycle_dead(lifecycle_state),
-            is_active_marker_present=is_active_marker_present,
             has_pending_tool_use=self._has_pending_tool_use,
             tail_event_type=self._last_event_type,
             tail_is_final_answer=tail_is_final,
