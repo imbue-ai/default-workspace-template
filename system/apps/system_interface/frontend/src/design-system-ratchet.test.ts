@@ -27,7 +27,10 @@ const BASELINES = {
   // var(--font-size-*). The remaining 4 are icon glyphs (chevrons, +, ×) that
   // are sized independently of the text scale, each marked design-system-exception.
   fontSizePx: 4,
-  borderRadiusPx: 55,
+  // Tightened after the radius de-dup: raw 6px border-radii now use
+  // var(--radius-base). The remaining 40 are values with no token yet (8/12/…),
+  // handled when a radius scale lands (needs non-colliding names, like type).
+  borderRadiusPx: 40,
   zIndexLiteral: 18,
 } as const;
 

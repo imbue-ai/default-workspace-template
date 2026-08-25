@@ -289,7 +289,7 @@ body {
   width: max-content;
   max-width: 260px;
   padding: 6px 9px;
-  border-radius: 6px;
+  border-radius: var(--radius-base);
   background: var(--color-text-primary);
   color: #fff;
   font-size: var(--font-size-helper);
@@ -359,7 +359,7 @@ body {
   width: max-content;
   max-width: 300px;
   padding: 6px 9px;
-  border-radius: 6px;
+  border-radius: var(--radius-base);
   background: var(--color-text-primary);
   color: #fff;
   font-size: var(--font-size-helper);
@@ -559,7 +559,7 @@ body {
   width: max-content;
   max-width: 240px;
   padding: 6px 9px;
-  border-radius: 6px;
+  border-radius: var(--radius-base);
   background: var(--color-text-primary);
   color: #fff;
   font-family: var(--font-family-base);
@@ -706,7 +706,7 @@ body {
   width: 36px;
   height: 36px;
   object-fit: cover;
-  border-radius: 6px;
+  border-radius: var(--radius-base);
   flex-shrink: 0;
 }
 
@@ -1028,7 +1028,7 @@ body {
   line-height: var(--_option-height);
   display: block;
   padding: 0 10px;
-  border-radius: 6px;
+  border-radius: var(--radius-base);
   cursor: pointer;
   white-space: nowrap;
   overflow: hidden;
@@ -1446,7 +1446,7 @@ body {
 /* Light-red tint on the failure text; a grey note below when it's the model
    provider's fault (a 5xx / overloaded) rather than our request. */
 .message-api-error {
-  border-radius: 6px;
+  border-radius: var(--radius-base);
   padding: 0.5em 0.75em;
   background: rgba(220, 38, 38, 0.08);
   color: #dc2626;
@@ -1605,7 +1605,7 @@ body {
 .permission-request-badge--sm {
   width: 24px;
   height: 24px;
-  border-radius: 6px;
+  border-radius: var(--radius-base);
 }
 
 .permission-request-info {
@@ -1665,7 +1665,7 @@ body {
   font-size: var(--font-size-helper);
   color: var(--color-text-secondary);
   background: var(--color-bg-sidebar);
-  border-radius: 6px;
+  border-radius: var(--radius-base);
   padding: 8px;
   overflow: auto;
   white-space: pre-wrap;
@@ -2088,7 +2088,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 .dockview-theme-light .dv-tabs-overflow-dropdown-default {
   gap: 4px;
   padding: 0 6px;
-  border-radius: 6px;
+  border-radius: var(--radius-base);
   color: var(--color-text-secondary);
   font-size: var(--font-size-helper);
   cursor: pointer;
@@ -2482,7 +2482,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   gap: 6px;
   max-width: 400px;
   padding: 4px 8px;
-  border-radius: 6px;
+  border-radius: var(--radius-base);
   background: #000000;
   color: #ffffff;
   font-size: var(--font-size-helper);
@@ -2812,7 +2812,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   font-family: inherit;
   font-size: var(--font-size-body);
   font-weight: 600;
-  border-radius: 6px;
+  border-radius: var(--radius-base);
   cursor: pointer;
   border: none;
   background: #1e293b;
@@ -3436,7 +3436,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   width: 28px;
   height: 28px;
   margin: -4px;
-  border-radius: 6px;
+  border-radius: var(--radius-base);
   cursor: pointer;
   color: var(--color-text-secondary);
   display: flex;
@@ -3536,7 +3536,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   padding: 4px 8px;
   background: transparent;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-base);
   cursor: pointer;
   font: inherit;
   font-size: var(--font-size-body);
@@ -3697,7 +3697,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   margin-top: 8px;
   padding: 8px 10px;
   border: 1px solid var(--color-border);
-  border-radius: 6px;
+  border-radius: var(--radius-base);
   background: var(--color-surface);
   font-family: var(--font-family-mono);
   font-size: var(--font-size-helper);
@@ -4096,7 +4096,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   height: 36px;
   padding: 0;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-base);
   background: transparent;
   color: rgba(255, 255, 255, 0.85);
   cursor: pointer;
