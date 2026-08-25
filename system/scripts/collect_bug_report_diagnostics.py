@@ -6,17 +6,14 @@ Invoked by the minds desktop app via a small ``mngr exec`` as
 [--transcript] [--scan-timeout=<seconds>]``. Stdlib only (no venv, no
 third-party imports), targeting the container's system python3 (3.11+).
 
-Prints exactly one line: a JSON object of the shape
-
-    {"contract_version": 1, "zip": "<base64 of a zip>", "omissions": {...}}
-
-``zip`` is absent (not empty) when nothing was collected. The zip holds
-``metadata.json`` plus one ``logs/<program>.log`` member per collected log
-(when --logs scanned clean) and one ``chats/<agent-id>-<harness>.jsonl`` per
-selected agent conversation, newest first (when --transcript scanned clean).
-``omissions`` explains, per requested content type, anything that was
-withheld; a content type that was not requested appears in neither the zip
-nor omissions.
+Prints exactly one line -- the base64 of a zip -- and nothing at all when no
+content type was requested. The zip holds ``metadata.json`` plus one
+``logs/<program>.log`` member per collected log (when --logs scanned clean)
+and one ``chats/<agent-name>-<harness>.jsonl`` per selected agent
+conversation, newest first (when --transcript scanned clean). Anything
+requested that was withheld is a plain-words line in the archive's own
+``collection-notes.txt`` member, so the archive explains itself; a content
+type that was not requested appears in neither the members nor the notes.
 
 Nothing leaves the container unscanned: every chat, the logs text, and each
 future zip member's own filename are staged as PLAINTEXT and run through the
