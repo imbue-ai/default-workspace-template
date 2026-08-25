@@ -51,18 +51,65 @@
   --radius-base: 6px;
   --radius-bubble: 18px;
   --radius-composer: 16px;
+  /* Typography scale — role-based; see the .type-* classes below. Unit: px. */
+  --font-size-heading-lg: 24px;
+  --font-size-heading: 18px;
+  --font-size-body: 14px;
+  --font-size-helper: 12px;
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
   --logo-url: none;
 }
 
 body {
   font-family: var(--font-family-base);
-  font-size: 15px;
+  font-size: var(--font-size-body);
   color: var(--color-text-primary);
   background-color: var(--color-bg);
   margin: 0;
   height: 100vh;
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
+}
+
+/* ── Typography roles ───────────────────────────────────────────────────────
+ * The role-based type system. Prefer these classes (or the --font-size-* /
+ * --weight-* tokens) over hand-set font-size/weight. See docs/design-system.md.
+ * `medium` (500) is a valid weight but is intentionally NOT used on interactive
+ * controls (buttons/tabs) — that treatment comes with the Button/Tab primitive. */
+.type-heading-lg {
+  font-size: var(--font-size-heading-lg);
+  font-weight: var(--weight-bold);
+  line-height: 1.25;
+}
+.type-heading {
+  font-size: var(--font-size-heading);
+  font-weight: var(--weight-semibold);
+  line-height: 1.3;
+}
+.type-label {
+  font-size: var(--font-size-body);
+  font-weight: var(--weight-semibold);
+  line-height: 1.4;
+}
+.type-body {
+  font-size: var(--font-size-body);
+  font-weight: var(--weight-regular);
+  line-height: 1.5;
+}
+.type-helper {
+  font-size: var(--font-size-helper);
+  font-weight: var(--weight-regular);
+  line-height: 1.4;
+}
+.type-section {
+  font-size: var(--font-size-helper);
+  font-weight: var(--weight-semibold);
+  line-height: 1.3;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
 /* Spacer for the Minds desktop client title bar. When running inside the
@@ -91,13 +138,13 @@ body {
 
 .app-header-title {
   font-family: var(--font-family-heading);
-  font-size: 17px;
+  font-size: var(--font-size-heading);
   font-weight: 600;
   color: var(--color-text-primary);
 }
 
 .app-header-model-badge {
-  font-size: 12px;
+  font-size: var(--font-size-helper);
   font-family: var(--font-family-mono);
   color: var(--color-text-secondary);
   background: var(--color-bg-sidebar);
@@ -135,7 +182,7 @@ body {
   background: var(--color-bg-user-bubble);
   border-radius: var(--radius-bubble) var(--radius-bubble) 4px var(--radius-bubble);
   padding: 12px 18px;
-  font-size: 15px;
+  font-size: var(--font-size-body);
   line-height: 1.5;
   color: var(--color-text-primary);
   /* Break long unbreakable tokens (e.g. API keys, URLs) so they wrap inside
@@ -188,7 +235,7 @@ body {
 
 .queued-header-label {
   font-family: var(--font-family-base);
-  font-size: 12px;
+  font-size: var(--font-size-helper);
   font-weight: 500;
   letter-spacing: 0.02em;
   color: var(--color-text-secondary);
@@ -206,7 +253,7 @@ body {
   height: 28px;
   padding: 0 12px;
   font-family: var(--font-family-base);
-  font-size: 13px;
+  font-size: var(--font-size-body);
   color: var(--color-text-secondary);
   background: none;
   border: 1px solid var(--color-border);
@@ -245,7 +292,7 @@ body {
   border-radius: 6px;
   background: var(--color-text-primary);
   color: #fff;
-  font-size: 12px;
+  font-size: var(--font-size-helper);
   font-weight: 400;
   line-height: 1.4;
   white-space: normal;
@@ -289,7 +336,7 @@ body {
 .queued-info {
   position: relative;
   flex-shrink: 0;
-  font-size: 12px;
+  font-size: var(--font-size-helper);
   line-height: 1;
   color: var(--color-text-secondary);
   opacity: 0.7;
@@ -315,7 +362,7 @@ body {
   border-radius: 6px;
   background: var(--color-text-primary);
   color: #fff;
-  font-size: 12px;
+  font-size: var(--font-size-helper);
   font-weight: 400;
   line-height: 1.4;
   white-space: normal;
@@ -354,7 +401,7 @@ body {
 .outgoing-status {
   margin-top: 3px;
   font-family: var(--font-family-base);
-  font-size: 11px;
+  font-size: var(--font-size-helper);
   color: var(--color-text-secondary);
 }
 
@@ -401,7 +448,7 @@ body {
   height: 30px;
   padding: 0 8px;
   font-family: var(--font-family-base);
-  font-size: 13px;
+  font-size: var(--font-size-body);
   color: var(--color-text-secondary);
   background: none;
   border: none;
@@ -437,7 +484,7 @@ body {
   height: 30px;
   padding: 0 8px;
   font-family: var(--font-family-base);
-  font-size: 13px;
+  font-size: var(--font-size-body);
   color: var(--color-text-secondary);
   white-space: nowrap;
   user-select: none;
@@ -469,7 +516,7 @@ body {
 
 .message-input-textbox {
   font-family: var(--font-family-base);
-  font-size: 15px;
+  font-size: var(--font-size-body);
   line-height: 1.5;
   color: var(--color-text-primary);
   background: transparent;
@@ -516,7 +563,7 @@ body {
   background: var(--color-text-primary);
   color: #fff;
   font-family: var(--font-family-base);
-  font-size: 12px;
+  font-size: var(--font-size-helper);
   font-weight: 400;
   line-height: 1.4;
   white-space: nowrap;
@@ -695,7 +742,7 @@ body {
 }
 
 .composer-attachment-name {
-  font-size: 13px;
+  font-size: var(--font-size-body);
   color: var(--color-text-primary);
   white-space: nowrap;
   overflow: hidden;
@@ -703,7 +750,7 @@ body {
 }
 
 .composer-attachment-detail {
-  font-size: 11px;
+  font-size: var(--font-size-helper);
   color: var(--color-text-secondary);
 }
 
@@ -749,7 +796,7 @@ body {
   background: var(--color-surface);
   border: 1px solid var(--color-accent);
   border-radius: 999px;
-  font-size: 14px;
+  font-size: var(--font-size-body);
   font-weight: 500;
   color: var(--color-accent);
   box-shadow: 0 2px 12px rgba(55, 53, 47, 0.12);
@@ -819,14 +866,14 @@ body {
 }
 
 .message-attachment-file-name {
-  font-size: 14px;
+  font-size: var(--font-size-body);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .message-attachment-file-size {
-  font-size: 11px;
+  font-size: var(--font-size-helper);
   color: var(--color-text-secondary);
 }
 
@@ -842,7 +889,7 @@ body {
   align-items: center;
   height: 30px;
   padding: 0 6px;
-  font-size: 15px;
+  font-size: var(--font-size-body);
   color: var(--color-text-secondary);
   user-select: none;
 }
@@ -858,7 +905,7 @@ body {
   gap: 4px;
   height: 30px;
   font-family: var(--font-family-base);
-  font-size: 13px;
+  font-size: var(--font-size-body);
   color: var(--color-text-secondary);
   background: none;
   border: none;
@@ -909,7 +956,7 @@ body {
 
 .model-selector-dropdown-header {
   font-family: var(--font-family-base);
-  font-size: 12px;
+  font-size: var(--font-size-helper);
   font-weight: 500;
   color: var(--color-text-faint);
   padding: 4px 10px 6px;
@@ -949,7 +996,7 @@ body {
   outline: none;
   background: none;
   font-family: var(--font-family-base);
-  font-size: 13px;
+  font-size: var(--font-size-body);
   color: var(--color-text-primary);
 }
 
@@ -975,7 +1022,7 @@ body {
 
 .model-selector-option {
   font-family: var(--font-family-base);
-  font-size: 13px;
+  font-size: var(--font-size-body);
   color: var(--color-text-primary);
   height: var(--_option-height);
   line-height: var(--_option-height);
@@ -1079,7 +1126,7 @@ body {
 /* ── Markdown content styling ── */
 .markdown-content {
   line-height: 1.5;
-  font-size: 15px;
+  font-size: var(--font-size-body);
   color: var(--color-text-primary);
 }
 
@@ -1172,7 +1219,7 @@ body {
   background-color: transparent;
   padding: 0;
   border-radius: 0;
-  font-size: 13px;
+  font-size: var(--font-size-body);
   line-height: 1.55;
 }
 
@@ -1203,7 +1250,7 @@ body {
   left: 10px;
   top: 14px;
   font-family: var(--font-family-mono);
-  font-size: 13px;
+  font-size: var(--font-size-body);
   line-height: 1.55;
   color: var(--color-text-faint);
   transition: transform 150ms;
@@ -1319,7 +1366,7 @@ body {
   gap: 6px;
   padding: 3px 10px;
   font-family: var(--font-family-mono);
-  font-size: 13px;
+  font-size: var(--font-size-body);
   color: var(--color-text-secondary);
   cursor: pointer;
   user-select: none;
@@ -1344,7 +1391,7 @@ body {
 }
 
 .tool-call-chevron {
-  font-size: 10px;
+  font-size: 10px; /* design-system-exception: icon glyph (chevron), sized independently of the text scale */
   transition: transform 150ms;
   display: inline-block;
 }
@@ -1383,7 +1430,7 @@ body {
 .tool-call-input pre code,
 .tool-call-output pre code {
   font-family: var(--font-family-mono);
-  font-size: 12px;
+  font-size: var(--font-size-helper);
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-all;
@@ -1460,7 +1507,7 @@ body {
 }
 
 .subagent-card-description {
-  font-size: 13px;
+  font-size: var(--font-size-body);
   font-weight: 500;
   color: var(--color-text-primary);
   white-space: nowrap;
@@ -1469,7 +1516,7 @@ body {
 }
 
 .subagent-card-type-badge {
-  font-size: 11px;
+  font-size: var(--font-size-helper);
   font-family: var(--font-family-mono);
   color: var(--color-accent);
   background: var(--color-bg);
@@ -1481,7 +1528,7 @@ body {
 }
 
 .subagent-card-link {
-  font-size: 13px;
+  font-size: var(--font-size-body);
   color: var(--color-accent);
   text-decoration: none;
   white-space: nowrap;
@@ -1524,13 +1571,13 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: var(--font-size-helper);
   color: var(--color-text-secondary);
 }
 
 .permission-request-status {
   margin-top: 9px;
-  font-size: 13px;
+  font-size: var(--font-size-body);
   color: var(--color-text-secondary);
 }
 
@@ -1567,13 +1614,13 @@ body {
 }
 
 .permission-request-title {
-  font-size: 13px;
+  font-size: var(--font-size-body);
   font-weight: 600;
   color: var(--color-text-primary);
 }
 
 .permission-request-reason {
-  font-size: 12px;
+  font-size: var(--font-size-helper);
   line-height: 1.45;
   color: var(--color-text-secondary);
 }
@@ -1595,7 +1642,7 @@ body {
 }
 
 .permission-request-raw-toggle {
-  font-size: 12px;
+  font-size: var(--font-size-helper);
   color: var(--color-text-faint);
   background: transparent;
   border: none;
@@ -1615,7 +1662,7 @@ body {
 .permission-request-raw > pre {
   margin: 0;
   font-family: ui-monospace, monospace;
-  font-size: 12px;
+  font-size: var(--font-size-helper);
   color: var(--color-text-secondary);
   background: var(--color-bg-sidebar);
   border-radius: 6px;
@@ -1625,7 +1672,7 @@ body {
 }
 
 .permission-request-button {
-  font-size: 13px;
+  font-size: var(--font-size-body);
   font-weight: 500;
   color: #fff;
   background: var(--color-accent);
@@ -1665,7 +1712,7 @@ body {
 
 .permission-request-receipt-title {
   min-width: 0;
-  font-size: 13px;
+  font-size: var(--font-size-body);
   font-weight: 600;
   color: var(--color-text-primary);
   overflow: hidden;
@@ -1685,7 +1732,7 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 12px;
+  font-size: var(--font-size-helper);
   font-weight: 600;
   flex-shrink: 0;
 }
@@ -2043,7 +2090,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   padding: 0 6px;
   border-radius: 6px;
   color: var(--color-text-secondary);
-  font-size: 12px;
+  font-size: var(--font-size-helper);
   cursor: pointer;
 }
 
@@ -2105,7 +2152,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 
 .dockview-theme-light .dv-default-tab {
   font-family: var(--font-family-base);
-  font-size: 13px;
+  font-size: var(--font-size-body);
   font-weight: 500;
   padding: var(--si-tab-padding);
   gap: 8px;
@@ -2202,7 +2249,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   border: none;
   background: none;
   color: var(--color-text-secondary);
-  font-size: 18px;
+  font-size: 18px; /* design-system-exception: icon glyph (+ add-tab), not text */
   font-weight: 300;
   cursor: pointer;
   line-height: 1;
@@ -2243,7 +2290,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 
 .custom-url-dialog-title {
   font-family: var(--font-family-heading);
-  font-size: 16px;
+  font-size: var(--font-size-heading);
   font-weight: 600;
   color: var(--color-text-primary);
   margin: 0 0 16px;
@@ -2251,7 +2298,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 
 .custom-url-dialog-label {
   display: block;
-  font-size: 13px;
+  font-size: var(--font-size-body);
   font-weight: 500;
   color: var(--color-text-secondary);
   margin-bottom: 4px;
@@ -2262,7 +2309,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   width: 100%;
   padding: 8px 12px;
   font-family: var(--font-family-base);
-  font-size: 14px;
+  font-size: var(--font-size-body);
   color: var(--color-text-primary);
   background: var(--color-bg);
   border: 1px solid var(--color-border);
@@ -2287,7 +2334,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 .custom-url-dialog-open {
   padding: 6px 16px;
   font-family: var(--font-family-base);
-  font-size: 13px;
+  font-size: var(--font-size-body);
   font-weight: 500;
   border-radius: var(--radius-base);
   cursor: pointer;
@@ -2438,7 +2485,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   border-radius: 6px;
   background: #000000;
   color: #ffffff;
-  font-size: 12px;
+  font-size: var(--font-size-helper);
   font-weight: 400;
   line-height: 1.4;
   text-align: center;
@@ -2534,14 +2581,14 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 
 .destroy-dialog-title {
   font-family: var(--font-family-heading);
-  font-size: 16px;
+  font-size: var(--font-size-heading);
   font-weight: 600;
   color: var(--color-text-primary);
   margin: 0 0 12px;
 }
 
 .destroy-dialog-message {
-  font-size: 14px;
+  font-size: var(--font-size-body);
   color: var(--color-text-secondary);
   margin: 0 0 16px;
   line-height: 1.5;
@@ -2556,7 +2603,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 .destroy-dialog-btn {
   padding: 8px 16px;
   font-family: var(--font-family-base);
-  font-size: 13px;
+  font-size: var(--font-size-body);
   font-weight: 500;
   border-radius: var(--radius-base);
   cursor: pointer;
@@ -2627,14 +2674,14 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 
 .fast-mode-modal-title {
   font-family: var(--font-family-heading);
-  font-size: 16px;
+  font-size: var(--font-size-heading);
   font-weight: 600;
   color: var(--color-text-primary);
   margin: 0;
 }
 
 .fast-mode-modal-message {
-  font-size: 14px;
+  font-size: var(--font-size-body);
   color: var(--color-text-secondary);
   margin: 0 0 16px;
   line-height: 1.5;
@@ -2658,7 +2705,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 .fast-mode-modal-btn {
   padding: 8px 16px;
   font-family: var(--font-family-base);
-  font-size: 13px;
+  font-size: var(--font-size-body);
   font-weight: 500;
   border-radius: var(--radius-base);
   cursor: pointer;
@@ -2718,26 +2765,26 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 
 .share-modal-title {
   font-family: var(--font-family-heading);
-  font-size: 16px;
+  font-size: var(--font-size-heading);
   font-weight: 600;
   color: var(--color-text-primary);
   margin: 0 0 16px;
 }
 
 .share-modal-loading {
-  font-size: 14px;
+  font-size: var(--font-size-body);
   color: var(--color-text-secondary);
   margin: 0 0 16px;
 }
 
 .share-modal-error {
-  font-size: 14px;
+  font-size: var(--font-size-body);
   color: #dc2626;
   margin: 0 0 12px;
 }
 
 .share-modal-label {
-  font-size: 14px;
+  font-size: var(--font-size-body);
   color: var(--color-text-secondary);
   margin: 0 0 12px;
 }
@@ -2752,7 +2799,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   flex: 1;
   padding: 8px 12px;
   font-family: var(--font-family-mono, monospace);
-  font-size: 13px;
+  font-size: var(--font-size-body);
   color: var(--color-text-primary);
   background: var(--color-bg);
   border: 1px solid var(--color-border);
@@ -2763,7 +2810,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 .share-modal-btn {
   padding: 6px 16px;
   font-family: inherit;
-  font-size: 14px;
+  font-size: var(--font-size-body);
   font-weight: 600;
   border-radius: 6px;
   cursor: pointer;
@@ -2806,7 +2853,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 }
 
 .share-modal-empty {
-  font-size: 13px;
+  font-size: var(--font-size-body);
   color: var(--color-text-secondary);
   font-style: italic;
   margin: 8px 0;
@@ -2823,7 +2870,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   align-items: center;
   justify-content: space-between;
   padding: 4px 8px;
-  font-size: 13px;
+  font-size: var(--font-size-body);
   color: var(--color-text-primary);
 }
 
@@ -2832,7 +2879,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   border: none;
   color: var(--color-text-secondary);
   cursor: pointer;
-  font-size: 14px;
+  font-size: var(--font-size-body);
   padding: 2px 6px;
   border-radius: 3px;
 }
@@ -2852,7 +2899,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   flex: 1;
   padding: 6px 10px;
   font-family: var(--font-family-base);
-  font-size: 13px;
+  font-size: var(--font-size-body);
   color: var(--color-text-primary);
   background: var(--color-bg);
   border: 1px solid var(--color-border);
@@ -2879,7 +2926,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   background: none;
   border: none;
   color: var(--color-text-secondary);
-  font-size: 18px;
+  font-size: 18px; /* design-system-exception: icon glyph (× close), not text */
   cursor: pointer;
   padding: 4px 8px;
   border-radius: 4px;
@@ -2951,7 +2998,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   /* The "glint" that sweeps across active-step narration. Kept independent of
      the text scale so the shimmer stays visible against the muted caption. */
   --pv-shimmer: #bcbcbc;
-  font-size: 14.5px;
+  font-size: var(--font-size-body);
   line-height: 1.5;
   color: var(--pv-fg);
 }
@@ -2999,7 +3046,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 .pv-chev {
   display: inline-block;
   margin-left: 6px;
-  font-size: 18px;
+  font-size: 18px; /* design-system-exception: icon glyph (chevron), not text */
   color: var(--pv-fg-muted);
   transition: transform 0.15s ease;
   font-weight: 400;
@@ -3018,7 +3065,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   font: inherit;
   text-align: left;
   cursor: pointer;
-  font-size: 14.5px;
+  font-size: var(--font-size-body);
   font-weight: 500;
   color: var(--pv-fg);
   line-height: 1.4;
@@ -3080,7 +3127,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 .pv-tl-summary {
   margin-top: 3px;
   padding-left: 2px;
-  font-size: 13px;
+  font-size: var(--font-size-body);
   color: var(--pv-fg-muted);
   line-height: 1.5;
 }
@@ -3088,7 +3135,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 .pv-tl-narration {
   margin-top: 3px;
   padding-left: 2px;
-  font-size: 13px;
+  font-size: var(--font-size-body);
   font-style: italic;
   color: var(--pv-fg-muted);
   line-height: 1.5;
@@ -3115,7 +3162,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 .pv-tl-narration--static {
   margin-top: 3px;
   padding-left: 2px;
-  font-size: 13px;
+  font-size: var(--font-size-body);
   font-style: italic;
   color: var(--pv-fg-muted);
   line-height: 1.5;
@@ -3188,7 +3235,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   margin-right: 8px;
   padding: 0 6px;
   font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: 11.5px;
+  font-size: var(--font-size-helper);
   font-weight: 500;
   letter-spacing: 0.01em;
   color: var(--pv-fg-muted);
@@ -3201,7 +3248,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
    we keep the title weight lighter and the typography slightly de-emphasized. */
 .pv-tl-node--step .pv-tl-title {
   font-weight: 500;
-  font-size: 13.5px;
+  font-size: var(--font-size-body);
   color: var(--pv-fg-soft);
 }
 
@@ -3216,7 +3263,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   margin-top: 10px;
   padding: 4px 0 4px 14px;
   border-left: 2px solid var(--pv-line-faint);
-  font-size: 14px;
+  font-size: var(--font-size-body);
 }
 .pv-expanded p {
   margin: 0 0 0.6em;
@@ -3234,7 +3281,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 .pv-final {
   margin-top: 16px;
   padding: 0;
-  font-size: 15px;
+  font-size: var(--font-size-body);
   line-height: 1.5;
   color: var(--pv-fg);
 }
@@ -3244,7 +3291,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 .pv-lead {
   margin-bottom: 16px;
   padding: 0;
-  font-size: 15px;
+  font-size: var(--font-size-body);
   line-height: 1.5;
   color: var(--pv-fg);
 }
@@ -3306,7 +3353,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   width: 100%;
   max-width: var(--width-message-column);
   padding: 0 4px;
-  font-size: 12.5px;
+  font-size: var(--font-size-helper);
   color: var(--color-text-secondary);
 }
 
@@ -3376,7 +3423,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 }
 
 .claude-login-title {
-  font-size: 1.0625rem;
+  font-size: var(--font-size-heading);
   font-weight: 600;
   color: var(--color-text-primary);
   margin: 0;
@@ -3433,7 +3480,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 .claude-login-lead {
   color: var(--color-text-secondary);
   margin: 0 0 18px;
-  font-size: 0.875rem;
+  font-size: var(--font-size-body);
   line-height: 1.5;
 }
 
@@ -3458,7 +3505,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 }
 
 .claude-login-primary-headline {
-  font-size: 1.05rem;
+  font-size: var(--font-size-heading);
   font-weight: 700;
   color: var(--color-text-primary);
   margin: 0 0 4px;
@@ -3466,7 +3513,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 }
 
 .claude-login-primary-sub {
-  font-size: 0.85rem;
+  font-size: var(--font-size-body);
   color: var(--color-text-secondary);
   line-height: 1.5;
   margin: 0 auto 16px;
@@ -3492,7 +3539,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   border-radius: 6px;
   cursor: pointer;
   font: inherit;
-  font-size: 0.82rem;
+  font-size: var(--font-size-body);
   font-weight: 600;
   color: var(--color-text-secondary);
 }
@@ -3560,13 +3607,13 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 }
 
 .claude-login-alt-name {
-  font-size: 0.875rem;
+  font-size: var(--font-size-body);
   font-weight: 600;
   color: var(--color-text-primary);
 }
 
 .claude-login-alt-desc {
-  font-size: 0.78rem;
+  font-size: var(--font-size-helper);
   color: var(--color-text-secondary);
   line-height: 1.4;
 }
@@ -3595,7 +3642,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 0.8125rem;
+  font-size: var(--font-size-body);
   font-weight: 600;
   color: var(--color-text-primary);
   margin-bottom: 8px;
@@ -3610,13 +3657,13 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   border-radius: 50%;
   background: var(--color-accent);
   color: #fff;
-  font-size: 0.6875rem;
+  font-size: var(--font-size-helper);
   font-weight: 600;
 }
 
 /* "Copy the link" fallback under the Open-sign-in-page button */
 .claude-login-copylink {
-  font-size: 0.78rem;
+  font-size: var(--font-size-helper);
   color: var(--color-text-secondary);
   line-height: 1.5;
   margin: 9px 0 0;
@@ -3624,7 +3671,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 
 .claude-login-copylink-action {
   font: inherit;
-  font-size: 0.78rem;
+  font-size: var(--font-size-helper);
   font-weight: 600;
   color: var(--color-accent);
   background: transparent;
@@ -3653,7 +3700,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   border-radius: 6px;
   background: var(--color-surface);
   font-family: var(--font-family-mono);
-  font-size: 0.75rem;
+  font-size: var(--font-size-helper);
   line-height: 1.4;
   color: var(--color-text-primary);
   word-break: break-all;
@@ -3681,7 +3728,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   padding: 9px 12px;
   border: 1px solid var(--color-border);
   border-radius: 8px;
-  font-size: 0.875rem;
+  font-size: var(--font-size-body);
   color: var(--color-text-primary);
   background: var(--color-surface);
   transition:
@@ -3692,7 +3739,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 
 .claude-login-input--mono {
   font-family: var(--font-family-mono);
-  font-size: 0.8125rem;
+  font-size: var(--font-size-body);
   letter-spacing: 0.01em;
 }
 
@@ -3714,7 +3761,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   background: transparent;
   border: none;
   padding: 4px 8px;
-  font-size: 0.75rem;
+  font-size: var(--font-size-helper);
   color: var(--color-text-secondary);
   cursor: pointer;
   border-radius: 4px;
@@ -3726,7 +3773,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 }
 
 .claude-login-helper {
-  font-size: 0.75rem;
+  font-size: var(--font-size-helper);
   color: var(--color-text-secondary);
   margin-top: 6px;
   line-height: 1.4;
@@ -3738,7 +3785,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 
 /* Muted "currently signed in via ..." header on the provider-selection screen */
 .claude-login-current-mode {
-  font-size: 0.75rem;
+  font-size: var(--font-size-helper);
   color: var(--color-text-faint);
   text-align: center;
   margin: 0 0 10px;
@@ -3756,14 +3803,14 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 0.8125rem;
+  font-size: var(--font-size-body);
   color: var(--color-text-secondary);
   padding: 6px 0;
 }
 
 /* Body copy for the /logout interception notice dialog */
 .logout-notice-body {
-  font-size: 0.875rem;
+  font-size: var(--font-size-body);
   color: var(--color-text-secondary);
   line-height: 1.5;
   margin: 8px 0 4px;
@@ -3787,7 +3834,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 0.875rem;
+  font-size: var(--font-size-body);
 }
 
 .claude-login-checklist-icon {
@@ -3834,7 +3881,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   background: none;
   border: none;
   padding: 0;
-  font-size: 0.75rem;
+  font-size: var(--font-size-helper);
   color: var(--color-text-faint);
   cursor: pointer;
   font-family: inherit;
@@ -3860,7 +3907,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 .claude-login-button {
   padding: 8px 16px;
   border-radius: 8px;
-  font-size: 0.875rem;
+  font-size: var(--font-size-body);
   font-weight: 500;
   cursor: pointer;
   transition:
@@ -3928,7 +3975,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   border: 1px solid #f4c7c3;
   border-radius: 8px;
   color: #80261f;
-  font-size: 0.8125rem;
+  font-size: var(--font-size-body);
   line-height: 1.45;
   margin-bottom: 14px;
 }
@@ -3973,14 +4020,14 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 }
 
 .claude-login-status-title {
-  font-size: 1rem;
+  font-size: var(--font-size-heading);
   font-weight: 600;
   color: var(--color-text-primary);
   margin: 0 0 4px;
 }
 
 .claude-login-status-detail {
-  font-size: 0.875rem;
+  font-size: var(--font-size-body);
   color: var(--color-text-secondary);
   margin: 0;
   line-height: 1.5;
@@ -4025,7 +4072,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   max-width: 60%;
   overflow: hidden;
   color: rgba(255, 255, 255, 0.9);
-  font-size: 14px;
+  font-size: var(--font-size-body);
   font-weight: 500;
   text-align: center;
   text-overflow: ellipsis;
@@ -4088,7 +4135,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   gap: 12px;
   flex: 0 0 auto;
   padding: 6px 10px;
-  font-size: 0.8125rem;
+  font-size: var(--font-size-body);
   line-height: 1.4;
   color: var(--color-text-secondary);
   background: var(--color-bg-secondary, #f8fafc);
@@ -4112,7 +4159,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 
 .terminal-banner-btn {
   padding: 2px 8px;
-  font-size: 0.75rem;
+  font-size: var(--font-size-helper);
   color: var(--color-text-secondary);
   background: transparent;
   border: 1px solid var(--color-border, #e5e7eb);

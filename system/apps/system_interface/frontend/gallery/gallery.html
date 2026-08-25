@@ -150,10 +150,11 @@
 
       <!-- ── Type scale ────────────────────────────────────────────────── -->
       <section class="gy-section" data-shot="tokens-type">
-        <h2>Type scale</h2>
+        <h2>Typography roles</h2>
         <div class="gy-pad"><div class="gy-stack" id="gy-type"></div></div>
         <div class="gy-note">
-          Body default is 15px. Proposed <code>--text-*</code> tokens appear here once added to <code>@theme</code>.
+          Role-based type system: each <code>.type-*</code> class bundles size + weight + treatment. Body default is
+          14px. Sizes come from <code>--font-size-*</code>; weights from <code>--weight-*</code>.
         </div>
       </section>
 
@@ -400,30 +401,22 @@
       }
       if (colorCount === 0) document.getElementById("gy-colors-empty").hidden = false;
 
-      // Type scale: proposed --text-* tokens plus the literal body sizes in use.
-      const TYPE_TOKENS = [
-        "--text-2xs",
-        "--text-xs",
-        "--text-sm",
-        "--text-base",
-        "--text-md",
-        "--text-lg",
-        "--text-xl",
-        "--text-2xl",
+      // Typography roles: the semantic .type-* classes (size + weight + treatment).
+      const TYPE_ROLES = [
+        "type-heading-lg",
+        "type-heading",
+        "type-label",
+        "type-body",
+        "type-helper",
+        "type-section",
       ];
       const typeHost = document.getElementById("gy-type");
-      const presentType = TYPE_TOKENS.filter((t) => val(t));
-      const typeList = presentType.length
-        ? presentType.map((t) => ({ label: t, size: val(t) }))
-        : // Fallback: the literal sizes actually used today, so the section is
-          // never empty before the token scale lands.
-          ["11px", "12px", "13px", "14px", "15px", "16px", "17px", "18px"].map((s) => ({ label: s, size: s }));
-      for (const { label, size } of typeList) {
+      for (const cls of TYPE_ROLES) {
         const row = document.createElement("div");
-        row.className = "gy-type-sample";
-        row.style.fontSize = size;
-        row.textContent = label + " — The quick brown fox jumps over the lazy dog";
+        row.className = "gy-type-sample " + cls;
         typeHost.append(row);
+        const cs = getComputedStyle(row);
+        row.textContent = `${cls} · ${cs.fontSize} / ${cs.fontWeight} — The quick brown fox jumps over the lazy dog`;
       }
 
       // Spacing scale: proposed --space-* tokens; fall back to the common atoms.
