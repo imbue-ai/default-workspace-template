@@ -98,6 +98,15 @@ def _write_log(log_dir: Path, name: str, *, mtime: float, content: str = "") -> 
     return path
 
 
+def _stamp_seconds_ago(age_seconds: float) -> str:
+    """An ISO-8601 ``Z`` timestamp that many seconds before now, as transcripts carry them."""
+    return (
+        datetime.fromtimestamp(time.time() - age_seconds, tz=timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
+
 def _chat_events(marker: str, *, age_seconds: float = 60.0, source: str = "claude") -> str:
     """One conversation's JSONL, carrying ``marker`` and a timestamp of that age.
 
@@ -105,15 +114,10 @@ def _chat_events(marker: str, *, age_seconds: float = 60.0, source: str = "claud
     user_activity_time is unpopulated on real agents), and ``marker`` is what a
     content assertion looks for inside the archived member.
     """
-    stamp = (
-        datetime.fromtimestamp(time.time() - age_seconds, tz=timezone.utc)
-        .isoformat()
-        .replace("+00:00", "Z")
-    )
     return (
         json.dumps(
             {
-                "timestamp": stamp,
+                "timestamp": _stamp_seconds_ago(age_seconds),
                 "type": "user_message",
                 "source": f"{source}/common_transcript",
                 "seq": marker,
@@ -481,23 +485,14 @@ def test_every_chat_written_to_inside_the_window_rides_along_newest_first(
 ) -> None:
     """A bug is rarely about exactly one conversation: a busy window sends more
     than the floor, and a chat outside the window past the floor stays home."""
-    now = time.time()
-
-    def stamp(offset: float) -> str:
-        return (
-            datetime.fromtimestamp(now - offset, tz=timezone.utc)
-            .isoformat()
-            .replace("+00:00", "Z")
-        )
-
     # Six chats inside the two-hour window (one more than the floor) and one
     # outside it: every recent chat rides, the idle one does not.
     recent_names = [f"busy-{index}" for index in range(6)]
     events_by_agent = {
-        name: _transcript_events(name, timestamp=stamp(60 * (index + 1)))
+        name: _transcript_events(name, timestamp=_stamp_seconds_ago(60 * (index + 1)))
         for index, name in enumerate(recent_names)
     }
-    events_by_agent["idle"] = _transcript_events("idle", timestamp=stamp(10_000))
+    events_by_agent["idle"] = _transcript_events("idle", timestamp=_stamp_seconds_ago(10_000))
     stub = _write_mngr_stub(
         tmp_path,
         agents=tuple((name, "", "") for name in [*recent_names, "idle"]),
@@ -518,22 +513,13 @@ def test_a_quiet_window_still_sends_the_five_newest_chats(
     """The floor: at least MIN_TRANSCRIPT_COUNT chats ride when the workspace has
     them, however quiet the window -- a bug filed from a quiet workspace still
     needs its recent history."""
-    now = time.time()
-
-    def stamp(offset: float) -> str:
-        return (
-            datetime.fromtimestamp(now - offset, tz=timezone.utc)
-            .isoformat()
-            .replace("+00:00", "Z")
-        )
-
     # One chat inside the window, six outside it: the window's one plus the
     # next-newest four make the floor of five; the two oldest stay home.
     events_by_agent = {
-        "fresh": _transcript_events("fresh", timestamp=stamp(60)),
+        "fresh": _transcript_events("fresh", timestamp=_stamp_seconds_ago(60)),
         **{
             f"stale-{index}": _transcript_events(
-                f"stale-{index}", timestamp=stamp(10_000 + 100 * index)
+                f"stale-{index}", timestamp=_stamp_seconds_ago(10_000 + 100 * index)
             )
             for index in range(6)
         },
