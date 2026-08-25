@@ -31,10 +31,11 @@ _RAW_SPAWN_RULE = RatchetRuleInfo(
         "The system interface must spawn every subprocess through "
         "imbue.system_interface.subprocess_runner.run_detached_command, which puts the child in its "
         "own session. A child that inherits this service's controlling terminal can stop the whole "
-        "service by restoring terminal modes when it is killed (the kernel sends SIGTTOU to the "
-        "background process group), which wedges the workspace: the socket keeps accepting and "
-        "nothing answers. Do not call run_local_command_modern_version, subprocess.Popen/run, or "
-        "os.system directly -- extend run_detached_command instead."
+        "service just by touching that terminal when it is killed (the kernel answers a read or a "
+        "mode change from a background process group with SIGTTIN / SIGTTOU addressed to the whole "
+        "group), which wedges the workspace: the socket keeps accepting and nothing answers. Do "
+        "not call run_local_command_modern_version, subprocess.Popen/run, or os.system directly "
+        "-- extend run_detached_command instead."
     ),
 )
 

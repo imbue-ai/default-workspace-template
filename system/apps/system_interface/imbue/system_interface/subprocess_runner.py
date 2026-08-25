@@ -12,11 +12,12 @@ terminal.
 
 That is only a problem when a child reaches the terminal, but children do. Redirecting stdio
 does not stop them: the ``claude`` CLI opens ``/dev/tty`` directly even with stdin on
-``DEVNULL`` and stdout/stderr on pipes, and it restores terminal modes while handling the
-SIGTERM the runner sends when a command overruns its timeout. A ``tcsetattr`` from a
-background process group makes the kernel deliver SIGTTOU to that whole group -- so the child
-takes the system interface down with it, stopped mid-call. The listening socket still accepts
-connections and nothing ever answers them, which is exactly how the app goes blank.
+``DEVNULL`` and stdout/stderr on pipes, and it reads that terminal and restores its modes while
+handling the SIGTERM the runner sends when a command overruns its timeout. Both are stopping
+operations from a background process group -- the kernel answers them with SIGTTIN / SIGTTOU
+addressed to the whole group -- so the child takes the system interface down with it, stopped
+mid-call. The listening socket still accepts connections and nothing ever answers them, which
+is exactly how the app goes blank.
 
 Running each child in its own session removes the exposure at the source: it inherits no
 controlling terminal, so ``/dev/tty`` is not openable and there is no group for a terminal
