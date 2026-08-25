@@ -9,6 +9,14 @@
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
+# Pin $HOME to the image-build home. Several installers below follow $HOME (the
+# claude.ai installer, the uv installer, `uv python install` / `uv tool install`),
+# while the checks and PATH entries in this script are fixed to /root/.local. A
+# live re-provision (the update apply, or an agent running this by hand) runs
+# under HOME=/home/user -- root's passwd home at runtime -- so without this pin
+# the installers "succeed" into the wrong home and the version checks fail.
+export HOME=/root
+
 # Skip if this exact repo tree was already provisioned (e.g. baked into the image).
 . "$(dirname "$0")/_provision_guard.sh"
 provision_skip_if_done setup_system
@@ -129,8 +137,16 @@ case "${restic_arch}" in
 esac
 curl -fsSL "${CURL_RETRY[@]}" "https://github.com/restic/restic/releases/download/v${RESTIC_VERSION}/restic_${RESTIC_VERSION}_linux_${restic_goarch}.bz2" -o /tmp/restic.bz2
 echo "${restic_sha256}  /tmp/restic.bz2" | sha256sum -c -
-bunzip2 -c /tmp/restic.bz2 > /usr/local/bin/restic
-chmod +x /usr/local/bin/restic
+# Decompress-then-rename, the same motion as install_downloaded_binary (which
+# cannot be used directly because of the bunzip2 step): a plain `bunzip2 -c >
+# /usr/local/bin/restic` truncates the binary in place, which fails with
+# ETXTBSY when the live host_backup service is executing it during a
+# re-provision. The temp file shares the destination directory so the mv is an
+# atomic same-filesystem rename.
+restic_tmp="$(mktemp /usr/local/bin/restic.XXXXXX)"
+bunzip2 -c /tmp/restic.bz2 > "$restic_tmp"
+chmod 0755 "$restic_tmp"
+mv -f "$restic_tmp" /usr/local/bin/restic
 rm /tmp/restic.bz2
 
 # ttyd (terminal-over-web) binary from GitHub releases (not in apt).
