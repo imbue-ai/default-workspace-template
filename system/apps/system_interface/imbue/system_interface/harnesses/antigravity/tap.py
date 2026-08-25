@@ -4,10 +4,14 @@ Both are claude's shapes with agy's one structural advantage: **we hold the queu
 neither action has to retrieve anything from inside agy. See
 docs/design/antigravity-message-lifecycle-plan.md.
 
-The cancel key is agy's native `cli.escape`, which ends the live turn. Unlike claude there is
-no binding to provision and none to verify -- but also no scoping, so it is only ever pressed
-when a turn is known to be open (an Escape with no turn running is a keystroke into whatever
-agy is showing).
+The cancel key is a SINGLE ctrl+c, agy's native `cli.escape` action, which ends the live turn.
+Unlike claude there is no binding to provision -- but also no scoping, so it is only ever
+pressed when a turn is known to be open.
+
+**One press, never two.** agy reads the first ctrl+c as "interrupt the active operation" and a
+double press as "exit", and its documentation says that exit valve fires regardless of how the
+key is remapped. Both actions below press once and fall back to the restart rather than
+pressing again; a retry here would kill the agent instead of interrupting it.
 """
 
 import time
@@ -108,6 +112,7 @@ class AntigravityInterruptToComposer(InterruptToComposer):
                 return queued_block
             is_pressed = press_chord()
         if not is_pressed or not _wait_for_turn_to_end(self._agent_info):
+            # Deliberately NOT a second press -- see the module docstring.
             logger.warning("antigravity: cancel did not settle for {}; restarting", self._agent_info.name)
             in_flight = get_in_flight_block()
             restart_drain(watcher, restart_process, settle_activity)
