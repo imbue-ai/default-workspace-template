@@ -266,7 +266,20 @@ chose or hands the pass back to 2a with the ceiling's answer.
 
 ### 3b. Launch
 
-Open a tracking ticket, write the task file, launch via the `launch-task`
+First, surface your own chat tab. The minds app sends the user into this
+workspace when it starts an update, and this conversation is what they are
+meant to land on; the workspace UI places the tab in front of whichever client
+is connected when your chat appears, which from outside the workspace is often
+nobody yet. The command detaches a helper that keeps trying until a client is
+there (or gives up after a while), so it returns at once; it is best-effort,
+and a failure is not a reason to stop:
+
+```bash
+python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
+    surface-chat-tab --name "$MNGR_AGENT_NAME"
+```
+
+Then open a tracking ticket, write the task file, launch via the `launch-task`
 machinery, and background-poll.
 
 ```bash

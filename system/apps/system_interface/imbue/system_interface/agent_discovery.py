@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from collections.abc import Callable
 from collections.abc import Sequence
+from datetime import datetime
 from pathlib import Path
 
 from loguru import logger as _loguru_logger
@@ -59,6 +60,7 @@ class AgentInfo(FrozenModel):
         default=DEFAULT_HARNESS,
         description="The agent's harness, narrowed from mngr's AgentDetails.type. Resolved here and nowhere else.",
     )
+    create_time: datetime | None = Field(default=None, description="When the agent was created, if known")
 
 
 def _get_mngr_context() -> tuple[MngrContext, ConcurrencyGroup]:
@@ -167,6 +169,7 @@ def discover_agents(
                 labels=dict(agent_details.labels),
                 work_dir=str(agent_details.work_dir),
                 harness=parse_harness(str(agent_details.type)),
+                create_time=agent_details.create_time,
             )
         )
 
