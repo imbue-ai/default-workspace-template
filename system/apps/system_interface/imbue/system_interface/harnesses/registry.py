@@ -28,6 +28,8 @@ from imbue.system_interface.harnesses.antigravity.model import ANTIGRAVITY_CATAL
 from imbue.system_interface.harnesses.antigravity.model import ANTIGRAVITY_STATE_RELATIVE_PATH
 from imbue.system_interface.harnesses.antigravity.model import AntigravityModelResolver
 from imbue.system_interface.harnesses.antigravity.session import AntigravityHarnessSession
+from imbue.system_interface.harnesses.antigravity.tap import AntigravityAtomicShoulderTap
+from imbue.system_interface.harnesses.antigravity.tap import AntigravityInterruptToComposer
 from imbue.system_interface.harnesses.antigravity.watcher import AntigravitySessionWatcher
 from imbue.system_interface.harnesses.auth_check import ANTIGRAVITY_AUTH_CHECK
 from imbue.system_interface.harnesses.auth_check import CODEX_AUTH_CHECK
@@ -311,6 +313,11 @@ class HarnessSpec(FrozenModel):
     # auth-error hook) opens; ``terminal`` surfaces show ``auth_instructions``.
     auth_modal: AuthModalKind = AuthModalKind.TERMINAL
     auth_instructions: str | None = None
+    # The tmux key the cancel/tap actions deliver to end a live turn. Claude binds its own
+    # ``meta+q`` chord (scoped to its chat context so a stray press cannot be reinterpreted);
+    # antigravity uses its NATIVE Escape, which needs no provisioning. Declared here rather
+    # than imported from a harness module, so the endpoints stay harness-neutral.
+    cancel_chord: str = "M-q"
 
 
 HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
@@ -449,6 +456,12 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         session_class=AntigravityHarnessSession,
         model_state_relative_path=ANTIGRAVITY_STATE_RELATIVE_PATH,
         special_kinds=frozenset(),
+        # Stop and tap both end the live turn with agy's native Escape. Neither needs to
+        # retrieve anything from inside agy: the queue is ours (see antigravity/session.py),
+        # so stop returns it by reading it and the tap delivers it by sending it.
+        interrupt_to_composer_class=AntigravityInterruptToComposer,
+        shoulder_tap_class=AntigravityAtomicShoulderTap,
+        cancel_chord="Escape",
         popups=(_MODEL_BAR_POPUP,),
         auth_check=ANTIGRAVITY_AUTH_CHECK,
         # No `/login` popup, unlike codex and pi: agy has no such command. Signing in is what

@@ -84,8 +84,9 @@ ANTIGRAVITY_CATALOG: Final[HarnessCatalog] = HarnessCatalog(
     # lie about the set's size.
     picker_mode=PickerMode.LIST,
     powered_by_text="Powered by Antigravity",
-    # agy exposes no atomic flush; its stop/tap go through the shared restart-drain.
-    native_atomic_shoulder_tap_possible=False,
+    # agy's tap does not restart: it ends the turn with Escape and then delivers the block we
+    # were holding, so the entries never blink out (contract E1). Codex's shape, not claude's.
+    native_atomic_shoulder_tap_possible=True,
 )
 
 # A tier suffix agy bakes into the id, rendered parenthesised in its display name.
