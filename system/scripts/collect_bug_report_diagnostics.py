@@ -11,11 +11,11 @@ Prints exactly one line: a JSON object of the shape
     {"contract_version": 1, "zip": "<base64 of a zip>", "omissions": {...}}
 
 ``zip`` is absent (not empty) when nothing was collected. The zip holds
-``workspace-logs.log`` (when --logs scanned clean) and one
-``chats/<agent-id>-<harness>.jsonl`` per selected chat, newest chat first
-(when --transcript scanned clean). ``omissions`` explains, per requested
-content type, anything that was withheld; a content type that was not
-requested appears in neither the zip nor omissions.
+one ``logs/<program>.log`` member per collected log (when --logs scanned
+clean) and one ``chats/<agent-id>-<harness>.jsonl`` per selected agent
+conversation, newest first (when --transcript scanned clean). ``omissions``
+explains, per requested content type, anything that was withheld; a content
+type that was not requested appears in neither the zip nor omissions.
 
 Nothing leaves the container unscanned: every chat, the logs text, and each
 future zip member's own filename are staged as PLAINTEXT and run through the
@@ -25,7 +25,6 @@ archive into a way around the scan, so the scan always happens first.
 """
 
 import base64
-import configparser
 from datetime import datetime
 import glob
 import io
@@ -43,9 +42,8 @@ from collections.abc import Mapping, Sequence
 CONTRACT_VERSION = 1
 
 WORKSPACE_DIR = "/home/user/workspace"
-# The workspace's own service definitions, and the single source of truth for
-# which supervisord programs are user-created; minds must not carry a duplicate
-# list of service names.
+# The workspace's own service definitions, read for the supervisorctl status in
+# the report's metadata.
 SUPERVISORD_CONF = WORKSPACE_DIR + "/system/supervisord.conf"
 SHED_LEDGER = WORKSPACE_DIR + "/data/.state/oom_priority/events/shed.jsonl"
 SUPERVISOR_LOG_DIR = "/var/log/supervisor"
@@ -175,68 +173,33 @@ def safe_mtime(path: str) -> float:
         return 0.0
 
 
-def load_user_program_names() -> set[str] | None:
-    """Names of the supervisord programs the workspace marks as user-created, or None.
-
-    Every service the workspace starts is wrapped in ``oom_tag_service.py <band>``,
-    and a user-created app is the one passing the literal band ``user`` -- that
-    argument is how the workspace itself distinguishes its own apps, so it is read
-    here rather than guessed at.
-
-    The alternative, asking ``oom_priority.bands`` for each program's band, answers
-    a different question: that table ranks what is expendable under memory
-    pressure, and anything absent from it falls back to the user band. Built-in
-    services that predate the table or skip the wrapper entirely (``cron``) would
-    be read as user apps and their logs silently dropped.
-
-    None means the config could not be read, which the caller reports rather than
-    guessing a classification from.
-    """
-    parser = configparser.ConfigParser(interpolation=None, strict=False)
-    try:
-        if not parser.read(SUPERVISORD_CONF, encoding="utf-8"):
-            return None
-    except (OSError, configparser.Error):
-        return None
-    user_programs = set()
-    for section in parser.sections():
-        if not section.startswith("program:"):
-            continue
-        command = parser.get(section, "command", fallback="")
-        if re.search(r"oom_tag_service\.py\s+user(\s|$)", command):
-            user_programs.add(section[len("program:") :])
-    return user_programs
-
-
 def program_name_for_log(path: str) -> str:
-    """The supervisord program a log file belongs to, from its filename."""
+    """The program a log file belongs to, from its filename.
+
+    The bare ``.log`` case covers files without a stream suffix (supervisord's
+    own log); a program whose stderr file and plain log share a stem is kept
+    apart by the member-name numbering, not here.
+    """
     name = os.path.basename(path)
-    for suffix in ("-stderr.log", "-stdout.log"):
+    for suffix in ("-stderr.log", "-stdout.log", ".log"):
         if name.endswith(suffix):
             return name[: -len(suffix)]
     return name
 
 
-def select_log_files(user_programs: set[str] | None) -> list[str]:
-    """Supervisord log files worth sending, newest first and capped.
+def select_log_files() -> list[str]:
+    """Every supervisord log file worth sending, newest first and capped.
 
-    A user app's logs are workspace content rather than diagnostics, so they never
-    leave the container. ``user_programs`` of None means the classification could
-    not be made at all, and nothing is filtered by ownership -- the caller says so
-    in the payload rather than letting the omission pass unremarked.
+    Deliberately unfiltered by owner or stream: any program's log -- app or
+    service, user-created or built-in, stdout or stderr -- can carry the bug,
+    so all of them ride (the user consented via the logs checkbox, and every
+    member still passes the secret scan before it leaves).
 
     Only logs written to inside ``LOG_RECENCY_WINDOW_SECONDS`` are sent: a
-    service that has been silent for over a day describes some earlier state of
+    program that has been silent for over a day describes some earlier state of
     the workspace, not the one the bug was filed from.
     """
-    candidates = list(glob.glob(SUPERVISOR_LOG_DIR + "/*-stderr.log"))
-    system_interface_stdout = SUPERVISOR_LOG_DIR + "/system_interface-stdout.log"
-    if os.path.exists(system_interface_stdout):
-        candidates.append(system_interface_stdout)
-    if user_programs is not None:
-        candidates = [
-            p for p in candidates if program_name_for_log(p) not in user_programs
-        ]
+    candidates = list(glob.glob(SUPERVISOR_LOG_DIR + "/*.log"))
     cutoff = time.time() - LOG_RECENCY_WINDOW_SECONDS
     candidates = [p for p in candidates if safe_mtime(p) >= cutoff]
     candidates.sort(key=safe_mtime, reverse=True)
@@ -252,7 +215,6 @@ def build_metadata() -> dict[str, object]:
     string fields rather than being given an invented schema; what matters is
     that they are separately addressable instead of concatenated together.
     """
-    user_programs = load_user_program_names()
     return {
         "workspace": {
             "commit": run_command(
@@ -282,26 +244,21 @@ def build_metadata() -> dict[str, object]:
                 ["supervisorctl", "-c", SUPERVISORD_CONF, "status"],
                 SUPERVISORCTL_TIMEOUT_SECONDS,
             ),
-            # None means the config could not be read, so user-created services
-            # could not be told apart and every log was collected. Recorded
-            # rather than silent: it changes what the log members mean.
-            "are_user_services_identified": user_programs is not None,
             "log_lines_per_file": MAX_LINES_PER_LOG,
         },
     }
 
 
 def collect_log_members() -> list[tuple[str, str, float]]:
-    """One member per service log, as ``(member name, content, mtime)``.
+    """One member per log file, as ``(member name, content, mtime)``.
 
     Separate members rather than one concatenated file: the payload is an
     archive, so there is no reason to make a reader split headed sections apart
-    again. User-created services' logs are excluded -- those are the user's
-    content, not diagnostics -- by the workspace's own service definitions.
+    again.
     """
     members = []
     used_names: set[str] = set()
-    for path in select_log_files(load_user_program_names()):
+    for path in select_log_files():
         stem = safe_member_component(program_name_for_log(path))
         member = "{}/{}.log".format(LOG_MEMBER_DIR, stem)
         index = 2
@@ -366,39 +323,28 @@ def run_mngr(args: Sequence[str], timeout: float) -> str | None:
     return proc.stdout
 
 
-def list_chat_agents(timeout: float) -> list[str]:
-    """Each chat agent's name, by the workspace's own definition.
+def list_agents(timeout: float) -> list[str]:
+    """Every agent's name -- chat, background worker, or the primary services agent.
 
-    Mirrors system_interface's get_chat_agent_ids: a chat is any agent that is
-    neither a worker another agent spawned (``agent_created=true`` -- caretaker
-    runs, automations) nor the primary services agent (``is_primary=true``).
-    Those two marks are how the workspace tells its background agents apart, so
-    they are read rather than a list of agent types being kept here.
+    Deliberately unfiltered: any agent's conversation can carry the bug, so all
+    of them are asked for a transcript (an agent with none simply contributes no
+    member, which is how the primary services agent usually drops out).
 
     The pipe-delimited template is used rather than ``--format json``: inside a
     workspace container mngr cannot reach the providers that back its hosts, and
     the json path fails outright on that where the template still answers from
     local state.
     """
-    listed = run_mngr(
-        [
-            "list",
-            "--format",
-            "{name}|{type}|{labels.is_primary}|{labels.agent_created}",
-        ],
-        timeout,
-    )
+    listed = run_mngr(["list", "--format", "{name}|{type}"], timeout)
     if listed is None:
         return []
     agents: list[str] = []
     for line in listed.splitlines():
         parts = line.split("|")
-        if len(parts) != 4:
+        if len(parts) != 2:
             continue
-        name, agent_type, is_primary, agent_created = (p.strip() for p in parts)
+        name, agent_type = (p.strip() for p in parts)
         if not name or not agent_type:
-            continue
-        if is_primary.lower() == "true" or agent_created.lower() == "true":
             continue
         agents.append(name)
     return agents
@@ -481,17 +427,18 @@ def newest_event_time(events: str) -> float:
 
 
 def collect_transcript_members(timeout: float) -> list[tuple[str, str, float]]:
-    """The chats to attach, as ``(member name, content, last-written epoch)``.
+    """The conversations to attach, as ``(member name, content, last-written epoch)``.
 
-    A bug is rarely about exactly one conversation, so every chat written to
-    inside the recency window rides along, newest first -- and never fewer than
-    the ``MIN_TRANSCRIPT_COUNT`` newest (all of them, when the workspace holds
-    fewer), so a report filed from a quiet workspace still carries its recent
-    history rather than nothing.
+    Every agent's transcript is a candidate -- chat, background worker, or
+    otherwise. A bug is rarely about exactly one conversation, so every one
+    written to inside the recency window rides along, newest first -- and never
+    fewer than the ``MIN_TRANSCRIPT_COUNT`` newest (all of them, when the
+    workspace holds fewer), so a report filed from a quiet workspace still
+    carries its recent history rather than nothing.
     """
     fetched = []
     used_names: set[str] = set()
-    for name in list_chat_agents(timeout):
+    for name in list_agents(timeout):
         events = fetch_transcript(name, timeout)
         if events is None:
             continue
