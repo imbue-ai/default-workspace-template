@@ -6,19 +6,21 @@ and `new` prints the `playwright-cli attach --cdp=...` line to drive with. The d
 of the skill (the loop, element indices, the requery rule, the command table) is gone, along
 with the `task` verb and its Anthropic API key requirement.
 
-Added `.agents/skills/playwright-cli/` -- Microsoft's own skill from `@playwright/cli`,
-vendored verbatim so it stays in git and is pinned alongside `PLAYWRIGHT_CLI_VERSION`, with
-a workspace-specific addendum in front of it covering five things the upstream text does not
-know about this environment:
+The skill keeps its name and stays the single entry point. It no longer restates the driving
+commands -- `playwright-cli --help` ships with the pinned version and cannot drift -- and gains
+the things `--help` cannot know about this workspace:
 
-* Never run `close` / `attach` / `detach` / `close-all` / `kill-all` / `delete-data` -- the
-  fleet owns lifecycle, and a killed session is unrecoverable.
-* A dropped session is poisoned permanently: it never rebinds and every command then hangs.
-* On ANY failure, do not interpret the message -- `playwright-cli` exits 1 for everything, so
-  run `agentic-browser-fleet ls` and branch on what the fleet says.
-* `snapshot` prints inline (5-15k tokens); prefer `find`, `eval`, or `--filename=`.
-* `mousewheel` scrolls at the last mouse position, default (0,0) -- `hover` the pane you mean
-  first, or it silently scrolls the wrong one.
+* the fleet owns lifecycle, so never `close` / `detach` / `close-all` / `kill-all`
+* a session whose socket dropped is unrecoverable: it hangs rather than erroring
+* `playwright-cli` exits 1 for everything, so on any failure run `ls` and branch on that
+* a crash looks like a plain disconnect from the agent's side, and the dead name must not be
+  re-attached
+* **"not found" is not "not there"** on a virtualized list -- with a check that tells
+  virtualized from infinite-scroll from ordinary-long, and the rule that you are at the bottom
+  when rows stop advancing, not when `find` fails
+* `mousewheel` fires at (0,0) unless you `hover` the pane you mean first
+* snapshots are cheap and screenshots are not, with the narrow set of cases where a screenshot
+  is the only thing that can answer the question
 
 The fleet skill's idle-lease figure is corrected from 90s to 60s, which is what the code has
 enforced for some time.
