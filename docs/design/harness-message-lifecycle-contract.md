@@ -361,6 +361,28 @@ same lifecycle+transcript path as claude and pi), not the ledger's turn notifica
 stays the queue/message-lifecycle authority. Deriving the dot from the ledger's notifications is
 what stuck it on "Thinking".
 
+### E9. Test-environment quirks (not product bugs)
+- `test_codex_agent_full_lifecycle` is functionally green end-to-end but exits non-zero locally on
+  the resource-guard mark check (`@pytest.mark.tmux` / `rsync` "marked but never invoked"): in a
+  sandbox those binaries do not route through the guard's PATH wrapper. In CI the wrappers are
+  active and the marks pass. The same cause makes several `adopt`/`destroy` unit tests "fail"
+  locally.
+
+### E10. Deliberately not closed
+- **claude model/effort switches do not survive restart.** Launch settings re-pin the model every
+  relaunch; only `fastMode` is recorded per-agent. Fix is to record model+effort in the same
+  per-agent settings file. (The restart precedence here was inferred, not observed — verify
+  against a real restart before acting on it.)
+- **pi has no create-time model/effort knobs**, and its switch can report success even when the
+  extension drops the model.
+- **Create-time model selection is three unrelated mechanisms** across the harnesses with no
+  shared mngr abstraction. Unify when next touching this area.
+- **codex switch durability across `codex resume` is unverified.**
+- **`initial_message` delivery as a first `turn/start` is unimplemented** for codex. Rarely
+  exercised.
+- **AGENTS.md injection renders as a giant fake user message** in codex common transcripts;
+  instruction-injection turns are not yet tagged or skipped by the converter.
+
 ### E11. antigravity — A3 identity is unreachable; the displayed queue is OURS
 **Structural, not a bug to fix.** Every other harness's queue is observable: codex's pending
 steers, claude's parked send queue, pi's inbox. agy's parked messages live inside its TUI and
@@ -387,25 +409,3 @@ each press exactly once and fall back to the restart rather than pressing again.
 chord bound to `cli.escape` (claude's approach) would remove both hazards and remains the right
 end state; it is blocked on confirming where agy reads `keybindings.json`, since a write to the
 wrong path would silently no-op and leave stop and tap dead.
-
-### E9. Test-environment quirks (not product bugs)
-- `test_codex_agent_full_lifecycle` is functionally green end-to-end but exits non-zero locally on
-  the resource-guard mark check (`@pytest.mark.tmux` / `rsync` "marked but never invoked"): in a
-  sandbox those binaries do not route through the guard's PATH wrapper. In CI the wrappers are
-  active and the marks pass. The same cause makes several `adopt`/`destroy` unit tests "fail"
-  locally.
-
-### E10. Deliberately not closed
-- **claude model/effort switches do not survive restart.** Launch settings re-pin the model every
-  relaunch; only `fastMode` is recorded per-agent. Fix is to record model+effort in the same
-  per-agent settings file. (The restart precedence here was inferred, not observed — verify
-  against a real restart before acting on it.)
-- **pi has no create-time model/effort knobs**, and its switch can report success even when the
-  extension drops the model.
-- **Create-time model selection is three unrelated mechanisms** across the harnesses with no
-  shared mngr abstraction. Unify when next touching this area.
-- **codex switch durability across `codex resume` is unverified.**
-- **`initial_message` delivery as a first `turn/start` is unimplemented** for codex. Rarely
-  exercised.
-- **AGENTS.md injection renders as a giant fake user message** in codex common transcripts;
-  instruction-injection turns are not yet tagged or skipped by the converter.
