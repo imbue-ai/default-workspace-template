@@ -324,11 +324,12 @@ deliberately touched surface.
 
 ## 6. Verifying a change
 
-A token-only refactor is a visual no-op when each replaced literal resolves to the
-same computed value — check the compiled CSS / the diff to confirm nothing's value
-changed. The ratchet (section 7) is the automated guard against raw values
-regrowing, and it runs under the test suite. For an intentional visual change,
-review the diff and the running UI surface it touches.
+Adopting a token or shared primitive can shift a value slightly (a control taking
+the primitive's size, for instance) — that's expected, and a refactor does **not**
+have to render pixel-for-pixel identically; the goal is a consistent system, not a
+frozen one. Make each change deliberately and review the diff — and, for a visible
+change, the running UI surface it touches. The ratchet (section 7) is the automated
+guard against raw values regrowing, and it runs under the test suite.
 
 ---
 

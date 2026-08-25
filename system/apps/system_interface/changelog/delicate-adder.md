@@ -1,10 +1,10 @@
 Design-system pass over the system interface frontend: a token layer, shared
-component primitives, and modal consolidation. Predominantly a visual no-op --
-most replaced literals resolve to the same computed value -- with a few
-deliberate size normalizations where a bespoke control adopts a shared
-primitive (e.g. the progress spinner ring goes 1.5px -> 2px, launcher section
-headings 11px -> 12px, and icon buttons onto the shared 34px `.btn--icon`
-size). No behavioural change.
+component primitives, and modal consolidation. A styling and structure change
+with no behavioural change. Most values are preserved; a few controls shift size
+slightly where they adopt a shared primitive (the progress spinner ring goes
+1.5px -> 2px, launcher section headings 11px -> 12px, icon buttons onto the
+shared 34px `.btn--icon` size), which is intended -- the goal is a consistent
+system, not a pixel-identical render.
 
 - **Token scaffold in `src/style.css`.** Colours are now semantic
   `var(--color-*)` tokens from a single `@theme` block (zero raw hex outside

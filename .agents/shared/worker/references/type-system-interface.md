@@ -36,10 +36,12 @@ the full assessment and token set are in
   baseline in `src/design-system-ratchet.test.ts` (it only ratchets down) in the
   same change. The ratchet runs under `npm run test`, so a new raw value fails
   the suite until you either tokenize it or justify it this way.
-- **A token-only refactor should be a visual no-op** — each replaced literal must
-  resolve to the same computed value. The ratchet
-  (`src/design-system-ratchet.test.ts`, run under `npm run test`) is the automated
-  guard against raw values regrowing; review the diff to confirm no value changed.
+- **Don't chase a pixel-perfect no-op.** Adopting a token or shared primitive can
+  shift a value slightly (a control taking the primitive's size, say); that's fine
+  — the goal is a consistent system, not an identical render. Make the change
+  deliberately and review the diff. The ratchet
+  (`src/design-system-ratchet.test.ts`, run under `npm run test`) still guards
+  against raw values regrowing.
 
 ## Running and testing
 
