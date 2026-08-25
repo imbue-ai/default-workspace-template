@@ -34,7 +34,7 @@ export const ShareModal: m.Component<ShareModalAttrs> = {
             "×",
           ),
         ],
-        actions: [m("button.btn.btn--secondary", { onclick: onClose }, "Close")],
+        actions: [m("button.btn.btn--primary", { onclick: onClose }, "Close")],
       },
       [
         m("p.modal-message", [

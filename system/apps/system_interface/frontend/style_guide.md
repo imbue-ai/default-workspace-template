@@ -42,7 +42,11 @@ so you don't have to reinvent — **reach for them first, every time.**
    buttons, use the `.btn` primitive: `.btn.btn--{primary|secondary|ghost|
    destructive|inverse|icon}`, with `.btn--sm`, `.btn--selected`, and the
    `.btn--ghost.btn--destructive` quiet-destructive combo. Grow shared primitives
-   in that shape rather than making per-feature copies. (Modal, badge, toggle,
+   in that shape rather than making per-feature copies. A dialog's default action
+   — its confirm, or the sole acknowledgement in a one-button notice — is
+   `.btn--primary`; downgrade a button to secondary/ghost/destructive only when
+   its content calls for it (a Cancel paired with a confirm, a destructive verb, a
+   passive dismissal). (Modal, badge, toggle,
    spinner, and input primitives are still to come — until they land, generalize
    the best existing example rather than adding another one-off.)
 

@@ -368,7 +368,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
             m("p.modal-message", declined.body ?? "You can still send it from the agent's terminal."),
             m("div.modal-actions", [
               m(
-                "button.btn.btn--secondary",
+                "button.btn.btn--primary",
                 {
                   // Focus it so Enter and Space dismiss too, and so the notice is reachable
                   // without a mouse.
