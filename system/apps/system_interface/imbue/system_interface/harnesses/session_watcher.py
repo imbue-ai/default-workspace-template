@@ -130,6 +130,39 @@ class AgentSessionWatcher(ABC):
         """Apply the working->IDLE backstop and return the resulting snapshot (empty by default)."""
         return []
 
+    def take_unclaimed_queue(self) -> tuple[str, tuple[str, ...]]:
+        """Remove and return the queue entries no delivery has claimed, as one block.
+
+        Stop's return path, for a harness that holds the queue itself. It exists instead of
+        ``clear_queue`` because clearing cannot distinguish the entries stop accounted for from
+        ones the user sent while the cancel was settling, and wiping the latter leaves them in
+        no state at all (contract A1). Entries a delivery HAS claimed are deliberately left:
+        that send may still land, and returning them too would make one message both Delivered
+        and Returned. Empty by default.
+        """
+        return "", ()
+
+    def take_whole_queue(self) -> tuple[str, tuple[str, ...]]:
+        """Remove and return every queue entry, claimed included -- the restart path.
+
+        A restart kills the agent process, so an in-flight send dies with it and its entries
+        can be returned without risking a double. Taking them is mandatory: the shared restart
+        drain clears the queue as it goes, so anything left is destroyed unaccounted. Empty by
+        default.
+        """
+        return "", ()
+
+    def claim_queue_for_tap(self) -> tuple[str, tuple[str, ...], int]:
+        """Claim the queue on a shoulder-tap's behalf: returns (block, claimed ids, generation).
+
+        Claiming is what greys the tap button for the duration of the tap's own run, so a
+        second tap cannot arrive and deliver a second cancel key. Empty by default.
+        """
+        return "", (), 0
+
+    def release_tap_claim(self, claimed: tuple[str, ...], generation: int) -> None:
+        """Hand a tap's claim back unsettled, without charging a delivery attempt. No-op by default."""
+
     def set_flush_hooks(self, send: "FlushSendCallback", is_alive: "IsAliveCallback") -> None:
         """Give a watcher the two capabilities it needs to DELIVER its own queue. No-op by default.
 

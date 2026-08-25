@@ -3,10 +3,10 @@
 Two reasons this subclass exists.
 
 **Sending.** agy accepts a message mid-turn only by parking it invisibly inside its TUI,
-where nothing can observe it and from where agy merges it into one turn. So we never type
-into a busy agy: while a turn is open the message is HELD here and delivered by the watcher's
-flush worker once agy goes idle. See :meth:`send` and
-docs/design/antigravity-message-lifecycle-plan.md.
+where nothing can observe it and from where agy merges it into one turn. So this session
+NEVER types: every message is enqueued, and the watcher's flush worker -- the single typist --
+delivers it when no turn is open. See :meth:`send` and
+``docs/design/antigravity-swallow-fix-plan.md``.
 
 **The model chip.** See :meth:`switch_options`.
 """
@@ -23,8 +23,6 @@ from imbue.system_interface.harnesses.antigravity.queue_tracker import Antigravi
 from imbue.system_interface.harnesses.antigravity.queue_tracker import OUTBOX_FILENAME
 from imbue.system_interface.harnesses.antigravity.queue_tracker import get_tracker
 from imbue.system_interface.harnesses.antigravity.queue_tracker import session_token
-from imbue.system_interface.harnesses.antigravity.turn_state import get_turn_state
-from imbue.system_interface.harnesses.interrupt import try_hold_message_lock
 from imbue.system_interface.harnesses.model import ModelOption
 from imbue.system_interface.harnesses.model import match_option
 from imbue.system_interface.harnesses.model import read_model_identity
@@ -48,63 +46,50 @@ class AntigravityHarnessSession(FileHarnessSession):
         return self
 
     def send(self, text: str, message_id: str) -> SendOutcome:
-        """Type into agy only when it is idle; otherwise hold the message for the flush.
+        """Hold the message. Always. This session never types into agy.
 
-        The decision is made **while holding agy's message lock** -- the same lock mngr takes
-        for the whole of its own send. That is what makes two rapid sends safe: agy's send does
-        not return until its busy marker advances, so a second send that acquires the lock
-        necessarily observes the first one's effect. Deciding before taking the lock would let
-        us read "idle" while a previous send is still in flight, type into a busy agy, and lose
-        the message into its invisible parked block -- the exact failure this design exists to
-        prevent.
+        Deciding here whether to type meant reading agy's state, releasing the lock (mngr
+        re-acquires the same flock, and flock is per open-file-description, so holding it
+        across the delegation deadlocks the process against itself), and only then typing --
+        a check-then-act whose window was wide enough to land a message in a turn that had
+        just started. agy parks such a message invisibly and merges it into the running turn.
 
-        Failing to take the lock means a send IS in flight, so the agent is busy by definition
-        and the message is held. The wait is ZERO on purpose, unlike stop's: stop waits out an
-        in-flight send because it may be about to finish and change what stop must return,
-        whereas here the answer is already known the instant the lock is contended. Taking the
-        helper's 2s default would stall every send behind the previous one -- precisely the
-        rapid-fire case this path exists to serve -- to learn something we already know.
+        Enqueueing unconditionally removes the decision, and with it the window. One typist
+        exists -- the flush worker -- so there is nothing left to race. The chip is published
+        inside the tracker's lock before this returns, so the message is on screen from the
+        instant it leaves the composer (contract A1a), and the worker is woken in the same
+        breath, so an idle agy is typed into immediately.
 
-        Residual window, accepted: between releasing the lock and mngr re-taking it for the
-        real send, another send can start a turn, so we can type into an agy that just became
-        busy. The message is NOT lost when that happens -- agy parks it and delivers it at the
-        end of that turn -- it is simply shown as sent rather than queued, arriving later than
-        the UI implied. Closing it would mean holding the lock across the delegation, which is
-        the deadlock described below.
+        Cost, accepted deliberately: a message to an idle agy renders as a queued chip for one
+        worker cycle instead of going straight to a turn. Queued is a real backend-reported
+        state, so A2/A3b permit it, and it is strictly better A1a than the previous behaviour,
+        where nothing represented the message until its turn committed.
         """
-        with try_hold_message_lock(self._deps.state_dir, wait_seconds=0.0) as is_lock_held:
-            # NOT the marker alone: agy removes it for the whole of every tool call, so a
-            # marker-only check reads "idle" mid-chain and types into a live turn -- the
-            # swallow this whole design exists to prevent. See turn_state.
-            is_busy = (not is_lock_held) or get_turn_state(self._deps.state_dir.name).is_turn_open(
-                self._deps.state_dir
-            )
-        # The delegation MUST happen after the lock is released. mngr's own send takes this
-        # same message.lock, and flock is per open-file-description, so a second exclusive
-        # acquire from this process blocks forever -- delegating while still holding it
-        # deadlocks every idle send.
-        if not is_busy:
-            return super().send(text, message_id)
-        queued_id = self._queue().enqueue(text, _now_iso())
-        self._deps.on_queue_snapshot(self._queue().snapshot())
+        self._queue().enqueue(text, _now_iso())
         self._deps.notify_agents_changed()
-        logger.debug("antigravity: holding a message for the next flush ({})", queued_id)
+        logger.debug("antigravity: holding a message for the flush worker ({})", message_id)
         return SendOutcome.OK
 
     def is_sending(self) -> bool:
-        """A flush in progress IS a send in flight, so the tap is withheld through it.
+        """Whether anything is in flight, so the shoulder-tap must be withheld.
 
-        The base returns False (no send is ever "in flight" for a harness whose queue its
-        own process drains). agy's flush is ours and takes real time, so the gate has to
-        see it -- otherwise the button stays lit through the one window where pressing it
-        would ctrl+c the turn the flush is committing into.
+        With one typist this is exactly "a flush has entries claimed". The base's
+        ``SendingRegistry`` is still consulted, because this class no longer records into it
+        but the base's own send path would -- keeping both means the gate cannot silently
+        regress if a direct send is ever reintroduced.
         """
-        return self._queue().is_sending()
+        return self._queue().is_sending() or super().is_sending()
 
-    # in_flight_block deliberately stays the base "". agy's claimed entries are NOT removed
-    # from the queue while they are in flight (that is what keeps them on screen), so they are
-    # already inside stop's queued_block -- returning them here as well would place every
-    # flushing message into the composer twice.
+    def in_flight_block(self) -> str:
+        """The in-flight text, for stop's return block.
+
+        Claimed entries are deliberately NOT included: they are still in the queue (that is
+        what keeps them on screen), so stop already accounts for them there, and returning
+        them here as well would place every flushing message into the composer twice. The
+        base's registry block is still returned, for the same reason ``is_sending`` still
+        consults it.
+        """
+        return super().in_flight_block()
 
     def switch_queue_snapshot(self) -> list[dict[str, Any]]:
         """The held queue, for tests and diagnostics (the live wire copy goes through the

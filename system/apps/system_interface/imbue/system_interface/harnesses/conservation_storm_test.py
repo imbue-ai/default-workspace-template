@@ -79,6 +79,11 @@ _ROUND_COUNT = 30
 # are kept to a fixed, small set to bound the storm's runtime; claude's bounded wait is injected
 # small, so its round schedule lets the rng stage slow sends freely.
 _STOP_HAMMER_ROUNDS = frozenset({7, 19})
+
+# Worker ticks allowed at the end of a round for the queue to empty. More than one because a
+# claim may be outstanding when the round ends; far fewer than the attempt ceiling, so a gate
+# that never releases still fails.
+_SETTLE_TICKS = 4
 _FLUSH_BLOCKED_ROUNDS = frozenset({13})
 
 # How long an in-flight send holds the lock: FAST resolves within the executor's bounded wait
@@ -845,7 +850,21 @@ def test_claude_conservation_storm_tap_and_stop_executors(tmp_path: Path) -> Non
 
 
 class _AgyWorld:
-    """The scripted agy: the busy marker, and the turns it commits."""
+    """The scripted agy: its busy marker, its transcript, and the turns it commits.
+
+    Two things this world must model honestly, because getting either wrong validates the
+    wrong gate with a green test:
+
+    * **The marker stays present for the WHOLE turn**, tool calls included. That is what
+      ``statusline.sh``'s header records (75 consecutive busy samples across a ~29s subagent
+      run, zero mid-turn idle blips). An earlier version of this world deleted the marker on
+      every tool call and called it "the production shape"; it was not, and a flush gate
+      validated against it would be checking a signal agy never sends.
+    * **Typing into an open turn PARKS and MERGES.** agy does not reject it and does not give
+      it its own turn -- the text is absorbed into the running turn, invisibly. So a mid-turn
+      delivery is scored as a LOSS here, which is the only way a conservation ledger can see
+      the failure this whole design exists to prevent.
+    """
 
     def __init__(self, agent_state_dir: Path, ledger: _Ledger) -> None:
         self.dir = agent_state_dir
@@ -853,8 +872,11 @@ class _AgyWorld:
         self.ledger = ledger
         self.queue = AntigravityQueueTracker.build(self.dir / "agy_outbox.jsonl", "storm-session")
         self._counter = 0
-        self._is_tool_running = False
+        self._is_turn_open = False
+        self._turn_started_at = time.time() - 1.0
+        self._committed_user_turns: list[str] = []
         drop_turn_state(self.dir.name)
+        self.turn_state = get_turn_state(self.dir.name)
 
     # --- the simulated agy ---------------------------------------------------------------
 
@@ -863,47 +885,70 @@ class _AgyWorld:
         return self.dir / ACTIVE_MARKER_FILENAME
 
     def begin_turn(self) -> None:
+        self._is_turn_open = True
+        # The tail row is stamped when the turn's work happened, NOT when we later look at it.
+        # A cancelled tool row predates the ctrl+c that abandoned it, which is exactly what
+        # lets our cancel stamp release the hold.
+        self._turn_started_at = time.time() - 1.0
         self.marker.write_text("")
-        self._publish_turn_open(True)
+        self._republish()
 
     def end_turn(self) -> None:
+        self._is_turn_open = False
         self.marker.unlink(missing_ok=True)
-        self._is_tool_running = False
-        self._publish_turn_open(False)
+        self._republish()
 
-    def begin_tool_call(self) -> None:
-        """agy starts a tool: it stops reporting ``thinking``, so its statusLine REMOVES the
-        marker -- while the turn is very much still open. This is the production shape that
-        made a marker-only busy check type straight into a live turn."""
-        if not self.is_turn_open():
+    def run_tool(self) -> None:
+        """A tool call mid-turn. The marker STAYS -- agy keeps reporting busy throughout."""
+        if not self._is_turn_open:
             return
-        self._is_tool_running = True
-        self.marker.unlink(missing_ok=True)
-        self._publish_turn_open(True)
-
-    def end_tool_call(self) -> None:
-        if not self._is_tool_running:
-            return
-        self._is_tool_running = False
         self.marker.write_text("")
-        self._publish_turn_open(True)
+        self._republish()
 
-    def _publish_turn_open(self, is_open: bool) -> None:
-        # What the real watcher publishes from the transcript tail, which is what the
-        # executors consult through turn_state.
-        get_turn_state(self.dir.name).publish(is_open_by_tail=is_open)
+    def cancel_turn(self) -> None:
+        """A ctrl+c. The turn ends, but the transcript tail keeps reading 'open' forever --
+        measured on agy 1.1.20, a cancelled tool call settles as CANCELED and the parser
+        emits a tool_result for it. Only our own cancel stamp releases it."""
+        self._is_turn_open = False
+        self.marker.unlink(missing_ok=True)
+        self._republish(force_open_tail=True)
+
+    def _republish(self, *, force_open_tail: bool = False) -> None:
+        """Publish a transcript whose tail matches the world's state."""
+        events: list[dict[str, Any]] = []
+        for text in self._committed_user_turns:
+            events.append({"type": "user_message", "content": text, "timestamp": _iso_timestamp(time.time())})
+        if self._is_turn_open or force_open_tail:
+            events.append({"type": "tool_result", "timestamp": _iso_timestamp(self._turn_started_at)})
+        else:
+            events.append({"type": "assistant_message", "text": "done", "timestamp": _iso_timestamp(time.time())})
+        self.turn_state.publish(events, None)
 
     def is_turn_open(self) -> bool:
-        """The REAL question. The marker answers it only while agy is thinking."""
-        return self.marker.exists() or self._is_tool_running
+        return self._is_turn_open
 
-    def is_busy(self) -> bool:
-        return self.is_turn_open()
+    def deliver(self, block: str) -> bool:
+        """agy receives a typed block. THIS is where the swallow is scored.
 
-    def commit(self, block: str) -> None:
-        """agy receives a block and commits it as ONE turn -- every line is delivered."""
-        for text in _block_texts(block):
+        If a turn is open the text is parked and merged: it is absorbed, never answered
+        separately, and nothing on disk distinguishes it. mngr still reports success, because
+        its probe is the busy marker's mtime -- which is exactly why the ack cannot be trusted.
+        """
+        texts = _block_texts(block)
+        if self._is_turn_open:
+            for text in texts:
+                self.ledger.killed.append(text)
+            return True
+        self.begin_turn()
+        for text in texts:
             self.ledger.delivered.append(text)
+        # ONE turn for the whole block -- measured on agy 1.1.20: an embedded newline is
+        # inserted in the composer, not submitted, so one Enter commits the block as a single
+        # USER_INPUT row. Crediting each line as its own turn would make the delivery verdict
+        # unmatchable and the block would be retyped forever.
+        self._committed_user_turns.append(block)
+        self._republish()
+        return True
 
     # --- the ops -------------------------------------------------------------------------
 
@@ -912,26 +957,25 @@ class _AgyWorld:
         return f"agy-msg-{self._counter}"
 
     def send(self, text: str) -> None:
-        """The real hold-vs-type rule: hold while a turn is open, deliver straight through when not."""
+        """The REAL rule: the session never types, it only enqueues."""
         self.ledger.accepted.append(text)
-        if self.is_busy():
-            self.queue.enqueue(text, _iso_timestamp(time.time()))
-        else:
-            self.begin_turn()
-            self.commit(text)
+        self.queue.enqueue(text, _iso_timestamp(time.time()))
 
-    def flush(self) -> None:
-        """The idle flush: deliver the whole held block as one turn."""
-        block, claimed = self.queue.begin_flush()
-        if not claimed:
+    def foreign_turn(self) -> None:
+        """Someone we do not control -- a human at the tmux pane, or cron -- opens a turn.
+
+        It holds no lock of ours and appears in the same transcript, which is why a delivery
+        verdict of "did a turn open?" cannot be trusted and the block's own text is matched.
+        """
+        if self._is_turn_open:
             return
         self.begin_turn()
-        self.commit(block)
-        self.queue.finish_flush(claimed, is_delivered=True)
+        self._committed_user_turns.append("foreign-" + str(self._counter))
+        self._republish()
 
 
 class _AgyStormWatcher(_StormWatcherBase):
-    """Exposes the REAL tracker through the queue surface the executors read."""
+    """Exposes the REAL tracker and the REAL turn-open predicate to the executors."""
 
     def __init__(self, world: _AgyWorld) -> None:
         self._world = world
@@ -945,11 +989,47 @@ class _AgyStormWatcher(_StormWatcherBase):
     def clear_queue(self) -> None:
         self._world.queue.clear()
 
+    def take_unclaimed_queue(self) -> tuple[str, tuple[str, ...]]:
+        return self._world.queue.take_unclaimed()
+
+    def take_whole_queue(self) -> tuple[str, tuple[str, ...]]:
+        return self._world.queue.take_all()
+
+    def claim_queue_for_tap(self) -> tuple[str, tuple[str, ...], int]:
+        return self._world.queue.begin_flush()
+
+    def release_tap_claim(self, claimed: tuple[str, ...], generation: int) -> None:
+        self._world.queue.release_claim(claimed, generation)
+
+    def notify_idle(self) -> list[dict[str, Any]]:
+        return self._world.queue.snapshot()
+
     def get_subagent_metadata(self, subagent_session_id: str) -> dict[str, str] | None:
         return None
 
     def is_main_session_event(self, event: dict[str, Any]) -> bool:
         return True
+
+
+def _run_agy_worker(world: _AgyWorld) -> None:
+    """One tick of the REAL flush worker's decision, against the scripted agy.
+
+    This mirrors ``AntigravitySessionWatcher._attempt_flush`` exactly: liveness, then the
+    bounded turn-open gate, then the claim, then the send, then a verdict taken from agy's
+    own committed user turns rather than from the send's return value.
+    """
+    if not world.queue.has_entries():
+        return
+    if world.turn_state.is_hold_required(world.dir):
+        return
+    block, claimed, generation = world.queue.begin_flush()
+    if not claimed:
+        return
+    before = world.turn_state.user_turn_texts()
+    world.deliver(block)
+    after = world.turn_state.user_turn_texts()[len(before) :]
+    delivered = claimed if any(text.strip() == block.strip() for text in after) else ()
+    world.queue.finish_flush(claimed, generation, delivered=delivered)
 
 
 def _agy_agent_info(agent_state_dir: Path) -> AgentInfo:
@@ -964,65 +1044,63 @@ def _agy_agent_info(agent_state_dir: Path) -> AgentInfo:
 
 
 def _run_agy_stop(world: _AgyWorld, watcher: _AgyStormWatcher, agent_info: AgentInfo, send_mode: str) -> None:
-    """Drive the REAL stop executor and account for every message in its returned block."""
+    """Drive the REAL stop executor and account for every message it returns.
+
+    ``send_mode`` stages what is in flight when stop lands. With ONE typist an in-flight send
+    is by definition a CLAIMED flush, so that is what is staged -- and it is SETTLED after stop
+    returns, because the real worker always settles in a ``finally``. A claim that is never
+    settled is not a state production can reach.
+    """
     in_flight_text = ""
-    in_flight: _InFlightSend | None = None
+    claimed: tuple[str, ...] = ()
+    generation = 0
     if send_mode != _SEND_MODE_NONE:
         in_flight_text = world.new_text()
         world.ledger.accepted.append(in_flight_text)
-        hold = _SLOW_HOLD_SECONDS if send_mode == _SEND_MODE_SLOW else _FAST_HOLD_SECONDS
-        if send_mode == _SEND_MODE_SLOW:
-            # Staged slow-send corner (contract E2): stop hammers past the bounded wait, so
-            # this message is allowed to die -- and ONLY because the storm staged it.
-            world.ledger.killable.add(in_flight_text)
-        in_flight = _InFlightSend(world.dir, hold, lambda: None)
+        world.queue.enqueue(in_flight_text, _iso_timestamp(time.time()))
+        _block, claimed, generation = world.queue.begin_flush()
 
     def restart_process() -> tuple[bool, str]:
         world.end_turn()
-        if send_mode == _SEND_MODE_SLOW and in_flight_text:
-            world.ledger.killed.append(in_flight_text)
         return (True, "ok")
 
     def press_chord() -> bool:
-        # A single ctrl+c ends agy's turn; its statusline drops the marker.
-        world.end_turn()
+        # A single ctrl+c ends agy's turn. Its statusline drops the marker, but the transcript
+        # tail keeps reading "open" -- which is why only our own cancel stamp releases it.
+        world.cancel_turn()
         return True
 
     executor = AntigravityInterruptToComposer.build(agent_info)
-    block = executor.drain_to_composer(
-        watcher,
-        restart_process,
-        lambda: None,
-        press_chord,
-        lambda: in_flight_text if (send_mode == _SEND_MODE_FAST and in_flight_text) else "",
-    )
+    block = executor.drain_to_composer(watcher, restart_process, lambda: None, press_chord, lambda: "")
     for text in _block_texts(block):
         world.ledger.returned.append(text)
-    if in_flight is not None:
-        in_flight.join()
-    # A fast in-flight send that stop did NOT return still parked, so agy committed it.
-    if send_mode == _SEND_MODE_FAST and in_flight_text and in_flight_text not in world.ledger.returned:
-        world.ledger.delivered.append(in_flight_text)
+
+    if claimed:
+        # The staged flush now finishes, and it did NOT land: stop cancelled the turn it was
+        # sending into. Settling as undelivered returns the entry to the queue, where the
+        # ordinary worker delivers it later -- so the world's own ``deliver`` remains the only
+        # thing that ever credits a delivery. The settle carries the generation it claimed
+        # under, so a stop that voided the claim is respected and this becomes a no-op.
+        world.queue.finish_flush(claimed, generation, delivered=())
     world.end_turn()
 
 
 def _run_agy_tap(world: _AgyWorld, watcher: _AgyStormWatcher, agent_info: AgentInfo) -> None:
-    """Drive the REAL tap executor: it must DELIVER the block, never return it."""
-    if not world.is_busy():
+    """Drive the REAL tap executor.
+
+    It must NOT deliver: a tap that sent could race the flush worker for the same block and
+    deliver it twice. It cancels, releases its claim, and the one typist delivers.
+    """
+    if not world.is_turn_open():
         world.begin_turn()
+
+    def _must_not_send(_block: str) -> bool:
+        raise AssertionError("the tap must never send: the flush worker is the only typist")
+
     executor = AntigravityAtomicShoulderTap.build(agent_info)
-    outcome = executor.tap(watcher, lambda: (world.end_turn(), True)[1], _tap_send(world))
-    assert outcome.status != "chord_failed", world.ledger.replay_note()
-    world.end_turn()
-
-
-def _tap_send(world: _AgyWorld) -> Callable[[str], bool]:
-    def send_recovery(block: str) -> bool:
-        world.begin_turn()
-        world.commit(block)
-        return True
-
-    return send_recovery
+    executor.tap(watcher, lambda: (world.cancel_turn(), True)[1], _must_not_send)
+    # The tap wakes the worker rather than delivering; run it, as the real loop would.
+    _run_agy_worker(world)
 
 
 def test_antigravity_conservation_storm_stop_and_tap_executors(tmp_path: Path) -> None:
@@ -1050,6 +1128,9 @@ def test_antigravity_conservation_storm_stop_and_tap_executors(tmp_path: Path) -
                         "send",
                         "busy_send",
                         "tool_call",
+                        "foreign_turn",
+                        "worker",
+                        "worker",
                         "tap",
                         "flush",
                         "stop:" + _SEND_MODE_NONE,
@@ -1058,9 +1139,16 @@ def test_antigravity_conservation_storm_stop_and_tap_executors(tmp_path: Path) -
                 )
             ledger.log(f"  {op}")
             if op == "tool_call":
-                # agy drops its marker for the duration of a tool call while the turn stays
-                # open -- exactly when a marker-only busy check types into a live turn.
-                world.begin_tool_call()
+                # A tool call mid-turn. The marker STAYS (statusline.sh's measured behaviour);
+                # what makes this dangerous is simply that the turn is still open.
+                world.run_tool()
+            elif op == "foreign_turn":
+                # A turn WE did not open -- a human at the tmux pane, or cron. It holds no lock
+                # of ours and lands in the same transcript, which is why a delivery verdict of
+                # "did a turn open?" is not good enough.
+                world.foreign_turn()
+            elif op == "worker":
+                _run_agy_worker(world)
             elif op == "send":
                 world.send(world.new_text())
             elif op == "busy_send":
@@ -1070,14 +1158,27 @@ def test_antigravity_conservation_storm_stop_and_tap_executors(tmp_path: Path) -
             elif op == "tap":
                 _run_agy_tap(world, watcher, agent_info)
             elif op == "flush":
-                world.flush()
+                _run_agy_worker(world)
             elif op.startswith("stop:"):
                 _run_agy_stop(world, watcher, agent_info, op.split(":", 1)[1])
             else:
                 pytest.fail(f"unknown agy op {op}")
-        # Settle: agy finishes its turn, and anything still held drains as one merged turn.
+        # Settle: agy finishes its turn, then the worker drains whatever is still held.
+        # PROGRESS, not just conservation -- a queue held forever is in exactly one state and
+        # still never arrives, so the storm asserts it actually empties.
+        for _ in range(_SETTLE_TICKS):
+            # agy finishes whatever turn is running, then the worker gets one chance. Each
+            # delivery OPENS a turn (that is what a delivery is), so the turn must close
+            # between ticks -- exactly what the real worker waits for.
+            world.end_turn()
+            if not world.queue.has_entries():
+                break
+            _run_agy_worker(world)
         world.end_turn()
-        world.flush()
+        assert not world.queue.has_entries(), (
+            "the queue must drain once the turn is closed -- a permanently held queue is a "
+            f"strand, not conservation.\n{ledger.replay_note()}"
+        )
         ledger.verify()
 
 
@@ -1089,13 +1190,16 @@ def test_antigravity_interrupt_during_a_flush_conserves_every_message(tmp_path: 
     flush hands its block to mngr's send, which holds ``message.lock`` for the whole
     submission, and stop arrives during exactly that window. Both interleavings must conserve.
 
-    - fast flush: it releases inside stop's bounded wait, so stop acquires the lock and reads a
-      SETTLED queue -- the entries are delivered and gone, and stop returns nothing. This is the
-      direct regression test for capturing the block under the lock: captured before the wait
-      instead, both delivered messages would ALSO be handed back to the composer.
-    - slow flush: it outlives the bound, so stop hammers and the restart kills the send. The
-      block dies uncommitted, but the entries never left our queue, so stop returns them --
-      nothing is lost, and nothing needs staging as killable.
+    Stop deliberately does NOT take the claimed entries: that send may still land, and handing
+    them to the composer as well is how one message becomes both Delivered and Returned. It
+    also does not void the claim, so the flush can still settle -- voiding it would make the
+    settle stale, return the entries to the queue, and deliver a block agy had already
+    committed a second time.
+
+    - fast flush: it settles before stop finishes, so the entries are delivered and gone.
+    - slow flush: it settles after, under the generation it claimed with, and is honoured.
+
+    Either way every message ends in exactly one state and the queue drains.
     """
     ledger = _Ledger(f"antigravity-interrupt-during-flush[slow={is_flush_slow}]")
     world = _AgyWorld(tmp_path / "agy-flush", ledger)
@@ -1106,7 +1210,7 @@ def test_antigravity_interrupt_during_a_flush_conserves_every_message(tmp_path: 
     world.begin_turn()
     for _ in range(2):
         world.send(world.new_text())
-    block, claimed = world.queue.begin_flush()
+    block, claimed, generation = world.queue.begin_flush()
     assert claimed, "the flush must have something to claim"
 
     restart_count = {"value": 0}
@@ -1118,10 +1222,10 @@ def test_antigravity_interrupt_during_a_flush_conserves_every_message(tmp_path: 
             # removed from our queue on claim, so stop's block already handed them back -- they
             # are Returned, NOT killed. This is where agy conserves better than claude's E2
             # corner, whose in-flight text lives inside the harness and dies with it.
-            world.queue.finish_flush(claimed, is_delivered=False)
+            world.queue.finish_flush(claimed, generation, delivered=())
             return
-        world.commit(block)
-        world.queue.finish_flush(claimed, is_delivered=True)
+        world.deliver(block)
+        world.queue.finish_flush(claimed, generation, delivered=claimed)
 
     hold = _SLOW_HOLD_SECONDS if is_flush_slow else _FAST_HOLD_SECONDS
     in_flight = _InFlightSend(world.dir, hold, deliver)
@@ -1132,7 +1236,7 @@ def test_antigravity_interrupt_during_a_flush_conserves_every_message(tmp_path: 
         return (True, "ok")
 
     def press_chord() -> bool:
-        world.end_turn()
+        world.cancel_turn()
         return True
 
     executor = AntigravityInterruptToComposer.build(agent_info)
@@ -1142,11 +1246,8 @@ def test_antigravity_interrupt_during_a_flush_conserves_every_message(tmp_path: 
     in_flight.join()
 
     world.end_turn()
-    world.flush()
+    _run_agy_worker(world)
     ledger.verify()
-    if is_flush_slow:
-        assert len(ledger.returned) == 2, "the hammer must hand the uncommitted block back"
-        assert ledger.delivered == []
-    else:
-        assert ledger.returned == [], "a flush that already delivered must not hand its block back"
-        assert len(ledger.delivered) == 2
+    assert not world.queue.has_entries(), "the queue must drain rather than strand"
+    assert len(ledger.delivered) == 2, "both messages must reach agy exactly once"
+    assert ledger.returned == [], "stop must not hand back a block whose flush it left running"

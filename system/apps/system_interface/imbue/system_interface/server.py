@@ -815,8 +815,16 @@ def _send_message_endpoint(agent_id: str) -> Response:
         return _agent_not_found_response(agent_id)
 
     send_message_request = SendMessageRequest.model_validate(request.get_json())
-    agent_manager: AgentManager = get_state().agent_manager
+    state = get_state()
+    agent_manager: AgentManager = state.agent_manager
     message_id = send_message_request.message_id or uuid4().hex
+
+    # Ensure the watcher exists BEFORE the send, as the tap and stop endpoints already do. For
+    # a harness that holds its own queue (antigravity), the watcher owns the only thread that
+    # can ever deliver it -- so a send arriving here first (a headless client, or the first
+    # request after a restart) would otherwise enqueue a message with nothing running to drain
+    # it, and decide "is a turn open?" from an unpublished reading.
+    state.get_or_create_watcher(agent_info)
 
     # The agent's session owns the whole send lifecycle (contract A1/A2): the file session
     # records the message as *Sending* around mngr's blocking delivery (greying the tap button

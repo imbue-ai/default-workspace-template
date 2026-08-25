@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+import time
 from pathlib import Path
 from typing import Any
 from typing import Callable
@@ -34,14 +35,12 @@ from imbue.system_interface.harnesses.antigravity.agy_transcript import Truncate
 from imbue.system_interface.harnesses.antigravity.agy_transcript import decode_step
 from imbue.system_interface.harnesses.antigravity.queue_tracker import AntigravityQueueTracker
 from imbue.system_interface.harnesses.antigravity.queue_tracker import OUTBOX_FILENAME
-from imbue.system_interface.harnesses.antigravity.queue_tracker import drop_tracker
 from imbue.system_interface.harnesses.antigravity.queue_tracker import get_tracker
 from imbue.system_interface.harnesses.antigravity.queue_tracker import session_token
 from imbue.system_interface.harnesses.antigravity.session_parser import parse_step
 from imbue.system_interface.harnesses.antigravity.turn_state import TurnState
 from imbue.system_interface.harnesses.antigravity.turn_state import drop_turn_state
 from imbue.system_interface.harnesses.antigravity.turn_state import get_turn_state
-from imbue.system_interface.harnesses.antigravity.turn_state import is_turn_open_by_tail
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.harnesses.session_watcher import OnEventsCallback
 from imbue.system_interface.harnesses.session_watcher import QueueSnapshotCallback
@@ -58,7 +57,18 @@ _STEPS_QUERY = "SELECT idx, step_type, status, step_payload FROM steps WHERE idx
 
 # How long the flush worker waits for agy to be reachable before giving up on one attempt.
 # A failed attempt leaves the queue intact and re-arms, so this bounds a try, not the queue.
+# mngr stamps this on every launch and resume, so its mtime is the current agy process's
+# start boundary. Named here rather than imported from the activity tracker to keep the
+# watcher independent of it (they are wired together only through the registry).
+_PROCESS_STARTED_MARKER_FILENAME: Final[str] = "antigravity_process_started"
+
 _FLUSH_RETRY_SECONDS: Final[float] = 5.0
+
+# How long to wait, after mngr reports a send accepted, for agy's store to show the turn our
+# block opened. mngr's ack fires at the BUSY edge -- before agy has written the user row -- so
+# sampling at the ack would call every real delivery a failure and re-paste the block.
+_DELIVERY_WITNESS_SECONDS: Final[float] = 15.0
+_DELIVERY_POLL_SECONDS: Final[float] = 0.25
 
 
 class AntigravitySessionWatcher(AgentSessionWatcher):
@@ -145,8 +155,15 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
             return
         # Prime the backlog WITHOUT broadcasting it -- it is delivered via the REST tail path,
         # not the live stream (mirrors claude's prime-vs-poll split).
+        self._stopping.clear()
+        # Bind the publisher and the wake BEFORE anything can enqueue, so the very first
+        # message is announced and delivered rather than sitting until the next tick.
+        self._queue.attach(publish=self._publish_snapshot, wake=self._flush_wake.set)
         with self._lock:
             self._collect_new_events()
+            # Publish during priming, not one poll later: an unpublished turn state makes the
+            # first send after every backend restart fall back to the marker alone.
+            self._publish_turn_state()
         self._observer = Observer()
         handler = WakeOnChangeHandler(self._wake)
         # Watch whatever exists now; the 1s poll safety net covers a dir/file created later.
@@ -178,8 +195,15 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
             # Longer than the transcript thread's: a flush may be inside mngr's send, and
             # abandoning it mid-keystroke would leave a half-typed message in agy's composer.
             self._flush_thread.join(timeout=10.0)
+            if self._flush_thread.is_alive():
+                # It is inside mngr's send (bounded at 90s), so it will outlive us. Detaching
+                # stops it publishing into a dead callback; its settle carries a generation
+                # this tracker has since moved past, so it cannot resurrect anything either.
+                logger.warning("antigravity: {}'s flush outlived teardown; detaching it", self._agent_id)
             self._flush_thread = None
-        drop_tracker(self._agent_id)
+        # The tracker is NOT dropped: it is the agent's for the agent's life, and a queue held
+        # across a watcher restart is still the same live session's. Only detach the wiring.
+        self._queue.detach()
         drop_turn_state(self._agent_id)
 
     def _run(self) -> None:
@@ -188,11 +212,15 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
             self._wake.clear()
             if self._stopping.is_set():
                 return
+            # The ONLY caller of set_session. Adopting a new agy session discards the old
+            # one's queue, so it must never happen as a side effect of a read -- a broadcast
+            # asking "is the tap available?" used to be able to trigger exactly that.
+            self._queue.set_session(session_token(self._state_dir))
             with self._lock:
                 pending = self._collect_new_events()
-                # Publish inside the lock, from the same events the emit used: the send
+                # Publish inside the lock, from the same events the emit used: the hold
                 # decision and the dot must never read different transcripts.
-                self._turn_state.publish(is_open_by_tail=is_turn_open_by_tail(self._events))
+                self._publish_turn_state()
             if pending:
                 self._on_events(self._agent_id, pending)
 
@@ -316,9 +344,41 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
         return self._queue.concatenated_block()
 
     def clear_queue(self) -> None:
-        """Drop the queue without delivering it (stop, or a dead agent)."""
+        """Drop the queue without delivering it.
+
+        Only for a session that no longer exists. Stop and the tap must NOT use this: it
+        cannot distinguish the entries they accounted for from ones the user sent while they
+        were working, and wiping the latter leaves them in no state at all.
+        """
         self._queue.clear()
-        self._publish_queue()
+
+    def take_unclaimed_queue(self) -> tuple[str, tuple[str, ...]]:
+        """Remove and return the unclaimed queue as one block -- stop's return path."""
+        return self._queue.take_unclaimed()
+
+    def take_whole_queue(self) -> tuple[str, tuple[str, ...]]:
+        """Remove and return EVERY entry -- stop's restart path, where the send dies too."""
+        return self._queue.take_all()
+
+    def claim_queue_for_tap(self) -> tuple[str, tuple[str, ...], int]:
+        """Claim the queue on the tap's behalf, so the button greys for its whole run.
+
+        Same primitive the flush worker claims with, which is what makes the two mutually
+        exclusive: whichever gets there first, the other is refused.
+        """
+        return self._queue.begin_flush()
+
+    def release_tap_claim(self, claimed: tuple[str, ...], generation: int) -> None:
+        """Hand a tap's claim back unsettled -- the worker delivers, not the tap."""
+        self._queue.release_claim(claimed, generation)
+
+    def is_turn_open(self) -> bool:
+        """Whether a turn is open, per the bounded predicate (see turn_state)."""
+        return self._turn_state.is_hold_required(self._state_dir)
+
+    def turn_state(self) -> TurnState:
+        """The shared reading, for the tap/stop executors' cancel interlock."""
+        return self._turn_state
 
     def notify_idle(self) -> list[dict[str, Any]]:
         """The working->IDLE backstop. For agy this ARMS the flush; it never delivers here.
@@ -332,15 +392,31 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
         self._flush_wake.set()
         return self._queue.snapshot()
 
-    def _publish_queue(self) -> None:
+    def _publish_snapshot(self, snapshot: list[dict[str, Any]]) -> None:
+        """The tracker's publisher: it calls this from inside its own lock."""
         callback = self._queue_snapshot_callback
         if callback is not None:
-            callback(self._queue.snapshot())
+            callback(snapshot)
 
-    # --- the flush worker -------------------------------------------------------------
+    def _publish_turn_state(self) -> None:
+        """Hand the transcript to the shared reading. Caller holds ``self._lock``."""
+        self._turn_state.publish(self._events, self._process_started_at())
+
+    def _process_started_at(self) -> float | None:
+        try:
+            return (self._state_dir / _PROCESS_STARTED_MARKER_FILENAME).stat().st_mtime
+        except OSError:
+            return None
+
+    # --- the flush worker: the ONLY typist ---------------------------------------------
 
     def _run_flush_worker(self) -> None:
-        """Deliver the held queue once agy is idle. Own thread, so a slow send stalls nothing."""
+        """Deliver the held queue when no turn is open. Own thread, so a slow send stalls nothing.
+
+        This is the only code in the system that types into agy. ``session.send`` enqueues and
+        wakes this loop; the tap cancels and wakes this loop; nothing else delivers. One typist
+        is what removes the check-then-act window that let a message land in a live turn.
+        """
         while not self._stopping.is_set():
             self._flush_wake.wait(timeout=_FLUSH_RETRY_SECONDS)
             self._flush_wake.clear()
@@ -353,28 +429,106 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
                 logger.opt(exception=error).warning("antigravity: flush attempt failed for {}", self._agent_id)
 
     def _attempt_flush(self) -> None:
+        """One delivery attempt. The gate, the send, and the verdict.
+
+        Order is load-bearing:
+
+        1. **Republish**, always. Level-triggered visibility: an untrack/re-track cycle drops
+           the manager's cached queue, and without this nothing restores the chips until the
+           next mutation -- A1a's forbidden "resurfaces later".
+        2. **Liveness.** mngr's send auto-starts a stopped agent, so delivering to a dead one
+           would resurrect it. The queue is RETURNED, never cleared: a message the user sent
+           and saw accepted must end up somewhere, and silently deleting it is the swallow
+           wearing a different hat.
+        3. **Is a turn open?** The whole bug was that this question was never asked. Bounded on
+           every rung, so a cancelled or abandoned turn cannot wedge the queue forever.
+        4. **Claim.** The tracker refuses a second claim while one is open, which is the mutual
+           exclusion between every typist.
+        5. **Send, then look.** mngr's ack is the busy marker's mtime, which advances even for
+           a message that merely parked -- so the ack is not evidence. The evidence is agy's
+           own store gaining a user turn whose text is ours.
+        """
         send, is_alive = self._flush_send, self._flush_is_alive
         if send is None or is_alive is None:
             return
-        # Liveness FIRST, and never skipped: mngr's send auto-starts a stopped agent, so
-        # flushing a dead one would resurrect it and deliver a queue the contract says is
-        # already gone. Drop it instead -- "the queue is empty whenever the agent is stopped".
-        if not is_alive():
-            if self._queue.has_entries():
-                logger.info("antigravity: dropping {}'s queue -- the agent is not alive", self._agent_id)
-                self.clear_queue()
+        self._queue.republish()
+        if not self._queue.has_entries():
             return
-        block, claimed = self._queue.begin_flush()
+        if not is_alive():
+            self._return_queue_to_composer()
+            return
+        if self.is_turn_open():
+            return
+        block, claimed, generation = self._queue.begin_flush()
         if not claimed:
             return
-        # The entries stay on screen, rendered "Sending...", for the whole send.
-        self._publish_queue()
-        is_delivered = False
+        before = self._turn_state.user_turn_texts()
+        delivered: tuple[str, ...] = ()
         try:
-            is_delivered = bool(send(block))
+            if send(block):
+                delivered = self._observe_delivery(before, block, claimed)
         finally:
-            # Not delivered means still queued -- never silently dropped.
-            self._queue.finish_flush(claimed, is_delivered=is_delivered)
-            self._publish_queue()
-            if not is_delivered:
-                self._flush_wake.set()
+            self._queue.finish_flush(claimed, generation, delivered=delivered)
+            if not delivered:
+                # No immediate re-arm: the retry cadence is this loop's own timeout. Re-arming
+                # here turned a persistently failing send into a hot loop that re-pasted the
+                # whole block, re-ran discovery and re-broadcast on every iteration.
+                logger.info("antigravity: {} did not witness a turn for its block", self._agent_id)
+
+    def _observe_delivery(self, before: tuple[str, ...], block: str, claimed: tuple[str, ...]) -> tuple[str, ...]:
+        """Which claimed ids agy actually committed, by finding our text in its own store.
+
+        NOT "did a turn open": a turn opened by the human at the tmux pane, or by ``mngr
+        message`` from cron, would resolve our entries while our block sat parked. The text is
+        the only thing that identifies the block as ours.
+
+        Measured on agy 1.1.20, a newline-joined block commits as exactly one turn (an embedded
+        newline is inserted in the composer, not submitted), so the whole-block arm is the live
+        path. The prefix arm is defence in depth for a block that only partly committed.
+        """
+        deadline = time.monotonic() + _DELIVERY_WITNESS_SECONDS
+        lines = block.split("\n")
+        is_deadline_passed = False
+        while not is_deadline_passed:
+            # Rescan here rather than waiting on the transcript thread's cadence: the verdict
+            # must not depend on another thread having ticked, and a row agy has already
+            # written should be seen the moment we look.
+            with self._lock:
+                pending = self._collect_new_events()
+                self._publish_turn_state()
+            if pending:
+                self._on_events(self._agent_id, pending)
+            for text in self._turn_state.user_turn_texts()[len(before) :]:
+                cleaned = text.strip()
+                if cleaned == block.strip():
+                    return claimed
+                covered = _covered_prefix(lines, cleaned)
+                if covered:
+                    return claimed[:covered]
+            is_deadline_passed = time.monotonic() >= deadline
+            if not is_deadline_passed:
+                # Waiting on the stop event rather than sleeping: teardown interrupts the
+                # witness window immediately instead of after the full deadline, and the
+                # worker cannot sit blind while its watcher is being shut down.
+                if self._stopping.wait(_DELIVERY_POLL_SECONDS):
+                    return ()
+        return ()
+
+    def _return_queue_to_composer(self) -> None:
+        """A dead agent's queue goes back to the user, not into the bin."""
+        _block, taken = self._queue.take_unclaimed()
+        if taken:
+            logger.info("antigravity: returned {} queued message(s) -- {} is not alive", len(taken), self._agent_id)
+
+
+def _covered_prefix(lines: list[str], committed: str) -> int:
+    """How many leading lines of the block ``committed`` accounts for (0 = none).
+
+    Whole-block equality is handled by the caller; this is only the partial arm.
+    """
+    if not committed:
+        return 0
+    for count in range(len(lines) - 1, 0, -1):
+        if committed == "\n".join(lines[:count]).strip():
+            return count
+    return 0
