@@ -19,6 +19,7 @@ page instead of a handoff.
 
 import base64
 import hashlib
+import json
 import logging
 import secrets
 from datetime import datetime
@@ -41,11 +42,43 @@ from supertokens_python.exceptions import GeneralError as SuperTokensGeneralErro
 from supertokens_python.recipe.session.exceptions import SuperTokensSessionError
 
 import imbue.remote_service_connector.accounts_web as accounts_web_module
+import imbue.remote_service_connector.auth as auth_module
 import imbue.remote_service_connector.auth_proxy as auth_proxy_module
 import imbue.remote_service_connector.shares as shares_module
+from imbue.modal_app_kit.metrics import emit_metric
+from imbue.modal_app_kit.request_logging import deployed_minds_env_name
+from imbue.modal_app_kit.request_logging import ensure_info_log_handler
 from imbue.remote_service_connector.http_api import handle_endpoint_errors
 
 logger = logging.getLogger(__name__)
+
+# Dedicated logger for the append-only share-visit records: one JSON line per
+# authorized visit, parsed downstream by the analytics aggregation (the
+# ``share_tunnel_logins`` table only keeps a last-login upsert, so these lines
+# are the visit *history*). INFO must actually reach stderr, hence the
+# explicit handler.
+_share_visit_logger = logging.getLogger(f"{__name__}.visits")
+ensure_info_log_handler(_share_visit_logger)
+
+
+def _log_share_visit_authorized(
+    visitor_user_id: str, host_id: str, owner_share_label: str, workspace_domain: str, is_owner: bool
+) -> None:
+    record = {
+        "type": "share_visit_authorized",
+        "visitor_user_id": visitor_user_id,
+        "host_id": host_id,
+        "owner_share_label": owner_share_label,
+        "workspace_domain": workspace_domain,
+        "is_owner": is_owner,
+    }
+    # Same env stamp as the access-log lines, so the analytics aggregation can
+    # filter one env's records out of the shared per-tier log store.
+    env_name = deployed_minds_env_name()
+    if env_name:
+        record["minds_env"] = env_name
+    _share_visit_logger.info("%s", json.dumps(record, ensure_ascii=True, separators=(",", ":")))
+
 
 router = APIRouter()
 
@@ -220,7 +253,8 @@ def _send_visitor_verification_email(user_id: str, email: str, continue_next_pat
         # A failed send must not fail the visit: the visitor still lands on
         # /check-inbox (which explains what to do), and the manage page offers
         # a resend. The cooldown slot was already released for the retry.
-        logger.warning("Could not send the visitor verification email: %s", exc)
+        emit_metric("verification_email_send_failed", 1, {"caller": "share_broker"})
+        logger.warning("Could not send the visitor verification email", exc_info=exc)
 
 
 @router.get("/share/authorize", response_model=None)
@@ -261,6 +295,7 @@ def broker_authorize(request: Request) -> RedirectResponse:
             login_next = f"/share/authorize?{_authorize_self_query(machine_domain, next_url, callback_origin, state)}"
             return RedirectResponse(url=f"/login?next={quote(login_next, safe='')}", status_code=302)
         user_id, session_email, is_email_verified = identity
+        auth_module.stash_authenticated_user_for_access_log(request, user_id)
         share = shares_module.get_share_store().find_active_share_by_workspace_domain(machine_domain)
         if share is None:
             raise HTTPException(status_code=404, detail="No active share for this domain")
@@ -288,6 +323,16 @@ def broker_authorize(request: Request) -> RedirectResponse:
             _send_visitor_verification_email(user_id, session_email, authorize_next_path)
             # The check-your-inbox page lives in the hosted accounts bundle.
             return RedirectResponse(url=f"/check-inbox?next={quote(authorize_next_path, safe='')}", status_code=303)
+        # The visit is authorized past this point: record it as an append-only
+        # JSON line (visitor identity comes from the browser session, so this
+        # is the one place visit history with identity exists).
+        _log_share_visit_authorized(
+            visitor_user_id=user_id,
+            host_id=str(share.get("host_id", "")),
+            owner_share_label=str(share.get("user_id", "")),
+            workspace_domain=machine_domain,
+            is_owner=is_owner,
+        )
         handoff_token = mint_share_handoff_token(
             signing_key=_broker_signing_key(),
             user_id=user_id,

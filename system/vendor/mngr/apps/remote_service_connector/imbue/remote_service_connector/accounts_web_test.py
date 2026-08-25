@@ -1,6 +1,8 @@
 """Tests for the hosted accounts surface (browser auth, device handoff, OAuth, attribution)."""
 
+import http.client
 import secrets
+import urllib.error
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -14,8 +16,6 @@ from urllib.parse import urlsplit
 import jwt as pyjwt
 import psycopg2
 import pytest
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
 from starlette.requests import Request
 from starlette.testclient import TestClient
 from supertokens_python.recipe.emailpassword.interfaces import SignUpOkResult as EPSignUpOkResult
@@ -23,22 +23,22 @@ from supertokens_python.recipe.session.exceptions import TryRefreshTokenError
 
 import imbue.remote_service_connector.accounts_web as accounts_web_module
 import imbue.remote_service_connector.share_broker as share_broker_module
+from imbue.remote_service_connector import accounts_web
 from imbue.remote_service_connector.accounts_web import _mark_next_confirmed
 from imbue.remote_service_connector.accounts_web import compute_pkce_challenge
 from imbue.remote_service_connector.accounts_web import is_valid_loopback_redirect_uri
 from imbue.remote_service_connector.attribution import ATTRIBUTION_COOKIE_NAME
+from imbue.remote_service_connector.auth import UserAuth
+from imbue.remote_service_connector.auth import derive_user_id_prefix
 from imbue.remote_service_connector.testing import FakeProvider
 from imbue.remote_service_connector.testing import FakeSuperTokensBackend
 from imbue.remote_service_connector.testing import InMemoryDeviceAuthCodeStore
+from imbue.remote_service_connector.testing import TEST_OAUTH_SIGNING_KEY
+from imbue.remote_service_connector.testing import TEST_OAUTH_SIGNING_KEY_PEM
 from imbue.remote_service_connector.testing import _make_accounts_web_test_client
+from imbue.remote_service_connector.testing import _make_share_test_client_with_fakes
 from imbue.remote_service_connector.testing import encode_attribution_cookie
-
-_TEST_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-_TEST_KEY_PEM = _TEST_KEY.private_bytes(
-    encoding=serialization.Encoding.PEM,
-    format=serialization.PrivateFormat.PKCS8,
-    encryption_algorithm=serialization.NoEncryption(),
-).decode("utf-8")
+from imbue.remote_service_connector.testing import hold_stable_download_link
 
 
 def _sign_in_browser(
@@ -87,6 +87,40 @@ def test_pages_serve_the_built_bundle_index(monkeypatch: pytest.MonkeyPatch, tmp
 
     for page in ("/login", "/signup", "/manage", "/auth/reset-password", "/auth/verify-email", "/check-inbox"):
         resp = client.get(page)
+        assert resp.status_code == 200
+        assert "Minds accounts" in resp.text
+
+
+def test_account_pages_are_refused_off_the_accounts_origin_with_a_link_there(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """With a dedicated accounts origin configured, the identity pages cannot work
+    on other hosts (the session cookie's Domain is the accounts apex), so they are
+    refused with a link to the same page on the right origin."""
+    client, _st, _codes = _make_accounts_web_test_client(monkeypatch)
+    (tmp_path / "index.html").write_text("<!doctype html><title>Minds accounts</title>")
+    monkeypatch.setenv("ACCOUNTS_FRONTEND_DIST", str(tmp_path))
+    monkeypatch.setenv("ACCOUNTS_BASE_URL", "https://accounts.example.com")
+
+    refused = client.get("/login?next=%2Fmanage")
+    assert refused.status_code == 421
+    assert "https://accounts.example.com/login?next=%2Fmanage" in refused.text
+
+    served = client.get("https://accounts.example.com/login?next=%2Fmanage")
+    assert served.status_code == 200
+    assert "Minds accounts" in served.text
+
+
+def test_account_pages_still_serve_on_the_chrome_origin(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The chrome origin shares the apex session cookie, so the account pages keep working there."""
+    client, _st, _codes = _make_accounts_web_test_client(monkeypatch)
+    (tmp_path / "index.html").write_text("<!doctype html><title>Minds accounts</title>")
+    monkeypatch.setenv("ACCOUNTS_FRONTEND_DIST", str(tmp_path))
+    monkeypatch.setenv("ACCOUNTS_BASE_URL", "https://accounts.example.com")
+    monkeypatch.setenv("SHARE_CHROME_ORIGIN", "https://chrome.example.com")
+
+    for page in ("/login", "/signup", "/manage"):
+        resp = client.get(f"https://chrome.example.com{page}")
         assert resp.status_code == 200
         assert "Minds accounts" in resp.text
 
@@ -529,13 +563,21 @@ def _make_oauth_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[TestClient, FakeSuperTokensBackend]:
     client, st_backend, _codes = _make_accounts_web_test_client(monkeypatch)
-    monkeypatch.setenv("BROKER_JWT_SIGNING_KEY_PEM", _TEST_KEY_PEM)
+    monkeypatch.setenv("BROKER_JWT_SIGNING_KEY_PEM", TEST_OAUTH_SIGNING_KEY_PEM)
     st_backend.register_provider("google", email="visitor@example.com", is_verified=True)
     return client, st_backend
 
 
-def _start_oauth(client: TestClient, next_path: str) -> str:
-    resp = client.get(f"/accounts/oauth/google/start?next={quote(next_path, safe='')}", follow_redirects=False)
+def _start_oauth(client: TestClient, next_path: str, is_terms_accepted: bool = True, plan: str = "") -> str:
+    # Terms ride the start URL by default (the signup tab's button always
+    # carries them); pass False to model the sign-in tab's button. A non-empty
+    # plan models the signup tab's plan selector.
+    terms_suffix = "&terms=1" if is_terms_accepted else ""
+    plan_suffix = f"&plan={quote(plan, safe='')}" if plan else ""
+    resp = client.get(
+        f"/accounts/oauth/google/start?next={quote(next_path, safe='')}{terms_suffix}{plan_suffix}",
+        follow_redirects=False,
+    )
     assert resp.status_code == 302
     return parse_qs(urlsplit(resp.headers["location"]).query)["state"][0]
 
@@ -551,7 +593,7 @@ def test_oauth_start_redirects_with_signed_state_and_nonce_cookie(monkeypatch: p
     query = parse_qs(location.query)
     # The redirect URI is our own registered callback path, derived from the request.
     assert query["redirect_uri"] == ["https://testserver/share/oauth/google/callback"]
-    claims = pyjwt.decode(query["state"][0], _TEST_KEY.public_key(), algorithms=["RS256"])
+    claims = pyjwt.decode(query["state"][0], TEST_OAUTH_SIGNING_KEY.public_key(), algorithms=["RS256"])
     assert claims["purpose"] == "accounts_oauth"
     assert claims["next"] == "/accounts/authorize?a=b"
     assert claims["cb"] == "https://testserver/share/oauth/google/callback"
@@ -567,17 +609,111 @@ def test_oauth_start_uses_the_tier_redirector_when_configured(monkeypatch: pytes
 
     query = parse_qs(urlsplit(resp.headers["location"]).query)
     assert query["redirect_uri"] == ["https://oauth-redirector.example.com/forward"]
-    claims = pyjwt.decode(query["state"][0], _TEST_KEY.public_key(), algorithms=["RS256"])
+    claims = pyjwt.decode(query["state"][0], TEST_OAUTH_SIGNING_KEY.public_key(), algorithms=["RS256"])
     assert claims["cb"] == "https://testserver/share/oauth/google/callback"
+
+
+def test_oauth_start_is_refused_off_the_accounts_origin_even_on_the_chrome_origin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Google flow started anywhere but the accounts origin can never complete
+    (host-only nonce cookie; the callback is registered on the accounts origin),
+    so the start is refused up front -- on the chrome origin included -- with a
+    link to the accounts-origin login carrying the pending ``next``."""
+    client, _st = _make_oauth_client(monkeypatch)
+    monkeypatch.setenv("ACCOUNTS_BASE_URL", "https://accounts.example.com")
+    monkeypatch.setenv("SHARE_CHROME_ORIGIN", "https://chrome.example.com")
+
+    for start_host in ("https://testserver", "https://chrome.example.com"):
+        refused = client.get(
+            f"{start_host}/accounts/oauth/google/start?next=%2Fmanage",
+            follow_redirects=False,
+        )
+        assert refused.status_code == 421
+        assert "https://accounts.example.com/login?next=%2Fmanage" in refused.text
+        assert "imbue_oauth_nonce" not in refused.headers.get("set-cookie", "")
+
+    started = client.get(
+        "https://accounts.example.com/accounts/oauth/google/start?next=%2Fmanage",
+        follow_redirects=False,
+    )
+    assert started.status_code == 302
+    assert "imbue_oauth_nonce" in started.headers.get("set-cookie", "")
 
 
 def test_oauth_start_404s_when_not_configured(monkeypatch: pytest.MonkeyPatch) -> None:
     client, st_backend, _codes = _make_accounts_web_test_client(monkeypatch)
-    monkeypatch.setenv("BROKER_JWT_SIGNING_KEY_PEM", _TEST_KEY_PEM)
+    monkeypatch.setenv("BROKER_JWT_SIGNING_KEY_PEM", TEST_OAUTH_SIGNING_KEY_PEM)
 
     resp = client.get("/accounts/oauth/google/start?next=%2F", follow_redirects=False)
 
     assert resp.status_code == 404
+
+
+def _make_base_url_request(scheme: str, host: str, forwarded_proto: str | None) -> Request:
+    """A minimal ASGI request for exercising ``accounts_public_base_url`` directly."""
+    headers: list[tuple[bytes, bytes]] = [(b"host", host.encode("latin-1"))]
+    if forwarded_proto is not None:
+        headers.append((b"x-forwarded-proto", forwarded_proto.encode("latin-1")))
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "scheme": scheme,
+        "path": "/",
+        "query_string": b"",
+        "headers": headers,
+        "server": (host, 443 if scheme == "https" else 80),
+    }
+    return Request(scope)
+
+
+def test_accounts_public_base_url_prefers_configured_origin(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ACCOUNTS_BASE_URL", "https://accounts.example.com")
+    request = _make_base_url_request("https", "rsc-dev.modal.run", forwarded_proto="http")
+
+    assert accounts_web_module.accounts_public_base_url(request) == "https://accounts.example.com"
+
+
+def test_accounts_public_base_url_trusts_a_plain_forwarded_scheme(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ACCOUNTS_BASE_URL", raising=False)
+    # Modal terminates TLS at ingress, so the ASGI scheme is http and the
+    # https origin must be recovered from the forwarded-proto header.
+    request = _make_base_url_request("http", "rsc-dev.modal.run", forwarded_proto="https")
+
+    assert accounts_web_module.accounts_public_base_url(request) == "https://rsc-dev.modal.run"
+
+
+def test_accounts_public_base_url_falls_back_when_header_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ACCOUNTS_BASE_URL", raising=False)
+    request = _make_base_url_request("https", "rsc-dev.modal.run", forwarded_proto=None)
+
+    assert accounts_web_module.accounts_public_base_url(request) == "https://rsc-dev.modal.run"
+
+
+@pytest.mark.parametrize(
+    "poisoned_proto",
+    [
+        "https://evil.example/?",
+        "https://evil.example",
+        "javascript:alert(1)//",
+        "https ",
+        "ftp",
+        "minds",
+    ],
+)
+def test_accounts_public_base_url_rejects_a_poisoned_forwarded_scheme(
+    monkeypatch: pytest.MonkeyPatch, poisoned_proto: str
+) -> None:
+    """An untrusted forwarded-proto never reaches the f-string, so it can never
+    change the constructed URL's effective host."""
+    monkeypatch.delenv("ACCOUNTS_BASE_URL", raising=False)
+    request = _make_base_url_request("https", "rsc-dev.modal.run", forwarded_proto=poisoned_proto)
+
+    base_url = accounts_web_module.accounts_public_base_url(request)
+
+    # The clamp falls back to the ASGI scheme; the host stays the real request host.
+    assert base_url == "https://rsc-dev.modal.run"
+    assert urlsplit(base_url).hostname == "rsc-dev.modal.run"
 
 
 def test_oauth_callback_signs_in_and_marks_a_pending_authorize_confirmed(
@@ -694,7 +830,7 @@ def test_oauth_callback_rejects_wrong_purpose_state_under_the_same_key(monkeypat
     """
     client, _st = _make_oauth_client(monkeypatch)
     handoff = share_broker_module.mint_share_handoff_token(
-        signing_key=_TEST_KEY,
+        signing_key=TEST_OAUTH_SIGNING_KEY,
         user_id="user-1",
         email="visitor@example.com",
         machine_domain="x.example.com",
@@ -730,6 +866,127 @@ def test_oauth_callback_refuses_an_email_registered_with_a_password(monkeypatch:
     assert "password" in resp.headers["location"].replace("+", " ")
     # No browser session was minted for the refused login.
     assert st_backend.last_browser_session is None
+
+
+# ---------------------------------------------------------------------------
+# Signup plan choice + terms agreement + the static doc pages
+# ---------------------------------------------------------------------------
+
+
+def test_browser_signup_records_the_selected_plan(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, st_backend, _codes = _make_accounts_web_test_client(monkeypatch)
+
+    resp = client.post(
+        "/accounts/api/signup", json={"email": "new@example.com", "password": "pw-123456", "plan": "free"}
+    )
+
+    assert resp.json()["status"] == "OK"
+    user_id = resp.json()["user"]["user_id"]
+    row = st_backend.entitlements_store.get_entitlements(user_id)
+    assert row is not None
+    assert row["plan_name"] == "free"
+    assert row["user_id_prefix"] == user_id.replace("-", "")[:16]
+
+
+def test_browser_signup_ignores_an_unknown_or_absent_plan(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only the signup selector's plans are honored; anything else defers to the lazy backfill."""
+    client, st_backend, _codes = _make_accounts_web_test_client(monkeypatch)
+
+    crafted = client.post(
+        "/accounts/api/signup", json={"email": "crafty@example.com", "password": "pw-123456", "plan": "ally"}
+    )
+    assert crafted.json()["status"] == "OK"
+
+    legacy = client.post("/accounts/api/signup", json={"email": "old-frontend@example.com", "password": "pw-123456"})
+    assert legacy.json()["status"] == "OK"
+
+    assert st_backend.entitlements_store.rows_by_user_id == {}
+
+
+def test_browser_signup_succeeds_when_the_plan_write_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The plan choice fails open: the lazy backfill's free default is consent-safe."""
+    client, st_backend, _codes = _make_accounts_web_test_client(monkeypatch)
+    st_backend.entitlements_store.raise_on_insert = psycopg2.OperationalError("neon is down")
+
+    resp = client.post(
+        "/accounts/api/signup", json={"email": "resilient@example.com", "password": "pw-123456", "plan": "explorer"}
+    )
+
+    assert resp.json()["status"] == "OK"
+    assert st_backend.entitlements_store.rows_by_user_id == {}
+
+
+def test_oauth_signup_carries_the_plan_and_terms_through_the_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The signup tab's Google button carries plan + terms; a new account gets its chosen row."""
+    client, st_backend = _make_oauth_client(monkeypatch)
+    state = _start_oauth(client, "/manage", plan="free")
+
+    resp = client.get(f"/share/oauth/google/callback?code=code-1&state={state}", follow_redirects=False)
+
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/manage"
+    account = st_backend.accounts_by_email["visitor@example.com"]
+    row = st_backend.entitlements_store.get_entitlements(account.user_id)
+    assert row is not None
+    assert row["plan_name"] == "free"
+
+
+def test_oauth_new_account_without_terms_is_rolled_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A Google exchange creating an account without the terms agreement (the sign-in
+    tab's button) is rolled back and bounced to the terms_required banner."""
+    client, st_backend = _make_oauth_client(monkeypatch)
+    state = _start_oauth(client, "/manage", is_terms_accepted=False)
+
+    resp = client.get(f"/share/oauth/google/callback?code=code-1&state={state}", follow_redirects=False)
+
+    assert resp.status_code == 303
+    assert resp.headers["location"].startswith("/login")
+    assert "error=terms_required" in resp.headers["location"]
+    # The just-created account was rolled back: no account, no session, no
+    # attribution, no entitlements row.
+    assert "visitor@example.com" not in st_backend.accounts_by_email
+    assert st_backend.last_browser_session is None
+    assert st_backend.attribution_store.account_rows == []
+    assert st_backend.entitlements_store.rows_by_user_id == {}
+
+
+def test_oauth_returning_signin_needs_no_terms(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The terms gate applies only to account CREATION; returning Google sign-ins are untouched."""
+    client, st_backend = _make_oauth_client(monkeypatch)
+    signup_state = _start_oauth(client, "/manage", plan="explorer")
+    created = client.get(f"/share/oauth/google/callback?code=code-1&state={signup_state}", follow_redirects=False)
+    assert created.status_code == 303
+    assert "error=" not in created.headers["location"]
+
+    # The same account signing in again from the sign-in tab (no plan/terms).
+    signin_state = _start_oauth(client, "/manage", is_terms_accepted=False)
+    returning = client.get(f"/share/oauth/google/callback?code=code-2&state={signin_state}", follow_redirects=False)
+
+    assert returning.status_code == 303
+    assert returning.headers["location"] == "/manage"
+    account = st_backend.accounts_by_email["visitor@example.com"]
+    row = st_backend.entitlements_store.get_entitlements(account.user_id)
+    assert row is not None
+    assert row["plan_name"] == "explorer"
+
+
+def test_terms_conduct_and_privacy_pages_serve_from_the_bundle(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    client, _st, _codes = _make_accounts_web_test_client(monkeypatch)
+    monkeypatch.setenv("ACCOUNTS_FRONTEND_DIST", str(tmp_path))
+    page_title_by_path = {
+        "/terms-of-service": "Terms of Service",
+        "/code-of-conduct": "Code of Conduct",
+        "/privacy-policy": "Privacy Policy",
+    }
+    for path, title in page_title_by_path.items():
+        # Missing from the dist (an unbuilt bundle) answers the 503 placeholder.
+        assert client.get(path).status_code == 503
+        (tmp_path / f"{path.lstrip('/')}.html").write_text(f"<!doctype html><h1>{title}</h1>")
+        served = client.get(path)
+        assert served.status_code == 200
+        assert title in served.text
 
 
 # ---------------------------------------------------------------------------
@@ -831,7 +1088,7 @@ def test_oauth_signup_records_attribution_but_returning_signin_does_not(monkeypa
     client, st_backend = _make_oauth_client(monkeypatch)
     _plant_attribution_cookie(client)
     start = client.get(
-        "/accounts/oauth/google/start?next=%2Fweb%2Foverview&pq=utm_source%3Dsignup-link&pp=%2Fsignup",
+        "/accounts/oauth/google/start?next=%2Fweb%2Foverview&pq=utm_source%3Dsignup-link&pp=%2Fsignup&terms=1",
         follow_redirects=False,
     )
     state = parse_qs(urlsplit(start.headers["location"]).query)["state"][0]
@@ -859,15 +1116,19 @@ def test_oauth_signup_records_attribution_but_returning_signin_does_not(monkeypa
 
 def test_download_redirects_per_platform_and_404s_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
     client, _st, _codes = _make_accounts_web_test_client(monkeypatch)
+    # Resolved from a fixture manifest, so this covers routing rather than what
+    # stable happens to serve -- and so it does not reach the network.
+    _hold_stable_download(_STABLE_MANIFEST)
 
     mac = client.get("/download?platform=mac-arm64", follow_redirects=False)
     assert mac.status_code == 302
-    assert mac.headers["location"] == "https://dl.todesktop.com/26032588hqdzk/mac/dmg/arm64"
+    assert mac.headers["location"] == _STABLE_ARM64_DMG
 
     # The friendly alias resolves server-side to the same target.
     alias = client.get("/download?platform=mac", follow_redirects=False)
     assert alias.headers["location"] == mac.headers["location"]
 
+    # Only mac-arm64 resolves; every other platform keeps its declared target.
     source = client.get("/download?platform=source", follow_redirects=False)
     assert source.status_code == 302
     assert source.headers["location"] == "https://github.com/imbue-ai/mngr"
@@ -918,3 +1179,232 @@ def test_download_still_redirects_when_the_event_write_fails(monkeypatch: pytest
 
     assert resp.status_code == 302
     assert st_backend.attribution_store.download_rows == []
+
+
+# /download is the link marketing hands to a person, so it has to serve what the
+# stable channel serves.
+
+# Shaped like the live feed: an arm64-only fixture would let a resolver that
+# picks any .dmg at all pass.
+_STABLE_MANIFEST = """version: 0.4.1
+files:
+  - url: https://download.todesktop.com/x/Minds%200.4.1%20-%20Build%20b1-x64-mac.zip
+    sha512: abc==
+    size: 303377197
+  - url: https://download.todesktop.com/x/Minds%200.4.1%20-%20Build%20b1-arm64-mac.zip
+    sha512: def==
+    size: 296819574
+  - url: https://download.todesktop.com/x/Minds%200.4.1%20-%20Build%20b1-x64.dmg
+    sha512: ghi==
+    size: 309416827
+  - url: https://download.todesktop.com/x/Minds%200.4.1%20-%20Build%20b1-arm64.dmg
+    sha512: jkl==
+    size: 302771815
+path: https://download.todesktop.com/x/Minds%200.4.1%20-%20Build%20b1-x64-mac.zip
+sha512: abc==
+releaseDate: '2026-08-18T23:46:47.920Z'
+"""
+
+
+_STABLE_ARM64_DMG = "https://download.todesktop.com/x/Minds%200.4.1%20-%20Build%20b1-arm64.dmg"
+
+
+def _resolve(manifest: str | None) -> str | None:
+    def fetch() -> str:
+        if manifest is None:
+            raise urllib.error.URLError("unreachable")
+        return manifest
+
+    return accounts_web.resolve_stable_mac_arm64_url(fetch=fetch)
+
+
+def _hold_stable_download(manifest: str | None) -> None:
+    """Seed what the route reads, so it stays off the network."""
+    hold_stable_download_link(_resolve(manifest))
+
+
+def test_the_download_link_is_the_dmg_stable_serves() -> None:
+    assert _resolve(_STABLE_MANIFEST) == _STABLE_ARM64_DMG
+
+
+def test_an_unreachable_manifest_leaves_the_fallback_in_place() -> None:
+    """Fails open like the attribution write beside it.
+
+    Returning None rather than raising is what lets the TTL cache hold the
+    failure, so an outage costs one read per window instead of one per request.
+    """
+    assert _resolve(None) is None
+
+
+def test_a_body_that_arrives_broken_fails_open_like_an_unreachable_one() -> None:
+    """Neither of these is an OSError."""
+
+    def truncated() -> str:
+        raise http.client.IncompleteRead(b"version: 0.4.1\n")
+
+    def undecodable() -> str:
+        return b"\xff\xfe".decode()
+
+    assert accounts_web.resolve_stable_mac_arm64_url(fetch=truncated) is None
+    assert accounts_web.resolve_stable_mac_arm64_url(fetch=undecodable) is None
+
+
+def test_a_manifest_naming_no_arm64_dmg_at_all_is_refused() -> None:
+    """The link is only correct if the manifest names exactly one arm64 .dmg."""
+    assert _resolve("version: 0.4.1\nfiles: []\n") is None
+
+
+def test_the_route_reads_a_cached_link_rather_than_the_feed() -> None:
+    """Otherwise every download click would put the feed in the request path."""
+    seeded = "https://download.todesktop.com/x/Seeded-arm64.dmg"
+    hold_stable_download_link(seeded)
+
+    assert accounts_web.stable_mac_arm64_url() == seeded
+    assert accounts_web.stable_mac_arm64_url() == seeded
+
+
+def test_download_serves_what_stable_serves_not_todesktops_own_latest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _st, _codes = _make_accounts_web_test_client(monkeypatch)
+    _hold_stable_download(_STABLE_MANIFEST)
+
+    resp = client.get("/download?platform=mac", follow_redirects=False)
+
+    assert resp.status_code == 302
+    assert resp.headers["location"] == _STABLE_ARM64_DMG
+
+
+def test_download_falls_back_when_stable_cannot_be_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, _st, _codes = _make_accounts_web_test_client(monkeypatch)
+    _hold_stable_download(None)
+
+    resp = client.get("/download?platform=mac", follow_redirects=False)
+
+    assert resp.status_code == 302
+    assert resp.headers["location"] == "https://dl.todesktop.com/26032588hqdzk/mac/dmg/arm64"
+
+
+def test_the_same_url_named_twice_is_still_one_answer() -> None:
+    """Two entries naming one artifact are not ambiguous."""
+    repeated = (
+        "version: 0.4.1\n"
+        "files:\n"
+        "  - url: https://download.todesktop.com/x/Only-arm64.dmg\n"
+        "    size: 1\n"
+        "  - url: https://download.todesktop.com/x/Only-arm64.dmg\n"
+        "    size: 1\n"
+    )
+    assert _resolve(repeated) == "https://download.todesktop.com/x/Only-arm64.dmg"
+
+
+def test_two_different_dmgs_are_ambiguous_and_refused() -> None:
+    two = (
+        "version: 0.4.1\n"
+        "files:\n"
+        "  - url: https://download.todesktop.com/x/One-arm64.dmg\n"
+        "    size: 1\n"
+        "  - url: https://download.todesktop.com/x/Two-arm64.dmg\n"
+        "    size: 2\n"
+    )
+    assert _resolve(two) is None
+
+
+def test_a_dmg_hosted_anywhere_but_todesktop_is_not_a_candidate() -> None:
+    """The feed says where to send people, so a compromised one must not be able to."""
+    elsewhere = "version: 0.4.1\nfiles:\n  - url: https://evil.example/Minds-arm64.dmg\n    size: 1\n"
+    assert _resolve(elsewhere) is None
+
+
+def test_a_bare_filename_is_not_a_candidate() -> None:
+    """electron-builder writes these; relative would resolve against the connector's own host."""
+    relative = "version: 0.4.1\nfiles:\n  - url: Minds-0.4.1-arm64.dmg\n    size: 1\n"
+    assert _resolve(relative) is None
+
+
+def test_an_arm64_dmg_under_another_key_is_not_an_artifact() -> None:
+    """Only `url:` names an artifact.
+
+    Scanning the document instead would see two urls here, call the manifest
+    ambiguous, and refuse a perfectly good one -- and would take whatever a
+    future key happened to hold.
+    """
+    decoy = _STABLE_MANIFEST + "path: https://download.todesktop.com/x/Something-Else-arm64.dmg\n"
+
+    assert _resolve(decoy) == "https://download.todesktop.com/x/Minds%200.4.1%20-%20Build%20b1-arm64.dmg"
+
+
+def test_browser_signin_refused_for_suspended_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, st_backend, _codes = _make_accounts_web_test_client(monkeypatch)
+    signup = st_backend.sign_up(tenant_id="public", email="banned@example.com", password="pw-123456")
+    assert isinstance(signup, EPSignUpOkResult)
+    st_backend.suspended_user_ids.add(signup.user.id)
+
+    resp = client.post("/accounts/api/signin", json={"email": "banned@example.com", "password": "pw-123456"})
+
+    body = resp.json()
+    assert body["status"] == "ACCOUNT_SUSPENDED"
+    assert "support@imbue.com" in body["message"]
+    # No session was minted for the refused sign-in.
+    assert st_backend.last_browser_session is None
+
+
+def test_device_token_exchange_refused_for_suspended_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A code authorized before the suspension must not be exchangeable after it."""
+    client, st_backend, _codes = _make_accounts_web_test_client(monkeypatch)
+    user_id = _sign_in_browser(client, st_backend)
+    verifier = secrets.token_urlsafe(32)
+    query = _authorize_query(verifier=verifier)
+    query["confirmed"] = "1"
+    authorize = client.get(f"/accounts/authorize?{urlencode(query)}", follow_redirects=False)
+    code = parse_qs(urlsplit(authorize.headers["location"]).query)["code"][0]
+    st_backend.suspended_user_ids.add(user_id)
+
+    exchange = client.post(
+        "/auth/device/token",
+        json={"code": code, "code_verifier": verifier, "redirect_uri": "http://127.0.0.1:8123/callback"},
+    )
+
+    assert exchange.status_code == 403
+    assert exchange.json()["detail"]["code"] == "account_suspended"
+
+
+def test_oauth_callback_refuses_a_suspended_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, st_backend = _make_oauth_client(monkeypatch)
+    # First OAuth login creates the account.
+    first_state = _start_oauth(client, "/")
+    client.get(f"/share/oauth/google/callback?code=code-1&state={first_state}", follow_redirects=False)
+    account = st_backend.accounts_by_email["visitor@example.com"]
+    st_backend.suspended_user_ids.add(account.user_id)
+    st_backend.last_browser_session = None
+
+    second_state = _start_oauth(client, "/")
+    resp = client.get(f"/share/oauth/google/callback?code=code-2&state={second_state}", follow_redirects=False)
+
+    assert resp.status_code == 303
+    assert "error=account_suspended" in resp.headers["location"]
+    assert st_backend.last_browser_session is None
+
+
+def test_bearer_identity_checks_the_core_on_writes_and_not_on_reads(monkeypatch: pytest.MonkeyPatch) -> None:
+    """D3: resolve_web_user_identity infers check_database from the request method."""
+    checked_databases: list[bool] = []
+    user_id = "d3d3d3d3-1111-2222-3333-444455556666"
+
+    def _recording_authenticate_request(request: Request, check_database: bool = False) -> UserAuth:
+        checked_databases.append(check_database)
+        return UserAuth(user_id_prefix=derive_user_id_prefix(user_id), email="d3@example.com", is_email_verified=True)
+
+    client, _backend = _make_share_test_client_with_fakes(
+        monkeypatch,
+        {
+            "get_user_id_from_access_token": lambda token: user_id,
+            "authenticate_request": _recording_authenticate_request,
+        },
+    )
+    headers = {"Authorization": "Bearer d3-session-token"}
+
+    client.get("/shares", headers=headers)
+    client.post("/shares", json={"host_id": "host-" + "c" * 32}, headers=headers)
+
+    assert checked_databases == [False, True]

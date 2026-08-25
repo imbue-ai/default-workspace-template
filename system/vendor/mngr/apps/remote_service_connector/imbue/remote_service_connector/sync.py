@@ -30,6 +30,7 @@ import imbue.remote_service_connector.entitlements as entitlements_module
 from imbue.remote_service_connector import db
 from imbue.remote_service_connector.auth import UserAuth
 from imbue.remote_service_connector.entitlements import raise_quota_exceeded
+from imbue.remote_service_connector.errors import ConnectorError
 from imbue.remote_service_connector.http_api import handle_endpoint_errors
 
 logger = logging.getLogger(__name__)
@@ -121,7 +122,7 @@ class AccountKeyBundleModel(BaseModel):
     updated_at: str = Field(default="", description="Server timestamp (response only)")
 
 
-class SyncRevisionConflictError(Exception):
+class SyncRevisionConflictError(ConnectorError):
     """CAS failure: the stored revision does not precede the pushed one."""
 
     def __init__(self, stored_record: dict[str, Any]) -> None:
@@ -129,7 +130,7 @@ class SyncRevisionConflictError(Exception):
         self.stored_record = stored_record
 
 
-class SyncRecordFormatTooNewError(Exception):
+class SyncRecordFormatTooNewError(ConnectorError):
     """A push carried a record_format below the stored row's (a client too old for this record)."""
 
     def __init__(self, stored_record: dict[str, Any]) -> None:
@@ -137,11 +138,11 @@ class SyncRecordFormatTooNewError(Exception):
         self.stored_record = stored_record
 
 
-class SyncActiveAgentConflictError(Exception):
+class SyncActiveAgentConflictError(ConnectorError):
     """A second ACTIVE record for the same (user_id, agent_id) was rejected."""
 
 
-class SyncStoreConsistencyError(RuntimeError):
+class SyncStoreConsistencyError(ConnectorError, RuntimeError):
     """The store violated one of its own invariants (e.g. a write returned no row)."""
 
 

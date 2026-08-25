@@ -394,8 +394,14 @@ def make_fake_imbue_cloud_cli() -> FakeImbueCloudCli:
     )
 
 
-def make_session_store_for_test(data_dir: Path, cli: ImbueCloudCli | None = None) -> MultiAccountSessionStore:
-    """Build a :class:`MultiAccountSessionStore` (with its record store) over a fake CLI by default."""
+def make_session_store_for_test(
+    data_dir: Path, cli: ImbueCloudCli | None = None, mngr_host_dir: Path | None = None
+) -> MultiAccountSessionStore:
+    """Build a :class:`MultiAccountSessionStore` (with its record store) over a fake CLI by default.
+
+    ``mngr_host_dir`` (default None: disabled) enables the identity cache's
+    on-disk sessions-dir coherence check, exactly as the app wires it.
+    """
     effective_cli = cli or make_fake_imbue_cloud_cli()
     record_store = WorkspaceRecordStore(
         paths=WorkspacePaths(data_dir=data_dir),
@@ -403,7 +409,9 @@ def make_session_store_for_test(data_dir: Path, cli: ImbueCloudCli | None = None
         device_id=device_id_for_test("session-store"),
         device_label="test-device",
     )
-    return MultiAccountSessionStore(data_dir=data_dir, cli=effective_cli, record_store=record_store)
+    return MultiAccountSessionStore(
+        data_dir=data_dir, cli=effective_cli, record_store=record_store, mngr_host_dir=mngr_host_dir
+    )
 
 
 def build_desktop_client_for_test(
@@ -435,12 +443,14 @@ def build_desktop_client_for_test(
 
 @pytest.fixture
 def root_concurrency_group() -> Iterator[ConcurrencyGroup]:
-    """Root ``ConcurrencyGroup`` for tests that construct an ``AgentCreator``.
+    """Root ``ConcurrencyGroup`` for tests that construct something requiring one.
 
-    ``AgentCreator.root_concurrency_group`` is required (in production it is
-    owned by ``start_desktop_client`` and brackets the FastAPI lifespan); this
-    fixture enters an equivalent group for the test's duration and exits it
-    cleanly afterwards so any strand tracking / shutdown semantics match.
+    Several components take it as a required field -- ``AgentCreator``,
+    ``ConnectivityDetector``, ``WorkspaceViewRefresher`` -- and in production all
+    of them are handed the one group ``start_desktop_client`` owns, which
+    brackets the app's lifespan. This fixture enters an equivalent group for the
+    test's duration and exits it cleanly afterwards so any strand tracking /
+    shutdown semantics match.
     """
     cg = ConcurrencyGroup(name="test-root")
     with cg:

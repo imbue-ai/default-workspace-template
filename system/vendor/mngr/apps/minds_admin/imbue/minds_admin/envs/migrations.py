@@ -27,7 +27,6 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
 from urllib.parse import urlsplit
-from urllib.parse import urlunsplit
 
 from loguru import logger
 from pydantic import SecretStr
@@ -35,6 +34,7 @@ from pydantic import SecretStr
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.imbue_common.logging import info_span
 from imbue.minds_admin.envs.providers.neon_db import NeonProviderError
+from imbue.minds_admin.envs.providers.neon_db import direct_dsn_from_pooled
 
 # psql shellout timeout per migration. Generous enough to absorb a slow
 # Neon cold-start; short enough that a real connectivity failure surfaces
@@ -56,11 +56,6 @@ class MigrationRunnerError(NeonProviderError):
     """Raised when the schema_migrations runner fails to apply a file."""
 
 
-# Neon serves PgBouncer (transaction pooling) on hostnames whose first label
-# ends with this suffix; the same hostname without it is the direct compute.
-_POOLER_LABEL_SUFFIX: Final[str] = "-pooler"
-
-
 def _direct_migration_dsn(dsn: SecretStr) -> SecretStr:
     """Return ``dsn`` with Neon's ``-pooler`` suffix stripped from the hostname.
 
@@ -68,20 +63,10 @@ def _direct_migration_dsn(dsn: SecretStr) -> SecretStr:
     session-scoped behavior (advisory locks, ``CREATE INDEX CONCURRENTLY``'s
     multi-transaction protocol) that is unsafe through PgBouncer's
     transaction-mode pooling (Neon's ``-pooler`` endpoints). Non-Neon and
-    already-direct DSNs are returned unchanged. Twin of
-    ``direct_database_url`` in ``imbue.modal_app_kit.database`` (duplicated
-    because minds does not depend on the modal-app-kit library).
+    already-direct DSNs are returned unchanged (see
+    ``neon_db.direct_dsn_from_pooled``).
     """
-    database_url = dsn.get_secret_value()
-    parsed = urlsplit(database_url)
-    userinfo, at_sign, host_and_port = parsed.netloc.rpartition("@")
-    host, colon, port = host_and_port.partition(":")
-    first_label, dot, remaining_labels = host.partition(".")
-    if not dot or not first_label.endswith(_POOLER_LABEL_SUFFIX):
-        return dsn
-    direct_host = first_label[: -len(_POOLER_LABEL_SUFFIX)] + dot + remaining_labels
-    direct_netloc = f"{userinfo}{at_sign}{direct_host}{colon}{port}"
-    return SecretStr(urlunsplit(parsed._replace(netloc=direct_netloc)))
+    return SecretStr(direct_dsn_from_pooled(dsn.get_secret_value()))
 
 
 def _psql_path() -> str:

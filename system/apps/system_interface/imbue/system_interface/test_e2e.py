@@ -476,6 +476,43 @@ def test_send_button_appears_on_input(e2e_server: tuple[str, list[AgentInfo], Pa
     expect(send_button).to_be_visible()
 
 
+@pytest.mark.timeout(60, func_only=False)
+def test_composer_bar_survives_a_shorter_window(e2e_server: tuple[str, list[AgentInfo], Path], page: Page) -> None:
+    """A window that gets shorter keeps the whole composer on screen.
+
+    The minds shell does this without the user touching the window: its recovery
+    band takes ~50px off the top of the frame this app runs in. Everything below
+    the dock is positioned in pixels -- the panes, and the live surfaces
+    mirroring them -- so a row that grows with the viewport but cannot shrink
+    back leaves the chat laid out at the old height, with the model bar under
+    the composer hanging below the bottom edge where nothing can bring it back.
+    Asserted against the viewport rather than against a pixel height: what
+    matters is that the bar is inside the window, whatever the window is.
+    """
+    base_url, _, _ = e2e_server
+    page.set_viewport_size({"width": 1200, "height": 900})
+    # Waited on so the view is fully mounted before the window changes size, and
+    # so the module's tmux mark is honored (mounting is what shells out to it).
+    with page.expect_response(lambda response: response.url.endswith("/api/terminals"), timeout=15000):
+        page.goto(base_url)
+
+    under_bar = page.locator(".composer-under-bar")
+    expect(under_bar).to_be_visible(timeout=15000)
+
+    page.set_viewport_size({"width": 1200, "height": 848})
+    expect(under_bar).to_be_visible()
+    # The dock relays out on a resize observation and the surfaces follow on the
+    # next frame, so the settled geometry is what is asserted -- polled rather
+    # than slept on. The wrong layout is stable, not slow: it never settles.
+    wait_for(
+        lambda: page.eval_on_selector(
+            ".composer-under-bar", "e => e.getBoundingClientRect().bottom <= window.innerHeight"
+        ),
+        timeout=10.0,
+        error_message="the composer's model bar stayed below the bottom of the shortened window",
+    )
+
+
 _TOOL_CALL_SESSION_EVENTS: list[dict[str, Any]] = [
     {
         "type": "user",
@@ -597,6 +634,14 @@ def _broadcast_layout_op(base_url: str, op: str, args: dict[str, Any], agent_id:
             if e.code == 412:
                 return False
             raise
+        except (TimeoutError, urllib.error.URLError):
+            # Not reaching the server is exactly what this loop is for, but only
+            # HTTPError was being caught -- so a request that timed out under
+            # load escaped the retry and failed the calling test outright,
+            # despite `wait_for` still having seconds left to spend. A server
+            # that never answers still fails, with this helper's own message
+            # rather than a raw socket traceback.
+            return False
 
     wait_for(
         _attempt,
@@ -1532,7 +1577,11 @@ def _create_terminal_from_launcher(page: Page, known_titles: set[str]) -> str:
     naming dialog ever appears: the session name is machine-allocated and the
     display name is derived from it.
     """
-    page.locator(".dockview-add-tab-button").first.click()
+    # The "+" is only offered when the pane has no launcher, since a pane holds
+    # at most one; a create leaves the launcher behind on the failure paths, so
+    # a repeat call may find one already up.
+    if page.locator(".new-tab-launcher").count() == 0:
+        page.locator(".dockview-add-tab-button").first.click()
     expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=10000)
     page.locator(".new-tab-launcher-tile:visible", has_text="Terminal").click()
     expect(page.locator(".custom-url-dialog")).to_have_count(0)
@@ -1658,16 +1707,26 @@ def test_double_click_renames_a_chat_and_the_name_survives_a_reload(tmp_path: Pa
 _TERMINAL_DESTROY_PORT = 18879
 
 
+# `/api/terminals` answers by shelling out to `tmux list-sessions`, so its
+# latency is a subprocess spawn's, not a handler's. Five seconds was tight
+# enough to lose the race on a machine also running the rest of this suite --
+# seen as a bare socket timeout inside this helper, which fails the calling
+# test outright rather than being retried by it.
+_TERMINALS_API_TIMEOUT_SECONDS = 20.0
+
+
 def _terminal_session_names(base_url: str) -> set[str]:
     """The live user-terminal session names, as the server's terminals API reports them."""
-    with urllib.request.urlopen(f"{base_url}/api/terminals", timeout=5.0) as response:
+    with urllib.request.urlopen(f"{base_url}/api/terminals", timeout=_TERMINALS_API_TIMEOUT_SECONDS) as response:
         payload = json.loads(response.read())
     return {terminal["session_name"] for terminal in payload["terminals"]}
 
 
 # Same _collapse_rail race as test_renaming_an_object_in_one_view_names_it_in
 # _the_other above: seen fail once on this helper's own wait, then pass twice
-# on retry with no code changed in between.
+# on retry with no code changed in between. Separately seen to lose the
+# terminals API's own timeout under load, which _TERMINALS_API_TIMEOUT_SECONDS
+# now allows for.
 @pytest.mark.flaky
 @pytest.mark.timeout(180, func_only=False)
 def test_shut_down_terminal_leaves_no_resurrected_tab_in_everything(tmp_path: Path, page: Page) -> None:
@@ -1746,9 +1805,7 @@ def test_shut_down_terminal_leaves_no_resurrected_tab_in_everything(tmp_path: Pa
             )
             expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=15000)
             page.locator(".new-tab-launcher-row:visible", has_text=terminal_title).first.click()
-            expect(page.locator(".dv-default-tab-content", has_text=terminal_title).first).to_be_visible(
-                timeout=15000
-            )
+            expect(page.locator(".dv-default-tab-content", has_text=terminal_title).first).to_be_visible(timeout=15000)
             wait_for(
                 lambda: everything_file.exists() and session_name in everything_file.read_text(),
                 timeout=15.0,
@@ -1769,8 +1826,8 @@ def test_shut_down_terminal_leaves_no_resurrected_tab_in_everything(tmp_path: Pa
             ).first
             expect(terminal_tab).to_be_visible(timeout=15000)
             terminal_tab.hover()
-            terminal_tab.locator(".dv-custom-tab-action").last.click()
-            page.locator("[role='menuitem']", has_text=f"Quit {terminal_title}").click()
+            terminal_tab.locator('.dv-custom-tab-action[aria-label="Tab options"]').click()
+            page.locator("[role='menuitem']", has_text=f"Delete {terminal_title}").click()
             page.locator(".destroy-dialog-btn-destroy").click()
 
             # The whole blast radius. The tab leaves the mounted project ...
@@ -1826,9 +1883,6 @@ def test_shut_down_terminal_leaves_no_resurrected_tab_in_everything(tmp_path: Pa
             )
 
 
-_ROW_REMOVAL_PORT = 18873
-
-
 def _project_members(layout_dir: Path) -> list[str]:
     """The starter project's member refs, straight out of the registry on disk.
 
@@ -1845,16 +1899,25 @@ def _project_members(layout_dir: Path) -> list[str]:
     return members
 
 
+_ROW_REMOVAL_PORT = 18873
+
+
 @pytest.mark.timeout(120, func_only=False)
 def test_removing_a_row_from_the_project_unfiles_it_without_destroying_it(tmp_path: Path, page: Page) -> None:
-    """The tab list's row menu unfiles a member from the project rather than destroying it.
+    """The rail row menu's "Remove from project" unfiles a member rather than destroying it.
 
-    "Remove from project" is `removalItemsForRow`'s safe verb (see Sidebar.ts):
-    it takes the ref out of the mounted project's member list and undocks its
-    tab, but the object itself is untouched. The removal is asserted against
-    the registry on disk, same as any other membership change; "kept running"
-    is asserted against Everything, which lists every object on the machine
-    regardless of membership and so still has to show this one afterwards.
+    The safe middle verb of the shared object menu (objectMenu.ts): it takes
+    the ref out of the mounted project's member list and undocks its tab, and
+    the object itself is untouched. Both halves are unit-tested apart -- the
+    menu item routes to ``onRemoveFromView``, and the endpoint unfiles without
+    stopping anything -- so what this covers is the wiring between them, which
+    is the part that moved when the verb went from the rail's own
+    ``removalItemsForRow`` to the definition the tab menu shares.
+
+    The removal is asserted against the registry on disk, same as any other
+    membership change; "kept running" is asserted against Everything, which
+    lists every object on the machine regardless of membership and so still has
+    to show this one afterwards.
     """
     primary_agent_id = "primary-services-agent"
     with _running_e2e_server(tmp_path, _ROW_REMOVAL_PORT, primary_agent_id=primary_agent_id) as (
@@ -1877,8 +1940,10 @@ def test_removing_a_row_from_the_project_unfiles_it_without_destroying_it(tmp_pa
             error_message="the fixture chat was never filed as a member of the starter project",
         )
 
-        # Right-click the chat's row in the rail's tab list, exactly as the
-        # design's row menu offers it, and remove it from the project.
+        # Right-click the chat's row in the rail's tab list, which is one of the
+        # two ways that row's menu opens, and take the verb from the menu rather
+        # than from the row's own one-click remove: the menu is what renders the
+        # shared definition.
         page.locator(".machine-sidebar").hover()
         chat_row = page.locator(".project-rail-tab", has_text="test-agent")
         expect(chat_row).to_have_count(1)
@@ -1917,26 +1982,10 @@ _PINNABLE_APP_NAME = "docs-viewer"
 _PINNABLE_APP_REF = f"service:{_PINNABLE_APP_NAME}"
 _PINNABLE_APP_LABEL = f"{_PINNABLE_APP_NAME}-e2elabel"
 
-# The "All apps" heading an app's row currently sits under, read by walking back
-# up the list to the nearest thing that is not a row. The grouping is what the
-# two headings MEAN, so asserting on the heading above the row is what proves an
-# app moved between them -- a heading's mere presence would not. The row is found
-# by its label span rather than its whole textContent, because the row's glyph
-# may be a monogram whose SVG <text> initial leaks into the latter.
-_HEADING_ABOVE_APP_JS = """
-(appName) => {
-  const rows = Array.from(document.querySelectorAll('.project-rail-app'));
-  const row = rows.find((candidate) => {
-    const label = candidate.querySelector('.truncate');
-    return label !== null && label.textContent.trim() === appName;
-  });
-  if (row === undefined) return null;
-  for (let node = row.previousElementSibling; node !== null; node = node.previousElementSibling) {
-    if (!node.classList.contains('project-rail-app')) return node.textContent.trim();
-  }
-  return null;
-}
-"""
+# One app's row inside the "All apps" popover. Matched on its label span
+# rather than the row's whole textContent, because the row's glyph may be a
+# monogram whose SVG <text> initial leaks into the latter.
+_APP_ROW_SELECTOR = ".project-rail-app:has(.truncate:text-is('{name}'))"
 
 
 def _open_all_apps(page: Page) -> None:
@@ -1956,11 +2005,12 @@ def test_pinning_an_app_to_a_project_is_the_same_as_its_membership(tmp_path: Pat
     """Pinning an app IS filing it in the project, and unpinning is unfiling it.
 
     There is one concept here, not two: an app is pinned exactly when the
-    project's member list holds its ``service:<name>`` ref. So "All apps" has
-    exactly two headings -- "Pinned in <Project>" and "Unpinned" -- and the round
-    trip through them has to move the app on the server, not in this browser:
-    pinning puts the ref in the registry on disk and grows a rail shortcut,
-    unpinning takes both away again.
+    project's member list holds its ``service:<name>`` ref. So "All apps" lists
+    exactly the apps the view has NOT pinned -- the pinned ones are already in
+    the rail -- and the round trip has to move the app on the server, not in
+    this browser: pinning puts the ref in the registry on disk, grows a rail
+    shortcut and drops the row from the popover; unpinning, which the rail row's
+    own pin icon does in one click, undoes all three.
 
     The last assertion is the one the design turns on. Unpinning is removing an
     object from a view and nothing more, so the app must still be RUNNING
@@ -1993,23 +2043,20 @@ def test_pinning_an_app_to_a_project_is_the_same_as_its_membership(tmp_path: Pat
         )
         page.evaluate(_WATCH_SURFACE_REMOVALS_JS)
 
-        # Nothing has pinned this app, so it starts under "Unpinned" -- there is
-        # no pinned group at all yet -- and the rail carries no shortcut for it.
+        # Nothing has pinned this app, so the popover -- which lists only what
+        # the view has not pinned -- offers it, and the rail carries no shortcut.
         _open_all_apps(page)
-        assert page.evaluate(_HEADING_ABOVE_APP_JS, _PINNABLE_APP_NAME) == "Unpinned"
-        expect(page.locator(f"text=Pinned in {DEFAULT_PROJECT_NAME}")).to_have_count(0)
+        app_row = page.locator(_APP_ROW_SELECTOR.format(name=_PINNABLE_APP_NAME))
+        expect(app_row).to_have_count(1)
         expect(page.locator(".project-rail-shortcut", has_text=_PINNABLE_APP_NAME)).to_have_count(0)
         assert _PINNABLE_APP_REF not in _project_members(layout_dir)
 
-        # Pin it. The row moves under the project's own heading, the rail grows
-        # a shortcut for it, and -- because pinning IS membership -- the ref
-        # lands in the project's member list on disk.
+        # Pin it. The row leaves the popover -- a pinned app lives in the rail a
+        # few pixels away, so listing it twice is what the filtering removes --
+        # the rail grows a shortcut for it, and, because pinning IS membership,
+        # the ref lands in the project's member list on disk.
         page.locator(f'button[aria-label="Pin {_PINNABLE_APP_NAME}"]').click()
-        page.wait_for_function(
-            f"() => ({_HEADING_ABOVE_APP_JS})({json.dumps(_PINNABLE_APP_NAME)}) === "
-            f"{json.dumps(f'Pinned in {DEFAULT_PROJECT_NAME}')}",
-            timeout=15000,
-        )
+        expect(app_row).to_have_count(0, timeout=15000)
         expect(page.locator(".project-rail-shortcut", has_text=_PINNABLE_APP_NAME)).to_have_count(1)
         wait_for(
             lambda: _PINNABLE_APP_REF in _project_members(layout_dir),
@@ -2021,6 +2068,8 @@ def test_pinning_an_app_to_a_project_is_the_same_as_its_membership(tmp_path: Pat
         # Open it from that shortcut, so there is a live page to lose. Stamp the
         # element holding it: nothing serializes the property, so a surface that
         # answers to it later is necessarily this same element.
+        page.keyboard.press("Escape")
+        expect(page.locator(".project-rail-app")).to_have_count(0, timeout=5000)
         page.locator(".project-rail-shortcut", has_text=_PINNABLE_APP_NAME).click()
         expect(page.locator(app_frame_selector)).to_have_count(1, timeout=_TRIGGER_TIMEOUT_MS)
         page.evaluate(
@@ -2032,15 +2081,21 @@ def test_pinning_an_app_to_a_project_is_the_same_as_its_membership(tmp_path: Pat
             """
         )
 
-        # Unpin it. It goes back under "Unpinned", the shortcut goes with it,
-        # and the ref leaves the project's member list.
-        _open_all_apps(page)
+        # Unpin it from the rail row itself, which is the one-click path now the
+        # popover no longer lists a pinned app. The shortcut goes, the ref leaves
+        # the project's member list, and the app returns to the popover it was
+        # filtered out of.
+        #
+        # The popover has to be dismissed first: an open menu sits on a scrim
+        # that swallows the click dismissing it, precisely so that click does not
+        # also land on whatever was underneath -- the rail included.
+        page.keyboard.press("Escape")
+        expect(page.locator(".project-rail-app")).to_have_count(0, timeout=5000)
+        page.locator(".machine-sidebar").hover()
         page.locator(f'button[aria-label="Unpin {_PINNABLE_APP_NAME}"]').click()
-        page.wait_for_function(
-            f'() => ({_HEADING_ABOVE_APP_JS})({json.dumps(_PINNABLE_APP_NAME)}) === "Unpinned"',
-            timeout=15000,
-        )
-        expect(page.locator(".project-rail-shortcut", has_text=_PINNABLE_APP_NAME)).to_have_count(0)
+        expect(page.locator(".project-rail-shortcut", has_text=_PINNABLE_APP_NAME)).to_have_count(0, timeout=15000)
+        _open_all_apps(page)
+        expect(page.locator(_APP_ROW_SELECTOR.format(name=_PINNABLE_APP_NAME))).to_have_count(1, timeout=15000)
         wait_for(
             lambda: _PINNABLE_APP_REF not in _project_members(layout_dir),
             timeout=15.0,
@@ -2170,9 +2225,12 @@ def test_launcher_shows_an_opened_tabs_recency_and_it_survives_a_reload(tmp_path
         page.reload()
         expect(page.locator(".dv-default-tab-content", has_text="test-agent").first).to_be_visible(timeout=15000)
 
-        # A launcher may have been restored with the layout; the "+" opens one
-        # if not and flashes the existing one if so, so either way one is up.
-        page.locator(".dockview-add-tab-button").first.click()
+        # A launcher may have been restored with the layout. The "+" is only
+        # offered when there is none -- a pane holds at most one, so with one
+        # open the button would have nothing left to do -- hence asking first
+        # rather than clicking blind.
+        if page.locator(".new-tab-launcher").count() == 0:
+            page.locator(".dockview-add-tab-button").first.click()
         expect(page.locator(".new-tab-launcher").first).to_be_visible(timeout=10000)
         chat_row = page.locator(
             ".new-tab-launcher-section[data-section='in-project'] .new-tab-launcher-row", has_text="test-agent"
@@ -2195,16 +2253,41 @@ def test_launcher_kind_filter_hides_a_kind_and_reset_restores_it(tmp_path: Path,
 
     The filter is a checkbox menu per table: one row per kind the table holds,
     plus a reset. Unchecking "Chats" must drop the chat rows and ONLY the chat
-    rows -- the app seeded beside them stays -- and "Reset filters" must bring
-    them straight back. The machine offers an extra agent and an app so the
-    "On this machine" table holds two kinds to tell apart.
+    rows -- the app instance seeded beside them stays -- and "Reset filters"
+    must bring them straight back. The machine offers an extra agent and an
+    app so the "On this machine" table holds two kinds to tell apart.
     """
     with _running_e2e_server(
         tmp_path,
         _LAUNCHER_FILTER_PORT,
+        primary_agent_id="primary-filter-agent",
         additional_agents=(("agent-filter-999", "filter-agent"),),
         apps=("docs-viewer",),
     ) as (base_url, _agent_info, _session_file):
+        # Apps list as their INSTANCES, and an instance exists while something
+        # references it -- so the machine table only holds an app row once one
+        # is referenced somewhere. Seed one docs-viewer instance as a member of
+        # a second project: the client mounts the first project (a fresh
+        # browser lands on projects[0], the starter), so the instance lands in
+        # its "On this machine" table rather than the in-project one. The
+        # primary agent id is what gives the project endpoints a layout dir to
+        # persist into -- without one the seed POSTs answer 500 / drop the ref.
+        seed_request = urllib.request.Request(
+            f"{base_url}/api/projects",
+            data=json.dumps({"name": "Seed", "color": "#3B82F6", "glyph": 1}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(seed_request, timeout=5) as response:
+            assert response.status == 200
+        member_request = urllib.request.Request(
+            f"{base_url}/api/projects/seed/members",
+            data=json.dumps({"ref": "service:docs-viewer?instance=docs-viewer-1"}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(member_request, timeout=5) as response:
+            assert response.status == 200
         page.goto(base_url)
         expect(page.locator(".dv-default-tab-content", has_text="test-agent").first).to_be_visible(timeout=15000)
 
@@ -2340,7 +2423,7 @@ def test_overflowed_tabs_list_as_plain_rows_and_the_strip_keeps_its_handles(tmp_
         strip_tab = page.locator(".dv-tab", has=page.locator(".dv-default-tab-content", has_text=clicked_title)).first
         strip_tab.hover()
         expect(strip_tab.locator(".dv-custom-tab-action")).to_have_count(2, timeout=5000)
-        strip_tab.locator(".dv-custom-tab-action").last.click()
+        strip_tab.locator('.dv-custom-tab-action[aria-label="Tab options"]').click()
         expect(page.locator("[role='menuitem']", has_text="Hide tab")).to_be_visible(timeout=5000)
         page.keyboard.press("Escape")
 
@@ -2514,6 +2597,8 @@ def test_rail_hover_expansion_holds_a_fixed_layout_and_only_a_pointer_leave_clos
         # Only the pointer actually leaving closes it.
         page.mouse.move(600, 400)
         expect(page.locator(".project-rail-search")).to_have_count(0, timeout=5000)
+
+
 # A conversation whose transcript ends with an unresolved queue-operation/enqueue,
 # so the Claude queue populator surfaces one currently-queued message. Shaped like
 # the real records (a normal exchange, then an enqueue line the watcher feeds to
@@ -2713,9 +2798,9 @@ def test_mobile_client_saves_its_own_arrangement(tmp_path: Path, page: Page) -> 
 
             # The fixture chat auto-opens in the starter project; the debounced
             # autosave then writes the arrangement out -- into the mobile file.
-            expect(
-                mobile_page.locator(".dv-default-tab-content", has_text="test-agent").first
-            ).to_be_visible(timeout=15000)
+            expect(mobile_page.locator(".dv-default-tab-content", has_text="test-agent").first).to_be_visible(
+                timeout=15000
+            )
             wait_for(
                 lambda: (layout_dir / "projects" / f"{DEFAULT_PROJECT_ID}.mobile.json").exists(),
                 timeout=15.0,

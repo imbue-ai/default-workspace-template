@@ -3,6 +3,7 @@ from uuid import UUID
 
 import pytest
 
+from imbue.remote_service_connector.testing import _ADMIN_KEY_TEST_VALUE
 from imbue.remote_service_connector.testing import _USER_STUB_USER_ID_PREFIX
 from imbue.remote_service_connector.testing import _admin_key_headers
 from imbue.remote_service_connector.testing import _make_pool_quota_test_client
@@ -87,6 +88,9 @@ def test_stop_workspace_flips_row_and_spawns_supervisor(monkeypatch: pytest.Monk
     assert row.status == "stopping"
     assert row.stop_requested_at is not None
     assert backend.spawned_supervisors == [str(_WS_ID)]
+    # The endpoint minted the fencing token and handed it to the supervisor.
+    assert row.transition_id is not None
+    assert backend.spawned_supervisor_tokens == [(str(_WS_ID), row.transition_id)]
 
 
 def test_stop_workspace_is_idempotent_while_stopping(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -142,20 +146,28 @@ def test_start_workspace_from_stopped_flips_row_and_spawns(monkeypatch: pytest.M
     assert resp.json()["status"] == "starting"
     assert _row_status(backend, _WS_ID) == "starting"
     assert backend.spawned_supervisors == [str(_WS_ID)]
+    # The endpoint minted the fencing token and handed it to the supervisor.
+    assert stopped.transition_id is not None
+    assert backend.spawned_supervisor_tokens == [(str(_WS_ID), stopped.transition_id)]
 
 
-def test_start_workspace_from_stopping_skips_quota_check(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_start_workspace_while_stopping_is_refused_with_the_current_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Transitions only begin from stable states: a still-stopping row refuses
+    the start (409, naming the current status) so its stop supervisor is never
+    raced by a start supervisor -- the caller waits for stopped and retries."""
     client, backend, entitlements_store, _litellm = _make_pool_quota_test_client(monkeypatch)
-    # Cap of 1 running workspace; the stopping row itself already counts as
-    # running, so restarting it must not be quota-refused.
-    _seed_entitlements_row(entitlements_store, plan_name="explorer", max_remote_workspaces=1)
+    _seed_entitlements_row(entitlements_store, plan_name="ally")
     backend.storage_config = make_storage_config()
     _seed_leased_workspace(backend, _WS_ID, status="stopping")
 
     resp = client.post(f"/workspaces/{_WS_ID}/start", headers=_user_headers())
 
-    assert resp.status_code == 202
-    assert _row_status(backend, _WS_ID) == "starting"
+    assert resp.status_code == 409
+    assert "stopping" in resp.json()["detail"]
+    assert _row_status(backend, _WS_ID) == "stopping"
+    assert backend.spawned_supervisors == []
 
 
 def test_start_workspace_on_running_row_reports_running(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -173,7 +185,7 @@ def test_start_workspace_on_running_row_reports_running(monkeypatch: pytest.Monk
 
 def test_abandon_workspace_requires_admin_key(monkeypatch: pytest.MonkeyPatch) -> None:
     client, backend = _make_pool_test_client(monkeypatch)
-    monkeypatch.setenv("MINDS_ADMIN_KEY", "admin-key-secret-9f3a2b")
+    monkeypatch.setenv("MINDS_ADMIN_KEY", _ADMIN_KEY_TEST_VALUE)
     _seed_leased_workspace(backend, _WS_ID, status="stopping")
 
     unauthorized = client.post(
@@ -190,3 +202,49 @@ def test_abandon_workspace_requires_admin_key(monkeypatch: pytest.MonkeyPatch) -
     assert row is not None
     assert row.status == "crashed"
     assert row.transition_error == "box died"
+
+
+def test_admin_stop_workspace_flips_row_and_spawns_supervisor(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, backend = _make_pool_test_client(monkeypatch)
+    monkeypatch.setenv("MINDS_ADMIN_KEY", _ADMIN_KEY_TEST_VALUE)
+    # Another user's row: the operator route has no ownership check.
+    _seed_leased_workspace(backend, _WS_ID, leased_to_user="deadbeefdeadbeef")
+    backend.storage_config = make_storage_config()
+
+    resp = client.post(f"/admin/workspaces/{_WS_ID}/stop", headers=_admin_key_headers())
+
+    assert resp.status_code == 202
+    assert resp.json()["status"] == "stopping"
+    row = backend.find_pool_row(_WS_ID)
+    assert row is not None
+    assert row.status == "stopping"
+    # The spawned supervisor owns the transition_id the stop CAS minted.
+    assert row.transition_id is not None
+    assert backend.spawned_supervisor_tokens == [(str(_WS_ID), row.transition_id)]
+
+
+def test_admin_stop_workspace_requires_admin_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, backend = _make_pool_test_client(monkeypatch)
+    monkeypatch.setenv("MINDS_ADMIN_KEY", _ADMIN_KEY_TEST_VALUE)
+    _seed_leased_workspace(backend, _WS_ID)
+    backend.storage_config = make_storage_config()
+
+    resp = client.post(f"/admin/workspaces/{_WS_ID}/stop", headers=_user_headers())
+
+    assert resp.status_code == 401
+    assert _row_status(backend, _WS_ID) == "leased"
+
+
+def test_admin_stop_workspace_is_idempotent_and_404s_on_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, backend = _make_pool_test_client(monkeypatch)
+    monkeypatch.setenv("MINDS_ADMIN_KEY", _ADMIN_KEY_TEST_VALUE)
+    _seed_leased_workspace(backend, _WS_ID, status="stopped")
+    backend.storage_config = make_storage_config()
+
+    already = client.post(f"/admin/workspaces/{_WS_ID}/stop", headers=_admin_key_headers())
+    assert already.status_code == 202
+    assert already.json()["status"] == "stopped"
+    assert backend.spawned_supervisors == []
+
+    missing = client.post(f"/admin/workspaces/{_WS_ID_2}/stop", headers=_admin_key_headers())
+    assert missing.status_code == 404

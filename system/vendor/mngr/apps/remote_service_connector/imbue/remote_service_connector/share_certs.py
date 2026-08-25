@@ -41,11 +41,13 @@ from tenacity import stop_after_delay
 from tenacity import wait_fixed
 
 import imbue.remote_service_connector.shares as shares_module
+from imbue.modal_app_kit.metrics import emit_metric
 from imbue.remote_service_connector import db
 from imbue.remote_service_connector.cloudflare import CF_BASE_URL
 from imbue.remote_service_connector.cloudflare import cf_check
 from imbue.remote_service_connector.errors import AcmeIssuanceError
 from imbue.remote_service_connector.errors import CloudflareApiError
+from imbue.remote_service_connector.errors import ConnectorError
 from imbue.remote_service_connector.errors import InvalidCsrError
 from imbue.remote_service_connector.errors import MissingShareConfigError
 from imbue.remote_service_connector.http_api import handle_endpoint_errors
@@ -242,7 +244,7 @@ def get_acme_account_store() -> AcmeAccountStore:
     return PostgresAcmeAccountStore()
 
 
-class _TxtNotPropagatedError(RuntimeError):
+class _TxtNotPropagatedError(ConnectorError, RuntimeError):
     """Internal: the expected TXT values are not yet visible; tenacity retries the probe."""
 
 
@@ -370,7 +372,8 @@ def _issue_certificate_with_ca(
             try:
                 dns_ops.delete_txt_record(record_id)
             except (httpx.HTTPError, CloudflareApiError) as exc:
-                logger.warning("Failed to clean up ACME challenge TXT record %s: %s", record_id, exc)
+                emit_metric("cloudflare_api_failed", 1, {"operation": "acme_txt_record_cleanup"})
+                logger.warning("Failed to clean up ACME challenge TXT record %s", record_id, exc_info=exc)
     fullchain_pem = finalized_order.fullchain_pem
     if not fullchain_pem:
         raise AcmeIssuanceError(f"{ca.name} finalized the order but returned no certificate chain")
@@ -399,7 +402,10 @@ def issue_share_certificate(
             CloudflareApiError,
             OSError,
         ) as exc:
-            logger.warning("ACME issuance via %s failed: %s", ca.name, exc)
+            # Expected now and then (CA outages, rate limits); the next CA
+            # is tried, and the metric's rate shows a CA degrading.
+            emit_metric("acme_ca_issuance_failed", 1, {"ca": ca.name})
+            logger.warning("ACME issuance via %s failed", ca.name, exc_info=exc)
             last_error = exc
     raise AcmeIssuanceError("every configured ACME CA failed to issue the certificate") from last_error
 

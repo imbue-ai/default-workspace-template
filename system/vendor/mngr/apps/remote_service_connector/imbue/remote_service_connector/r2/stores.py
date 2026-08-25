@@ -29,7 +29,9 @@ from imbue.remote_service_connector import db
 logger = logging.getLogger(__name__)
 
 
-_R2_KEY_COLUMNS = "access_key_id, owner_user_id, bucket_name, access, alias, created_at, enforced_access"
+_R2_KEY_COLUMNS = (
+    "access_key_id, owner_user_id, bucket_name, access, alias, created_at, enforced_access, suspension_access"
+)
 
 
 def _r2_key_row_to_dict(row: tuple[Any, ...]) -> dict[str, Any]:
@@ -41,6 +43,11 @@ def _r2_key_row_to_dict(row: tuple[Any, ...]) -> dict[str, Any]:
         "alias": row[4],
         "created_at": str(row[5]) if row[5] is not None else "",
         "enforced_access": row[6],
+        # What account suspension did to this key ('read' = policy flipped
+        # read-only, 'disabled' = token status disabled, None = untouched).
+        # Distinct from the quota sweep's enforced_access so the sweep can
+        # never "restore" a suspended key.
+        "suspension_access": row[7],
     }
 
 
@@ -56,6 +63,7 @@ class KeyStore(Protocol):
     def delete_key(self, access_key_id: str) -> None: ...
     def delete_keys_for_bucket(self, owner_user_id: str, bucket_name: str) -> list[dict[str, Any]]: ...
     def set_enforced_access(self, access_key_id: str, enforced_access: str | None) -> None: ...
+    def set_suspension_access(self, access_key_id: str, suspension_access: str | None) -> None: ...
 
 
 class PostgresKeyStore:
@@ -124,6 +132,18 @@ class PostgresKeyStore:
                     cur.execute(
                         "UPDATE r2_keys SET enforced_access = %s WHERE access_key_id = %s",
                         (enforced_access, access_key_id),
+                    )
+        finally:
+            conn.close()
+
+    def set_suspension_access(self, access_key_id: str, suspension_access: str | None) -> None:
+        conn = db.get_pool_db_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE r2_keys SET suspension_access = %s WHERE access_key_id = %s",
+                        (suspension_access, access_key_id),
                     )
         finally:
             conn.close()

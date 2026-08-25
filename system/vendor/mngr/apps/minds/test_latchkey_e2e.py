@@ -88,14 +88,19 @@ from imbue.mngr_latchkey.store import save_permissions
 # Opt-in gate; see the module docstring for why this is not enabled by default.
 _OPT_IN_ENV_VAR: Final[str] = "MNGR_LATCHKEY_E2E_TESTS"
 
-# NOTE: no ``rsync`` mark. The source checkout handed to ``mngr create`` is a
-# *git repo*, so the transfer resolves to GIT_MIRROR (git push), not rsync --
-# the same reasoning (verified empirically there) as
-# ``test_aws_workspace_release.py``. The rsync resource-guard fails tests that
-# carry the mark without invoking rsync.
+# NOTE: the ``rsync`` mark is for mngr's host provisioning, not the source
+# transfer or the latchkey state sync: the source checkout handed to
+# ``mngr create`` is a *git repo*, so the work-dir transfer resolves to
+# GIT_MIRROR (git push), and the state sync ships the latchkey state to the
+# VPS over SFTP (``write_file``) -- but creating the workspace's *new remote
+# docker host* uploads the collected deploy files (the isolated profile's
+# config/settings) with one rsync (``on_host_created`` ->
+# ``provision_mngr_on_host`` -> ``upload_files_in_bulk``), which the
+# resource guard observes on every run.
 pytestmark = [
     pytest.mark.release,
     pytest.mark.docker,
+    pytest.mark.rsync,
     pytest.mark.timeout(1800),
     pytest.mark.skipif(
         os.environ.get(_OPT_IN_ENV_VAR) != "1",
@@ -664,7 +669,11 @@ def test_latchkey_remote_workspace_gateways_and_state_sync_end_to_end(tmp_path: 
             # The workspace really carries the latchkey wiring in its host env.
             env_probe = _exec_in_workspace(env, repo, agent_address, f"printenv {ENV_LATCHKEY_GATEWAY}")
             assert env_probe.returncode == 0, f"printenv probe failed:\n{env_probe.stderr}"
-            assert env_probe.stdout.strip() == f"http://127.0.0.1:{AGENT_SIDE_LATCHKEY_PORT}"
+            # mngr exec appends a "Command succeeded on agent ..." status line
+            # to stdout, so the env value is the first line only.
+            assert env_probe.stdout.splitlines()[0].strip() == f"http://127.0.0.1:{AGENT_SIDE_LATCHKEY_PORT}", (
+                f"unexpected {ENV_LATCHKEY_GATEWAY} value:\n{env_probe.stdout}"
+            )
 
             # -- Step 4: run the forward supervisor (gateway + discovery + provisioning + sync) --
             forward_log_path = tmp_path / "latchkey-forward.log"

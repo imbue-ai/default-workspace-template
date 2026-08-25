@@ -147,7 +147,9 @@ It is already present transitively in the connector image; pinning makes it expl
 
 **remote_service_connector**: `init_sentry("remote-service-connector", "RSC_SENTRY_DSN")` at the top of `fastapi_app()` and of every cron/spawned function (each wrapped in `capture_and_reraise`).
 The stamped `sentry` secret is added to `_connector_secrets()`.
-The default integrations give us: unhandled request exceptions, stdlib `logger.error` calls as events, and INFO-level breadcrumbs (all verified in the prototype).
+The integrations give us: unhandled request exceptions, stdlib `logger.warning`/`logger.error` calls as events, and INFO-level breadcrumbs.
+
+The reporting policy (added after the bring-up): stdlib log levels ARE the priority scheme. `logger.error` (and any exception escaping to the connector's app-level 500 handler, `http_api.handle_unexpected_exception`) reports at error level -- failures nothing tolerated. `logger.warning` reports at warning level -- exceptions the code caught and continued past for robustness. Expected, routine anomalies (transient upstream errors, client-input junk) are neither: they are counted as `metric` JSON log lines (`imbue.modal_app_kit.metrics`) flowing into the tier's OpenObserve, where a rate change is the signal. Every connector-defined exception inherits `errors.ConnectorError`; the expected set is exactly what `raise_as_http` maps to status codes, and 500 bodies are a generic `internal_error` detail carrying the Bugsink event id (plus the exception repr on dev/ci tiers only -- production and staging never leak exception text to clients).
 
 **modal_litellm**: same init in `litellm_app()` and `migrate_db()`, plus LiteLLM's native integration: `"failure_callback": ["sentry"]` in `LITELLM_CONFIG`'s `litellm_settings`.
 LiteLLM's callback reads the literal `SENTRY_DSN` env var, so `litellm_app()` must copy `LITELLM_SENTRY_DSN` into `os.environ["SENTRY_DSN"]` before importing the proxy server (precedent: that function already sets `CONFIG_FILE_PATH`/`WORKER_CONFIG` the same way); our own `sentry_sdk.init` passes the DSN explicitly and is unaffected.
@@ -206,7 +208,7 @@ The noise is bounded by per-project quotas and filterable by the `environment` t
 - Unit tests for `modal_app_kit.sentry`: DSN/env resolution, the kill switch, idempotent init, rate-limiter behavior (grace count, dedup, timeout growth), `capture_and_reraise`.
 - Unit tests in `apps/observability` for the pure parts: the renderers (EnvironmentFile escaping, caddy gate surface, allowed hosts), the install script (hash-locked install, file modes, restart ordering, unit/constant agreement), and the REST provisioning (token parsing, get-or-create idempotence, project-to-Vault-key mapping) against an httpx mock transport.
 - Conf-vs-template drift is covered by the documented re-diff step (not a test, since upstream's template is not vendored); the hash-locked requirements export is asserted well-formed by a unit test.
-- Deployment-test follow-up (separate PR): a `minds_services` test that sends one event through a real deployed dev instance and asserts it appears via the REST API. This doubles as the end-to-end proof the DSN plumbing works after any deploy change.
+- Deployment test (shipped with the reporting-policy conversion): the connector exposes `GET /health/reporting-probe` on dev/ci tiers only -- one call emits a metric log line, logs a warning-level Bugsink event, and raises an unmapped exception through the app-level 500 handler. The `minds_services` test `test_error_reporting.py` drives it and asserts the `internal_error` response contract including a well-formed, non-empty `event_id`, which is the end-to-end proof the DSN plumbing and SDK capture work after any deploy change. Store-side delivery is deliberately not asserted (the REST/query APIs are loopback-only by design); the probe's unique `marker` makes the operator's manual lookup trivial.
 
 ## Implementation plan
 
@@ -214,7 +216,7 @@ The noise is bounded by per-project quotas and filterable by the `environment` t
 2. Operator plumbing: the Vault templates, `scripts/provision_bugsink_config.py`, the `just` recipe family, `sentry` in every tier's `[secrets].services`, and the bring-up runbook.
 3. Consumer wiring: connector, litellm proxy, oauth_redirector (each a no-op until its tier's `sentry` Vault entry is populated).
 4. Tier bring-up (operational, no code): dev instance first with the runbook's validation gates, then staging, then production; invites per "Access management".
-5. Follow-up: the deployment test, the connector health-sweep probe, and the separately-tracked region-pinning of rsc/llm.
+5. Follow-up: the connector health-sweep probe and the separately-tracked region-pinning of rsc/llm (the deployment test shipped with the reporting-policy conversion).
 
 ## Future work
 

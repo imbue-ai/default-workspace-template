@@ -132,13 +132,20 @@ discovery_args = "-c pyproject.toml --no-cov"
 # Only tests carrying the snapshot-resume mark run here at all. Everything else
 # is scoped out of this run, and `minds_snapshot_resume` is itself scoped out of
 # the other offload configs, so a test with this mark is only ever collected here.
+#
+# `not release` on both groups is what keeps the bug-report diagnostics tests out
+# of CI. They need this lane's pre-baked snapshot to resume a workspace, so they
+# cannot simply move to a release config -- every one of those scopes
+# `minds_snapshot_resume` out. Carrying both marks and excluding release here
+# leaves them collected by no automated lane, to be run deliberately at release
+# time.
 [groups.all]
 retry_count = 0
-filters = "-m 'minds_snapshot_resume and not flaky'"
+filters = "-m 'minds_snapshot_resume and not flaky and not release'"
 
 [groups.flaky]
 retry_count = 4
-filters = "-m 'minds_snapshot_resume and flaky'"
+filters = "-m 'minds_snapshot_resume and flaky and not release'"
 
 [history]
 path = "offload-history-modal-minds-snapshot.jsonl"

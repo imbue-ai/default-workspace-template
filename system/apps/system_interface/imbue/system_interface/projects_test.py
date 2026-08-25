@@ -8,7 +8,6 @@ from imbue.system_interface.projects import DEFAULT_PROJECT_COLOR
 from imbue.system_interface.projects import EVERYTHING_VIEW_ID
 from imbue.system_interface.projects import DEFAULT_PROJECT_ID
 from imbue.system_interface.projects import DEFAULT_PROJECT_NAME
-from imbue.system_interface.projects import LastProjectDeletionError
 from imbue.system_interface.projects import ProjectColorError
 from imbue.system_interface.projects import ProjectConflictError
 from imbue.system_interface.projects import ProjectGlyphError
@@ -28,7 +27,10 @@ from imbue.system_interface.projects import member_refs_from_content
 from imbue.system_interface.projects import project_content_path
 from imbue.system_interface.projects import projects_showing
 from imbue.system_interface.projects import read_project_content
+from imbue.system_interface.projects import ProjectShortcutError
+from imbue.system_interface.projects import list_projects
 from imbue.system_interface.projects import remove_member
+from imbue.system_interface.projects import set_shortcut_override
 from imbue.system_interface.projects import remove_panel_from_all_projects
 from imbue.system_interface.projects import set_last_active_id
 from imbue.system_interface.projects import slugify_project_name
@@ -243,10 +245,50 @@ def test_delete_project_unfiles_its_members(tmp_path: Path) -> None:
     assert projects_showing(tmp_path, "service:notes") == [DEFAULT_PROJECT_ID]
 
 
-def test_deleting_the_last_project_raises(tmp_path: Path) -> None:
-    with pytest.raises(LastProjectDeletionError):
+def test_deleting_the_last_project_leaves_the_machine_with_none(tmp_path: Path) -> None:
+    # Delete is a pure view operation now, so there is no undeletable project:
+    # a machine may end up with zero of them, with Everything as the fallback.
+    fallback_id = delete_project(tmp_path, DEFAULT_PROJECT_ID)
+
+    assert fallback_id == EVERYTHING_VIEW_ID
+    assert list_projects(tmp_path) == []
+    assert get_last_active_id(tmp_path) == EVERYTHING_VIEW_ID
+    # Reading again does not resurrect the starter project: an empty registry
+    # is a legitimate, persistent state rather than something to reseed.
+    assert list_projects(tmp_path) == []
+    with pytest.raises(ProjectNotFoundError):
         delete_project(tmp_path, DEFAULT_PROJECT_ID)
-    assert [info.project_id for info in list_projects(tmp_path)] == [DEFAULT_PROJECT_ID]
+
+
+def test_everything_still_works_with_zero_projects(tmp_path: Path) -> None:
+    # Everything has no registry entry, so it never depended on a project
+    # existing; deleting every project must not take it down too.
+    write_project_content(tmp_path, EVERYTHING_VIEW_ID, {"dockview": {}, "panelParams": {}})
+    delete_project(tmp_path, DEFAULT_PROJECT_ID)
+
+    assert read_project_content(tmp_path, EVERYTHING_VIEW_ID) == {"dockview": {}, "panelParams": {}}
+    write_project_content(tmp_path, EVERYTHING_VIEW_ID, {"dockview": {"grid": {}}, "panelParams": {}})
+    assert read_project_content(tmp_path, EVERYTHING_VIEW_ID) == {"dockview": {"grid": {}}, "panelParams": {}}
+
+
+def test_deleting_a_project_never_touches_other_projects_or_everything(tmp_path: Path) -> None:
+    # A pure view operation: the deleted project's own member list and content
+    # go, and nothing about any other view -- not a member list, not a saved
+    # arrangement -- moves.
+    create_project(tmp_path, "Scratch", "#3B82F6", 3)
+    add_member(tmp_path, "scratch", "terminal:terminal-4")
+    add_member(tmp_path, DEFAULT_PROJECT_ID, "terminal:terminal-4")
+    write_project_content(tmp_path, EVERYTHING_VIEW_ID, _content_with_panels("terminal-session-terminal-4"))
+
+    delete_project(tmp_path, "scratch")
+
+    # The surviving project keeps the member the deleted one also showed.
+    assert list_members(tmp_path, DEFAULT_PROJECT_ID) == ["terminal:terminal-4"]
+    assert projects_showing(tmp_path, "terminal:terminal-4") == [DEFAULT_PROJECT_ID]
+    # Everything's saved arrangement is untouched: nothing was destroyed.
+    assert content_contains_panel(
+        read_project_content(tmp_path, EVERYTHING_VIEW_ID) or {}, "terminal-session-terminal-4"
+    )
 
 
 def test_set_last_active_ignores_unknown_id(tmp_path: Path) -> None:
@@ -310,12 +352,71 @@ def test_corrupt_meta_recovers_to_defaults(tmp_path: Path) -> None:
     assert get_last_active_id(tmp_path) == DEFAULT_PROJECT_ID
 
 
-def test_registry_with_no_projects_recovers_to_defaults(tmp_path: Path) -> None:
-    # Nothing is undeletable any more, so an externally emptied registry has to
-    # reseed rather than leave the workspace with no project to fall back to.
+def test_registry_with_no_projects_is_read_as_is(tmp_path: Path) -> None:
+    # Deleting is a pure view operation with no undeletable project any more, so
+    # an on-disk registry holding zero of them is a legitimate state -- reached
+    # by deleting down to none -- and must not be reseeded back to the starter
+    # project on the next read.
     (tmp_path / "projects_meta.json").write_text('{"project_by_id": {}, "last_active_id": "gone"}')
-    assert [info.project_id for info in list_projects(tmp_path)] == [DEFAULT_PROJECT_ID]
-    assert get_last_active_id(tmp_path) == DEFAULT_PROJECT_ID
+    assert list_projects(tmp_path) == []
+    assert get_last_active_id(tmp_path) == EVERYTHING_VIEW_ID
+
+
+def test_legacy_url_members_are_purged_on_read_and_persisted(tmp_path: Path) -> None:
+    # Ad-hoc pages are no longer filed as members, so url: refs written by the
+    # old filer are dead entries; the first read drops them everywhere and
+    # rewrites the registry, leaving every real member untouched.
+    (tmp_path / "projects_meta.json").write_text(
+        json.dumps(
+            {
+                "project_by_id": {
+                    "research": {
+                        "name": "Research",
+                        "color": "#12B5A5",
+                        "glyph": 4,
+                        "members": ["chat:agent-1", "url:9f86d081", "service:web"],
+                    },
+                    "taxes": {"name": "Taxes", "color": "#E5A33D", "glyph": 7, "members": ["url:deadbeef"]},
+                },
+                "last_active_id": "research",
+            }
+        )
+    )
+
+    members_by_id = {info.project_id: list(info.members) for info in list_projects(tmp_path)}
+
+    assert members_by_id == {"research": ["chat:agent-1", "service:web"], "taxes": []}
+    persisted = json.loads((tmp_path / "projects_meta.json").read_text())
+    assert persisted["project_by_id"]["research"]["members"] == ["chat:agent-1", "service:web"]
+    assert persisted["project_by_id"]["taxes"]["members"] == []
+
+
+def test_bare_files_members_are_purged_on_read_while_instances_survive(tmp_path: Path) -> None:
+    # The file viewer's pin is its built-in rail row, never membership, so a
+    # bare service:files ref (filed by builds whose opens filed bare app refs)
+    # is a dead entry that only ever rendered a phantom "files" tab row. Its
+    # instances -- and other apps' bare pins -- are real members and stay.
+    (tmp_path / "projects_meta.json").write_text(
+        json.dumps(
+            {
+                "project_by_id": {
+                    "research": {
+                        "name": "Research",
+                        "color": "#12B5A5",
+                        "glyph": 4,
+                        "members": ["service:files", "service:files?instance=files-1", "service:docs"],
+                    },
+                },
+                "last_active_id": "research",
+            }
+        )
+    )
+
+    members_by_id = {info.project_id: list(info.members) for info in list_projects(tmp_path)}
+
+    assert members_by_id == {"research": ["service:files?instance=files-1", "service:docs"]}
+    persisted = json.loads((tmp_path / "projects_meta.json").read_text())
+    assert persisted["project_by_id"]["research"]["members"] == ["service:files?instance=files-1", "service:docs"]
 
 
 def test_corrupt_content_reads_as_empty(tmp_path: Path) -> None:
@@ -357,6 +458,149 @@ def test_refs_in_no_project_are_filed_nowhere(tmp_path: Path) -> None:
     # its home, and Everything enumerates the machine rather than this registry.
     assert projects_showing(tmp_path, "chat:loose-agent") == []
     assert all_members(tmp_path) == {}
+
+
+def _overrides(layout_dir: Path, project_id: str) -> dict[str, dict[str, object]]:
+    info = next(p for p in list_projects(layout_dir) if p.project_id == project_id)
+    return {
+        shortcut_id: override.model_dump(exclude_none=True)
+        for shortcut_id, override in info.shortcut_overrides.items()
+    }
+
+
+def test_a_project_shows_every_shortcut_until_one_is_overridden(tmp_path: Path) -> None:
+    """Absence has to mean the defaults, or every project written before this would lose its rail."""
+    create_project(tmp_path, "Research", "#12B5A5", 4)
+    assert _overrides(tmp_path, "research") == {}
+
+
+def test_unpinning_a_shortcut_records_it_against_that_project_only(tmp_path: Path) -> None:
+    # Which starting points a project keeps to hand is a property of THAT
+    # project, which is the whole reason this is stored per project.
+    create_project(tmp_path, "Research", "#12B5A5", 4)
+    create_project(tmp_path, "Coding", "#16A34A", 1)
+
+    set_shortcut_override(tmp_path, "research", "terminal", False, None)
+
+    assert _overrides(tmp_path, "research") == {"terminal": {"is_pinned": False}}
+    assert _overrides(tmp_path, "coding") == {}
+
+
+def test_pinning_a_shortcut_back_returns_it_to_the_rail(tmp_path: Path) -> None:
+    create_project(tmp_path, "Research", "#12B5A5", 4)
+    set_shortcut_override(tmp_path, "research", "files", False, None)
+    set_shortcut_override(tmp_path, "research", "files", True, None)
+    assert _overrides(tmp_path, "research") == {}
+
+
+def test_setting_a_shortcut_to_what_it_already_is_changes_nothing(tmp_path: Path) -> None:
+    create_project(tmp_path, "Research", "#12B5A5", 4)
+    set_shortcut_override(tmp_path, "research", "chat", False, None)
+    assert set_shortcut_override(tmp_path, "research", "chat", False, None) == {"chat": {"is_pinned": False}}
+    assert _overrides(tmp_path, "research") == {"chat": {"is_pinned": False}}
+
+
+def test_a_shortcut_mode_flip_is_stored_sparsely(tmp_path: Path) -> None:
+    """Only deviations from the defaults are stored: chat's default is new, the
+    rest default to focus, so flipping back to a default clears the field."""
+    create_project(tmp_path, "Research", "#12B5A5", 4)
+
+    set_shortcut_override(tmp_path, "research", "chat", None, "focus")
+    set_shortcut_override(tmp_path, "research", "terminal", None, "new")
+    assert _overrides(tmp_path, "research") == {"chat": {"mode": "focus"}, "terminal": {"mode": "new"}}
+
+    set_shortcut_override(tmp_path, "research", "chat", None, "new")
+    set_shortcut_override(tmp_path, "research", "terminal", None, "focus")
+    assert _overrides(tmp_path, "research") == {}
+
+
+def test_an_app_shortcut_stores_only_mode(tmp_path: Path) -> None:
+    """App pinning IS membership, so an app: key carries mode and refuses a pin."""
+    create_project(tmp_path, "Research", "#12B5A5", 4)
+
+    set_shortcut_override(tmp_path, "research", "app:docs", None, "new")
+    assert _overrides(tmp_path, "research") == {"app:docs": {"mode": "new"}}
+
+    with pytest.raises(ProjectShortcutError):
+        set_shortcut_override(tmp_path, "research", "app:docs", False, None)
+
+
+def test_pin_and_mode_land_in_one_override_entry(tmp_path: Path) -> None:
+    create_project(tmp_path, "Research", "#12B5A5", 4)
+    set_shortcut_override(tmp_path, "research", "browser", False, "new")
+    assert _overrides(tmp_path, "research") == {"browser": {"is_pinned": False, "mode": "new"}}
+
+
+def test_an_unknown_shortcut_or_mode_is_refused_rather_than_stored(tmp_path: Path) -> None:
+    # Storing one would hide nothing while riding every list response forever.
+    create_project(tmp_path, "Research", "#12B5A5", 4)
+    with pytest.raises(ProjectShortcutError):
+        set_shortcut_override(tmp_path, "research", "not-a-shortcut", False, None)
+    with pytest.raises(ProjectShortcutError):
+        set_shortcut_override(tmp_path, "research", "chat", None, "sometimes")
+    assert _overrides(tmp_path, "research") == {}
+
+
+def test_hand_edited_override_junk_is_ignored_on_read(tmp_path: Path) -> None:
+    """The registry is hand-editable, so junk keys, values, and default-restating
+    fields must not survive a read."""
+    create_project(tmp_path, "Research", "#12B5A5", 4)
+    set_shortcut_override(tmp_path, "research", "browser", False, None)
+    meta_path = tmp_path / "projects_meta.json"
+    meta = json.loads(meta_path.read_text())
+    meta["project_by_id"]["research"]["shortcut_overrides"] = {
+        "browser": {"is_pinned": False},
+        "made-up": {"is_pinned": False},
+        "chat": {"mode": "sometimes"},
+        # Restating a default stores nothing.
+        "terminal": {"is_pinned": True, "mode": "focus"},
+        # An app: key's is_pinned is ignored outright.
+        "app:docs": {"is_pinned": False},
+        "files": "not-an-object",
+    }
+    meta_path.write_text(json.dumps(meta))
+
+    assert _overrides(tmp_path, "research") == {"browser": {"is_pinned": False}}
+
+
+def test_a_legacy_unpinned_shortcuts_list_is_read_and_migrated_on_first_write(tmp_path: Path) -> None:
+    """A registry from the projects follow-up stored the unpinned set as a list;
+    it reads as {name: {is_pinned: false}} and the first write of any override
+    rewrites the entry to the new shape and drops the legacy key."""
+    create_project(tmp_path, "Research", "#12B5A5", 4)
+    meta_path = tmp_path / "projects_meta.json"
+    meta = json.loads(meta_path.read_text())
+    entry = meta["project_by_id"]["research"]
+    del entry["shortcut_overrides"]
+    entry["unpinned_shortcuts"] = ["terminal", "made-up"]
+    meta_path.write_text(json.dumps(meta))
+
+    assert _overrides(tmp_path, "research") == {"terminal": {"is_pinned": False}}
+
+    set_shortcut_override(tmp_path, "research", "chat", None, "focus")
+
+    stored = json.loads(meta_path.read_text())["project_by_id"]["research"]
+    assert "unpinned_shortcuts" not in stored
+    assert stored["shortcut_overrides"] == {
+        "terminal": {"is_pinned": False},
+        "chat": {"mode": "focus"},
+    }
+
+
+def test_update_project_keeps_the_shortcut_overrides(tmp_path: Path) -> None:
+    # A settings save rebuilds the registry entry, and it must carry the
+    # shortcut state through the same way it carries the member list -- or
+    # renaming a project would silently put every shortcut it had unpinned
+    # back in its rail.
+    create_project(tmp_path, "Research", "#12B5A5", 4)
+    set_shortcut_override(tmp_path, "research", "terminal", False, None)
+
+    updated = update_project(tmp_path, "research", "Research Renamed", "#16A34A", 2)
+
+    assert {k: v.model_dump(exclude_none=True) for k, v in updated.shortcut_overrides.items()} == {
+        "terminal": {"is_pinned": False}
+    }
+    assert _overrides(tmp_path, "research") == {"terminal": {"is_pinned": False}}
 
 
 def test_remove_member_leaves_other_projects_alone(tmp_path: Path) -> None:
@@ -620,9 +864,7 @@ def test_remove_panel_matches_both_the_given_id_and_the_ref(tmp_path: Path) -> N
     # panel id catches the first and the ref-resolution catches the second,
     # without double-stripping a panel that matches both.
     ref = "terminal:terminal-1"
-    write_project_content(
-        tmp_path, DEFAULT_PROJECT_ID, _content_with_panels("terminal-session-terminal-1", "chat-a")
-    )
+    write_project_content(tmp_path, DEFAULT_PROJECT_ID, _content_with_panels("terminal-session-terminal-1", "chat-a"))
     everything_content = _content_with_panels("iframe-terminal-1755000000003", "chat-a")
     everything_content["panelParams"]["iframe-terminal-1755000000003"] = {"terminalSessionName": "terminal-1"}
     write_project_content(tmp_path, EVERYTHING_VIEW_ID, everything_content)

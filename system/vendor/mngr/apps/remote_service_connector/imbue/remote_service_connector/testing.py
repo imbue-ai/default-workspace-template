@@ -7,8 +7,10 @@ import re
 import secrets
 import uuid
 from collections.abc import Iterator
+from collections.abc import MutableMapping
 from collections.abc import Set as AbstractSet
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from types import SimpleNamespace
 from typing import Any
@@ -22,6 +24,9 @@ from uuid import UUID
 import paramiko
 import psycopg2
 import pytest
+from cachetools.keys import hashkey
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import HTTPException
 from starlette.testclient import TestClient
 from supertokens_python.recipe.emailpassword.interfaces import ConsumePasswordResetTokenOkResult
@@ -61,11 +66,15 @@ import imbue.remote_service_connector.hosts as hosts_module
 import imbue.remote_service_connector.litellm_client as litellm_client_mod
 import imbue.remote_service_connector.r2.stores as r2_stores_mod
 import imbue.remote_service_connector.share_broker as share_broker_module
+import imbue.remote_service_connector.signup_hardening as signup_hardening_module
 import imbue.remote_service_connector.stop_start as stop_start_module
 import imbue.remote_service_connector.storage as connector_storage_module
+import imbue.remote_service_connector.suspension as suspension_module
+import imbue.remote_service_connector.suspension_admin as suspension_admin_module
 import imbue.remote_service_connector.sync as sync_mod
 from imbue.remote_service_connector.auth import UserAuth
 from imbue.remote_service_connector.auth import derive_user_id_prefix
+from imbue.remote_service_connector.box_scripts import CLEANUP_DELETE_FAILED_MARKER
 from imbue.remote_service_connector.cloudflare import CloudflareCtx
 from imbue.remote_service_connector.errors import CloudflareApiError
 from imbue.remote_service_connector.errors import MissingStorageConfigError
@@ -84,6 +93,16 @@ from imbue.remote_service_connector.sync import UPDATABLE_RECORD_COLUMNS
 from imbue.remote_service_connector.sync import _ONE_ACTIVE_PER_AGENT_INDEX_NAME
 from imbue.remote_service_connector.sync import _WORKSPACE_RECORD_COLUMNS
 from imbue.remote_service_connector.web import web_app
+
+# Shared RSA signing key for the accounts-surface OAuth tests: it mints the
+# BROKER_JWT_SIGNING_KEY_PEM env value and verifies the signed OAuth state.
+# Generated once here so each test module does not pay its own keygen.
+TEST_OAUTH_SIGNING_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+TEST_OAUTH_SIGNING_KEY_PEM = TEST_OAUTH_SIGNING_KEY.private_bytes(
+    encoding=serialization.Encoding.PEM,
+    format=serialization.PrivateFormat.PKCS8,
+    encryption_algorithm=serialization.NoEncryption(),
+).decode("utf-8")
 
 
 class FakeCloudflareOps:
@@ -166,6 +185,17 @@ class FakeCloudflareOps:
         token["bucket_name"] = bucket_name
         token["name"] = token_name
 
+    def set_bucket_token_status(
+        self, token_id: str, bucket_name: str, access: str, token_name: str, status: str
+    ) -> None:
+        token = self.account_tokens.get(token_id)
+        if token is None:
+            raise CloudflareApiError(status_code=404, errors=[{"message": f"token not found: {token_id}"}])
+        token["status"] = status
+        token["access"] = access
+        token["bucket_name"] = bucket_name
+        token["name"] = token_name
+
     def roll_bucket_token_value(self, token_id: str) -> dict[str, Any]:
         token = self.account_tokens.get(token_id)
         if token is None:
@@ -205,6 +235,7 @@ class InMemoryKeyStore:
             "alias": alias,
             "created_at": f"2026-01-01T00:00:{self._created_counter:02d}+00:00",
             "enforced_access": None,
+            "suspension_access": None,
         }
 
     def list_keys(self, owner_user_id: str, bucket_name: str | None = None) -> list[dict[str, Any]]:
@@ -230,6 +261,11 @@ class InMemoryKeyStore:
         row = self.keys_by_access_key_id.get(access_key_id)
         if row is not None:
             row["enforced_access"] = enforced_access
+
+    def set_suspension_access(self, access_key_id: str, suspension_access: str | None) -> None:
+        row = self.keys_by_access_key_id.get(access_key_id)
+        if row is not None:
+            row["suspension_access"] = suspension_access
 
     def delete_keys_for_bucket(self, owner_user_id: str, bucket_name: str) -> list[dict[str, Any]]:
         removed = [
@@ -468,6 +504,22 @@ class FakeSuperTokensBackend:
     device_code_store: "InMemoryDeviceAuthCodeStore"
     # In-memory attribution store installed onto the attribution module.
     attribution_store: "InMemoryAttributionStore"
+    # In-memory entitlements store (pre-seeded with the committed plans),
+    # installed onto accounts_web's get_entitlements_store seam so signup
+    # plan choices land somewhere assertable.
+    entitlements_store: "InMemoryEntitlementsStore"
+    # In-memory signup-hardening stores/seams installed onto signup_hardening.
+    signup_attempt_store: "InMemorySignupAttemptStore"
+    ip_reputation_cache: "InMemoryIpReputationCache"
+    ip_reputation_provider: "FakeIpReputationProvider"
+    tor_exit_list: "FakeTorExitList"
+    # The client IP the fake `_client_ip` seam reports for every request (the
+    # test client's real socket peer is not a routable IP). None models an
+    # underivable client IP.
+    fake_client_ip: str | None
+    # Accounts the fake suspension seam reports as suspended -- the login
+    # gates consult this instead of the real entitlements DB.
+    suspended_user_ids: set[str]
 
     def install_on_app_module(self, app_mod: Any, monkeypatch: pytest.MonkeyPatch) -> None:
         """Swap every SuperTokens SDK call site with a fake.
@@ -479,6 +531,13 @@ class FakeSuperTokensBackend:
         (the SDK functions are referenced as module globals at call time, so
         patching the importing module's attribute is what takes effect).
         """
+        # If a quota test client already installed an in-memory entitlements
+        # store on the seam, adopt it rather than shadowing it: browser-signup
+        # writes and quota-endpoint reads must resolve one store, or
+        # cross-flow assertions lie.
+        already_installed_store = entitlements_mod.get_entitlements_store()
+        if isinstance(already_installed_store, InMemoryEntitlementsStore):
+            self.entitlements_store = already_installed_store
         fakes: dict[str, Any] = {
             "ep_sign_up": self.sign_up,
             "ep_sign_in": self.sign_in,
@@ -500,13 +559,22 @@ class FakeSuperTokensBackend:
             "manually_create_or_update_user": self.manually_create_or_update_user,
             "_sdk_create_browser_session": self.sdk_create_browser_session,
             "_sdk_get_browser_session": self.sdk_get_browser_session,
+            "delete_user": self.sdk_delete_user,
             # Not SuperTokens seams, but accounts-surface test plumbing that
             # rides the same single-loop install: the Turnstile verifier
-            # (driven by ``is_turnstile_passing``) and the in-memory
-            # device-auth-code and attribution stores.
+            # (driven by ``is_turnstile_passing``), the in-memory
+            # device-auth-code / attribution / signup-hardening stores, and
+            # the client-IP seam (driven by ``fake_client_ip``).
             "_verify_turnstile_token": self.verify_turnstile_token,
             "_device_code_store": self.device_code_store,
             "_attribution_store": self.attribution_store,
+            "get_entitlements_store": lambda: self.entitlements_store,
+            "_signup_attempt_store": self.signup_attempt_store,
+            "_ip_reputation_cache": self.ip_reputation_cache,
+            "_ip_reputation_provider": self.ip_reputation_provider,
+            "_tor_exit_list": self.tor_exit_list,
+            "_client_ip": self.client_ip,
+            "is_user_suspended": self.is_user_suspended_check,
         }
         target_modules = [
             app_mod,
@@ -516,6 +584,12 @@ class FakeSuperTokensBackend:
             share_broker_module,
             accounts_web_module,
             attribution_module,
+            signup_hardening_module,
+            suspension_module,
+            suspension_admin_module,
+            # accounts_web's signup plan recorder resolves the entitlements
+            # store through this module (the runtime-seam convention).
+            entitlements_mod,
         ]
         for name, fake in fakes.items():
             matching_modules = [module for module in target_modules if hasattr(module, name)]
@@ -763,10 +837,14 @@ class FakeSuperTokensBackend:
         access_token: str,
         anti_csrf_check: bool = False,
         session_required: bool = True,
+        check_database: bool | None = None,
         override_global_claim_validators: Any = None,
         user_context: dict[str, Any] | None = None,
     ) -> FakeSessionContainer | None:
-        del anti_csrf_check, session_required, override_global_claim_validators, user_context
+        # The fake's session map IS the "database": a revoked session is
+        # removed from it, so both stateless and check_database verification
+        # collapse to the same lookup here.
+        del anti_csrf_check, session_required, check_database, override_global_claim_validators, user_context
         return self.sessions_by_access_token.get(access_token)
 
     def list_users_by_account_info(
@@ -922,6 +1000,33 @@ class FakeSuperTokensBackend:
         del token, remote_ip
         return self.is_turnstile_passing
 
+    def client_ip(self, request: Any) -> str | None:
+        """Fake for ``accounts_web._client_ip``: driven by ``fake_client_ip``."""
+        del request
+        return self.fake_client_ip
+
+    def is_user_suspended_check(self, user_id: str) -> bool:
+        """Fake for ``suspension.is_user_suspended``: driven by ``suspended_user_ids``.
+
+        Patched on the suspension module, so ``is_user_suspended_at_gate`` and
+        ``require_not_suspended`` (which resolve the check through the module
+        global) honor it too.
+        """
+        return user_id in self.suspended_user_ids
+
+    def sdk_delete_user(self, user_id: str) -> None:
+        """Fake for the SDK's ``delete_user`` (the refused-OAuth-signup rollback)."""
+        self._raise_if_configured("delete_user")
+        account = self.accounts_by_id.pop(user_id, None)
+        if account is None:
+            return
+        emails_pointing_at_account = [
+            email for email, existing in self.accounts_by_email.items() if existing.user_id == user_id
+        ]
+        for email in emails_pointing_at_account:
+            del self.accounts_by_email[email]
+        self.revoke_all_sessions_for_user(user_id=user_id)
+
     def manually_create_or_update_user(
         self,
         *,
@@ -986,6 +1091,13 @@ def make_fake_supertokens_backend() -> FakeSuperTokensBackend:
     backend.is_turnstile_passing = True
     backend.device_code_store = InMemoryDeviceAuthCodeStore()
     backend.attribution_store = InMemoryAttributionStore()
+    backend.entitlements_store = make_fake_entitlements_store()
+    backend.signup_attempt_store = InMemorySignupAttemptStore()
+    backend.ip_reputation_cache = InMemoryIpReputationCache()
+    backend.ip_reputation_provider = FakeIpReputationProvider()
+    backend.tor_exit_list = FakeTorExitList()
+    backend.fake_client_ip = "203.0.113.77"
+    backend.suspended_user_ids = set()
     return backend
 
 
@@ -1040,6 +1152,8 @@ class FakePoolRow:
     artifact_generation: int
     transition_heartbeat_at: datetime | None
     transition_error: str | None
+    transition_id: str | None
+    transition_failure_count: int
 
 
 def _row_attributes(row: "FakePoolRow") -> dict[str, Any]:
@@ -1114,6 +1228,8 @@ def _make_pool_row(
     row.artifact_generation = 0
     row.transition_heartbeat_at = None
     row.transition_error = None
+    row.transition_id = None
+    row.transition_failure_count = 0
     return row
 
 
@@ -1203,98 +1319,101 @@ class FakeCursor:
                     self._results.append(self._backend.workspace_info_tuple(row))
 
         elif query_lower.startswith("update pool_hosts set status = 'stopping', stop_requested_at"):
-            found = self._backend.find_pool_row(params[0])
+            transition_id, raw_id = params
+            found = self._backend.find_pool_row(raw_id)
             if found is not None and found.status == "leased":
                 found.status = "stopping"
                 found.stop_requested_at = datetime.now(timezone.utc)
                 found.transition_error = None
+                found.transition_failure_count = 0
+                found.transition_id = transition_id
+                found.transition_heartbeat_at = datetime.now(timezone.utc)
                 self.rowcount = 1
 
         elif query_lower.startswith("update pool_hosts set status = 'starting'"):
-            found = self._backend.find_pool_row(params[0])
-            if found is not None and found.status in ("stopped", "stopping"):
+            transition_id, raw_id = params
+            found = self._backend.find_pool_row(raw_id)
+            if found is not None and found.status == "stopped":
                 found.status = "starting"
                 found.transition_error = None
+                found.transition_failure_count = 0
+                found.transition_id = transition_id
+                found.transition_heartbeat_at = datetime.now(timezone.utc)
                 self.rowcount = 1
 
         elif query_lower.startswith("update pool_hosts set status = 'crashed'"):
-            reason, raw_id = params
+            reason, transition_id, raw_id = params
             found = self._backend.find_pool_row(raw_id)
             if found is not None and found.status in ("leased", "stopping", "stopped", "starting"):
                 found.status = "crashed"
                 found.transition_error = reason
+                found.transition_id = transition_id
                 self.rowcount = 1
 
         elif query_lower.startswith("update pool_hosts set transition_heartbeat_at"):
-            found = self._backend.find_pool_row(params[0])
-            if found is not None:
+            raw_id, transition_id, expected_status = params
+            found = self._backend.find_pool_row(raw_id)
+            if found is not None and found.transition_id == transition_id and found.status == expected_status:
                 found.transition_heartbeat_at = datetime.now(timezone.utc)
                 self.rowcount = 1
 
         elif query_lower.startswith("update pool_hosts set transition_error"):
-            message, raw_id = params
+            message, raw_id, transition_id = params
             found = self._backend.find_pool_row(raw_id)
-            if found is not None:
+            if found is not None and found.transition_id == transition_id:
                 found.transition_error = message
+                found.transition_failure_count = found.transition_failure_count + 1
                 self.rowcount = 1
 
         elif query_lower.startswith("update pool_hosts set wrapped_dek"):
-            wrapped, manifest_json, raw_id = params
+            wrapped, manifest_json, raw_id, transition_id = params
             found = self._backend.find_pool_row(raw_id)
-            if found is not None and found.status == "stopping":
+            if found is not None and found.status == "stopping" and found.transition_id == transition_id:
                 found.wrapped_dek = wrapped
                 found.artifact_manifest = json.loads(manifest_json)
                 self.rowcount = 1
 
         elif query_lower.startswith("update pool_hosts set status = 'stopped', stopped_at"):
-            manifest_json, generation, raw_id = params
+            manifest_json, generation, raw_id, transition_id = params
             found = self._backend.find_pool_row(raw_id)
-            if found is not None and found.status == "stopping":
+            if found is not None and found.status == "stopping" and found.transition_id == transition_id:
                 found.status = "stopped"
                 found.stopped_at = datetime.now(timezone.utc)
-                found.vps_address = None
-                found.ssh_port = None
-                found.container_ssh_port = None
                 found.artifact_manifest = json.loads(manifest_json)
                 found.artifact_generation = int(generation)
                 found.transition_error = None
+                found.transition_failure_count = 0
                 self.rowcount = 1
 
         elif query_lower.startswith("update pool_hosts set status = 'stopped', transition_error"):
-            message, raw_id = params
+            message, raw_id, transition_id = params
             found = self._backend.find_pool_row(raw_id)
-            if found is not None and found.status == "starting" and found.stopped_at is not None:
+            if found is not None and found.status == "starting" and found.transition_id == transition_id:
                 found.status = "stopped"
                 found.transition_error = message
-                found.vps_address = None
-                found.ssh_port = None
-                found.container_ssh_port = None
-                found.bare_metal_server_id = None
-                self.rowcount = 1
-
-        elif query_lower.startswith("update pool_hosts set status = 'stopping', transition_error"):
-            message, raw_id = params
-            found = self._backend.find_pool_row(raw_id)
-            if found is not None and found.status == "starting":
-                found.status = "stopping"
-                found.transition_error = message
+                found.transition_failure_count = found.transition_failure_count + 1
+                found.transition_heartbeat_at = None
                 self.rowcount = 1
 
         elif query_lower.startswith("update pool_hosts set status = 'leased', stop_requested_at = null"):
-            found = self._backend.find_pool_row(params[0])
-            if found is not None and found.status == "starting":
+            generation, raw_id, transition_id = params
+            found = self._backend.find_pool_row(raw_id)
+            if found is not None and found.status == "starting" and found.transition_id == transition_id:
                 found.status = "leased"
                 found.stop_requested_at = None
                 found.stopped_at = None
                 found.artifact_manifest = None
                 found.wrapped_dek = None
+                found.artifact_generation = int(generation)
                 found.transition_error = None
+                found.transition_failure_count = 0
+                found.transition_heartbeat_at = None
                 self.rowcount = 1
 
         elif query_lower.startswith("update pool_hosts set status = 'leased', vps_address"):
-            vps_address, ssh_port, container_ssh_port, server_id, raw_id = params
+            vps_address, ssh_port, container_ssh_port, server_id, raw_id, transition_id = params
             found = self._backend.find_pool_row(raw_id)
-            if found is not None and found.status == "starting":
+            if found is not None and found.status == "starting" and found.transition_id == transition_id:
                 found.status = "leased"
                 found.vps_address = vps_address
                 found.ssh_port = ssh_port
@@ -1303,24 +1422,59 @@ class FakeCursor:
                 found.stop_requested_at = None
                 found.stopped_at = None
                 found.transition_error = None
+                found.transition_failure_count = 0
+                found.transition_heartbeat_at = None
+                self.rowcount = 1
+
+        elif query_lower.startswith("update pool_hosts set vps_address = null"):
+            # Retention finalize, step 1: claim the VM for deletion by
+            # clearing the placement (guarded on ownership).
+            raw_id, transition_id = params
+            found = self._backend.find_pool_row(raw_id)
+            if found is not None and found.status == "stopped" and found.transition_id == transition_id:
+                found.vps_address = None
+                found.ssh_port = None
+                found.container_ssh_port = None
                 self.rowcount = 1
 
         elif query_lower.startswith("update pool_hosts set bare_metal_server_id = null"):
-            found = self._backend.find_pool_row(params[0])
-            if found is not None and found.status == "stopped":
+            # Retention finalize, final step: drop the box link after the VM
+            # is gone (guarded on ownership).
+            raw_id, transition_id = params
+            found = self._backend.find_pool_row(raw_id)
+            if found is not None and found.status == "stopped" and found.transition_id == transition_id:
                 found.bare_metal_server_id = None
                 found.transition_heartbeat_at = None
                 self.rowcount = 1
 
-        elif query_lower.startswith("select id from pool_hosts where") and "transition_heartbeat_at" in query_lower:
-            # Watchdog: in-flight rows whose supervisor heartbeat is stale.
-            # The fake treats "no heartbeat recorded" as stale.
+        elif query_lower.startswith("update pool_hosts set transition_id"):
+            # Watchdog takeover: claim only an in-flight (or unfinalized-stop)
+            # row whose heartbeat is still stale.
+            transition_id, raw_id = params
+            found = self._backend.find_pool_row(raw_id)
+            if found is not None:
+                is_in_flight = found.status in ("stopping", "starting") or (
+                    found.status == "stopped" and found.bare_metal_server_id is not None
+                )
+                heartbeat = found.transition_heartbeat_at
+                age = None if heartbeat is None else (datetime.now(timezone.utc) - heartbeat).total_seconds()
+                if is_in_flight and (age is None or age >= stop_start_module.STALE_HEARTBEAT_SECONDS):
+                    found.transition_id = transition_id
+                    found.transition_heartbeat_at = datetime.now(timezone.utc)
+                    self.rowcount = 1
+
+        elif query_lower.startswith("select id, status, transition_failure_count"):
+            # Watchdog: every in-flight (or unfinalized-stop) row, with its
+            # failure count and heartbeat age (None when never stamped).
             for row in self._backend.pool_rows:
                 is_in_flight = row.status in ("stopping", "starting") or (
                     row.status == "stopped" and row.bare_metal_server_id is not None
                 )
-                if is_in_flight and row.transition_heartbeat_at is None:
-                    self._results.append((row.host_id,))
+                if not is_in_flight:
+                    continue
+                heartbeat = row.transition_heartbeat_at
+                age = None if heartbeat is None else (datetime.now(timezone.utc) - heartbeat).total_seconds()
+                self._results.append((row.host_id, row.status, row.transition_failure_count, age))
 
         elif "from bare_metal_servers where id" in query_lower:
             box = self._backend.find_box_row(params[0])
@@ -1676,6 +1830,21 @@ class FakeCursor:
                 deactivated_share["state"] = "inactive"
                 deactivated_share["updated_at"] = _SHARE_ROW_UPDATED_AT
 
+        elif query_lower.startswith("update shares set state = 'suspended'"):
+            # Suspension: every active share of the user flips to suspended.
+            for share in self._backend.share_rows:
+                if share["user_id"] == params[0] and share["state"] == "active":
+                    share["state"] = "suspended"
+                    share["updated_at"] = _SHARE_ROW_UPDATED_AT
+                    self.rowcount += 1
+
+        elif query_lower.startswith("update shares set state = 'active'") and "state = 'suspended'" in query_lower:
+            for share in self._backend.share_rows:
+                if share["user_id"] == params[0] and share["state"] == "suspended":
+                    share["state"] = "active"
+                    share["updated_at"] = _SHARE_ROW_UPDATED_AT
+                    self.rowcount += 1
+
         elif query_lower.startswith("update shares set entry_label"):
             entry_label, host_id, user_label = params
             labeled_share = self._backend.find_share(host_id, user_label)
@@ -1996,7 +2165,11 @@ class FakePoolBackend:
     reserve_rc: int
     reserve_stdout: str
     reserve_stderr: str
+    # When set, the restore rollback's ``limactl delete`` leaves the instance
+    # config behind, so the box reports the VM survived.
+    cleanup_vm_survives: bool
     spawned_supervisors: list[str]
+    spawned_supervisor_tokens: list[tuple[str, str]]
     box_command_should_fail_matching: str | None
     box_command_callback: Any
     sleep_callback: Any
@@ -2266,6 +2439,8 @@ class FakePoolBackend:
             row.artifact_manifest,
             row.wrapped_dek,
             row.artifact_generation,
+            row.transition_id,
+            row.transition_failure_count,
         )
 
     def run_box_command_fake(
@@ -2286,6 +2461,10 @@ class FakePoolBackend:
                 else self.transfer_status_sequence.pop(0)
             )
             return 0, text, ""
+        # The restore rollback embeds a ``kill -0`` liveness wait of its own, so
+        # it is matched before the transfer-alive probe.
+        if CLEANUP_DELETE_FAILED_MARKER in command:
+            return 0, "", (f"{CLEANUP_DELETE_FAILED_MARKER}\n" if self.cleanup_vm_survives else "")
         if "kill -0" in command:
             return (0 if self.transfer_alive else 1), "", ""
         if "reserve.sh" in command:
@@ -2315,8 +2494,9 @@ class FakePoolBackend:
         self.deleted_prefixes.append(prefix)
         return 0
 
-    def record_spawned_supervisor(self, host_db_id: str) -> None:
+    def record_spawned_supervisor(self, host_db_id: str, transition_id: str) -> None:
         self.spawned_supervisors.append(host_db_id)
+        self.spawned_supervisor_tokens.append((host_db_id, transition_id))
 
     def install_on_app_module(self, app_mod: Any, monkeypatch: pytest.MonkeyPatch) -> None:
         """Swap DB and SSH functions on their owning modules with fakes.
@@ -2700,7 +2880,9 @@ def make_fake_pool_backend() -> FakePoolBackend:
     backend.reserve_rc = 0
     backend.reserve_stdout = "MNGR_RESTORE_RESERVED 23000 23001\n"
     backend.reserve_stderr = ""
+    backend.cleanup_vm_survives = False
     backend.spawned_supervisors = []
+    backend.spawned_supervisor_tokens = []
     backend.box_command_should_fail_matching = None
     backend.box_command_callback = None
     backend.sleep_callback = None
@@ -2870,6 +3052,14 @@ def make_fake_orphan_bucket_store() -> InMemoryOrphanBucketStore:
 
 
 # Canonical plan values matching the committed deploy.toml [plans] blocks.
+FREE_PLAN_VALUES: Final[dict[str, float]] = {
+    "max_remote_workspaces": 1,
+    "max_total_workspaces": 5,
+    "max_buckets": 5,
+    "max_total_bucket_bytes": 25 * 1024**3,
+    "monthly_llm_spend_usd": 0.0,
+    "max_active_synced_workspaces": 200,
+}
 EXPLORER_PLAN_VALUES: Final[dict[str, float]] = {
     "max_remote_workspaces": 2,
     "max_total_workspaces": 10,
@@ -2889,13 +3079,18 @@ ALLY_PLAN_VALUES: Final[dict[str, float]] = {
 
 
 class InMemoryEntitlementsStore:
-    """In-memory EntitlementsStore for testing plans + per-account quota rows."""
+    """In-memory EntitlementsStore for testing plans + per-account quota rows.
+
+    Set ``raise_on_insert`` to exercise the signup plan recorder's fail-open
+    path (the exception is raised by ``insert_entitlements_if_absent``).
+    """
 
     def __init__(self) -> None:
         # plan_name -> {plan_name, <quota columns>}
         self.plans_by_name: dict[str, dict[str, Any]] = {}
         # user_id -> {user_id, user_id_prefix, plan_name, <quota columns>}
         self.rows_by_user_id: dict[str, dict[str, Any]] = {}
+        self.raise_on_insert: Exception | None = None
 
     def seed_plan(self, plan_name: str, values: dict[str, float]) -> None:
         self.plans_by_name[plan_name] = {"plan_name": plan_name, **values}
@@ -2918,6 +3113,8 @@ class InMemoryEntitlementsStore:
         return None
 
     def insert_entitlements_if_absent(self, row: dict[str, Any]) -> None:
+        if self.raise_on_insert is not None:
+            raise self.raise_on_insert
         self.rows_by_user_id.setdefault(row["user_id"], dict(row))
 
     def update_entitlements(self, user_id: str, values: dict[str, Any]) -> None:
@@ -2927,8 +3124,9 @@ class InMemoryEntitlementsStore:
 
 
 def make_fake_entitlements_store() -> InMemoryEntitlementsStore:
-    """Construct an in-memory entitlements store pre-seeded with the two launch plans."""
+    """Construct an in-memory entitlements store pre-seeded with the committed plans."""
     store = InMemoryEntitlementsStore()
+    store.seed_plan("free", FREE_PLAN_VALUES)
     store.seed_plan("explorer", EXPLORER_PLAN_VALUES)
     store.seed_plan("ally", ALLY_PLAN_VALUES)
     return store
@@ -3110,6 +3308,12 @@ class FakeLiteLLMBackend:
             for key_id in body.get("keys", []):
                 self.keys_by_id.pop(str(key_id), None)
             return _FakeLiteLLMResponse({"status": "deleted"})
+        if path in ("/key/block", "/key/unblock"):
+            key = self.keys_by_id.get(str(body.get("key", "")))
+            if key is None:
+                raise HTTPException(status_code=404, detail="LiteLLM error: key not found")
+            key["blocked"] = path == "/key/block"
+            return _FakeLiteLLMResponse({"token": key["key"], "blocked": key["blocked"]})
         raise HTTPException(status_code=404, detail=f"LiteLLM error: unhandled fake path {path}")
 
 
@@ -3153,7 +3357,7 @@ def _make_quota_test_client(
     Sets up the SuperTokens Bearer auth path so tests calling user-authenticated endpoints
     can authenticate with ``_user_headers()`` without needing a real JWT.
     Installs an in-memory paid-list backend seeded with the stub user email,
-    an entitlements store pre-seeded with the two launch plans (with the stub
+    an entitlements store pre-seeded with the committed plans (with the stub
     user's SuperTokens ``time_joined`` faked to 0, i.e. pre-cutoff, so the
     stub's lazy plan resolves to ally by default), and a fake LiteLLM admin
     API. The paid-status cache is disabled
@@ -3167,7 +3371,8 @@ def _make_quota_test_client(
     monkeypatch.setenv("LITELLM_PROXY_URL", "https://fake-litellm.example.com")
     fake_ctx = make_fake_cloudflare_ctx()
 
-    def _stub_supertokens(token: str) -> UserAuth:
+    def _stub_supertokens(token: str, check_database: bool = False) -> UserAuth:
+        del check_database
         if token != _USER_STUB_TOKEN:
             raise HTTPException(status_code=401, detail="Invalid token")
         # The stub user simulates a fully-verified account (it is paid-listed
@@ -3193,7 +3398,7 @@ def _make_quota_test_client(
     backend = make_fake_pool_backend()
     backend.add_paid_email(_USER_STUB_EMAIL)
     backend.install_on_app_module(app_mod, monkeypatch)
-    return TestClient(web_app), entitlements_store, litellm
+    return TestClient(web_app, raise_server_exceptions=False), entitlements_store, litellm
 
 
 def _make_test_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
@@ -3202,7 +3407,7 @@ def _make_test_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     return client
 
 
-_PLAN_VALUES_BY_NAME = {"explorer": EXPLORER_PLAN_VALUES, "ally": ALLY_PLAN_VALUES}
+_PLAN_VALUES_BY_NAME = {"free": FREE_PLAN_VALUES, "explorer": EXPLORER_PLAN_VALUES, "ally": ALLY_PLAN_VALUES}
 
 
 def _seed_entitlements_row(
@@ -3239,8 +3444,9 @@ def _make_pool_quota_test_client(
 
     The returned pool backend is seeded with the stub user email as paid, so
     the stub's lazily-created entitlements row resolves to the ally plan by
-    default; explorer-plan tests flip the entry via ``backend.add_paid_email``
-    or write a row into the entitlements store directly.
+    default; free-plan tests flip the entry via ``backend.add_paid_email``
+    (the lazy backfill never assigns explorer), and tests wanting any other
+    plan write a row into the entitlements store directly.
     """
     client, entitlements_store, litellm = _make_quota_test_client(monkeypatch)
     monkeypatch.setenv("POOL_SSH_PRIVATE_KEY", "fake-management-key-pem")
@@ -3272,6 +3478,8 @@ def _make_pool_quota_web_test_client(
     """
     client, backend, entitlements_store, litellm = _make_pool_quota_test_client(monkeypatch)
     st_backend = make_fake_supertokens_backend()
+    # install adopts the quota client's entitlements store, so both seams
+    # resolve one store.
     st_backend.install_on_app_module(app_mod, monkeypatch)
     return client, backend, entitlements_store, litellm, st_backend
 
@@ -3292,6 +3500,40 @@ def _sign_in_browser_user(client: TestClient, st_backend: FakeSuperTokensBackend
 
 def _admin_key_headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {_ADMIN_KEY_TEST_VALUE}"}
+
+
+def _make_suspension_admin_test_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[
+    TestClient,
+    FakePoolBackend,
+    InMemoryEntitlementsStore,
+    FakeLiteLLMBackend,
+    FakeSuperTokensBackend,
+    FakeCloudflareOps,
+    InMemoryKeyStore,
+]:
+    """Test client wiring every backend the suspend/unsuspend fan-out touches.
+
+    Pool backend (workspaces + shares SQL), entitlements store, LiteLLM admin
+    API, SuperTokens (email resolution + sessions), Cloudflare ops, and the
+    R2 key store -- plus the admin key env var.
+    """
+    client, backend, entitlements_store, litellm = _make_pool_quota_test_client(monkeypatch)
+    monkeypatch.setenv("MINDS_ADMIN_KEY", _ADMIN_KEY_TEST_VALUE)
+    fake_ctx = make_fake_cloudflare_ctx()
+    key_store = make_fake_key_store()
+    # Single-loop patching (same pattern as the other client helpers) so the
+    # monkeypatch ratchet only counts one occurrence.
+    suspension_fakes: list[tuple[object, str, object]] = [
+        (cloudflare_mod, "get_cloudflare_ctx", lambda: fake_ctx),
+        (r2_stores_mod, "get_key_store", lambda: key_store),
+    ]
+    for target_module, name, fake_impl in suspension_fakes:
+        monkeypatch.setattr(target_module, name, fake_impl)
+    st_backend = make_fake_supertokens_backend()
+    st_backend.install_on_app_module(app_mod, monkeypatch)
+    return client, backend, entitlements_store, litellm, st_backend, fake_ctx.fake, key_store
 
 
 def _make_paid_crud_test_client(monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, FakePoolBackend]:
@@ -3417,7 +3659,8 @@ def _make_share_test_client(monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient
 
     # The share endpoints resolve identity through the shared web-identity
     # path, whose Bearer leg also calls authenticate_request; stub both.
-    def _stub_authenticate_request(request: Any) -> UserAuth:
+    def _stub_authenticate_request(request: Any, check_database: bool = False) -> UserAuth:
+        del check_database
         auth_header = request.headers.get("authorization", "")
         if auth_header != f"Bearer {_SHARE_STUB_TOKEN}":
             raise HTTPException(status_code=401, detail="Invalid token")
@@ -3470,6 +3713,133 @@ class InMemoryDeviceAuthCodeStore:
             "code_challenge": row["code_challenge"],
             "redirect_uri": row["redirect_uri"],
         }
+
+
+class InMemorySignupAttemptStore:
+    """In-memory stand-in for the Neon signup_attempts table."""
+
+    def __init__(self) -> None:
+        self.attempts: list[dict[str, Any]] = []
+        # When set, both store methods raise it (the DB-outage fail-open path).
+        self.error_to_raise: Exception | None = None
+
+    def count_recent_attempts(self, client_ip: str, subnet: str | None) -> tuple[int, int]:
+        if self.error_to_raise is not None:
+            raise self.error_to_raise
+        now = datetime.now(timezone.utc)
+        ip_hour_count = sum(
+            1
+            for attempt in self.attempts
+            if attempt["client_ip"] == client_ip and (now - attempt["attempted_at"]) < timedelta(hours=1)
+        )
+        subnet_day_count = sum(
+            1
+            for attempt in self.attempts
+            if subnet is not None
+            and attempt["subnet"] == subnet
+            and (now - attempt["attempted_at"]) < timedelta(days=1)
+        )
+        return ip_hour_count, subnet_day_count
+
+    def record_attempt(
+        self,
+        client_ip: str | None,
+        subnet: str | None,
+        email: str,
+        signup_method: str,
+        verdict: str,
+        outcome: str,
+        reputation_json: str | None,
+    ) -> None:
+        if self.error_to_raise is not None:
+            raise self.error_to_raise
+        self.attempts.append(
+            {
+                "attempted_at": datetime.now(timezone.utc),
+                "client_ip": client_ip,
+                "subnet": subnet,
+                "email": email,
+                "signup_method": signup_method,
+                "verdict": verdict,
+                "outcome": outcome,
+                "reputation_json": reputation_json,
+            }
+        )
+
+    def seed_attempts(self, client_ip: str, subnet: str | None, count: int) -> None:
+        """Plant ``count`` recent attempts so a test can trip the velocity caps."""
+        for _ in range(count):
+            self.record_attempt(
+                client_ip=client_ip,
+                subnet=subnet,
+                email="seeded@example.com",
+                signup_method="password",
+                verdict="clean",
+                outcome="allowed",
+                reputation_json=None,
+            )
+
+
+class InMemoryIpReputationCache:
+    """In-memory stand-in for the Neon ip_reputation_cache table."""
+
+    def __init__(self) -> None:
+        self.entries_by_ip: dict[str, tuple[datetime, signup_hardening_module.IpReputation]] = {}
+        # When set, every cache method raises it (the cache-outage fail-open path).
+        self.error_to_raise: Exception | None = None
+
+    def get_fresh(self, client_ip: str, ttl_seconds: int) -> signup_hardening_module.IpReputation | None:
+        if self.error_to_raise is not None:
+            raise self.error_to_raise
+        entry = self.entries_by_ip.get(client_ip)
+        if entry is None:
+            return None
+        fetched_at, reputation = entry
+        if (datetime.now(timezone.utc) - fetched_at) > timedelta(seconds=ttl_seconds):
+            return None
+        return reputation
+
+    def store(self, client_ip: str, reputation: signup_hardening_module.IpReputation) -> None:
+        if self.error_to_raise is not None:
+            raise self.error_to_raise
+        self.entries_by_ip[client_ip] = (datetime.now(timezone.utc), reputation)
+
+    def count_lookups_in_last_day(self) -> int:
+        if self.error_to_raise is not None:
+            raise self.error_to_raise
+        now = datetime.now(timezone.utc)
+        return sum(1 for fetched_at, _ in self.entries_by_ip.values() if (now - fetched_at) < timedelta(days=1))
+
+
+class FakeIpReputationProvider:
+    """Configurable reputation provider: per-IP flags, a not-configured default, and error injection."""
+
+    def __init__(self) -> None:
+        self.reputation_by_ip: dict[str, signup_hardening_module.IpReputation] = {}
+        self.fetch_count = 0
+        # When set, every fetch raises this instead of answering (the
+        # provider-outage fail-open path).
+        self.error_to_raise: Exception | None = None
+        # When False the provider acts unconfigured (no token on this tier).
+        self.is_configured = True
+
+    def fetch_reputation(self, client_ip: str) -> signup_hardening_module.IpReputation | None:
+        self.fetch_count += 1
+        if self.error_to_raise is not None:
+            raise self.error_to_raise
+        if not self.is_configured:
+            return None
+        return self.reputation_by_ip.get(client_ip, signup_hardening_module.IpReputation())
+
+
+class FakeTorExitList:
+    """Static in-memory Tor exit set (no network)."""
+
+    def __init__(self) -> None:
+        self.exit_ips: set[str] = set()
+
+    def is_tor_exit(self, client_ip: str) -> bool:
+        return client_ip in self.exit_ips
 
 
 def encode_attribution_cookie(payload: object) -> str:
@@ -3543,6 +3913,32 @@ class InMemoryAttributionStore:
         )
 
 
+def hold_stable_download_link(url: str | None) -> None:
+    """Put ``url`` -- or "could not be read" -- in the connector's stable-download cache.
+
+    ``GET /download`` resolves the stable channel manifest over the network, so
+    every test runs with an entry held (see the autouse fixture) and none of
+    them reach the live feed. Tests that care what the link resolves to hold
+    their own; the resolver's own tests call ``resolve_stable_mac_arm64_url``,
+    which does not read this cache.
+    """
+    cache = _stable_download_cache()
+    cache.clear()
+    cache[hashkey()] = url
+
+
+def clear_stable_download_link() -> None:
+    """Drop the held link, so the next read reaches the live feed."""
+    _stable_download_cache().clear()
+
+
+def _stable_download_cache() -> MutableMapping[Any, Any]:
+    # `cached` types its cache as optional because passing None disables it.
+    cache = accounts_web_module.stable_mac_arm64_url.cache
+    assert cache is not None, "the stable download resolver is not cached"
+    return cache
+
+
 def _make_accounts_web_test_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[TestClient, FakeSuperTokensBackend, InMemoryDeviceAuthCodeStore]:
@@ -3554,9 +3950,19 @@ def _make_accounts_web_test_client(
     st_backend.last_browser_session.access_token)``.
     """
     monkeypatch.setenv("SUPERTOKENS_CONNECTION_URI", "https://fake-supertokens.example.com")
+    # The identity pages and the OAuth start change behavior when a dedicated
+    # accounts origin or chrome origin is configured (misdirected requests are
+    # refused with 421), so clear any ambient values: tests only see the
+    # origins they set themselves.
+    monkeypatch.delenv("ACCOUNTS_BASE_URL", raising=False)
+    monkeypatch.delenv("SHARE_CHROME_ORIGIN", raising=False)
     st_backend = make_fake_supertokens_backend()
     st_backend.install_on_app_module(app_mod, monkeypatch)
-    return TestClient(web_app, base_url="https://testserver"), st_backend, st_backend.device_code_store
+    return (
+        TestClient(web_app, base_url="https://testserver", raise_server_exceptions=False),
+        st_backend,
+        st_backend.device_code_store,
+    )
 
 
 def _make_share_test_client_with_fakes(
@@ -3571,4 +3977,4 @@ def _make_share_test_client_with_fakes(
         monkeypatch.setattr(auth_mod, name, fake_impl)
     backend = make_fake_pool_backend()
     backend.install_on_app_module(app_mod, monkeypatch)
-    return TestClient(web_app), backend
+    return TestClient(web_app, raise_server_exceptions=False), backend

@@ -18,6 +18,7 @@ import imbue.remote_service_connector.accounts_web as accounts_web_module
 import imbue.remote_service_connector.cloudflare as cloudflare_module
 import imbue.remote_service_connector.entitlements as entitlements_module
 import imbue.remote_service_connector.r2.stores as stores_module
+from imbue.modal_app_kit.metrics import emit_metric
 from imbue.remote_service_connector import db
 from imbue.remote_service_connector.cloudflare import CloudflareOps
 from imbue.remote_service_connector.entitlements import AccountEntitlements
@@ -190,7 +191,10 @@ def _check_storage_quota_for_new_bucket(
     try:
         live_bytes = measure_live_owner_usage_bytes(ops, user_id_prefix)
     except (CloudflareApiError, httpx.HTTPError) as exc:
-        logger.warning("Skipped the storage-quota check for bucket creation (usage read failed): %s", exc)
+        # Fail-open on an enforcement decision: worth a low-priority report,
+        # and the metric's rate shows whether failing open is becoming routine.
+        emit_metric("cloudflare_api_failed", 1, {"operation": "bucket_creation_quota_check"})
+        logger.warning("Skipped the storage-quota check for bucket creation (usage read failed)", exc_info=exc)
         return
     if live_bytes > entitlements.max_total_bucket_bytes:
         raise_quota_exceeded(
@@ -202,14 +206,16 @@ def best_effort_revoke_token(ops: CloudflareOps, token_id: str) -> None:
     try:
         ops.delete_bucket_token(token_id)
     except (CloudflareApiError, httpx.HTTPError) as exc:
-        logger.warning("Failed to revoke R2 token %s: %s", token_id, exc)
+        emit_metric("cloudflare_api_failed", 1, {"operation": "best_effort_revoke_token"})
+        logger.warning("Failed to revoke R2 token %s", token_id, exc_info=exc)
 
 
 def _best_effort_delete_bucket(ops: CloudflareOps, bucket_name: str) -> None:
     try:
         ops.delete_bucket(bucket_name)
     except (CloudflareApiError, R2BucketNotEmptyError, R2BucketNotFoundError, httpx.HTTPError) as exc:
-        logger.warning("Failed to roll back bucket %s: %s", bucket_name, exc)
+        emit_metric("cloudflare_api_failed", 1, {"operation": "bucket_rollback_delete"})
+        logger.warning("Failed to roll back bucket %s", bucket_name, exc_info=exc)
 
 
 def key_info_from_row(row: dict[str, Any]) -> R2KeyInfo:

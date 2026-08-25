@@ -46,6 +46,8 @@ from imbue.concurrency_group.concurrency_group import ObservableThread
 from imbue.imbue_common.logging import log_span
 from imbue.imbue_common.pure import pure
 from imbue.minds.envs.paths import active_env_name_or_none
+from imbue.minds_admin.bake.content_tag import DEFAULT_WORKSPACE_TEMPLATE_IMAGE_REPOSITORY
+from imbue.minds_admin.bake.content_tag import compute_content_addressed_cache_tag
 from imbue.minds_admin.bake.pool_bake import BAKED_SERVICES_AGENT_NAME
 from imbue.minds_admin.bake.pool_bake import BAKED_SERVICES_CHECKOUT_PATH
 from imbue.minds_admin.bake.pool_bake import BakedPoolHost
@@ -70,14 +72,20 @@ from imbue.minds_admin.slices.bare_metal_db import fetch_pool_host_destroy_targe
 from imbue.minds_admin.slices.bare_metal_db import fetch_pool_host_status
 from imbue.minds_admin.slices.bare_metal_db import fetch_server_by_id
 from imbue.minds_admin.slices.bare_metal_db import fetch_server_capacities
+from imbue.minds_admin.slices.bare_metal_db import fetch_servers
 from imbue.minds_admin.slices.bare_metal_db import fetch_slice_disk_names_for_server
 from imbue.minds_admin.slices.bare_metal_db import fetch_slice_instance_names_for_server
 from imbue.minds_admin.slices.bare_metal_db import fetch_unleased_slice_teardown_row_ids
 from imbue.minds_admin.slices.bare_metal_db import insert_bare_metal_server
 from imbue.minds_admin.slices.bare_metal_db import insert_slice_pool_host
 from imbue.minds_admin.slices.bare_metal_db import update_server
+from imbue.minds_admin.slices.bare_metal_db import upsert_bare_metal_server
 from imbue.minds_admin.slices.bare_metal_prep import DEFAULT_LIMA_VERSION
 from imbue.minds_admin.slices.bare_metal_prep import build_box_prep_script
+from imbue.minds_admin.slices.ci_slice_sweep import CiSliceSweepBoxReport
+from imbue.minds_admin.slices.ci_slice_sweep import CiSliceSweepReport
+from imbue.minds_admin.slices.ci_slice_sweep import DEFAULT_CI_SLICE_MAX_AGE_HOURS
+from imbue.minds_admin.slices.ci_slice_sweep import sweep_ci_slices_on_box
 from imbue.minds_admin.slices.ordering import DEFAULT_REINSTALL_OS_TEMPLATE
 from imbue.minds_admin.slices.ordering import build_and_assign_eco_cart
 from imbue.minds_admin.slices.ordering import checkout_eco_cart
@@ -105,6 +113,7 @@ from imbue.mngr_imbue_cloud.data_types import SliceBakeOutcome
 from imbue.mngr_imbue_cloud.data_types import SliceBakeReport
 from imbue.mngr_imbue_cloud.data_types import SlicePricingRow
 from imbue.mngr_imbue_cloud.data_types import UnauditedBox
+from imbue.mngr_imbue_cloud.data_types import WarmCacheReport
 from imbue.mngr_imbue_cloud.errors import BareMetalProvisioningError
 from imbue.mngr_imbue_cloud.errors import SliceBakeTerminatedError
 from imbue.mngr_imbue_cloud.primitives import BareMetalServerDbId
@@ -117,12 +126,14 @@ from imbue.mngr_imbue_cloud.primitives import SERVER_STATUS_INSTALLING
 from imbue.mngr_imbue_cloud.primitives import SERVER_STATUS_ORDERED
 from imbue.mngr_imbue_cloud.primitives import SERVER_STATUS_READY
 from imbue.mngr_imbue_cloud.primitives import SliceBakeOutcomeStatus
+from imbue.mngr_imbue_cloud.primitives import US_REGION_BY_OVH_DATACENTER_CODE
 from imbue.mngr_imbue_cloud.primitives import is_box_exclusive_to_tier
 from imbue.mngr_imbue_cloud.primitives import tier_for_env_name
 from imbue.mngr_imbue_cloud.slices.bare_metal import DEFAULT_MEMORY_PER_SLICE_GB
 from imbue.mngr_imbue_cloud.slices.bare_metal import DEFAULT_SLICE_CPU_OVERCOMMIT_RATIO
 from imbue.mngr_imbue_cloud.slices.bare_metal import DEFAULT_SLICE_PORT_RANGE_END
 from imbue.mngr_imbue_cloud.slices.bare_metal import DEFAULT_SLICE_PORT_RANGE_START
+from imbue.mngr_imbue_cloud.slices.bare_metal import assert_env_name_fits_slice_names
 from imbue.mngr_imbue_cloud.slices.bare_metal import box_default_workspace_template_cache_dir
 from imbue.mngr_imbue_cloud.slices.bare_metal import compute_orphan_slice_disk_names
 from imbue.mngr_imbue_cloud.slices.bare_metal import compute_orphan_slice_instance_names
@@ -133,10 +144,12 @@ from imbue.mngr_imbue_cloud.slices.bare_metal import compute_slot_count
 from imbue.mngr_imbue_cloud.slices.bare_metal import count_slice_resource_names
 from imbue.mngr_imbue_cloud.slices.bare_metal import find_server_capacity_by_id
 from imbue.mngr_imbue_cloud.slices.bare_metal import foreign_tier_slice_names
+from imbue.mngr_imbue_cloud.slices.bare_metal import is_slice_owned_by_env
 from imbue.mngr_imbue_cloud.slices.bare_metal import parse_degraded_md_arrays
 from imbue.mngr_imbue_cloud.slices.bare_metal import parse_raw_swap_devices
 from imbue.mngr_imbue_cloud.slices.bare_metal import slice_lima_disk_name
 from imbue.mngr_imbue_cloud.slices.bare_metal import slice_lima_instance_name
+from imbue.mngr_imbue_cloud.slices.box_image_cache import BoxImageCacheInterface
 from imbue.mngr_imbue_cloud.slices.lima_box_image_cache import LimaBoxImageCache
 from imbue.mngr_imbue_cloud.slices.lima_slice_client import LimaSliceVpsClient
 from imbue.mngr_lima.constants import DEFAULT_IMAGE_URL_X86_64
@@ -663,6 +676,120 @@ def register_server(
     )
 
 
+@server.command(name="sweep-ci-slices")
+@click.option(
+    "--max-age-hours",
+    type=float,
+    default=DEFAULT_CI_SLICE_MAX_AGE_HOURS,
+    show_default=True,
+    help=(
+        "Destroy CI-owned slices older than this. Old enough that no live (serialized) release run "
+        "can still be using one; young CI slices and every non-ci-tier resource are kept."
+    ),
+)
+@click.option("--database-url", default=None, help=DATABASE_URL_HELP)
+def sweep_ci_slices(max_age_hours: float, database_url: str | None) -> None:
+    """Destroy stale CI-tier slices left on the ready boxes by crashed release runs.
+
+    Reads each ready box's real lima resources over SSH (with the tier's pool key) and
+    destroys every slice stamped for a ``ci-*`` env that is older than the threshold --
+    the crash backstop for release runs whose per-run env (and its DB) died before the
+    normal teardown. See specs/remote-workspaces-in-ci.md.
+    """
+    if max_age_hours <= 0:
+        raise click.UsageError("--max-age-hours must be positive")
+    pool_private_key_pem = resolve_pool_private_key_pem()
+    conn = psycopg2.connect(resolve_pool_database_url(database_url))
+    try:
+        ready_servers = [server for server in fetch_servers(conn) if str(server.status) == SERVER_STATUS_READY]
+    finally:
+        conn.close()
+    box_reports: list[CiSliceSweepBoxReport] = []
+    unreachable: list[str] = []
+    with pool_private_key_path(pool_private_key_pem) as private_key_path:
+        for server_row in ready_servers:
+            if not server_row.public_address:
+                unreachable.append(str(server_row.id))
+                continue
+            client = LimaSliceVpsClient(
+                box_address=str(server_row.public_address),
+                box_ssh_user=server_row.lima_service_user or "limahost",
+                private_key_path=str(private_key_path),
+                box_host_public_key=server_row.box_host_public_key,
+            )
+            try:
+                box_reports.append(
+                    sweep_ci_slices_on_box(
+                        client,
+                        server_id=str(server_row.id),
+                        public_address=str(server_row.public_address),
+                        max_age_seconds=max_age_hours * 3600.0,
+                    )
+                )
+            except (MngrError, OSError) as exc:
+                logger.warning("CI slice sweep: box {} unreachable: {}", server_row.public_address, exc)
+                unreachable.append(str(server_row.id))
+    report = CiSliceSweepReport(
+        max_age_hours=max_age_hours,
+        boxes=tuple(box_reports),
+        unreachable_boxes=tuple(sorted(unreachable)),
+    )
+    emit_json(report.model_dump(mode="json"))
+    if unreachable or any(box.failed for box in box_reports):
+        raise click.ClickException(
+            "the CI slice sweep could not fully clean the fleet (unreachable boxes or failed destroys above); "
+            "stale slices will be retried on the next sweep"
+        )
+
+
+@server.command(name="import-boxes")
+@click.option(
+    "--source-database-url",
+    required=True,
+    help=(
+        "Pool DSN holding the canonical bare_metal_servers rows to copy from (for the CI standing "
+        "boxes: the CI infra DB at secrets/minds/ci/neon/DATABASE_URL)."
+    ),
+)
+@click.option("--database-url", default=None, help=DATABASE_URL_HELP)
+def import_boxes(source_database_url: str, database_url: str | None) -> None:
+    """Copy every ready bare_metal_servers row from a source pool DB into this env's pool DB.
+
+    Id-preserving and idempotent (upsert by row id), so re-running after a box changed
+    (address, host key, status) converges the target on the source. Used by the CI
+    release flow to make the standing CI boxes leasable from each per-run ci env --
+    see specs/remote-workspaces-in-ci.md.
+    """
+    source_conn = psycopg2.connect(source_database_url)
+    try:
+        ready_servers = [server for server in fetch_servers(source_conn) if str(server.status) == SERVER_STATUS_READY]
+    finally:
+        source_conn.close()
+    if not ready_servers:
+        raise click.ClickException(
+            f"the source pool DB has no '{SERVER_STATUS_READY}' bare_metal_servers rows to import"
+        )
+    target_conn = psycopg2.connect(resolve_pool_database_url(database_url))
+    try:
+        for server_row in ready_servers:
+            upsert_bare_metal_server(target_conn, server_row)
+    finally:
+        target_conn.close()
+    emit_json(
+        {
+            "imported": [
+                {
+                    "id": str(server_row.id),
+                    "region": server_row.region,
+                    "public_address": server_row.public_address,
+                    "slot_count": server_row.slot_count,
+                }
+                for server_row in ready_servers
+            ]
+        }
+    )
+
+
 def build_registered_server(
     *,
     ovh_service_name: str,
@@ -739,6 +866,13 @@ def slice_advertised_attributes(sizing: dict[str, int]) -> dict[str, Any]:
 # Provider instance name the slice bake targets; -S overrides under this key
 # carry the box address + per-slice carve sizing into the create.
 _SLICE_PROVIDER_INSTANCE: str = "imbue_cloud_slice"
+
+# The reserved pseudo-env label stamped into the lima names of the cache
+# pre-warm verb's throwaway seed slices (specs/remote-workspaces-in-ci.md).
+# It parses as a ci-tier owner (``tier_for_env_name`` sees the ``ci-`` prefix),
+# so a warm slice a killed invocation leaked is reclaimed by the age-based
+# ``server sweep-ci-slices`` like any other CI slice.
+CI_WARM_PSEUDO_ENV_NAME: Final[str] = "ci-warm"
 
 # Per-slice ``mngr create`` hard timeout (carve + DEFAULT_WORKSPACE_TEMPLATE container build + agent
 # bootstrap). 45 min gives headroom for the build under concurrency; the bake's
@@ -1734,6 +1868,30 @@ def assert_box_is_exclusive_to_tier(
     )
 
 
+def _is_seed_phase_needed(cache: BoxImageCacheInterface, cache_tag: str | None) -> bool:
+    """Whether the bake must run its own seed phase (one slice baked alone) before the fan-out.
+
+    No seed phase is needed when there is no cache tag (a plain dev bake: every slice
+    builds from the Dockerfile), when the box already holds the tag's tar (warm), or
+    when another seeder currently holds the build lock -- e.g. the CI cache pre-warm
+    job running in parallel with this bake (specs/remote-workspaces-in-ci.md). In the
+    lock-held case each fan-out slice's create blocks on that in-flight seed's tar and
+    then docker-loads it (taking over the build if the seeder dies), so a local seed
+    phase would only serialize one slice behind the very same wait.
+    """
+    if cache_tag is None:
+        return False
+    if cache.has_tar(cache_tag):
+        return False
+    if cache.is_build_locked(cache_tag):
+        logger.info(
+            "Box already has an in-flight seed build for {} (build lock held); skipping the local seed phase",
+            cache_tag,
+        )
+        return False
+    return True
+
+
 def allocate_slices(
     *,
     count: int,
@@ -1744,6 +1902,7 @@ def allocate_slices(
     workspace_dir: Path,
     mngr_source: str | None,
     is_from_tag: bool,
+    is_content_addressed_cache: bool,
     database_url: str,
     pool_private_key_pem: str,
     is_dry_run: bool,
@@ -1786,6 +1945,11 @@ def allocate_slices(
         raise click.UsageError("--count must be positive")
     if max_concurrency <= 0:
         raise click.UsageError("--max-concurrency must be positive")
+    # Fail fast on an env name too long for the slice lima identifiers: limactl
+    # only rejects it at reserve time, deep inside the bake, with an unhelpful
+    # message (CI env names sit near the cap).
+    if env_name is not None:
+        assert_env_name_fits_slice_names(env_name)
     conn = psycopg2.connect(database_url)
     try:
         capacities = fetch_server_capacities(conn)
@@ -1871,24 +2035,37 @@ def allocate_slices(
                 sync_mngr_into_template(mngr_source_to_vendor, workspace_dir)
 
             pool_public_key = _derive_public_key(private_key_path)
-            # Enable the per-box default-workspace-template image cache only for production (--from-tag) bakes, whose
-            # content is an immutable tag: the first slice builds + seeds a box-local tar
-            # (tagged default-workspace-template:<tag>), the rest docker-load it. Dev (--workspace-dir) bakes have
-            # mutable content under a branch label, so they always build (default_workspace_template_cache_tag=None).
+            # Enable the per-box default-workspace-template image cache only when its key is
+            # immutable: production (--from-tag) bakes key on the tag, and CI bakes opt in to a
+            # content-addressed key (a hash of the workspace tree AFTER the vendor sync above,
+            # so it covers the vendored mngr too). Plain dev (--workspace-dir) bakes have
+            # mutable content under a branch label, so they always build
+            # (default_workspace_template_cache_tag=None).
             repo_branch_or_tag = lease_attributes.get("repo_branch_or_tag")
-            default_workspace_template_cache_tag = (
-                f"default-workspace-template:{repo_branch_or_tag}" if (is_from_tag and repo_branch_or_tag) else None
-            )
+            if is_content_addressed_cache:
+                default_workspace_template_cache_tag: str | None = compute_content_addressed_cache_tag(workspace_dir)
+                logger.info("Using content-addressed image-cache tag {}", default_workspace_template_cache_tag)
+            elif is_from_tag and repo_branch_or_tag:
+                default_workspace_template_cache_tag = (
+                    f"{DEFAULT_WORKSPACE_TEMPLATE_IMAGE_REPOSITORY}:{repo_branch_or_tag}"
+                )
+            else:
+                default_workspace_template_cache_tag = None
             # Seed-first: a cache-tag bake onto a box that does not hold this tag's tar
             # yet runs a seed phase -- one slice baked alone -- before the fan-out. The
             # seeder builds + publishes the box tar (its bounded retries absorb transient
             # build failures), every later slice takes the warm docker-load path, and a
             # build that keeps failing aborts the whole bake up front with one clear
-            # error instead of consuming one requested slice per failed build.
-            is_seed_phase_needed = default_workspace_template_cache_tag is not None and not LimaBoxImageCache(
-                slice_client=occupancy_client,
-                cache_dir=box_default_workspace_template_cache_dir(ssh_user),
-            ).has_tar(default_workspace_template_cache_tag)
+            # error instead of consuming one requested slice per failed build. When
+            # another seeder already holds the build lock (e.g. the CI cache pre-warm
+            # job), the seed phase is skipped too -- see _is_seed_phase_needed.
+            is_seed_phase_needed = _is_seed_phase_needed(
+                LimaBoxImageCache(
+                    slice_client=occupancy_client,
+                    cache_dir=box_default_workspace_template_cache_dir(ssh_user),
+                ),
+                default_workspace_template_cache_tag,
+            )
             # One worker per slice, capped at ``max_concurrency`` at once by the shared
             # fan-out: each bake blocks on the semaphore before its ``mngr create``, so
             # the box is never contended by more than K simultaneous carves+builds
@@ -1993,6 +2170,227 @@ def allocate_slices(
             )
             emit_json(report.model_dump(mode="json", exclude_none=True))
             if report.failed:
+                raise SystemExit(1)
+
+
+def _warm_bake_one_slice(
+    *,
+    server: BareMetalServer,
+    sizing: dict[str, int],
+    region: str,
+    workspace_dir: Path,
+    pool_public_key: str,
+    private_key_path: Path,
+    default_workspace_template_cache_tag: str,
+    extra_create_env: Mapping[str, str],
+) -> SliceBakeOutcome:
+    """Bake one throwaway ci-warm slice purely so its create builds + publishes the box image tar.
+
+    The create's own cache path does the real work (the seed build and the
+    ``docker save`` to the box tar happen inside ``mngr create``); no pool row is
+    written, the post-create finalize steps are skipped entirely, and the caller
+    destroys the slice afterwards.
+    """
+    ssh_user = server.lima_service_user or "limahost"
+    host_name = f"slice-{uuid4().hex}"
+    attributes = slice_advertised_attributes(sizing)
+    try:
+        baked = bake_pool_host(
+            provider_instance=_SLICE_PROVIDER_INSTANCE,
+            host_name=host_name,
+            attributes=attributes,
+            workspace_dir=workspace_dir,
+            extra_create_args=_build_slice_create_args(
+                server=server,
+                sizing=sizing,
+                region=region,
+                env_name=CI_WARM_PSEUDO_ENV_NAME,
+                pool_public_key=pool_public_key,
+                private_key_path=private_key_path,
+                ssh_user=ssh_user,
+                port_range_start=DEFAULT_SLICE_PORT_RANGE_START,
+                port_range_end=DEFAULT_SLICE_PORT_RANGE_END,
+                default_workspace_template_cache_tag=default_workspace_template_cache_tag,
+            ),
+            extra_create_env=extra_create_env,
+            mngr_create_timeout_seconds=_SLICE_MNGR_CREATE_TIMEOUT_SECONDS,
+        )
+    except (PoolBakeError, BareMetalProvisioningError, MngrError, OSError) as exc:
+        logger.warning("Warm seed slice bake {} failed: {}", host_name, exc)
+        return SliceBakeOutcome(
+            host_name=host_name, server_id=str(server.id), status=SliceBakeOutcomeStatus.FAILED, error=str(exc)
+        )
+    return SliceBakeOutcome(
+        host_name=host_name,
+        server_id=str(server.id),
+        status=SliceBakeOutcomeStatus.SUCCEEDED,
+        host_id=baked.host_id,
+        agent_id=baked.agent_id,
+        vm_ssh_port=baked.outer_ssh_port,
+        container_ssh_port=baked.ssh_port,
+        attributes=attributes,
+    )
+
+
+def _reap_ci_warm_slice_resources(client: LimaSliceVpsClient) -> None:
+    """Destroy every ci-warm-stamped slice VM (then orphan disk) on the box.
+
+    The warm verb's unconditional cleanup. ci-warm slices exist only while a
+    (serialized) warm invocation runs, so destroying all of them -- rather than
+    tracking the one host id this invocation carved -- also reclaims a slice a
+    killed prior warm left behind. Failures are logged, not raised: the age-based
+    CI slice sweep is the backstop.
+    """
+    try:
+        instance_names = client.list_instance_names()
+    except (MngrError, OSError) as exc:
+        logger.warning("Could not list lima instances for the ci-warm reap: {}", exc)
+        return
+    for instance_name in sorted(instance_names):
+        if not is_slice_owned_by_env(instance_name, CI_WARM_PSEUDO_ENV_NAME):
+            continue
+        logger.info("Destroying ci-warm slice VM {}", instance_name)
+        try:
+            client.destroy_instance(VpsInstanceId(instance_name))
+        except (MngrError, OSError) as exc:
+            logger.warning("Failed to destroy ci-warm slice VM {}: {}", instance_name, exc)
+    # Disks second, re-listed so disks destroyed with their VM are gone; a disk
+    # that outlived its VM would otherwise hold the box slot forever.
+    try:
+        disk_names = client.list_disk_names()
+    except (MngrError, OSError) as exc:
+        logger.warning("Could not list lima disks for the ci-warm reap: {}", exc)
+        return
+    for disk_name in sorted(disk_names):
+        if not is_slice_owned_by_env(disk_name, CI_WARM_PSEUDO_ENV_NAME):
+            continue
+        logger.info("Destroying orphan ci-warm slice disk {}", disk_name)
+        try:
+            client.destroy_disk(disk_name)
+        except (MngrError, OSError) as exc:
+            logger.warning("Failed to destroy ci-warm slice disk {}: {}", disk_name, exc)
+
+
+def warm_box_image_cache(
+    *,
+    server_id: str,
+    workspace_dir: Path,
+    mngr_source: str | None,
+    database_url: str,
+    pool_private_key_pem: str,
+) -> None:
+    """Pre-warm one box's content-addressed image cache: seed the tar via a throwaway slice, then destroy it.
+
+    The slice backend of ``minds-admin pool warm-cache`` (specs/remote-workspaces-in-ci.md).
+    Reads the box row from ``database_url`` but writes nothing: slot/port reservation is
+    purely on-box, no ``pool_hosts`` row is created, and the throwaway slice carries the
+    reserved ``ci-warm`` pseudo-env label so the CI slice sweep reclaims a leaked one by
+    age. If the box already holds the tar for the derived content tag this is a cheap
+    no-op. Exits non-zero when the box does not hold the tar afterwards; the caller
+    (the CI warm job) treats that as advisory.
+    """
+    conn = psycopg2.connect(database_url)
+    try:
+        server = fetch_server_by_id(conn, BareMetalServerDbId(server_id))
+    finally:
+        conn.close()
+    if server is None:
+        raise click.UsageError(f"no bare-metal server with id {server_id}; see `minds-admin server list`")
+    if str(server.status) != SERVER_STATUS_READY:
+        raise click.UsageError(f"server {server.id} is '{server.status}', not '{SERVER_STATUS_READY}'; cannot warm")
+    if not server.public_address:
+        raise click.UsageError(f"server {server.id} has no public_address; cannot warm")
+    sizing = compute_server_slice_sizing(server)
+    # The create's provider config wants the lease-region label; derive it from the
+    # box's datacenter code so the verb needs no --region of its own (the label is
+    # irrelevant for a slice that never becomes a pool row).
+    region = US_REGION_BY_OVH_DATACENTER_CODE.get(server.region or "")
+    if region is None:
+        raise click.UsageError(
+            f"server {server.id} is in datacenter {server.region!r}, which maps to no known lease region"
+        )
+
+    ssh_user = server.lima_service_user or "limahost"
+    with pool_private_key_path(pool_private_key_pem) as private_key_path:
+        client = LimaSliceVpsClient(
+            box_address=str(server.public_address),
+            box_ssh_user=ssh_user,
+            private_key_path=str(private_key_path),
+            box_host_public_key=server.box_host_public_key,
+        )
+        box_disk_names = client.list_disk_names()
+        assert_box_is_exclusive_to_tier(
+            server=server,
+            env_name=CI_WARM_PSEUDO_ENV_NAME,
+            box_disk_names=box_disk_names,
+            authorized_key_count=client.count_authorized_keys(),
+        )
+        box_used_slots = count_slice_resource_names(box_disk_names)
+        if server.slot_count - box_used_slots < 1:
+            raise click.UsageError(
+                f"server {server.id} has no free slot ({box_used_slots}/{server.slot_count} in use); cannot "
+                "carve the throwaway warm slice"
+            )
+
+        sweep_stale_bake_namespaces()
+        with ephemeral_bake_namespace() as bake_namespace:
+            if mngr_source is not None:
+                sync_mngr_into_template(Path(mngr_source), workspace_dir)
+            cache_tag = compute_content_addressed_cache_tag(workspace_dir)
+            cache = LimaBoxImageCache(
+                slice_client=client, cache_dir=box_default_workspace_template_cache_dir(ssh_user)
+            )
+            if cache.has_tar(cache_tag):
+                logger.info("Box {} already holds the tar for {}; nothing to warm", server.public_address, cache_tag)
+                report = WarmCacheReport(
+                    cache_tag=cache_tag,
+                    server_id=str(server.id),
+                    was_tar_already_present=True,
+                    is_warmed=True,
+                    slices=(),
+                )
+                emit_json(report.model_dump(mode="json", exclude_none=True))
+                return
+
+            logger.info(
+                "Warming box {} image cache for {} with one throwaway {} slice",
+                server.public_address,
+                cache_tag,
+                CI_WARM_PSEUDO_ENV_NAME,
+            )
+            pool_public_key = _derive_public_key(private_key_path)
+            try:
+                outcome = _run_bake_attempts(
+                    lambda: _warm_bake_one_slice(
+                        server=server,
+                        sizing=sizing,
+                        region=region,
+                        workspace_dir=workspace_dir,
+                        pool_public_key=pool_public_key,
+                        private_key_path=private_key_path,
+                        default_workspace_template_cache_tag=cache_tag,
+                        extra_create_env=bake_namespace.to_subprocess_env(),
+                    ),
+                    _SLICE_BAKE_ATTEMPT_COUNT,
+                    termination_event=threading.Event(),
+                )
+            finally:
+                # The throwaway slice is destroyed unconditionally -- its only
+                # purpose was publishing the tar.
+                _reap_ci_warm_slice_resources(client)
+            # The warm's goal is the tar, not the slice: a bake that failed after
+            # the tar was published (e.g. during agent bootstrap) still warmed the
+            # box, so success is judged by the tar's presence.
+            is_warmed = cache.has_tar(cache_tag)
+            report = WarmCacheReport(
+                cache_tag=cache_tag,
+                server_id=str(server.id),
+                was_tar_already_present=False,
+                is_warmed=is_warmed,
+                slices=(outcome,),
+            )
+            emit_json(report.model_dump(mode="json", exclude_none=True))
+            if not is_warmed:
                 raise SystemExit(1)
 
 

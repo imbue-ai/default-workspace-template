@@ -251,5 +251,7 @@ def test_box_prep_installs_transfer_tooling_and_skips_stop_marked_vms() -> None:
     assert "/usr/local/bin/age-keygen" in script
     assert "/usr/local/bin/s5cmd" in script
     assert ".mngr-installed-transfer-tools" in script
+    # zstd (the transfer stream compressor) comes from apt with the box packages.
+    assert "zstd" in script
     # The boot autostart must never resurrect a VM a workspace stop halted.
     assert "mngr-stop-requested" in script

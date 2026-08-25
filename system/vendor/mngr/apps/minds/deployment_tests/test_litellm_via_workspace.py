@@ -26,16 +26,20 @@ moves to offload, the future ``offload-modal-minds-services.toml`` will
 enable Docker-in-Docker (mirroring ``offload-modal-acceptance.toml``).
 """
 
+import contextlib
 import json
 import os
 import shlex
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 from collections.abc import Callable
+from collections.abc import Iterator
 from pathlib import Path
 
+import httpx
 import psycopg2
 import pytest
 import tomlkit
@@ -111,6 +115,14 @@ def _create_docker_workspace(template_path: Path, host_name: str) -> tuple[str, 
     # config dir at the clone's .mngr explicitly.
     create_env = dict(os.environ)
     create_env["MNGR_PROJECT_CONFIG_DIR"] = str(template_path / ".mngr")
+    # The template passes the host's ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL
+    # into the workspace (pass_host_env). With a real key in the invoking env
+    # (the CI job exports one for other steps), the workspace's claude would
+    # talk straight to Anthropic and the minted litellm key would never record
+    # spend -- the very thing this test must prove. Strip them so the
+    # submitted credentials are the workspace's only LLM path.
+    create_env.pop("ANTHROPIC_API_KEY", None)
+    create_env.pop("ANTHROPIC_BASE_URL", None)
     create = _run(
         [
             "mngr",
@@ -220,6 +232,50 @@ def _chat_and_await_echo(container_name: str, chat_agent_id: str, token: str) ->
     assert replied.returncode == 0, f"The chat agent never echoed the token {token}"
 
 
+_KEEPALIVE_PING_INTERVAL_SECONDS = 2.0
+
+
+@contextlib.contextmanager
+def _litellm_proxy_keepalive(litellm_base_url: str) -> Iterator[None]:
+    """Keep the env's litellm Modal container awake so its spend writer can run.
+
+    LiteLLM persists spend asynchronously: each request's cost is queued in
+    memory and a scheduled job (``proxy_batch_write_at``, ~10s) batch-writes it
+    to the DB. The CI env's litellm proxy is a scale-to-zero Modal ASGI
+    function, and Modal CPU-throttles a container whenever no request is in
+    flight -- so after the last LLM call of a burst the flush timer never
+    fires. The one wake-up the queue gets is container scaledown (~60s idle),
+    where the flush races the teardown and loses ("Spend tracking - DB
+    connection error writing spend logs ... All connection attempts failed",
+    then the event loop is destroyed mid-retry), silently dropping the spend.
+    Verified against a live CI env: an identical proxied call recorded no
+    spend when left idle and full spend when followed by traffic.
+
+    Cheap liveness pings during the chat + spend-poll window keep the
+    container unthrottled (and alive), so the batch writer actually runs and
+    the spend this test asserts on reaches the ledger. Ping failures are
+    swallowed: the pings are a scheduling aid, not an assertion.
+    """
+    stop = threading.Event()
+
+    def ping_loop() -> None:
+        with httpx.Client(timeout=10.0) as client:
+            while not stop.is_set():
+                try:
+                    client.get(f"{litellm_base_url}/health/liveness")
+                except httpx.HTTPError:
+                    pass
+                stop.wait(_KEEPALIVE_PING_INTERVAL_SECONDS)
+
+    thread = threading.Thread(target=ping_loop, name="litellm-proxy-keepalive", daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        thread.join(timeout=15)
+
+
 def _await_key_spend(neon_litellm_dsn: str, key_alias: str) -> float:
     """Poll the litellm token table until the minted key shows non-zero spend."""
     for _attempt in range(_SPEND_POLL_ATTEMPTS):
@@ -304,9 +360,13 @@ def test_litellm_spend_tracking_via_local_workspace(
         assert submit_body.get("auth_mode") == "imbue", f"expected imbue mode after blob submit: {submit_body!r}"
 
         chat_agent_id = _find_chat_agent_id(container_name)
-        _chat_and_await_echo(container_name, chat_agent_id, token)
-
-        spend = _await_key_spend(env.neon_litellm_dsn.get_secret_value(), key_alias)
+        # The keepalive must span the whole chat-to-assertion window: the
+        # proxy's last chat call otherwise strands its spend in the throttled
+        # container's memory (see _litellm_proxy_keepalive), and the echo
+        # poll alone can outlast the ~60s idle scaledown that drops it.
+        with _litellm_proxy_keepalive(str(minted.base_url)):
+            _chat_and_await_echo(container_name, chat_agent_id, token)
+            spend = _await_key_spend(env.neon_litellm_dsn.get_secret_value(), key_alias)
         logger.info("litellm recorded spend {} for key alias {}", spend, key_alias)
     finally:
         # Destroy unconditionally: even a create that failed partway (timeout,

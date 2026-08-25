@@ -1238,7 +1238,9 @@ def _drain_refresh_frames(client_queue: "queue.Queue[str | None]") -> list[dict[
     return [frame for frame in drain_ui_channel_frames(client_queue) if frame["type"] == "workspace_refresh"]
 
 
-def test_a_machine_coming_back_tells_every_window_to_rebuild_its_view(tmp_path: Path) -> None:
+def test_a_machine_coming_back_tells_every_window_to_rebuild_its_view(
+    tmp_path: Path, root_concurrency_group: ConcurrencyGroup
+) -> None:
     """A recovered machine broadcasts the same refresh an in-workspace agent can ask for.
 
     While the machine was down every window went on painting whatever it served
@@ -1252,10 +1254,17 @@ def test_a_machine_coming_back_tells_every_window_to_rebuild_its_view(tmp_path: 
     client = _build_client(
         tmp_path,
         StaticBackendResolver(url_by_agent_and_service={str(agent_id): {}}),
+        root_concurrency_group=root_concurrency_group,
         system_interface_health_tracker=tracker,
     )
     window_queue = get_state(client.application).ui_channel_broadcaster.register()
 
+    # The app this client is (one with a concurrency group) also runs the
+    # unattended dispatch off the same stuck edge, and its restart would race
+    # this test to the machine's health. Marked as deliberately stopped, which
+    # is what production uses to keep that dispatch off a machine; the probe
+    # success below clears the mark as it fires the recovery.
+    tracker.suppress_unattended_recovery(agent_id)
     # An outage, then the machine answering again -- the only thing that ends one.
     tracker.record_failure(agent_id)
     tracker.record_probe_failure(agent_id)
@@ -1265,7 +1274,9 @@ def test_a_machine_coming_back_tells_every_window_to_rebuild_its_view(tmp_path: 
     assert _drain_refresh_frames(window_queue) == [{"type": "workspace_refresh", "agent_id": str(agent_id)}]
 
 
-def test_a_machine_that_never_went_down_does_not_refresh_windows(tmp_path: Path) -> None:
+def test_a_machine_that_never_went_down_does_not_refresh_windows(
+    tmp_path: Path, root_concurrency_group: ConcurrencyGroup
+) -> None:
     """Only the recovery edge refreshes: a probe success on a healthy machine is every probe.
 
     The probe loop reports success continuously for the machines it watches, so
@@ -1280,6 +1291,7 @@ def test_a_machine_that_never_went_down_does_not_refresh_windows(tmp_path: Path)
     client = _build_client(
         tmp_path,
         StaticBackendResolver(url_by_agent_and_service={str(agent_id): {}}),
+        root_concurrency_group=root_concurrency_group,
         system_interface_health_tracker=tracker,
     )
     window_queue = get_state(client.application).ui_channel_broadcaster.register()
@@ -2401,44 +2413,6 @@ def _resolver_with_services_agent(agent_id: AgentId, services_id: AgentId) -> Ba
         }
     )
     return make_resolver_with_data(agents_json)
-
-
-def test_workspace_health_returns_probes_for_known_workspace(
-    tmp_path: Path, root_concurrency_group: ConcurrencyGroup
-) -> None:
-    # A known workspace returns the flat HostHealthResponse the recovery page
-    # renders: a probe list plus the derived dispatch tier.
-    agent_id = AgentId()
-    resolver = make_resolver_with_data(make_agents_json(agent_id))
-    client = _build_client(tmp_path, resolver, root_concurrency_group=root_concurrency_group)
-
-    response = client.get(f"/api/v1/workspaces/{agent_id}/health", headers=_auth_header())
-
-    assert response.status_code == 200
-    body = json.loads(response.data)
-    assert isinstance(body["probes"], list)
-    assert "dispatch_tier" in body
-
-
-def test_workspace_health_unknown_workspace_returns_404(
-    tmp_path: Path, root_concurrency_group: ConcurrencyGroup
-) -> None:
-    resolver = make_resolver_with_data(make_agents_json(AgentId()))
-    client = _build_client(tmp_path, resolver, root_concurrency_group=root_concurrency_group)
-
-    response = client.get(f"/api/v1/workspaces/{AgentId()}/health", headers=_auth_header())
-
-    assert response.status_code == 404
-
-
-def test_workspace_health_requires_bearer(tmp_path: Path, root_concurrency_group: ConcurrencyGroup) -> None:
-    agent_id = AgentId()
-    resolver = make_resolver_with_data(make_agents_json(agent_id))
-    client = _build_client(tmp_path, resolver, root_concurrency_group=root_concurrency_group)
-
-    response = client.get(f"/api/v1/workspaces/{agent_id}/health")
-
-    assert response.status_code == 401
 
 
 def test_workspace_restart_returns_202_operation_handle(

@@ -51,6 +51,28 @@ _INSERT_SLICE_POOL_HOST_SQL: Final[str] = (
     "%s, %s, %s, %s, %s, NOW())"
 )
 
+# Id-preserving copy of a box row between host_pool DBs (the CI standing boxes
+# live canonically in the CI infra DB and are imported into each per-run ci
+# env's DB so its connector can SSH them at lease/release time -- see
+# specs/remote-workspaces-in-ci.md). Unlike the plain insert above this carries
+# box_host_public_key (normally recorded later via update_server), because an
+# imported row must arrive lease-ready with its pinned host key intact.
+_UPSERT_BARE_METAL_SERVER_SQL: Final[str] = (
+    "INSERT INTO bare_metal_servers "
+    "(id, ovh_order_id, ovh_service_name, plan_code, region, public_address, "
+    "cpu_cores, cpu_threads, ram_gb, disk_gb, memory_per_slice_gb, cpu_overcommit_ratio, "
+    "slot_count, raid_level, lima_service_user, status, box_host_public_key, created_at, updated_at) "
+    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW()) "
+    "ON CONFLICT (id) DO UPDATE SET "
+    "ovh_order_id = EXCLUDED.ovh_order_id, ovh_service_name = EXCLUDED.ovh_service_name, "
+    "plan_code = EXCLUDED.plan_code, region = EXCLUDED.region, public_address = EXCLUDED.public_address, "
+    "cpu_cores = EXCLUDED.cpu_cores, cpu_threads = EXCLUDED.cpu_threads, ram_gb = EXCLUDED.ram_gb, "
+    "disk_gb = EXCLUDED.disk_gb, memory_per_slice_gb = EXCLUDED.memory_per_slice_gb, "
+    "cpu_overcommit_ratio = EXCLUDED.cpu_overcommit_ratio, slot_count = EXCLUDED.slot_count, "
+    "raid_level = EXCLUDED.raid_level, lima_service_user = EXCLUDED.lima_service_user, "
+    "status = EXCLUDED.status, box_host_public_key = EXCLUDED.box_host_public_key, updated_at = NOW()"
+)
+
 _SELECT_SERVERS_SQL: Final[str] = (
     "SELECT id, ovh_order_id, ovh_service_name, plan_code, region, public_address, "
     "cpu_cores, cpu_threads, ram_gb, disk_gb, memory_per_slice_gb, cpu_overcommit_ratio, "
@@ -181,6 +203,19 @@ def insert_bare_metal_server(conn: Any, server: BareMetalServer) -> None:
     """Insert a new bare_metal_servers row."""
     with conn.cursor() as cur:
         cur.execute(_INSERT_BARE_METAL_SERVER_SQL, build_bare_metal_server_insert_values(server))
+    conn.commit()
+
+
+@pure
+def build_bare_metal_server_upsert_values(server: BareMetalServer) -> tuple[Any, ...]:
+    """Build the value tuple for :data:`_UPSERT_BARE_METAL_SERVER_SQL` from a server."""
+    return build_bare_metal_server_insert_values(server) + (server.box_host_public_key,)
+
+
+def upsert_bare_metal_server(conn: Any, server: BareMetalServer) -> None:
+    """Insert-or-update a bare_metal_servers row by id, preserving the source row's identity."""
+    with conn.cursor() as cur:
+        cur.execute(_UPSERT_BARE_METAL_SERVER_SQL, build_bare_metal_server_upsert_values(server))
     conn.commit()
 
 

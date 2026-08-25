@@ -29,7 +29,7 @@ def test_render_writes_all_three_artifacts(tmp_path: Path) -> None:
     # The rendered frps.toml must be valid TOML and be SNI-passthrough.
     parsed = tomllib.loads(frps)
     assert parsed["vhostHTTPSPort"] == 443
-    assert parsed["httpPlugins"][0]["ops"] == ["Login", "NewProxy"]
+    assert parsed["httpPlugins"][0]["ops"] == ["Login", "NewProxy", "Ping"]
     assert "443" in (out_dir / "nftables.conf").read_text()
     assert "redir https://" in (out_dir / "port80.Caddyfile").read_text()
 

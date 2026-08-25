@@ -29,9 +29,9 @@ def test_frps_toml_is_sni_passthrough_and_has_no_tls_termination() -> None:
     assert "tls_cert" not in rendered
 
 
-def test_frps_toml_authorizes_only_login_and_newproxy() -> None:
+def test_frps_toml_authorizes_only_the_tunnel_gating_ops() -> None:
     rendered = render_frps_toml(_config())
-    assert 'ops = ["Login", "NewProxy"]' in rendered
+    assert 'ops = ["Login", "NewProxy", "Ping"]' in rendered
     # Visitor connections must NOT be authorized per-connection (that would put
     # the connector in every visitor's request path).
     assert "NewUserConn" not in rendered

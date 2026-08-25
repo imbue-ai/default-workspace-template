@@ -47,6 +47,12 @@ _MODULE_ATTRIBUTE_SEAMS = (
     "_sdk_get_browser_session",
     "_verify_turnstile_token",
     "get_device_code_store",
+    "_client_ip",
+    "delete_user",
+    "get_signup_attempt_store",
+    "get_ip_reputation_cache",
+    "get_ip_reputation_provider",
+    "get_tor_exit_list",
 )
 
 

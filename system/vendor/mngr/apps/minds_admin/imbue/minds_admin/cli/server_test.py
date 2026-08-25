@@ -14,6 +14,7 @@ from imbue.minds_admin.cli.server import _bake_one_slice_with_retry
 from imbue.minds_admin.cli.server import _box_ssh_host_key_options
 from imbue.minds_admin.cli.server import _destroy_one_pool_host
 from imbue.minds_admin.cli.server import _format_capacity_table
+from imbue.minds_admin.cli.server import _is_seed_phase_needed
 from imbue.minds_admin.cli.server import _kill_bake_worker_processes
 from imbue.minds_admin.cli.server import _resolve_vendored_mngr_source
 from imbue.minds_admin.cli.server import _run_bake_attempts
@@ -42,6 +43,7 @@ from imbue.mngr_imbue_cloud.primitives import SliceBakeOutcomeStatus
 from imbue.mngr_imbue_cloud.slices.bare_metal import SLICE_BOOT_DISK_GIB
 from imbue.mngr_imbue_cloud.slices.bare_metal import compute_capacity
 from imbue.mngr_imbue_cloud.slices.bare_metal import slice_lima_disk_name
+from imbue.mngr_imbue_cloud.slices.mock_box_image_cache_test import MockBoxImageCache
 
 
 def _server(
@@ -554,3 +556,24 @@ def test_build_box_tier_audit_report_marks_the_foreign_tier_half_as_unchecked_wi
     # list must not be readable as a clean bill of health.
     report = build_box_tier_audit_report(env_name=None, audits=[], unaudited=[])
     assert not report.is_foreign_tier_checked
+
+
+def test_seed_phase_is_skipped_without_a_cache_tag() -> None:
+    # A plain dev bake (no cache tag) never seeds: every slice builds for itself.
+    assert _is_seed_phase_needed(MockBoxImageCache(), None) is False
+
+
+def test_seed_phase_is_skipped_when_the_box_already_holds_the_tar() -> None:
+    cache = MockBoxImageCache(tars_present={"default-workspace-template:content-abc"})
+    assert _is_seed_phase_needed(cache, "default-workspace-template:content-abc") is False
+
+
+def test_seed_phase_is_skipped_when_another_seeder_holds_the_build_lock() -> None:
+    # E.g. the CI cache pre-warm job is mid-build: the fan-out slices wait on its
+    # tar (or take over via the dead-seeder handoff), so no local seed phase.
+    cache = MockBoxImageCache(locks_held={"default-workspace-template:content-abc"})
+    assert _is_seed_phase_needed(cache, "default-workspace-template:content-abc") is False
+
+
+def test_seed_phase_is_needed_when_the_tag_has_neither_tar_nor_lock() -> None:
+    assert _is_seed_phase_needed(MockBoxImageCache(), "default-workspace-template:content-abc") is True

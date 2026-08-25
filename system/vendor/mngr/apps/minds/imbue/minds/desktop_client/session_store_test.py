@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -77,6 +78,102 @@ def test_invalidate_picks_up_new_account(tmp_path: Path) -> None:
 
     store.invalidate_identity_cache()
     assert {a.email for a in store.list_accounts()} == {"a@b.com", "b@b.com"}
+
+
+def _make_plugin_host_dir(tmp_path: Path) -> tuple[Path, Path]:
+    """Fabricate the mngr host dir layout the plugin keeps its sessions under.
+
+    Returns ``(host_dir, sessions_dir)`` where ``sessions_dir`` is
+    ``<host_dir>/profiles/<profile>/providers/imbue_cloud/sessions`` -- the
+    directory ``mngr imbue_cloud auth signin``/``signout`` write to.
+    """
+    host_dir = tmp_path / "mngr-host"
+    sessions_dir = host_dir / "profiles" / "profile0" / "providers" / "imbue_cloud" / "sessions"
+    sessions_dir.mkdir(parents=True)
+    (host_dir / "config.toml").write_text('profile = "profile0"\n')
+    return host_dir, sessions_dir
+
+
+def test_out_of_band_plugin_signin_surfaces_without_invalidate(tmp_path: Path) -> None:
+    """A CLI signin's on-disk session write refreshes the identity cache on the next read."""
+    host_dir, sessions_dir = _make_plugin_host_dir(tmp_path)
+    cli = make_fake_imbue_cloud_cli()
+    store = make_session_store_for_test(tmp_path / "data", cli=cli, mngr_host_dir=host_dir)
+    assert store.list_accounts() == []
+
+    # The plugin gains an account but nothing on disk changed yet (only the
+    # fake's in-memory listing): the cached empty listing keeps being served.
+    cli.add_account(user_id="user-1", email="cli@example.com")
+    assert store.list_accounts() == []
+
+    # The signin's session-file write is what invalidates the cache.
+    (sessions_dir / "user-1.json").write_text("{}")
+    assert {a.email for a in store.list_accounts()} == {"cli@example.com"}
+
+
+def test_out_of_band_plugin_signout_surfaces_without_invalidate(tmp_path: Path) -> None:
+    """Deleting a session file (CLI signout) drops the account on the next read."""
+    host_dir, sessions_dir = _make_plugin_host_dir(tmp_path)
+    session_file = sessions_dir / "user-1.json"
+    session_file.write_text("{}")
+    cli = make_fake_imbue_cloud_cli()
+    cli.add_account(user_id="user-1", email="cli@example.com")
+    store = make_session_store_for_test(tmp_path / "data", cli=cli, mngr_host_dir=host_dir)
+    assert {a.email for a in store.list_accounts()} == {"cli@example.com"}
+
+    cli.remove_account("user-1")
+    # Disk unchanged: the cache still lists the account.
+    assert {a.email for a in store.list_accounts()} == {"cli@example.com"}
+
+    session_file.unlink()
+    assert store.list_accounts() == []
+
+
+def test_atomic_same_size_same_mtime_rewrite_surfaces(tmp_path: Path) -> None:
+    """An atomic same-size rewrite landing in the same mtime tick still refreshes the cache.
+
+    The plugin writes session files via temp-file-plus-os.replace, so every
+    rewrite mints a new inode even when the payload size is unchanged and the
+    coarse clock hands it the same mtime (forced here via os.utime); the
+    fingerprint's inode component is what catches this case.
+    """
+    host_dir, sessions_dir = _make_plugin_host_dir(tmp_path)
+    session_file = sessions_dir / "user-1.json"
+    session_file.write_text('{"n": 1}')
+    cli = make_fake_imbue_cloud_cli()
+    cli.add_account(user_id="user-1", email="old@example.com")
+    store = make_session_store_for_test(tmp_path / "data", cli=cli, mngr_host_dir=host_dir)
+    assert {a.email for a in store.list_accounts()} == {"old@example.com"}
+
+    original_stats = session_file.stat()
+    cli.remove_account("user-1")
+    cli.add_account(user_id="user-1", email="new@example.com")
+    # Simulate the plugin's atomic rewrite: same name, same size, and (forced)
+    # the exact same mtime -- only the inode differs.
+    replacement = sessions_dir / "user-1.json.tmp"
+    replacement.write_text('{"n": 2}')
+    os.replace(replacement, session_file)
+    os.utime(session_file, ns=(original_stats.st_atime_ns, original_stats.st_mtime_ns))
+    assert session_file.stat().st_size == original_stats.st_size
+    assert {a.email for a in store.list_accounts()} == {"new@example.com"}
+
+
+def test_sessions_dir_appearing_later_is_picked_up(tmp_path: Path) -> None:
+    """A host dir initialized after the store was built still gets the coherence check."""
+    host_dir = tmp_path / "mngr-host"
+    host_dir.mkdir()
+    cli = make_fake_imbue_cloud_cli()
+    # No config.toml yet: the sessions dir cannot be resolved, so the first
+    # read caches against "unresolvable".
+    store = make_session_store_for_test(tmp_path / "data", cli=cli, mngr_host_dir=host_dir)
+    assert store.list_accounts() == []
+
+    sessions_dir = host_dir / "profiles" / "profile0" / "providers" / "imbue_cloud" / "sessions"
+    sessions_dir.mkdir(parents=True)
+    (host_dir / "config.toml").write_text('profile = "profile0"\n')
+    (sessions_dir / "user-1.json").write_text("{}")
+    cli.add_account(user_id="user-1", email="late@example.com")
+    assert {a.email for a in store.list_accounts()} == {"late@example.com"}
 
 
 def test_remove_account_disappears_after_invalidate(tmp_path: Path) -> None:

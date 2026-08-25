@@ -26,6 +26,12 @@ const STROKE_PATHS = {
   // they get different glyphs: a minus puts the tab away and leaves the thing
   // running, an "x" ends it everywhere.
   minus: '<path d="M6 12h12"/>',
+  // A third act between those two, and it gets a third glyph: taking an object
+  // out of ONE project. The bare minus is already "put the tab away", and the
+  // object here keeps running and stays in Everything, so neither that nor the
+  // "x" says it. The ring is what marks it as acting on the filing rather than
+  // on the tab.
+  "minus-circle": '<circle cx="12" cy="12" r="9"/><path d="M8 12h8"/>',
   file: '<path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"/>',
   // Up-arrow, shared by the composer "send" button and the pending-message
   // "interrupt and send now" action.
@@ -65,6 +71,9 @@ const STROKE_PATHS = {
   // Pencil, on the tab menu's Rename row and the project switcher's per-row
   // settings control.
   edit: '<path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/>',
+  // Lucide "folder-plus", on the object menu's "Add to project..." row.
+  "folder-plus":
+    '<path d="M12 10v6"/><path d="M9 13h6"/><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
   // Gear, on the switcher's current-project row: the project you are already in
   // does not need to be offered again, so that row leads to its settings.
   settings:

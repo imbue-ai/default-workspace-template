@@ -112,6 +112,7 @@ export async function signUp(
   password: string,
   turnstileToken: string,
   attribution: SignupAttribution,
+  plan: string,
 ): Promise<AuthResult> {
   const resp = await postJson("/accounts/api/signup", {
     email,
@@ -120,6 +121,7 @@ export async function signUp(
     attribution_page_query: attribution.page_query,
     attribution_page_path: attribution.page_path,
     attribution_next: attribution.next,
+    plan,
   });
   return (await resp.json()) as AuthResult;
 }

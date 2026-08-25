@@ -42,11 +42,30 @@ comparison and removal PRs land).
 - `export ANTHROPIC_API_KEY=sk-ant-...` -- the decider (simulated user), the judge, and the
   credential the driver signs each workspace in with. Set `ANTHROPIC_BASE_URL` alongside it to sign
   workspaces in against a proxy instead of the Anthropic API directly.
-- Always invoke harbor as `uv run harbor` from the monorepo root: harbor is a pinned dependency of
-  this app, which both fixes the version and makes the driver import path resolvable. A bare
-  `uvx harbor` runs in an isolated env that cannot import the monorepo packages.
+- Always invoke harbor as `uv run --project apps/minds_evals harbor` (from the monorepo root; or
+  plain `uv run harbor` from inside this directory). harbor is a pinned dependency of this app,
+  which both fixes the version and makes the driver import path resolvable. A bare `uvx harbor`
+  runs in an isolated env that cannot import this package.
 - The `minds-evals-*` recipes below live in `private.just`, which the root `justfile` imports, so
   grepping `justfile` alone will not find them.
+
+This app is a **standalone uv project**, not a member of the monorepo's uv workspace: it has its
+own `pyproject.toml`, `uv.lock`, and `.venv`. harbor declares `rich>=14.1.0` and `modal>=1.5.1`,
+and the workspace is held at `rich<14` (by `litellm[proxy]`) and `modal==1.4.3` (by
+`imbue-mngr-modal`); uv allows one version per package per workspace, so a separate lock is the
+only way harbor gets the dependencies it declares. Practical consequences:
+
+- `uv sync --all-packages` at the repo root does not install this app; run `uv sync` from this
+  directory (or `just test-minds-evals`, which does it for you).
+- `just test-quick` / `just test-offload` skip this directory, and the root `ty check` skips its
+  modules -- but not `imbue/minds_evals/resources/`, which runs in the box against the monorepo venv
+  and is type-checked by the root workspace for that reason. Its tests
+  and type check run under `just test-minds-evals`, which the `test-minds-evals` CI job invokes on
+  any PR touching this app or the monorepo packages it depends on.
+- `imbue/minds_evals/resources/` and `imbue/minds_evals/templates/` import packages this project
+  deliberately does not depend on (`litellm` and `mngr_forward` in the box, `rewardkit` in the
+  verifier container). They are shipped as source into environments that do have them, so this
+  project's type check and coverage skip both directories.
 
 ## Usage
 
@@ -55,16 +74,16 @@ comparison and removal PRs land).
 just minds-evals-generate apps/mngr_minds_eval/eval-config-small.json /tmp/minds-evals/datasets/small
 
 # 2. Sanity-check the dataset end-to-end with the oracle (canned transcript; no Minds boot)
-uv run harbor run -p /tmp/minds-evals/datasets/small -a oracle -e modal -y -o apps/minds_evals/jobs
+uv run --project apps/minds_evals harbor run -p /tmp/minds-evals/datasets/small -a oracle -e modal -y -o apps/minds_evals/jobs
 
 # 3. Run the real eval (concurrency = simultaneous boxes; set it to the case count for one wave)
 just minds-evals-run /tmp/minds-evals/datasets/small my-eval-run 9
 
 # 4. Browse results
-uv run harbor view -o apps/minds_evals/jobs
+uv run --project apps/minds_evals harbor view -o apps/minds_evals/jobs
 
 # Re-grade finished rollouts without re-running them (needs the task path)
-uv run harbor trial regrade -p /tmp/minds-evals/datasets/small apps/minds_evals/jobs/<job>/<trial>
+uv run --project apps/minds_evals harbor trial regrade -p /tmp/minds-evals/datasets/small apps/minds_evals/jobs/<job>/<trial>
 ```
 
 Each trial boots its own 6-CPU/16-GB box, so a full run is a **scheduled/nightly regression job,
@@ -204,9 +223,9 @@ inside rewardkit.
 
 - The box image build takes 10-20 minutes the first time on Modal's builders, then is layer-cached
   per mngr SHA. Keep per-case data out of `environment/` or the cache key diverges.
-- Debugging: `uv run harbor task start-env -p <task> -e modal -i`, then `modal shell`. The old
-  harness's live noVNC desktop URL does not exist here (harbor's Modal provider opens no tunnels),
-  but the box still runs x11vnc/websockify for in-sandbox use.
+- Debugging: `uv run --project apps/minds_evals harbor task start-env -p <task> -e modal -i`, then
+  `modal shell`. The old harness's live noVNC desktop URL does not exist here (harbor's Modal
+  provider opens no tunnels), but the box still runs x11vnc/websockify for in-sandbox use.
 - Cleanup: the driver destroys its nested workspace sandboxes in a `finally` block
   (`mngr list --ids | mngr destroy - --force`, scoped to the trial's own USER_ID); the nested
   sandboxes' `modal_eval` 3h timeout is the backstop if the runner dies hard.

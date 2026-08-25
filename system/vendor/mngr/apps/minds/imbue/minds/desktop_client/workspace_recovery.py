@@ -1,21 +1,37 @@
-"""Workspace recovery: host-health probe + restart worker.
+"""Workspace recovery: the passive backend verdict + the restart worker.
 
 These are the engine behind the recovery flow (the recovery card's state and its
 host restart action). They are extracted here -- away from :mod:`app` -- so the
 versioned ``/api/v1`` surface (:mod:`api_v1`) can drive them without importing
 :mod:`app` (which would form an import cycle, since ``app`` imports ``api_v1``).
 
-``probe_workspace_health`` composes a :class:`HostHealthResponse` from the
-passive discovery resolver plus a batched in-container ``mngr exec`` probe.
-``run_restart_sequence`` is the background worker body (``mngr stop`` + ``mngr
-start``, then await recovery) that drives both the
+``read_backend_unreachable_verdict`` answers "can minds reach the provider that
+hosts this machine at all?" from evidence already in hand, so a polling surface
+pays nothing for it. ``run_restart_sequence`` is the background worker body
+(``mngr stop`` + ``mngr start``, then await recovery) that drives both the
 :class:`SystemInterfaceHealthTracker` (so the recovery surfaces re-label) and a
 :class:`WorkspaceOperationRegistryInterface` (so the v1
 ``/workspaces/operations/restart/<id>`` resource can report restart status + logs).
+
+The environment signals meet discovery here too. :mod:`environment_signals`
+supplies the raw facts -- has this process been running, can this device reach
+anything -- and is deliberately a leaf that knows nothing of machines or
+providers, so everything that answers one of its questions *from discovery*
+lives on this side of the line: :class:`WorkspaceSshEndpointSource` (the
+endpoints minds itself dials, which is what the SSH facet measures),
+:class:`ProviderErrorConnectivityTrigger` (a provider discovery cannot reach is
+the earliest evidence a cold start on a dead network produces),
+:func:`is_network_dependent_workspace` / :func:`is_network_dependent_provider`
+(the on-device rule that exempts local, docker and lima from all of it), and
+:func:`read_environment_block` (what the recovery surfaces render). They sit
+with the restart paths that consult them: the gate on
+:class:`UnattendedRecoveryDispatcher` is the one place a signal withholds an
+action rather than merely explaining one.
 """
 
+import json
 import os
-import shlex
+import threading
 import time
 from collections.abc import Mapping
 from datetime import datetime
@@ -27,6 +43,7 @@ from typing import Final
 from loguru import logger
 from pydantic import ConfigDict
 from pydantic import Field
+from pydantic import PrivateAttr
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyExceptionGroup
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
@@ -40,31 +57,41 @@ from imbue.minds.desktop_client.agent_creator import probe_workspace_through_plu
 from imbue.minds.desktop_client.backend_resolver import AgentDisplayInfo
 from imbue.minds.desktop_client.backend_resolver import BackendResolverInterface
 from imbue.minds.desktop_client.backend_resolver import MngrCliBackendResolver
-from imbue.minds.desktop_client.forward_cli import EnvelopeStreamConsumer
+from imbue.minds.desktop_client.environment_signals import ConnectivityDetector
+from imbue.minds.desktop_client.environment_signals import EnvironmentBlock
+from imbue.minds.desktop_client.environment_signals import SshEndpoint
+from imbue.minds.desktop_client.mngr_command import format_output_tail
+from imbue.minds.desktop_client.mngr_command import mngr_failure_verdict
 from imbue.minds.desktop_client.provider_display import friendly_provider_label
-from imbue.minds.desktop_client.recovery_probe import DispatchTier
-from imbue.minds.desktop_client.recovery_probe import HostHealthResponse
-from imbue.minds.desktop_client.recovery_probe import build_host_health_response
-from imbue.minds.desktop_client.recovery_probe import build_probe_argv
+from imbue.minds.desktop_client.system_interface_health import AgentHealth
 from imbue.minds.desktop_client.system_interface_health import SystemInterfaceHealthTracker
 from imbue.minds.desktop_client.workspace_lifecycle import HOST_START_TIMEOUT_SECONDS
 from imbue.minds.desktop_client.workspace_lifecycle import HOST_STOP_TIMEOUT_SECONDS
 from imbue.minds.desktop_client.workspace_operations import WorkspaceOperationKind
 from imbue.minds.desktop_client.workspace_operations import WorkspaceOperationRegistryInterface
+from imbue.minds.errors import MindError
 from imbue.minds.errors import MngrCommandError
 from imbue.minds.errors import MngrCommandTimeoutError
 from imbue.mngr.api.discovery_events import DISCOVERY_STREAM_POLL_INTERVAL_SECONDS
 from imbue.mngr.api.discovery_events import DiscoveryError
 from imbue.mngr.errors import HOST_SHUTDOWN_NOT_SUPPORTED_MESSAGE
+from imbue.mngr.errors import MngrError
 from imbue.mngr.errors import parse_provider_unavailable_reason
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import HostState
 from imbue.mngr.primitives import ProviderInstanceName
+from imbue.mngr_forward.data_types import SystemInterfaceBackendFailureReason
 
 # Stand-in provider name for the "Can't connect to ..." headline, for a provider
 # discovery has not named yet (or does not recognise).
 _DEFAULT_PROVIDER_LABEL: Final[str] = "the machine backend"
+# Reason shown for the UNAUTHENTICATED host state. Discovery carries only the
+# host state (``DiscoveredHost`` has no failure_reason field), so there is no
+# provider error to show verbatim; this covers the class of causes instead.
+HOST_ACCESS_REJECTED_REASON: Final[str] = (
+    "This machine's access to the machine host was rejected. You may need to recreate the machine or contact support."
+)
 # How long a single workspace probe through the plugin is allowed to hang.
 # Short and snappy so a wedged workspace doesn't gate the recovery UI.
 _WORKSPACE_PROBE_TIMEOUT_SECONDS: Final[float] = 2.0
@@ -75,12 +102,6 @@ _WORKSPACE_PROBE_TIMEOUT_SECONDS: Final[float] = 2.0
 # restore a workspace from object storage (imbue_cloud), so those steps pass
 # the shared ``workspace_lifecycle`` budgets explicitly.
 _MNGR_COMMAND_TIMEOUT_SECONDS: Final[float] = 120.0
-# Hard timeout for the recovery host-health probe's in-container ``mngr exec``.
-# Far shorter than the default ceiling: this is a *diagnostic* that gates the
-# recovery UI. The exec touches the provider (``get_host`` -> the connector's
-# ~30s httpx) before reaching the container, so it must carry its own 30s-class
-# cap rather than inheriting the 120s default.
-_HOST_HEALTH_PROBE_TIMEOUT_SECONDS: Final[float] = 30.0
 # How long we wait for the system interface to answer again after a restart.
 # ``mngr start`` cold-boots the container, so this waits for exactly the event
 # the create flow's readiness wait already measures -- a cold-booted workspace's
@@ -107,6 +128,255 @@ _RESTART_PROBE_INTERVAL_SECONDS: Final[float] = 1.0
 # :func:`_workspace_provider_poll_interval_seconds`), it stays above the normal
 # inter-snapshot interval to avoid a false "stale" during a single slow poll.
 _DISCOVERY_FRESHNESS_MISSED_SNAPSHOT_COUNT: Final[int] = 3
+# How recent a connectivity reading may be and still answer a gate that is about
+# to withhold a restart. A dropped network wedges every remote workspace on the
+# same probe tick, so their gates arrive together; without this each would queue
+# behind the last and re-measure the same network, putting tens of seconds
+# between the first machine's verdict and the last's. Short enough that the
+# reading still describes the network the decision is being made on.
+_GATE_READING_REUSE_SECONDS: Final[float] = 2.0
+# Provider backends whose machines live on this device. Their workspaces are
+# reachable with the network unplugged, so no connectivity reading ever gates or
+# explains anything about them. Not ``mind_liveness``'s set of the same shape:
+# that one is scoped to backends minds can also shut down, which excludes
+# ``local`` -- and a local workspace is the last one a dead network should be
+# allowed to withhold a restart from.
+_ON_DEVICE_PROVIDER_BACKENDS: Final[frozenset[str]] = frozenset({"local", "docker", "lima"})
+
+
+class WorkspaceSshEndpointSource(MutableModel):
+    """Supplies the connectivity detector with the SSH endpoints minds actually dials.
+
+    The detector needs to know whether *this device* can open the connections
+    minds depends on, and those are not on port 22: each machine's host is
+    reached on whatever port its provider forwarded, which for imbue_cloud is a
+    box-forwarded port in the 22000-32000 range. Discovery already reports the
+    real coordinate per agent -- it is the same one the recovery card renders as
+    a copy-pasteable ``ssh`` command -- so this hands it over rather than
+    guessing.
+
+    Read fresh on every call: a probe taken minutes later must ask about the
+    machines that exist then. Deduped, because the agents on one host share its
+    endpoint and probing it three times measures nothing extra.
+
+    Machines on a backend that runs on this device are left out. Discovery
+    reports SSH info for them like any other host -- a docker container is
+    reached at ``127.0.0.1`` on the port its daemon mapped, not through some
+    local channel -- and an endpoint that answers with the wifi off cannot say
+    anything about the network. Handing one over would settle the SSH facet as
+    reachable on every probe, which is the facet reading the whole
+    incompatible-network verdict rests on.
+
+    Endpoints on hosts discovery reports as RUNNING come first, because the
+    detector samples only the first few and one endpoint answering settles the
+    facet. A host that is stopped, crashed, or in a state discovery has not
+    reported cannot answer whatever the network is doing, so sampling it spends
+    part of a bounded sample on a question it cannot resolve -- and every
+    sampled endpoint failing is what sends the facet to the public quorum, where
+    a network that blocks port 22 in particular then reads as blocking SSH
+    outright and withholds a restart the machine may genuinely need. Ordering
+    rather than filtering: on a dead network discovery goes stale too, so a
+    reading taken when nothing is known to be running must still be able to ask
+    about something.
+    """
+
+    backend_resolver: BackendResolverInterface = Field(frozen=True, description="Discovery's view of the machines.")
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    def __call__(self) -> tuple[SshEndpoint, ...]:
+        endpoints_on_running_hosts: list[SshEndpoint] = []
+        other_endpoints: list[SshEndpoint] = []
+        for agent_id in self.backend_resolver.list_known_agent_ids():
+            if not is_network_dependent_workspace(self.backend_resolver, agent_id):
+                continue
+            ssh_info = self.backend_resolver.get_ssh_info(agent_id)
+            if ssh_info is None:
+                continue
+            endpoint = SshEndpoint(host=ssh_info.host, port=ssh_info.port)
+            if endpoint in endpoints_on_running_hosts or endpoint in other_endpoints:
+                continue
+            if self._is_host_running(agent_id):
+                endpoints_on_running_hosts.append(endpoint)
+            else:
+                other_endpoints.append(endpoint)
+        return tuple(endpoints_on_running_hosts) + tuple(other_endpoints)
+
+    def _is_host_running(self, agent_id: AgentId) -> bool:
+        """Whether discovery reports this agent's host as RUNNING right now.
+
+        False for every other answer, including the unknown ones: this only
+        decides which endpoints are asked first, so a host discovery cannot
+        currently describe simply loses its head start.
+        """
+        display_info = self.backend_resolver.get_agent_display_info(agent_id)
+        if display_info is None:
+            return False
+        return read_host_state(self.backend_resolver, display_info) is HostState.RUNNING
+
+
+class ProviderErrorConnectivityTrigger(MutableModel):
+    """Probes the device when discovery reports a provider it cannot reach.
+
+    The gate on the STUCK edge only ever asks about the network once a *machine*
+    has been convicted, and a machine can only be convicted once something has
+    tried to reach it. That leaves the case this exists for: minds opened on a
+    dead network. Discovery's first poll of a remote provider fails immediately,
+    the machines list renders rows nobody can reach, and until the user clicks
+    into one there is nothing to convict and so nothing to say -- which is
+    precisely when they most need telling that the problem is their wifi.
+
+    A remote provider erroring is the earliest evidence available, and it costs
+    nothing to act on: the probe answers the question the user is about to ask,
+    and a healthy answer settles it. Local backends are ignored -- a stopped
+    docker daemon errors the same way and says nothing about the network.
+
+    Registered on the resolver's change callbacks, which fire on every discovery
+    event, so the probe is taken on a worker (it blocks for seconds) and once
+    per *episode* rather than once per event. The episode is the set of errored
+    network-dependent providers: a provider can stay errored for the life of the
+    app for reasons of its own -- a revoked token, a backend outage of its own --
+    and re-measuring on every event would make this a background network poll,
+    which is precisely what the detector does not do. One probe answers the
+    question; if the answer is bad, the detector's own watching loop takes over
+    the re-probing until it clears. Nothing here reads the result: the detector
+    publishes it.
+    """
+
+    backend_resolver: BackendResolverInterface = Field(frozen=True, description="Discovery's view of the providers.")
+    connectivity_detector: ConnectivityDetector = Field(frozen=True, description="Detector to ask.")
+    concurrency_group: ConcurrencyGroup = Field(frozen=True, description="Parent group for the probe worker.")
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
+    # Whether a probe worker is already in flight. The resolver fires far faster
+    # than a probe completes, and every one of those events reports the same
+    # provider error; without this they would queue on the detector's probe lock.
+    _is_probe_in_flight: bool = PrivateAttr(default=False)
+    # The errored network-dependent providers the last probe was taken for, or
+    # None while none are erroring. Keyed on the set rather than a bare flag so a
+    # second provider going dark -- which is what a network dying underneath an
+    # already-broken one looks like -- is new evidence and gets its own probe.
+    _measured_provider_errors: frozenset[ProviderInstanceName] | None = PrivateAttr(default=None)
+
+    def __call__(self) -> None:
+        errored_providers = self._unreachable_remote_providers()
+        if not errored_providers:
+            with self._lock:
+                self._measured_provider_errors = None
+            return
+        with self._lock:
+            if self._is_probe_in_flight or errored_providers == self._measured_provider_errors:
+                return
+            self._is_probe_in_flight = True
+            self._measured_provider_errors = errored_providers
+        try:
+            self.concurrency_group.start_new_thread(
+                target=self._probe_once,
+                name="connectivity-provider-error-probe",
+                daemon=True,
+                is_checked=False,
+            )
+        # An exited or shutting-down group raises one of these; this runs on the
+        # resolver's callback thread, so an escape would take that with it.
+        except (OSError, RuntimeError, ConcurrencyGroupError, ConcurrencyExceptionGroup) as exc:
+            # The episode goes back to unmeasured with the flag: a probe that
+            # never ran must not latch the errors it was going to ask about.
+            with self._lock:
+                self._is_probe_in_flight = False
+                self._measured_provider_errors = None
+            # Warning, like the gate's own spawn failure: this trigger is the only
+            # thing that raises the app-level notice on a cold start over a dead
+            # network, and it says nothing on its success path -- so at debug level
+            # a bundle could not tell a failed probe from one that never fired.
+            logger.warning("Could not start the provider-error connectivity probe: {}", exc)
+
+    def _probe_once(self) -> None:
+        """Worker body: measure the device once for this episode of provider errors.
+
+        Fenced with the families ``probe_now`` can reach here with -- the same
+        ones ``ConnectivityDetector.run_background_loop`` names for the same
+        call. A probe that raised leaves the episode unmeasured, so it is
+        un-latched with the in-flight flag rather than left recorded as asked:
+        this trigger is the only thing that raises the app-level notice on a
+        cold start over a dead network, and latching an episode nothing measured
+        would leave the hub pages silent for the rest of it.
+        """
+        is_measured = False
+        try:
+            self.connectivity_detector.probe_now(max_reuse_age_seconds=_GATE_READING_REUSE_SECONDS)
+            is_measured = True
+        except (
+            MindError,
+            MngrError,
+            OSError,
+            RuntimeError,
+            ValueError,
+            ConcurrencyGroupError,
+            ConcurrencyExceptionGroup,
+        ) as exc:
+            logger.opt(exception=exc).warning("The provider-error connectivity probe failed: {}", exc)
+        finally:
+            with self._lock:
+                self._is_probe_in_flight = False
+                if not is_measured:
+                    self._measured_provider_errors = None
+
+    def _unreachable_remote_providers(self) -> frozenset[ProviderInstanceName]:
+        """The providers discovery is reporting an error for that need the network."""
+        return frozenset(
+            provider_name
+            for provider_name in self.backend_resolver.get_provider_errors()
+            if is_network_dependent_provider(self.backend_resolver, provider_name)
+        )
+
+
+def is_network_dependent_workspace(backend_resolver: BackendResolverInterface, agent_id: AgentId) -> bool:
+    """Whether reaching this workspace requires the device to have a working network.
+
+    Workspaces on a backend that runs on this device (``local``, ``docker``,
+    ``lima``) are reachable over loopback with the wifi off, so a connectivity
+    reading has nothing to say about them: it must never withhold their restart,
+    and must never be offered as the explanation for their failure.
+
+    Everything else answers True, including a workspace whose provider or
+    backend cannot be identified. That is the conservative direction for this
+    question and only for this question: a wrong True can at most delay an
+    unattended restart until a probe confirms the network is fine (and that
+    probe is what the caller is about to run anyway), whereas a wrong False
+    would restore exactly the doomed-dispatch behaviour this exists to prevent.
+    Nothing here suppresses anything on its own -- a confirmed-bad reading is
+    still required for that.
+    """
+    if not isinstance(backend_resolver, MngrCliBackendResolver):
+        return True
+    display_info = backend_resolver.get_agent_display_info(agent_id)
+    if display_info is None or display_info.provider_name is None:
+        return True
+    return is_network_dependent_provider(backend_resolver, ProviderInstanceName(display_info.provider_name))
+
+
+def is_network_dependent_provider(
+    backend_resolver: BackendResolverInterface, provider_name: ProviderInstanceName
+) -> bool:
+    """Whether reaching this provider's machines requires the device to have a working network.
+
+    The provider-level half of :func:`is_network_dependent_workspace`, split out
+    because one caller starts from a provider rather than a machine: a provider
+    discovery reports as unreachable is evidence about the network *before* any
+    machine has been convicted, which is the only evidence a cold start on a
+    dead network produces.
+
+    Answers True for a provider it cannot identify, for the same reason and with
+    the same safety as the per-workspace form: a wrong True costs one probe.
+    """
+    if not isinstance(backend_resolver, MngrCliBackendResolver):
+        return True
+    for provider in backend_resolver.list_providers():
+        if provider.provider_name == provider_name:
+            return str(provider.config.backend) not in _ON_DEVICE_PROVIDER_BACKENDS
+    return True
 
 
 def _is_discovery_fresh(last_snapshot_at: datetime | None, poll_interval_seconds: float) -> bool:
@@ -253,6 +523,7 @@ def _report_restart_step_failure(
     tracker: SystemInterfaceHealthTracker,
     backend_resolver: BackendResolverInterface,
     registry: WorkspaceOperationRegistryInterface,
+    connectivity_detector: ConnectivityDetector | None,
 ) -> None:
     """End the restart on a failed step, naming the backend when that is the real cause.
 
@@ -267,6 +538,17 @@ def _report_restart_step_failure(
     discovery snapshot that carries the same outage is up to a provider poll
     interval behind it. Recorded before the RESTART_FAILED transition below, so
     the surfaces that re-derive on that edge already see it.
+
+    A step that failed because this *device* is offline (or on a network that
+    blocks SSH) reports at warning rather than error. The state it sets is
+    unchanged -- RESTART_FAILED is truthful, and the user can retry it -- but
+    error level is what reaches error reporting, and there is nothing there to
+    report: the command was always going to fail, nobody can act on it, and the
+    report's own log upload would be making the same doomed network call. The
+    reading is read here rather than passed in, so it is the latest the detector
+    has rather than whatever was known when the restart began -- but it is the
+    *cached* reading, not a fresh probe, so a network that dropped since the
+    last probe still reads clear and the failure is reported as any other.
     """
     display_info = backend_resolver.get_agent_display_info(workspace_agent_id)
     provider_name = display_info.provider_name if display_info is not None else None
@@ -277,28 +559,147 @@ def _report_restart_step_failure(
         if reason is not None:
             tracker.record_backend_outage(workspace_agent_id, provider_name, reason)
             message = f"This machine's backend is unreachable, so the restart could not run: {reason}"
+    device_block = read_environment_block(connectivity_detector, backend_resolver, workspace_agent_id)
+    is_blocked_by_device = device_block is not EnvironmentBlock.NONE
+    if is_blocked_by_device:
+        verdict = f"this device is {device_block.value}"
+    elif reason is not None:
+        verdict = "reported as a backend outage"
+    else:
+        verdict = "reported as a failed step"
     # Which verdict the user was shown, alongside what the command actually
     # printed. The two now differ -- that difference is the whole verdict -- and
     # the raw output is still what a failure nobody anticipated is diagnosed from.
-    logger.error(
-        "{} step of host restart for {} failed ({}): {}",
+    # The subprocess's captured output tail is appended to this same (single)
+    # log record -- reaching minds.log, and error reporting when the record is
+    # an error -- rather than carried in the user-facing message above.
+    logger.log(
+        "WARNING" if is_blocked_by_device else "ERROR",
+        "{} step of host restart for {} failed ({}): {}{}",
         step_label,
         workspace_agent_id,
-        "reported as a backend outage" if reason is not None else "reported as a failed step",
+        verdict,
         exc,
+        "" if exc.output_tail is None else f"\nsubprocess output:\n{exc.output_tail}",
     )
     tracker.mark_restart_failed(workspace_agent_id, message)
     registry.fail(workspace_agent_id, message)
 
 
-def _build_mngr_stop_argv(mngr_binary: str, agent_id: AgentId) -> list[str]:
-    """Build the argv for ``mngr stop`` on ``agent_id``, stopping its host with it."""
-    return [mngr_binary, "stop", str(agent_id), "--quiet", "--stop-host"]
+def read_environment_block(
+    connectivity_detector: ConnectivityDetector | None,
+    backend_resolver: BackendResolverInterface,
+    workspace_agent_id: AgentId,
+) -> EnvironmentBlock:
+    """The device-level condition that explains this workspace being unreachable, if any.
+
+    Both halves are required: a confirmed-bad reading, and a workspace that
+    actually needs the network to be reached. A docker container on this laptop
+    is reachable with the wifi off, so a dead network explains nothing about it
+    and must not soften how its failures are reported.
+
+    Reads the cached reading rather than probing. No caller is in a position to
+    block for seconds -- they are reporting a failure, or answering a UI poll,
+    or have just probed on the gate -- and an ``UNKNOWN`` cache answers NONE,
+    which is the no-op.
+    """
+    if connectivity_detector is None:
+        return EnvironmentBlock.NONE
+    if not is_network_dependent_workspace(backend_resolver, workspace_agent_id):
+        return EnvironmentBlock.NONE
+    return connectivity_detector.get_reading().environment_block
 
 
-def _build_mngr_start_argv(mngr_binary: str, agent_id: AgentId) -> list[str]:
-    """Build the argv for ``mngr start`` on ``agent_id`` (also starts the host if it is stopped)."""
-    return [mngr_binary, "start", str(agent_id), "--quiet"]
+def _build_restart_agent_address(agent_id: AgentId, workspace_display_info: AgentDisplayInfo | None) -> str:
+    """Render ``agent_id`` as ``AGENT@HOST.PROVIDER`` when discovery can supply both components.
+
+    A provider-qualified address is what restricts ``mngr``'s discovery to the
+    one provider that can host this agent (see ``find_all_agents``, which queries
+    every configured provider unless every address pins one). Unpinned, a restart
+    pays for every provider the user has configured, and a provider that is
+    merely unreachable -- a stopped Docker daemon, an account this device cannot
+    currently reach -- is enough to fail it: when the agent goes unmatched,
+    ``mngr`` reports the first unavailable provider as the reason, whether or not
+    that provider could ever have hosted the agent.
+
+    ``workspace_display_info`` describes the *workspace* agent rather than the
+    system-services agent this address names. The two share a host by
+    construction (they run in the same container), and the workspace agent is the
+    one whose display info survives a lifecycle transition, so it is the more
+    reliable source of the same coordinate.
+
+    Falls back to the bare id when discovery supplies no ``host-`` coordinate or
+    no provider name. Unpinned is what shipped, so the fallback costs the
+    scoping and nothing else -- a restart must not fail for want of a qualifier.
+    """
+    if workspace_display_info is None or workspace_display_info.provider_name is None:
+        return str(agent_id)
+    host_id = str(workspace_display_info.host_id)
+    # The resolver's placeholder host id ("localhost") is not a routable
+    # coordinate, and only the real host-<hex> shape parses as a HostId.
+    if not host_id.startswith("host-"):
+        return str(agent_id)
+    return f"{agent_id}@{host_id}.{workspace_display_info.provider_name}"
+
+
+def _build_mngr_stop_argv(mngr_binary: str, agent_address: str) -> list[str]:
+    """Build the argv for ``mngr stop`` on ``agent_address``, stopping its host with it.
+
+    ``-v`` (DEBUG console logging to stderr) instead of ``--quiet``: the output
+    goes to the capture pipe, not a terminal, and it is the per-step timeline
+    that makes a killed-on-timeout command diagnosable (see ``output_tail`` on
+    ``MngrCommandError``). ``--quiet`` here is what left every production start
+    timeout a black box. The timeline stays on that tail and off the error
+    message, which ``mngr_failure_verdict`` narrows to mngr's verdict alone.
+    """
+    return [mngr_binary, "stop", agent_address, "-v", "--stop-host"]
+
+
+def _build_mngr_start_argv(mngr_binary: str, agent_address: str) -> list[str]:
+    """Build the argv for ``mngr start`` on ``agent_address`` (also starts the host if it is stopped).
+
+    ``-v`` instead of ``--quiet`` for the same reason as ``_build_mngr_stop_argv``.
+
+    Structured output because the restart needs one thing the human output does
+    not carry: whether a host was actually booted. The two flags act on separate
+    streams and do not fight: ``--format json`` writes the one result line to
+    stdout and suppresses the human lines entirely, while all of mngr's logging
+    -- everything ``-v`` widens -- goes to stderr.
+    """
+    return [mngr_binary, "start", agent_address, "-v", "--format", "json"]
+
+
+def _did_start_boot_a_host(stdout: str) -> bool | None:
+    """Read ``was_host_started`` out of ``mngr start --format json``'s result line, or None.
+
+    ``--format json`` writes exactly one result object to stdout (its logging
+    goes to stderr), so the last non-empty line is the whole contract.
+
+    None means the output did not answer, which is not the same as answering
+    "nothing booted": an ``mngr`` on PATH too old to report the field leaves the
+    question open, and a caller must keep its restart framing rather than
+    reading silence as a no-op. Because that silently disables the no-op
+    detection for every restart, it is logged rather than passed over.
+    """
+    last_line = next((line for line in reversed(stdout.splitlines()) if line.strip()), "")
+    try:
+        parsed = json.loads(last_line)
+    except json.JSONDecodeError as exc:
+        logger.warning(
+            "Could not read `mngr start`'s result line, so a start that booted nothing cannot be told "
+            "from one that did ({}): {!r}",
+            exc,
+            last_line[:200],
+        )
+        return None
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("was_host_started"), bool):
+        logger.warning(
+            "`mngr start` reported no was_host_started, so a start that booted nothing cannot be told "
+            "from one that did: {!r}",
+            last_line[:200],
+        )
+        return None
+    return bool(parsed["was_host_started"])
 
 
 def _run_mngr(
@@ -315,7 +716,13 @@ def _run_mngr(
     """
     stdout, returncode, stderr = _run_mngr_capturing(concurrency_group, argv, env, timeout_seconds=timeout_seconds)
     if returncode != 0:
-        raise MngrCommandError(f"exited {returncode}: {stderr.strip()}")
+        # Only mngr's verdict rides the message (see ``mngr_failure_verdict``);
+        # the timeline it printed getting there rides the tail, exactly as the
+        # timeout path below does.
+        raise MngrCommandError(
+            f"exited {returncode}: {mngr_failure_verdict(stderr)}",
+            output_tail=format_output_tail(stdout, stderr),
+        )
     return stdout
 
 
@@ -345,7 +752,13 @@ def _run_mngr_capturing(
         # wrap it as the single MngrCommandError they already catch.
         raise MngrCommandError(str(exc)) from exc
     if finished.is_timed_out:
-        raise MngrCommandTimeoutError(f"timed out after {int(timeout_seconds)}s")
+        # A killed subprocess never printed a verdict, so its captured output is
+        # the only record of which step it died in; carry it on the error
+        # (bounded, out of the message) instead of discarding it.
+        raise MngrCommandTimeoutError(
+            f"timed out after {int(timeout_seconds)}s",
+            output_tail=format_output_tail(finished.stdout, finished.stderr),
+        )
     # A finished, non-timed-out process always carries a returncode; the Optional
     # is for the not-yet-finished case, which this branch has ruled out.
     returncode = finished.returncode if finished.returncode is not None else 1
@@ -446,6 +859,7 @@ def dispatch_host_restart(
     mngr_forward_port: int,
     mngr_forward_preauth_cookie: str | None,
     skip_stop: bool,
+    connectivity_detector: ConnectivityDetector | None = None,
 ) -> RestartDispatchOutcome:
     """Claim the restart for ``workspace_agent_id`` and spawn its worker.
 
@@ -504,6 +918,7 @@ def dispatch_host_restart(
                 "mngr_forward_preauth_cookie": mngr_forward_preauth_cookie,
                 "registry": registry,
                 "skip_stop": skip_stop,
+                "connectivity_detector": connectivity_detector,
             },
             name=f"workspace-restart-{workspace_agent_id}",
             daemon=True,
@@ -545,6 +960,23 @@ class UnattendedRecoveryDispatcher(MutableModel):
     unattended dispatch can never bounce a live container out from under
     someone. Bouncing a running-but-wedged machine stays a decision the user
     makes, on the recovery card.
+
+    A machine on the far side of a network this device cannot use is the one
+    case where the dispatch is withheld rather than run. Every remote machine
+    goes STUCK together when the wifi drops, and every ``mngr start`` aimed at
+    them fails at DNS -- turning one local condition into a burst of
+    RESTART_FAILED cards, each with an error report of its own. So a
+    network-dependent workspace's dispatch first asks the device whether it can
+    reach anything, and on a confirmed no it remembers the machine as owed (the
+    card and band read the same condition off the detector's published state).
+    The owed dispatches run when connectivity comes back, for whichever
+    machines are still stuck by then.
+
+    The gate deliberately runs off the stuck-edge thread. That edge is fired
+    from the health probe loop, which every other workspace's probing is queued
+    behind, and the connectivity probe costs seconds; the wait happens on a
+    one-shot worker instead. Nothing is lost by the delay -- the machine is
+    already stuck, and ``mngr start`` is idempotent.
     """
 
     tracker: SystemInterfaceHealthTracker = Field(frozen=True, description="Tracker whose edges drive this.")
@@ -555,8 +987,25 @@ class UnattendedRecoveryDispatcher(MutableModel):
     mngr_host_dir: Path = Field(frozen=True, description="MNGR_HOST_DIR for the restart's mngr calls.")
     mngr_forward_port: int = Field(frozen=True, description="Forward port used to probe for recovery.")
     mngr_forward_preauth_cookie: str | None = Field(frozen=True, description="Preauth cookie for that probe.")
+    connectivity_detector: ConnectivityDetector | None = Field(
+        default=None,
+        frozen=True,
+        description=(
+            "Answers whether this device can reach anything, so a dispatch that would fail for "
+            "local reasons is withheld and owed instead. None dispatches unconditionally, which "
+            "is the behaviour without any environment signals at all."
+        ),
+    )
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    # Machines whose unattended start was withheld because this device could not
+    # reach anything, held until it can. Per-process and deliberately small: it
+    # is a list of restarts the app owes right now, not a history, and a quit
+    # takes it with it (a machine still down at the next launch is picked up by
+    # session restore, which starts it as a matter of course).
+    _owed_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
+    _owed_agent_ids: set[str] = PrivateAttr(default_factory=set)
 
     def __call__(self, agent_id: AgentId) -> None:
         # A machine the user stopped is unreachable on purpose. Starting it
@@ -565,6 +1014,139 @@ class UnattendedRecoveryDispatcher(MutableModel):
         if self.tracker.is_unattended_recovery_suppressed(agent_id):
             logger.info("Not auto-starting {}: it was stopped from inside the app", agent_id)
             return
+        detector = self.connectivity_detector
+        if detector is None or not is_network_dependent_workspace(self.backend_resolver, agent_id):
+            self._dispatch(agent_id)
+            return
+        # The reading this needs takes seconds to establish, and this call is on
+        # the probe loop's thread. Hand the whole decision to a worker, along
+        # with the detector it is to consult -- which is what keeps "the gate
+        # ran with nothing to ask" out of the worker's reach entirely.
+        try:
+            self.concurrency_group.start_new_thread(
+                target=self._dispatch_once_connectivity_is_known,
+                args=(agent_id, detector),
+                name=f"unattended-recovery-gate-{agent_id}",
+                daemon=True,
+                is_checked=False,
+            )
+        # Same two families ``dispatch_host_restart`` names: an exited group
+        # raises ConcurrencyGroupError, one that is shutting down (or already
+        # has a failed checked strand) raises ConcurrencyExceptionGroup. An
+        # escape here would kill the probe thread this runs on.
+        except (OSError, RuntimeError, ConcurrencyGroupError, ConcurrencyExceptionGroup) as exc:
+            # Nothing to recover into: the group can no longer run work, which
+            # means the app is on its way down.
+            logger.warning("Could not start the connectivity gate for {}: {}", agent_id, exc)
+
+    def _dispatch_once_connectivity_is_known(self, agent_id: AgentId, detector: ConnectivityDetector) -> None:
+        """Worker body: probe the device, then either dispatch or record the start as owed.
+
+        The detector is handed in rather than read off the field, so the reading
+        is always a real one: a caller with none dispatched inline and never
+        spawned this.
+
+        The reading costs seconds, and the machine can move out from under them,
+        so both conditions are read here rather than trusted from before the
+        probe -- the same two, in the same order, that
+        :meth:`on_connectivity_recovered` re-reads before it dispatches an owed
+        start. A stop or a destroy marks the machine *before* its own command
+        runs, precisely so this dispatch cannot undo it, and a destroy takes no
+        operation slot for the dispatch to lose; a machine a restart has already
+        claimed is being handled by whatever claimed it.
+        """
+        try:
+            block = detector.probe_now(max_reuse_age_seconds=_GATE_READING_REUSE_SECONDS).environment_block
+        # The group refusing the SSH round is the spawn failure one frame later,
+        # and gets the same answer for the same reason: it only refuses once the
+        # app is going down, so there is nothing left to dispatch onto -- and a
+        # dispatch that then loses its own spawn would report a RESTART_FAILED,
+        # at error level, on the way out.
+        except (ConcurrencyGroupError, ConcurrencyExceptionGroup) as exc:
+            logger.warning("Dropping the gated start of {}: the group can no longer probe: {}", agent_id, exc)
+            return
+        # Everything else the probe reaches is the walk behind its endpoints, on
+        # an app that is otherwise fine. A reading that could not be taken is no
+        # evidence, and no evidence suppresses nothing here -- the same answer a
+        # wake-disqualified probe hands back. Withholding instead would strand
+        # the machine: the owed set is drained by a connectivity recovery, and a
+        # probe that never landed can produce no such edge.
+        except (MindError, MngrError, OSError, RuntimeError, ValueError) as exc:
+            logger.opt(exception=exc).warning(
+                "The connectivity gate's probe for {} failed; dispatching as though the device were fine: {}",
+                agent_id,
+                exc,
+            )
+            block = EnvironmentBlock.NONE
+        if self.tracker.get_health(agent_id) is not AgentHealth.STUCK:
+            logger.info("Dropping the gated start of {}: it is no longer stuck", agent_id)
+            return
+        if self.tracker.is_unattended_recovery_suppressed(agent_id):
+            logger.info("Dropping the gated start of {}: it was stopped from inside the app", agent_id)
+            return
+        if block is EnvironmentBlock.NONE:
+            self._dispatch(agent_id)
+            return
+        with self._owed_lock:
+            self._owed_agent_ids.add(str(agent_id))
+        logger.info(
+            "Withholding the unattended start of {}: this device is {}. It is owed until connectivity returns",
+            agent_id,
+            block.value,
+        )
+        # A recovery that landed while the lines above ran drained an owed set
+        # this machine had not joined yet, and no second one is coming: the
+        # detector fires on the bad -> good edge alone and stops probing at it,
+        # so the machine would sit STUCK behind a device condition that no
+        # longer holds, with nothing to clear it. Draining again here is the
+        # remedy. The question is whether an edge is still to come rather than
+        # whether the reading currently reads clear, because a wake blanks the
+        # reading to UNKNOWN while leaving the watch on -- and a machine whose
+        # gate happened to be interrupted by one must stay owed rather than be
+        # released onto a network nothing has looked at. Reaching here at all
+        # means this gate's own probe stored a bad reading (a disqualified one
+        # answers UNKNOWN, whose block is NONE, and takes the dispatch path), so
+        # the watch is off only if a recovery took it off.
+        if not detector.is_watching_for_recovery():
+            self.on_connectivity_recovered()
+
+    def on_connectivity_recovered(self) -> None:
+        """Run the starts withheld while this device could not reach anything.
+
+        Registered as the detector's recovery callback. Only machines that are
+        *still* stuck are started: one that answered again in the meantime (the
+        outage was the network the whole time, so most of them will have) needs
+        nothing, and one that has moved on to RESTARTING or RESTART_FAILED is
+        already being handled by whatever moved it.
+        """
+        with self._owed_lock:
+            owed_agent_ids = sorted(self._owed_agent_ids)
+            self._owed_agent_ids.clear()
+        for aid_str in owed_agent_ids:
+            # Per machine, because the set was cleared before any of it ran and
+            # the detector has already stopped watching: one release raising
+            # would otherwise leave every machine after it stuck behind a
+            # waiting-for-network card, on a working network, with nothing left
+            # to come back for them. The two families are the ones a restart's
+            # registry and tracker calls raise -- the same pair the detector's
+            # own callback fence names.
+            try:
+                self._release_owed_start(AgentId(aid_str))
+            except (MindError, MngrError) as exc:
+                logger.opt(exception=exc).warning("The owed start of {} could not be released: {}", aid_str, exc)
+
+    def _release_owed_start(self, agent_id: AgentId) -> None:
+        """Start one owed machine, if it still needs and may take a start."""
+        if self.tracker.get_health(agent_id) is not AgentHealth.STUCK:
+            logger.info("Dropping the owed start of {}: it is no longer stuck", agent_id)
+            return
+        if self.tracker.is_unattended_recovery_suppressed(agent_id):
+            logger.info("Dropping the owed start of {}: it was stopped from inside the app", agent_id)
+            return
+        self._dispatch(agent_id)
+
+    def _dispatch(self, agent_id: AgentId) -> None:
+        """Run the start-only restart and report which of the dispatch outcomes it hit."""
         outcome = dispatch_host_restart(
             workspace_agent_id=agent_id,
             tracker=self.tracker,
@@ -576,6 +1158,7 @@ class UnattendedRecoveryDispatcher(MutableModel):
             mngr_forward_port=self.mngr_forward_port,
             mngr_forward_preauth_cookie=self.mngr_forward_preauth_cookie,
             skip_stop=True,
+            connectivity_detector=self.connectivity_detector,
         )
         logger.info("Unattended recovery for {}: {}", agent_id, outcome.value)
 
@@ -592,6 +1175,7 @@ def run_restart_sequence(
     registry: WorkspaceOperationRegistryInterface,
     skip_stop: bool = False,
     startup_wait_seconds: float = _HOST_RESTART_STARTUP_WAIT_SECONDS,
+    connectivity_detector: ConnectivityDetector | None = None,
 ) -> None:
     """Background worker: stop + start the workspace's host, then await recovery.
 
@@ -605,7 +1189,14 @@ def run_restart_sequence(
 
     Every RESTART_FAILED transition also logs at error level: the recovery
     surface is quiet (Principle 3), so a failed restart must reach error
-    reporting even though the card renders it for the user. That is also why the
+    reporting even though the card renders it for the user. The exception is the
+    two endings that route over the network -- a step that errored, and a
+    readiness wait that timed out -- while this device is confirmed offline or on
+    a network that blocks SSH: those log at warning instead, since the state is
+    still RESTART_FAILED but the failure was doomed by something no error report
+    can act on (see :func:`_report_restart_step_failure`). The endings that
+    describe discovery losing a coordinate keep their error level, network or
+    no: nothing about the device explains them. That is also why the
     readiness wait is given a full cold-boot budget: below it, a restart that was
     merely slow reports itself as a failure, to the user and to error reporting
     alike. A shutdown that truncates the wait is the one ending that yields no
@@ -629,6 +1220,13 @@ def run_restart_sequence(
         registry.fail(workspace_agent_id, message)
         return
 
+    # Read before the stop step, so both commands address the same machine. The
+    # post-restart read further down is a separate question (where the machine
+    # ended up) and deliberately takes its own, later snapshot.
+    services_agent_address = _build_restart_agent_address(
+        services_agent_id, backend_resolver.get_agent_display_info(workspace_agent_id)
+    )
+
     env = dict(os.environ)
     env["MNGR_HOST_DIR"] = str(mngr_host_dir)
 
@@ -640,7 +1238,7 @@ def run_restart_sequence(
         try:
             _run_mngr(
                 concurrency_group,
-                _build_mngr_stop_argv(mngr_binary, services_agent_id),
+                _build_mngr_stop_argv(mngr_binary, services_agent_address),
                 env,
                 timeout_seconds=HOST_STOP_TIMEOUT_SECONDS,
             )
@@ -670,14 +1268,15 @@ def run_restart_sequence(
                     tracker=tracker,
                     backend_resolver=backend_resolver,
                     registry=registry,
+                    connectivity_detector=connectivity_detector,
                 )
                 return
 
     registry.append_log(workspace_agent_id, "Starting the system-services agent.")
     try:
-        _run_mngr(
+        start_stdout = _run_mngr(
             concurrency_group,
-            _build_mngr_start_argv(mngr_binary, services_agent_id),
+            _build_mngr_start_argv(mngr_binary, services_agent_address),
             env,
             timeout_seconds=HOST_START_TIMEOUT_SECONDS,
         )
@@ -689,8 +1288,20 @@ def run_restart_sequence(
             tracker=tracker,
             backend_resolver=backend_resolver,
             registry=registry,
+            connectivity_detector=connectivity_detector,
         )
         return
+
+    # A start that booted no host is the whole reason this reads its output. It
+    # is not a failure -- the start is idempotent by design, and a host that was
+    # already running needed nothing -- and it means the machine never went down
+    # and came back, so the surfaces must stop describing this episode as a
+    # restart of it. (It does not mean the start did nothing: an agent whose
+    # session had died is relaunched either way. Only the host is in question.)
+    if _did_start_boot_a_host(start_stdout) is False:
+        logger.info("Start step of host restart for {} booted nothing; the host was already up", workspace_agent_id)
+        registry.append_log(workspace_agent_id, "The machine was already running; it was not restarted.")
+        tracker.record_restart_started_nothing(workspace_agent_id)
 
     # Without a plugin route there is no way to probe for recovery, so treat a
     # clean dispatch as success (mirrors the background probe loop being a no-op).
@@ -734,7 +1345,23 @@ def run_restart_sequence(
         logger.info("Host restart of {} was cut short by shutdown before the interface answered", workspace_agent_id)
     else:
         message = f"The system interface did not respond within {int(startup_wait_seconds)}s of the host restart."
-        logger.error("Host restart of {} failed: {}", workspace_agent_id, message)
+        # Warning while this device is confirmed offline or on a network that
+        # blocks SSH, for the reason :func:`_report_restart_step_failure` gives
+        # for the steps: every poll of the wait was routed over the same network
+        # the commands were, so there is nothing here an error report could act
+        # on. This is the longer of the two windows the network can die in --
+        # the wait is given a full cold-boot budget -- and so the likelier
+        # place a restart already in flight when the wifi dropped ends up.
+        is_blocked_by_device = (
+            read_environment_block(connectivity_detector, backend_resolver, workspace_agent_id)
+            is not EnvironmentBlock.NONE
+        )
+        logger.log(
+            "WARNING" if is_blocked_by_device else "ERROR",
+            "Host restart of {} failed: {}",
+            workspace_agent_id,
+            message,
+        )
         tracker.mark_restart_failed(workspace_agent_id, message)
         registry.fail(workspace_agent_id, message)
 
@@ -869,26 +1496,19 @@ def read_backend_unreachable_verdict(
     """Return the backend-unreachable verdict reachable without running a command, or None.
 
     The recovery card polls, so it needs this verdict at a poll's cost: no
-    ``mngr exec`` round trip is made for it. It is the same classifier
-    ``probe_workspace_health`` runs, handed only the evidence already in hand --
-    so the two agree on the sources of BACKEND_UNREACHABLE (a surfaced provider
-    error and an UNAUTHENTICATED host state, both freshness-gated because both
-    are properties of one snapshot; and the backend outage a restart already ran
-    into, held by the tracker) by construction rather than by restating the
-    rules here.
+    ``mngr`` round trip is made for it. Two sources answer, and both are already
+    in hand -- a surfaced provider error and an UNAUTHENTICATED host state, both
+    freshness-gated because both are properties of one snapshot, plus the backend
+    outage a restart already ran into, which the tracker holds.
 
     That last one is why this does not trail an outage by a provider poll. The
     machine minds is asked to recover is one it has just tried to restart, and a
     restart mngr rejected at the provider names the backend on the spot; only an
-    outage no command has run into yet waits for discovery. The one source out
-    of reach is the exec the probe fires itself, which is bought with the round
-    trip this read exists to avoid.
+    outage no command has run into yet waits for discovery.
 
-    The reverse does not hold either: the tiers that need the in-container probe,
-    such as a wedged but reachable container, are invisible here -- with no exec
-    attempted the classifier renders them INDETERMINATE. So this answers only "is
-    the backend unreachable?", and a None means "not by this evidence", not "the
-    machine is fine".
+    This answers only "is the backend unreachable?". A None means "not by this
+    evidence", not "the machine is fine": a wedged but reachable container looks
+    identical here, and it is the probe loop, not this read, that settles it.
     """
     display_info = backend_resolver.get_agent_display_info(agent_id)
     provider_name = display_info.provider_name if display_info is not None else None
@@ -900,21 +1520,70 @@ def read_backend_unreachable_verdict(
     provider_error_message = _passive_provider_error_message(
         backend_resolver, tracker, agent_id, provider_name, classification_is_trustworthy
     )
-    # No exec was attempted and none is going to be, so the probe rows the
-    # response also carries are unused here (they are pure string assembly over
-    # values already in hand, which is what keeps this a poll-cheap read).
-    response = build_host_health_response(
-        host_state=host_state_enum.value if host_state_enum is not None else "",
-        services_agent_id=None,
-        in_container_stdout=None,
-        plugin_resolver_services={},
-        provider_error_message=provider_error_message,
-        provider_label=friendly_provider_label(provider_name) or _DEFAULT_PROVIDER_LABEL,
-        classification_is_trustworthy=classification_is_trustworthy,
-    )
-    if response.dispatch_tier is not DispatchTier.BACKEND_UNREACHABLE:
+    if provider_error_message is not None:
+        reason = provider_error_message
+    elif classification_is_trustworthy and host_state_enum is HostState.UNAUTHENTICATED:
+        # Discovery carries only the host state (``DiscoveredHost`` has no
+        # failure_reason), so there is no verbatim error to show here -- the
+        # canned text covers the class of causes instead.
+        reason = HOST_ACCESS_REJECTED_REASON
+    else:
         return None
-    return BackendUnreachableVerdict(provider_label=response.provider_label, reason=response.unreachable_reason)
+    return BackendUnreachableVerdict(
+        provider_label=friendly_provider_label(provider_name) or _DEFAULT_PROVIDER_LABEL,
+        reason=reason,
+    )
+
+
+# The classified causes that mean the failure is on this device, not the
+# workspace: a tunnel this machine could not build, and the forward's own
+# connection pool running out. Both are raised without the backend ever being
+# dialed, so neither says anything about whether the workspace is answering --
+# and both are fixed by restarting the app, never by restarting the machine.
+_DEVICE_SIDE_FAILURE_REASONS: Final[frozenset[SystemInterfaceBackendFailureReason]] = frozenset(
+    {
+        SystemInterfaceBackendFailureReason.TUNNEL_SETUP_FAILED,
+        SystemInterfaceBackendFailureReason.POOL_EXHAUSTED,
+    }
+)
+
+
+class DeviceCannotConnectVerdict(FrozenModel):
+    """This device cannot reach the workspace, whatever the workspace is doing."""
+
+    detail: str = Field(description="The forward's verbatim error text, empty when it quoted none")
+
+
+def read_device_cannot_connect_verdict(
+    agent_id: AgentId,
+    *,
+    tracker: SystemInterfaceHealthTracker | None,
+) -> DeviceCannotConnectVerdict | None:
+    """Return the this-device-cannot-connect verdict, or None when the evidence does not say so.
+
+    Read off the cause the forward classified for this episode (see
+    ``SystemInterfaceHealthTracker.record_connection_failure``). Only the two
+    causes raised before the backend is ever dialed qualify; a failure that
+    reached the network leaves the workspace implicated and is not this.
+
+    Like the backend-unreachable verdict, this outranks whatever the restart
+    episode concluded, because it explains it: a machine this device cannot
+    reach goes STUCK and gets restarted whether or not anything is wrong with
+    it, and the restart is what produces the RESTART_FAILED the surfaces would
+    otherwise report. It clears the moment a probe succeeds, which drops the
+    tracker's record for the episode along with it.
+
+    Pool exhaustion and a broken tunnel are not separated for the user: both are
+    fixed by restarting the app and by nothing else the user can do, so a second
+    card would be a distinction without an action. The recorded cause keeps them
+    apart in the log and in Sentry, where the difference is measurable.
+    """
+    if tracker is None:
+        return None
+    observation = tracker.get_connection_failure(agent_id)
+    if observation is None or observation.reason not in _DEVICE_SIDE_FAILURE_REASONS:
+        return None
+    return DeviceCannotConnectVerdict(detail=observation.detail or "")
 
 
 def read_host_state(backend_resolver: BackendResolverInterface, display_info: AgentDisplayInfo) -> HostState | None:
@@ -929,196 +1598,3 @@ def read_host_state(backend_resolver: BackendResolverInterface, display_info: Ag
     except ValueError:
         return None
     return backend_resolver.get_host_state(host_id)
-
-
-def probe_workspace_health(
-    agent_id: AgentId,
-    *,
-    backend_resolver: BackendResolverInterface,
-    tracker: SystemInterfaceHealthTracker | None,
-    mngr_binary: str,
-    mngr_host_dir: Path,
-    concurrency_group: ConcurrencyGroup,
-    envelope_stream_consumer: EnvelopeStreamConsumer | None,
-) -> HostHealthResponse:
-    """Compose the host-health response from the passive resolver + an in-container probe.
-
-    Provider reachability and host lifecycle are read from the
-    ``backend_resolver`` -- the single passive-discovery sampler shared with the
-    rest of minds -- not re-sampled with a synchronous ``mngr list``. The reason
-    the inner interface isn't answering comes from the batched in-container ``mngr
-    exec`` probe, which is fired when the provider is reachable and the passive
-    layer cannot already answer: either the host is observed RUNNING (so the
-    container should be reachable and the exec tests the inner interface), or the
-    resolver's host state is not trustworthy yet (a stale pre-onset snapshot, or a
-    dead/stalled discovery producer whose freshness gate can never open). When
-    the passive layer cannot
-    answer, the exec's own outcome is the only direct evidence available; a fresh,
-    trustworthy, actionable state is left to the classifier so an outage never
-    pays a doomed provider round-trip. The plugin's resolver-snapshot mirror
-    supplies the last probe.
-
-    The recovery page can be reached before discovery has re-observed the host
-    after an outage (the STUCK redirect is no longer gated on freshness -- that
-    gate moved here), so this checks freshness itself: ``tracker`` supplies the
-    outage onset and ``is_recovery_classification_trustworthy`` decides whether a
-    negative verdict off the resolver's host state can be trusted yet. When it
-    cannot (a pre-outage snapshot), or the in-container probe timed out (observed
-    nothing), the classifier yields INDETERMINATE rather than a verdict -- unless
-    the probe returned direct evidence: a live GET / 200 is trusted regardless of
-    freshness, and an exec that completed without reaching the container is
-    likewise direct (fresh) evidence for the consent-gated HOST_UNRESPONSIVE.
-
-    Both passive reads that feed the classifier -- the host state and the
-    provider error -- are re-read after the exec, at the same instant the
-    trustworthiness check runs, so the freshness gate always certifies the values
-    that are actually classified (a snapshot landing during the slow exec would
-    otherwise open the gate for a pre-snapshot reading). The exec's own in-band
-    provider reason is not one of them: it is a live observation, so it is held
-    apart and preferred over the resolver's.
-    """
-    env = dict(os.environ)
-    env["MNGR_HOST_DIR"] = str(mngr_host_dir)
-    services_agent_id = backend_resolver.get_system_services_agent_id(agent_id)
-    display_info = backend_resolver.get_agent_display_info(agent_id)
-    provider_name = display_info.provider_name if display_info is not None else None
-    # Friendly provider name for the "Can't connect to ..." page title.
-    provider_label = friendly_provider_label(provider_name) or _DEFAULT_PROVIDER_LABEL
-
-    # Read host/provider state from the passive discovery resolver.
-    host_state_enum = read_host_state(backend_resolver, display_info) if display_info is not None else None
-    host_state = host_state_enum.value if host_state_enum is not None else ""
-
-    # Whether the resolver's host state can be trusted for a verdict yet (a
-    # snapshot taken at/after the outage onset has landed). Computed here to gate
-    # the exec; re-read after the exec for the actual classification (see below).
-    state_is_trustworthy = is_recovery_classification_trustworthy(backend_resolver, tracker, agent_id)
-    provider_error_message = _passive_provider_error_message(
-        backend_resolver, tracker, agent_id, provider_name, state_is_trustworthy
-    )
-
-    # In-container exec probe, fired only when the provider is reachable (no
-    # surfaced error that the freshness gate lets speak -- a gated-off one is
-    # left to the exec to settle in-band, sooner and from a live observation --
-    # and no outage a restart has already been rejected with, which would send
-    # this exec through the same backend to be rejected the same way)
-    # and the passive layer will not already answer with a
-    # verdict: the host is observed RUNNING (verify the interface), or its state
-    # is UNKNOWN (observed up but unreadable from inside, or otherwise
-    # indeterminate -- the passive layer carries no verdict, so the exec is the
-    # only direct evidence), or its state is not trustworthy yet (a stale
-    # pre-onset snapshot, or a dead/stalled discovery producer whose freshness
-    # gate can never open). A fresh, trusted state that *does* carry a verdict
-    # (STOPPED/CRASHED -> offline, FAILED/UNAUTHENTICATED, or a transitional
-    # STOPPING) is left to the classifier rather than execced, so an outage never
-    # pays a doomed provider round-trip. The exec SSHes to the container via
-    # ``get_host`` (the connector's ~30s httpx), so it carries an explicit
-    # 30s-class cap; its outcome is the only direct evidence available when the
-    # passive layer is silent, resolving the page to HEALTHY or a consent-gated
-    # HOST_UNRESPONSIVE instead of an indefinite INDETERMINATE. A non-clean
-    # outcome leaves ``in_container_stdout`` None.
-    in_container_stdout: str | None = None
-    probe_timed_out = False
-    probe_exec_attempted = False
-    in_band_provider_error: str | None = None
-    if (
-        services_agent_id is not None
-        and provider_error_message is None
-        and (host_state_enum in (HostState.RUNNING, HostState.UNKNOWN) or not state_is_trustworthy)
-    ):
-        probe_exec_attempted = True
-        try:
-            in_container_stdout = _run_mngr(
-                concurrency_group,
-                build_probe_argv(mngr_binary, services_agent_id),
-                env,
-                timeout_seconds=_HOST_HEALTH_PROBE_TIMEOUT_SECONDS,
-            )
-        except MngrCommandTimeoutError as exc:
-            # A timeout observed nothing -- distinct from a clean exit with no
-            # sentinel (ssh dead, a real HOST_UNRESPONSIVE signal). Flag it so the
-            # classifier surfaces INDETERMINATE (keep checking) rather than
-            # rendering a verdict off non-evidence. Ordered before MngrCommandError
-            # because the timeout error is a subclass of it.
-            probe_timed_out = True
-            logger.debug("in-container probe for host-health of {} timed out: {}", agent_id, exc)
-        except MngrCommandError as exc:
-            # The exec can fail *at the provider*, before it ever reaches the
-            # container, and a provider that reports itself unavailable while
-            # being queried says so in-band as a ProviderUnavailableError.
-            # Trusting only the resolver's surfaced error would misclassify that
-            # for up to a full provider poll interval (30s for imbue_cloud): the
-            # classifier reads a completed-but-empty exec as direct evidence the
-            # container is unreachable, so an outage the exec never got past
-            # would be reported as a wedged machine. The in-band reason is the
-            # same class of evidence, only sooner. An outage that carries no
-            # such reason reads as that completed-but-empty exec until the
-            # discovery poll names it. It is kept apart from the resolver's own
-            # error rather than overwriting it because only the resolver's is
-            # freshness-gated: this one is a live observation, so it must
-            # survive a gate that is closed (and it is preferred below when both
-            # are in hand, being the more recent of the two). Only this
-            # workspace's own provider answers, and only when it is known: an
-            # unrelated backend's outage says nothing about whether this
-            # container can be reached.
-            in_band_provider_error = _in_band_provider_outage_reason(exc, provider_name)
-            logger.debug("in-container probe for host-health of {} did not exit cleanly: {}", agent_id, exc)
-    plugin_resolver_services: dict[str, str] = (
-        envelope_stream_consumer.get_resolver_snapshot_for_agent(agent_id)
-        if envelope_stream_consumer is not None
-        else {}
-    )
-    if services_agent_id is not None:
-        exec_command = shlex.join(build_probe_argv(mngr_binary, services_agent_id))
-    else:
-        exec_command = "(mngr exec <system-services-agent>) -- no services agent id known"
-    # Re-read the host state here, paired with the trustworthiness check below, so
-    # the freshness gate certifies the state that is actually classified. The exec
-    # above can take tens of seconds; a discovery snapshot landing mid-exec bumps
-    # the per-provider snapshot time past the outage onset (making the
-    # classification trustworthy) while the pre-exec read still holds the
-    # pre-snapshot state -- classifying e.g. HOST_UNRESPONSIVE off a stale RUNNING
-    # when the snapshot that opened the gate already reads STOPPED. The pre-exec
-    # read above only decides whether to attempt the exec.
-    if display_info is not None:
-        host_state_enum = read_host_state(backend_resolver, display_info)
-        host_state = host_state_enum.value if host_state_enum is not None else ""
-    classification_is_trustworthy = is_recovery_classification_trustworthy(backend_resolver, tracker, agent_id)
-    # The provider error is re-read for the same reason the host state is: a
-    # snapshot landing mid-exec can open the freshness gate, and the read that is
-    # classified must be the one this check certifies. The recorded outage is
-    # re-read too, since such a snapshot is also what ends its authority. The
-    # exec's own in-band reason wins over both when it produced one -- it was
-    # observed after this poll's snapshot, so it is the latest account of the
-    # same backend.
-    provider_error_message = in_band_provider_error or _passive_provider_error_message(
-        backend_resolver, tracker, agent_id, provider_name, classification_is_trustworthy
-    )
-    response = build_host_health_response(
-        host_state=host_state,
-        services_agent_id=services_agent_id,
-        in_container_stdout=in_container_stdout,
-        plugin_resolver_services=plugin_resolver_services,
-        mngr_exec_command=exec_command,
-        mngr_binary=mngr_binary,
-        provider_error_message=provider_error_message,
-        provider_label=provider_label,
-        probe_timed_out=probe_timed_out,
-        probe_exec_attempted=probe_exec_attempted,
-        classification_is_trustworthy=classification_is_trustworthy,
-    )
-    # One line per probe with the classifier's inputs: the tier alone (logged at
-    # the route) cannot explain WHY a verdict fired -- reconstructing a
-    # multi-probe sequence (e.g. unresponsive -> indeterminate -> offline at app
-    # startup) needs the host state, trust, and exec outcome that produced each.
-    logger.info(
-        "Host-health probe inputs for {}: host_state={!r} trusted={} exec_attempted={} timed_out={} provider_error={} -> {}",
-        agent_id,
-        host_state,
-        classification_is_trustworthy,
-        probe_exec_attempted,
-        probe_timed_out,
-        provider_error_message is not None,
-        response.dispatch_tier.value,
-    )
-    return response

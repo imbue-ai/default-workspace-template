@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 import tomlkit
+import yaml
 from inline_snapshot import snapshot
 
 from imbue.imbue_common.ratchet_testing.common_ratchets import RegexRatchetRule
@@ -34,7 +35,10 @@ _IS_SOURCE_OF_TRUTH = (_REPO_ROOT / "mirror").exists()
 _EXCLUDED_PROJECTS: frozenset[str] = frozenset()
 
 _SELF_EXCLUSION: tuple[str, ...] = ("test_meta_ratchets.py",)
-_DATA_FILE_EXCLUSION: tuple[str, ...] = ("*.jsonl",)
+# Machine-generated data files whose contents are not human-written text:
+# npm lockfiles carry random base64 integrity hashes that can contain any
+# short letter run (e.g. "mng"), so they are excluded from content scans.
+_DATA_FILE_EXCLUSION: tuple[str, ...] = ("*.jsonl", "package-lock.json")
 _MIGRATION_SCRIPT_EXCLUSION: tuple[str, ...] = (
     "migrate_code_mng_to_mngr.sh",
     "migrate_state_mng_to_mngr.sh",
@@ -55,6 +59,49 @@ def _get_all_project_dirs() -> list[Path]:
     return [
         get_project_dir(name, _REPO_ROOT) for name in pyproject_projects(_REPO_ROOT) if name not in _EXCLUDED_PROJECTS
     ]
+
+
+def _get_workspace_project_dirs() -> list[Path]:
+    """Return the project directories that are members of the root uv workspace.
+
+    A project listed in the root ``[tool.uv.workspace].exclude`` is a standalone
+    uv project: it has its own lockfile and CI job, the root ``uv sync
+    --all-packages`` never installs it, and the root pytest run never collects
+    it. Anything that reasons about *root* pytest/coverage configuration must
+    look at this list rather than every directory that happens to hold a
+    pyproject.toml, otherwise it demands root config for packages that cannot
+    be imported there.
+    """
+    root_pyproject = tomlkit.parse((_REPO_ROOT / "pyproject.toml").read_text())
+    excluded_globs = [str(p) for p in root_pyproject["tool"]["uv"]["workspace"].get("exclude", [])]
+    # Spell each glob without a trailing slash. Two other readers match this same
+    # list with their own matchers -- scripts/utils.py's iter_standalone_project_dirs
+    # globs the pattern directly, and scripts/snapshot_minds_e2e_state.py matches
+    # `f"{glob}/*"` -- and none of the three normalizes a trailing slash. With one,
+    # this function stops recognizing the exclusion, _get_standalone_project_dirs()
+    # goes empty, the standalone-project ratchets below pass vacuously, and
+    # scripts/release.py quietly stops advancing that project's cooldown cutoff. An
+    # absent `exclude` key is fine (the public-mirror overlay has none); only the
+    # ambiguous spelling is rejected.
+    assert all(not glob.endswith("/") for glob in excluded_globs), (
+        "[tool.uv.workspace].exclude entries must not end in '/': "
+        f"{[glob for glob in excluded_globs if glob.endswith('/')]}"
+    )
+    return [
+        d
+        for d in _get_all_project_dirs()
+        if not any(fnmatch.fnmatch(str(d.relative_to(_REPO_ROOT)), glob) for glob in excluded_globs)
+    ]
+
+
+def _get_standalone_project_dirs() -> list[Path]:
+    """Return the project directories that are NOT members of the root uv workspace.
+
+    The complement of ``_get_workspace_project_dirs``, expressed as a difference so
+    the exclusion globs are read in exactly one place.
+    """
+    workspace_dirs = set(_get_workspace_project_dirs())
+    return [d for d in _get_all_project_dirs() if d not in workspace_dirs]
 
 
 def _find_test_ratchets_file(project_dir: Path) -> Path | None:
@@ -267,6 +314,47 @@ def test_cli_docs_are_up_to_date() -> None:
     assert result.returncode == 0, (
         "Generated CLI docs are out of date. Run `uv run python scripts/make_cli_docs.py` "
         f"and commit the result.\n{result.stdout}{result.stderr}"
+    )
+
+
+_NUMBERED_MIGRATION_RE = re.compile(r"^(\d+)_.+\.sql$")
+
+
+def test_numbered_sql_migrations_have_unique_numbers() -> None:
+    """Ensure no migrations/ directory holds two ``NNN_*.sql`` files with the same number.
+
+    The schema_migrations runners record applied migrations by *filename*, so
+    two files sharing a number both apply -- but their relative order degrades
+    to a lexicographic accident, and the duplicate breaks the "highest number
+    is the newest schema" convention operators and reviewers rely on. This is
+    exactly what concurrent branches produce (it happened once in the
+    connector: two branches each landed an 029), so it is checked repo-wide
+    for every directory named ``migrations`` that contains numbered SQL files.
+    """
+    migration_files_by_dir: dict[Path, list[Path]] = {}
+    for sql_file in _get_all_files_with_extension(_REPO_ROOT, ".sql"):
+        if sql_file.parent.name == "migrations" and _NUMBERED_MIGRATION_RE.match(sql_file.name):
+            migration_files_by_dir.setdefault(sql_file.parent, []).append(sql_file)
+    # The check must actually be exercising something; if the discovery ever
+    # finds no numbered migrations at all, the glob logic has rotted.
+    assert migration_files_by_dir, "No numbered SQL migrations found anywhere; the discovery logic is broken"
+
+    duplicate_descriptions: list[str] = []
+    for migrations_dir, files in sorted(migration_files_by_dir.items()):
+        # Keyed on the numeric value, not the raw prefix, so a padding mismatch
+        # (29_foo.sql vs 029_bar.sql) still counts as the same number.
+        files_by_number: dict[int, list[str]] = {}
+        for migration_file in files:
+            match = _NUMBERED_MIGRATION_RE.match(migration_file.name)
+            assert match is not None
+            files_by_number.setdefault(int(match.group(1)), []).append(migration_file.name)
+        for number, names in sorted(files_by_number.items()):
+            if len(names) > 1:
+                relative_dir = migrations_dir.relative_to(_REPO_ROOT)
+                duplicate_descriptions.append(f"  {relative_dir}: {number} -> {sorted(names)}")
+    assert len(duplicate_descriptions) == 0, (
+        "Duplicate migration numbers found (renumber the newer file to the next free number):\n"
+        + "\n".join(duplicate_descriptions)
     )
 
 
@@ -752,6 +840,10 @@ def test_top_level_cov_flags_are_union_of_subproject_cov_flags() -> None:
     subprojects' `--cov=` flags, except for packages whose source is fully omitted in the
     top-level `[tool.coverage.run].omit` (e.g. `libs/mngr_modal/imbue/mngr_modal/*`).
 
+    Standalone (non-workspace-member) projects are out of scope: the root run cannot
+    import them at all, so a root ``--cov=`` flag for one would only ever warn that the
+    module was never imported. They own their coverage in their own project.
+
     Keeps the root coverage scope in sync with the per-project scopes so a new subproject
     cannot silently drop out of combined coverage collection.
     """
@@ -763,7 +855,7 @@ def test_top_level_cov_flags_are_union_of_subproject_cov_flags() -> None:
     )
 
     subproject_cov: set[str] = set()
-    for project_dir in _get_all_project_dirs():
+    for project_dir in _get_workspace_project_dirs():
         pyproject = tomlkit.parse((project_dir / "pyproject.toml").read_text())
         # Only consider --cov= flags that target the `imbue.<pkg>` namespace;
         # the top-level pyproject.toml only exposes that shape via its `source =
@@ -794,6 +886,58 @@ def test_top_level_cov_flags_are_union_of_subproject_cov_flags() -> None:
     assert len(errors) == 0, "Top-level --cov= flags out of sync with subprojects:\n" + "\n".join(errors)
 
 
+def test_standalone_project_ci_gates_list_every_in_repo_dependency() -> None:
+    """A standalone project's CI job must be gated on all of its in-repo dependencies.
+
+    A standalone project is invisible to the offload run, so one path-gated job is the
+    only thing that exercises it. It resolves its in-repo dependencies as editable path
+    sources, which means a change to any of them lands in that project's venv without
+    touching the project directory -- and a gate that does not list the dependency
+    simply does not run, reporting green for a change it never built. The lock is the
+    authority on what those dependencies are, so the gate is checked against it rather
+    than against a second hand-written list.
+    """
+    workflow = yaml.safe_load((_REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text())
+    missing: list[str] = []
+    for project_dir in _get_standalone_project_dirs():
+        rel_project = project_dir.relative_to(_REPO_ROOT)
+        lock_text = (project_dir / "uv.lock").read_text()
+        # `source = { editable = "../../libs/foo" }` -- the project's own entry is "."
+        editable_deps = {
+            (project_dir / raw).resolve().relative_to(_REPO_ROOT.resolve())
+            for raw in re.findall(r'source = \{ editable = "([^"]+)" \}', lock_text)
+            if raw != "."
+        }
+        gate = _find_ci_path_gate(workflow, rel_project)
+        assert gate is not None, f"no path-gated CI job found for standalone project {rel_project}"
+        # Compare whole shell words, not substrings: `libs/mngr` is a substring of the
+        # listed `libs/mngr_usage`, so a substring test would report a gate that omits
+        # `libs/mngr` as complete.
+        gate_words = set(gate.split())
+        missing.extend(
+            f"{rel_project}: CI gate omits {dep}" for dep in sorted(editable_deps) if str(dep) not in gate_words
+        )
+    assert not missing, (
+        "Standalone projects' CI path gates must list every in-repo editable dependency in their "
+        "uv.lock:\n" + "\n".join(f"  - {m}" for m in missing)
+    )
+
+
+def _find_ci_path_gate(workflow: dict, project_dir: Path) -> str | None:
+    """The shell body of the `git diff --name-only` step that gates ``project_dir``'s CI job.
+
+    Returned with backslash-newline continuations collapsed to spaces, so the gate's
+    path arguments -- one per continued line -- are plain whitespace-delimited words
+    that callers can match exactly.
+    """
+    for job in workflow.get("jobs", {}).values():
+        for step in job.get("steps", []):
+            run = step.get("run", "").replace("\\\n", " ")
+            if "git diff --name-only" in run and f" {project_dir} " in run:
+                return run
+    return None
+
+
 def test_top_level_coverage_omit_covers_subproject_omits() -> None:
     """For every file in a subproject's package tree that the subproject's
     `[tool.coverage.run].omit` patterns exclude, the top-level
@@ -805,6 +949,9 @@ def test_top_level_coverage_omit_covers_subproject_omits() -> None:
     `libs/<pkg>/imbue/<pkg>/testing.py`. Walking concrete files and matching via
     fnmatch (the same matcher coverage.py uses) makes both forms equivalent.
 
+    Standalone (non-workspace-member) projects are out of scope: the root run never
+    measures them, so the root omit list has nothing to say about their files.
+
     Prevents a new subproject from silently omitting files that combined coverage
     still counts at the root.
     """
@@ -814,7 +961,7 @@ def test_top_level_coverage_omit_covers_subproject_omits() -> None:
         return any(fnmatch.fnmatch(rel_repo_path, pat) for pat in top_omit)
 
     missing: dict[str, list[str]] = {}
-    for project_dir in _get_all_project_dirs():
+    for project_dir in _get_workspace_project_dirs():
         pkg_root = project_dir / "imbue" / project_dir.name
         if not pkg_root.exists():
             continue
@@ -932,6 +1079,11 @@ def test_offload_version_pinned_consistently() -> None:
 def _collect_class_defs_for_model_config_checks() -> tuple[dict[str, set[str]], dict[str, list[str]]]:
     """Collect, repo-wide, each class's base names and any extra="forbid" declarations in its body.
 
+    Cached: three tests share this repo-wide AST walk, and the meta-ratchet
+    xdist group runs them in one process, so the repo is parsed once instead
+    of three times (the walk alone can approach a 10s timeout on a loaded CI
+    sandbox).
+
     Returns ``(base_names_by_class, forbid_locations_by_class)``. Classes are keyed
     by bare name; two same-named classes in different files have their bases merged,
     which can only over-approximate a base's subclass set (acceptable for guards
@@ -1019,6 +1171,8 @@ def _config_value_sets_extra_forbid(value: ast.expr) -> bool:
     return False
 
 
+# Repo-wide AST walk (cached, but the first caller pays it); the default 10s
+# timeout is too tight on a loaded CI sandbox.
 @pytest.mark.flaky
 @pytest.mark.timeout(60)
 def test_event_envelope_subclasses_never_re_forbid_extra() -> None:
@@ -1048,6 +1202,8 @@ def test_event_envelope_subclasses_never_re_forbid_extra() -> None:
     )
 
 
+# Repo-wide AST walk (cached, but the first caller pays it); the default 10s
+# timeout is too tight on a loaded CI sandbox.
 @pytest.mark.flaky
 @pytest.mark.timeout(60)
 def test_wire_model_subclasses_never_re_forbid_extra() -> None:
@@ -1078,6 +1234,8 @@ def test_wire_model_subclasses_never_re_forbid_extra() -> None:
     )
 
 
+# Repo-wide AST walk (cached, but the first caller pays it); the default 10s
+# timeout is too tight on a loaded CI sandbox.
 @pytest.mark.flaky
 @pytest.mark.timeout(60)
 def test_wire_types_files_contain_only_wire_models_and_wire_enums() -> None:

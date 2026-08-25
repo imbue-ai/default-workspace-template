@@ -28,6 +28,19 @@ gh workflow run ci.yml -f run_minds_release_tests=true --ref <branch>
 
 Both marks are excluded from the standard `test-offload` jobs and from `just test-quick`; they run only via the CI jobs above or the `just minds-test-*` recipes below.
 
+## Remote-workspace (pool) tests
+
+`test_pool_lease.py`, `test_pool_fast_path_create.py`, and `test_workspace_stop_start.py` lease real pre-baked bare-metal slices. In CI (the opt-in release dispatch) the `build-minds-ci-env` job pre-bakes slices onto the standing CI boxes before the tests run -- see [`specs/remote-workspaces-in-ci.md`](../../../specs/remote-workspaces-in-ci.md). An empty pool **fails** these tests by default (a broken bake stage must not turn the suite green); `MINDS_ALLOW_EMPTY_POOL=1` restores the skip for envs that legitimately have no pool (`just minds-test-services-against` sets it automatically).
+
+Local iterate loop (each test consumes its slice at release; top up between re-runs -- warm-content re-bakes take minutes):
+
+```bash
+just minds-test-deployment-up default
+just bake-ci-slices --count 2 --template-dir "$PWD/.external_worktrees/default-workspace-template"
+# ...run the printed pytest command (add -k to pick one test)...
+just minds-test-deployment-down
+```
+
 ## Running locally
 
 ```bash

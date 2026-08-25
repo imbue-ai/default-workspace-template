@@ -17,6 +17,7 @@ provisioning at all.
 """
 
 import json as _json
+from pathlib import Path
 from typing import Any
 from typing import Final
 
@@ -41,6 +42,7 @@ from imbue.minds_admin.cli.server import allocate_slices
 from imbue.minds_admin.cli.server import build_pool_host_destroy_report
 from imbue.minds_admin.cli.server import destroy_pool_hosts_in_parallel
 from imbue.minds_admin.cli.server import tear_down_unleased_slices
+from imbue.minds_admin.cli.server import warm_box_image_cache
 from imbue.minds_admin.slices.bare_metal_db import destroy_eligible_pool_host_statuses
 from imbue.mngr_imbue_cloud.cli._common import emit_json
 from imbue.mngr_imbue_cloud.cli._common import fail_with_json
@@ -162,6 +164,18 @@ def pool() -> None:
         "for dev/throwaway bakes; NEVER use for production pool hosts."
     ),
 )
+@click.option(
+    "--content-addressed-cache",
+    "is_content_addressed_cache",
+    is_flag=True,
+    default=False,
+    help=(
+        "[--workspace-dir only; CI bakes] Key the per-box image cache on a hash of the workspace "
+        "content (computed after the --mngr-source vendor sync) instead of disabling it: the first "
+        "slice builds + seeds the box tar, the rest docker-load it, and a re-bake of identical content "
+        "is warm. --from-tag bakes already key on the tag, so combining is refused."
+    ),
+)
 def pool_create(
     count: int,
     region: str,
@@ -176,6 +190,7 @@ def pool_create(
     is_dry_run: bool,
     max_concurrency: int,
     is_deferred_install_wait_skipped: bool,
+    is_content_addressed_cache: bool,
 ) -> None:
     """Create pre-provisioned bare-metal slice pool hosts for the activated minds env.
 
@@ -220,6 +235,13 @@ def pool_create(
     except BakeSourceError as exc:
         fail_with_json(str(exc), error_class="UsageError")
 
+    if is_content_addressed_cache and from_tag is not None:
+        fail_with_json(
+            "--content-addressed-cache only applies to --workspace-dir bakes; --from-tag bakes already "
+            "key the image cache on the tag",
+            error_class="UsageError",
+        )
+
     # The activated env stamps slice ownership; the tier's pool key comes from
     # Vault (or the POOL_SSH_PRIVATE_KEY override for non-activated use).
     # Resolved up front, before any clone-heavy bake work.
@@ -250,6 +272,7 @@ def pool_create(
                 # A --from-tag bake must keep the tag's own vendored mngr (byte-for-byte
                 # release content); only --workspace-dir / --mngr-source override it.
                 is_from_tag=from_tag is not None,
+                is_content_addressed_cache=is_content_addressed_cache,
                 database_url=resolved_database_url,
                 pool_private_key_pem=pool_private_key_pem,
                 is_dry_run=is_dry_run,
@@ -272,6 +295,72 @@ def _parse_optional_attributes_json(attributes_json: str | None) -> dict[str, An
     if not isinstance(parsed, dict):
         fail_with_json("--attributes must be a JSON object", error_class="UsageError")
     return parsed
+
+
+@pool.command(name="warm-cache")
+@click.option(
+    "--server-id",
+    "server_id",
+    required=True,
+    help="The bare_metal_servers row id of the box to warm (from `minds-admin server list`).",
+)
+@click.option(
+    "--workspace-dir",
+    required=True,
+    type=click.Path(exists=True),
+    help="The default-workspace-template working tree whose content the tar is built from.",
+)
+@click.option(
+    "--mngr-source",
+    type=click.Path(exists=True),
+    default=None,
+    help="Path to the mngr monorepo root. If provided, rsyncs into the template's system/vendor/mngr/ first.",
+)
+@click.option(
+    "--content-addressed-cache",
+    "is_content_addressed_cache",
+    is_flag=True,
+    default=False,
+    help="Required: key the tar on a hash of the workspace content (computed after the --mngr-source sync).",
+)
+@click.option(
+    "--database-url",
+    required=False,
+    default=None,
+    type=str,
+    help=DATABASE_URL_HELP,
+)
+def pool_warm_cache(
+    server_id: str,
+    workspace_dir: str,
+    mngr_source: str | None,
+    is_content_addressed_cache: bool,
+    database_url: str | None,
+) -> None:
+    """Pre-warm a box's image cache for the given workspace content, without provisioning any pool host.
+
+    The DB-free seed-only verb of the CI release flow (specs/remote-workspaces-in-ci.md):
+    if the box already holds the tar for the derived content tag this exits 0 immediately;
+    otherwise one throwaway ``ci-warm`` slice is carved, the existing seed path builds and
+    publishes the box tar, and the slice is destroyed unconditionally. Run in parallel with
+    the per-run env deploy so a cold seed build overlaps it instead of following it. The
+    database (typically the CI infra DB) is only read, for the box row; failure is advisory
+    to the CI workflow (the bake stage's own seed phase is the fallback) but still exits
+    non-zero so operators see it.
+    """
+    if not is_content_addressed_cache:
+        fail_with_json(
+            "--content-addressed-cache is required: warm-cache exists to pre-seed the content-addressed "
+            "tar (a tag-keyed production bake seeds its own cache via `pool create --from-tag`)",
+            error_class="UsageError",
+        )
+    warm_box_image_cache(
+        server_id=server_id,
+        workspace_dir=Path(workspace_dir).resolve(),
+        mngr_source=mngr_source,
+        database_url=resolve_pool_database_url(database_url),
+        pool_private_key_pem=resolve_pool_private_key_pem(),
+    )
 
 
 # Every pool_hosts column, in a stable display order, used to build BOTH the

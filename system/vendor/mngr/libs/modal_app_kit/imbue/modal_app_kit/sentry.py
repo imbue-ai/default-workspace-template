@@ -21,6 +21,7 @@ and per-key dedup collapses it client-side before it hits the wire.
 """
 
 import functools
+import logging
 import os
 import threading
 import time
@@ -29,6 +30,7 @@ from contextlib import contextmanager
 from typing import Final
 
 import sentry_sdk
+from sentry_sdk.integrations.logging import LoggingIntegration
 from sentry_sdk.types import Event
 from sentry_sdk.types import Hint
 
@@ -160,6 +162,15 @@ def _init_sentry_once(service_name: str, dsn: str, environment: str, release: st
         environment=environment,
         release=release,
         server_name=service_name,
+        # Log-level reporting policy: WARNING and above become events (not
+        # just ERROR, the SDK default). The stdlib levels ARE the priority
+        # scheme -- ``logger.error`` (and unhandled exceptions) report at
+        # error level for failures nothing tolerated, while ``logger.warning``
+        # reports at warning level for exceptions we caught and continued
+        # past for robustness. Expected, routine anomalies (transient
+        # upstream errors, client-input junk) belong at info/debug plus a
+        # metric line, not warning. INFO and up remain breadcrumbs.
+        integrations=[LoggingIntegration(level=logging.INFO, event_level=logging.WARNING)],
         # Error reporting only -- a transaction per HTTP request would be
         # high-volume noise for the tiny Bugsink instances.
         traces_sample_rate=0.0,
@@ -192,6 +203,21 @@ def init_sentry(service_name: str, dsn_env_var: str) -> None:
         resolve_sentry_environment(environ),
         environ.get(_DEPLOY_ID_ENV_VAR, "unknown"),
     )
+
+
+def capture_unexpected_exception(exc: BaseException) -> str | None:
+    """Report an unexpected exception to Sentry, returning the event id when one was sent.
+
+    For app-level 500 handlers that embed the event id in their error
+    response. Explicit capture (rather than waiting for the framework
+    integration to see the exception propagate) is what makes the id
+    available while building the response; the SDK's default Dedupe
+    integration then drops the framework integration's later capture of the
+    same exception instance, so nothing is double-reported. Returns None
+    when reporting is disabled (no active client) or the event was dropped
+    (e.g. by the rate limiter).
+    """
+    return sentry_sdk.capture_exception(exc)
 
 
 @contextmanager

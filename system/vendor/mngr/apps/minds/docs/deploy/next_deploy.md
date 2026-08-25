@@ -69,6 +69,57 @@ release published).
   `just provision-observability-accounts <instance-ip>` once data flows so
   the log-stream retention overrides land. (Done for the dev fleet
   2026-08-18; staging/production fleets pending their tier bring-up.)
+- [ ] **Signup IP hardening** (issue mngr-internal#467; migration 028 applies
+  automatically):
+  - `IPINFO_TOKEN` is populated in every tier's Vault `supertokens` entry
+    (dev, ci, staging, production; 2026-08-21/22) -- nothing to do before
+    deploying. Verified live on dev-josh-2: recorded signup attempt with a
+    real Max-lookup reputation, cache reuse on the second attempt.
+  - The token must come from an account on the IPinfo **Max** plan: the
+    connector calls the Max lookup API (`api.ipinfo.io/lookup/{ip}`,
+    residential proxies included); a non-Max token 403s there, which the
+    gate treats as provider-off (fail open). One IPinfo account/token may
+    serve all tiers -- the token only guards lookup quota.
+  - After the first deploy with this change, confirm on staging that a
+    request's access-log line (`client_ip=` in the Modal function logs)
+    shows the caller's real public IP: the client-IP derivation switched
+    to the socket peer, verified on `*.modal.run` but worth one glance
+    behind the custom domains.
+- [ ] **Workspace stop/start wedge fix** (issue mngr-internal#547; migration
+  029 -- `transition_id` + `transition_failure_count` on `pool_hosts` --
+  applies automatically, and the new connector code requires it): stops now
+  land on `stopped` the moment the upload verifies (retention finalize reaps
+  the local VM later), starts on a still-`stopping` row are refused with 409,
+  and supervisors are fenced by a `transition_id` ownership token with the
+  watchdog taking over stale transitions. At the redeploy moment, any
+  supervisor spawned with the old single-argument Modal signature fails; the
+  watchdog cron takes those in-flight transitions over under fresh tokens
+  within about an hour, so no action is needed -- but if a `stopping` /
+  `starting` row from before the deploy matters urgently, re-drive it by
+  waiting for the next watchdog tick (or spot-check `transition_error` /
+  `transition_failure_count` after it).
+- [ ] **User-account suspension + live tunnel kill** (issue mngr-internal#550,
+  PR #557; migration 030 -- `suspended_at`/`suspended_reason` on
+  `account_entitlements`, `suspension_access` on `r2_keys` -- applies
+  automatically). No new secrets: the feature reuses `MINDS_ADMIN_KEY`, the
+  LiteLLM master key, and the Cloudflare token (whose required
+  `Account API Tokens: Edit` permission is already in place).
+  - **Relay redeploys, per tier, AFTER that tier's connector deploy**: every
+    relay's `frps.toml` must be re-rendered (the plugin ops gain `Ping`) and
+    redeployed -- 3 dev relays, 4 staging, 4 production. Ordering matters:
+    the new connector's Ping handling fails open on its own internal errors,
+    while today's connector would fail-closed reject pings and kill healthy
+    tunnels, so never redeploy a relay before its tier's connector.
+  - Until a tier's relays are redeployed, suspension and unshare only block
+    tunnel *reconnects* there (today's behavior); the ~10s live-tunnel kill
+    activates per relay as it is redeployed. Note the user-visible change
+    that ships with it: an ordinary unshare now also severs the live tunnel.
+  - Post-deploy verification on staging (needs the relays redeployed): share
+    a workspace, `minds-admin account suspend` the owner, confirm the tunnel
+    drops within ~10s and visitors get nothing; `unsuspend`, start the
+    workspace, confirm the share comes back without re-sharing. Plus a quick
+    suspend/unsuspend smoke of the account-level flow (sign-in blocked with
+    `ACCOUNT_SUSPENDED`, restored after unsuspend).
 - [ ] **Bugsink error tracking bring-up** (per-tier OVH VPS, converging on
   the OpenObserve hosting pattern; needs the observability bring-up's
   Cloudflare/OVH plumbing familiarity but no code dependency): dev-tier
@@ -227,3 +278,8 @@ retires on its own as workspaces `update-self` and clients update.
 - v0.3.11 clients: the account page's plan section shows "unavailable"
   against the current connector, their sharing surface 404s until they
   update, and they must be restarted after a host-machine reboot.
+- Pre-#547 clients request a workspace start while the row is still
+  `stopping`; the current connector answers 409 (start is only accepted from
+  `stopped`), so on those clients a start issued mid-stop fails with that
+  message until the stop's upload verifies -- retrying after it reaches
+  stopped works, and updated clients wait out the stop automatically.

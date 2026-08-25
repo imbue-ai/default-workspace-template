@@ -1,8 +1,10 @@
 """Tests for the self-hosted sharing model + endpoints (shares, relay tokens, frps plugin auth)."""
 
 import re
+from typing import Any
 from uuid import uuid4
 
+import psycopg2
 import pytest
 
 from imbue.remote_service_connector.errors import InvalidShareCoordinateError
@@ -11,6 +13,7 @@ from imbue.remote_service_connector.errors import ShareQuotaExceededError
 from imbue.remote_service_connector.shares import DEFAULT_MAX_SHARED_WORKSPACES_PER_USER
 from imbue.remote_service_connector.shares import check_share_quota
 from imbue.remote_service_connector.shares import decide_frps_new_proxy
+from imbue.remote_service_connector.shares import decide_frps_ping
 from imbue.remote_service_connector.shares import derive_share_user_label
 from imbue.remote_service_connector.shares import entry_label_from_claimed_domains
 from imbue.remote_service_connector.shares import generate_relay_token
@@ -738,7 +741,64 @@ def test_frps_auth_allows_unsubscribed_ops_unchanged(monkeypatch: pytest.MonkeyP
 
     resp = client.post(
         f"/frps/auth/{_FRPS_SECRET}/{_RELAY_ID_US1}",
+        json={"op": "NewWorkConn", "content": {"user": {"metas": {"relay_token": created["relay_token"]}}}},
+    )
+
+    assert resp.json() == {"reject": False, "reject_reason": "", "unchange": True}
+
+
+def test_frps_auth_allows_ping_for_active_share(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, _backend = _make_share_test_client(monkeypatch)
+    created = client.post("/shares", json={"host_id": _SHARE_STUB_HOST_ID}, headers=_share_headers()).json()
+
+    resp = client.post(
+        f"/frps/auth/{_FRPS_SECRET}/{_RELAY_ID_US1}",
         json={"op": "Ping", "content": {"user": {"metas": {"relay_token": created["relay_token"]}}}},
     )
 
     assert resp.json() == {"reject": False, "reject_reason": "", "unchange": True}
+
+
+def test_frps_auth_rejects_ping_once_share_is_suspended(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The live-tunnel kill switch: a suspended share's next heartbeat is refused."""
+    client, backend = _make_share_test_client(monkeypatch)
+    created = client.post("/shares", json={"host_id": _SHARE_STUB_HOST_ID}, headers=_share_headers()).json()
+    ping_body = {"op": "Ping", "content": {"user": {"metas": {"relay_token": created["relay_token"]}}}}
+    assert client.post(f"/frps/auth/{_FRPS_SECRET}/{_RELAY_ID_US1}", json=ping_body).json()["reject"] is False
+
+    for share in backend.share_rows:
+        share["state"] = "suspended"
+
+    rejected = client.post(f"/frps/auth/{_FRPS_SECRET}/{_RELAY_ID_US1}", json=ping_body)
+    assert rejected.json()["reject"] is True
+
+
+def test_frps_auth_rejects_ping_after_unshare(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A normal unshare also severs the live tunnel: the deleted token no longer resolves."""
+    client, _backend = _make_share_test_client(monkeypatch)
+    created = client.post("/shares", json={"host_id": _SHARE_STUB_HOST_ID}, headers=_share_headers()).json()
+    client.delete(f"/shares/{_SHARE_STUB_HOST_ID}", headers=_share_headers())
+
+    rejected = client.post(
+        f"/frps/auth/{_FRPS_SECRET}/{_RELAY_ID_US1}",
+        json={"op": "Ping", "content": {"user": {"metas": {"relay_token": created["relay_token"]}}}},
+    )
+
+    assert rejected.json()["reject"] is True
+
+
+def test_decide_frps_ping_fails_open_on_lookup_error() -> None:
+    """A connector-internal failure must not kill every live tunnel (frp fails closed on errors)."""
+
+    def _broken_lookup(token_hash: str) -> dict[str, Any] | None:
+        raise psycopg2.OperationalError("simulated db outage 71634")
+
+    decision = decide_frps_ping(_broken_lookup, "some-relay-token")
+
+    assert decision.reject is False
+
+
+def test_decide_frps_ping_rejects_missing_token() -> None:
+    decision = decide_frps_ping(lambda token_hash: None, None)
+
+    assert decision.reject is True

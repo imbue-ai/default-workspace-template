@@ -26,6 +26,7 @@ churn of per-developer environments.
 """
 
 import shutil
+import urllib.parse
 from pathlib import Path
 from typing import Final
 
@@ -39,6 +40,7 @@ from pydantic import ValidationError
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.logging import info_span
+from imbue.imbue_common.pure import pure
 from imbue.minds.envs.primitives import DevEnvName
 from imbue.minds.errors import MindError
 from imbue.mngr.utils.polling import poll_for_value
@@ -679,3 +681,166 @@ def wipe_neon_db_schema(dsn: SecretStr, *, parent_cg: ConcurrencyGroup) -> None:
     if result.returncode != 0:
         stderr = result.stderr.strip() or result.stdout.strip()
         raise NeonProviderError(f"`psql` exited {result.returncode} while wiping the Neon schema: {stderr}")
+
+
+# Neon pooled endpoints put a ``-pooler`` label at the end of the host's
+# first DNS label; the same hostname without it is the direct compute.
+_POOLER_LABEL_SUFFIX: Final[str] = "-pooler"
+
+
+@pure
+def direct_dsn_from_pooled(dsn: str) -> str:
+    """Strip Neon's ``-pooler`` label from a DSN's host (no-op for already-direct DSNs).
+
+    Direct connections matter wherever session-scoped behavior (advisory
+    locks, ``SET``, multi-transaction DDL protocols) would break through
+    PgBouncer's transaction pooling. Mirrors
+    ``imbue.modal_app_kit.database.direct_database_url`` (not imported:
+    this app does not depend on modal_app_kit).
+    """
+    parsed = urllib.parse.urlsplit(dsn)
+    userinfo, at_sign, host_and_port = parsed.netloc.rpartition("@")
+    host, colon, port = host_and_port.partition(":")
+    first_label, dot, remaining_labels = host.partition(".")
+    if not dot or not first_label.endswith(_POOLER_LABEL_SUFFIX):
+        return dsn
+    direct_host = first_label[: -len(_POOLER_LABEL_SUFFIX)] + dot + remaining_labels
+    return urllib.parse.urlunsplit(parsed._replace(netloc=f"{userinfo}{at_sign}{direct_host}{colon}{port}"))
+
+
+# Names of the databases we provision inside every per-env *analytics* Neon
+# project (see :func:`create_analytics_neon_project`). Mirrors the spec's
+# per-env storage layout (specs/minds-analytics/spec.md): two DuckLake
+# catalogs plus the plain-Postgres ops database.
+ANALYTICS_METRICS_DB_NAME: Final[str] = "metrics"
+ANALYTICS_TRANSCRIPTS_DB_NAME: Final[str] = "transcripts"
+ANALYTICS_OPS_DB_NAME: Final[str] = "ops"
+
+
+class AnalyticsNeonRecord(FrozenModel):
+    """Result of :func:`create_analytics_neon_project` (direct, non-pooler DSNs)."""
+
+    project_id: str = Field(description="Neon project id of the per-env analytics project.")
+    project_name: str = Field(description="Neon project name -- equals `analytics-<env-name>`.")
+    metrics_dsn: SecretStr = Field(description="Direct DSN for the `metrics` DuckLake catalog database.")
+    transcripts_dsn: SecretStr = Field(description="Direct DSN for the `transcripts` DuckLake catalog database.")
+    ops_dsn: SecretStr = Field(description="Direct DSN for the `ops` database (job bookkeeping, audit).")
+
+
+def analytics_project_name_for(name: DevEnvName) -> str:
+    """The per-env analytics Neon project name (kept separate from ``minds-<env>``).
+
+    A dedicated project mirrors the staging / production shape (one
+    ``analytics-<env>`` project per env) and keeps the DuckLake catalogs
+    out of the ``minds-<env>`` project that the deploy's pre-deploy
+    snapshot / recover flow operates on.
+    """
+    return f"analytics-{name}"
+
+
+def _fetch_direct_dsn(
+    project_id: str,
+    database_name: str,
+    *,
+    api_token: SecretStr,
+) -> SecretStr:
+    """A DIRECT (non-pooler) DSN: DuckLake catalogs and schema migrations need session-scoped behavior."""
+    payload = _neon_request(
+        "GET",
+        f"/projects/{project_id}/connection_uri?database_name={database_name}&role_name=neondb_owner&pooled=false",
+        api_token=api_token,
+    )
+    uri = payload.get("uri") if isinstance(payload, dict) else None
+    if not isinstance(uri, str) or not uri:
+        raise NeonProviderError(f"Neon API did not return a direct connection URI for database {database_name!r}")
+    return SecretStr(uri)
+
+
+def create_analytics_neon_project(
+    name: DevEnvName,
+    *,
+    org_id: str,
+    api_token: SecretStr,
+) -> AnalyticsNeonRecord:
+    """Provision (or adopt) the per-env analytics Neon project ``analytics-<name>``.
+
+    Same lookup-first / adopt-or-create / cleanup-on-late-failure shape as
+    :func:`create_neon_project`, with the analytics database set (``metrics``,
+    ``transcripts``, ``ops``) and DIRECT connection URIs -- DuckLake catalogs
+    and the analytics ops migrations both rely on session-scoped behavior
+    that PgBouncer's transaction pooling breaks.
+    """
+    project_name = analytics_project_name_for(name)
+    with info_span("Looking up existing Neon project {!r} under org {}", project_name, org_id):
+        candidates = _find_projects_by_name(org_id, project_name, api_token=api_token)
+        existing = _select_one_or_raise_multi_match(candidates, project_name, org_id=org_id)
+
+    project_was_pre_existing = existing is not None
+    if existing is not None:
+        project_id = existing.id
+        logger.info("Adopted pre-existing Neon project {!r} (id={})", project_name, project_id)
+    else:
+        with info_span("Creating Neon project {!r} under org {}", project_name, org_id):
+            create_payload = _neon_request(
+                "POST",
+                "/projects",
+                api_token=api_token,
+                json_body={
+                    "project": {
+                        "name": project_name,
+                        "org_id": org_id,
+                        "pg_version": _DEFAULT_PG_VERSION,
+                        "region_id": _DEFAULT_REGION_ID,
+                    },
+                },
+            )
+            project_id = create_payload.get("project", {}).get("id")
+            if not isinstance(project_id, str) or not project_id:
+                raise NeonProviderError(
+                    f"Neon POST /projects returned no project.id for {project_name!r}; got: {create_payload!r}"
+                )
+
+    try:
+        branch = _resolve_default_branch(project_id, api_token=api_token)
+        for database_name in (ANALYTICS_METRICS_DB_NAME, ANALYTICS_TRANSCRIPTS_DB_NAME, ANALYTICS_OPS_DB_NAME):
+            with info_span("Creating Neon database {!r} on branch {}", database_name, branch.id):
+                _ensure_database(project_id, branch.id, database_name, api_token=api_token)
+        with info_span("Fetching direct DSNs for the analytics databases"):
+            metrics_dsn = _fetch_direct_dsn(project_id, ANALYTICS_METRICS_DB_NAME, api_token=api_token)
+            transcripts_dsn = _fetch_direct_dsn(project_id, ANALYTICS_TRANSCRIPTS_DB_NAME, api_token=api_token)
+            ops_dsn = _fetch_direct_dsn(project_id, ANALYTICS_OPS_DB_NAME, api_token=api_token)
+    except NeonProviderError:
+        if not project_was_pre_existing:
+            try:
+                _neon_request("DELETE", f"/projects/{project_id}", api_token=api_token)
+            except NeonProviderError:
+                pass
+        raise
+
+    return AnalyticsNeonRecord(
+        project_id=project_id,
+        project_name=project_name,
+        metrics_dsn=metrics_dsn,
+        transcripts_dsn=transcripts_dsn,
+        ops_dsn=ops_dsn,
+    )
+
+
+def delete_analytics_neon_project(
+    name: DevEnvName,
+    *,
+    org_id: str,
+    api_token: SecretStr,
+) -> None:
+    """Delete the per-env analytics Neon project ``analytics-<name>`` (idempotent)."""
+    project_name = analytics_project_name_for(name)
+    candidates = _find_projects_by_name(org_id, project_name, api_token=api_token)
+    existing = _select_one_or_raise_multi_match(candidates, project_name, org_id=org_id)
+    if existing is None:
+        return
+    try:
+        _neon_request("DELETE", f"/projects/{existing.id}", api_token=api_token)
+    except NeonProviderError as exc:
+        if "404" in str(exc):
+            return
+        raise

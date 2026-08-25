@@ -13,6 +13,7 @@ from imbue.imbue_common.primitives import NonNegativeFloat
 from imbue.imbue_common.primitives import NonNegativeInt
 from imbue.minds.build_info import DEFAULT_WEB_TEMPLATE_REPO_KEY
 from imbue.minds.build_info import FALLBACK_BRANCH
+from imbue.minds.config.data_types import AnalyticsDeployConfig
 from imbue.minds.config.data_types import DeployEnvConfig
 from imbue.minds.config.data_types import DeployLifecycleConfig
 from imbue.minds.config.data_types import DeploySecretsConfig
@@ -22,9 +23,11 @@ from imbue.minds.config.data_types import OriginsConfig
 from imbue.minds.config.data_types import PaidDefaultsConfig
 from imbue.minds.config.data_types import PlanQuotasConfig
 from imbue.minds.config.data_types import ScaledownWindowConfig
+from imbue.minds.config.data_types import StorageDeployConfig
 from imbue.minds.config.data_types import WebWorkspacesConfig
 from imbue.minds.envs.docker_cleanup import DockerCleanupError
 from imbue.minds.envs.primitives import DevEnvName
+from imbue.minds.envs.primitives import SecretTemplateValidationError
 from imbue.minds.errors import MindError
 from imbue.minds.errors import WebTemplateRefRequiredError
 from imbue.minds.primitives import ServiceName
@@ -34,6 +37,8 @@ from imbue.minds_admin.envs.local_store import read_client_config_file
 from imbue.minds_admin.envs.local_store import read_secrets_file
 from imbue.minds_admin.envs.mngr_agent_cleanup import MngrAgentCleanupError
 from imbue.minds_admin.envs.per_env_deploy import ModalDeployError
+from imbue.minds_admin.envs.providers.analytics_stack import AnalyticsStackError
+from imbue.minds_admin.envs.providers.analytics_stack import AnalyticsStackRecord
 from imbue.minds_admin.envs.providers.modal_env import ModalEnvProviderError
 from imbue.minds_admin.envs.providers.neon_db import NeonProjectRecord
 from imbue.minds_admin.envs.providers.neon_db import NeonProviderError
@@ -48,7 +53,9 @@ from imbue.minds_admin.envs.provisioning import custom_domain_hosts_for_origins
 from imbue.minds_admin.envs.provisioning import deploy_env
 from imbue.minds_admin.envs.provisioning import destroy_env
 from imbue.minds_admin.envs.provisioning import list_dev_envs
+from imbue.minds_admin.envs.provisioning import resolve_analytics_enablement
 from imbue.minds_admin.envs.provisioning import resolve_web_template_pin
+from imbue.minds_admin.envs.provisioning import with_analytics_enablement
 from imbue.minds_admin.envs.recover import RecoverTargetAlreadyExistsError
 from imbue.minds_admin.envs.testing import make_workspace_storage_vault_values
 from imbue.mngr_imbue_cloud.primitives import DEV_TIER
@@ -120,6 +127,7 @@ def _deploy_config(
     services: tuple[str, ...] = ("cloudflare",),
     origins: OriginsConfig | None = None,
     web_workspaces: WebWorkspacesConfig | None = None,
+    analytics: AnalyticsDeployConfig | None = None,
 ) -> DeployEnvConfig:
     if lifecycle is None:
         lifecycle = _DEV_LIFECYCLE if tier == "dev" else _SHARED_TIER_LIFECYCLE
@@ -134,6 +142,7 @@ def _deploy_config(
         scaledown_window=scaledown_window if scaledown_window is not None else ScaledownWindowConfig(),
         paid=paid if paid is not None else PaidDefaultsConfig(),
         plans=plans if plans is not None else {},
+        analytics=analytics if analytics is not None else AnalyticsDeployConfig(),
         origins=origins,
         web_workspaces=web_workspaces,
     )
@@ -254,6 +263,39 @@ def _build_fake_providers(
         if tier == "dev":
             return AnyUrl(f"https://{_TEST_MODAL_WORKSPACE}-{modal_env}--llm-dev-proxy.modal.run")
         return AnyUrl(f"https://{_TEST_MODAL_WORKSPACE}--llm-{tier}-proxy.modal.run")
+
+    def deploy_analytics(modal_env, tier, deploy_id, strategy, cg):
+        call_log["calls"].append(("deploy_analytics", modal_env, tier, deploy_id, strategy))
+
+    def create_analytics_stack(request):
+        call_log["calls"].append(("create_analytics_stack", str(request.name), request.logs_bucket))
+        if fail_step == "analytics_stack":
+            raise AnalyticsStackError("analytics stack boom")
+        return AnalyticsStackRecord(
+            metrics_catalog_dsn=SecretStr(f"postgresql://direct/{request.name}/metrics"),
+            transcripts_catalog_dsn=SecretStr(f"postgresql://direct/{request.name}/transcripts"),
+            ops_dsn=SecretStr(f"postgresql://direct/{request.name}/ops"),
+            rsc_readonly_dsn=SecretStr(f"postgresql://reader/{request.name}/host_pool"),
+            metrics_bucket=f"analytics-metrics-{request.name}",
+            metrics_access_key_id="metrics-key-id",
+            metrics_secret_access_key=SecretStr("metrics-secret"),
+            transcripts_bucket=f"analytics-transcripts-{request.name}",
+            transcripts_access_key_id="transcripts-key-id",
+            transcripts_secret_access_key=SecretStr("transcripts-secret"),
+            logs_bucket=request.logs_bucket or "fake-logs-bucket",
+            logs_access_key_id="logs-key-id",
+            logs_secret_access_key=SecretStr("logs-secret"),
+            r2_account_id="cf-account-fake",
+        )
+
+    def delete_analytics_stack(name, neon_org_id, neon_api_token, cloudflare_account_id, cloudflare_api_token):
+        call_log["calls"].append(("delete_analytics_stack", str(name)))
+        if "analytics_stack" in fail_delete:
+            raise AnalyticsStackError("analytics stack delete boom")
+
+    def apply_analytics_migrations(analytics_ops_dsn, cg):
+        call_log["calls"].append(("apply_analytics_migrations", analytics_ops_dsn.get_secret_value()))
+        return ()
 
     def deploy_remote_service_connector(
         modal_env, tier, min_containers, scaledown_window, deploy_id, custom_domains, strategy, cg
@@ -377,10 +419,14 @@ def _build_fake_providers(
         push_per_env_modal_secret=push_per_env_modal_secret,
         deploy_litellm_proxy=deploy_litellm_proxy,
         deploy_remote_service_connector=deploy_remote_service_connector,
+        deploy_analytics=deploy_analytics,
+        create_analytics_stack=create_analytics_stack,
+        delete_analytics_stack=delete_analytics_stack,
         stop_modal_app=stop_modal_app,
         delete_modal_secret=delete_modal_secret,
         list_modal_secrets=list_modal_secrets,
         apply_pool_hosts_migrations=apply_pool_hosts_migrations,
+        apply_analytics_migrations=apply_analytics_migrations,
         seed_paid_list_defaults=seed_paid_list_defaults,
         write_plan_defaults=write_plan_defaults,
         get_modal_app_latest_version=get_modal_app_latest_version,
@@ -586,6 +632,9 @@ def test_destroy_env_dev_walks_providers_in_order_and_removes_root(
         "cleanup_state_container",
         # Step 2: SuperTokens app (cascade-deletes its users).
         "delete_supertokens_app",
+        # Step 3a: the per-env analytics stack (no-op for envs that never
+        # enabled analytics, but always attempted).
+        "delete_analytics_stack",
         # Step 3: Neon project (atomic teardown of all DBs / roles / endpoints).
         "delete_neon_project",
         # Step 4: Modal env (cascade-deletes apps/secrets/volumes inside).
@@ -1188,6 +1237,7 @@ def test_destroy_env_tier_stops_apps_deletes_secrets_and_removes_env_root(
     assert stops == [
         ("stop_modal_app", "llm-staging", "main"),
         ("stop_modal_app", "rsc-staging", "main"),
+        ("stop_modal_app", "analytics-staging", "main"),
     ]
     # Deletes every timestamped per-tier Modal Secret. The _deploy_config
     # only lists `cloudflare` in [secrets].services, but the deploy also
@@ -1399,10 +1449,13 @@ def test_destroy_env_tier_full_step_order(_isolated_home: Path, _root_cg: Concur
         "read_per_env_secret_values",
         "wipe_neon_db_schema",
         # 4: Modal -- stop + list-then-delete-all-timestamped-secrets path.
-        # Two deletes: ``cloudflare-staging-<id>`` (the one entry in this
+        # Three stops (llm / rsc / analytics -- analytics unconditionally,
+        # stop is idempotent on absent apps). Two deletes:
+        # ``cloudflare-staging-<id>`` (the one entry in this
         # _deploy_config's [secrets].services) and ``litellm-connector-
         # staging-<id>`` (always pushed separately by the deploy as a
         # non-vault-backed Modal Secret).
+        "stop_modal_app",
         "stop_modal_app",
         "stop_modal_app",
         "list_modal_secrets",
@@ -1705,12 +1758,9 @@ def test_assert_deploy_url_matches_non_workspace_mismatch_keeps_formula_hint() -
     assert "bound to workspace" not in message
 
 
-def test_compute_secret_overrides_stamps_storage_prefix_only_for_per_env_tiers() -> None:
-    """Per-env-Modal-env tiers (dev / ci) share their tier's workspace-storage
-    bucket, so the deploy must stamp each env's key prefix into the storage
-    secret; shared tiers (staging / production) have a dedicated bucket and
-    must not get a prefix override."""
-    per_env_overrides = _compute_secret_overrides(
+def _compute_per_env_secret_overrides(*, storage: StorageDeployConfig | None = None) -> dict[str, dict[str, str]]:
+    """Call ``_compute_secret_overrides`` with the canonical per-env (dev) shape."""
+    return _compute_secret_overrides(
         name=DevEnvName("dev-josh"),
         lifecycle=_DEV_LIFECYCLE,
         cloudflare_domain="dev.example.com",
@@ -1729,12 +1779,17 @@ def test_compute_secret_overrides_stamps_storage_prefix_only_for_per_env_tiers()
         expected_connector_url=AnyUrl("https://test-ws-dev-josh--rsc-dev-api.modal.run"),
         expected_litellm_proxy_url=AnyUrl("https://test-ws-dev-josh--llm-dev-proxy.modal.run"),
         origins=None,
+        storage=storage,
     )
-    # Only the per-env key prefix is overridden; the bucket + credentials stay
-    # tier-shared from Vault.
-    assert per_env_overrides["storage"] == {"WORKSPACE_STORAGE_KEY_PREFIX": "dev-josh/"}
 
-    shared_overrides = _compute_secret_overrides(
+
+def _compute_shared_tier_secret_overrides(
+    *,
+    origins: OriginsConfig | None = None,
+    storage: StorageDeployConfig | None = None,
+) -> dict[str, dict[str, str]]:
+    """Call ``_compute_secret_overrides`` with the canonical shared-tier (staging) shape."""
+    return _compute_secret_overrides(
         name=DevEnvName("staging"),
         lifecycle=_SHARED_TIER_LIFECYCLE,
         cloudflare_domain="staging.example.com",
@@ -1742,9 +1797,41 @@ def test_compute_secret_overrides_stamps_storage_prefix_only_for_per_env_tiers()
         supertokens_record=None,
         expected_connector_url=AnyUrl("https://test-ws--rsc-staging-api.modal.run"),
         expected_litellm_proxy_url=AnyUrl("https://test-ws--llm-staging-proxy.modal.run"),
-        origins=None,
+        origins=origins,
+        storage=storage,
     )
+
+
+def test_compute_secret_overrides_stamps_storage_prefix_only_for_per_env_tiers() -> None:
+    """Per-env-Modal-env tiers (dev / ci) share their tier's workspace-storage
+    bucket, so the deploy must stamp each env's key prefix into the storage
+    secret; shared tiers (staging / production) have a dedicated bucket and
+    must not get a prefix override."""
+    per_env_overrides = _compute_per_env_secret_overrides()
+    # Only the per-env key prefix is overridden; the bucket + credentials stay
+    # tier-shared from Vault.
+    assert per_env_overrides["storage"] == {"WORKSPACE_STORAGE_KEY_PREFIX": "dev-josh/"}
+
+    shared_overrides = _compute_shared_tier_secret_overrides()
     assert "storage" not in shared_overrides
+
+
+def test_compute_secret_overrides_stamps_the_configured_stop_retention_window() -> None:
+    """A deploy.toml ``[storage] stop_retention_seconds`` wins over the Vault
+    value on every tier shape: per-env tiers merge it alongside their key
+    prefix, and shared tiers gain a storage override just for it."""
+    per_env_overrides = _compute_per_env_secret_overrides(
+        storage=StorageDeployConfig(stop_retention_seconds=NonNegativeInt(60))
+    )
+    assert per_env_overrides["storage"] == {
+        "WORKSPACE_STORAGE_KEY_PREFIX": "dev-josh/",
+        "WORKSPACE_STOP_RETENTION_SECONDS": "60",
+    }
+
+    shared_overrides = _compute_shared_tier_secret_overrides(
+        storage=StorageDeployConfig(stop_retention_seconds=NonNegativeInt(120))
+    )
+    assert shared_overrides["storage"] == {"WORKSPACE_STOP_RETENTION_SECONDS": "120"}
 
 
 def test_resolve_web_template_pin_defaults_to_the_release_tag_on_shared_tiers(
@@ -1827,16 +1914,7 @@ def test_deploy_env_dev_tier_with_web_workspaces_refuses_before_any_cloud_mutati
 def test_compute_secret_overrides_stamps_the_origin_layout_when_origins_configured() -> None:
     """A tier with an [origins] block gets its whole browser-facing origin
     layout from git: accounts surface, cookie apex, and chrome embed origin."""
-    overrides = _compute_secret_overrides(
-        name=DevEnvName("staging"),
-        lifecycle=_SHARED_TIER_LIFECYCLE,
-        cloudflare_domain="staging.example.com",
-        neon_record=None,
-        supertokens_record=None,
-        expected_connector_url=AnyUrl("https://test-ws--rsc-staging-api.modal.run"),
-        expected_litellm_proxy_url=AnyUrl("https://test-ws--llm-staging-proxy.modal.run"),
-        origins=_STAGING_ORIGINS,
-    )
+    overrides = _compute_shared_tier_secret_overrides(origins=_STAGING_ORIGINS)
     # No trailing slashes anywhere: origins are compared byte-exactly by the
     # connector (embed allowlist) and appended to (OAuth callback paths).
     assert overrides["supertokens"]["AUTH_WEBSITE_DOMAIN"] == "https://accounts.imbue-staging.com"
@@ -1848,16 +1926,7 @@ def test_compute_secret_overrides_stamps_the_origin_layout_when_origins_configur
 
 
 def test_compute_secret_overrides_keeps_the_connector_url_when_origins_absent() -> None:
-    overrides = _compute_secret_overrides(
-        name=DevEnvName("staging"),
-        lifecycle=_SHARED_TIER_LIFECYCLE,
-        cloudflare_domain="staging.example.com",
-        neon_record=None,
-        supertokens_record=None,
-        expected_connector_url=AnyUrl("https://test-ws--rsc-staging-api.modal.run"),
-        expected_litellm_proxy_url=AnyUrl("https://test-ws--llm-staging-proxy.modal.run"),
-        origins=None,
-    )
+    overrides = _compute_shared_tier_secret_overrides()
     assert overrides["supertokens"]["AUTH_WEBSITE_DOMAIN"] == "https://test-ws--rsc-staging-api.modal.run/"
     assert "sharing" not in overrides
     assert "SHARE_CHROME_ORIGIN" not in overrides["litellm-connector"]
@@ -1935,3 +2004,199 @@ def test_deploy_env_marks_declared_services_required_only_on_shared_tiers(
     )
     dev_reads = {c[1]: c[3] for c in dev_log["calls"] if c[0] == "read_per_env_secret_values"}
     assert dev_reads["cloudflare"] is False
+
+
+def test_deploy_with_analytics_on_dev_provisions_stack_and_deploys(
+    _isolated_home: Path, _root_cg: ConcurrencyGroup
+) -> None:
+    """A dev env auto-provisions its analytics stack, pushes the composed secret, migrates, and deploys."""
+    call_log = _make_call_log()
+    providers = _build_fake_providers(
+        call_log,
+        vault_responses={"observability": {"OPENOBSERVE_R2_BUCKET": "minds-observability-dev"}},
+    )
+
+    deploy_env(
+        DevEnvName("dev-alice"),
+        tier="dev",
+        deploy_config=_deploy_config(analytics=AnalyticsDeployConfig(is_deployed=True)),
+        credentials=_credentials(),
+        providers=providers,
+        parent_concurrency_group=_root_cg,
+    )
+
+    call_names = [call[0] for call in call_log["calls"]]
+    # The stack was provisioned with the tier's OpenObserve bucket, and NO
+    # per-tier analytics Vault entry was read (that path is shared-tier only).
+    assert ("create_analytics_stack", "dev-alice", "minds-observability-dev") in call_log["calls"]
+    analytics_reads = [
+        call for call in call_log["calls"] if call[0] == "read_per_env_secret_values" and call[1] == "analytics"
+    ]
+    assert analytics_reads == []
+    pushed_names = [call[1] for call in call_log["calls"] if call[0] == "push_per_env_modal_secret"]
+    assert any(name.startswith("analytics-dev-") for name in pushed_names)
+    # Migrations target the provisioned stack's ops DSN, before the app deploys.
+    assert ("apply_analytics_migrations", "postgresql://direct/dev-alice/ops") in call_log["calls"]
+    assert call_names.index("apply_analytics_migrations") < call_names.index("deploy_analytics")
+    # The stack persists into the env's local secrets so re-deploys reuse it.
+    persisted = read_secrets_file(DevEnvName("dev-alice")).secrets
+    assert persisted["ANALYTICS_OPS_DATABASE_URL"].get_secret_value() == "postgresql://direct/dev-alice/ops"
+    assert persisted["ANALYTICS_METRICS_R2_BUCKET"].get_secret_value() == "analytics-metrics-dev-alice"
+
+
+def test_second_analytics_deploy_reuses_the_persisted_stack(_isolated_home: Path, _root_cg: ConcurrencyGroup) -> None:
+    config = _deploy_config(analytics=AnalyticsDeployConfig(is_deployed=True))
+    first_log = _make_call_log()
+    deploy_env(
+        DevEnvName("dev-alice"),
+        tier="dev",
+        deploy_config=config,
+        credentials=_credentials(),
+        providers=_build_fake_providers(
+            first_log, vault_responses={"observability": {"OPENOBSERVE_R2_BUCKET": "minds-observability-dev"}}
+        ),
+        parent_concurrency_group=_root_cg,
+    )
+    assert "create_analytics_stack" in [call[0] for call in first_log["calls"]]
+
+    second_log = _make_call_log()
+    deploy_env(
+        DevEnvName("dev-alice"),
+        tier="dev",
+        deploy_config=config,
+        credentials=_credentials(),
+        providers=_build_fake_providers(second_log),
+        parent_concurrency_group=_root_cg,
+    )
+    assert "create_analytics_stack" not in [call[0] for call in second_log["calls"]]
+    assert "deploy_analytics" in [call[0] for call in second_log["calls"]]
+
+
+def test_deploy_with_analytics_on_shared_tier_reads_the_vault_entry(
+    _isolated_home: Path, _root_cg: ConcurrencyGroup
+) -> None:
+    """Shared tiers keep the operator bringup path: the per-tier analytics Vault entry is required."""
+    call_log = _make_call_log()
+    providers = _build_fake_providers(
+        call_log,
+        vault_responses={
+            "supertokens": {
+                "SUPERTOKENS_CONNECTION_URI": "https://st.example.com/appid-staging",
+                "SUPERTOKENS_API_KEY": "fake-api-key",
+            },
+            "neon": {"DATABASE_URL": "postgres://user:pass@host/db"},
+            "analytics": {"ANALYTICS_OPS_DATABASE_URL": "postgresql://ops.example/ops"},
+        },
+    )
+
+    deploy_env(
+        DevEnvName("staging"),
+        tier="staging",
+        deploy_config=_deploy_config(
+            tier="staging", analytics=AnalyticsDeployConfig(is_deployed=True), origins=_STAGING_ORIGINS
+        ),
+        credentials=_credentials(),
+        providers=providers,
+        parent_concurrency_group=_root_cg,
+    )
+
+    analytics_reads = [
+        call for call in call_log["calls"] if call[0] == "read_per_env_secret_values" and call[1] == "analytics"
+    ]
+    assert len(analytics_reads) == 1
+    assert analytics_reads[0][3] is True
+    assert "create_analytics_stack" not in [call[0] for call in call_log["calls"]]
+    assert ("apply_analytics_migrations", "postgresql://ops.example/ops") in call_log["calls"]
+
+
+def test_destroy_of_a_dev_env_tears_down_the_analytics_stack(_isolated_home: Path, _root_cg: ConcurrencyGroup) -> None:
+    call_log = _make_call_log()
+    providers = _build_fake_providers(call_log)
+
+    destroy_env(
+        DevEnvName("dev-alice"),
+        tier="dev",
+        deploy_config=_deploy_config(),
+        credentials=_credentials(),
+        providers=providers,
+        parent_concurrency_group=_root_cg,
+    )
+
+    call_names = [call[0] for call in call_log["calls"]]
+    assert ("delete_analytics_stack", "dev-alice") in call_log["calls"]
+    # The analytics stack goes before the env's own Neon project.
+    assert call_names.index("delete_analytics_stack") < call_names.index("delete_neon_project")
+
+
+def test_deploy_without_analytics_never_touches_the_analytics_seams(
+    _isolated_home: Path, _root_cg: ConcurrencyGroup
+) -> None:
+    call_log = _make_call_log()
+    providers = _build_fake_providers(call_log)
+
+    deploy_env(
+        DevEnvName("dev-alice"),
+        tier="dev",
+        deploy_config=_deploy_config(),
+        credentials=_credentials(),
+        providers=providers,
+        parent_concurrency_group=_root_cg,
+    )
+
+    call_names = [call[0] for call in call_log["calls"]]
+    assert "deploy_analytics" not in call_names
+    assert "apply_analytics_migrations" not in call_names
+    analytics_reads = [
+        call for call in call_log["calls"] if call[0] == "read_per_env_secret_values" and call[1] == "analytics"
+    ]
+    assert analytics_reads == []
+
+
+def test_shared_tier_analytics_deploy_fails_loudly_without_the_ops_dsn(
+    _isolated_home: Path, _root_cg: ConcurrencyGroup
+) -> None:
+    """A missing ANALYTICS_OPS_DATABASE_URL in the tier's Vault entry aborts with a bringup pointer."""
+    call_log = _make_call_log()
+    providers = _build_fake_providers(
+        call_log,
+        vault_responses={
+            "supertokens": {
+                "SUPERTOKENS_CONNECTION_URI": "https://st.example.com/appid-staging",
+                "SUPERTOKENS_API_KEY": "fake-api-key",
+            },
+            "neon": {"DATABASE_URL": "postgres://user:pass@host/db"},
+            "analytics": {},
+        },
+    )
+
+    with pytest.raises(SecretTemplateValidationError, match="bringup"):
+        deploy_env(
+            DevEnvName("staging"),
+            tier="staging",
+            deploy_config=_deploy_config(
+                tier="staging", analytics=AnalyticsDeployConfig(is_deployed=True), origins=_STAGING_ORIGINS
+            ),
+            credentials=_credentials(),
+            providers=providers,
+            parent_concurrency_group=_root_cg,
+        )
+
+    assert "deploy_analytics" not in [call[0] for call in call_log["calls"]]
+
+
+def test_resolve_analytics_enablement_prefers_flag_then_override_then_tier_default() -> None:
+    assert resolve_analytics_enablement(explicit_flag=True, persisted_override=False, tier_default=False) is True
+    assert resolve_analytics_enablement(explicit_flag=False, persisted_override=True, tier_default=True) is False
+    assert resolve_analytics_enablement(explicit_flag=None, persisted_override=True, tier_default=False) is True
+    assert resolve_analytics_enablement(explicit_flag=None, persisted_override=None, tier_default=True) is True
+    assert resolve_analytics_enablement(explicit_flag=None, persisted_override=None, tier_default=False) is False
+
+
+def test_with_analytics_enablement_replaces_only_the_analytics_block() -> None:
+    base_config = _deploy_config()
+
+    enabled_config = with_analytics_enablement(base_config, True)
+
+    assert base_config.analytics.is_deployed is False
+    assert enabled_config.analytics.is_deployed is True
+    assert enabled_config.modal_workspace == base_config.modal_workspace

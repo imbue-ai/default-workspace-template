@@ -1,7 +1,14 @@
-import { describe, expect, it } from "vitest";
-import { RecoveryCardBody, RecoveryTroubleshooting, recoveryHeading } from "./RecoveryCard";
+import m from "mithril";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  RecoveryCardBody,
+  RecoveryTroubleshooting,
+  recoveryBusyActionLabel,
+  recoveryHeading,
+} from "./RecoveryCard";
 import { RecoveryModel, type LifecycleDeps, type RecoveryInfo } from "../../models/backups";
-import { renderRoot, renderedText } from "../../testing";
+import { healthBadgeLabelFor } from "../pages/landing-controls";
+import { allText, attrsOf, collectVnodes, renderRoot, renderedText } from "../../testing";
 
 /** Deps that answer nothing and schedule nothing: these tests render a state,
  * they do not drive one. */
@@ -19,11 +26,15 @@ const UNRESPONSIVE: RecoveryInfo = {
   workspace_name: "my-machine",
   health: "restart_failed",
   health_error: "",
+  is_restart_start_only: null,
   ssh_command: "",
   is_host_offline: false,
+  device_environment: "NONE",
   is_backend_unreachable: false,
   provider_label: "",
   unreachable_reason: "",
+  is_device_cannot_connect: false,
+  device_error_detail: "",
 };
 
 /** A model holding a given reading, with no poller running behind it. */
@@ -33,10 +44,60 @@ function modelShowing(info: RecoveryInfo): RecoveryModel {
   return model;
 }
 
+/** A model that adopted the reading the way the poller does, rather than having
+ * it assigned. Loading is what attaches the model to a restart it did not
+ * dispatch, so a card rendered off one of these sees the state production holds
+ * -- which `modelShowing` cannot reproduce. */
+async function modelAttachedTo(info: RecoveryInfo): Promise<RecoveryModel> {
+  const model = new RecoveryModel("agent-33", { ...IDLE_DEPS, getJson: async () => info });
+  await model.load();
+  return model;
+}
+
+/** A model that dispatched its own restart, of the given shape, and is still
+ * following it. */
+async function modelRestartingOwn(info: RecoveryInfo, isStartOnly: boolean): Promise<RecoveryModel> {
+  const model = new RecoveryModel("agent-33", {
+    ...IDLE_DEPS,
+    postJson: async () => ({ status: 202, json: null }),
+  });
+  model.info = info;
+  await model.dispatchRestart(isStartOnly);
+  return model;
+}
+
 /** What the card puts on screen for a given reading of the machine. */
 function renderCard(info: RecoveryInfo, model = modelShowing(info)): string {
   return renderedText(renderRoot(RecoveryCardBody, { model }));
 }
+
+/** Press the button reading `label`, so a test can assert what a click does
+ * rather than only what the card says. */
+function clickButtonLabeled(rendered: m.Vnode, label: string): void {
+  const button = collectVnodes(rendered).find(
+    (vnode) => typeof attrsOf(vnode).onclick === "function" && allText(vnode.children).trim() === label,
+  );
+  if (button === undefined) throw new Error(`no button labeled ${label}`);
+  (attrsOf(button).onclick as () => void)();
+}
+
+/** The same, with the app running as the desktop client. The Electron bridge
+ * feature-detects `window.mindsNative`, and the device-side card asks it whether
+ * restarting the app is something this build can actually do. */
+function renderCardOnDesktop(info: RecoveryInfo): string {
+  vi.stubGlobal("window", { mindsNative: { retry: () => {} } });
+  return renderCard(info);
+}
+
+/** And in a plain browser: a window with no native surface behind it. */
+function renderCardInBrowser(info: RecoveryInfo): string {
+  vi.stubGlobal("window", {});
+  return renderCard(info);
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("recoveryHeading", () => {
   it("reserves the unresponsive verdict for a machine a restart has already failed", () => {
@@ -46,8 +107,55 @@ describe("recoveryHeading", () => {
     expect(recoveryHeading("my-machine", "restart_failed", false)).toBe("my-machine unresponsive");
     expect(recoveryHeading("my-machine", "stuck", false)).toBe("my-machine isn't responding yet.");
     expect(recoveryHeading("my-machine", "healthy", true)).toBe("my-machine is stopped.");
-    expect(recoveryHeading("my-machine", "restarting", true)).toBe("Bringing my-machine back online...");
     expect(recoveryHeading("my-machine", "healthy", false)).toBe("my-machine is responding again.");
+  });
+
+  it("claims a restart only where something is known to be restarting", () => {
+    // The three restarting readings, and why they differ. A stopped host is
+    // genuinely being booted. A full stop+start bounce is only ever the user's
+    // own click, so their action makes the claim honest. Everything else is the
+    // start-only dispatch the app fires at any machine that stops answering --
+    // it no-ops against a host that is already up, so "Restarting" would tell
+    // the user their work was interrupted when nothing happened to the machine.
+    expect(recoveryHeading("my-machine", "restarting", true, null)).toBe("Bringing my-machine back online...");
+    expect(recoveryHeading("my-machine", "restarting", false, false)).toBe("Restarting my-machine...");
+    expect(recoveryHeading("my-machine", "restarting", false, true)).toBe("Reconnecting to my-machine...");
+    // No reading at all is not evidence of a restart either.
+    expect(recoveryHeading("my-machine", "restarting", false, null)).toBe("Reconnecting to my-machine...");
+  });
+
+  it("agrees with the machines-list badge about the same restart", () => {
+    // The card and the row are two views of one episode, and a user looking at
+    // the list and then opening the card must not be told two different things
+    // about it. Both read the tracker's start-only reading off their own frame,
+    // so the pairing is what keeps them in step -- the badge silently reporting
+    // the weaker word for a bounce the user themselves clicked is exactly the
+    // divergence this pins.
+    for (const isStartOnly of [true, false, null]) {
+      const isRestartClaimedOnCard = recoveryHeading("my-machine", "restarting", false, isStartOnly).startsWith(
+        "Restarting",
+      );
+      const isRestartClaimedOnBadge = healthBadgeLabelFor("restarting", false, isStartOnly, false) === "Restarting...";
+      expect(isRestartClaimedOnBadge).toBe(isRestartClaimedOnCard);
+    }
+  });
+
+  it("agrees with its own action button about the same restart", () => {
+    // The shortest range at which one episode can be described two ways: the
+    // button sits directly under the heading, so a fixed "Restarting..." there
+    // contradicts a heading that has just declined to claim a restart.
+    for (const isHostOffline of [true, false]) {
+      for (const isStartOnly of [true, false, null]) {
+        const isRestartClaimedInHeading = recoveryHeading(
+          "my-machine",
+          "restarting",
+          isHostOffline,
+          isStartOnly,
+        ).startsWith("Restarting");
+        const isRestartClaimedOnButton = recoveryBusyActionLabel(isHostOffline, isStartOnly) === "Restarting...";
+        expect(isRestartClaimedOnButton).toBe(isRestartClaimedInHeading);
+      }
+    }
   });
 });
 
@@ -106,13 +214,209 @@ describe("RecoveryCardBody", () => {
     expect(text).toContain("Restart Machine");
   });
 
-  it("reads a restart nobody started here as busy, not as an idle machine", () => {
-    // The unattended dispatcher restarts a wedged machine on its own, so the
-    // card must not sit there offering to start a second one.
-    const text = renderCard({ ...UNRESPONSIVE, health: "restarting" });
-    expect(text).toContain("Restarting my-machine...");
-    expect(text).toContain("Restarting...");
+  it("explains this device's dead network and offers no restart to route over it", () => {
+    // The restart would go over the same network that is down, so there is
+    // nothing here for the user to decide -- not even a disabled button.
+    const text = renderCard({ ...UNRESPONSIVE, health: "stuck", device_environment: "OFFLINE" });
+
+    expect(text).toContain("Can't connect to my-machine from this device");
+    expect(text).toContain("This device has no network connection.");
+    expect(text).toContain("Minds will reconnect to your machine as soon as it does.");
+    expect(text).toContain("Waiting for network");
     expect(text).not.toContain("Restart Machine");
+    expect(text).toContain("Report a problem");
+  });
+
+  it("tells a user on an SSH-blocking network what is actually wrong", () => {
+    // Their browser works, so "you are offline" is a claim they can see is
+    // false -- and unlike a dead network, this one never fixes itself.
+    const text = renderCard({ ...UNRESPONSIVE, health: "stuck", device_environment: "SSH_BLOCKED" });
+
+    expect(text).toContain("This network blocks the connection Minds uses to reach your machines (SSH).");
+    expect(text).toContain("Try another network or a VPN.");
+    expect(text).not.toContain("This device has no network connection.");
+    expect(text).not.toContain("Restart Machine");
+  });
+
+  it("blames this device before it blames the backend behind it", () => {
+    // A laptop with no network cannot reach the provider either, so the
+    // provider's error is a symptom of the same condition rather than a second
+    // one -- and naming the provider would send the user after the wrong thing.
+    const text = renderCard({
+      ...UNRESPONSIVE,
+      device_environment: "OFFLINE",
+      is_backend_unreachable: true,
+      provider_label: "Imbue Cloud",
+      unreachable_reason: "could not reach Imbue Cloud",
+    });
+
+    expect(text).toContain("Can't connect to my-machine from this device");
+    expect(text).not.toContain("Can't connect to Imbue Cloud");
+  });
+
+  it("explains the device for a machine stuck before the network died", () => {
+    // No stuck edge fired under the condition, so no dispatch was ever
+    // withheld for this machine -- and the band that sent the user here named
+    // the device, so the card must not blame the backend.
+    const text = renderCard({
+      ...UNRESPONSIVE,
+      health: "stuck",
+      device_environment: "OFFLINE",
+      is_backend_unreachable: true,
+      provider_label: "Imbue Cloud",
+      unreachable_reason: "could not reach Imbue Cloud",
+    });
+
+    expect(text).toContain("This device has no network connection.");
+    expect(text).not.toContain("Can't connect to Imbue Cloud");
+    expect(text).not.toContain("Restart Machine");
+  });
+
+  it("keeps narrating a restart that is actually running", () => {
+    // The device may well be offline, but the restart is in flight and its
+    // progress is what the user asked to see.
+    const text = renderCard({ ...UNRESPONSIVE, health: "restarting", device_environment: "OFFLINE" });
+
+    expect(text).not.toContain("This device has no network connection.");
+    expect(text).not.toContain("Waiting for network");
+  });
+
+  it("keeps narrating a restart this card just started, before the poll catches up", () => {
+    // The click flips the model at once; info.health only moves on the next 2s
+    // poll, and a read already in flight can land after it still saying stuck.
+    // Reading the server's health alone would swap the spinner and the log
+    // lines for "Waiting for network..." over a restart that is running.
+    const info: RecoveryInfo = { ...UNRESPONSIVE, health: "stuck", device_environment: "OFFLINE" };
+    const model = modelShowing(info);
+    model.isRestartRunning = true;
+    // A click from this card is a full stop+start bounce, which is what
+    // licenses the card to call it a restart at all.
+    model.dispatchedRestartIsStartOnly = false;
+
+    const text = renderCard(info, model);
+
+    expect(text).toContain("Restarting my-machine...");
+    expect(text).not.toContain("Waiting for network");
+  });
+
+  it("returns the machine to its normal states once it answers again", () => {
+    // The device may still be blocked for everything else, but this machine is
+    // answering -- the card must not keep the waiting state on it.
+    const text = renderCard({ ...UNRESPONSIVE, health: "healthy", device_environment: "OFFLINE" });
+
+    expect(text).toContain("my-machine is responding again.");
+    expect(text).not.toContain("Waiting for network");
+  });
+
+  it("reads a restart nobody started here as busy, not as an idle machine", async () => {
+    // The unattended dispatcher restarts a wedged machine on its own, so the
+    // card must not sit there offering to start a second one. It is start-only,
+    // so the heading says reconnecting rather than claiming a restart.
+    //
+    // Loaded rather than assigned on purpose: adopting a "restarting" reading is
+    // what attaches the model to that restart, and a card that read its own
+    // busy flag as evidence of its own click would claim a restart here.
+    const info = { ...UNRESPONSIVE, health: "restarting", is_restart_start_only: true };
+    const model = await modelAttachedTo(info);
+    // The precondition that makes this a regression test: attaching sets the
+    // same busy flag the card's own click sets, so the flag cannot stand in for
+    // "this card dispatched it".
+    expect(model.isRestartRunning).toBe(true);
+    const text = renderCard(info, model);
+    expect(text).toContain("Reconnecting to my-machine...");
+    // Busy, and busy in the same words the heading chose: the button under a
+    // heading that declines to claim a restart must decline to claim one too.
+    expect(text).toContain("Reconnecting...");
+    expect(text).not.toContain("Restarting...");
+    expect(text).not.toContain("Restart Machine");
+  });
+
+  it("says restarting from the click, before the tracker has caught up", async () => {
+    // The card's own button dispatches a full bounce, so it is a restart
+    // whatever the server has published yet -- and the window before the
+    // tracker answers is exactly when the user is looking at the card they
+    // just clicked.
+    const info = { ...UNRESPONSIVE, health: "stuck" };
+    const text = renderCard(info, await modelRestartingOwn(info, false));
+    expect(text).toContain("Restarting my-machine...");
+  });
+
+  it("does not claim a restart for a start-only dispatch of its own", async () => {
+    // The recovery page's "open this stopped machine" click-through runs the
+    // idempotent start through this same model. It may well no-op, so the
+    // claim the full bounce earns is not available to it.
+    const info = { ...UNRESPONSIVE, health: "stuck" };
+    const text = renderCard(info, await modelRestartingOwn(info, true));
+    expect(text).toContain("Reconnecting to my-machine...");
+  });
+
+  it("blames this device, not the machine, when the connection never left the device", () => {
+    // The failure was raised before anything was sent, so the machine is not
+    // implicated and bouncing it would interrupt real work to fix a fault that
+    // is not its own. Restarting the app is the remedy for both causes that
+    // land here, and the verbatim error is what makes a broken install
+    // diagnosable at all.
+    const text = renderCardOnDesktop({
+      ...UNRESPONSIVE,
+      is_device_cannot_connect: true,
+      device_error_detail: "No known_hosts file at /keys/known_hosts; refusing to connect",
+    });
+
+    expect(text).toContain("Can't connect to my-machine from this device");
+    expect(text).toContain("the connection failed on this device, before reaching it");
+    expect(text).toContain("Restart Minds");
+    expect(text).toContain("No known_hosts file at /keys/known_hosts; refusing to connect");
+    expect(text).not.toContain("Restart Machine");
+    expect(text).toContain("Report a problem");
+  });
+
+  it("offers no app restart in a browser, where there is no app to restart", () => {
+    // The bridge's restart is a no-op outside Electron, so a button here would
+    // do nothing at all when clicked -- and the copy must not name a remedy the
+    // user has no way to carry out. The condition, the error, and the way to
+    // report it are still worth saying.
+    const text = renderCardInBrowser({
+      ...UNRESPONSIVE,
+      is_device_cannot_connect: true,
+      device_error_detail: "No known_hosts file at /keys/known_hosts; refusing to connect",
+    });
+
+    expect(text).toContain("Can't connect to my-machine from this device");
+    expect(text).toContain("the connection failed on this device, before reaching it");
+    expect(text).toContain("No known_hosts file at /keys/known_hosts; refusing to connect");
+    expect(text).toContain("Report a problem");
+    expect(text).not.toContain("Restart Minds");
+    expect(text).not.toContain("Restarting Minds rebuilds the connection");
+  });
+
+  it("outranks the restart episode's own account of the machine", () => {
+    // A machine this device cannot reach goes STUCK and gets restarted whether
+    // or not anything is wrong with it, so RESTART_FAILED here is an effect of
+    // the device-side fault. Reporting it would blame the machine for the
+    // app's own broken connection.
+    const text = renderCardOnDesktop({
+      ...UNRESPONSIVE,
+      health: "restart_failed",
+      health_error: "The system interface did not respond within 300s of the host restart.",
+      is_device_cannot_connect: true,
+    });
+
+    expect(text).toContain("Can't connect to my-machine from this device");
+    expect(text).not.toContain("my-machine unresponsive");
+  });
+
+  it("stops blaming this device once the machine is answering", () => {
+    // Whatever failed earlier is not failing now, and the card that stayed up
+    // owes the user the ending rather than a stale fault.
+    const text = renderCard({
+      ...UNRESPONSIVE,
+      health: "healthy",
+      is_device_cannot_connect: true,
+      device_error_detail: "pool timeout",
+    });
+
+    expect(text).toContain("my-machine is responding again.");
+    expect(text).not.toContain("from this device");
   });
 
   it("reports a machine that came back without also calling it unresponsive", () => {
@@ -137,8 +441,44 @@ describe("RecoveryCardBody", () => {
     const model = modelShowing(UNRESPONSIVE);
     model.isRestartSucceeded = true;
     const text = renderedText(renderRoot(RecoveryCardBody, { model, isSelfDismissing: true }));
-    expect(text).toContain("Restarting...");
+    expect(text).toContain("Reconnecting...");
     expect(text).not.toContain("Restart Machine");
+  });
+
+  it("keeps that window free of the device's condition too", () => {
+    // The same window as above, with a device block still recorded: the machine
+    // has answered, so the block is stale and the card is one confirmation away
+    // from leaving. Rendering the wait here would replace a restart that just
+    // succeeded with an indefinite "Waiting for network".
+    const model = modelShowing({ ...UNRESPONSIVE, health: "stuck", device_environment: "OFFLINE" });
+    model.isRestartSucceeded = true;
+    const text = renderedText(renderRoot(RecoveryCardBody, { model, isSelfDismissing: true }));
+    // No evidence of the restart's shape here, so the busy label is the
+    // weakest honest one -- what matters is that it narrates the restart.
+    expect(text).toContain("Reconnecting...");
+    expect(text).not.toContain("Waiting for network");
+    expect(text).not.toContain("This device has no network connection.");
+  });
+
+  it("offers the way into the machine when the surface it is on has one", () => {
+    // The recovery page stands between the reader and the machine; the modal
+    // has the machine behind it and an X to get there. Only the first supplies
+    // this, and when it does, entering is the action -- the card is saying
+    // nothing further is needed.
+    const model = modelShowing({ ...UNRESPONSIVE, health: "healthy" });
+    const enter = vi.fn();
+    const rendered = renderRoot(RecoveryCardBody, { model, onEnterMachine: enter });
+
+    expect(renderedText(rendered)).toContain("Open machine");
+    clickButtonLabeled(rendered, "Open machine");
+    expect(enter).toHaveBeenCalledOnce();
+  });
+
+  it("says nothing about entering the machine on a surface that already can", () => {
+    // The modal passes nothing, and gets no button: it would sit on top of the
+    // very machine it offered to open.
+    const model = modelShowing({ ...UNRESPONSIVE, health: "healthy" });
+    expect(renderedText(renderRoot(RecoveryCardBody, { model }))).not.toContain("Open machine");
   });
 });
 

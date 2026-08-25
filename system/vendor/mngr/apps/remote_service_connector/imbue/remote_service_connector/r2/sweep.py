@@ -28,6 +28,7 @@ from supertokens_python.recipe.session.exceptions import SuperTokensSessionError
 
 import imbue.remote_service_connector.auth as auth_module
 import imbue.remote_service_connector.entitlements as entitlements_module
+from imbue.modal_app_kit.metrics import emit_metric
 from imbue.remote_service_connector.cloudflare import CloudflareOps
 from imbue.remote_service_connector.entitlements import EntitlementsStore
 from imbue.remote_service_connector.errors import CloudflareApiError
@@ -52,7 +53,8 @@ def _sweep_owner_email(user_id: str, email_getter: Callable[[str], str | None]) 
     try:
         return email_getter(user_id)
     except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
-        logger.warning("Sweep could not resolve email for user %s: %s", user_id[:8], exc)
+        emit_metric("supertokens_user_fetch_failed", 1, {"caller": "r2_sweep"})
+        logger.warning("Sweep could not resolve email for user %s", user_id[:8], exc_info=exc)
         return None
 
 
@@ -86,7 +88,8 @@ def _revoke_extra_bucket_keys(
             try:
                 ops.delete_bucket_token(access_key_id)
             except (CloudflareApiError, httpx.HTTPError) as exc:
-                logger.error("Sweep failed to revoke extra key %s: %s", access_key_id, exc)
+                emit_metric("cloudflare_api_failed", 1, {"operation": "sweep_revoke_extra_key"})
+                logger.warning("Sweep failed to revoke extra key %s", access_key_id, exc_info=exc)
                 counters["key_update_failures"] += 1
                 continue
             key_store.delete_key(access_key_id)
@@ -100,17 +103,19 @@ def _resolve_owner_storage_limit_bytes(
     owner_prefix: str,
     entitlements_store: EntitlementsStore,
     email_getter: Callable[[str], str | None],
+    existing_row: dict[str, Any] | None,
 ) -> int | None:
     """Resolve the owner's storage limit, lazily creating their entitlements row when needed.
 
-    Mirrors the request-path rule (paid pre-cutoff accounts land on ally; an
-    existing-but-unverified owner gets a plain explorer row). Returns ``None``
-    only for an owner whose SuperTokens record cannot be resolved at all --
-    the sweep must skip them, never enforce against guessed limits.
+    ``existing_row`` is the owner's already-fetched entitlements row (None when
+    the owner has none yet). Mirrors the request-path rule (paid pre-cutoff
+    accounts land on ally; an existing-but-unverified owner gets a plain
+    free row). Returns ``None`` only for an owner whose SuperTokens record
+    cannot be resolved at all -- the sweep must skip them, never enforce
+    against guessed limits.
     """
-    existing = entitlements_store.get_entitlements(owner_user_id)
-    if existing is not None:
-        return int(existing["max_total_bucket_bytes"])
+    if existing_row is not None:
+        return int(existing_row["max_total_bucket_bytes"])
     email = _sweep_owner_email(owner_user_id, email_getter)
     if email is None:
         return None
@@ -133,6 +138,12 @@ def enforce_owner_key_access(
     that key.
     """
     for row in rows:
+        # A key under suspension enforcement is owned by the suspend/unsuspend
+        # flow; the sweep must not downgrade or restore it (the owner loop
+        # already skips suspended accounts -- this guards the race where the
+        # account's state changed mid-pass).
+        if row.get("suspension_access") is not None:
+            continue
         access_key_id = str(row["access_key_id"])
         bucket_name = str(row["bucket_name"])
         token_name = r2_token_name(bucket_name, row.get("alias"))
@@ -150,7 +161,8 @@ def enforce_owner_key_access(
                 # read-only, already downgraded, or already restored).
                 pass
         except (CloudflareApiError, httpx.HTTPError) as exc:
-            logger.error("Sweep failed to update token %s for bucket %s: %s", access_key_id, bucket_name, exc)
+            emit_metric("cloudflare_api_failed", 1, {"operation": "sweep_update_token"})
+            logger.warning("Sweep failed to update token %s for bucket %s", access_key_id, bucket_name, exc_info=exc)
             counters["key_update_failures"] += 1
 
 
@@ -172,7 +184,8 @@ def _settle_expired_grants(
         try:
             live_bytes = measure_live_owner_usage_bytes(ops, str(grant["user_id_prefix"]))
         except (CloudflareApiError, httpx.HTTPError) as exc:
-            logger.error("Sweep failed to settle grant %s (usage read failed): %s", grant["grant_id"], exc)
+            emit_metric("cloudflare_api_failed", 1, {"operation": "sweep_settle_grant_usage_read"})
+            logger.warning("Sweep failed to settle grant %s (usage read failed)", grant["grant_id"], exc_info=exc)
             counters["grant_settle_failures"] += 1
             continue
         grant_store.settle_grant(int(grant["grant_id"]), live_bytes, live_bytes < int(grant["baseline_bytes"]))
@@ -206,6 +219,7 @@ def run_r2_quota_sweep(
         "keys_restored": 0,
         "users_skipped": 0,
         "users_skipped_for_grant": 0,
+        "users_skipped_suspended": 0,
         "key_update_failures": 0,
         "grants_settled": 0,
         "grant_settle_failures": 0,
@@ -235,14 +249,24 @@ def run_r2_quota_sweep(
             counters["users_skipped_for_grant"] += 1
             continue
 
+        # A suspended owner's keys are held in whatever state the suspend
+        # action put them (read-only or disabled); leave them alone entirely
+        # -- the unsuspend fan-out re-applies the correct quota state.
+        owner_entitlements_row = entitlements_store.get_entitlements(owner_user_id)
+        if owner_entitlements_row is not None and owner_entitlements_row.get("suspended_at"):
+            counters["users_skipped_suspended"] += 1
+            continue
+
         owner_prefix = str(rows[0]["bucket_name"]).split(R2_BUCKET_NAME_SEP, 1)[0]
         bucket_prefix = f"{owner_prefix}{R2_BUCKET_NAME_SEP}"
         owner_buckets = [name for name in all_buckets if name.startswith(bucket_prefix)]
         owner_peak_bytes = sum(usage_by_bucket.get(name, 0) for name in owner_buckets)
 
-        limit_bytes = _resolve_owner_storage_limit_bytes(owner_user_id, owner_prefix, entitlements_store, email_getter)
+        limit_bytes = _resolve_owner_storage_limit_bytes(
+            owner_user_id, owner_prefix, entitlements_store, email_getter, owner_entitlements_row
+        )
         if limit_bytes is None:
-            logger.error(
+            logger.warning(
                 "Sweep skipping user %s: no resolvable verified email for lazy plan assignment", owner_user_id[:8]
             )
             counters["users_skipped"] += 1
@@ -257,7 +281,8 @@ def run_r2_quota_sweep(
             try:
                 live_bytes = measure_live_owner_usage_bytes(ops, owner_prefix)
             except (CloudflareApiError, httpx.HTTPError) as exc:
-                logger.error("Sweep skipping user %s: live usage read failed: %s", owner_user_id[:8], exc)
+                emit_metric("cloudflare_api_failed", 1, {"operation": "sweep_live_usage_read"})
+                logger.warning("Sweep skipping user %s: live usage read failed", owner_user_id[:8], exc_info=exc)
                 counters["live_usage_read_failures"] += 1
                 counters["users_skipped"] += 1
                 continue

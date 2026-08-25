@@ -24,9 +24,11 @@ import logging
 import os
 import re
 import secrets
+from collections.abc import Callable
 from typing import Any
 from typing import Protocol
 
+import psycopg2
 from fastapi import APIRouter
 from fastapi import HTTPException
 from fastapi import Request
@@ -36,6 +38,7 @@ from pydantic import field_validator
 
 import imbue.remote_service_connector.accounts_web as accounts_web_module
 import imbue.remote_service_connector.relays as relays_module
+from imbue.modal_app_kit.metrics import emit_metric
 from imbue.remote_service_connector import db
 from imbue.remote_service_connector.errors import InvalidShareCoordinateError
 from imbue.remote_service_connector.errors import MissingShareConfigError
@@ -61,6 +64,7 @@ _RELAY_TOKEN_BYTES = 32
 
 _FRPS_LOGIN_OP = "Login"
 _FRPS_NEW_PROXY_OP = "NewProxy"
+_FRPS_PING_OP = "Ping"
 
 # frpc carries its relay token in the client metadata map under this key
 # (``metadatas.relay_token`` in frpc.toml). Login ops receive the map as
@@ -236,9 +240,10 @@ class FrpsAuthDecision(BaseModel):
     """The reply the connector returns to the frps server plugin.
 
     ``reject`` rejects the operation with ``reject_reason``; otherwise the
-    operation proceeds unchanged (``unchange = True``). frps calls this only for
-    ``Login`` and ``NewProxy`` -- never for visitor connections -- so a shared
-    workspace's actual traffic never reaches the connector.
+    operation proceeds unchanged (``unchange = True``). frps calls this only
+    for the subscribed ops (``Login``, ``NewProxy``, ``Ping``) -- never for
+    visitor connections -- so a shared workspace's actual traffic never
+    reaches the connector.
     """
 
     reject: bool
@@ -289,14 +294,45 @@ def decide_frps_new_proxy(
     return _frps_allow()
 
 
+def decide_frps_ping(
+    share_lookup: Callable[[str], dict[str, Any] | None], relay_token: str | None
+) -> FrpsAuthDecision:
+    """Authorize an frps ``Ping`` heartbeat: reject only on an affirmative non-active share.
+
+    Rejecting a ping makes frpc close its whole session (frps answers the
+    heartbeat with an error Pong), which is exactly how a suspended or
+    unshared workspace's LIVE tunnel is severed within one heartbeat interval
+    (~10s). But frp also fails closed on plugin errors, so this path fails
+    OPEN on the connector's own internal errors: tunnel uptime stays coupled
+    only to the connector being reachable, and a non-active share slips
+    through only until the next successful lookup. ``Login``/``NewProxy``
+    keep their fail-closed handling -- they are security decisions, while a
+    heartbeat merely continues an already-authorized session.
+    """
+    if relay_token is None:
+        return _frps_reject("missing relay token")
+    try:
+        share = share_lookup(hash_relay_token(relay_token))
+    except psycopg2.Error as exc:
+        emit_metric("frps_ping_fail_open", 1, {})
+        logger.warning("Allowing frps ping despite a share lookup failure", exc_info=exc)
+        return _frps_allow()
+    if share is None or share["state"] != "active":
+        emit_metric("frps_ping_rejected", 1, {})
+        return _frps_reject("unknown or inactive relay token")
+    return _frps_allow()
+
+
 def _extract_frps_relay_token(op: str, content: dict[str, Any]) -> str | None:
     """Pull the relay token out of an frps plugin op's metadata map.
 
-    Login ops carry the frpc client metadata at ``content.metas``; NewProxy (and
-    other proxy-scoped) ops nest it under ``content.user.metas``. These shapes
-    are verified against frp 0.70.1 (the pinned relay release): a Login body is
-    ``{op, content: {metas: {relay_token}, ...}}`` and a NewProxy body is
-    ``{op, content: {user: {metas: {relay_token}}, custom_domains: [...], ...}}``.
+    Login ops carry the frpc client metadata at ``content.metas``; NewProxy,
+    Ping, and the other client-scoped ops nest it under ``content.user.metas``.
+    These shapes are verified against frp 0.70.1 (the pinned relay release): a
+    Login body is ``{op, content: {metas: {relay_token}, ...}}``, a NewProxy
+    body is ``{op, content: {user: {metas: {relay_token}}, custom_domains:
+    [...], ...}}``, and a Ping body is ``{op, content: {user: {metas:
+    {relay_token}, run_id, ...}, ping: {...}}}``.
     """
     if op == _FRPS_LOGIN_OP:
         metas = content.get("metas")
@@ -349,6 +385,8 @@ class ShareStore(Protocol):
     ) -> None: ...
     def update_share_entry_label(self, host_id: str, user_label: str, entry_label: str) -> None: ...
     def deactivate_share(self, host_id: str, user_label: str) -> None: ...
+    def suspend_shares_for_user(self, user_label: str) -> int: ...
+    def unsuspend_shares_for_user(self, user_label: str) -> int: ...
     def delete_relay_tokens(self, host_id: str, user_label: str) -> None: ...
     def find_share_by_token_hash(self, token_hash: str) -> dict[str, Any] | None: ...
     def find_active_share_by_workspace_domain(self, workspace_domain: str) -> dict[str, Any] | None: ...
@@ -472,6 +510,40 @@ class PostgresShareStore:
                         "UPDATE shares SET state = 'inactive', updated_at = NOW() WHERE host_id = %s AND user_id = %s",
                         (host_id, user_label),
                     )
+        finally:
+            conn.close()
+
+    def suspend_shares_for_user(self, user_label: str) -> int:
+        """Flip every active share of one user to ``suspended``, keeping the relay tokens.
+
+        The retained token rows are what make unsuspension self-healing: the
+        workspace still holds the plaintext token, so once the share is back
+        to ``active`` its next tunnel login succeeds with no re-share.
+        """
+        conn = db.get_pool_db_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE shares SET state = 'suspended', updated_at = NOW() "
+                        "WHERE user_id = %s AND state = 'active'",
+                        (user_label,),
+                    )
+                    return cur.rowcount
+        finally:
+            conn.close()
+
+    def unsuspend_shares_for_user(self, user_label: str) -> int:
+        conn = db.get_pool_db_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE shares SET state = 'active', updated_at = NOW() "
+                        "WHERE user_id = %s AND state = 'suspended'",
+                        (user_label,),
+                    )
+                    return cur.rowcount
         finally:
             conn.close()
 
@@ -886,23 +958,34 @@ def get_share_status(request: Request, host_id: str) -> dict[str, object]:
 
 @router.post("/frps/auth/{plugin_secret}/{relay_id}")
 def frps_auth(plugin_secret: str, relay_id: str, body: FrpsAuthRequest) -> dict[str, object]:
-    """Authorize an frps server-plugin operation (``Login`` / ``NewProxy``) for one relay.
+    """Authorize an frps server-plugin operation (``Login`` / ``NewProxy`` / ``Ping``) for one relay.
 
-    The relay's frps calls this for every workspace tunnel connect and hostname
-    claim, authenticated by the shared secret embedded in its rendered plugin
-    URL path; the path's trailing relay id identifies WHICH relay is calling,
-    so tunnel logins are attributable per relay (the fleet-convergence signal).
-    The presented relay token must resolve to an active share, and a
-    ``NewProxy`` may only claim single per-service labels directly under that
-    share's own domain (see ``decide_frps_new_proxy``).
-    Every operation must present a relay token resolving to an active share
-    (token-less bodies are rejected whatever the op); beyond that, operations
-    other than the two we subscribe to are allowed unchanged -- frps should
-    not be configured to send them, and constraining an unexpected op further
-    would break the tunnel for no security gain.
+    The relay's frps calls this for every workspace tunnel connect, hostname
+    claim, and heartbeat, authenticated by the shared secret embedded in its
+    rendered plugin URL path; the path's trailing relay id identifies WHICH
+    relay is calling, so tunnel logins are attributable per relay (the
+    fleet-convergence signal). The presented relay token must resolve to an
+    active share; a ``NewProxy`` may only claim single per-service labels
+    directly under that share's own domain (see ``decide_frps_new_proxy``),
+    and a ``Ping`` whose token no longer resolves to an active share is
+    rejected fail-open (see ``decide_frps_ping``) -- the live-tunnel kill
+    switch. Every operation must present a relay token resolving to an active
+    share (token-less bodies are rejected whatever the op); beyond that,
+    operations other than the ones we subscribe to are allowed unchanged --
+    frps should not be configured to send them, and constraining an
+    unexpected op further would break the tunnel for no security gain.
     """
     with handle_endpoint_errors():
         _require_frps_plugin_secret(plugin_secret)
+        if body.op == _FRPS_PING_OP:
+            # Heartbeats skip the relay-row lookup: the plugin secret already
+            # authenticates the caller, and a DB read here would couple every
+            # live tunnel to the relays table (see decide_frps_ping's
+            # fail-open rationale).
+            return decide_frps_ping(
+                get_share_store().find_share_by_token_hash,
+                _extract_frps_relay_token(body.op, body.content),
+            ).model_dump()
         relay_row = next(
             (row for row in active_relay_rows() if str(row["relay_id"]) == relay_id),
             None,

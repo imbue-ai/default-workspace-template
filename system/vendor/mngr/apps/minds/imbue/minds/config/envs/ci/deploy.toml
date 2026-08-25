@@ -36,6 +36,14 @@ modal_env_strategy = "PER_ENV"
 writes_local_state = true
 tracks_generation = false
 
+# Workspace stop/start knobs stamped over the Vault ``storage`` entry at
+# deploy time. CI envs keep the retention window (halted local VM held for
+# instant restart-in-place before the slot is freed) short: the stop/start
+# tests must see the retention finalize land in minutes, and nothing in CI
+# ever wants an hour-long instant-restart window.
+[storage]
+stop_retention_seconds = 60
+
 # Default paid-access entries seeded (seed-if-absent) into paid_domains after
 # migrations, so CI / deployment-test envs can exercise paid features.
 [paid]
@@ -44,6 +52,14 @@ domains = ["imbue.com"]
 # Plan definitions for CI / deployment-test envs -- same values as the real
 # tiers so quota behavior under test matches production; tests that need
 # small limits override per-user via the admin API.
+[plans.free]
+max_remote_workspaces = 1
+max_total_workspaces = 5
+max_buckets = 5
+max_total_bucket_gb = 25
+monthly_llm_spend_usd = 0
+max_active_synced_workspaces = 200
+
 [plans.explorer]
 max_remote_workspaces = 2
 max_total_workspaces = 10
@@ -59,3 +75,11 @@ max_buckets = 20
 max_total_bucket_gb = 500
 monthly_llm_spend_usd = 1000
 max_active_synced_workspaces = 200
+
+# Whether this tier deploys the analytics app (analytics-<tier>): the
+# gold-table aggregation + lake maintenance crons. Off until the tier's
+# analytics bringup (apps/analytics/docs/bringup.md) has provisioned the
+# Neon project, R2 buckets, and Vault entry. Dev envs can opt in per-env
+# with the sticky `minds env deploy --with-analytics` flag.
+[analytics]
+is_deployed = false

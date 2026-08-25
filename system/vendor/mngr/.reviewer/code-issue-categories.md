@@ -93,24 +93,9 @@ The diff should not include excessive changes, or changes unrelated to the user'
 
 ## comment_cruft
 
-Comments added or changed in the diff should be pruned to what helps a future maintainer understand the code. This category applies the repository's `/crispy-comments` skill (`.claude/skills/crispy-comments/SKILL.md`) -- consult it for the full rationale. Flag, for removal, comments that:
+Apply the repository's `/crispy-comments` skill to comments added or changed in the diff. **Read `.claude/skills/crispy-comments/SKILL.md` for the criteria and rationale** -- that skill is the source of truth; this category does not restate it. In brief: prune comments that do not help a future maintainer, and keep the ones that explain a non-obvious "why".
 
-- Argue the code's correctness or defend it against a hypothetical -- edge-case proofs, "this is safe because...", "without this, X would happen" -- rather than explaining a non-obvious design decision.
-- Restate facts from the surrounding code that are likely to change: a count of subclasses, a list of variants, the call sites of a function. Follow DRY.
-- Are commented-out code (version control already remembers it).
-- Are ASCII-art banners or box-drawing section dividers.
-
-Keep comments that explain a non-obvious "why": intent, a design decision and its tradeoff, a cross-module or timing constraint not visible in the local code, or a genuine gotcha. Do not flag a comment merely for being long.
-
-**Examples:**
-- `# This is safe because n is always > 0 here` -- correctness argument; remove.
-- `# Callers: foo(), bar(), baz()` above a function whose call sites will drift -- volatile restatement; remove.
-- `# result = old_impl()  # left for reference` -- commented-out code; remove.
-- `# ============ HELPERS ============` -- banner; remove.
-
-**Exceptions:**
-- Comments that recount the change itself or today's bug fix ("# Changed X to Y", "# Fixed bug where...") are covered by `user_request_artifacts_left_in_code`; do not double-report them here.
-- Docstrings that serve as API documentation are judged by whether they help a caller, not by their length.
+**Exception:** change-process / bug-fix comments ("# Changed X to Y", "# Fixed bug where...") are covered by `user_request_artifacts_left_in_code`; do not double-report them here.
 
 ---
 
