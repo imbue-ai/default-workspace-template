@@ -2,7 +2,7 @@
 """Decide whether a Bash command is a non-standalone `tk start`/`tk close`.
 
 Takes the command as its single positional argument (passed by
-claude_tk_standalone.sh). Exits 0 to allow; exits 2 with a guiding stderr
+agent_tk_standalone.sh). Exits 0 to allow; exits 2 with a guiding stderr
 message to BLOCK. Only `start` and `close` are in scope -- `create` is exempt.
 See the wrapper for the why.
 
@@ -17,6 +17,8 @@ This hook runs under a bare `python3` with no virtualenv (see the wrapper), so
 it puts the parser lib's source directory on `sys.path` explicitly rather than
 relying on an installed package; the lib is stdlib-only for the same reason.
 """
+
+from __future__ import annotations
 
 import sys
 from pathlib import Path

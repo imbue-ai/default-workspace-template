@@ -453,9 +453,39 @@ def test_start_supervisor_superseded_mid_download_rolls_back_the_claimed_slot(
     assert outcome == "superseded"
     assert row.status == "removing"
     joined_commands = "\n".join(backend.box_command_log)
+    # The detached download is stopped and the (possibly booted) VM deleted
+    # before the dirs go, so the rollback never strands a waiter on the box's
+    # download lock or a ghost qemu on unlinked inodes.
+    assert "kill -TERM" in joined_commands
+    assert f"limactl delete --force {row.lima_instance_name}" in joined_commands
     assert f"rm -rf $HOME/.lima/{row.lima_instance_name}" in joined_commands
     assert f"rm -rf $HOME/.lima/_disks/{row.lima_disk_name}" in joined_commands
     assert f'rm -rf "$HOME/{box_scripts.TRANSFER_DIR_ROOT}/{row.lima_instance_name}"' in joined_commands
+
+
+def test_start_supervisor_rollback_warns_when_the_restore_vm_survives(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A rollback whose ``limactl delete`` leaves the instance behind keeps the
+    dirs (the box reports the survivor) and the supervisor logs it, so the
+    leftover VM is visible to ops instead of silently occupying the slot."""
+    _client, backend = _make_pool_test_client(monkeypatch)
+    backend.storage_config = make_storage_config()
+    row = _seed_stopped_workspace(backend)
+    backend.vm_exists_on_origin = False
+    backend.reserve_stdout = "MNGR_RESTORE_RESERVED 23000 23001\n"
+    backend.transfer_status_sequence = ["STAGE=failed\nFINISHED=1\nERROR=command failed: limactl start\n"]
+    backend.cleanup_vm_survives = True
+
+    with caplog.at_level(logging.WARNING):
+        outcome = run_transition_supervisor(str(_WS_ID), _TEST_TRANSITION_ID)
+
+    assert outcome == "start-failed"
+    assert row.status == "stopped"
+    assert "limactl start" in (row.transition_error or "")
+    survivor_warnings = [record for record in caplog.records if "survived the rollback" in record.getMessage()]
+    assert len(survivor_warnings) == 1
+    assert row.lima_instance_name in survivor_warnings[0].getMessage()
 
 
 def test_start_supervisor_superseded_at_final_cas_tears_down_the_booted_vm(
