@@ -128,37 +128,28 @@ def _chat_events(marker: str, *, age_seconds: float = 60.0, source: str = "claud
 
 
 def _mngr_stub_for_chats(tmp_path: Path, chats: Mapping[str, str]) -> Path:
-    """An mngr stub answering for exactly these ``agent name -> events`` chats."""
-    return _write_mngr_stub(
-        tmp_path,
-        agents=tuple((name, "", "") for name in chats),
-        events_by_agent=chats,
-    )
+    """An mngr stub answering for exactly these ``agent name -> events`` conversations."""
+    return _write_mngr_stub(tmp_path, agents=tuple(chats), events_by_agent=chats)
 
 
 def _write_mngr_stub(
     tmp_path: Path,
     *,
-    agents: Sequence[tuple[str, str, str]] = (),
+    agents: Sequence[str] = (),
     events_by_agent: Mapping[str, str] | None = None,
     exit_code: int = 0,
 ) -> Path:
     """Write a stub standing in for the workspace's mngr.
 
-    The collector asks mngr two things -- which agents are chats, and what was
-    said in one -- so the stub answers exactly those two shapes: the pipe
-    template ``{name}|{type}|{labels.is_primary}|{labels.agent_created}`` for
-    ``list``, and raw JSONL for ``event``. ``agents`` entries are
-    ``(name, is_primary, agent_created)`` rendered into that template.
+    The collector asks mngr two things -- which agents exist, and what was said
+    in one -- so the stub answers exactly those two shapes: the pipe template
+    ``{name}|{type}`` for ``list``, and raw JSONL for ``event``.
     """
     events_dir = tmp_path / "stub-events"
     events_dir.mkdir(parents=True, exist_ok=True)
     for agent_name, events in (events_by_agent or {}).items():
         (events_dir / agent_name).write_text(events, encoding="utf-8")
-    listing = "".join(
-        f"{name}|chat|{is_primary}|{agent_created}\n"
-        for name, is_primary, agent_created in agents
-    )
+    listing = "".join(f"{name}|chat\n" for name in agents)
     listing_path = tmp_path / "stub-listing.txt"
     listing_path.write_text(listing, encoding="utf-8")
     argv_log = tmp_path / "stub-argv.log"
@@ -310,7 +301,7 @@ def test_select_log_files_caps_at_the_newest_hundred_files(tmp_path: Path) -> No
         _write_log(log_dir, f"svc-{index:03d}-stderr.log", mtime=now - index)
     module = _load_collector(supervisor_log_dir=log_dir)
 
-    selected = module.select_log_files(None)
+    selected = module.select_log_files()
 
     assert len(selected) == module.MAX_LOG_FILES
     expected_newest_first = [
@@ -330,7 +321,7 @@ def test_select_log_files_drops_logs_not_written_to_in_the_last_day(
     _write_log(log_dir, "xvfb-stderr.log", mtime=now - 25 * 60 * 60)
     module = _load_collector(supervisor_log_dir=log_dir)
 
-    selected = module.select_log_files(None)
+    selected = module.select_log_files()
 
     assert [os.path.basename(path) for path in selected] == [
         "system_interface-stderr.log",
@@ -341,65 +332,28 @@ def test_select_log_files_drops_logs_not_written_to_in_the_last_day(
 # --- User-app log exclusion ---
 
 
-def test_load_user_program_names_finds_only_the_programs_tagged_with_the_user_band(
+def test_select_log_files_keeps_every_programs_logs_both_streams(
     tmp_path: Path,
 ) -> None:
-    """The literal ``user`` band argument is how the workspace marks its own apps.
-
-    ``xvfb`` tags itself by name and ``cron`` has no wrapper; neither is a user
-    app, though both would be misread as one by a band-table lookup.
-    """
-    conf = tmp_path / "supervisord.conf"
-    conf.write_text(_FIXTURE_SUPERVISORD_CONF, encoding="utf-8")
-    module = _load_collector(supervisord_conf=conf)
-
-    assert module.load_user_program_names() == {"geopolitical-dashboard"}
-
-
-def test_load_user_program_names_is_none_when_the_config_cannot_be_read(
-    tmp_path: Path,
-) -> None:
-    module = _load_collector(supervisord_conf=tmp_path / "no-such-supervisord.conf")
-
-    assert module.load_user_program_names() is None
-
-
-def test_select_log_files_drops_user_app_logs_and_keeps_system_ones(
-    tmp_path: Path,
-) -> None:
+    """No log is filtered by owner or stream: an app's log -- user-created or
+    built-in, stdout or stderr, supervisord's own included -- can carry the bug,
+    so all of them ride (still day-bounded, capped, and secret-scanned)."""
     log_dir = tmp_path / "supervisor"
     now = time.time()
+    _write_log(log_dir, "supervisord.log", mtime=now)
     _write_log(log_dir, "system_interface-stderr.log", mtime=now - 1)
     _write_log(log_dir, "system_interface-stdout.log", mtime=now - 2)
-    _write_log(log_dir, "terminal-stderr.log", mtime=now - 3)
+    _write_log(log_dir, "terminal-stdout.log", mtime=now - 3)
     _write_log(log_dir, "geopolitical-dashboard-stderr.log", mtime=now - 4)
-    # Only system_interface's stdout is collected; every other program
-    # contributes stderr alone.
-    _write_log(log_dir, "terminal-stdout.log", mtime=now)
     module = _load_collector(supervisor_log_dir=log_dir)
 
-    selected = module.select_log_files({"geopolitical-dashboard"})
+    selected = module.select_log_files()
 
     assert [os.path.basename(path) for path in selected] == [
+        "supervisord.log",
         "system_interface-stderr.log",
         "system_interface-stdout.log",
-        "terminal-stderr.log",
-    ]
-
-
-def test_select_log_files_keeps_every_log_when_the_classification_is_unavailable(
-    tmp_path: Path,
-) -> None:
-    log_dir = tmp_path / "supervisor"
-    now = time.time()
-    _write_log(log_dir, "system_interface-stderr.log", mtime=now - 1)
-    _write_log(log_dir, "geopolitical-dashboard-stderr.log", mtime=now - 2)
-    module = _load_collector(supervisor_log_dir=log_dir)
-
-    selected = module.select_log_files(None)
-
-    assert [os.path.basename(path) for path in selected] == [
-        "system_interface-stderr.log",
+        "terminal-stdout.log",
         "geopolitical-dashboard-stderr.log",
     ]
 
@@ -407,22 +361,20 @@ def test_select_log_files_keeps_every_log_when_the_classification_is_unavailable
 # --- Chat selection ---
 
 
-def test_chat_agents_exclude_the_services_agent_and_agent_spawned_workers(
+def test_every_agent_is_a_transcript_candidate(
     tmp_path: Path,
 ) -> None:
-    """The workspace's own marks decide what a chat is, mirroring system_interface.
-
-    is_primary is the services agent; agent_created is a worker another agent
-    spawned (caretaker runs, automations). Neither is a conversation a person
-    had, and an agent carrying neither mark is one.
+    """No agent is filtered out: chat, background worker, or the primary services
+    agent -- any of their conversations can carry the bug. An agent with no
+    transcript simply contributes no member downstream.
     """
     stub = _write_mngr_stub(
         tmp_path,
-        agents=(("chatty", "", ""), ("system-services", "true", ""), ("worker", "", "true")),
+        agents=("chatty", "system-services", "worker"),
     )
     collector = _load_collector(mngr_binary=stub)
 
-    assert collector.list_chat_agents(5.0) == ["chatty"]
+    assert collector.list_agents(5.0) == ["chatty", "system-services", "worker"]
 
 
 def test_a_transcript_is_named_for_the_harness_that_wrote_it_not_the_agent_type(
@@ -436,7 +388,7 @@ def test_a_transcript_is_named_for_the_harness_that_wrote_it_not_the_agent_type(
     """
     stub = _write_mngr_stub(
         tmp_path,
-        agents=(("chatty", "", ""),),
+        agents=("chatty",),
         events_by_agent={"chatty": _transcript_events("hello", source="claude")},
     )
     collector = _load_collector(mngr_binary=stub)
@@ -474,7 +426,7 @@ def test_the_transcript_query_asks_for_conversations_and_excludes_the_converter_
 
 
 def test_an_agent_with_no_conversation_contributes_no_member(tmp_path: Path) -> None:
-    stub = _write_mngr_stub(tmp_path, agents=(("chatty", "", ""),))
+    stub = _write_mngr_stub(tmp_path, agents=("chatty",))
     collector = _load_collector(mngr_binary=stub)
 
     assert collector.collect_transcript_members(5.0) == []
@@ -495,7 +447,7 @@ def test_every_chat_written_to_inside_the_window_rides_along_newest_first(
     events_by_agent["idle"] = _transcript_events("idle", timestamp=_stamp_seconds_ago(10_000))
     stub = _write_mngr_stub(
         tmp_path,
-        agents=tuple((name, "", "") for name in [*recent_names, "idle"]),
+        agents=tuple([*recent_names, "idle"]),
         events_by_agent=events_by_agent,
     )
     collector = _load_collector(mngr_binary=stub)
@@ -526,7 +478,7 @@ def test_a_quiet_window_still_sends_the_five_newest_chats(
     }
     stub = _write_mngr_stub(
         tmp_path,
-        agents=tuple((name, "", "") for name in events_by_agent),
+        agents=tuple(events_by_agent),
         events_by_agent=events_by_agent,
     )
     collector = _load_collector(mngr_binary=stub)
@@ -550,7 +502,7 @@ def test_an_idle_workspace_still_carries_its_most_recent_chats(
     than the floor means all of them ride."""
     stub = _write_mngr_stub(
         tmp_path,
-        agents=(("stale", "", ""), ("staler", "", "")),
+        agents=("stale", "staler"),
         events_by_agent={
             "stale": _transcript_events("recent-ish", timestamp="2026-08-01T12:00:00Z"),
             "staler": _transcript_events("ancient", timestamp="2025-01-01T12:00:00Z"),
@@ -571,10 +523,10 @@ def test_a_workspace_whose_mngr_cannot_be_asked_reports_no_chats(
 ) -> None:
     """A failing mngr must read as no transcript, never as a crash: the collector
     asks mngr precisely so it does not re-derive this from the files itself."""
-    stub = _write_mngr_stub(tmp_path, agents=(("chatty", "", ""),), exit_code=3)
+    stub = _write_mngr_stub(tmp_path, agents=("chatty",), exit_code=3)
     collector = _load_collector(mngr_binary=stub)
 
-    assert collector.list_chat_agents(5.0) == []
+    assert collector.list_agents(5.0) == []
     assert collector.collect_transcript_members(5.0) == []
 
 
@@ -839,7 +791,6 @@ def test_main_prints_only_the_contract_json_line_with_all_content_on_a_clean_sca
         )
         metadata = json.loads(archive.read("metadata.json").decode("utf-8"))
         assert set(metadata) == {"workspace", "host_health", "services"}
-        assert metadata["services"]["are_user_services_identified"] is True
         assert '"seq": "agent-newer"' in archive.read(
             "chats/agent-newer-codex.jsonl"
         ).decode("utf-8")
