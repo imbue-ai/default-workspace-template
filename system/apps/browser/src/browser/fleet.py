@@ -330,6 +330,10 @@ def _print_attach(browser_name: str) -> None:
     url = _attach_url(browser_name)
     if url:
         _out(f"   drive it:  playwright-cli -s={browser_name} attach --cdp={url}")
+        # Point at the tool's own help rather than restating its commands anywhere: it
+        # ships with the pinned version, so it cannot drift the way a copy would.
+        _out(f"   then:      playwright-cli -s={browser_name} <command>   "
+             f"(run `playwright-cli --help` for the commands)")
     else:
         _out(f"   (still starting up -- run `ls` in a few seconds, then attach to browser {browser_name})")
 
