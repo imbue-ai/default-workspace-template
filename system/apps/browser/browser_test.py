@@ -1231,17 +1231,25 @@ def test_token_gate_is_the_per_frame_replacement_for_the_command_cas() -> None:
     asyncio.run(go())
 
 
-def test_ownership_write_rotates_the_token() -> None:
-    # Rotation on every ownership write is what makes revocation race-free: the old
-    # token simply stops matching, with no socket to chase.
-    browser = _leased("riley-jones")
+def test_the_token_survives_its_own_agent_but_not_another() -> None:
+    # Rotation is scoped deliberately. The moment-to-moment guarantee comes from the
+    # per-frame lease check, not from re-minting -- the token is identity, not authority --
+    # so it must survive everything except the browser genuinely changing hands to someone
+    # else. See the takeover test for why re-minting too eagerly breaks resumption.
+    browser = _leased("riley-jones", agent_id="A")
 
     async def go() -> None:
-        await browser.acquire("A", "Alice")
         first = browser._token
+        await browser.acquire("A", "Alice")
         assert browser._token == first  # its OWN agent acquiring must not invalidate it
         await browser.take_control()
-        assert browser._token != first
+        assert browser._token == first  # nor may a human takeover (the socket must survive)
+        assert await browser._token_may_drive(first) is False  # ...but it cannot drive
+        # The human hands back; A is at the front of the resume queue, so it lands on A.
+        await browser.return_to_agents()
+        await browser.release("A")
+        assert await browser.acquire("B", "Bob", wait=False) == "acquired"
+        assert browser._token != first  # a DIFFERENT agent does invalidate it
         assert await browser._token_may_drive(first) is False
 
     asyncio.run(go())
@@ -1438,5 +1446,38 @@ def test_pane_follow_never_reasserts_a_stale_cached_tab() -> None:
             assert activated == [], "must not re-assert the cached tab"
             await browser._on_proxy_activity("THE-TAB-THE-AGENT-IS-ON")
             assert activated == ["THE-TAB-THE-AGENT-IS-ON"]
+
+    asyncio.run(go())
+
+
+def test_a_human_takeover_does_not_kill_the_agents_socket() -> None:
+    # THE takeover flow: the agent's live socket carries the token it attached with, so
+    # re-minting on takeover would kill it permanently -- and re-attaching is not a way out,
+    # because a playwright-cli slug is poisoned once its session is torn down. Handing
+    # control back has to leave the agent able to carry on.
+    browser = _leased("browser-1", agent_id="A")
+
+    async def go() -> None:
+        attached_with = browser._token
+        assert await browser._token_may_drive(attached_with) is True
+        await browser.take_control()
+        assert await browser._token_may_drive(attached_with) is False  # refused while held
+        await browser.return_to_agents()
+        assert await browser._token_may_drive(attached_with) is True  # ...and resumes after
+
+    asyncio.run(go())
+
+
+def test_a_different_agent_taking_the_browser_does_kill_the_old_token() -> None:
+    # The rotation that DOES matter: otherwise the previous holder keeps driving.
+    browser = _leased("browser-1", agent_id="A")
+
+    async def go() -> None:
+        a_token = browser._token
+        await browser.acquire("A", "Alice")
+        await browser.release("A")
+        await browser.acquire("B", "Bob")
+        assert browser._token != a_token
+        assert await browser._token_may_drive(a_token) is False
 
     asyncio.run(go())
