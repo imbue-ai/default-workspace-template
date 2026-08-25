@@ -197,10 +197,22 @@ calls `restart_drain`; it is not the path being built here.
 Provision a rare chord bound to `cli.escape`, the way mngr provisions claude's
 `meta+q` → `chat:cancel`.
 
-Necessary because agy ships `cli.escape` bound to:
+Shipped as a **single `ctrl+c`**, not `esc`. Both are bound to agy's `cli.escape`, and the
+choice is between two different hazards:
 
-- `ctrl+c` — **double-press exits the agent.** Never send this.
-- `esc` — context-overloaded in a TUI (menus, dialogs, vim normal mode).
+- `esc` carries text-editing meaning in too many contexts (menus, dialogs, vim normal mode)
+  to deliver blind.
+- `ctrl+c` is unambiguous on the FIRST press, but agy treats a DOUBLE press as exit, and its
+  docs say that valve fires regardless of remapping.
+
+The second hazard is the controllable one: every caller presses exactly once and falls back to
+the restart rather than pressing again. The first is not controllable, because we cannot know
+what agy is currently showing.
+
+A dedicated chord bound to `cli.escape` (claude's approach) removes both hazards and remains
+the right end state. It is not shipped because agy writes no `keybindings.json` until asked,
+and a write to the wrong path would silently no-op and leave stop and tap dead. `cancel_chord`
+on the harness spec makes that a one-line change once the path is confirmed.
 
 A dedicated chord means a delivered key can only mean "cancel".
 

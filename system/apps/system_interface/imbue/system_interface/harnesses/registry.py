@@ -456,12 +456,20 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         session_class=AntigravityHarnessSession,
         model_state_relative_path=ANTIGRAVITY_STATE_RELATIVE_PATH,
         special_kinds=frozenset(),
-        # Stop and tap both end the live turn with agy's native Escape. Neither needs to
-        # retrieve anything from inside agy: the queue is ours (see antigravity/session.py),
-        # so stop returns it by reading it and the tap delivers it by sending it.
+        # Stop and tap both end the live turn with a SINGLE ctrl+c. Neither needs to retrieve
+        # anything from inside agy: the queue is ours (see antigravity/session.py), so stop
+        # returns it by reading it and the tap delivers it by sending it.
+        #
+        # DANGER, and the reason this is a named constant rather than a literal at the press
+        # site: agy treats the FIRST ctrl+c as "interrupt the active operation" and a DOUBLE
+        # press as "exit" -- and its own docs say that valve fires regardless of how the key
+        # is remapped. One press is the interrupt we want; two in quick succession kill the
+        # agent. Every caller presses exactly once and never retries. Do not add a retry.
+        # (Escape is bound to the same `cli.escape` action and would avoid that hazard, but it
+        # carries text-editing meaning in too many contexts to deliver blind.)
         interrupt_to_composer_class=AntigravityInterruptToComposer,
         shoulder_tap_class=AntigravityAtomicShoulderTap,
-        cancel_chord="Escape",
+        cancel_chord="C-c",
         popups=(_MODEL_BAR_POPUP,),
         auth_check=ANTIGRAVITY_AUTH_CHECK,
         # No `/login` popup, unlike codex and pi: agy has no such command. Signing in is what
