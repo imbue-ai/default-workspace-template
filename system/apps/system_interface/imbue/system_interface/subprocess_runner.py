@@ -1,7 +1,11 @@
 """The one way the system interface shells out: detached from the workspace's terminal.
 
-Every subprocess the system interface runs goes through :func:`run_detached_command`, and a
-ratchet (``test_subprocess_ratchets.py``) keeps it that way.
+Every run-to-completion subprocess the system interface starts goes through
+:func:`run_detached_command`, and a ratchet (``test_subprocess_ratchets.py``) keeps it that
+way. Two spawns sit outside it, both isolated by other means: ``AgentManager``'s long-running
+``mngr observe`` child, which asks ``ConcurrencyGroup.run_process_in_background`` for the same
+detachment directly, and the PTY auth flows' ``pexpect.spawn``, which puts its child in a new
+session on a pty of its own.
 
 The system interface is started by supervisord, which puts each service it launches into its
 own process group with ``setpgrp`` -- a new *group*, but the same session, so the service and
@@ -21,8 +25,17 @@ is exactly how the app goes blank.
 
 Running each child in its own session removes the exposure at the source: it inherits no
 controlling terminal, so ``/dev/tty`` is not openable and there is no group for a terminal
-signal to travel through. Nothing here needs the terminal, and nothing here needs to receive
-the terminal's signals -- there is no interactive Ctrl-C to propagate to a background service.
+signal to travel through. Nothing here needs the terminal, and there is no interactive Ctrl-C
+to propagate to a background service.
+
+The cost, which is deliberate: a detached child is out of reach of *any* process-group signal,
+supervisord's included, and ``[program:system_interface]`` sets ``stopasgroup``/``killasgroup``.
+A ``supervisorctl restart`` therefore no longer takes in-flight children down with the service.
+For the request-path commands that means a second or two of orphaned ``tmux``/``mngr``; for a
+``mngr start --restart`` on the auth restart thread it means a ten-minute budget that can
+outlive the restart meant to end it, holding host locks while it does. Staying in the service's
+process group is exactly the bug, so this half of the trade is forced, and mngr's host locks are
+built to be contended -- but the teardown behaviour really did change.
 """
 
 from __future__ import annotations

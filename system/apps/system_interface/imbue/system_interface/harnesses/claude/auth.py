@@ -224,6 +224,16 @@ class CredentialPasteError(ClaudeAuthError):
     """Raised when a pasted credential blob fails strict validation."""
 
 
+class AuthStatusUnavailableError(ClaudeAuthError):
+    """Raised when the auth check did not finish, so nothing is known either way.
+
+    Distinct from a signed-out answer, and deliberately an exception rather than a field on
+    `AuthStatus`: every caller has to decide what to do about not knowing, and a field is too
+    easy to leave unread -- which would put `logged_in=False` in front of the user as though
+    the check had said so.
+    """
+
+
 # Public type aliases for dependency injection. Tests pass deterministic
 # fakes to `ClaudeAuthService`; production code uses the module defaults.
 CommandRunner = Callable[..., Any]
@@ -317,10 +327,6 @@ class AuthStatus(FrozenModel):
     restart_reason: str | None = Field(
         default=None,
         description="Why the restart is running: 'credentials_saved', 'subscription_switch', 'console_switch'",
-    )
-    is_status_unknown: bool = Field(
-        default=False,
-        description="The check did not finish, so `logged_in` is a default and not an answer about this workspace",
     )
 
 
@@ -933,9 +939,8 @@ class ClaudeAuthService(MutableModel):
         Returns `logged_in=False` if the `claude` binary is missing or
         doesn't produce output, rather than raising, since the whole point
         of the modal is to recover from broken auth state. A check that ran
-        out of time is different: it says nothing about this workspace, so
-        it comes back with `is_status_unknown` set, and a caller that needs
-        a real answer must refuse to act on the `logged_in` default.
+        out of time is different -- it says nothing about this workspace
+        either way -- and raises `AuthStatusUnavailableError`.
 
         The managed env currently in settings.json is overlaid on the
         status subprocess's environment (with `extra_env` layered on top):
@@ -964,8 +969,9 @@ class ClaudeAuthService(MutableModel):
             return self._with_derived_mode(AuthStatus(logged_in=False), combined_extra)
 
         if result.is_timed_out:
-            logger.warning("claude auth status did not finish within {}s", _CLAUDE_AUTH_STATUS_TIMEOUT_SECONDS)
-            return self._with_derived_mode(AuthStatus(logged_in=False, is_status_unknown=True), combined_extra)
+            raise AuthStatusUnavailableError(
+                f"claude auth status did not finish within {_CLAUDE_AUTH_STATUS_TIMEOUT_SECONDS:.0f}s"
+            )
 
         stdout = result.stdout.strip() if isinstance(result.stdout, str) else ""
         if not stdout:

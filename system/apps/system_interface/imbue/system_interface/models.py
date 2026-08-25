@@ -415,10 +415,6 @@ class ClaudeAuthStatusResponse(FrozenModel):
         default=None,
         description="Why the restart is running: 'credentials_saved', 'subscription_switch', 'console_switch'",
     )
-    is_status_unknown: bool = Field(
-        default=False,
-        description="The check did not finish, so `logged_in` is a default and not an answer about this workspace",
-    )
 
 
 class ClaudeOAuthLoginStartRequest(FrozenModel):
