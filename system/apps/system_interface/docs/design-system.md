@@ -22,7 +22,22 @@ change only what it intends to.
   deliberate exceptions: markdown's relative `em` sizes and four icon glyphs.
   `type-section` is live on the new-tab launcher's category headers. Ratchet
   `fontSizePx` tightened 80 → 4.
-- **Colour de-dup, semantic colour, primitives — not yet started** (below).
+- **Corner-radius de-dup — DONE.** 15 raw `6px` border-radii → `var(--radius-base)`;
+  provable exact no-op (harness: all sections identical). Ratchet `borderRadiusPx`
+  55 → 40. A full radius *scale* (8/12/…) is deferred: like type, it needs
+  non-colliding names (Tailwind's `rounded-md/lg` are used in the views).
+- **Semantic colour — DONE (no-op).** Added `--color-danger*/-warning*/-success/
+  -info`, a `--color-neutral-*` slate scale, and `--color-text-on-accent`, all at
+  current in-use values; migrated 36 sites (exact hex→token, `color:#fff`→on-accent,
+  surface white→`--color-surface`) and dropped 5 dead `var(--token,#hex)` fallbacks.
+  Ratchet `hexOutsideTheme` 52 → 16.
+- **Leftover colours — pending a design call.** 16 raw hexes remain in three
+  component-local palettes that would be *unification* (a visible change), not a
+  no-op: the warm login/composer error red (`#80261f/#fdecea/#f4c7c3/#c5221f/
+  #b3573c/#d4806a`) vs the cool `--color-danger`; the `.minds-tooltip` black/white;
+  and the progress-block warm greys (`#5a564a/#c2bfb6/#bcbcbc`).
+- **Primitives (P3) / Modal (P4) — not started** (below); out of scope for the
+  current pass (user chose "through P2").
 
 All line/rule counts below were measured from `frontend/src/style.css`
 (4,108 lines, 512 rule blocks) and the `frontend/src/**` view modules at the
