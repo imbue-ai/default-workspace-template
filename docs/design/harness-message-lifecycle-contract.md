@@ -398,8 +398,10 @@ transcript carries no client id, so delivery rests on having sent exactly one bl
 receiving exactly one turn — a 1:1 correspondence we control rather than an id we can look up.
 Separately, mngr's send returns when agy's busy marker advances, i.e. when agy became *busy*,
 not when the user step settled in its store. A turn cancelled between those two points is
-reported delivered though nothing committed. Narrow, real, and recorded rather than papered
-over.
+reported delivered though nothing committed. The mirror case also has no id to settle it: a
+send that times out on a prompt agy actually accepted reports failure, so the block returns to
+the queue and the next idle flush sends it again -- a duplicate rather than a loss, which is
+the safer of the two but still visible. Narrow, real, and recorded rather than papered over.
 
 The same gap is why A6's "no overlap between Sending… and Thinking…" does not hold exactly
 during a flush: the marker advancing is both what starts the dot and what our send waits on,
