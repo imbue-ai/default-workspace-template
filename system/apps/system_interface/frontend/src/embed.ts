@@ -43,9 +43,7 @@ export const QUERY_PERMISSION_RESOLUTIONS: "minds:query-permission-resolutions" 
     ? embedContract.QUERY_PERMISSION_RESOLUTIONS
     : "minds:query-permission-resolutions";
 export const PERMISSION_RESOLUTIONS: "minds:permission-resolutions" =
-  "PERMISSION_RESOLUTIONS" in embedContract
-    ? embedContract.PERMISSION_RESOLUTIONS
-    : "minds:permission-resolutions";
+  "PERMISSION_RESOLUTIONS" in embedContract ? embedContract.PERMISSION_RESOLUTIONS : "minds:permission-resolutions";
 
 type EmbedderMessageHandler = (message: ContractMessage) => void;
 
