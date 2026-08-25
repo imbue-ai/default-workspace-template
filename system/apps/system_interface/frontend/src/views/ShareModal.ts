@@ -40,9 +40,7 @@ export const ShareModal: m.Component<ShareModalAttrs> = {
             "Shared traffic is encrypted end-to-end into this workspace, and access is granted per email address.",
           ),
         ]),
-        m("div.share-modal-footer", [
-          m("button.share-modal-btn.share-modal-btn-secondary", { onclick: onClose }, "Close"),
-        ]),
+        m("div.share-modal-footer", [m("button.btn.btn--secondary", { onclick: onClose }, "Close")]),
       ]),
     ]);
   },

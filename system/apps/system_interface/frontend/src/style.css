@@ -2831,46 +2831,11 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   outline: none;
 }
 
-.share-modal-btn {
-  padding: 6px 16px;
-  font-family: inherit;
-  font-size: var(--font-size-body);
-  font-weight: 600;
-  border-radius: var(--radius-base);
-  cursor: pointer;
-  border: none;
-  background: var(--color-neutral-900);
-  color: white;
-}
-
-.share-modal-btn:hover:not(:disabled) {
-  background: var(--color-neutral-700);
-}
-
-.share-modal-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.share-modal-btn-secondary {
-  background: white;
-  color: var(--color-neutral-900);
-  border: 1px solid var(--color-neutral-200);
-}
-
-.share-modal-btn-secondary:hover:not(:disabled) {
-  background: var(--color-neutral-100);
-}
-
-.share-modal-btn-destructive {
-  background: white;
-  color: var(--color-danger);
-  border: 1px solid var(--color-danger-border);
-}
-
-.share-modal-btn-destructive:hover:not(:disabled) {
-  background: var(--color-danger-bg);
-}
+/* Share modal buttons now use the shared .btn primitive. The only live share
+   button is "Close" (btn--secondary); the former base (dark), -destructive and
+   -create variants had no remaining call sites, so their styling is deleted.
+   The intended mapping for those was base -> btn--inverse and destructive ->
+   btn--ghost.btn--destructive. */
 
 .share-modal-section {
   margin: 16px 0;
@@ -2973,8 +2938,6 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   display: flex;
   gap: 8px;
 }
-
-/* share-modal-btn-create uses the base .share-modal-btn styling (dark button) */
 
 /* === Claude login modal === */
 
