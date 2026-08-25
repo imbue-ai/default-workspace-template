@@ -570,7 +570,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
           "Connect your Claude.ai account to use your Pro or Max plan quota in this mind.",
         ),
         m(
-          "button.claude-login-button.claude-login-button--primary.claude-login-button--block",
+          "button.btn.btn--primary.btn--block",
           { type: "button", onclick: () => void startOauthLogin("claudeai") },
           "Continue with Claude subscription",
         ),
@@ -723,7 +723,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
       m("div.claude-login-step", [
         m("div.claude-login-step-label", [m("span.claude-login-step-num", "1"), "Get your credentials"]),
         m(
-          "a.claude-login-button.claude-login-button--primary.claude-login-button--block.claude-login-button--link",
+          "a.btn.btn--primary.btn--block.no-underline",
           {
             href: "#",
             onclick: (event: MouseEvent) => {
@@ -764,7 +764,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
       m("div.claude-login-step", [
         m("div.claude-login-step-label", [m("span.claude-login-step-num", "1"), "Open the sign-in page"]),
         m(
-          "a.claude-login-button.claude-login-button--primary.claude-login-button--block.claude-login-button--link",
+          "a.btn.btn--primary.btn--block.no-underline",
           {
             href: oauthUrl,
             target: "_blank",
@@ -818,7 +818,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
             },
           }),
           m(
-            "button.claude-login-button.claude-login-button--primary",
+            "button.btn.btn--primary",
             {
               type: "button",
               disabled: !code.trim(),
@@ -857,7 +857,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
                     },
                   }),
                   m(
-                    "button.claude-login-button.claude-login-button--primary",
+                    "button.btn.btn--primary",
                     {
                       type: "button",
                       disabled: !directToken.trim(),
@@ -1019,11 +1019,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
     if (mode === "select_provider" || mode === "verifying" || mode === "applying") return null;
     if (mode === "success") {
       return m("div.claude-login-footer", [
-        m(
-          "button.claude-login-button.claude-login-button--primary",
-          { type: "button", onclick: () => attrsRef?.onDismiss() },
-          "Done",
-        ),
+        m("button.btn.btn--primary", { type: "button", onclick: () => attrsRef?.onDismiss() }, "Done"),
       ]);
     }
     if (mode === "error") {
@@ -1034,7 +1030,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
       // a single primary action here is not a dead end.
       return m("div.claude-login-footer", [
         m(
-          "button.claude-login-button.claude-login-button--primary.claude-login-button--block",
+          "button.btn.btn--primary.btn--block",
           { type: "button", onclick: () => goBackToProviderSelection() },
           "Start over",
         ),
@@ -1042,13 +1038,9 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
     }
     if (mode === "api_key_form") {
       return m("div.claude-login-footer.claude-login-footer--spread", [
+        m("button.btn.btn--secondary", { type: "button", onclick: () => goBackToProviderSelection() }, "Back"),
         m(
-          "button.claude-login-button.claude-login-button--ghost",
-          { type: "button", onclick: () => goBackToProviderSelection() },
-          "Back",
-        ),
-        m(
-          "button.claude-login-button.claude-login-button--primary",
+          "button.btn.btn--primary",
           {
             type: "button",
             disabled: !apiKey.trim(),
@@ -1062,13 +1054,9 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
     }
     if (mode === "imbue_form") {
       return m("div.claude-login-footer.claude-login-footer--spread", [
+        m("button.btn.btn--secondary", { type: "button", onclick: () => goBackToProviderSelection() }, "Back"),
         m(
-          "button.claude-login-button.claude-login-button--ghost",
-          { type: "button", onclick: () => goBackToProviderSelection() },
-          "Back",
-        ),
-        m(
-          "button.claude-login-button.claude-login-button--primary",
+          "button.btn.btn--primary",
           {
             type: "button",
             disabled: !imbueBlob.trim(),
@@ -1084,11 +1072,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
     // polling (or one of the subtle affordances, which carry their own
     // buttons). Back returns to provider selection and aborts the session.
     return m("div.claude-login-footer", [
-      m(
-        "button.claude-login-button.claude-login-button--ghost",
-        { type: "button", onclick: () => goBackToProviderSelection() },
-        "Back",
-      ),
+      m("button.btn.btn--secondary", { type: "button", onclick: () => goBackToProviderSelection() }, "Back"),
     ]);
   }
 

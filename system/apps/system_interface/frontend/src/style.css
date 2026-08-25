@@ -244,6 +244,10 @@ body {
   color: var(--color-accent);
   border-color: var(--color-accent);
 }
+/* Full-width modifier (e.g. modal CTAs that span the card). */
+.btn--block {
+  width: 100%;
+}
 
 /* Spacer for the Minds desktop client title bar. When running inside the
    Electron shell, --minds-titlebar-height is set to the title bar height
@@ -3924,66 +3928,10 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 }
 
 /* Buttons */
-.claude-login-button {
-  padding: 8px 16px;
-  border-radius: 8px;
-  font-size: var(--font-size-body);
-  font-weight: 500;
-  cursor: pointer;
-  transition:
-    background 80ms ease,
-    border-color 80ms ease;
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--color-text-primary);
-  font-family: inherit;
-}
-
-.claude-login-button:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
-}
-
-.claude-login-button--ghost {
-  border-color: var(--color-border);
-  background: var(--color-surface);
-}
-
-.claude-login-button--ghost:hover:not(:disabled) {
-  background: var(--color-bg-hover);
-}
-
-.claude-login-button--primary {
-  background: var(--color-accent);
-  color: var(--color-text-on-accent);
-  border-color: var(--color-accent);
-}
-
-.claude-login-button--primary:hover:not(:disabled) {
-  background: var(--color-accent-hover);
-  border-color: var(--color-accent-hover);
-}
-
-.claude-login-button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-/* Full-width button (subscription CTA, "Open sign-in page") */
-.claude-login-button--block {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  width: 100%;
-  padding: 10px 16px;
-}
-
-/* An <a> styled as a button -- strip link decoration */
-.claude-login-button--link {
-  text-decoration: none;
-  box-sizing: border-box;
-}
+/* Claude-login modal buttons now use the shared .btn primitive
+   (--primary -> btn--primary, --ghost -> btn--secondary, --block -> btn--block
+   for full width; the anchor CTAs use btn--primary.btn--block.no-underline,
+   replacing the old --link decoration strip). */
 
 /* Inline error callout */
 .claude-login-error-callout {
