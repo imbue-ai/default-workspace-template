@@ -467,19 +467,33 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
             return
         before = self._turn_state.user_turn_texts()
         delivered: tuple[str, ...] = ()
+        witnessed: list[dict[str, Any]] = []
         try:
             if send(block):
-                delivered = self._observe_delivery(before, block, claimed)
+                delivered, witnessed = self._observe_delivery(before, block, claimed)
         finally:
+            # DEPART BEFORE ARRIVE (contract A3b). The queue entry is removed FIRST, and only
+            # then are the transcript events it turned into released. Emitting as we found them
+            # -- which is what the witness loop used to do -- put the committed turn on screen
+            # while the entry was still showing as Sending: one message in two states at once,
+            # and the "chat, then still queued, then gone" blip.
             self._queue.finish_flush(claimed, generation, delivered=delivered)
             if not delivered:
                 # No immediate re-arm: the retry cadence is this loop's own timeout. Re-arming
                 # here turned a persistently failing send into a hot loop that re-pasted the
                 # whole block, re-ran discovery and re-broadcast on every iteration.
                 logger.info("antigravity: {} did not witness a turn for its block", self._agent_id)
+            if witnessed:
+                self._on_events(self._agent_id, witnessed)
 
-    def _observe_delivery(self, before: tuple[str, ...], block: str, claimed: tuple[str, ...]) -> tuple[str, ...]:
-        """Which claimed ids agy actually committed, by finding our text in its own store.
+    def _observe_delivery(
+        self, before: tuple[str, ...], block: str, claimed: tuple[str, ...]
+    ) -> tuple[tuple[str, ...], list[dict[str, Any]]]:
+        """Which claimed ids agy committed, plus the events seen while looking.
+
+        Returns ``(delivered_ids, witnessed_events)``. It deliberately does NOT emit those
+        events itself: the caller releases them only after the queue entry has been removed,
+        so the turn never appears while its entry is still on screen (contract A3b).
 
         NOT "did a turn open": a turn opened by the human at the tmux pane, or by ``mngr
         message`` from cron, would resolve our entries while our block sat parked. The text is
@@ -491,31 +505,30 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
         """
         deadline = time.monotonic() + _DELIVERY_WITNESS_SECONDS
         lines = block.split("\n")
+        witnessed: list[dict[str, Any]] = []
         is_deadline_passed = False
         while not is_deadline_passed:
             # Rescan here rather than waiting on the transcript thread's cadence: the verdict
             # must not depend on another thread having ticked, and a row agy has already
             # written should be seen the moment we look.
             with self._lock:
-                pending = self._collect_new_events()
+                witnessed.extend(self._collect_new_events())
                 self._publish_turn_state()
-            if pending:
-                self._on_events(self._agent_id, pending)
             for text in self._turn_state.user_turn_texts()[len(before) :]:
                 cleaned = text.strip()
                 if cleaned == block.strip():
-                    return claimed
+                    return claimed, witnessed
                 covered = _covered_prefix(lines, cleaned)
                 if covered:
-                    return claimed[:covered]
+                    return claimed[:covered], witnessed
             is_deadline_passed = time.monotonic() >= deadline
             if not is_deadline_passed:
                 # Waiting on the stop event rather than sleeping: teardown interrupts the
                 # witness window immediately instead of after the full deadline, and the
                 # worker cannot sit blind while its watcher is being shut down.
                 if self._stopping.wait(_DELIVERY_POLL_SECONDS):
-                    return ()
-        return ()
+                    return (), witnessed
+        return (), witnessed
 
     def _return_queue_to_composer(self) -> None:
         """A dead agent's queue goes back to the user, not into the bin."""
