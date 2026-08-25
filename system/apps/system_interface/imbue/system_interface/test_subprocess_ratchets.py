@@ -32,7 +32,7 @@ pytestmark = pytest.mark.xdist_group(name="ratchets")
 _RAW_SPAWN_RULE = RatchetRuleInfo(
     rule_name="subprocess spawns outside subprocess_runner.py",
     rule_description=(
-        "The system interface must spawn every subprocess through "
+        "The system interface must spawn every subprocess written in this project through "
         "imbue.system_interface.subprocess_runner.run_detached_command, which puts the child in its "
         "own session. A child that inherits this service's controlling terminal can stop the whole "
         "service just by touching that terminal when it is killed (the kernel answers a read or a "
