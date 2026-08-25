@@ -1973,6 +1973,12 @@ def _preflight(
     env = dict(os.environ)
     env["SYSTEM_INTERFACE_HOST"] = "127.0.0.1"
     env["SYSTEM_INTERFACE_PORT"] = str(port)
+    # The caller is an agent, so its environment carries MNGR_AGENT_ID -- under
+    # which the throwaway boot would persist layout state as if it were that
+    # agent, clobbering the live layout.json. The preview flow
+    # (reveal_system_interface.py) drops it for the same reason; the pre-flight
+    # is just as much a throwaway boot and gets the same guard.
+    env.pop("MNGR_AGENT_ID", None)
     with tempfile.TemporaryDirectory() as scratch:
         output_path = Path(scratch) / "preflight-boot.log"
         spawned = spawner.spawn(
