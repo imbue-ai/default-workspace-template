@@ -307,7 +307,7 @@ thread, lifecycle gate, flush lock, reconciliation — is the price, not an acci
 If that machinery turns out worse in practice than the guess, this is the paragraph
 to revisit.
 
-## 12. Done means
+## 13. Done means
 
 - Sending while agy is busy shows a queued entry immediately.
 - Stop returns everything unsent to the composer, in order, without restarting.
