@@ -468,7 +468,7 @@ def test_patterns_match_installed_binary() -> None:
     """Every pattern must still find its text in the shipped claude.
 
     This is the drift guard the module docstring promises. It exists because
-    ``EffortCalloutIndicator`` matched a string absent from every version Minds has ever
+    ``EffortCalloutIndicator`` matched a string absent from every version this repo has ever
     shipped and nothing noticed across two pins.
     """
     blob = _CLAUDE_BINARY.read_bytes()

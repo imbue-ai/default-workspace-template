@@ -276,9 +276,9 @@ def _emit_human_output(result: MessageResult) -> None:
 
     for failure in result.failures:
         # The reason says what to fix and that the terminal is where; naming the command that
-        # OPENS that terminal is the CLI's to add, because it is only true here -- a Minds user
-        # reading the same reason has a tab, not a shell. Only for a blocked input, which is the
-        # one kind a person can walk over and clear.
+        # OPENS that terminal is the CLI's to add, because it is only true here -- a graphical
+        # client reading the same reason has a tab, not a shell. Only for a blocked input,
+        # which is the one kind a person can walk over and clear.
         hint = (
             f" Connect with 'mngr connect {failure.agent_name}' to resolve it."
             if failure.kind == SendFailureKind.INPUT_BLOCKED

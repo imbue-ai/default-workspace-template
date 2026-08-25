@@ -2077,8 +2077,8 @@ def test_preflight_refuses_a_pending_shell_command(
     message = str(exc_info.value)
     # The actionable error the feature promises, and the same recovery PR #397 gave: what state
     # the agent is in and which keys resolve it. The 'mngr connect' clause #397 also carried is
-    # deliberately gone -- it named a CLI command inside a string Minds renders in a modal, next
-    # to a terminal tab, and the sentence before it already says to use the terminal.
+    # deliberately gone -- it named a CLI command inside a string a graphical client renders in a
+    # modal next to a terminal tab, and the sentence before it already says to use the terminal.
     assert "shell mode" in message and "Enter" in message and "Escape" in message
     assert "mngr connect" not in message
 

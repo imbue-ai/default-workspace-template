@@ -1555,8 +1555,8 @@ class DialogDetectedError(SendMessageError):
     agent X", and a client puts that in a title of its own -- so a preamble here restated what
     the reader had already been told twice, and the nickname wedged into it was internal
     vocabulary leaking. The dialog says what is wrong and what clears it, once. How to REACH the
-    terminal is the client's to say: a Minds user has a tab, a CLI user has ``mngr connect``, and
-    a line naming one of those is wrong wherever the other is true.
+    terminal is the client's to say: a graphical client has a tab, a CLI user has ``mngr connect``,
+    and a line naming one of those is wrong wherever the other is true.
     """
 
     def __init__(self, agent_name: str, dialog_description: str, recovery: str | None = None) -> None:
