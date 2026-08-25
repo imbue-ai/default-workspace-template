@@ -80,9 +80,7 @@ def get_status() -> Response:
         status = service.get_auth_status()
     except auth.AuthStatusUnavailableError as e:
         # A check that ran out of time is not a signed-out answer, and answering as if it were
-        # pops the login modal over a workspace that is signed in. All three callers of this
-        # endpoint already treat a failed request as "learned nothing this time", so refusing
-        # to answer is the honest outcome and also the quiet one.
+        # pops the login modal over a workspace that is signed in.
         return _error_response(str(e), status_code=_UNAVAILABLE_STATUS_CODE)
     except auth.ClaudeAuthError as e:
         return _error_response(str(e), status_code=500)

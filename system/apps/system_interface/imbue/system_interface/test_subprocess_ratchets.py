@@ -8,8 +8,8 @@ than counts, because a single new attached spawn reintroduces the whole failure 
 
 There are two rules because there are two ways to spawn. Run-to-completion commands go through
 ``run_detached_command``. Long-running background processes cannot -- they need
-``ConcurrencyGroup`` -- so they ask it for the detachment themselves; the ``mngr observe``
-child reached the runner that way and was invisible to a rule looking only for the raw call.
+``ConcurrencyGroup`` -- so they ask it for the detachment themselves, and a rule looking only
+for the raw runner call would not see them.
 
 Lives outside ``test_ratchets.py`` because that file is the per-project standard set, and
 these rules are specific to this project.
@@ -83,8 +83,8 @@ def test_prevent_background_process_spawns_outside_the_one_that_detaches_itself(
 
 
 def test_the_allowlisted_background_spawn_detaches_itself() -> None:
-    """agent_manager.py is exempt from the rule above, so nothing else would notice it going
-    back to an attached spawn -- which is how the observe child was missed to begin with."""
+    """agent_manager.py is exempt from the rule above, so nothing else would notice its spawn
+    going back to attached."""
     source = (_SOURCE / "imbue" / "system_interface" / "agent_manager.py").read_text()
     assert source.count("run_process_in_background(") == 1, (
         "agent_manager.py gained another background spawn; the shared rule cannot see them, "
