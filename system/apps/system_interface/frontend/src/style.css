@@ -13,7 +13,8 @@
  * "design-system-exception: <reason>" comment AND bump the matching baseline
  * in src/design-system-ratchet.test.ts (it only ratchets down).
  *
- * Prove no regression:  node gallery/visual-diff.mjs diff-refs main
+ * The ratchet (src/design-system-ratchet.test.ts) runs under the test suite and
+ * fails when raw hex/font-size/border-radius/z-index values grow.
  * ==========================================================================*/
 @import "tailwindcss";
 @import "dockview-core/dist/styles/dockview.css";

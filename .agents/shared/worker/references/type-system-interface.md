@@ -36,9 +36,10 @@ the full assessment and token set are in
   baseline in `src/design-system-ratchet.test.ts` (it only ratchets down) in the
   same change. The ratchet runs under `npm run test`, so a new raw value fails
   the suite until you either tokenize it or justify it this way.
-- **Prove no visual regression** for a CSS change with the before/after harness:
-  `node gallery/visual-diff.mjs diff-refs main` (see `frontend/gallery/README.md`).
-  A token-only refactor should report every section `identical`.
+- **A token-only refactor should be a visual no-op** — each replaced literal must
+  resolve to the same computed value. The ratchet
+  (`src/design-system-ratchet.test.ts`, run under `npm run test`) is the automated
+  guard against raw values regrowing; review the diff to confirm no value changed.
 
 ## Running and testing
 

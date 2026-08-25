@@ -35,8 +35,7 @@ another button/modal.** The enforceable rules and the escape hatch are in
 token set, and migration plan are in
 [`docs/design-system.md`](docs/design-system.md). A ratchet
 (`frontend/src/design-system-ratchet.test.ts`) fails the suite when raw values
-grow, and a visual before/after harness (`frontend/gallery/`,
-`node gallery/visual-diff.mjs diff-refs main`) proves a CSS change is a no-op.
+grow.
 
 ## Updating the running UI (canonical flow)
 

@@ -75,17 +75,13 @@ When you must:
 
 ### Prove you didn't regress
 
-For **any** CSS change, run the visual before/after harness and confirm the
-report is all-identical except the sections you intended to change:
-
-```
-node gallery/visual-diff.mjs diff-refs main
-open gallery/.visual-diff/report-main-vs-WORKING.html
-```
-
-See [`gallery/README.md`](gallery/README.md). Add a new `data-shot` section to
-`gallery/gallery.html` when you introduce a genuinely new shared surface, so it
-too is covered by before/after.
+A token-only refactor should be a visual no-op: each replaced literal must resolve
+to the same computed value. The ratchet
+([`src/design-system-ratchet.test.ts`](src/design-system-ratchet.test.ts)) runs
+under `npm run test` and fails when raw hex / font-size / border-radius / z-index
+values grow, so a regression that reintroduces a literal is caught automatically.
+Review the diff — and, for a genuine visual change, the running UI — to confirm you
+changed only what you intended.
 
 ---
 

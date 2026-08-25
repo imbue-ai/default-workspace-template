@@ -1,5 +1,5 @@
-Added a design-system assessment and a visual before/after harness for the frontend. No user-facing behaviour change.
+Added a design-system assessment for the frontend. No user-facing behaviour change.
 
 - `docs/design-system.md`: a durable assessment of how the UI is built and a phased plan to systematize it. Measures the current sprawl (29 font sizes, 23 spacing atoms, 18 radii, 7 unmanaged z-indexes, ~15 bespoke button families, 6+ independent modal implementations, ~45 raw hex colours of which ~18 duplicate existing tokens), proposes a complete `@theme` token set and a handful of component primitives, and lays out a low-risk migration (P0 scaffold → P1 mechanical sweep → P2 semantic colour → P3/P4 primitives + modal).
 
-- `frontend/gallery/`: a static component gallery plus a `visual-diff.mjs` tool that compiles a given `style.css` with the Tailwind CLI, renders the gallery, screenshots each `[data-shot]` section, and pixel-diffs two versions into an HTML report. `node gallery/visual-diff.mjs diff-refs main` gives a one-command before/after (extracts each ref's `style.css` via `git show`, so no worktree is needed). Token sections are read live from the compiled CSS, so any token-value change is caught. Dev-only: added `@tailwindcss/cli`, `playwright-core`, `pixelmatch` and `pngjs` as devDependencies; artifacts are gitignored and the gallery is not part of the app build.
+(A dev-only visual-diff gallery under `frontend/gallery/` was added alongside this to prove each migration phase a no-op; it was removed once the migration completed.)
