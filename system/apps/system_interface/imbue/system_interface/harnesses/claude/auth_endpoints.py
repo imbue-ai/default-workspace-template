@@ -53,13 +53,14 @@ def _status_to_response(status: auth.AuthStatus) -> ClaudeAuthStatusResponse:
     return ClaudeAuthStatusResponse.model_validate(status.model_dump())
 
 
-# What to tell the user when the auth check times out on a path that has already written the
-# credentials and kicked the restart. Saying "not signed in" there would be the same lie this
-# 503 exists to avoid, just further along the flow. Every one of those handlers renders the
-# `detail` verbatim, so this is the text the user sees.
+# What to tell the user when the auth check times out on a path that has already applied the
+# sign-in. Saying "not signed in" there would be the same lie this 503 exists to avoid, just
+# further along the flow. Every one of those handlers renders the `detail` verbatim, so this is
+# the text the user sees -- and it has to stay true on the subscription fast path, which stores
+# the credential through the CLI and deliberately starts no restart at all.
 _UNCONFIRMED_DETAIL: Final[str] = (
     "Could not confirm the sign-in: `claude auth status` did not finish in time. "
-    "Your credentials were saved and the agents are restarting; reopen this dialog to check."
+    "Your sign-in was applied; reopen this dialog to check."
 )
 # 503 rather than 500 throughout: the check may well answer on the next try.
 _UNAVAILABLE_STATUS_CODE: Final[int] = 503
