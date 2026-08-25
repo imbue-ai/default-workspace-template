@@ -59,7 +59,14 @@ const BASELINES = {
   // 10000` (plus the image lightbox's) now uses that token as it moves onto the
   // shell. Tightened again as the last custom-url dialogs moved onto the shell and
   // the bespoke .custom-url-dialog block (its raw z-index: 10000) was deleted.
-  zIndexLiteral: 11,
+  // Tightened again by the z-index scale (--z-content/-sticky/-dropdown/-overlay/
+  // -tooltip): the five literals with an exact layer name (10001, 1000, 100, and
+  // two 1s) moved onto the tokens. The remaining 6 have no layer name in the
+  // scale -- two mid-layer overlays at 50 (chat-drop, Claude sign-in modal) and
+  // four "content + 1" at 2 (the si-live-surface that must beat dockview's own
+  // z-index:1, plus three progress-view blocks lifted over the timeline thread) --
+  // each marked design-system-exception at its site.
+  zIndexLiteral: 6,
 } as const;
 
 interface Counts {
