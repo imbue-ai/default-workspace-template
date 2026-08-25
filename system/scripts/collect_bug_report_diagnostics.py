@@ -11,11 +11,12 @@ Prints exactly one line: a JSON object of the shape
     {"contract_version": 1, "zip": "<base64 of a zip>", "omissions": {...}}
 
 ``zip`` is absent (not empty) when nothing was collected. The zip holds
-one ``logs/<program>.log`` member per collected log (when --logs scanned
-clean) and one ``chats/<agent-id>-<harness>.jsonl`` per selected agent
-conversation, newest first (when --transcript scanned clean). ``omissions``
-explains, per requested content type, anything that was withheld; a content
-type that was not requested appears in neither the zip nor omissions.
+``metadata.json`` plus one ``logs/<program>.log`` member per collected log
+(when --logs scanned clean) and one ``chats/<agent-id>-<harness>.jsonl`` per
+selected agent conversation, newest first (when --transcript scanned clean).
+``omissions`` explains, per requested content type, anything that was
+withheld; a content type that was not requested appears in neither the zip
+nor omissions.
 
 Nothing leaves the container unscanned: every chat, the logs text, and each
 future zip member's own filename are staged as PLAINTEXT and run through the
