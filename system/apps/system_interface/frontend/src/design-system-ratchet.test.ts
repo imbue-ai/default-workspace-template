@@ -51,7 +51,11 @@ const BASELINES = {
   // Tightened by the tooltip primitive: the three duplicated per-component
   // `[data-tooltip]::after` bubbles (each with `z-index: 1000`) were consolidated
   // into one generic `[data-tooltip]::after`, dropping two z-index literals.
-  zIndexLiteral: 16,
+  // Tightened again by the P4 modal shell: the new shared `.modal-overlay` reads
+  // `var(--z-overlay)`, and the delete-confirm dialog's old raw `z-index: 10000`
+  // overlay plus the image lightbox's now use that token -- two raw literals gone.
+  // (Drops further as fast-mode/share/custom-url move onto the shell.)
+  zIndexLiteral: 14,
 } as const;
 
 interface Counts {
