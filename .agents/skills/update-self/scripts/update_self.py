@@ -1069,10 +1069,17 @@ _ASSET_REFERENCE_PATTERN = re.compile(r"/assets/([A-Za-z0-9._-]+\.js)")
 HEALTH_PATH = "/api/agents"
 SERVE_PATH = "/"
 
-# Poll budgets.
-_HEALTH_ATTEMPTS = 30
+# Poll budgets. The health and pre-flight budgets are deliberately generous: a
+# loaded workspace boots a healthy backend well past the 30s the old reveal
+# allowed, and a budget that is too short reads as "your change was bad" over a
+# change that was fine -- with the whole release as blast radius and a retry
+# that is correctly refused. A budget that is too long costs seconds only on a
+# genuinely broken change (the pre-flight also stops early when the boot
+# process dies). Tune these down against the per-phase timings the apply
+# marker records, not by guesswork.
+_HEALTH_ATTEMPTS = 240
 _HEALTH_INTERVAL_SECONDS = 1.0
-_PREFLIGHT_ATTEMPTS = 30
+_PREFLIGHT_ATTEMPTS = 240
 _PREFLIGHT_INTERVAL_SECONDS = 1.0
 _FRONTEND_PROBE_ATTEMPTS = 5
 _FRONTEND_PROBE_INTERVAL_SECONDS = 1.0
