@@ -671,11 +671,13 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
           title: actionFailureTitle,
           body: [
             detail,
-            // Many of these are resolved in seconds by someone looking at the pane -- an
-            // unsubmitted shell command, a dialog wanting a real answer -- so say so.
+            // Only when the detail does not already say what to do. An input_blocked reason is
+            // the dialog's own advice ("press Enter in its terminal to run it") -- following it
+            // with a vaguer paraphrase of the same instruction is the third time one screen has
+            // told the reader to go look at their terminal.
             actionFailureKind === "agent_unreachable"
               ? "The agent's terminal is gone, so restarting it is the only way to deliver this."
-              : isRepeatable
+              : isRepeatable && actionFailureKind !== "input_blocked"
                 ? "You can open the agent's terminal, fix it there, then Retry."
                 : null,
           ],

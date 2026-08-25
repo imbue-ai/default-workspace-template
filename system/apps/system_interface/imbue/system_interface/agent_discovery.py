@@ -236,6 +236,18 @@ def delivered_or_raise(failure: SendFailure | None) -> bool:
     return True
 
 
+def _without_send_prefix(error_message: str, agent_name: str) -> str:
+    """Drop mngr's "Failed to send message to agent X: " prefix from a reason we are about to show.
+
+    mngr writes that prefix for a terminal, where the line stands alone and has to say what
+    failed and for whom. Here it is the third time the reader is told: the notice is titled
+    "Couldn't send your message" and sits in that agent's own tab. Stripped rather than asked
+    for separately because the prefix is mngr's, stable, and built from the name we already have.
+    """
+    prefix = f"Failed to send message to agent {agent_name}: "
+    return error_message[len(prefix) :] if error_message.startswith(prefix) else error_message
+
+
 class SendFailure(FrozenModel):
     """Why a send did not land: the harness's own words, plus mngr's classification of them."""
 
@@ -253,7 +265,9 @@ def _first_failure(result: MessageResult) -> SendFailure:
     kinds = dict(result.failed_agent_kinds)
     for agent_name, error_message in result.failed_agents:
         if error_message:
-            return SendFailure(reason=error_message, kind=kinds.get(agent_name, "unknown"))
+            return SendFailure(
+                reason=_without_send_prefix(error_message, agent_name), kind=kinds.get(agent_name, "unknown")
+            )
     # Nothing matched the id at all, which is its own answer -- and trying again will not change
     # it, so it is classified the same as a pane that is gone.
     return SendFailure(reason="The agent could not be reached.", kind="agent_unreachable")
