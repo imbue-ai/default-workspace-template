@@ -401,6 +401,14 @@ not when the user step settled in its store. A turn cancelled between those two 
 reported delivered though nothing committed. Narrow, real, and recorded rather than papered
 over.
 
+The same gap is why A6's "no overlap between Sending… and Thinking…" does not hold exactly
+during a flush: the marker advancing is both what starts the dot and what our send waits on,
+so the flushing entries read "Sending…" for the short remainder of that send while the turn is
+already generating. Holding them there is deliberate -- dropping them at hand-off instead would
+blink them off screen before the turn renders, which A1a forbids outright and which E1 records
+as the worse failure. This is the same shape codex's shoulder-tap resend already has, and it
+renders through the same path.
+
 ### E13. antigravity — the cancel key is a single ctrl+c, and a double press exits
 agy binds `cli.escape` to both `esc` and `ctrl+c`. `esc` carries text-editing meaning in too
 many TUI contexts to deliver blind; `ctrl+c` is unambiguous on the FIRST press, but agy treats

@@ -191,6 +191,16 @@ class AntigravityQueueTracker:
         with self._lock:
             return bool(self._queued.snapshot())
 
+    def is_sending(self) -> bool:
+        """Whether a flush has entries claimed and in flight (contract Shoulder-tap).
+
+        The tap is offered only when nothing is Sending: tapping mid-flush would press
+        ctrl+c through the very turn the flush is committing our block into, and re-send
+        a block the flush already handed over.
+        """
+        with self._lock:
+            return bool(self._sending_ids)
+
 
 # The one tracker per agent, shared by the two components that need it.
 #

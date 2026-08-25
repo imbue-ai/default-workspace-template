@@ -97,8 +97,14 @@ class AntigravityInterruptToComposer(InterruptToComposer):
         landing during an in-flight send would otherwise block behind it. Failing to take
         the lock means exactly that, and stop must still win.
         """
-        queued_block = watcher.get_queued_block()
         with try_hold_message_lock(self._agent_info.agent_state_dir) as is_lock_held:
+            # Captured UNDER the lock, the way claude's restart_drain_under_message_lock does:
+            # holding it means any in-flight send -- including our own flush, which sends
+            # through mngr and so takes this same lock -- has finished and settled the queue.
+            # Captured before the wait instead, a flush that delivered during it would still
+            # be in the block and every message it delivered would be handed back to the
+            # composer as though it had never been sent.
+            queued_block = watcher.get_queued_block()
             if not is_lock_held:
                 # A send is in flight. Its text is not committed, so it must come back too --
                 # the base restart-drain discards the in-flight block, which is why this does
@@ -151,8 +157,7 @@ class AntigravityAtomicShoulderTap(AtomicShoulderTap):
         then deliver ours. The block is sent verbatim, which is the same text a natural flush
         would have sent -- one turn either way.
         """
-        block = watcher.get_queued_block()
-        if not block:
+        if not watcher.get_queued_block():
             return ShoulderTapOutcome(status=_NOTHING_QUEUED)
         if not _is_turn_open(self._agent_info):
             # No turn to interrupt; the ordinary idle flush will deliver it imminently.
@@ -161,6 +166,12 @@ class AntigravityAtomicShoulderTap(AtomicShoulderTap):
             if not is_lock_held:
                 # A send is in flight, so the queue is not settled. Benign no-op, as claude's.
                 return ShoulderTapOutcome(status=_SEND_IN_FLIGHT)
+            # Re-read under the lock (see the stop path): the block sent below must be the
+            # settled queue, not whatever it looked like before the wait.
+            block = watcher.get_queued_block()
+        if not block:
+            # A flush delivered it while we waited. Nothing left to tap.
+            return ShoulderTapOutcome(status=_NOTHING_QUEUED)
         # Released before pressing -- see the note in the stop path above.
         is_pressed = press_chord()
         if not is_pressed:
