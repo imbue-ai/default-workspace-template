@@ -636,29 +636,21 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         // have a button that quietly loses other people's. Best-effort on purpose: the agent we
         // are about to force is often the one that is stuck, so a drain that fails or is refused
         // must not stop the restart the user actually asked for.
-        // Rescue whatever is queued inside the harness before restarting, since the restart drops
-        // it. Best-effort: the agent being forced is often the stuck one, and a drain that fails
-        // must not stop the restart the user actually asked for.
-        let didDrainRestart = false;
         try {
           const drained = await drainToComposer(recovery.agentId);
           if (drained.block) {
             prependToComposer(recovery.agentId, drained.block);
-            // A non-empty queue means the drain took the restart path, so the agent has already
-            // been restarted and doing it again would cost a second one for nothing.
-            didDrainRestart = true;
           }
         } catch {
           // Nothing to do: the restart still goes ahead, and anything queued is lost with it.
         }
         try {
-          // The restart itself, which drain does not guarantee -- claude's drain can be a native
-          // chord that never restarts the process, and a wedged agent is exactly what Force is
-          // for. If this is refused (the services agent carries is_primary=true, say) that
-          // refusal becomes the notice's text and nothing is sent.
-          if (!didDrainRestart) {
-            await interruptAgent(recovery.agentId);
-          }
+          // The restart itself, unconditionally: the drain does not guarantee one. Claude's
+          // empty-queue path is a native chord, and pi/codex hand back a block without ever
+          // restarting -- so a non-empty block is not evidence the process was replaced, and a
+          // wedged agent is exactly what Force is for. If this is refused (the services agent
+          // carries is_primary=true, say) that refusal becomes the notice's text, nothing is sent.
+          await interruptAgent(recovery.agentId);
         } catch (err) {
           actionFailureDetail = describeRequestError(err);
           actionFailureInFlight = null;
