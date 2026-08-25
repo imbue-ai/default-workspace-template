@@ -144,6 +144,8 @@ echo "${restic_sha256}  /tmp/restic.bz2" | sha256sum -c -
 # re-provision. The temp file shares the destination directory so the mv is an
 # atomic same-filesystem rename.
 restic_tmp="$(mktemp /usr/local/bin/restic.XXXXXX)"
+# A failed decompress must not leave a partial binary beside the real one.
+trap 'rm -f "$restic_tmp"' EXIT
 bunzip2 -c /tmp/restic.bz2 > "$restic_tmp"
 chmod 0755 "$restic_tmp"
 mv -f "$restic_tmp" /usr/local/bin/restic
