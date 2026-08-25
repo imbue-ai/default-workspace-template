@@ -680,29 +680,7 @@ def _worker_is_idle(worker_name: str) -> bool:
     "not idle" so a transient mngr hiccup can never abort a healthy await --
     the timeout remains the backstop.
     """
-    try:
-        result = subprocess.run(
-            ["mngr", "list", "--format", "jsonl", "--on-error", "continue"],
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    if result.returncode != 0:
-        return False
-    for line in result.stdout.splitlines():
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if record.get("resource_type") != "agent":
-            continue
-        if record.get("name") != worker_name:
-            continue
-        return record.get("state") in ("WAITING", "STOPPED")
-    return False
+    return _worker_state(worker_name, Runner()) in ("WAITING", "STOPPED")
 
 
 def await_report(
