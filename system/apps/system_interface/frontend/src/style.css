@@ -68,6 +68,8 @@
   --width-sidebar: 250px;
   --width-sidebar-collapsed: 3.25rem;
   --duration-sidebar-transition: 200ms;
+  /* Overlay stacking layer — modal backdrops and the image lightbox sit here. */
+  --z-overlay: 10000;
   --radius-base: 6px;
   --radius-bubble: 18px;
   --radius-composer: 16px;
@@ -2673,8 +2675,39 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   color: var(--color-text-primary);
 }
 
-/* ── Destroy confirmation dialog ── */
-.destroy-dialog-overlay {
+/* ── Modal primitive ─────────────────────────────────────────────────────────
+ * One overlay + card + header/title + body + actions system, replacing the
+ * per-feature dialog shells (custom-url, destroy, fast-mode, share). Backdrop
+ * dismissal is wired once via views/modalBackdrop.ts (a primary mousedown on the
+ * overlay itself); Escape and autofocus stay per-modal (each modal keeps its own
+ * keydown listener / focus hook, since some dialogs intentionally lack Escape).
+ * Use the Modal() helper (views/Modal.ts) or these classes directly:
+ *   .modal-overlay > .modal-card
+ *     > .modal-header > .modal-title   (title row; add an icon or a close button)
+ *     > .modal-body / .modal-message   (body copy)
+ *     > .modal-actions                 (right-aligned button row)
+ * The card is 420px wide by default; the helper sets a per-modal width inline. */
+@keyframes modal-overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes modal-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.modal-overlay {
   position: fixed;
   top: 0;
   left: 0;
@@ -2684,10 +2717,11 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 10000;
+  z-index: var(--z-overlay);
+  animation: modal-overlay-in 150ms ease-out;
 }
 
-.destroy-dialog {
+.modal-card {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: 12px;
@@ -2695,31 +2729,63 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   width: 420px;
   max-width: 90vw;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  animation: modal-card-in 200ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-.destroy-dialog-title {
+.modal-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 16px;
+}
+
+.modal-title {
   font-family: var(--font-family-heading);
   font-size: var(--font-size-heading);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   color: var(--color-text-primary);
-  margin: 0 0 12px;
+  margin: 0;
 }
 
+.modal-body {
+  font-size: var(--font-size-body);
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+}
+
+.modal-message {
+  font-size: var(--font-size-body);
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+  margin: 0 0 16px;
+}
+
+.modal-label {
+  display: block;
+  font-size: var(--font-size-body);
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  margin-bottom: 4px;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* ── Destroy confirmation dialog ── */
+/* The delete-confirmation dialog is the shared .modal-* shell (see Modal
+   primitive above and views/DestroyConfirmDialog.ts); its buttons use the .btn
+   primitive (btn--secondary = cancel, btn--destructive = confirm). The
+   .destroy-dialog-message class remains only for the project settings / add-to-
+   project dialogs that still borrow it. */
 .destroy-dialog-message {
   font-size: var(--font-size-body);
   color: var(--color-text-secondary);
   margin: 0 0 16px;
   line-height: 1.5;
 }
-
-.destroy-dialog-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-/* Destroy-dialog buttons now use the shared .btn primitive
-   (btn--secondary = cancel/delete-trigger, btn--destructive = confirm). */
 
 /* ── Fast-mode grace-period prompt ── */
 .fast-mode-modal-overlay {
@@ -3920,7 +3986,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 .image-lightbox-overlay {
   position: fixed;
   inset: 0;
-  z-index: 10000;
+  z-index: var(--z-overlay);
   display: flex;
   flex-direction: column;
   background: rgba(0, 0, 0, 0.85);

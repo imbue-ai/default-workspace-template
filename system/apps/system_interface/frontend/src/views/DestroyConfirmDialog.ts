@@ -4,7 +4,7 @@
  */
 
 import m from "mithril";
-import { backdropDismissAttrs } from "./modalBackdrop";
+import { Modal } from "./Modal";
 
 interface DestroyConfirmDialogAttrs {
   agentName: string;
@@ -38,16 +38,17 @@ export const DestroyConfirmDialog: m.Component<DestroyConfirmDialogAttrs> = {
     ];
     const confirmLabel = vnode.attrs.confirmLabel ?? "Delete";
 
-    return m("div.destroy-dialog-overlay", backdropDismissAttrs(onCancel), [
-      m("div.destroy-dialog", [
-        m("h3.destroy-dialog-title", title),
-        m("p.destroy-dialog-message", question),
-        details === undefined ? null : m("p.destroy-dialog-message", details),
-        m("div.destroy-dialog-actions", [
+    return m(
+      Modal,
+      {
+        onDismiss: onCancel,
+        title,
+        actions: [
           m("button.btn.btn--secondary", { onclick: onCancel }, "Cancel"),
           m("button.btn.btn--destructive", { onclick: onConfirm }, confirmLabel),
-        ]),
-      ]),
-    ]);
+        ],
+      },
+      [m("p.modal-message", question), details === undefined ? null : m("p.modal-message", details)],
+    );
   },
 };
