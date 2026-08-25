@@ -9,7 +9,7 @@
  */
 
 import m from "mithril";
-import { backdropDismissAttrs } from "./modalBackdrop";
+import { Modal } from "./Modal";
 import { hoverTooltipAttrs } from "./hoverTooltip";
 
 interface ShareModalAttrs {
@@ -20,32 +20,35 @@ interface ShareModalAttrs {
 export const ShareModal: m.Component<ShareModalAttrs> = {
   view(vnode) {
     const { serviceName, onClose } = vnode.attrs;
-    return m("div.share-modal-overlay", backdropDismissAttrs(onClose), [
-      m("div.share-modal", [
-        m("div.share-modal-header", [
-          m("h3.share-modal-title", `Share "${serviceName}"`),
+    return m(
+      Modal,
+      {
+        onDismiss: onClose,
+        width: 480,
+        header: [
+          m("h3.modal-title", `Share "${serviceName}"`),
+          // ml-auto pins the close button to the right of the title row.
           m(
-            "button.btn.btn--icon.btn--sm",
+            "button.btn.btn--icon.btn--sm.ml-auto",
             { type: "button", "aria-label": "Close", onclick: onClose, ...hoverTooltipAttrs("Close") },
             "×",
           ),
+        ],
+        actions: [m("button.btn.btn--secondary", { onclick: onClose }, "Close")],
+      },
+      [
+        m("p.modal-message", [
+          "To share this service externally, open the Minds desktop app, go to ",
+          m("strong", "workspace settings"),
+          ", and enable sharing for the ",
+          m("strong", `"${serviceName}"`),
+          " service.",
         ]),
-        m("div", { style: "padding: 8px 0; color: #444; font-size: 14px; line-height: 1.5;" }, [
-          m("p", { style: "margin: 0 0 12px 0;" }, [
-            "To share this service externally, open the Minds desktop app, go to ",
-            m("strong", "workspace settings"),
-            ", and enable sharing for the ",
-            m("strong", `"${serviceName}"`),
-            " service.",
-          ]),
-          m(
-            "p",
-            { style: "margin: 0; color: #666;" },
-            "Shared traffic is encrypted end-to-end into this workspace, and access is granted per email address.",
-          ),
-        ]),
-        m("div.share-modal-footer", [m("button.btn.btn--secondary", { onclick: onClose }, "Close")]),
-      ]),
-    ]);
+        m(
+          "p.modal-message",
+          "Shared traffic is encrypted end-to-end into this workspace, and access is granted per email address.",
+        ),
+      ],
+    );
   },
 };

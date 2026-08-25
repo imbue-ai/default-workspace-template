@@ -49,7 +49,7 @@ const BASELINES = {
   // single .modal-card (drops further as each dialog moves onto the shell). The
   // remaining values have no token yet (8/12/…), handled when a radius scale lands
   // (needs non-colliding names, like type).
-  borderRadiusPx: 31,
+  borderRadiusPx: 29,
   // Tightened by the tooltip primitive: the three duplicated per-component
   // `[data-tooltip]::after` bubbles (each with `z-index: 1000`) were consolidated
   // into one generic `[data-tooltip]::after`, dropping two z-index literals.
@@ -57,7 +57,7 @@ const BASELINES = {
   // `var(--z-overlay)`, and each per-feature dialog overlay's old raw `z-index:
   // 10000` (plus the image lightbox's) now uses that token as it moves onto the
   // shell. (Drops further as share/custom-url follow.)
-  zIndexLiteral: 13,
+  zIndexLiteral: 12,
 } as const;
 
 interface Counts {
