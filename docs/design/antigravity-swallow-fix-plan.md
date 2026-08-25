@@ -262,8 +262,7 @@ Also required, none of which the storm can express today:
 - `activity_state.py:170`'s "the launch-time marker clear covers the rest" is false for agy
   until §2.7 lands.
 
-The architecture diagram (conversation-contexts/opencode-agy/artifacts) carries the same two
-retracted claims.
+The interactive architecture map carries the same two retracted claims.
 
 ## 6. What nobody can stake their life on yet
 
