@@ -575,7 +575,7 @@ function tabIconMarkupForPanel(params: PanelParams | undefined): string {
 
 // ---------- The tab ⋮ menu ----------
 //
-// The verb SET (which of Refresh/Share/Rename/Hide tab/Delete a kind gets, in
+// The verb SET (which of Refresh/Share/Rename/Close tab/Delete a kind gets, in
 // what order) is defined once in objectMenu.ts, shared with the rail's row
 // menu. What lives here is the tab-specific half: turning a live panel into
 // the ObjectMenuActions that module asks for, and the floating-card chrome
@@ -720,7 +720,7 @@ function objectMenuKindForPanel(params: PanelParams): ObjectMenuKind | null {
  * The verb SET comes from ``objectMenuEntries`` (objectMenu.ts), keyed by
  * kind and shared with the rail's row menu -- this function's whole job is
  * building the ``ObjectMenuActions`` that call takes, i.e. turning "what
- * Refresh/Rename/Hide tab/Delete mean" into closures over THIS live, open
+ * Refresh/Rename/Close tab/Delete mean" into closures over THIS live, open
  * panel. A panel that is not one of the four kinds (a launcher never reaches
  * here -- see its call site below -- a subagent view or an ad-hoc URL page)
  * gets a minimal menu of its own: there is nothing on it to name, share or
@@ -735,17 +735,16 @@ function tabMenuEntries(panelId: string): ObjectMenuEntry[] {
       { label: "Refresh", iconName: "refresh", run: () => refreshPanelContent(panelId) },
       OBJECT_MENU_DIVIDER,
       {
-        label: "Hide tab",
+        label: "Close tab",
         iconName: "minus",
         run: () => dockview?.panels.find((candidate) => candidate.id === panelId)?.api.close(),
       },
     ];
   }
   // An app pane's menu splits by what the pane IS: an instance pane carries
-  // the instance verbs with the service's own Share and Stop/Start trailing
-  // in their own group, while a pane whose instance has not landed yet keeps
-  // the bare service menu (share in the opening group, lifecycle in the
-  // destructive slot).
+  // the instance verbs plus the service's own Share and Stop/Start (via
+  // serviceGroup), while a pane whose instance has not landed yet keeps the
+  // bare service menu (share slot, lifecycle in the destructive slot).
   const isInstancePane = kind === "app" && params.serviceInstanceId !== undefined && params.serviceInstanceId !== "";
   const shareServiceName = kind === "app" ? params.serviceName : undefined;
   const shareAction =
@@ -1292,7 +1291,7 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
       // tabbed thing. It closes the tab and nothing else -- the object keeps
       // running and stays filed wherever it was filed; ending it for good is
       // the menu's job, behind its own confirmation.
-      const hideButton = createTabActionButton("Hide tab", "close", disposables, () => {
+      const hideButton = createTabActionButton("Close tab", "close", disposables, () => {
         parameters.api.close();
       });
 
