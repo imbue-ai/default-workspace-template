@@ -41,10 +41,10 @@
   --color-stop-button: #64748b;
   --color-stop-button-hover: #475569;
   /* Semantic status colours (promoted from scattered raw hexes). */
-  --color-danger: #dc2626;
-  --color-danger-hover: #b91c1c;
-  --color-danger-bg: #fef2f2;
-  --color-danger-border: #fecaca;
+  --color-danger: #d83a2c;
+  --color-danger-hover: #b62d22;
+  --color-danger-bg: #fdecea;
+  --color-danger-border: #f4c7c3;
   --color-warning: #b45309;
   --color-warning-bg: #fde68a;
   --color-success: #22a06b;
@@ -716,7 +716,7 @@ body {
 }
 
 .composer-attachment--error {
-  border-color: #d4806a;
+  border-color: var(--color-danger-border);
 }
 
 .composer-attachment-thumb {
@@ -772,7 +772,7 @@ body {
 }
 
 .composer-attachment-detail--error {
-  color: #b3573c;
+  color: var(--color-danger);
 }
 
 .composer-attachment-remove {
@@ -2446,7 +2446,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 
 /* Process up but idle, waiting on the user (WAITING) -- yellow. */
 .dv-tab-process-dot[data-liveness="waiting"] {
-  color: #ca8a04;
+  color: var(--color-warning);
 }
 
 /* Within a color, subtly vary the shape so states that share a hue stay
@@ -2500,8 +2500,8 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   max-width: 400px;
   padding: 4px 8px;
   border-radius: var(--radius-base);
-  background: #000000;
-  color: #ffffff;
+  background: var(--color-text-primary);
+  color: var(--color-text-on-accent);
   font-size: var(--font-size-helper);
   font-weight: 400;
   line-height: 1.4;
@@ -2515,8 +2515,8 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 
 @media (prefers-color-scheme: dark) {
   .minds-tooltip {
-    background: #ffffff;
-    color: #000000;
+    background: var(--color-surface);
+    color: var(--color-text-primary);
   }
 }
 
@@ -3004,17 +3004,17 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 .progress-block {
   margin: 18px 0 28px;
   --pv-fg: var(--color-text-primary);
-  --pv-fg-soft: #5a564a;
+  --pv-fg-soft: var(--color-text-secondary);
   --pv-fg-muted: var(--color-text-secondary);
   --pv-fg-faint: var(--color-text-faint);
   --pv-line: var(--color-border);
   --pv-line-faint: var(--color-border-faint);
   --pv-active: var(--color-accent);
-  --pv-done: #5a564a;
-  --pv-pending: #c2bfb6;
+  --pv-done: var(--color-text-secondary);
+  --pv-pending: var(--color-text-faint);
   /* The "glint" that sweeps across active-step narration. Kept independent of
      the text scale so the shimmer stays visible against the muted caption. */
-  --pv-shimmer: #bcbcbc;
+  --pv-shimmer: var(--color-text-faint);
   font-size: var(--font-size-body);
   line-height: 1.5;
   color: var(--pv-fg);
@@ -3988,10 +3988,10 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   align-items: flex-start;
   gap: 10px;
   padding: 10px 12px;
-  background: #fdecea;
-  border: 1px solid #f4c7c3;
+  background: var(--color-danger-bg);
+  border: 1px solid var(--color-danger-border);
   border-radius: 8px;
-  color: #80261f;
+  color: var(--color-danger);
   font-size: var(--font-size-body);
   line-height: 1.45;
   margin-bottom: 14px;
@@ -4027,8 +4027,8 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 }
 
 .claude-login-status-icon--error {
-  background: #fdecea;
-  color: #c5221f;
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
 }
 
 .claude-login-status-icon--loading {
