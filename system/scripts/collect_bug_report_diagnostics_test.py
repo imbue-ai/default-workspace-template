@@ -329,7 +329,7 @@ def test_select_log_files_drops_logs_not_written_to_in_the_last_day(
     ]
 
 
-# --- User-app log exclusion ---
+# --- No ownership or stream filtering ---
 
 
 def test_select_log_files_keeps_every_programs_logs_both_streams(
