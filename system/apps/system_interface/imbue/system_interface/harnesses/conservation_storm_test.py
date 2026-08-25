@@ -49,6 +49,8 @@ from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.antigravity.queue_tracker import AntigravityQueueTracker
 from imbue.system_interface.harnesses.antigravity.tap import AntigravityAtomicShoulderTap
 from imbue.system_interface.harnesses.antigravity.tap import AntigravityInterruptToComposer
+from imbue.system_interface.harnesses.antigravity.turn_state import drop_turn_state
+from imbue.system_interface.harnesses.antigravity.turn_state import get_turn_state
 from imbue.system_interface.harnesses.claude.session_parser import INTERRUPT_SENTINEL_TEXT
 from imbue.system_interface.harnesses.claude.tap import ClaudeTapStatus
 from imbue.system_interface.harnesses.claude.tap import execute_claude_shoulder_tap
@@ -851,6 +853,8 @@ class _AgyWorld:
         self.ledger = ledger
         self.queue = AntigravityQueueTracker.build(self.dir / "agy_outbox.jsonl", "storm-session")
         self._counter = 0
+        self._is_tool_running = False
+        drop_turn_state(self.dir.name)
 
     # --- the simulated agy ---------------------------------------------------------------
 
@@ -860,12 +864,41 @@ class _AgyWorld:
 
     def begin_turn(self) -> None:
         self.marker.write_text("")
+        self._publish_turn_open(True)
 
     def end_turn(self) -> None:
         self.marker.unlink(missing_ok=True)
+        self._is_tool_running = False
+        self._publish_turn_open(False)
+
+    def begin_tool_call(self) -> None:
+        """agy starts a tool: it stops reporting ``thinking``, so its statusLine REMOVES the
+        marker -- while the turn is very much still open. This is the production shape that
+        made a marker-only busy check type straight into a live turn."""
+        if not self.is_turn_open():
+            return
+        self._is_tool_running = True
+        self.marker.unlink(missing_ok=True)
+        self._publish_turn_open(True)
+
+    def end_tool_call(self) -> None:
+        if not self._is_tool_running:
+            return
+        self._is_tool_running = False
+        self.marker.write_text("")
+        self._publish_turn_open(True)
+
+    def _publish_turn_open(self, is_open: bool) -> None:
+        # What the real watcher publishes from the transcript tail, which is what the
+        # executors consult through turn_state.
+        get_turn_state(self.dir.name).publish(is_open_by_tail=is_open)
+
+    def is_turn_open(self) -> bool:
+        """The REAL question. The marker answers it only while agy is thinking."""
+        return self.marker.exists() or self._is_tool_running
 
     def is_busy(self) -> bool:
-        return self.marker.exists()
+        return self.is_turn_open()
 
     def commit(self, block: str) -> None:
         """agy receives a block and commits it as ONE turn -- every line is delivered."""
@@ -1012,10 +1045,23 @@ def test_antigravity_conservation_storm_stop_and_tap_executors(tmp_path: Path) -
                 op = "stop:" + _SEND_MODE_SLOW
             else:
                 op = rng.choice(
-                    ("send", "send", "busy_send", "tap", "flush", "stop:" + _SEND_MODE_NONE, "stop:" + _SEND_MODE_FAST)
+                    (
+                        "send",
+                        "send",
+                        "busy_send",
+                        "tool_call",
+                        "tap",
+                        "flush",
+                        "stop:" + _SEND_MODE_NONE,
+                        "stop:" + _SEND_MODE_FAST,
+                    )
                 )
             ledger.log(f"  {op}")
-            if op == "send":
+            if op == "tool_call":
+                # agy drops its marker for the duration of a tool call while the turn stays
+                # open -- exactly when a marker-only busy check types into a live turn.
+                world.begin_tool_call()
+            elif op == "send":
                 world.send(world.new_text())
             elif op == "busy_send":
                 # The case the whole design exists for: a send while a turn is open.
