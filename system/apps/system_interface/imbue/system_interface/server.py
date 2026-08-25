@@ -54,7 +54,6 @@ from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
 from imbue.system_interface.file_serving import try_serve_file
 from imbue.system_interface.harnesses.claude import auth_endpoints
-from imbue.system_interface.harnesses.claude.tap import TAP_CHORD
 from imbue.system_interface.harnesses.interrupt import restart_drain
 from imbue.system_interface.harnesses.model import ModelIdentity
 from imbue.system_interface.harnesses.model import ModelOption
@@ -1280,7 +1279,9 @@ def _shoulder_tap_atomic_endpoint(agent_id: str) -> Response:
     outcome = agent_manager.get_or_create_session(agent_info).shoulder_tap(
         agent_info,
         watcher,
-        press_chord=lambda: agent_manager.press_key_chord_on_agent(AgentId(agent_info.id), TAP_CHORD),
+        press_chord=lambda: agent_manager.press_key_chord_on_agent(
+            AgentId(agent_info.id), get_harness_spec(agent_info.harness).cancel_chord
+        ),
         send_recovery=lambda text: agent_manager.send_message_to_agent(AgentId(agent_info.id), text),
     )
     if outcome.error_detail is not None:
@@ -1318,7 +1319,9 @@ def _drain_to_composer_endpoint(agent_id: str) -> Response:
             watcher,
             restart_process,
             settle_activity,
-            lambda: agent_manager.press_key_chord_on_agent(AgentId(agent_info.id), TAP_CHORD),
+            lambda: agent_manager.press_key_chord_on_agent(
+                AgentId(agent_info.id), get_harness_spec(agent_info.harness).cancel_chord
+            ),
         )
     except AgentRestartError as e:
         return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=500)
