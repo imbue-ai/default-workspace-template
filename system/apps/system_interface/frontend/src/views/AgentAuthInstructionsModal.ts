@@ -8,7 +8,7 @@
  */
 
 import m from "mithril";
-import { backdropDismissAttrs } from "./modalBackdrop";
+import { Modal } from "./Modal";
 import { getAgentById } from "../models/AgentManager";
 import { getHarnessCatalog } from "../models/HarnessCatalog";
 import { dismissAuthInstructions, getAuthInstructionsAgentId } from "../models/AgentAuth";
@@ -38,36 +38,28 @@ export function AgentAuthInstructionsModal(): m.Component {
       const instructions =
         getHarnessCatalog(agent?.harness)?.auth_instructions ?? "Sign in from the agent's terminal.";
       return m(
-        "div.custom-url-dialog-overlay",
+        Modal,
         {
-          ...backdropDismissAttrs(dismissAuthInstructions),
-        },
-        m(
-          "div.custom-url-dialog",
-          {
-            onclick(e: MouseEvent) {
-              e.stopPropagation();
-            },
-          },
-          [
-            m("h3.custom-url-dialog-title", "Sign-in runs in the terminal"),
-            m("p.logout-notice-body", [
-              agent !== undefined ? m("strong", agent.name) : "This agent",
-              " signs in through its own terminal. ",
-              instructions,
-            ]),
-            m("div.custom-url-dialog-actions", [
-              m(
-                "button.custom-url-dialog-cancel",
-                {
-                  oncreate: (buttonVnode: m.VnodeDOM) => (buttonVnode.dom as HTMLButtonElement).focus(),
-                  onclick: () => dismissAuthInstructions(),
-                },
-                "OK",
-              ),
-            ]),
+          onDismiss: dismissAuthInstructions,
+          title: "Sign-in runs in the terminal",
+          actions: [
+            m(
+              "button.btn.btn--secondary",
+              {
+                oncreate: (buttonVnode: m.VnodeDOM) => (buttonVnode.dom as HTMLButtonElement).focus(),
+                onclick: () => dismissAuthInstructions(),
+              },
+              "OK",
+            ),
           ],
-        ),
+        },
+        [
+          m("p.modal-message", [
+            agent !== undefined ? m("strong", agent.name) : "This agent",
+            " signs in through its own terminal. ",
+            instructions,
+          ]),
+        ],
       );
     },
   };
