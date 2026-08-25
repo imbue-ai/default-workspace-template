@@ -833,9 +833,9 @@ class SendKeysAgent(InteractiveAgentMixin, SupportsKeyChordMixin, BaseAgent[Agen
         """Send a message directly without waiting for paste confirmation."""
         self._send_tmux_literal_keys(tmux_target, message)
 
-        enter_target_arg = self._send_target_arg(tmux_target)
-        self._clear_pane_modes(enter_target_arg)
-        send_enter_cmd = f"tmux send-keys -t {enter_target_arg} Enter"
+        # No resolve-and-clear here: the literal keys immediately above just did both, on the same
+        # pane, and nothing between them can have put it back into a mode.
+        send_enter_cmd = f"tmux send-keys -t {self._send_target_arg(tmux_target)} Enter"
         result = self.host.execute_stateful_command(send_enter_cmd)
         if not result.success:
             raise SendMessageError(str(self.name), f"tmux send-keys Enter failed: {result.stderr or result.stdout}")

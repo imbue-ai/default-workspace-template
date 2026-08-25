@@ -21,7 +21,7 @@ import { getQueuedMessagesForAgent, getShoulderTapAvailableForAgent } from "../m
 import type { QueuedMessage } from "../models/AgentManager";
 import { shoulderTap } from "../models/Response";
 import { prependToComposer, raiseFailureNotice } from "./MessageInput";
-import { describeRequestError } from "../models/request-error";
+import { describeRequestError, describeRequestErrorKind } from "../models/request-error";
 
 const SHOULDER_TAP_TOOLTIP = "Gently interrupt your agent to send queued messages early";
 const QUEUED_INFO_TOOLTIP = "Messages below are sent when your agent takes a breather mid-work or finishes a turn.";
@@ -56,6 +56,7 @@ async function shoulderTapQueuedMessages(agentId: string): Promise<void> {
     raiseFailureNotice(agentId, {
       title: "Couldn't send the queued messages",
       detail,
+      kind: describeRequestErrorKind(err),
       // The finally below has already cleared the in-flight marker by the time this can run.
       retry: () => shoulderTapQueuedMessages(agentId),
     });

@@ -27,7 +27,6 @@ from imbue.imbue_common.primitives import PositiveFloat
 from imbue.imbue_common.pure import pure
 from imbue.mngr.config.field_markers import RegistryField
 from imbue.mngr.config.overlay_merge import merge_models_via_overlay
-from imbue.mngr.errors import ConfigError
 from imbue.mngr.errors import ConfigParseError
 from imbue.mngr.errors import ParseSpecError
 from imbue.mngr.errors import ProviderTimeoutConfigError
@@ -178,37 +177,6 @@ class HookDefinition(FrozenModel):
 
 class AgentTypeConfig(FrozenModel):
     """Defines a custom agent type that inherits from an existing type."""
-
-    # CLEANUP: remove once no settings.toml in the wild still says auto_dismiss_dialogs -- the
-    # name this carried before it was clarified to say WHEN it applies (before startup, never at
-    # send time). Declared here rather than in each harness plugin because every one of them
-    # renamed the same field, and four copies of one shim had already begun to diverge.
-    auto_dismiss_dialogs: bool | None = Field(
-        default=None,
-        description="DEPRECATED: the old name for auto_dismiss_dialogs_at_startup; set that instead.",
-    )
-
-    @model_validator(mode="before")
-    @classmethod
-    def _fold_deprecated_auto_dismiss_dialogs(cls, data: Any) -> Any:
-        """Accept the old ``auto_dismiss_dialogs`` name as the new one.
-
-        Folded in before construction so nothing downstream knows the old name existed. Accepted
-        rather than rejected because this model forbids unknown fields, so an old settings file
-        does not get a warning -- it fails the whole load and the agent never starts. Giving both
-        names different values is contradictory and raises rather than picking a winner.
-        """
-        if not isinstance(data, dict) or data.get("auto_dismiss_dialogs") is None:
-            return data
-        deprecated = data.pop("auto_dismiss_dialogs")
-        current = data.get("auto_dismiss_dialogs_at_startup")
-        if current is not None and current != deprecated:
-            raise ConfigError(
-                "auto_dismiss_dialogs and auto_dismiss_dialogs_at_startup are the same setting under "
-                "two names and were given different values; set only auto_dismiss_dialogs_at_startup."
-            )
-        data["auto_dismiss_dialogs_at_startup"] = deprecated
-        return data
 
     parent_type: AgentTypeName | None = Field(
         default=None,

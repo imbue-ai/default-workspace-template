@@ -2331,13 +2331,13 @@ class _ClaudeDialogPane(FrozenModel):
     agent: "ClaudeAgent"
     tmux_target: TmuxWindowTarget
 
-    def _resolved_target(self) -> str:
-        """The agent's pane, resolved once for this pane object rather than per capture.
+    # Resolved once for this pane object. The dialog loop captures repeatedly -- once per settle
+    # poll, several times a pass -- and this object lives only for the length of one preflight,
+    # so the pane it names cannot change underneath it.
+    resolved_target: str
 
-        This loop captures repeatedly -- once per settle poll, several times per pass -- and
-        resolving inside each would spend a tmux round trip to learn the same answer.
-        """
-        return self.agent._send_target_arg(self.tmux_target)
+    def _resolved_target(self) -> str:
+        return self.resolved_target
 
     def capture(self) -> str:
         return self.agent._capture_pane_content(self._resolved_target()) or ""
@@ -2608,7 +2608,9 @@ class ClaudeAgent(
 
     def _dialog_pane(self, tmux_target: TmuxWindowTarget) -> "_ClaudeDialogPane":
         """The pane surface ``mngr_claude.dialogs`` operates through, bound to this agent."""
-        return _ClaudeDialogPane(agent=self, tmux_target=tmux_target)
+        return _ClaudeDialogPane(
+            agent=self, tmux_target=tmux_target, resolved_target=self._send_target_arg(tmux_target)
+        )
 
     def _deal_with_blocking_input(self, tmux_target: TmuxWindowTarget) -> None:
         """Clear whatever is holding the input, or raise the matching send error."""
