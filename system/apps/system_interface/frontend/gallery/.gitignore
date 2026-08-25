@@ -1,4 +1,0 @@
-# Harness artifacts — captures, diffs, reports, extracted CSS, authoring output.
-.visual-diff/
-.vd-tmp/
-compiled.css

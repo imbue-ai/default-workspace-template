@@ -6,8 +6,10 @@ the mechanical/semantic sweeps, the component primitives (button, badge, spinner
 toggle, input, tooltip), and the modal consolidation. What remains is a short
 follow-ups list (bottom of this log): off-grid spacing strays, a few defined-but-
 unused tokens, the medium-weight audit, and whether to build a dark theme. This
-document is the durable hand-off so any agent can pick the work up cold. A visual
-before/after harness ships alongside it (`frontend/gallery/`).
+document is the durable hand-off so any agent can pick the work up cold. The
+design-system ratchet (`frontend/src/design-system-ratchet.test.ts`) is the
+automated guard against the sprawl regrowing. (A dev-only visual-diff gallery
+was used during the migration and has since been removed — see section 6.)
 
 ### Progress log
 
@@ -97,9 +99,6 @@ before/after harness ships alongside it (`frontend/gallery/`).
   would regress it).
 - **Dark mode** — tokens are structured for it (semantic, centralized) but no dark
   theme is built. Open question from section 8.
-- **Harness upgrade** — a small pixel-diff threshold + click-to-zoom lightbox
-  would let it report clean "identical" through token additions (the reflow
-  artifact currently requires reasoning around).
 
 All line/rule counts below were measured from `frontend/src/style.css`
 (4,108 lines, 512 rule blocks) and the `frontend/src/**` view modules at the
@@ -312,54 +311,30 @@ no-ops** via the harness in section 6 (every gallery section reports
 - **P1 — mechanical sweep (visual no-op).** Replace the ~18 duplicate hexes with
   their existing `var(--color-*)` tokens; replace raw `6px` radius with
   `var(--radius-base)`; snap spacing/type/radius values to the nearest new
-  token. Verify: `diff-refs` report is all `identical`.
+  token. Verify: each replaced literal resolves to the same computed value.
 - **P2 — semantic colour (near visual no-op).** Migrate the red/amber/green/slate
   raw hexes to the new semantic tokens. Verify per-section.
 - **P3 — primitives.** Extract Button, Badge, Spinner, Toggle, Input; migrate
   call sites feature by feature. Intentional, reviewed diffs.
 - **P4 — Modal primitive.** Migrate the 6 modals onto `openModal`. Highest risk.
-  Consider promoting the gallery into a living reference **app tab** here (use
-  the `build-app` skill) so the system is self-documenting.
 
 **Acceptance criteria (P1/P2):** the visual-diff report shows 0 changed pixels
 in every section except any deliberately touched one.
 
 ---
 
-## 6. Visual before/after harness (`frontend/gallery/`)
+## 6. Visual before/after harness — removed
 
-A static, dev-server-free harness proves each change renders identically (or
-shows exactly what moved). See `frontend/gallery/README.md` for full usage.
-
-- `gallery/gallery.html` — a static catalog page rendering every token swatch,
-  button family + state, badge, toggle, input, modal surface, tooltip and
-  spinner. Each block is a `<section data-shot="slug">` so it can be screenshot
-  in isolation. It uses the real class names from `style.css`.
-- `gallery/visual-diff.mjs` — a Node CLI (uses the frontend's Playwright +
-  `@tailwindcss/cli` + `pixelmatch`/`pngjs`):
-  - `capture --label <name> [--css <path>]` — compile a `style.css` with the
-    Tailwind CLI, render the gallery against it, screenshot each section.
-  - `compare <a> <b>` — pixel-diff two captures → `report-<a>-vs-<b>.html`
-    (side-by-side + diff overlay + per-section `identical`/`differs` verdict and
-    changed-pixel count). Report UX mirrors mngr's `scripts/visual_diff.py`.
-  - `diff-refs <before-ref> [<after-ref|WORKING>]` — one-command before/after:
-    extracts each ref's `style.css` via `git show <ref>:<path>` (WORKING = the
-    on-disk file), captures both, compares. No worktree needed, because only the
-    CSS varies — the gallery markup is constant.
-
-Prior art deliberately mirrored: `system/vendor/mngr/apps/minds/scripts/visual_diff.py`
-(same capture→compare→HTML-report-with-lightbox shape). We do **not** reuse it
-directly because it runs on Python Playwright + the monorepo root venv (broken on
-macOS dev boxes — the `pcmflux` package is Linux-only) and targets the minds SPA.
-
-Typical use for a token-sweep PR:
-
-```
-cd system/apps/system_interface/frontend
-pnpm install                       # one-time; node_modules is gitignored
-node gallery/visual-diff.mjs diff-refs main
-open gallery/.visual-diff/report-main-vs-WORKING.html
-```
+During the migration a static component gallery + a `visual-diff.mjs` Node CLI
+(`frontend/gallery/`) proved each phase a pixel-level no-op: it compiled a given
+`style.css`, rendered the gallery, screenshotted each `[data-shot]` section, and
+pixel-diffed two git refs into an HTML report. It was **dev-only** (gitignored
+artifacts, extra devDependencies — `@tailwindcss/cli`, `playwright-core`,
+`pixelmatch`, `pngjs` — and excluded from the build) and has been **removed now
+that the migration is complete**; recover it from git history if a future large
+sweep wants it back. Going forward, the ratchet (section 7) + code review are the
+guard — a token-only refactor is a no-op when each replaced literal resolves to
+the same computed value.
 
 ---
 
@@ -386,7 +361,5 @@ open gallery/.visual-diff/report-main-vs-WORKING.html
 
 - Dark mode: there is none today (single light theme). Completing the token set
   makes a dark theme cheap later — is that wanted, or explicitly out of scope?
-- Should the gallery become a permanent in-app "reference" tab (P4), or stay a
-  dev-only harness?
 - Tailwind-utility vs semantic-class direction: do we standardize on one, or
   keep both with a rule for when each applies?
