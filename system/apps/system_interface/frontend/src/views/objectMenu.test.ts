@@ -82,12 +82,12 @@ describe("objectMenuEntries", () => {
     expect(labels(inEverything)).not.toContain("Remove from project");
   });
 
-  it("puts Remove from project between Hide tab and the destroy", () => {
+  it("puts Remove from project between Close tab and the destroy", () => {
     // It is the middle of three easily-confused acts: drop the panel, drop the
     // filing, drop the object. Reading them in that order is what tells them
     // apart.
     const shown = labels(objectMenuEntries("chat", fullActions()));
-    expect(shown.indexOf("Hide tab")).toBeLessThan(shown.indexOf("Remove from project"));
+    expect(shown.indexOf("Close tab")).toBeLessThan(shown.indexOf("Remove from project"));
     expect(shown.indexOf("Remove from project")).toBeLessThan(shown.indexOf("Delete Chat 1"));
   });
 
@@ -102,17 +102,17 @@ describe("objectMenuEntries", () => {
 
   it("never offers Share when the kind is app but the caller has none to give", () => {
     const entries = objectMenuEntries("app", fullActions({ share: null }));
-    expect(entries.some((entry) => entry !== OBJECT_MENU_DIVIDER && entry.iconName === "share")).toBe(false);
+    expect(entries.some((entry) => entry !== OBJECT_MENU_DIVIDER && entry.iconName === "user-plus")).toBe(false);
   });
 
-  it("omits Hide tab for a backgrounded object with no open tab", () => {
+  it("omits Close tab for a backgrounded object with no open tab", () => {
     const entries = objectMenuEntries("chat", fullActions({ hideTab: null }));
-    expect(labels(entries)).not.toContain("Hide tab");
+    expect(labels(entries)).not.toContain("Close tab");
   });
 
-  it("includes Hide tab when the object has an open tab", () => {
+  it("includes Close tab when the object has an open tab", () => {
     const entries = objectMenuEntries("browser", fullActions());
-    expect(labels(entries)).toContain("Hide tab");
+    expect(labels(entries)).toContain("Close tab");
   });
 
   it("omits the destructive verb when quit is unavailable (e.g. the primary chat)", () => {
@@ -136,19 +136,18 @@ describe("objectMenuEntries", () => {
     expect(actions.rename).not.toHaveBeenCalled();
   });
 
-  it("keeps one divider between the reload/share group and the rename/hide/destroy group", () => {
+  it("keeps one divider between the acting group and the removal group", () => {
     const entries = objectMenuEntries("app", fullActions());
     expect(entries.filter((entry) => entry === OBJECT_MENU_DIVIDER)).toHaveLength(1);
     const dividerIndex = entries.indexOf(OBJECT_MENU_DIVIDER);
-    // Refresh and Share come before it; the hide/destroy group follows.
-    expect(labels(entries.slice(0, dividerIndex))).toEqual(["Refresh", "Share web"]);
+    // Refresh, Share and the filing verb come before it; removal follows.
+    expect(labels(entries.slice(0, dividerIndex))).toEqual(["Refresh", "Share web", "Add to project..."]);
     expect(entries[dividerIndex + 1]).not.toBe(OBJECT_MENU_DIVIDER);
   });
 
-  it("puts the filing verb directly ahead of Remove from project", () => {
-    const shown = labels(objectMenuEntries("chat", fullActions()));
-    const removeIndex = shown.indexOf("Remove from project");
-    expect(shown[removeIndex - 1]).toBe("Add to project...");
+  it("puts Share directly under Refresh", () => {
+    const shown = labels(objectMenuEntries("app", fullActions()));
+    expect(shown.indexOf("Share web")).toBe(shown.indexOf("Refresh") + 1);
   });
 
   it("puts the reversible stop ahead of the delete, never as the destructive row", () => {
@@ -183,13 +182,13 @@ describe("objectMenuEntries", () => {
     expect(shown).not.toContain("Stop Chat 1");
   });
 
-  it("produces the full four-kind, fully-available list end to end", () => {
+  it("produces the full fully-available list end to end", () => {
     expect(labels(objectMenuEntries("chat", fullActions()))).toEqual([
       "Refresh",
+      "Add to project...",
       OBJECT_MENU_DIVIDER,
       "Rename",
-      "Hide tab",
-      "Add to project...",
+      "Close tab",
       "Remove from project",
       "Stop Chat 1",
       "Delete Chat 1",
@@ -197,11 +196,38 @@ describe("objectMenuEntries", () => {
     expect(labels(objectMenuEntries("app", fullActions({ stop: null })))).toEqual([
       "Refresh",
       "Share web",
-      OBJECT_MENU_DIVIDER,
-      "Hide tab",
       "Add to project...",
+      OBJECT_MENU_DIVIDER,
+      "Close tab",
       "Remove from project",
       "Delete Chat 1",
+    ]);
+  });
+
+  it("interleaves an instance menu's service verbs into the ordinary positions", () => {
+    // An app-instance tab: the service's Share joins the acting group and its
+    // Stop sits with the process verbs, directly above the instance's Delete.
+    const entries = objectMenuEntries(
+      "app",
+      fullActions({
+        share: null,
+        stop: null,
+        removeFromProject: null,
+        quit: { label: "Delete Browser 1", run: vi.fn() },
+        serviceGroup: {
+          share: { label: "Share web", run: vi.fn() },
+          lifecycle: { label: "Stop web", run: vi.fn() },
+        },
+      }),
+    );
+    expect(labels(entries)).toEqual([
+      "Refresh",
+      "Share web",
+      "Add to project...",
+      OBJECT_MENU_DIVIDER,
+      "Close tab",
+      "Stop web",
+      "Delete Browser 1",
     ]);
   });
 });
