@@ -2046,7 +2046,7 @@ def test_preflight_permissions_marker_is_hard_raise_even_with_wildcard(
     config = ClaudeAgentConfig(
         check_installation=False,
         preserve_sessions_on_destroy=False,
-        sensibly_deal_with_dialogs=("ALL_RECOGNIZED_NONBENIGN",),
+        sensibly_deal_with_dialogs=("ALL_KNOWN_DIALOGS",),
     )
     agent = _make_scripted_agent(local_provider, tmp_path, temp_mngr_ctx, [_CLEARED_PANE], config)
     agent_dir = agent._get_agent_dir()

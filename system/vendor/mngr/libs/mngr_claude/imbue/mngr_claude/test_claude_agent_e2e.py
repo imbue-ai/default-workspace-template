@@ -291,7 +291,7 @@ def _setup_ctx_that_answers_dialogs(profile: _ClaudeReleaseProfile, tmp_path: Pa
     with settings_path.open("a") as settings_file:
         settings_file.write(
             f"\n[agent_types.claude]\n"
-            f'sensibly_deal_with_dialogs = ["ALL_RECOGNIZED_NONBENIGN"]\n'
+            f'sensibly_deal_with_dialogs = ["ALL_KNOWN_DIALOGS"]\n'
             f"post_submit_dialog_observe_seconds = {_MODEL_PICKER_OBSERVE_SECONDS}\n"
         )
     return ctx

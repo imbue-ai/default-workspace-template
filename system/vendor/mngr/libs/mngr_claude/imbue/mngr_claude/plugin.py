@@ -379,11 +379,10 @@ class ClaudeAgentConfig(AgentTypeConfig):
     sensibly_deal_with_dialogs: tuple[str, ...] = Field(
         default=(),
         description="Nicknames of claude dialogs mngr may answer on the user's behalf when one is "
-        "holding the TUI's input at send time (see mngr_claude.dialogs.SELECTABLE_NICKNAMES). Two "
-        "tokens stand in for a list: 'ALL_RECOGNIZED_NONBENIGN' covers every dialog mngr can name, "
-        "each answered on the option named for it, so it grows with the catalogue without ever "
-        "becoming a guess; 'DANGEROUS_ALL_NONBENIGN_INCLUDING_UNRECOGNIZED' additionally covers "
-        "surfaces mngr cannot name, which can only be guessed at. "
+        "holding the TUI's input at send time (see mngr_claude.dialogs.SELECTABLE_NICKNAMES). The "
+        "token 'ALL_KNOWN_DIALOGS' stands in for the whole list: every dialog mngr can name, each "
+        "answered on the option named for it, so it grows with the catalogue without ever becoming "
+        "a guess. A dialog mngr cannot name is refused whatever this says. "
         "Empty (the default) means mngr dismisses the dialogs "
         "Esc closes harmlessly but refuses the send for anything that needs a real answer. A dialog "
         "mngr answers is reached by cycling the selector onto a named option, never by pressing "

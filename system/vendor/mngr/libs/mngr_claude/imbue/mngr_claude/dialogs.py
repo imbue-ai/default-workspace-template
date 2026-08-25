@@ -661,24 +661,14 @@ DIALOGS: Final[tuple[Dialog, ...]] = (
     GenericBenign(),
 )
 
-# The two tokens `sensibly_deal_with_dialogs` accepts in place of a nickname.
+# The one token `sensibly_deal_with_dialogs` accepts in place of a nickname.
 #
-# They are kept apart because they ask for different amounts of trust, and the difference is
-# the whole point. ALL_RECOGNIZED_NONBENIGN means "every dialog this module names, answered on
-# the option it names" -- every one of those options was chosen by a person who looked at that
-# dialog, so the set grows as the catalogue does without ever becoming a guess. It is what an
-# operator wants who is tired of listing nicknames one at a time.
-#
-# DANGEROUS_ALL_NONBENIGN_INCLUDING_UNRECOGNIZED additionally covers surfaces nobody has looked
-# at, which cannot be answered from knowledge, only guessed at. It says DANGEROUS out loud and
-# spells out what it includes, rather than being a wildcard: a "*" invites an operator to write
-# it meaning "all the ones you know", and it must not be possible to opt into guessing by
-# reaching for the obvious shorthand.
-ALL_RECOGNIZED_NONBENIGN: Final[str] = "ALL_RECOGNIZED_NONBENIGN"
-# NOT accepted by the config yet. Answering an unrecognised surface means guessing at an option
-# nobody has looked at, and nothing implements it -- Unrecognized refuses without consulting this.
-# The name is reserved here so the eventual feature does not have to invent a different one.
-DANGEROUS_ALL_NONBENIGN_INCLUDING_UNRECOGNIZED: Final[str] = "DANGEROUS_ALL_NONBENIGN_INCLUDING_UNRECOGNIZED"
+# It means "every dialog this module names, answered on the option it names". Each of those
+# options was chosen by a person who looked at that dialog, so the set grows as the catalogue
+# does without ever becoming a guess -- which is what an operator wants who is tired of listing
+# nicknames one at a time. There is deliberately no wildcard: `*` invites being written to mean
+# "all the ones you know", and a name that says which dialogs it covers cannot be misread that way.
+ALL_KNOWN_DIALOGS: Final[str] = "ALL_KNOWN_DIALOGS"
 
 # The complete set of nicknames an operator may put in `sensibly_deal_with_dialogs`.
 # Only non-benign recognised dialogs are selectable: benign ones are always dealt with
@@ -693,13 +683,11 @@ SELECTABLE_NICKNAMES: Final[frozenset[str]] = frozenset(
 def is_nonbenign_answer_allowed(nickname: str, configured: tuple[str, ...]) -> bool:
     """Whether the operator opted into mngr answering the dialog called ``nickname``.
 
-    Either token covers it, since both include everything recognised; the difference between
-    them is only whether UNRECOGNISED surfaces are covered too, which is not this question.
+    Only dialogs this module can name are answerable at all: an unrecognised surface is refused
+    no matter what this list says, since answering one means guessing at an option nobody has
+    looked at. That is a separate feature with a separate flag if it is ever built, not a value here.
     """
-    # DANGEROUS_ALL_NONBENIGN_INCLUDING_UNRECOGNIZED is deliberately not consulted: it promises to
-    # answer surfaces mngr cannot name, nothing implements that, and honouring it here would grant
-    # a blanket opt-in to everything ELSE instead -- quietly more than was asked for.
-    if ALL_RECOGNIZED_NONBENIGN in configured:
+    if ALL_KNOWN_DIALOGS in configured:
         return True
     return nickname in configured
 
