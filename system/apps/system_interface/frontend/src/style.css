@@ -4108,22 +4108,17 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   gap: 4px;
 }
 
+/* Icon buttons on the dark lightbox overlay reuse .btn--icon for shape, size and
+   layout; the .image-lightbox-iconbtn class only overrides the palette for the
+   dark backdrop (light glyph, white-tint hover) and keeps the download anchor
+   undecorated. The :hover:not(:disabled) selector matches .btn--icon's hover
+   specificity so this override wins by source order. */
 .image-lightbox-iconbtn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  padding: 0;
-  border: none;
-  border-radius: var(--radius-base);
-  background: transparent;
   color: rgba(255, 255, 255, 0.85);
-  cursor: pointer;
   text-decoration: none;
 }
 
-.image-lightbox-iconbtn:hover {
+.image-lightbox-iconbtn:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.15);
   color: var(--color-text-on-accent);
 }
