@@ -249,9 +249,11 @@ Run the general update apply -- the same script `update-self` lands releases
 with -- pointing it at the worker's branch and its already-built bundle. Resolve
 the work_dir again in the same invocation: Step 3's `WORK_DIR` is long gone,
 because each bash call starts a fresh shell and the user's verdict sat between
-them. A bundle path that does not resolve is not an error -- the apply just
-falls back to a live build, silently losing the "what the user previewed is what
-ships" guarantee.
+them. A bundle path that does not resolve -- or one whose bundle was built from
+some other frontend source than the merged tree's (the build stamps each
+bundle with its source tree hash, and the apply checks it) -- is not an
+error: the apply says so on stderr and falls back to a live build, losing only
+the "what the user previewed is what ships" guarantee.
 
 ```bash
 WORK_DIR=$(mngr ls --include 'name == "update-<slug>"' --format json \

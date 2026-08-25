@@ -1207,7 +1207,7 @@ _ASSET_NAME = "index-abc123.js"
 _TODAY = "2026-08-19"
 
 
-def _write_bundle(repo_root: Path) -> None:
+def _write_bundle(repo_root: Path, stamp: str | None = None) -> None:
     static = repo_root / update_self.STATIC_DIR
     (static / "assets").mkdir(parents=True, exist_ok=True)
     (static / "index.html").write_text(
@@ -1215,6 +1215,8 @@ def _write_bundle(repo_root: Path) -> None:
         "</script></head><body></body></html>"
     )
     (static / "assets" / _ASSET_NAME).write_text("console.log('app');")
+    if stamp is not None:
+        (static / update_self.BUNDLE_STAMP_FILENAME).write_text(stamp + "\n")
 
 
 def _bundle_exists(repo_root: Path) -> bool:
@@ -1279,6 +1281,9 @@ class _RecordingRunner(update_self.Runner):
     executables: dict[str, str] = field(default_factory=dict)
     repo_root: Path | None = None
     is_build_output_written: bool = True
+    # What the emulated build's postbuild step stamps the bundle with (None =
+    # a build with no git repo, which writes no stamp).
+    build_stamp: str | None = None
     on_command: Callable[[list[str]], None] | None = None
     _responses: dict[tuple[str, ...], object] = field(default_factory=dict)
 
@@ -1323,7 +1328,7 @@ class _RecordingRunner(update_self.Runner):
         # output is written, so a failure part-way through leaves nothing.
         shutil.rmtree(static, ignore_errors=True)
         if is_successful and self.is_build_output_written:
-            _write_bundle(self.repo_root)
+            _write_bundle(self.repo_root, self.build_stamp)
 
     def argvs_starting(self, *prefix: str) -> list[list[str]]:
         return [c for c in self.calls if tuple(c[: len(prefix)]) == prefix]
@@ -1947,6 +1952,150 @@ def test_apply_falls_back_to_a_live_build_when_the_bundle_path_is_empty(
 
     assert code == 0
     assert runner.ran("npm", "run", "build")
+
+
+_FRONTEND_TREE_HASH = "f1e2d3c4b5a6978877665544332211ffeeddccbb"
+
+
+def _make_worker_bundle(tmp_path: Path, stamp: str | None) -> Path:
+    worker_bundle = tmp_path / "worker-static"
+    (worker_bundle / "assets").mkdir(parents=True)
+    (worker_bundle / "index.html").write_text(
+        f'<!doctype html><script type="module" src="/assets/{_ASSET_NAME}"></script>'
+    )
+    (worker_bundle / "assets" / _ASSET_NAME).write_text("console.log('worker');")
+    if stamp is not None:
+        (worker_bundle / update_self.BUNDLE_STAMP_FILENAME).write_text(stamp + "\n")
+    return worker_bundle
+
+
+def _verifiable_runner(name_status: str, repo_root: Path) -> _RecordingRunner:
+    """An apply runner whose git can resolve the merged tree's frontend hash,
+    so bundle stamps are actually compared (and whose emulated build stamps
+    its output like the real postbuild step)."""
+    runner = _apply_runner(name_status, repo_root)
+    runner.respond(
+        ("git", "rev-parse", f"HEAD:{update_self.FRONTEND_DIR}"),
+        _Result(stdout=_FRONTEND_TREE_HASH + "\n"),
+    )
+    runner.build_stamp = _FRONTEND_TREE_HASH
+    return runner
+
+
+def _installed_asset(repo_root: Path) -> str:
+    return (repo_root / update_self.STATIC_DIR / "assets" / _ASSET_NAME).read_text()
+
+
+def test_a_verified_worker_bundle_is_installed_without_the_npm_refresh(
+    apply_repo: Path, tmp_path: Path
+) -> None:
+    # Installing the worker's bundle is a plain copy that needs no
+    # node_modules, so with a manifest change in the plan the `npm ci` --
+    # the slowest, most memory-hungry step, and one whose shed rolls the
+    # whole update back -- is dead work on the critical path and must not run.
+    worker_bundle = _make_worker_bundle(tmp_path, stamp=_FRONTEND_TREE_HASH)
+    runner = _verifiable_runner(_FRONTEND_MANIFEST_DIFF, apply_repo)
+
+    code = _apply(
+        runner,
+        _FakeHttp(_all_healthy),
+        _FakeSpawner(),
+        apply_repo,
+        worker_bundle=str(worker_bundle),
+    )
+
+    assert code == 0
+    assert not runner.ran("npm", "ci")
+    assert not runner.ran("npm", "run", "build")
+    assert _installed_asset(apply_repo) == "console.log('worker');"
+
+
+def test_a_stale_worker_bundle_falls_back_to_a_refreshed_live_build(
+    apply_repo: Path, tmp_path: Path, capsys
+) -> None:
+    # A --worker-bundle that was built from some other frontend source than
+    # the merged tree's (a wrong path, an old worker's leftovers) is exactly
+    # the "source updated, UI didn't" state a user once caught by eye. It must
+    # never be served: the live build runs instead -- with its npm refresh,
+    # since the copy-only shortcut no longer applies.
+    worker_bundle = _make_worker_bundle(tmp_path, stamp="0" * 40)
+    runner = _verifiable_runner(_FRONTEND_MANIFEST_DIFF, apply_repo)
+
+    code = _apply(
+        runner,
+        _FakeHttp(_all_healthy),
+        _FakeSpawner(),
+        apply_repo,
+        worker_bundle=str(worker_bundle),
+    )
+
+    assert code == 0
+    assert runner.ran("npm", "ci")
+    assert runner.ran("npm", "run", "build")
+    assert _installed_asset(apply_repo) == "console.log('app');"
+    err = capsys.readouterr().err
+    assert "it is stale" in err
+    assert "building live instead" in err
+
+
+def test_an_unstamped_worker_bundle_is_not_trusted_over_a_verifiable_tree(
+    apply_repo: Path, tmp_path: Path, capsys
+) -> None:
+    worker_bundle = _make_worker_bundle(tmp_path, stamp=None)
+    runner = _verifiable_runner(_FRONTEND_DIFF, apply_repo)
+
+    code = _apply(
+        runner,
+        _FakeHttp(_all_healthy),
+        _FakeSpawner(),
+        apply_repo,
+        worker_bundle=str(worker_bundle),
+    )
+
+    assert code == 0
+    assert runner.ran("npm", "run", "build")
+    assert "cannot be verified" in capsys.readouterr().err
+
+
+def test_a_live_build_whose_bundle_does_not_match_the_merged_source_rolls_back(
+    apply_repo: Path,
+) -> None:
+    # The exit-code check cannot tell a build that wrote the merged source's
+    # bundle from one that left an older bundle in place; the stamp can.
+    runner = _verifiable_runner(_FRONTEND_DIFF, apply_repo)
+    runner.build_stamp = "0" * 40
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 2
+    assert runner.ran("git", "checkout", _ROLLBACK, "--")
+    assert _bundle_exists(apply_repo)
+
+
+def test_a_bundle_the_tree_cannot_vouch_for_is_accepted_on_the_index_alone(
+    apply_repo: Path, tmp_path: Path
+) -> None:
+    # When git cannot resolve the merged frontend tree there is nothing to
+    # compare a stamp against, and an apply must not be blocked on a read
+    # failure: the pre-stamp acceptance (index.html present) is what is left.
+    worker_bundle = _make_worker_bundle(tmp_path, stamp=None)
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+    runner.respond(
+        ("git", "rev-parse", f"HEAD:{update_self.FRONTEND_DIR}"),
+        _Result(returncode=128, stderr="fatal: not a tree"),
+    )
+
+    code = _apply(
+        runner,
+        _FakeHttp(_all_healthy),
+        _FakeSpawner(),
+        apply_repo,
+        worker_bundle=str(worker_bundle),
+    )
+
+    assert code == 0
+    assert not runner.ran("npm", "run", "build")
+    assert _installed_asset(apply_repo) == "console.log('worker');"
 
 
 # --- apply: failure -> rollback --------------------------------------------------
