@@ -1010,16 +1010,19 @@ _RECEIPT = "uv-receipt.toml"
 STATIC_DIR = f"{APP_DIR}/imbue/system_interface/static"
 FRONTEND_BUILD_INDEX = f"{STATIC_DIR}/index.html"
 # The identity stamp the frontend build writes into the bundle: the git tree
-# hash of the frontend source directory the build ran from (an npm `postbuild`
-# step in frontend/package.json; best-effort, absent when the build ran with no
-# git repo). The apply compares it against the merged tree's own frontend tree
-# hash, so a populated bundle built from some other source -- a wrong
-# --worker-bundle path, an old worker's leftovers -- falls back to a live build
-# instead of being served as if it were the merged source. A live build in the
-# merged checkout stamps that same hash, so for it the comparison is only a
-# consistency check; the postbuild runs after any exit-0 build, and a build
-# that wrote nothing is caught by the index check (vite empties the output
-# directory first), not by the stamp.
+# hash of the frontend source directory at the checkout's HEAD commit (an npm
+# `postbuild` step in frontend/package.json running `git rev-parse HEAD:./`;
+# best-effort, absent when the build ran with no git repo). It names the
+# committed tree, not the working tree: uncommitted frontend edits at build
+# time are not reflected in it, so a worker's bundle only describes its source
+# when the worker built after committing. The apply compares it against the
+# merged tree's own frontend tree hash, so a populated bundle built from some
+# other source -- a wrong --worker-bundle path, an old worker's leftovers --
+# falls back to a live build instead of being served as if it were the merged
+# source. A live build in the merged checkout stamps that same hash, so for it
+# the comparison is only a consistency check; the postbuild runs after any
+# exit-0 build, and a build that wrote nothing is caught by the index check
+# (vite empties the output directory first), not by the stamp.
 BUNDLE_STAMP_FILENAME = ".source-tree-hash"
 # The pinned-toolchain provisioner, re-run live when a provisioner-classified
 # path changed (idempotent; the content-addressed provision guard skips what
