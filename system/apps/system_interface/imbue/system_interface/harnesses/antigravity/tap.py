@@ -213,7 +213,11 @@ class AntigravityAtomicShoulderTap(AtomicShoulderTap):
             return ShoulderTapOutcome(status="not_flushed", error_detail="Antigravity did not stop its turn in time.")
         watcher.release_tap_claim(claimed, generation)
         watcher.notify_idle()
-        return ShoulderTapOutcome(status=_FLUSHED, block=block)
+        # block="" DELIBERATELY. ``ShoulderTapOutcome.block`` is a returned-to-composer
+        # handback, used only when a tap FAILED to hand its text back. Returning the queue
+        # here made the frontend prepend it to the composer while the worker was also
+        # delivering it -- the user saw their messages both sent and drained back.
+        return ShoulderTapOutcome(status=_FLUSHED)
 
 
 def _combine(queued_block: str, in_flight_block: str) -> str:
