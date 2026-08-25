@@ -37,6 +37,14 @@ Four subcommands cover the lead-side lifecycle:
     ``mngr/<name>`` survives in the shared object store, so the work can still
     be merged or inspected.
 
+``launch --destroy-existing``
+    A flow that keeps its finished worker around *stopped* (``mngr stop
+    <name>``, so its transcript stays reachable for the bug-report collector
+    without the agent consuming memory) would otherwise block its own next
+    pass: ``mngr create`` refuses a duplicate name. With this flag, launch
+    destroys a previous STOPPED worker of the same name as a pre-flight step.
+    A RUNNING or WAITING one is a genuine conflict and is still refused.
+
 The ``launch`` / ``await`` / ``launch-sync`` subcommands take the same
 ``--task-file``: ``launch`` sends it to the worker, and ``await`` /
 ``launch-sync`` read its ``finish_report_path`` to learn what to wait for.
@@ -426,6 +434,7 @@ def launch(
     task_file: Path,
     state_dir: Path | None = None,
     runner: Runner | None = None,
+    destroy_existing: bool = False,
 ) -> int:
     """Run the worker-creation lifecycle. Returns the process exit code.
 
@@ -447,6 +456,10 @@ def launch(
     converter at ``<state_dir>/commands/common_transcript.sh`` is flushed
     before the task message lands so the worker's first transcript read
     sees fresh events.
+
+    ``destroy_existing`` clears a previous *stopped* worker of the same name
+    before creating (a running one is still refused, exit 2) -- for flows that
+    keep their finished worker stopped rather than destroyed.
     """
     runner = runner or Runner()
 
@@ -514,6 +527,11 @@ def launch(
     lead_rc = _ensure_lead_agent(task_file)
     if lead_rc is not None:
         return lead_rc
+
+    if destroy_existing:
+        conflict_rc = _destroy_stopped_predecessor(name, runner)
+        if conflict_rc is not None:
+            return conflict_rc
 
     runner.run(
         [
@@ -592,6 +610,63 @@ def _worker_has_pending_shed(worker_name: str) -> bool:
     from oom_priority.ledger import has_pending_shed
 
     return has_pending_shed(worker_name)
+
+
+# The lifecycle state mngr reports for an agent whose process has been stopped
+# (``mngr stop``); the only state ``--destroy-existing`` will destroy over.
+_STOPPED_STATE = "STOPPED"
+
+
+def _worker_state(worker_name: str, runner: Runner) -> str | None:
+    """The mngr lifecycle state of ``worker_name``, or ``None`` when no such
+    agent exists (or the listing could not be read -- the launch then proceeds
+    to ``mngr create``, whose own duplicate-name refusal is the backstop)."""
+    result = runner.run(
+        ["mngr", "list", "--format", "jsonl", "--on-error", "continue"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    if getattr(result, "returncode", 0) != 0:
+        return None
+    for line in (getattr(result, "stdout", "") or "").splitlines():
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if record.get("resource_type") != "agent" or record.get("name") != worker_name:
+            continue
+        state = record.get("state")
+        return str(state) if state is not None else None
+    return None
+
+
+def _destroy_stopped_predecessor(name: str, runner: Runner) -> int | None:
+    """Clear a previous *stopped* worker of the same name; refuse a live one.
+
+    Returns exit code ``2`` when a worker of that name is still running (a
+    genuine conflict the caller must resolve), otherwise ``None``.
+    """
+    state = _worker_state(name, runner)
+    if state is None:
+        return None
+    if state != _STOPPED_STATE:
+        print(
+            f"create_worker: refusing to launch {name}: a worker of that name is "
+            f"still {state} (not stopped). --destroy-existing only clears a "
+            f"stopped predecessor; stop it (mngr stop {name}) or destroy it "
+            f"(mngr destroy {name} --force) first.",
+            file=sys.stderr,
+        )
+        return 2
+    print(
+        f"create_worker: destroying the stopped previous worker {name} "
+        "(--destroy-existing) before launching",
+        file=sys.stderr,
+    )
+    destroy(name, runner)
+    return None
 
 
 def _worker_is_idle(worker_name: str) -> bool:
@@ -929,6 +1004,7 @@ def _run_launch(args: argparse.Namespace, runner: Runner | None) -> int:
         task_file=args.task_file,
         state_dir=state_dir,
         runner=runner,
+        destroy_existing=args.destroy_existing,
     )
 
 
@@ -1005,6 +1081,13 @@ def main(argv: Sequence[str] | None = None, runner: Runner | None = None) -> int
         required=True,
         type=Path,
         help="Markdown task file (must already exist; typically inside --runtime-dir).",
+    )
+    launch_parser.add_argument(
+        "--destroy-existing",
+        action="store_true",
+        help="Destroy a previous STOPPED worker of the same name before creating "
+        "(for flows that keep a finished worker stopped rather than destroyed). "
+        "A running one is still refused.",
     )
 
     await_parser = subparsers.add_parser(

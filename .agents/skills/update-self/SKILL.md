@@ -354,11 +354,15 @@ BODY_EOF
 
 Launch with the plain `worker` template (this flow uses its own worker guidance,
 not the generic `harden-worker`), then background-poll (`run_in_background:
-true`), re-arming per `lead-proxy.md`:
+true`), re-arming per `lead-proxy.md`. `--destroy-existing` clears the previous
+pass's worker, which Step 6 leaves *stopped* rather than destroyed (so its
+transcript stays reachable for bug reports); a previous worker that is still
+running is a genuine conflict and the launch refuses it -- resolve that per the
+lease check in Step 1 rather than forcing past it:
 
 ```bash
 uv run .agents/skills/launch-task/scripts/create_worker.py launch \
-    --name update-self --template worker \
+    --name update-self --template worker --destroy-existing \
     --runtime-dir data/.tasks/update-self/ --task-file data/.tasks/update-self/task.md
 
 uv run .agents/skills/launch-task/scripts/create_worker.py await \
@@ -596,19 +600,44 @@ Interpret the exit code and report it per the §5a composition rules:
 - **`0` -- applied.** The update is landed, recorded in the version history,
   and the live workspace confirmed healthy; the environment advanced to the
   merged apt snapshot (summarize the env-converge delta count in plain
-  language). **Read the closing stderr line before signing off**: a workspace
+  language). **Read the closing stderr lines before signing off**: a workspace
   whose frontend was already broken beforehand still lands and still exits
   `0`, but the final line names the breakage instead of confirming health --
   pass that on as a separate problem, never repackage it as success. A
   non-fatal warning (the ledger could not be committed, or env-converge
   failed) also rides on stderr with its own follow-up; carry it out or
   surface it.
+
+  **`applied with incomplete provisioning` is the other exit-`0` variant to
+  act on.** A provisioner run (`system/scripts/setup_system.sh`) that fails
+  does *not* roll the update back on its own: a failed tool install leaves
+  the tree and services consistent, so the apply carries on to the restart
+  and the probes, and a load-bearing provisioner change (a node bump, a new
+  apt dependency) still fails those and still rolls back. When the probes
+  pass over a failed provisioner, the update is landed and the gap is
+  recorded at `data/.state/update-apply/provision-incomplete.json` (the
+  reason, the merge, the agent). That record is yours to close: diagnose the
+  failure from the stderr excerpt (often no network, or a download that
+  never completed), fix the cause, and re-run the provisioner by hand --
+  `bash system/scripts/setup_system.sh` -- which is idempotent; a later apply
+  whose provisioner run succeeds clears the record too, but do not leave it
+  for one. Tell the user plainly that the update is in and working but one
+  tool-install step is still pending, never that everything completed.
+
+  Every exit also prints one `apply phase timings:` line -- per-phase
+  durations from the apply marker. It is the benchmarking input for the
+  apply's poll and step budgets; when an apply took unusually long, quote it
+  in the report rather than guessing which step was slow.
 - **`2` -- automatically rolled back.** The apply reverted the **entire
   landed merge -- every class, not just the failing one** -- and restored the
   pre-apply state; the live workspace is confirmed healthy on the previous
   revision. The requested update did NOT land. See "If the apply rolled back"
   below for what to tell the user. The same already-broken-frontend variant
-  applies here.
+  applies here. A forward step that outlives its wall-clock budget (`<step>
+  did not finish within <N>s`) is one of the causes that lands here: the
+  apply never waits open-endedly on a hung `npm ci`, build, refresh,
+  provisioner, or restart, so treat that message as "it hung", with the
+  `apply phase timings:` line saying where.
 - **`3` -- emergency.** Even the rollback could not restore a healthy
   workspace. Escalate immediately. The pre-apply copies are kept under
   `data/.state/update-apply/snapshots/`, and when the apply touched the
@@ -758,16 +787,26 @@ its tab (`python3 system/scripts/layout.py close <name>`).
 
 **The rest of this section is only for a successful apply (exit 0).** After a
 rollback the retry path is the worker: its branch, worktree, and report are
-what make a diagnosed retry a quick re-land, so do not destroy the worker or
+what make a diagnosed retry a quick re-land, so do not stop the worker or
 consume the report until the retry is resolved with the user (release the
-leases either way, so another pass is not blocked while you wait). Then:
+leases either way, so another pass is not blocked while you wait). Then
+consume the report and **stop** the worker -- do not destroy it:
 
 ```bash
 mkdir -p data/.tasks/update-self/reports/consumed
 mv data/.tasks/update-self/reports/report.md \
     data/.tasks/update-self/reports/consumed/$(date +%s)-done.md
-uv run .agents/skills/launch-task/scripts/create_worker.py destroy --name update-self
+mngr stop update-self
 ```
+
+Stopping rather than destroying is deliberate. The worker's transcript is the
+primary evidence when an update pass later turns out to have gone wrong, and
+`mngr destroy` is the one thing that puts it out of reach of the bug-report
+collector (after a destroy, the only surviving copy is the harness's raw log,
+which nothing can find by asking mngr). A stopped worker consumes no memory,
+stays listed, and its transcript stays readable through `mngr event`; the next
+pass's launch clears it with `--destroy-existing` (Step 3b) before creating
+the new one.
 
 Consuming the terminal report is not optional bookkeeping: `create_worker.py
 launch` refuses to start a worker while a leftover report sits at the report
