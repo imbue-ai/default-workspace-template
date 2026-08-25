@@ -33,7 +33,6 @@ from typing import Any
 from loguru import logger
 
 from imbue.concurrency_group.subprocess_utils import ProcessSetupError
-from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.mngr.errors import MngrError
 from imbue.mngr.utils.file_utils import atomic_write
 from imbue.mngr.utils.file_utils import read_json_dict
@@ -60,6 +59,7 @@ from imbue.system_interface.harnesses.pi_coding.inbox import append_pi_inbox_sen
 from imbue.system_interface.harnesses.session import AtomicShoulderTap
 from imbue.system_interface.harnesses.session import ShoulderTapOutcome
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
+from imbue.system_interface.subprocess_runner import run_detached_command
 
 # The single-slot switch mailbox this resolver writes: switch() atomically OVERWRITES
 # it with one JSON intent, so a newer pick replaces an unconsumed older one (buffer of
@@ -224,9 +224,8 @@ class PiModelResolver(HarnessModelResolver):
         pi_config_dir = self._state_dir / _PI_CONFIG_DIR_RELPATH
         env = {**os.environ, "PI_CODING_AGENT_DIR": str(pi_config_dir)}
         try:
-            finished = run_local_command_modern_version(
+            finished = run_detached_command(
                 [executable, "--list-models"],
-                is_checked=False,
                 timeout=_LIST_MODELS_TIMEOUT_SECONDS,
                 env=env,
                 name="pi --list-models",

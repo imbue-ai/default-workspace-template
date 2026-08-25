@@ -142,6 +142,23 @@ def test_status_endpoint_logged_out_when_claude_missing(isolated_claude_config: 
     assert response.get_json()["logged_in"] is False
 
 
+def test_status_endpoint_refuses_to_answer_when_the_check_times_out(isolated_claude_config: Path) -> None:
+    """503, not `logged_in: false`.
+
+    The frontend's load check stays quiet on a failed request, where a false would have popped
+    the login modal over a signed-in workspace.
+    """
+
+    def _timed_out_runner(_cmd: list[str], _timeout: float, _env: object = None) -> FakeFinishedProcess:
+        return FakeFinishedProcess(stdout="", returncode=-15, is_timed_out=True)
+
+    service = ClaudeAuthService(command_runner=_timed_out_runner)
+    with _client(claude_auth_service=service) as client:
+        response = client.get("/api/claude-auth/status")
+    assert response.status_code == 503
+    assert "logged_in" not in response.get_json()
+
+
 def test_setup_token_flow_via_poll_completion(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The normal subscription flow: start, poll pending, poll complete.
 

@@ -27,7 +27,6 @@ from imbue.concurrency_group.errors import ProcessError
 from imbue.concurrency_group.event_utils import ShutdownEvent
 from imbue.concurrency_group.local_process import RunningProcess
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
-from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.mngr.api.find import AgentMatch
@@ -83,6 +82,7 @@ from imbue.system_interface.naming import canonical_agent_name
 from imbue.system_interface.naming import first_free_numbered_name
 from imbue.system_interface.naming import is_name_conflict
 from imbue.system_interface.oom_prioritizer import ChatOomPrioritizer
+from imbue.system_interface.subprocess_runner import run_detached_command
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 # The role template every UI-created agent gets. The harness is chosen separately via
@@ -868,10 +868,9 @@ class AgentManager:
         else:
             cmd = _build_chat_rename_command(self._mngr_binary, agent_state.id, display_name)
         try:
-            result = run_local_command_modern_version(
+            result = run_detached_command(
                 command=cmd,
                 cwd=None,
-                is_checked=False,
                 timeout=_RENAME_TIMEOUT_SECONDS,
             )
         except (OSError, ConcurrencyGroupError) as e:
@@ -1228,10 +1227,9 @@ class AgentManager:
             _safe_log_put(log_queue, json.dumps({"line": header_line}))
 
             try:
-                result = run_local_command_modern_version(
+                result = run_detached_command(
                     command=cmd,
                     cwd=work_dir,
-                    is_checked=False,
                     trace_output=True,
                     trace_on_line_callback=_LogQueueCallback(log_queue=log_queue),
                     shutdown_event=self._shutdown_event,

@@ -255,14 +255,15 @@ class FakeFinishedProcess:
     """Minimal stand-in for a `FinishedProcess` returned by `command_runner`.
 
     The real subprocess runner produces an object with `stdout`, `stderr`,
-    and `returncode`; this class exposes just those three so tests can
-    drive every branch the `claude_auth` callers care about.
+    `returncode`, and `is_timed_out`; this class exposes just those four so
+    tests can drive every branch the `claude_auth` callers care about.
     """
 
-    def __init__(self, stdout: str = "", stderr: str = "", returncode: int = 0) -> None:
+    def __init__(self, stdout: str = "", stderr: str = "", returncode: int = 0, is_timed_out: bool = False) -> None:
         self.stdout = stdout
         self.stderr = stderr
         self.returncode = returncode
+        self.is_timed_out = is_timed_out
 
 
 class FakePexpectProcess:
