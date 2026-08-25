@@ -1231,11 +1231,12 @@ def test_token_gate_is_the_per_frame_replacement_for_the_command_cas() -> None:
     asyncio.run(go())
 
 
-def test_the_token_survives_its_own_agent_but_not_another() -> None:
+def test_the_token_survives_its_own_agent_but_not_another(monkeypatch: pytest.MonkeyPatch) -> None:
     # Rotation is scoped deliberately. The moment-to-moment guarantee comes from the
     # per-frame lease check, not from re-minting -- the token is identity, not authority --
     # so it must survive everything except the browser genuinely changing hands to someone
     # else. See the takeover test for why re-minting too eagerly breaks resumption.
+    monkeypatch.setattr(bsession.LiveBrowser, "_wake_agent", _noop_wake)
     browser = _leased("riley-jones", agent_id="A")
 
     async def go() -> None:
@@ -1450,11 +1451,12 @@ def test_pane_follow_never_reasserts_a_stale_cached_tab() -> None:
     asyncio.run(go())
 
 
-def test_a_human_takeover_does_not_kill_the_agents_socket() -> None:
+def test_a_human_takeover_does_not_kill_the_agents_socket(monkeypatch: pytest.MonkeyPatch) -> None:
     # THE takeover flow: the agent's live socket carries the token it attached with, so
     # re-minting on takeover would kill it permanently -- and re-attaching is not a way out,
     # because a playwright-cli slug is poisoned once its session is torn down. Handing
     # control back has to leave the agent able to carry on.
+    monkeypatch.setattr(bsession.LiveBrowser, "_wake_agent", _noop_wake)
     browser = _leased("browser-1", agent_id="A")
 
     async def go() -> None:
@@ -1468,8 +1470,9 @@ def test_a_human_takeover_does_not_kill_the_agents_socket() -> None:
     asyncio.run(go())
 
 
-def test_a_different_agent_taking_the_browser_does_kill_the_old_token() -> None:
+def test_a_different_agent_taking_the_browser_does_kill_the_old_token(monkeypatch: pytest.MonkeyPatch) -> None:
     # The rotation that DOES matter: otherwise the previous holder keeps driving.
+    monkeypatch.setattr(bsession.LiveBrowser, "_wake_agent", _noop_wake)
     browser = _leased("browser-1", agent_id="A")
 
     async def go() -> None:
