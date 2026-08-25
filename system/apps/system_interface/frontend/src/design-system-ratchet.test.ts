@@ -48,9 +48,14 @@ const BASELINES = {
   // modal shell: the per-feature dialogs' bespoke 12px card radii collapse into the
   // single .modal-card. Tightened again as the last custom-url dialogs moved onto
   // the shell and the bespoke .custom-url-dialog block was deleted (its 12px card
-  // radius). The remaining values have no token yet (8/12/…), handled when a radius scale lands
-  // (needs non-colliding names, like type).
-  borderRadiusPx: 28,
+  // radius). Tightened again by the radius scale (--radius-3/-4/-8/-10/-12/-pill,
+  // named value-first to avoid Tailwind's rounded-{sm,md,lg} utilities used in the
+  // views): every exact-match px radius moved onto a token (incl. the user bubble's
+  // 4px tail corner). The last 2 are genuine one-offs kept raw with a
+  // design-system-exception each -- a 1px insertion caret (half its 2px width) and
+  // a 2px focus-ring radius on an inline link. (50% circles stay the raw idiom;
+  // percentages are not counted by this ratchet.)
+  borderRadiusPx: 2,
   // Tightened by the tooltip primitive: the three duplicated per-component
   // `[data-tooltip]::after` bubbles (each with `z-index: 1000`) were consolidated
   // into one generic `[data-tooltip]::after`, dropping two z-index literals.

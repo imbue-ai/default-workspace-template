@@ -101,9 +101,21 @@
   --z-dropdown: 1000;
   --z-overlay: 10000;
   --z-tooltip: 10001;
+  /* Radius scale. Value-named (--radius-8 = 8px, etc.) and deliberately NOT
+     --radius-{sm,md,lg}: those are Tailwind defaults backing the rounded-* utilities
+     used in the views (rounded-md/lg), so reusing them would shift those views --
+     the same non-colliding-name lesson as the type scale. --radius-base (6px) and
+     the two semantic radii (bubble/composer) already existed. 50% circles stay the
+     raw idiom (out of scope, not ratcheted). */
+  --radius-3: 3px;
+  --radius-4: 4px;
   --radius-base: 6px;
-  --radius-bubble: 18px;
+  --radius-8: 8px;
+  --radius-10: 10px;
+  --radius-12: 12px;
   --radius-composer: 16px;
+  --radius-bubble: 18px;
+  --radius-pill: 999px;
   /* Typography scale — role-based; see the .type-* classes below. Unit: px. */
   --font-size-heading-lg: 24px;
   --font-size-heading: 18px;
@@ -338,7 +350,7 @@ body {
   font-weight: var(--weight-regular);
   line-height: 1.4;
   border: 1px solid transparent;
-  border-radius: 10px;
+  border-radius: var(--radius-10);
   white-space: nowrap;
 }
 .badge--mono {
@@ -424,7 +436,7 @@ body {
   color: var(--color-text-secondary);
   background: none;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--radius-8);
   cursor: pointer;
   transition:
     color var(--dur-base),
@@ -623,7 +635,7 @@ body {
 .message-user-bubble {
   max-width: 80%;
   background: var(--color-bg-user-bubble);
-  border-radius: var(--radius-bubble) var(--radius-bubble) 4px var(--radius-bubble);
+  border-radius: var(--radius-bubble) var(--radius-bubble) var(--radius-4) var(--radius-bubble);
   padding: 12px 18px;
   font-size: var(--font-size-body);
   line-height: 1.5;
@@ -959,7 +971,7 @@ body {
   padding: var(--space-1_5) var(--space-2) var(--space-1_5) var(--space-1_5);
   background: var(--color-bg-sidebar);
   border: 1px solid var(--color-border);
-  border-radius: 10px;
+  border-radius: var(--radius-10);
 }
 
 .composer-attachment--error {
@@ -1039,7 +1051,7 @@ body {
   z-index: 50; /* design-system-exception: mid-layer drop overlay; the z scale has no name for 50 (it sits above chat content but below the modal overlay stack) */
   background: color-mix(in srgb, var(--color-accent-light) 70%, transparent);
   border: 2px dashed var(--color-accent);
-  border-radius: 12px;
+  border-radius: var(--radius-12);
   margin: var(--space-2);
 }
 
@@ -1047,7 +1059,7 @@ body {
   padding: 10px 18px;
   background: var(--color-surface);
   border: 1px solid var(--color-accent);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   font-size: var(--font-size-body);
   font-weight: 500;
   color: var(--color-accent);
@@ -1073,7 +1085,7 @@ body {
 .message-attachment-image {
   max-width: 240px;
   max-height: 240px;
-  border-radius: 8px;
+  border-radius: var(--radius-8);
   border: 1px solid var(--color-border);
   display: block;
 }
@@ -1092,7 +1104,7 @@ body {
   padding: var(--space-2) var(--space-3);
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: 10px;
+  border-radius: var(--radius-10);
   color: var(--color-text-primary);
   text-decoration: none;
   transition:
@@ -1162,7 +1174,7 @@ body {
   color: var(--color-text-secondary);
   background: none;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--radius-8);
   padding: 0 var(--space-2);
   cursor: pointer;
   transition:
@@ -1198,7 +1210,7 @@ body {
   max-width: min(92vw, 460px);
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: 12px;
+  border-radius: var(--radius-12);
   /* design-system-exception: unique two-layer Notion-charcoal menu shadow; the
      single-layer elevation scale has no menu tier. */
   box-shadow:
@@ -1225,7 +1237,7 @@ body {
   padding: 0 var(--space-2);
   height: 30px;
   border: 1px solid var(--color-border);
-  border-radius: 8px;
+  border-radius: var(--radius-8);
   background: var(--color-bg-hover);
   transition:
     border-color var(--dur-base),
@@ -1550,7 +1562,7 @@ body {
 
 .app-content::-webkit-scrollbar-thumb {
   background: var(--color-border);
-  border-radius: 3px;
+  border-radius: var(--radius-3);
 }
 
 .app-content::-webkit-scrollbar-thumb:hover {
@@ -1758,7 +1770,7 @@ body {
    revealing the raw request/response. */
 .permission-request {
   border: 1px solid var(--color-border);
-  border-radius: 10px;
+  border-radius: var(--radius-10);
   background: var(--color-bg-composer);
   padding: 12px 14px;
   max-width: 560px;
@@ -1790,7 +1802,7 @@ body {
 .permission-request-badge {
   width: 32px;
   height: 32px;
-  border-radius: 8px;
+  border-radius: var(--radius-8);
   background: var(--color-bg-hover);
   color: var(--color-text-secondary);
   display: flex;
@@ -1962,7 +1974,7 @@ body {
 
 .machine-sidebar ::-webkit-scrollbar-thumb {
   background: transparent;
-  border-radius: 3px;
+  border-radius: var(--radius-3);
 }
 
 .machine-sidebar:hover ::-webkit-scrollbar-thumb {
@@ -2288,7 +2300,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   min-width: 160px;
   padding: var(--space-1) 0;
   border: 1px solid var(--color-border);
-  border-radius: 8px;
+  border-radius: var(--radius-8);
   background-color: var(--color-surface);
   /* design-system-exception: two-layer menu shadow (shared verbatim with
      .minds-tooltip); the single-layer elevation scale has no menu tier. */
@@ -2391,7 +2403,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   top: 0;
   bottom: 0;
   width: 2px;
-  border-radius: 1px;
+  border-radius: 1px; /* design-system-exception: one-off; half of this 2px insertion caret's width, so it reads as a rounded line, not a scale radius */
   /* Neutral, like everything else on the dock: the accent is chrome's, and an
      insertion caret here would be the one accent-colored thing in the pane. */
   background: var(--color-text-primary);
@@ -2600,7 +2612,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   min-width: 0;
   padding: 0 3px;
   border: 1px solid var(--color-accent);
-  border-radius: 3px;
+  border-radius: var(--radius-3);
   outline: none;
   background: var(--color-bg);
   color: var(--color-text-primary);
@@ -2625,7 +2637,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   background: none;
   color: var(--color-text-secondary);
   cursor: pointer;
-  border-radius: 3px;
+  border-radius: var(--radius-3);
   transition:
     background var(--dur-fast),
     color var(--dur-fast);
@@ -2691,7 +2703,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 .modal-card {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: 12px;
+  border-radius: var(--radius-12);
   padding: var(--space-6);
   width: 420px;
   max-width: 90vw;
@@ -2757,7 +2769,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   justify-content: center;
   width: 26px;
   height: 26px;
-  border-radius: 8px;
+  border-radius: var(--radius-8);
   color: var(--color-accent);
   background: var(--color-accent-light);
   flex-shrink: 0;
@@ -2986,7 +2998,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   font-size: 0.9em;
   padding: 0.1em 0.35em;
   background: var(--pv-line-faint, rgba(127, 127, 127, 0.08));
-  border-radius: 3px;
+  border-radius: var(--radius-3);
   font-style: normal;
   -webkit-text-fill-color: var(--pv-fg-muted);
   -webkit-background-clip: padding-box;
@@ -3003,7 +3015,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   margin: 0.4em 0;
   padding: 0.5em 0.7em;
   background: var(--pv-line-faint, rgba(127, 127, 127, 0.08));
-  border-radius: 4px;
+  border-radius: var(--radius-4);
   overflow-x: auto;
   font-size: 0.9em;
   font-style: normal;
@@ -3190,7 +3202,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 .claude-login-modal {
   position: relative;
   background: var(--color-surface);
-  border-radius: 12px;
+  border-radius: var(--radius-12);
   width: 100%;
   max-width: 460px;
   max-height: calc(100vh - 32px);
@@ -3369,7 +3381,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   padding: 12px 14px;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: 8px;
+  border-radius: var(--radius-8);
   box-shadow: var(--elevation-sm);
   cursor: pointer;
   font: inherit;
@@ -3481,7 +3493,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 .claude-login-copylink-action:focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
-  border-radius: 2px;
+  border-radius: 2px; /* design-system-exception: one-off; tight focus-ring radius on an inline text link, between scale steps */
 }
 
 /* Raw OAuth URL fallback, shown when the clipboard write was rejected. */
@@ -3531,7 +3543,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   font-size: var(--font-size-helper);
   color: var(--color-text-secondary);
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: var(--radius-4);
 }
 
 .claude-login-input-action:hover {
@@ -3676,7 +3688,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   padding: 10px 12px;
   background: var(--color-danger-bg);
   border: 1px solid var(--color-danger-border);
-  border-radius: 8px;
+  border-radius: var(--radius-8);
   color: var(--color-danger);
   font-size: var(--font-size-body);
   line-height: 1.45;

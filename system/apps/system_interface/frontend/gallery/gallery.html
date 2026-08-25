@@ -478,16 +478,19 @@
         spaceHost.append(row);
       }
 
-      // Radii: proposed + existing radius tokens.
+      // Radii: the app's own radius scale (value-named to avoid Tailwind's
+      // rounded-{sm,md,lg} utilities). 50% circles stay the raw idiom, so there is
+      // no --radius-circle token.
       const RADIUS_TOKENS = [
-        "--radius-sm",
+        "--radius-3",
+        "--radius-4",
         "--radius-base",
-        "--radius-md",
-        "--radius-lg",
-        "--radius-bubble",
+        "--radius-8",
+        "--radius-10",
+        "--radius-12",
         "--radius-composer",
+        "--radius-bubble",
         "--radius-pill",
-        "--radius-circle",
       ];
       const radiusHost = document.getElementById("gy-radius");
       for (const t of RADIUS_TOKENS) {
