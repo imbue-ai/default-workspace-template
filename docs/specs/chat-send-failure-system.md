@@ -91,7 +91,7 @@ Below all four sits the tmux pipeline the send-keys harnesses drive (claude and 
 | `not_ready` | the harness is still coming up | Cancel, Retry |
 | `unknown` | unclassified | Cancel, Retry, Force (today's behaviour) |
 
-**Built.** `MessageResult` carries `failed_agent_kinds` parallel to `failed_agents` -- parallel rather than a third element in that public tuple, which `mngr message`'s exit code reads. The kind travels through `SendFailure`, the send endpoint returns it beside the detail, and the chat maps it: `agent_unreachable` withholds Retry, since a pane that is gone will not be there on the next attempt, and offers Force, which is the only thing that can help. Anything unclassified reads as `unknown` and behaves exactly as it did before kinds existed.
+**Built.** `MessageResult.failures` carries one `AgentSendFailure` per agent (name, reason, kind), with `failed_agents` kept as a derived view so `mngr message`'s exit code and output are unchanged. The reason carries no "failed to send to X" framing: every consumer has the name already and adds its own. The kind travels through `SendFailure`, the send endpoint returns it beside the detail, and the chat maps it: `agent_unreachable` withholds Retry, since a pane that is gone will not be there on the next attempt, and offers Force, which is the only thing that can help. Anything unclassified reads as `unknown` and behaves exactly as it did before kinds existed.
 
 ## What Retry and Force actually are
 

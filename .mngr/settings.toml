@@ -101,15 +101,19 @@ auto_dismiss_dialogs_at_startup = true
 # naming what is in the way, rather than mngr guessing; anything Esc closes harmlessly is
 # dismissed regardless of this list.
 #
-# Answer every dialog mngr knows a sensible answer for, rather than naming them one by one.
-# A dialog only becomes answerable by being given a named option to land on, and mngr reaches
-# that option by cycling the selector onto it -- never by pressing Enter on whatever happens
-# to be highlighted -- so opting into all of them grants no power to guess. Anything without
-# a named answer still refuses the send, and anything Esc closes harmlessly is still just
-# dismissed. The alternative, an explicit list, silently stops covering each dialog added
+# Answer every dialog mngr knows a sensible answer for, and fall back to pressing "1" on one
+# it cannot name. A named dialog is answered by cycling the selector onto its own chosen option
+# -- never by pressing Enter on whatever happens to be highlighted -- so that half grants no
+# power to guess. The alternative, an explicit list, silently stops covering each dialog added
 # upstream: the model and effort switch confirmations were listed here, so a usage-limit or
 # LSP-install prompt blocked sends until someone noticed and added it.
-sensibly_deal_with_dialogs = ["ALL_KNOWN_DIALOGS"]
+#
+# The "and unknown" half IS a guess, chosen deliberately: a workspace chat has no good way to
+# show a dialog nobody has named, so refusing there strands the message until someone opens
+# the terminal tab. It is bounded -- the digit only goes to a pane actually showing a numbered
+# selector, and if the surface does not clear, the send still refuses rather than pressing on.
+# Narrow it to ALL_KNOWN_DIALOGS to go back to refusing anything unnamed.
+sensibly_deal_with_dialogs = ["ALL_KNOWN_AND_UNKNOWN_DIALOGS"]
 auto_allow_permissions = true
 auto_disable_questions = true
 cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode,TodoWrite,TaskCreate,TaskList,TaskUpdate"""
