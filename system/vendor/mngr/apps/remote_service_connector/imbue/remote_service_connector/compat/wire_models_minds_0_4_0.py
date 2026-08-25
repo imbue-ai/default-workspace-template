@@ -46,11 +46,16 @@ RELEASE_DATE = date(2026, 8, 18)
 # The date this snapshot stops being enforced: prune the file then (or extend
 # this date deliberately). Set to the release date + the ~1 month support
 # window; later releases that share this strictly-parsed surface extend this
-# date instead of adding a new snapshot (see docs: apps/minds/docs/release.md).
+# date instead of adding a new snapshot (see docs:
+# apps/minds/docs/deploy/release.md).
 # Also covers minds 0.4.1 (released 2026-08-18): its strictly-parsed connector
 # surface is identical to 0.4.0's (no wire_types or connector response changes
 # between the two tags), and its support window ends the same date.
-SUPPORT_ENDS = date(2026, 9, 18)
+# Also covers minds 0.4.2 (released 2026-08-24): the strictly-parsed surface is
+# still identical -- the only wire_types changes between the two tags are
+# docstrings, field descriptions, and the additive operator-only
+# AdminAccountInfo, which no strictly-parsed endpoint maps to.
+SUPPORT_ENDS = date(2026, 9, 24)
 
 
 class _TolerantModel(BaseModel):
