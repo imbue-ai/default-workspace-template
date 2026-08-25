@@ -1,11 +1,16 @@
 """The one way the system interface shells out: detached from the workspace's terminal.
 
-Every run-to-completion subprocess the system interface starts goes through
+Every run-to-completion subprocess spawned from this project's own source goes through
 :func:`run_detached_command`, and a ratchet (``test_subprocess_ratchets.py``) keeps it that
-way. Two spawns sit outside it, both isolated by other means: ``AgentManager``'s long-running
-``mngr observe`` child, which asks ``ConcurrencyGroup.run_process_in_background`` for the same
+way. Two spawns here are isolated by other means: ``AgentManager``'s long-running ``mngr
+observe`` child, which asks ``ConcurrencyGroup.run_process_in_background`` for the same
 detachment directly, and the PTY auth flows' ``pexpect.spawn``, which puts its child in a new
 session on a pty of its own.
+
+Calling into mngr in-process is the hole neither this module nor the ratchet can close: a mngr
+function spawns through its own runner with the default (attached) disposition, and the
+ratchet's regex only sees calls written here. ``mark_claude_agent_idle`` is one such call, on
+the request path. Check any new one by hand for a child that could reach the terminal.
 
 The system interface is started by supervisord, which puts each service it launches into its
 own process group with ``setpgrp`` -- a new *group*, but the same session, so the service and

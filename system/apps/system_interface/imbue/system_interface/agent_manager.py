@@ -1396,11 +1396,10 @@ class AgentManager:
                 on_output=self._handle_observe_output_line,
                 shutdown_event=self._shutdown_event,
                 is_checked_by_group=False,
-                # The one system-interface subprocess not started through
-                # subprocess_runner.run_detached_command, because that runs a command to
-                # completion and this one streams for the life of the service. It needs the
-                # same isolation for the same reason: `stop()` ends it with SIGTERM, and mngr
-                # discovery shells out underneath it.
+                # Not startable through subprocess_runner.run_detached_command, which runs a
+                # command to completion, while this one streams for the life of the service.
+                # It needs the same isolation for the same reason: `stop()` ends it with
+                # SIGTERM, and mngr discovery shells out underneath it.
                 is_detached_from_terminal=True,
             )
         except (OSError, InvalidConcurrencyGroupStateError):
