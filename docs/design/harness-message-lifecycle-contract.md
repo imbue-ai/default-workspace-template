@@ -1,7 +1,7 @@
 # The message-lifecycle contract (CANONICAL)
 
 The single source of truth for what happens to a user's message across every harness
-(claude, codex, pi): send, queue, shoulder-tap, interrupt, and return-to-composer. Harness
+(claude, codex, pi, antigravity): send, queue, shoulder-tap, interrupt, and return-to-composer. Harness
 implementations differ; **the observable behavior is identical**. If an implementation
 disagrees with this doc, the implementation is wrong.
 
@@ -233,7 +233,17 @@ Delivered. The backend decides per id (A4); the frontend asks the backend what t
   `turn/start`/`turn/steer`, stop = `turn/interrupt`, queue = pending steers observed via
   events, delivered = the committed `userMessage`, reconciliation by the minted `clientId`.
 
-The target is to make all three converge on the clean, single-path shape; claude's heuristic
+- **antigravity (the queue is OURS):** agy is the only harness whose queue cannot be observed
+  at all -- it parks mid-turn input inside its TUI, invisible on disk, and merges everything
+  parked into one turn. So it is never allowed to park anything: while a turn is open the
+  message is held backend-side and delivered as one newline-joined block when agy goes idle.
+  send = typed via tmux only when idle, queue = ours (journalled per-session so it survives a
+  backend restart but never the session), delivered = one block committing as one turn, stop =
+  a single ctrl+c plus handing our own list back, tap = ctrl+c then send the block. It needs no
+  restart on stop (nothing is parked inside agy to retract), keeping the restart only as the
+  bounded hammer when a send holds the message lock.
+
+The target is to make them converge on the clean, single-path shape; claude's heuristic
 path is what most needs to move toward it.
 
 ---
@@ -350,6 +360,33 @@ activity dot therefore follows mngr's authoritative RUNNING state via `CodexActi
 same lifecycle+transcript path as claude and pi), not the ledger's turn notifications. The ledger
 stays the queue/message-lifecycle authority. Deriving the dot from the ledger's notifications is
 what stuck it on "Thinking".
+
+### E11. antigravity — A3 identity is unreachable; the displayed queue is OURS
+**Structural, not a bug to fix.** Every other harness's queue is observable: codex's pending
+steers, claude's parked send queue, pi's inbox. agy's parked messages live inside its TUI and
+touch no file, so there is nothing to mirror. The design therefore inverts A3 rather than
+approximating it: agy is never allowed to park anything (a message is held backend-side while
+a turn is open), so the queue we display becomes the only queue that exists. The residual gap
+is other senders — a message typed into agy's own terminal, or `mngr message` from cron or a
+bot — which we neither see nor hold, and which we simply wait out.
+
+### E12. antigravity — delivery is not id-matched, and the send ack is not commit
+A4 wants a backend-minted id checked against the committed transcript. agy's protobuf
+transcript carries no client id, so delivery rests on having sent exactly one block and
+receiving exactly one turn — a 1:1 correspondence we control rather than an id we can look up.
+Separately, mngr's send returns when agy's busy marker advances, i.e. when agy became *busy*,
+not when the user step settled in its store. A turn cancelled between those two points is
+reported delivered though nothing committed. Narrow, real, and recorded rather than papered
+over.
+
+### E13. antigravity — the cancel key is a single ctrl+c, and a double press exits
+agy binds `cli.escape` to both `esc` and `ctrl+c`. `esc` carries text-editing meaning in too
+many TUI contexts to deliver blind; `ctrl+c` is unambiguous on the FIRST press, but agy treats
+a double press as exit and its docs say that valve fires regardless of remapping. Stop and tap
+each press exactly once and fall back to the restart rather than pressing again. A dedicated
+chord bound to `cli.escape` (claude's approach) would remove both hazards and remains the right
+end state; it is blocked on confirming where agy reads `keybindings.json`, since a write to the
+wrong path would silently no-op and leave stop and tap dead.
 
 ### E9. Test-environment quirks (not product bugs)
 - `test_codex_agent_full_lifecycle` is functionally green end-to-end but exits non-zero locally on
