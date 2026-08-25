@@ -76,13 +76,9 @@ export function FastModeModal(): m.Component {
                 " button",
               ]),
               m("div.fast-mode-modal-actions", [
+                m("button.btn.btn--secondary", { onclick: () => resolveFastModePrompt(true) }, "Keep fast mode on"),
                 m(
-                  "button.fast-mode-modal-btn.fast-mode-modal-btn-fast",
-                  { onclick: () => resolveFastModePrompt(true) },
-                  "Keep fast mode on",
-                ),
-                m(
-                  "button.fast-mode-modal-btn.fast-mode-modal-btn-standard",
+                  "button.btn.btn--primary",
                   {
                     onclick: () => resolveFastModePrompt(false),
                     // The default action, so Enter takes it without a reach for the mouse.
