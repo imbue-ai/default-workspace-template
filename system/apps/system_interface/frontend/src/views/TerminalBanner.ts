@@ -69,7 +69,7 @@ export function TerminalBanner(): m.Component {
         ]),
         m("span.terminal-banner-actions", [
           m(
-            "button.terminal-banner-btn",
+            "button.btn.btn--secondary.btn--sm",
             {
               onclick: () => {
                 hidden = true;
@@ -78,7 +78,7 @@ export function TerminalBanner(): m.Component {
             "Dismiss",
           ),
           m(
-            "button.terminal-banner-btn",
+            "button.btn.btn--secondary.btn--sm",
             {
               onclick: () => {
                 void persistNeverShowAgain();
