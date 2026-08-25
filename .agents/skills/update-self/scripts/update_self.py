@@ -2784,31 +2784,26 @@ def _install_or_build_bundle(
 ) -> None:
     """Put the merged frontend's bundle in place.
 
-    The worker's already-built ``static/`` is preferred when available -- it is
-    the artifact the user previewed, and installing it is a plain copy that
-    needs neither npm nor a registry. A live build is the fallback (the worker
-    is gone, or its bundle path is wrong), tagged expendable: a shed build is
-    an ordinary failure the rollback absorbs.
+    ``worker_bundle`` is the worker's already-built ``static/`` once the caller
+    has verified it against the merged source (:func:`_worker_bundle_reject_reason`)
+    -- the artifact the user previewed, and installing it is a plain copy that
+    needs neither npm nor a registry. ``None`` means build live, tagged
+    expendable: a shed build is an ordinary failure the rollback absorbs.
     """
     if worker_bundle is not None:
         source = Path(worker_bundle)
-        if (source / "index.html").exists():
-            destination = repo_root / STATIC_DIR
-            try:
-                if destination.exists():
-                    shutil.rmtree(destination)
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copytree(source, destination)
-            except OSError as exc:
-                raise ApplyFailed(
-                    f"installing the worker's built bundle from {source} failed "
-                    f"({type(exc).__name__}: {exc})"
-                ) from exc
-            return
-        sys.stderr.write(
-            f"note: --worker-bundle {source} holds no built bundle (index.html "
-            "missing); building live instead.\n"
-        )
+        destination = repo_root / STATIC_DIR
+        try:
+            if destination.exists():
+                shutil.rmtree(destination)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(source, destination)
+        except OSError as exc:
+            raise ApplyFailed(
+                f"installing the worker's built bundle from {source} failed "
+                f"({type(exc).__name__}: {exc})"
+            ) from exc
+        return
     _run_checked(
         runner,
         expend(["npm", "run", "build"]),
