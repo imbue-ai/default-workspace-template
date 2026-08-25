@@ -16,7 +16,7 @@ describe("createBrowser", () => {
     // no name of its own and takes whatever came back as the identity to open.
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ name: "browser-1", key_available: true }) });
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ name: "browser-1" }) });
     vi.stubGlobal("fetch", fetchMock);
 
     expect(await createBrowser()).toEqual({ ok: true, name: "browser-1", reason: "" });

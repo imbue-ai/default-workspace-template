@@ -154,6 +154,69 @@ _install_fortress() {
     _log "fortress: install complete (${_FORTRESS_INSTALL_DIR}/tilion-fortress/tilion)"
 }
 
+# Unpacked Chrome extensions loaded into every fleet browser, PINNED by version.
+#
+# These used to be downloaded at RUNTIME by browser-use, straight from the Chrome Web
+# Store, unpinned -- so every workspace got whatever CWS served that day, loaded into the
+# browser holding the user's real logins, on a first-launch network call. That violates
+# this unit's own contract (versions come from pins here, never from a re-run), so they
+# are pinned and installed here instead and passed via --load-extension (see chrome_args).
+#
+# uBlock Origin Lite keeps ad noise out of the accessibility snapshots the agent reads;
+# "I still don't care about cookies" clears the consent walls it would otherwise have to
+# click through. browser-use also shipped "Force Background Tab" -- deliberately dropped,
+# because opening links in background tabs fights the pane's active-tab follow.
+readonly _EXTENSIONS_DIR="${_FORTRESS_INSTALL_DIR}/extensions"
+readonly _UBLOCK_ID="ddkjiahejlhfcafbddmgiahcphecmpfh"
+readonly _UBLOCK_VERSION="2026.7.1041"
+readonly _COOKIES_ID="edibdbjcniadpccecjdfdjjppcpchdlm"
+readonly _COOKIES_VERSION="1.1.5"
+
+_install_one_extension() {
+    local name="$1" ext_id="$2" version="$3" dest="${_EXTENSIONS_DIR}/$1"
+    if [ -f "$dest/manifest.json" ]; then
+        return 0
+    fi
+    # The CRX endpoint serves the CURRENT version for an id, so the pin is enforced by
+    # checking what we got rather than by asking for it -- a drift is logged and the
+    # extension is skipped rather than silently shipping an unreviewed build.
+    local crx="/tmp/${ext_id}.crx"
+    local url="https://clients2.google.com/service/update2/crx?response=redirect&prodversion=151&acceptformat=crx3&x=id%3D${ext_id}%26uc"
+    _log "extensions: fetching ${name} (${ext_id})"
+    if ! curl -fsSL --retry 3 --max-time 120 -o "$crx" "$url"; then
+        _log "extensions: download FAILED for ${name}; browsers run without it"
+        return 1
+    fi
+    mkdir -p "$dest"
+    # A .crx is a zip with a signature header; unzip skips the header and warns.
+    if ! unzip -qo "$crx" -d "$dest" 2>/dev/null; then
+        _log "extensions: unpack FAILED for ${name}; browsers run without it"
+        rm -rf "$dest" "$crx"
+        return 1
+    fi
+    rm -f "$crx"
+    local got
+    got="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$dest/manifest.json" | head -1)"
+    if [ "$got" != "$version" ]; then
+        _log "extensions: ${name} is ${got}, pinned to ${version} -- review before bumping the pin"
+    fi
+    _log "extensions: ${name} ${got} installed"
+}
+
+_install_extensions() {
+    if [ -f "${_EXTENSIONS_DIR}/ublock-origin-lite/manifest.json" ] \
+        && [ -f "${_EXTENSIONS_DIR}/i-still-dont-care-about-cookies/manifest.json" ]; then
+        _log "extensions: already installed, satisfied"
+        return 0
+    fi
+    command -v unzip >/dev/null 2>&1 || apt-get install -y --no-install-recommends unzip || return 1
+    mkdir -p "$_EXTENSIONS_DIR"
+    local rc=0
+    _install_one_extension "ublock-origin-lite" "$_UBLOCK_ID" "$_UBLOCK_VERSION" || rc=$?
+    _install_one_extension "i-still-dont-care-about-cookies" "$_COOKIES_ID" "$_COOKIES_VERSION" || rc=$?
+    return "$rc"
+}
+
 _install_xvfb() {
     # Fast satisfied-check (env.d contract: no marker files): both binaries exist.
     if command -v Xvfb >/dev/null 2>&1 && command -v xclip >/dev/null 2>&1; then
@@ -178,6 +241,9 @@ main() {
     local rc=0
     _install_fortress || rc=$?
     _install_xvfb || rc=$?
+    # Extensions are a nice-to-have: a failure here must not fail the unit, because a
+    # browser without an ad blocker still works and the converge retries next boot.
+    _install_extensions || _log "extensions: not installed this pass; will retry next converge"
     if [ "$rc" -eq 0 ]; then
         _log "unit satisfied"
     else
