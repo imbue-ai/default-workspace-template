@@ -762,13 +762,20 @@ class LiveBrowser(MutableModel):
     async def _on_proxy_activity(self, target_id: str | None) -> None:
         """Foreground the target the agent just addressed (debounced by the proxy).
 
-        The whole 'agent acts -> pane follows' behavior. Nothing fails without it; the
-        human's view simply goes stale, which is why it is easy to lose.
+        The whole 'agent acts -> pane follows' behavior.
+
+        Only ever foregrounds a target the agent NAMED. It deliberately does not fall back
+        to ``_foreground_active()``: that re-asserts ``_active_target_id``, which is the
+        fleet's cache of the last tab *it* foregrounded. A human switching tabs does it
+        inside Chrome via XTEST, which never reaches our CDP connection, so that cache goes
+        stale the moment they browse -- and re-asserting it yanked the human off the tab
+        they had chosen and back onto the agent's old one. If we cannot tell which tab the
+        agent is acting on, the right move is to leave the view alone.
         """
         if target_id:
             await self._focus_and_foreground(target_id)
         else:
-            await self._foreground_active()
+            logger.debug("pane-follow: frame named no target for {}; leaving the view alone", self.browser_id)
 
     async def _page_count(self) -> int:
         """Number of real page targets, for the proxy's last-page close guard."""
