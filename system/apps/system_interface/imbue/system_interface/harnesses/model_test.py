@@ -9,6 +9,7 @@ from imbue.system_interface.harnesses.model import ModelOption
 from imbue.system_interface.harnesses.model import match_option
 from imbue.system_interface.harnesses.model import model_state_path
 from imbue.system_interface.harnesses.model import read_model_identity
+from imbue.system_interface.harnesses.model import resolve_model_choice
 from imbue.system_interface.harnesses.model import to_options
 
 # opus reports a suffix-free API id that differs from its switch id (the [1m] alias).
@@ -123,9 +124,33 @@ def test_match_option_returns_none_for_an_unknown_model() -> None:
     assert match_option(identity, _OPTIONS) is None
 
 
-def test_match_option_rejects_fast_on_a_model_without_fast() -> None:
+def test_fast_on_a_model_without_fast_drops_the_flag_instead_of_shrugging() -> None:
+    """A stale fast flag must not hide a model the catalog knows.
+
+    Fast is recorded in launch settings and so outlives the model it was chosen for, which is
+    re-read from the session. Any path that changes one without the other (a restart landing on
+    a different model, a model switch) produces this pairing, and it used to blank the bar.
+    """
     identity = ModelIdentity(model_id="claude-haiku-4-5", effort="medium", fast=True)
-    assert match_option(identity, _OPTIONS) is None
+    assert match_option(identity, _OPTIONS) is _HAIKU
+
+    choice = resolve_model_choice(identity, _OPTIONS)
+    assert choice.matched is _HAIKU
+    assert choice.identity.fast is False, "the flag is dropped, not carried through to the bar"
+
+
+def test_fast_is_preserved_on_a_model_that_supports_it() -> None:
+    identity = ModelIdentity(model_id="claude-opus-4-8", effort="medium", fast=True)
+    choice = resolve_model_choice(identity, _OPTIONS)
+    assert choice.matched is _OPUS
+    assert choice.identity.fast is True
+
+
+def test_an_unmatched_identity_is_still_the_shrug() -> None:
+    """Dropping fast is not the same as matching anything: an unknown model still shrugs."""
+    choice = resolve_model_choice(ModelIdentity(model_id="who-knows", effort=None, fast=True), _OPTIONS)
+    assert choice.matched is None
+    assert choice.identity.fast is True, "nothing was matched, so there is no claim to correct"
 
 
 def test_match_option_rejects_an_effort_a_model_does_not_declare() -> None:

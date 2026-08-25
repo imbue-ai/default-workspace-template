@@ -118,9 +118,7 @@ def submit_setup_token_code() -> Response:
     except (ValueError, TypeError) as e:
         return _error_response(f"Invalid request body: {e}")
     try:
-        status = service.submit_setup_token_code(
-            body.session_id, body.code, welcome_resender.check_and_resend_welcome
-        )
+        status = service.submit_setup_token_code(body.session_id, body.code, welcome_resender.check_and_resend_welcome)
     except auth.ClaudeAuthError as e:
         return _error_response(str(e), status_code=400)
     return _json_response(_status_to_response(status).model_dump())
@@ -209,9 +207,7 @@ def submit_oauth_login_code() -> Response:
     except (ValueError, TypeError) as e:
         return _error_response(f"Invalid request body: {e}")
     try:
-        status = service.submit_oauth_login_code(
-            body.session_id, body.code, welcome_resender.check_and_resend_welcome
-        )
+        status = service.submit_oauth_login_code(body.session_id, body.code, welcome_resender.check_and_resend_welcome)
     except auth.ClaudeAuthError as e:
         return _error_response(str(e), status_code=400)
     return _json_response(_status_to_response(status).model_dump())

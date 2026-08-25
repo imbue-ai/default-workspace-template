@@ -5320,9 +5320,7 @@ def test_deleting_an_instance_sweeps_membership_title_recency_and_location(
         client.post("/api/member-locations", json={"ref": instance_member_ref, "path": "/notes/"}).status_code == 200
     )
 
-    delete_response = client.post(
-        f"/api/projects/panels/{panel_id}/delete", json={"ref": instance_member_ref}
-    )
+    delete_response = client.post(f"/api/projects/panels/{panel_id}/delete", json={"ref": instance_member_ref})
 
     assert delete_response.status_code == 200
     assert delete_response.get_json()["project_ids"] == ["project-1"]

@@ -118,9 +118,7 @@ _APPLY_PATCH_LABELS: dict[str, tuple[str, str]] = {
 # apply_patch takes a backtick template literal, so the filename ends at a real newline
 # when the body arrives raw, or at the ``\n`` escape when it arrives JSON-serialised in
 # ``function_call.arguments``. Stop at either, plus the closing quote.
-_APPLY_PATCH_HEADER_RE = re.compile(
-    r"\*\*\*\s+(Add|Update|Delete) File:\s*([^\"\\\r\n]+)", re.IGNORECASE
-)
+_APPLY_PATCH_HEADER_RE = re.compile(r"\*\*\*\s+(Add|Update|Delete) File:\s*([^\"\\\r\n]+)", re.IGNORECASE)
 
 
 @pure

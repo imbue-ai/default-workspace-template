@@ -152,9 +152,7 @@ class CodexLiveConnection:
         self._codex_models = codex_models
         self._stop_event = threading.Event()
         self._is_alive = True
-        self._reader_thread = threading.Thread(
-            target=self._read_loop, name="codex-ledger-reader", daemon=True
-        )
+        self._reader_thread = threading.Thread(target=self._read_loop, name="codex-ledger-reader", daemon=True)
         self._reader_thread.start()
         return self
 

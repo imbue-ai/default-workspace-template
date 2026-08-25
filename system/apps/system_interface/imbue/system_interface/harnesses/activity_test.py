@@ -69,20 +69,32 @@ def test_each_tracker_is_independent() -> None:
     first = build_tracker(HarnessType.CLAUDE)
     second = build_tracker(HarnessType.CLAUDE)
     assert first.observe([{"type": "user_message", "timestamp": "2026-07-28T00:00:00Z"}]) is True
-    assert first.derive(lifecycle_state="RUNNING", is_active_marker_present=False, process_started_at=None) == ActivityState.THINKING
-    assert second.derive(lifecycle_state="RUNNING", is_active_marker_present=False, process_started_at=None) == ActivityState.IDLE
+    assert (
+        first.derive(lifecycle_state="RUNNING", is_active_marker_present=False, process_started_at=None)
+        == ActivityState.THINKING
+    )
+    assert (
+        second.derive(lifecycle_state="RUNNING", is_active_marker_present=False, process_started_at=None)
+        == ActivityState.IDLE
+    )
 
 
 @pytest.mark.parametrize("harness", _TRACKER_HARNESSES)
 def test_fresh_tracker_is_idle(harness: HarnessType) -> None:
     tracker = build_tracker(harness)
-    assert tracker.derive(lifecycle_state="RUNNING", is_active_marker_present=False, process_started_at=None) == ActivityState.IDLE
+    assert (
+        tracker.derive(lifecycle_state="RUNNING", is_active_marker_present=False, process_started_at=None)
+        == ActivityState.IDLE
+    )
 
 
 @pytest.mark.parametrize("harness", _TRACKER_HARNESSES)
 def test_observe_reports_no_change_on_repeat(harness: HarnessType) -> None:
     """A repeated event list must short-circuit, so streamed lines stay cheap."""
-    events: list[dict[str, Any]] = [_turn_started_marker(), {"type": "user_message", "timestamp": "2026-07-28T00:00:00Z"}]
+    events: list[dict[str, Any]] = [
+        _turn_started_marker(),
+        {"type": "user_message", "timestamp": "2026-07-28T00:00:00Z"},
+    ]
     tracker = build_tracker(harness)
     assert tracker.observe(events) is True, f"{harness} should register the first event"
     assert tracker.observe(events) is False, f"{harness} should short-circuit an unchanged list"
@@ -92,8 +104,14 @@ def test_claude_honors_the_mngr_lifecycle() -> None:
     """A stopped claude agent is IDLE regardless of a mid-turn transcript tail."""
     tracker = build_tracker(HarnessType.CLAUDE)
     tracker.observe([{"type": "user_message", "timestamp": "2026-07-28T00:00:00Z"}])
-    assert tracker.derive(lifecycle_state="RUNNING", is_active_marker_present=False, process_started_at=None) == ActivityState.THINKING
-    assert tracker.derive(lifecycle_state="WAITING", is_active_marker_present=False, process_started_at=None) == ActivityState.IDLE
+    assert (
+        tracker.derive(lifecycle_state="RUNNING", is_active_marker_present=False, process_started_at=None)
+        == ActivityState.THINKING
+    )
+    assert (
+        tracker.derive(lifecycle_state="WAITING", is_active_marker_present=False, process_started_at=None)
+        == ActivityState.IDLE
+    )
 
 
 @pytest.mark.parametrize("harness", _TRACKER_HARNESSES)
@@ -111,13 +129,18 @@ def test_stale_transcript_tail_reads_idle(harness: HarnessType) -> None:
             {"type": "user_message", "timestamp": "2026-07-28T00:00:00Z"},
         ]
     )
-    stale_tail_is_live = tracker.derive(lifecycle_state="RUNNING", is_active_marker_present=False, process_started_at=None)
+    stale_tail_is_live = tracker.derive(
+        lifecycle_state="RUNNING", is_active_marker_present=False, process_started_at=None
+    )
     assert stale_tail_is_live != ActivityState.IDLE
 
     # Marker touched after the tail -> the turn belongs to a dead process.
     # 2100-01-01, comfortably after the tail above.
     restarted_at = 4102444800.0
-    assert tracker.derive(lifecycle_state="RUNNING", is_active_marker_present=False, process_started_at=restarted_at) == ActivityState.IDLE
+    assert (
+        tracker.derive(lifecycle_state="RUNNING", is_active_marker_present=False, process_started_at=restarted_at)
+        == ActivityState.IDLE
+    )
 
 
 @pytest.mark.parametrize("harness", _TRACKER_HARNESSES)
@@ -129,9 +152,15 @@ def test_reset_settles_on_idle(harness: HarnessType) -> None:
             {"type": "user_message", "timestamp": "2026-07-28T00:00:00Z"},
         ]
     )
-    assert tracker.derive(lifecycle_state="RUNNING", is_active_marker_present=False, process_started_at=None) != ActivityState.IDLE
+    assert (
+        tracker.derive(lifecycle_state="RUNNING", is_active_marker_present=False, process_started_at=None)
+        != ActivityState.IDLE
+    )
     tracker.reset()
-    assert tracker.derive(lifecycle_state="RUNNING", is_active_marker_present=False, process_started_at=None) == ActivityState.IDLE
+    assert (
+        tracker.derive(lifecycle_state="RUNNING", is_active_marker_present=False, process_started_at=None)
+        == ActivityState.IDLE
+    )
 
 
 @pytest.mark.parametrize("harness", _TRACKER_HARNESSES)
@@ -147,7 +176,10 @@ def test_pending_tool_use_reads_tool_running(harness: HarnessType) -> None:
             },
         ]
     )
-    assert tracker.derive(lifecycle_state="RUNNING", is_active_marker_present=False, process_started_at=None) == ActivityState.TOOL_RUNNING
+    assert (
+        tracker.derive(lifecycle_state="RUNNING", is_active_marker_present=False, process_started_at=None)
+        == ActivityState.TOOL_RUNNING
+    )
 
 
 @pytest.mark.parametrize("harness", _TRACKER_HARNESSES)

@@ -79,6 +79,7 @@ SOURCE = "codex/common_transcript"
 # frontend's non-optional ``model`` field populated.
 _UNKNOWN_MODEL = "unknown"
 
+
 def _join_output_text(content: Any) -> str:
     """Join the ``text`` of ``content`` blocks whose ``type`` is ``output_text``."""
     if not isinstance(content, list):
@@ -411,11 +412,7 @@ def parse_lines(
         # rollouts: ``task_complete`` lands just after the final assistant message, so
         # the dot clears only once the text is already on screen.
         if payload_type in ("task_started", "task_complete"):
-            kind = (
-                SpecialEventKind.TURN_STARTED
-                if payload_type == "task_started"
-                else SpecialEventKind.TURN_COMPLETED
-            )
+            kind = SpecialEventKind.TURN_STARTED if payload_type == "task_started" else SpecialEventKind.TURN_COMPLETED
             event_id = _marker_event_id(payload, payload_type, line_index)
             return [
                 {

@@ -813,9 +813,7 @@ def test_claude_conservation_storm_tap_and_stop_executors(tmp_path: Path) -> Non
     # set, once each -- and never a returned or killed message (U1 read straight off disk).
     events = world.watcher.get_all_events()
     on_disk_user_turns = Counter(
-        event["content"]
-        for event in events
-        if event.get("type") == "user_message" and event.get("display") is None
+        event["content"] for event in events if event.get("type") == "user_message" and event.get("display") is None
     )
     assert on_disk_user_turns == Counter(ledger.delivered), (
         f"on-disk user turns {on_disk_user_turns} != delivered ledger {Counter(ledger.delivered)}"
