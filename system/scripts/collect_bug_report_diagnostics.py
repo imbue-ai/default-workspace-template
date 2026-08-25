@@ -35,7 +35,7 @@ import sys
 import tempfile
 import time
 import zipfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 
 WORKSPACE_DIR = "/home/user/workspace"
 # The workspace's own service definitions, read for the supervisorctl status in
