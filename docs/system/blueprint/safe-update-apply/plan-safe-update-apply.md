@@ -4,7 +4,7 @@
 
 - Invert the ownership between the two update skills: `update-self` gains a general "apply a merge safely" capability (new `apply` / `recover` subcommands on its existing `update_self.py`), and `update-system-interface` calls it for its apply step, keeping only the `preview` / `unpreview` adapters in `reveal_system_interface.py`.
 - Motivation: two production incidents showed the current split is unsafe. Landing the merge (Step 5b) is live-affecting on its own — the running system interface re-reads `.mngr/settings.toml` through old in-memory code, and the editable `mngr` tool points into the vendored tree the merge just replaced — while everything that repairs that lives in later prose steps across multiple agent turns. A pause between land and reveal (a user question, a stop hook, a crash) strands the workspace half-applied, and the failure kills the very chat channel needed to continue.
-- The apply becomes one atomic, idempotent, rollback-on-failure motion inside a single near-OOM-exempt process: merge, dependency snapshots and refresh, provisioner run, build/install, restarts, health probes. On any failure it reverts the entire merge and restores pre-apply snapshots — a recovery path needing no network, no package manager, and no working `mngr`.
+- The apply becomes one atomic, idempotent, rollback-on-failure motion inside a single near-OOM-exempt process: merge, dependency snapshots and refresh, provisioner run, build/install, restarts, health probes. On any failure it reverts the entire merge and restores pre-apply snapshots — a recovery path needing no network, no package manager, and no working `mngr`. (One deliberate exception: a failed provisioner run alone does not roll back — the apply carries on to the restart and probes and, if they pass, lands with a durable `provision-incomplete.json` record; see the incident fixes in known-issues.md.)
 - Interruption becomes detectable and self-healing: a full-info marker (DRI agent, rollback point, phase, PID), a flow-level "updating workspace" lease, boot-time recovery in bootstrap, and a permanent stale-guarded cron entry for kills without a restart. The recovered workspace re-engages the DRI agent; the retry path (worker branch, report) survives every rollback.
 - Because the script lives inside `.agents/skills/update-self/`, the existing Step 2a bootstrap handoff stages it pre-merge — old workspaces updating in run the *target's* apply, so fixes to the apply flow take effect for the very update that ships them.
 
@@ -12,20 +12,30 @@
 
 ### update-self happy path
 
-- After the user approves (5a), the lead runs one `apply` invocation from the staged skill-at-target copy. No agent-prose pause exists between the merge landing and the workspace being consistent with it.
-- The apply: ff-merges the worker's `update-self:` merge commit, snapshots current state, refreshes affected environments, re-runs `setup_system.sh` when provisioner-classified paths changed (before any restart), installs the worker's already-built frontend bundle when available (the artifact the user previewed; live build as fallback), pre-flights, restarts, probes to the frontend standard, writes the VERSION_HISTORY.md ledger entry, and runs `env-converge upgrade` post-success.
-- Exit-code contract is `0` applied / `2` rolled back / `3` emergency / `1` precondition, each with an honest closing line (a workspace whose frontend was already broken beforehand still lands and still exits `0`, but the closing line names the breakage instead of confirming health).
+- After the worker reports `done` and the lead's report audit passes (5a), the lead runs one `apply` invocation from the staged skill-at-target copy -- no user approval gate, and no agent-prose pause between the merge landing and the workspace being consistent with it.
+- The apply: ff-merges the worker's `update-self:` merge commit, snapshots current state, refreshes affected environments, re-runs `setup_system.sh` when provisioner-classified paths changed (before any restart), installs the worker's already-built frontend bundle when available (the exact artifact the worker validated; live build as fallback), pre-flights, restarts, probes to the frontend standard, writes the VERSION_HISTORY.md ledger entry, and runs `env-converge upgrade` post-success.
+- Exit-code contract is `0` applied / `2` rolled back / `3` emergency / `1` precondition, each with an honest closing line (a workspace whose frontend was already broken beforehand still lands and still exits `0`, but the closing line names the breakage instead of confirming health; a landed apply whose provisioner run failed is the other `0` variant — its contract is the stderr closing line plus the `provision-incomplete.json` record).
+
+### Unattended operation
+
+- The pass is fully unattended after launch: the user starts an update and can walk away; no mid-flight confirmation gates. A user who initiates an update also wants it applied -- our average user holds no opinions on technical choices -- and everything the apply lands is git (usually with a host backup behind it), so post-hoc rollback replaces pre-approval.
+- The old 5a approval gate becomes a **results message** composed after the apply: the same composition rules, now reporting what landed, every decision made on the user's behalf (conflict resolutions, provisioning caveats), and a standing rollback offer -- honored by landing a forward revert through the same apply machinery (`apply --merge-ref <revert branch>`, no `--target-ref`), with the Step 1 backup as the full-rewind fallback.
+- A missing or unconfirmed pre-pass backup (`host-backup-now` exits 1/2/3) is flagged in the results message instead of blocking the pass: git plus the apply's own rollback and `recover` remain the recovery path.
+- Merge-conflict questions the worker cannot settle are decided by the lead -- defaulting to preserving the workspace's local behavior -- recorded, and surfaced afterwards with the alternative still on offer; never escalated mid-pass.
+- Rebuild-only findings (a global-dependency bump under user-created code; container-level parameters a running container cannot adopt) no longer pre-clear with the user: the apply proceeds and the results message leads with them as caveats.
+- The pre-apply system-interface preview is dropped; the landed workspace is the review surface, with the rollback offer attached to any surface that took nontrivial merge work.
+- The one confirmation kept is the over-ceiling `--override` (Steps 2/3a): it fires at launch while the user is still present and asks whether to *attempt* a version the driving app cannot support. Terminal outcomes that inherently need a person -- `stuck`, migration-required, an exit-3 emergency -- still end the pass with a user-facing message.
 
 ### Failure and rollback
 
-- On any failure the script reverts the entire merge as a forward revert commit and restores the pre-apply snapshots: built bundle, root `.venv`, both uv tool environments, `node_modules`. All restores are file copies to their original absolute paths — no network, no `npm`/`uv`, no `mngr` required.
+- On any failure past the provisioner step (which alone degrades to the provision-incomplete record above), the script reverts the entire merge as a forward revert commit and restores the pre-apply snapshots: built bundle, root `.venv`, both uv tool environments, `node_modules`. All restores are file copies to their original absolute paths — no network, no `npm`/`uv`, no `mngr` required.
 - Globally pinned tools (the `setup_system.sh` tier) roll back by re-running the provisioner from the restored tree, only when the apply had run it; if that re-run fails (e.g. no network), the rollback still counts as recovered and the closing report names the tools left ahead of the tree.
 - `env-converge` runs post-success only, so a failed apply never moved apt state.
 - The retry path survives every rollback: worker branch, worktree, and report are kept, so a diagnosed retry is a quick re-land. The DRI agent's message offers exactly that.
 
 ### Interruption (hard kill) and recovery
 
-- The script writes a marker under `data/.state/` at apply start — DRI agent (from its environment), rollback point, last completed phase, PID — and clears it on every exit path. A concurrent `apply` refuses to start while a live marker exists.
+- The script writes a marker under `data/.state/` at apply start — DRI agent (from its environment), rollback point, last completed phase, PID — and clears it on every exit path that leaves the tree resolved (a `recover` whose restore fails, and a resumed apply refused on its precondition, deliberately keep it). A concurrent `apply` refuses to start while a live marker exists.
 - Container restart: bootstrap checks the marker and runs the rollback directly (no agent or UI needed, and dependency-free except for the provisioner re-run noted above), then wakes and messages the DRI agent to verify state and talk to the user.
 - Killed without a restart and the DRI agent gone too: a permanent cron entry (written by the bootstrap at each boot, every ~5 minutes) runs `recover` with an only-if-stale guard — marker present, recorded PID dead, older than a grace period — and is a silent no-op in every normal state. It invokes the stdlib-only script directly, never the automations/agent machinery.
 - The DRI agent, when alive, simply re-runs the idempotent `apply`; every step tolerates re-entry.
@@ -44,7 +54,7 @@
 
 ### Concurrency
 
-- A general "updating workspace" lease (tk chore, like the other flows' leases) is taken by the lead at flow start and held through worker, approval, and apply — replacing the update-self single-flight ticket check. When the update touches the system interface, the existing `editing service system_interface` lease is additionally taken; that lease is unchanged for non-update SI edits.
+- A general "updating workspace" lease (tk chore, like the other flows' leases) is taken by the lead at flow start and held through worker, report audit, and apply — replacing the update-self single-flight ticket check. When the update touches the system interface, the existing `editing service system_interface` lease is additionally taken; that lease is unchanged for non-update SI edits.
 
 ### Migration-required updates
 
@@ -77,6 +87,7 @@
 ### `.agents/skills/update-self/SKILL.md`
 
 - Steps 5b + 5c collapse into the single `apply` invocation (run from the staged skill-at-target copy), with exit-code interpretation and the honest-closing-line guidance.
+- The flow is fully unattended (see Expected behavior): the missing-backup go-ahead, the mid-pass conflict escalation, the pre-apply preview, and the approval wait are all removed; 5a becomes a report audit plus a post-apply results message with a real rollback offer.
 - Step 1: the "updating workspace" lease replaces the single-flight ticket check; take the SI editing lease additionally when the update touches the system interface.
 - New migration-required section: the canonical high-level copy, the two-step `/migrate-workspace` path, and the in-place-compatible-release offer.
 - Post-rollback guidance: preserved retry path, DRI recovery composition rules (what to tell the user after an automatic rollback).

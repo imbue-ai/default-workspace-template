@@ -18,11 +18,17 @@ So, like `update-system-interface`, this flow never mutates the live tree from a
 unverified state: an isolated **worker** does the merge and validation on its own
 branch, and only a known-good, user-approved result is landed and applied.
 
-You are the **lead**: resolve the target, dispatch the worker, proxy its one
-gate, present the approval gate, and -- on approval -- run the one-command
-**apply** that lands the merge and makes the live workspace consistent with it
-(Step 5b). The worker owns the merge, the conflict triage, and the validation;
-the apply script owns going live.
+You are the **lead**, and the pass is **fully unattended**: once the user
+starts it, run it end to end -- resolve the target, dispatch the worker,
+answer its gates, audit its evidence, run the one-command **apply** that
+lands the merge and makes the live workspace consistent with it (Step 5b),
+and only then report. The user launches an update and walks away; they come
+back to a finished result and an offer to roll back anything they don't
+like, not to questions. This is safe because everything the apply lands is
+git (usually with a host backup behind it) and the worker validates before
+anything goes live -- so review happens *after* the apply instead of gating
+it. The worker owns the merge, the conflict triage, and the validation; the
+apply script owns going live.
 
 The default target is the **latest stable `minds-v*` tag** (released,
 already-tested), not `origin/main` -- and never newer than the Minds app driving
@@ -51,19 +57,21 @@ uv run host-backup-now
 ```
 
 It waits for any in-flight backup, forces a fresh tick, and prints the tick's
-terminal event -- exit 0 means `restic_backup_succeeded`; confirm that before
-continuing. Exit 3 means backups aren't configured
-(`tick_skipped_due_to_missing_secrets` -- no `data/.secrets/restic.env`), so there
-is **no** restore point: tell the user, and get their explicit go-ahead before
-proceeding without one. Exit 1 is a failed backup attempt; exit 2 means the
-outcome could not be observed at all (the tick may still be running, or the
-service is not writing events) -- neither confirms a restore point, so treat both
-the same way as exit 3.
+terminal event -- exit 0 means `restic_backup_succeeded`. Exit 3 means backups
+aren't configured (`tick_skipped_due_to_missing_secrets` -- no
+`data/.secrets/restic.env`), so there is **no** restore point. Exit 1 is a
+failed backup attempt; exit 2 means the outcome could not be observed at all
+(the tick may still be running, or the service is not writing events) --
+neither confirms a restore point. **None of the three blocks the pass**: note
+which it was and carry it into the results message (§5a composition rules) as
+a caveat, then continue -- git still holds every version of the tree, and the
+apply's own rollback and `recover` are the primary recovery path regardless.
+Do not stop to ask for a go-ahead.
 
 **Take the "updating workspace" lease.** One update flow at a time (its worker
 name, branch, and runtime dir are fixed, and two applies must never
 interleave). This is a lease like the other flows' editing leases, held from
-here through the worker, the approval gate, and the apply, and released in
+here through the worker, the report audit, and the apply, and released in
 Step 6. First check for a foreign one:
 
 ```bash
@@ -161,10 +169,11 @@ app cannot vouch for** -- newer than the app, or a branch/commit whose version
 can't be compared. Do not dispatch the worker on it silently. Tell the user
 plainly what they asked for and what it risks ("that version is newer than your
 Minds app, so parts of your workspace may stop working until you update the app
-itself"), and **get an explicit go-ahead before continuing**. This is a separate
-confirmation from the Step 5a approval gate, and it comes first: 5a asks whether
-to apply a verified update, this asks whether to attempt an unsupported one at
-all. An override at or below the ceiling needs no extra confirmation.
+itself"), and **get an explicit go-ahead before continuing**. This is the one
+confirmation the otherwise-unattended flow keeps: it fires immediately at
+launch, while the user is still present, and it asks whether to *attempt* an
+unsupported version at all -- a question no later rollback offer can substitute
+for. An override at or below the ceiling needs no confirmation.
 
 To preview what the release actually changes, always diff from the **merge
 base**, never from `HEAD` -- a `git diff HEAD "$REF"` also shows every *local*
@@ -219,7 +228,7 @@ both dispatch against the correct version.
 Steps 1-2 -- preconditions and target resolution -- always run from the *local*
 copy: they are what decide `$REF`, so by construction they cannot come from the
 target. The target's flow is entered at **Step 3**, and everything from there
-on -- the worker dispatch, the approval gate, **and the apply** (Step 5b runs
+on -- the worker dispatch, the report audit, **and the apply** (Step 5b runs
 the staged copy's `update_self.py apply`) -- is the target version's. So an
 edit to this skill must preserve that boundary: a future version's Steps 1-2
 must stay "capture a backup, the lease/clean-tree checks, then resolve a ref
@@ -238,7 +247,7 @@ version: it, not Step 2, is what protects a workspace arriving from an older
 template. Keep the staging path
 (`data/.tasks/update-self/skill-at-target/.agents/skills/update-self`) stable for the
 same reason. Note also that this handoff runs the target ref's `update_self.py`
-and follows its prose *before* the Step 5a approval gate; for the default target
+and follows its prose *before* the worker has validated anything; for the default target
 (a stable, already-tested `minds-v*` tag) that is the same trust basis as the
 merge itself, but a `--override` to an untrusted ref means trusting that ref's
 flow code and instructions -- only override to a ref you trust.
@@ -374,8 +383,11 @@ uv run .agents/skills/launch-task/scripts/create_worker.py await \
 Per `.agents/shared/references/lead-proxy.md` (worker `update-self`, branch
 `mngr/update-self`, reports dir `data/.tasks/update-self/reports/`). Almost
 always this is a genuine, unresolvable conflict -- a real decision about how to
-reconcile a file both sides rewrote incompatibly. **Escalate it to the user**,
-relay their resolution via `mngr message`, consume the report, and re-arm.
+reconcile a file both sides rewrote incompatibly. **Decide it yourself**: the
+pass is unattended, the average user has no opinion on a technical conflict,
+and a wrong call is recoverable because the results message names the decision
+and keeps the other side on offer. Relay your resolution via `mngr message`,
+consume the report, and re-arm.
 
 The one other thing a `question` can be is the worker's review-gate escape hatch
 (its §4c): a *process* question about whether or at what scope the gates run.
@@ -389,16 +401,17 @@ has shown the skip branch's three conditions hold. Either way, reply, consume,
 and re-arm without involving the user. Escalate only if the worker has surfaced
 a real question of user intent inside it.
 
-For the conflict case, **compose the question per the §5a rules -- plain-language
-and pointed at a resolution, not the worker's raw conflict dump.** Lead with
-where things stand ("The update is almost ready -- one file needs a decision from
-you before I can finish"), explain the choice in plain terms (what the new
-version does vs. what your workspace currently does, and what's at stake each
-way), and **propose a way forward**: a recommended option when you have one, the
-concrete trade-offs when you genuinely don't. Close by inviting the user to
-resolve it *with* you rather than only to rule on it -- "tell me which you'd
-prefer, or talk it through with me and we'll land on the best option together."
-Reassure that nothing has been applied and the workspace is untouched.
+For the conflict case, the default that needs no deliberation is to **keep
+this workspace's current behavior**: preserve the user's local customization
+and fold in what upstream adds around it, taking the release's side only
+where no local intent is at stake (formatting, generated files, code the user
+never touched). Record every such decision -- the file, what was kept, what
+the release's version would have changed -- because the results message must
+present each one with the alternative still on offer ("I kept your version;
+if you'd rather match the official release exactly there, I can do that").
+When a conflict genuinely has no safe default, still prefer the local side
+and make that decision a leading caveat of the results message rather than
+stopping the pass.
 
 ## 5. Terminal status
 
@@ -417,9 +430,9 @@ Reassure that nothing has been applied and the workspace is untouched.
   verbatim** (not paraphrased), with a pointer to the full report and logs under
   `data/.tasks/update-self/reports/`. Never leave the user at a dead end, and never
   hand them a failure so vague it's useless in a bug report.
-- **`done`** -> the approval gate below.
+- **`done`** -> the report audit below.
 
-### 5a. Approval gate
+### 5a. Audit the report; compose the results message after the apply
 
 **Audit the report before composing anything.** The worker contract (the
 staged copy's `references/update-self-worker.md`, §4c and §6) makes the review
@@ -435,38 +448,40 @@ worker to be completed: run the Step 4 gate cycle over it (say what is missing
 via `mngr message`, consume this report into
 `data/.tasks/update-self/reports/consumed/`, re-arm the background poll) and
 audit the replacement, because `done` otherwise ends the poll and a report left
-at the report path would satisfy the next `await` instantly. Do not compose an
-approval message over the gap, and never repackage a worker-disclosed deviation
-as reassurance. A deviation only *stands* when completing it is genuinely out of
-reach -- the worker is gone and the gap cannot be closed from here, or you told
-the user about it and they chose to go ahead anyway; not because the reasoning
-behind it persuaded you. In that case the approval message states the deviation
-itself, plainly, where the user will read it -- it is a caveat, never a footnote
-to a reassurance.
+at the report path would satisfy the next `await` instantly. Do not run the
+apply over the gap, and never repackage a worker-disclosed deviation as
+reassurance. A deviation only *stands* when completing it is genuinely out of
+reach -- the worker is gone and the gap cannot be closed from here; not because
+the reasoning behind it persuaded you. In that case the results message states
+the deviation itself, plainly, where the user will read it -- it is a caveat,
+never a footnote to a reassurance.
 
 The `done` report is *your* raw material, not the user's message. It is a
 comprehensive, technical digest for the lead -- changelog entries in range, the
-conflicts and how the worker resolved them, reveal-class breakdown, impact
-analysis, lockfile handling, and validation. **Do not forward it verbatim.**
-Keep it available (it is persisted under `data/.tasks/update-self/reports/` -- offer
-to show it if the user wants the specifics), and **compose a plain-language
-approval message** from it. Then **wait for explicit approval** -- mandatory even
-on a clean pull.
+conflicts and how the worker resolved them, change-class breakdown, impact
+analysis, and validation. **Do not forward it verbatim.** Keep it available (it
+is persisted under `data/.tasks/update-self/reports/` -- offer to show it if the
+user wants the specifics), and **compose a plain-language results message**
+from it -- delivered *after* the apply. There is no approval gate: run 5b as
+soon as the audit above passes; the audit, not the user, is what authorizes
+the apply. The results message is the one thing the user reads about the whole
+pass -- what changed, every decision made on their behalf, any caveats, and
+the standing offer to roll back anything they don't like.
 
 **These composition rules govern every user-facing message this flow produces --
-the approval message here, the `question` gate (Step 4), and a `stuck` result
-(Step 5) alike.** Whenever the update can't simply proceed, the message names the
+the results message here and a `stuck` result (Step 5) alike.** Whenever the update can't simply proceed, the message names the
 blocker in plain terms and **proposes a way forward, or invites the user to
 resolve it with you** -- it never dead-ends. The one thing that varies is how
-much mechanism to keep: the approval and `question` messages drop technical
+much mechanism to keep: the results message drops technical
 detail the user can't act on, but a `stuck` message deliberately preserves it
 (Step 5) so it survives being pasted into a bug report.
 
 Write the message a non-technical reader skims top-to-bottom, in this fixed
 order:
 
-1. **Verdict headline** (one line, first thing they see): "ready to apply,"
-   "ready to apply, with one caveat," or "needs your input on X."
+1. **Verdict headline** (one line, first thing they see): "your workspace is
+   updated," "updated, with one thing to know," or -- after a rollback -- "the
+   update hit a problem, so I undid it; everything is safe."
 2. **Held back by your app version** -- include this line if and only if
    `held_back_by_ceiling` is `true` in the resolve-target output
    (`/tmp/update-self-target.json`). Say it in one plain line -- "there's a newer
@@ -495,68 +510,57 @@ order:
    (see the worker guidance's §4a): state plainly whether each lives in
    **built-in** code (present at the target ref -> report upstream) or the
    **user's own** code. Never call built-in code "workspace-added."
-8. **The ask** -- see the language rule below.
+8. **The offer** -- see the language rule below.
 
 **Detail in the informational sections (3-5); plain language at the decision
 points.** Spend deliberate plain-language care only where the message asks the
 user to **decide or act** -- the verdict headline, any caveat that needs their
-action, and the closing ask. Those carry no jargon: never "merge," "land," or
-"fast-forward" there. Frame the ask around *applying the update to their
-workspace* (many users just want their workspace improved and don't think in
-terms of merges), e.g. "Everything's ready -- want me to apply the update to
-your workspace now?"
+action, and the closing offer. Those carry no jargon: never "merge," "land," or
+"fast-forward" there. Frame the close around *what changed in their workspace
+and how to undo it* (many users just want their workspace improved and don't
+think in terms of merges), e.g. "Your workspace is updated -- if anything looks
+or behaves differently than you'd like, tell me and I can put it back."
 
 **Drop dependency/lockfile mechanics** from the user message unless there is an
 action the *user* must take. **Command rule:** never print a command *you* will
 run -- describe it in plain language ("I'll refresh it automatically if it comes
 up"). Show a literal command only when the *user* must run it themselves.
 
-**Preview rule for the system interface:** if upstream was strictly newer there
-(no merge work needed), no preview is needed; if the worker's report says
-nontrivial merge work was needed, give the user a live preview first, exactly as
-`update-system-interface` Step 3 does (keep the worker alive until they
-verdict). The report's per-surface merge-work judgment is what you go by.
-
-```bash
-WORK_DIR=$(mngr ls --include 'name == "update-self"' --format json \
-    | python3 -c 'import sys, json; print(json.load(sys.stdin)["agents"][0]["work_dir"])')
-python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py preview \
-    --slug update-self --work-dir "$WORK_DIR"
-python3 system/scripts/layout.py open si-preview
-```
-
-With no `--view`, the `open` goes to the view the connected client is looking
-at, which is where the user expects the preview tab.
-
-**Other user apps are optional previews.** When the report says another user
-app took meaningful merge work, use your judgment: serve it from the
-worker's worktree via `.agents/shared/scripts/serve_isolated_instance.py` as its
-own preview tab -- or, when the system interface is also being previewed, link
-it from inside that preview. Skip previews for services that came in clean.
+**No previews in the unattended pass.** The old flow stood up a live preview
+of the merged system interface (and optionally other user apps) before
+applying, whenever the worker had done nontrivial merge work there.
+Unattended, the tested result simply lands and the live workspace is the
+review surface: when the report marks a surface's merge work nontrivial, name
+that surface in the results message, say what was reconciled, and attach the
+rollback offer to exactly that piece. (The preview machinery still exists in
+`update-system-interface` for its own local-edit flow; this pass does not use
+it.)
 
 ### 5b. Apply the update (one atomic motion)
 
-**Surface rebuild-only findings before applying.** The apply is deterministic
-and has no opt-outs: it re-runs the provisioner whenever a
-provisioner-classified file changed, and there is no flag to land the merge
-without that. So if the worker's report flags either of these, stop and put it
-to the user before you run anything:
+**Carry rebuild-only findings into the results message; they do not block the
+apply.** The apply is deterministic and has no opt-outs: it re-runs the
+provisioner whenever a provisioner-classified file changed, and there is no
+flag to land the merge without that. When the worker's report flags either of
+these, apply anyway and make the finding a *leading caveat* of the results
+message -- named plainly, never a footnote:
 
 - **A global-dependency bump coupled to a user-created dependent.** The worker
   classifies this "unsafe to hot-apply" -- upstream never tested their code
-  against the new dependency. Be exact about what taking the update means:
-  the apply *will* move the global tool under that code, because the
-  provisioner re-run is not optional. The clean landing is a workspace
-  recreate, which provisions the new substrate and re-runs their code against
-  it. So the real choice is take it and watch that dependent, or defer the
-  whole update until they can recreate.
+  against the new dependency, and the apply *will* move the global tool under
+  that code, because the provisioner re-run is not optional. In the results
+  message name the dependent, check it yourself (or invite the user to
+  exercise it), and give both remedies in the same breath: roll the update
+  back, or recreate the workspace -- which provisions the new substrate and
+  re-runs their code against it -- if they want the update *and* a clean
+  landing for that code.
 - **A container build/launch parameter a running container cannot adopt** (a
   `build_arg` / `start_arg` / runtime flag). Here taking the update is safe --
   nothing hot-applies -- but that one piece stays inert until a recreate, and
   the user has to know that rather than assume it is live.
 
-For a genuinely breaking case, take the migration path below instead. Either
-way, do not run the apply over an unresolved rebuild-only warning.
+For a genuinely breaking case, take the migration path below instead -- that
+is a terminal verdict of the pass, not a confirmation to wait on.
 
 **When the update touches `system/apps/system_interface/` at all** (merged
 *or* pulled in), additionally take the `editing service system_interface`
@@ -576,8 +580,8 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
 ```
 
 When the worker's report names its **built system-interface bundle** (it built
-the frontend for the preview), append `--worker-bundle <that path>` -- the
-apply then installs the exact build the user previewed instead of spending
+the frontend for validation), append `--worker-bundle <that path>` -- the
+apply then installs the exact build the worker validated instead of spending
 a live build (which remains the fallback).
 
 That one command is the whole landing: there is no agent-prose pause between
@@ -753,6 +757,20 @@ and try again once it's fixed"), and never make the user feel the whole pass
 must be redone from scratch. If the closing line said the frontend was already
 broken beforehand, report that as its own problem alongside.
 
+### Rolling back on request
+
+The results message always offers a rollback, and the offer must be real. If
+the user wants the update (or one piece of it) gone: create a **forward
+revert** on a branch -- `git revert -m 1 <merge sha>` for the whole update, or
+a commit reverting just the paths they dislike; never rewind history -- and
+land it with the same machinery, `update_self.py apply --merge-ref <that
+branch>` (ordinary merge mode, no `--target-ref`), so the revert gets the same
+refresh, restart, and health-probe motion the update got. Two residues to
+mention when they matter: the apt snapshot advanced by `env-converge upgrade`
+stays advanced, and the version-history entry stays (the revert is its own
+history). The full-rewind fallback is the Step 1 backup, when one was
+captured.
+
 ## Migration-required updates
 
 Some updates cannot be applied in place -- the judgment is yours, standardized
@@ -777,10 +795,10 @@ starts at some later version), offer both in the same breath: "I can apply
 
 ## 6. Teardown
 
-**Tear the previews down either way.** A preview outlives the pass it belongs
-to if you leave it up, and `update-system-interface`'s preview guard refuses
-the next pass while one is registered. If you stood up a system-interface
-preview in 5a:
+**Tear down any stray preview.** This pass no longer creates previews, but an
+interrupted older pass or another flow may have left one registered, and
+`update-system-interface`'s preview guard refuses the next pass while one is.
+If a system-interface preview is up:
 
 ```bash
 python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py unpreview --slug update-self
