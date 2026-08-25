@@ -15,13 +15,22 @@ workspace.
 Usage:
     uv run .agents/skills/build-app/scripts/scaffold_flask_lib.py \\
         --name inbox-status --description "inbox status dashboard" \\
+        --icon-file /tmp/inbox-status-icon.svg \\
         [--port 8081] [--extra-dep "jinja2>=3.1"] [--extra-dep "anthropic>=0.40"]
 
+`--icon-file` is required: draw the app's icon (house style: a single
+`<svg viewBox="0 0 24 24">` of monochrome line art, stroke='currentColor',
+fill='none') before scaffolding. Its contents are copied to
+`system/apps/<package>/icon.svg`, which the generated supervisord command
+registers via `forward_port.py --icon-file` on every start -- so a later
+icon edit takes effect on the next restart.
+
 Run from the repo root (`/home/user/workspace`). Fails non-zero with a clear message on
-any failure (lib already exists, reserved name, sync failure, etc.).
+any failure (lib already exists, reserved name, invalid icon, sync failure, etc.).
 """
 
 import argparse
+import importlib.util
 import re
 import subprocess
 import sys
@@ -65,6 +74,22 @@ RESERVED_NAME_PREFIXES = ("host-", "agent-")
 LOWEST_AUTO_PORT = 8080
 KEBAB_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
 LOCALHOST_PORT_RE = re.compile(r"http://(?:localhost|127\.0\.0\.1):(\d+)")
+
+# forward_port.py owns icon validation (single safe <svg>, length cap); load it
+# from this checkout so the scaffold rejects a bad icon up front instead of the
+# app failing to register on its first supervisord start.
+_FORWARD_PORT_PATH = (
+    Path(__file__).resolve().parents[4] / "system" / "scripts" / "forward_port.py"
+)
+
+
+def _validate_icon_markup(markup: str) -> str | None:
+    spec = importlib.util.spec_from_file_location("_forward_port_for_scaffold", _FORWARD_PORT_PATH)
+    if spec is None or spec.loader is None:
+        sys.exit(f"error: could not load {_FORWARD_PORT_PATH} for icon validation")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.validate_icon(markup)
 
 
 def _kebab_to_snake(name: str) -> str:
@@ -341,7 +366,12 @@ def _lib_readme(name: str, description: str) -> str:
 
 
 def _write_lib(
-    repo_root: Path, name: str, description: str, port: int, extras: list[str]
+    repo_root: Path,
+    name: str,
+    description: str,
+    port: int,
+    extras: list[str],
+    icon_markup: str,
 ) -> Path:
     package = _kebab_to_snake(name)
     lib_dir = repo_root / "system" / "apps" / package
@@ -353,6 +383,7 @@ def _write_lib(
         _lib_pyproject(name, package, description, extras)
     )
     (lib_dir / "README.md").write_text(_lib_readme(name, description))
+    (lib_dir / "icon.svg").write_text(icon_markup.strip() + "\n")
     (lib_dir / f"test_{package}_ratchets.py").write_text(_lib_ratchets())
     (src_dir / "__init__.py").write_text("")
     (src_dir / "runner.py").write_text(_lib_runner(name, package, description, port))
@@ -406,7 +437,7 @@ def _update_root_pyproject(repo_root: Path, name: str, package: str) -> None:
 
 _SUPERVISORD_PROGRAM_TEMPLATE = """\
 [program:{name}]
-command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:{port} --name {name} --program {name} && uv run {name}"
+command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:{port} --name {name} --icon-file system/apps/{package}/icon.svg --program {name} && uv run {name}"
 directory=/home/user/workspace
 autostart=true
 autorestart=true
@@ -422,7 +453,7 @@ stderr_logfile_backups=3
 """
 
 
-def _update_supervisord_conf(repo_root: Path, name: str, port: int) -> None:
+def _update_supervisord_conf(repo_root: Path, name: str, package: str, port: int) -> None:
     # system/supervisord.conf is INI (not TOML) and has hand-written comments worth
     # preserving, so append a [program:<name>] block as text rather than
     # round-tripping through a parser. The command is wrapped in `bash -c "..."`
@@ -438,7 +469,7 @@ def _update_supervisord_conf(repo_root: Path, name: str, port: int) -> None:
         sys.exit(
             f"error: system/supervisord.conf already has a [program:{name}] section"
         )
-    block = _SUPERVISORD_PROGRAM_TEMPLATE.format(name=name, port=port)
+    block = _SUPERVISORD_PROGRAM_TEMPLATE.format(name=name, package=package, port=port)
     path.write_text(existing.rstrip("\n") + "\n\n" + block)
 
 
@@ -472,6 +503,15 @@ def main() -> None:
     parser.add_argument("--name", required=True, help="kebab-case app name")
     parser.add_argument("--description", required=True, help="one-line description")
     parser.add_argument(
+        "--icon-file",
+        required=True,
+        help=(
+            "path to the app's icon, a single <svg viewBox=\"0 0 24 24\"> of "
+            "monochrome line art (stroke='currentColor', fill='none'); copied "
+            "to system/apps/<package>/icon.svg and registered on every start"
+        ),
+    )
+    parser.add_argument(
         "--port", type=int, default=None, help="explicit port (auto-picked if omitted)"
     )
     parser.add_argument(
@@ -493,6 +533,13 @@ def main() -> None:
     args = parser.parse_args()
 
     _validate_name(args.name)
+    icon_path = Path(args.icon_file)
+    if not icon_path.is_file():
+        sys.exit(f"error: --icon-file {str(icon_path)!r} does not exist")
+    icon_markup = icon_path.read_text(encoding="utf-8")
+    icon_error = _validate_icon_markup(icon_markup)
+    if icon_error is not None:
+        sys.exit(f"error: {icon_error}")
     repo_root = (
         Path(args.repo_root).resolve()
         if args.repo_root
@@ -502,10 +549,10 @@ def main() -> None:
     port = _pick_port(repo_root, args.port)
 
     lib_dir = _write_lib(
-        repo_root, args.name, args.description, port, list(args.extra_dep)
+        repo_root, args.name, args.description, port, list(args.extra_dep), icon_markup
     )
     _update_root_pyproject(repo_root, args.name, package)
-    _update_supervisord_conf(repo_root, args.name, port)
+    _update_supervisord_conf(repo_root, args.name, package, port)
 
     if not args.skip_uv_sync:
         _run_uv_sync(repo_root)

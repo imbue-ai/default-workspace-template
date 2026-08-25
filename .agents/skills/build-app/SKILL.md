@@ -99,6 +99,16 @@ under `system/apps/<your-package>/` so they get an isolated tab and origin.
   descriptive (`news`, `docs-viewer`) beats clever. Avoid names
   already used in `system/supervisord.conf` (`system_interface`,
   `browser`, etc. are reserved by the scaffolder).
+- **Draw the app's icon.** Every new app registers an icon --
+  `forward_port.py` refuses a brand-new registration without one, so
+  an icon-less app never even starts. Do not treat this as a checkbox:
+  design a glyph that depicts what *this* app does (a bell for
+  reminders, a graph for a dashboard), in the workspace's house style
+  (the exact frame is in the `forward_port.py` CLI reference below).
+  Write it to a scratch path for now; the scaffolder copies it into
+  the lib. Existing apps registered before this rule simply keep their
+  generic letter glyph -- the requirement bites only on first
+  registration, when you (the author) are present to draw one.
 - **Pick a free port.** `ss -tln` lists what's bound. The scaffolder
   picks the lowest free port at or above 8080 by parsing
   `system/supervisord.conf` and `data/.state/apps.toml`; if you're choosing
@@ -118,6 +128,7 @@ under `system/apps/<your-package>/` so they get an isolated tab and origin.
 uv run .agents/skills/build-app/scripts/scaffold_flask_lib.py \
     --name <service-name> \
     --description "<one-liner>" \
+    --icon-file <path-to-svg> \
     [--port <int>] \
     [--extra-dep <pkg>] [--extra-dep <pkg>] ...
 ```
@@ -127,6 +138,11 @@ Required:
   must not start with `host-` or `agent-`) -- it becomes the service's
   hostname label.
 - `--description`: becomes the lib `pyproject.toml` description.
+- `--icon-file`: the icon you drew in pre-flight. Validated up front
+  (same rules as `forward_port.py`), copied to
+  `system/apps/<package>/icon.svg`, and registered by the generated
+  supervisord command on every start -- so editing that file and
+  restarting the program updates the icon.
 
 Optional:
 - `--port`: explicit port; auto-picked if omitted.
@@ -166,6 +182,8 @@ What gets generated:
 - `system/apps/<package>/test_<package>_ratchets.py` -- standard ratchets at
   zero.
 - `system/apps/<package>/README.md` -- one-line description.
+- `system/apps/<package>/icon.svg` -- the icon you passed via
+  `--icon-file`, now owned by the lib.
 
 What gets updated:
 
@@ -177,7 +195,7 @@ What gets updated:
 
   ```ini
   [program:<name>]
-  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:<port> --name <name> --program <name> && uv run <name>"
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:<port> --name <name> --icon-file system/apps/<package>/icon.svg --program <name> && uv run <name>"
   directory=/home/user/workspace
   autostart=true
   autorestart=true
@@ -429,18 +447,22 @@ calling the work done.
 
 ## Escape hatch: wrap an existing server
 
-For pre-existing third-party tools, do not scaffold a lib. Add a
-`[program:<name>]` block to `system/supervisord.conf` that runs
-`forward_port.py` and then your existing start command. supervisord runs
-commands directly (no shell), so wrap any command that chains with `&&`
-in `bash -c "..."`, and prefix the whole thing with
+For pre-existing third-party tools, do not scaffold a lib. Draw the
+app's icon (pre-flight above) and save it as
+`system/apps/<name>/icon.svg` -- a wrapped tool has no scaffolded lib,
+so give it a minimal `system/apps/<name>/` directory holding just the
+icon (and a one-line README), the way the built-in `files` app wraps
+`dufs`. Then add a `[program:<name>]` block to `system/supervisord.conf`
+that runs `forward_port.py` and then your existing start command.
+supervisord runs commands directly (no shell), so wrap any command that
+chains with `&&` in `bash -c "..."`, and prefix the whole thing with
 `python3 system/services/oom_priority/bin/oom_tag_service.py user` so this user-created app is
 shed before any built-in service under memory pressure (see
 `system/services/oom_priority/README.md`):
 
 ```ini
 [program:<name>]
-command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:<port> --name <name> --program <name> && <existing_start_command>"
+command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:<port> --name <name> --icon-file system/apps/<name>/icon.svg --program <name> && <existing_start_command>"
 directory=/home/user/workspace
 autostart=true
 autorestart=true
@@ -452,7 +474,7 @@ Two valid shapes:
 
   ```ini
   [program:docs-viewer]
-  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:8090 --name docs-viewer --program docs-viewer && jupyter notebook --port 8090 --ip 127.0.0.1 --no-browser"
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:8090 --name docs-viewer --icon-file system/apps/docs-viewer/icon.svg --program docs-viewer && jupyter notebook --port 8090 --ip 127.0.0.1 --no-browser"
   directory=/home/user/workspace
   autostart=true
   autorestart=true
@@ -464,7 +486,7 @@ Two valid shapes:
   # system/scripts/run_<name>.sh
   #!/usr/bin/env bash
   set -euo pipefail
-  python3 system/scripts/forward_port.py --url http://localhost:<port> --name <name> --program <name>
+  python3 system/scripts/forward_port.py --url http://localhost:<port> --name <name> --icon-file system/apps/<name>/icon.svg --program <name>
   exec <existing_start_command>
   ```
 
@@ -494,7 +516,7 @@ Used by both paths (the scaffolder generates the call; the escape
 hatch has you write it directly).
 
 ```
-python3 system/scripts/forward_port.py --name NAME --url URL
+python3 system/scripts/forward_port.py --name NAME --url URL --icon-file PATH
 python3 system/scripts/forward_port.py --name NAME --remove
 ```
 
@@ -508,15 +530,19 @@ Flags:
   loudly on an invalid name.
 - `--url`: full URL where the app is reachable from inside the
   container (e.g. `http://localhost:8090`).
-- `--icon` / `--icon-file`: optional SVG icon for the app, so the
-  workspace draws its glyph instead of the generic one. `--icon` takes
-  the markup itself; `--icon-file` takes a path whose *contents* are
-  read now and stored (the path is not recorded). Either way the
-  registry holds the markup, which must be a single `<svg>` element
-  with no script, style, event handler, or external reference, and at
-  most 16384 characters -- registration fails loudly otherwise.
-  Omitting both leaves any icon already registered for the app in
-  place, so a service that re-registers on restart keeps its icon.
+- `--icon` / `--icon-file`: SVG icon for the app, so the workspace
+  draws its glyph instead of a generic letter-in-a-box monogram.
+  **Required whenever the registration would create a new entry**
+  (unless `--internal`, or an explicit `--no-icon`): a brand-new app
+  without one is refused, so the moment to draw the icon is before the
+  app first starts. Re-registrations of an existing entry (the normal
+  supervisord-restart case, and apps that predate the requirement) are
+  exempt -- omitting both flags then leaves any stored icon in place.
+  `--icon` takes the markup itself; `--icon-file` takes a path whose
+  *contents* are read now and stored (the path is not recorded). Either
+  way the registry holds the markup, which must be a single `<svg>`
+  element with no script, style, event handler, or external reference,
+  and at most 16384 characters -- registration fails loudly otherwise.
 
   **Draw the icon in the workspace's house style**: monochrome line
   art on a transparent background, exactly like the built-in glyphs.
@@ -534,6 +560,10 @@ Flags:
   text beside it, and a transparent background is what keeps it from
   reading as a sticker in a row of line icons. Only use color if the
   user explicitly asks for a colored icon.
+- `--no-icon`: register a brand-new entry without an icon, on purpose,
+  keeping the generic glyph. Only for machinery hidden from the app
+  pickers (previews, wrappers, built-in services with their own UI
+  glyphs) -- never for a user-facing app you are building.
 - `--program`: name of the supervisord program that runs the app --
   the program-name-equals-service-name convention both paths follow, so
   pass the app's own name. Its presence on the registry entry is what

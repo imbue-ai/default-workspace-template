@@ -58,7 +58,7 @@ _OTHER_ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circ
 )
 def test_valid_names_register_and_are_persisted(tmp_path: Path, name: str) -> None:
     apps_file = tmp_path / "apps.toml"
-    result = _run(["--name", name, "--url", "http://localhost:7681"], apps_file)
+    result = _run(["--name", name, "--url", "http://localhost:7681", "--no-icon"], apps_file)
     assert result.returncode == 0, result.stderr
     rows = _read_apps(apps_file)
     assert len(rows) == 1
@@ -107,7 +107,7 @@ def test_remove_also_rejects_invalid_names(tmp_path: Path) -> None:
 def test_upsert_then_remove_round_trips(tmp_path: Path) -> None:
     apps_file = tmp_path / "apps.toml"
 
-    result = _run(["--name", "web", "--url", "http://localhost:5000"], apps_file)
+    result = _run(["--name", "web", "--url", "http://localhost:5000", "--no-icon"], apps_file)
     assert result.returncode == 0, result.stderr
 
     label_after_create = _read_apps(apps_file)[0]["label"]
@@ -174,13 +174,76 @@ def test_register_from_an_icon_file_stores_the_contents_not_the_path(tmp_path: P
     assert str(icon_file) not in apps_file.read_text()
 
 
-def test_register_without_an_icon_omits_the_key(tmp_path: Path) -> None:
+def test_register_with_no_icon_omits_the_key(tmp_path: Path) -> None:
     apps_file = tmp_path / "apps.toml"
-    result = _run(["--name", "web", "--url", "http://localhost:8000"], apps_file)
+    result = _run(["--name", "web", "--url", "http://localhost:8000", "--no-icon"], apps_file)
     assert result.returncode == 0, result.stderr
     rows = _read_apps(apps_file)
     assert len(rows) == 1
     assert "icon" not in rows[0]
+
+
+def test_a_new_app_without_an_icon_is_refused(tmp_path: Path) -> None:
+    """A brand-new pickable app must register an icon (or say --no-icon), or
+    the workspace could only ever draw the generic letter monogram for it."""
+    apps_file = tmp_path / "apps.toml"
+    result = _run(["--name", "web", "--url", "http://localhost:8000"], apps_file)
+    assert result.returncode != 0
+    assert "must register an icon" in result.stderr
+    assert not apps_file.exists()
+
+
+def test_a_new_internal_entry_needs_no_icon(tmp_path: Path) -> None:
+    """Internal entries never render anywhere, so the icon requirement is moot."""
+    apps_file = tmp_path / "apps.toml"
+    result = _run(
+        ["--name", "vm-exec", "--url", "http://localhost:8792", "--internal"], apps_file
+    )
+    assert result.returncode == 0, result.stderr
+    assert _read_apps(apps_file)[0]["name"] == "vm-exec"
+
+
+def test_a_preexisting_icon_less_entry_reregisters_without_icon_flags(tmp_path: Path) -> None:
+    """Apps registered before the icon requirement keep restarting untouched:
+    the requirement bites only when the registration would create the entry."""
+    apps_file = tmp_path / "apps.toml"
+    apps_file.write_text('[[apps]]\nname = "legacy"\nurl = "http://localhost:8000"\n')
+    result = _run(["--name", "legacy", "--url", "http://localhost:8001"], apps_file)
+    assert result.returncode == 0, result.stderr
+    rows = _read_apps(apps_file)
+    assert rows[0]["url"] == "http://localhost:8001"
+    assert "icon" not in rows[0]
+
+
+def test_no_icon_on_an_existing_entry_keeps_the_stored_icon(tmp_path: Path) -> None:
+    """--no-icon is 'register without one', not 'remove the stored one'."""
+    apps_file = tmp_path / "apps.toml"
+    result = _run(
+        ["--name", "web", "--url", "http://localhost:8000", "--icon", _ICON], apps_file
+    )
+    assert result.returncode == 0, result.stderr
+
+    result = _run(["--name", "web", "--url", "http://localhost:8001", "--no-icon"], apps_file)
+    assert result.returncode == 0, result.stderr
+    rows = _read_apps(apps_file)
+    assert rows[0]["icon"] == _ICON
+
+
+def test_no_icon_is_mutually_exclusive_with_the_icon_flags(tmp_path: Path) -> None:
+    apps_file = tmp_path / "apps.toml"
+    result = _run(
+        ["--name", "web", "--url", "http://localhost:8000", "--no-icon", "--icon", _ICON],
+        apps_file,
+    )
+    assert result.returncode != 0
+    assert "mutually exclusive" in result.stderr
+
+
+def test_no_icon_cannot_be_combined_with_remove(tmp_path: Path) -> None:
+    apps_file = tmp_path / "apps.toml"
+    result = _run(["--remove", "--name", "web", "--no-icon"], apps_file)
+    assert result.returncode != 0
+    assert "cannot be combined with --remove" in result.stderr
 
 
 def test_reregistering_without_an_icon_keeps_the_one_already_set(tmp_path: Path) -> None:
@@ -218,7 +281,7 @@ def test_reregistering_with_an_icon_replaces_the_previous_one(tmp_path: Path) ->
 
 def test_register_without_internal_omits_the_key(tmp_path: Path) -> None:
     apps_file = tmp_path / "apps.toml"
-    result = _run(["--name", "web", "--url", "http://localhost:8000"], apps_file)
+    result = _run(["--name", "web", "--url", "http://localhost:8000", "--no-icon"], apps_file)
     assert result.returncode == 0, result.stderr
     rows = _read_apps(apps_file)
     assert "internal" not in rows[0]
@@ -253,7 +316,7 @@ def test_reregistering_without_internal_clears_a_previously_internal_entry(tmp_p
 
 def test_register_without_program_omits_the_key(tmp_path: Path) -> None:
     apps_file = tmp_path / "apps.toml"
-    result = _run(["--name", "web", "--url", "http://localhost:8000"], apps_file)
+    result = _run(["--name", "web", "--url", "http://localhost:8000", "--no-icon"], apps_file)
     assert result.returncode == 0, result.stderr
     rows = _read_apps(apps_file)
     assert "program" not in rows[0]
@@ -262,7 +325,8 @@ def test_register_without_program_omits_the_key(tmp_path: Path) -> None:
 def test_register_with_program_stores_the_supervisord_program_name(tmp_path: Path) -> None:
     apps_file = tmp_path / "apps.toml"
     result = _run(
-        ["--name", "web", "--url", "http://localhost:8000", "--program", "web"], apps_file
+        ["--name", "web", "--url", "http://localhost:8000", "--no-icon", "--program", "web"],
+        apps_file,
     )
     assert result.returncode == 0, result.stderr
     rows = _read_apps(apps_file)
@@ -275,7 +339,8 @@ def test_reregistering_without_program_clears_a_previously_stored_one(tmp_path: 
     leave a stale stop/start capability behind."""
     apps_file = tmp_path / "apps.toml"
     result = _run(
-        ["--name", "web", "--url", "http://localhost:8000", "--program", "web"], apps_file
+        ["--name", "web", "--url", "http://localhost:8000", "--no-icon", "--program", "web"],
+        apps_file,
     )
     assert result.returncode == 0, result.stderr
 
