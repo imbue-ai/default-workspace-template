@@ -629,9 +629,10 @@ Interpret the exit code and report it per the §5a composition rules:
 
   Every apply that had live work to do (a `0` after changes, a `2`, or a `3`;
   not the "nothing live needed to change" exit) also prints one `apply phase
-  timings:` line -- per-phase durations from the apply marker. It is the benchmarking input for the
-  apply's poll and step budgets; when an apply took unusually long, quote it
-  in the report rather than guessing which step was slow.
+  timings:` line -- per-phase durations from the apply marker. It is the
+  benchmarking input for the apply's poll and step budgets; when an apply took
+  unusually long, quote it in the report rather than guessing which step was
+  slow.
 - **`2` -- automatically rolled back.** The apply reverted the **entire
   landed merge -- every class, not just the failing one** -- and restored the
   pre-apply state; the live workspace is confirmed healthy on the previous
