@@ -3149,6 +3149,12 @@ def apply_update(
         usable_worker_bundle: str | None = None
         if plan.frontend:
             expected_bundle_hash = _expected_frontend_tree_hash(repo_root, runner)
+            if expected_bundle_hash is None:
+                sys.stderr.write(
+                    f"note: could not resolve the merged tree's {FRONTEND_DIR} hash, so "
+                    "the bundle cannot be verified against the merged source; accepting "
+                    "it on its index alone.\n"
+                )
             bundle_reject = _worker_bundle_reject_reason(
                 marker.worker_bundle, expected_bundle_hash
             )
