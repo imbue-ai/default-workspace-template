@@ -34,13 +34,12 @@ system, not a pixel-identical render.
 - **Removed the dev-only visual-diff gallery harness** (no longer needed after
   the sweep).
 
-- **Guidelines + enforcement.** `frontend/style_guide.md` holds the enforceable
-  "use tokens and shared primitives; here's the narrow escape hatch" rules
-  (agents auto-read a project's `style_guide.md`), and
-  `src/design-system-ratchet.test.ts` is a vitest ratchet that scans
-  `src/style.css` and fails when raw hex colours (outside `@theme`), raw `px` in
-  `font-size`/`border-radius`, or raw numeric `z-index` exceed recorded
-  baselines. Baselines only ratchet down; a justified deviation raises the
-  baseline with a comment. Discoverability: a design-system banner at the top of
-  `src/style.css`, the full assessment and target token set in
-  `docs/design-system.md`, and a pointer in the app README.
+- **Guidance (not enforced).** `frontend/style_guide.md` and
+  `docs/design-system.md` document the tokens and shared primitives as an
+  optional convention for keeping the *default* UI coherent — explicitly not a
+  hard rule, so a user redesigning their interface to their own taste isn't
+  constrained by it. There is deliberately no automated ratchet gating raw
+  values (an earlier draft added one; it was removed to avoid impeding
+  user-driven redesigns). Discoverability: a banner at the top of
+  `src/style.css`, the token set and background in `docs/design-system.md`, and a
+  pointer in the app README.

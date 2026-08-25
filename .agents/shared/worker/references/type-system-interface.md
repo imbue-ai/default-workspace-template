@@ -16,32 +16,29 @@ It is what the user is looking at *right now*, so you always work against an
   + mithril/dockview). Build output goes to the gitignored
   `system/apps/system_interface/imbue/system_interface/static/`.
 
-## Design system: use it, don't drift
+## Design system: an optional convention for the default UI
 
-Any change that adds or edits styling must follow the frontend design system.
-The rules and the escape hatch are in
-`system/apps/system_interface/frontend/style_guide.md` (short and enforceable);
-the full assessment and token set are in
-`system/apps/system_interface/docs/design-system.md`. In brief:
+The shipped **default** UI is built from a small design system — a token layer
+(`@theme` at the top of `src/style.css`) plus shared component classes. It keeps
+the default look coherent. Details are in
+`system/apps/system_interface/frontend/style_guide.md` (short) and
+`system/apps/system_interface/docs/design-system.md` (token set + background).
 
-- **Use tokens, never raw values.** Colours are `var(--color-*)` from the
-  `@theme` block at the top of `src/style.css` (never a raw `#hex`/`rgb`/`rgba`);
-  radius is `var(--radius-base)` etc.; for type/spacing/shadow/z-index reuse a
-  token or an existing value rather than inventing a new literal.
-- **Reuse shared components.** Extend an existing button/modal/badge/toggle/
-  spinner class or add a variant modifier; do not hand-roll another per-feature
-  copy. Interactive elements are real `<button>`/`<a>`, not clickable `<div>`s.
-- **Deviate only when a token genuinely can't express it**, and then mark the
-  site with a `design-system-exception: <reason>` comment and bump the matching
-  baseline in `src/design-system-ratchet.test.ts` (it only ratchets down) in the
-  same change. The ratchet runs under `npm run test`, so a new raw value fails
-  the suite until you either tokenize it or justify it this way.
-- **Don't chase a pixel-perfect no-op.** Adopting a token or shared primitive can
-  shift a value slightly (a control taking the primitive's size, say); that's fine
-  — the goal is a consistent system, not an identical render. Make the change
-  deliberately and review the diff. The ratchet
-  (`src/design-system-ratchet.test.ts`, run under `npm run test`) still guards
-  against raw values regrowing.
+It is a convention, **not** a rule, and it defers to the user. If the user asks
+for their interface restyled to their own taste — including something bold and
+unlike the default — build exactly that; don't hold back or steer it back toward
+tokens. Nothing enforces the system (there is no ratchet). When you *are*
+extending the default look, prefer it so it stays consistent:
+
+- **Prefer a token over a literal** (`var(--color-*)` over a raw hex,
+  `var(--radius-base)` over `6px`, an existing type/spacing value over a new one),
+  and **reuse a shared component** (extend `.btn` / the modal / badge / toggle /
+  spinner / input primitive) rather than hand-rolling another per-feature copy.
+- **Regardless of styling, keep interactive elements as real `<button>`/`<a>`**
+  (not clickable `<div>`s) — that's accessibility, not taste.
+- Adopting a token or primitive may shift a value slightly (a control taking the
+  primitive's size); that's fine. Make the change deliberately and review the
+  diff — the goal is a consistent system, not a pixel-identical render.
 
 ## Running and testing
 

@@ -12,70 +12,47 @@ enforceable "what to do while editing" version.
 
 ---
 
-## Design system: use it; don't drift
+## Design system: an optional convention for the default UI
 
-**Why this matters.** Left unmanaged, this UI grew ~15 bespoke button families,
-6+ independent modal implementations, 29 font sizes, 23 spacing values, and ~45
-raw hex colours (a third of them exact duplicates of existing tokens). Every new
-one-off makes the next change harder and the UI less coherent. The token layer
-(`@theme` at the top of `src/style.css`) and the shared component classes exist
-so you don't have to reinvent — **reach for them first, every time.**
+The shipped **default** interface is built from a small design system — a token
+layer (`@theme` at the top of `src/style.css`: colours, radius, spacing, type,
+shadow, motion, z-index) plus shared component classes (`.btn`, the modal shell,
+`.badge`, `.toggle`, `.spinner`, `.input`). It exists so the default look stays
+coherent instead of regrowing the ~15 bespoke button families and ~45 raw colours
+it started with.
 
-### The rules
+**It is a convention, not a rule, and it defers to the user.** If the user wants
+their interface restyled to their own taste — including something bold, unique,
+and nothing like the shipped default — build exactly that. Don't hold back, don't
+"correct" it back toward tokens, and don't treat anything below as a gate.
+Nothing enforces it; there is no ratchet.
 
-1. **Colour — never write a raw `#hex` / `rgb()` / `rgba()`** in `style.css` or in
-   inline styles. Use a `var(--color-*)` token from the `@theme` block. If the
-   colour you need has no token, **add a semantically-named token** (e.g.
-   `--color-danger`), don't inline a literal. The same value must never exist as
-   both a token and a hardcoded copy.
+When you *are* extending or maintaining the default look, prefer the system so it
+stays consistent:
 
-2. **Type, spacing, radius, shadow, motion, z-index — use the token**, or the
-   nearest existing value; do not invent a new literal. The radius token
-   `--radius-base` already exists — use it instead of retyping `6px`. (Type and
-   spacing scales are mid-rollout; see `design-system.md` P1. Until a scale token
-   exists, **reuse an existing value rather than adding a new one** — do not widen
-   the set.)
+- **Reach for a token before a literal.** `var(--color-*)` over a raw
+  `#hex`/`rgb()`; `var(--radius-base)` over a raw `6px`; an existing type/spacing
+  value over a brand-new one. If a colour has no token, adding a
+  semantically-named one (e.g. `--color-danger`) keeps the default themeable.
+- **Reuse a shared component before hand-rolling one.** Extend the `.btn`
+  primitive (`.btn--{primary|secondary|ghost|destructive|inverse|icon}`, plus
+  `.btn--sm`, `.btn--selected`, and the `.btn--ghost.btn--destructive`
+  quiet-destructive combo) or the modal/badge/toggle/spinner/input primitive,
+  rather than copying it under a new feature prefix. A dialog's default action
+  (its confirm, or the sole button in a one-button notice) is `.btn--primary`;
+  downgrade only when the content calls for it.
+- **Prefer semantic tokens/classes over Tailwind utilities for anything themed**
+  (colour, and spacing that should track the scale). Utilities are fine for
+  genuinely one-off layout (`flex`, `grid`, `gap`).
 
-3. **Components — reuse the shared class/primitive; do not hand-roll another**
-   button, modal, badge, toggle, spinner, or input. Extend the existing one (or
-   add a variant modifier) instead of copying it under a new feature prefix. For
-   buttons, use the `.btn` primitive: `.btn.btn--{primary|secondary|ghost|
-   destructive|inverse|icon}`, with `.btn--sm`, `.btn--selected`, and the
-   `.btn--ghost.btn--destructive` quiet-destructive combo. Grow shared primitives
-   in that shape rather than making per-feature copies. A dialog's default action
-   — its confirm, or the sole acknowledgement in a one-button notice — is
-   `.btn--primary`; downgrade a button to secondary/ghost/destructive only when
-   its content calls for it (a Cancel paired with a confirm, a destructive verb, a
-   passive dismissal). (Modal, badge, toggle,
-   spinner, and input primitives are still to come — until they land, generalize
-   the best existing example rather than adding another one-off.)
+Two items below are about correctness, not taste, so keep them even in a custom
+redesign:
 
-4. **Prefer semantic tokens/classes over Tailwind utilities for anything
-   themed** (colour, and spacing that should track the scale). Tailwind utilities
-   are fine for genuinely one-off, non-tokenized layout (`flex`, `grid`, `gap`).
-   Don't express a themed colour or a design-token spacing as a utility.
-
-5. **Interactive elements are real `<button>` / `<a>`**, never clickable
-   `<div>` / `<span>` — for accessibility and so they inherit consistent states.
-
-6. **States** — every interactive element gets `:hover`, `:focus-visible`, and
-   `:disabled`. Use the existing selected/active convention; do not invent yet
-   another spelling (the codebase already has four: `--selected`, `--active`,
-   `-current`, `.dv-active-tab` — do not add a fifth).
-
-### When you may deviate (the escape hatch)
-
-Deviation is allowed **only when a token or primitive genuinely cannot express
-what's needed** — not to save a few minutes. It is meant to be rare and visible.
-When you must:
-
-- Keep it minimal and local to the one site that needs it.
-- Add a `/* design-system-exception: <reason> */` comment at that site.
-- In the **same change**, bump the matching baseline in
-  [`src/design-system-ratchet.test.ts`](src/design-system-ratchet.test.ts) with a
-  comment saying why. That ratchet only ever ratchets *down*, so a bump is an
-  explicit, reviewable decision — never a silent regression. Do **not** evade the
-  ratchet by reformatting to dodge its regex; that is worse than the raw value.
+- **Interactive elements are real `<button>` / `<a>`**, never clickable
+  `<div>` / `<span>` — for accessibility and consistent keyboard/focus behaviour.
+- **Every interactive element gets `:hover`, `:focus-visible`, and `:disabled`
+  states.** Reuse the existing selected/active spelling rather than inventing a
+  fifth.
 
 ### Review what you changed
 
@@ -84,17 +61,14 @@ picking up the primitive's size, say. That's expected and fine; the goal is a
 consistent system, not a pixel-identical one, so don't contort the code to keep
 an exact visual match. Just make the change deliberately: review the diff — and,
 for a visible change, the running UI — to confirm you changed only what you
-intended. The ratchet
-([`src/design-system-ratchet.test.ts`](src/design-system-ratchet.test.ts)) runs
-under `npm run test` and fails when raw hex / font-size / border-radius / z-index
-values grow, so an accidentally reintroduced literal is still caught.
+intended.
 
 ---
 
 ## Running and testing
 
 - Build: `npm run build` (must be clean). Lint: `npm run lint`. Test:
-  `npm run test` (includes the design-system ratchet and the lint/format check).
+  `npm run test`.
 - The wider isolation / preview / reveal rules for changing the live UI are owned
   by the `update-system-interface` skill and
   `.agents/shared/worker/references/type-system-interface.md`. Never edit the

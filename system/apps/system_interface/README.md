@@ -26,16 +26,16 @@ npm install
 npm run dev
 ```
 
-## Design system (read before styling)
+## Design system (optional convention for the default UI)
 
 The frontend has a token layer (`@theme` in `frontend/src/style.css`) and shared
-component classes. **Use them; do not hardcode colours/spacing/radii or hand-roll
-another button/modal.** The enforceable rules and the escape hatch are in
-[`frontend/style_guide.md`](frontend/style_guide.md); the full assessment, target
-token set, and migration plan are in
-[`docs/design-system.md`](docs/design-system.md). A ratchet
-(`frontend/src/design-system-ratchet.test.ts`) fails the suite when raw values
-grow.
+component classes. When you extend or maintain the *default* look, prefer them
+over new one-offs so it stays coherent. This is a convention, not an enforced
+rule — if a user wants their interface restyled to their own taste, build that
+and ignore the tokens freely. See
+[`frontend/style_guide.md`](frontend/style_guide.md) for the short version and
+[`docs/design-system.md`](docs/design-system.md) for the token set and the
+background on why it exists.
 
 ## Updating the running UI (canonical flow)
 

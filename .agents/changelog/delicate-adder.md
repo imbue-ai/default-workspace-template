@@ -1,10 +1,11 @@
-Added a "Design system: use it, don't drift" section to the worker reference
+Added a "Design system" section to the worker reference
 `shared/worker/references/type-system-interface.md` (the doc agents read when
-editing the system-interface UI). It tells future agents to style with the new
-`var(--color-*)`/`var(--radius-*)` tokens and to reuse the shared
-button/modal/badge/toggle/spinner primitives rather than hand-rolling per-feature
-copies, keeps interactive elements as real `<button>`/`<a>`, and documents the
-narrow escape hatch: mark a justified raw value with a `design-system-exception`
-comment and bump the matching baseline in `design-system-ratchet.test.ts` in the
-same change. Points at the app's `frontend/style_guide.md` and
-`docs/design-system.md` for the full rules and token set.
+editing the system-interface UI). It points agents at the frontend's token layer
+(`var(--color-*)`/`var(--radius-*)`) and shared button/modal/badge/toggle/spinner
+primitives, and asks them to reuse those rather than hand-rolling per-feature
+copies when extending the default look. It is framed as an optional convention,
+not a rule: if the user wants their interface restyled to their own taste, the
+agent should build that and not steer it back toward tokens (there is no ratchet
+enforcing any of it). The one hard rule kept is accessibility — interactive
+elements stay real `<button>`/`<a>`. Points at the app's `frontend/style_guide.md`
+and `docs/design-system.md` for the token set and background.

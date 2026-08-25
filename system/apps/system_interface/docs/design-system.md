@@ -6,9 +6,16 @@ the mechanical/semantic sweeps, the component primitives (button, badge, spinner
 toggle, input, tooltip), and the modal consolidation. What remains is a short
 follow-ups list (bottom of this log): off-grid spacing strays, a few defined-but-
 unused tokens, the medium-weight audit, and whether to build a dark theme. This
-document is the durable hand-off so any agent can pick the work up cold. The
-design-system ratchet (`frontend/src/design-system-ratchet.test.ts`) is the
-automated guard against the sprawl regrowing.
+document is the durable hand-off so any agent can pick the work up cold.
+
+> **The design system is an optional convention, not an enforced rule.** It keeps
+> the *shipped default* UI coherent, so prefer the tokens and primitives when you
+> extend that default. But a user running their own source may want their
+> interface redesigned to their taste — build exactly that and ignore these
+> conventions freely. Nothing gates any of this. (An earlier draft added a
+> `design-system-ratchet.test.ts`; it was removed to avoid impeding user-driven
+> redesigns. The "Ratchet X → Y" figures in the log below are a historical record
+> of the one-time cleanup, not a live gate.)
 
 ### Progress log
 
@@ -328,27 +335,24 @@ Adopting a token or shared primitive can shift a value slightly (a control takin
 the primitive's size, for instance) — that's expected, and a refactor does **not**
 have to render pixel-for-pixel identically; the goal is a consistent system, not a
 frozen one. Make each change deliberately and review the diff — and, for a visible
-change, the running UI surface it touches. The ratchet (section 7) is the automated
-guard against raw values regrowing, and it runs under the test suite.
+change, the running UI surface it touches. Nothing gates this automatically: the
+design system is a convention for the default UI, not an enforced rule (section 7).
 
 ---
 
-## 7. Ratchet + contribution rules (stop the sprawl regrowing)
+## 7. Keeping the default coherent (convention, not enforcement)
 
-**In place now** (did not wait for P1):
-
-- **Contribution rules:** `frontend/style_guide.md` — the short, enforceable
-  "use tokens/primitives, here's the escape hatch" guide agents auto-read as the
-  project style guide. Cross-linked from the app README, the `style.css` banner,
-  and `.agents/shared/worker/references/type-system-interface.md`.
-- **Ratchet:** `frontend/src/design-system-ratchet.test.ts` — a vitest guard
-  that scans `src/style.css` and fails when these exceed a recorded baseline:
-  hex colours outside `@theme`, raw `px` in `font-size` / `border-radius`
-  declarations, and raw numeric `z-index`. The baselines only ratchet down; a
-  deviation must bump the baseline with a comment (the escape hatch), mirroring
-  the repo's `test_ratchets.py` philosophy. Baselines were recorded at the
-  current (pre-sweep) state, so the sprawl can only shrink from here — tighten
-  them after each phase.
+- **Style guide:** `frontend/style_guide.md` — the short "prefer the tokens and
+  primitives when extending the default UI" guide agents auto-read as the project
+  style guide. Cross-linked from the app README, the `style.css` banner, and
+  `.agents/shared/worker/references/type-system-interface.md`. It is guidance for
+  the default look, explicitly deferring to the user for custom redesigns.
+- **No ratchet.** There is deliberately no automated gate on raw values. A hard
+  gate was considered and removed: the failure mode here is cosmetic, the tax on
+  every legitimate deviation is real, and — most importantly — a user redesigning
+  their own interface should never be blocked by "use a variable" rules. If
+  sprawl in the default UI ever becomes a problem again, a periodic cleanup pass
+  (like the one this document records) is the intended remedy.
 
 ---
 
