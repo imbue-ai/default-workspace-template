@@ -980,9 +980,7 @@ describe("verdict hydration", () => {
       noteUnresolvedPermissionRequest("req-b");
       vi.advanceTimersByTime(250);
     });
-    expect(posted).toEqual([
-      { type: "minds:query-permission-resolutions", requestIds: ["req-a", "req-b"] },
-    ]);
+    expect(posted).toEqual([{ type: "minds:query-permission-resolutions", requestIds: ["req-a", "req-b"] }]);
   });
 
   it("resends an unanswered query a bounded number of times, then goes quiet", () => {
@@ -1018,7 +1016,7 @@ describe("verdict hydration", () => {
     expect(m.redraw).toHaveBeenCalled();
   });
 
-  it("treats an empty answer as \"all still pending\" and stops resending", () => {
+  it('treats an empty answer as "all still pending" and stops resending', () => {
     const posted = postedDuring(() => {
       noteUnresolvedPermissionRequest("req-a");
       vi.advanceTimersByTime(250);
