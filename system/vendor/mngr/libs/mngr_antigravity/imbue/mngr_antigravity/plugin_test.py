@@ -440,7 +440,7 @@ def test_assemble_command_launches_agy_under_per_agent_home(antigravity_agent: A
 
 
 def test_assemble_command_puts_the_policy_shim_ahead_of_bash(antigravity_agent: AntigravityAgent) -> None:
-    """agy resolves `bash` from PATH for every tool call, which is where the workspace's
+    """agy resolves `bash` from PATH for every tool call, which is where the work dir's own
     command guards run -- it has no usable PreToolUse hook. The entry must be on the agy
     process only: setting it through the agent env file would follow the user into every
     terminal they open in this agent's tmux session."""
