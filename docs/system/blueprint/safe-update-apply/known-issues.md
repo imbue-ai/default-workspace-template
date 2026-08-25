@@ -66,11 +66,35 @@ Same ship-with-this-release logic as issue 1.
 ### 3. Provisioner bugs have no pre-apply validation
 
 The structural version of 1 and 2: nothing in the flow exercises
-`setup_system.sh` before the live apply. Worth keeping in mind for any
-provisioner-touching release; a worker-side smoke run (even syntax/lint plus
-a dry-run of changed sections) would convert apply-time walls into
-worker-time findings. No concrete design yet -- recorded so the asymmetry is
-not rediscovered per incident.
+`setup_system.sh` before the live apply. The worker cannot do it -- it shares
+the live container, and there is no nested container to run the provisioner
+in -- so the validation has to come from CI, and the apply has to stop
+turning provisioner failures into whole-release walls. Three directions,
+which compose:
+
+- **A DWT CI "live re-provision" job.** CI today builds the image from
+  scratch, which only exercises the fresh-build path; both real bugs are
+  specifically *live re-run* bugs (ETXTBSY needs a running `host_backup`
+  holding the binary; the `$HOME` split needs an agent-like env). Boot a
+  container from the base image with services up, then run the PR's
+  `setup_system.sh` inside it the way an agent would (`HOME=/home/user`,
+  agent PATH). Catches this class at PR time.
+
+- **Canonical env for the apply's provisioner call.** `apply` should invoke
+  `setup_system.sh` with the env the image build used (`HOME=/root`, explicit
+  PATH) rather than ambient agent env. Closes the divergence class generically
+  rather than the one Claude symptom; do it alongside issue 1.
+
+- **Provisioner failure alone should not roll back the merge.** A failed tool
+  install leaves the tree and services consistent, and re-running the
+  provisioner is cheap and merge-independent. On provisioner failure,
+  continue to restart + probes; if healthy, land the update with a loud
+  "provisioning incomplete: <step>" record (the `emergency.json` surface
+  already exists for this shape) and have the skill re-run the provisioner
+  after the fix; if the probes fail, roll back as now. Load-bearing
+  provisioner changes (a node bump, a new apt dependency) still fail the
+  probes and still roll back. This changes the exit-code contract and needs
+  its own SKILL guidance.
 
 ### 4. Successful teardown destroys the worker the bug collector needs
 
@@ -82,24 +106,37 @@ was only recoverable by manual archaeology in the destroyed worktree's
 projects directory. Post-rollback the SKILL already keeps the worker; the
 success path should stop being the destructive one.
 
-Direction (per gabriel): do not destroy right away -- `mngr stop` the worker
-so it stops consuming memory but stays discoverable for the bug collector.
-Design considerations:
+Direction: do not destroy right away -- stop the worker so it stops consuming
+memory but stays discoverable for the bug collector. Concretely:
 
-- `mngr create` refuses a duplicate name, so a kept-around stopped
-  `update-self` worker blocks the next pass's launch. Either rename the
-  worker before stopping it, use unique per-pass worker names, or have
-  `launch` destroy a previous *stopped* worker of the same name as a
-  pre-flight step.
+- `create_worker.py` gains a `stop` subcommand (`mngr stop <name>`), and
+  SKILL §6's success path uses it in place of `destroy`.
 
-- The report-consumption guard is independent of the agent's existence
-  (launch refuses on a leftover file at `finish_report_path`), so keeping the
-  agent does not by itself break the next pass's report handling.
+- `create_worker.py launch` gains `--destroy-existing`: `mngr create` refuses
+  a duplicate name, so a kept-around stopped `update-self` worker would
+  otherwise block the next pass. With the flag, launch destroys a previous
+  *stopped* worker of the same name as a pre-flight step and still refuses a
+  *running* one (that is a genuine conflict). The report-consumption guard is
+  independent of the agent's existence, so keeping the agent does not by
+  itself break the next pass's report handling.
 
-- Complementary fix regardless: teach the bug-report collector to gather
-  worker transcripts. They persist in the Claude projects directory even
-  after `mngr destroy`, so the collector could capture them without any
-  lifecycle change.
+- The bug-report collector (`system/scripts/collect_bug_report_diagnostics.py`)
+  has to stop excluding workers. Today `list_chat_agents` drops every
+  `agent_created=true` agent, so even a live worker is never attached. The
+  cheap fix: include `agent_created=true` agents whose transcript was written
+  inside the existing recency window (a few lines in `list_chat_agents` /
+  `collect_transcript_members`; the recency filter already exists).
+  `fetch_transcript` goes through `mngr event`, which reads `events.jsonl`
+  under the host dir rather than talking to the agent process, so a stopped
+  worker's transcript is reachable through the same path with no new code.
+
+- Looking for *destroyed* agents' transcripts is not worth it: after
+  `mngr destroy` the only surviving copy is the harness's own raw JSONL under
+  the Claude projects directory (harness-specific path mangling, not the mngr
+  common-transcript format), and finding it means scanning the filesystem
+  and guessing at agent identity -- exactly the second discovery path the
+  collector's design rejects in favour of asking mngr. Keeping the worker
+  alive-but-stopped makes the mngr path sufficient.
 
 ### 5. `apply` runs `npm ci` live even when the worker's bundle will be installed
 
@@ -122,8 +159,11 @@ was fine -- now with the whole release as blast radius and a retry that is
 correctly refused (`_has_rollback_since`). The plan's own OOM-banding
 reasoning says the apply runs when the box is under the most pressure.
 
-Fix: scale the budgets or key them off progress (e.g. process-alive plus
-port-open milestones) rather than a flat wall clock.
+Fix: there is no good progress signal to key off yet, so just raise the
+budgets -- generously -- and tune them down against live testing and
+benchmarking of real applies. A budget that is too long costs seconds on a
+genuinely broken change; one that is too short rolls back a whole release.
+The per-phase timings from issue 10 are the benchmarking input.
 
 ### 7. Nothing verifies the served bundle corresponds to the merged source
 
@@ -133,8 +173,13 @@ stale-but-populated directory is copied silently and passes both -- the same
 "source updated, UI didn't" state Incident A's user caught by eye after two
 false success claims.
 
-Fix: a build-stamp comparison in `_assert_bundle_built` (e.g. stamp the
-merge SHA into the bundle at build time and assert it matches).
+Fix: stamp the bundle at build time with the identity of the source it was
+built from -- the git tree hash of the frontend source directory is the
+natural one, since the worker builds from its branch tip and that tree must
+equal the merged tree's for the same directory -- and have
+`_assert_bundle_built` compare the stamp against the merged tree. A stale
+`--worker-bundle` then fails the apply before restart instead of being
+served.
 
 ### 8. Staged worker copy breaks bare `uv run pytest` (test-file basename collision)
 
@@ -161,14 +206,24 @@ reports an empty impact set.
 Fix: a loud error in `_cmd_classify_merge` when `--local` already contains
 `--target` ("did you mean the merge commit's first parent?").
 
-### 10. The apply is one long silent foreground command
+### 10. The apply's duration is unbounded -- a hang looks like slowness
 
-Incident A's reveal produced 1h28m of silence before the user asked "are you
-stuck?". The new apply is still a single long-running command driven from the
-chat with no progress channel. Mitigated substantially by the marker,
-recovery cron, and rollback honesty, but the silence itself is unchanged.
-Lower priority; a phase-progress line to the transcript (the marker already
-tracks phase) would cover most of it.
+Incident A's reveal ran for 1h28m before the user asked "are you stuck?".
+The problem is not that it was silent; it is that nothing about an update
+should take anywhere near that long, and nothing stopped it. The reveal's
+output never reached the transcript, so what hung is not determinable
+(candidates: `npm ci`/`npm run build` shed or stalled under load, a stuck
+pre-flight boot). The new apply is the same shape: one foreground command
+with no per-phase deadline and no record of how long each phase took.
+
+Fix: (a) record a timestamp per phase transition in the apply marker (it
+already tracks `phase`), so every apply yields per-phase durations and the
+next hang names its phase; (b) put a per-phase wall-clock budget on the
+forward steps, sized from those measurements, so a hung step becomes a
+rollback with a named phase instead of an open-ended wait; (c) gating the
+live `npm ci` (issue 5) removes the largest known cost from the critical
+path. Progress reporting to the chat is secondary: with (b), the command
+returns.
 
 ### 11. Pre-flight leaks the caller's agent env into the throwaway boot
 
