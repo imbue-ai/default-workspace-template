@@ -58,7 +58,11 @@ class AntigravityHarnessSession(FileHarnessSession):
         prevent.
 
         Failing to take the lock means a send IS in flight, so the agent is busy by definition
-        and the message is held.
+        and the message is held. The wait is ZERO on purpose, unlike stop's: stop waits out an
+        in-flight send because it may be about to finish and change what stop must return,
+        whereas here the answer is already known the instant the lock is contended. Taking the
+        helper's 2s default would stall every send behind the previous one -- precisely the
+        rapid-fire case this path exists to serve -- to learn something we already know.
 
         Residual window, accepted: between releasing the lock and mngr re-taking it for the
         real send, another send can start a turn, so we can type into an agy that just became
@@ -67,7 +71,7 @@ class AntigravityHarnessSession(FileHarnessSession):
         the UI implied. Closing it would mean holding the lock across the delegation, which is
         the deadlock described below.
         """
-        with try_hold_message_lock(self._deps.state_dir) as is_lock_held:
+        with try_hold_message_lock(self._deps.state_dir, wait_seconds=0.0) as is_lock_held:
             is_busy = (not is_lock_held) or (self._deps.state_dir / ACTIVE_MARKER_FILENAME).exists()
         # The delegation MUST happen after the lock is released. mngr's own send takes this
         # same message.lock, and flock is per open-file-description, so a second exclusive
@@ -80,6 +84,11 @@ class AntigravityHarnessSession(FileHarnessSession):
         self._deps.notify_agents_changed()
         logger.debug("antigravity: holding a message for the next flush ({})", queued_id)
         return SendOutcome.OK
+
+    def switch_queue_snapshot(self) -> list[dict[str, Any]]:
+        """The held queue, for tests and diagnostics (the live wire copy goes through the
+        watcher's snapshot callback)."""
+        return self._queue().snapshot()
 
     def _queue(self) -> AntigravityQueueTracker:
         """The agent's tracker -- the same instance the watcher reads (see queue_tracker).
