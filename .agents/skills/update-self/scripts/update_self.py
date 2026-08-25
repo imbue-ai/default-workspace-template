@@ -3759,7 +3759,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--worker-bundle",
         default=None,
         help="Path to the worker's already-built static/ bundle (the artifact "
-        "the user previewed); a live build is the fallback.",
+        "the worker validated); a live build is the fallback.",
     )
     apply_parser.add_argument(
         "--target-ref",

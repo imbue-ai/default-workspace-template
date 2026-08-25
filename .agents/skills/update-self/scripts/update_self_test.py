@@ -1929,7 +1929,7 @@ def test_apply_installs_the_workers_bundle_instead_of_building(
     )
 
     assert code == 0
-    # The previewed artifact is installed as-is; no live build runs.
+    # The worker's validated artifact is installed as-is; no live build runs.
     assert not runner.ran("npm", "run", "build")
     installed = (
         apply_repo / update_self.STATIC_DIR / "assets" / _ASSET_NAME
