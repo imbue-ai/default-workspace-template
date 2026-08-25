@@ -73,15 +73,17 @@ When you must:
   explicit, reviewable decision — never a silent regression. Do **not** evade the
   ratchet by reformatting to dodge its regex; that is worse than the raw value.
 
-### Prove you didn't regress
+### Review what you changed
 
-A token-only refactor should be a visual no-op: each replaced literal must resolve
-to the same computed value. The ratchet
+Adopting a token or a shared primitive can shift a value slightly — a control
+picking up the primitive's size, say. That's expected and fine; the goal is a
+consistent system, not a pixel-identical one, so don't contort the code to keep
+an exact visual match. Just make the change deliberately: review the diff — and,
+for a visible change, the running UI — to confirm you changed only what you
+intended. The ratchet
 ([`src/design-system-ratchet.test.ts`](src/design-system-ratchet.test.ts)) runs
 under `npm run test` and fails when raw hex / font-size / border-radius / z-index
-values grow, so a regression that reintroduces a literal is caught automatically.
-Review the diff — and, for a genuine visual change, the running UI — to confirm you
-changed only what you intended.
+values grow, so an accidentally reintroduced literal is still caught.
 
 ---
 
