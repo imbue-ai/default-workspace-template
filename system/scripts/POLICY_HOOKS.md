@@ -4,8 +4,8 @@ Minds runs a set of **hooks** on its agents: checkpoints fired around a tool cal
 turn where we can block a command, rewrite it, or inject a reminder into the model's
 context. claude is the reference harness — it runs every hook here. This file is the single
 source of truth for **each hook claude runs and how codex and pi reflect it** (or why one is
-deliberately claude-only). The hook *logic* lives in the `claude_*` scripts in this directory;
-codex reuses those scripts verbatim, pi re-expresses them in TypeScript.
+deliberately claude-only). The hook *logic* lives in the `agent_*` scripts in this directory;
+codex reuses those scripts verbatim, pi runs their checkers or re-expresses them in TypeScript.
 
 ## Status legend
 
@@ -20,20 +20,21 @@ codex reuses those scripts verbatim, pi re-expresses them in TypeScript.
 |---|------|-------|------|--------|-------|----|
 | 1 | Block a command piping into `tail`/`head` | PreToolUse | safety | live | live | live |
 | 2 | Block `git rebase` / `commit --amend`/`--fixup` / `pull --rebase` | PreToolUse | safety | live | live | live |
-| 3 | Rewrite every Bash command: OOM self-tag + git identity | PreToolUse | safety | live | live | live |
-| 4 | Nudge when doing substantive work with no in-progress step | PreToolUse | workflow | live | live | live |
-| 5 | Block a `tk start`/`close` that is chained or redirected | PreToolUse | workflow | live | live | live |
-| 6 | Carry over still-open steps into the next turn | UserPromptSubmit | workflow | live | live | live |
-| 7 | Surface steps the previous turn left open | Stop (pi: at turn-start, via #6) | workflow | live | live | live |
-| 8 | Session-start setup (`uv sync`, tk-on-path, plugin update, shed notice) | SessionStart | setup | live | n/a | n/a |
-| 9 | Force the agent back to the repo root before it stops | Stop | workflow | live | n/a | n/a |
+| 3 | Block a latchkey permission request that is batched, chained, or redirected | PreToolUse | safety | live | live | live |
+| 4 | Rewrite every Bash command: OOM self-tag + git identity | PreToolUse | safety | live | live | live |
+| 5 | Nudge when doing substantive work with no in-progress step | PreToolUse | workflow | live | live | live |
+| 6 | Block a `tk start`/`close` that is chained or redirected | PreToolUse | workflow | live | live | live |
+| 7 | Carry over still-open steps into the next turn | UserPromptSubmit | workflow | live | live | live |
+| 8 | Surface steps the previous turn left open | Stop (pi: at turn-start, via #7) | workflow | live | live | live |
+| 9 | Session-start setup (`uv sync`, tk-on-path, plugin update, shed notice) | SessionStart | setup | live | n/a | n/a |
+| 10 | Force the agent back to the repo root before it stops | Stop | workflow | live | n/a | n/a |
 
-Hooks 1–3 (safety) and 4–7 (tk workflow discipline) are the cross-harness set. Hooks 8–9 are
+Hooks 1–4 (safety) and 5–8 (tk workflow discipline) are the cross-harness set. Hooks 9–10 are
 claude-only by construction — see the last section. Note the **Stop** event: claude runs two Stop
-hooks (#7 open-items, #9 cwd); on pi neither *reaches the agent* on stop — #9 does not apply, and
-#7's agent-visible reminder is delivered at the **start of the next turn** (#6) because pi's stop
+hooks (#8 open-items, #10 cwd); on pi neither *reaches the agent* on stop — #10 does not apply, and
+#8's agent-visible reminder is delivered at the **start of the next turn** (#7) because pi's stop
 event (`agent_settled`) can only write to stderr. pi still registers an `agent_settled` handler
-for #7, but it is a stderr-only log (clobbered in the TUI), not a channel to the agent.
+for #8, but it is a stderr-only log (clobbered in the TUI), not a channel to the agent.
 
 ## How each harness attaches
 
@@ -42,27 +43,64 @@ Runs the `.sh`/`.py` scripts in this directory, one entry per hook under the mat
 (`PreToolUse`, `UserPromptSubmit`, `Stop`, `SessionStart`). A script reads the event JSON on
 stdin. This is the reference implementation and needs no changes.
 
-### codex  (wiring: `mngr_codex/.../codex_config.py` → `build_codex_hooks_config()`)
+### codex  (wiring: `.codex/hooks.json` in this repo)
 Codex speaks the **same hook protocol** as claude — same event names, same stdin payload
 (`tool_name`, `.tool_input.command`, claude-shaped even under code mode), same output
 channels — so codex **reuses the exact same scripts**, referenced from the work dir
 (`$MNGR_AGENT_WORK_DIR/system/scripts/…`). No copy, no new logic: editing a script updates
-claude and codex at once. `build_codex_hooks_config` just adds the entries. Codex requires its
-command hooks be trusted; the plugin passes `--dangerously-bypass-hook-trust` (consent-gated)
-so mngr's own hooks run.
+claude and codex at once.
 
-### pi  (wiring: `mngr_pi_coding/.../resources/mngr_pi_lifecycle.ts`)
-Pi has **no shell-hook surface** — its only extension point is a TypeScript module loaded with
-`pi -e <per-agent-path>`. So pi **cannot run the scripts**; it re-expresses each rule against
-the pi SDK event that matches. Reminder *text* and regexes are copied verbatim from the scripts
-so all three harnesses read identically; where a rule needs tk state, pi shells out to the same
-vendored `ticket` binary the scripts use. The SDK is documented in the package's
-`dist/core/extensions/types.d.ts`; we do NOT modify it.
+Codex loads hooks from every active config layer and a higher-precedence layer does not
+replace a lower one, so this repo's `.codex/hooks.json` runs alongside the per-agent file
+mngr writes for its own bookkeeping hook. Adding a guard is an edit to
+`.claude/settings.json` and `.codex/hooks.json` (and `.pi/extensions/policy_guards.ts`
+below) — never a mngr release.
 
-**Minds-only, by construction.** The pi extension is loaded via the `-e` flag mngr adds *only*
-to a managed agent's launch command (`plugin.py::assemble_command`). A user running plain `pi`
-never loads it, and a nested `pi` the agent spawns via the bash tool (no `-e`) never runs these
-handlers. Normal pi behavior and the pi SDK are untouched.
+A project layer's hooks need the layer trusted and each hook trusted by hash; mngr already
+marks the work dir trusted and passes `--dangerously-bypass-hook-trust`, which covers both.
+
+### pi  (wiring: `.pi/extensions/policy_guards.ts` in this repo)
+Pi has **no shell-hook surface** — its only extension point is a TypeScript module. It
+therefore cannot run a hook *wrapper* (those read a hook payload on stdin, which pi has no
+equivalent of), and splits our rules two ways:
+
+* **This repo's guards** live in `.pi/extensions/policy_guards.ts`, which pi auto-discovers
+  from the project. It spawns the same `*_check.py` files claude and codex reach through
+  their wrappers, passing the agent's command as `$1` and blocking on exit 2 with the
+  checker's stderr as the reason. pi calls every extension's `tool_call` handler and blocks
+  when any returns `{block, reason}`, so this runs alongside mngr's lifecycle extension.
+  One checker file, three harnesses.
+* **This repo's tk step discipline** lives in `.pi/extensions/tk_workflow.ts` — the
+  require-steps nudge on `tool_result`, the open-steps carryover on `before_agent_start`,
+  and the stop nudge on `agent_settled`. pi composes across extensions (`tool_result`
+  handlers chain like middleware, `before_agent_start` chains the system prompt), so it
+  runs alongside mngr's without either clobbering the other. Reminder *text* is copied
+  verbatim from the scripts so all three harnesses read identically, and step state comes
+  from the same vendored `ticket` binary they read.
+* **Rules that hold for any pi agent** (the pipe-into-`tail`/`head` block, the git
+  history-rewrite block, and the OOM/git-identity rewrite) stay re-expressed in mngr's
+  lifecycle extension against the pi SDK event that matches.
+
+**Which command a guard sees.** On claude and codex, the rewriter (#4) is deliberately the
+**last** PreToolUse hook, so every blocker ahead of it inspects the command the agent wrote.
+pi offers no such ordering: it calls every extension's `tool_call` handler on one shared,
+mutable event, and mngr's rewrite prepends the OOM tag and git identity as their own
+`;`-joined commands — which our checkers would refuse as "another command runs before it",
+blocking every permission request and every `tk start`/`tk close`. So mngr's handler records
+the pre-rewrite command on the event as **`mngrOriginalCommand`**, and
+`policy_guards.ts` prefers it, falling back to `input.command` (the untouched value) when it
+is absent because this extension ran first. Either order gives the guards the agent's own
+command. Keep the two ends of that contract in step.
+
+The SDK is documented in the package's `dist/core/extensions/types.d.ts`; we do NOT modify it.
+
+**Which pi runs which extension.** mngr's lifecycle extension is loaded via the `-e` flag mngr
+adds *only* to a managed agent's launch command (`plugin.py::assemble_command`), so a user
+running plain `pi`, or a nested `pi` the agent spawns via the bash tool, never runs its
+handlers. This repo's two extensions are the opposite by design: pi auto-discovers
+`.pi/extensions/` from the project (it is one of the cwd trust inputs pi asks about), so any pi
+that runs *here* — managed or not — is held to the guards and the step discipline. Normal pi
+behavior and the pi SDK are untouched either way.
 
 ## Output contracts (the reference the mapping below relies on)
 
@@ -91,17 +129,47 @@ source — all in agreement):
 
 ## Category A — shell-command safety policies (live in all three)
 
-### 1. Block pipe into `tail`/`head` — `claude_block_pipe_tail_head.sh`
+### 1. Block pipe into `tail`/`head` — `agent_block_pipe_tail_head.sh`
 Redirect to a file and read that instead.
 - **claude / codex**: the script — matches `\|\s*(tail|head)`, writes the reason to stderr, `exit 2`.
 - **pi**: same regex in `commandBlockReason()`; returns `{block, reason}`.
 
-### 2. Block git history rewrites — `claude_prevent_commit_rewrite.sh`
+### 2. Block git history rewrites — `agent_prevent_commit_rewrite.sh`
 Blocks `git rebase`, `git commit --amend|--fixup`, `git pull --rebase`.
 - **claude / codex**: the script (stderr + `exit 2`).
 - **pi**: the same set of regexes in `commandBlockReason()`.
 
-### 3. Rewrite every Bash command — `claude_rewrite_bash_command.py`
+### 3. Block a batched/chained/redirected permission request — `agent_latchkey_request_standalone.sh`
+A **hard** block when a POST to the reserved `latchkey-self.invalid/permission-requests` host
+(the call that FILES a permission request) shares its tool call with a second request, with
+another command, has its output redirected, or runs in the background. The chat builds the card the user acts on out of
+that one call: only the first echoed request object in the result is read, and one card is
+rendered per call — so a second request is never shown, and `> /tmp/req.json` / `| jq
+.request_id` takes the echoed object away, leaving the card with no button. Every other latchkey
+call, including reading the queue, is untouched. The tokenizing lives in
+`agent_latchkey_request_check.py` (`shlex` again, so a rationale that mentions `&&` or `>` stays
+inside its quoted token).
+
+The redirect half is blunt on purpose: `CommandSegment.has_redirect` records only *that* a
+segment is redirected, so an *input* redirect (`-d @- < body.json`, or a heredoc, whose body
+also re-enters the parse as further commands) is blocked alongside the output ones, even though
+it leaves the echo intact. The block message names that form, and the fix is the same either
+way — pass the body inline with `-d '{...}'`.
+
+One violation is not in the command text at all: a **backgrounded** tool call
+(claude's Bash `run_in_background: true`) returns a shell id, so the echo lands in a later
+`BashOutput` call rather than in the card's own result — the same failure as a trailing `&`,
+which the command-text checks already block. The `.sh` therefore also reads
+`.tool_input.run_in_background` out of the payload and passes `--backgrounded` to the `.py`,
+which blocks when a request is filed that way. A harness whose payload has no such field never
+sets it.
+- **claude / codex**: the `.sh`, which execs the `.py`; stderr + `exit 2` blocks.
+- **pi**: `on("tool_call")` runs the **same** `agent_latchkey_request_check.py` synchronously
+  (only when the command mentions the host) and maps its exit-2/stderr to `{block, reason}` —
+  the same bridge shape as the tk-standalone checker below. It passes the command alone: the
+  `--backgrounded` flag has no counterpart in pi's `tool_call` input.
+
+### 4. Rewrite every Bash command — `agent_rewrite_bash_command.py`
 Prepends an OOM self-tag (so the agent's subprocesses are shed first under memory pressure)
 and the agent's git identity (`GIT_AUTHOR_*`/`GIT_COMMITTER_*`), then runs the original
 command verbatim.
@@ -110,7 +178,7 @@ command verbatim.
   `updatedInput` that has no `permissionDecision`, so the flag makes the script also emit
   `permissionDecision: "allow"`. claude runs it without the flag, because in claude a
   PreToolUse `allow` would auto-approve the tool and skip the permission prompt. The `allow`
-  does **not** weaken hooks 1–2: they are earlier PreToolUse hooks and codex honors an earlier
+  does **not** weaken hooks 1–3: they are earlier PreToolUse hooks and codex honors an earlier
   block over a later allow (verified live — a blocked `git commit --amend` / `| head` never
   runs even with the rewriter allowing).
 - **pi**: `rewriteBashCommand()` mutates `event.input.command` with the same OOM + identity
@@ -125,7 +193,7 @@ codex-specific output-channel quirks were found and handled while wiring these (
 below): the carryover reminder needs a `--codex` flag, and the stop nudge must never exit
 non-zero.
 
-### 4. Require a step before substantive work — `claude_require_steps_pretool.sh`
+### 5. Require a step before substantive work — `agent_require_steps_pretool.sh`
 A **soft** reminder (never blocks) when a substantive tool call happens with no in-progress
 step. Skipped for read-only tools (`Read`/`Glob`/`Grep`/…) and for Bash commands that invoke
 `tk` itself.
@@ -137,20 +205,21 @@ step. Skipped for read-only tools (`Read`/`Glob`/`Grep`/…) and for Bash comman
   result cannot inject non-blocking context, so the reminder rides the tool result instead —
   same visible effect, one tool-round later).
 
-### 5. Block a non-standalone `tk start`/`close` — `claude_tk_standalone.sh`
+### 6. Block a non-standalone `tk start`/`close` — `agent_tk_standalone.sh`
 A **hard** block when a `tk start`/`close` is chained (`cd …;`, `&&`, `|`, …) or redirected,
 which would drop the step's transition out of the progress view. `create` is exempt. The
-tokenizing lives in `claude_tk_standalone_check.py` (uses `shlex`, which a bash regex can't do
+tokenizing lives in `agent_tk_standalone_check.py` (uses `shlex`, which a bash regex can't do
 reliably).
 - **claude / codex**: the `.sh`, which execs the `.py`; stderr + `exit 2` blocks. Codex honors
   the exit-2 block identically.
-- **pi**: `on("tool_call")` runs the **same** `claude_tk_standalone_check.py` synchronously
-  (`spawnSync("python3", [checker, command])`, only when the command mentions `tk`/`ticket`) and
-  maps its exit-2/stderr to `{block, reason}` — reusing the checker keeps the shlex tokenizer
-  single-sourced. Step state for the other guards comes from `spawnSync("bash", [ticket, ...])`
-  (via `bash` so it runs regardless of the mount's exec bit).
+- **pi**: `.pi/extensions/policy_guards.ts` runs the **same** `agent_tk_standalone_check.py`
+  synchronously from `on("tool_call")` — through `bash --noprofile --norc -c`, with the command
+  passed as `$1`, and only when the command mentions `tk`/`ticket` — and maps its exit-2/stderr
+  to `{block, reason}`; reusing the checker keeps the shlex tokenizer single-sourced. Step state
+  for the other guards comes from `spawnSync("bash", [ticket, ...])` in
+  `.pi/extensions/tk_workflow.ts` (via `bash` so it runs regardless of the mount's exec bit).
 
-### 6. Carry over open steps into the next turn — `claude_open_tickets_reminder.sh`
+### 7. Carry over open steps into the next turn — `agent_open_tickets_reminder.sh`
 When a new user message arrives and this agent has still-open step records, inject a reminder
 listing them so the agent reconciles before acting.
 - **claude**: UserPromptSubmit, prints the reminder to stdout (added to context).
@@ -163,13 +232,13 @@ listing them so the agent reconciles before acting.
   return `{systemPrompt: base + reminder}` to **append the reminder to this turn's system prompt**,
   the guaranteed model-visible channel (`BeforeAgentStartEventResult` accepts either `message` or
   `systemPrompt`; we use `systemPrompt`, and pi resets the override each turn). This is also where pi does the
-  "steps left open" surfacing that claude runs as a Stop hook (#7): pi has no usable stop-time
+  "steps left open" surfacing that claude runs as a Stop hook (#8): pi has no usable stop-time
   channel to the agent, so both the carryover and the leftover-open reminder are delivered here,
   at the start of the next turn.
 
-### 7. Nudge on stop with open steps — `claude_open_tickets_stop_nudge.sh`
+### 8. Nudge on stop with open steps — `agent_open_tickets_stop_nudge.sh`
 A non-blocking, log-only note (exit 0 always) when the agent stops with steps still open.
-Real follow-up is handled by hook 6 on the next turn.
+Real follow-up is handled by hook 7 on the next turn.
 - **claude**: Stop, writes to stderr, `exit 0`.
 - **codex**: the **same** script — stderr only, `exit 0`, no stdout. Codex accepts an
   empty-stdout, exit-0 Stop hook as a clean no-op (confirmed live on 0.146.0 and against the
@@ -183,27 +252,27 @@ Real follow-up is handled by hook 6 on the next turn.
   with no result type), so a handler can only write to stderr — and in pi's full-screen TUI,
   running in a tmux pane, that stderr is clobbered and never reaches the agent or the chat. So on
   pi the "steps left open" reminder is surfaced at the **start of the next turn** via
-  `before_agent_start` (see #6), the same channel the carryover uses — not on stop. pi does
+  `before_agent_start` (see #7), the same channel the carryover uses — not on stop. pi does
   register an `agent_settled` handler here, but only as a stderr log; it is not the agent-visible
-  reminder (that rides #6).
+  reminder (that rides #7).
 
 ## Category C — the Stop event, and claude-only hooks (by construction)
 
-Claude fires **two** hooks on the **Stop** event: the open-items nudge (#7, above) and the
-return-to-repo-root cwd check (#9, below). On **pi**, neither runs as a Stop hook — #9 does not
-apply (pi has no persistent cwd), and #7 is folded into the **turn-start** check (#6), because
-pi's stop event cannot reach the agent. **codex** runs #7 as a real Stop hook, but not #9 (same
-cwd reasoning). So of claude's two Stop hooks, only #7's *purpose* is cross-harness, and pi
+Claude fires **two** hooks on the **Stop** event: the open-items nudge (#8, above) and the
+return-to-repo-root cwd check (#10, below). On **pi**, neither runs as a Stop hook — #10 does not
+apply (pi has no persistent cwd), and #8 is folded into the **turn-start** check (#7), because
+pi's stop event cannot reach the agent. **codex** runs #8 as a real Stop hook, but not #10 (same
+cwd reasoning). So of claude's two Stop hooks, only #8's *purpose* is cross-harness, and pi
 delivers it at turn start rather than on stop.
 
-### 8. Session-start setup — SessionStart
+### 9. Session-start setup — SessionStart
 `uv sync --all-packages`, `ensure_tk_on_path.sh`, `claude_update_plugin.sh` (a Claude-Code
 *plugin* updater with no codex/pi analogue), and the OOM shed-notice hook. Provisioning is each
 harness's own concern: codex/pi get their environment from their plugins, and `tk` is already
 baked onto `PATH` in the image (and the hooks call the vendored `ticket` script by absolute
 path anyway), so there is nothing to port here.
 
-### 9. Return-to-repo-root before stop — Stop
+### 10. Return-to-repo-root before stop — Stop
 claude blocks the stop (`exit 2`) until the agent `cd`s back to the repo root, so the *other*
 Stop hooks resolve paths correctly. This does not port:
 - **codex** resets the shell cwd per command (each Bash call starts at the work dir), so there
@@ -215,12 +284,23 @@ Stop hooks resolve paths correctly. This does not port:
 ## Keeping the three in step
 
 When a rule changes, update every harness that carries it:
-- **Safety 1–2** and **workflow 4–6**: the `claude_*` scripts (shared by claude **and** codex)
-  and the matching handler in `mngr_pi_lifecycle.ts` (pi).
-- **Safety 3** (`claude_rewrite_bash_command.py`) and **workflow 5** checker
-  (`claude_tk_standalone_check.py`): shared by claude and codex; pi calls #5's checker directly
-  and mirrors #3's prefix logic in `rewriteBashCommand()`.
-- codex wiring lives in `build_codex_hooks_config()`; pi wiring in the `pi.on(...)` handlers.
+- **Safety 1–2** (`agent_block_pipe_tail_head.sh`, `agent_prevent_commit_rewrite.sh`): the
+  scripts (shared by claude **and** codex) and `commandBlockReason()` in mngr's
+  `mngr_pi_lifecycle.ts` (pi) — these hold for any pi agent, so mngr still carries them.
+- **Workflow 5, 7–8** (`agent_require_steps_pretool.sh`, `agent_open_tickets_reminder.sh`,
+  `agent_open_tickets_stop_nudge.sh`): the scripts (claude **and** codex) and the matching
+  handler in **this repo's** `.pi/extensions/tk_workflow.ts` (pi). The step discipline is
+  this repo's, not mngr's — mngr's lifecycle extension no longer carries any of it.
+- **Safety 3** (`agent_latchkey_request_check.py`) and **workflow 6**
+  (`agent_tk_standalone_check.py`): one checker file each, reached by claude and codex through
+  their `.sh` wrappers and called directly by pi — so the tokenizing rule is single-sourced.
+- **Safety 4** (`agent_rewrite_bash_command.py`): shared by claude and codex; pi mirrors its
+  prefix logic in `rewriteBashCommand()`. Keep it **last** in both hook configs, and keep
+  mngr recording `mngrOriginalCommand` for pi — a blocker that inspects the rewritten
+  command refuses everything (see "Which command a guard sees" above).
+- codex and pi wiring lives in **this repo**: `.codex/hooks.json` and
+  `.pi/extensions/policy_guards.ts`. A guard added to `.claude/settings.json` needs the
+  matching entry in both, and nothing in mngr.
 - claude and codex share one runtime (shell + JSON) so they share files; pi is a separate
   runtime (in-process TypeScript), so its copy is unavoidable — but small, and its rules and
   reminder text are verbatim copies.
