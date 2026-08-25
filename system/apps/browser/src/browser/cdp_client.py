@@ -51,6 +51,13 @@ class CdpClient:
         self._reconnecting = False
         self._closed = False
         self._lock = asyncio.Lock()
+        # Tab order, and it has to be tracked rather than read. `Target.getTargets` returns
+        # targets in an ARBITRARY order -- measured: tabs created com, org, net came back
+        # net, com, org. Indexing into that list restores the wrong tab after a restart and
+        # makes `ls --include-tabs` disagree with the strip the human is looking at.
+        # `Target.setDiscoverTargets` gives us targetCreated/targetDestroyed instead, so we
+        # keep the order Chrome actually made them in.
+        self._order: list[str] = []
 
     # --- lifecycle -------------------------------------------------------
 
@@ -66,6 +73,8 @@ class CdpClient:
             websockets.connect(url, max_size=None, ping_interval=None), timeout=_CONNECT_TIMEOUT_S
         )
         self._reader = asyncio.create_task(self._read_loop())
+        # Replays targetCreated for everything already open, then streams new ones.
+        await self.send("Target.setDiscoverTargets", {"discover": True})
 
     async def close(self) -> None:
         self._closed = True
@@ -96,9 +105,12 @@ class CdpClient:
         try:
             async for raw in self._ws:
                 msg = json.loads(raw)
-                fut = self._pending.pop(msg.get("id"), None) if "id" in msg else None
-                if fut is not None and not fut.done():
-                    fut.set_result(msg)
+                if "id" in msg:
+                    fut = self._pending.pop(msg["id"], None)
+                    if fut is not None and not fut.done():
+                        fut.set_result(msg)
+                    continue
+                self._track_target(msg)
         except asyncio.CancelledError:
             raise
         except Exception as e:  # noqa: BLE001  (any read failure means the socket is gone)
@@ -108,6 +120,18 @@ class CdpClient:
                 if not fut.done():
                     fut.set_exception(CdpError("connection closed"))
             self._pending.clear()
+
+    def _track_target(self, msg: dict[str, Any]) -> None:
+        """Maintain tab order from the target lifecycle events."""
+        method = msg.get("method")
+        if method == "Target.targetCreated":
+            target_id = (msg.get("params", {}).get("targetInfo") or {}).get("targetId")
+            if target_id and target_id not in self._order:
+                self._order.append(target_id)
+        elif method == "Target.targetDestroyed":
+            target_id = msg.get("params", {}).get("targetId")
+            if target_id in self._order:
+                self._order.remove(target_id)
 
     async def _reconnect(self) -> bool:
         """Best-effort reconnect. Returns True if the socket is usable again."""
@@ -177,7 +201,11 @@ class CdpClient:
         background_page, one service_worker, one page).
         """
         result = await self.send("Target.getTargets")
-        return [t for t in result.get("targetInfos", []) if _is_real_page(t)]
+        pages = [t for t in result.get("targetInfos", []) if _is_real_page(t)]
+        # Creation order, not getTargets order (see `_order`). Anything we somehow never saw
+        # created sorts last rather than being dropped.
+        position = {tid: i for i, tid in enumerate(self._order)}
+        return sorted(pages, key=lambda t: position.get(t["targetId"], len(position)))
 
     async def activate(self, target_id: str) -> None:
         await self.send("Target.activateTarget", {"targetId": target_id})

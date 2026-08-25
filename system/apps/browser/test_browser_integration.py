@@ -15,6 +15,7 @@ Three kinds:
 """
 
 import asyncio
+import contextlib
 import json
 import os
 import socket
@@ -407,10 +408,13 @@ def test_profile_persists_across_manager_restart(monkeypatch: pytest.MonkeyPatch
             live = (await browser._cdp.send("Storage.getCookies")).get("cookies", [])
             assert any(c.get("name") == "fleet_test" for c in live), f"cookie not set in the live session: {live}"
             await first._save_manifest()
-            # Chromium writes the cookie to the on-disk profile DB lazily, and teardown is a
-            # hard kill that does not flush, so ask Chromium to flush before we stop it. A
-            # real daemon that has run for minutes has long since flushed on its own timer.
-            await browser._cdp.send("Storage.flushCookies")
+            # Chromium writes the cookie to the on-disk profile DB lazily and teardown is a
+            # hard kill, so close the browser GRACEFULLY first -- that is what flushes it.
+            # (There is no Storage.flushCookies; the CDP method does not exist.) A real
+            # daemon that has run for minutes has long since flushed on its own timer.
+            with contextlib.suppress(Exception):
+                await browser._cdp.send("Browser.close")
+            await asyncio.sleep(1)
         finally:
             await first.shutdown()
 
