@@ -1021,6 +1021,17 @@ BUNDLE_STAMP_FILENAME = ".source-tree-hash"
 # path changed (idempotent; the content-addressed provision guard skips what
 # already matches).
 PROVISIONER_SCRIPT = "system/scripts/setup_system.sh"
+# The environment the provisioner runs under when re-run live: the image
+# build's, not the calling agent's. Root's passwd home moves to /home/user at
+# runtime, so an agent-driven run carries HOME=/home/user, and an installer
+# that follows $HOME then lands beside neither the checks nor the PATH entries
+# the script fixes to /root/.local (this is what a Claude pin bump hit). Only
+# the two values that diverge are pinned; everything else ambient (proxies,
+# apt configuration) is kept.
+_PROVISIONER_HOME = "/root"
+_PROVISIONER_PATH = (
+    "/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+)
 
 DEFAULT_WORKSPACE_URL = "http://127.0.0.1:8000"
 ENV_WORKSPACE_URL = "MINDS_WORKSPACE_SERVER_URL"
@@ -1043,6 +1054,14 @@ SNAPSHOTS_DIRNAME = "snapshots"
 # content match the pre-apply HEAD again -- so without a separate file the one
 # state that most needs to speak is the one nothing can see.
 EMERGENCY_FILENAME = "emergency.json"
+# The provisioning-incomplete record, written when an update landed healthy
+# but its provisioner run failed. A failed tool install leaves the tree and
+# services consistent and re-running the provisioner is cheap and
+# merge-independent, so it does not roll the whole release back -- but the
+# gap must not be silent either: this record (the same durable shape as the
+# emergency one) is what the skill reads to re-run the provisioner after the
+# fix, and it comes down only when a provisioner run succeeds.
+PROVISION_INCOMPLETE_FILENAME = "provision-incomplete.json"
 
 # The apply's phases, recorded in the marker as each completes so an
 # interrupted apply can be read (by recovery, and by the system interface's
@@ -1092,6 +1111,21 @@ _PREFLIGHT_INTERVAL_SECONDS = 1.0
 _FRONTEND_PROBE_ATTEMPTS = 5
 _FRONTEND_PROBE_INTERVAL_SECONDS = 1.0
 _PREFLIGHT_OUTPUT_TAIL_LINES = 40
+
+# Per-step wall-clock budgets for the forward apply steps. Nothing about an
+# update should take anywhere near an hour, yet the old reveal ran for 1h28m
+# before anyone asked whether it was stuck -- so a hung step (an `npm ci`
+# stalled under load, a provisioner download that never completes) has to
+# become a rollback with a named phase rather than an open-ended wait. Sized
+# generously; the per-phase timings the marker records are the input for
+# tuning them down. The rollback and recovery paths carry no budgets: there is
+# no further rollback to absorb a timeout there.
+_NPM_CI_TIMEOUT_SECONDS = 1200.0
+_FRONTEND_BUILD_TIMEOUT_SECONDS = 1200.0
+_ENVIRONMENT_REFRESH_TIMEOUT_SECONDS = 1200.0
+_PROVISIONER_TIMEOUT_SECONDS = 1800.0
+_RESTART_TIMEOUT_SECONDS = 600.0
+_ENV_CONVERGE_TIMEOUT_SECONDS = 1200.0
 
 # ``recover --if-stale``'s default grace: how long a marker must have gone
 # without an update (with its process dead) before the cron path rolls the
@@ -1512,6 +1546,9 @@ class ApplyMarker:
     # its own interrupted run may have broken. ``None`` = not yet measured.
     frontend_expected: bool | None = None
     snapshots: list[SnapshotRecord] = field(default_factory=list)
+    # When each phase was reached (epoch seconds), so every apply yields
+    # per-phase durations and an interrupted one names the phase it hung in.
+    phase_timings: dict[str, float] = field(default_factory=dict)
 
     def to_json(self) -> str:
         payload = {
@@ -1528,6 +1565,7 @@ class ApplyMarker:
             "provisioner_ran": self.provisioner_ran,
             "live_service_restarted": self.live_service_restarted,
             "frontend_expected": self.frontend_expected,
+            "phase_timings": dict(self.phase_timings),
             "snapshots": [
                 {"name": s.name, "source": s.source, "copy": s.copy}
                 for s in self.snapshots
@@ -1552,6 +1590,10 @@ class ApplyMarker:
             provisioner_ran=bool(raw.get("provisioner_ran", False)),
             live_service_restarted=bool(raw.get("live_service_restarted", False)),
             frontend_expected=raw.get("frontend_expected"),
+            phase_timings={
+                str(phase): float(at)
+                for phase, at in (raw.get("phase_timings") or {}).items()
+            },
             snapshots=[
                 SnapshotRecord(
                     name=str(s["name"]), source=str(s["source"]), copy=str(s["copy"])
@@ -1667,6 +1709,91 @@ def clear_emergency(repo_root: Path) -> None:
     workspace that still needs it.
     """
     emergency_path(repo_root).unlink(missing_ok=True)
+
+
+def provision_incomplete_path(repo_root: Path) -> Path:
+    return repo_root / STATE_DIR_REL / PROVISION_INCOMPLETE_FILENAME
+
+
+def write_provision_incomplete(
+    repo_root: Path,
+    reason: str,
+    dri_agent: str,
+    merge_ref: str,
+    now: Callable[[], float],
+) -> None:
+    """Record that an update landed with its provisioner run failed, atomically.
+
+    Best-effort like the emergency record: the failure is already on stderr in
+    full, and a filesystem that will not take the record must not turn a
+    landed update into a traceback.
+    """
+    path = provision_incomplete_path(repo_root)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        scratch = path.with_suffix(".json.tmp")
+        scratch.write_text(
+            json.dumps(
+                {
+                    "reason": reason,
+                    "recorded_at": now(),
+                    "dri_agent": dri_agent,
+                    "merge_ref": merge_ref,
+                    "provisioner": PROVISIONER_SCRIPT,
+                },
+                indent=2,
+            )
+        )
+        scratch.replace(path)
+    except OSError as exc:
+        sys.stderr.write(
+            f"warning: could not record the incomplete provisioning at {path} ({exc}).\n"
+        )
+
+
+def clear_provision_incomplete(repo_root: Path) -> None:
+    """Drop the record; a provisioner run has completed cleanly."""
+    provision_incomplete_path(repo_root).unlink(missing_ok=True)
+
+
+def provisioner_env() -> dict:
+    """The canonical environment for a live provisioner run (see
+    :data:`_PROVISIONER_HOME`)."""
+    env = dict(os.environ)
+    env["HOME"] = _PROVISIONER_HOME
+    env["PATH"] = _PROVISIONER_PATH
+    return env
+
+
+def _run_provisioner(runner: Runner, repo_root: Path) -> str | None:
+    """Re-run the pinned-toolchain provisioner live; return why it failed, or
+    ``None`` on success.
+
+    Never raises: the forward apply carries on past a failed provisioner (a
+    failed tool install leaves the tree and services consistent; whether the
+    update is good is what the probes decide) and records the failure instead,
+    so the caller needs the reason, not an exception.
+    """
+    try:
+        result = runner.run(
+            ["bash", PROVISIONER_SCRIPT],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            check=False,
+            env=provisioner_env(),
+            timeout=_PROVISIONER_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return (
+            f"bash {PROVISIONER_SCRIPT} did not finish within "
+            f"{_PROVISIONER_TIMEOUT_SECONDS:g}s (hung or stalled)"
+        )
+    returncode = getattr(result, "returncode", 0)
+    if returncode == 0:
+        return None
+    stderr = _tail((getattr(result, "stderr", "") or "").strip(), 20)
+    return f"bash {PROVISIONER_SCRIPT} failed (exit {returncode}): {stderr}"
 
 
 def _default_is_pid_a_live_apply(pid: int) -> bool:
@@ -1923,11 +2050,26 @@ def _run_checked(
     *,
     live_service_restarted: bool = False,
     env: dict | None = None,
+    timeout: float | None = None,
 ) -> None:
-    """Run an apply command; raise :class:`ApplyFailed` on a non-zero exit."""
-    result = runner.run(
-        list(argv), cwd=str(cwd), capture_output=True, text=True, check=False, env=env
-    )
+    """Run an apply command; raise :class:`ApplyFailed` on a non-zero exit, or
+    when it outlives its ``timeout`` budget (a hung step is a failure with a
+    name, not an open-ended wait)."""
+    try:
+        result = runner.run(
+            list(argv),
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            check=False,
+            env=env,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        raise ApplyFailed(
+            f"{what} did not finish within {timeout:g}s (hung or stalled)",
+            live_service_restarted=live_service_restarted,
+        ) from None
     if getattr(result, "returncode", 0) != 0:
         stderr = (getattr(result, "stderr", "") or "").strip()
         raise ApplyFailed(
@@ -2220,6 +2362,7 @@ def _reinstall_tool(
     repo_root: Path,
     runner: Runner,
     expend: ExpendWrapper,
+    timeout: float | None = None,
 ) -> None:
     """Re-resolve the installed ``executable``'s tool from its in-tree source,
     keeping the extras it was installed with.
@@ -2244,24 +2387,31 @@ def _reinstall_tool(
         repo_root,
         f"uv tool install {tool_name} --reinstall",
         env=env,
+        timeout=timeout,
     )
 
 
 def _refresh_backend_dependencies(
-    repo_root: Path, runner: Runner, expend: ExpendWrapper
+    repo_root: Path,
+    runner: Runner,
+    expend: ExpendWrapper,
+    timeout: float | None = None,
 ) -> None:
     """Re-resolve the three backend environments from the current tree,
     mirroring ``build_workspace.sh``: the vendored ``mngr`` tool, the
-    ``system-interface`` tool, and the workspace venv (``uv sync``)."""
+    ``system-interface`` tool, and the workspace venv (``uv sync``).
+    ``timeout`` bounds each of the three (the forward apply's budget; recovery
+    passes none)."""
     _reinstall_tool(
-        MNGR_TOOL_NAME, MNGR_EXECUTABLE, MNGR_DIR, repo_root, runner, expend
+        MNGR_TOOL_NAME, MNGR_EXECUTABLE, MNGR_DIR, repo_root, runner, expend, timeout
     )
-    _reinstall_tool(TOOL_NAME, TOOL_NAME, APP_DIR, repo_root, runner, expend)
+    _reinstall_tool(TOOL_NAME, TOOL_NAME, APP_DIR, repo_root, runner, expend, timeout)
     _run_checked(
         runner,
         expend(["uv", "sync", "--all-packages", "--frozen"]),
         repo_root,
         "uv sync --all-packages --frozen",
+        timeout=timeout,
     )
 
 
@@ -2626,7 +2776,11 @@ def _assert_bundle_built(
 
 
 def _install_or_build_bundle(
-    worker_bundle: str | None, repo_root: Path, runner: Runner, expend: ExpendWrapper
+    worker_bundle: str | None,
+    repo_root: Path,
+    runner: Runner,
+    expend: ExpendWrapper,
+    timeout: float | None = None,
 ) -> None:
     """Put the merged frontend's bundle in place.
 
@@ -2660,6 +2814,7 @@ def _install_or_build_bundle(
         expend(["npm", "run", "build"]),
         repo_root / FRONTEND_DIR,
         "npm run build",
+        timeout=timeout,
     )
 
 
@@ -2697,6 +2852,7 @@ def _recover_running_state(
                 capture_output=True,
                 text=True,
                 check=False,
+                env=provisioner_env(),
             )
             if getattr(result, "returncode", 0) != 0:
                 sys.stderr.write(
@@ -2755,6 +2911,22 @@ def _recover_running_state(
     if healthy:
         _refresh_workspace_view(repo_root, runner)
     return healthy
+
+
+def _phase_timing_line(marker: ApplyMarker) -> str:
+    """One stderr line of per-phase durations, from the marker's timings.
+
+    The benchmarking input for tuning the poll and step budgets -- and, read
+    from an interrupted apply's marker, what names the phase it hung in.
+    """
+    if not marker.phase_timings:
+        return ""
+    previous = marker.started_at
+    parts: list[str] = []
+    for phase, at in sorted(marker.phase_timings.items(), key=lambda item: item[1]):
+        parts.append(f"{phase} +{at - previous:.1f}s")
+        previous = at
+    return "apply phase timings: " + ", ".join(parts) + "\n"
 
 
 def _report_rolled_back(is_frontend_expected: bool) -> None:
@@ -2905,6 +3077,11 @@ def apply_update(
         )
     write_marker(marker, repo_root, now)
 
+    def _advance(phase: str) -> None:
+        marker.phase = phase
+        marker.phase_timings[phase] = now()
+        write_marker(marker, repo_root, now)
+
     # --- Land the merge (skipped when already landed: idempotent re-entry). ---
     if not is_merge_landed:
         merge_argv = (
@@ -2938,13 +3115,13 @@ def apply_update(
                 )
             )
             return 1
-    marker.phase = PHASE_MERGED
-    write_marker(marker, repo_root, now)
+    _advance(PHASE_MERGED)
 
     name_status = _diff_name_status(repo_root, marker.rollback_to, runner)
     plan = plan_apply([path for _, path in name_status])
 
     unresolved_frontend_failure: str | None = None
+    provisioner_failure: str | None = None
     if plan.any:
         # The regression baseline: whether a working frontend is owed afterwards
         # is decided by what was being served *before* the apply -- measured
@@ -2986,20 +3163,32 @@ def apply_update(
 
         try:
             marker.snapshots = take_snapshots(plan, repo_root, runner, marker.snapshots)
-            marker.phase = PHASE_SNAPSHOTTED
-            write_marker(marker, repo_root, now)
+            _advance(PHASE_SNAPSHOTTED)
 
             if plan.frontend_manifest and usable_worker_bundle is None:
                 _run_checked(
-                    runner, expend(["npm", "ci"]), repo_root / FRONTEND_DIR, "npm ci"
+                    runner,
+                    expend(["npm", "ci"]),
+                    repo_root / FRONTEND_DIR,
+                    "npm ci",
+                    timeout=_NPM_CI_TIMEOUT_SECONDS,
                 )
             if plan.backend_manifest:
-                _refresh_backend_dependencies(repo_root, runner, expend)
-            marker.phase = PHASE_REFRESHED
-            write_marker(marker, repo_root, now)
+                _refresh_backend_dependencies(
+                    repo_root, runner, expend, _ENVIRONMENT_REFRESH_TIMEOUT_SECONDS
+                )
+            _advance(PHASE_REFRESHED)
 
             # The provisioner runs before any restart, so nothing boots into a
-            # tree whose pinned global toolchain has not caught up with it.
+            # tree whose pinned global toolchain has not caught up with it. Its
+            # failure alone does not roll the merge back: a failed tool install
+            # leaves the tree and services consistent, and re-running the
+            # provisioner later is cheap and merge-independent -- whereas the
+            # rollback costs the whole release plus a fresh worker pass. So the
+            # apply carries on to the restart and the probes; a load-bearing
+            # provisioner change (a node bump, a new apt dependency) still
+            # fails those and still rolls back, and a landed update records
+            # the gap (``write_provision_incomplete``) rather than hiding it.
             if plan.provisioner:
                 # Recorded before the run is attempted, like the restart flag:
                 # a provisioner that fails part-way (or is killed) may already
@@ -3007,24 +3196,29 @@ def apply_update(
                 # the restored tree (best-effort) even then.
                 marker.provisioner_ran = True
                 write_marker(marker, repo_root, now)
-                _run_checked(
-                    runner,
-                    ["bash", PROVISIONER_SCRIPT],
-                    repo_root,
-                    f"bash {PROVISIONER_SCRIPT}",
-                )
-                marker.phase = PHASE_PROVISIONED
-                write_marker(marker, repo_root, now)
+                provisioner_failure = _run_provisioner(runner, repo_root)
+                if provisioner_failure is not None:
+                    sys.stderr.write(
+                        f"warning: {provisioner_failure}\nContinuing without rolling "
+                        "back: the tree and services stay consistent without the "
+                        "provisioner, so the update lands if the probes pass and is "
+                        "recorded as provisioning-incomplete; if they fail it rolls "
+                        "back as usual.\n"
+                    )
+                _advance(PHASE_PROVISIONED)
 
             if plan.frontend:
                 _install_or_build_bundle(
-                    usable_worker_bundle, repo_root, runner, expend
+                    usable_worker_bundle,
+                    repo_root,
+                    runner,
+                    expend,
+                    _FRONTEND_BUILD_TIMEOUT_SECONDS,
                 )
                 _assert_bundle_built(
                     repo_root, expected_bundle_hash, live_service_restarted=False
                 )
-                marker.phase = PHASE_BUILT
-                write_marker(marker, repo_root, now)
+                _advance(PHASE_BUILT)
 
             if plan.needs_restart:
                 preflight_output = _preflight(repo_root, http, spawner, sleeper, expend)
@@ -3045,9 +3239,9 @@ def apply_update(
                     repo_root,
                     "mngr start --restart",
                     live_service_restarted=True,
+                    timeout=_RESTART_TIMEOUT_SECONDS,
                 )
-                marker.phase = PHASE_RESTARTED
-                write_marker(marker, repo_root, now)
+                _advance(PHASE_RESTARTED)
                 if not wait_healthy(
                     http,
                     f"{resolved_base}{HEALTH_PATH}",
@@ -3088,6 +3282,13 @@ def apply_update(
             # post-success bookkeeping (so an unattended ``recover`` can never
             # roll back an update that already went live; the ledger append
             # and env-converge are both safely re-runnable without a marker).
+            sys.stderr.write(_phase_timing_line(marker))
+            if provisioner_failure is not None:
+                write_provision_incomplete(
+                    repo_root, provisioner_failure, marker.dri_agent, merge_ref, now
+                )
+            elif plan.provisioner:
+                clear_provision_incomplete(repo_root)
             clear_marker(repo_root)
             discard_snapshots(repo_root)
             # The emergency record only comes down on confirmed health, which
@@ -3101,6 +3302,7 @@ def apply_update(
         except ApplyFailed as exc:
             sys.stderr.write(
                 f"apply failed: {exc}\n{_detail_block(exc.detail)}"
+                f"{_phase_timing_line(marker)}"
                 f"rolling back to {marker.rollback_to[:12]} and restoring the "
                 "workspace...\n"
             )
@@ -3184,13 +3386,22 @@ def apply_update(
         # The one moment package versions are allowed to move. Post-success
         # only, so a failed apply never moved apt state; a failure here is
         # reported but does not un-apply the update.
-        converge = runner.run(
-            ["uv", "run", "env-converge", "upgrade"],
-            cwd=str(repo_root),
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        try:
+            converge = runner.run(
+                ["uv", "run", "env-converge", "upgrade"],
+                cwd=str(repo_root),
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=_ENV_CONVERGE_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
+            converge = subprocess.CompletedProcess(
+                ["uv", "run", "env-converge", "upgrade"],
+                returncode=124,
+                stdout="",
+                stderr=f"did not finish within {_ENV_CONVERGE_TIMEOUT_SECONDS:g}s",
+            )
         if getattr(converge, "returncode", 0) != 0:
             stderr = (getattr(converge, "stderr", "") or "").strip()
             sys.stderr.write(
@@ -3201,6 +3412,14 @@ def apply_update(
         elif getattr(converge, "stdout", ""):
             sys.stdout.write(converge.stdout)
 
+    if provisioner_failure is not None:
+        sys.stderr.write(
+            f"applied with incomplete provisioning: {provisioner_failure}\nThe update "
+            "is landed and the live workspace is healthy, but the pinned global "
+            f"toolchain did not catch up with the tree. Re-run `bash {PROVISIONER_SCRIPT}` "
+            "once the cause is fixed; the gap is recorded at "
+            f"{provision_incomplete_path(repo_root)} until a provisioner run succeeds.\n"
+        )
     if unresolved_frontend_failure is not None:
         sys.stderr.write(
             "applied: the update landed and the backend is healthy, but the live UI is "
@@ -3302,6 +3521,7 @@ def recover(
                 capture_output=True,
                 text=True,
                 check=False,
+                env=provisioner_env(),
             )
             if getattr(result, "returncode", 0) != 0:
                 sys.stderr.write(
