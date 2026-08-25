@@ -198,7 +198,20 @@ def read_icon_file(path: Path) -> tuple[str | None, str | None]:
 
     Only one of the two is ever set. The file's *contents* are what gets
     persisted; the path is not recorded anywhere.
+
+    Only ``.svg`` files are accepted. The contents are validated as SVG markup
+    anyway, but checking the extension up front turns "I passed a PNG" into a
+    clear error naming the one supported format instead of an XML parse
+    failure -- icons are vector-only so every app's glyph stays in the same
+    house style.
     """
+    if path.suffix.lower() != ".svg":
+        return None, (
+            f"icon file {str(path)!r} must be an .svg file: app icons are "
+            "stored as SVG markup so every glyph stays in the same vector "
+            "house style (PNG, JPEG, and other raster formats are not "
+            "supported)"
+        )
     if not path.is_file():
         return None, f"icon file {str(path)!r} does not exist"
     try:
@@ -413,9 +426,10 @@ def main() -> None:
     parser.add_argument(
         "--icon-file",
         help=(
-            "Path to a file holding the SVG markup for the app's icon. The "
-            "file is read now and its contents are stored; the path is not "
-            "recorded. Mutually exclusive with --icon."
+            "Path to an .svg file holding the SVG markup for the app's icon "
+            "(SVG only -- no raster formats). The file is read now and its "
+            "contents are stored; the path is not recorded. Mutually "
+            "exclusive with --icon."
         ),
     )
     parser.add_argument(

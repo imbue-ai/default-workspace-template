@@ -75,21 +75,28 @@ LOWEST_AUTO_PORT = 8080
 KEBAB_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
 LOCALHOST_PORT_RE = re.compile(r"http://(?:localhost|127\.0\.0\.1):(\d+)")
 
-# forward_port.py owns icon validation (single safe <svg>, length cap); load it
-# from this checkout so the scaffold rejects a bad icon up front instead of the
-# app failing to register on its first supervisord start.
+# forward_port.py owns icon reading and validation (.svg files only, a single
+# safe <svg>, length cap); load it from this checkout so the scaffold rejects a
+# bad icon up front instead of the app failing to register on its first
+# supervisord start.
 _FORWARD_PORT_PATH = (
     Path(__file__).resolve().parents[4] / "system" / "scripts" / "forward_port.py"
 )
 
 
-def _validate_icon_markup(markup: str) -> str | None:
+def _read_and_validate_icon(path: Path) -> str:
     spec = importlib.util.spec_from_file_location("_forward_port_for_scaffold", _FORWARD_PORT_PATH)
     if spec is None or spec.loader is None:
         sys.exit(f"error: could not load {_FORWARD_PORT_PATH} for icon validation")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.validate_icon(markup)
+    markup, read_error = module.read_icon_file(path)
+    if read_error is not None:
+        sys.exit(f"error: {read_error}")
+    icon_error = module.validate_icon(markup)
+    if icon_error is not None:
+        sys.exit(f"error: {icon_error}")
+    return markup
 
 
 def _kebab_to_snake(name: str) -> str:
@@ -506,9 +513,11 @@ def main() -> None:
         "--icon-file",
         required=True,
         help=(
-            "path to the app's icon, a single <svg viewBox=\"0 0 24 24\"> of "
-            "monochrome line art (stroke='currentColor', fill='none'); copied "
-            "to system/apps/<package>/icon.svg and registered on every start"
+            "path to the app's icon, an .svg file holding a single "
+            "<svg viewBox=\"0 0 24 24\"> of monochrome line art "
+            "(stroke='currentColor', fill='none'); copied to "
+            "system/apps/<package>/icon.svg and registered on every start. "
+            "SVG only -- no raster formats"
         ),
     )
     parser.add_argument(
@@ -533,13 +542,7 @@ def main() -> None:
     args = parser.parse_args()
 
     _validate_name(args.name)
-    icon_path = Path(args.icon_file)
-    if not icon_path.is_file():
-        sys.exit(f"error: --icon-file {str(icon_path)!r} does not exist")
-    icon_markup = icon_path.read_text(encoding="utf-8")
-    icon_error = _validate_icon_markup(icon_markup)
-    if icon_error is not None:
-        sys.exit(f"error: {icon_error}")
+    icon_markup = _read_and_validate_icon(Path(args.icon_file))
     repo_root = (
         Path(args.repo_root).resolve()
         if args.repo_root

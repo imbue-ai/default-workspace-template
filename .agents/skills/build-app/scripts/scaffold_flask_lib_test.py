@@ -113,6 +113,23 @@ def test_scaffold_refuses_invalid_icon_markup(tmp_path: Path) -> None:
     assert not (repo_root / "system" / "apps" / "my_app").exists()
 
 
+def test_scaffold_refuses_a_non_svg_icon_file(tmp_path: Path) -> None:
+    """SVG is the only supported icon format, and a raster file must say so
+    instead of failing as malformed XML."""
+    repo_root = _make_repo_root(tmp_path)
+    png_file = tmp_path / "icon.png"
+    png_file.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    result = _run(
+        repo_root,
+        ["--name", "my-app", "--description", "a test app", "--icon-file", str(png_file)],
+    )
+
+    assert result.returncode != 0
+    assert "must be an .svg file" in result.stderr
+    assert not (repo_root / "system" / "apps" / "my_app").exists()
+
+
 def test_scaffold_requires_an_icon_file(tmp_path: Path) -> None:
     repo_root = _make_repo_root(tmp_path)
 

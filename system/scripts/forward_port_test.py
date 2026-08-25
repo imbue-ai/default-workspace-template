@@ -431,6 +431,28 @@ def test_icon_and_icon_file_cannot_be_combined(tmp_path: Path) -> None:
     assert "mutually exclusive" in result.stderr
 
 
+def test_a_non_svg_icon_file_is_refused_with_a_clear_error(tmp_path: Path) -> None:
+    """The contents are validated as SVG anyway, but a raster file must fail
+    with 'use an .svg' instead of a baffling XML parse error."""
+    apps_file = tmp_path / "apps.toml"
+    png_file = tmp_path / "icon.png"
+    png_file.write_bytes(b"\x89PNG\r\n\x1a\n")
+    result = _run(
+        [
+            "--name",
+            "web",
+            "--url",
+            "http://localhost:8000",
+            "--icon-file",
+            str(png_file),
+        ],
+        apps_file,
+    )
+    assert result.returncode != 0
+    assert "must be an .svg file" in result.stderr
+    assert not apps_file.exists()
+
+
 def test_a_missing_icon_file_fails_loudly(tmp_path: Path) -> None:
     apps_file = tmp_path / "apps.toml"
     result = _run(
