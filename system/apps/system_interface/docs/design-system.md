@@ -53,7 +53,21 @@ change only what it intends to.
   express — they need a future `.btn--icon.btn--round` + send/stop colour
   treatment. A few other icon buttons (share close-×, dockview tab actions) are
   also not yet on the primitive. `borderRadiusPx` ratchet 40 → 36.
-- **Badge / Spinner / Toggle / Input primitives, Modal (P4) — not started.**
+- **Modal consolidation (P4) — DONE.** Extracted the shared modal shell
+  (`views/Modal.ts` + the `.modal-*` block in `style.css`) and migrated every
+  card dialog onto it: the destroy-confirm, fast-mode prompt, and share notice
+  (earlier), then the add-to-project and project-settings dialogs, the terminal
+  sign-in notice, and the composer's two command notices (`can't be sent from
+  chat` / `sign-in is managed here`). Deleted the bespoke `.custom-url-dialog-*`
+  block and the now-unused `.destroy-dialog-message` / `.logout-notice-body`
+  body-copy classes; the pickers' feedback CSS is rescoped onto `.modal-card`.
+  **Deliberately left off the shell:** the full-bleed image lightbox (a viewer,
+  not a card — already on `--z-overlay`, with a darker column-layout backdrop),
+  and the Claude sign-in modal (a scrollable, multi-step flow whose
+  absolute-positioned, sectioned, self-padded card and lower `z-index: 50`
+  blurred backdrop would regress if forced onto the shared `.modal-*` classes,
+  which the prompt forbids restructuring to fix). `borderRadiusPx` ratchet
+  29 → 28, `zIndexLiteral` 12 → 11.
 
 All line/rule counts below were measured from `frontend/src/style.css`
 (4,108 lines, 512 rule blocks) and the `frontend/src/**` view modules at the
