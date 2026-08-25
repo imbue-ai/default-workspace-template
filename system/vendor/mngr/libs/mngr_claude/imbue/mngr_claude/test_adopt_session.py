@@ -108,7 +108,7 @@ def trusted_subprocess_env(
 
     * ``mngr create`` raises ``ClaudeDirectoryNotTrustedError`` at
       ``plugin.py:1564`` when running locally without ``--yes`` /
-      ``auto_dismiss_dialogs_at_startup``.
+      ``auto_dismiss_dialogs``.
     * ``claude`` itself prompts for trust on the destination agent's
       interactive session.
 
