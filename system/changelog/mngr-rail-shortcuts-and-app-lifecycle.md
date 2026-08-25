@@ -1,0 +1,7 @@
+`forward_port.py` grows `--program <name>`, recording the supervisord program that runs an app on its registry row -- the capability grant for the workspace's new Stop/Start. Authoritative per call (omitting it clears any stored value), never set for unsupervised instances. The `files` and `browser` supervisord registrations pass it; `system_interface` and `terminal` deliberately do not.
+
+`layout.py` grows the agent-facing shortcut surface: a `shortcuts` query (the active or named view's effective rail shortcut list: id, pinned, mode) and a `shortcut set <id> [--pin/--unpin] [--mode focus|new]` verb that calls the same `POST /api/projects/<id>/shortcuts` endpoint the UI uses.
+
+The changelog-gate tests now isolate themselves from the CI runner's own `CHANGELOG_BASE_REF`/`GITHUB_BASE_REF`, which on a stacked PR named a branch absent from the tests' sandbox repos and failed the suite.
+
+The file viewer hides system files by default: dufs now serves a vendored copy of its own frontend (`system/apps/files/assets/`, byte-identical to the pinned release plus marked "minds patch" blocks) via `--assets`, adding a toolbox eye toggle that hides dotted paths client-side (choice kept in localStorage; the server still lists everything, so toggling needs no reload and direct navigation into dotted paths keeps working). `install_dufs.sh` documents that a version bump must re-vendor the assets from the matching tag.

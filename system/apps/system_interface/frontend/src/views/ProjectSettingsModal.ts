@@ -1,5 +1,5 @@
 /**
- * Modal for one project's display metadata: its name, its color, and which of
+ * Modal for one project's display metadata: its name, its color and which of
  * the ten squiggles stands for it -- plus the one place a project can be
  * deleted.
  *
@@ -8,11 +8,14 @@
  * project" mints "Project N" with the next unused glyph on the spot, so the
  * user lands in the New Tab launcher instead of on a form. Everything never
  * reaches here either -- it is a view rather than a project, with no name,
- * color or glyph of its own and nothing to delete.
+ * color, glyph or member list of its own and nothing to delete.
  *
  * Deleting is confirm-gated in place -- a second, red button inside this same
  * dialog rather than a second stacked dialog -- because the modal already owns
  * the screen and the name being deleted is right there in the preview.
+ * Deleting a project is itself a pure view operation now: it removes the
+ * project's own view and member list and nothing more, so there is no longer
+ * any consequence for the confirmation to enumerate beyond that.
  *
  * Shell and class names follow the shared `.custom-url-dialog`
  * markup, a backdrop click to dismiss, Enter in the name field to save. Escape
@@ -22,6 +25,7 @@
  */
 
 import m from "mithril";
+import { backdropDismissAttrs } from "./modalBackdrop";
 import { deleteProjectRequest, updateProjectSettings } from "../models/Projects";
 import type { ProjectInfo } from "../models/Projects";
 import { SQUIGGLE_GLYPHS, squiggleMarkup } from "./squiggles";
@@ -156,8 +160,8 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
       m("p.destroy-dialog-message", [
         "Delete ",
         m("strong", attrs.project.name),
-        "? Its terminals and browsers are shut down — everywhere they appear. Chats and apps keep " +
-          "running, stay in Everything, and stay in any other project showing them.",
+        "? This removes the view only — everything it shows keeps running, and stays in Everything and " +
+          "in any other project showing it.",
       ]),
       m("div.custom-url-dialog-actions", [
         m(
@@ -206,11 +210,7 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
           onremove() {
             document.removeEventListener("keydown", handleKeydown);
           },
-          onclick(e: MouseEvent) {
-            if ((e.target as HTMLElement).classList.contains("custom-url-dialog-overlay")) {
-              attrs.onCancel();
-            }
-          },
+          ...backdropDismissAttrs(attrs.onCancel),
         },
         [
           m(

@@ -20,7 +20,8 @@ usage is captured, delegation is at least *detected*: any trial that delegates i
 ``is_cost_complete = False`` rather than quietly reporting a clean total.
 
 Both are priced with ``mngr_usage``'s table rather than a local copy, so these numbers stay bound to
-the prices the LiteLLM proxy bills at (a drift test in apps/modal_litellm enforces that).
+the prices the LiteLLM proxy bills at (``mngr_usage``'s litellm_pricing_test pins that table to
+litellm's own price map, which is what the proxy bills from).
 
 **Speed tier and what it does to cost.** Fast mode bills the same tokens at twice the standard rate
 ($10/$50 per MTok against $5/$25 on Opus 5 and Opus 4.8), and it is chosen per request, so a model id

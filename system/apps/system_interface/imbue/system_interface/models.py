@@ -121,9 +121,7 @@ class ModelOptionsResponse(FrozenModel):
 class PoweredByResponse(FrozenModel):
     """Response from GET /api/agents/{id}/powered-by."""
 
-    label: str = Field(
-        description="The agent harness's verbatim credit text, or '' when that harness shows no credit"
-    )
+    label: str = Field(description="The agent harness's verbatim credit text, or '' when that harness shows no credit")
 
 
 class FastModePromptAnsweredResponse(FrozenModel):
@@ -305,6 +303,23 @@ class AppEntry(FrozenModel):
             "rail's All apps popover, its shortcuts)."
         ),
     )
+    program: str = Field(
+        default="",
+        description=(
+            "The supervisord program running this app, registered via "
+            "``forward_port.py --program``. Its presence is the capability "
+            "grant 'this app can be stopped and started through supervisord'; "
+            "empty means unsupervised (or registered before the field existed)."
+        ),
+    )
+    is_running: bool = Field(
+        default=True,
+        description=(
+            "Derived liveness, never stored in the registry: supervisord's "
+            "process state for ``program`` rows, a TCP probe of ``url`` "
+            "otherwise. Rows default to running until the first probe lands."
+        ),
+    )
 
 
 class TerminalSessionInfo(FrozenModel):
@@ -356,6 +371,12 @@ class StartAgentResponse(FrozenModel):
     """Response from the agent start endpoint."""
 
     status: str = Field(description="Result of the start operation")
+
+
+class StopAgentResponse(FrozenModel):
+    """Response from the agent stop endpoint."""
+
+    status: str = Field(description="Result of the stop operation")
 
 
 class ClaudeAuthStatusResponse(FrozenModel):

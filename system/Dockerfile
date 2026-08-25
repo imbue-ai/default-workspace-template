@@ -72,6 +72,13 @@ RUN chmod +x /usr/local/bin/default-workspace-template-setup-system /usr/local/b
 COPY system/scripts/install_owner_exec.sh /usr/local/bin/default-workspace-template-install-owner-exec
 RUN chmod +x /usr/local/bin/default-workspace-template-install-owner-exec && default-workspace-template-install-owner-exec
 
+# Install the pinned dufs static binary (the file-viewer server behind the
+# rail's File Viewer row; supervisord's [program:files] serves data/ with it).
+# Pin + per-arch sha256 verification live in the script; a version bump there
+# rebuilds only this small layer.
+COPY system/scripts/install_dufs.sh /usr/local/bin/default-workspace-template-install-dufs
+RUN chmod +x /usr/local/bin/default-workspace-template-install-dufs && default-workspace-template-install-dufs
+
 # /var/cache/user is the off-volume cache target, pinned via ENV so BOTH the
 # build layers below (dependency pre-warm) and the runtime container cache to
 # the same image-layer path: warm caches stay baked into the image instead of

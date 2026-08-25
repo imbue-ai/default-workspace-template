@@ -1,4 +1,5 @@
 import m from "mithril";
+import { backdropDismissAttrs } from "./modalBackdrop";
 import {
   clearComposerAttachments,
   getComposerAttachments,
@@ -360,11 +361,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
             onremove() {
               document.removeEventListener("keydown", handleDeclinedNoticeKeydown);
             },
-            onclick(e: MouseEvent) {
-              if ((e.target as HTMLElement).classList.contains("custom-url-dialog-overlay")) {
-                dismissDeclinedCommandNotice();
-              }
-            },
+            ...backdropDismissAttrs(dismissDeclinedCommandNotice),
           },
           m(
             "div.custom-url-dialog",
@@ -401,11 +398,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         return m(
           "div.custom-url-dialog-overlay",
           {
-            onclick(e: MouseEvent) {
-              if ((e.target as HTMLElement).classList.contains("custom-url-dialog-overlay")) {
-                dismissAuthCommandNotice();
-              }
-            },
+            ...backdropDismissAttrs(dismissAuthCommandNotice),
           },
           m(
             "div.custom-url-dialog",

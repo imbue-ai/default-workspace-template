@@ -1048,15 +1048,29 @@ def _remove_transfer_dir(box: BoxRow, instance_name: str) -> None:
 
 def _cleanup_reserved_restore(box: BoxRow, instance_name: str, disk_name: str) -> None:
     """Best-effort rollback of a claimed restore slot after a failed download/boot."""
+    command = " && ".join(box_scripts.build_cleanup_reserved_restore_commands(instance_name, disk_name))
     try:
-        _run_box_commands_checked(
-            box,
-            box_scripts.build_cleanup_reserved_restore_commands(instance_name, disk_name),
-            _SSH_COMMAND_TIMEOUT_SECONDS,
-        )
-    except (WorkspaceTransitionError, paramiko.SSHException, OSError) as exc:
+        exit_status, _stdout, stderr = _run_box_command(box, command, timeout_seconds=_VM_STOP_TIMEOUT_SECONDS)
+    except (paramiko.SSHException, OSError) as exc:
         logger.warning(
             "Could not roll back reserved restore for %s on %s", instance_name, box.public_address, exc_info=exc
+        )
+        return
+    if exit_status != 0:
+        logger.warning(
+            "Could not roll back reserved restore for %s on %s (exit %d): %s",
+            instance_name,
+            box.public_address,
+            exit_status,
+            stderr.strip(),
+        )
+        return
+    if box_scripts.CLEANUP_DELETE_FAILED_MARKER in stderr:
+        logger.warning(
+            "Restore VM %s survived the rollback on %s; its instance and disk dirs were kept for a later sweep: %s",
+            instance_name,
+            box.public_address,
+            stderr.strip(),
         )
 
 

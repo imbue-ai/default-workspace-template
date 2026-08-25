@@ -9,8 +9,8 @@
  * backgrounded, still running, just not docked -- would have nowhere to keep a
  * name at all. Keying by ref makes both of those go away, which is why every
  * surface that names an object (the dock tab, the rail's tab list and its app
- * shortcuts, the New Tab launcher, the project settings list, and Everything)
- * reads its label through here.
+ * shortcuts, the All apps popover, the New Tab launcher, the project settings
+ * list, and Everything) reads its label through here.
  *
  * This is a sibling of Projects rather than another export inside it, mirroring
  * the backend's split: a title belongs to the machine and a member list belongs
@@ -24,6 +24,8 @@
  * gets whether or not it is showing the object. A ref that is absent is simply
  * unnamed, and the caller falls back to whatever the object calls itself.
  */
+
+import m from "mithril";
 
 import { apiUrl } from "../base-path";
 
@@ -118,19 +120,46 @@ async function errorDetailFromResponse(response: Response): Promise<string> {
  * keying this by ref. The cache is updated from the server's own answer (it
  * trims), and the broadcast that follows repaints every other client. Throws
  * with the server's detail on rejection (a bad ref, a name over the cap).
+ *
+ * The new name is shown BEFORE the server has agreed to it, and put back if it
+ * refuses. Renaming a chat goes all the way out to the ``mngr`` CLI, whose
+ * startup alone is several seconds, so waiting for the round trip meant typing
+ * a name and watching the old one sit there -- with no indication anything had
+ * happened. What the user typed is what they meant; the server's answer is a
+ * correction, not the source of truth for what to paint.
+ *
+ * Reverting restores whatever the name was when this call started. Two renames
+ * of the SAME ref overlapping would therefore have the loser restore a stale
+ * name, which is the honest outcome available here: this store holds one name
+ * per ref, so there is nothing finer to roll back to. The next broadcast
+ * settles every client regardless.
  */
 export async function setMemberTitle(ref: string, title: string): Promise<string | null> {
-  const response = await fetch(apiUrl("/api/member-titles"), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ref, title }),
-  });
+  const previousTitle = titleByRef[ref] ?? null;
+  applyMemberTitleChange(ref, title.trim());
+  m.redraw();
+  let response: Response;
+  try {
+    response = await fetch(apiUrl("/api/member-titles"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ref, title }),
+    });
+  } catch (e) {
+    applyMemberTitleChange(ref, previousTitle);
+    m.redraw();
+    throw e;
+  }
   if (!response.ok) {
-    throw new Error(await errorDetailFromResponse(response));
+    const detail = await errorDetailFromResponse(response);
+    applyMemberTitleChange(ref, previousTitle);
+    m.redraw();
+    throw new Error(detail);
   }
   const data = (await response.json()) as { title?: string | null };
   const stored = data.title ?? null;
   applyMemberTitleChange(ref, stored);
+  m.redraw();
   return stored;
 }
 

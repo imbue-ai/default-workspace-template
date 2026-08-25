@@ -51,6 +51,7 @@ from imbue.minds.desktop_client.agent_creator import sweep_orphaned_scratch_clon
 from imbue.minds.desktop_client.api_key_store import generate_api_key
 from imbue.minds.desktop_client.app import create_desktop_client
 from imbue.minds.desktop_client.app import start_discovery_health_watchdog_loop
+from imbue.minds.desktop_client.app import start_sleep_heartbeat_loop
 from imbue.minds.desktop_client.app import start_system_interface_health_probe_loop
 from imbue.minds.desktop_client.auth import FileAuthStore
 from imbue.minds.desktop_client.backend_resolver import MngrCliBackendResolver
@@ -59,6 +60,8 @@ from imbue.minds.desktop_client.backup_reaper import make_quota_evictor
 from imbue.minds.desktop_client.device_identity import get_or_create_device_id
 from imbue.minds.desktop_client.discovery_health import DiscoveryHealthWatchdog
 from imbue.minds.desktop_client.discovery_health import SupervisorProducerRemediator
+from imbue.minds.desktop_client.environment_signals import ConnectivityDetector
+from imbue.minds.desktop_client.environment_signals import SleepTracker
 from imbue.minds.desktop_client.forward_cli import ForwardSubprocessConfig
 from imbue.minds.desktop_client.forward_cli import start_mngr_forward
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCli
@@ -100,6 +103,8 @@ from imbue.minds.desktop_client.workspace_defaults import FALLBACK_BRANCH
 from imbue.minds.desktop_client.workspace_defaults import is_local_workspace_defaults_opt_in
 from imbue.minds.desktop_client.workspace_record_store import WorkspaceRecordStore
 from imbue.minds.desktop_client.workspace_record_store import read_device_label
+from imbue.minds.desktop_client.workspace_recovery import ProviderErrorConnectivityTrigger
+from imbue.minds.desktop_client.workspace_recovery import WorkspaceSshEndpointSource
 from imbue.minds.envs.docker_cleanup import DockerCleanupError
 from imbue.minds.envs.docker_cleanup import start_active_env_state_container
 from imbue.minds.mngr_settings.imbue_cloud_accounts import reconcile_imbue_cloud_providers_from_sessions
@@ -117,6 +122,7 @@ from imbue.mngr.api.discovery_events import get_discovery_events_dir
 from imbue.mngr.config.data_types import MngrConfig
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import HostId
+from imbue.mngr.utils.logging import get_default_cli_events_log_dir
 from imbue.mngr.utils.parent_process import start_grandparent_death_watcher
 from imbue.mngr_latchkey.agent_setup import maybe_recover_host_permissions_for_agent
 from imbue.mngr_latchkey.core import LATCHKEY_BINARY
@@ -245,6 +251,7 @@ def run(
         is_error_reporting_enabled=minds_config.get_report_unexpected_errors,
         latchkey_plugin_data_dir=latchkey.plugin_data_dir,
         discovery_events_dir=get_discovery_events_dir(MngrConfig(default_host_dir=mngr_host_dir)),
+        mngr_cli_events_dir=get_default_cli_events_log_dir(mngr_host_dir),
     )
     client_config_path = config_file
     client_env_config = load_client_config(client_config_path)
@@ -268,7 +275,13 @@ def run(
 
     auth_store = FileAuthStore(data_directory=paths.auth_dir)
     is_electron = os.getenv("MINDS_ELECTRON") == "1"
-    notification_dispatcher = NotificationDispatcher(is_electron=is_electron)
+    # The master notifications toggle is read live on every dispatch, so a
+    # Settings change silences (or re-enables) every producer without a
+    # restart -- agent-sent notifications and backup failures included.
+    notification_dispatcher = NotificationDispatcher.create(
+        is_electron=is_electron,
+        is_enabled_provider=minds_config.get_notifications_enabled,
+    )
     backend_resolver = MngrCliBackendResolver(
         last_good_agents_path=paths.data_dir / "last_good_agent_topology.json",
     )
@@ -371,6 +384,56 @@ def run(
     # turn exit cleanly. Without it, a crashed Electron leaves the entire
     # orphan tree running across restarts.
     start_grandparent_death_watcher(root_concurrency_group)
+
+    # Sleep detector: a ~1s heartbeat whose wall-clock gaps mark the windows in
+    # which this process was not running. Started this early because it can only
+    # account for sleep that happens after its first tick, and everything that
+    # reasons over elapsed time (the stuck-threshold failure run, the discovery
+    # staleness baseline) is downstream of it.
+    sleep_tracker = SleepTracker()
+    start_sleep_heartbeat_loop(sleep_tracker, root_concurrency_group)
+
+    # Connectivity detector: answers whether this device can reach anything, and
+    # whether the network it is on passes SSH at all. Probed only when a decision
+    # depends on it, and repeatedly only while a bad answer is outstanding. A wake
+    # invalidates whatever it last found -- the laptop may be somewhere else now.
+    connectivity_detector = ConnectivityDetector(
+        # Measured against the endpoints minds itself dials rather than port 22:
+        # an imbue_cloud machine's host answers on a box-forwarded port in the
+        # 22000-32000 range, so :22 says nothing about whether this device can
+        # reach it.
+        workspace_ssh_endpoints_fn=WorkspaceSshEndpointSource(backend_resolver=backend_resolver),
+        # So a probe in flight at quit stops opening connections instead of
+        # holding the group's drain for a round of timeouts -- which on a dead
+        # network, where a round was measured at 9.25s, is most of the time.
+        shutdown_event=root_concurrency_group.shutdown_event,
+        # And so the SSH facet asks its endpoints at once rather than one after
+        # another, which is what made that round the sum of every budget.
+        concurrency_group=root_concurrency_group,
+    )
+    sleep_tracker.add_on_wake_callback(connectivity_detector.invalidate_after_wake)
+    # The earliest evidence a cold start on a dead network produces: discovery's
+    # first poll of a remote provider fails, long before the user clicks into a
+    # machine and gives the STUCK edge something to gate.
+    backend_resolver.add_on_change_callback(
+        ProviderErrorConnectivityTrigger(
+            backend_resolver=backend_resolver,
+            connectivity_detector=connectivity_detector,
+            concurrency_group=root_concurrency_group,
+        )
+    )
+    root_concurrency_group.start_new_thread(
+        target=connectivity_detector.run_background_loop,
+        args=(root_concurrency_group,),
+        name="connectivity-detector",
+        daemon=True,
+        # Best-effort: a detector failure must never tear down the app. The loop
+        # fences its own probe, because unchecked is not the same as harmless
+        # here -- this thread is the only thing that can observe the network
+        # coming back, so losing it while a bad reading is outstanding would
+        # strand every owed restart rather than fall back to dispatching.
+        is_checked=False,
+    )
 
     # Run ``mngr message`` (and other ``mngr`` CLI calls) in a pre-warmed,
     # single-use ``mngr`` process instead of spawning (and importing) a fresh
@@ -496,7 +559,10 @@ def run(
     # be threaded into both AgentCreator (for record_probe_success) and the
     # consumer's failure callback (registered before consumer.start() below;
     # otherwise early failures would dispatch against an empty list).
-    system_interface_health_tracker = SystemInterfaceHealthTracker()
+    # The sleep tracker is threaded in so a probe-failure run that straddles a
+    # laptop sleep restarts from the wake instead of convicting a workspace of
+    # seconds during which no probe ran at all.
+    system_interface_health_tracker = SystemInterfaceHealthTracker(sleep_tracker=sleep_tracker)
 
     # The plugin reports every backend failure it observes; minds decides which
     # ones count. Only envelopes carrying no status code, or an infrastructure
@@ -692,6 +758,7 @@ def run(
         minds_api_key=minds_api_key,
         latchkey_forward_supervisor=latchkey_forward_supervisor,
         discovery_health_watchdog=discovery_health_watchdog,
+        connectivity_detector=connectivity_detector,
         sync_scheduler=sync_scheduler,
     )
 
@@ -703,6 +770,7 @@ def run(
         watchdog=discovery_health_watchdog,
         backend_resolver=backend_resolver,
         root_concurrency_group=root_concurrency_group,
+        sleep_tracker=sleep_tracker,
     )
 
     # Background probe loop: flips STUCK/RESTARTING agents back to HEALTHY
@@ -715,6 +783,10 @@ def run(
         mngr_forward_port=mngr_forward_port,
         mngr_forward_preauth_cookie=preauth_cookie,
         root_concurrency_group=root_concurrency_group,
+        # The same tracker the failure runs are aged against, so the first pass
+        # after a wake establishes that wake before it convicts anything of the
+        # seconds nobody was watching.
+        sleep_tracker=sleep_tracker,
     )
 
     # Wire the permission-requests streaming consumer once the Flask

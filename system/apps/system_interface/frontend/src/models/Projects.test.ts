@@ -7,23 +7,32 @@ vi.mock("../base-path", () => ({ apiUrl: (path: string) => path }));
 import {
   EVERYTHING_VIEW_ID,
   addMember,
+  appInstanceRef,
+  appShortcutId,
   autosaveProject,
   buildEverythingMembers,
+  chatAgentIdFromRef,
   chooseInitialViewId,
   createProject,
   deleteProjectRequest,
   fetchMemberMap,
   fetchProjectContent,
   fetchProjectsList,
+  defaultShortcutMode,
+  instanceNameFromRef,
+  instanceNumberFromName,
   filingProjectForAgentOp,
   isEverythingView,
+  isShortcutPinned,
   memberKindFromRef,
   memberRef,
   partitionByMembership,
   projectForViewId,
   removeMember,
+  shortcutModeForProject,
   removePanelFromAllProjects,
   searchMembers,
+  serviceNameFromInstanceName,
   serviceNameFromRef,
   shareMember,
   updateProjectSettings,
@@ -74,8 +83,7 @@ const EMPTY_INVENTORY: MachineInventory = {
   chatAgents: [],
   terminals: [],
   browsers: [],
-  apps: [],
-  urlTabs: [],
+  appInstances: [],
 };
 
 afterEach(() => {
@@ -113,8 +121,11 @@ describe("chooseInitialViewId", () => {
     expect(chooseInitialViewId([], EVERYTHING_VIEW_ID)).toBe(EVERYTHING_VIEW_ID);
   });
 
-  it("returns null when no projects exist and none was stored", () => {
-    expect(chooseInitialViewId([], "anything")).toBeNull();
+  it("lands on Everything when no projects exist and none was stored", () => {
+    // A machine may genuinely have zero projects now that deleting one is a
+    // pure view operation, so this is no longer treated as an unreadable
+    // registry -- Everything is always there to land on.
+    expect(chooseInitialViewId([], "anything")).toBe(EVERYTHING_VIEW_ID);
   });
 });
 
@@ -252,6 +263,22 @@ describe("createProject", () => {
 
     await expect(createProject("Taxes", "#e5a33d", 7)).rejects.toThrow("project name already in use");
   });
+
+  it("says the workspace is unreachable rather than showing a bare gateway status", async () => {
+    // A 502/503/504 comes from the tunnel in FRONT of the server -- a workspace
+    // provisioning, restarting or shutting down -- so the request reached no
+    // endpoint and nothing changed. "HTTP 503" read as a bug in whatever the
+    // user had just clicked.
+    for (const status of [502, 503, 504]) {
+      stubFetch({ ok: false, status, json: () => Promise.reject(new Error("not json")) });
+      await expect(createProject("Taxes", "#e5a33d", 7)).rejects.toThrow(/not responding right now/);
+    }
+  });
+
+  it("still shows a bare status for one it has nothing better to say about", async () => {
+    stubFetch({ ok: false, status: 418, json: () => Promise.reject(new Error("not json")) });
+    await expect(createProject("Taxes", "#e5a33d", 7)).rejects.toThrow("HTTP 418");
+  });
 });
 
 describe("updateProjectSettings", () => {
@@ -285,14 +312,10 @@ describe("deleteProjectRequest", () => {
     expect(mockFetch).toHaveBeenCalledWith("/api/projects/taxes/delete", { method: "POST" });
   });
 
-  it("throws the server's refusal to delete the last project", async () => {
-    stubFetch({
-      ok: false,
-      status: 409,
-      json: () => Promise.resolve({ detail: "Cannot delete the last remaining project" }),
-    });
+  it("throws the server's rejection reason for an unknown project", async () => {
+    stubFetch({ ok: false, status: 404, json: () => Promise.resolve({ detail: "Project 'gone' not found" }) });
 
-    await expect(deleteProjectRequest("website-redesign")).rejects.toThrow("Cannot delete the last remaining project");
+    await expect(deleteProjectRequest("gone")).rejects.toThrow("Project 'gone' not found");
   });
 });
 
@@ -479,6 +502,17 @@ describe("memberRef", () => {
   });
 });
 
+describe("chatAgentIdFromRef", () => {
+  it("recovers the agent id a chat ref was built from", () => {
+    expect(chatAgentIdFromRef(memberRef("chat", "agent-9"))).toBe("agent-9");
+  });
+
+  it("answers null for a ref that addresses no chat", () => {
+    expect(chatAgentIdFromRef("terminal:build")).toBeNull();
+    expect(chatAgentIdFromRef("chat:")).toBeNull();
+  });
+});
+
 describe("serviceNameFromRef", () => {
   it("recovers the name an app ref was built from", () => {
     expect(serviceNameFromRef(memberRef("app", "web"))).toBe("web");
@@ -497,6 +531,33 @@ describe("serviceNameFromRef", () => {
   it("answers null for a fleet browser, which is a session rather than an app", () => {
     expect(serviceNameFromRef(memberRef("browser", "quiet-otter"))).toBeNull();
   });
+
+  it("answers an instance ref with its service: the instance is a page of it", () => {
+    expect(serviceNameFromRef("service:files?instance=files-2")).toBe("files");
+  });
+});
+
+describe("app instance refs", () => {
+  it("builds and parses the instance ref round trip", () => {
+    const ref = appInstanceRef("files", "files-2");
+    expect(ref).toBe("service:files?instance=files-2");
+    expect(instanceNameFromRef(ref)).toBe("files-2");
+    expect(memberKindFromRef(ref)).toBe("app");
+  });
+
+  it("reads no instance out of a bare service ref or a browser session ref", () => {
+    expect(instanceNameFromRef("service:files")).toBeNull();
+    expect(instanceNameFromRef(memberRef("browser", "browser-2"))).toBeNull();
+    expect(instanceNameFromRef("chat:a1")).toBeNull();
+  });
+
+  it("parses the canonical instance name, digits-ending services included", () => {
+    expect(instanceNumberFromName("files-2")).toBe(2);
+    expect(serviceNameFromInstanceName("files-2")).toBe("files");
+    expect(serviceNameFromInstanceName("app-2-3")).toBe("app-2");
+    expect(instanceNumberFromName("files")).toBeNull();
+    expect(serviceNameFromInstanceName("files-0")).toBeNull();
+  });
 });
 
 describe("buildEverythingMembers", () => {
@@ -505,16 +566,14 @@ describe("buildEverythingMembers", () => {
       chatAgents: [{ name: "a1", label: "Planning" }],
       terminals: [{ name: "build", label: "build" }],
       browsers: [{ name: "quiet-otter", label: "Browser quiet-otter" }],
-      apps: [{ name: "web", label: "web" }],
-      urlTabs: [{ name: "9f86d081", label: "Release notes" }],
+      appInstances: [{ serviceName: "web", instanceName: "web-1", label: "web 1" }],
     };
 
     expect(buildEverythingMembers(inventory, {})).toEqual([
       { ref: "chat:a1", kind: "chat", label: "Planning", projectIds: [] },
       { ref: "terminal:build", kind: "terminal", label: "build", projectIds: [] },
       { ref: "service:browser?session=quiet-otter", kind: "browser", label: "Browser quiet-otter", projectIds: [] },
-      { ref: "service:web", kind: "app", label: "web", projectIds: [] },
-      { ref: "url:9f86d081", kind: "url", label: "Release notes", projectIds: [] },
+      { ref: "service:web?instance=web-1", kind: "app", label: "web 1", projectIds: [] },
     ]);
   });
 
@@ -531,20 +590,23 @@ describe("buildEverythingMembers", () => {
 
   it("decorates a row with every project showing it", () => {
     const rows = buildEverythingMembers(
-      { ...EMPTY_INVENTORY, apps: [{ name: "web", label: "web" }] },
-      { "service:web": ["website-redesign", "taxes"] },
+      { ...EMPTY_INVENTORY, appInstances: [{ serviceName: "web", instanceName: "web-1", label: "web 1" }] },
+      { "service:web?instance=web-1": ["website-redesign", "taxes"] },
     );
 
     expect(rows[0].projectIds).toEqual(["website-redesign", "taxes"]);
   });
 
   it("copies the project list rather than aliasing the map", () => {
-    const projectsByRef = { "service:web": ["taxes"] };
-    const rows = buildEverythingMembers({ ...EMPTY_INVENTORY, apps: [{ name: "web", label: "web" }] }, projectsByRef);
+    const projectsByRef = { "service:web?instance=web-1": ["taxes"] };
+    const rows = buildEverythingMembers(
+      { ...EMPTY_INVENTORY, appInstances: [{ serviceName: "web", instanceName: "web-1", label: "web 1" }] },
+      projectsByRef,
+    );
 
     rows[0].projectIds.push("website-redesign");
 
-    expect(projectsByRef["service:web"]).toEqual(["taxes"]);
+    expect(projectsByRef["service:web?instance=web-1"]).toEqual(["taxes"]);
   });
 
   it("keeps the order each source listed its objects in", () => {
@@ -563,24 +625,29 @@ describe("buildEverythingMembers", () => {
   });
 
   it("collapses a duplicate onto the first row for it", () => {
-    // Two layouts can host a tab for the same ad-hoc URL; Everything lists it
-    // once.
+    // A source that reports the same object twice -- a fleet listing mid-
+    // refresh, say -- must not make Everything list it twice.
     const rows = buildEverythingMembers(
       {
         ...EMPTY_INVENTORY,
-        urlTabs: [
-          { name: "9f86d081", label: "Release notes" },
-          { name: "9f86d081", label: "Release notes (other pane)" },
+        terminals: [
+          { name: "build", label: "build" },
+          { name: "build", label: "build (again)" },
         ],
       },
       {},
     );
 
-    expect(rows).toEqual([{ ref: "url:9f86d081", kind: "url", label: "Release notes", projectIds: [] }]);
+    expect(rows).toEqual([{ ref: "terminal:build", kind: "terminal", label: "build", projectIds: [] }]);
   });
 
   it("skips an object the machine reported with no name", () => {
-    expect(buildEverythingMembers({ ...EMPTY_INVENTORY, apps: [{ name: "", label: "unnamed" }] }, {})).toEqual([]);
+    expect(
+      buildEverythingMembers(
+        { ...EMPTY_INVENTORY, appInstances: [{ serviceName: "", instanceName: "", label: "unnamed" }] },
+        {},
+      ),
+    ).toEqual([]);
   });
 
   it("yields nothing for an empty machine", () => {
@@ -727,5 +794,53 @@ describe("filingProjectForAgentOp", () => {
     expect(filingProjectForAgentOp("", [WEBSITE])).toBeNull();
     // A label naming a project that no longer exists must not file anywhere.
     expect(filingProjectForAgentOp("deleted-project", [WEBSITE])).toBeNull();
+  });
+});
+
+describe("shortcut overrides", () => {
+  const base: ProjectInfo = {
+    project_id: "p",
+    name: "P",
+    color: "#000000",
+    glyph: 0,
+    has_content: false,
+    members: [],
+  };
+
+  it("keeps every shortcut pinned until an override says otherwise", () => {
+    expect(isShortcutPinned(base, "terminal")).toBe(true);
+    expect(isShortcutPinned({ ...base, shortcut_overrides: { terminal: { is_pinned: false } } }, "terminal")).toBe(
+      false,
+    );
+    // A null field is the server spelling "unset", which means the default.
+    expect(isShortcutPinned({ ...base, shortcut_overrides: { terminal: { is_pinned: null } } }, "terminal")).toBe(
+      true,
+    );
+    // Everything (a null project) always shows the full set.
+    expect(isShortcutPinned(null, "terminal")).toBe(true);
+  });
+
+  it("defaults chat to new mode and everything else to focus", () => {
+    expect(defaultShortcutMode("chat")).toBe("new");
+    expect(defaultShortcutMode("terminal")).toBe("focus");
+    expect(defaultShortcutMode("app:docs")).toBe("focus");
+  });
+
+  it("reads a stored mode override and falls back to the default otherwise", () => {
+    expect(shortcutModeForProject(base, "chat")).toBe("new");
+    expect(shortcutModeForProject({ ...base, shortcut_overrides: { chat: { mode: "focus" } } }, "chat")).toBe("focus");
+    expect(shortcutModeForProject({ ...base, shortcut_overrides: { "app:docs": { mode: "new" } } }, "app:docs")).toBe(
+      "new",
+    );
+    // Junk from a hand-edited registry falls back rather than leaking through.
+    expect(shortcutModeForProject({ ...base, shortcut_overrides: { chat: { mode: "sometimes" } } }, "chat")).toBe(
+      "new",
+    );
+    // Everything runs the defaults.
+    expect(shortcutModeForProject(null, "chat")).toBe("new");
+  });
+
+  it("builds an app's shortcut id from its service name", () => {
+    expect(appShortcutId("docs")).toBe("app:docs");
   });
 });

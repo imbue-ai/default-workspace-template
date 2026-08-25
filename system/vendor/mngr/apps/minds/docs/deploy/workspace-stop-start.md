@@ -122,6 +122,16 @@ the connector's default hour-long instant-restart window.
   it over and re-drives it, backing off in `transition_failure_count` (the
   last failure is on `transition_error`) and logging at error level once it
   has failed many consecutive times.
+- Restores on one box download one at a time under `~/.mngr-download.lock`
+  (released before the VM boots). A restore queued behind another's
+  download shows `STAGE=waiting-for-lock` in its box-side status file; the
+  wait is bounded (`flock -w 300`), so a stuck lock fails the restore with
+  `box download lock unavailable after 300s` on `transition_error` rather
+  than stalling it. To find who holds the lock, walk `/proc/*/fd` for the
+  lock path (not `/proc/locks`, which records the long-gone `flock(1)`
+  pid); a `limactl hostagent` + `qemu` pair holding it is a leaked
+  descriptor from a pre-fix restore, and unlinking the lock file (a new
+  restore then locks a fresh inode) is the safe remediation.
 - KEK rotation re-wraps the per-stop identities in the DB only -- objects
   are never re-encrypted.
 - Known constraint: upload from boxes to OVH Object Storage is currently

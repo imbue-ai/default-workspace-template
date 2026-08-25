@@ -2,11 +2,12 @@
 
 A *project* is a **view** over the machine's objects: a filter saying which of
 them it shows, plus its own saved dockview arrangement. A member is a panel ref
-(``service:<name>``, ``service:browser?session=<name>``, ``chat:<agent-id>``,
-``terminal:<name>``, ``url:<hash>``) the project shows whether or not a tab for
-it is open, so a member with no panel is simply *backgrounded*: still running,
-just not docked. Closing a tab therefore never changes the member list; only
-``add_member`` / ``remove_member`` do.
+(``service:<name>``, ``service:<name>?instance=<name>-<N>``,
+``service:browser?session=<name>``, ``chat:<agent-id>``, ``terminal:<name>``,
+``url:<hash>``) the project shows whether or not a tab for it is open, so a
+member with no panel is simply *backgrounded*: still running, just not docked.
+Closing a tab therefore never changes the member list; only ``add_member`` /
+``remove_member`` do.
 
 Nothing owns anything. The same object may appear in any number of projects at
 once -- the one app a machine runs can sit in every project that cares about
@@ -90,6 +91,13 @@ _COLOR_PATTERN: Final[re.Pattern[str]] = re.compile(r"#[0-9a-fA-F]{6}")
 # panels to the same refs members are filed under.
 _BROWSER_SESSION_QUERY_KEY: Final[str] = "session"
 
+# Query parameter that distinguishes a plain app's instances, riding the same
+# ``service:<name>?<query>`` grammar the browser fleet uses. The value is the
+# instance's full canonical name (``files-2``), carried on the pane's params
+# (``serviceInstanceId``) rather than in its URL -- the URL is the service
+# origin plus wherever the instance is looking. See ``app_instances``.
+_SERVICE_INSTANCE_QUERY_KEY: Final[str] = "instance"
+
 # Serializes every read-modify-write of the meta file + content files across
 # the threaded WSGI server. Mirrors the module-level ``_terminal_allocate_lock``
 # convention in ``server.py``.
@@ -116,12 +124,6 @@ class ProjectNotFoundError(KeyError):
         super().__init__(f"Project '{project_id}' not found")
 
 
-class LastProjectDeletionError(ValueError):
-    """Raised when deleting a project would leave the workspace with none."""
-
-    ...
-
-
 class ProjectColorError(ValueError):
     """Raised when a project color is not a ``#RRGGBB`` hex string."""
 
@@ -140,6 +142,12 @@ class ProjectMemberRefError(ValueError):
     ...
 
 
+class ProjectShortcutError(ValueError):
+    """Raised when a shortcut name is not one of the rail's built-in rows."""
+
+    ...
+
+
 class ProjectDeviceError(ValueError):
     """Raised when a device kind is not one of DEVICE_KINDS."""
 
@@ -154,6 +162,63 @@ def validate_device(device: str) -> str:
     return device
 
 
+# The rail's four built-in shortcut rows. Unlike an app, none of these is an
+# object with a member ref -- "chat" is a create, and the terminal and browser
+# services are fleets reached by making a session rather than by opening the
+# service -- so which of them a project shows cannot be membership and is
+# recorded here instead.
+SHORTCUT_NAMES: Final[frozenset[str]] = frozenset({"chat", "files", "browser", "terminal"})
+
+# A pinned app's shortcut is keyed ``app:<service-name>`` in the overrides map.
+# App pinning itself stays membership (the ``service:<name>`` member ref IS the
+# pin), so an ``app:`` override carries only ``mode``.
+APP_SHORTCUT_PREFIX: Final[str] = "app:"
+
+# A shortcut's two modes: focus goes to the most recently used member of the
+# kind in the active view (creating only when the view shows none), new always
+# creates. Stored lowercase because these are wire/registry values.
+SHORTCUT_MODES: Final[tuple[str, ...]] = ("focus", "new")
+
+# Per-shortcut mode defaults, code-side so changing one applies to every
+# project that never stored an override. Chat defaults to new ("New Chat") --
+# multi-chat discoverability is the point -- and everything else to focus.
+_DEFAULT_NEW_MODE_SHORTCUTS: Final[frozenset[str]] = frozenset({"chat"})
+
+
+@pure
+def default_shortcut_mode(shortcut_id: str) -> str:
+    return "new" if shortcut_id in _DEFAULT_NEW_MODE_SHORTCUTS else "focus"
+
+
+@pure
+def validated_shortcut_id(shortcut_id: str) -> str:
+    """A built-in shortcut name or ``app:<service-name>``, else ProjectShortcutError."""
+    if shortcut_id in SHORTCUT_NAMES:
+        return shortcut_id
+    if shortcut_id.startswith(APP_SHORTCUT_PREFIX) and len(shortcut_id) > len(APP_SHORTCUT_PREFIX):
+        return shortcut_id
+    known = ", ".join(sorted(SHORTCUT_NAMES))
+    raise ProjectShortcutError(
+        f"Unknown shortcut {shortcut_id!r} (known shortcuts: {known}, or 'app:<service-name>')"
+    )
+
+
+class ShortcutOverride(FrozenModel):
+    """One shortcut's stored deviations from the code-side defaults."""
+
+    is_pinned: bool | None = Field(
+        default=None,
+        description=(
+            "False when a built-in row is unpinned into the All apps menu; None means "
+            "the default (pinned). Never stored for an app: key -- app pinning IS membership."
+        ),
+    )
+    mode: str | None = Field(
+        default=None,
+        description="'focus' or 'new' when the project has flipped this shortcut's mode; None means the default",
+    )
+
+
 class ProjectInfo(FrozenModel):
     """One project as listed to clients."""
 
@@ -163,6 +228,13 @@ class ProjectInfo(FrozenModel):
     glyph: int = Field(description="Index into the frontend's squiggle glyph table")
     has_content: bool = Field(description="Whether a saved content file exists yet")
     members: tuple[str, ...] = Field(description="Panel refs this project shows, open or backgrounded")
+    # Sparse on purpose: an absent key means all defaults, so no migration is
+    # ever needed and the registry stays hand-edit tolerant. Keys are a
+    # built-in name or ``app:<service-name>`` (see ``validated_shortcut_id``).
+    shortcut_overrides: dict[str, ShortcutOverride] = Field(
+        default_factory=dict,
+        description="Per-shortcut deviations from the defaults (pinning for built-ins, mode for any)",
+    )
 
 
 @pure
@@ -242,15 +314,86 @@ class _ProjectEntry(TypedDict):
     color: str
     glyph: int
     members: list[str]
+    shortcut_overrides: dict[str, dict[str, Any]]
 
 
-def _project_entry(name: str, color: str, glyph: int, members: list[str]) -> _ProjectEntry:
-    """Build one registry entry from validated display metadata plus its members."""
+def _project_entry(
+    name: str,
+    color: str,
+    glyph: int,
+    members: list[str],
+    shortcut_overrides: Mapping[str, Mapping[str, Any]] | None = None,
+) -> _ProjectEntry:
+    """Build one registry entry from validated display metadata plus its members.
+
+    ``shortcut_overrides`` defaults to none -- the same state an absent key
+    means on read -- so only ``update_project``, which must carry an existing
+    project's shortcut state through a rebuild, ever passes it.
+    """
     return {
         "name": _validated_name(name),
         "color": _validated_color(color),
         "glyph": _validated_glyph(glyph),
         "members": list(members),
+        "shortcut_overrides": {key: dict(value) for key, value in (shortcut_overrides or {}).items()},
+    }
+
+
+@pure
+def _sanitized_override(shortcut_id: str, raw_override: Mapping[str, Any]) -> dict[str, Any]:
+    """One override's usable fields, tolerating a hand-edit.
+
+    Only the fields that deviate from the defaults survive: ``is_pinned`` when
+    False (True is the default, and app pinning is membership so an ``app:``
+    key never carries it -- the spec says such a field is ignored), ``mode``
+    when it is a known mode other than the shortcut's default. Anything else
+    is dropped rather than trusted, so junk cannot ride every list response.
+    """
+    sanitized: dict[str, Any] = {}
+    is_pinned = raw_override.get("is_pinned")
+    if is_pinned is False and shortcut_id in SHORTCUT_NAMES:
+        sanitized["is_pinned"] = False
+    mode = raw_override.get("mode")
+    if isinstance(mode, str) and mode in SHORTCUT_MODES and mode != default_shortcut_mode(shortcut_id):
+        sanitized["mode"] = mode
+    return sanitized
+
+
+@pure
+def _entry_shortcut_overrides(entry: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    """One entry's shortcut overrides, tolerating hand-edits and legacy shapes.
+
+    Keys that are not shortcut ids, values that are not objects, and fields
+    that just restate a default are all dropped on read. When the entry has no
+    ``shortcut_overrides`` at all, the legacy ``unpinned_shortcuts`` list is
+    read as ``{<name>: {"is_pinned": False}}`` -- the shape the projects
+    follow-up stored pin state in -- so nothing a user put away pops back.
+
+    CLEANUP: drop the legacy ``unpinned_shortcuts`` branch once no supported
+    workspace's registry predates the shortcut_overrides map (the first write
+    of any override rewrites the entry to the new shape).
+    """
+    raw_overrides = entry.get("shortcut_overrides")
+    if isinstance(raw_overrides, dict):
+        sanitized_overrides: dict[str, dict[str, Any]] = {}
+        for shortcut_id, raw_override in raw_overrides.items():
+            if not isinstance(shortcut_id, str) or not isinstance(raw_override, dict):
+                continue
+            try:
+                validated_shortcut_id(shortcut_id)
+            except ProjectShortcutError:
+                continue
+            sanitized = _sanitized_override(shortcut_id, raw_override)
+            if sanitized:
+                sanitized_overrides[shortcut_id] = sanitized
+        return sanitized_overrides
+    legacy_unpinned = entry.get("unpinned_shortcuts")
+    if not isinstance(legacy_unpinned, list):
+        return {}
+    return {
+        name: {"is_pinned": False}
+        for name in legacy_unpinned
+        if isinstance(name, str) and name in SHORTCUT_NAMES
     }
 
 
@@ -323,11 +466,14 @@ def _panel_member_ref(panel_id: str, params: dict[str, Any]) -> str:
     chat_agent_id = params.get("chatAgentId")
     terminal_session_name = params.get("terminalSessionName")
     service_name = params.get("serviceName")
+    service_instance_id = params.get("serviceInstanceId")
     if params.get("panelType") == "chat" and isinstance(chat_agent_id, str) and chat_agent_id:
         return f"chat:{chat_agent_id}"
     if isinstance(terminal_session_name, str) and terminal_session_name:
         return f"terminal:{terminal_session_name}"
     if isinstance(service_name, str) and service_name:
+        if isinstance(service_instance_id, str) and service_instance_id:
+            return f"service:{service_name}?{_SERVICE_INSTANCE_QUERY_KEY}={service_instance_id}"
         session_suffix = _browser_session_suffix(params.get("url"))
         return f"service:{service_name}{session_suffix}"
     return f"url:{hashlib.sha256(panel_id.encode('utf-8')).hexdigest()[:8]}"
@@ -460,14 +606,57 @@ def _migrate_named_layouts_unlocked(layout_dir: Path) -> dict[str, Any] | None:
     }
 
 
+# Member refs that name nothing a project can show any more, purged on read:
+#
+# - ``url:`` members, left behind by the old ad-hoc-page filer. A ``url:<hash>``
+#   ref named the panel that once showed the page rather than the page itself,
+#   so nothing can open or act on one. (CLEANUP: remove -- with the frontend's
+#   remaining "url" member handling in models/Projects.ts -- once no supported
+#   workspace's registry predates the projects follow-up that stopped filing
+#   ad-hoc pages.)
+# - bare ``service:files`` members, left behind by builds whose app opens filed
+#   the bare service ref. The file viewer's pin is its built-in rail row, never
+#   membership, so such an entry only ever rendered as a phantom "files" tab
+#   row. Opens file ``?instance=`` refs now. (CLEANUP: remove once no supported
+#   workspace's registry predates app instances.)
+_PURGED_MEMBER_REFS: Final[tuple[str, ...]] = ("service:files",)
+_PURGED_MEMBER_REF_PREFIXES: Final[tuple[str, ...]] = ("url:",)
+
+
+def _purge_legacy_members_unlocked(layout_dir: Path, meta: dict[str, Any]) -> None:
+    """Drop the member refs nothing can show any more (see the table above).
+
+    Pages and panes still persist in each view's saved arrangement; only the
+    dead member entries go. Rewrites the registry only when something was
+    actually dropped.
+    """
+    dropped_count = 0
+    for entry in meta["project_by_id"].values():
+        if not isinstance(entry, dict):
+            continue
+        members = _entry_members(entry)
+        kept_members = [
+            ref
+            for ref in members
+            if ref not in _PURGED_MEMBER_REFS and not ref.startswith(_PURGED_MEMBER_REF_PREFIXES)
+        ]
+        if len(kept_members) != len(members):
+            dropped_count += len(members) - len(kept_members)
+            entry["members"] = kept_members
+    if dropped_count:
+        _loguru_logger.info("Dropped {} legacy member(s) from the project registry", dropped_count)
+        _write_meta_unlocked(layout_dir, meta)
+
+
 def _read_meta_unlocked(layout_dir: Path) -> dict[str, Any]:
     """Read the registry, seeding the starter project on first use.
 
-    A corrupt meta file -- or one a hand-edit left holding no projects at all
-    -- is treated as first use (logged at warning) rather than crashing every
-    project endpoint: the registry is derivable state and the content files
-    themselves are untouched. Reseeding is also what guarantees the rest of
-    this module always has at least one project to fall back to.
+    A corrupt meta file is treated as first use (logged at warning) rather than
+    crashing every project endpoint: the registry is derivable state and the
+    content files themselves are untouched. An empty ``project_by_id`` is *not*
+    treated as corrupt -- deleting is a pure view operation with no undeletable
+    project any more, so a machine legitimately reaches zero of them, and
+    Everything is always there to fall back to.
     """
     meta_path = _meta_path(layout_dir)
     if meta_path.exists():
@@ -476,7 +665,8 @@ def _read_meta_unlocked(layout_dir: Path) -> dict[str, Any]:
         except (json.JSONDecodeError, OSError) as e:
             _loguru_logger.opt(exception=e).warning("Failed to read {}; reinitializing defaults", meta_path)
             meta = None
-        if isinstance(meta, dict) and isinstance(meta.get("project_by_id"), dict) and meta["project_by_id"]:
+        if isinstance(meta, dict) and isinstance(meta.get("project_by_id"), dict):
+            _purge_legacy_members_unlocked(layout_dir, meta)
             return meta
     migrated_meta = _migrate_named_layouts_unlocked(layout_dir)
     meta = migrated_meta if migrated_meta is not None else _default_meta()
@@ -494,6 +684,10 @@ def _project_info(layout_dir: Path, project_id: str, entry: Mapping[str, Any]) -
         glyph=glyph if isinstance(glyph, int) else DEFAULT_PROJECT_GLYPH,
         has_content=any(project_content_path(layout_dir, project_id, device).exists() for device in DEVICE_KINDS),
         members=tuple(_entry_members(entry)),
+        shortcut_overrides={
+            shortcut_id: ShortcutOverride.model_validate(override)
+            for shortcut_id, override in _entry_shortcut_overrides(entry).items()
+        },
     )
 
 
@@ -505,6 +699,7 @@ def list_projects(layout_dir: Path) -> list[ProjectInfo]:
 
 
 def get_last_active_id(layout_dir: Path) -> str:
+    """The view a client should land on, falling back to Everything with zero projects."""
     with _projects_lock:
         meta = _read_meta_unlocked(layout_dir)
         last_active = meta.get("last_active_id")
@@ -512,7 +707,7 @@ def get_last_active_id(layout_dir: Path) -> str:
             last_active == EVERYTHING_VIEW_ID or last_active in meta["project_by_id"]
         ):
             return last_active
-        return next(iter(meta["project_by_id"]))
+        return next(iter(meta["project_by_id"]), EVERYTHING_VIEW_ID)
 
 
 def set_last_active_id(layout_dir: Path, project_id: str) -> None:
@@ -641,6 +836,70 @@ def add_member(layout_dir: Path, project_id: str, ref: str) -> None:
             return
         entry["members"] = [*members, member_ref]
         _write_meta_unlocked(layout_dir, meta)
+
+
+def set_shortcut_override(
+    layout_dir: Path,
+    project_id: str,
+    shortcut_id: str,
+    # None leaves the field as it is; a value sets it (and a value equal to the
+    # default clears it back out, keeping the stored map sparse).
+    is_pinned: bool | None,
+    mode: str | None,
+) -> dict[str, dict[str, Any]]:
+    """Record one shortcut's deviation from the defaults on ``project_id``.
+
+    Pinning moves where a built-in row is offered (the rail when pinned, the
+    All apps menu when not) and mode decides what clicking it does (focus the
+    most recent member of the kind, or always create). Both are project-scoped
+    on purpose: which starting points a project keeps to hand, and how they
+    behave, are properties of that project.
+
+    Idempotent; returns the resulting sparse override map. The first write also
+    migrates a legacy ``unpinned_shortcuts`` entry to the new shape (the
+    legacy key is folded in by the read and dropped from the entry here). An
+    unknown project id raises ProjectNotFoundError; an unknown shortcut id, a
+    bad mode, or a pin on an ``app:`` key (whose pinning IS membership) raises
+    ProjectShortcutError.
+    """
+    validated_shortcut_id(shortcut_id)
+    if mode is not None and mode not in SHORTCUT_MODES:
+        known_modes = ", ".join(SHORTCUT_MODES)
+        raise ProjectShortcutError(f"Unknown shortcut mode {mode!r} (known modes: {known_modes})")
+    if is_pinned is not None and shortcut_id not in SHORTCUT_NAMES:
+        raise ProjectShortcutError(
+            f"Pinning is not stored for {shortcut_id!r}: an app's pin IS its project membership"
+        )
+    with _projects_lock:
+        meta = _read_meta_unlocked(layout_dir)
+        entry = meta["project_by_id"].get(project_id)
+        if entry is None:
+            raise ProjectNotFoundError(project_id)
+        overrides = _entry_shortcut_overrides(entry)
+        override = dict(overrides.get(shortcut_id, {}))
+        if is_pinned is not None:
+            if is_pinned:
+                override.pop("is_pinned", None)
+            else:
+                override["is_pinned"] = False
+        if mode is not None:
+            if mode == default_shortcut_mode(shortcut_id):
+                override.pop("mode", None)
+            else:
+                override["mode"] = mode
+        if override:
+            overrides[shortcut_id] = override
+        else:
+            overrides.pop(shortcut_id, None)
+        if entry.get("shortcut_overrides") == overrides and "unpinned_shortcuts" not in entry:
+            return overrides
+        entry["shortcut_overrides"] = overrides
+        # The first write of any override migrates the entry to the new shape:
+        # the legacy list was already folded into ``overrides`` by the read.
+        # CLEANUP: remove alongside _entry_shortcut_overrides' legacy branch.
+        entry.pop("unpinned_shortcuts", None)
+        _write_meta_unlocked(layout_dir, meta)
+        return overrides
 
 
 def remove_member(layout_dir: Path, project_id: str, ref: str) -> None:
@@ -894,7 +1153,7 @@ def create_project(layout_dir: Path, name: str, color: str, glyph: int) -> Proje
 
 
 def update_project(layout_dir: Path, project_id: str, name: str, color: str, glyph: int) -> ProjectInfo:
-    """Replace one project's display metadata, keeping its id, content and members.
+    """Replace one project's display metadata, keeping its id, content, members and shortcut pins.
 
     Renaming never re-slugifies the id: the id keys the content file and the
     registry entry that owns the members, so a rename is purely cosmetic.
@@ -905,7 +1164,9 @@ def update_project(layout_dir: Path, project_id: str, name: str, color: str, gly
         existing_entry = meta["project_by_id"].get(project_id)
         if existing_entry is None:
             raise ProjectNotFoundError(project_id)
-        entry = _project_entry(name, color, glyph, _entry_members(existing_entry))
+        entry = _project_entry(
+            name, color, glyph, _entry_members(existing_entry), _entry_shortcut_overrides(existing_entry)
+        )
         meta["project_by_id"][project_id] = entry
         _write_meta_unlocked(layout_dir, meta)
         return _project_info(layout_dir, project_id, entry)
@@ -914,22 +1175,22 @@ def update_project(layout_dir: Path, project_id: str, name: str, color: str, gly
 def delete_project(layout_dir: Path, project_id: str) -> str:
     """Delete a project and return the fallback id clients should switch to.
 
-    The fallback is the first remaining project in registry order. The member
-    list goes with the project, which changes nothing about the objects it
-    showed: they keep running, and they stay in every other project showing them
-    and in Everything. Stopping any of them is the caller's job, and is what the
-    delete confirmation enumerates. Raises ProjectNotFoundError for an unknown id
-    and LastProjectDeletionError when this is the only project left, since the
-    fallback is always another project.
+    A pure view operation: only this project's registry entry and its own
+    content files (desktop and mobile) go. The member list goes with them, but
+    that changes nothing about the objects it showed -- they keep running, and
+    they stay in every other project showing them and in Everything, neither of
+    which this function ever touches. The fallback is the first remaining
+    project in registry order, or Everything once none are left: a machine may
+    end up with zero projects and still work, since Everything has no registry
+    entry to delete and is always there. Raises ProjectNotFoundError for an
+    unknown id.
     """
     with _projects_lock:
         meta = _read_meta_unlocked(layout_dir)
         if project_id not in meta["project_by_id"]:
             raise ProjectNotFoundError(project_id)
-        if len(meta["project_by_id"]) <= 1:
-            raise LastProjectDeletionError("Cannot delete the last remaining project")
         del meta["project_by_id"][project_id]
-        fallback_id = next(iter(meta["project_by_id"]))
+        fallback_id = next(iter(meta["project_by_id"]), EVERYTHING_VIEW_ID)
         if meta.get("last_active_id") == project_id:
             meta["last_active_id"] = fallback_id
         _write_meta_unlocked(layout_dir, meta)

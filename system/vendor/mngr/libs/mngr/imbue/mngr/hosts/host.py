@@ -67,6 +67,7 @@ from imbue.mngr.hosts.offline_host import BaseHost
 from imbue.mngr.hosts.offline_host import apply_rename_to_agent_data
 from imbue.mngr.hosts.outer_host import ActiveRemoteLock
 from imbue.mngr.hosts.outer_host import OuterHost
+from imbue.mngr.hosts.outer_host import SSH_CHANNEL_OPEN_TIMEOUT_SECONDS
 from imbue.mngr.hosts.outer_host import is_transient_ssh_error
 from imbue.mngr.hosts.outer_host import retry_on_transient_ssh_error
 from imbue.mngr.hosts.tmux import TmuxSessionTarget
@@ -647,23 +648,15 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
             "_retry_delay": _retry_delay,
             "_retry_until": _retry_until,
         }
-        with self._notify_on_connection_error():
-            try:
-                return self._run_shell_command_with_transient_retry(command, pyinfra_kwargs)
-            except TimeoutError as e:
-                # ``TimeoutError`` is a subclass of ``OSError``, so this
-                # must precede the OSError branch below. Reached when the
-                # retry decorator has exhausted its attempts on transient
-                # SSH read timeouts; surface as a structured
-                # HostConnectionError so callers don't see a raw timeout.
-                raise HostConnectionError("SSH command timed out reading output") from e
-            except OSError as e:
-                if "Socket is closed" in str(e):
-                    raise HostConnectionError("Connection was closed while running command") from e
-                else:
-                    raise
-            except (EOFError, SSHException) as e:
-                raise HostConnectionError("Could not execute command due to connection error") from e
+        with (
+            self._notify_on_connection_error(),
+            self._translate_ssh_errors(
+                timed_out="SSH command timed out reading output",
+                closed="Connection was closed while running command",
+                failed="Could not execute command due to connection error",
+            ),
+        ):
+            return self._run_shell_command_with_transient_retry(command, pyinfra_kwargs)
 
     # _run_shell_command_with_transient_retry and _run_shell_command_local
     # are inherited unchanged from OuterHost. _get_file*, _put_file*,
@@ -1006,7 +999,9 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
         self._ensure_connected()
         transport = self._get_paramiko_transport()
         try:
-            channel = transport.open_session()
+            # Bounded open: a wedged sshd that accepts TCP but no longer
+            # services channel opens would otherwise hang here forever.
+            channel = transport.open_session(timeout=SSH_CHANNEL_OPEN_TIMEOUT_SECONDS)
         except (OSError, EOFError, SSHException) as e:
             if is_transient_ssh_error(e):
                 logger.debug("Transient SSH error opening host-lock channel: {}, disconnecting for retry", e)
@@ -1168,14 +1163,22 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
         )
         self._ensure_connected()
         transport = self._get_paramiko_transport()
-        channel = transport.open_session()
+        channel = transport.open_session(timeout=SSH_CHANNEL_OPEN_TIMEOUT_SECONDS)
+        # The confirmation is one round trip on a healthy sshd, so bound the read on
+        # the same budget as the open: an sshd that accepts the channel but stops
+        # servicing it would otherwise block here forever.
+        channel.settimeout(SSH_CHANNEL_OPEN_TIMEOUT_SECONDS)
         try:
             channel.exec_command(command)
             # Wait for the launch confirmation so the holder forks before we release.
             marker_bytes = _LOCK_HOLDER_LAUNCHED_MARKER.encode()
             buffer = b""
             while marker_bytes not in buffer:
-                chunk = channel.recv(4096)
+                try:
+                    chunk = channel.recv(4096)
+                except TimeoutError:
+                    logger.warning("Detached host-lock holder did not confirm launch within the read timeout")
+                    break
                 if not chunk:
                     logger.warning("Detached host-lock holder did not confirm launch")
                     break

@@ -13,6 +13,13 @@ needed the identical behavior):
   ``permission_request`` field), because the object routinely runs past the output cap and
   a mid-object cut would leave the card nothing to read.
 
+  Both readers assume one filing per tool call, with the echo in that call's own
+  result. ``system/scripts/agent_latchkey_request_standalone.sh`` and its checker
+  ``agent_latchkey_request_check.py`` are what hold the agent to it, on every harness;
+  they exist for these two functions and copy ``PERMISSION_REQUEST_HOST`` from here, so
+  changing what counts as a request call -- or how many a result can carry -- means
+  revisiting that gate too.
+
 - **tk step decoration.** tk lifecycle commands print machine-readable decoration on
   stdout (``Updated <id> -> <status>``, ``tk-step <id> title|summary: ...``) that the chat
   progress view reads back from the transcript. Those lines must survive truncation (a tk

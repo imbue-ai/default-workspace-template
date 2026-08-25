@@ -35,6 +35,7 @@
  */
 
 import m from "mithril";
+import { backdropDismissAttrs } from "./modalBackdrop";
 import { OPEN_AI_KEYS_ACK, OPEN_AI_KEYS_PAGE } from "@minds/embed-contract";
 import { apiUrl } from "../base-path";
 import { clearEmbedderMessageHandler, sendToEmbedder, setEmbedderMessageHandler } from "../embed";
@@ -1113,11 +1114,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
       const onClose = (): void => attrsRef?.onDismiss();
       return m(
         "div.claude-login-overlay",
-        {
-          onclick: (event: MouseEvent) => {
-            if (event.target === event.currentTarget) onClose();
-          },
-        },
+        backdropDismissAttrs(onClose),
         m(
           "div.claude-login-modal",
           {
