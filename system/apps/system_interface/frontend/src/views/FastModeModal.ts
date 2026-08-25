@@ -10,7 +10,7 @@
  */
 
 import m from "mithril";
-import { backdropDismissAttrs } from "./modalBackdrop";
+import { Modal } from "./Modal";
 import { getAgentById } from "../models/AgentManager";
 import { getFastModePromptAgentId, resolveFastModePrompt } from "../models/FastModePrompt";
 import { icon } from "./icons";
@@ -38,59 +38,52 @@ export function FastModeModal(): m.Component {
 
     view() {
       return m(
-        "div.fast-mode-modal-overlay",
-        backdropDismissAttrs(() => resolveFastModePrompt(false)),
+        Modal,
+        {
+          onDismiss: () => resolveFastModePrompt(false),
+          width: 460,
+          card: {
+            role: "dialog",
+            "aria-modal": "true",
+            "aria-label": "Keep fast mode on?",
+          },
+          header: [
+            m("span.fast-mode-modal-icon", m.trust(icon("zap", { size: 16 }))),
+            m("h3.modal-title", "Keep fast mode on?"),
+          ],
+          actions: [
+            m("button.btn.btn--secondary", { onclick: () => resolveFastModePrompt(true) }, "Keep fast mode on"),
+            m(
+              "button.btn.btn--primary",
+              {
+                onclick: () => resolveFastModePrompt(false),
+                // The default action, so Enter takes it without a reach for the mouse.
+                oncreate: (vnode: m.VnodeDOM) => {
+                  (vnode.dom as HTMLButtonElement).focus();
+                },
+              },
+              "Switch to standard speed",
+            ),
+          ],
+        },
         [
-          m(
-            "div.fast-mode-modal",
-            {
-              role: "dialog",
-              "aria-modal": "true",
-              "aria-label": "Keep fast mode on?",
-            },
-            [
-              m("div.fast-mode-modal-header", [
-                m("span.fast-mode-modal-icon", m.trust(icon("zap", { size: 16 }))),
-                m("h3.fast-mode-modal-title", "Keep fast mode on?"),
-              ]),
-              m("p.fast-mode-modal-message", [
-                promptingAgentName() !== null ? [m("strong", promptingAgentName()), " has Fast Mode on. "] : null,
-                "Fast Mode is 2.5x faster and 2x more expensive (",
-                m(
-                  "a.fast-mode-modal-link",
-                  { href: FAST_MODE_DOC_URL, target: "_blank", rel: "noopener noreferrer" },
-                  [m("span", "learn more"), m.trust(icon("external-link", { size: 13 }))],
-                ),
-                ")",
-              ]),
-              m("p.fast-mode-modal-message", [
-                "You can toggle Fast Mode at any time with the ",
-                // A copy of the composer's toggle, so "the button" has something to
-                // point at. Decorative: hidden from assistive tech, which gets the
-                // sentence on its own.
-                m(
-                  "span.toggle.toggle--on.toggle--inline",
-                  { "aria-hidden": "true" },
-                  m.trust(icon("zap", { size: 16 })),
-                ),
-                " button",
-              ]),
-              m("div.fast-mode-modal-actions", [
-                m("button.btn.btn--secondary", { onclick: () => resolveFastModePrompt(true) }, "Keep fast mode on"),
-                m(
-                  "button.btn.btn--primary",
-                  {
-                    onclick: () => resolveFastModePrompt(false),
-                    // The default action, so Enter takes it without a reach for the mouse.
-                    oncreate: (vnode: m.VnodeDOM) => {
-                      (vnode.dom as HTMLButtonElement).focus();
-                    },
-                  },
-                  "Switch to standard speed",
-                ),
-              ]),
-            ],
-          ),
+          m("p.modal-message", [
+            promptingAgentName() !== null ? [m("strong", promptingAgentName()), " has Fast Mode on. "] : null,
+            "Fast Mode is 2.5x faster and 2x more expensive (",
+            m("a.fast-mode-modal-link", { href: FAST_MODE_DOC_URL, target: "_blank", rel: "noopener noreferrer" }, [
+              m("span", "learn more"),
+              m.trust(icon("external-link", { size: 13 })),
+            ]),
+            ")",
+          ]),
+          m("p.modal-message", [
+            "You can toggle Fast Mode at any time with the ",
+            // A copy of the composer's toggle, so "the button" has something to
+            // point at. Decorative: hidden from assistive tech, which gets the
+            // sentence on its own.
+            m("span.toggle.toggle--on.toggle--inline", { "aria-hidden": "true" }, m.trust(icon("zap", { size: 16 }))),
+            " button",
+          ]),
         ],
       );
     },

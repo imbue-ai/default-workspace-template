@@ -44,18 +44,20 @@ const BASELINES = {
   // Tightened again by the badge primitive, which folded three bespoke badges'
   // radii (two 10px + one 4px) into the single .badge (one 10px). Tightened again
   // by the input primitive, which deleted the claude-login-input's bespoke 8px
-  // radius (the shared .input uses var(--radius-base)). The remaining 32 are
-  // values with no token yet (8/12/…), handled when a radius scale lands (needs
-  // non-colliding names, like type).
-  borderRadiusPx: 32,
+  // radius (the shared .input uses var(--radius-base)). Tightened again by the P4
+  // modal shell: the per-feature dialogs' bespoke 12px card radii collapse into the
+  // single .modal-card (drops further as each dialog moves onto the shell). The
+  // remaining values have no token yet (8/12/…), handled when a radius scale lands
+  // (needs non-colliding names, like type).
+  borderRadiusPx: 31,
   // Tightened by the tooltip primitive: the three duplicated per-component
   // `[data-tooltip]::after` bubbles (each with `z-index: 1000`) were consolidated
   // into one generic `[data-tooltip]::after`, dropping two z-index literals.
   // Tightened again by the P4 modal shell: the new shared `.modal-overlay` reads
-  // `var(--z-overlay)`, and the delete-confirm dialog's old raw `z-index: 10000`
-  // overlay plus the image lightbox's now use that token -- two raw literals gone.
-  // (Drops further as fast-mode/share/custom-url move onto the shell.)
-  zIndexLiteral: 14,
+  // `var(--z-overlay)`, and each per-feature dialog overlay's old raw `z-index:
+  // 10000` (plus the image lightbox's) now uses that token as it moves onto the
+  // shell. (Drops further as share/custom-url follow.)
+  zIndexLiteral: 13,
 } as const;
 
 interface Counts {
