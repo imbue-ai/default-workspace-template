@@ -49,7 +49,7 @@ function statusIcon(status: StepStatus, is_frontier: boolean): m.Children {
     if (!is_frontier) {
       return m.trust(statusRingIcon());
     }
-    return m("span.pv-icon.pv-icon--active", m("span.pv-spinner"));
+    return m("span.pv-icon.pv-icon--active", m("span.spinner.spinner--sm.spinner--current"));
   }
   return m.trust(statusPendingIcon());
 }

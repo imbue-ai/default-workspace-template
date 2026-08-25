@@ -280,16 +280,21 @@
 
       <!-- ── Spinner ───────────────────────────────────────────────────── -->
       <section class="gy-section" data-shot="spinner">
-        <h2>Spinner</h2>
+        <h2>Spinner — unified .spinner primitive</h2>
         <div class="gy-pad">
-          <div class="gy-row" style="align-items: center">
-            <span class="pv-spinner"></span>
-            <span class="claude-login-spinner"></span>
-            <span class="composer-attachment-spinner"></span>
+          <div class="gy-row" style="align-items: center; gap: 24px">
+            <div class="gy-cell"><div class="gy-label">.spinner</div><span class="spinner"></span></div>
+            <div class="gy-cell"><div class="gy-label">.spinner--sm</div><span class="spinner spinner--sm"></span></div>
+            <div class="gy-cell"><div class="gy-label">.spinner--lg</div><span class="spinner spinner--lg"></span></div>
+            <div class="gy-cell">
+              <div class="gy-label">--current (on accent)</div>
+              <span class="spinner spinner--sm spinner--current" style="color: var(--color-accent)"></span>
+            </div>
           </div>
         </div>
         <div class="gy-note">
-          Three separate implementations with near-identical <code>@keyframes</code> — a consolidation target.
+          One <code>.spinner</code> class + one <code>@keyframes spin</code> replace the three bespoke
+          keyframes. The login screen's SVG arc keeps its own hook but shares the keyframe.
         </div>
       </section>
 

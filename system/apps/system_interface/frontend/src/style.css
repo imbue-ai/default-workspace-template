@@ -327,6 +327,40 @@ body {
   border-color: color-mix(in srgb, var(--color-success) 35%, transparent);
 }
 
+/* ── Spinner primitive ───────────────────────────────────────────────────────
+ * One CSS ring spinner (+ one @keyframes spin) replacing the near-identical
+ * bespoke keyframes. Size via --spinner-size (or .spinner--sm / .spinner--lg);
+ * the two-tone track/arc default to --color-border / --color-accent, overridable
+ * via --spinner-track / --spinner-arc. .spinner--current makes it monochrome
+ * (currentColor ring with a transparent gap) for use on coloured contexts.
+ * (The login screen's fancier SVG arc keeps its own .claude-login-spinner hook
+ * but shares this @keyframes.) */
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.spinner {
+  display: block;
+  width: var(--spinner-size, 16px);
+  height: var(--spinner-size, 16px);
+  border: 2px solid var(--spinner-track, var(--color-border));
+  border-top-color: var(--spinner-arc, var(--color-accent));
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+.spinner--sm {
+  --spinner-size: 12px;
+}
+.spinner--lg {
+  --spinner-size: 32px;
+}
+.spinner--current {
+  --spinner-track: currentColor;
+  --spinner-arc: transparent;
+}
+
 /* Spacer for the Minds desktop client title bar. When running inside the
    Electron shell, --minds-titlebar-height is set to the title bar height
    (38px). Outside the shell the variable is unset and the spacer collapses
@@ -826,20 +860,8 @@ body {
   flex-shrink: 0;
 }
 
-.composer-attachment-spinner {
-  width: 16px;
-  height: 16px;
-  border: 2px solid var(--color-border);
-  border-top-color: var(--color-accent);
-  border-radius: 50%;
-  animation: composer-attachment-spin 0.7s linear infinite;
-}
-
-@keyframes composer-attachment-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
+/* The composer attachment upload spinner now uses the shared .spinner primitive
+   (its 16px two-tone default is exactly this). */
 
 .composer-attachment-info {
   display: flex;
@@ -2948,12 +2970,6 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   }
 }
 
-@keyframes claude-login-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 /* ─────────────────────────────────────────────────────────────────────
    PROGRESS VIEW (per-turn task timeline rendered from tk tickets)
    ─────────────────────────────────────────────────────────────────── */
@@ -3001,20 +3017,9 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   color: var(--pv-pending);
 }
 
-.pv-spinner {
-  display: block;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  border: 1.5px solid currentColor;
-  border-top-color: transparent;
-  animation: pv-spin 0.9s linear infinite;
-}
-@keyframes pv-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
+/* The progress-view active-step spinner now uses the shared .spinner primitive
+   (.spinner--sm.spinner--current: a 12px currentColor ring, coloured by
+   --pv-active via the surrounding .pv-icon--active). */
 
 /* Chevron */
 .pv-chev {
@@ -3935,10 +3940,13 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   max-width: 320px;
 }
 
+/* The login SVG spinner (a faded ring + solid arc, drawn in the SVG itself) is
+   not a CSS ring like .spinner, so it keeps its own size/rotation hook -- but it
+   shares the single @keyframes spin. */
 .claude-login-spinner {
   width: 32px;
   height: 32px;
-  animation: claude-login-spin 800ms linear infinite;
+  animation: spin 800ms linear infinite;
 }
 
 /* ── Inline image lightbox ── */

@@ -113,7 +113,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
           "span",
           { class: "composer-attachment-icon" },
           attachment.status === "uploading"
-            ? m("span", { class: "composer-attachment-spinner" })
+            ? m("span", { class: "spinner" })
             : m.trust(icon("file", { size: 18, strokeWidth: 1.8 })),
         );
     return m(
