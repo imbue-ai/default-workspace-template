@@ -27,10 +27,13 @@ a real core (matching the seam pattern used across this package).
 import base64
 import hashlib
 import html
+import http.client
 import logging
 import os
 import re
 import secrets
+import threading
+import urllib.request
 from collections.abc import Callable
 from datetime import datetime
 from datetime import timedelta
@@ -48,6 +51,9 @@ from urllib.parse import urlsplit
 import httpx
 import jwt as pyjwt
 import psycopg2
+import yaml
+from cachetools import TTLCache
+from cachetools import cached
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import APIRouter
@@ -160,17 +166,94 @@ OAUTH_GOOGLE_CALLBACK_PATH: Final[str] = "/share/oauth/google/callback"
 # back to the ASGI scheme rather than being spliced into the base URL verbatim.
 _TRUSTED_FORWARDED_SCHEMES: Final[frozenset[str]] = frozenset({"http", "https"})
 
-# Stable per-platform installer links for GET /download. ToDesktop's channel
-# URLs always resolve to the latest published build, so nothing here changes
-# per release; "source" is the escape hatch for platforms without builds.
-_DOWNLOAD_TARGET_BY_PLATFORM: Final[dict[str, str]] = {
-    "mac-arm64": "https://dl.todesktop.com/26032588hqdzk/mac/dmg/arm64",
+# The only platform that tracks a release channel meaningfully.
+_MAC_ARM64_PLATFORM: Final[str] = "mac-arm64"
+
+# Default per-platform installer links.
+_DEFAULT_TARGET_BY_PLATFORM: Final[dict[str, str]] = {
+    # For _MAC_ARM64_PLATFORM, this is the hardcoded fallback, used only when the live manifest is down.
+    _MAC_ARM64_PLATFORM: "https://dl.todesktop.com/26032588hqdzk/mac/dmg/arm64",
     "source": "https://github.com/imbue-ai/mngr",
 }
+
+_STABLE_CHANNEL_MANIFEST_URL: Final[str] = "https://updates.imbueminds.com/stable-mac.yml"
+_STABLE_CHANNEL_CACHE_SECONDS: Final[float] = 60.0
+_STABLE_CHANNEL_FETCH_TIMEOUT_SECONDS: Final[float] = 2.0
+_ARM64_DMG_SUFFIX: Final[str] = "-arm64.dmg"
+# Where ToDesktop serves builds, and so the only host this route will redirect to.
+_TODESKTOP_DOWNLOAD_PREFIX: Final[str] = "https://download.todesktop.com/"
+
+
+def _arm64_dmg_urls(manifest: str) -> set[str]:
+    """Every arm64 .dmg an electron-updater channel manifest offers.
+
+    Read out of ``files[].url``, which is what names an artifact -- a url under
+    some other key, now or later, is not one. A url that does not point at
+    ToDesktop is not a candidate either, so the route falls back rather than
+    sending anyone wherever the feed happened to say.
+    """
+    document = yaml.safe_load(manifest)
+    entries = document.get("files") if isinstance(document, dict) else None
+    if not isinstance(entries, list):
+        return set()
+    urls = set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        url = str(entry.get("url", ""))
+        if url.startswith(_TODESKTOP_DOWNLOAD_PREFIX) and url.endswith(_ARM64_DMG_SUFFIX):
+            urls.add(url)
+    return urls
+
+
+def _fetch_stable_channel_manifest() -> str:
+    # The feed's CDN answers 403 to `Python-urllib/<version>` by name.
+    request = urllib.request.Request(_STABLE_CHANNEL_MANIFEST_URL, headers={"User-Agent": "minds-connector"})
+    with urllib.request.urlopen(request, timeout=_STABLE_CHANNEL_FETCH_TIMEOUT_SECONDS) as response:
+        return response.read().decode()
+
+
+def resolve_stable_mac_arm64_url(fetch: Callable[[], str] = _fetch_stable_channel_manifest) -> str | None:
+    """The arm64 .dmg the stable channel serves, or None to fall back.
+
+    Uncached; ``stable_mac_arm64_url`` is the entry point the route uses.
+    """
+    try:
+        manifest = fetch()
+    except (OSError, http.client.HTTPException, UnicodeDecodeError) as exc:
+        # OSError to capture socket level errors
+        logger.warning("Could not resolve the stable download: %s", exc)
+        return None
+    try:
+        urls = _arm64_dmg_urls(manifest)
+    except yaml.YAMLError as exc:
+        logger.warning("Could not resolve the stable download: unreadable manifest: %s", exc)
+        return None
+    if len(urls) != 1:
+        logger.warning(
+            "Could not resolve the stable download: the manifest names %d distinct arm64 .dmg urls, not 1", len(urls)
+        )
+        return None
+    return urls.pop()
+
+
+# The condition serialises concurrent misses, so a cold container hit by several
+# downloads at once reads the feed once rather than once per request.
+@cached(cache=TTLCache(maxsize=1, ttl=_STABLE_CHANNEL_CACHE_SECONDS), condition=threading.Condition())
+def stable_mac_arm64_url() -> str | None:
+    """What the route redirects to, re-read at most once per TTL.
+
+    Each container caches independently, so a promotion reaches every one of
+    them within the TTL. A read that fails caches its None too, so an outage
+    costs one download the fetch timeout rather than every one.
+    """
+    return resolve_stable_mac_arm64_url()
+
+
 # Friendly aliases resolve server-side so marketing links stay stable if a
 # platform's default target ever changes (e.g. "mac" moving off arm64).
 _DOWNLOAD_PLATFORM_BY_ALIAS: Final[dict[str, str]] = {
-    "mac": "mac-arm64",
+    "mac": _MAC_ARM64_PLATFORM,
 }
 
 # Caps on the campaign context carried through the OAuth state JWT: the whole
@@ -1549,9 +1632,11 @@ def download_redirect(request: Request) -> RedirectResponse:
     with handle_endpoint_errors():
         raw_platform = request.query_params.get("platform", "")
         platform = _DOWNLOAD_PLATFORM_BY_ALIAS.get(raw_platform, raw_platform)
-        target_url = _DOWNLOAD_TARGET_BY_PLATFORM.get(platform)
-        if target_url is None:
+        if platform not in _DEFAULT_TARGET_BY_PLATFORM:
             raise HTTPException(status_code=404, detail="Unknown platform")
+        target_url = _DEFAULT_TARGET_BY_PLATFORM[platform]
+        if platform == _MAC_ARM64_PLATFORM:
+            target_url = stable_mac_arm64_url() or target_url
         record_download_event(
             cookie_value=request.cookies.get(ATTRIBUTION_COOKIE_NAME),
             request_query=request.url.query,

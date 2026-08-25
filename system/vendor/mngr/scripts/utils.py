@@ -14,10 +14,12 @@ from imbue.mngr.plugin_catalog import UNPUBLISHED_PACKAGES
 
 REPO_ROOT: Final[Path] = Path(__file__).parent.parent
 
-# Workspace layout, per the root `[tool.uv.workspace] members = ["libs/*", "apps/*"]`.
-# Only libs/ packages are publishable to PyPI; apps/ (e.g. minds) are desktop
-# bundles that are never published. Both parents are still scanned for pin
-# alignment, because apps pin internal packages too.
+# Monorepo layout: every project lives under libs/ or apps/. Only libs/ packages
+# are publishable to PyPI; apps/ (e.g. minds) are desktop bundles that are never
+# published. Both parents are still scanned for pin alignment, because apps pin
+# internal packages too -- including apps that are standalone uv projects rather
+# than members of the root workspace (root `[tool.uv.workspace].exclude`), whose
+# pins have to stay aligned just the same.
 _PUBLISHABLE_PARENT: Final[str] = "libs"
 _WORKSPACE_PARENTS: Final[tuple[str, ...]] = ("libs", "apps")
 
@@ -92,9 +94,12 @@ def _iter_all_dependency_strings(pyproject_data: dict) -> Iterator[str]:
 
 
 def iter_workspace_member_dirs() -> Iterator[tuple[str, Path]]:
-    """Yield ``(parent, directory)`` for every workspace member holding a pyproject.toml.
+    """Yield ``(parent, directory)`` for every monorepo project holding a pyproject.toml.
 
     ``parent`` is one of ``_WORKSPACE_PARENTS`` (``"libs"`` / ``"apps"``).
+    Discovery is by filesystem, so standalone uv projects (excluded from the root
+    workspace) are included too -- version and pin consistency is a monorepo-wide
+    invariant, not a uv-workspace one.
     """
     for parent in _WORKSPACE_PARENTS:
         parent_dir = REPO_ROOT / parent
@@ -103,6 +108,20 @@ def iter_workspace_member_dirs() -> Iterator[tuple[str, Path]]:
         for child in sorted(parent_dir.iterdir()):
             if (child / "pyproject.toml").is_file():
                 yield parent, child
+
+
+def iter_standalone_project_dirs() -> Iterator[Path]:
+    """Yield each directory the root pyproject excludes from the uv workspace.
+
+    Those directories are standalone uv projects: they carry their own
+    pyproject.toml and their own uv.lock, and ``uv lock`` at the repo root does
+    not touch either. Anything maintaining an invariant across the repo's locks
+    -- the supply-chain cooldown cutoff, relocking after a dependency-pin bump --
+    has to visit them separately.
+    """
+    root_pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())
+    for pattern in root_pyproject["tool"]["uv"]["workspace"].get("exclude", ()):
+        yield from sorted(path for path in REPO_ROOT.glob(pattern) if (path / "pyproject.toml").is_file())
 
 
 def _workspace_member_name(pyproject_data: dict) -> str | None:

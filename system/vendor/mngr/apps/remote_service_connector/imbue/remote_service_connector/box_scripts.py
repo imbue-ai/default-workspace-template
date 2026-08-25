@@ -36,6 +36,11 @@ TRANSFER_DIR_ROOT: Final[str] = ".mngr-transfers"
 # Box-wide lock serializing artifact downloads (one at a time per box, so a
 # restore never competes with another restore for disk/network).
 DOWNLOAD_LOCK_RELPATH: Final[str] = ".mngr-download.lock"
+# How long a restore waits for the download lock before failing. Downloads
+# run at ~1 GB/s against ~30 GB disks, so a legitimate queue clears in well
+# under a minute; anything longer means the lock is stuck, and failing fast
+# with a real error beats parking the workspace behind the transfer timeout.
+DOWNLOAD_LOCK_WAIT_SECONDS: Final[int] = 300
 
 # Object names within a generation prefix.
 DISK_OBJECT: Final[str] = "disk.zst.age"
@@ -47,6 +52,10 @@ META_OBJECT: Final[str] = "meta.tar.zst.age"
 RESTORE_RESERVED_MARKER: Final[str] = "MNGR_RESTORE_RESERVED"
 RESTORE_BOX_FULL_MARKER: Final[str] = "MNGR_RESTORE_BOX_FULL"
 RESTORE_NO_PORTS_MARKER: Final[str] = "MNGR_RESTORE_NO_PORTS"
+# Printed (to stderr) by the restore rollback when the instance survived
+# ``limactl delete``: its dirs were kept rather than pulled out from under a
+# possibly-running VM.
+CLEANUP_DELETE_FAILED_MARKER: Final[str] = "MNGR_CLEANUP_DELETE_FAILED"
 
 # Slice lima resources are named mngr-slice-<env>-<host-hex>; the data disk
 # adds this suffix. Mirrors ``mngr_imbue_cloud.slices.bare_metal``.
@@ -190,9 +199,15 @@ def render_download_script(
     return (
         _prelude(instance_name)
         + f"""\
-# One artifact download at a time per box (restores are fast; queue briefly).
+# One artifact download at a time per box. The lock covers only the
+# downloads: it is closed before the boot below because limactl's hostagent
+# and qemu inherit every open descriptor and would otherwise keep the lock
+# for the life of the VM.
+status_kv STAGE waiting-for-lock
+status_kv FINISHED 0
+status_flush
 exec 8> "$HOME/{DOWNLOAD_LOCK_RELPATH}"
-flock 8
+flock -w {DOWNLOAD_LOCK_WAIT_SECONDS} 8 || fail "box download lock unavailable after {DOWNLOAD_LOCK_WAIT_SECONDS}s"
 
 IDF="$TD/identity"
 umask 077
@@ -227,11 +242,11 @@ wait_ssh() {{
 }}
 
 status_kv STAGE downloading
-status_kv FINISHED 0
 status_flush
 
 download_one "{DISK_OBJECT}" "$HOME/.lima/$WS_INSTANCE/disk" DISK {expected_disk}
 download_one "{DATADISK_OBJECT}" "$HOME/.lima/_disks/{disk_name}/datadisk" DATADISK {expected_datadisk}
+exec 8>&-
 
 status_kv STAGE booting
 status_flush
@@ -401,13 +416,38 @@ def build_finalize_stop_commands(instance_name: str, disk_name: str) -> tuple[st
 
 
 def build_cleanup_reserved_restore_commands(instance_name: str, disk_name: str) -> tuple[str, ...]:
-    """Roll back a failed restore: drop the claimed instance dir, disk dir, and transfer dir."""
+    """Roll back a failed restore: stop the transfer, delete the VM, drop the claimed dirs.
+
+    The detached transfer is signalled as a process group (it was launched
+    under ``setsid``) so its pipeline children go with it, but only after the
+    recorded pid's cwd proves it is still this instance's transfer -- the pid
+    file may outlive the process on a shared box. ``limactl delete`` then
+    retires the VM. Its exit status is not the survivor test (it sweeps
+    every instance on the box afterwards and exits non-zero over unrelated
+    wreckage); the instance config is. While that exists the VM may still be
+    running off the instance dir, so the instance and disk dirs are kept
+    (reapable, rather than a ghost running off unlinked inodes) and
+    ``CLEANUP_DELETE_FAILED_MARKER`` is printed. The transfer dir goes
+    either way: it holds the S3 credentials and the age identity.
+    """
     td = transfer_dir(instance_name)
     quoted = shlex.quote(instance_name)
     quoted_disk = shlex.quote(disk_name)
+    instance_config = f"$HOME/.lima/{quoted}/lima.yaml"
+    kill_transfer = (
+        f'if [ -f "{td}/pid" ] && pid=$(cat "{td}/pid") && [ "/proc/$pid/cwd" -ef "{td}" ]; '
+        f'then pgid=$(ps -o pgid= -p "$pid" | tr -d " "); kill -TERM -- "-$pgid" 2>/dev/null || true; '
+        f'for _ in $(seq 1 20); do kill -0 "$pid" 2>/dev/null || break; sleep 0.5; done; '
+        f'kill -KILL -- "-$pgid" 2>/dev/null || true; fi'
+    )
+    remove_dirs_unless_vm_survived = (
+        f'if [ -e "{instance_config}" ]; then echo "{CLEANUP_DELETE_FAILED_MARKER}" >&2; '
+        f"else rm -rf $HOME/.lima/{quoted}; rm -rf $HOME/.lima/_disks/{quoted_disk}; fi"
+    )
     return (
-        f"rm -rf $HOME/.lima/{quoted}",
-        f"rm -rf $HOME/.lima/_disks/{quoted_disk}",
+        kill_transfer,
+        f"PATH=/usr/local/bin:$HOME/.local/bin:$PATH limactl delete --force {quoted} || true",
+        remove_dirs_unless_vm_survived,
         f'rm -rf "{td}"',
     )
 

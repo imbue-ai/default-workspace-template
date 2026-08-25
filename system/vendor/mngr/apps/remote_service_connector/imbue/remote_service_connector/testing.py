@@ -7,6 +7,7 @@ import re
 import secrets
 import uuid
 from collections.abc import Iterator
+from collections.abc import MutableMapping
 from collections.abc import Set as AbstractSet
 from datetime import datetime
 from datetime import timedelta
@@ -23,6 +24,7 @@ from uuid import UUID
 import paramiko
 import psycopg2
 import pytest
+from cachetools.keys import hashkey
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import HTTPException
@@ -72,6 +74,7 @@ import imbue.remote_service_connector.suspension_admin as suspension_admin_modul
 import imbue.remote_service_connector.sync as sync_mod
 from imbue.remote_service_connector.auth import UserAuth
 from imbue.remote_service_connector.auth import derive_user_id_prefix
+from imbue.remote_service_connector.box_scripts import CLEANUP_DELETE_FAILED_MARKER
 from imbue.remote_service_connector.cloudflare import CloudflareCtx
 from imbue.remote_service_connector.errors import CloudflareApiError
 from imbue.remote_service_connector.errors import MissingStorageConfigError
@@ -2162,6 +2165,9 @@ class FakePoolBackend:
     reserve_rc: int
     reserve_stdout: str
     reserve_stderr: str
+    # When set, the restore rollback's ``limactl delete`` leaves the instance
+    # config behind, so the box reports the VM survived.
+    cleanup_vm_survives: bool
     spawned_supervisors: list[str]
     spawned_supervisor_tokens: list[tuple[str, str]]
     box_command_should_fail_matching: str | None
@@ -2455,6 +2461,10 @@ class FakePoolBackend:
                 else self.transfer_status_sequence.pop(0)
             )
             return 0, text, ""
+        # The restore rollback embeds a ``kill -0`` liveness wait of its own, so
+        # it is matched before the transfer-alive probe.
+        if CLEANUP_DELETE_FAILED_MARKER in command:
+            return 0, "", (f"{CLEANUP_DELETE_FAILED_MARKER}\n" if self.cleanup_vm_survives else "")
         if "kill -0" in command:
             return (0 if self.transfer_alive else 1), "", ""
         if "reserve.sh" in command:
@@ -2870,6 +2880,7 @@ def make_fake_pool_backend() -> FakePoolBackend:
     backend.reserve_rc = 0
     backend.reserve_stdout = "MNGR_RESTORE_RESERVED 23000 23001\n"
     backend.reserve_stderr = ""
+    backend.cleanup_vm_survives = False
     backend.spawned_supervisors = []
     backend.spawned_supervisor_tokens = []
     backend.box_command_should_fail_matching = None
@@ -3900,6 +3911,32 @@ class InMemoryAttributionStore:
                 "user_agent": user_agent,
             }
         )
+
+
+def hold_stable_download_link(url: str | None) -> None:
+    """Put ``url`` -- or "could not be read" -- in the connector's stable-download cache.
+
+    ``GET /download`` resolves the stable channel manifest over the network, so
+    every test runs with an entry held (see the autouse fixture) and none of
+    them reach the live feed. Tests that care what the link resolves to hold
+    their own; the resolver's own tests call ``resolve_stable_mac_arm64_url``,
+    which does not read this cache.
+    """
+    cache = _stable_download_cache()
+    cache.clear()
+    cache[hashkey()] = url
+
+
+def clear_stable_download_link() -> None:
+    """Drop the held link, so the next read reaches the live feed."""
+    _stable_download_cache().clear()
+
+
+def _stable_download_cache() -> MutableMapping[Any, Any]:
+    # `cached` types its cache as optional because passing None disables it.
+    cache = accounts_web_module.stable_mac_arm64_url.cache
+    assert cache is not None, "the stable download resolver is not cached"
+    return cache
 
 
 def _make_accounts_web_test_client(

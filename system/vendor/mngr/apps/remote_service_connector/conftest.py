@@ -5,6 +5,7 @@ import sentry_sdk
 
 import imbue.remote_service_connector.auth as auth_mod
 from imbue.imbue_common.conftest_hooks import register_conftest_hooks
+from imbue.remote_service_connector.testing import hold_stable_download_link
 
 register_conftest_hooks(globals())
 
@@ -32,6 +33,18 @@ def _clear_paid_status_cache() -> None:
     cache set a positive TTL explicitly; everything else runs with it empty.
     """
     auth_mod.clear_paid_status_cache()
+
+
+@pytest.fixture(autouse=True)
+def _hold_a_stable_download_link() -> None:
+    """Keep every test off the live update feed, and out of each other's cache.
+
+    ``GET /download`` resolves the stable channel manifest over the network, so
+    any test touching that route would otherwise fetch it for real. Holding
+    "could not be read" makes the route serve its fallback; tests that care
+    what the link resolves to hold their own.
+    """
+    hold_stable_download_link(None)
 
 
 @pytest.fixture(autouse=True)
