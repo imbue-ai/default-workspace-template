@@ -39,6 +39,55 @@ wrong thing. `hover <ref>` inside the pane you mean first. For a virtualized lis
 `mousewheel` works well (~20 rows per 800px); confirm progress with `find`, not a fresh
 `snapshot`.
 
+---
+
+## Long lists: "not found" is not the same as "not there"
+
+This is the single most expensive mistake on this tool. On a **virtualized** list only the
+visible rows exist in the DOM at all, so `find` and `snapshot` genuinely cannot see the rest.
+An agent that searches, gets `No matches found`, and reports "there are only 25 items" is
+wrong, and confidently so.
+
+**Never conclude a list is complete from a snapshot alone.** If a list scrolls, the only way to
+know what is in it is to scroll to the end.
+
+Check whether you are looking at one before you trust any count:
+
+```bash
+playwright-cli -s=<b> eval "() => document.querySelectorAll('[role=row],li,tr,a').length"
+playwright-cli -s=<b> mousewheel 0 800
+playwright-cli -s=<b> eval "() => document.querySelectorAll('[role=row],li,tr,a').length"
+```
+
+* **Count stays flat, content changed** -> virtualized. Rows are recycled. Scroll until you
+  reach the end; `find` only ever sees the current window.
+* **Count grows** -> infinite scroll. New rows are appended, usually after a network fetch, so
+  give it a moment before searching again.
+* **Count was already large and barely moves** -> an ordinary long page. One scroll to the
+  bottom is enough.
+
+Working a virtualized list to the end: `hover` a row inside it (so the wheel lands on the right
+container), then repeat `mousewheel 0 800` + `find`. Roughly 20 rows per 800px. You are at the
+bottom when the visible rows stop advancing between wheels -- not when `find` fails.
+
+## When to take a screenshot
+
+Default to `snapshot` / `find`: they are text, cheap, and give you refs you can act on. A
+screenshot cannot be clicked and costs far more.
+
+Take one when the accessibility tree cannot answer the question:
+
+* the content is a **canvas, chart, map, video or PDF viewer** -- there is no tree to read
+* the question is **visual**: is this button disabled, is the row highlighted, did the layout
+  break, what colour is it
+* the snapshot is **empty or nonsense** but the page has clearly rendered
+* you are **stuck**: two attempts have failed and you cannot tell why from the text
+
+Do not screenshot to "check the page loaded" -- the snapshot after each command already tells
+you the URL and title.
+
+---
+
 Two smaller notes: **re-snapshot after any action that changes the page** -- refs survive DOM
 mutation, so a stale ref can resolve to a *different* element rather than erroring. And
 `goto file://...` is blocked by the CLI; serve a local file over http if you need one.
