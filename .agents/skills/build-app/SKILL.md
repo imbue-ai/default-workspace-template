@@ -99,9 +99,9 @@ under `system/apps/<your-package>/` so they get an isolated tab and origin.
   descriptive (`news`, `docs-viewer`) beats clever. Avoid names
   already used in `system/supervisord.conf` (`system_interface`,
   `browser`, etc. are reserved by the scaffolder).
-- **Draw the app's icon.** `forward_port.py` refuses a brand-new
-  registration without one. Design an `.svg` glyph specific to what
-  *this* app does, in the house style (see the CLI reference below).
+- **Draw the app's icon** -- an `.svg` glyph specific to what *this*
+  app does, in the house style (see the CLI reference below);
+  `forward_port.py` refuses a brand-new registration without one.
 - **Pick a free port.** `ss -tln` lists what's bound. The scaffolder
   picks the lowest free port at or above 8080 by parsing
   `system/supervisord.conf` and `data/.state/apps.toml`; if you're choosing
@@ -435,9 +435,8 @@ calling the work done.
 
 ## Escape hatch: wrap an existing server
 
-For pre-existing third-party tools, do not scaffold a lib. Save the
-icon you drew as `system/apps/<name>/icon.svg` (a minimal directory, the
-way the built-in `files` app wraps `dufs`), then add a
+For pre-existing third-party tools, do not scaffold a lib. Save your
+icon as `system/apps/<name>/icon.svg` (like the `files` app), then add a
 `[program:<name>]` block to `system/supervisord.conf` that runs
 `forward_port.py` and then your existing start command. supervisord runs
 commands directly (no shell), so wrap any command that chains with `&&`
@@ -516,15 +515,13 @@ Flags:
   loudly on an invalid name.
 - `--url`: full URL where the app is reachable from inside the
   container (e.g. `http://localhost:8090`).
-- `--icon` / `--icon-file`: SVG icon for the app, drawn instead of the
-  generic letter monogram. **Required when creating a new entry**
-  (unless `--internal` or `--no-icon`); omitting both on
-  re-registration keeps the stored icon. `--icon` takes the markup;
-  `--icon-file` a path to an `.svg` file (SVG only -- no rasters)
-  whose *contents* are read now and stored. Either way the
-  registry holds the markup, which must be a single `<svg>` element
-  with no script, style, event handler, or external reference, and at
-  most 16384 characters -- registration fails loudly otherwise.
+- `--icon-file`: path to the app's `.svg` icon (SVG only -- no
+  rasters), drawn instead of the generic letter monogram. **Required
+  when creating a new entry** (unless `--internal` or `--no-icon`);
+  omitting it on re-registration keeps the stored icon. The file's
+  *contents* are stored: a single safe `<svg>` element (no script,
+  style, event handlers, or external references; at most 16384
+  characters) -- registration fails loudly otherwise.
 
   **Draw the icon in the workspace's house style**: monochrome line
   art on a transparent background, exactly like the built-in glyphs.
@@ -542,8 +539,7 @@ Flags:
   text beside it, and a transparent background is what keeps it from
   reading as a sticker in a row of line icons. Only use color if the
   user explicitly asks for a colored icon.
-- `--no-icon`: register a brand-new entry without an icon -- only for
-  machinery hidden from the app pickers, never a user-facing app.
+- `--no-icon`: register new non-pickable machinery without an icon (never a user-facing app).
 - `--program`: name of the supervisord program that runs the app --
   the program-name-equals-service-name convention both paths follow, so
   pass the app's own name. Its presence on the registry entry is what

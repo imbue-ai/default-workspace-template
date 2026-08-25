@@ -80,7 +80,6 @@ def _read_and_validate_icon(path: Path) -> str:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     markup, error = module.read_icon_file(path)
-    error = error or module.validate_icon(markup)
     if error is not None:
         sys.exit(f"error: {error}")
     return markup
@@ -487,11 +486,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--name", required=True, help="kebab-case app name")
     parser.add_argument("--description", required=True, help="one-line description")
-    parser.add_argument(
-        "--icon-file",
-        required=True,
-        help="the app's icon: an .svg file holding a single house-style <svg> (see the build-app skill)",
-    )
+    parser.add_argument("--icon-file", required=True, help="the app's icon: an .svg file holding a single house-style <svg> (see the build-app skill)")
     parser.add_argument(
         "--port", type=int, default=None, help="explicit port (auto-picked if omitted)"
     )

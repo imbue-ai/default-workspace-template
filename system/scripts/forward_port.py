@@ -23,14 +23,12 @@ event -> WebSocket path with no extra plumbing and no file access at all.
 registration time, and its contents (not its path) are what gets persisted.
 
 The markup is validated before it is stored, because it is eventually inlined
-into the workspace DOM. ``validate_icon`` rejects anything that is not exactly
-one well-formed ``<svg>`` element and anything that could execute or reach off
-the page (see its docstring). It also caps the length at
-``MAX_ICON_LENGTH`` so one app cannot bloat the registry that every consumer
-re-reads on every change. An icon is REQUIRED when a registration would create
-a new, non-``--internal`` entry, so a new app cannot silently fall back to the
-generic letter-in-a-box monogram; ``--no-icon`` opts out for machinery hidden
-from the app pickers. Existing entries re-register untouched.
+into the workspace DOM: ``validate_icon`` accepts exactly one well-formed
+``<svg>`` element with nothing that executes or reaches off the page, capped
+at ``MAX_ICON_LENGTH`` (see its docstring). An icon is REQUIRED when a
+registration would create a new, non-``--internal`` entry (``--no-icon`` opts
+out, for machinery hidden from the app pickers); existing entries re-register
+untouched.
 """
 
 import argparse
@@ -186,19 +184,23 @@ def validate_icon(icon: str) -> str | None:
 
 
 def read_icon_file(path: Path) -> tuple[str | None, str | None]:
-    """Read icon markup from ``path``, returning ``(markup, error_message)``.
+    """Read and validate icon markup from ``path``, returning ``(markup, error_message)``.
 
-    Only one of the two is ever set. The file's *contents* are what gets
-    persisted; the path is not recorded anywhere.
+    Only one of the two is ever set. The file's *contents* (validated,
+    stripped) are what gets persisted; the path is not recorded anywhere.
     """
     if path.suffix.lower() != ".svg":
         return None, f"icon file {str(path)!r} must be an .svg file (icons are SVG-only so every glyph stays in the same vector style)"
     if not path.is_file():
         return None, f"icon file {str(path)!r} does not exist"
     try:
-        return path.read_text(encoding="utf-8"), None
+        markup = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as error:
         return None, f"icon file {str(path)!r} could not be read as UTF-8 text: {error}"
+    icon_error = validate_icon(markup)
+    if icon_error is not None:
+        return None, icon_error
+    return markup.strip(), None
 
 
 def mint_service_label(name: str) -> str:
@@ -376,24 +378,7 @@ def main() -> None:
         "--url",
         help="Full URL where the app is accessible (e.g. http://localhost:7681)",
     )
-    parser.add_argument(
-        "--icon",
-        help=(
-            "SVG markup for the app's icon, stored verbatim on the entry. Must "
-            "be a single <svg> element. House style: monochrome line art -- "
-            "stroke='currentColor', fill='none', transparent background -- like "
-            "the workspace's built-in glyphs. Omit to leave any icon already "
-            "registered for this app untouched."
-        ),
-    )
-    parser.add_argument(
-        "--icon-file",
-        help=(
-            "Path to a file holding the SVG markup for the app's icon. The "
-            "file is read now and its contents are stored; the path is not "
-            "recorded. Mutually exclusive with --icon."
-        ),
-    )
+    parser.add_argument("--icon-file", help="Path to the app's .svg icon; its contents are read now, validated, and stored (the path is not recorded). Omit to leave any stored icon untouched.")
     parser.add_argument("--no-icon", action="store_true", help="Register a brand-new entry without an icon -- only for machinery hidden from the app pickers")
     parser.add_argument(
         "--program",
@@ -427,14 +412,11 @@ def main() -> None:
     if not args.remove and not args.url:
         parser.error("--url is required when not using --remove")
 
-    if args.icon is not None and args.icon_file is not None:
-        parser.error("--icon and --icon-file are mutually exclusive")
+    if args.no_icon and args.icon_file is not None:
+        parser.error("--no-icon is mutually exclusive with --icon-file")
 
-    if args.no_icon and (args.icon is not None or args.icon_file is not None):
-        parser.error("--no-icon is mutually exclusive with --icon and --icon-file")
-
-    if args.remove and (args.icon is not None or args.icon_file is not None or args.no_icon):
-        parser.error("--icon, --icon-file, and --no-icon cannot be combined with --remove")
+    if args.remove and (args.icon_file is not None or args.no_icon):
+        parser.error("--icon-file and --no-icon cannot be combined with --remove")
 
     if args.remove and args.program is not None:
         parser.error("--program cannot be combined with --remove")
@@ -446,16 +428,11 @@ def main() -> None:
     if name_error is not None:
         parser.error(name_error)
 
-    icon: str | None = args.icon
+    icon: str | None = None
     if args.icon_file is not None:
         icon, read_error = read_icon_file(Path(args.icon_file))
         if read_error is not None:
             parser.error(read_error)
-    if icon is not None:
-        icon_error = validate_icon(icon)
-        if icon_error is not None:
-            parser.error(icon_error)
-        icon = icon.strip()
 
     apps_file = _apps_file()
     lock_path = apps_file.parent / ".apps.lock"
@@ -469,7 +446,7 @@ def main() -> None:
             else:
                 if icon is None and not args.no_icon and not args.internal and not _has_entry(apps_file, args.name):
                     parser.error(
-                        f"app {args.name!r} is new and has no icon: pass --icon/--icon-file with a house-style "
+                        f"app {args.name!r} is new and has no icon: pass --icon-file with a house-style "
                         "SVG (see the build-app skill), or --no-icon for non-pickable machinery"
                     )
                 _upsert(
