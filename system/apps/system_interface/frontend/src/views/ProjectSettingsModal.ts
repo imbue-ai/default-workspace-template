@@ -238,7 +238,7 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
               ]),
 
               m("label.custom-url-dialog-label", "Name"),
-              m("input.custom-url-dialog-input", {
+              m("input.input.mb-3", {
                 type: "text",
                 value: name,
                 placeholder: "project name",

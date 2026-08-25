@@ -287,7 +287,7 @@ describe("Sidebar switcher dropdown", () => {
     click(root.querySelector('[aria-label="Edit Beta"]'));
     redraw();
     expect(attrs.onSelectView).not.toHaveBeenCalled();
-    const nameField = root.querySelector("input.custom-url-dialog-input") as HTMLInputElement | null;
+    const nameField = root.querySelector('input[placeholder="project name"]') as HTMLInputElement | null;
     expect(nameField?.value).toBe("Beta");
   });
 
