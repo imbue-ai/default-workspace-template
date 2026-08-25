@@ -2749,6 +2749,10 @@ def _run_ws_broadcast_loop(
                     layout_dir=layout_dir,
                     is_first_report=not is_client_registered,
                 ):
+                    if not is_client_registered:
+                        # Now that a client can apply layout ops, hand it the
+                        # chats that appeared while nobody could.
+                        agent_manager.flush_pending_auto_opens()
                     is_client_registered = True
                 incoming = websocket.receive(timeout=0)
             try:

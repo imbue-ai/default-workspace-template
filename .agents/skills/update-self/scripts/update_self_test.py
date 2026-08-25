@@ -1072,3 +1072,56 @@ def test_skill_md_task_template_carries_the_lead_agent_and_report_fields() -> No
     frontmatter_template = skill_md[start:end]
     assert "lead_agent: $MNGR_AGENT_NAME" in frontmatter_template
     assert "finish_report_path: " in frontmatter_template
+
+
+# --- surface-chat-tab ------------------------------------------------------
+
+
+def test_wait_and_open_chat_tab_stops_at_the_first_success() -> None:
+    # No client for the first two tries (the user is still on their way in),
+    # then one takes it: the loop must stop there rather than keep re-opening.
+    answers = iter([False, False, True])
+    calls = 0
+
+    def try_open() -> bool:
+        nonlocal calls
+        calls += 1
+        return next(answers)
+
+    clock = [0.0]
+
+    def sleep(seconds: float) -> None:
+        clock[0] += seconds
+
+    assert update_self.wait_and_open_chat_tab(
+        try_open,
+        deadline_seconds=60.0,
+        retry_seconds=5.0,
+        monotonic=lambda: clock[0],
+        sleep=sleep,
+    )
+    assert calls == 3
+
+
+def test_wait_and_open_chat_tab_gives_up_at_the_deadline() -> None:
+    calls = 0
+
+    def try_open() -> bool:
+        nonlocal calls
+        calls += 1
+        return False
+
+    clock = [0.0]
+
+    def sleep(seconds: float) -> None:
+        clock[0] += seconds
+
+    assert not update_self.wait_and_open_chat_tab(
+        try_open,
+        deadline_seconds=12.0,
+        retry_seconds=5.0,
+        monotonic=lambda: clock[0],
+        sleep=sleep,
+    )
+    # Tried at t=0, 5, 10; the check after the third failure sees 10 < 12 and sleeps to 15, then stops.
+    assert calls == 4
