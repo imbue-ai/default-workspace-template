@@ -10,7 +10,7 @@ Per-agent ``$HOME`` (the core mechanism)
 ----------------------------------------
 ``agy`` resolves its entire config/permission/auth/session tree from
 ``$HOME/.gemini`` and has **no** config-dir override env var and no
-per-workspace settings/permission loading (``--add-dir`` does not load
+per-project settings/permission loading (``--add-dir`` does not load
 settings/permissions/model from the added dir). The only lever that yields a
 per-agent ``settings.json`` -- and therefore per-agent permissions, per-agent
 model, and isolated transcripts/conversations -- is a **per-agent ``$HOME``**.
@@ -35,7 +35,7 @@ agy process; mngr-owned files rewritten idempotently each ``provision``)::
       config/hooks.json
 
 where ``settings.json`` is a copy of the user's settings (when
-``sync_home_settings``) plus the workspace trust, ``settings_overrides``, and
+``sync_home_settings``) plus the project trust, ``settings_overrides``, and
 the mngr-owned lifecycle ``statusLine`` (applied last so it wins);
 ``cache/onboarding.json`` is the NUX seed that skips the first-run theme/ToS
 flow; ``antigravity-oauth-token`` is a symlink to the user's shared file token
@@ -234,28 +234,28 @@ _AGY_LOG_FILE_RELATIVE_PATH: Final[str] = "logs/agy_cli.log"
 
 # Per-agent $HOME for the agy process, under the agent state dir. agy resolves
 # ``GeminiDir = $HOME/.gemini`` from it (works under this dotted ``~/.mngr/...``
-# path -- agy only rejects dot-prefixed *workspace*/``--add-dir`` paths, not its
+# path -- agy only rejects dot-prefixed *project folder*/``--add-dir`` paths, not its
 # own config dir). Mirrors mngr_claude's per-agent ``get_claude_config_dir``.
 _AGY_HOME_RELATIVE_PATH: Final[tuple[str, ...]] = ("plugin", "antigravity", "home")
 
 # Parent directory for the per-agent symlinks that work around agy's
 # refusal to treat hidden paths (anything with a dot-prefixed segment, like
-# ``.mngr/...``) as a workspace. agy logs ``Failed to add workspace folder
+# ``.mngr/...``) as a project folder. agy logs ``Failed to add workspace folder
 # /path/.mngr/...: is hidden: ignore uri`` and falls back to the user's
-# home directory as the project root, which means workspace-scoped tooling
+# home directory as the project root, which means project-scoped tooling
 # (file search, project_id, .agents/) operates against the wrong tree.
 #
 # Verified via google-forum bug report (no flag override exists) and
 # confirmed live: launching agy with cwd set to a /tmp symlink that targets
 # the dotted ``work_dir`` produces ``project: using project "/tmp/..."``
-# (the symlink path, not the resolved target), and the workspace-add error
+# (the symlink path, not the resolved target), and the folder-add error
 # disappears. The symlink is recreated on every ``assemble_command`` call
 # via ``mkdir -p`` + ``ln -sfn`` so /tmp wipes self-repair on next launch.
 # (HOME isolation does not change this: the work_dir is still a hidden path
-# agy refuses as a *workspace*, even though it accepts a hidden config dir.)
+# agy refuses as a *project folder*, even though it accepts a hidden config dir.)
 _AGY_WORKSPACE_SYMLINK_PARENT: Final[str] = "/tmp/mngr_antigravity_workspaces"
 
-# Touched in the agent state dir on every launch/resume. Its mtime is how the workspace
+# Touched in the agent state dir on every launch/resume. Its mtime is how the system interface
 # bounds transcript staleness: after a mid-turn restart the previous process's tail is still
 # in agy's store -- including an unmatched tool call no later event will ever close -- and
 # without this the chat's activity indicator latches on it and never clears. The peer
@@ -515,7 +515,7 @@ class AntigravityAgentConfig(AgentTypeConfig):
     # Why default off: the global file is shared user state, and we should never
     # silently let an agent run on untrusted code -- trusting the repo is an
     # explicit choice. Why gate at all: the per-agent settings.json trusts the
-    # agent's workspace so the running agy doesn't show its dialog, but granting
+    # agent's project folder so the running agy doesn't show its dialog, but granting
     # that trust must still be a deliberate acknowledgment.
     auto_dismiss_dialogs: bool = Field(
         default=False,
@@ -788,7 +788,7 @@ class AntigravityAgent(
         - ``--adopt`` (alias ``--adopt-session``): each value (a conversation id or an absolute
           path to a conversations store / ``<id>.db`` file) is resolved and its store copied in
           additively; the resolved id is returned.
-        - ``--from <agent>``: a clone copies the source *workspace* but not its state dir, so
+        - ``--from <agent>``: a clone copies the source *work dir* but not its state dir, so
           ``copy_clone`` transfers just the source's conversation store and returns its root
           conversation id.
 
@@ -823,7 +823,7 @@ class AntigravityAgent(
     def _copy_cloned_session(self, host: OnlineHostInterface, source_location: HostLocation) -> str | None:
         """Transfer a ``--from <agent>`` clone's conversation store and return its resume id.
 
-        A generic clone copies the source *workspace* but not the source agent's *state dir*,
+        A generic clone copies the source *work dir* but not the source agent's *state dir*,
         so the source's agy conversation store is transferred into this agent's home via the
         shared helper (just the ``conversations/`` relpath -- the same one preserved on
         destroy and scanned by ``_resolve_adopt_session``). agy resumes purely by conversation
@@ -835,7 +835,7 @@ class AntigravityAgent(
         ``ROOT_CONVERSATION_FILENAME``); if that pointer is absent or its store did not come
         across, the most-recent transferred ``<id>.db`` is used. Returns ``None`` (after
         warning) when the clone has nothing to resume (no store, or a store with no usable
-        conversation id) -- ``--from`` is fundamentally a workspace clone, so carrying the
+        conversation id) -- ``--from`` is fundamentally a work-dir clone, so carrying the
         source's conversation forward is a bonus, not a requirement; the caller starts fresh.
         """
         transferred = transfer_cloned_agent_session_store(
@@ -915,7 +915,7 @@ class AntigravityAgent(
            ``SystemExit`` if consent is unavailable -- we never silently run an
            agent on untrusted code.
         3. Build the per-agent ``$HOME`` tree (``_provision_agy_home``):
-           settings.json (copy of the user's settings + workspace trust +
+           settings.json (copy of the user's settings + project trust +
            overrides + the mngr-owned lifecycle statusLine), the onboarding NUX
            seed, the conversation-id capture hook, the oauth token symlink/copy,
            the shared playwright-cache symlink, and -- on macOS -- the
@@ -1044,7 +1044,7 @@ class AntigravityAgent(
     def _provision_agent_instructions(self, host: OnlineHostInterface, agy_home: Path) -> None:
         """Write the agent's role instructions to the per-agent global ``GEMINI.md`` rule.
 
-        agy discovers ``$HOME/.gemini/GEMINI.md`` as a global rule across all workspaces;
+        agy discovers ``$HOME/.gemini/GEMINI.md`` as a global rule across all projects;
         under the per-agent ``$HOME`` this is a per-agent file that never touches the source
         repo. It is a *peer* of the repo's own ``AGENTS.md`` (agy documents no precedence
         between rule sources) rather than a true system-prompt channel -- an accepted
@@ -1169,7 +1169,7 @@ class AntigravityAgent(
         per-agent cache to the user's real host cache shares the download (agy
         creates/reads it through the symlink, like the oauth token). Done at
         provision time -- the per-agent ``$HOME`` is durable (under the agent state
-        dir), so unlike the ``/tmp`` workspace symlink this needn't be recreated
+        dir), so unlike the ``/tmp`` project symlink this needn't be recreated
         each launch. The OS-specific subpath comes from the host's ``uname``, so it
         is correct on remote hosts too.
         """
@@ -1240,7 +1240,7 @@ class AntigravityAgent(
           a standalone project) is the durable thing worth persisting: once
           trusted, later agents/worktrees of the same repo skip the consent
           prompt. This is what this method records.
-        * **Transient per-agent workspace path -> per-agent settings.json
+        * **Transient per-agent project path -> per-agent settings.json
           (``_provision_agy_home``).** The agy-cwd ``/tmp`` symlink the running
           (isolated) agy exact-matches goes only into the per-agent file, which
           is deleted with the agent -- never into the global file, which would
@@ -1322,7 +1322,7 @@ class AntigravityAgent(
         """Hard-error if ``trustedWorkspaces`` exists but isn't a list.
 
         The ``@pure`` merge helper used to silently coerce non-list values
-        into a fresh array containing only the new workspace, which could
+        into a fresh array containing only the new path, which could
         destroy entries an unknown future agy schema put there. Surfacing
         the schema break is safer than rewriting the file.
         """
@@ -1377,13 +1377,13 @@ class AntigravityAgent(
         return f"( bash {script_path} {shlex.quote(self.session_name)} ) &"
 
     def _get_agy_workspace_symlink_path(self) -> str:
-        """Per-agent symlink target that agy will treat as its workspace.
+        """Per-agent symlink target that agy will treat as its project folder.
 
         Lives under ``/tmp/mngr_antigravity_workspaces/<agent_id>`` -- a
         non-dotted path, which is required because agy refuses to add any
-        path with a dot-prefixed segment as a workspace (see the constant
+        path with a dot-prefixed segment as a project folder (see the constant
         docstring above for the bug background). Per-agent so multiple
-        antigravity agents don't share a workspace identity.
+        antigravity agents don't share a project identity.
         """
         return f"{_AGY_WORKSPACE_SYMLINK_PARENT}/{self.id}"
 
@@ -1401,13 +1401,13 @@ class AntigravityAgent(
         1. ``( bash background_tasks.sh <session> ) &`` -- backgrounded
            supervisor for the transcript streamer + converter.
         2. ``mkdir -p <state>/logs <ws_symlink_parent>`` -- guarantees the agy
-           ``--log-file`` directory and the workspace-symlink parent exist
+           ``--log-file`` directory and the project-symlink parent exist
            before launch.
         3. ``ln -sfn <work_dir> <ws_symlink>`` -- create / refresh the
-           non-dotted ``/tmp`` workspace symlink (works around agy's rejection
-           of dot-prefixed (hidden) paths as workspaces; see
+           non-dotted ``/tmp`` project symlink (works around agy's rejection
+           of dot-prefixed (hidden) paths as project folders; see
            ``_AGY_WORKSPACE_SYMLINK_PARENT``).
-        4. ``cd <ws_symlink>`` -- launches agy with cwd set to the workspace
+        4. ``cd <ws_symlink>`` -- launches agy with cwd set to the project folder
            symlink, so agy's "project: using project ..." log line names the
            symlink path (not the resolved dotted target).
         5. ``{ <resume-prelude>; env HOME=<home> agy <user_args>
