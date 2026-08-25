@@ -61,8 +61,8 @@ from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.harness_type import parse_harness
 from imbue.system_interface.harnesses.model import ModelChoice
 from imbue.system_interface.harnesses.model import ModelOption
-from imbue.system_interface.harnesses.model import resolve_model_choice
 from imbue.system_interface.harnesses.model import read_model_identity
+from imbue.system_interface.harnesses.model import resolve_model_choice
 from imbue.system_interface.harnesses.path_watch import PathWatcher
 from imbue.system_interface.harnesses.registry import build_interrupt_to_composer
 from imbue.system_interface.harnesses.registry import build_shoulder_tap
