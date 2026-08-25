@@ -82,8 +82,15 @@ you `acquire` before a long stretch of driving.
   (or `new`); `acquire` only if you specifically need that browser and are willing to queue.
 - **Never `--reclaim` a browser a human is holding on your own initiative.** End your turn and
   ask. A bare "keep going" from the user counts as confirmation.
-- **A browser can crash** (Chromium killed, e.g. out of memory). It is gone for good — `ls` shows
-  it crashed. Run `new`; the crashed name stays reserved until you `close` it.
+- **A browser can crash** (Chromium killed, e.g. out of memory), and from your side it looks
+  like your connection simply dying: `playwright-cli` reports a generic disconnect, not a
+  crash. Do not interpret it — run `ls`, which says `crashed`. Then run `new` and use the
+  attach line it prints. **Do not try to re-attach the old browser's name**: its Chromium is
+  gone for good, its name stays reserved until someone `close`s it, and your old
+  `playwright-cli` session for that name is dead too (a session whose socket drops never
+  rebinds). `new` gives you a different name, so its session is clean.
+- **The same is true if a browser is closed while you are attached** — the connection dies,
+  `ls` tells you it is gone, and you start over with `new`.
 - **Browsers persist across a restart** (tabs, cookies, logins), so a site you logged into
   earlier is probably still logged in. Right after a restart the fleet may be restoring; `ls`
   works, and driving commands may need a few seconds.
