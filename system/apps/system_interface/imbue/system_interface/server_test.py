@@ -1624,9 +1624,7 @@ def test_flush_queue_restarts_and_resends_the_concatenated_block(client: FlaskCl
     with (
         patch("imbue.system_interface.server._find_agent", return_value=_agent_info()),
         patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
-        patch(
-            "imbue.system_interface.server.run_detached_command", return_value=_restart_ok()
-        ) as mock_run,
+        patch("imbue.system_interface.server.run_detached_command", return_value=_restart_ok()) as mock_run,
         patch.object(AgentManager, "reset_activity_state"),
         patch.object(AgentManager, "send_message_to_agent", return_value=True) as mock_send,
     ):
@@ -1953,9 +1951,7 @@ def test_drain_to_composer_claude_nonempty_queue_delegates_to_base_restart(
     with (
         patch("imbue.system_interface.server._find_agent", return_value=agent_info),
         patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
-        patch(
-            "imbue.system_interface.server.run_detached_command", return_value=_restart_ok()
-        ) as mock_run,
+        patch("imbue.system_interface.server.run_detached_command", return_value=_restart_ok()) as mock_run,
         patch.object(AgentManager, "reset_activity_state"),
         patch.object(AgentManager, "send_message_to_agent") as mock_send,
     ):
@@ -2125,9 +2121,7 @@ def test_drain_to_composer_pi_falls_back_to_restart_when_a_send_is_in_flight(
         patch.object(AgentManager, "get_or_create_session", return_value=in_flight_session),
         patch("imbue.system_interface.server._find_agent", return_value=agent_info),
         patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
-        patch(
-            "imbue.system_interface.server.run_detached_command", return_value=_restart_ok()
-        ) as mock_run,
+        patch("imbue.system_interface.server.run_detached_command", return_value=_restart_ok()) as mock_run,
         patch.object(AgentManager, "reset_activity_state"),
     ):
         response = client.post("/api/agents/agent-123/drain-to-composer")
@@ -2160,9 +2154,7 @@ def test_drain_to_composer_claude_falls_back_to_restart_when_a_send_is_in_flight
         patch("imbue.system_interface.harnesses.interrupt.STOP_LOCK_WAIT_SECONDS", 0.1),
         patch("imbue.system_interface.server._find_agent", return_value=agent_info),
         patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
-        patch(
-            "imbue.system_interface.server.run_detached_command", return_value=_restart_ok()
-        ) as mock_run,
+        patch("imbue.system_interface.server.run_detached_command", return_value=_restart_ok()) as mock_run,
         patch.object(AgentManager, "reset_activity_state"),
     ):
         response = app.test_client().post(f"/api/agents/{agent_id}/drain-to-composer")
