@@ -555,26 +555,8 @@ body {
   gap: 2px;
 }
 
-.composer-under-bar-action {
-  height: 30px;
-  padding: 0 8px;
-  font-family: var(--font-family-base);
-  font-size: var(--font-size-body);
-  color: var(--color-text-secondary);
-  background: none;
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
-  white-space: nowrap;
-  transition:
-    color 120ms,
-    background 120ms;
-}
-
-.composer-under-bar-action:hover {
-  color: var(--color-text-primary);
-  background: var(--color-bg-hover);
-}
+/* Composer under-bar action buttons now use the shared .btn primitive
+   (btn--ghost btn--sm). */
 
 /* A non-clickable credit sharing the action buttons' font, but static: no hover,
    no pointer cursor, not focusable. */
