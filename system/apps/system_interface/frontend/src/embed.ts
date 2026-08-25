@@ -31,9 +31,8 @@ export const PERMISSION_REQUEST_RESOLVED: "minds:permission-request-resolved" =
   "PERMISSION_REQUEST_RESOLVED" in embedContract
     ? embedContract.PERMISSION_REQUEST_RESOLVED
     : "minds:permission-request-resolved";
-// Workspace -> embedder: open the minds shell's Share tab focused on one app
-// (payload { serviceName }). Fire-and-forget, like OPEN_REQUEST_MODAL: with no
-// embedder present the send simply has no listener.
+// Workspace -> embedder: open the minds shell's Share tab focused on one app.
+// Payload: { serviceName }.
 export const OPEN_SHARE_SETTINGS: "minds:open-share-settings" =
   "OPEN_SHARE_SETTINGS" in embedContract ? embedContract.OPEN_SHARE_SETTINGS : "minds:open-share-settings";
 
