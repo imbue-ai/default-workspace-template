@@ -1,15 +1,13 @@
-Phase 1 of the transcript smooth-scroll rework (docs/system/specs/transcript-smooth-scroll.md): the pure scroll engine under frontend/src/models/transcriptScroll/, not yet wired into any view.
+Transcript smooth-scroll rework, phases 1 and 2 (docs/system/specs/transcript-smooth-scroll.md).
 
-- Strict TypeScript state machines: scroll position (FOLLOW / USER_CONTROLLED with a row-key + px-offset anchor) and scrollbar interaction (ELSEWHERE / SCROLLBAR with a frozen track mapping), as pure exhaustive reducers.
+Phase 1 -- the pure engine under frontend/src/models/transcriptScroll/, fully unit-tested: strict TypeScript state machines (FOLLOW / USER_CONTROLLED scroll position with a row-key + px-offset anchor; ELSEWHERE / SCROLLBAR scrollbar interaction with a frozen track mapping), exact physical-layer geometry with an anchor round-trip, custom-scrollbar track math (pixel-space physical region, index-space virtual regions), smoothed virtual end-spacer sizing, a progressive-fill planner (instant tail page, chunked growth toward the user, jump-window replacement, cap eviction and re-centering), a persistence codec, and a ring-buffer scroll trace.
 
-- Physical-layer geometry: exact row prefix sums, anchor resolution with an exact scrollTop round-trip, and the visible-row window computation.
+Phase 2 -- ChatPanel now runs on the new engine (frontend/src/views/transcript-scroll-engine.ts): the app owns anchoring end-to-end (native scroll anchoring disabled; every programmatic scrollTop write is echo-tracked and folded with any in-flight user scroll, so wheel input is never swallowed and streaming never jitters the view); the physical layer grows in the background to a 50k-event cap centered on the user, with off-window rows measured in idle-time offscreen batches; a custom auto-hiding overlay scrollbar replaces the hidden native one (track clicks and thumb drags jump by the physical/virtual mapping, which freezes while the user keeps using the scrollbar); scrolling all the way down or sending a message returns to following the tail; the per-agent scroll position persists to localStorage and restores across reload; text selections freeze row unmounting instead of the old disjoint pinned-run machinery; a dev-only ?debug=scroll trace records transitions, anchors, and every compensation write.
 
-- Custom-scrollbar track math: the physical region maps in pixel space, virtual end regions in event-index space; live mapping, fraction-to-target resolution, and thumb placement.
+The old phantom-spacer estimate geometry -- the root cause of the scroll-jump bug (estimated 160px/event vs ~34px/event rendered for tool-heavy turns) -- is gone from ChatPanel; SubagentView still runs the old shared controller until phase 3 removes it.
 
-- Virtual end-spacer sizing from the measured physical average with smoothing, each update paired with its exact scrollTop compensation.
+Store changes: eviction is side/count-explicit (both ends), paging fetches take caller-specified limits, and sendMessage notifies message-sent listeners.
 
-- Progressive-fill planner for the physical window (instant tail page, chunked growth toward the user, jump-window replacement, cap eviction and re-centering).
+Manual verification tooling lives in system/scripts/scroll_verification/ (a standalone fixture server over a real session JSONL plus a Playwright driver asserting the spec's must-pass scenarios with content-relative measurements); 17/17 scenarios pass against a 6900-event real transcript. It sits outside this project so the project's code ratchets (no time.sleep / bare print / unittest.mock) keep applying to app and test code while the manual driver keeps the patterns that are its substance.
 
-- Persistence codec for the per-agent scroll state and a ring-buffer scroll trace for the ?debug=scroll instrumentation.
-
-- Frontend CI now runs the vitest suite (npm test) alongside the build, so these and the pre-existing frontend unit tests gate PRs.
+Frontend CI now runs the vitest suite (npm test) alongside the build, so these and the pre-existing frontend unit tests gate PRs.
