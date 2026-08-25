@@ -1004,10 +1004,23 @@ class LiveBrowser(MutableModel):
         race-free: the moment control moves, every frame bearing the old token is refused,
         with no socket to hunt down and no window in which a stale attacher can act.
         """
-        # Re-mint unless the browser is simply staying with the agent the token was issued
-        # to -- otherwise the holder's own acquire would invalidate the URL it is using.
-        if self._token and not (to == "agent" and agent_id and agent_id == self._token_owner):
-            self._mint_token(agent_id or "", agent_name if to == "agent" else None)
+        # Re-mint ONLY when the browser passes to a different agent. Two things must both
+        # hold and they pull in opposite directions:
+        #
+        #  * A human taking control must NOT invalidate the token. The agent's live socket
+        #    carries the token it attached with, so re-minting here would kill that socket
+        #    permanently -- and after the human hands back the agent could not resume on it.
+        #    Re-attaching is not a way out either: a playwright-cli slug is poisoned once its
+        #    session is torn down. Handing control back has to leave the agent able to carry
+        #    on, which is the whole point of the takeover flow.
+        #  * A DIFFERENT agent taking the browser must invalidate it, or the previous holder
+        #    could keep driving. That is the rotation that matters.
+        #
+        # The moment-to-moment guarantee does not depend on rotation at all: `_token_may_drive`
+        # refuses every frame while the controller is not the token's own agent. The token is
+        # identity, not authority.
+        if self._token and to == "agent" and agent_id and agent_id != self._token_owner:
+            self._mint_token(agent_id, agent_name)
         self.controller = to
         self.owner_agent_id = agent_id
         self.owner_agent_name = agent_name
