@@ -1186,14 +1186,12 @@ describe("permission request breaks", () => {
 type PermissionItem = {
   kind: "permission";
   resolutionsByRequestId: ReadonlyMap<string, PermissionResolution>;
-  fallbackResolution: PermissionResolution | null;
 };
 
 /** The verdict a card would show: its own request's id looked up in the id-keyed
- *  map (the primary correlation path), falling back to the legacy, arrival-order
- *  guess -- mirrors resolutionForCall in message-renderers.ts. */
+ *  map -- mirrors resolutionForCall in message-renderers.ts. */
 function verdictFor(item: PermissionItem, requestId: string): PermissionResolution | null {
-  return item.resolutionsByRequestId.get(requestId) ?? item.fallbackResolution;
+  return item.resolutionsByRequestId.get(requestId) ?? null;
 }
 
 describe("permission resolutions", () => {
@@ -1208,9 +1206,9 @@ describe("permission resolutions", () => {
       result("2026-05-01T01:00:01Z", "perm", '{"request_id":"r1"}'),
       userMsg(
         "2026-05-01T01:00:02Z",
-        "Your permission request for Slack was granted with the following permissions: slack-read-all. Please retry the call that was blocked.",
+        "Your permission request for Slack was granted with the following permissions: slack-read-all. Please retry the call that was blocked. (request_id: r1)",
         "u-res",
-        { display: "permission_resolution", resolution: "granted" },
+        { display: "permission_resolution", resolution: "granted", request_id: "r1" },
       ),
     ];
     const sections = run(events);
@@ -1232,10 +1230,16 @@ describe("permission resolutions", () => {
       result("2026-05-01T01:00:01Z", "c-s1", startOut("s1", "Connect to your Gmail account")),
       permissionMsg("2026-05-01T01:00:02Z", "perm"),
       result("2026-05-01T01:00:02Z", "perm", '{"request_id":"r1"}'),
-      userMsg("2026-05-01T01:00:03Z", "Your permission request for Gmail was granted. Retry.", "u-res", {
-        display: "permission_resolution",
-        resolution: "granted",
-      }),
+      userMsg(
+        "2026-05-01T01:00:03Z",
+        "Your permission request for Gmail was granted. Retry. (request_id: r1)",
+        "u-res",
+        {
+          display: "permission_resolution",
+          resolution: "granted",
+          request_id: "r1",
+        },
+      ),
       // Post-approval work and the step closing happen after the boundary.
       workMsg("2026-05-01T01:00:04Z", "Bash", "w-after"),
       result("2026-05-01T01:00:04Z", "w-after", "ok"),
@@ -1265,39 +1269,13 @@ describe("permission resolutions", () => {
       result("2026-05-01T01:00:01Z", "perm", '{"request_id":"r1"}'),
       userMsg(
         "2026-05-01T01:00:02Z",
-        "Your permission request for Slack was denied. Do not retry the blocked call.",
+        "Your permission request for Slack was denied. Do not retry the blocked call. (request_id: r1)",
         "u-res",
-        { display: "permission_resolution", resolution: "denied" },
+        { display: "permission_resolution", resolution: "denied", request_id: "r1" },
       ),
     ];
     const sections = run(events);
     expect(verdictFor(sections[0].items[0] as PermissionItem, "r1")).toBe("denied");
-  });
-
-  it("falls back to resolving the oldest open request first when neither notification carries a request id", () => {
-    // Legacy fallback path: a resolution recorded before request-id embedding
-    // shipped carries no id, so it is attributed to the oldest still-open
-    // request by arrival order (exactly as this walk always did).
-    const events = [
-      userMsg("2026-05-01T01:00:00Z", "go"),
-      permissionMsg("2026-05-01T01:00:01Z", "perm1"),
-      result("2026-05-01T01:00:01Z", "perm1", '{"request_id":"r1"}'),
-      permissionMsg("2026-05-01T01:00:02Z", "perm2"),
-      result("2026-05-01T01:00:02Z", "perm2", '{"request_id":"r2"}'),
-      userMsg("2026-05-01T01:00:03Z", "Your permission request for Slack was granted. Retry.", "u-res1", {
-        display: "permission_resolution",
-        resolution: "granted",
-      }),
-      userMsg("2026-05-01T01:00:04Z", "Your permission request for GitHub was denied. Do not retry.", "u-res2", {
-        display: "permission_resolution",
-        resolution: "denied",
-      }),
-    ];
-    const sections = run(events);
-    const perms = sections[0].items.filter((i) => i.kind === "permission") as PermissionItem[];
-    expect(perms).toHaveLength(2);
-    expect(verdictFor(perms[0], "r1")).toBe("granted"); // first request -> first verdict
-    expect(verdictFor(perms[1], "r2")).toBe("denied");
   });
 
   it("attaches each verdict to its own card by request id, even when resolved out of order", () => {
@@ -1337,48 +1315,23 @@ describe("permission resolutions", () => {
     expect(verdictFor(perms[1], "req-b")).toBe("denied");
   });
 
-  it("resolves a workspace-phrased grant so later verdicts don't land one card late", () => {
-    // Regression: the workspace handler's notification ("... permission request
-    // was granted (<verbs>) for <target>") lacks the "permission request for"
-    // phrasing, so it used to go unrecognised -- the workspace request stayed
-    // queued and every later verdict resolved the wrong (one-older) card.
+  it("hides an id-less notification instead of guessing which card it resolves", () => {
+    // A notice recorded before minds embedded ids attributes nothing: the
+    // arrival-order guess is what used to swap verdicts, and an embedded page
+    // recovers the verdict from the response log via the card's hydration
+    // query. The notice still acts as the turn boundary it is, with no bubble.
     const events = [
       userMsg("2026-05-01T01:00:00Z", "go"),
-      permissionMsg("2026-05-01T01:00:01Z", "perm-ws"),
-      result("2026-05-01T01:00:01Z", "perm-ws", '{"request_id":"r-ws"}'),
-      userMsg(
-        "2026-05-01T01:00:02Z",
-        "Your cross-workspace permission request was granted (minds-workspaces-read) for all workspaces.",
-        "u-res-ws",
-        { display: "permission_resolution", resolution: "granted" },
-      ),
-      permissionMsg("2026-05-01T01:00:03Z", "perm-slack"),
-      result("2026-05-01T01:00:03Z", "perm-slack", '{"request_id":"r-slack"}'),
-      userMsg(
-        "2026-05-01T01:00:04Z",
-        "Your permission request for Slack was denied. Do not retry the blocked call.",
-        "u-res-slack",
-        { display: "permission_resolution", resolution: "denied" },
-      ),
-    ];
-    const sections = run(events);
-    const perms = sections.flatMap((s) => s.items).filter((i) => i.kind === "permission") as PermissionItem[];
-    expect(perms).toHaveLength(2);
-    expect(verdictFor(perms[0], "r-ws")).toBe("granted"); // the workspace card, from its own notification
-    expect(verdictFor(perms[1], "r-slack")).toBe("denied"); // the Slack card -- not shifted onto the workspace one
-  });
-
-  it("leaves a notification with no open request to render as a normal turn", () => {
-    const events = [
-      userMsg("2026-05-01T01:00:00Z", "go"),
-      userMsg("2026-05-01T01:00:01Z", "Your permission request for Slack was granted. Retry.", "u-orphan", {
+      permissionMsg("2026-05-01T01:00:01Z", "perm"),
+      result("2026-05-01T01:00:01Z", "perm", '{"request_id":"r1"}'),
+      userMsg("2026-05-01T01:00:02Z", "Your permission request for Slack was granted. Retry.", "u-legacy", {
         display: "permission_resolution",
         resolution: "granted",
       }),
     ];
     const sections = run(events);
-    // No card to claim it, so it falls through and opens its own turn.
+    expect(verdictFor(sections[0].items[0] as PermissionItem, "r1")).toBeNull();
     expect(sections).toHaveLength(2);
-    expect(sections[1].user_event?.event_id).toBe("u-orphan");
+    expect(sections[1].user_event).toBeNull();
   });
 });

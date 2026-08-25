@@ -22,22 +22,12 @@ import {
 } from "@minds/embed-contract";
 import * as embedContract from "@minds/embed-contract";
 
-// PERMISSION_REQUEST_RESOLVED postdates the vendored embed_contract snapshot (it arrives with
-// the next mngr release sync; this repo deliberately does not edit system/vendor by hand). A
-// named import of a missing export fails the rollup build, so probe the namespace and fall
-// back to the literal. Until the sync lands the endpoint drops the (to it) unknown type before
-// any handler runs, so the resolution relay stays dormant and cards keep the transcript-driven
-// flip; the moment the sync lands the relay goes live with no code change here.
-export const PERMISSION_REQUEST_RESOLVED: "minds:permission-request-resolved" =
-  "PERMISSION_REQUEST_RESOLVED" in embedContract
-    ? embedContract.PERMISSION_REQUEST_RESOLVED
-    : "minds:permission-request-resolved";
-
-// The contract-v3 verdict-hydration query pair, probed the same way. Sending
-// the query needs no vendored support (send does not validate types), so a
-// workspace ahead of its vendor snapshot still asks; the ANSWER is dropped by
-// a stale vendored endpoint's validator until the sync lands, and the cards
-// keep the transcript-driven flip in the meantime.
+// The contract-v3 resolution pair postdates the vendored embed_contract
+// snapshot (this repo does not edit system/vendor by hand); a named import of
+// a missing export fails the rollup build, so probe the namespace and fall
+// back to the literal. Sends need no vendored support, but a stale vendored
+// endpoint's validator drops the ANSWER until the sync lands -- cards keep
+// the transcript-driven flip in the meantime.
 export const QUERY_PERMISSION_RESOLUTIONS: "minds:query-permission-resolutions" =
   "QUERY_PERMISSION_RESOLUTIONS" in embedContract
     ? embedContract.QUERY_PERMISSION_RESOLUTIONS
@@ -71,7 +61,6 @@ function getEndpoint(): ContractEndpoint {
       handlers: {
         [CLOSE_ACTIVE_TAB]: (message) => handlerByType[CLOSE_ACTIVE_TAB]?.(message),
         [OPEN_AI_KEYS_ACK]: (message) => handlerByType[OPEN_AI_KEYS_ACK]?.(message),
-        [PERMISSION_REQUEST_RESOLVED]: (message) => handlerByType[PERMISSION_REQUEST_RESOLVED]?.(message),
         [PERMISSION_RESOLUTIONS]: (message) => handlerByType[PERMISSION_RESOLUTIONS]?.(message),
       },
     });

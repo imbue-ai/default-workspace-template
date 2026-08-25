@@ -13,19 +13,15 @@ import { isSkillExpansionUserMessage } from "./message-classification";
 import { PermissionCard, isFiledPermissionRequest, parsePermissionRequest } from "./permission-card";
 
 /** A permission-request tool call's own verdict: its own request id's entry in
- *  `resolutionsByRequestId` when parseable, else `fallbackResolution` -- the
- *  legacy, arrival-order guess used for a notification recorded before id
- *  embedding shipped (only ever correct when `event` carries a single
- *  permission-request tool call, which is what that older data assumed). */
+ *  `resolutionsByRequestId`, or null while the request awaits a decision (or
+ *  when the call is unparseable). */
 function resolutionForCall(
   toolCall: ToolCall,
   toolResult: ToolResultEvent | null,
   resolutionsByRequestId: ReadonlyMap<string, PermissionResolution>,
-  fallbackResolution: PermissionResolution | null,
 ): PermissionResolution | null {
   const details = parsePermissionRequest(toolCall, toolResult);
-  const byId = details ? resolutionsByRequestId.get(details.requestId) : undefined;
-  return byId ?? fallbackResolution;
+  return (details ? resolutionsByRequestId.get(details.requestId) : undefined) ?? null;
 }
 
 // Per-kind user_message rendering lives in user-message-display.ts (the display
@@ -350,7 +346,6 @@ export function renderAssistantMessageChildren(
   toolResults: Map<string, ToolResultEvent>,
   agentId: string,
   resolutionsByRequestId: ReadonlyMap<string, PermissionResolution> = new Map(),
-  fallbackResolution: PermissionResolution | null = null,
 ): m.Children[] {
   const textContent = event.text || "";
   const toolCalls = event.tool_calls || [];
@@ -390,7 +385,7 @@ export function renderAssistantMessageChildren(
     // looked up by this call's own request id so a message batching more than
     // one permission request resolves each of its cards independently.
     if (isFiledPermissionRequest(toolCall, result)) {
-      const resolution = resolutionForCall(toolCall, result, resolutionsByRequestId, fallbackResolution);
+      const resolution = resolutionForCall(toolCall, result, resolutionsByRequestId);
       children.push(m(PermissionCard, { toolCall, toolResult: result, resolution }));
       continue;
     }
@@ -411,7 +406,6 @@ export function renderPermissionItem(
   toolResults: Map<string, ToolResultEvent>,
   agentId: string,
   resolutionsByRequestId: ReadonlyMap<string, PermissionResolution>,
-  fallbackResolution: PermissionResolution | null,
   domId: string = event.event_id,
 ): m.Vnode {
   // ``domId`` defaults to the event id but a top-level permission row passes its
@@ -422,6 +416,6 @@ export function renderPermissionItem(
   return m(
     "div",
     { id: domId, class: "message message-assistant", key: event.event_id },
-    renderAssistantMessageChildren(event, toolResults, agentId, resolutionsByRequestId, fallbackResolution),
+    renderAssistantMessageChildren(event, toolResults, agentId, resolutionsByRequestId),
   );
 }

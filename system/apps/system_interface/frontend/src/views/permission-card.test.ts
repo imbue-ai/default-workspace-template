@@ -9,7 +9,7 @@ import {
   PermissionCard,
   isFiledPermissionRequest,
   initShellPermissionResolutions,
-  notePermissionResolutionsAnswer,
+  notePermissionResolutions,
   noteUnresolvedPermissionRequest,
   openPermissionRequest,
   parsePermissionRequest,
@@ -875,84 +875,8 @@ describe("openPermissionRequest", () => {
   });
 });
 
-// The instant card flip works only once the vendored embed contract defines
-// PERMISSION_REQUEST_RESOLVED: the workspace endpoint validates incoming types
-// against the vendored contract and drops unknown ones before any handler
-// runs (mngr-internal#224 adds the type; this repo deliberately does not edit
-// system/vendor by hand). Until the release sync lands, cards fall back to
-// the transcript-driven flip and these tests skip -- and un-skip themselves
-// the moment the sync arrives, since the probe reads the vendored contract
-// itself.
-const HAS_RESOLVED_MESSAGE = "PERMISSION_REQUEST_RESOLVED" in embedContract;
+// -- Shell-reported verdicts and hydration ------------------------------------
 
-describe.skipIf(!HAS_RESOLVED_MESSAGE)("shell permission resolutions", () => {
-  it("rejects an off-shape payload without recording anything", () => {
-    // Delivered through the real contract, so this covers the validation the
-    // shell's messages actually pass through -- not a second copy of it.
-    deliverFromEmbedder({
-      type: "minds:permission-request-resolved",
-      requestId: "req-rejected",
-      resolution: "error",
-    });
-    deliverFromEmbedder({ type: "minds:permission-request-resolved", requestId: "req-rejected" });
-    deliverFromEmbedder({ type: "minds:permission-request-resolved", resolution: "granted" });
-    expect(shellPermissionResolutionFor("req-rejected")).toBeNull();
-
-    // The same delivery with a verdict the contract accepts does record, so
-    // the rejections above are the payloads' doing and not a dead harness.
-    deliverFromEmbedder({
-      type: "minds:permission-request-resolved",
-      requestId: "req-rejected",
-      resolution: "granted",
-    });
-    expect(shellPermissionResolutionFor("req-rejected")).toBe("granted");
-  });
-
-  it("ignores a resolution from anyone but this page's embedder", () => {
-    deliverFromEmbedder(
-      { type: "minds:permission-request-resolved", requestId: "req-nested", resolution: "granted" },
-      { isFromEmbedder: false },
-    );
-    expect(shellPermissionResolutionFor("req-nested")).toBeNull();
-  });
-
-  it("records the verdict the shell reports", () => {
-    deliverFromEmbedder({
-      type: "minds:permission-request-resolved",
-      requestId: "req-recorded",
-      resolution: "denied",
-    });
-    expect(shellPermissionResolutionFor("req-recorded")).toBe("denied");
-  });
-
-  it("flips the live card to the shell's verdict before the transcript resolution lands", () => {
-    // The shell (the Minds review popup) reported this request granted; the
-    // transcript walk hasn't classified a resolution yet (`resolution: null`),
-    // but the card should already render the Approved receipt.
-    deliverFromEmbedder({
-      type: "minds:permission-request-resolved",
-      requestId: "fs-1",
-      resolution: "granted",
-    });
-    const card = PermissionCard();
-    const vnode = card.view({
-      attrs: {
-        toolCall: makeToolCall(PERMISSION_INPUT, "permission_request"),
-        toolResult: makeResult(FILE_SHARING_OUTPUT),
-        resolution: null,
-      },
-    } as unknown as Parameters<typeof card.view>[0]);
-    const verdict = findByClass(vnode, "permission-request-verdict");
-    expect(verdict).not.toBeNull();
-    expect(textOf(verdict)).toBe("Approved");
-    expect(findReviewButton(vnode)).toBeNull();
-  });
-});
-
-// The hydration QUERY needs no vendored-contract support (send does not
-// validate types), so these run against today's vendor snapshot; only the
-// answer's delivery through the real endpoint needs the vendored validator,
-// covered by the skipIf block below.
 describe("verdict hydration", () => {
   beforeEach(() => {
     resetPermissionResolutionHydrationForTesting();
@@ -974,131 +898,111 @@ describe("verdict hydration", () => {
     return posted;
   }
 
-  it("batches every undecided card into one debounced query", () => {
+  it("batches undecided cards into one query, resent a bounded number of times, once per id", () => {
+    // The resends cover the boot race where the first query beats the
+    // embedder's endpoint registration; with no embedder they go nowhere and
+    // stop on their own. Re-reporting an already-asked id (every redraw does)
+    // never re-queries -- verdicts arriving later ride the unsolicited push.
     const posted = postedDuring(() => {
       noteUnresolvedPermissionRequest("req-a");
       noteUnresolvedPermissionRequest("req-b");
-      vi.advanceTimersByTime(250);
-    });
-    expect(posted).toEqual([{ type: "minds:query-permission-resolutions", requestIds: ["req-a", "req-b"] }]);
-  });
-
-  it("resends an unanswered query a bounded number of times, then goes quiet", () => {
-    // Three sends cover the boot race where the first query beats the
-    // embedder's endpoint registration; with no embedder at all the round
-    // must close rather than retry forever.
-    const posted = postedDuring(() => {
+      vi.advanceTimersByTime(60000);
       noteUnresolvedPermissionRequest("req-a");
-      vi.advanceTimersByTime(250);
-      vi.advanceTimersByTime(2000 + 5000 + 15000);
       vi.advanceTimersByTime(60000);
     });
     expect(posted.length).toBe(3);
     expect(new Set(posted.map((p) => JSON.stringify(p))).size).toBe(1);
+    expect(posted[0]).toEqual({
+      type: "minds:query-permission-resolutions",
+      requestIds: ["req-a", "req-b"],
+    });
   });
 
-  it("records the answered verdicts and stops the resend cycle", () => {
+  it("sends an id that arrives mid-batch in the next batch", () => {
     const posted = postedDuring(() => {
       noteUnresolvedPermissionRequest("req-a");
-      noteUnresolvedPermissionRequest("req-b");
       vi.advanceTimersByTime(250);
-      notePermissionResolutionsAnswer({
-        type: "minds:permission-resolutions",
-        resolutions: [{ requestId: "req-a", resolution: "denied" }],
-      });
+      // The first batch is mid-flight; a late-classified card reports now.
+      noteUnresolvedPermissionRequest("req-late");
       vi.advanceTimersByTime(60000);
     });
-    // One query, no resends after the answer.
-    expect(posted.length).toBe(1);
+    expect(posted.length).toBe(6);
+    expect(posted.slice(0, 3).every((p) => JSON.stringify(p).includes('"req-a"'))).toBe(true);
+    expect(posted.slice(3).every((p) => JSON.stringify(p).includes('"req-late"'))).toBe(true);
+  });
+
+  it("records the verdicts a resolutions message carries and redraws", () => {
+    notePermissionResolutions({
+      type: "minds:permission-resolutions",
+      resolutions: [
+        { requestId: "req-a", resolution: "denied" },
+        { requestId: "req-b", resolution: "granted" },
+        { requestId: "req-c", resolution: "maybe" },
+        { requestId: "", resolution: "granted" },
+      ],
+    });
     expect(shellPermissionResolutionFor("req-a")).toBe("denied");
-    // req-b was answered as still-pending (absent), not given some verdict.
-    expect(shellPermissionResolutionFor("req-b")).toBeNull();
+    expect(shellPermissionResolutionFor("req-b")).toBe("granted");
+    // Off-shape entries are dropped without poisoning the rest.
+    expect(shellPermissionResolutionFor("req-c")).toBeNull();
     expect(m.redraw).toHaveBeenCalled();
   });
 
-  it('treats an empty answer as "all still pending" and stops resending', () => {
-    const posted = postedDuring(() => {
-      noteUnresolvedPermissionRequest("req-a");
-      vi.advanceTimersByTime(250);
-      notePermissionResolutionsAnswer({ type: "minds:permission-resolutions", resolutions: [] });
-      vi.advanceTimersByTime(60000);
-    });
-    expect(posted.length).toBe(1);
-  });
-
-  it("asks about each request id at most once per page-life", () => {
-    // Undecided cards re-report their id on every redraw; only the first
-    // report queries. Verdicts arriving later ride the push relay instead.
-    const posted = postedDuring(() => {
-      noteUnresolvedPermissionRequest("req-a");
-      vi.advanceTimersByTime(250);
-      notePermissionResolutionsAnswer({ type: "minds:permission-resolutions", resolutions: [] });
-      noteUnresolvedPermissionRequest("req-a");
-      vi.advanceTimersByTime(60000);
-    });
-    expect(posted.length).toBe(1);
-  });
-
-  it("queues an id that arrives mid-round into the next round", () => {
-    const posted = postedDuring(() => {
-      noteUnresolvedPermissionRequest("req-a");
-      vi.advanceTimersByTime(250);
-      // The first round is in flight; a late-classified card reports now.
-      noteUnresolvedPermissionRequest("req-late");
-      notePermissionResolutionsAnswer({ type: "minds:permission-resolutions", resolutions: [] });
-      vi.advanceTimersByTime(250);
-      notePermissionResolutionsAnswer({ type: "minds:permission-resolutions", resolutions: [] });
-      vi.advanceTimersByTime(60000);
-    });
-    expect(posted).toEqual([
-      { type: "minds:query-permission-resolutions", requestIds: ["req-a"] },
-      { type: "minds:query-permission-resolutions", requestIds: ["req-late"] },
-    ]);
-  });
-
-  it("is triggered by an undecided card rendering, with the card's own request id", () => {
+  it("is triggered by an undecided card rendering, and only by one", () => {
     const posted = postedDuring(() => {
       const card = PermissionCard();
-      card.view({
-        attrs: {
-          toolCall: makeToolCall(PERMISSION_INPUT, "permission_request"),
-          toolResult: makeResult(PERMISSION_OUTPUT),
-          resolution: null,
-        },
-      } as unknown as Parameters<typeof card.view>[0]);
+      const attrs = (resolution: PermissionResolution | null) =>
+        ({
+          attrs: {
+            toolCall: makeToolCall(PERMISSION_INPUT, "permission_request"),
+            toolResult: makeResult(PERMISSION_OUTPUT),
+            resolution,
+          },
+        }) as unknown as Parameters<typeof card.view>[0];
+      card.view(attrs("granted"));
+      vi.advanceTimersByTime(60000);
+      card.view(attrs(null));
       vi.advanceTimersByTime(250);
     });
-    expect(posted).toEqual([
-      {
-        type: "minds:query-permission-resolutions",
-        requestIds: ["885711ec07bf47239d71294e1534330b"],
+    // The decided render queried nothing; the undecided one asks with the
+    // card's own request id.
+    expect(posted[0]).toEqual({
+      type: "minds:query-permission-resolutions",
+      requestIds: ["885711ec07bf47239d71294e1534330b"],
+    });
+  });
+
+  it("flips the live card once the shell reports its verdict", () => {
+    // The shell (the Minds review popup) reported this request granted; the
+    // transcript walk hasn't classified a resolution yet (`resolution: null`),
+    // but the card should already render the Approved receipt.
+    notePermissionResolutions({
+      type: "minds:permission-resolutions",
+      resolutions: [{ requestId: "fs-1", resolution: "granted" }],
+    });
+    const card = PermissionCard();
+    const vnode = card.view({
+      attrs: {
+        toolCall: makeToolCall(PERMISSION_INPUT, "permission_request"),
+        toolResult: makeResult(FILE_SHARING_OUTPUT),
+        resolution: null,
       },
-    ]);
-  });
-
-  it("is not triggered by a card that already has its verdict", () => {
-    const posted = postedDuring(() => {
-      const card = PermissionCard();
-      card.view({
-        attrs: {
-          toolCall: makeToolCall(PERMISSION_INPUT, "permission_request"),
-          toolResult: makeResult(PERMISSION_OUTPUT),
-          resolution: "granted",
-        },
-      } as unknown as Parameters<typeof card.view>[0]);
-      vi.advanceTimersByTime(60000);
-    });
-    expect(posted).toEqual([]);
+    } as unknown as Parameters<typeof card.view>[0]);
+    const verdict = findByClass(vnode, "permission-request-verdict");
+    expect(verdict).not.toBeNull();
+    expect(textOf(verdict)).toBe("Approved");
+    expect(findReviewButton(vnode)).toBeNull();
   });
 });
 
-// Answer delivery through the real endpoint needs the vendored contract to
-// know PERMISSION_RESOLUTIONS (a stale snapshot's validator drops the type
-// before any handler runs); like the PERMISSION_REQUEST_RESOLVED block above,
-// these un-skip themselves the moment the vendor sync lands.
-const HAS_RESOLUTIONS_ANSWER = "PERMISSION_RESOLUTIONS" in embedContract;
+// Delivery through the real endpoint needs the vendored contract to know
+// PERMISSION_RESOLUTIONS (a stale snapshot's validator drops the type before
+// any handler runs; this repo deliberately does not edit system/vendor by
+// hand). These un-skip themselves the moment the vendor sync lands, and cover
+// the source and payload checks the shell's messages actually pass through.
+const HAS_RESOLUTIONS_MESSAGE = "PERMISSION_RESOLUTIONS" in embedContract;
 
-describe.skipIf(!HAS_RESOLUTIONS_ANSWER)("verdict hydration answers via the contract", () => {
+describe.skipIf(!HAS_RESOLUTIONS_MESSAGE)("shell resolutions via the contract", () => {
   beforeEach(() => {
     resetPermissionResolutionHydrationForTesting();
   });
@@ -1107,19 +1011,11 @@ describe.skipIf(!HAS_RESOLUTIONS_ANSWER)("verdict hydration answers via the cont
     resetPermissionResolutionHydrationForTesting();
   });
 
-  it("records verdicts delivered as a permission-resolutions answer", () => {
+  it("records verdicts from this page's embedder, and only from it", () => {
     deliverFromEmbedder({
       type: "minds:permission-resolutions",
-      resolutions: [
-        { requestId: "req-hydrated", resolution: "granted" },
-        { requestId: "req-hydrated-2", resolution: "denied" },
-      ],
+      resolutions: [{ requestId: "req-hydrated", resolution: "granted" }],
     });
-    expect(shellPermissionResolutionFor("req-hydrated")).toBe("granted");
-    expect(shellPermissionResolutionFor("req-hydrated-2")).toBe("denied");
-  });
-
-  it("ignores an answer from anyone but this page's embedder", () => {
     deliverFromEmbedder(
       {
         type: "minds:permission-resolutions",
@@ -1127,6 +1023,13 @@ describe.skipIf(!HAS_RESOLUTIONS_ANSWER)("verdict hydration answers via the cont
       },
       { isFromEmbedder: false },
     );
+    // The contract validator rejects the whole message on one off-shape entry.
+    deliverFromEmbedder({
+      type: "minds:permission-resolutions",
+      resolutions: [{ requestId: "req-rejected", resolution: "error" }],
+    });
+    expect(shellPermissionResolutionFor("req-hydrated")).toBe("granted");
     expect(shellPermissionResolutionFor("req-forged")).toBeNull();
+    expect(shellPermissionResolutionFor("req-rejected")).toBeNull();
   });
 });
