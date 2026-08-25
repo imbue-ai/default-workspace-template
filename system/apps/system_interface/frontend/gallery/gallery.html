@@ -505,8 +505,10 @@
         radiusHost.append(cell);
       }
 
-      // Elevation: proposed --shadow-* tokens.
-      const SHADOW_TOKENS = ["--shadow-sm", "--shadow-md", "--shadow-lg", "--shadow-overlay"];
+      // Elevation: the app's --elevation-* scale (named to avoid Tailwind's own
+      // --shadow-* utilities). --elevation-md has no consumer yet, so Tailwind
+      // tree-shakes it out of :root and it does not render here.
+      const SHADOW_TOKENS = ["--elevation-sm", "--elevation-md", "--elevation-lg", "--elevation-overlay"];
       const shadowHost = document.getElementById("gy-shadow");
       let shadowCount = 0;
       for (const t of SHADOW_TOKENS) {
