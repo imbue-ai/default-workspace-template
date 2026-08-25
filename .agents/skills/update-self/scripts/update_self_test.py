@@ -2073,7 +2073,7 @@ def test_a_live_build_whose_bundle_does_not_match_the_merged_source_rolls_back(
 
 
 def test_a_bundle_the_tree_cannot_vouch_for_is_accepted_on_the_index_alone(
-    apply_repo: Path, tmp_path: Path
+    apply_repo: Path, tmp_path: Path, capsys
 ) -> None:
     # When git cannot resolve the merged frontend tree there is nothing to
     # compare a stamp against, and an apply must not be blocked on a read
@@ -2096,6 +2096,7 @@ def test_a_bundle_the_tree_cannot_vouch_for_is_accepted_on_the_index_alone(
     assert code == 0
     assert not runner.ran("npm", "run", "build")
     assert _installed_asset(apply_repo) == "console.log('worker');"
+    assert "cannot be verified" in capsys.readouterr().err
 
 
 # --- apply: failure -> rollback --------------------------------------------------
