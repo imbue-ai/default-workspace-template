@@ -10,7 +10,6 @@ did not: an unambiguous process-death signal, and the ability to notice a Chromi
 by a previous service restart before launching a second one onto the same profile (§8.1).
 """
 
-import json
 import os
 import shutil
 import signal
@@ -69,9 +68,24 @@ def profile_holder_pid(profile_dir: Path) -> int | None:
             pid = int(line)
         except ValueError:
             continue
-        if pid != os.getpid():
+        if pid != os.getpid() and _has_exact_arg(pid, marker):
             return pid
     return None
+
+
+def _has_exact_arg(pid: int, arg: str) -> bool:
+    """Whether ``pid``'s argv contains exactly ``arg`` as one token.
+
+    `pgrep -f` matches a SUBSTRING of the command line, so launching `browser-1` would
+    match a healthy, running `browser-10` -- and `reap_orphan` would then SIGKILL it
+    mid-session. Names are user-chosen, so this is not hypothetical. Confirm the exact
+    argv token before treating anything as an orphan.
+    """
+    try:
+        raw = Path(f"/proc/{pid}/cmdline").read_bytes()
+    except OSError:
+        return False  # no procfs (macOS/dev) or the process is already gone: do not kill
+    return arg in raw.decode(errors="replace").split("\0")
 
 
 def reap_orphan(profile_dir: Path, timeout_s: float = 10.0) -> bool:

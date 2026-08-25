@@ -45,8 +45,6 @@ Cloud / litellm proxy (``ANTHROPIC_BASE_URL``) path is intentionally unsupported
 """
 
 import asyncio
-import base64
-import ipaddress
 import json
 import os
 import queue
@@ -56,7 +54,6 @@ import subprocess
 import threading
 import time
 from collections import deque
-from urllib.parse import urlparse
 from collections.abc import Awaitable, Callable, Coroutine
 from pathlib import Path
 from typing import Any, Literal
@@ -303,31 +300,6 @@ _MAX_SESSIONS = int(os.environ.get("BROWSER_MAX_SESSIONS", "2"))
 _ALLOWED_NAV_SCHEMES = frozenset({"http", "https"})
 
 
-def _unsafe_navigation_reason(url: str) -> "str | None":
-    """Reason a caller-supplied URL must not be navigated to (SSRF guard), or None if allowed.
-
-    Blocks non-web schemes (``file:``/``chrome:``/``data:``...) and loopback/link-local hosts
-    (including the cloud-metadata IP 169.254.169.254), so a caller can't make the browser read a
-    local file -- e.g. the Anthropic key at ``file:///home/user/.mngr/env`` -- or hit an internal
-    service and exfiltrate it back through the state/screenshot channel. Literal-IP based; a
-    hostname that DNS-rebinds to a blocked IP is a residual this minimal guard does not resolve."""
-    parsed = urlparse((url or "").strip())
-    scheme = parsed.scheme.lower()
-    if scheme not in _ALLOWED_NAV_SCHEMES:
-        return f"scheme {scheme or '(none)'!r} is not allowed (only http/https)"
-    host = (parsed.hostname or "").lower()
-    if not host:
-        return "URL has no host"
-    if host == "localhost" or host.endswith(".localhost"):
-        return "loopback host is not allowed"
-    try:
-        address = ipaddress.ip_address(host)
-    except ValueError:
-        return None  # a regular hostname
-    if address.is_loopback or address.is_link_local:
-        return f"internal address {host} is not allowed"
-    return None
-
 # Names whose background launch FAILED are remembered briefly so a late/retrying optimistic
 # viewer (still in 1013 reconnect-backoff when the launch failed, so it never registered a
 # cast queue and missed the launch_failed broadcast) is closed terminally (1008) instead of
@@ -387,10 +359,6 @@ def _repo_root() -> Path:
     return Path.cwd()
 
 
-# Where `screenshot` writes PNGs (relative to the daemon's cwd = repo root). The
-# CLI prints the path and the agent reads the file; agent + daemon share the FS.
-_SCREENSHOT_DIR = Path(os.environ.get("BROWSER_SCREENSHOT_DIR", "data/.state/browser-screenshots"))
-
 # Sentinel the fleet wraps its agent-facing nudges in before sending them via
 # `mngr message` (see `_message_agent`). These nudges land in the agent's
 # transcript as an ordinary user turn; without a marker the system_interface
@@ -435,9 +403,6 @@ _MANIFEST_CHECKPOINT_SECONDS = float(os.environ.get("BROWSER_CHECKPOINT_SECONDS"
 # Lock files Chromium leaves in a profile; a hard kill (crash/OOM/container stop)
 # orphans them and the next launch on that profile would refuse to start. Safe to
 # remove because restore is sequential and the prior Chromium for this dir is dead.
-_SINGLETON_LOCK_NAMES = ("SingletonLock", "SingletonSocket", "SingletonCookie")
-
-
 def _profile_dir(browser_id: str) -> Path:
     """The persistent Chromium ``user_data_dir`` for a browser name.
 
@@ -452,17 +417,6 @@ def _profile_dir(browser_id: str) -> Path:
     int to the name string (validated filesystem-safe by names.is_valid_browser_name).
     """
     return _PROFILE_ROOT / f"browser-use-user-data-dir-{browser_id}"
-
-
-def _clear_stale_singleton(profile_dir: Path) -> None:
-    """Remove Chromium's Singleton* lock files left behind by a hard kill, so a
-    relaunch on this persistent profile isn't refused. Called only at launch, never
-    while a browser is live (one live Chromium per profile dir)."""
-    for name in _SINGLETON_LOCK_NAMES:
-        try:
-            (profile_dir / name).unlink(missing_ok=True)
-        except OSError as e:
-            logger.debug("could not clear {} in {} ({})", name, profile_dir, e)
 
 
 def _is_restorable_url(url: str | None) -> bool:
@@ -558,6 +512,11 @@ class LiveBrowser(MutableModel):
     # every Chromium launch, which makes revocation race-free and makes a client that
     # reconnects across a restart fail cleanly instead of driving a different browser.
     _token: str = PrivateAttr(default="")
+    # The agent the current token was minted for. A CDP client sends no identity header, so
+    # the token IS the identity: it is issued to one agent, and it stops matching the moment
+    # anyone else takes the browser.
+    _token_owner: str = PrivateAttr(default="")
+    _token_owner_name: str | None = PrivateAttr(default=None)
     # The tab the pane is showing. Was browser-use's ``agent_focus_target_id``; now the
     # fleet's own notion, updated wherever we foreground.
     _active_target_id: str = PrivateAttr(default="")
@@ -730,7 +689,15 @@ class LiveBrowser(MutableModel):
         if await self._abort_start_if_torn_down():
             return
         self._cdp = CdpClient(self._chrome.http_endpoint)
-        await self._cdp.connect()
+        try:
+            await self._cdp.connect()
+        except Exception as e:  # noqa: BLE001  (websockets/JSON errors are outside _BROWSER_ERRORS)
+            # Anything here means we have a live Chromium we cannot talk to. Raising the
+            # fleet's own startup error is what gets the browser torn down and removed --
+            # otherwise it strands in `init`, holding its name and a slot against the cap
+            # forever, with Chromium and Xvfb still up and the viewer stuck on "Starting".
+            await self._teardown_chrome()
+            raise BrowserStartupError(f"could not open a CDP connection to Chromium: {e}") from e
         # A fresh token per launch: a CLI session that reconnects across a service restart
         # is rejected rather than silently driving a different Chromium (§4.1).
         self._mint_token()
@@ -757,22 +724,31 @@ class LiveBrowser(MutableModel):
 
     # --- the proxy's callbacks into ownership --------------------------------
 
-    def _token_may_drive(self, token: str) -> bool:
+    async def _token_may_drive(self, token: str) -> bool:
         """Whether a frame bearing ``token`` may be forwarded right now.
 
-        This is the per-frame replacement for ``run_action``'s compare-and-set, and it is
-        the entire human-wins guarantee: the instant a human takes control, the token no
-        longer matches and every subsequent frame is refused. Reading the control state
-        without the lock is deliberate -- this runs per frame, and a stale read can only
-        let ONE already-in-flight frame through, which is the same bound the old
-        per-command CAS gave.
+        The per-frame replacement for ``run_action``'s compare-and-set, and the entire
+        human-wins guarantee: the instant a human takes control the token is re-minted, so
+        every subsequent frame is refused.
+
+        It also carries what ``run_action`` did on its FIRST call -- acquiring the browser.
+        Without that, the URL ``new`` prints could never drive anything: a fresh browser
+        rests with the human, and nothing else auto-acquires any more. The sticky lease
+        that SKILL.md promises starts here, on the agent's first frame.
         """
-        if not token or token != self._token:
+        if not token or token != self._token or not self._token_owner:
             return False
-        if self.controller != "agent" or self.human_pinned:
+        if self._crashed or not self._is_running:
             return False
-        self.touch_lease()
-        return True
+        if self.controller == "agent" and self.owner_agent_id == self._token_owner and not self.human_pinned:
+            self.touch_lease()
+            return True
+        if self.controller == "human" and not self.human_pinned:
+            # Resting browser: take it, exactly as the first direct command used to.
+            if await self.acquire(self._token_owner, self._token_owner_name, wait=False) == "acquired":
+                self.touch_lease()
+                return True
+        return False
 
     async def _on_proxy_attach(self) -> None:
         """Surface the pane on an agent's FIRST attach.
@@ -1021,8 +997,10 @@ class LiveBrowser(MutableModel):
         race-free: the moment control moves, every frame bearing the old token is refused,
         with no socket to hunt down and no window in which a stale attacher can act.
         """
-        if self._token:  # only once a browser has launched and minted its first token
-            self._mint_token()
+        # Re-mint unless the browser is simply staying with the agent the token was issued
+        # to -- otherwise the holder's own acquire would invalidate the URL it is using.
+        if self._token and not (to == "agent" and agent_id and agent_id == self._token_owner):
+            self._mint_token(agent_id or "", agent_name if to == "agent" else None)
         self.controller = to
         self.owner_agent_id = agent_id
         self.owner_agent_name = agent_name
@@ -1615,23 +1593,44 @@ class LiveBrowser(MutableModel):
         if chrome is not None:
             await asyncio.to_thread(chrome.kill)
 
-    def _mint_token(self) -> str:
-        """Fresh capability token for the attach URL.
+    def _mint_token(self, agent_id: str = "", agent_name: str | None = None) -> str:
+        """Fresh capability token, issued to ``agent_id``.
 
-        Called on every Chromium launch and every ownership write. Rotating on ownership
-        makes lease revocation race-free (an old token simply stops matching), and
-        rotating on launch means a client that reconnects after a service restart is
-        rejected rather than silently driving a DIFFERENT Chromium with stale target ids.
+        Minted on every Chromium launch (so a client reconnecting across a service restart
+        is rejected rather than silently driving a DIFFERENT Chromium with stale target
+        ids) and re-minted whenever the browser changes hands. Rotation is what makes
+        revocation race-free: the old token simply stops matching, with no socket to chase.
         """
         self._token = secrets.token_urlsafe(18)
+        self._token_owner = agent_id
+        self._token_owner_name = agent_name
         return self._token
 
     @property
     def attach_url(self) -> str:
-        """What the agent points `playwright-cli attach --cdp=` at."""
+        """The URL the current token-holder points `playwright-cli attach --cdp=` at."""
         if _PROXY.server is None or not self._token:
             return ""
         return f"http://127.0.0.1:{_PROXY.server.port}/{self.browser_id}/{self._token}"
+
+    async def attach_for(self, agent_id: str, agent_name: str | None) -> dict[str, Any]:
+        """Issue ``agent_id`` an attach URL, or say why it can't have one.
+
+        This is where agent-vs-agent exclusion is enforced. The proxy cannot read the
+        ``X-Mngr-Agent-Id`` header (a generic CDP client sends none), so identity has to be
+        bound here, at the one place that still sees it, and carried by the token.
+        """
+        if self._crashed:
+            return self._crashed_payload()
+        if not self._is_running:
+            return self._starting_payload()
+        async with self._control_lock:
+            if self.human_pinned:
+                return {"ok": False, "status": "busy_human", **self._control_state()}
+            if self.controller == "agent" and self.owner_agent_id not in (None, agent_id):
+                return {"ok": False, "status": "busy_agent", **self._control_state()}
+            self._mint_token(agent_id, agent_name)
+        return {"ok": True, "attach_url": self.attach_url, **self._control_state()}
 
     def touch_lease(self) -> None:
         """Record agent activity. Called for a FORWARDED frame only (see _sweep_idle_lease)."""

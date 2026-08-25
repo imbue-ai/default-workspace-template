@@ -17,7 +17,6 @@ Three kinds:
 import asyncio
 import json
 import os
-import queue
 import socket
 import urllib.request
 import threading

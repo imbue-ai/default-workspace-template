@@ -823,7 +823,9 @@ def test_crashed_browser_reports_crashed_to_agent_and_viewer() -> None:
         # An agent's next ownership command short-circuits to a clear "crashed" status,
         # and the token gate refuses every CDP frame -- nothing tries to drive a corpse.
         assert await browser.acquire("A", "Alice", wait=False) == "crashed"
-        assert browser._token_may_drive(browser._token) is False
+        assert await browser._token_may_drive(browser._token) is False
+        # A crashed browser must not hand out an attach URL that would drop the socket.
+        assert (await browser.attach_for("A", "Alice"))["status"] == "crashed"
         # And it's reported in the fleet snapshot, with no tabs.
         desc = await browser.describe()
         assert desc["crashed"] is True and desc["tabs"] == [] and desc["lifecycle"] == "crashed"
@@ -1160,11 +1162,51 @@ def test_looking_at_a_busy_browser_does_not_enqueue_the_agent() -> None:
 # --- ownership: the lease, now enforced per CDP frame ------------------------
 
 
-def _leased(name: str = "alex-smith") -> bsession.LiveBrowser:
-    """A running LiveBrowser with a minted token, ready for the per-frame gate."""
+def _leased(name: str = "alex-smith", agent_id: str = "A") -> bsession.LiveBrowser:
+    """A running LiveBrowser with a token minted FOR ``agent_id``."""
     browser = _running_browser(browser_id=name)
-    browser._mint_token()
+    browser._mint_token(agent_id, "Alice")
     return browser
+
+
+def test_the_url_new_prints_can_actually_drive_a_resting_browser() -> None:
+    # The bug this pins: `run_action`'s "the first action acquires the browser" was deleted
+    # with the drive verbs, and nothing replaced it -- so a freshly created browser rests
+    # with the human, and the attach URL `new` printed was refused on EVERY frame. The
+    # agent's first frame has to take the lease, exactly as its first command used to.
+    browser = _leased("browser-1")
+    assert browser.controller == "human"  # a new browser rests with the human
+
+    async def go() -> None:
+        assert await browser._token_may_drive(browser._token) is True
+        assert browser._state_tuple() == ("agent", "A", False)  # the first frame acquired it
+        # ...and the acquire must NOT invalidate the very URL the agent is driving with.
+        assert await browser._token_may_drive(browser._token) is True
+
+    asyncio.run(go())
+
+
+def test_a_second_agent_cannot_get_a_token_for_a_held_browser() -> None:
+    # A CDP client sends no identity header, so the token IS the identity. If /attach handed
+    # the live token to any caller, agent B could drive agent A's browser.
+    browser = _leased("browser-1", agent_id="A")
+
+    async def go() -> None:
+        await browser.acquire("A", "Alice")
+        denied = await browser.attach_for("B", "Bob")
+        assert denied["ok"] is False and denied["status"] == "busy_agent"
+        # The holder can always re-issue itself one (the token rotates on ownership moves).
+        # The URL text needs a live ProxyServer, which the real-Chromium test covers; here
+        # what matters is that a token was issued and it is bound to the right agent.
+        mine = await browser.attach_for("A", "Alice")
+        assert mine["ok"] is True
+        assert browser._token_owner == "A"
+        # A human-pinned browser refuses everyone.
+        await browser.take_control()
+        pinned = await browser.attach_for("A", "Alice")
+        assert pinned["ok"] is False and pinned["status"] == "busy_human"
+
+    asyncio.run(go())
 
 
 def test_token_gate_is_the_per_frame_replacement_for_the_command_cas() -> None:
@@ -1176,15 +1218,15 @@ def test_token_gate_is_the_per_frame_replacement_for_the_command_cas() -> None:
     async def go() -> None:
         await browser.acquire("A", "Alice")
         token = browser._token
-        assert browser._token_may_drive(token) is True
+        assert await browser._token_may_drive(token) is True
         # A stale/absent token is refused outright (this is how agent B is kept out --
         # a generic CDP client sends no x-mngr-agent-id header, so the token is the
         # ONLY thing distinguishing one attacher from another).
-        assert browser._token_may_drive("not-the-token") is False
-        assert browser._token_may_drive("") is False
+        assert await browser._token_may_drive("not-the-token") is False
+        assert await browser._token_may_drive("") is False
         # A human take-control makes the very next frame fail, mid-session.
         await browser.take_control()
-        assert browser._token_may_drive(token) is False
+        assert await browser._token_may_drive(token) is False
 
     asyncio.run(go())
 
@@ -1197,9 +1239,10 @@ def test_ownership_write_rotates_the_token() -> None:
     async def go() -> None:
         await browser.acquire("A", "Alice")
         first = browser._token
+        assert browser._token == first  # its OWN agent acquiring must not invalidate it
         await browser.take_control()
         assert browser._token != first
-        assert browser._token_may_drive(first) is False
+        assert await browser._token_may_drive(first) is False
 
     asyncio.run(go())
 

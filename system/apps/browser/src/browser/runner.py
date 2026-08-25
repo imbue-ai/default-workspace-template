@@ -39,7 +39,6 @@ import os
 import queue
 import signal
 import threading
-from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import FrameType
 from typing import Any
@@ -51,7 +50,7 @@ from simple_websocket import ConnectionClosed
 
 from browser import mediastream, telemetry
 from browser.cdp_proxy import ProxyServer
-from browser.loop_bridge import AsyncLoopBridge, cancel_task
+from browser.loop_bridge import AsyncLoopBridge
 from browser.names import is_valid_browser_name
 from browser.oom_retag import start_oom_retagging
 from browser.session import (
@@ -80,20 +79,6 @@ _STARTUP_ERRORS = (BrowserStartupError, RuntimeError, OSError, ConnectionError)
 # bridge) cancelling the orphaned coroutine. The acquire/hold/task streaming paths
 # legitimately block until granted/disconnected and pass timeout=None instead.
 _ROUTE_TIMEOUT = float(os.environ.get("BROWSER_ROUTE_TIMEOUT", "120"))
-
-# Direct-control browser ACTIONS (navigate/click/input/.../tab) can legitimately run long
-# on a heavy page -- a navigation to a slow site can easily exceed the 120s _ROUTE_TIMEOUT,
-# and the old FastAPI path had NO server-side timeout at all (finding [9]). Cancelling such
-# an action mid-flight would surface a spurious 500 for a request that was about to succeed,
-# so direct actions get their own generous timeout. A timeout cancellation is still SAFE for
-# the ownership state machine: run_action sets the lease (and clears the claim window) BEFORE
-# the action and runs the action under _lock, so a cancellation only unwinds the in-flight
-# action + the _lock frame -- the lease stays held and no ownership field is left half-written
-# (control mutations are atomic under _control_lock, which the action body never holds). The
-# backstop against a truly-wedged action is still the idle-lease sweep. Env-tunable; set to 0
-# for no timeout (the action then runs to completion or until the agent's own client drops).
-_DIRECT_ACTION_TIMEOUT_RAW = float(os.environ.get("BROWSER_DIRECT_ACTION_TIMEOUT", "600"))
-_DIRECT_ACTION_TIMEOUT: float | None = _DIRECT_ACTION_TIMEOUT_RAW if _DIRECT_ACTION_TIMEOUT_RAW > 0 else None
 
 # Outbound-drain / inbound-poll cadence for the cast handler and the NDJSON
 # generators. The 0.5s NDJSON poll both flushes a heartbeat (so a dead client
@@ -372,18 +357,21 @@ def _direct_target(
 
 
 def cmd_attach(browser_id: str) -> Response:
-    """The attach URL for a browser, or why it isn't drivable yet.
+    """Issue this agent an attach URL, or say why it can't have one.
 
     Separate from ``POST /browsers`` because create returns while Chromium is still
-    launching -- the token only exists once the process is up. The CLI polls this.
+    launching -- the token only exists once the process is up, so the CLI polls this.
+
+    Goes through ``_direct_target`` for the agent identity: the token is minted FOR one
+    agent, and this route is the last place that identity is visible (the proxy sees a
+    generic CDP client with no header). Handing the live token to any caller would make
+    agent-vs-agent exclusion unenforceable.
     """
-    resolved = _resolve_sync(browser_id)
-    if isinstance(resolved, Response):
-        return resolved
-    url = resolved.attach_url
-    if not url:
-        return jsonify({"ok": False, "status": "starting", "error": "browser is still starting up"})
-    return jsonify({"ok": True, "attach_url": url})
+    target = _direct_target(browser_id)
+    if isinstance(target, Response):
+        return target
+    session, agent_id, agent_name = target
+    return jsonify(bridge.run(session.attach_for(agent_id, agent_name), timeout=_ROUTE_TIMEOUT))
 
 
 def cmd_acquire(browser_id: str) -> Response:
@@ -776,9 +764,21 @@ def create_app() -> Flask:
 
 
 async def _start_proxy() -> None:
-    """Bring up the fleet-wide CDP proxy and hand it to session.py."""
+    """Bring up the fleet-wide CDP proxy and hand it to session.py.
+
+    Falls back to an ephemeral port if the fixed one is taken. A bind failure here would
+    otherwise propagate out of ``create_app`` and kill ``main``, which supervisord
+    (``autorestart=true``) would then crash-loop -- taking the whole fleet down over a
+    port conflict, when a different port works fine (the CLI reads the URL from
+    ``/attach``, it never assumes the number).
+    """
     server = ProxyServer(port=_PROXY_PORT)
-    await server.start()
+    try:
+        await server.start()
+    except OSError as e:
+        logger.warning("CDP proxy could not bind port {} ({}); using an ephemeral port", _PROXY_PORT, e)
+        server = ProxyServer(port=0)
+        await server.start()
     set_proxy_server(server)
 
 

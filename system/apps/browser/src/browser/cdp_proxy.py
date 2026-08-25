@@ -23,7 +23,7 @@ CLI actually sends rather than for a hostile client.
 import asyncio
 import json
 import urllib.request
-from typing import Any, Callable, Awaitable
+from typing import Any, Awaitable, Callable
 
 import websockets
 from loguru import logger
@@ -64,6 +64,12 @@ _LAST_PAGE_GUARDED = {"Target.closeTarget", "Page.close"}
 _FOLLOW_DEBOUNCE_S = 0.25
 
 
+_LEASE_LOST = (
+    "browser is not yours right now -- the human took control, or your lease expired. "
+    "Run `agentic-browser-fleet ls` to see who holds it."
+)
+
+
 def _error(frame_id: Any, session_id: str | None, message: str, code: int = -32000) -> str:
     reply: dict[str, Any] = {"id": frame_id, "error": {"code": code, "message": message}}
     if session_id:
@@ -80,7 +86,7 @@ class BrowserProxy:
         name: str,
         upstream_http: str,
         public_base: str,
-        is_allowed: Callable[[str], bool],
+        is_allowed: Callable[[str], Awaitable[bool]],
         on_attach: Callable[[], Awaitable[None]],
         on_activity: Callable[[str | None], Awaitable[None]],
         page_count: Callable[[], Awaitable[int]],
@@ -88,7 +94,7 @@ class BrowserProxy:
         self.name = name
         self._upstream_http = upstream_http.rstrip("/")
         self._public_base = public_base.rstrip("/")
-        self._is_allowed = is_allowed          # token -> may this token drive right now?
+        self._is_allowed = is_allowed          # token -> may this token drive right now? (async)
         self._on_attach = on_attach            # first attach surfaces the pane
         self._on_activity = on_activity        # pane-follow, debounced by the caller
         self._page_count = page_count          # for the last-page guard
@@ -98,15 +104,21 @@ class BrowserProxy:
 
     # --- HTTP discovery ---------------------------------------------------
 
-    def rewrite_discovery(self, path: str, token: str) -> Response | None:
-        """Serve `/json/version[/]` and `/json/list[/]` with our URLs substituted."""
+    async def rewrite_discovery(self, path: str, token: str) -> Response | None:
+        """Serve `/json/version[/]` and `/json/list[/]` with our URLs substituted.
+
+        Async because `_fetch` is a blocking HTTP call to Chromium and this runs on the one
+        background loop that also carries video, telemetry, keepalive and ownership --
+        a slow or wedged browser must not freeze all of it for the 5s timeout.
+        """
         bare = path.rstrip("/")
         if bare.endswith("/json/version"):
-            payload = self._fetch("/json/version")
+            payload = await asyncio.to_thread(self._fetch, "/json/version")
             payload["webSocketDebuggerUrl"] = f"{self._public_base}/{self.name}/{token}"
             return self._json(payload)
         if bare.endswith("/json/list"):
-            targets = [t for t in self._fetch("/json/list") if t.get("type") == "page"]
+            raw = await asyncio.to_thread(self._fetch, "/json/list")
+            targets = [t for t in raw if t.get("type") == "page"]
             for t in targets:
                 t.pop("devtoolsFrontendUrl", None)
                 t["webSocketDebuggerUrl"] = f"{self._public_base}/{self.name}/{token}"
@@ -142,6 +154,11 @@ class BrowserProxy:
 
     async def pump(self, client: Any, token: str) -> None:
         """Bridge one agent socket to Chromium, gating every frame the agent sends."""
+        if not await self._is_allowed(token):
+            # Refuse before opening an upstream socket or spending the one-shot pane
+            # surfacing on somebody who cannot drive.
+            await client.send(_error(None, None, "this browser is not yours -- run `agentic-browser-fleet ls`"))
+            return
         upstream_url = await asyncio.to_thread(
             lambda: json.loads(urllib.request.urlopen(f"{self._upstream_http}/json/version", timeout=5).read())[
                 "webSocketDebuggerUrl"
@@ -151,11 +168,20 @@ class BrowserProxy:
             if not self._attached_once:
                 self._attached_once = True
                 await self._on_attach()  # surface the pane on first attach, as `_action` used to
-            await asyncio.gather(
-                self._client_to_browser(client, upstream, token),
-                self._browser_to_client(client, upstream),
-                return_exceptions=True,
-            )
+            # FIRST_COMPLETED, not gather: when the agent detaches, `_client_to_browser`
+            # returns but `_browser_to_client` stays parked in `async for` until the next
+            # CDP event -- which never comes on an idle browser (ping_interval=None). That
+            # would leak the upstream socket and two tasks per attach/detach cycle.
+            tasks = [
+                asyncio.create_task(self._client_to_browser(client, upstream, token)),
+                asyncio.create_task(self._browser_to_client(client, upstream)),
+            ]
+            try:
+                await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _client_to_browser(self, client: Any, upstream: Any, token: str) -> None:
         async for raw in client:
@@ -189,20 +215,24 @@ class BrowserProxy:
     async def _screen(self, frame: dict[str, Any], token: str) -> str | None:
         """Reason to refuse this frame, or None to forward it."""
         method = frame.get("method", "")
-        if not self._is_allowed(token):
+        if not await self._is_allowed(token):
             # The lease moved (a human took control, it expired, or another agent holds it).
             # Refuse rather than disconnect: a dropped socket poisons the CLI session forever.
-            return (
-                "browser is not yours right now -- the human took control, or your lease "
-                "expired. Run `agentic-browser-fleet ls` to see who holds it."
-            )
+            return _LEASE_LOST
         if method in _ALWAYS_BLOCKED:
             return f"{method} is not permitted through the fleet proxy"
-        if method in _LAST_PAGE_GUARDED and await self._page_count() <= 1:
-            return (
-                f"{method} would close the browser's last page. Use "
-                "`agentic-browser-fleet close` to end the browser instead."
-            )
+        if method in _LAST_PAGE_GUARDED:
+            last_page = await self._page_count() <= 1
+            # `_page_count` is a real CDP round trip, so the lease may have moved while we
+            # waited. Every other method reaches the forward without suspending; this one
+            # must re-check, or a human take-control during the round trip still lands.
+            if not await self._is_allowed(token):
+                return _LEASE_LOST
+            if last_page:
+                return (
+                    f"{method} would close the browser's last page. Use "
+                    "`agentic-browser-fleet close` to end the browser instead."
+                )
         return None
 
     def _schedule_follow(self, frame: dict[str, Any]) -> None:
@@ -264,7 +294,7 @@ class ProxyServer:
             self._server.close()
             await self._server.wait_closed()
 
-    def _process_request(self, connection: Any, request: Any) -> Response | None:
+    async def _process_request(self, connection: Any, request: Any) -> Response | None:
         """Serve HTTP discovery; return None to let the websocket handshake proceed."""
         path = request.path
         if "/json/" not in path:
@@ -274,7 +304,7 @@ class ProxyServer:
         if proxy is None:
             return BrowserProxy._json({"error": f"no browser {name}"}, status=404)
         try:
-            return proxy.rewrite_discovery(path, token)
+            return await proxy.rewrite_discovery(path, token)
         except Exception as e:  # noqa: BLE001  (a dead upstream must not 500 the whole server)
             logger.debug("discovery for {} failed ({})", name, e)
             return BrowserProxy._json({"error": "browser is not reachable"}, status=502)
