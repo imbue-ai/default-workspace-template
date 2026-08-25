@@ -29,13 +29,11 @@ from imbue.concurrency_group.errors import ProcessError
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.subprocess_runner import run_detached_command
 
-# Bounds a wedged CLI so a create cannot hang. Not near-instant, despite what this comment
-# used to say: these are the same shape as `claude auth status`, which was measured at 3-8s
-# for its first run after an idle gap (see _CLAUDE_AUTH_STATUS_TIMEOUT_SECONDS in
-# harnesses/claude/auth.py). The budget is left at 20s because codex and pi ship much
-# smaller binaries than claude's 256MB and their cold start has not been measured here --
-# raising it to match would be a guess. Note the fail-closed consequence: a check that
-# times out reports the harness as signed out, which after a cold start may be wrong.
+# Bounds a wedged CLI so a create cannot hang. These commands are not instant: they are the
+# same shape as `claude auth status`, measured at 3-8s on its first run after an idle gap (see
+# _CLAUDE_AUTH_STATUS_TIMEOUT_SECONDS in harnesses/claude/auth.py). 20s rather than that
+# constant's 25s because codex and pi ship much smaller binaries than claude's 256MB and their
+# cold start has not been measured here -- matching it would be a guess.
 _AUTH_CHECK_TIMEOUT_SECONDS = 20.0
 
 
