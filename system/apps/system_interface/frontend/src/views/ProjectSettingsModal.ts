@@ -17,15 +17,15 @@
  * project's own view and member list and nothing more, so there is no longer
  * any consequence for the confirmation to enumerate beyond that.
  *
- * Shell and class names follow the shared `.custom-url-dialog`
- * markup, a backdrop click to dismiss, Enter in the name field to save. Escape
- * is listened for on the document (as FastModeModal does) rather than on the
- * name field alone, because focus here just as easily sits on a swatch or a
- * glyph.
+ * Built on the shared Modal shell (views/Modal.ts): a backdrop mousedown to
+ * dismiss, Enter in the name field to save. Escape is listened for on the
+ * document (wired through the shell's `overlay` hook, as FastModeModal does)
+ * rather than on the name field alone, because focus here just as easily sits
+ * on a swatch or a glyph.
  */
 
 import m from "mithril";
-import { backdropDismissAttrs } from "./modalBackdrop";
+import { Modal } from "./Modal";
 import { deleteProjectRequest, updateProjectSettings } from "../models/Projects";
 import type { ProjectInfo } from "../models/Projects";
 import { SQUIGGLE_GLYPHS, squiggleMarkup } from "./squiggles";
@@ -155,35 +155,70 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
     );
   }
 
-  function deleteConfirmation(attrs: ProjectSettingsModalAttrs): m.Children {
+  // The delete step's copy, shown at the foot of the body while confirming; its
+  // Keep/Delete buttons ride the shell's action row (see the view).
+  function deleteConfirmationMessage(attrs: ProjectSettingsModalAttrs): m.Vnode {
+    return m("p.modal-message", [
+      "Delete ",
+      m("strong", attrs.project.name),
+      "? This removes the view only — everything it shows keeps running, and stays in Everything and " +
+        "in any other project showing it.",
+    ]);
+  }
+
+  function deleteConfirmationActions(attrs: ProjectSettingsModalAttrs): m.Children {
     return [
-      m("p.destroy-dialog-message", [
-        "Delete ",
-        m("strong", attrs.project.name),
-        "? This removes the view only — everything it shows keeps running, and stays in Everything and " +
-          "in any other project showing it.",
-      ]),
-      m("div.custom-url-dialog-actions", [
-        m(
-          "button.custom-url-dialog-cancel",
-          {
-            disabled: isDeleting,
-            onclick() {
-              isConfirmingDelete = false;
-            },
+      m(
+        "button.btn.btn--secondary",
+        {
+          disabled: isDeleting,
+          onclick() {
+            isConfirmingDelete = false;
           },
-          "Keep project",
-        ),
-        m(
-          "button.btn.btn--destructive",
-          {
-            class: "disabled:opacity-50",
-            disabled: isDeleting,
-            onclick: () => deleteProject(attrs),
+        },
+        "Keep project",
+      ),
+      m(
+        "button.btn.btn--destructive",
+        {
+          class: "disabled:opacity-50",
+          disabled: isDeleting,
+          onclick: () => deleteProject(attrs),
+        },
+        isDeleting ? "Deleting..." : "Delete project",
+      ),
+    ];
+  }
+
+  function editActions(attrs: ProjectSettingsModalAttrs, trimmedName: string): m.Children {
+    return [
+      m(
+        "button.btn.btn--secondary",
+        {
+          class: "mr-auto disabled:opacity-50",
+          disabled: isSaving || isDeleting,
+          onclick() {
+            isConfirmingDelete = true;
           },
-          isDeleting ? "Deleting..." : "Delete project",
-        ),
-      ]),
+        },
+        "Delete",
+      ),
+      m(
+        "button.btn.btn--secondary",
+        {
+          onclick: attrs.onCancel,
+          disabled: isSaving || isDeleting,
+        },
+        "Cancel",
+      ),
+      m(
+        "button.btn.btn--primary",
+        {
+          onclick: () => save(attrs),
+          disabled: isSaving || isDeleting || !trimmedName,
+        },
+        isSaving ? "Saving..." : "Save",
+      ),
     ];
   }
 
@@ -202,103 +237,61 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
       const trimmedName = name.trim();
 
       return m(
-        "div.custom-url-dialog-overlay",
+        Modal,
         {
-          oncreate() {
-            document.addEventListener("keydown", handleKeydown);
+          onDismiss: attrs.onCancel,
+          overlay: {
+            oncreate() {
+              document.addEventListener("keydown", handleKeydown);
+            },
+            onremove() {
+              document.removeEventListener("keydown", handleKeydown);
+            },
           },
-          onremove() {
-            document.removeEventListener("keydown", handleKeydown);
-          },
-          ...backdropDismissAttrs(attrs.onCancel),
+          title: "Project settings",
+          actions: isConfirmingDelete ? deleteConfirmationActions(attrs) : editActions(attrs, trimmedName),
         },
         [
-          m(
-            "div.custom-url-dialog",
-            {
-              onclick(e: MouseEvent) {
-                e.stopPropagation();
-              },
+          // Live preview of the two pickers' combined result.
+          m("div", { class: "mb-4 flex items-center gap-3" }, [
+            m(
+              "span",
+              { class: "flex h-10 w-10 shrink-0 items-center justify-center" },
+              m.trust(squiggleMarkup(glyphIndex, color, PREVIEW_GLYPH_SIZE)),
+            ),
+            m("span", { class: "text-text-primary truncate text-sm font-medium" }, trimmedName || "Untitled project"),
+          ]),
+
+          m("label.modal-label", "Name"),
+          m("input.input.mb-3", {
+            type: "text",
+            value: name,
+            placeholder: "project name",
+            autofocus: true,
+            disabled: isSaving || isDeleting,
+            oninput(e: InputEvent) {
+              name = (e.target as HTMLInputElement).value;
             },
-            [
-              m("h3.custom-url-dialog-title", "Project settings"),
+            onkeydown(e: KeyboardEvent) {
+              if (e.key === "Enter") {
+                save(attrs);
+              }
+            },
+          }),
 
-              // Live preview of the two pickers' combined result.
-              m("div", { class: "mb-4 flex items-center gap-3" }, [
-                m(
-                  "span",
-                  { class: "flex h-10 w-10 shrink-0 items-center justify-center" },
-                  m.trust(squiggleMarkup(glyphIndex, color, PREVIEW_GLYPH_SIZE)),
-                ),
-                m(
-                  "span",
-                  { class: "text-text-primary truncate text-sm font-medium" },
-                  trimmedName || "Untitled project",
-                ),
-              ]),
+          m("label.modal-label", "Color"),
+          m("div", { class: "mb-3 flex flex-wrap gap-2" }, PALETTE.map(colorSwatch)),
 
-              m("label.custom-url-dialog-label", "Name"),
-              m("input.input.mb-3", {
-                type: "text",
-                value: name,
-                placeholder: "project name",
-                autofocus: true,
-                disabled: isSaving || isDeleting,
-                oninput(e: InputEvent) {
-                  name = (e.target as HTMLInputElement).value;
-                },
-                onkeydown(e: KeyboardEvent) {
-                  if (e.key === "Enter") {
-                    save(attrs);
-                  }
-                },
-              }),
-
-              m("label.custom-url-dialog-label", "Color"),
-              m("div", { class: "mb-3 flex flex-wrap gap-2" }, PALETTE.map(colorSwatch)),
-
-              m("label.custom-url-dialog-label", "Squiggle"),
-              m(
-                "div",
-                { class: "mb-3 grid grid-cols-5 gap-2" },
-                SQUIGGLE_GLYPHS.map((_glyph, index) => glyphCell(index)),
-              ),
-
-              error ? m("p", { style: "color: red; font-size: 0.85em; margin-top: 4px;" }, error) : null,
-
-              isConfirmingDelete
-                ? deleteConfirmation(attrs)
-                : m("div.custom-url-dialog-actions", [
-                    m(
-                      "button.btn.btn--secondary",
-                      {
-                        class: "mr-auto disabled:opacity-50",
-                        disabled: isSaving || isDeleting,
-                        onclick() {
-                          isConfirmingDelete = true;
-                        },
-                      },
-                      "Delete",
-                    ),
-                    m(
-                      "button.custom-url-dialog-cancel",
-                      {
-                        onclick: attrs.onCancel,
-                        disabled: isSaving || isDeleting,
-                      },
-                      "Cancel",
-                    ),
-                    m(
-                      "button.custom-url-dialog-open",
-                      {
-                        onclick: () => save(attrs),
-                        disabled: isSaving || isDeleting || !trimmedName,
-                      },
-                      isSaving ? "Saving..." : "Save",
-                    ),
-                  ]),
-            ],
+          m("label.modal-label", "Squiggle"),
+          m(
+            "div",
+            { class: "mb-3 grid grid-cols-5 gap-2" },
+            SQUIGGLE_GLYPHS.map((_glyph, index) => glyphCell(index)),
           ),
+
+          error ? m("p", { style: "color: red; font-size: 0.85em; margin-top: 4px;" }, error) : null,
+
+          isConfirmingDelete ? deleteConfirmationMessage(attrs) : null,
         ],
       );
     },

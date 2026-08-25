@@ -39,7 +39,9 @@ type VnodeLike = {
 
 /** Depth-first walk over a rendered Mithril vnode tree (mirrors
  *  ClaudeLoginModal.test.ts's helper, which every modal test in this
- *  directory that inspects a tree without mounting it re-implements). */
+ *  directory that inspects a tree without mounting it re-implements). The
+ *  modal's footer buttons ride the shared Modal shell's `actions` prop rather
+ *  than its children, so the walk descends into that slot too. */
 function* walk(node: unknown): Generator<VnodeLike> {
   if (Array.isArray(node)) {
     for (const child of node) yield* walk(child);
@@ -49,6 +51,7 @@ function* walk(node: unknown): Generator<VnodeLike> {
     const vnode = node as VnodeLike;
     yield vnode;
     if (vnode.children !== undefined) yield* walk(vnode.children);
+    if (vnode.attrs?.actions !== undefined) yield* walk(vnode.attrs.actions);
   }
 }
 
