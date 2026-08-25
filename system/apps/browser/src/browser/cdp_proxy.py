@@ -122,8 +122,20 @@ class BrowserProxy:
 
     @staticmethod
     def _json(payload: Any, status: int = 200) -> Response:
+        """A discovery response, and it MUST close the connection.
+
+        Without `Connection: close` the client keeps the socket alive and sends the
+        websocket upgrade on it -- but this server has already finished with that
+        connection, so the upgrade hangs up (`socket hang up`, code 1006) and the CLI
+        daemon exits 1. Measured against real `@playwright/cli`: discovery succeeds, the
+        attach then fails, and the proxy never even logs the upgrade. One header.
+        """
         body = json.dumps(payload).encode()
-        headers = Headers({"Content-Type": "application/json", "Content-Length": str(len(body))})
+        headers = Headers({
+            "Content-Type": "application/json",
+            "Content-Length": str(len(body)),
+            "Connection": "close",
+        })
         return Response(status, "OK" if status == 200 else "Error", headers, body)
 
     # --- the websocket path ----------------------------------------------

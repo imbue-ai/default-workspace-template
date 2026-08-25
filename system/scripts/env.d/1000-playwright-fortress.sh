@@ -166,20 +166,22 @@ _install_fortress() {
 # "I still don't care about cookies" clears the consent walls it would otherwise have to
 # click through. browser-use also shipped "Force Background Tab" -- deliberately dropped,
 # because opening links in background tabs fights the pane's active-tab follow.
+#
+# NOT version-pinned, deliberately. The CRX endpoint only serves the CURRENT build for an
+# id, so a "pin" here could only ever be a post-hoc check that logged a mismatch -- pinning
+# theatre, not a pin. Freezing these for real would mean vendoring the CRX into the image or
+# mirroring it, which is not worth it for two ad/cookie blockers. What this DOES fix versus
+# browser-use is the timing and the ownership: the fetch happens once at converge, not on a
+# user's first browser launch, and the set is chosen here rather than by a dependency.
 readonly _EXTENSIONS_DIR="${_FORTRESS_INSTALL_DIR}/extensions"
 readonly _UBLOCK_ID="ddkjiahejlhfcafbddmgiahcphecmpfh"
-readonly _UBLOCK_VERSION="2026.7.1041"
 readonly _COOKIES_ID="edibdbjcniadpccecjdfdjjppcpchdlm"
-readonly _COOKIES_VERSION="1.1.5"
 
 _install_one_extension() {
-    local name="$1" ext_id="$2" version="$3" dest="${_EXTENSIONS_DIR}/$1"
+    local name="$1" ext_id="$2" dest="${_EXTENSIONS_DIR}/$1"
     if [ -f "$dest/manifest.json" ]; then
         return 0
     fi
-    # The CRX endpoint serves the CURRENT version for an id, so the pin is enforced by
-    # checking what we got rather than by asking for it -- a drift is logged and the
-    # extension is skipped rather than silently shipping an unreviewed build.
     local crx="/tmp/${ext_id}.crx"
     local url="https://clients2.google.com/service/update2/crx?response=redirect&prodversion=151&acceptformat=crx3&x=id%3D${ext_id}%26uc"
     _log "extensions: fetching ${name} (${ext_id})"
@@ -197,9 +199,6 @@ _install_one_extension() {
     rm -f "$crx"
     local got
     got="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$dest/manifest.json" | head -1)"
-    if [ "$got" != "$version" ]; then
-        _log "extensions: ${name} is ${got}, pinned to ${version} -- review before bumping the pin"
-    fi
     _log "extensions: ${name} ${got} installed"
 }
 
@@ -212,8 +211,8 @@ _install_extensions() {
     command -v unzip >/dev/null 2>&1 || apt-get install -y --no-install-recommends unzip || return 1
     mkdir -p "$_EXTENSIONS_DIR"
     local rc=0
-    _install_one_extension "ublock-origin-lite" "$_UBLOCK_ID" "$_UBLOCK_VERSION" || rc=$?
-    _install_one_extension "i-still-dont-care-about-cookies" "$_COOKIES_ID" "$_COOKIES_VERSION" || rc=$?
+    _install_one_extension "ublock-origin-lite" "$_UBLOCK_ID" || rc=$?
+    _install_one_extension "i-still-dont-care-about-cookies" "$_COOKIES_ID" || rc=$?
     return "$rc"
 }
 

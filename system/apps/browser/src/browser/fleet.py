@@ -308,12 +308,20 @@ def _attach_url(browser_name: str, *, attempts: int = 40, delay: float = 0.5) ->
     ``new`` returns as soon as the browser is REGISTERED; Chromium launches in the
     background and the capability token only exists once it is up, so the URL is not
     available synchronously.
+
+    Only ``starting`` is worth waiting on. Any other answer -- a 404, a crashed browser,
+    a daemon that says something unexpected -- will not become an attach URL by waiting,
+    so bail immediately rather than burning the full timeout on a browser that is never
+    going to come up.
     """
-    for _ in range(attempts):
+    for attempt in range(attempts):
         status, payload = _request("GET", f"/browsers/{browser_name}/attach")
         if status == 200 and payload.get("ok"):
             return str(payload.get("attach_url", ""))
-        time.sleep(delay)
+        if status != 200 or payload.get("status") != "starting":
+            return ""
+        if attempt + 1 < attempts:
+            time.sleep(delay)
     return ""
 
 

@@ -175,3 +175,15 @@ def test_registration_is_addressable_and_removable() -> None:
     assert server._browsers["browser-1"] is proxy
     server.unregister("browser-1")
     assert "browser-1" not in server._browsers
+
+
+def test_discovery_responses_close_the_connection(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Without `Connection: close` the client keeps the socket alive and sends the websocket
+    # upgrade on it, but this server is done with that connection -- so the upgrade hangs up
+    # (code 1006) and the CLI daemon exits 1. Found only by attaching a REAL playwright-cli;
+    # every unit test passed while the attach was broken end to end.
+    proxy, _ = _proxy()
+    monkeypatch.setattr(BrowserProxy, "_fetch", lambda self, endpoint: {"webSocketDebuggerUrl": "ws://x/y"})
+    response = proxy.rewrite_discovery("/browser-1/good/json/version/", "good")
+    assert response is not None
+    assert response.headers["Connection"] == "close"

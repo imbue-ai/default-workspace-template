@@ -241,3 +241,31 @@ def test_cmd_handoff_not_owner_still_tells_agent_to_stop(monkeypatch: pytest.Mon
     monkeypatch.setattr(fleet, "_pull_in_pane", lambda name: None)
     args = fleet._build_parser().parse_args(["handoff", "alex-smith"])
     assert fleet.cmd_handoff(args) == fleet._EXIT_PREEMPTED
+
+
+def test_attach_url_waits_only_while_the_browser_is_starting(monkeypatch: pytest.MonkeyPatch) -> None:
+    # `new` returns before Chromium is up, so the attach URL has to be polled -- but ONLY
+    # while the daemon says "starting". Anything else will never become an attach URL, and
+    # waiting on it burns the full timeout on a browser that is never coming up.
+    calls: list[int] = []
+    slept: list[float] = []
+    monkeypatch.setattr(fleet.time, "sleep", lambda s: slept.append(s))
+
+    def starting_then_ready(*_a: object, **_k: object) -> tuple[int, dict]:
+        calls.append(1)
+        if len(calls) < 3:
+            return 200, {"ok": False, "status": "starting"}
+        return 200, {"ok": True, "attach_url": "http://127.0.0.1:8083/browser-1/tok"}
+
+    monkeypatch.setattr(fleet, "_request", starting_then_ready)
+    assert fleet._attach_url("browser-1") == "http://127.0.0.1:8083/browser-1/tok"
+    assert len(calls) == 3 and len(slept) == 2  # waited across the launch, then got it
+
+
+def test_attach_url_bails_immediately_on_anything_but_starting(monkeypatch: pytest.MonkeyPatch) -> None:
+    for status, payload in [(404, {"error": "no browser"}), (200, {"ok": False, "status": "crashed"})]:
+        calls: list[int] = []
+        monkeypatch.setattr(fleet.time, "sleep", lambda s: (_ for _ in ()).throw(AssertionError("must not sleep")))
+        monkeypatch.setattr(fleet, "_request", lambda *a, s=status, p=payload, **k: (calls.append(1), (s, p))[1])
+        assert fleet._attach_url("browser-1") == ""
+        assert len(calls) == 1
