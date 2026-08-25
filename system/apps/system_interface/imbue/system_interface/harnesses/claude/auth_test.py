@@ -902,6 +902,29 @@ def test_oauth_login_fast_path_completes_without_restart(isolated_claude_config:
     assert not (isolated_claude_config / "settings.json").exists()
 
 
+def test_oauth_login_fast_path_still_resends_the_welcome_when_the_status_check_times_out(
+    isolated_claude_config: Path,
+) -> None:
+    """The fast path is the only completion that runs the welcome hook inline rather than on
+    the background apply thread, so a `get_auth_status` that raises must not swallow it: the
+    sign-in already succeeded, and the session record is gone, so there is nothing to retry."""
+
+    def _runner(cmd: list[str], _timeout: float, _env: object = None) -> FakeFinishedProcess:
+        if cmd[1] == "list":
+            return FakeFinishedProcess(stdout=_LIST_PAYLOAD)
+        return FakeFinishedProcess(stdout="", returncode=-15, is_timed_out=True)
+
+    fake_process = FakePexpectProcess([(0, _FAKE_URL), (0, "Login successful.\r\n")])
+    service = auth.ClaudeAuthService(command_runner=_runner, pexpect_spawner=lambda *_a, **_k: fake_process)
+    start = service.start_oauth_login(auth.OAuthProvider.CLAUDEAI)
+
+    completions: list[str] = []
+    with pytest.raises(auth.AuthStatusUnavailableError):
+        service.poll_oauth_login(start.session_id, lambda: completions.append("welcome"))
+
+    assert completions == ["welcome"]
+
+
 def test_oauth_login_fast_path_clears_stale_failed_restart_progress(isolated_claude_config: Path) -> None:
     """A FAILED restart left by an earlier credential change (which emptied
     the managed env, so this sign-in takes the fast path) must not leak into
