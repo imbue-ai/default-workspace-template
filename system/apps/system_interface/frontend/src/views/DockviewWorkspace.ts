@@ -747,8 +747,6 @@ function tabMenuEntries(panelId: string): ObjectMenuEntry[] {
   // the bare service menu (share in the opening group, lifecycle in the
   // destructive slot).
   const isInstancePane = kind === "app" && params.serviceInstanceId !== undefined && params.serviceInstanceId !== "";
-  // A const rather than params.serviceName so the narrowing survives into the
-  // run closure.
   const shareServiceName = kind === "app" ? params.serviceName : undefined;
   const shareAction =
     shareServiceName !== undefined
@@ -759,9 +757,6 @@ function tabMenuEntries(panelId: string): ObjectMenuEntry[] {
           // shows the chosen name over it. The share itself is still keyed by
           // the service name.
           label: `Share ${appDisplayLabel(shareServiceName)}`,
-          // Ask the embedding minds chrome to open its Share tab on this app.
-          // Fire-and-forget: opened directly in a browser (no embedder), the
-          // send has no listener and the click is a no-op.
           run: () => sendToEmbedder(OPEN_SHARE_SETTINGS, { serviceName: shareServiceName }),
         }
       : null;
@@ -2358,9 +2353,7 @@ export async function removeMemberRefFromView(ref: string): Promise<void> {
 }
 
 /** Ask the embedding minds chrome to open its Share tab for an app row -- the
- *  share is per registered service, so an instance row shares its service.
- *  Fire-and-forget: with no embedder (a direct browser visit) the send has no
- *  listener and the click is a no-op. */
+ *  share is per registered service, so an instance row shares its service. */
 export function shareMemberRow(row: SidebarTabRow): void {
   if (row.kind !== "app") return;
   const serviceName = serviceNameFromRef(row.ref);
