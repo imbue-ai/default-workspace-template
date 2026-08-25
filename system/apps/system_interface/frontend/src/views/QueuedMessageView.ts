@@ -126,7 +126,7 @@ export function renderQueuedMessages(agentId: string): m.Vnode[] {
       "button",
       {
         type: "button",
-        class: "queued-action queued-action--flush",
+        class: "btn btn--secondary btn--sm queued-action queued-action--flush",
         disabled: isDisabled,
         "data-tooltip": SHOULDER_TAP_TOOLTIP,
         "aria-label": SHOULDER_TAP_TOOLTIP,
