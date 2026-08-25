@@ -237,3 +237,11 @@ def test_is_non_turn_tail_matches_model_bar_traffic_and_is_meta() -> None:
     # Awaiting-a-reply injections are NOT non-turn: the agent responds to these.
     assert is_non_turn_tail("/welcome") is False
     assert is_non_turn_tail("<task-notification>x</task-notification>") is False
+
+
+def test_permission_resolution_reads_the_machine_tag_first() -> None:
+    """The tagged form needs no phrasing recognition -- any prose works."""
+    display = classify_user_message("Whatever minds chose to say. (resolution: denied, request_id: evt-9)")
+    assert display.display == DisplayKind.PERMISSION_RESOLUTION
+    assert display.resolution == "denied"
+    assert display.request_id == "evt-9"

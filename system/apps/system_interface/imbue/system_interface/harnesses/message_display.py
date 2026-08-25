@@ -97,23 +97,18 @@ def _visible_text(content: str) -> str:
     return content[: match.start()].rstrip()
 
 
-# When a latchkey permission request is resolved, the app injects a plain user message
-# announcing the outcome. The phrasing is authored by the latchkey handlers in the mngr
-# repo (apps/minds/imbue/minds/desktop_client/latchkey/handlers/) -- a copy edit there
-# strands cards here, so keep the two in step. The patterns require only
-# "Your ... request ... was granted/denied" (anchored to the start), because the exact
-# phrasing differs per request type; the frontend only consults the decision while a
-# request is actually awaiting one, so a prose look-alike stays unlikely.
+# When a latchkey permission request is resolved, minds injects a plain user message
+# announcing the outcome, tagged machine-readably by ``format_resolution_notice`` in the
+# mngr repo's ``latchkey/handlers/messaging.py``: "(resolution: granted, request_id: <id>)".
+# The tag is the classification contract -- no reading of the handler-authored English.
+_RESOLUTION_TAG_RE = re.compile(r"\(resolution:\s*(granted|denied|error),\s*request_id:\s*([^)\s]+)\)")
+
+# Legacy notices predating the tag carry only prose (possibly with a bare request_id
+# suffix); recognise them loosely so historical transcripts keep their verdicts hidden
+# and classified. New notices never take this path.
 _RESOLUTION_GRANTED_RE = re.compile(r"^Your\b.*\brequest\b.*\bwas granted\b")
 _RESOLUTION_DENIED_RE = re.compile(r"^Your\b.*\brequest\b.*\bwas denied\b")
 _RESOLUTION_ERROR_RE = re.compile(r"^Your\b.*\brequest\b.*\bcould not be completed\b")
-
-# The same handlers append "(request_id: <id>)" after the human-readable text (see
-# ``format_resolution_notice`` in the mngr repo's ``latchkey/handlers/messaging.py`) so the
-# frontend can attach a verdict to the exact card it belongs to instead of guessing from
-# arrival order -- two requests resolved out of (creation) order used to land their verdicts
-# on the wrong cards. Absent on a resolution recorded before that handler shipped; the
-# frontend falls back to its old order-based correlation for those.
 _RESOLUTION_REQUEST_ID_RE = re.compile(r"\(request_id:\s*([^)\s]+)\)")
 
 
@@ -223,6 +218,11 @@ def _match_bash_block(content: str) -> MessageDisplay | None:
 
 def _match_permission_resolution(content: str) -> MessageDisplay | None:
     """A latchkey permission-request verdict, injected as a plain user message."""
+    tag = _RESOLUTION_TAG_RE.search(content)
+    if tag is not None:
+        return MessageDisplay(
+            display=DisplayKind.PERMISSION_RESOLUTION, resolution=tag.group(1), request_id=tag.group(2)
+        )
     if _RESOLUTION_GRANTED_RE.search(content) is not None:
         resolution = "granted"
     elif _RESOLUTION_DENIED_RE.search(content) is not None:
