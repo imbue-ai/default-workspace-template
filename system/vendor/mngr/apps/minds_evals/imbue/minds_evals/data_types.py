@@ -123,7 +123,7 @@ class Expectations(FrozenModel):
 
 
 class AppCheck(FrozenModel):
-    """A lowered registry/service check: enough delivered apps are registered and their services run."""
+    """An expanded registry/service check: enough delivered apps are registered and their services run."""
 
     check_id: str = Field(description="Stable id, used as the manifest entry's id prefix")
     min_registered_apps: int = Field(description="How many non-builtin apps must appear in the registry")
@@ -131,7 +131,7 @@ class AppCheck(FrozenModel):
 
 
 class HttpCheck(FrozenModel):
-    """A lowered HTTP probe. A 'registered-apps' target fans out to one probe per delivered app."""
+    """An expanded HTTP probe. A 'registered-apps' target fans out to one probe per delivered app."""
 
     check_id: str = Field(description="Stable id, used as the manifest entry's id prefix")
     target: str = Field(description="'registered-apps' or a service name")
@@ -140,7 +140,7 @@ class HttpCheck(FrozenModel):
 
 
 class FilesCheck(FrozenModel):
-    """A lowered file-inventory check, evaluated at grade time against the captured inventory."""
+    """An expanded file-inventory check, evaluated at grade time against the captured inventory."""
 
     check_id: str = Field(description="Stable id, used as the manifest entry's id")
     glob: str = Field(description="Glob matched against paths relative to the workspace home tree")
@@ -148,9 +148,9 @@ class FilesCheck(FrozenModel):
 
 
 class UiFlowCheck(FrozenModel):
-    """A lowered UI flow: one natural-language flow the verification agent drives at trial time.
+    """An expanded UI flow: one natural-language flow the verification agent drives at trial time.
 
-    Only flows authored as `steps` + `expect` lower to a check; the reserved `script` and
+    Only flows authored as `steps` + `expect` expand to a check; the reserved `script` and
     `minds-ui` spellings are rejected at parse time and never reach here.
     """
 
@@ -161,7 +161,7 @@ class UiFlowCheck(FrozenModel):
     surface: FlowSurface = Field(description="Where the flow enters the app; the forwarded origin in v1")
 
 
-class LoweredExpectations(FrozenModel):
+class ExpandedExpectations(FrozenModel):
     """The expectations after the generator expands `deliverable.kind` into an explicit check list.
 
     Both consumers read this exact object -- the driver out of instruction.md, the verifier out of
@@ -190,7 +190,7 @@ class CheckStatus(LowerCaseStrEnum):
 
 
 class CheckClass(LowerCaseStrEnum):
-    """Which lowered expectation class a manifest entry belongs to; the verifier registers one
+    """Which expanded expectation class a manifest entry belongs to; the verifier registers one
     programmatic criterion per scored class and ignores the rest."""
 
     APP = auto()
@@ -213,7 +213,7 @@ class ManifestEntry(FrozenModel):
     """One recorded probe in the evidence manifest: what was checked, how it came out, and why."""
 
     entry_id: str = Field(description="Stable id within the trial, e.g. 'http_registered_apps_0'")
-    check_class: CheckClass = Field(description="The lowered expectation class this entry feeds")
+    check_class: CheckClass = Field(description="The expanded expectation class this entry feeds")
     status: CheckStatus = Field(description="Passed, fell short, or could not be determined")
     env: EvidenceEnv = Field(description="Which environment the entry was measured in")
     reason: str = Field(description="Why the entry is not PASSED (e.g. 'timeout'); empty when it passed")
@@ -310,9 +310,9 @@ class CaseConfig(FrozenModel):
     dwt_branch: str = Field(description="Workspace template branch the SHA was resolved from")
     dwt_sha: str = Field(description="Exact workspace template SHA resolved at generation time")
     avg_word_count_baseline: float = Field(description="Baseline for the verifier's wordiness guard")
-    # The lowered form is what both the collector and the verifier act on; the authored form rides
+    # The expanded form is what both the collector and the verifier act on; the authored form rides
     # along so a reader of instruction.md or case.json can see what the config actually said.
-    expectations: LoweredExpectations | None = Field(description="The lowered expectations, if the case has any")
+    expectations: ExpandedExpectations | None = Field(description="The expanded expectations, if the case has any")
     authored_expectations: Expectations | None = Field(description="The expectations exactly as authored")
 
 

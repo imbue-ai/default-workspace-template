@@ -254,16 +254,16 @@ Field semantics:
 - `fresh_env` (bool, optional, default false): also boot the deliverable in a fresh workspace and repeat the deliverable and `ui_flows` checks there (see "Fresh-environment verification"; the feature is deferred -- the flag is reserved, and the Phase 1 bundle capture keeps old trials replayable once it lands).
 - Reserved fields fail loudly, never silently: until their execution semantics land, the generator rejects `fresh_env: true` and a `ui_flows` entry using `script` with a "known but unimplemented" error -- a case author must never get a green generation and a completed trial believing verification ran that never did.
 
-**One schema, both consumers, lowered once.**
+**One schema, both consumers, expanded once.**
 The evidence collector (driver) and the grade-time judge/checks read the same expectations by construction: the identical `CaseConfig` JSON travels in `instruction.md` (parsed by the driver) and `tests/case.json` (read by the verifier).
-The implied-check expansion happens exactly once, in `generate.py`: it **lowers** `deliverable.kind` plus refinements into the explicit per-class check list (`files`, `app`, `http`, commit capture) and writes the lowered form into both copies, keeping the authored form alongside as `authored_expectations` for readability.
-Lowering at generation time is what keeps the verifier free of expansion logic -- it is a stdlib+rewardkit container that cannot import this package -- and guarantees the collector can never probe a different set of checks than the judge scores.
+The implied-check expansion happens exactly once, in `generate.py`: it **expands** `deliverable.kind` plus refinements into the explicit per-class check list (`files`, `app`, `http`, commit capture) and writes the expanded form into both copies, keeping the authored form alongside as `authored_expectations` for readability.
+Expanding at generation time is what keeps the verifier free of expansion logic -- it is a stdlib+rewardkit container that cannot import this package -- and guarantees the collector can never probe a different set of checks than the judge scores.
 
 Cases without `expectations` (e.g. `greeting`) are untouched: no collection phase beyond the (cheap, unconditional) registry/service/inventory capture, no `outcome` dimension in scoring.
-An `expectations` block must lower to **at least one check class**: rewardkit only emits the pooled programmatic reward when criteria exist, so a prose-only block would silently make the outcome dimension 100% judge -- double the judge weight every other case has, breaking exactly the cross-case comparability the fixed split exists for.
-The v1 validator enforces this as "`deliverable` must be present" -- stricter than the rule itself, since a `ui_flows`-only block (the anchored-in-an-existing-app shape) also lowers to a scored class and satisfies the rationale; the validator is relaxed to admit it when the first such case lands.
+An `expectations` block must expand to **at least one check class**: rewardkit only emits the pooled programmatic reward when criteria exist, so a prose-only block would silently make the outcome dimension 100% judge -- double the judge weight every other case has, breaking exactly the cross-case comparability the fixed split exists for.
+The v1 validator enforces this as "`deliverable` must be present" -- stricter than the rule itself, since a `ui_flows`-only block (the anchored-in-an-existing-app shape) also expands to a scored class and satisfies the rationale; the validator is relaxed to admit it when the first such case lands.
 Prose-only expectations are therefore rejected at generation time until a degenerate composition is deliberately specified.
-Schema plumbing: `PersonaCase`/`CaseConfig` in `data_types.py` gain the parsed `expectations` model; `generate.py` validates it (unknown keys rejected, flows require `steps` + `expect` or `script`, `deliverable.kind` must be a known kind), and `verification_timeout_seconds` is lowered into `CaseConfig` -- the driver reads only the instruction's embedded JSON, so a knob that is not lowered does not exist for it.
+Schema plumbing: `PersonaCase`/`CaseConfig` in `data_types.py` gain the parsed `expectations` model; `generate.py` validates it (unknown keys rejected, flows require `steps` + `expect` or `script`, `deliverable.kind` must be a known kind), and `verification_timeout_seconds` is carried into `CaseConfig` -- the driver reads only the instruction's embedded JSON, so a knob that is not carried into it does not exist for it.
 
 ## The evidence bundle
 
@@ -312,8 +312,8 @@ Verification-agent spend is harness spend: reported as `metadata.verifier_agent_
 
 A third rewardkit dimension, `tests/outcome/`, present only in tasks whose case declares `expectations` (the generator omits the directory otherwise, so rewardkit never emits a partial score for it):
 
-- `checks.py` (programmatic, over the manifest): one criterion per lowered expectation class -- `files_expectations_met`, `app_registered`, `http_expectations_met`, `ui_flows_completed` (the fraction of measurable flows that carried out their declared steps, which is a fact about the run rather than a ruling on the `expect`).
-  The file reads `case.json`'s lowered check list at import time and registers only the criteria for classes present in it (whether authored directly or implied by `deliverable.kind`), so an absent class contributes no score in either direction.
+- `checks.py` (programmatic, over the manifest): one criterion per expanded expectation class -- `files_expectations_met`, `app_registered`, `http_expectations_met`, `ui_flows_completed` (the fraction of measurable flows that carried out their declared steps, which is a fact about the run rather than a ruling on the `expect`).
+  The file reads `case.json`'s expanded check list at import time and registers only the criteria for classes present in it (whether authored directly or implied by `deliverable.kind`), so an absent class contributes no score in either direction.
   Manifest entries with status `error` are handled per the failure-semantics rules below.
 - `judge.toml` (LLM judge): files = the rendered `expectations.md` (the `outcome` prose plus the declared checks), `manifest.json`, `conversation.jsonl`, the flow digest, and each flow's last four screenshots up to 24 in all (any screenshot over rewardkit's 1 MB judge limit is dropped from the judge input but kept as a trial artifact).
   A grade-time pre-step in `test.sh` renders `expectations.md` from `case.json` (the same pattern as `render_judge_transcript.py`), so `harbor trial regrade` picks up rendering changes.
@@ -361,7 +361,7 @@ Note the existing caveat (improvements item 4.3) that oracle reward floors are j
 
 ## Phasing
 
-1. **Schema + evidence + static/liveness + judge** (the core): `expectations` parsing and the `deliverable.kind` lowering in the generator, the collection phase minus flows (inventory, registry, services, HTTP, test commands), the deliverable git bundle + repo-state capture (so deferred fresh-env verification stays retroactively possible), the `outcome` dimension with the lowered `files`/`app`/`http` criteria and the `works_as_expected` judge, finalize composition, oracle bundle.
+1. **Schema + evidence + static/liveness + judge** (the core): `expectations` parsing and the `deliverable.kind` expansion in the generator, the collection phase minus flows (inventory, registry, services, HTTP, test commands), the deliverable git bundle + repo-state capture (so deferred fresh-env verification stays retroactively possible), the `outcome` dimension with the expanded `files`/`app`/`http` criteria and the `works_as_expected` judge, finalize composition, oracle bundle.
    This alone catches ships-nothing and never-started failures and gives the judge real evidence.
 2. **UI flows**: the host-side flow agent, flow evidence, `ui_flows_completed`, screenshots feeding the judge (Level 5 comes along for free). Shipped first over the workspace browser fleet (PR #523, live-proven), then re-executed over the forwarded origin (see the executor spec and phase 2b below).
 2b. **Executor swap to the forwarded origin** (PR stacked on #523, branch `maciek/minds-evals-forwarded-origin-flows`): box-side Playwright + `mngr forward`, deleting the fleet command layer and the eval's dependency on dwt #462's allowlist; details in [flow_executor_forwarded_origin.md](flow_executor_forwarded_origin.md).

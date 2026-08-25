@@ -33,8 +33,12 @@ from typing import Final
 
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 
-# Long enough for the runner's poll loop to notice, short enough to keep the test brief.
-_CHILD_TIMEOUT_SECONDS: Final[float] = 1.0
+# The toucher has to boot an interpreter, import this module, and arm its SIGTERM handler
+# before this expires -- overrun it and the kill lands on the default disposition, the child
+# dies without a marker, and the reproduction quietly stops reproducing. Measured warm at
+# 0.08-0.13s, so this is ~40x headroom for a cold, parallel CI runner; the cost of the slack
+# is that each harness run waits it out once.
+_CHILD_TIMEOUT_SECONDS: Final[float] = 5.0
 # The toucher either dies at once or is stopped mid-syscall and never dies, so waiting out
 # a full default shutdown budget would only add dead time before the runner's SIGKILL.
 _CHILD_SHUTDOWN_TIMEOUT_SECONDS: Final[float] = 3.0
@@ -61,9 +65,11 @@ def _pin_job_control_signals_to_default() -> str:
 
     The kernel only generates SIGTTIN/SIGTTOU for a process that is neither ignoring nor
     blocking them, so a runner that has turned them off makes the terminal touch succeed
-    quietly and the reproduction silently stop reproducing. Modal's sandbox does exactly that.
-    A supervisord-managed service gets the default disposition, which is the one under test, so
-    the harness pins it rather than inheriting. Returns what it found, for the record.
+    quietly and the reproduction silently stop reproducing. A supervisord-managed service gets
+    the default disposition, which is the one under test, so the harness pins it rather than
+    inheriting. The inherited value is returned and recorded in the verdict, which is how a
+    platform that does not deliver the stop for some *other* reason can be told apart from one
+    that merely had the signals switched off.
     """
     inherited = ",".join(str(signal.getsignal(number)) for number in _JOB_CONTROL_SIGNALS)
     signal.pthread_sigmask(signal.SIG_UNBLOCK, set(_JOB_CONTROL_SIGNALS))

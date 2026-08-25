@@ -1,1 +1,1 @@
-Refreshed the vendored mngr snapshot. It carries the option the system interface needs to run its subprocesses detached from the workspace's terminal, which is what stopped a killed `claude auth status` from freezing the whole service, and everything else that landed on mngr's main since the previous snapshot.
+Refreshed the vendored mngr snapshot to the paired mngr branch. It carries the option the system interface needs to run its subprocesses detached from the workspace's terminal, which is what stopped a killed `claude auth status` from freezing the whole service.

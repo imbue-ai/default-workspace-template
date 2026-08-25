@@ -31,22 +31,25 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-# harbor's verifier-container contract, not this harness's choice: /logs/verifier/reward.json is the
-# file harbor parses for the trial reward (and rewardkit's own output location), /tests is the
-# task's tests directory, and /logs/agent/... is where declared artifacts are re-materialized at
-# their original absolute paths.
+# harbor's contract, not this harness's choice: the file harbor parses for the trial reward, and
+# rewardkit's own output location.
 REWARD_PATH = Path("/logs/verifier/reward.json")
+# rewardkit's per-criterion results, written beside the reward.
 DETAILS_PATH = Path("/logs/verifier/reward-details.json")
+# Under /logs/agent, harbor's contract for where a task's declared artifacts are re-materialized at
+# their original absolute paths.
 STATE_PATH = Path("/logs/agent/state.json")
+# /tests is harbor's contract for where the task's tests directory lands in the container.
 CASE_PATH = Path("/tests/case.json")
+# The evidence bundle: a declared artifact, so it re-materializes under /logs/agent too.
 MANIFEST_PATH = Path("/logs/agent/verification/manifest.json")
 
 # The headline knob: how much of a gated trial's reward the delivered artifact carries. Constant in
 # v1, deliberately not per-case -- per-case weights would make rewards incomparable across cases.
 OUTCOME_SHARE = 0.5
 
-# Which lowered check list makes a class scored, mirroring outcome/checks.py's registration rule.
-SCORED_CLASS_BY_LOWERED_KEY = {"files_checks": "files", "app_checks": "app", "http_checks": "http"}
+# Which expanded check list makes a class scored, mirroring outcome/checks.py's registration rule.
+SCORED_CLASS_BY_EXPECTATION_KEY = {"files_checks": "files", "app_checks": "app", "http_checks": "http"}
 
 # ui_flow_checks is deliberately NOT in that map. An unmeasurable inventory or registry means the
 # collection phase itself failed, which is worth erroring a trial over. A flow set where every
@@ -114,7 +117,7 @@ def _is_conversation_finished() -> bool:
     return _load_json(STATE_PATH).get("test_state") == "finished"
 
 
-def _lowered_expectations() -> dict[str, Any]:
+def _expectations() -> dict[str, Any]:
     expectations = _load_json(CASE_PATH).get("expectations")
     return expectations if isinstance(expectations, dict) else {}
 
@@ -157,8 +160,8 @@ def _evidence_failure(rewards: dict[str, Any]) -> str | None:
     means the collection phase never ran, which is the harness's failure to measure. On an unfinished
     or timed-out trial, partial-or-absent evidence is expected -- the structural gates already zero it.
     """
-    lowered = _lowered_expectations()
-    if not lowered:
+    expectations = _expectations()
+    if not expectations:
         return None
     if not _is_conversation_finished():
         return None
@@ -169,8 +172,8 @@ def _evidence_failure(rewards: dict[str, Any]) -> str | None:
         return "the case declares expectations and the conversation finished, but the evidence manifest is empty"
     if "outcome" not in rewards:
         return "the outcome dimension produced no score"
-    for lowered_key, check_class in SCORED_CLASS_BY_LOWERED_KEY.items():
-        if not lowered.get(lowered_key):
+    for expectation_key, check_class in SCORED_CLASS_BY_EXPECTATION_KEY.items():
+        if not expectations.get(expectation_key):
             continue
         determinable = [
             entry for entry in entry_list if entry.get("check_class") == check_class and entry.get("status") != "error"
@@ -184,7 +187,7 @@ def _evidence_failure(rewards: dict[str, Any]) -> str | None:
 
 def _earned_reward(rewards: dict[str, Any]) -> float:
     quality = float(rewards.get("quality", 0.0))
-    if not _lowered_expectations():
+    if not _expectations():
         return quality
     outcome = float(rewards.get("outcome", 0.0))
     return (1.0 - OUTCOME_SHARE) * quality + OUTCOME_SHARE * outcome

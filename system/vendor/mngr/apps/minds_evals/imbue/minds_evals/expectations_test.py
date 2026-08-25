@@ -6,7 +6,7 @@ from imbue.minds_evals.data_types import FlowSurface
 from imbue.minds_evals.data_types import REGISTERED_APPS_HTTP_TARGET
 from imbue.minds_evals.data_types import UiFlow
 from imbue.minds_evals.errors import EvalConfigError
-from imbue.minds_evals.expectations import lower_expectations
+from imbue.minds_evals.expectations import expand_expectations
 from imbue.minds_evals.expectations import parse_expectations
 
 
@@ -153,20 +153,22 @@ def test_parse_expectations_rejects_an_empty_test_command() -> None:
         )
 
 
-def test_lower_expectations_expands_the_minds_app_kind_into_explicit_checks() -> None:
-    lowered = lower_expectations(parse_expectations({"outcome": "x", "deliverable": {"kind": "minds-app"}}, "todo"))
+def test_expand_expectations_expands_the_minds_app_kind_into_explicit_checks() -> None:
+    expectations = expand_expectations(
+        parse_expectations({"outcome": "x", "deliverable": {"kind": "minds-app"}}, "todo")
+    )
 
-    assert [check.min_registered_apps for check in lowered.app_checks] == [1]
-    assert lowered.app_checks[0].is_supervisord_service_required is True
-    assert [(check.target, check.expect_status) for check in lowered.http_checks] == [
+    assert [check.min_registered_apps for check in expectations.app_checks] == [1]
+    assert expectations.app_checks[0].is_supervisord_service_required is True
+    assert [(check.target, check.expect_status) for check in expectations.http_checks] == [
         (REGISTERED_APPS_HTTP_TARGET, 200)
     ]
-    assert lowered.files_checks == ()
-    assert lowered.is_deliverable_bundle_required is True
+    assert expectations.files_checks == ()
+    assert expectations.is_deliverable_bundle_required is True
 
 
-def test_lower_expectations_merges_refinements_onto_the_implied_checks() -> None:
-    lowered = lower_expectations(
+def test_expand_expectations_merges_refinements_onto_the_implied_checks() -> None:
+    expectations = expand_expectations(
         parse_expectations(
             {
                 "outcome": "x",
@@ -182,14 +184,14 @@ def test_lower_expectations_merges_refinements_onto_the_implied_checks() -> None
     )
 
     # The kind's implied probe stays first, so refinements never renumber it.
-    assert [check.target for check in lowered.http_checks] == [REGISTERED_APPS_HTTP_TARGET, "todo"]
-    assert [check.check_id for check in lowered.http_checks] == ["http_0_registered_apps", "http_1_todo"]
-    assert lowered.app_checks[0].min_registered_apps == 3
-    assert [(check.check_id, check.min_count) for check in lowered.files_checks] == [("files_0", 1)]
+    assert [check.target for check in expectations.http_checks] == [REGISTERED_APPS_HTTP_TARGET, "todo"]
+    assert [check.check_id for check in expectations.http_checks] == ["http_0_registered_apps", "http_1_todo"]
+    assert expectations.app_checks[0].min_registered_apps == 3
+    assert [(check.check_id, check.min_count) for check in expectations.files_checks] == [("files_0", 1)]
 
 
 def test_parse_expectations_rejects_a_block_that_would_check_nothing() -> None:
-    # Prose-only expectations lower to zero check classes. rewardkit only pools a programmatic
+    # Prose-only expectations expand to zero check classes. rewardkit only pools a programmatic
     # reward when criteria exist, so the outcome dimension would silently become 100% judge --
     # double the judge weight every other case carries, which breaks the cross-case comparability
     # the fixed 50/50 split exists to provide.
@@ -197,8 +199,8 @@ def test_parse_expectations_rejects_a_block_that_would_check_nothing() -> None:
         parse_expectations({"outcome": "Just advice."}, "greeting")
 
 
-def test_lower_expectations_turns_natural_language_flows_into_checks() -> None:
-    lowered = lower_expectations(
+def test_expand_expectations_turns_natural_language_flows_into_checks() -> None:
+    expectations = expand_expectations(
         parse_expectations(
             {
                 "outcome": "x",
@@ -212,16 +214,16 @@ def test_lower_expectations_turns_natural_language_flows_into_checks() -> None:
         )
     )
 
-    assert [(check.check_id, check.name) for check in lowered.ui_flow_checks] == [
+    assert [(check.check_id, check.name) for check in expectations.ui_flow_checks] == [
         ("ui_flow_0_add_complete_delete", "add-complete-delete"),
         ("ui_flow_1_persistence", "persistence"),
     ]
-    assert lowered.ui_flow_checks[0].expect == "'buy milk' is visible."
+    assert expectations.ui_flow_checks[0].expect == "'buy milk' is visible."
 
 
-def test_lower_expectations_refuses_to_lower_a_scripted_flow() -> None:
+def test_expand_expectations_refuses_to_expand_a_scripted_flow() -> None:
     # Scripts are rejected at parse time, so this can only be reached if that rejection is ever
-    # removed -- at which point lowering one into an ordinary check would silently commission
+    # removed -- at which point expanding one into an ordinary check would silently commission
     # verification that nothing runs. Constructed directly, since parsing will not produce it.
     expectations = Expectations(
         outcome="x",
@@ -232,7 +234,7 @@ def test_lower_expectations_refuses_to_lower_a_scripted_flow() -> None:
     )
 
     with pytest.raises(AssertionError, match="rejected at parse time"):
-        lower_expectations(expectations)
+        expand_expectations(expectations)
 
 
 def test_parse_expectations_rejects_two_flows_whose_names_collide() -> None:
@@ -263,7 +265,7 @@ def test_parse_expectations_defaults_a_flow_to_the_forwarded_origin() -> None:
     )
 
     assert expectations.ui_flows[0].surface is FlowSurface.ORIGIN
-    assert lower_expectations(expectations).ui_flow_checks[0].surface is FlowSurface.ORIGIN
+    assert expand_expectations(expectations).ui_flow_checks[0].surface is FlowSurface.ORIGIN
 
 
 def test_parse_expectations_rejects_the_minds_ui_surface_as_unimplemented() -> None:

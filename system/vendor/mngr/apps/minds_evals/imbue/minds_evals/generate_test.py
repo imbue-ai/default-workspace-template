@@ -218,7 +218,7 @@ def test_generate_dataset_emits_the_outcome_dimension_only_for_expectation_cases
     assert [criterion["name"] for criterion in judge["criterion"]] == ["works_as_expected"]
 
 
-def test_generate_dataset_lowers_expectations_identically_into_both_copies(tmp_path: Path) -> None:
+def test_generate_dataset_expands_expectations_identically_into_both_copies(tmp_path: Path) -> None:
     repo = make_local_git_repo(tmp_path, "fake-mngr", commit_count=1)
     dwt_repo = make_local_git_repo(tmp_path, "fake-dwt", commit_count=1)
     config = _valid_config(
@@ -233,12 +233,12 @@ def test_generate_dataset_lowers_expectations_identically_into_both_copies(tmp_p
     tests_case = json.loads((task_dir / "tests" / "case.json").read_text())
     instruction_case = parse_case_config((task_dir / "instruction.md").read_text())
 
-    # The collector (instruction.md) and the judge (case.json) must read the identical lowered form.
+    # The collector (instruction.md) and the judge (case.json) must read the identical expanded form.
     assert tests_case == instruction_case.model_dump(mode="json")
-    lowered = tests_case["expectations"]
-    assert [check["min_registered_apps"] for check in lowered["app_checks"]] == [1]
-    assert [check["target"] for check in lowered["http_checks"]] == ["registered-apps"]
-    assert lowered["test_commands"] == ["uv run pytest -q"]
+    expectations = tests_case["expectations"]
+    assert [check["min_registered_apps"] for check in expectations["app_checks"]] == [1]
+    assert [check["target"] for check in expectations["http_checks"]] == ["registered-apps"]
+    assert expectations["test_commands"] == ["uv run pytest -q"]
     # The authored form rides along so a reader can see what the config actually said.
     assert tests_case["authored_expectations"]["deliverable"] == {
         "kind": "MINDS_APP",

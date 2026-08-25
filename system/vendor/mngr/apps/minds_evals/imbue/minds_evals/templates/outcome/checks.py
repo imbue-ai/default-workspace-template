@@ -1,7 +1,7 @@
 """Programmatic outcome criteria: score the evidence the driver recorded while the workspace was
 alive, never live state (by grade time the workspace is long destroyed).
 
-One criterion per lowered expectation class, and only for the classes this case actually declares --
+One criterion per expanded expectation class, and only for the classes this case actually declares --
 an absent class contributes nothing in either direction rather than a silent zero. Entries the
 collector marked ``error`` (the harness could not find out) are excluded from the denominator; when
 a declared class has no determinable entry at all, this scores 0.0 and finalize.py turns that into a
@@ -18,7 +18,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-import rewardkit
+import rewardkit as rk
 from rewardkit import criterion
 
 CASE_PATH = Path("/tests/case.json")
@@ -30,7 +30,7 @@ APP_CLASS = "app"
 HTTP_CLASS = "http"
 UI_FLOWS_CLASS = "ui_flows"
 
-# Which lowered check list makes a class scored, and what its criterion is called. A class the case
+# Which expanded check list makes a class scored, and what its criterion is called. A class the case
 # does not declare registers no criterion at all, so it contributes nothing in either direction.
 CRITERION_BY_CLASS = (
     (FILES_CLASS, "files_checks", "files_expectations_met"),
@@ -53,7 +53,7 @@ def _load_json(path: Path) -> dict[str, Any]:
     return loaded if isinstance(loaded, dict) else {}
 
 
-def _lowered_expectations() -> dict[str, Any]:
+def _expectations() -> dict[str, Any]:
     expectations = _load_json(CASE_PATH).get("expectations")
     return expectations if isinstance(expectations, dict) else {}
 
@@ -102,7 +102,7 @@ def _recorded_class_score(check_class: str) -> float:
 def _files_score() -> float:
     """Declared globs are matched against the captured inventory here rather than at collection
     time, so a regrade picks up a corrected glob without re-running the trial."""
-    checks = _lowered_expectations().get("files_checks") or []
+    checks = _expectations().get("files_checks") or []
     if not checks:
         return 0.0
     # An inventory that could not be captured is recorded as an error entry, which finalize.py reads
@@ -134,7 +134,7 @@ def expectation_class_met(workspace: Path, check_class: str) -> float:
         return 0.0
 
 
-def _is_class_scorable(check_class: str, lowered_key: str) -> bool:
+def _is_class_scorable(check_class: str, expectation_key: str) -> bool:
     """Whether this case's evidence supports scoring one class at all.
 
     Declaring the class is the first condition. For UI flows there is a second: at least one
@@ -149,7 +149,7 @@ def _is_class_scorable(check_class: str, lowered_key: str) -> bool:
     The cheap classes keep the stricter rule: an inventory or registry that could not be read at
     all means the collection phase itself failed, which is worth erroring the trial over.
     """
-    if not _lowered_expectations().get(lowered_key):
+    if not _expectations().get(expectation_key):
         return False
     if check_class != UI_FLOWS_CLASS:
         return True
@@ -159,6 +159,6 @@ def _is_class_scorable(check_class: str, lowered_key: str) -> bool:
 # Registration goes through the rewardkit module rather than the decorated name: @criterion returns
 # a handle that refuses a direct call, and only the module-level lookup reaches the factory that
 # actually registers a check (and accepts the criterion's name).
-for _check_class, _lowered_key, _criterion_name in CRITERION_BY_CLASS:
-    if _is_class_scorable(_check_class, _lowered_key):
-        rewardkit.expectation_class_met(_check_class, name=_criterion_name)
+for _check_class, _expectation_key, _criterion_name in CRITERION_BY_CLASS:
+    if _is_class_scorable(_check_class, _expectation_key):
+        rk.expectation_class_met(_check_class, name=_criterion_name)

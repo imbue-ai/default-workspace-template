@@ -1,6 +1,6 @@
 """The contract between the two grade-time files that decide which expectation classes are scored.
 
-``outcome/checks.py`` registers one criterion per class present in the lowered check list, and
+``outcome/checks.py`` registers one criterion per class present in the expanded check list, and
 ``finalize.py`` errors a trial whose declared class produced no determinable evidence. If the two
 disagree about which classes exist, a class either scores with no infrastructure-failure backstop or
 gets a backstop with nothing to score -- silently, in the verifier container, on a nightly run.
@@ -15,7 +15,7 @@ import importlib.util
 from pathlib import Path
 from typing import Any
 
-from imbue.minds_evals.data_types import LoweredExpectations
+from imbue.minds_evals.data_types import ExpandedExpectations
 
 _TEMPLATES = Path(__file__).parent / "templates"
 _CHECKS_PATH = _TEMPLATES / "outcome" / "checks.py"
@@ -85,10 +85,10 @@ def test_finalize_errors_a_trial_only_over_classes_checks_py_actually_scores() -
     # finalize.py's map is the "this class was unmeasurable, so void the trial" list. Every key on
     # it must be a class checks.py scores, or trials would be destroyed over a class nothing reads.
     finalize = _load_finalize()
-    scored_keys = {lowered_key for _check_class, lowered_key, _name in _criterion_by_class()}
+    scored_keys = {expectation_key for _check_class, expectation_key, _name in _criterion_by_class()}
 
-    assert set(finalize.SCORED_CLASS_BY_LOWERED_KEY) <= scored_keys
-    assert set(finalize.SCORED_CLASS_BY_LOWERED_KEY.values()) <= {
+    assert set(finalize.SCORED_CLASS_BY_EXPECTATION_KEY) <= scored_keys
+    assert set(finalize.SCORED_CLASS_BY_EXPECTATION_KEY.values()) <= {
         check_class for check_class, _key, _name in _criterion_by_class()
     }
 
@@ -102,18 +102,18 @@ def test_an_unmeasurable_flow_class_does_not_void_the_whole_trial() -> None:
     # criterion in that case instead, so the flows cost nothing in either direction.
     finalize = _load_finalize()
 
-    assert "ui_flow_checks" not in finalize.SCORED_CLASS_BY_LOWERED_KEY
-    assert "ui_flows" not in finalize.SCORED_CLASS_BY_LOWERED_KEY.values()
+    assert "ui_flow_checks" not in finalize.SCORED_CLASS_BY_EXPECTATION_KEY
+    assert "ui_flows" not in finalize.SCORED_CLASS_BY_EXPECTATION_KEY.values()
     # checks.py still scores the class when there IS something determinable to score.
     assert ("ui_flows", "ui_flow_checks", "ui_flows_completed") in _criterion_by_class()
 
 
-def test_every_scored_key_is_a_real_field_of_the_lowered_expectations() -> None:
-    # The lowered form is what travels into the verifier as case.json; a key that does not exist on
+def test_every_scored_key_is_a_real_field_of_the_expanded_expectations() -> None:
+    # The expanded form is what travels into the verifier as case.json; a key that does not exist on
     # it would make its criterion silently unregistered forever.
-    scored_keys = {lowered_key for _check_class, lowered_key, _name in _criterion_by_class()}
+    scored_keys = {expectation_key for _check_class, expectation_key, _name in _criterion_by_class()}
 
-    assert scored_keys <= set(LoweredExpectations.model_fields)
+    assert scored_keys <= set(ExpandedExpectations.model_fields)
 
 
 def test_finalize_splits_a_flow_case_between_quality_and_outcome() -> None:

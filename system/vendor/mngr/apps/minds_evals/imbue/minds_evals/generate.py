@@ -24,7 +24,7 @@ from loguru import logger
 
 from imbue.imbue_common.logging import setup_logging
 from imbue.imbue_common.pure import pure
-from imbue.minds_evals import verification
+from imbue.minds_evals import evidence_collection
 from imbue.minds_evals.data_types import CaseConfig
 from imbue.minds_evals.data_types import DECIDE_SENTINEL
 from imbue.minds_evals.data_types import DEFAULT_AVG_WORD_COUNT_BASELINE
@@ -36,7 +36,7 @@ from imbue.minds_evals.data_types import EvalConfig
 from imbue.minds_evals.data_types import PersonaCase
 from imbue.minds_evals.errors import EvalConfigError
 from imbue.minds_evals.errors import GitSourceError
-from imbue.minds_evals.expectations import lower_expectations
+from imbue.minds_evals.expectations import expand_expectations
 from imbue.minds_evals.expectations import parse_expectations
 
 MNGR_REPO: Final[str] = "https://github.com/imbue-ai/mngr-internal.git"
@@ -82,7 +82,7 @@ OUTCOME_JUDGE_WEIGHT: Final[float] = 1.0
 # -- which is why the digest states the screenshot count rather than leaving the judge to infer it.
 OUTCOME_JUDGE_FILES: Final[tuple[str, ...]] = (
     "/logs/agent/expectations.md",
-    "/logs/agent/{}/{}".format(verification.VERIFICATION_DIRNAME, verification.MANIFEST_FILENAME),
+    "/logs/agent/{}/{}".format(evidence_collection.VERIFICATION_DIRNAME, evidence_collection.MANIFEST_FILENAME),
     "/logs/agent/conversation.jsonl",
     "/logs/agent/judge_flows_digest.txt",
     "/logs/agent/judge_screenshots",
@@ -216,7 +216,7 @@ def build_case_config(config: EvalConfig, case: PersonaCase, mngr_sha: str, dwt_
         dwt_branch=config.dwt_branch,
         dwt_sha=dwt_sha,
         avg_word_count_baseline=config.avg_word_count_baseline,
-        expectations=lower_expectations(case.expectations) if case.expectations is not None else None,
+        expectations=expand_expectations(case.expectations) if case.expectations is not None else None,
         authored_expectations=case.expectations,
     )
 
@@ -298,23 +298,23 @@ def render_oracle_evidence_shell(case_config: CaseConfig) -> str:
     for cases with no expectations, which must keep grading exactly as they did before."""
     if case_config.expectations is None:
         return ""
-    evidence_files = verification.oracle_evidence_files(case_config)
+    evidence_files = evidence_collection.oracle_evidence_files(case_config)
     lines = [
         "",
         "# The oracle boots no workspace, so the evidence bundle is fabricated: every declared",
         "# check recorded as passed, against a plausible registry and service listing.",
-        "rm -f /logs/agent/{}/README.txt".format(verification.VERIFICATION_DIRNAME),
+        "rm -f /logs/agent/{}/README.txt".format(evidence_collection.VERIFICATION_DIRNAME),
     ]
     # Every parent directory the bundle needs, derived rather than listed: the flow logs nest one
     # level deeper than the HTTP probes, and a new nested artifact must not need a change here.
-    bundle_root = PurePosixPath("/logs/agent") / verification.VERIFICATION_DIRNAME
+    bundle_root = PurePosixPath("/logs/agent") / evidence_collection.VERIFICATION_DIRNAME
     directories = sorted({str(bundle_root / PurePosixPath(name).parent) for name in evidence_files})
     lines += ["mkdir -p {}".format(directory) for directory in directories]
     for relative_name, content in sorted(evidence_files.items()):
         heredoc = "MINDS_EVALS_EVIDENCE_{}_EOF".format(_slug_for_heredoc(relative_name))
         lines.append(
             "cat > /logs/agent/{dirname}/{name} << '{marker}'\n{content}\n{marker}".format(
-                dirname=verification.VERIFICATION_DIRNAME, name=relative_name, content=content, marker=heredoc
+                dirname=evidence_collection.VERIFICATION_DIRNAME, name=relative_name, content=content, marker=heredoc
             )
         )
     return "\n".join(lines) + "\n"

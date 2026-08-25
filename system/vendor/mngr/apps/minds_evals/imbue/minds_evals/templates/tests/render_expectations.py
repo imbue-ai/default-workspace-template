@@ -18,15 +18,15 @@ EXPECTATIONS_PATH = Path("/logs/agent/expectations.md")
 
 def render_expectations(case: dict[str, Any]) -> str:
     """The judge-facing markdown for one case: the outcome prose plus every declared check."""
-    lowered = case.get("expectations") or {}
+    expectations = case.get("expectations") or {}
     lines: list[str] = [
         "# Expected outcome for `{}`".format(case.get("case_id") or "unknown"),
         "",
-        str(lowered.get("outcome") or "(no outcome prose was declared)"),
+        str(expectations.get("outcome") or "(no outcome prose was declared)"),
         "",
     ]
 
-    app_checks = lowered.get("app_checks") or []
+    app_checks = expectations.get("app_checks") or []
     if app_checks:
         lines += ["## Delivered apps", ""]
         for check in app_checks:
@@ -38,7 +38,7 @@ def render_expectations(case: dict[str, Any]) -> str:
             )
         lines.append("")
 
-    http_checks = lowered.get("http_checks") or []
+    http_checks = expectations.get("http_checks") or []
     if http_checks:
         lines += ["## HTTP probes", ""]
         for check in http_checks:
@@ -49,14 +49,14 @@ def render_expectations(case: dict[str, Any]) -> str:
             )
         lines.append("")
 
-    files_checks = lowered.get("files_checks") or []
+    files_checks = expectations.get("files_checks") or []
     if files_checks:
         lines += ["## Delivered files", ""]
         for check in files_checks:
             lines.append("- At least {} file(s) matching `{}`.".format(check.get("min_count"), check.get("glob")))
         lines.append("")
 
-    ui_flow_checks = lowered.get("ui_flow_checks") or []
+    ui_flow_checks = expectations.get("ui_flow_checks") or []
     if ui_flow_checks:
         lines += ["## UI flows", ""]
         for check in ui_flow_checks:
@@ -65,7 +65,7 @@ def render_expectations(case: dict[str, Any]) -> str:
             lines.append("  - Expected end state: {}".format(check.get("expect")))
         lines.append("")
 
-    test_commands = lowered.get("test_commands") or []
+    test_commands = expectations.get("test_commands") or []
     if test_commands:
         lines += ["## Recorded test commands (never gated)", ""]
         for command in test_commands:

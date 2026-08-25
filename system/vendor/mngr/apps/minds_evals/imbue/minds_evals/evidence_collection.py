@@ -43,8 +43,8 @@ from imbue.minds_evals.data_types import CheckClass
 from imbue.minds_evals.data_types import CheckStatus
 from imbue.minds_evals.data_types import EvidenceEnv
 from imbue.minds_evals.data_types import EvidenceManifest
+from imbue.minds_evals.data_types import ExpandedExpectations
 from imbue.minds_evals.data_types import HttpCheck
-from imbue.minds_evals.data_types import LoweredExpectations
 from imbue.minds_evals.data_types import ManifestEntry
 from imbue.minds_evals.data_types import PhaseTiming
 from imbue.minds_evals.data_types import REGISTERED_APPS_HTTP_TARGET
@@ -716,7 +716,7 @@ class EvidenceCollector(MutableModel):
     environment: BaseEnvironment = Field(frozen=True, description="The harbor environment (the box)")
     box_env: dict[str, str] = Field(frozen=True, description="The per-trial env every bridge exec runs with")
     workspace_agent_id: str = Field(frozen=True, description="The nested workspace the evidence is collected from")
-    case: CaseConfig = Field(frozen=True, description="The case whose lowered expectations drive the probes")
+    case: CaseConfig = Field(frozen=True, description="The case whose expanded expectations drive the probes")
     clone_base_sha: str = Field(frozen=True, description="HEAD of the prepared dwt clone; the git bundle's base")
     dwt_tip_sha: str = Field(frozen=True, description="The dwt tip the base clone was made from")
     host_logs_dir: Path = Field(frozen=True, description="The trial's host-side logs dir")
@@ -875,16 +875,16 @@ class EvidenceCollector(MutableModel):
         await ensure_evidence_dir(self.environment)
         await self._capture_workspace_state()
         await self._capture_file_inventory()
-        lowered = self.case.expectations
-        if is_expectations_collection_wanted and lowered is not None:
-            if lowered.is_deliverable_bundle_required:
+        expectations = self.case.expectations
+        if is_expectations_collection_wanted and expectations is not None:
+            if expectations.is_deliverable_bundle_required:
                 await self._capture_repo_state()
-            await self._run_test_commands(lowered)
-            await self._run_http_probes(lowered)
-            self._evaluate_app_checks(lowered)
+            await self._run_test_commands(expectations)
+            await self._run_http_probes(expectations)
+            self._evaluate_app_checks(expectations)
             # Last, and after the HTTP probes: driving the UI is the most expensive step and the
             # one most likely to exhaust the budget, and everything above is worth having anyway.
-            await self._run_ui_flows(lowered)
+            await self._run_ui_flows(expectations)
         await self._flush_record()
         return self.manifest()
 
@@ -1005,14 +1005,14 @@ class EvidenceCollector(MutableModel):
         self._record_phase("repo_state", started_at)
         await self._flush_record()
 
-    async def _run_test_commands(self, lowered: LoweredExpectations) -> None:
+    async def _run_test_commands(self, expectations: ExpandedExpectations) -> None:
         """The agent's own tests, if the case declared any. Recorded and judge-visible but never
         gated: gating here would punish cases whose prompts never mentioned tests, and reward an
         agent that writes one trivial assert."""
-        if not lowered.test_commands:
+        if not expectations.test_commands:
             return
         started_at = time.monotonic()
-        for index, command in enumerate(lowered.test_commands):
+        for index, command in enumerate(expectations.test_commands):
             entry_id = "test_command_{}".format(index)
             if not self.repo_root:
                 self.entries.append(
@@ -1044,14 +1044,14 @@ class EvidenceCollector(MutableModel):
         self._record_phase("test_commands", started_at)
         await self._flush_record()
 
-    async def _run_http_probes(self, lowered: LoweredExpectations) -> None:
+    async def _run_http_probes(self, expectations: ExpandedExpectations) -> None:
         """Probe the app AS DELIVERED. The harness never starts it: Minds' promise to the client is a
         running app tab, so "built it but never started it" must read as a delivery failure rather
         than get silently repaired here."""
-        if not lowered.http_checks:
+        if not expectations.http_checks:
             return
         started_at = time.monotonic()
-        for check in lowered.http_checks:
+        for check in expectations.http_checks:
             await self._run_one_http_check(check)
         self._record_phase("http_probes", started_at)
         await self._flush_record()
@@ -1268,19 +1268,21 @@ class EvidenceCollector(MutableModel):
             _PROBE_TIMEOUT_SECONDS,
         )
 
-    async def _run_ui_flows(self, lowered: LoweredExpectations) -> None:
+    async def _run_ui_flows(self, expectations: ExpandedExpectations) -> None:
         """Drive each declared flow through the delivered app's forwarded origin.
 
         This runs LAST of the collection steps: it is the most expensive one and the one most
         likely to exhaust the budget, and everything before it is worth having even when it does.
         """
-        if not lowered.ui_flow_checks:
+        if not expectations.ui_flow_checks:
             return
         started_at = time.monotonic()
         agent = self.verification_agent
         if agent is None:
             self._record_flow_error(
-                lowered.ui_flow_checks, ui_flows.REASON_VERIFIER_AGENT_FAILED, "no verification agent was configured"
+                expectations.ui_flow_checks,
+                ui_flows.REASON_VERIFIER_AGENT_FAILED,
+                "no verification agent was configured",
             )
             await self._finish_flow_phase(started_at)
             return
@@ -1289,7 +1291,7 @@ class EvidenceCollector(MutableModel):
             # A registry we could not read tells us nothing about what was served, which is the
             # harness failing to look -- quite unlike a registry that lists nothing.
             self._record_flow_error(
-                lowered.ui_flow_checks,
+                expectations.ui_flow_checks,
                 REASON_REGISTRY_UNREADABLE if self.is_registry_present else REASON_REGISTRY_ABSENT,
                 "no readable app registry, so there is no origin to drive a flow against",
             )
@@ -1300,7 +1302,7 @@ class EvidenceCollector(MutableModel):
             # is the harness failing to look it up, so it must not be charged to the agent the way an
             # empty registry is.
             self._record_flow_error(
-                lowered.ui_flow_checks,
+                expectations.ui_flow_checks,
                 ui_flows.REASON_HOST_ID_UNKNOWN,
                 "no usable workspace host id ({!r}), so no forwarded origin can be addressed".format(
                     self.workspace_host_id
@@ -1311,7 +1313,7 @@ class EvidenceCollector(MutableModel):
         target_url = self._flow_target_url(delivered_apps)
         if not target_url:
             # A readable registry listing no delivered app is the agent shipping nothing.
-            for check in lowered.ui_flow_checks:
+            for check in expectations.ui_flow_checks:
                 self.entries.append(
                     _flow_entry(
                         check,
@@ -1325,11 +1327,11 @@ class EvidenceCollector(MutableModel):
         await minds_bridge.upload_flow_step_script(self.environment, ui_flows.BOX_FLOW_STEP_PATH)
         forward_reason = await self._start_forward()
         if forward_reason:
-            self._record_flow_error(lowered.ui_flow_checks, forward_reason, "the forward proxy never served")
+            self._record_flow_error(expectations.ui_flow_checks, forward_reason, "the forward proxy never served")
             await self._stop_forward()
             await self._finish_flow_phase(started_at)
             return
-        for flow_index, check in enumerate(lowered.ui_flow_checks):
+        for flow_index, check in enumerate(expectations.ui_flow_checks):
             await self._run_one_flow(check, flow_index, target_url, agent)
         await self._stop_forward()
         await self._finish_flow_phase(started_at)
@@ -1543,17 +1545,17 @@ class EvidenceCollector(MutableModel):
         self.entries.append(_flow_entry(check, status, reason, _bounded(detail, MAX_COMMAND_OUTPUT_CHARS)))
         await self._flush_record()
 
-    def _evaluate_app_checks(self, lowered: LoweredExpectations) -> None:
+    def _evaluate_app_checks(self, expectations: ExpandedExpectations) -> None:
         """The registry/service half of the deliverable: enough delivered apps registered, and each
         one's supervisord program actually running. Derived from the always-on capture, so it costs
         no extra round trip."""
-        if not lowered.app_checks:
+        if not expectations.app_checks:
             return
         started_at = time.monotonic()
         service_states = parse_service_states(self.services_text)
         delivered_apps = self._delivered_apps
         program_by_registration = parse_supervised_registrations(self.supervisord_conf)
-        for check in lowered.app_checks:
+        for check in expectations.app_checks:
             self.entries.append(
                 registration_entry(check.check_id, check.min_registered_apps, delivered_apps, self.is_registry_present)
             )
@@ -1577,8 +1579,8 @@ def oracle_evidence_files(case: CaseConfig) -> dict[str, str]:
     """The green evidence bundle the oracle fabricates, so `-a oracle` exercises the whole new path
     -- artifact transfer, the outcome criteria, the judge, and the reward composition -- without
     booting a workspace. Every declared check is recorded as passed against a plausible registry."""
-    lowered = case.expectations
-    assert lowered is not None, "oracle evidence is only fabricated for cases that declare expectations"
+    expectations = case.expectations
+    assert expectations is not None, "oracle evidence is only fabricated for cases that declare expectations"
     apps_toml = "".join(
         '[[apps]]\nname = "{name}"\nurl = "{url}"\nlabel = "{name}-o1r2a3c4"\n\n'.format(name=name, url=url)
         for name, url in (
@@ -1594,7 +1596,7 @@ def oracle_evidence_files(case: CaseConfig) -> dict[str, str]:
     )
     inventory = "".join(
         json.dumps({"path": path, "size_bytes": 1024, "mtime": 0.0}) + "\n"
-        for path in _oracle_inventory_paths(lowered)
+        for path in _oracle_inventory_paths(expectations)
     )
     manifest = EvidenceManifest(
         schema_version=MANIFEST_SCHEMA_VERSION,
@@ -1605,7 +1607,7 @@ def oracle_evidence_files(case: CaseConfig) -> dict[str, str]:
         is_evidence_complete=True,
         started_at="1970-01-01T00:00:00+00:00",
         phases=(PhaseTiming(name="oracle", seconds=0.0),),
-        entries=_oracle_entries(lowered),
+        entries=_oracle_entries(expectations),
     )
     trace = TraceRecord(
         timestamp="1970-01-01T00:00:00+00:00",
@@ -1647,14 +1649,14 @@ def oracle_evidence_files(case: CaseConfig) -> dict[str, str]:
                 },
                 indent=2,
             )
-            for check in lowered.http_checks
+            for check in expectations.http_checks
         },
         # Flow logs but no screenshots: the oracle boots no browser, and the judge prompt states
         # that screenshots may be absent. The grade-time pre-step still runs, which is what makes
         # an oracle run prove the empty-screenshot-directory path leaves no "[not found]" noise.
         **{
             "{}/{}/{}".format(FLOWS_DIRNAME, slugify(check.name), FLOW_LOG_FILENAME): _oracle_flow_log(check)
-            for check in lowered.ui_flow_checks
+            for check in expectations.ui_flow_checks
         },
     }
 
@@ -1692,7 +1694,7 @@ def _oracle_http_evidence_name(check: HttpCheck) -> str:
 
 
 @pure
-def _oracle_inventory_paths(lowered: LoweredExpectations) -> tuple[str, ...]:
+def _oracle_inventory_paths(expectations: ExpandedExpectations) -> tuple[str, ...]:
     """Inventory paths that satisfy every declared glob, plus a plausible app source tree.
 
     A glob's wildcards are filled in literally, which covers `*` but not `?` or a character class:
@@ -1701,12 +1703,12 @@ def _oracle_inventory_paths(lowered: LoweredExpectations) -> tuple[str, ...]:
     return (
         "workspace/apps/{}/main.py".format(_ORACLE_APP_NAME),
         "workspace/apps/{}/templates/index.html".format(_ORACLE_APP_NAME),
-        *tuple(check.glob.replace("*", "oracle") for check in lowered.files_checks),
+        *tuple(check.glob.replace("*", "oracle") for check in expectations.files_checks),
     )
 
 
 @pure
-def _oracle_entries(lowered: LoweredExpectations) -> tuple[ManifestEntry, ...]:
+def _oracle_entries(expectations: ExpandedExpectations) -> tuple[ManifestEntry, ...]:
     entries: list[ManifestEntry] = [
         _entry(
             "file_inventory",
@@ -1717,7 +1719,7 @@ def _oracle_entries(lowered: LoweredExpectations) -> tuple[ManifestEntry, ...]:
             "{}/{}".format(VERIFICATION_DIRNAME, FILE_INVENTORY_FILENAME),
         )
     ]
-    if lowered.is_deliverable_bundle_required:
+    if expectations.is_deliverable_bundle_required:
         entries.append(
             _entry(
                 "deliverable_bundle",
@@ -1728,7 +1730,7 @@ def _oracle_entries(lowered: LoweredExpectations) -> tuple[ManifestEntry, ...]:
                 "",
             )
         )
-    for check in lowered.app_checks:
+    for check in expectations.app_checks:
         entries.append(
             registration_entry(
                 check.check_id,
@@ -1763,7 +1765,7 @@ def _oracle_entries(lowered: LoweredExpectations) -> tuple[ManifestEntry, ...]:
                     is_services_readable=True,
                 )
             )
-    for check in lowered.http_checks:
+    for check in expectations.http_checks:
         entries.append(
             _entry(
                 "{}_{}".format(check.check_id, slugify(_ORACLE_APP_NAME)),
@@ -1776,7 +1778,7 @@ def _oracle_entries(lowered: LoweredExpectations) -> tuple[ManifestEntry, ...]:
                 "{}/{}".format(VERIFICATION_DIRNAME, _oracle_http_evidence_name(check)),
             )
         )
-    for index, command in enumerate(lowered.test_commands):
+    for index, command in enumerate(expectations.test_commands):
         entries.append(
             _entry(
                 "test_command_{}".format(index),
@@ -1787,7 +1789,7 @@ def _oracle_entries(lowered: LoweredExpectations) -> tuple[ManifestEntry, ...]:
                 "",
             )
         )
-    for check in lowered.ui_flow_checks:
+    for check in expectations.ui_flow_checks:
         entries.append(
             _flow_entry(
                 check,

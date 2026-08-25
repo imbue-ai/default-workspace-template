@@ -14,6 +14,11 @@ real SIGTERM-on-timeout. One pins the exposure that ``is_detached_from_terminal`
 close; the other shows it closed, and shows *why* -- the child can no longer open the terminal
 at all. The third covers the same capability on ``ConcurrencyGroup``, the API a service is
 actually meant to start processes through.
+
+Only the first depends on the kernel actually delivering the job-control stop, and not every
+sandbox does (Modal's, where this repo's CI runs its unit tests, does not -- measured). It
+detects that from its own verdict and skips, rather than asserting something the platform will
+not do. The other two assert properties of the fix itself and run everywhere.
 """
 
 from __future__ import annotations
@@ -38,6 +43,9 @@ _HARNESS_SCRIPT: Final[Path] = Path(_terminal_freeze_test_script.__file__)
 # Comfortably above the harness's own 20s internal deadline, so a harness that misbehaves
 # reports a verdict rather than being cut off here.
 _HARNESS_TIMEOUT_SECONDS: Final[float] = 40.0
+# The toucher's marker when tcsetattr *returned* -- i.e. the kernel let a background process
+# group change the terminal without stopping it.
+_TERMINAL_TOUCH_RETURNED: Final[str] = "reached_and_returned"
 
 
 def _kill_service_group(verdict_path: Path) -> None:
@@ -88,6 +96,10 @@ def _run_harness(tmp_path: Path, is_detached_from_terminal: bool) -> dict[str, A
 
 def _assert_the_caller_was_backgrounded_on_a_terminal(verdict: dict[str, Any]) -> None:
     """Guard against a vacuous pass: without this shape there is no SIGTTOU to avoid."""
+    assert verdict["toucher"] is not None, (
+        "the child never wrote a marker, so it was killed before arming its handler -- "
+        f"_CHILD_TIMEOUT_SECONDS is too tight for this machine: {verdict}"
+    )
     assert verdict["foreground_process_group_id"] == verdict["own_process_group_id"], (
         f"harness did not hold the terminal's foreground group: {verdict}"
     )
@@ -112,6 +124,14 @@ def test_a_terminal_touching_child_stops_the_whole_caller_group_when_its_timeout
     assert verdict["toucher"]["session_id"] == verdict["session_id"], (
         f"the child did not inherit the caller's session: {verdict}"
     )
+    if verdict["toucher"]["terminal"] == _TERMINAL_TOUCH_RETURNED:
+        # The child reached the terminal from a background process group and tcsetattr came
+        # back instead of stopping it. POSIX allows that only when the signal is blocked or
+        # ignored, and the harness pins both to SIG_DFL and records what it inherited -- so
+        # this is a kernel that does not deliver the stop at all, which is what Modal's
+        # sandboxes do. There is no freeze to reproduce here; the fix is covered below.
+        pytest.skip(f"this kernel does not stop a background process group for a terminal touch: {verdict}")
+
     assert verdict["toucher"]["terminal"] == "reached", f"the child never got into tcsetattr: {verdict}"
     assert verdict["outcome"] == "stopped", f"expected the caller to be stopped, got: {verdict}"
     assert verdict["stop_signal"] == "SIGTTOU"

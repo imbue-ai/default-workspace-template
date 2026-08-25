@@ -7,8 +7,8 @@ import pytest
 from harbor.environments.base import ExecResult
 from pydantic import SecretStr
 
+from imbue.minds_evals import evidence_collection
 from imbue.minds_evals import ui_flows
-from imbue.minds_evals import verification
 from imbue.minds_evals.data_types import CaseConfig
 from imbue.minds_evals.data_types import CheckClass
 from imbue.minds_evals.data_types import CheckStatus
@@ -16,7 +16,7 @@ from imbue.minds_evals.data_types import Expectations
 from imbue.minds_evals.data_types import HttpCheck
 from imbue.minds_evals.data_types import ManifestEntry
 from imbue.minds_evals.data_types import RegisteredApp
-from imbue.minds_evals.expectations import lower_expectations
+from imbue.minds_evals.expectations import expand_expectations
 from imbue.minds_evals.expectations import parse_expectations
 from imbue.minds_evals.mock_environment_test import MockBoxEnvironment
 from imbue.minds_evals.mock_environment_test import ScriptedExecRule
@@ -68,7 +68,7 @@ def _case_config(expectations: Expectations | None, verification_timeout_seconds
         dwt_branch="main",
         dwt_sha="d" * 40,
         avg_word_count_baseline=100.0,
-        expectations=lower_expectations(expectations) if expectations is not None else None,
+        expectations=expand_expectations(expectations) if expectations is not None else None,
         authored_expectations=expectations,
     )
 
@@ -87,7 +87,7 @@ def _http_check(target: str = "registered-apps", expect_status: int = 200, expec
 
 
 def test_parse_apps_registry_reads_names_urls_and_marks_builtins() -> None:
-    apps = verification.parse_apps_registry(_REGISTRY_TOML)
+    apps = evidence_collection.parse_apps_registry(_REGISTRY_TOML)
 
     assert apps is not None
     assert [(app.name, app.url, app.is_builtin) for app in apps] == [
@@ -100,7 +100,7 @@ def test_the_templates_own_file_browser_is_not_a_deliverable() -> None:
     # `files` ships with the workspace template and registers through exactly the path a delivered
     # app does, so nothing about its row says otherwise. Counting it charges the agent for a
     # builtin, and -- when that builtin is unhealthy -- aims the UI flows at a dead port.
-    apps = verification.parse_apps_registry(
+    apps = evidence_collection.parse_apps_registry(
         '[[apps]]\nname = "files"\nurl = "http://localhost:8300"\nlabel = "files-aa"\n'
     )
 
@@ -112,16 +112,16 @@ def test_the_templates_own_file_browser_is_not_a_deliverable() -> None:
 def test_parse_apps_registry_reports_an_unreadable_registry_as_none(registry_text: str) -> None:
     # None ("could not read it") and () ("read it; it lists nothing") are different claims: the
     # second is the agent shipping nothing, which must score against the agent.
-    assert verification.parse_apps_registry(registry_text) is None
+    assert evidence_collection.parse_apps_registry(registry_text) is None
 
 
 @pytest.mark.parametrize("registry_text", ["", "   ", "other = 1"])
 def test_parse_apps_registry_reports_a_readable_but_empty_registry_as_no_apps(registry_text: str) -> None:
-    assert verification.parse_apps_registry(registry_text) == ()
+    assert evidence_collection.parse_apps_registry(registry_text) == ()
 
 
 def test_parse_service_states_reads_program_states() -> None:
-    assert verification.parse_service_states(_SERVICES_TEXT) == {
+    assert evidence_collection.parse_service_states(_SERVICES_TEXT) == {
         "system_interface": "RUNNING",
         "todo": "RUNNING",
     }
@@ -140,7 +140,7 @@ def test_parse_service_states_yields_nothing_for_an_error_message(services_text:
     # `supervisorctl status` exits nonzero merely because a program is down, so only the content
     # can tell a real listing from a broken instrument -- and a broken one must not read as a fleet
     # of stopped services, which would be charged to the agent.
-    assert verification.parse_service_states(services_text) == {}
+    assert evidence_collection.parse_service_states(services_text) == {}
 
 
 def test_service_entries_find_a_grouped_supervisord_program() -> None:
@@ -148,7 +148,7 @@ def test_service_entries_find_a_grouped_supervisord_program() -> None:
     # a perfectly healthy grouped service as absent and score it against the agent.
     delivered = (RegisteredApp(name="todo", url="http://localhost:8081", is_builtin=False, is_internal=False),)
 
-    entries = verification.service_entries(
+    entries = evidence_collection.service_entries(
         "app_registered", delivered, {"apps:todo": "RUNNING"}, {"todo": "todo"}, True
     )
 
@@ -160,11 +160,11 @@ def test_split_sections_keeps_the_first_occurrence_of_a_marker() -> None:
     # markers, so a later duplicate must never overwrite an earlier, harness-emitted section.
     forged = _sections(status="200 0.01\n", body="") + _sections(status="500 9.9\n")
 
-    assert verification.split_sections(forged)["status"] == "200 0.01\n"
+    assert evidence_collection.split_sections(forged)["status"] == "200 0.01\n"
 
 
 def test_split_sections_separates_one_commands_several_answers() -> None:
-    assert verification.split_sections(
+    assert evidence_collection.split_sections(
         "noise\n" + _sections(repo_root="/home/user/workspace\n", registry="x = 1\n", services="")
     ) == {"repo_root": "/home/user/workspace\n", "registry": "x = 1\n", "services": ""}
 
@@ -174,39 +174,39 @@ def test_split_sections_separates_one_commands_several_answers() -> None:
     [("200 0.0041", (200, 0.004)), ("000 0.000153", (0, 0.0)), ("", (0, 0.0)), ("garbage", (0, 0.0))],
 )
 def test_parse_curl_status_reads_code_and_timing(status_section: str, expected: tuple[int, float]) -> None:
-    assert verification.parse_curl_status(status_section) == expected
+    assert evidence_collection.parse_curl_status(status_section) == expected
 
 
 def test_http_entry_status_separates_a_broken_instrument_from_a_broken_app() -> None:
     # Not being able to ask means we could not find out (ERROR); an app answering wrong -- or
     # refusing the connection, which curl reports as 000 -- is the workspace falling short (FAILED).
     # The whole grading policy rests on that distinction.
-    assert verification.http_entry_status(False, "", 200, "ok", _http_check()) == (
+    assert evidence_collection.http_entry_status(False, "", 200, "ok", _http_check()) == (
         CheckStatus.ERROR,
-        verification.REASON_BRIDGE_FAILED,
+        evidence_collection.REASON_BRIDGE_FAILED,
     )
-    assert verification.http_entry_status(True, "curl_missing", 0, "", _http_check()) == (
+    assert evidence_collection.http_entry_status(True, "curl_missing", 0, "", _http_check()) == (
         CheckStatus.ERROR,
-        verification.REASON_PROBE_UNAVAILABLE,
+        evidence_collection.REASON_PROBE_UNAVAILABLE,
     )
-    assert verification.http_entry_status(True, "", 500, "boom", _http_check()) == (
+    assert evidence_collection.http_entry_status(True, "", 500, "boom", _http_check()) == (
         CheckStatus.FAILED,
-        verification.REASON_WRONG_STATUS,
+        evidence_collection.REASON_WRONG_STATUS,
     )
-    assert verification.http_entry_status(True, "", 0, "", _http_check()) == (
+    assert evidence_collection.http_entry_status(True, "", 0, "", _http_check()) == (
         CheckStatus.FAILED,
-        verification.REASON_WRONG_STATUS,
+        evidence_collection.REASON_WRONG_STATUS,
     )
-    assert verification.http_entry_status(True, "", 200, "ok", _http_check()) == (CheckStatus.PASSED, "")
+    assert evidence_collection.http_entry_status(True, "", 200, "ok", _http_check()) == (CheckStatus.PASSED, "")
 
 
 def test_http_entry_status_checks_a_declared_body_regex() -> None:
     check = _http_check(expect_body_regex="buy milk")
 
-    assert verification.http_entry_status(True, "", 200, "<p>buy milk</p>", check) == (CheckStatus.PASSED, "")
-    assert verification.http_entry_status(True, "", 200, "<p>nope</p>", check) == (
+    assert evidence_collection.http_entry_status(True, "", 200, "<p>buy milk</p>", check) == (CheckStatus.PASSED, "")
+    assert evidence_collection.http_entry_status(True, "", 200, "<p>nope</p>", check) == (
         CheckStatus.FAILED,
-        verification.REASON_BODY_MISMATCH,
+        evidence_collection.REASON_BODY_MISMATCH,
     )
 
 
@@ -217,31 +217,36 @@ def test_resolve_http_targets_fans_registered_apps_out_over_delivered_apps_only(
         RegisteredApp(name="halfway", url="", is_builtin=False, is_internal=False),
     )
 
-    delivered = verification.resolve_delivered_apps(apps, frozenset())
-    assert [app.name for app in verification.resolve_http_targets(_http_check(), delivered)] == ["todo"]
-    assert [app.name for app in verification.resolve_http_targets(_http_check(target="todo"), delivered)] == ["todo"]
-    assert verification.resolve_http_targets(_http_check(target="absent"), delivered) == ()
+    delivered = evidence_collection.resolve_delivered_apps(apps, frozenset())
+    assert [app.name for app in evidence_collection.resolve_http_targets(_http_check(), delivered)] == ["todo"]
+    assert [app.name for app in evidence_collection.resolve_http_targets(_http_check(target="todo"), delivered)] == [
+        "todo"
+    ]
+    assert evidence_collection.resolve_http_targets(_http_check(target="absent"), delivered) == ()
 
 
 def test_registration_entry_distinguishes_an_unreadable_registry_from_an_empty_one() -> None:
     delivered = (RegisteredApp(name="todo", url="http://localhost:8081", is_builtin=False, is_internal=False),)
 
-    absent = verification.registration_entry("app_registered", 1, None, is_registry_present=False)
-    unreadable = verification.registration_entry("app_registered", 1, None, is_registry_present=True)
+    absent = evidence_collection.registration_entry("app_registered", 1, None, is_registry_present=False)
+    unreadable = evidence_collection.registration_entry("app_registered", 1, None, is_registry_present=True)
     # An empty registry is the agent shipping nothing -- the failure this whole eval exists to catch
     # -- so it must score against the agent rather than error the trial.
-    empty = verification.registration_entry("app_registered", 1, (), is_registry_present=True)
+    empty = evidence_collection.registration_entry("app_registered", 1, (), is_registry_present=True)
 
-    assert (absent.status, absent.reason) == (CheckStatus.ERROR, verification.REASON_REGISTRY_ABSENT)
-    assert (unreadable.status, unreadable.reason) == (CheckStatus.ERROR, verification.REASON_REGISTRY_UNREADABLE)
-    assert (empty.status, empty.reason) == (CheckStatus.FAILED, verification.REASON_TOO_FEW_APPS)
+    assert (absent.status, absent.reason) == (CheckStatus.ERROR, evidence_collection.REASON_REGISTRY_ABSENT)
+    assert (unreadable.status, unreadable.reason) == (
+        CheckStatus.ERROR,
+        evidence_collection.REASON_REGISTRY_UNREADABLE,
+    )
+    assert (empty.status, empty.reason) == (CheckStatus.FAILED, evidence_collection.REASON_TOO_FEW_APPS)
     assert (
-        verification.registration_entry("app_registered", 1, delivered, is_registry_present=True).status
+        evidence_collection.registration_entry("app_registered", 1, delivered, is_registry_present=True).status
         is CheckStatus.PASSED
     )
     assert (
-        verification.registration_entry("app_registered", 2, delivered, is_registry_present=True).reason
-        == verification.REASON_TOO_FEW_APPS
+        evidence_collection.registration_entry("app_registered", 2, delivered, is_registry_present=True).reason
+        == evidence_collection.REASON_TOO_FEW_APPS
     )
 
 
@@ -249,13 +254,13 @@ def test_service_entries_flag_a_registered_app_whose_service_is_not_running() ->
     delivered = (RegisteredApp(name="todo", url="http://localhost:8081", is_builtin=False, is_internal=False),)
 
     programs = {"todo": "todo"}
-    running = verification.service_entries("app_registered", delivered, {"todo": "RUNNING"}, programs, True)
-    crashed = verification.service_entries("app_registered", delivered, {"todo": "FATAL"}, programs, True)
-    unknown = verification.service_entries("app_registered", delivered, {}, programs, False)
+    running = evidence_collection.service_entries("app_registered", delivered, {"todo": "RUNNING"}, programs, True)
+    crashed = evidence_collection.service_entries("app_registered", delivered, {"todo": "FATAL"}, programs, True)
+    unknown = evidence_collection.service_entries("app_registered", delivered, {}, programs, False)
 
     assert running[0].status is CheckStatus.PASSED
     assert crashed[0].status is CheckStatus.FAILED
-    assert crashed[0].reason == verification.REASON_SERVICE_NOT_RUNNING
+    assert crashed[0].reason == evidence_collection.REASON_SERVICE_NOT_RUNNING
     assert unknown[0].status is CheckStatus.ERROR
 
 
@@ -273,7 +278,7 @@ def test_parse_supervised_registrations_joins_rows_to_the_program_that_registers
         "[program:cron]\ncommand=cron -f\n"
     )
 
-    assert verification.parse_supervised_registrations(conf) == {
+    assert evidence_collection.parse_supervised_registrations(conf) == {
         "system_interface": "system_interface",
         "shop": "dashboard",
         "shop-admin": "dashboard",
@@ -284,7 +289,7 @@ def test_parse_supervised_registrations_accepts_either_flag_order() -> None:
     # The app scaffold writes --url first; the isolated-instance runner writes --name first.
     conf = "[program:todo]\ncommand=python3 system/scripts/forward_port.py --name todo --url http://localhost:8081\n"
 
-    assert verification.parse_supervised_registrations(conf) == {"todo": "todo"}
+    assert evidence_collection.parse_supervised_registrations(conf) == {"todo": "todo"}
 
 
 def test_parse_isolated_instance_services_reads_every_concatenated_state_file() -> None:
@@ -296,14 +301,14 @@ def test_parse_isolated_instance_services_reads_every_concatenated_state_file() 
         + "\n"
     )
 
-    assert verification.parse_isolated_instance_services(instances) == frozenset(
+    assert evidence_collection.parse_isolated_instance_services(instances) == frozenset(
         {"shop-preview", "si-preview", "scratch"}
     )
 
 
 @pytest.mark.parametrize("instances_text", ["", "   ", "not json at all"])
 def test_parse_isolated_instance_services_tolerates_no_state(instances_text: str) -> None:
-    assert verification.parse_isolated_instance_services(instances_text) == frozenset()
+    assert evidence_collection.parse_isolated_instance_services(instances_text) == frozenset()
 
 
 def test_parse_apps_registry_reads_the_internal_marker() -> None:
@@ -314,7 +319,7 @@ def test_parse_apps_registry_reads_the_internal_marker() -> None:
         '[[apps]]\nname = "todo-list"\nurl = "http://localhost:8080"\nlabel = "todo-list-nyk8ptte"\n'
     )
 
-    apps = verification.parse_apps_registry(registry)
+    apps = evidence_collection.parse_apps_registry(registry)
 
     assert apps is not None
     assert [(app.name, app.is_internal) for app in apps] == [("owner-exec", True), ("todo-list", False)]
@@ -329,7 +334,7 @@ def test_resolve_delivered_apps_excludes_internal_machinery() -> None:
         RegisteredApp(name="todo-list", url="http://localhost:8080", is_builtin=False, is_internal=False),
     )
 
-    delivered = verification.resolve_delivered_apps(apps, frozenset())
+    delivered = evidence_collection.resolve_delivered_apps(apps, frozenset())
 
     assert [app.name for app in delivered] == ["todo-list"]
 
@@ -339,7 +344,7 @@ def test_service_entries_fall_back_to_a_program_named_like_the_row() -> None:
     # supervisord.conf, so the config join finds nothing but the program plainly exists.
     delivered = (RegisteredApp(name="todo-list", url="http://localhost:8080", is_builtin=False, is_internal=False),)
 
-    entries = verification.service_entries("app_registered", delivered, {"todo-list": "RUNNING"}, {}, True)
+    entries = evidence_collection.service_entries("app_registered", delivered, {"todo-list": "RUNNING"}, {}, True)
 
     assert entries[0].status is CheckStatus.PASSED
 
@@ -354,7 +359,7 @@ def test_resolve_delivered_apps_excludes_abandoned_preview_rows() -> None:
         RegisteredApp(name="shop-preview", url="http://localhost:9100", is_builtin=False, is_internal=False),
     )
 
-    delivered = verification.resolve_delivered_apps(apps, frozenset({"shop-preview"}))
+    delivered = evidence_collection.resolve_delivered_apps(apps, frozenset({"shop-preview"}))
 
     assert [app.name for app in delivered] == ["shop"]
 
@@ -365,7 +370,7 @@ def test_resolve_delivered_apps_keeps_a_real_app_whose_name_looks_like_a_preview
     # way and still miss throwaways named anything else.
     apps = (RegisteredApp(name="recipes-test", url="http://localhost:9000", is_builtin=False, is_internal=False),)
 
-    assert [app.name for app in verification.resolve_delivered_apps(apps, frozenset())] == ["recipes-test"]
+    assert [app.name for app in evidence_collection.resolve_delivered_apps(apps, frozenset())] == ["recipes-test"]
 
 
 def test_service_entries_flag_a_registry_row_no_program_supervises() -> None:
@@ -374,16 +379,18 @@ def test_service_entries_flag_a_registry_row_no_program_supervises() -> None:
     # distinguishable from a program that exists and crashed.
     delivered = (RegisteredApp(name="handmade", url="http://localhost:9000", is_builtin=False, is_internal=False),)
 
-    entries = verification.service_entries("app_registered", delivered, {"todo": "RUNNING"}, {"todo": "todo"}, True)
+    entries = evidence_collection.service_entries(
+        "app_registered", delivered, {"todo": "RUNNING"}, {"todo": "todo"}, True
+    )
 
     assert entries[0].status is CheckStatus.FAILED
-    assert entries[0].reason == verification.REASON_NO_SUPERVISED_PROGRAM
+    assert entries[0].reason == evidence_collection.REASON_NO_SUPERVISED_PROGRAM
 
 
 def test_service_entries_resolve_a_program_named_differently_from_the_row() -> None:
     delivered = (RegisteredApp(name="shop-admin", url="http://localhost:9001", is_builtin=False, is_internal=False),)
 
-    entries = verification.service_entries(
+    entries = evidence_collection.service_entries(
         "app_registered", delivered, {"dashboard": "RUNNING"}, {"shop-admin": "dashboard"}, True
     )
 
@@ -393,14 +400,14 @@ def test_service_entries_resolve_a_program_named_differently_from_the_row() -> N
 def test_inventory_excludes_git_on_top_of_the_snapshot_excludes() -> None:
     # Loose objects would crowd real deliverable files out of the entry cap; the committed history
     # travels as the git bundle instead.
-    assert ".git" in verification.INVENTORY_EXCLUDES
-    assert "node_modules" in verification.INVENTORY_EXCLUDES
+    assert ".git" in evidence_collection.INVENTORY_EXCLUDES
+    assert "node_modules" in evidence_collection.INVENTORY_EXCLUDES
 
 
 def test_test_command_wrapper_runs_the_command_in_a_subshell() -> None:
     # A declared test command ending in `exit` would otherwise take the probe down with it, losing
     # the exit code and output it exists to record.
-    command = verification.test_command_wrapper("/home/user/workspace", "pytest -q")
+    command = evidence_collection.test_command_wrapper("/home/user/workspace", "pytest -q")
 
     assert "( pytest -q )" in command
 
@@ -445,11 +452,11 @@ def _run_collector(
     rules: list[ScriptedExecRule],
     deadline_offset_seconds: float = 600.0,
     is_expectations_collection_wanted: bool = True,
-) -> tuple[verification.EvidenceCollector, MockBoxEnvironment]:
+) -> tuple[evidence_collection.EvidenceCollector, MockBoxEnvironment]:
     environment = MockBoxEnvironment(tmp_path, rules)
     logs_dir = tmp_path / "agent"
     logs_dir.mkdir(parents=True, exist_ok=True)
-    collector = verification.EvidenceCollector(
+    collector = evidence_collection.EvidenceCollector(
         environment=environment,
         box_env={"MINDS_ENV": "staging"},
         workspace_agent_id="ws-1",
@@ -463,7 +470,7 @@ def _run_collector(
     return collector, environment
 
 
-def _entry_status_by_id(collector: verification.EvidenceCollector) -> dict[str, CheckStatus]:
+def _entry_status_by_id(collector: evidence_collection.EvidenceCollector) -> dict[str, CheckStatus]:
     return {entry.entry_id: entry.status for entry in collector.entries}
 
 
@@ -614,7 +621,7 @@ def test_collector_records_a_ships_nothing_trial_as_evidence_not_an_error(tmp_pa
 def test_repo_state_command_never_invokes_git_bundle_on_an_empty_range() -> None:
     # The guard is in the shell, because the failure it prevents is git's own refusal to bundle an
     # empty range -- which would surface as a collection error rather than as the agent's outcome.
-    command = verification.repo_state_command("/home/user/workspace", "a" * 40)
+    command = evidence_collection.repo_state_command("/home/user/workspace", "a" * 40)
 
     assert "no-commits" in command
     # A non-numeric or zero count short-circuits before `git bundle create` is ever reached.
@@ -628,7 +635,7 @@ def test_collector_records_a_failing_test_command_without_erroring(tmp_path: Pat
 
     failed = next(entry for entry in collector.entries if entry.entry_id == "test_command_0")
     assert failed.status is CheckStatus.FAILED
-    assert failed.reason == verification.REASON_NONZERO_EXIT
+    assert failed.reason == evidence_collection.REASON_NONZERO_EXIT
     assert failed.check_class is CheckClass.TEST_COMMAND
 
 
@@ -641,7 +648,7 @@ def test_collector_records_timeouts_as_errors_rather_than_failures(tmp_path: Pat
     assert statuses["test_command_0"] is CheckStatus.ERROR
     assert statuses["http_0_registered_apps_todo"] is CheckStatus.ERROR
     timed_out = next(entry for entry in collector.entries if entry.entry_id == "test_command_0")
-    assert timed_out.reason == verification.REASON_TIMEOUT
+    assert timed_out.reason == evidence_collection.REASON_TIMEOUT
 
 
 def test_collector_runs_only_the_always_on_capture_for_an_unfinished_trial(tmp_path: Path) -> None:
@@ -706,9 +713,9 @@ def test_collector_reports_a_dead_bridge_as_an_error(tmp_path: Path) -> None:
 def test_oracle_evidence_files_record_every_declared_check_as_passed() -> None:
     case = _case_config(_authored(test_commands=["uv run pytest -q"]))
 
-    files = verification.oracle_evidence_files(case)
+    files = evidence_collection.oracle_evidence_files(case)
 
-    manifest = json.loads(files[verification.MANIFEST_FILENAME])
+    manifest = json.loads(files[evidence_collection.MANIFEST_FILENAME])
     assert manifest["is_evidence_complete"] is True
     assert {entry["status"] for entry in manifest["entries"]} == {"passed"}
     assert {entry["check_class"] for entry in manifest["entries"]} == {
@@ -720,17 +727,17 @@ def test_oracle_evidence_files_record_every_declared_check_as_passed() -> None:
     }
     # Both SHAs travel, so a replay can regenerate the base clone and verify it before unbundling.
     assert manifest["base_sha"] and manifest["dwt_tip_sha"]
-    assert json.loads(files[verification.REPO_STATE_FILENAME])["dwt_tip_sha"]
-    registry_apps = verification.parse_apps_registry(files[verification.APPS_REGISTRY_FILENAME])
+    assert json.loads(files[evidence_collection.REPO_STATE_FILENAME])["dwt_tip_sha"]
+    registry_apps = evidence_collection.parse_apps_registry(files[evidence_collection.APPS_REGISTRY_FILENAME])
     assert registry_apps is not None
     assert [app.name for app in registry_apps if not app.is_builtin] == ["delivered-app"]
-    assert "RUNNING" in files[verification.SERVICES_FILENAME]
+    assert "RUNNING" in files[evidence_collection.SERVICES_FILENAME]
 
 
 def test_oracle_evidence_inventory_satisfies_declared_file_globs() -> None:
     case = _case_config(_authored(deliverable={"kind": "minds-app", "files": [{"glob": "workspace/apps/*/main.py"}]}))
 
-    inventory = verification.oracle_evidence_files(case)[verification.FILE_INVENTORY_FILENAME]
+    inventory = evidence_collection.oracle_evidence_files(case)[evidence_collection.FILE_INVENTORY_FILENAME]
 
     paths = [json.loads(line)["path"] for line in inventory.splitlines()]
     assert any(path.startswith("workspace/apps/") and path.endswith("main.py") for path in paths)
@@ -798,11 +805,11 @@ def _flow_collector(
     rules: list[ScriptedExecRule],
     flows: list[dict[str, str]] | None = None,
     host_id: str = _HOST_ID,
-) -> tuple[verification.EvidenceCollector, MockBoxEnvironment]:
+) -> tuple[evidence_collection.EvidenceCollector, MockBoxEnvironment]:
     environment = MockBoxEnvironment(tmp_path, rules)
     logs_dir = tmp_path / "agent"
     logs_dir.mkdir(parents=True, exist_ok=True)
-    collector = verification.EvidenceCollector(
+    collector = evidence_collection.EvidenceCollector(
         environment=environment,
         box_env={"MINDS_ENV": "staging"},
         workspace_agent_id="ws-1",
@@ -827,11 +834,11 @@ def _run_flow_collector(
     agent: ScriptedVerificationAgent,
     executor_rules: list[ScriptedExecRule] | None = None,
     flows: list[dict[str, str]] | None = None,
-) -> tuple[verification.EvidenceCollector, MockBoxEnvironment]:
+) -> tuple[evidence_collection.EvidenceCollector, MockBoxEnvironment]:
     return _flow_collector(tmp_path, agent, [*(executor_rules or _executor_rules()), *_collector_rules()], flows)
 
 
-def _flow_entries(collector: verification.EvidenceCollector) -> list[ManifestEntry]:
+def _flow_entries(collector: evidence_collection.EvidenceCollector) -> list[ManifestEntry]:
     return [entry for entry in collector.entries if entry.check_class is CheckClass.UI_FLOWS]
 
 

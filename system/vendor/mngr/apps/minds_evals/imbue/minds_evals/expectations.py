@@ -1,8 +1,8 @@
-"""Parsing and lowering of a case's `expectations` block.
+"""Parsing and expansion of a case's `expectations` block.
 
 The eval config authors expectations as a deliverable *kind* with optional refinements; the driver's
-evidence collector and the verifier's criteria both need an explicit per-class check list. Lowering
-happens exactly once, here, at generation time: the lowered form is written into both copies of the
+evidence collector and the verifier's criteria both need an explicit per-class check list. Expansion
+happens exactly once, here, at generation time: the expanded form is written into both copies of the
 case config (instruction.md's embedded JSON and tests/case.json), which is what guarantees the
 collector can never probe a different set of checks than the judge scores -- and what keeps the
 verifier, a stdlib+rewardkit container that cannot import this package, free of expansion logic.
@@ -18,13 +18,13 @@ from imbue.minds_evals.data_types import AppCheck
 from imbue.minds_evals.data_types import DEFAULT_MIN_REGISTERED_APPS
 from imbue.minds_evals.data_types import DeliverableExpectation
 from imbue.minds_evals.data_types import DeliverableKind
+from imbue.minds_evals.data_types import ExpandedExpectations
 from imbue.minds_evals.data_types import Expectations
 from imbue.minds_evals.data_types import FilesCheck
 from imbue.minds_evals.data_types import FilesExpectation
 from imbue.minds_evals.data_types import FlowSurface
 from imbue.minds_evals.data_types import HttpCheck
 from imbue.minds_evals.data_types import HttpExpectation
-from imbue.minds_evals.data_types import LoweredExpectations
 from imbue.minds_evals.data_types import MINDS_APP_EXPECTED_HTTP_STATUS
 from imbue.minds_evals.data_types import REGISTERED_APPS_HTTP_TARGET
 from imbue.minds_evals.data_types import RESERVED_MINDS_UI_SURFACE
@@ -216,7 +216,7 @@ def parse_expectations(raw_entry: object, case_id: str) -> Expectations:
         )
     raw_deliverable = raw.get("deliverable")
     if raw_deliverable is None:
-        # An expectations block with no deliverable lowers to zero check classes, so its outcome
+        # An expectations block with no deliverable expands to zero check classes, so its outcome
         # dimension would hold nothing but the judge: rewardkit pools programmatic criteria into a
         # reward only when some exist, so the judge would silently carry the entire dimension rather
         # than the half it carries everywhere else, and this case's reward would not be comparable
@@ -281,7 +281,7 @@ def _implied_http_expectations(kind: DeliverableKind) -> tuple[HttpExpectation, 
 
 
 @pure
-def _lower_deliverable(
+def _expand_deliverable(
     deliverable: DeliverableExpectation,
 ) -> tuple[tuple[AppCheck, ...], tuple[HttpCheck, ...], tuple[FilesCheck, ...]]:
     min_registered_apps = (
@@ -313,12 +313,12 @@ def _lower_deliverable(
 
 
 @pure
-def _lower_ui_flows(flows: tuple[UiFlow, ...]) -> tuple[UiFlowCheck, ...]:
+def _expand_ui_flows(flows: tuple[UiFlow, ...]) -> tuple[UiFlowCheck, ...]:
     """The flows the verification agent drives, each with the id its manifest entry is keyed on.
 
     Every flow reaching here is natural language: `parse_expectations` rejects the reserved `script`
     field outright, because scripted execution has no semantics yet. The assertion holds that line
-    from this side -- if scripts are ever accepted at parse time again, lowering one into an
+    from this side -- if scripts are ever accepted at parse time again, expanding one into an
     ordinary check would silently commission verification that nothing runs.
     """
     assert not any(flow.script for flow in flows), "scripted flows are rejected at parse time"
@@ -335,18 +335,18 @@ def _lower_ui_flows(flows: tuple[UiFlow, ...]) -> tuple[UiFlowCheck, ...]:
 
 
 @pure
-def lower_expectations(expectations: Expectations) -> LoweredExpectations:
+def expand_expectations(expectations: Expectations) -> ExpandedExpectations:
     """Expand `deliverable.kind` into the explicit per-class check list both consumers act on."""
-    # Guaranteed by parse_expectations, which rejects a block that would lower to no checks at all.
+    # Guaranteed by parse_expectations, which rejects a block that would expand to no checks at all.
     assert expectations.deliverable is not None, "expectations must commission a deliverable"
-    app_checks, http_checks, files_checks = _lower_deliverable(expectations.deliverable)
-    return LoweredExpectations(
+    app_checks, http_checks, files_checks = _expand_deliverable(expectations.deliverable)
+    return ExpandedExpectations(
         outcome=expectations.outcome,
         app_checks=app_checks,
         http_checks=http_checks,
         files_checks=files_checks,
         test_commands=expectations.test_commands,
         is_deliverable_bundle_required=True,
-        ui_flow_checks=_lower_ui_flows(expectations.ui_flows),
+        ui_flow_checks=_expand_ui_flows(expectations.ui_flows),
         is_fresh_env_enabled=expectations.is_fresh_env_enabled,
     )

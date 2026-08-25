@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 VERIFICATION_DIR = Path("/logs/agent/verification")
-# The case as the generator lowered it, which is where a flow's declared steps and its `expect`
+# The case as the generator expanded it, which is where a flow's declared steps and its `expect`
 # live. Same path outcome/checks.py reads: harbor mounts the task's tests directory there.
 CASE_PATH = Path("/tests/case.json")
 DIGEST_PATH = Path("/logs/agent/judge_flows_digest.txt")
@@ -57,7 +57,7 @@ MAX_STEP_STATE_CHARS = 16_000
 # What earlier steps shrink to, in order, when the whole digest will not fit. A flow's LAST step is
 # never rendered below MAX_STEP_STATE_CHARS while any earlier step still has room to give up: the
 # final state is the one the `expect` is judged against.
-_EARLIER_STEP_STATE_LADDER = (MAX_STEP_STATE_CHARS, 8_000, 4_000, 2_000, 1_000, 400)
+_EARLIER_STEP_STATE_THRESHOLDS = (MAX_STEP_STATE_CHARS, 8_000, 4_000, 2_000, 1_000, 400)
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -292,16 +292,16 @@ def render_digest(
     # The index is always kept whole: it is what tells the judge how many flows there were and how
     # each came out.
     budget = max(MAX_DIGEST_BYTES - len(index.encode()), 0)
-    for earlier_state_chars in _EARLIER_STEP_STATE_LADDER:
+    for earlier_state_chars in _EARLIER_STEP_STATE_THRESHOLDS:
         detail = _render_detail(flow_dirs, entry_by_flow, steps_by_flow, check_by_id, earlier_state_chars)
         if len(detail.encode()) <= budget:
             return index + detail
-    # Even at the ladder's floor the record does not fit, so whole steps have to go. Keep the TAIL:
+    # Even at the smallest threshold the record does not fit, so whole steps have to go. Keep the TAIL:
     # a flow's last steps carry the state its `expect` is judged against. The marker's own bytes
     # come out of the detail's share, or the result would overshoot the limit this exists to
     # respect.
     marker = "[...earlier steps truncated...]\n"
-    detail = _render_detail(flow_dirs, entry_by_flow, steps_by_flow, check_by_id, _EARLIER_STEP_STATE_LADDER[-1])
+    detail = _render_detail(flow_dirs, entry_by_flow, steps_by_flow, check_by_id, _EARLIER_STEP_STATE_THRESHOLDS[-1])
     tail_budget = max(budget - len(marker.encode()), 0)
     encoded = detail.encode()
     return index + marker + encoded[len(encoded) - tail_budget :].decode(errors="ignore")

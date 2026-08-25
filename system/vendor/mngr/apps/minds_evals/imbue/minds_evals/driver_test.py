@@ -27,7 +27,7 @@ from imbue.minds_evals.driver import resolve_turn_sources
 from imbue.minds_evals.driver import sanitize_user_id
 from imbue.minds_evals.errors import AgentKwargError
 from imbue.minds_evals.errors import InstructionParseError
-from imbue.minds_evals.expectations import lower_expectations
+from imbue.minds_evals.expectations import expand_expectations
 from imbue.minds_evals.expectations import parse_expectations
 from imbue.minds_evals.mock_environment_test import ConversationModel
 from imbue.minds_evals.mock_environment_test import MockBoxEnvironment
@@ -55,7 +55,7 @@ def _case_config(
         dwt_branch="main",
         dwt_sha="c" * 40,
         avg_word_count_baseline=100.0,
-        expectations=lower_expectations(expectations) if expectations is not None else None,
+        expectations=expand_expectations(expectations) if expectations is not None else None,
         authored_expectations=expectations,
     )
 

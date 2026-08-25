@@ -253,7 +253,7 @@ nothing outscores one that ships a working app in terse messages. A case that de
 
 - `outcome` (required) is the prose the outcome judge grades against -- the task description *for
   the eval*, alongside the prompts *for the agent*.
-- `deliverable` is **required**. A block with none would lower to no programmatic checks, and
+- `deliverable` is **required**. A block with none would expand to no programmatic checks, and
   rewardkit only pools a programmatic reward when criteria exist -- so the outcome dimension would
   silently become judge-only, carrying double the judge weight of every other case.
 - `minds-app` is a **kind with implied checks**, not a hand-written check list: at least one
@@ -265,10 +265,10 @@ nothing outscores one that ships a working app in terse messages. A case that de
   them would punish cases whose prompts never mentioned tests.
 - `ui_flows` are natural-language flows through the delivered UI, each with a verifiable end
   condition -- see [UI flows](#ui-flows). A flow may instead carry the reserved `script` field; that
-  form is validated and carried but has no execution semantics yet, so it lowers to no check at all.
+  form is validated and carried but has no execution semantics yet, so it expands to no check at all.
 - `fresh_env` is reserved: parsed and carried, but nothing acts on it yet.
 
-The kind is lowered into its explicit check list **once**, in the generator, and the lowered form is
+The kind is expanded into its explicit check list **once**, in the generator, and the expanded form is
 written identically into `instruction.md` and `tests/case.json` -- which is what guarantees the
 collector cannot probe a different set of checks than the judge scores. The authored form rides
 alongside as `authored_expectations`.

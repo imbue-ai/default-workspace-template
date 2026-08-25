@@ -68,7 +68,7 @@ def _flow_entry(name: str, status: str, reason: str = "", detail: str = "") -> d
 
 
 def _write_case(tmp_path: Path, checks: list[dict[str, Any]]) -> Path:
-    """The lowered case, which is where a flow's declared steps and its `expect` come from."""
+    """The expanded case, which is where a flow's declared steps and its `expect` come from."""
     case_path = tmp_path / "case.json"
     case_path.write_text(json.dumps({"expectations": {"ui_flow_checks": checks}}))
     return case_path
@@ -327,7 +327,7 @@ def test_renderer_shrinks_earlier_steps_before_the_last_one(tmp_path: Path) -> N
 
 
 def test_renderer_drops_earliest_steps_only_when_shrinking_is_not_enough(tmp_path: Path) -> None:
-    # Past the floor of the shrink ladder there is nothing left to give but whole steps, and it is
+    # Past the smallest shrink threshold there is nothing left to give but whole steps, and it is
     # the earliest that go -- the tail is what the `expect` is judged against.
     verification_dir = tmp_path / "verification"
     flow_dir = verification_dir / "flows" / "huge"

@@ -20,6 +20,7 @@ from flask.testing import FlaskClient
 
 from imbue.system_interface import welcome_resend
 from imbue.system_interface.agent_discovery import AgentInfo
+from imbue.system_interface.harnesses.claude import auth_endpoints
 from imbue.system_interface.harnesses.claude.auth import ClaudeAuthService
 from imbue.system_interface.harnesses.claude.auth import ProcessSetupError
 from imbue.system_interface.harnesses.claude.auth import RestartPhase
@@ -176,9 +177,9 @@ def test_submitting_credentials_does_not_report_rejection_when_the_check_times_o
             json={"credentials": "ANTHROPIC_API_KEY=sk-test-1234"},
         )
     assert response.status_code == 503
-    detail = response.get_json()["detail"]
-    assert "saved" in detail.lower()
-    assert "logged_in" not in response.get_json()
+    body = response.get_json()
+    assert body["detail"] == auth_endpoints._UNCONFIRMED_DETAIL
+    assert "logged_in" not in body
 
 
 def test_setup_token_flow_via_poll_completion(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -39,12 +39,12 @@ from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 from imbue.minds_evals import decider
+from imbue.minds_evals import evidence_collection
 from imbue.minds_evals import forward_instance
 from imbue.minds_evals import minds_bridge
 from imbue.minds_evals import proxy_config
 from imbue.minds_evals import ui_flows
 from imbue.minds_evals import usage as usage_accounting
-from imbue.minds_evals import verification
 from imbue.minds_evals.data_types import CaseConfig
 from imbue.minds_evals.data_types import CheckStatus
 from imbue.minds_evals.data_types import DECIDE_SENTINEL
@@ -438,7 +438,7 @@ class MindsPersonaDriver(BaseAgent):
         # declared artifact path as a failed entry, and `harbor trial regrade` refuses any trial
         # that has one -- an EMPTY directory is tolerated, an absent one is not. Without this, a
         # trial that dies before the collection phase would be permanently non-regradable.
-        await verification.ensure_evidence_dir(environment)
+        await evidence_collection.ensure_evidence_dir(environment)
         # The staged mngr clone's HEAD is the exact SHA the dataset was generated
         # at, so the box env can be built without seeing the instruction.
         self._mngr_sha = await minds_bridge.read_box_mngr_sha(environment)
@@ -504,7 +504,7 @@ class MindsPersonaDriver(BaseAgent):
         """
         if self._box_env is None or self._case is None or not self._workspace_agent_id:
             return
-        collector = verification.EvidenceCollector(
+        collector = evidence_collection.EvidenceCollector(
             environment=environment,
             box_env=self._box_env,
             workspace_agent_id=self._workspace_agent_id,
@@ -968,13 +968,13 @@ class MindsPersonaDriver(BaseAgent):
             "printf '{base_marker}\\n'; git -C {clone} rev-parse HEAD; "
             "printf '{dwt_marker}\\n'; git -C /work/eval-base rev-parse HEAD".format(
                 clone=clone_dir,
-                base_marker=verification.section_marker("base_sha"),
-                dwt_marker=verification.section_marker("dwt_tip_sha"),
+                base_marker=evidence_collection.section_marker("base_sha"),
+                dwt_marker=evidence_collection.section_marker("dwt_tip_sha"),
             ),
             self._box_env,
             120,
         )
-        sections = verification.split_sections(base_result.stdout or "")
+        sections = evidence_collection.split_sections(base_result.stdout or "")
         self._dwt_tip_sha = sections.get("dwt_tip_sha", "").strip()
         base_output = sections.get("base_sha", "").strip()
         self._clone_base_sha = base_output.splitlines()[-1].strip() if base_output else ""

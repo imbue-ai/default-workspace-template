@@ -11,7 +11,7 @@ optional `min_registered_apps` / `http` / `files` entries refining that set rath
 reserved: parsed and carried, but nothing executes them yet. Unknown kinds and unknown keys are
 rejected at generation time rather than silently ignored.
 
-The generator lowers the kind into its explicit check list exactly once and writes the lowered form
+The generator expands the kind into its explicit check list exactly once and writes the expanded form
 identically into `instruction.md` and `tests/case.json`, so the trial-time collector can never probe
 a different set of checks than the grade-time judge scores.
 
@@ -68,7 +68,7 @@ dates, so an identical tree always yields the same base sha. Without that the bu
 unbundled onto a regenerated clone, which is the whole reason it is captured. The evidence records
 both that base sha and the workspace-template tip it was built from.
 
-`expectations` now requires a `deliverable`. A prose-only block would lower to no checks at all, and
+`expectations` now requires a `deliverable`. A prose-only block would expand to no checks at all, and
 rewardkit only pools a programmatic reward when criteria exist -- so the outcome dimension would
 silently become judge-only, carrying double the judge weight of every other case and breaking the
 cross-case comparability the fixed split exists for.
