@@ -15,18 +15,10 @@ workspace.
 Usage:
     uv run .agents/skills/build-app/scripts/scaffold_flask_lib.py \\
         --name inbox-status --description "inbox status dashboard" \\
-        --icon-file /tmp/inbox-status-icon.svg \\
         [--port 8081] [--extra-dep "jinja2>=3.1"] [--extra-dep "anthropic>=0.40"]
 
-`--icon-file` is required: draw the app's icon (house style: a single
-`<svg viewBox="0 0 24 24">` of monochrome line art, stroke='currentColor',
-fill='none') before scaffolding. Its contents are copied to
-`system/apps/<package>/icon.svg`, which the generated supervisord command
-registers via `forward_port.py --icon-file` on every start -- so a later
-icon edit takes effect on the next restart.
-
 Run from the repo root (`/home/user/workspace`). Fails non-zero with a clear message on
-any failure (lib already exists, reserved name, invalid icon, sync failure, etc.).
+any failure (lib already exists, reserved name, sync failure, etc.).
 """
 
 import argparse
@@ -71,36 +63,27 @@ RESERVED_NAMES = frozenset(
 # prefix could collide with that coordinate label, so forward_port.py rejects
 # both and the scaffold must too.
 RESERVED_NAME_PREFIXES = ("host-", "agent-")
+# forward_port.py owns icon reading/validation; reuse it so a bad icon fails here.
+_FORWARD_PORT_PATH = Path(__file__).resolve().parents[4] / "system/scripts/forward_port.py"
 LOWEST_AUTO_PORT = 8080
 KEBAB_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
 LOCALHOST_PORT_RE = re.compile(r"http://(?:localhost|127\.0\.0\.1):(\d+)")
 
-# forward_port.py owns icon reading and validation (.svg files only, a single
-# safe <svg>, length cap); load it from this checkout so the scaffold rejects a
-# bad icon up front instead of the app failing to register on its first
-# supervisord start.
-_FORWARD_PORT_PATH = (
-    Path(__file__).resolve().parents[4] / "system" / "scripts" / "forward_port.py"
-)
-
-
-def _read_and_validate_icon(path: Path) -> str:
-    spec = importlib.util.spec_from_file_location("_forward_port_for_scaffold", _FORWARD_PORT_PATH)
-    if spec is None or spec.loader is None:
-        sys.exit(f"error: could not load {_FORWARD_PORT_PATH} for icon validation")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    markup, read_error = module.read_icon_file(path)
-    if read_error is not None:
-        sys.exit(f"error: {read_error}")
-    icon_error = module.validate_icon(markup)
-    if icon_error is not None:
-        sys.exit(f"error: {icon_error}")
-    return markup
-
 
 def _kebab_to_snake(name: str) -> str:
     return name.replace("-", "_")
+
+
+def _read_and_validate_icon(path: Path) -> str:
+    spec = importlib.util.spec_from_file_location("_forward_port", _FORWARD_PORT_PATH)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    markup, error = module.read_icon_file(path)
+    error = error or module.validate_icon(markup)
+    if error is not None:
+        sys.exit(f"error: {error}")
+    return markup
 
 
 def _validate_name(name: str) -> None:
@@ -373,12 +356,7 @@ def _lib_readme(name: str, description: str) -> str:
 
 
 def _write_lib(
-    repo_root: Path,
-    name: str,
-    description: str,
-    port: int,
-    extras: list[str],
-    icon_markup: str,
+    repo_root: Path, name: str, description: str, port: int, extras: list[str], icon_markup: str
 ) -> Path:
     package = _kebab_to_snake(name)
     lib_dir = repo_root / "system" / "apps" / package
@@ -512,13 +490,7 @@ def main() -> None:
     parser.add_argument(
         "--icon-file",
         required=True,
-        help=(
-            "path to the app's icon, an .svg file holding a single "
-            "<svg viewBox=\"0 0 24 24\"> of monochrome line art "
-            "(stroke='currentColor', fill='none'); copied to "
-            "system/apps/<package>/icon.svg and registered on every start. "
-            "SVG only -- no raster formats"
-        ),
+        help="the app's icon: an .svg file holding a single house-style <svg> (see the build-app skill)",
     )
     parser.add_argument(
         "--port", type=int, default=None, help="explicit port (auto-picked if omitted)"
