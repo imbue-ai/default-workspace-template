@@ -22,6 +22,9 @@ from browser.cdp_proxy import _ALWAYS_BLOCKED, _LAST_PAGE_GUARDED, BrowserProxy,
 def _proxy(*, allowed: bool = True, pages: int = 2) -> "tuple[BrowserProxy, dict[str, Any]]":
     seen: dict[str, Any] = {"attached": 0, "activity": []}
 
+    async def is_allowed(token: str) -> bool:
+        return allowed and token == "good"
+
     async def on_attach() -> None:
         seen["attached"] += 1
 
@@ -35,7 +38,7 @@ def _proxy(*, allowed: bool = True, pages: int = 2) -> "tuple[BrowserProxy, dict
         name="browser-1",
         upstream_http="http://127.0.0.1:1",
         public_base="ws://127.0.0.1:2",
-        is_allowed=lambda token: allowed and token == "good",
+        is_allowed=is_allowed,
         on_attach=on_attach,
         on_activity=on_activity,
         page_count=page_count,
@@ -45,6 +48,10 @@ def _proxy(*, allowed: bool = True, pages: int = 2) -> "tuple[BrowserProxy, dict
 
 def _screen(proxy: BrowserProxy, method: str, token: str = "good") -> str | None:
     return asyncio.run(proxy._screen({"id": 1, "method": method}, token))
+
+
+def _discover(proxy: BrowserProxy, path: str, token: str = "good") -> "Any":
+    return asyncio.run(proxy.rewrite_discovery(path, token))
 
 
 def test_a_valid_token_forwards_ordinary_methods() -> None:
@@ -105,7 +112,7 @@ def test_discovery_rewrites_every_websocket_url(monkeypatch: pytest.MonkeyPatch)
         "webSocketDebuggerUrl": "ws://127.0.0.1:9777/devtools/browser/abc",
     }
     monkeypatch.setattr(BrowserProxy, "_fetch", lambda self, endpoint: upstream)
-    response = proxy.rewrite_discovery("/browser-1/good/json/version", "good")
+    response = _discover(proxy, "/browser-1/good/json/version", "good")
     assert response is not None
     body = json.loads(response.body)
     assert "9777" not in json.dumps(body)
@@ -124,7 +131,7 @@ def test_discovery_filters_targets_to_real_pages(monkeypatch: pytest.MonkeyPatch
          "devtoolsFrontendUrl": "/devtools/inspector.html?ws=127.0.0.1:9777/d"},
     ]
     monkeypatch.setattr(BrowserProxy, "_fetch", lambda self, endpoint: upstream)
-    response = proxy.rewrite_discovery("/browser-1/good/json/list/", "good")
+    response = _discover(proxy, "/browser-1/good/json/list/", "good")
     assert response is not None
     targets = json.loads(response.body)
     assert [t["type"] for t in targets] == ["page"]
@@ -137,7 +144,7 @@ def test_the_legacy_mutating_http_endpoints_are_refused(monkeypatch: pytest.Monk
     proxy, _ = _proxy()
     monkeypatch.setattr(BrowserProxy, "_fetch", lambda self, endpoint: {})
     for verb in ("new", "close", "activate"):
-        response = proxy.rewrite_discovery(f"/browser-1/good/json/{verb}", "good")
+        response = _discover(proxy, f"/browser-1/good/json/{verb}", "good")
         assert response is not None and response.status_code == 405
 
 
@@ -147,12 +154,12 @@ def test_discovery_is_served_on_both_bare_and_trailing_slash_paths(monkeypatch: 
     proxy, _ = _proxy()
     monkeypatch.setattr(BrowserProxy, "_fetch", lambda self, endpoint: {"webSocketDebuggerUrl": "ws://x/y"})
     for path in ("/browser-1/good/json/version", "/browser-1/good/json/version/"):
-        assert proxy.rewrite_discovery(path, "good") is not None
+        assert _discover(proxy, path) is not None
 
 
 def test_a_non_json_path_falls_through_to_the_websocket_handshake() -> None:
     proxy, _ = _proxy()
-    assert proxy.rewrite_discovery("/browser-1/good", "good") is None
+    assert _discover(proxy, "/browser-1/good") is None
 
 
 @pytest.mark.parametrize(
@@ -184,6 +191,6 @@ def test_discovery_responses_close_the_connection(monkeypatch: pytest.MonkeyPatc
     # every unit test passed while the attach was broken end to end.
     proxy, _ = _proxy()
     monkeypatch.setattr(BrowserProxy, "_fetch", lambda self, endpoint: {"webSocketDebuggerUrl": "ws://x/y"})
-    response = proxy.rewrite_discovery("/browser-1/good/json/version/", "good")
+    response = _discover(proxy, "/browser-1/good/json/version/", "good")
     assert response is not None
     assert response.headers["Connection"] == "close"

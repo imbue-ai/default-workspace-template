@@ -108,7 +108,13 @@ def test_prevent_broad_exception_catch() -> None:
     #    server down; a dead upstream must answer discovery with 502 rather than 500), and
     #    1 in session.py's page-count helper, which backs the proxy's last-page guard and
     #    must fail open rather than wedge the agent's socket.
-    rc.check_broad_exception_catch(_DIR, snapshot(30))
+    #  * +1 in session.py's start(), around the fleet's CDP connect. websockets' handshake
+    #    errors and the JSON/KeyError from resolving the debug URL are all OUTSIDE
+    #    _BROWSER_ERRORS, so without this they escape the launch task entirely -- stranding
+    #    the browser in `init` while it holds its name and a slot against the fleet cap
+    #    forever, with Chromium and Xvfb still running and the viewer stuck on "Starting".
+    #    It re-raises as BrowserStartupError, which is what actually tears the browser down.
+    rc.check_broad_exception_catch(_DIR, snapshot(31))
 
 
 def test_prevent_builtin_exception_raises() -> None:

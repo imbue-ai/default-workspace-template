@@ -25,6 +25,15 @@ control the capability token rotates and the agent's next CDP frame is refused. 
 permanently (measured: it never rebinds and vanishes from `playwright-cli list`), so closing on
 takeover would have bricked the browser on first use.
 
+**The agent's first frame acquires the browser.** `run_action`'s "the first action acquires"
+moved into the per-frame gate, so the URL `new` prints drives a resting browser with no
+explicit `acquire` -- the sticky lease SKILL.md promises still starts on first use.
+
+**The capability token is issued to one agent.** `GET /browsers/<name>/attach` requires the
+`X-Mngr-Agent-Id` header and refuses a browser another agent holds, because the proxy sees a
+generic CDP client with no identity. The token stays valid while its own agent holds the
+browser and is re-minted the moment anyone else takes it.
+
 **Security.** The proxy authenticates with a capability token in the attach URL, because a
 generic CDP client sends no `X-Mngr-Agent-Id` header and agent-vs-agent exclusion would otherwise
 be unenforceable. It is a guardrail, not a boundary: the agent has a shell and can read
