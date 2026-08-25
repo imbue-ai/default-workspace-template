@@ -8,6 +8,7 @@ import pytest
 from imbue.minds_evals.data_types import DECIDE_SENTINEL
 from imbue.minds_evals.data_types import DEFAULT_AVG_WORD_COUNT_BASELINE
 from imbue.minds_evals.data_types import DEFAULT_DWT_REPO
+from imbue.minds_evals.data_types import DEFAULT_VERIFICATION_TIMEOUT_SECONDS
 from imbue.minds_evals.driver import parse_case_config
 from imbue.minds_evals.errors import EvalConfigError
 from imbue.minds_evals.errors import GitSourceError
@@ -128,7 +129,7 @@ def test_generate_dataset_writes_complete_byte_identical_tasks(tmp_path: Path) -
         assert task_config["metadata"]["dwt_repo"] == str(dwt_repo.repo_dir)
         # Case budget + verification budget + grace, so verification never competes with the
         # conversation for time and teardown keeps its grace.
-        assert task_config["agent"]["timeout_sec"] == 1800.0 + 600.0 + 300.0
+        assert task_config["agent"]["timeout_sec"] == 1800.0 + DEFAULT_VERIFICATION_TIMEOUT_SECONDS + 300.0
         assert task_config["verifier"]["environment_mode"] == "separate"
         assert task_config["verifier"]["env"]["ANTHROPIC_API_KEY"] == "${ANTHROPIC_API_KEY}"
         assert set(task_config["artifacts"]) == {
@@ -201,10 +202,15 @@ def test_generate_dataset_emits_the_outcome_dimension_only_for_expectation_cases
     assert {path.name for path in outcome_dir.iterdir()} == {"checks.py", "judge.toml", "prompt.md"}
 
     judge = tomllib.loads((outcome_dir / "judge.toml").read_text())
+    # The last two are written by a grade-time pre-step and always exist: rewardkit renders a
+    # listed path it cannot find as a "[not found]" block, so a conditional entry would put noise
+    # into every flow-less trial's judge prompt.
     assert judge["judge"]["files"] == [
         "/logs/agent/expectations.md",
         "/logs/agent/verification/manifest.json",
         "/logs/agent/conversation.jsonl",
+        "/logs/agent/judge_flows_digest.txt",
+        "/logs/agent/judge_screenshots",
     ]
     # rewardkit averages all .py criteria into ONE reward of weight 1.0 and weighs each judge toml
     # separately, so weight 1.0 is what makes the judge exactly half the dimension.

@@ -44,6 +44,24 @@ RUN cd apps/minds \
  && (pnpm run build:css || echo "build:css failed (non-fatal)") \
  && (node scripts/ensure-binaries.js || echo "ensure-binaries failed (non-fatal)")
 
+# Chromium for the UI-flow executor, which drives the delivered app's forwarded origin from inside
+# the box. The playwright PYTHON package is already in the synced venv (apps/minds depends on it),
+# so only the browser binary is missing, and the browser this installs is the revision that
+# version pins. Both halves of the executor -- this install and the step script that drives it --
+# run against that same venv, so they cannot drift apart: nothing outside the box has a say in
+# which playwright either of them sees.
+#
+# Placed last on purpose: it invalidates nothing above it, so the expensive uv/pnpm layers stay
+# cached when this line changes. Roughly +300 MB.
+#
+# `python -m playwright`, never the `playwright` console script: uv writes an absolute venv path
+# into console-script shebangs, which breaks as soon as the workspace moves (see
+# libs/mngr_imbue_cloud's changelog). PLAYWRIGHT_BROWSERS_PATH is absolute for the same class of
+# reason -- the default lives under $HOME, and the box runs as root with $HOME not guaranteed.
+# --with-deps is belt-and-braces: every library Chromium needs is already installed above.
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+RUN uv run python -m playwright install --with-deps chromium
+
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY probe_minds_port.py /usr/local/bin/probe_minds_port.py
 RUN chmod +x /usr/local/bin/entrypoint.sh

@@ -98,6 +98,9 @@ not a per-PR gate**. Handy knobs:
 - `-m/--model` selects the decider (simulated-user) model; default `claude-opus-4-8`.
 - `--ak snapshot_mode=per-turn|final|off` controls workspace snapshot cadence (the run recipe
   defaults to `final`; pass `--ak snapshot_mode=per-turn` after the named args to override).
+- `--ak verifier_model=<model>` runs the UI-flow verification agent on a different model from the
+  decider (default: the decider's). Flow driving is mechanical, so a cheaper tier may do -- measure
+  flow stability before changing the default.
 - `-k/--n-attempts N` runs each case N times (judge scores are statistical; use means).
 - `just minds-evals-run <dataset> <job> <concurrency> true` (or `MINDS_EVALS_PUSH_R2=1`) syncs the
   job dir to R2 after the run; it defaults to off everywhere.
@@ -260,7 +263,10 @@ nothing outscores one that ships a working app in terse messages. A case that de
   rather than replacing it. Unknown kinds and unknown keys are rejected at generation time.
 - `test_commands` are run in the delivered repo and recorded for the judge, but never gated: gating
   them would punish cases whose prompts never mentioned tests.
-- `ui_flows` and `fresh_env` are reserved: they are parsed and carried, but nothing executes them yet.
+- `ui_flows` are natural-language flows through the delivered UI, each with a verifiable end
+  condition -- see [UI flows](#ui-flows). A flow may instead carry the reserved `script` field; that
+  form is validated and carried but has no execution semantics yet, so it lowers to no check at all.
+- `fresh_env` is reserved: parsed and carried, but nothing acts on it yet.
 
 The kind is lowered into its explicit check list **once**, in the generator, and the lowered form is
 written identically into `instruction.md` and `tests/case.json` -- which is what guarantees the
@@ -281,6 +287,8 @@ verification/
   repo_state.json        # HEAD sha, the base and dwt-tip shas, commit count, git status --porcelain
   deliverable.bundle     # incremental `git bundle <clone HEAD>..HEAD` -- the agent's own commits
   http/<n>_<app>.json    # per probe: status, headers, timing, body head (256 KB cap)
+  flows/<name>/log.jsonl # per UI-flow step: the verbatim page state, the action, the reasoning
+  flows/<name>/step_NNN.png  # a screenshot per step
   trace.jsonl            # every bridge command the collector ran, failures included
 ```
 
@@ -335,13 +343,96 @@ tip it was built from so a replay can regenerate and verify the base.
 `trace.jsonl` is the collector's own flight recorder: it exists so a `failed` verdict can be
 attributed to the app rather than to the instrument, without re-running anything.
 
+## UI flows
+
+Liveness probes cannot see whether the app does what was asked -- a 200 with a stack-trace page
+passes one. A `ui_flows` entry is a natural-language walk through the delivered UI with a verifiable
+end condition, and it is the only level that checks the actual promise in the prompt:
+
+```json
+"ui_flows": [
+  {
+    "name": "persistence",
+    "steps": "Open the app. Add a task named 'persist me'. Reload the page.",
+    "expect": "'persist me' is still visible after the reload."
+  }
+]
+```
+
+A flow may also carry a `surface`. `origin` is the default and the only implemented one; the
+reserved `minds-ui`, which would drive the Minds chrome and reach the app as an embedded iframe, is
+rejected at generation time rather than silently falling back.
+
+**The executor drives the app's forwarded origin from inside the box.** Flows run at the end of the
+collection phase, inside its budget, in a headless Chromium the box launches for the flow -- its own
+profile and its own CDP port, so no flow inherits another's cookies or storage -- navigating
+`https://<label>.host-<hex>.localhost:8431/`, the exact URL the client's app tab iframes, served
+by a `mngr forward` instance the driver owns. A host-side verification agent (the decider's sibling)
+reads the page, decides one action, and a box-side step script performs it, screenshots the result
+and reads the page back. The reasoning stays host-side, so the loop is budgeted, logged, and
+attributable to harness spend.
+
+This tests the app **through** the product's serving path -- forward proxy, SSH tunnel, label
+origin, origin-scoped cookies -- rather than under it. Elements are addressed by ARIA role and
+accessible name, taken from Playwright's `aria_snapshot`, which is also what the flow log records
+verbatim for the judge.
+
+**A step is one box exec.** Acting, screenshotting and re-reading the page are consecutive and need
+nothing from the host in between, so they ride a single `environment.exec` -- and unlike the
+previous executor, that exec is box-local, so the workspace hop is gone from the action path
+entirely. Only the proxy's own tunnel touches the workspace.
+
+The verification agent's spend is reported as `metadata.verifier_agent_usage`, beside
+`decider_usage` and never folded into the agent's own cost fields. It runs on the decider's model by
+default; `--ak verifier_model=...` overrides it. A flow's name must be unique within a case: it names
+the flow's evidence directory.
+
+**Grading a product with its own machinery cuts both ways**, so app failures and executor failures
+are kept apart. An app that cannot satisfy the flow -- the `expect` does not hold, an element is not
+there, the page never settles within the flow deadline, nothing was ever registered to open -- is
+`failed` and counts against the agent. Machinery that could not be driven is `error`, with a reason
+naming which layer went: `browser_launch_failed`, `cdp_connect_failed`, `forward_unreachable` (the
+proxy itself), `tunnel_down` (proxy up, workspace leg dead), `tls_refused`, `step_bridge_failed`,
+`host_id_unknown` (the workspace's host id could not be looked up, so no origin can be addressed),
+and `verifier_agent_failed`.
+
+The forward instance is the driver's own, not the one the headless minds backend may have spawned:
+that gives it a port and a pre-auth token the driver minted, instead of a coupling to backend
+internals and a cookie it never saw. It is configured at flag parity with minds' own spawn
+(`forward_instance_test.py` asserts that against minds' argv builder, so the two cannot drift). It
+adds one flag minds omits, a chosen `--port`, and drops the two that only shape how minds *embeds*
+the app, which the origin surface has no analogue for.
+
+**This executor replaced the workspace's browser fleet**, and the history is worth keeping. Flows
+first shipped through `agentic-browser-fleet` and proved the concept live, but that shape coupled
+the eval to the workspace's internal-tool security model -- the fleet's SSRF guard blocks every
+delivered-app origin, so the eval only ran by changing the product -- and reached the app at a raw
+in-container socket, leaving the forwarding path and everything cookie-shaped unverified. Flows now
+run against dwt main with no product change required.
+
 Scoring adds a third rewardkit dimension, `tests/outcome/`, present only for expectation cases (the
 generator omits the directory otherwise, so rewardkit never emits a partial score for it). It holds
 one programmatic criterion per declared class -- `app_registered`, `http_expectations_met`,
-`files_expectations_met` -- plus a `works_as_expected` likert judge over the rendered expectations,
-the manifest, and the conversation. The conversation is in there deliberately: `DECIDE_FROM_PERSONA`
-turns are free-form, so a client who steers the build mid-conversation must be graded against the
-evolved ask.
+`files_expectations_met`, `ui_flows_completed` -- plus a `works_as_expected` likert judge over the
+rendered expectations, the manifest, the conversation, and the flow evidence. The conversation is in
+there deliberately: `DECIDE_FROM_PERSONA` turns are free-form, so a client who steers the build
+mid-conversation must be graded against the evolved ask.
+
+`ui_flows_completed` scores COMPLETION: the fraction of measurable flows that carried out their
+declared steps. It does not score whether the app did what a flow's `expect` describes. That is the
+judge's ruling, made from the step log and the screenshots, and having both sides rule on it would
+put a trial-time judgement -- taken from less evidence, and frozen against regrade -- next to one
+that can be revisited. Trial time collects; grade time verifies.
+
+A grade-time pre-step (`render_flow_evidence.py`) flattens the flow evidence for the judge, because
+rewardkit expands a listed directory exactly one level and never recurses. It always writes
+`judge_flows_digest.txt` -- per flow: the declared steps, the `expect` the judge is to rule on, the
+completion status, the agent's own description of the final page (evidence, not a verdict), then
+every step's action, reasoning and page state -- and always creates a flat `judge_screenshots/`
+holding each flow's last four frames, up to 24 in all, each under rewardkit's 1 MiB judge limit.
+"Always" is load-bearing in both directions: rewardkit renders a listed path it cannot find as a
+visible `[not found]` block, while an empty listed directory renders *nothing at all* -- which is why
+the digest states the screenshot count instead of leaving the judge to infer it.
 
 Reward composition changes only for expectation cases: `reward = gates_all_passed ? (0.5 * quality +
 0.5 * outcome) : 0`. The 50/50 split says "a great app described badly and a great description of no

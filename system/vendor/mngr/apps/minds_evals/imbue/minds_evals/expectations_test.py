@@ -1,7 +1,10 @@
 import pytest
 
 from imbue.minds_evals.data_types import DeliverableKind
+from imbue.minds_evals.data_types import Expectations
+from imbue.minds_evals.data_types import FlowSurface
 from imbue.minds_evals.data_types import REGISTERED_APPS_HTTP_TARGET
+from imbue.minds_evals.data_types import UiFlow
 from imbue.minds_evals.errors import EvalConfigError
 from imbue.minds_evals.expectations import lower_expectations
 from imbue.minds_evals.expectations import parse_expectations
@@ -192,3 +195,99 @@ def test_parse_expectations_rejects_a_block_that_would_check_nothing() -> None:
     # the fixed 50/50 split exists to provide.
     with pytest.raises(EvalConfigError, match="needs a 'deliverable'"):
         parse_expectations({"outcome": "Just advice."}, "greeting")
+
+
+def test_lower_expectations_turns_natural_language_flows_into_checks() -> None:
+    lowered = lower_expectations(
+        parse_expectations(
+            {
+                "outcome": "x",
+                "deliverable": {"kind": "minds-app"},
+                "ui_flows": [
+                    {"name": "add-complete-delete", "steps": "Add 'buy milk'.", "expect": "'buy milk' is visible."},
+                    {"name": "persistence", "steps": "Reload.", "expect": "It survived."},
+                ],
+            },
+            "todo",
+        )
+    )
+
+    assert [(check.check_id, check.name) for check in lowered.ui_flow_checks] == [
+        ("ui_flow_0_add_complete_delete", "add-complete-delete"),
+        ("ui_flow_1_persistence", "persistence"),
+    ]
+    assert lowered.ui_flow_checks[0].expect == "'buy milk' is visible."
+
+
+def test_lower_expectations_refuses_to_lower_a_scripted_flow() -> None:
+    # Scripts are rejected at parse time, so this can only be reached if that rejection is ever
+    # removed -- at which point lowering one into an ordinary check would silently commission
+    # verification that nothing runs. Constructed directly, since parsing will not produce it.
+    expectations = Expectations(
+        outcome="x",
+        deliverable=parse_expectations({"outcome": "x", "deliverable": {"kind": "minds-app"}}, "todo").deliverable,
+        ui_flows=(UiFlow(name="scripted", steps="", expect="", script="flows/f.py", surface=FlowSurface.ORIGIN),),
+        test_commands=(),
+        is_fresh_env_enabled=False,
+    )
+
+    with pytest.raises(AssertionError, match="rejected at parse time"):
+        lower_expectations(expectations)
+
+
+def test_parse_expectations_rejects_two_flows_whose_names_collide() -> None:
+    # A flow's name is its evidence directory, so a collision would have one flow's screenshots and
+    # step log overwrite the other's.
+    with pytest.raises(EvalConfigError, match="names collide"):
+        parse_expectations(
+            {
+                "outcome": "x",
+                "deliverable": {"kind": "minds-app"},
+                "ui_flows": [
+                    {"name": "add-task", "steps": "s", "expect": "e"},
+                    {"name": "add_task", "steps": "s", "expect": "e"},
+                ],
+            },
+            "todo",
+        )
+
+
+def test_parse_expectations_defaults_a_flow_to_the_forwarded_origin() -> None:
+    expectations = parse_expectations(
+        {
+            "outcome": "x",
+            "deliverable": {"kind": "minds-app"},
+            "ui_flows": [{"name": "persistence", "steps": "s", "expect": "e"}],
+        },
+        "todo",
+    )
+
+    assert expectations.ui_flows[0].surface is FlowSurface.ORIGIN
+    assert lower_expectations(expectations).ui_flow_checks[0].surface is FlowSurface.ORIGIN
+
+
+def test_parse_expectations_rejects_the_minds_ui_surface_as_unimplemented() -> None:
+    # Accepting it would drive the app's own origin while the author believed the Minds chrome was
+    # exercised -- so a works-at-origin-but-broken-when-iframed failure would report as a pass.
+    with pytest.raises(EvalConfigError, match="known but unimplemented surface"):
+        parse_expectations(
+            {
+                "outcome": "x",
+                "deliverable": {"kind": "minds-app"},
+                "ui_flows": [{"name": "f", "steps": "s", "expect": "e", "surface": "minds-ui"}],
+            },
+            "todo",
+        )
+
+
+def test_parse_expectations_rejects_an_unknown_surface() -> None:
+    # Distinct from the reserved one: a typo should not read as "coming soon".
+    with pytest.raises(EvalConfigError, match="unknown surface"):
+        parse_expectations(
+            {
+                "outcome": "x",
+                "deliverable": {"kind": "minds-app"},
+                "ui_flows": [{"name": "f", "steps": "s", "expect": "e", "surface": "carrier-pigeon"}],
+            },
+            "todo",
+        )

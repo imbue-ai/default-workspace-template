@@ -25,11 +25,21 @@ DEFAULT_AVG_WORD_COUNT_BASELINE: Final[float] = 120.0
 
 # Wall-clock the driver's evidence-collection phase gets after the conversation
 # ends; overridable per eval config via "verification_timeout_seconds".
-DEFAULT_VERIFICATION_TIMEOUT_SECONDS: Final[float] = 600.0
+#
+# Sized for a case that declares UI flows, which dominate the phase: each flow is bounded
+# separately and the rest of the capture takes ~2 minutes. It is a deadline, not a reservation --
+# a case with no flows finishes in a couple of minutes and the rest is never spent -- so the
+# generous default costs nothing beyond a longer harbor agent timeout.
+DEFAULT_VERIFICATION_TIMEOUT_SECONDS: Final[float] = 1800.0
 
-# Apps every Minds workspace serves out of the box. A deliverable app is any
-# entry in the workspace's registry that is not one of these.
-BUILTIN_APP_NAMES: Final[tuple[str, ...]] = ("system_interface", "terminal", "browser")
+# Apps every Minds workspace serves out of the box -- the workspace template's own, which live
+# under its `system/apps/<name>` tree and register through the same path a delivered app does. A
+# deliverable app is any entry in the workspace's registry that is not one of these.
+#
+# The list has to track what the template ships: a builtin missing from it is counted as something
+# the agent delivered, which both inflates the delivered count and charges the agent for a builtin
+# that happens to be unhealthy.
+BUILTIN_APP_NAMES: Final[tuple[str, ...]] = ("system_interface", "terminal", "browser", "files")
 
 # What "kind": "minds-app" implies when nothing refines it: one delivered app,
 # answering 200 on its root path.
@@ -71,13 +81,35 @@ class DeliverableExpectation(FrozenModel):
     files: tuple[FilesExpectation, ...] = Field(description="Inventory globs added on top of the kind's implied ones")
 
 
+class FlowSurface(LowerCaseStrEnum):
+    """Where a flow enters the delivered app.
+
+    ORIGIN goes straight to the app's forwarded origin -- the URL the client's app tab iframes --
+    which is one origin with no frame-piercing and exercises the real serving path (forward proxy,
+    tunnel, label origin, origin-scoped cookies).
+
+    The reserved `minds-ui` surface, which drives the Minds client UI and reaches the app as an
+    embedded iframe, has no member here on purpose: it is rejected by name at parse time, so it can
+    never be represented as a value the collector might try to act on.
+    """
+
+    ORIGIN = auto()
+
+
+# Spelled with a dash in the config, like the deliverable kinds. Rejected by name rather than
+# silently falling into "unknown surface", so a case author gets told it is coming rather than
+# misspelled.
+RESERVED_MINDS_UI_SURFACE: Final[str] = "minds-ui"
+
+
 class UiFlow(FrozenModel):
-    """One behavioral flow through the delivered UI. Parsed and carried, but not executed in phase 1."""
+    """One behavioral flow through the delivered UI, exactly as authored."""
 
     name: str = Field(description="Stable flow name; names the flow's evidence directory")
     steps: str = Field(description="Natural-language step sequence (empty when the flow carries a script)")
     expect: str = Field(description="The verifiable end condition (empty when the flow carries a script)")
     script: str = Field(description="Per-case script file for flows anchored in a known app (empty otherwise)")
+    surface: FlowSurface = Field(description="Where the flow enters the app; defaults to the forwarded origin")
 
 
 class Expectations(FrozenModel):
@@ -85,7 +117,7 @@ class Expectations(FrozenModel):
 
     outcome: str = Field(description="The prose the outcome judge grades the delivered artifact against")
     deliverable: DeliverableExpectation | None = Field(description="What the case commissions, if anything")
-    ui_flows: tuple[UiFlow, ...] = Field(description="Reserved for phase 2; validated but never executed")
+    ui_flows: tuple[UiFlow, ...] = Field(description="Behavioral flows the verification agent drives through the UI")
     test_commands: tuple[str, ...] = Field(description="Commands run in the delivered repo; recorded, never gated")
     is_fresh_env_enabled: bool = Field(description="Reserved: also boot the deliverable in a fresh workspace")
 
@@ -115,6 +147,20 @@ class FilesCheck(FrozenModel):
     min_count: int = Field(description="How many inventory entries the glob must match")
 
 
+class UiFlowCheck(FrozenModel):
+    """A lowered UI flow: one natural-language flow the verification agent drives at trial time.
+
+    Only flows authored as `steps` + `expect` lower to a check; the reserved `script` and
+    `minds-ui` spellings are rejected at parse time and never reach here.
+    """
+
+    check_id: str = Field(description="Stable id, used as the manifest entry's id")
+    name: str = Field(description="The flow's name; names its evidence directory under flows/")
+    steps: str = Field(description="Natural-language step sequence the verification agent executes")
+    expect: str = Field(description="The verifiable end condition the agent judges the final state against")
+    surface: FlowSurface = Field(description="Where the flow enters the app; the forwarded origin in v1")
+
+
 class LoweredExpectations(FrozenModel):
     """The expectations after the generator expands `deliverable.kind` into an explicit check list.
 
@@ -128,7 +174,9 @@ class LoweredExpectations(FrozenModel):
     files_checks: tuple[FilesCheck, ...] = Field(description="Inventory globs; scored as files_expectations_met")
     test_commands: tuple[str, ...] = Field(description="Commands run in the delivered repo; recorded, never scored")
     is_deliverable_bundle_required: bool = Field(description="Whether to capture the delivered repo as a git bundle")
-    ui_flows: tuple[UiFlow, ...] = Field(description="Reserved for phase 2; carried but never executed")
+    ui_flow_checks: tuple[UiFlowCheck, ...] = Field(
+        description="Flows driven through the UI; scored as ui_flows_completed"
+    )
     is_fresh_env_enabled: bool = Field(description="Reserved: also boot the deliverable in a fresh workspace")
 
 
@@ -150,6 +198,7 @@ class CheckClass(LowerCaseStrEnum):
     FILES = auto()
     BUNDLE = auto()
     TEST_COMMAND = auto()
+    UI_FLOWS = auto()
 
 
 class EvidenceEnv(LowerCaseStrEnum):
@@ -188,6 +237,13 @@ class RegisteredApp(FrozenModel):
 
     name: str = Field(description="The registered service name")
     url: str = Field(description="The workspace-local origin the app is served on")
+    # The unguessable `<name>-<rand>` origin label forward_port.py mints, and the component the
+    # forwarded origin is built from: `https://<label>.host-<hex>.localhost:<port>/`. The forward
+    # proxy maps the label back to the service name itself, so the label -- not the name -- is what
+    # a URL must carry. Defaulted rather than required because "no label" is a real registry state
+    # and not an omission: a row written before labels existed has none, and forward routes it under
+    # its own name.
+    label: str = Field(default="", description="The service's origin label; empty when the row has none")
     is_builtin: bool = Field(description="Whether this is one of the apps every workspace ships with")
     # The registry's own `internal = true` marker: machinery that forwards a port but has no page of
     # its own to show, so the workspace never offers it as an app to open.

@@ -56,6 +56,15 @@ def render_expectations(case: dict[str, Any]) -> str:
             lines.append("- At least {} file(s) matching `{}`.".format(check.get("min_count"), check.get("glob")))
         lines.append("")
 
+    ui_flow_checks = lowered.get("ui_flow_checks") or []
+    if ui_flow_checks:
+        lines += ["## UI flows", ""]
+        for check in ui_flow_checks:
+            lines.append("- **{}**".format(check.get("name")))
+            lines.append("  - Steps: {}".format(check.get("steps")))
+            lines.append("  - Expected end state: {}".format(check.get("expect")))
+        lines.append("")
+
     test_commands = lowered.get("test_commands") or []
     if test_commands:
         lines += ["## Recorded test commands (never gated)", ""]

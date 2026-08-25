@@ -12,6 +12,7 @@ workspace fell short and ``error`` means the harness could not find out -- an ag
 zero because the measuring instrument broke.
 """
 
+import asyncio
 import base64
 import json
 import re
@@ -29,10 +30,13 @@ from harbor.environments.base import BaseEnvironment
 from loguru import logger
 from pydantic import ConfigDict
 from pydantic import Field
+from pydantic import SecretStr
 
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
+from imbue.minds_evals import forward_instance
 from imbue.minds_evals import minds_bridge
+from imbue.minds_evals import ui_flows
 from imbue.minds_evals.data_types import BUILTIN_APP_NAMES
 from imbue.minds_evals.data_types import CaseConfig
 from imbue.minds_evals.data_types import CheckClass
@@ -46,6 +50,7 @@ from imbue.minds_evals.data_types import PhaseTiming
 from imbue.minds_evals.data_types import REGISTERED_APPS_HTTP_TARGET
 from imbue.minds_evals.data_types import RegisteredApp
 from imbue.minds_evals.data_types import TraceRecord
+from imbue.minds_evals.data_types import UiFlowCheck
 from imbue.minds_evals.expectations import slugify
 
 # The bundle layout, relative to /logs/agent/. The directory is declared as an artifact in task.toml,
@@ -60,6 +65,8 @@ SERVICES_FILENAME: Final[str] = "services.txt"
 REPO_STATE_FILENAME: Final[str] = "repo_state.json"
 DELIVERABLE_BUNDLE_FILENAME: Final[str] = "deliverable.bundle"
 HTTP_DIRNAME: Final[str] = "http"
+FLOWS_DIRNAME: Final[str] = "flows"
+FLOW_LOG_FILENAME: Final[str] = "log.jsonl"
 
 MANIFEST_SCHEMA_VERSION: Final[int] = 1
 
@@ -98,6 +105,18 @@ _BUNDLE_TIMEOUT_SECONDS: Final[int] = 300
 _TEST_COMMAND_TIMEOUT_SECONDS: Final[int] = 300
 _HTTP_TIMEOUT_SECONDS: Final[int] = 60
 _RSYNC_TIMEOUT_SECONDS: Final[int] = 600
+# One flow step: a box-local exec that drives the browser and reads the page back. Generous
+# because a navigation waits for the network to settle and a heavy page's ARIA tree is large.
+_STEP_TIMEOUT_SECONDS: Final[int] = 120
+# How long the forward proxy gets to start serving. It has to bind, then discover the workspace,
+# then bring up its SSH tunnel, and it answers 503 throughout.
+_FORWARD_READY_ATTEMPT_COUNT: Final[int] = 40
+_FORWARD_READY_POLL_SECONDS: Final[float] = 3.0
+# One flow's own wall-clock. Separate from the phase budget on purpose: exceeding this is the app
+# failing to respond, whereas exhausting the phase budget is the harness running out of time.
+# Re-measured against the box-side executor on its first live run rather than carried over from the
+# fleet's ~30s/step, which was dominated by a workspace hop this executor does not make.
+_FLOW_DEADLINE_SECONDS: Final[float] = 600.0
 
 _SECTION_MARKER: Final[str] = "<<<MINDS_EVALS_SECTION:{}>>>"
 _SECTION_PATTERN: Final[re.Pattern[str]] = re.compile(r"<<<MINDS_EVALS_SECTION:([a-z_]+)>>>\n?")
@@ -122,6 +141,7 @@ REASON_NONZERO_EXIT: Final[str] = "nonzero_exit"
 # The name the oracle's fabricated evidence gives the app it pretends was delivered.
 _ORACLE_APP_NAME: Final[str] = "delivered-app"
 _ORACLE_APP_URL: Final[str] = "http://localhost:8080"
+_ORACLE_APP_LABEL: Final[str] = "delivered-app-o1r2a3c4"
 
 # Walks the workspace home tree once and writes the inventory as JSONL. Run as an in-workspace python
 # program rather than a `find` pipeline so that paths containing quotes or newlines are escaped
@@ -261,6 +281,7 @@ def parse_apps_registry(registry_text: str) -> tuple[RegisteredApp, ...] | None:
             RegisteredApp(
                 name=name,
                 url=str(raw_app.get("url") or ""),
+                label=str(raw_app.get("label") or ""),
                 is_builtin=name in BUILTIN_APP_NAMES,
                 is_internal=bool(raw_app.get("internal")),
             )
@@ -389,6 +410,21 @@ def _entry(
         reason=reason,
         detail=detail,
         evidence_path=evidence_path,
+    )
+
+
+@pure
+def _flow_entry(check: UiFlowCheck, status: CheckStatus, reason: str, detail: str) -> ManifestEntry:
+    """One flow's manifest entry. Its evidence path is the flow's DIRECTORY: the grade-time
+    pre-step joins entries back to their captured steps and screenshots through that basename."""
+    return ManifestEntry(
+        entry_id=check.check_id,
+        check_class=CheckClass.UI_FLOWS,
+        status=status,
+        env=EvidenceEnv.LIVE,
+        reason=reason,
+        detail=detail,
+        evidence_path="{}/{}/{}".format(VERIFICATION_DIRNAME, FLOWS_DIRNAME, slugify(check.name)),
     )
 
 
@@ -685,6 +721,32 @@ class EvidenceCollector(MutableModel):
     dwt_tip_sha: str = Field(frozen=True, description="The dwt tip the base clone was made from")
     host_logs_dir: Path = Field(frozen=True, description="The trial's host-side logs dir")
     deadline: float = Field(frozen=True, description="Monotonic-clock deadline for the whole phase")
+    # None when no key was available to build one; the flows are then recorded as unmeasurable
+    # rather than silently skipped.
+    verification_agent: ui_flows.VerificationAgent | None = Field(
+        frozen=True, default=None, description="Decides each flow's next action and reads its final state"
+    )
+    verifier_model: str = Field(frozen=True, default="", description="Model the UI-flow agent reasons with")
+    workspace_host_id: str = Field(
+        frozen=True, default="", description="The workspace's mngr host id; the forwarded origin's host component"
+    )
+    # Minted per trial. The driver owns the forward instance precisely so it knows this, rather
+    # than having to discover a cookie the minds backend minted for itself.
+    preauth_cookie: SecretStr = Field(
+        frozen=True, default=SecretStr(""), description="Pre-arms the forward proxy's session for the browser"
+    )
+    browser_bridge_token: SecretStr = Field(
+        frozen=True, default=SecretStr(""), description="The forward proxy's plain-browser bridge token"
+    )
+    # Set for the duration of one flow. Every bridge call inside it is clamped to this as well as
+    # to the phase deadline, or a single stuck fleet command could overrun the flow's budget many
+    # times over before the loop's own check noticed.
+    flow_deadline: float = Field(default=0.0, description="Monotonic deadline for the flow being driven")
+    # How long the readiness loops wait between polls. A field so a test can drive the loops to
+    # their give-up condition without actually sleeping through them.
+    readiness_poll_seconds: float = Field(
+        default=_FORWARD_READY_POLL_SECONDS, description="Seconds between readiness polls"
+    )
     entries: list[ManifestEntry] = Field(default_factory=list, description="Recorded probes, in collection order")
     phases: list[PhaseTiming] = Field(default_factory=list, description="Wall-clock spent per collection phase")
     trace: list[TraceRecord] = Field(default_factory=list, description="Every command the collector ran")
@@ -698,6 +760,9 @@ class EvidenceCollector(MutableModel):
     )
     # None until the registry has been read, and again if it turned out to be unreadable.
     registered_apps: tuple[RegisteredApp, ...] | None = Field(default=None, description="The parsed registry")
+    serving_app_names: set[str] = Field(
+        default_factory=set, description="Delivered apps that answered their root-path probe as expected"
+    )
     started_at: str = Field(default="", description="UTC ISO timestamp the phase began")
 
     @property
@@ -817,8 +882,16 @@ class EvidenceCollector(MutableModel):
             await self._run_test_commands(lowered)
             await self._run_http_probes(lowered)
             self._evaluate_app_checks(lowered)
+            # Last, and after the HTTP probes: driving the UI is the most expensive step and the
+            # one most likely to exhaust the budget, and everything above is worth having anyway.
+            await self._run_ui_flows(lowered)
         await self._flush_record()
         return self.manifest()
+
+    def verifier_usage(self) -> ui_flows.VerifierUsage:
+        """What the UI-flow agent spent. Harness spend, reported beside the decider's."""
+        calls = tuple(self.verification_agent.calls) if self.verification_agent is not None else ()
+        return ui_flows.summarize_verifier_usage(calls, self.verifier_model)
 
     async def _capture_workspace_state(self) -> None:
         """Always-on: the app registry and supervisord's view of the world. Cheap enough that even a
@@ -1052,6 +1125,8 @@ class EvidenceCollector(MutableModel):
             ),
         )
         status, reason = http_entry_status(is_success, probe_error, status_code, body_head, check)
+        if status is CheckStatus.PASSED:
+            self.serving_app_names.add(target.name)
         self.entries.append(
             _entry(
                 entry_id,
@@ -1064,6 +1139,409 @@ class EvidenceCollector(MutableModel):
                 "{}/{}".format(VERIFICATION_DIRNAME, evidence_name),
             )
         )
+
+    async def _run_step_script(self, step_request: str) -> ui_flows.StepOutcome:
+        """One flow step: one box exec of the step script, which acts, shoots and reads the page.
+
+        Box-local, unlike everything else this collector runs -- the browser and the forward proxy
+        both live here, and only the proxy's own tunnel touches the workspace. That is the whole
+        latency argument for this executor.
+        """
+        wanted_seconds = _STEP_TIMEOUT_SECONDS
+        if self.flow_deadline:
+            wanted_seconds = max(1, min(wanted_seconds, int(self.flow_deadline - time.monotonic())))
+        result = await minds_bridge.run_in_box(
+            self.environment, ui_flows.step_command(step_request), self.box_env, self._budget(wanted_seconds)
+        )
+        output = (result.stdout or "") + (result.stderr or "")
+        self.trace.append(
+            TraceRecord(
+                timestamp=utc_now_iso(),
+                phase="ui_flows",
+                command=ui_flows.step_command(step_request)[:400],
+                is_success=result.return_code == 0,
+                output=_bounded(output, MAX_TRACE_OUTPUT_CHARS),
+            )
+        )
+        return ui_flows.parse_step_result(result.stdout or "")
+
+    async def _start_forward(self) -> str:
+        """Start the trial's own `mngr forward` and wait until it actually serves.
+
+        Readiness is a real request returning 200, not the proxy's `listening` event: that event
+        fires from the server's lifespan hook before the socket accepts, and even once it accepts
+        the proxy answers 503 until discovery has resolved the workspace. Returns the reason it
+        could not be made ready, or empty on success.
+        """
+        argv = forward_instance.build_forward_command(
+            self.preauth_cookie.get_secret_value(),
+            self.browser_bridge_token.get_secret_value(),
+            forward_instance.FORWARD_PORT,
+        )
+        start = forward_instance.forward_start_command(
+            argv, minds_bridge.BOX_MNGR_DIR, forward_instance.BOX_FORWARD_LOG_PATH
+        )
+        # The cookie and the bridge token are arguments, so the command is never traced verbatim.
+        await minds_bridge.run_in_box(self.environment, start, self.box_env, self._budget(_PROBE_TIMEOUT_SECONDS))
+        self.trace.append(
+            TraceRecord(
+                timestamp=utc_now_iso(),
+                phase="ui_flows",
+                command=forward_instance.redact_forward_command(argv),
+                is_success=True,
+                output="",
+            )
+        )
+        probe = forward_instance.forward_probe_command(
+            forward_instance.FORWARD_PORT, self.preauth_cookie.get_secret_value(), self.workspace_host_id
+        )
+        for _attempt in range(_FORWARD_READY_ATTEMPT_COUNT):
+            if self._remaining_seconds <= 0:
+                return REASON_TIMEOUT
+            result = await minds_bridge.run_in_box(
+                self.environment, probe, self.box_env, self._budget(_PROBE_TIMEOUT_SECONDS)
+            )
+            if (result.stdout or "").strip() == "200":
+                return ""
+            await asyncio.sleep(self.readiness_poll_seconds)
+        await self._capture_forward_events()
+        return ui_flows.REASON_FORWARD_UNREACHABLE
+
+    async def _start_browser(self, flow_index: int) -> str:
+        """Launch one flow's headless Chromium, and wait for its debug port to answer."""
+        launch = ui_flows.browser_launch_command(flow_index)
+        result = await minds_bridge.run_in_box(
+            self.environment, launch, self.box_env, self._budget(_PROBE_TIMEOUT_SECONDS)
+        )
+        self.trace.append(
+            TraceRecord(
+                timestamp=utc_now_iso(),
+                phase="ui_flows",
+                command=launch,
+                is_success=result.return_code == 0,
+                output=_bounded((result.stdout or "") + (result.stderr or ""), MAX_TRACE_OUTPUT_CHARS),
+            )
+        )
+        if result.return_code != 0:
+            return ui_flows.REASON_BROWSER_LAUNCH_FAILED
+        for _attempt in range(ui_flows.BROWSER_READY_ATTEMPT_COUNT):
+            if self._remaining_seconds <= 0:
+                return REASON_TIMEOUT
+            probe = await minds_bridge.run_in_box(
+                self.environment,
+                ui_flows.browser_probe_command(ui_flows.flow_browser_port(flow_index)),
+                self.box_env,
+                self._budget(_PROBE_TIMEOUT_SECONDS),
+            )
+            if "webSocketDebuggerUrl" in (probe.stdout or ""):
+                return ""
+            await asyncio.sleep(self.readiness_poll_seconds)
+        return ui_flows.REASON_CDP_CONNECT_FAILED
+
+    async def _capture_forward_events(self) -> None:
+        """Fold the proxy's own account of itself into the trace: when it started serving, and
+        every backend failure it reported. That is what separates a dead proxy from a dead tunnel
+        after the fact, without re-running anything."""
+        log_text = await minds_bridge.read_box_file(
+            self.environment, self.box_env, forward_instance.BOX_FORWARD_LOG_PATH
+        )
+        summary = forward_instance.summarize_forward_events(forward_instance.parse_forward_events(log_text))
+        if summary:
+            self.trace.append(
+                TraceRecord(
+                    timestamp=utc_now_iso(),
+                    phase="ui_flows",
+                    command="(mngr forward envelopes)",
+                    is_success=True,
+                    output=_bounded(summary, MAX_TRACE_OUTPUT_CHARS),
+                )
+            )
+
+    async def _stop_forward(self) -> None:
+        """Stop the trial's own instance, matched on the port it holds so a forward the minds
+        backend spawned is never caught by this."""
+        await self._capture_forward_events()
+        await minds_bridge.run_in_box(
+            self.environment,
+            forward_instance.forward_stop_command(forward_instance.FORWARD_PORT),
+            self.box_env,
+            _PROBE_TIMEOUT_SECONDS,
+        )
+
+    async def _run_ui_flows(self, lowered: LoweredExpectations) -> None:
+        """Drive each declared flow through the delivered app's forwarded origin.
+
+        This runs LAST of the collection steps: it is the most expensive one and the one most
+        likely to exhaust the budget, and everything before it is worth having even when it does.
+        """
+        if not lowered.ui_flow_checks:
+            return
+        started_at = time.monotonic()
+        agent = self.verification_agent
+        if agent is None:
+            self._record_flow_error(
+                lowered.ui_flow_checks, ui_flows.REASON_VERIFIER_AGENT_FAILED, "no verification agent was configured"
+            )
+            await self._finish_flow_phase(started_at)
+            return
+        delivered_apps = self._delivered_apps
+        if delivered_apps is None:
+            # A registry we could not read tells us nothing about what was served, which is the
+            # harness failing to look -- quite unlike a registry that lists nothing.
+            self._record_flow_error(
+                lowered.ui_flow_checks,
+                REASON_REGISTRY_UNREADABLE if self.is_registry_present else REASON_REGISTRY_ABSENT,
+                "no readable app registry, so there is no origin to drive a flow against",
+            )
+            await self._finish_flow_phase(started_at)
+            return
+        if not forward_instance.is_host_id(self.workspace_host_id):
+            # Without the host id there is no origin to build, whatever the workspace is serving. That
+            # is the harness failing to look it up, so it must not be charged to the agent the way an
+            # empty registry is.
+            self._record_flow_error(
+                lowered.ui_flow_checks,
+                ui_flows.REASON_HOST_ID_UNKNOWN,
+                "no usable workspace host id ({!r}), so no forwarded origin can be addressed".format(
+                    self.workspace_host_id
+                ),
+            )
+            await self._finish_flow_phase(started_at)
+            return
+        target_url = self._flow_target_url(delivered_apps)
+        if not target_url:
+            # A readable registry listing no delivered app is the agent shipping nothing.
+            for check in lowered.ui_flow_checks:
+                self.entries.append(
+                    _flow_entry(
+                        check,
+                        CheckStatus.FAILED,
+                        ui_flows.REASON_NO_APP_TO_OPEN,
+                        "no delivered app is registered, so there is no UI to exercise",
+                    )
+                )
+            await self._finish_flow_phase(started_at)
+            return
+        await minds_bridge.upload_flow_step_script(self.environment, ui_flows.BOX_FLOW_STEP_PATH)
+        forward_reason = await self._start_forward()
+        if forward_reason:
+            self._record_flow_error(lowered.ui_flow_checks, forward_reason, "the forward proxy never served")
+            await self._stop_forward()
+            await self._finish_flow_phase(started_at)
+            return
+        for flow_index, check in enumerate(lowered.ui_flow_checks):
+            await self._run_one_flow(check, flow_index, target_url, agent)
+        await self._stop_forward()
+        await self._finish_flow_phase(started_at)
+
+    async def _finish_flow_phase(self, started_at: float) -> None:
+        self.flow_deadline = 0.0
+        self._record_phase("ui_flows", started_at)
+        await self._flush_record()
+
+    def _flow_target_url(self, delivered_apps: Sequence[RegisteredApp]) -> str:
+        """The forwarded origin of the app a flow drives -- the URL the client's app tab iframes.
+
+        Empty means the workspace registered nothing to drive, which is the agent's shortfall; the
+        caller has already established that the host id is usable, so that harness-side failure can
+        never reach this answer.
+
+        An app that ANSWERED its root-path probe wins over one that merely holds a registry row.
+        With more than one delivered row, taking the first would point the flow at whichever
+        registered first, and a row whose port is dead serves the proxy's own error page -- so the
+        flow would record the deliverable as broken having never once reached it. Registry order
+        decides only among apps that are equally reachable, and remains the fallback when nothing
+        was probed at all.
+
+        The origin is built from the row's LABEL, not its service name: the label is the
+        unguessable `<name>-<rand>` component forward_port.py mints and the proxy routes on,
+        mapping it back to the service itself. A row with no label predates labels and routes under
+        its name.
+        """
+        addressable = [app for app in delivered_apps if app.url]
+        serving = [app for app in addressable if app.name in self.serving_app_names]
+        for app in serving or addressable:
+            return forward_instance.forwarded_origin(
+                app.label or app.name, self.workspace_host_id, forward_instance.FORWARD_PORT
+            )
+        return ""
+
+    def _record_flow_error(self, checks: Sequence[UiFlowCheck], reason: str, detail: str) -> None:
+        for check in checks:
+            self.entries.append(
+                _flow_entry(check, CheckStatus.ERROR, reason, _bounded(detail, MAX_COMMAND_OUTPUT_CHARS))
+            )
+
+    async def _run_one_flow(
+        self, check: UiFlowCheck, flow_index: int, target_url: str, agent: ui_flows.VerificationAgent
+    ) -> None:
+        """Execute one flow: open the app in a browser of its own, then read-decide-act until the
+        agent says it is done, and finally judge the declared `expect` against the last state."""
+        slug = slugify(check.name)
+        self.flow_deadline = min(time.monotonic() + _FLOW_DEADLINE_SECONDS, self.deadline)
+        steps: list[str] = []
+        history: list[str] = []
+        is_finished_by_agent = False
+
+        # A browser of its own per flow, so one flow's cookies and storage never leak into the next.
+        browser_reason = await self._start_browser(flow_index)
+        if browser_reason:
+            await self._finish_flow(
+                check, slug, steps, CheckStatus.ERROR, browser_reason, "the box browser never came up"
+            )
+            return
+        endpoint = ui_flows.cdp_endpoint(ui_flows.flow_browser_port(flow_index))
+
+        # The session cookie rides this first request, so the opening navigation is already
+        # authenticated rather than bouncing off the proxy's login redirect.
+        opening = ui_flows.FlowAction(
+            kind=ui_flows.FlowActionKind.OPEN, role="", target="", text=target_url, amount=0, reasoning="open the app"
+        )
+        outcome = await self._run_step_script(
+            ui_flows.build_step_request(
+                opening,
+                self._flow_screenshot_path(slug, 0),
+                cdp_endpoint_url=endpoint,
+                preauth_cookie=self.preauth_cookie.get_secret_value(),
+                origin=target_url,
+            )
+        )
+        if not outcome.is_ok:
+            # The harness's own navigation to the delivered app's forwarded origin. If THIS fails on
+            # the instrument, it cannot look at the app at all; if it fails on the app -- a page that
+            # never loads -- that is the deliverable falling short.
+            # A step that failed always names its layer; a report that names none is the executor
+            # failing to say what happened, which is an instrument failure like any other. The
+            # status follows the reason, so the two can never disagree.
+            reason = outcome.reason or ui_flows.REASON_STEP_ERROR
+            await self._finish_flow(
+                check,
+                slug,
+                steps,
+                CheckStatus.ERROR if ui_flows.is_instrument_reason(reason) else CheckStatus.FAILED,
+                reason,
+                outcome.detail,
+            )
+            return
+        state_text = outcome.state_text
+
+        for step_index in range(1, ui_flows.MAX_STEPS_PER_FLOW + 1):
+            if self._remaining_seconds <= 0:
+                await self._finish_flow(
+                    check, slug, steps, CheckStatus.ERROR, REASON_TIMEOUT, "the collection budget ran out mid-flow"
+                )
+                return
+            if time.monotonic() >= self.flow_deadline:
+                # The flow's own deadline, unlike the phase budget, is about THIS app: a page that
+                # never settles is the delivered thing being unusable.
+                await self._finish_flow(
+                    check,
+                    slug,
+                    steps,
+                    CheckStatus.FAILED,
+                    ui_flows.REASON_FLOW_DEADLINE,
+                    "the flow did not finish within its deadline",
+                )
+                return
+            action, _call = agent.decide_next_action(check.steps, tuple(history), state_text)
+            if action is None:
+                await self._finish_flow(
+                    check,
+                    slug,
+                    steps,
+                    CheckStatus.ERROR,
+                    ui_flows.REASON_VERIFIER_AGENT_FAILED,
+                    "the verification agent returned no usable action",
+                )
+                return
+            described = ui_flows.describe_action(action)
+            if action.kind == ui_flows.FlowActionKind.DONE:
+                steps.append(
+                    ui_flows.flow_step_record(
+                        step_index, described, action.reasoning, state_text, "", "", utc_now_iso()
+                    )
+                )
+                is_finished_by_agent = True
+                break
+            history.append(described)
+            outcome = await self._run_step_script(
+                ui_flows.build_step_request(
+                    action,
+                    self._flow_screenshot_path(slug, step_index),
+                    cdp_endpoint_url=endpoint,
+                    preauth_cookie="",
+                    origin=target_url,
+                )
+            )
+            if ui_flows.is_instrument_reason(outcome.reason):
+                steps.append(
+                    ui_flows.flow_step_record(
+                        step_index, described, action.reasoning, state_text, "", outcome.reason, utc_now_iso()
+                    )
+                )
+                await self._finish_flow(check, slug, steps, CheckStatus.ERROR, outcome.reason, outcome.detail)
+                return
+            step_error = ""
+            if not outcome.is_ok:
+                # The action did not land but the browser is fine -- an element that is not there,
+                # a click that hit nothing. The page below shows the truth, so the flow carries on
+                # with the failure recorded where the grade-time judge will read it.
+                step_error = _bounded(outcome.detail.strip(), 200)
+                history.append("(that action failed: {})".format(step_error))
+            steps.append(
+                ui_flows.flow_step_record(
+                    step_index,
+                    described,
+                    action.reasoning,
+                    state_text,
+                    # The executor names the frame it actually wrote, and names nothing when the
+                    # capture failed. Naming the file it would have written instead would put a
+                    # screenshot that does not exist in front of the grade-time judge.
+                    outcome.screenshot_name,
+                    step_error,
+                    utc_now_iso(),
+                )
+            )
+            state_text = outcome.state_text or state_text
+
+        # The agent's account of the state the flow ended in. Evidence for the judge, never a
+        # verdict on the `expect` -- and a call that produced nothing costs the flow its context,
+        # not its completion, because the step log already carries every state that was seen.
+        reading, _reading_call = agent.read_final_state(check.steps, tuple(history), state_text)
+        observation = reading.observation if reading is not None else ""
+        steps.append(ui_flows.flow_reading_record(len(steps) + 1, observation, state_text, utc_now_iso()))
+        # Completion, not achievement: a flow that carried out its declared steps is `completed`,
+        # and one that ran out of budget first is `incomplete`. Whether the app did what the
+        # `expect` describes is decided at grade time, from this evidence.
+        await self._finish_flow(
+            check,
+            slug,
+            steps,
+            CheckStatus.PASSED if is_finished_by_agent else CheckStatus.FAILED,
+            "" if is_finished_by_agent else ui_flows.REASON_STEP_BUDGET_EXHAUSTED,
+            "expected: {}\nagent's reading of the final state: {}".format(
+                check.expect, observation or "(none recorded)"
+            ),
+        )
+
+    def _flow_screenshot_path(self, slug: str, step_index: int) -> str:
+        """Where the step script writes a frame: straight into the box's evidence directory.
+
+        The browser runs in the box, so the screenshot is already where the declared artifact
+        collector will find it -- there is no workspace staging leg and no rsync at all, which is
+        the transport the fleet executor needed and this one does not.
+        """
+        return "{}/{}/{}/step_{:03d}.png".format(self._box_dir, FLOWS_DIRNAME, slug, step_index)
+
+    async def _finish_flow(
+        self, check: UiFlowCheck, slug: str, steps: Sequence[str], status: CheckStatus, reason: str, detail: str
+    ) -> None:
+        """Write one flow's step log and record its entry. Screenshots are already in place."""
+        await self._write_evidence(
+            "{}/{}/{}".format(FLOWS_DIRNAME, slug, FLOW_LOG_FILENAME), "".join(line + "\n" for line in steps)
+        )
+        self.entries.append(_flow_entry(check, status, reason, _bounded(detail, MAX_COMMAND_OUTPUT_CHARS)))
+        await self._flush_record()
 
     def _evaluate_app_checks(self, lowered: LoweredExpectations) -> None:
         """The registry/service half of the deliverable: enough delivered apps registered, and each
@@ -1171,7 +1649,41 @@ def oracle_evidence_files(case: CaseConfig) -> dict[str, str]:
             )
             for check in lowered.http_checks
         },
+        # Flow logs but no screenshots: the oracle boots no browser, and the judge prompt states
+        # that screenshots may be absent. The grade-time pre-step still runs, which is what makes
+        # an oracle run prove the empty-screenshot-directory path leaves no "[not found]" noise.
+        **{
+            "{}/{}/{}".format(FLOWS_DIRNAME, slugify(check.name), FLOW_LOG_FILENAME): _oracle_flow_log(check)
+            for check in lowered.ui_flow_checks
+        },
     }
+
+
+@pure
+def _oracle_flow_log(check: UiFlowCheck) -> str:
+    return "".join(
+        line + "\n"
+        for line in (
+            ui_flows.flow_step_record(
+                0,
+                "open {}".format(_ORACLE_APP_URL),
+                "Opening the delivered app to start the flow.",
+                "browser minds-eval-verify @ {}  ({})".format(_ORACLE_APP_URL, check.name),
+                "",
+                "",
+                "1970-01-01T00:00:00+00:00",
+            ),
+            ui_flows.flow_step_record(
+                1,
+                "finish the flow",
+                "Every declared step has been carried out.",
+                "browser minds-eval-verify @ {}  ({})\n{}".format(_ORACLE_APP_URL, check.name, check.expect),
+                "",
+                "",
+                "1970-01-01T00:00:00+00:00",
+            ),
+        )
+    )
 
 
 @pure
@@ -1221,7 +1733,15 @@ def _oracle_entries(lowered: LoweredExpectations) -> tuple[ManifestEntry, ...]:
             registration_entry(
                 check.check_id,
                 check.min_registered_apps,
-                (RegisteredApp(name=_ORACLE_APP_NAME, url=_ORACLE_APP_URL, is_builtin=False, is_internal=False),),
+                (
+                    RegisteredApp(
+                        name=_ORACLE_APP_NAME,
+                        url=_ORACLE_APP_URL,
+                        label=_ORACLE_APP_LABEL,
+                        is_builtin=False,
+                        is_internal=False,
+                    ),
+                ),
                 is_registry_present=True,
             )
         )
@@ -1229,7 +1749,15 @@ def _oracle_entries(lowered: LoweredExpectations) -> tuple[ManifestEntry, ...]:
             entries.extend(
                 service_entries(
                     check.check_id,
-                    (RegisteredApp(name=_ORACLE_APP_NAME, url=_ORACLE_APP_URL, is_builtin=False, is_internal=False),),
+                    (
+                        RegisteredApp(
+                            name=_ORACLE_APP_NAME,
+                            url=_ORACLE_APP_URL,
+                            label=_ORACLE_APP_LABEL,
+                            is_builtin=False,
+                            is_internal=False,
+                        ),
+                    ),
                     {_ORACLE_APP_NAME: "RUNNING"},
                     {_ORACLE_APP_NAME: _ORACLE_APP_NAME},
                     is_services_readable=True,
@@ -1257,6 +1785,15 @@ def _oracle_entries(lowered: LoweredExpectations) -> tuple[ManifestEntry, ...]:
                 "",
                 "$ {}\nexit 0\n".format(command),
                 "",
+            )
+        )
+    for check in lowered.ui_flow_checks:
+        entries.append(
+            _flow_entry(
+                check,
+                CheckStatus.PASSED,
+                "",
+                "expected: {}\nagent's reading of the final state: as described".format(check.expect),
             )
         )
     return tuple(entries)

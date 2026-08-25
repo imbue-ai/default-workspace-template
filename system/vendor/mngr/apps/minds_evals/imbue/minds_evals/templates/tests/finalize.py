@@ -48,6 +48,14 @@ OUTCOME_SHARE = 0.5
 # Which lowered check list makes a class scored, mirroring outcome/checks.py's registration rule.
 SCORED_CLASS_BY_LOWERED_KEY = {"files_checks": "files", "app_checks": "app", "http_checks": "http"}
 
+# ui_flow_checks is deliberately NOT in that map. An unmeasurable inventory or registry means the
+# collection phase itself failed, which is worth erroring a trial over. A flow set where every
+# entry errored usually means only that the flow executor was unavailable -- no browser, no
+# forward proxy, a dead tunnel -- and voiding the trial would discard its conversation-quality
+# measurement over one of them. outcome/checks.py registers no ui_flows criterion in that
+# case, so the flows contribute nothing in either direction, and the manifest still records which
+# part broke.
+
 
 def _reward_dicts(dimension: Any) -> list[dict[str, Any]]:
     """The per-reward detail dicts for one dimension. rewardkit emits a single dict when a dimension

@@ -4,13 +4,17 @@ import time
 from pathlib import Path
 
 import pytest
+from harbor.environments.base import ExecResult
+from pydantic import SecretStr
 
+from imbue.minds_evals import ui_flows
 from imbue.minds_evals import verification
 from imbue.minds_evals.data_types import CaseConfig
 from imbue.minds_evals.data_types import CheckClass
 from imbue.minds_evals.data_types import CheckStatus
 from imbue.minds_evals.data_types import Expectations
 from imbue.minds_evals.data_types import HttpCheck
+from imbue.minds_evals.data_types import ManifestEntry
 from imbue.minds_evals.data_types import RegisteredApp
 from imbue.minds_evals.expectations import lower_expectations
 from imbue.minds_evals.expectations import parse_expectations
@@ -19,6 +23,10 @@ from imbue.minds_evals.mock_environment_test import ScriptedExecRule
 from imbue.minds_evals.mock_environment_test import failed_result
 from imbue.minds_evals.mock_environment_test import mngr_exec_json
 from imbue.minds_evals.mock_environment_test import ok_result
+from imbue.minds_evals.mock_verification_agent_test import ScriptedVerificationAgent
+from imbue.minds_evals.mock_verification_agent_test import click_action
+from imbue.minds_evals.mock_verification_agent_test import done_action
+from imbue.minds_evals.mock_verification_agent_test import reading
 
 _REGISTRY_TOML = (
     '[[apps]]\nname = "system_interface"\nurl = "http://localhost:8000"\nlabel = "system_interface-aa"\n\n'
@@ -86,6 +94,18 @@ def test_parse_apps_registry_reads_names_urls_and_marks_builtins() -> None:
         ("system_interface", "http://localhost:8000", True),
         ("todo", "http://localhost:8081", False),
     ]
+
+
+def test_the_templates_own_file_browser_is_not_a_deliverable() -> None:
+    # `files` ships with the workspace template and registers through exactly the path a delivered
+    # app does, so nothing about its row says otherwise. Counting it charges the agent for a
+    # builtin, and -- when that builtin is unhealthy -- aims the UI flows at a dead port.
+    apps = verification.parse_apps_registry(
+        '[[apps]]\nname = "files"\nurl = "http://localhost:8300"\nlabel = "files-aa"\n'
+    )
+
+    assert apps is not None
+    assert [(app.name, app.is_builtin) for app in apps] == [("files", True)]
 
 
 @pytest.mark.parametrize("registry_text", ["not = [toml", 'apps = "wrong shape"'])
@@ -714,3 +734,452 @@ def test_oracle_evidence_inventory_satisfies_declared_file_globs() -> None:
 
     paths = [json.loads(line)["path"] for line in inventory.splitlines()]
     assert any(path.startswith("workspace/apps/") and path.endswith("main.py") for path in paths)
+
+
+# --- driving UI flows through the forwarded origin ---
+
+
+_HOST_ID = "host-" + "a" * 32
+_FLOWS = [
+    {"name": "add-complete-delete", "steps": "Add 'buy milk'. Delete 'walk dog'.", "expect": "'buy milk' is visible."},
+]
+_TWO_FLOWS = [
+    *_FLOWS,
+    {"name": "persistence", "steps": "Add 'persist me'. Reload.", "expect": "'persist me' survived."},
+]
+_PAGE_SNAPSHOT = "- textbox 'Add a task'\n- button 'Add'"
+
+
+def _step_result(
+    is_ok: bool = True,
+    reason: str = "",
+    detail: str = "",
+    snapshot: str = _PAGE_SNAPSHOT,
+    screenshot_path: str = "/logs/agent/verification/flows/add_complete_delete/step_000.png",
+) -> ExecResult:
+    """What the box-side step script prints: one JSON object describing the step's outcome."""
+    return ok_result(
+        json.dumps(
+            {
+                "is_ok": is_ok,
+                "reason": reason,
+                "detail": detail,
+                "url": "https://todo-x.{}.localhost:8431/".format(_HOST_ID),
+                "title": "Todo",
+                "snapshot": snapshot,
+                "screenshot_path": screenshot_path,
+            }
+        )
+    )
+
+
+def _executor_rules(
+    forward_probe: str = "200",
+    browser_probe: str = '{"webSocketDebuggerUrl": "ws://127.0.0.1:9333/devtools/browser/x"}',
+    step: ExecResult | None = None,
+    is_browser_launched: bool = True,
+) -> list[ScriptedExecRule]:
+    """The box half of the scripted environment: the forward proxy, the browser, and the steps."""
+    return [
+        ScriptedExecRule("setsid nohup uv run mngr forward", [ok_result()]),
+        ScriptedExecRule("https://127.0.0.1:8431/", [ok_result(forward_probe)]),
+        ScriptedExecRule(
+            "--remote-debugging-port", [ok_result("launched") if is_browser_launched else failed_result()]
+        ),
+        ScriptedExecRule("/json/version", [ok_result(browser_probe)]),
+        ScriptedExecRule("box_flow_step.py", [step or _step_result()]),
+        ScriptedExecRule("pkill -f", [ok_result()]),
+    ]
+
+
+def _flow_collector(
+    tmp_path: Path,
+    agent: ScriptedVerificationAgent | None,
+    rules: list[ScriptedExecRule],
+    flows: list[dict[str, str]] | None = None,
+    host_id: str = _HOST_ID,
+) -> tuple[verification.EvidenceCollector, MockBoxEnvironment]:
+    environment = MockBoxEnvironment(tmp_path, rules)
+    logs_dir = tmp_path / "agent"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    collector = verification.EvidenceCollector(
+        environment=environment,
+        box_env={"MINDS_ENV": "staging"},
+        workspace_agent_id="ws-1",
+        case=_case_config(_authored(ui_flows=flows if flows is not None else _FLOWS)),
+        clone_base_sha="a" * 40,
+        dwt_tip_sha="e" * 40,
+        host_logs_dir=logs_dir,
+        deadline=time.monotonic() + 600.0,
+        verification_agent=agent,
+        verifier_model="claude-opus-4-8",
+        workspace_host_id=host_id,
+        readiness_poll_seconds=0.0,
+        preauth_cookie=SecretStr("preauth-token"),
+        browser_bridge_token=SecretStr("bridge-token"),
+    )
+    asyncio.run(collector.collect(is_expectations_collection_wanted=True))
+    return collector, environment
+
+
+def _run_flow_collector(
+    tmp_path: Path,
+    agent: ScriptedVerificationAgent,
+    executor_rules: list[ScriptedExecRule] | None = None,
+    flows: list[dict[str, str]] | None = None,
+) -> tuple[verification.EvidenceCollector, MockBoxEnvironment]:
+    return _flow_collector(tmp_path, agent, [*(executor_rules or _executor_rules()), *_collector_rules()], flows)
+
+
+def _flow_entries(collector: verification.EvidenceCollector) -> list[ManifestEntry]:
+    return [entry for entry in collector.entries if entry.check_class is CheckClass.UI_FLOWS]
+
+
+def test_collector_drives_the_flow_at_the_apps_forwarded_origin(tmp_path: Path) -> None:
+    # The whole point of this executor: the browser sees the app at the URL the client's app tab
+    # iframes, built from the registry row's LABEL on the workspace's host origin.
+    agent = ScriptedVerificationAgent(actions=[click_action(), done_action()], readings=[reading()])
+
+    collector, environment = _run_flow_collector(tmp_path, agent)
+
+    entries = _flow_entries(collector)
+    assert [(entry.entry_id, entry.status, entry.reason) for entry in entries] == [
+        ("ui_flow_0_add_complete_delete", CheckStatus.PASSED, "")
+    ]
+    opening = next(command for command in environment.exec_commands if "box_flow_step.py" in command)
+    # `todo-bb` is the row's LABEL; the service name is plain `todo`, so this also pins that the
+    # URL is built from the label rather than the name.
+    assert "https://todo-bb.{}.localhost:8431/".format(_HOST_ID) in opening
+    # The session cookie rides that first request, so the opening navigation is already
+    # authenticated rather than bouncing off the proxy's login redirect.
+    assert "preauth-token" in opening
+    assert "mngr_forward_session" in opening
+
+
+def test_the_flow_drives_an_app_that_actually_answers(tmp_path: Path) -> None:
+    # With two delivered rows, the first-registered one can be a dead port -- and a dead port
+    # serves the proxy's own error page, so a flow pointed at it would record the deliverable as
+    # broken having never reached it.
+    registry = (
+        '[[apps]]\nname = "gallery"\nurl = "http://localhost:8300"\nlabel = "gallery-aa"\n\n'
+        '[[apps]]\nname = "todo"\nurl = "http://localhost:8081"\nlabel = "todo-bb"\n'
+    )
+    services = (
+        "gallery                          BACKOFF   Exited too quickly\n"
+        "todo                             RUNNING   pid 103, uptime 0:05:00\n"
+    )
+    supervisord = (
+        "[program:gallery]\n"
+        'command=bash -c "python3 system/scripts/forward_port.py --url http://localhost:8300 '
+        '--name gallery && uv run gallery"\n'
+        "\n"
+        "[program:todo]\n"
+        'command=bash -c "python3 system/scripts/forward_port.py --url http://localhost:8081 '
+        '--name todo && uv run todo"\n'
+    )
+    agent = ScriptedVerificationAgent(actions=[done_action()], readings=[reading()])
+    rules = [
+        *_executor_rules(),
+        # The dead app is probed first and answers nothing; the todo app answers 200.
+        *_collector_rules(registry_text=registry, services_text=services, supervisord_conf=supervisord),
+    ]
+    http_rule_index = next(index for index, rule in enumerate(rules) if rule.substring == "http_headers")
+    rules[http_rule_index] = ScriptedExecRule(
+        "http_headers",
+        [
+            ok_result(mngr_exec_json(_sections(status="000 0.0001\n", headers="", body=""))),
+            ok_result(
+                mngr_exec_json(_sections(status="200 0.0041\n", headers="HTTP/1.1 200 OK\r\n", body="<h1>todo</h1>"))
+            ),
+        ],
+    )
+
+    _collector, environment = _flow_collector(tmp_path, agent, rules)
+
+    opening = next(command for command in environment.exec_commands if "box_flow_step.py" in command)
+    assert "https://todo-bb.{}.localhost:8431/".format(_HOST_ID) in opening
+    assert "gallery-aa" not in opening
+
+
+def test_each_flow_drives_a_browser_of_its_own(tmp_path: Path) -> None:
+    # Everything a flow needs to persist across its steps lives in the browser's default context,
+    # which the browser process owns -- so the only thing that can keep one flow's cookies and
+    # storage out of the next is a browser, and a profile, of its own.
+    agent = ScriptedVerificationAgent(actions=[done_action(), done_action()], readings=[reading()])
+
+    _collector, environment = _run_flow_collector(tmp_path, agent, flows=_TWO_FLOWS)
+
+    launches = [command for command in environment.exec_commands if "--remote-debugging-port" in command]
+    assert len(launches) == 2
+    for flow_index, launch in enumerate(launches):
+        assert "--remote-debugging-port={}".format(9333 + flow_index) in launch
+        assert launch.startswith("profile=/tmp/minds-evals-chromium-{};".format(flow_index))
+        # Whatever an earlier flow left running, or left on disk, goes first.
+        assert "pkill -f" in launch and 'rm -rf "$profile"' in launch
+    steps = [command for command in environment.exec_commands if "box_flow_step.py" in command]
+    assert '"cdp_endpoint":"http://127.0.0.1:9334"' in steps[-1]
+
+
+def test_a_step_whose_frame_was_not_captured_names_no_screenshot(tmp_path: Path) -> None:
+    # The executor reports an empty screenshot path exactly when the capture failed, so naming the
+    # file it would have written would point the grade-time judge at a frame that is not there.
+    agent = ScriptedVerificationAgent(actions=[click_action(), done_action()], readings=[reading()])
+    rules = _executor_rules()
+    rules[4] = ScriptedExecRule("box_flow_step.py", [_step_result(), _step_result(screenshot_path="")])
+
+    _collector, environment = _run_flow_collector(tmp_path, agent, rules)
+
+    log = environment.uploaded_content_by_target["/logs/agent/verification/flows/add_complete_delete/log.jsonl"]
+    # Two steps and the closing reading, none of which produced a frame.
+    assert [json.loads(line)["screenshot"] for line in log.splitlines()] == ["", "", ""]
+
+
+def test_collector_records_a_flow_that_ran_as_completed_whatever_the_app_showed(tmp_path: Path) -> None:
+    # Trial time records that the declared steps were carried out; whether the app ended up in the
+    # state the `expect` describes is the grade-time judge's call, from this evidence. Recording a
+    # verdict here as well would be a second ruling on the same question, made with less to go on.
+    agent = ScriptedVerificationAgent(actions=[done_action()], readings=[reading("the task never appeared")])
+
+    collector, environment = _run_flow_collector(tmp_path, agent)
+
+    entry = _flow_entries(collector)[0]
+    assert (entry.status, entry.reason) == (CheckStatus.PASSED, "")
+    # The agent's reading rides along as evidence, labelled as a reading rather than a verdict.
+    assert "the task never appeared" in entry.detail
+    assert "agent's reading of the final state" in entry.detail
+    log = environment.uploaded_content_by_target["/logs/agent/verification/flows/add_complete_delete/log.jsonl"]
+    last_record = json.loads(log.splitlines()[-1])
+    assert last_record["action"] == "read the final state"
+    assert last_record["reasoning"] == "the task never appeared"
+
+
+def test_a_flow_that_ran_out_of_steps_is_incomplete(tmp_path: Path) -> None:
+    # The one thing trial time does rule on: the flow never got to carry out what it declared, so
+    # there is no final state for the judge to rule on either.
+    agent = ScriptedVerificationAgent(actions=[click_action()], readings=[reading()])
+
+    collector, _environment = _run_flow_collector(tmp_path, agent)
+
+    entry = _flow_entries(collector)[0]
+    assert (entry.status, entry.reason) == (CheckStatus.FAILED, ui_flows.REASON_STEP_BUDGET_EXHAUSTED)
+
+
+def test_collector_keeps_going_when_an_action_does_not_land(tmp_path: Path) -> None:
+    # An element that is not there is the app falling short, and the page below shows the truth --
+    # so the flow records the failure where the judge will read it and carries on.
+    agent = ScriptedVerificationAgent(
+        actions=[click_action(), done_action()], readings=[reading("the final page does not list it")]
+    )
+    rules = _executor_rules()
+    rules[4] = ScriptedExecRule(
+        "box_flow_step.py",
+        [
+            _step_result(),
+            _step_result(
+                is_ok=False, reason=ui_flows.REASON_ACTION_TIMED_OUT, detail="locator resolved to 0 elements"
+            ),
+        ],
+    )
+
+    collector, environment = _run_flow_collector(tmp_path, agent, rules)
+
+    entry = _flow_entries(collector)[0]
+    # The flow still carried out its declared steps, so it completed; what the failed action means
+    # for the `expect` is for the judge, which reads the error the log records below.
+    assert entry.status is CheckStatus.PASSED
+    log = environment.uploaded_content_by_target["/logs/agent/verification/flows/add_complete_delete/log.jsonl"]
+    records = [json.loads(line) for line in log.splitlines()]
+    assert any("locator resolved to 0 elements" in (record.get("error") or "") for record in records)
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        ui_flows.REASON_CDP_CONNECT_FAILED,
+        ui_flows.REASON_FORWARD_UNREACHABLE,
+        ui_flows.REASON_TUNNEL_DOWN,
+        ui_flows.REASON_TLS_REFUSED,
+        # An action kind the step script cannot perform, and an executor failure it could not name:
+        # both are the harness, and neither is anything the workspace did.
+        ui_flows.REASON_UNKNOWN_ACTION,
+        ui_flows.REASON_STEP_ERROR,
+    ],
+)
+def test_collector_records_each_executor_level_failure_as_its_own_error(tmp_path: Path, reason: str) -> None:
+    # The executor is product machinery too, so when IT breaks the outcome must not read as "the
+    # agent builds bad apps" -- and the reason has to name which layer went.
+    # One acting step, so the failure lands on it rather than on the opening navigation.
+    agent = ScriptedVerificationAgent(actions=[click_action(), done_action()], readings=[reading()])
+    rules = _executor_rules()
+    rules[4] = ScriptedExecRule(
+        "box_flow_step.py", [_step_result(), _step_result(is_ok=False, reason=reason, detail="boom")]
+    )
+
+    collector, _environment = _run_flow_collector(tmp_path, agent, rules)
+
+    entry = _flow_entries(collector)[0]
+    assert (entry.status, entry.reason) == (CheckStatus.ERROR, reason)
+    assert collector.manifest().is_evidence_complete is False
+
+
+def test_collector_charges_a_timed_out_action_to_the_app(tmp_path: Path) -> None:
+    # The other half of the same taxonomy: a page that never offered what the flow asked for is the
+    # deliverable falling short, so it scores against the agent rather than being excluded.
+    agent = ScriptedVerificationAgent(
+        actions=[click_action(), done_action()], readings=[reading("the final page does not list it")]
+    )
+    rules = _executor_rules()
+    rules[4] = ScriptedExecRule(
+        "box_flow_step.py",
+        [
+            _step_result(is_ok=False, reason=ui_flows.REASON_ACTION_TIMED_OUT, detail="Timeout 15000ms exceeded"),
+        ],
+    )
+
+    collector, _environment = _run_flow_collector(tmp_path, agent, rules)
+
+    entry = _flow_entries(collector)[0]
+    assert (entry.status, entry.reason) == (CheckStatus.FAILED, ui_flows.REASON_ACTION_TIMED_OUT)
+
+
+def test_collector_treats_a_step_that_names_no_reason_as_an_executor_failure(tmp_path: Path) -> None:
+    # A step reporting failure without naming a layer is the executor failing to say what happened.
+    # Charging that to the agent would be the one thing the taxonomy exists to prevent.
+    agent = ScriptedVerificationAgent(actions=[done_action()], readings=[reading()])
+    rules = _executor_rules()
+    rules[4] = ScriptedExecRule("box_flow_step.py", [_step_result(is_ok=False, reason="", detail="nothing said")])
+
+    collector, _environment = _run_flow_collector(tmp_path, agent, rules)
+
+    entry = _flow_entries(collector)[0]
+    assert (entry.status, entry.reason) == (CheckStatus.ERROR, ui_flows.REASON_STEP_ERROR)
+
+
+def test_collector_records_a_proxy_that_never_served_as_an_error(tmp_path: Path) -> None:
+    # Readiness is a real request returning 200; a proxy that only ever 503s never served at all.
+    agent = ScriptedVerificationAgent(actions=[done_action()], readings=[reading()])
+
+    collector, _environment = _run_flow_collector(tmp_path, agent, _executor_rules(forward_probe="503"))
+
+    entry = _flow_entries(collector)[0]
+    assert (entry.status, entry.reason) == (CheckStatus.ERROR, ui_flows.REASON_FORWARD_UNREACHABLE)
+
+
+def test_collector_records_a_browser_that_never_launched_as_an_error(tmp_path: Path) -> None:
+    agent = ScriptedVerificationAgent(actions=[done_action()], readings=[reading()])
+
+    collector, _environment = _run_flow_collector(tmp_path, agent, _executor_rules(is_browser_launched=False))
+
+    entry = _flow_entries(collector)[0]
+    assert (entry.status, entry.reason) == (CheckStatus.ERROR, ui_flows.REASON_BROWSER_LAUNCH_FAILED)
+
+
+def test_collector_records_a_browser_that_never_took_cdp_as_an_error(tmp_path: Path) -> None:
+    agent = ScriptedVerificationAgent(actions=[done_action()], readings=[reading()])
+
+    collector, _environment = _run_flow_collector(tmp_path, agent, _executor_rules(browser_probe="not yet"))
+
+    entry = _flow_entries(collector)[0]
+    assert (entry.status, entry.reason) == (CheckStatus.ERROR, ui_flows.REASON_CDP_CONNECT_FAILED)
+
+
+def test_collector_stops_a_flow_at_the_step_budget(tmp_path: Path) -> None:
+    # An agent that never says "done" is looping, not progressing.
+    agent = ScriptedVerificationAgent(actions=[click_action()], readings=[reading("the final page does not list it")])
+
+    collector, _environment = _run_flow_collector(tmp_path, agent)
+
+    assert agent.action_count == ui_flows.MAX_STEPS_PER_FLOW
+    entry = _flow_entries(collector)[0]
+    assert (entry.status, entry.reason) == (CheckStatus.FAILED, ui_flows.REASON_STEP_BUDGET_EXHAUSTED)
+
+
+def test_collector_fails_a_flow_when_nothing_was_ever_served(tmp_path: Path) -> None:
+    # No delivered app is the agent shipping nothing; the browser was never the problem.
+    agent = ScriptedVerificationAgent(actions=[done_action()], readings=[reading()])
+    builtins_only = '[[apps]]\nname = "system_interface"\nurl = "http://localhost:8000"\n'
+
+    collector, _environment = _flow_collector(
+        tmp_path, agent, [*_executor_rules(), *_collector_rules(registry_text=builtins_only)]
+    )
+
+    entry = _flow_entries(collector)[0]
+    assert (entry.status, entry.reason) == (CheckStatus.FAILED, ui_flows.REASON_NO_APP_TO_OPEN)
+
+
+def test_collector_records_an_unreadable_registry_as_an_error_not_a_missing_app(tmp_path: Path) -> None:
+    # A registry we could not read says nothing about what was served -- that is the harness
+    # failing to look, quite unlike a registry that lists nothing.
+    agent = ScriptedVerificationAgent(actions=[done_action()], readings=[reading()])
+
+    collector, _environment = _flow_collector(
+        tmp_path, agent, [*_executor_rules(), *_collector_rules(registry_status="absent")]
+    )
+
+    entry = _flow_entries(collector)[0]
+    assert entry.status is CheckStatus.ERROR
+
+
+def test_collector_will_not_build_an_origin_from_a_missing_host_id(tmp_path: Path) -> None:
+    # The host id is a separate uuid4 from the agent id and has to be looked up; without it the URL
+    # would be one the proxy silently declines to route. Failing to look it up is the harness losing
+    # track of the workspace, so it is an error -- the registry here lists a healthy delivered app.
+    agent = ScriptedVerificationAgent(actions=[done_action()], readings=[reading()])
+
+    collector, environment = _flow_collector(
+        tmp_path, agent, [*_executor_rules(), *_collector_rules()], host_id="agent-72fdb075"
+    )
+
+    entry = _flow_entries(collector)[0]
+    assert (entry.status, entry.reason) == (CheckStatus.ERROR, ui_flows.REASON_HOST_ID_UNKNOWN)
+    assert not any("box_flow_step.py" in command for command in environment.exec_commands)
+
+
+def test_collector_records_flows_as_unmeasurable_without_a_verification_agent(tmp_path: Path) -> None:
+    collector, _environment = _flow_collector(tmp_path, None, [*_executor_rules(), *_collector_rules()])
+
+    assert _flow_entries(collector)[0].reason == ui_flows.REASON_VERIFIER_AGENT_FAILED
+
+
+def test_collector_stops_its_own_forward_instance_and_no_one_elses(tmp_path: Path) -> None:
+    # The eval's instance is matched on the port it holds, so a forward the minds backend spawned
+    # is never caught by the cleanup.
+    agent = ScriptedVerificationAgent(actions=[done_action()], readings=[reading()])
+
+    _collector, environment = _run_flow_collector(tmp_path, agent)
+
+    stop = next(
+        command for command in environment.exec_commands if "pkill -f" in command and "mngr forward" in command
+    )
+    assert "[-]-port 8431" in stop
+
+
+def test_collector_screenshots_land_in_the_box_without_an_rsync(tmp_path: Path) -> None:
+    # The browser runs in the box, so a frame is already where the artifact collector will find it.
+    # There is no workspace staging leg at all, which the fleet executor needed and this does not.
+    agent = ScriptedVerificationAgent(actions=[click_action(), done_action()], readings=[reading()])
+
+    _collector, environment = _run_flow_collector(tmp_path, agent)
+
+    step_commands = [command for command in environment.exec_commands if "box_flow_step.py" in command]
+    assert any("/logs/agent/verification/flows/add_complete_delete/step_" in command for command in step_commands)
+    assert not any("mngr rsync" in command and "flows" in command for command in environment.exec_commands)
+
+
+def test_collector_reports_the_verification_agents_own_spend(tmp_path: Path) -> None:
+    agent = ScriptedVerificationAgent(actions=[click_action(), done_action()], readings=[reading()])
+
+    collector, _environment = _run_flow_collector(tmp_path, agent)
+
+    usage = collector.verifier_usage()
+    assert (usage.call_count, usage.model, usage.input_token_count) == (3, "claude-opus-4-8", 300)
+
+
+def test_collector_drives_no_browser_when_the_case_declares_no_flows(tmp_path: Path) -> None:
+    agent = ScriptedVerificationAgent(actions=[done_action()], readings=[reading()])
+
+    collector, environment = _run_flow_collector(tmp_path, agent, flows=[])
+
+    assert _flow_entries(collector) == []
+    assert not any("box_flow_step.py" in command for command in environment.exec_commands)
+    assert not any("mngr forward" in command for command in environment.exec_commands)

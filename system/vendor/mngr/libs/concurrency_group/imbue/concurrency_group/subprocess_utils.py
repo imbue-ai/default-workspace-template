@@ -297,13 +297,14 @@ def run_local_command_modern_version(
     ``is_detached_from_terminal=True`` puts the child in a new session, so it inherits neither
     this process's controlling terminal nor its process group. Redirecting stdio is not enough
     to keep a child off the terminal: the ``claude`` CLI opens ``/dev/tty`` directly even with
-    stdin on ``DEVNULL`` and stdout/stderr on pipes, and restores terminal modes while handling
-    the SIGTERM this function sends on timeout. A ``tcsetattr`` from a process group that is not
-    the terminal's foreground one makes the kernel deliver SIGTTOU to that *whole* group, which
-    stops the caller as well -- so any service running in a background process group (anything
-    under supervisord in a tmux pane, for instance) must detach the children it may have to kill.
-    Off by default because detaching also removes the child from the reach of an interactive
-    Ctrl-C, which a CLI relies on to take its children down with it.
+    stdin on ``DEVNULL`` and stdout/stderr on pipes, and reads it and restores its modes while
+    handling the SIGTERM this function sends on timeout. Both are stopping operations from a
+    process group that is not the terminal's foreground one -- the kernel answers them with
+    SIGTTIN / SIGTTOU addressed to that *whole* group -- so the caller is stopped along with the
+    child it was killing. Any service running in a background process group (anything under
+    supervisord in a tmux pane, for instance) therefore has to detach the children it may need
+    to kill. Off by default because detaching also removes the child from the reach of an
+    interactive Ctrl-C, which a CLI relies on to take its children down with it.
     """
     try:
         shutdown_event = shutdown_event or Event()

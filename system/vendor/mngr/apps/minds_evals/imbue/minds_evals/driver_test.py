@@ -8,6 +8,7 @@ import pytest
 from harbor.models.agent.context import AgentContext
 from pydantic import ValidationError
 
+from imbue.minds_evals import ui_flows
 from imbue.minds_evals.data_types import CaseConfig
 from imbue.minds_evals.data_types import DECIDE_SENTINEL
 from imbue.minds_evals.data_types import Expectations
@@ -797,3 +798,65 @@ def test_driver_captures_work_the_agent_does_after_it_reports_waiting(tmp_path: 
     # And its tokens are accounted for, rather than being spend with no record.
     assert context.n_input_tokens == 17
     assert context.n_output_tokens == 170
+
+
+def test_driver_runs_the_verification_agent_on_the_decider_model_by_default(tmp_path: Path) -> None:
+    # Flow driving is mechanical, so a cheaper tier may do -- but until that is measured the
+    # verification agent runs on whatever model the decider does.
+    driver = MindsPersonaDriver(logs_dir=tmp_path / "agent", extra_env={"ANTHROPIC_API_KEY": "sk-eval-test"})
+
+    agent = driver._build_verification_agent()
+
+    assert isinstance(agent, ui_flows.AnthropicVerificationAgent)
+    assert agent.model == driver._decider_model
+
+
+def test_driver_honours_the_verifier_model_override(tmp_path: Path) -> None:
+    driver = MindsPersonaDriver(
+        logs_dir=tmp_path / "agent",
+        extra_env={"ANTHROPIC_API_KEY": "sk-eval-test"},
+        verifier_model="claude-haiku-4-5",
+    )
+
+    agent = driver._build_verification_agent()
+
+    assert isinstance(agent, ui_flows.AnthropicVerificationAgent)
+    assert agent.model == "claude-haiku-4-5"
+    # The override must not drag the simulated client onto a different model -- that would change
+    # the thing being measured, not just how it is measured.
+    assert driver._decider_model != "claude-haiku-4-5"
+
+
+def test_driver_builds_no_verification_agent_without_a_key(tmp_path: Path) -> None:
+    driver = MindsPersonaDriver(logs_dir=tmp_path / "agent", extra_env={})
+
+    assert driver._build_verification_agent() is None
+
+
+def test_driver_reports_the_verification_agents_spend_separately_from_the_agent_under_test(tmp_path: Path) -> None:
+    conversation = ConversationModel(
+        chat_agent_id="chat-1",
+        chat_agent_name="eval-todo-app",
+        pre_events=[],
+        turn_reply_events=[_reply_events("All done; open the preview.")],
+    )
+    expectations = parse_expectations(
+        {"outcome": "A working to-do web app.", "deliverable": {"kind": "minds-app"}}, "todo-app"
+    )
+
+    _driver, _environment, context = _run_driver(
+        tmp_path,
+        ("Build it",),
+        conversation,
+        trial_name="todo-app__verifier1",
+        timeout_seconds=1800.0,
+        expectations=expectations,
+    )
+
+    assert context.metadata is not None
+    # Harness spend has its own key beside the decider's; the agent under test's cost fields must
+    # never absorb the cost of measuring it.
+    verifier_usage = context.metadata["verifier_agent_usage"]
+    assert verifier_usage["model"] == _driver._decider_model
+    assert verifier_usage["call_count"] == 0
+    assert "verifier_agent_usage" in context.metadata and "decider_usage" in context.metadata

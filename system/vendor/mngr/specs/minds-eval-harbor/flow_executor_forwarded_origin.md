@@ -49,7 +49,8 @@ The instance is scoped to the trial's own `USER_ID` like everything else in the 
 - The per-step DOM digest is Playwright's `page.aria_snapshot(mode="ai")` -- a YAML-shaped ARIA tree as a string -- plus URL and title, recorded verbatim in `flows/<name>/log.jsonl` exactly where the fleet's browser_use digest went.
   (The older `page.accessibility.snapshot()` API this spec first assumed is fully removed from Playwright, verified empirically at 1.59-1.62; the replacement reshaped the action vocabulary for the better -- elements are addressed by **ARIA role + accessible name**, which survives page changes, where the fleet's numeric indexes went stale on every mutation and forced a re-read before each action.)
 - Screenshots are written box-side by the step script and are already on the box filesystem -- no workspace staging or rsync leg at all; the collector moves them into `/logs/agent/verification/flows/` directly.
-- `manifest.json`, the judge pre-step (digest flattening, 8-screenshot selection), and `ui_flows_passed` are untouched.
+- `manifest.json` is untouched. The judge pre-step flattens the same evidence, now attaching each flow's last four screenshots (24 in all) and presenting each flow's declared steps, its `expect`, its completion and the agent's reading of the final page.
+- The trial-time outcome of a flow is COMPLETION -- `completed` or `incomplete` -- and the grade-time judge alone rules on the `expect`; the programmatic criterion is `ui_flows_completed`.
 
 ### Failure taxonomy: executor-level reasons replace fleet-level ones
 

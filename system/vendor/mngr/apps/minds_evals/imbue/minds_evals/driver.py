@@ -39,8 +39,10 @@ from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 from imbue.minds_evals import decider
+from imbue.minds_evals import forward_instance
 from imbue.minds_evals import minds_bridge
 from imbue.minds_evals import proxy_config
+from imbue.minds_evals import ui_flows
 from imbue.minds_evals import usage as usage_accounting
 from imbue.minds_evals import verification
 from imbue.minds_evals.data_types import CaseConfig
@@ -363,9 +365,13 @@ class MindsPersonaDriver(BaseAgent):
         poll_seconds: float = 5.0,
         proxy_probe: object = False,
         proxy: object = False,
+        verifier_model: str = "",
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
+        # Flow driving is mechanical, so a cheaper tier may well do; until that is measured the
+        # verification agent runs on the decider's model, with this override to measure it.
+        self._verifier_model_override = verifier_model.strip()
         # Opt-in check that a box-local port is reachable from inside the workspace, which is what
         # an in-box LLM proxy would depend on. Off by default: it costs an extra bridge round trip.
         self._is_proxy_probe_enabled = parse_agent_flag(proxy_probe, "proxy_probe")
@@ -410,6 +416,7 @@ class MindsPersonaDriver(BaseAgent):
         # and check it reproduces _clone_base_sha before unbundling the agent's commits onto it.
         self._dwt_tip_sha: str = ""
         self._verification_metadata: dict[str, Any] = {}
+        self._verifier_usage: ui_flows.VerifierUsage | None = None
 
     @staticmethod
     def name() -> str:
@@ -421,6 +428,10 @@ class MindsPersonaDriver(BaseAgent):
     @property
     def _decider_model(self) -> str:
         return self._parsed_model_name or decider.DEFAULT_DECIDER_MODEL
+
+    @property
+    def _verifier_model(self) -> str:
+        return self._verifier_model_override or self._decider_model
 
     async def setup(self, environment: BaseEnvironment) -> None:
         # Create the evidence directory before anything else can fail. harbor records a missing
@@ -468,6 +479,20 @@ class MindsPersonaDriver(BaseAgent):
             self._write_trajectory()
             await self._teardown(environment)
 
+    def _build_verification_agent(self) -> ui_flows.VerificationAgent | None:
+        """The UI-flow agent, or None when there is no key to run it with. The upstream key is used
+        rather than the trial's proxy key: this is the harness reasoning about the workspace, not
+        the workspace's own traffic, so it must not be metered as the agent under test's spend."""
+        api_key = self._get_env("ANTHROPIC_API_KEY") or ""
+        if not api_key:
+            logger.warning("No ANTHROPIC_API_KEY for the UI-flow verification agent; flows cannot be measured")
+            return None
+        return ui_flows.AnthropicVerificationAgent(
+            model=self._verifier_model,
+            api_key=SecretStr(api_key),
+            timeout_seconds=ui_flows.DEFAULT_CALL_TIMEOUT_SECONDS,
+        )
+
     async def _collect_verification_evidence(self, environment: BaseEnvironment) -> None:
         """Capture what the delivered workspace actually is, while it still exists.
 
@@ -490,6 +515,13 @@ class MindsPersonaDriver(BaseAgent):
             # Monotonic, unlike the conversation's own deadline: a clock step during a ten-minute
             # collection phase would otherwise truncate or extend it.
             deadline=time.monotonic() + self._case.verification_timeout_seconds,
+            verifier_model=self._verifier_model,
+            verification_agent=self._build_verification_agent(),
+            workspace_host_id=await minds_bridge.fetch_agent_host_id(
+                environment, self._box_env, self._workspace_agent_id
+            ),
+            preauth_cookie=SecretStr(forward_instance.mint_forward_secret()),
+            browser_bridge_token=SecretStr(forward_instance.mint_forward_secret()),
         )
         logger.info("Collecting outcome-verification evidence from the workspace")
         try:
@@ -498,7 +530,10 @@ class MindsPersonaDriver(BaseAgent):
             )
         except Exception as exc:
             logger.opt(exception=exc).warning("Evidence collection failed; grading on what it managed to write")
+            # Whatever the flow agent spent before the failure is still spent, so keep the account.
+            self._verifier_usage = collector.verifier_usage()
             return
+        self._verifier_usage = collector.verifier_usage()
         self._verification_metadata = {
             "is_evidence_complete": manifest.is_evidence_complete,
             "entry_count": len(manifest.entries),
@@ -1069,6 +1104,11 @@ class MindsPersonaDriver(BaseAgent):
             "usage_source": "proxy" if proxy_usage is not None else "transcript",
             "transcript_usage": usage_accounting.workspace_usage_metadata(transcript_usage),
             "decider_usage": usage_accounting.decider_usage_metadata(decider_usage),
+            # The UI-flow verification agent is harness spend just like the decider: it measures
+            # what the eval costs to run, never what the agent under test consumed.
+            "verifier_agent_usage": usage_accounting.verifier_usage_metadata(self._verifier_usage)
+            if self._verifier_usage is not None
+            else {},
             # Empty when no evidence phase ran (no workspace, or collection failed outright);
             # the grade reads the bundle itself, this is for scanning runs at a glance.
             "verification": self._verification_metadata,

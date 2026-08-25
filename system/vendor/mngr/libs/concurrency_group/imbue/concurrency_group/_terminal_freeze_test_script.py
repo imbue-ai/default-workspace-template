@@ -44,6 +44,8 @@ _SESSION_DEADLINE_SECONDS: Final[int] = 20
 # Exit code for the toucher finding no terminal to reach, distinguishing the detached run
 # from any other way the child could have died.
 _NO_TERMINAL_EXIT_CODE: Final[int] = 3
+# The two signals a terminal uses to stop a background process group.
+_JOB_CONTROL_SIGNALS: Final[tuple[int, ...]] = (signal.SIGTTIN, signal.SIGTTOU)
 
 
 class _DeadlineExpired(Exception):
@@ -54,6 +56,22 @@ def _write_json(path: Path, payload: dict[str, object]) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def _pin_job_control_signals_to_default() -> str:
+    """Take the terminal-stop signals off whatever the test runner left them at.
+
+    The kernel only generates SIGTTIN/SIGTTOU for a process that is neither ignoring nor
+    blocking them, so a runner that has turned them off makes the terminal touch succeed
+    quietly and the reproduction silently stop reproducing. Modal's sandbox does exactly that.
+    A supervisord-managed service gets the default disposition, which is the one under test, so
+    the harness pins it rather than inheriting. Returns what it found, for the record.
+    """
+    inherited = ",".join(str(signal.getsignal(number)) for number in _JOB_CONTROL_SIGNALS)
+    signal.pthread_sigmask(signal.SIG_UNBLOCK, set(_JOB_CONTROL_SIGNALS))
+    for number in _JOB_CONTROL_SIGNALS:
+        signal.signal(number, signal.SIG_DFL)
+    return inherited
+
+
 def _raise_deadline_expired(signal_number: int, frame: object) -> None:
     raise _DeadlineExpired()
 
@@ -61,17 +79,36 @@ def _raise_deadline_expired(signal_number: int, frame: object) -> None:
 def _reach_for_the_terminal_and_exit(signal_number: int, frame: object) -> None:
     """SIGTERM handler for toucher mode. Reads its marker path back out of ``sys.argv``."""
     marker_path = Path(sys.argv[2])
+    inherited = _pin_job_control_signals_to_default()
     try:
         terminal_fd = os.open("/dev/tty", os.O_RDWR)
     except OSError as e:
-        _write_json(marker_path, {"terminal": "unreachable", "errno": e.errno, "session_id": os.getsid(0)})
+        _write_json(
+            marker_path,
+            {
+                "terminal": "unreachable",
+                "errno": e.errno,
+                "session_id": os.getsid(0),
+                "inherited_job_control_signals": inherited,
+            },
+        )
         os._exit(_NO_TERMINAL_EXIT_CODE)
     # Recorded before the call, not after: when the terminal is reachable from a background
     # process group this process is stopped *inside* tcsetattr and never runs again, so
     # "reached" is the last thing it can report.
-    _write_json(marker_path, {"terminal": "reached", "session_id": os.getsid(0)})
+    _write_json(
+        marker_path,
+        {"terminal": "reached", "session_id": os.getsid(0), "inherited_job_control_signals": inherited},
+    )
     termios.tcsetattr(terminal_fd, termios.TCSADRAIN, termios.tcgetattr(terminal_fd))
-    _write_json(marker_path, {"terminal": "reached_and_returned", "session_id": os.getsid(0)})
+    _write_json(
+        marker_path,
+        {
+            "terminal": "reached_and_returned",
+            "session_id": os.getsid(0),
+            "inherited_job_control_signals": inherited,
+        },
+    )
     os._exit(0)
 
 
@@ -84,6 +121,9 @@ def _run_toucher(marker_path: Path) -> int:
 
 
 def _run_service(result_path: Path, marker_path: Path, is_detached_from_terminal: bool) -> int:
+    # The caller has to be stoppable too: SIGTTIN/SIGTTOU go to the whole process group, and a
+    # caller still ignoring them would survive a kill that the real service does not.
+    inherited = _pin_job_control_signals_to_default()
     finished = run_local_command_modern_version(
         [sys.executable, __file__, "toucher", str(marker_path)],
         is_checked=False,
@@ -98,6 +138,7 @@ def _run_service(result_path: Path, marker_path: Path, is_detached_from_terminal
             "returncode": finished.returncode,
             "session_id": os.getsid(0),
             "process_group_id": os.getpgid(0),
+            "inherited_job_control_signals": inherited,
         },
     )
     return 0

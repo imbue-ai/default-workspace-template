@@ -51,6 +51,7 @@ from pydantic import Field
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from imbue.minds_evals.data_types import DeciderResult
+from imbue.minds_evals.ui_flows import VerifierUsage
 from imbue.mngr_usage.data_types import TokenSnapshot
 from imbue.mngr_usage.pricing import compute_cost
 
@@ -417,6 +418,21 @@ def decider_usage_metadata(usage: DeciderUsage) -> dict[str, Any]:
         "fallback_count": usage.fallback_count,
         "tokens": {"input": usage.input_token_count, "output": usage.output_token_count},
         "cost_usd": usage.cost_usd,
+    }
+
+
+@pure
+def verifier_usage_metadata(usage: VerifierUsage) -> dict[str, Any]:
+    """The UI-flow verification agent's own spend. Reported next to the decider's and priced the
+    same way: harness spend, never folded into what the agent under test consumed."""
+    pricing_key = canonical_model_key(usage.model)
+    tokens = TokenSnapshot(input=usage.input_token_count, output=usage.output_token_count)
+    return {
+        "model": usage.model,
+        "call_count": usage.call_count,
+        "failed_call_count": usage.failed_call_count,
+        "tokens": {"input": usage.input_token_count, "output": usage.output_token_count},
+        "cost_usd": compute_cost(pricing_key, tokens) if pricing_key is not None else None,
     }
 
 

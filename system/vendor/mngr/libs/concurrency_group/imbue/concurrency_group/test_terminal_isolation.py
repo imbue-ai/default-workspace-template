@@ -1,18 +1,19 @@
 """Integration tests: what a timed-out child can do to the process that ran it.
 
 ``run_local_command_modern_version`` kills a child that overruns its timeout. If that child
-can reach a controlling terminal it inherited, the kill is not contained: restoring terminal
-modes from a background process group makes the kernel deliver SIGTTOU to the *whole* group,
-stopping the caller along with the child. That is how a workspace's system interface freezes
--- it runs under supervisord in a tmux pane, so it sits in a background process group on the
-pane's terminal, and the ``claude`` CLI it spawns opens ``/dev/tty`` directly even when its
-stdio is fully redirected.
+can reach a controlling terminal it inherited, the kill is not contained: reading that terminal
+or changing its modes from a background process group makes the kernel deliver SIGTTIN /
+SIGTTOU to the *whole* group, stopping the caller along with the child. That is how a
+workspace's system interface freezes -- it runs under supervisord in a tmux pane, so it sits in
+a background process group on the pane's terminal, and the ``claude`` CLI it spawns opens
+``/dev/tty`` directly even when its stdio is fully redirected, then touches it on the way out.
 
-Both tests drive the real thing through ``_terminal_freeze_test_script.py``: a real pty, a
-real session leader holding it in the foreground, a real background process group, and a real
-SIGTERM-on-timeout. The first pins the exposure that ``is_detached_from_terminal`` exists to
-close; the second shows it closed, and shows *why* -- the child can no longer open the
-terminal at all.
+The first two tests drive the real thing through ``_terminal_freeze_test_script.py``: a real
+pty, a real session leader holding it in the foreground, a real background process group, and a
+real SIGTERM-on-timeout. One pins the exposure that ``is_detached_from_terminal`` exists to
+close; the other shows it closed, and shows *why* -- the child can no longer open the terminal
+at all. The third covers the same capability on ``ConcurrencyGroup``, the API a service is
+actually meant to start processes through.
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ import pytest
 
 from imbue.concurrency_group import _terminal_freeze_test_script
 from imbue.concurrency_group._terminal_freeze_test_script import _NO_TERMINAL_EXIT_CODE
+from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 
 _HARNESS_SCRIPT: Final[Path] = Path(_terminal_freeze_test_script.__file__)
 # Comfortably above the harness's own 20s internal deadline, so a harness that misbehaves
@@ -134,3 +136,17 @@ def test_a_detached_child_cannot_stop_the_caller_when_its_timeout_kills_it(tmp_p
     # the child died in the SIGTERM handler that would otherwise have taken the group down.
     assert verdict["service"]["is_timed_out"] is True
     assert verdict["service"]["returncode"] == _NO_TERMINAL_EXIT_CODE
+
+
+@pytest.mark.timeout(60)
+def test_the_structured_process_api_can_detach_too() -> None:
+    """``ConcurrencyGroup`` is how services are meant to start processes, so it has to be able
+    to express this -- a service that starts a long-running child through it is in exactly the
+    position the flag exists for."""
+    report_session_id = [sys.executable, "-c", "import os; print(os.getsid(0))"]
+    with ConcurrencyGroup(name="terminal-isolation") as group:
+        attached = group.run_process_to_completion(report_session_id)
+        detached = group.run_process_to_completion(report_session_id, is_detached_from_terminal=True)
+
+    assert int(attached.stdout.strip()) == os.getsid(0)
+    assert int(detached.stdout.strip()) != os.getsid(0)
