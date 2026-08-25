@@ -5,8 +5,8 @@ Uses file locking to safely upsert or remove entries. Called by services
 on startup to declare the ports they expose.
 
 Usage:
-    python3 system/scripts/forward_port.py --name terminal --url http://localhost:7681
     python3 system/scripts/forward_port.py --icon-file system/apps/foo/icon.svg --name foo --url http://localhost:8090
+    python3 system/scripts/forward_port.py --no-icon --name terminal --url http://localhost:7681
     python3 system/scripts/forward_port.py --remove --name terminal
 
 Icons
@@ -28,6 +28,17 @@ one well-formed ``<svg>`` element and anything that could execute or reach off
 the page (see its docstring). It also caps the length at
 ``MAX_ICON_LENGTH`` so one app cannot bloat the registry that every consumer
 re-reads on every change.
+
+An icon is REQUIRED when a registration would create a new entry (unless the
+entry is ``--internal``, which never renders anywhere): without one the
+workspace can only draw a generic letter-in-a-box monogram, and a wall of
+those makes apps indistinguishable. The requirement bites at first
+registration -- exactly the moment the authoring agent is present and can
+draw a proper glyph (see the build-app skill for the house style). It does
+NOT apply to entries that already exist, so pre-existing apps registered
+before the requirement keep restarting (and keep their monogram) untouched.
+``--no-icon`` opts out explicitly, for machinery whose entry is hidden from
+the app pickers (previews, wrappers) and keeps the generic glyph on purpose.
 """
 
 import argparse
@@ -342,6 +353,26 @@ def _upsert(
     _save_apps(path, doc)
 
 
+def _has_entry(path: Path, name: str) -> bool:
+    """Whether the registry already holds an entry for ``name``."""
+    doc = _load_apps(path)
+    return any(app.get("name") == name for app in doc.get("apps", []))
+
+
+def missing_icon_error(name: str) -> str:
+    """The error for registering a brand-new pickable app without an icon."""
+    return (
+        f"app {name!r} is not registered yet and no icon was given: a new app "
+        "must register an icon, or the workspace can only draw a generic "
+        "letter-in-a-box glyph for it. Draw one in the house style -- a single "
+        '<svg viewBox="0 0 24 24"> of monochrome line art, '
+        "stroke='currentColor', fill='none' (see the build-app skill) -- and "
+        "pass it via --icon or --icon-file. Pass --no-icon only for machinery "
+        "that is hidden from the app pickers and keeps the generic glyph on "
+        "purpose"
+    )
+
+
 def _remove(path: Path, name: str) -> None:
     if not path.exists():
         return
@@ -373,8 +404,10 @@ def main() -> None:
             "SVG markup for the app's icon, stored verbatim on the entry. Must "
             "be a single <svg> element. House style: monochrome line art -- "
             "stroke='currentColor', fill='none', transparent background -- like "
-            "the workspace's built-in glyphs. Omit to leave any icon already "
-            "registered for this app untouched."
+            "the workspace's built-in glyphs. Required (or --icon-file, or an "
+            "explicit --no-icon) when the registration would create a new "
+            "non-internal entry; omit on re-registration to leave the stored "
+            "icon untouched."
         ),
     )
     parser.add_argument(
@@ -383,6 +416,18 @@ def main() -> None:
             "Path to a file holding the SVG markup for the app's icon. The "
             "file is read now and its contents are stored; the path is not "
             "recorded. Mutually exclusive with --icon."
+        ),
+    )
+    parser.add_argument(
+        "--no-icon",
+        action="store_true",
+        help=(
+            "Register a brand-new entry without an icon, on purpose. Only for "
+            "machinery whose entry is hidden from the app pickers (previews, "
+            "wrappers, the built-in services with their own UI glyphs); a "
+            "user-facing app must pass --icon or --icon-file instead. Like "
+            "omitting the icon flags, this never touches an icon already "
+            "stored on the entry."
         ),
     )
     parser.add_argument(
@@ -420,8 +465,11 @@ def main() -> None:
     if args.icon is not None and args.icon_file is not None:
         parser.error("--icon and --icon-file are mutually exclusive")
 
-    if args.remove and (args.icon is not None or args.icon_file is not None):
-        parser.error("--icon and --icon-file cannot be combined with --remove")
+    if args.no_icon and (args.icon is not None or args.icon_file is not None):
+        parser.error("--no-icon is mutually exclusive with --icon and --icon-file")
+
+    if args.remove and (args.icon is not None or args.icon_file is not None or args.no_icon):
+        parser.error("--icon, --icon-file, and --no-icon cannot be combined with --remove")
 
     if args.remove and args.program is not None:
         parser.error("--program cannot be combined with --remove")
@@ -454,6 +502,13 @@ def main() -> None:
             if args.remove:
                 _remove(apps_file, args.name)
             else:
+                # Checked under the lock so the existence answer cannot go
+                # stale between the check and the upsert.
+                is_new_pickable_entry = (
+                    not args.internal and not _has_entry(apps_file, args.name)
+                )
+                if icon is None and not args.no_icon and is_new_pickable_entry:
+                    parser.error(missing_icon_error(args.name))
                 _upsert(
                     apps_file,
                     args.name,

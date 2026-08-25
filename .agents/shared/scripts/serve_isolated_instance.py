@@ -220,6 +220,10 @@ def _register_service(
             service_name,
             "--url",
             f"http://localhost:{port}",
+            # Isolated instances and preview wrappers are short-lived tabs a
+            # flow opens itself, not pickable apps, so they skip the new-app
+            # icon requirement and keep the generic glyph.
+            "--no-icon",
         ],
         cwd=str(repo_root),
         capture_output=True,
