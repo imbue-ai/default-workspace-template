@@ -1,6 +1,6 @@
 """One live app-server connection per codex agent -- the ledger's persistent home.
 
-The message-lifecycle contract (see ``docs/design/harness-message-lifecycle-contract.md``)
+The message-lifecycle contract (see ``system/apps/system_interface/imbue/system_interface/harnesses/core-contracts/messages-lifecycle-contract.md``)
 makes the backend the sole authority for a codex agent's five message states, and
 :class:`~imbue.system_interface.harnesses.codex.ledger.CodexMessageLedger` is that authority.
 The ledger is a pure reducer over the stock ``codex app-server`` notification stream, so it needs
