@@ -105,7 +105,6 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   // (via the data source below) and renders the rows/spacers it asks for.
   const engine = createTranscriptScrollEngine({
     isVisible: () => panelVisible,
-    getPersistAgentKey: () => currentAgentId,
     dataSource: {
       getRows: () => cachedRows,
       getWindowEventIds: () => getEventsForAgent(currentAgentId ?? "").map((event) => event.event_id),
