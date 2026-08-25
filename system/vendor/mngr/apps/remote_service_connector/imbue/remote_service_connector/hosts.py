@@ -1118,7 +1118,8 @@ _SHARE_GRANTS_REMOTE_PATH = "/home/user/workspace/data/.secrets/share_grants.tom
 class EnableSharingResponse(BaseModel):
     """Response from POST /hosts/{host_db_id}/enable-sharing."""
 
-    host_id: str = Field(description="The workspace's mngr host id")
+    host_id: str = Field(description="The workspace's current machine (mngr host id)")
+    workspace_id: str | None = Field(default=None, description="The workspace's id (agent-<32hex>), when known")
     workspace_domain: str = Field(description="The share's bare workspace domain")
     region: str = Field(description="The relay region the share is pinned to")
     entry_label: str | None = Field(
@@ -1267,7 +1268,7 @@ def _enable_sharing_core(
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT leased_to_user, status, vps_address, container_ssh_port, ssh_user, host_id, "
-                "container_host_public_key FROM pool_hosts WHERE id = %s",
+                "container_host_public_key, agent_id FROM pool_hosts WHERE id = %s",
                 (str(host_db_id),),
             )
             row = cur.fetchone()
@@ -1275,7 +1276,16 @@ def _enable_sharing_core(
         conn.close()
     if row is None:
         raise HTTPException(status_code=404, detail="No such host")
-    (leased_to_user, status, vps_address, container_ssh_port, ssh_user, host_id, container_host_public_key) = row
+    (
+        leased_to_user,
+        status,
+        vps_address,
+        container_ssh_port,
+        ssh_user,
+        host_id,
+        container_host_public_key,
+        workspace_id,
+    ) = row
     if leased_to_user != user.user_id_prefix:
         raise HTTPException(status_code=403, detail="You do not own this host lease")
     if status != "leased":
@@ -1288,7 +1298,12 @@ def _enable_sharing_core(
 
     management_key_pem = os.environ["POOL_SSH_PRIVATE_KEY"]
     store = shares_module.get_share_store()
-    existing_share = store.get_share(host_id, user_label)
+    # The workspace id (the pool row's pre-provisioned agent id) is the
+    # share's durable key; the host-keyed fallback inside only covers rows old
+    # clients created, never a row claimed by a different workspace.
+    existing_share = shares_module.find_share_for_workspace(
+        store, host_id, user_label, workspace_id if workspace_id else None
+    )
     relay_rows = shares_module.active_relay_rows()
     region = shares_module.resolve_share_region_for_share(
         existing_region=str(existing_share["region"]) if existing_share is not None else None,
@@ -1297,12 +1312,28 @@ def _enable_sharing_core(
         eligible_regions=relays_module.eligible_regions(relay_rows),
         host_id=host_id,
     )
-    coordinate = shares_module.make_share_coordinate(
-        host_id=host_id,
-        user_label=user_label,
-        region=region,
-        content_domain=shares_module.share_content_domain(),
-    )
+    if existing_share is not None:
+        coordinate = shares_module.coordinate_from_stored_share(
+            existing_share, user_label, workspace_id_backfill=workspace_id
+        )
+    elif workspace_id:
+        coordinate = shares_module.make_workspace_share_coordinate(
+            host_id=host_id,
+            workspace_id=workspace_id,
+            share_label=shares_module.generate_share_label(),
+            user_id=full_user_id,
+            region=region,
+            content_domain=shares_module.share_content_domain(),
+        )
+    else:
+        # A pool row without an agent id should not exist; keep the legacy
+        # host-led coordinate as the safe degradation.
+        coordinate = shares_module.make_share_coordinate(
+            host_id=host_id,
+            user_label=user_label,
+            region=region,
+            content_domain=shares_module.share_content_domain(),
+        )
     relay_token = shares_module.generate_relay_token()
     # No entry label is supplied here: the frps NewProxy callback records it
     # once the workspace's tunnel claims its service labels, so the connector
@@ -1348,6 +1379,7 @@ def _enable_sharing_core(
     recorded_entry_label = share_row.get("entry_label") if share_row is not None else None
     return EnableSharingResponse(
         host_id=host_id,
+        workspace_id=coordinate.workspace_id,
         workspace_domain=coordinate.workspace_domain,
         region=region,
         entry_label=recorded_entry_label,

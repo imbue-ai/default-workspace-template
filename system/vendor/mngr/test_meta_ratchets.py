@@ -8,11 +8,14 @@ from pathlib import Path
 
 import pytest
 import tomlkit
+import yaml
 from inline_snapshot import snapshot
 
 from imbue.imbue_common.ratchet_testing.common_ratchets import RegexRatchetRule
+from imbue.imbue_common.ratchet_testing.common_ratchets import check_ratchet_rule
 from imbue.imbue_common.ratchet_testing.common_ratchets import check_ratchet_rule_all_files
 from imbue.imbue_common.ratchet_testing.core import BINARY_FILE_EXCLUSION
+from imbue.imbue_common.ratchet_testing.core import RatchetMatchChunk
 from imbue.imbue_common.ratchet_testing.core import _get_all_files_with_extension
 from imbue.imbue_common.ratchet_testing.ratchets import check_no_import_lint_errors
 from imbue.imbue_common.ratchet_testing.ratchets import check_no_type_errors
@@ -58,6 +61,49 @@ def _get_all_project_dirs() -> list[Path]:
     return [
         get_project_dir(name, _REPO_ROOT) for name in pyproject_projects(_REPO_ROOT) if name not in _EXCLUDED_PROJECTS
     ]
+
+
+def _get_workspace_project_dirs() -> list[Path]:
+    """Return the project directories that are members of the root uv workspace.
+
+    A project listed in the root ``[tool.uv.workspace].exclude`` is a standalone
+    uv project: it has its own lockfile and CI job, the root ``uv sync
+    --all-packages`` never installs it, and the root pytest run never collects
+    it. Anything that reasons about *root* pytest/coverage configuration must
+    look at this list rather than every directory that happens to hold a
+    pyproject.toml, otherwise it demands root config for packages that cannot
+    be imported there.
+    """
+    root_pyproject = tomlkit.parse((_REPO_ROOT / "pyproject.toml").read_text())
+    excluded_globs = [str(p) for p in root_pyproject["tool"]["uv"]["workspace"].get("exclude", [])]
+    # Spell each glob without a trailing slash. Two other readers match this same
+    # list with their own matchers -- scripts/utils.py's iter_standalone_project_dirs
+    # globs the pattern directly, and scripts/snapshot_minds_e2e_state.py matches
+    # `f"{glob}/*"` -- and none of the three normalizes a trailing slash. With one,
+    # this function stops recognizing the exclusion, _get_standalone_project_dirs()
+    # goes empty, the standalone-project ratchets below pass vacuously, and
+    # scripts/release.py quietly stops advancing that project's cooldown cutoff. An
+    # absent `exclude` key is fine (the public-mirror overlay has none); only the
+    # ambiguous spelling is rejected.
+    assert all(not glob.endswith("/") for glob in excluded_globs), (
+        "[tool.uv.workspace].exclude entries must not end in '/': "
+        f"{[glob for glob in excluded_globs if glob.endswith('/')]}"
+    )
+    return [
+        d
+        for d in _get_all_project_dirs()
+        if not any(fnmatch.fnmatch(str(d.relative_to(_REPO_ROOT)), glob) for glob in excluded_globs)
+    ]
+
+
+def _get_standalone_project_dirs() -> list[Path]:
+    """Return the project directories that are NOT members of the root uv workspace.
+
+    The complement of ``_get_workspace_project_dirs``, expressed as a difference so
+    the exclusion globs are read in exactly one place.
+    """
+    workspace_dirs = set(_get_workspace_project_dirs())
+    return [d for d in _get_all_project_dirs() if d not in workspace_dirs]
 
 
 def _find_test_ratchets_file(project_dir: Path) -> Path | None:
@@ -358,7 +404,7 @@ def test_prevent_bash_without_strict_mode() -> None:
     violations = [
         v for v in find_bash_scripts_without_strict_mode(_REPO_ROOT) if Path(v).resolve().is_relative_to(checkout_root)
     ]
-    assert len(violations) <= snapshot(12), "Bash scripts missing 'set -euo pipefail':\n" + "\n".join(
+    assert len(violations) <= snapshot(8), "Bash scripts missing 'set -euo pipefail':\n" + "\n".join(
         f"  - {v}" for v in violations
     )
 
@@ -796,6 +842,10 @@ def test_top_level_cov_flags_are_union_of_subproject_cov_flags() -> None:
     subprojects' `--cov=` flags, except for packages whose source is fully omitted in the
     top-level `[tool.coverage.run].omit` (e.g. `libs/mngr_modal/imbue/mngr_modal/*`).
 
+    Standalone (non-workspace-member) projects are out of scope: the root run cannot
+    import them at all, so a root ``--cov=`` flag for one would only ever warn that the
+    module was never imported. They own their coverage in their own project.
+
     Keeps the root coverage scope in sync with the per-project scopes so a new subproject
     cannot silently drop out of combined coverage collection.
     """
@@ -807,7 +857,7 @@ def test_top_level_cov_flags_are_union_of_subproject_cov_flags() -> None:
     )
 
     subproject_cov: set[str] = set()
-    for project_dir in _get_all_project_dirs():
+    for project_dir in _get_workspace_project_dirs():
         pyproject = tomlkit.parse((project_dir / "pyproject.toml").read_text())
         # Only consider --cov= flags that target the `imbue.<pkg>` namespace;
         # the top-level pyproject.toml only exposes that shape via its `source =
@@ -838,6 +888,58 @@ def test_top_level_cov_flags_are_union_of_subproject_cov_flags() -> None:
     assert len(errors) == 0, "Top-level --cov= flags out of sync with subprojects:\n" + "\n".join(errors)
 
 
+def test_standalone_project_ci_gates_list_every_in_repo_dependency() -> None:
+    """A standalone project's CI job must be gated on all of its in-repo dependencies.
+
+    A standalone project is invisible to the offload run, so one path-gated job is the
+    only thing that exercises it. It resolves its in-repo dependencies as editable path
+    sources, which means a change to any of them lands in that project's venv without
+    touching the project directory -- and a gate that does not list the dependency
+    simply does not run, reporting green for a change it never built. The lock is the
+    authority on what those dependencies are, so the gate is checked against it rather
+    than against a second hand-written list.
+    """
+    workflow = yaml.safe_load((_REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text())
+    missing: list[str] = []
+    for project_dir in _get_standalone_project_dirs():
+        rel_project = project_dir.relative_to(_REPO_ROOT)
+        lock_text = (project_dir / "uv.lock").read_text()
+        # `source = { editable = "../../libs/foo" }` -- the project's own entry is "."
+        editable_deps = {
+            (project_dir / raw).resolve().relative_to(_REPO_ROOT.resolve())
+            for raw in re.findall(r'source = \{ editable = "([^"]+)" \}', lock_text)
+            if raw != "."
+        }
+        gate = _find_ci_path_gate(workflow, rel_project)
+        assert gate is not None, f"no path-gated CI job found for standalone project {rel_project}"
+        # Compare whole shell words, not substrings: `libs/mngr` is a substring of the
+        # listed `libs/mngr_usage`, so a substring test would report a gate that omits
+        # `libs/mngr` as complete.
+        gate_words = set(gate.split())
+        missing.extend(
+            f"{rel_project}: CI gate omits {dep}" for dep in sorted(editable_deps) if str(dep) not in gate_words
+        )
+    assert not missing, (
+        "Standalone projects' CI path gates must list every in-repo editable dependency in their "
+        "uv.lock:\n" + "\n".join(f"  - {m}" for m in missing)
+    )
+
+
+def _find_ci_path_gate(workflow: dict, project_dir: Path) -> str | None:
+    """The shell body of the `git diff --name-only` step that gates ``project_dir``'s CI job.
+
+    Returned with backslash-newline continuations collapsed to spaces, so the gate's
+    path arguments -- one per continued line -- are plain whitespace-delimited words
+    that callers can match exactly.
+    """
+    for job in workflow.get("jobs", {}).values():
+        for step in job.get("steps", []):
+            run = step.get("run", "").replace("\\\n", " ")
+            if "git diff --name-only" in run and f" {project_dir} " in run:
+                return run
+    return None
+
+
 def test_top_level_coverage_omit_covers_subproject_omits() -> None:
     """For every file in a subproject's package tree that the subproject's
     `[tool.coverage.run].omit` patterns exclude, the top-level
@@ -849,6 +951,9 @@ def test_top_level_coverage_omit_covers_subproject_omits() -> None:
     `libs/<pkg>/imbue/<pkg>/testing.py`. Walking concrete files and matching via
     fnmatch (the same matcher coverage.py uses) makes both forms equivalent.
 
+    Standalone (non-workspace-member) projects are out of scope: the root run never
+    measures them, so the root omit list has nothing to say about their files.
+
     Prevents a new subproject from silently omitting files that combined coverage
     still counts at the root.
     """
@@ -858,7 +963,7 @@ def test_top_level_coverage_omit_covers_subproject_omits() -> None:
         return any(fnmatch.fnmatch(rel_repo_path, pat) for pat in top_omit)
 
     missing: dict[str, list[str]] = {}
-    for project_dir in _get_all_project_dirs():
+    for project_dir in _get_workspace_project_dirs():
         pkg_root = project_dir / "imbue" / project_dir.name
         if not pkg_root.exists():
             continue
@@ -1163,3 +1268,75 @@ def test_wire_types_files_contain_only_wire_models_and_wire_enums() -> None:
         "Every class in a wire_types.py must inherit WireModel or WireEnum (directly or transitively) "
         "so connector response shapes stay forward compatible:\n" + "\n".join(f"  - {v}" for v in violations)
     )
+
+
+# --- Machine/workspace terminology (see specs/machine-workspace-naming/decisions.md) ---
+
+# Non-test .py files under these globs are mngr-level: they speak host/agent and must
+# not use the minds-level machine/workspace vocabulary or reference minds itself.
+_MNGR_LEVEL_DIR_GLOB = "libs/mngr*"
+
+# Test-infrastructure files are exempt: they may exercise higher-level scenarios and
+# uv-workspace tooling, and their prose is not part of the shipped vocabulary.
+_TERMINOLOGY_TEST_EXCLUSIONS: tuple[str, ...] = ("*_test.py", "test_*.py", "conftest.py", "testing.py")
+
+# mngr_imbue_cloud carve-outs: the wire layer (and the primitives feeding it) mirrors
+# the connector's own vocabulary, which says "workspace"; the bake/slice/admin-CLI
+# operator tooling is minds-level infrastructure living in the plugin until it moves
+# (https://github.com/imbue-ai/mngr-internal/issues/461).
+_IMBUE_CLOUD_TERMINOLOGY_EXEMPT: tuple[str, ...] = (
+    "wire.py",
+    "wire_types.py",
+    "primitives.py",
+    "bake/*.py",
+    "slices/*.py",
+    "cli/*.py",
+    "connector/*.py",
+)
+
+_PREVENT_WORKSPACE_VOCABULARY_IN_MNGR_LEVEL_CODE = RegexRatchetRule(
+    rule_name="workspace vocabulary in mngr-level code",
+    rule_description=(
+        "mngr-level code (libs/mngr and the mngr plugins) speaks host/agent; 'workspace' is the "
+        "minds-level term for the logical unit identified by its system-services agent id. Say "
+        "host, agent, work dir, or project as appropriate (see "
+        "specs/machine-workspace-naming/decisions.md). The uv sense must be spelled 'uv-workspace'."
+    ),
+    # The uv sense is allowed when spelled "uv-workspace" (the lookbehind).
+    pattern_string=r"(?i)(?<!uv-)\bworkspaces?\b",
+)
+
+_PREVENT_MINDS_REFERENCES_IN_MNGR_LEVEL_CODE = RegexRatchetRule(
+    rule_name="minds references in mngr-level code",
+    rule_description=(
+        "mngr-level code must not reference minds, default-workspace-template, or the "
+        "/home/user/workspace container path -- those are higher-level concerns layered on top "
+        "of mngr (see specs/machine-workspace-naming/decisions.md). Describe the behavior "
+        "generically (e.g. 'a caller may...') instead of naming the higher-level product."
+    ),
+    pattern_string=r"(?i)\bminds\b|default[-_]workspace[-_]template|/home/user/workspace",
+)
+
+
+def _mngr_level_terminology_chunks(rule: RegexRatchetRule) -> list[RatchetMatchChunk]:
+    chunks: list[RatchetMatchChunk] = []
+    for level_dir in sorted(_REPO_ROOT.glob(_MNGR_LEVEL_DIR_GLOB)):
+        if not level_dir.is_dir():
+            continue
+        exclusions = _TERMINOLOGY_TEST_EXCLUSIONS
+        if level_dir.name == "mngr_imbue_cloud":
+            exclusions = exclusions + _IMBUE_CLOUD_TERMINOLOGY_EXEMPT
+        chunks.extend(check_ratchet_rule(rule, level_dir, exclusions))
+    return chunks
+
+
+def test_prevent_workspace_vocabulary_in_mngr_level_code() -> None:
+    """Keep the minds-level 'workspace' vocabulary out of mngr-level code (count may only fall)."""
+    chunks = _mngr_level_terminology_chunks(_PREVENT_WORKSPACE_VOCABULARY_IN_MNGR_LEVEL_CODE)
+    assert len(chunks) <= snapshot(370), _PREVENT_WORKSPACE_VOCABULARY_IN_MNGR_LEVEL_CODE.format_failure(tuple(chunks))
+
+
+def test_prevent_minds_references_in_mngr_level_code() -> None:
+    """Keep minds / default-workspace-template references out of mngr-level code (count may only fall)."""
+    chunks = _mngr_level_terminology_chunks(_PREVENT_MINDS_REFERENCES_IN_MNGR_LEVEL_CODE)
+    assert len(chunks) <= snapshot(352), _PREVENT_MINDS_REFERENCES_IN_MNGR_LEVEL_CODE.format_failure(tuple(chunks))

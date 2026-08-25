@@ -649,23 +649,15 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
             "_retry_delay": _retry_delay,
             "_retry_until": _retry_until,
         }
-        with self._notify_on_connection_error():
-            try:
-                return self._run_shell_command_with_transient_retry(command, pyinfra_kwargs)
-            except TimeoutError as e:
-                # ``TimeoutError`` is a subclass of ``OSError``, so this
-                # must precede the OSError branch below. Reached when the
-                # retry decorator has exhausted its attempts on transient
-                # SSH read timeouts; surface as a structured
-                # HostConnectionError so callers don't see a raw timeout.
-                raise HostConnectionError("SSH command timed out reading output") from e
-            except OSError as e:
-                if "Socket is closed" in str(e):
-                    raise HostConnectionError("Connection was closed while running command") from e
-                else:
-                    raise
-            except (EOFError, SSHException) as e:
-                raise HostConnectionError("Could not execute command due to connection error") from e
+        with (
+            self._notify_on_connection_error(),
+            self._translate_ssh_errors(
+                timed_out="SSH command timed out reading output",
+                closed="Connection was closed while running command",
+                failed="Could not execute command due to connection error",
+            ),
+        ):
+            return self._run_shell_command_with_transient_retry(command, pyinfra_kwargs)
 
     # _run_shell_command_with_transient_retry and _run_shell_command_local
     # are inherited unchanged from OuterHost. _get_file*, _put_file*,
@@ -1506,6 +1498,10 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
     def save_agent_data(self, agent_id: AgentId, agent_data: Mapping[str, object]) -> None:
         """Persist agent data to external storage via the provider."""
         self.provider_instance.persist_agent_data(self.id, agent_data)
+
+    def remove_agent_data(self, agent_id: AgentId) -> None:
+        """Remove agent data from external storage via the provider."""
+        self.provider_instance.remove_persisted_agent_data(self.id, agent_id)
 
     def get_agents(self) -> list[AgentInterface]:
         """Get all agents on this host."""
@@ -3119,7 +3115,7 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
 
                 # Remove persisted agent data from external storage (e.g., Modal volume).
                 try:
-                    self.provider_instance.remove_persisted_agent_data(self.id, agent.id)
+                    self.remove_agent_data(agent.id)
                 except MngrError as e:
                     logger.warning(
                         "Failed to remove persisted data for agent {} on host {}: {}", agent.name, self.id, e
@@ -3533,7 +3529,7 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
         when its environ carries the marker. The server hosts *every* agent's session
         on the host, so it is never a legitimate member of one agent's process tree --
         but it inherits the environment of whichever process happens to fork it, and
-        when that was an agent-context ``mngr start`` (e.g. the workspace template's
+        when that was an agent-context ``mngr start`` (e.g. a project template's
         boot units, which source the system-services agent's env before relaunching
         it), the marker brands the server as that agent's. Sweeping it up then kills
         every agent on the host, and when the sweep was requested from inside one of

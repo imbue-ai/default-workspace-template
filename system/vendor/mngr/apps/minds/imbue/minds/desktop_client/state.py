@@ -24,18 +24,20 @@ from pydantic import Field
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.minds.config.data_types import ClientEnvConfig
-from imbue.minds.config.data_types import WorkspacePaths
+from imbue.minds.config.data_types import InstallationPaths
 from imbue.minds.desktop_client.agent_creator import AgentCreator
 from imbue.minds.desktop_client.auth import AuthStoreInterface
 from imbue.minds.desktop_client.backend_resolver import BackendResolverInterface
 from imbue.minds.desktop_client.backup_trim import BackupTrimManager
 from imbue.minds.desktop_client.discovery_health import DiscoveryHealthWatchdog
+from imbue.minds.desktop_client.environment_signals import ConnectivityDetector
 from imbue.minds.desktop_client.forward_cli import EnvelopeStreamConsumer
 from imbue.minds.desktop_client.imbue_cloud_cli import ActiveShareCache
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCli
 from imbue.minds.desktop_client.latchkey.permission_requests_consumer import PermissionRequestsConsumer
 from imbue.minds.desktop_client.minds_config import MindsConfig
 from imbue.minds.desktop_client.notification import NotificationDispatcher
+from imbue.minds.desktop_client.notification_feed import NotificationFeed
 from imbue.minds.desktop_client.region_preference import GeoLocationCache
 from imbue.minds.desktop_client.request_events import RequestInbox
 from imbue.minds.desktop_client.request_handler import RequestEventHandler
@@ -85,7 +87,15 @@ class DesktopClientState(MutableModel):
     notification_dispatcher: NotificationDispatcher | None = Field(
         default=None, frozen=True, description="OS notification dispatcher"
     )
-    api_v1_paths: WorkspacePaths | None = Field(
+    notification_feed: NotificationFeed | None = Field(
+        default=None,
+        frozen=True,
+        description=(
+            "Durable in-memory notification feed, reconciled by the channel's notifications "
+            "derive; wired by create_desktop_client (None only for apps constructed without it)"
+        ),
+    )
+    api_v1_paths: InstallationPaths | None = Field(
         default=None, frozen=True, description="Workspace data paths; gates the /api/v1 mount"
     )
     minds_config: MindsConfig | None = Field(default=None, frozen=True, description="Per-user minds config store")
@@ -152,6 +162,11 @@ class DesktopClientState(MutableModel):
     )
     discovery_health_watchdog: DiscoveryHealthWatchdog | None = Field(
         default=None, frozen=True, description="App-global discovery-pipeline health watchdog"
+    )
+    connectivity_detector: ConnectivityDetector | None = Field(
+        default=None,
+        frozen=True,
+        description="Whether this device can reach anything, for the restart paths that would otherwise be doomed",
     )
     mngr_binary: str = Field(default="mngr", frozen=True, description="Path/name of the mngr binary to shell out to")
     mngr_caller: MngrCaller | None = Field(

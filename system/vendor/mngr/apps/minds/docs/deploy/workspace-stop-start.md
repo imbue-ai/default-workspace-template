@@ -11,8 +11,11 @@ downloading onto any same-region box with a free slot after it. The minds
 desktop shows the Start/Stop control for imbue_cloud workspaces through the
 same gate as local ones.
 
-The pool_hosts row is the workspace's stable identity across the whole
-lifecycle (`host_db_id` and `host_id` never change):
+The pool_hosts row is the lease/machine record; `host_db_id` and `host_id`
+identify the machine (the slice VM keeps its host id across stop/start --
+suspending and resuming a machine does not mint a new one). The workspace's
+own durable identity is its workspace id (the pre-provisioned services agent
+id on the row). Lifecycle:
 
 ```
 running (leased) -> stopping -> stopped -> starting -> running
@@ -48,7 +51,9 @@ running (leased) -> stopping -> stopped -> starting -> running
   file. The
   boot-time slice autostart skips VMs carrying the stop-requested marker so
   a box reboot never resurrects a half-uploaded VM.
-- **Artifact**: the slice's self-contained qcow2 `disk` + `datadisk`, plus a
+- **Artifact** (a machine image, not a workspace backup -- the restic
+  backups remain the substrate-independent safety net): the slice's
+  self-contained qcow2 `disk` + `datadisk`, plus a
   small metadata tar (`lima.yaml` and sidecars), keyed under
   `[<env>/]<host-id>/gen-<n>/`. Each object is encrypted to a per-stop age
   identity; the identity is wrapped by the tier KEK and stored on the row
@@ -122,6 +127,16 @@ the connector's default hour-long instant-restart window.
   it over and re-drives it, backing off in `transition_failure_count` (the
   last failure is on `transition_error`) and logging at error level once it
   has failed many consecutive times.
+- Restores on one box download one at a time under `~/.mngr-download.lock`
+  (released before the VM boots). A restore queued behind another's
+  download shows `STAGE=waiting-for-lock` in its box-side status file; the
+  wait is bounded (`flock -w 300`), so a stuck lock fails the restore with
+  `box download lock unavailable after 300s` on `transition_error` rather
+  than stalling it. To find who holds the lock, walk `/proc/*/fd` for the
+  lock path (not `/proc/locks`, which records the long-gone `flock(1)`
+  pid); a `limactl hostagent` + `qemu` pair holding it is a leaked
+  descriptor from a pre-fix restore, and unlinking the lock file (a new
+  restore then locks a fresh inode) is the safe remediation.
 - KEK rotation re-wraps the per-stop identities in the DB only -- objects
   are never re-encrypted.
 - Known constraint: upload from boxes to OVH Object Storage is currently

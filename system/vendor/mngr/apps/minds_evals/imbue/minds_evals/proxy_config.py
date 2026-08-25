@@ -28,8 +28,12 @@ HOOKS_MODULE: Final[str] = "box_proxy_hooks"
 def build_model_list() -> list[dict[str, Any]]:
     """One routable entry per priced Anthropic model, carrying its prices inline.
 
-    Inline pricing (rather than litellm's bundled map) is the same posture apps/modal_litellm takes:
-    cost stays correct even on a litellm whose own table predates a model.
+    Prices are written inline rather than left to litellm's bundled map, so cost stays correct even
+    on a litellm version whose own table predates a model. The trade is that four flat per-token
+    numbers cannot express what that map holds beside them -- the fast-mode premium
+    (``provider_specific_entry.fast``), the 1-hour cache-write rate, the regional uplift -- so every
+    figure the proxy reports is a standard-rate, 5-minute-cache one. The eval's own totals re-apply
+    the fast premium from ``mngr_usage`` afterwards; the proxy's per-request ``cost_usd`` does not.
     """
     entries: list[dict[str, Any]] = []
     for pricing_key, prices in MODEL_PRICING.items():

@@ -78,11 +78,10 @@ GitHub runner only orchestrates -- all weight is on Modal -- so `ubuntu-latest` 
    requires `MINDS_EVAL_BUCKET` / `MINDS_EVAL_S3_ENDPOINT`, a local convention that does not exist on
    a runner. There is no `upload-artifact` step either. Sizing input: 92 MB per trial, nearly all of
    it the workspace snapshot tarball.
-7. **Install weight on every other job.** `apps/minds_evals` is a uv workspace member, so the
-   `uv sync --all-packages` that every CI job runs now builds harbor from git and pulls its
-   dependency tree (fastapi, uvicorn, supabase, litellm, dirhash, pathspec). See item 5 under
-   "Packaging" -- unpacking the workspace membership fixes this and the dependency-override problem
-   in one move.
+7. ~~**Install weight on every other job.**~~ **Done** -- while `apps/minds_evals` was a uv
+   workspace member, the `uv sync --all-packages` that every CI job runs built harbor from git and
+   pulled its dependency tree (fastapi, uvicorn, supabase, litellm, dirhash, pathspec) into every one
+   of them. The packaging fix in section 5 keeps that tree out of the root lock entirely.
 
 Timeout math is already sound: `--agent-setup-timeout-multiplier 3` against harbor's 360s default
 gives 1080s, comfortably over `BACKEND_BOOT_TIMEOUT_SECONDS = 600`, and the agent timeout is the case
@@ -213,8 +212,31 @@ carries none, which is what the eval's own comment claims and is correct.
    declared rich and modal, the root override disappears, the filelock/platformdirs bumps stop
    rippling into the `image_requirements.txt` files and the mirror lock, and every other CI job stops
    installing fastapi/supabase/litellm. Cost: the driver import path needs the monorepo packages
-   visible, solvable with a path dependency on what it actually imports (`imbue-common`). **Not yet
-   verified to resolve cleanly** -- worth an actual `uv lock` experiment before committing.
+   visible, solvable with a path dependency on what it actually imports (`imbue-common`).
+
+**Resolved, as proposed.** `apps/minds_evals` is a standalone uv project: the root
+`[tool.uv.workspace]` excludes it, and it carries its own `pyproject.toml`, `uv.lock`,
+`.python-version` and `.venv`, resolved under the same two-week cooldown policy as the root, stated as a
+rolling `exclude-newer` window so nothing has to advance it (a meta-ratchet holds the window equal to
+`DEPENDENCY_COOLDOWN`). It
+takes the genuine `harbor[modal]==0.21.0` and resolves rich 15.0.0 / modal 1.5.2, both above harbor's
+floors; the root `override-dependencies` entry is gone and the root lock drops 14 packages with no
+version change to anything that remains. The monorepo packages it needs come in as editable path
+sources rather than workspace members, so trial costs are still priced off this repo's
+`mngr_usage` table.
+
+The bill for isolation is that nothing in the root workspace's tooling reaches the project any more:
+`uv sync --all-packages` does not install it, the offload image does not contain it, root pytest
+ignores it via `collect_ignore_glob`, and the root `ty check` excludes it. What replaces that is
+`just test-minds-evals` (sync from its own lock, `ty check`, pytest) plus a path-gated
+`test-minds-evals` CI job that runs the recipe whenever the app *or any of the in-repo packages that
+land in its venv* changes -- a meta-ratchet checks that gate against the editable sources in the
+project's own lock, since a gate missing one reports green for code it never built.
+
+One caveat worth keeping in view: this buys a resolver-checkable claim, not a tested one. harbor ran
+on rich 13.9.4 (below its floor, smoke-verified) and now runs on rich 15.0.0 (above its floor,
+equally unverified by us). Item 2's substantive worry -- that a harbor bump starts calling a modal
+1.5 API -- is what actually goes away, because the resolver will now refuse rather than shrug.
 
 ## 6. Iteration friction
 
@@ -520,8 +542,11 @@ whether the rate applied to it is the one it was billed at. Three things to know
 1. **Repricing is done, but only where the tier is observable.** `mngr_usage` carries a
    `FAST_MODE_PRICE_MULTIPLIER` and `compute_cost(..., is_fast_mode=True)`, and the eval prices
    each tier's tokens at its own rate. This only helps a proxied trial: without the proxy the tier is
-   invisible and everything is priced standard, which for a default Minds workspace is half the real
-   figure. Two consequences worth carrying forward: **every eval cost recorded before this** was
+   invisible and everything is priced standard. Measured on a default Minds workspace, tier-blindness
+   alone puts the figure at 68% of the real one -- less of an understatement than the 2x rate
+   suggests, because only the chat agent runs fast. An unproxied trial compounds that with the
+   delegated spend it cannot see and lands far lower: 26% and 32% on two measured trials. Two
+   consequences worth carrying forward: **every eval cost recorded before this** was
    standard-rate and should be read as a floor, and **mngr's own usage reporting** has the same gap
    in production -- minds runs fast mode by default, and nothing outside a proxy sees the tier, so
    user-facing cost numbers understate fast-mode traffic. Deciding what to do about that is a
@@ -536,9 +561,13 @@ whether the rate applied to it is the one it was billed at. Three things to know
    does not accept it, so a non-Opus arm silently runs standard instead of erroring. Convenient, but
    it means the downgrade is invisible unless the recorded tier is actually read.
 
-3. **Controlling the tier is implemented in the per-model override work (PR 407);** observing it
-   lives here. An arm therefore declares both its model and its tier, and the recorded tier is what
-   confirms the override actually took effect rather than being assumed.
+3. **The tier cannot currently be controlled at all, only observed.** The workspace's `first`
+   create template passes `-S agent_types.claude.settings_overrides.fastMode=true` when it creates
+   the starting chat, and a `--setting` outranks any settings file placed in the per-case clone, so
+   nothing the eval writes there changes the tier. Pinning it means creating the graded agent rather
+   than talking to the one the workspace starts. Until then a model arm carries whatever tier its
+   model can serve, so an Opus arm bills at roughly twice a Haiku arm's rate for reasons that are not
+   about the model.
 
 Also worth knowing when reading cache numbers: switching tier invalidates the prompt cache, so an
 arm that flips fast mode mid-run pays cache writes it would not otherwise have paid.
