@@ -31,11 +31,15 @@ change only what it intends to.
   current in-use values; migrated 36 sites (exact hex→token, `color:#fff`→on-accent,
   surface white→`--color-surface`) and dropped 5 dead `var(--token,#hex)` fallbacks.
   Ratchet `hexOutsideTheme` 52 → 16.
-- **Leftover colours — pending a design call.** 16 raw hexes remain in three
-  component-local palettes that would be *unification* (a visible change), not a
-  no-op: the warm login/composer error red (`#80261f/#fdecea/#f4c7c3/#c5221f/
-  #b3573c/#d4806a`) vs the cool `--color-danger`; the `.minds-tooltip` black/white;
-  and the progress-block warm greys (`#5a564a/#c2bfb6/#bcbcbc`).
+- **Leftover colours — DONE (intentional).** Zero raw hex now remains outside
+  `@theme` (`hexOutsideTheme` 16 → 0). Decisions: `--color-danger` was *warmed*
+  to `#d83a2c` (hover `#b62d22`, bg `#fdecea`, border `#f4c7c3`) and the warm
+  login/composer error reds unified onto it (one error red everywhere); the amber
+  waiting-dot → `--color-warning`; the `.minds-tooltip` black/white → existing
+  `text-primary`/`surface`/`on-accent` (it self-inverts via its own
+  `prefers-color-scheme` rules, so no new token); the progress-block warm greys →
+  the neutral `--color-text-secondary`/`-faint` (progress view greys are now
+  neutral, a small deliberate shift). Note: `--color-info` is defined but unused.
 - **Primitives (P3) / Modal (P4) — not started** (below); out of scope for the
   current pass (user chose "through P2").
 
