@@ -2400,92 +2400,6 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   color: var(--color-text-primary);
 }
 
-/* ── Custom URL dialog ── */
-.custom-url-dialog-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background: rgba(0, 0, 0, 0.4);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 10000;
-}
-
-.custom-url-dialog {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: 12px;
-  padding: 24px;
-  width: 400px;
-  max-width: 90vw;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
-}
-
-.custom-url-dialog-title {
-  font-family: var(--font-family-heading);
-  font-size: var(--font-size-heading);
-  font-weight: 600;
-  color: var(--color-text-primary);
-  margin: 0 0 16px;
-}
-
-.custom-url-dialog-label {
-  display: block;
-  font-size: var(--font-size-body);
-  font-weight: 500;
-  color: var(--color-text-secondary);
-  margin-bottom: 4px;
-}
-
-/* The project-name field now uses the shared .input primitive; the row's
-   bottom spacing is applied at the call site (a utility class). */
-
-.custom-url-dialog-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 8px;
-}
-
-.custom-url-dialog-cancel,
-.custom-url-dialog-open {
-  padding: 6px 16px;
-  font-family: var(--font-family-base);
-  font-size: var(--font-size-body);
-  font-weight: 500;
-  border-radius: var(--radius-base);
-  cursor: pointer;
-  border: 1px solid var(--color-border);
-  transition: background 100ms;
-}
-
-.custom-url-dialog-cancel {
-  background: var(--color-bg);
-  color: var(--color-text-primary);
-}
-
-.custom-url-dialog-cancel:hover {
-  background: var(--color-bg-hover);
-}
-
-.custom-url-dialog-open {
-  background: var(--color-accent);
-  color: var(--color-text-on-accent);
-  border-color: var(--color-accent);
-}
-
-.custom-url-dialog-open:hover {
-  background: var(--color-accent-hover);
-}
-
-.custom-url-dialog-open:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
 /* ── Project settings pickers ── */
 /* The color swatches and the squiggle cells of the project settings modal. They
    are the only toggles a modal carries, so ``aria-pressed`` is what tells them
@@ -2777,15 +2691,8 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 /* ── Destroy confirmation dialog ── */
 /* The delete-confirmation dialog is the shared .modal-* shell (see Modal
    primitive above and views/DestroyConfirmDialog.ts); its buttons use the .btn
-   primitive (btn--secondary = cancel, btn--destructive = confirm). The
-   .destroy-dialog-message class remains only for the project settings / add-to-
-   project dialogs that still borrow it. */
-.destroy-dialog-message {
-  font-size: var(--font-size-body);
-  color: var(--color-text-secondary);
-  margin: 0 0 16px;
-  line-height: 1.5;
-}
+   primitive (btn--secondary = cancel, btn--destructive = confirm), and its body
+   copy uses .modal-message -- the same as every other dialog now on the shell. */
 
 /* ── Fast-mode grace-period prompt ── */
 /* The prompt is the shared .modal-* shell (see Modal primitive above and
@@ -3610,14 +3517,6 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   font-size: var(--font-size-body);
   color: var(--color-text-secondary);
   padding: 6px 0;
-}
-
-/* Body copy for the /logout interception notice dialog */
-.logout-notice-body {
-  font-size: var(--font-size-body);
-  color: var(--color-text-secondary);
-  line-height: 1.5;
-  margin: 8px 0 4px;
 }
 
 /* Step checklist shown while the background agent restart runs */
