@@ -227,7 +227,9 @@ conversation:**
 1. Initiate every activation requirement YOURSELF, now -- one latchkey
    permission request per `requires_permission:` line (see the `latchkey` skill: `latchkey curl -XPOST
    http://latchkey-self.invalid/permission-requests`; the request opens the
-   approval/login flow in the minds app). Do not merely tell the user a
+   approval/login flow in the minds app). Each request is its own tool call,
+   with nothing else in it; when a template needs several, file them one after
+   another without waiting for verdicts in between. Do not merely tell the user a
    permission is needed — send the request so it appears for them to approve.
 2. **Install what the template declares.** Read `[environment]` in
    `template.toml`. If it is empty, skip this. Otherwise install the entries

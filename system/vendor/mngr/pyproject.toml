@@ -18,12 +18,6 @@ dependencies = [
 # fresh dep and break resolution. This only buys a detection delay;
 # it can't catch a compromise that stays undetected past the window.
 exclude-newer = "2026-07-20T00:00:00Z"
-# harbor 0.21.0 declares rich>=14.1.0, but litellm[proxy] (a regular dependency
-# of apps/modal_litellm) caps rich<14 in every version inside the cooldown
-# window, so the two can never co-resolve. Override rich to the workspace
-# status quo (13.x); harbor runs fine on it (verified via the minds_evals
-# oracle smoke run on Modal).
-override-dependencies = ["rich>=13.9.4,<14.0"]
 
 [tool.uv.sources]
 imbue-common = { workspace = true }
@@ -31,6 +25,14 @@ overlay = { workspace = true }
 
 [tool.uv.workspace]
 members = ["libs/*", "apps/*"]
+# apps/minds_evals is a standalone uv project with its own pyproject.toml and
+# uv.lock, not a workspace member. It depends on harbor, whose rich>=14.1.0 and
+# modal>=1.5.1 floors cannot co-resolve with this workspace's litellm[proxy]
+# (rich<14) and modal==1.4.3 pins -- uv enforces one version per package across
+# a workspace, so the only way harbor gets its declared dependencies is a
+# separate lock. It is built, tested, and type-checked by the `test-minds-evals`
+# CI job (see justfile's test-minds-evals); nothing here installs or collects it.
+exclude = ["apps/minds_evals"]
 
 [dependency-groups]
 dev = [
@@ -128,8 +130,10 @@ addopts = [
   "--cov=imbue.mngr_gcp",
   "--cov=imbue.mngr_azure",
   "--cov=imbue.mngr_minds_eval",
-  "--cov=imbue.minds_evals",
   "--cov=imbue.analytics",
+  # NOTE: apps/minds_evals is deliberately absent from this list -- it is a
+  # standalone project (see [tool.uv.workspace].exclude) and is excluded from
+  # collection by collect_ignore_glob in the root conftest.py, not from here.
   # NOTE: no --cov-report/--coverage-to-file here. Per-run coverage reports
   # are expensive to generate (they walk every measured file) and are only
   # useful interactively, so the local recipes that want them
@@ -192,13 +196,27 @@ format-command="uv run ruff format --force-exclude --config pyproject.toml --std
 [tool.ty.src]
 # apps/minds/hatch_build.py imports hatchling, which exists only inside
 # hatchling's isolated build environment, never in the dev venv.
-# minds_evals templates run inside eval containers (rewardkit arrives via uvx
-# in the verifier image), so their imports are unresolvable in the dev venv.
+# apps/minds_evals is a standalone uv project (see [tool.uv.workspace].exclude),
+# so harbor and the project's own package are absent from this venv and its
+# modules are type-checked against their own environment by `test-minds-evals`.
+# The exception is imbue/minds_evals/resources/, which is deliberately NOT
+# excluded here: those files are shipped as source into the eval box and run
+# against the monorepo venv, so this workspace is the environment they actually
+# execute in, and the standalone project (which has no mngr_forward) cannot
+# resolve them. Do NOT collapse the entries below into a plain
+# "apps/minds_evals/": that excludes resources/ too, and since the standalone
+# project excludes it as well, it leaves those files type-checked nowhere. The
+# cost of naming the package's own modules instead is that a new subpackage
+# importing harbor fails here until it is added -- loudly, which is the point.
 exclude = [
     "scripts/style_guide.py",
     "contrib/",
     "apps/minds/scripts/",
     "apps/minds/hatch_build.py",
+    "apps/minds_evals/*.py",
+    "apps/minds_evals/imbue/minds_evals/*.py",
+    # templates/ run in the verifier container, where rewardkit arrives via uvx;
+    # unresolvable in this venv and in the standalone project alike.
     "apps/minds_evals/imbue/minds_evals/templates/",
     # Vendored upstream bugsink settings template; the bugsink package is
     # installed only on the error-tracker VPS (never in the dev venv), so its
@@ -228,9 +246,6 @@ omit = [
     # Vendored upstream bugsink settings template (a deploy asset shipped to
     # the error-tracker VPS); never importable in the test process.
     "*/bugsink_conf.py",
-    # minds_evals's harbor task templates run inside eval containers, never in
-    # the dev/test process.
-    "*/minds_evals/templates/*",
     # Test utility modules contain helpers only used by tests
     "*/testing.py",
     "*/utils/plugin_testing.py",
