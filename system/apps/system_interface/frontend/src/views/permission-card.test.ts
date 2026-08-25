@@ -10,11 +10,10 @@ import {
   isFiledPermissionRequest,
   initShellPermissionResolutions,
   notePermissionResolutions,
-  noteUnresolvedPermissionRequest,
   openPermissionRequest,
   parsePermissionRequest,
   renderPermissionCard,
-  resetPermissionResolutionHydrationForTesting,
+  resetShellPermissionResolutionsForTesting,
   shellPermissionResolutionFor,
 } from "./permission-card";
 
@@ -875,60 +874,17 @@ describe("openPermissionRequest", () => {
   });
 });
 
-// -- Shell-reported verdicts and hydration ------------------------------------
+// -- Shell-reported verdicts ---------------------------------------------------
 
-describe("verdict hydration", () => {
+describe("shell-reported verdicts", () => {
   beforeEach(() => {
-    resetPermissionResolutionHydrationForTesting();
-    vi.useFakeTimers();
+    resetShellPermissionResolutionsForTesting();
     vi.spyOn(m, "redraw").mockImplementation(() => undefined);
   });
 
   afterEach(() => {
-    resetPermissionResolutionHydrationForTesting();
-    vi.useRealTimers();
+    resetShellPermissionResolutionsForTesting();
     vi.restoreAllMocks();
-  });
-
-  /** Messages posted to the stubbed embedder while `run` executes. */
-  function postedDuring(run: () => void): Record<string, unknown>[] {
-    const posted: Record<string, unknown>[] = [];
-    const postMessage = (data: Record<string, unknown>) => posted.push(data);
-    withStubbedEmbedder({ postMessage }, () => run());
-    return posted;
-  }
-
-  it("batches undecided cards into one query, resent a bounded number of times, once per id", () => {
-    // The resends cover the boot race where the first query beats the
-    // embedder's endpoint registration; with no embedder they go nowhere and
-    // stop on their own. Re-reporting an already-asked id (every redraw does)
-    // never re-queries -- verdicts arriving later ride the unsolicited push.
-    const posted = postedDuring(() => {
-      noteUnresolvedPermissionRequest("req-a");
-      noteUnresolvedPermissionRequest("req-b");
-      vi.advanceTimersByTime(60000);
-      noteUnresolvedPermissionRequest("req-a");
-      vi.advanceTimersByTime(60000);
-    });
-    expect(posted.length).toBe(3);
-    expect(new Set(posted.map((p) => JSON.stringify(p))).size).toBe(1);
-    expect(posted[0]).toEqual({
-      type: "minds:query-permission-resolutions",
-      requestIds: ["req-a", "req-b"],
-    });
-  });
-
-  it("sends an id that arrives mid-batch in the next batch", () => {
-    const posted = postedDuring(() => {
-      noteUnresolvedPermissionRequest("req-a");
-      vi.advanceTimersByTime(250);
-      // The first batch is mid-flight; a late-classified card reports now.
-      noteUnresolvedPermissionRequest("req-late");
-      vi.advanceTimersByTime(60000);
-    });
-    expect(posted.length).toBe(6);
-    expect(posted.slice(0, 3).every((p) => JSON.stringify(p).includes('"req-a"'))).toBe(true);
-    expect(posted.slice(3).every((p) => JSON.stringify(p).includes('"req-late"'))).toBe(true);
   });
 
   it("records the verdicts a resolutions message carries and redraws", () => {
@@ -948,34 +904,11 @@ describe("verdict hydration", () => {
     expect(m.redraw).toHaveBeenCalled();
   });
 
-  it("is triggered by an undecided card rendering, and only by one", () => {
-    const posted = postedDuring(() => {
-      const card = PermissionCard();
-      const attrs = (resolution: PermissionResolution | null) =>
-        ({
-          attrs: {
-            toolCall: makeToolCall(PERMISSION_INPUT, "permission_request"),
-            toolResult: makeResult(PERMISSION_OUTPUT),
-            resolution,
-          },
-        }) as unknown as Parameters<typeof card.view>[0];
-      card.view(attrs("granted"));
-      vi.advanceTimersByTime(60000);
-      card.view(attrs(null));
-      vi.advanceTimersByTime(250);
-    });
-    // The decided render queried nothing; the undecided one asks with the
-    // card's own request id.
-    expect(posted[0]).toEqual({
-      type: "minds:query-permission-resolutions",
-      requestIds: ["885711ec07bf47239d71294e1534330b"],
-    });
-  });
-
   it("flips the live card once the shell reports its verdict", () => {
-    // The shell (the Minds review popup) reported this request granted; the
-    // transcript walk hasn't classified a resolution yet (`resolution: null`),
-    // but the card should already render the Approved receipt.
+    // The shell reported this request granted -- as the live one-entry push or
+    // the page-load snapshot; the transcript walk hasn't classified a
+    // resolution yet (`resolution: null`), but the card should already render
+    // the Approved receipt.
     notePermissionResolutions({
       type: "minds:permission-resolutions",
       resolutions: [{ requestId: "fs-1", resolution: "granted" }],
@@ -1004,11 +937,11 @@ const HAS_RESOLUTIONS_MESSAGE = "PERMISSION_RESOLUTIONS" in embedContract;
 
 describe.skipIf(!HAS_RESOLUTIONS_MESSAGE)("shell resolutions via the contract", () => {
   beforeEach(() => {
-    resetPermissionResolutionHydrationForTesting();
+    resetShellPermissionResolutionsForTesting();
   });
 
   afterEach(() => {
-    resetPermissionResolutionHydrationForTesting();
+    resetShellPermissionResolutionsForTesting();
   });
 
   it("records verdicts from this page's embedder, and only from it", () => {

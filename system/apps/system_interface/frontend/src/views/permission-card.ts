@@ -14,12 +14,7 @@
 import m from "mithril";
 import { OPEN_REQUEST_MODAL } from "@minds/embed-contract";
 import type { ContractMessage } from "@minds/embed-contract";
-import {
-  PERMISSION_RESOLUTIONS,
-  QUERY_PERMISSION_RESOLUTIONS,
-  sendToEmbedder,
-  setEmbedderMessageHandler,
-} from "../embed";
+import { PERMISSION_RESOLUTIONS, sendToEmbedder, setEmbedderMessageHandler } from "../embed";
 import type { ToolCall, ToolResultEvent } from "../models/Response";
 import type { ScopeInfo } from "./latchkey-scope-info";
 import { getScopeInfo } from "./latchkey-scope-info";
@@ -239,75 +234,22 @@ export function openPermissionRequest(requestId: string): void {
 // Verdicts learned over `minds:permission-resolutions`, which arrives two ways
 // with one meaning: unsolicited with a single entry the moment the user
 // resolves a request in the review popup (the card flips ahead of the
-// resolution message's transcript round trip), and as the answer to this
-// page's own query below. The endpoint admits it only from this page's
-// embedder with a well-shaped payload; the transcript's classified resolution
-// takes over once it lands.
+// resolution message's transcript round trip), and as the recent-verdicts
+// snapshot the chrome pushes whenever this page (re)loads -- this in-memory
+// cache dies with the page, and without the snapshot a rebuilt page would
+// offer Approve/Deny for a request decided while it was not live. The
+// endpoint admits the message only from this page's embedder with a
+// well-shaped payload; the transcript's classified resolution takes over once
+// it lands. Sends need no vendored-contract support but a stale vendored
+// endpoint drops the message until the sync lands, leaving cards
+// transcript-driven (also the direct-share behavior, where no embedder
+// exists).
 const shellResolutions = new Map<string, PermissionResolution>();
 
 /** The shell-reported verdict for a request, or null if the shell hasn't
  *  reported one. */
 export function shellPermissionResolutionFor(requestId: string): PermissionResolution | null {
   return shellResolutions.get(requestId) ?? null;
-}
-
-// -- Verdict hydration (the pull) ---------------------------------------------
-//
-// The cache above is gone on any page (re)build, and a verdict given while
-// the page was not live arrived by no push -- so cards that render undecided
-// ask the shell for their requests' current state, answered from the desktop
-// client's durable response log. Without this, a reloaded page keeps offering
-// Approve/Deny for an already-decided request until the agent transcript's
-// own resolution message arrives, which delivery failures can delay.
-//
-// Scheduling is deliberately dumb: ids batch behind a short debounce, and a
-// batch is sent a fixed few times, covering the boot race where the first
-// query beats the embedder's endpoint registration. Nothing tracks whether a
-// send was answered -- answers apply idempotently whenever they arrive, an id
-// is only ever asked about once per page-life (the unsolicited push covers
-// verdicts given while the page lives), and with no embedder, or one
-// predating the query type, the sends go nowhere and stop on their own.
-
-// Send waits: the first is the batching debounce, the rest space the resends.
-const QUERY_SEND_WAITS_MS: readonly number[] = [250, 2000, 5000];
-// Mirrors MAX_PERMISSION_RESOLUTION_QUERY_IDS in the embed contract: a query
-// naming more ids than this is rejected whole by the embedder's validator.
-const MAX_QUERY_IDS = 64;
-
-const everQueriedIds = new Set<string>();
-let batchIds: string[] = []; // the batch currently being sent
-let waitingIds: string[] = []; // noted while a batch is active
-let sendIndex = 0; // position in QUERY_SEND_WAITS_MS for the active batch
-let queryTimer: ReturnType<typeof setTimeout> | null = null;
-
-/** Ask the shell (soon, batched) for this undecided request's current verdict. */
-export function noteUnresolvedPermissionRequest(requestId: string): void {
-  if (everQueriedIds.has(requestId)) return;
-  everQueriedIds.add(requestId);
-  waitingIds.push(requestId);
-  if (queryTimer === null) scheduleNextSend();
-}
-
-function scheduleNextSend(): void {
-  if (sendIndex >= QUERY_SEND_WAITS_MS.length) {
-    // The active batch used up its sends; a waiting batch starts fresh.
-    batchIds = [];
-    sendIndex = 0;
-    if (waitingIds.length === 0) return;
-  }
-  queryTimer = setTimeout(sendQueryBatch, QUERY_SEND_WAITS_MS[sendIndex]);
-}
-
-function sendQueryBatch(): void {
-  queryTimer = null;
-  if (batchIds.length === 0) {
-    batchIds = waitingIds.slice(0, MAX_QUERY_IDS);
-    waitingIds = waitingIds.slice(MAX_QUERY_IDS);
-  }
-  if (batchIds.length === 0) return;
-  sendToEmbedder(QUERY_PERMISSION_RESOLUTIONS, { requestIds: [...batchIds] });
-  sendIndex += 1;
-  scheduleNextSend();
 }
 
 /** Record every verdict a `minds:permission-resolutions` message carries --
@@ -327,16 +269,8 @@ export function notePermissionResolutions(message: ContractMessage): void {
   if (isAnyRecorded) m.redraw();
 }
 
-/** Drop all hydration state so the next test starts from a quiet page. */
-export function resetPermissionResolutionHydrationForTesting(): void {
-  if (queryTimer !== null) {
-    clearTimeout(queryTimer);
-    queryTimer = null;
-  }
-  everQueriedIds.clear();
-  batchIds = [];
-  waitingIds = [];
-  sendIndex = 0;
+/** Drop the verdict cache so the next test starts from a quiet page. */
+export function resetShellPermissionResolutionsForTesting(): void {
   shellResolutions.clear();
 }
 
@@ -562,12 +496,6 @@ export function PermissionCard(): m.Component<{
       // the shell reported for this request (the user just resolved it in the
       // review popup) flips the card without waiting for the round trip.
       const effectiveResolution = resolution ?? (details ? shellPermissionResolutionFor(details.requestId) : null);
-      // Still undecided by both sources: ask the shell whether a verdict was
-      // recorded while this page was not live, so a rebuilt page never keeps
-      // offering Approve/Deny for an already-decided request.
-      if (effectiveResolution === null && details !== null) {
-        noteUnresolvedPermissionRequest(details.requestId);
-      }
       return renderPermissionCard(
         details,
         scopeInfo,
