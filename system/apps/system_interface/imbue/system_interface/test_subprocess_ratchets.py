@@ -15,6 +15,7 @@ Lives outside ``test_ratchets.py`` because that file is the per-project standard
 these rules are specific to this project.
 """
 
+import ast
 from pathlib import Path
 
 import pytest
@@ -24,6 +25,7 @@ from imbue.imbue_common.ratchet_testing.common_ratchets import RatchetRuleInfo
 from imbue.imbue_common.ratchet_testing.core import FileExtension
 from imbue.imbue_common.ratchet_testing.core import RegexPattern
 from imbue.imbue_common.ratchet_testing.core import check_regex_ratchet
+from imbue.imbue_common.ratchet_testing.core import get_ast_nodes_of_type
 
 _SOURCE = Path(__file__).parent.parent.parent
 
@@ -64,6 +66,15 @@ _ALLOWED_RAW_SPAWN_FILES = ("subprocess_runner.py", *_TEST_FILES)
 _ALLOWED_BACKGROUND_SPAWN_FILES = ("agent_manager.py", *_TEST_FILES)
 
 
+def _called_name(call: ast.Call) -> str | None:
+    """The bare name of what ``call`` invokes, for both ``f(...)`` and ``obj.f(...)``."""
+    if isinstance(call.func, ast.Attribute):
+        return call.func.attr
+    if isinstance(call.func, ast.Name):
+        return call.func.id
+    return None
+
+
 def test_prevent_subprocess_spawns_outside_the_detached_runner() -> None:
     pattern = RegexPattern(
         r"run_local_command_modern_version\(|subprocess\.(?:Popen|run|call|check_call|check_output)\(|os\.system\(",
@@ -85,9 +96,18 @@ def test_prevent_background_process_spawns_outside_the_one_that_detaches_itself(
 def test_the_allowlisted_background_spawn_detaches_itself() -> None:
     """agent_manager.py is exempt from the rule above, so nothing else would notice its spawn
     going back to attached."""
-    source = (_SOURCE / "imbue" / "system_interface" / "agent_manager.py").read_text()
-    assert source.count("run_process_in_background(") == 1, (
+    agent_manager_path = _SOURCE / "imbue" / "system_interface" / "agent_manager.py"
+    spawns = [
+        call
+        for call in get_ast_nodes_of_type(agent_manager_path, ast.Call)
+        if _called_name(call) == "run_process_in_background"
+    ]
+    assert len(spawns) == 1, (
         "agent_manager.py gained another background spawn; the shared rule cannot see them, "
         "so each one has to be checked here"
     )
-    assert "is_detached_from_terminal=True" in source
+    detachment = {keyword.arg: keyword.value for keyword in spawns[0].keywords}.get("is_detached_from_terminal")
+    assert isinstance(detachment, ast.Constant) and detachment.value is True, (
+        "agent_manager.py's background spawn must pass is_detached_from_terminal=True; without it the "
+        "child inherits this service's controlling terminal and can stop the whole service when killed"
+    )
