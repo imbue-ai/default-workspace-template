@@ -8,7 +8,7 @@
  *   signs in with NO agent restart; when managed settings-env keys are
  *   active they are cleared and the agents restarted (the switching case).
  * - Sign in with Imbue: ask the embedding minds chrome (via the embed
- *   contract's `minds:open-ai-keys-page` message, keyed by this workspace's
+ *   contract's `minds:open-ai-keys-page` message, keyed by this workspace's id
  *   host id) to open its key-mint page over this window, then paste the
  *   copied env-style blob into a textarea. Any minds chrome -- Electron or
  *   plain-browser -- acks the message; with no ack (a direct share visit) an
@@ -51,7 +51,7 @@ interface ClaudeAuthStatus {
   subscription_type?: string | null;
   auth_mode?: string;
   masked_key_suffix?: string | null;
-  workspace_host_id?: string | null;
+  workspace_id?: string | null;
   restart_phase?: string | null;
   restart_detail?: string | null;
   restart_error?: string | null;
@@ -534,7 +534,9 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
         "The Imbue key page is part of the Minds app. Open this workspace from the Minds app on your computer to mint a key, then paste it here.",
       );
     }, MINT_PAGE_ACK_TIMEOUT_MS);
-    sendToEmbedder(OPEN_AI_KEYS_PAGE, { hostId: currentStatus?.workspace_host_id ?? "" });
+    // The embed-contract field stays named hostId for wire compatibility;
+    // the value is the workspace id (older minds chromes dual-accept both).
+    sendToEmbedder(OPEN_AI_KEYS_PAGE, { hostId: currentStatus?.workspace_id ?? "" });
   }
 
   // ----- Renderers -----

@@ -7,6 +7,7 @@ import type { ScopeInfo } from "./latchkey-scope-info";
 import type { PermissionResolution } from "./message-classification";
 import {
   PermissionCard,
+  isFiledPermissionRequest,
   initShellPermissionResolutions,
   openPermissionRequest,
   parsePermissionRequest,
@@ -477,6 +478,41 @@ const LOCK_RECT = '<rect x="3" y="11"';
 // A predefined request naming a service the workspace bundles no artwork for.
 const UNBUNDLED_SERVICE_OUTPUT =
   '{"request_id":"x1","request_type":"predefined","rationale":"look something up","payload":{"scope":"madeup-api"}}';
+
+describe("isFiledPermissionRequest", () => {
+  // A PreToolUse guard refusing the command is the common way this happens: the
+  // harness returns the block message as an errored result and nothing ever
+  // reaches the gateway. Rendering that as a permission card sent the user to a
+  // Permissions tab with nothing in it.
+  const call = makeToolCall(PERMISSION_INPUT, "permission_request");
+
+  it("counts a request whose result has not arrived yet", () => {
+    expect(isFiledPermissionRequest(call, null)).toBe(true);
+  });
+
+  it("counts a request the gateway answered", () => {
+    expect(isFiledPermissionRequest(call, makeResult(PERMISSION_OUTPUT))).toBe(true);
+  });
+
+  it("does not count a call the harness refused", () => {
+    const blocked = makeResult("PreToolUse:Bash hook error: Blocked: file ONE latchkey permission request", true);
+    expect(isFiledPermissionRequest(call, blocked)).toBe(false);
+  });
+
+  it("does not count a body the gateway rejected", () => {
+    // curl exits 0 on a 4xx, so this does not even read as a failed call -- but no
+    // request was created, so there is nothing in the Permissions tab to send the
+    // user to. Verbatim from a gateway that refused a malformed payload.
+    const rejected = makeResult(
+      '{\n  "error": "Invalid request body: payload.\'scope\' is required and must be a non-empty string."\n}',
+    );
+    expect(isFiledPermissionRequest(call, rejected)).toBe(false);
+  });
+
+  it("does not count an ordinary tool call", () => {
+    expect(isFiledPermissionRequest(makeToolCall('{"command":"echo hi"}'), null)).toBe(false);
+  });
+});
 
 describe("renderPermissionCard", () => {
   it("shows the eyebrow, title, rationale, and review button on a pending card", () => {

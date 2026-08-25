@@ -11,8 +11,8 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
-_SCRIPT = Path(__file__).parent / "claude_tk_standalone_check.py"
-_spec = importlib.util.spec_from_file_location("claude_tk_standalone_check", _SCRIPT)
+_SCRIPT = Path(__file__).parent / "agent_tk_standalone_check.py"
+_spec = importlib.util.spec_from_file_location("agent_tk_standalone_check", _SCRIPT)
 assert _spec is not None and _spec.loader is not None
 checker = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(checker)

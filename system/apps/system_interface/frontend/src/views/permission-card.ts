@@ -171,6 +171,13 @@ function detailsFromResponseObject(obj: Record<string, unknown>): PermissionRequ
  * succeeded and carries a request_id; otherwise null (the request is still
  * pending, errored, or nothing could be read -- the caller then shows a
  * pending card and keeps the raw output available).
+ *
+ * The `request_id` this reads is what the "Review & respond" button opens the
+ * approval dialog with, so a filing whose echo never reaches its own tool result
+ * renders a card the user cannot act on. The PreToolUse gate in
+ * `system/scripts/agent_latchkey_request_standalone.sh` blocks the forms that
+ * would do that; if this parser learns to read a filing the gate refuses, or
+ * stops reading one it allows, the two need updating together.
  */
 export function parsePermissionRequest(
   toolCall: ToolCall,
@@ -193,6 +200,24 @@ export function parsePermissionRequest(
   }
   const parsed = parseResponseObject(toolResult.output || "");
   return parsed === null ? null : detailsFromResponseObject(parsed);
+}
+
+/** True when a permission-request call has something for the user to answer.
+ *
+ *  Filing one is a plain HTTP POST, and plenty of ways to fail leave a tool call
+ *  that looks like a filing but created nothing: a PreToolUse guard refusing the
+ *  command, or the gateway rejecting the body (`curl` exits 0 on a 4xx, so the
+ *  call does not even read as failed). Rendering those as a permission card sends
+ *  the user to a Permissions tab that has nothing in it, so they render as the
+ *  ordinary tool calls they are -- with whatever the error was.
+ *
+ *  A call with no result YET does count: that is the request in flight, which is
+ *  exactly when it most needs to be visible.
+ */
+export function isFiledPermissionRequest(toolCall: ToolCall, toolResult: ToolResultEvent | null): boolean {
+  if (!isPermissionRequestCall(toolCall)) return false;
+  if (toolResult === null) return true;
+  return parsePermissionRequest(toolCall, toolResult) !== null;
 }
 
 /**

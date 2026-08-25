@@ -9,8 +9,8 @@ import type { TranscriptEvent, AssistantMessageEvent, ToolResultEvent, ToolCall 
 import { openSubagentTab } from "./DockviewWorkspace";
 import { hoverTooltipAttrs } from "./hoverTooltip";
 import type { PermissionResolution } from "./message-classification";
-import { isPermissionRequestCall, isSkillExpansionUserMessage } from "./message-classification";
-import { PermissionCard } from "./permission-card";
+import { isSkillExpansionUserMessage } from "./message-classification";
+import { PermissionCard, isFiledPermissionRequest } from "./permission-card";
 
 // Per-kind user_message rendering lives in user-message-display.ts (the display
 // half of the classify/display split). Re-exported here so existing importers --
@@ -370,7 +370,7 @@ export function renderAssistantMessageChildren(
     // Gated on the input-only predicate so the card shows even while the request
     // is still pending -- the same signal the timeline walk uses to lift it out
     // of its step. The resolution (once the user decides) comes from the walk.
-    if (isPermissionRequestCall(toolCall)) {
+    if (isFiledPermissionRequest(toolCall, result)) {
       children.push(m(PermissionCard, { toolCall, toolResult: result, resolution: permissionResolution }));
       continue;
     }
