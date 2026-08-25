@@ -1,9 +1,10 @@
 # safe-update-apply: pre-merge review findings (2026-08-25)
 
-Open findings from the full-branch review run before merge (both repos:
-this one and the paired mngr-internal branch). Everything here was verified
-against the code at `gabriel/safe-update-apply`; none of it is fixed on the
-branch yet. Line numbers are as of that review.
+Findings from the full-branch review run before merge (both repos: this one
+and the paired mngr-internal branch), curated down to the items judged worth
+acting on -- pure test-quality and style nits were dropped. Everything here
+was verified against the code at `gabriel/safe-update-apply`; none of it is
+fixed on the branch yet. Line numbers are as of that review.
 
 ## Correctness — apply/recover (`.agents/skills/update-self/scripts/update_self.py`)
 
@@ -110,38 +111,57 @@ branch yet. Line numbers are as of that review.
 15. `app_context.static_directory` has no production injector — only tests set
     it. Either wire it or drop it from the production model.
 
+16. The staleness meta-tag injection interpolates without HTML escaping
+    (`server.py:565`). Safe today (the only producer returns one of three
+    module constants), but the parameter is typed `str | None`, so a future
+    variant sourced from disk (e.g. text out of `emergency.json`) would be a
+    stored XSS in the app shell. The adjacent base-path tag has the same
+    latent shape.
+
+17. The new `UPDATE_APPLY` band may not hold on the cron path: banding to 15
+    *lowers* `oom_score_adj`, which needs `CAP_SYS_RESOURCE` when the process
+    inherited a higher adj — and the cron parent is banded 55, so the write
+    can fail with only a warning (`update_self.py:1204`). Separately,
+    `oom_tag_backstop`'s raise-only descendant walk can lift a running
+    `recover` from 15 back to its parent's 55 if cron's program is re-tagged
+    mid-run.
+
 ## Tooling / tests
 
-16. `system/services/oom_priority/bin/script_import_paths_test.py` no longer
+18. `system/services/oom_priority/bin/script_import_paths_test.py` no longer
     guards the script that actually bands itself: the reveal entry is vacuous
     (its `sys.path.insert` is gone) and `update_self.py`'s insert shape doesn't
     match `_PATH_INSERT_RE`, so the update-apply orchestrator is uncovered.
 
-17. `create_worker.py --destroy-existing` refuses a `DONE` predecessor (an
+19. `create_worker.py --destroy-existing` refuses a `DONE` predecessor (an
     agent whose process exited on its own) while the docs claim only
     RUNNING/WAITING are refused (`:44-45` vs `:657`); and the documented
     "unreadable listing degrades to mngr create's duplicate-name refusal" is
     actually an uncaught `CalledProcessError` traceback (`launch` runs
     `mngr create` with `check=True` and `main` catches nothing).
 
-18. `update-system-interface/SKILL.md:317-342`: the teardown/lease-release
+20. `update-system-interface/SKILL.md:317-342`: the teardown/lease-release
     block is gated on success-or-rejection, so apply exits 1/2/3 leave no
     instruction to unpreview or release the lease — a rolled-back apply
     strands both.
 
-19. Notable test gaps (details in the review transcript): no test pins
-    `main()`'s recover-before-venv-sync/wake-after ordering in bootstrap; the
+21. Notable test gaps: no test pins `main()`'s
+    recover-before-venv-sync/wake-after ordering in bootstrap; the
     cron-vs-boot flag split is only half-pinned; two "bundle restored"
     assertions are vacuous because the emulated build already recreated the
     bundle (`update_self_test.py:2072`, `:2554`); the recovery-refreshes-envs
     assertion passes on forward-pass `uv tool dir` calls alone (`:3157`);
     real-git ledger tests inherit the developer's global git config (gpgsign /
     hooksPath would break them); the starter-drift test permanently self-skips
-    once any real ledger entry exists (`:3656-3676`).
+    once any real ledger entry exists (`:3656-3676`); `_worker_is_idle`
+    constructs its own `Runner()` instead of taking the injected one, so a
+    launch-sync timeout "unit" test really shells out to `mngr list`; and the
+    new SI frontend vitest files (like all frontend tests) never run in GitHub
+    CI, so the banner's prototype-chain guard is unenforced there.
 
 ## Paired mngr-internal branch
 
-20. `offload-modal-minds-snapshot.toml` comment says the lane runs 19 tests;
+22. `offload-modal-minds-snapshot.toml` comment says the lane runs 19 tests;
     the config's own selection collects 15 (the 4 `release`-marked tests are
     deselected), so the `max_parallel` 20→24 bump was unnecessary and the dev
     changelog repeats the wrong count. The new live-reprovision test would
