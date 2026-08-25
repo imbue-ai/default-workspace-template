@@ -292,25 +292,46 @@ def test_collector_caps_match_the_documented_limits() -> None:
     assert module.CONTRACT_VERSION == 1
     assert module.MAX_LOG_FILES == 100
     assert module.MAX_LINES_PER_LOG == 200
+    assert module.MIN_TRANSCRIPT_COUNT == 5
+    assert module.LOG_RECENCY_WINDOW_SECONDS == 24 * 60 * 60
 
 
 def test_select_log_files_caps_at_the_newest_hundred_files(tmp_path: Path) -> None:
     log_dir = tmp_path / "supervisor"
     over_cap_count = 120
+    now = time.time()
+    # All inside the day window (the recency filter has its own test); one
+    # second apart so newest-first is a strict order.
     for index in range(over_cap_count):
-        _write_log(log_dir, f"svc-{index:03d}-stderr.log", mtime=1_000_000 + index)
+        _write_log(log_dir, f"svc-{index:03d}-stderr.log", mtime=now - index)
     module = _load_collector(supervisor_log_dir=log_dir)
 
     selected = module.select_log_files(None)
 
     assert len(selected) == module.MAX_LOG_FILES
     expected_newest_first = [
-        str(log_dir / f"svc-{index:03d}-stderr.log")
-        for index in range(
-            over_cap_count - 1, over_cap_count - 1 - module.MAX_LOG_FILES, -1
-        )
+        str(log_dir / f"svc-{index:03d}-stderr.log") for index in range(module.MAX_LOG_FILES)
     ]
     assert selected == expected_newest_first
+
+
+def test_select_log_files_drops_logs_not_written_to_in_the_last_day(
+    tmp_path: Path,
+) -> None:
+    """A service that has been silent for over a day is history, not diagnostics."""
+    log_dir = tmp_path / "supervisor"
+    now = time.time()
+    _write_log(log_dir, "system_interface-stderr.log", mtime=now - 60)
+    _write_log(log_dir, "terminal-stderr.log", mtime=now - 23 * 60 * 60)
+    _write_log(log_dir, "xvfb-stderr.log", mtime=now - 25 * 60 * 60)
+    module = _load_collector(supervisor_log_dir=log_dir)
+
+    selected = module.select_log_files(None)
+
+    assert [os.path.basename(path) for path in selected] == [
+        "system_interface-stderr.log",
+        "terminal-stderr.log",
+    ]
 
 
 # --- User-app log exclusion ---
@@ -343,13 +364,14 @@ def test_select_log_files_drops_user_app_logs_and_keeps_system_ones(
     tmp_path: Path,
 ) -> None:
     log_dir = tmp_path / "supervisor"
-    _write_log(log_dir, "system_interface-stderr.log", mtime=1_000_004)
-    _write_log(log_dir, "system_interface-stdout.log", mtime=1_000_003)
-    _write_log(log_dir, "terminal-stderr.log", mtime=1_000_002)
-    _write_log(log_dir, "geopolitical-dashboard-stderr.log", mtime=1_000_001)
+    now = time.time()
+    _write_log(log_dir, "system_interface-stderr.log", mtime=now - 1)
+    _write_log(log_dir, "system_interface-stdout.log", mtime=now - 2)
+    _write_log(log_dir, "terminal-stderr.log", mtime=now - 3)
+    _write_log(log_dir, "geopolitical-dashboard-stderr.log", mtime=now - 4)
     # Only system_interface's stdout is collected; every other program
     # contributes stderr alone.
-    _write_log(log_dir, "terminal-stdout.log", mtime=1_000_005)
+    _write_log(log_dir, "terminal-stdout.log", mtime=now)
     module = _load_collector(supervisor_log_dir=log_dir)
 
     selected = module.select_log_files({"geopolitical-dashboard"})
@@ -365,8 +387,9 @@ def test_select_log_files_keeps_every_log_when_the_classification_is_unavailable
     tmp_path: Path,
 ) -> None:
     log_dir = tmp_path / "supervisor"
-    _write_log(log_dir, "system_interface-stderr.log", mtime=1_000_001)
-    _write_log(log_dir, "geopolitical-dashboard-stderr.log", mtime=1_000_000)
+    now = time.time()
+    _write_log(log_dir, "system_interface-stderr.log", mtime=now - 1)
+    _write_log(log_dir, "geopolitical-dashboard-stderr.log", mtime=now - 2)
     module = _load_collector(supervisor_log_dir=log_dir)
 
     selected = module.select_log_files(None)
@@ -456,7 +479,8 @@ def test_an_agent_with_no_conversation_contributes_no_member(tmp_path: Path) -> 
 def test_every_chat_written_to_inside_the_window_rides_along_newest_first(
     tmp_path: Path,
 ) -> None:
-    """A bug is rarely about exactly one conversation."""
+    """A bug is rarely about exactly one conversation: a busy window sends more
+    than the floor, and a chat outside the window past the floor stays home."""
     now = time.time()
 
     def stamp(offset: float) -> str:
@@ -466,30 +490,78 @@ def test_every_chat_written_to_inside_the_window_rides_along_newest_first(
             .replace("+00:00", "Z")
         )
 
+    # Six chats inside the two-hour window (one more than the floor) and one
+    # outside it: every recent chat rides, the idle one does not.
+    recent_names = [f"busy-{index}" for index in range(6)]
+    events_by_agent = {
+        name: _transcript_events(name, timestamp=stamp(60 * (index + 1)))
+        for index, name in enumerate(recent_names)
+    }
+    events_by_agent["idle"] = _transcript_events("idle", timestamp=stamp(10_000))
     stub = _write_mngr_stub(
         tmp_path,
-        agents=(("older", "", ""), ("newer", "", ""), ("idle", "", "")),
-        events_by_agent={
-            "older": _transcript_events("a", timestamp=stamp(3_000)),
-            "newer": _transcript_events("b", timestamp=stamp(60)),
-            "idle": _transcript_events("c", timestamp=stamp(10_000)),
-        },
+        agents=tuple((name, "", "") for name in [*recent_names, "idle"]),
+        events_by_agent=events_by_agent,
     )
     collector = _load_collector(mngr_binary=stub)
 
     members = collector.collect_transcript_members(5.0)
 
     assert [name for name, _, _ in members] == [
-        "chats/newer-claude.jsonl",
-        "chats/older-claude.jsonl",
+        f"chats/busy-{index}-claude.jsonl" for index in range(6)
     ]
 
 
-def test_an_idle_workspace_still_carries_its_single_most_recent_chat(
+def test_a_quiet_window_still_sends_the_five_newest_chats(
+    tmp_path: Path,
+) -> None:
+    """The floor: at least MIN_TRANSCRIPT_COUNT chats ride when the workspace has
+    them, however quiet the window -- a bug filed from a quiet workspace still
+    needs its recent history."""
+    now = time.time()
+
+    def stamp(offset: float) -> str:
+        return (
+            datetime.fromtimestamp(now - offset, tz=timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+
+    # One chat inside the window, six outside it: the window's one plus the
+    # next-newest four make the floor of five; the two oldest stay home.
+    events_by_agent = {
+        "fresh": _transcript_events("fresh", timestamp=stamp(60)),
+        **{
+            f"stale-{index}": _transcript_events(
+                f"stale-{index}", timestamp=stamp(10_000 + 100 * index)
+            )
+            for index in range(6)
+        },
+    }
+    stub = _write_mngr_stub(
+        tmp_path,
+        agents=tuple((name, "", "") for name in events_by_agent),
+        events_by_agent=events_by_agent,
+    )
+    collector = _load_collector(mngr_binary=stub)
+
+    members = collector.collect_transcript_members(5.0)
+
+    assert [name for name, _, _ in members] == [
+        "chats/fresh-claude.jsonl",
+        "chats/stale-0-claude.jsonl",
+        "chats/stale-1-claude.jsonl",
+        "chats/stale-2-claude.jsonl",
+        "chats/stale-3-claude.jsonl",
+    ]
+
+
+def test_an_idle_workspace_still_carries_its_most_recent_chats(
     tmp_path: Path,
 ) -> None:
     """Nothing was touched in the window, and a stale workspace is exactly where
-    the conversation is hardest to reconstruct from anything else."""
+    the conversation is hardest to reconstruct from anything else. Fewer chats
+    than the floor means all of them ride."""
     stub = _write_mngr_stub(
         tmp_path,
         agents=(("stale", "", ""), ("staler", "", "")),
@@ -502,7 +574,10 @@ def test_an_idle_workspace_still_carries_its_single_most_recent_chat(
 
     members = collector.collect_transcript_members(5.0)
 
-    assert [name for name, _, _ in members] == ["chats/stale-claude.jsonl"]
+    assert [name for name, _, _ in members] == [
+        "chats/stale-claude.jsonl",
+        "chats/staler-claude.jsonl",
+    ]
 
 
 def test_a_workspace_whose_mngr_cannot_be_asked_reports_no_chats(
