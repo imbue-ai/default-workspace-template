@@ -272,6 +272,20 @@ def keeps_full_tool_input(tool_name: str, raw_input: str) -> bool:
 
 
 @pure
+def is_single_delegated_call(raw_input: str) -> bool:
+    """True when a code-mode program delegates to exactly ONE tool.
+
+    codex's unit of a tool call is a JS program, which may hold several ``tools.<fn>(...)``
+    calls. Measured on codex-cli 0.147.0: one ``custom_tool_call`` containing three
+    ``exec_command`` calls produced three PreToolUse events with three unrelated
+    ``tool_use_id``s and no field naming the outer call. So any verdict phrased as "this call is
+    ONLY an X" -- the tk hide rule, the permission card -- is unknowable for a batched program,
+    and the readers of those verdicts all inspect only the FIRST call.
+    """
+    return len(_CODE_MODE_CALL_RE.findall(raw_input)) == 1
+
+
+@pure
 def shell_command(tool_name: str, raw_input: str) -> str | None:
     """The shell command this tool call runs, or None if it is not a shell call.
 

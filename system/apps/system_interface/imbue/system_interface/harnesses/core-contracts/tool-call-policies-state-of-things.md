@@ -12,21 +12,38 @@ timeless; everything here is a snapshot.
 |---|---|---|---|---|
 | P1 no pipe into `tail`/`head` | live | live | live | live |
 | P2 no git history rewrite | live | live | live | live |
-| P3 permission request stands alone | live | live | live | live |
+| P3 permission request stands alone | live | **partial** | live | **partial** |
 | P4 OOM band + git identity | live | live | live | live |
-| P5 substantive work under a step | live | live | live | **n/a** |
-| P6 `tk start`/`close` stands alone | live | live | live | live |
-| P7 open steps are reconciled | live | live | live | **n/a** |
+| P5 substantive work under a step | live | **partial** | live | **partial** |
+| P6 `tk start`/`close` stands alone | live | **partial** | live | live |
+| P7 open steps are reconciled | live | live | live | **live (turn-start only)** |
 
-Two harness-specific `n/a`s, both structural rather than unwired:
+No harness is fully `n/a` any more, and three rows are `partial` for reasons that are
+structural rather than unwired. Measured against codex-cli 0.147.0 and pi 0.84.1.
 
-- **agy P5.** The check skips on claude TOOL NAMES, and agy reaches the guards through a shell
-  shim where every call is `Bash`. It would nudge agy's read-only shell work while never
-  seeing agy's own edit tool -- wrong in both directions. The discipline lives in `AGENTS.md`
-  for agy, which it demonstrably reads.
-- **agy P7.** agy has no prompt-submit event, and its stop-time stderr goes to a tmux pane
-  nobody reads. pi reached the same conclusion about its own stop event and moved the reminder
-  to turn start; agy has no equivalent turn-start channel to the model.
+- **agy P5 — partial.** The shim sees only `bash -c`, so agy's own editing tools
+  (`write_to_file`, `replace_file_content`) can never be nudged: no agy hook carries tool
+  identity and neither tool spawns a process. The SHELL half is wired (the check judges the
+  command, not the tool name). Previously recorded as `n/a` on the grounds that the skip list
+  keys on claude tool names -- only half true, since the script has always had a command-shaped
+  branch.
+- **agy P7 — live, turn-start only.** The reminder rides the shim's stderr, which becomes the
+  tool result the model reads, keyed on the `active` marker's inode (which changes once per
+  turn). Previously recorded as `n/a` because "agy has no prompt-submit event and its stop
+  stderr goes to a tmux pane nobody reads" -- both true, and neither was the relevant channel.
+- **codex P3 / P6 — partial.** Both policies require the guarded thing to be the only thing in
+  its TOOL CALL. Under code mode a tool call is a JS program that may hold several
+  `tools.exec_command(...)` calls; measured, one `custom_tool_call` produced three PreToolUse
+  events with three unrelated `tool_use_id`s and no field naming the outer call, so no guard can
+  count per call. Each inner call is still checked on its own. The display layer no longer acts
+  on the unverifiable claim (see `codex/session_parser.py`).
+- **codex P5 — partial.** Its read-only skip list is keyed on claude tool names, none of which
+  codex ever sends (measured: `Bash`, `apply_patch`, `update_plan`). The command-shaped
+  read-only allowlist now covers the shell half; `apply_patch` is correctly nudge-worthy.
+- **P7's stop half is decorative on EVERY harness, claude included.**
+  `agent_open_tickets_stop_nudge.sh` says so itself ("mainly for orchestrator log / human
+  visibility") and exits 0 unconditionally; on codex a sentinel written at Stop appears in no
+  transcript item. The half that reaches the model is the turn-start reminder.
 
 ## Delivery channels, per harness
 
@@ -139,8 +156,15 @@ equivalent of), and splits our rules two ways:
   history-rewrite block, and the OOM/git-identity rewrite) stay re-expressed in mngr's
   lifecycle extension against the pi SDK event that matches.
 
-**Which command a guard sees.** On claude and codex, the rewriter (#4) is deliberately the
-**last** PreToolUse hook, so every blocker ahead of it inspects the command the agent wrote.
+**Which command a guard sees.** The "rewriter runs last so blockers see the original" story is
+only true on **agy**, where the shim runs the guards and the rewrite as statements in one
+script. It is belt-and-braces everywhere else and should not be relied on: claude runs a
+matcher's hooks in PARALLEL (`agent_rewrite_bash_command.py` says so in its own comment), and
+codex does not thread `updatedInput` into later hooks of the same event (measured: a rewriting
+hook placed first, a logging hook second, and the logger saw the original). On pi the order is
+deterministic and is the UNSAFE one -- CLI `-e` extensions load before project ones -- which is
+why mngr's lifecycle extension runs the blockers and the rewrite inside a single `tool_call`
+handler, blockers first.
 pi offers no such ordering: it calls every extension's `tool_call` handler on one shared,
 mutable event, and mngr's rewrite prepends the OOM tag and git identity as their own
 `;`-joined commands — which our checkers would refuse as "another command runs before it",
@@ -184,6 +208,29 @@ source — all in agreement):
 | Reminder on a new prompt | `on("before_agent_start")` → return `{systemPrompt: base + reminder}` (guaranteed model-visible) |
 | Stop | `on("agent_settled")` → the true "run fully settled" signal; stderr only |
 | Read tk state | shell out to the vendored `ticket` script synchronously |
+
+## Known bypasses
+
+A guard is a seatbelt on an agent already trusted to run commands, not a sandbox boundary. These
+are the routes around them that are worth knowing; all were measured.
+
+- **codex `write_stdin` (closed).** The unified-exec surface adds `write_stdin` and a tty option,
+  and `write_stdin` fires NO PreToolUse event -- so an agent could open a shell with one guarded
+  call and type anything into it. Closed by `features.unified_exec = false` in
+  `.mngr/settings.toml`. It is NOT closable via the `tools` table: `ToolsToml` accepts only
+  `web_search` / `experimental_request_user_input` / `update_plan`, and any other key there is
+  silently ignored.
+- **agy `manage_task` `send_input` (open).** Stdin piped into a task that a guarded
+  `run_command` launched is not itself a tool call, so nothing sees it. No event exists to hook.
+- **agy nested shells (open, deliberate).** Only the outermost `bash -c` is guarded; policing the
+  whole tree would block third-party build scripts and re-apply the rewrite per level.
+- **pi nested or plain `pi` (open).** mngr's lifecycle extension loads only via `-e` on a managed
+  launch, so a nested pi gets no P1/P2/P4. Worse, `.pi/extensions/` is **trust-gated**: pi loads
+  project extensions only `if (projectTrusted)`, and trust resolves to false for a
+  non-interactive run with no stored decision -- so a nested `pi -p` started from a subdirectory
+  gets NO guards at all. mngr seeds trust for the work dir, which covers the normal case.
+- **`sh -c` / `eval` (open on every harness, including claude).** The blockers anchor on the
+  command text, so re-entering through another interpreter evades them by construction.
 
 ## Keeping the harnesses in step
 

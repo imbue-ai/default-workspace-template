@@ -164,3 +164,88 @@ def test_it_runs_the_command_when_the_guards_are_missing(tmp_path: Path) -> None
 )
 def test_quoting_forms_survive_the_round_trip(command: str) -> None:
     assert _run("-c", command).returncode == 0
+
+
+# --- the two SOFT policies, which reach agy only through this shim ------------------------
+
+
+def _with_open_step(tmp_path: Path) -> dict[str, str]:
+    """An env whose tickets dir holds one open step, and whose state dir has a turn marker."""
+    tickets = tmp_path / "tickets"
+    tickets.mkdir()
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "active").write_text("")
+    subprocess.run(
+        [
+            str(_WORK_DIR / "system" / "vendor" / "tk" / "ticket"),
+            "create",
+            "--step",
+            "An open step",
+        ],
+        env={**os.environ, "TICKETS_DIR": str(tickets)},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    return {"TICKETS_DIR": str(tickets), "MNGR_AGENT_STATE_DIR": str(state)}
+
+
+def test_the_open_steps_reminder_rides_the_first_command_of_a_turn(
+    tmp_path: Path,
+) -> None:
+    """agy has no prompt-submit event, so P7's carryover reminder has no hook to live on. The
+    shim's stderr BECOMES the tool result the model reads, so it rides a command instead."""
+    env = _with_open_step(tmp_path)
+    result = _run("-c", "sed -i s/a/b/ prod.py", env=env)
+    assert "Open task reminder" in result.stderr
+    assert "An open step" in result.stderr
+
+
+def test_the_reminder_does_not_repeat_within_one_turn(tmp_path: Path) -> None:
+    """Keyed on the active marker's INODE, which agy's statusline changes once per turn (its
+    mtime is touched on every sample, so mtime would fire on every command)."""
+    env = _with_open_step(tmp_path)
+    _run("-c", "echo first", env=env)
+    result = _run("-c", "echo second", env=env)
+    assert "Open task reminder" not in result.stderr
+
+
+def test_the_reminder_returns_on_the_next_turn(tmp_path: Path) -> None:
+    env = _with_open_step(tmp_path)
+    _run("-c", "echo first", env=env)
+    marker = Path(env["MNGR_AGENT_STATE_DIR"]) / "active"
+    marker.unlink()
+    marker.write_text("")  # a new inode: the idle->busy edge of the next turn
+    result = _run("-c", "echo next-turn", env=env)
+    assert "Open task reminder" in result.stderr
+
+
+def test_substantive_shell_work_with_no_step_open_is_nudged(tmp_path: Path) -> None:
+    tickets = tmp_path / "tickets"
+    tickets.mkdir()
+    result = _run("-c", "sed -i s/a/b/ prod.py", env={"TICKETS_DIR": str(tickets)})
+    assert "Step tracking reminder" in result.stderr
+
+
+def test_read_only_shell_work_is_not_nudged(tmp_path: Path) -> None:
+    """Looking around must be as free as claude's Read/Grep, which are exempt by tool name --
+    and through a shim, read-only shell work is ALL the nudge would ever see."""
+    tickets = tmp_path / "tickets"
+    tickets.mkdir()
+    assert (
+        "Step tracking reminder"
+        not in _run("-c", "cat /etc/hostname", env={"TICKETS_DIR": str(tickets)}).stderr
+    )
+    assert (
+        "Step tracking reminder"
+        not in _run("-c", "ls -la", env={"TICKETS_DIR": str(tickets)}).stderr
+    )
+
+
+def test_a_soft_policy_never_changes_the_commands_result(tmp_path: Path) -> None:
+    """A reminder is not worth failing a command over."""
+    env = _with_open_step(tmp_path)
+    result = _run("-c", "echo payload; exit 7", env=env)
+    assert result.returncode == 7
+    assert "payload" in result.stdout

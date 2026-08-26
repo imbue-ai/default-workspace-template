@@ -55,6 +55,7 @@ from typing import Any
 
 from loguru import logger as _loguru_logger
 
+from imbue.system_interface.harnesses.codex.tool_labels import is_single_delegated_call
 from imbue.system_interface.harnesses.codex.tool_labels import keeps_full_tool_input
 from imbue.system_interface.harnesses.codex.tool_labels import shell_command
 from imbue.system_interface.harnesses.codex.tool_labels import tool_labels
@@ -146,9 +147,18 @@ def _labelled_tool_call(call_id: str, tool_name: str, raw_input: str) -> dict[st
     }
     # The render decision ships with the call (a hidden tk marker, or the permission
     # card), recognised from the UNTRUNCATED input backend-side.
+    #
+    # Both verdicts claim the call is ONLY the thing they name, and both are derived from the
+    # FIRST delegated call in the program -- so on a batched program they are claims we cannot
+    # check. Getting it wrong is not cosmetic: `tk start s1` followed by real work classified
+    # HIDDEN and the real work vanished from the chat entirely, which is the exact failure the
+    # standalone policies exist to prevent. A batched program renders as ordinary work instead.
     command = shell_command(tool_name, raw_input)
     is_pure_tk = command is not None and is_pure_tk_lifecycle_command(command)
-    display = classify_tool_call_display(is_pure_tk=is_pure_tk, raw_input=raw_input)
+    if is_single_delegated_call(raw_input):
+        display = classify_tool_call_display(is_pure_tk=is_pure_tk, raw_input=raw_input)
+    else:
+        display = None
     if display is not None:
         tool_call["display"] = display.value
     return tool_call

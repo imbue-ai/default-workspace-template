@@ -230,17 +230,30 @@ check_installation = false
 #   they close that hole (`code_mode_only` implies `code_mode`; it is Stage::UnderDevelopment,
 #   which only warns -- the suppress flag silences that). `code_mode_host` picks where the JS
 #   runs (standalone host vs embedded V8), unrelated to whether code mode is on.
+# - unified_exec = false: closes a TOTAL bypass of the PreToolUse guards. The unified-exec
+#   surface adds `write_stdin` (and a tty option to the shell tool); `write_stdin` fires NO
+#   PreToolUse event at all, so an agent can start a shell with one guarded call and then type
+#   anything into it -- `git rebase`, a piped `head`, a batched `tk start` -- with every guard
+#   skipped. Measured on codex-cli 0.147.0: the typed command ran and the hook log held a single
+#   `Bash`/`bash` entry. It is NOT closable via the tools table below: `ToolsToml` accepts only
+#   web_search / experimental_request_user_input / update_plan, and `write_stdin` there is
+#   silently ignored (verified -- the bypass still worked). With this flag the model reports
+#   "`write_stdin` does not exist in the available exec tools", ordinary shell calls still run
+#   AND still fire their hook. Cost: the interactive-tty affordance, which Minds does not use.
+#   (The older spelling `experimental_use_unified_exec_tool` is deprecated in 0.147.0.)
 # - features.goals = false, and tools.{update_plan, experimental_request_user_input,
 #   web_search}.enabled = false: turn off codex surfaces the chat does not use -- codex's own
 #   goals/plan UI (we drive tk), its interactive request-user-input tool, and web search --
 #   so they never appear in the transcript.
-config_overrides = { features = { memories = false, code_mode_only = true, code_mode_host = true, suppress_unstable_features_warning = true, goals = false }, tools = { update_plan = { enabled = false }, experimental_request_user_input = { enabled = false }, web_search = { enabled = false } } }
+config_overrides = { features = { memories = false, code_mode_only = true, code_mode_host = true, suppress_unstable_features_warning = true, goals = false, unified_exec = false }, tools = { update_plan = { enabled = false }, experimental_request_user_input = { enabled = false }, web_search = { enabled = false } } }
 # Codex-only instructions, appended to every codex agent's system prompt.
 append_system_prompt__extend = ["""# Codex-specific instructions
 
 Do NOT use your built-in `update_plan` tool, your `create_goal`/`get_goal`/`update_goal` tools, or your `request_user_input` tool. Their output and effects never reach the user's workspace chat -- a plan or goal recorded there is invisible to the user, and a `request_user_input` prompt blocks on a terminal nobody is watching (and submits empty answers when it times out). Track every plan and step with `tk` step records, and when you need something from the user, write it as an ordinary chat message and stop -- their reply comes back as your next turn.
 
-The pytest-timeout note in the shared instructions (`PYTEST_MAX_DURATION_SECONDS`) refers to your shell/exec tool's timeout.""", """# The /welcome command
+The pytest-timeout note in the shared instructions (`PYTEST_MAX_DURATION_SECONDS`) refers to your shell/exec tool's timeout.
+
+Run every shell command as its own `exec_command`. Do NOT start a long-lived interactive shell and feed commands into its stdin: commands delivered that way bypass this workspace's command guards, so a mistake they would have caught reaches the repo instead.""", """# The /welcome command
 
 If the user's message is exactly `/welcome`, your entire response is the message below, copied verbatim. Do NOT call any tool, do NOT read any file, do NOT look at the codebase, and do NOT add anything before or after it -- not a preamble, not a summary, not a note about what you are doing.
 

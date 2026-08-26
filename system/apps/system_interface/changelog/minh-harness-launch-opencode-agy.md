@@ -39,3 +39,15 @@ Agy's progress timeline now renders. It never had: the code that reads Agy's tra
 Agy tool calls also read better in the activity line. Agy writes its own short description of each call ("Creating step", "Running test call 1 of 20"), which we were reading from the wrong place and always getting nothing. Seven Agy tools that previously showed their raw internal name -- background tasks, scheduling, sub-agent management, file search, and the question prompt -- now show a proper label.
 
 Behind the scenes, the rule for recognising a task-tracker command was copy-pasted into all four harnesses and is now defined once, and the chat no longer has any harness-specific knowledge baked into it -- which is what left Agy as the only harness with no fallback when decoration was missing.
+
+Codex agents can edit files again. A guard meant for shell commands was also inspecting Codex's file edits -- Codex delivers an edit through the same channel as a command, with the patch text where the command normally goes -- so editing any file that merely *mentioned* piping into `head` or `tail` was refused outright and the whole batch of work was abandoned. The guards now only look at actual shell commands.
+
+Closed a hole where Codex could run commands the guards never saw: it could open a shell with one checked command and then type further commands into it, none of which were checked. That way of driving a shell is switched off; ordinary commands are unaffected.
+
+Codex work no longer disappears from the chat. Codex can put several commands in a single tool call, and the chat was judging the whole call by the first one -- so a call that began with a task-tracking command was treated as bookkeeping and hidden, taking any real work in the same call with it. Those calls now render as ordinary work.
+
+Antigravity agents now get the two reminders every other harness already had: the carry-over of steps left open from a previous turn, and the prompt to declare a step before doing substantive work. Neither had any way to reach Antigravity before. The step reminder covers shell work only -- Antigravity's own file-editing tools are invisible to it -- and reminders never affect whether a command succeeds.
+
+The reminder to declare a step also got more accurate everywhere: it no longer fires on read-only commands like `ls` or `cat`, it correctly recognises a bare `ticket` command, and it no longer mistakes a word like `gtk` for a task-tracker call.
+
+Pi's refusal messages now match the other harnesses word for word, so the same mistake gets the same explanation whichever agent you are talking to.

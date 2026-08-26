@@ -31,6 +31,13 @@
 set -uo pipefail
 
 REAL_BASH=/bin/bash
+# Helpers are resolved from a FIXED path, never the agent's. The plugin puts this very
+# directory first on the agent's PATH, and it is a repo path the agent edits normally -- so a
+# bare `jq` here means dropping a two-line `jq` NEXT TO this file makes the payload build fail,
+# which fail-open then runs unguarded. Verified: that turns a blocked `git rebase` from exit 2
+# into exit 0 with every guard skipped. Deleting the shim is a conceded bypass; adding a file
+# beside it must not be one.
+SAFE_PATH=/usr/bin:/bin
 SCRIPTS_DIR="${MNGR_AGENT_WORK_DIR:-}/system/scripts"
 SHIM_LOG="${MNGR_AGENT_STATE_DIR:-/tmp}/agy_shim.log"
 
@@ -42,6 +49,9 @@ note() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >>"$SHIM_LOG" 2>
 # Nested harnesses being unguarded is already the house norm (see "which pi runs which
 # extension" in tool-call-policies-state-of-things.md). MNGR_AGY_SHIM_OFF is the kill switch.
 if [ -n "${MNGR_AGY_BASH_SHIM:-}" ] || [ -n "${MNGR_AGY_SHIM_OFF:-}" ] || [ ! -d "$SCRIPTS_DIR" ]; then
+    # Every other fail-open path logs. This one is the broadest -- an unset or wrong
+    # MNGR_AGENT_WORK_DIR disables every guard -- so it must not be the silent one.
+    [ -d "$SCRIPTS_DIR" ] || note "no scripts dir at $SCRIPTS_DIR; running unguarded"
     exec "$REAL_BASH" "$@"
 fi
 
@@ -61,7 +71,7 @@ shift 2
 # backslash or a newline would produce invalid JSON; the guards run under `set -e`, so jq's
 # parse error would exit non-zero, and fail-open would pass the command through -- letting the
 # agent defeat every guard by appending `# "` to it.
-PAYLOAD=$(printf '%s' "$COMMAND" | jq -Rs '{tool_name: "Bash", tool_input: {command: .}}' 2>/dev/null)
+PAYLOAD=$(printf '%s' "$COMMAND" | PATH="$SAFE_PATH" jq -Rs '{tool_name: "Bash", tool_input: {command: .}}' 2>/dev/null)
 if [ -z "$PAYLOAD" ]; then
     note "payload build failed (jq missing or refused input); running unguarded"
     exec "$REAL_BASH" -c "$COMMAND" "$@"
@@ -84,7 +94,7 @@ do
     # Invoked through an explicit /bin/bash so the guard's own `#!/usr/bin/env bash` cannot
     # resolve back into this shim. BASH_ENV/ENV are cleared so a user startup file's output
     # cannot end up quoted to the model as a block reason (pi clears them for the same reason).
-    guard_stderr=$(printf '%s' "$PAYLOAD" | env -u BASH_ENV -u ENV "$REAL_BASH" "$guard_path" 2>&1 >/dev/null)
+    guard_stderr=$(printf '%s' "$PAYLOAD" | env -u BASH_ENV -u ENV PATH="$SAFE_PATH" "$REAL_BASH" "$guard_path" 2>&1 >/dev/null)
     guard_status=$?
     case "$guard_status" in
         0) ;;
@@ -100,11 +110,39 @@ do
     esac
 done
 
+# --- the two SOFT policies, which have no other route to agy ------------------------------
+#
+# agy fires no PreToolUse and no prompt-submit event, so neither of these can be a hook. But
+# this shim's stderr BECOMES the tool result the model reads -- the same channel the blockers
+# above already use -- so both can ride a command's output instead.
+
+# Open-steps carryover, once per turn. agy's statusline removes the `active` marker on the idle
+# edge and re-touches it on the busy edge, so the marker's INODE changes exactly once per turn
+# (its mtime does not -- that is touched on every sample). Stamping the inode gives a turn key
+# without a mngr change. Best effort: never let a reminder cost a command.
+TURN_STAMP="${MNGR_AGENT_STATE_DIR:-/tmp}/agy_shim_turn"
+TURN_KEY=$(PATH="$SAFE_PATH" stat -c %i "${MNGR_AGENT_STATE_DIR:-}/active" 2>/dev/null || echo "")
+if [ -n "$TURN_KEY" ] && [ "$TURN_KEY" != "$(cat "$TURN_STAMP" 2>/dev/null)" ]; then
+    printf '%s' "$TURN_KEY" >"$TURN_STAMP" 2>/dev/null || true
+    reminder=$(PATH="$SAFE_PATH" "$REAL_BASH" "$SCRIPTS_DIR/agent_open_tickets_reminder.sh" </dev/null 2>/dev/null) || reminder=""
+    [ -n "$reminder" ] && printf '%s\n' "$reminder" >&2
+fi
+
+# Require-a-step nudge. Soft by design, and PARTIAL on agy by construction: agy's own editing
+# tools (write_to_file, replace_file_content) never reach a shell, so this sees only the shell
+# half of the agent's work. The script decides from the COMMAND, not the tool name, so the
+# synthesised `Bash` payload is judged correctly; its verdict is on stdout, which the guard
+# loop above discards, so it is read separately here.
+nudge=$(printf '%s' "$PAYLOAD" | env -u BASH_ENV -u ENV PATH="$SAFE_PATH" "$REAL_BASH" \
+        "$SCRIPTS_DIR/agent_require_steps_pretool.sh" 2>/dev/null \
+      | PATH="$SAFE_PATH" jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null) || nudge=""
+[ -n "$nudge" ] && printf '%s\n' "$nudge" >&2
+
 # The OOM self-tag and git identity (#4). --prefix-only keeps the command out of the JSON
 # round-trip: passing it back through would replace any non-UTF-8 byte with U+FFFD and strip
 # trailing newlines, i.e. run something the agent did not write. Empty output is the normal
 # no-op path, not an error.
-PREFIX=$(python3 "$SCRIPTS_DIR/agent_rewrite_bash_command.py" --prefix-only 2>/dev/null) || PREFIX=""
+PREFIX=$(PATH="$SAFE_PATH" python3 "$SCRIPTS_DIR/agent_rewrite_bash_command.py" --prefix-only 2>/dev/null) || PREFIX=""
 
 # `bash -c CMD name arg...` sets $0 and the positional parameters; "$@" carries them through.
 exec "$REAL_BASH" -c "$PREFIX$COMMAND" "$@"
