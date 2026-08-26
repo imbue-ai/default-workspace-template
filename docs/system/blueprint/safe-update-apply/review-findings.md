@@ -171,3 +171,64 @@ fixed on the branch yet. Line numbers are as of that review.
     timeout. The `apps/minds` changelog entry mis-describes the test's
     `HOME=/home/user` as "the way the update-self apply does" — the apply
     deliberately pins `HOME=/root`; the test models a hand-run.
+
+## Architecture review of the combined branch (2026-08-25, `gabriel/tactful-swift`, both repos)
+
+Findings from the architecture pass over the merged branch (this repo plus the
+paired mngr-internal branch). None of these are fixed; they are decisions for
+the author, not autofix material.
+
+23. **The app's update-event consumer has no producer.** mngr-internal ships
+    `UpdateEventConsumer`, the `update` source in `mngr_forward`'s
+    `stream_manager.py`, the `forward_cli.py` routing, `parse_update_event`,
+    and the `ALREADY_CURRENT` verdict, all tested -- but nothing on this branch
+    appends to `$MNGR_AGENT_STATE_DIR/events/update/events.jsonl`. As paired,
+    the apply window opens only via the stuck-edge race path, verdicts never
+    arrive, and every run ends through the 20s liveness poll as STALLED, which
+    the app files as a real failure (schedules cancelled, error-level log).
+    "Update failed" is therefore the expected badge after a successful update.
+    Cheapest coherent fix is on this side: `update_self.py apply` already has
+    `_advance(phase)` and `write_marker`; appending an envelope line at start,
+    before `mngr start --restart`, and at each return is small. The
+    alternative is to hold the consumer, `ALREADY_CURRENT`, and the consent
+    tiers out of the app PR until the emitter exists.
+
+24. **The consent tiers bind to nothing.** The app's unattended seed prompt
+    tells the agent to "stop at the gate and wait", but `update-self/SKILL.md`
+    on this branch is "fully unattended" with no approval gate (the only
+    interactive stop left is the over-ceiling `--override` confirmation, which
+    unattended runs never send). So the 428 consent, `UpdateConsentKind`, and
+    the `BACKUPS_NOT_CONFIGURED` skip change nothing in the workspace; and the
+    attended "Update now" path also lands unattended, which the app's copy does
+    not say. Decide whether the gate exists and make the app's copy match.
+
+25. **Apply window vs. the apply's own budgets.** The app's
+    `DEFAULT_APPLY_WINDOW_SECONDS = 360` (already marked `CLEANUP:` as a guess)
+    is shorter than this side's `_RESTART_TIMEOUT_SECONDS = 600`, the
+    240 x 1s health and pre-flight probes, and `DEFAULT_RECOVER_GRACE_SECONDS
+    = 600`. A legitimately slow restart+health phase is handed to
+    `dispatch_restart` mid-apply -- the misdiagnosis the window exists to
+    prevent -- and the cron `recover --if-stale` then sees a dead pid. The
+    probe already reads `marker.json`; driving the window from the marker's
+    `phase`/`updated_at` against `DEFAULT_RECOVER_GRACE_SECONDS` puts both
+    repos on one authority and one staleness rule.
+
+26. **Inverted dependency on this side.** `system/libs/bootstrap` and the
+    `/etc/cron.d/update-apply-recover` entry now depend on a script under
+    `.agents/skills/` that re-points itself at other versions at runtime, and
+    `update_staleness.py` re-implements a narrower `classify_path` because it
+    cannot import from there. The apply/recover/emergency/provision-incomplete
+    core (now ~3,900 lines in one stdlib-only file) would sit more naturally as
+    a `system/libs/update_apply` package that the skill, bootstrap, cron, and
+    the SI all import, with the marker path exported from one place (it is a
+    literal in four files across the two repos today).
+
+27. Smaller items on the mngr-internal side: `_build_workspace_update_service`
+    constructs a second `UnattendedRecoveryDispatcher` for `dispatch_restart`
+    instead of a flag on the registered one; `WorkspaceUpdateService.scheduler`
+    is the graph's one mutable back-reference; `_is_update_request_authenticated`
+    is the third copy of `is_ui_request_authenticated`; the detector uses a
+    `ThreadPoolExecutor` where every other strand uses `ConcurrencyGroup`; and
+    the version read now costs up to two execs where there was one. The
+    `update-self: merge upstream template (<ref>)` commit subject is a prose
+    contract between the worker doc and the app's version grep.
