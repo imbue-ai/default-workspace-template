@@ -9,12 +9,15 @@ system, not a pixel-identical render.
 - **Token scaffold in `src/style.css`.** Colours are now semantic
   `var(--color-*)` tokens from a single `@theme` block (zero raw hex outside
   `@theme`); every colour is role-named (`bg`, `surface`, `text-*`, `accent*`,
-  `danger`/`warning`/`success`/`info`, `inverse-surface`, ...) with no
-  scale-position tokens -- the transitional `--color-neutral-*` slate ramp was
-  removed and its one live use (the terminal banner) moved to
-  `--color-surface-secondary`. Corner radii collapse onto a `--radius-*` scale,
-  spacing onto a 4px scale, motion timing/easing, drop shadows onto an elevation
-  scale, and the former magic z-index numbers onto named tokens.
+  `danger`/`warning`/`success`, `inverse-surface`, ...) with no scale-position
+  tokens -- the transitional `--color-neutral-*` slate ramp was removed and its
+  one live use (the terminal banner) moved to `--color-surface-secondary`. The
+  `@theme` block is kept fully live: seven defined-but-unused tokens
+  (`--color-info`, `--ease-standard`, `--elevation-md`, `--spacing-page`,
+  `--width-sidebar`/`-collapsed`, `--duration-sidebar-transition`) were pruned so
+  every token is referenced by the shipped CSS. Corner radii collapse onto a
+  `--radius-*` scale, spacing onto a 4px scale, motion timing/easing, drop shadows
+  onto an elevation scale, and the former magic z-index numbers onto named tokens.
 
 - **Shared component primitives.** A unified `.btn` (with `round`/`filled`/`stop`
   and `ghost-destructive` variants), plus `.badge`, `.input`, `.toggle`, and a
