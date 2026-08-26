@@ -308,7 +308,10 @@ over-ceiling `--override` in Step 2, stop and take that confirmation now, with
 the same plain-language framing Step 2 describes. A default (no-override) resolve
 that trips this means the local copy chose a target its app cannot support:
 say so, and offer the ref this pass *would* cap to (re-run without `--override`
-to learn it). Do not dispatch the worker until it is resolved.
+to learn it). Do not dispatch the worker until it is resolved. If they decline
+every option, that ends the pass: record `run-status verdict REFUSED --detail
+"<the version they asked for, and that they chose not to attempt it>"`, exactly
+as Step 2's confirmation does.
 
 **If the user takes the capped ref instead**, set `$REF` to it and then re-run
 §2a for the new `$REF` before dispatching. Do not just reassign the variable:
@@ -477,6 +480,13 @@ user is away, the pass holds (worker alive, leases held) until they answer.
 A cosmetic shift -- the widget moved but still works -- is *not* a hold: that
 applies unattended and is named in the results message with an offer to
 restore the old arrangement.
+
+If they choose to skip the update, that ends the pass: record `run-status
+verdict REFUSED --detail "<what the update could not keep, and that they chose
+to keep it instead>"` before tearing down. Nothing was applied, and without the
+verdict the app reports the answer they gave to the one question it asked them
+as a failed update. The other two answers carry on into §5 and get their
+verdict there, so record nothing for those.
 
 ## 5. Terminal status
 
