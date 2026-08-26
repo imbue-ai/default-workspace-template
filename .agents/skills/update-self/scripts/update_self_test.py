@@ -4707,7 +4707,12 @@ def test_run_status_start_and_verdict_round_trip(tmp_path, monkeypatch) -> None:
     # the run's start survives the verdict write (the app tells runs apart by
     # their start).
     monkeypatch.setenv("MNGR_AGENT_NAME", "update-abc123")
-    assert update_self.main(["run-status", "start", "--unattended", "--repo-root", str(tmp_path)]) == 0
+    assert (
+        update_self.main(
+            ["run-status", "start", "--unattended", "--repo-root", str(tmp_path)]
+        )
+        == 0
+    )
     status = update_self.read_run_status(tmp_path)
     assert status is not None
     assert status.chat_agent_name == "update-abc123"
@@ -4741,13 +4746,32 @@ def test_run_status_start_and_verdict_round_trip(tmp_path, monkeypatch) -> None:
     assert status.is_unattended
 
 
-def test_run_status_start_supersedes_the_previous_runs_verdict(tmp_path, monkeypatch) -> None:
+def test_run_status_start_supersedes_the_previous_runs_verdict(
+    tmp_path, monkeypatch
+) -> None:
     # One file per workspace: a new run's start must overwrite the last run's
     # record outright, or the app would read the old verdict as the new run's.
     monkeypatch.setenv("MNGR_AGENT_NAME", "update-old")
     assert update_self.main(["run-status", "start", "--repo-root", str(tmp_path)]) == 0
-    assert update_self.main(["run-status", "verdict", "REFUSED", "--repo-root", str(tmp_path)]) == 0
-    assert update_self.main(["run-status", "start", "--chat", "update-new", "--repo-root", str(tmp_path)]) == 0
+    assert (
+        update_self.main(
+            ["run-status", "verdict", "REFUSED", "--repo-root", str(tmp_path)]
+        )
+        == 0
+    )
+    assert (
+        update_self.main(
+            [
+                "run-status",
+                "start",
+                "--chat",
+                "update-new",
+                "--repo-root",
+                str(tmp_path),
+            ]
+        )
+        == 0
+    )
     status = update_self.read_run_status(tmp_path)
     assert status is not None
     assert status.chat_agent_name == "update-new"
@@ -4755,7 +4779,40 @@ def test_run_status_start_supersedes_the_previous_runs_verdict(tmp_path, monkeyp
     assert status.detail == ""
 
 
-def test_run_status_verdict_without_a_start_still_records(tmp_path, monkeypatch) -> None:
+def test_run_status_verdict_is_recorded_under_the_agent_recording_it(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    # A pass that started and then stopped (a foreign lease, say) leaves its own
+    # start in the file. The running pass's verdict must not be filed under that
+    # pass's name: the app matches a record to a workspace's row by chat name,
+    # so it would discard the verdict and read the real run as having died.
+    monkeypatch.setenv("MNGR_AGENT_NAME", "update-aborted")
+    assert (
+        update_self.main(
+            ["run-status", "start", "--unattended", "--repo-root", str(tmp_path)]
+        )
+        == 0
+    )
+
+    monkeypatch.setenv("MNGR_AGENT_NAME", "update-real")
+    assert (
+        update_self.main(
+            ["run-status", "verdict", "UPDATED", "--repo-root", str(tmp_path)]
+        )
+        == 0
+    )
+
+    status = update_self.read_run_status(tmp_path)
+    assert status is not None
+    assert status.chat_agent_name == "update-real"
+    assert status.verdict == "UPDATED"
+    assert not status.is_unattended
+    assert "records update-aborted, not update-real" in capsys.readouterr().err
+
+
+def test_run_status_verdict_without_a_start_still_records(
+    tmp_path, monkeypatch
+) -> None:
     # A pass that skipped its start (an older skill copy, an agent that missed
     # the step) still owes the app its outcome; the env names the agent.
     monkeypatch.setenv("MNGR_AGENT_NAME", "update-late")

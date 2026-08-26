@@ -49,21 +49,6 @@ each bash invocation starts a fresh shell).
 
 ## 1. Preconditions
 
-**Record the run for the Minds app.** Before anything else -- so the app can
-see a run is under way from the first moment, whoever launched it:
-
-```bash
-python3 .agents/skills/update-self/scripts/update_self.py run-status start
-```
-
-Append `--unattended` when your dispatch message says the run is unattended
-(pre-authorized, nobody watching). This writes
-`data/.state/update-apply/run.json`, which the Minds app polls; the pass owes
-that file exactly one more write -- a `run-status verdict` when it ends, from
-whichever section ends it. Each terminal path below names its verdict; a pass
-that ends without recording one shows the user "update failed" in the app over
-a run that may have gone fine.
-
 **Back up first.** Before dispatching anything, capture a restore point of the
 whole workspace so the pass is recoverable -- the apply re-runs provisioners and
 restarts services, and a backup is the last-resort recovery path if everything
@@ -108,8 +93,29 @@ UPDATE_LEASE_ID=$(tk create "updating workspace" -t chore \
 
 then `tk start "$UPDATE_LEASE_ID"`.
 
+**Record the run for the Minds app.** As soon as the lease is yours -- so the
+app can see a run is under way, whoever launched it, for all of the pass it
+actually owns:
+
+```bash
+python3 .agents/skills/update-self/scripts/update_self.py run-status start
+```
+
+Append `--unattended` when your dispatch message says the run is unattended
+(pre-authorized, nobody watching). This writes
+`data/.state/update-apply/run.json`, which the Minds app polls; the pass owes
+that file exactly one more write -- a `run-status verdict` when it ends, from
+whichever section ends it. Each terminal path below names its verdict; a pass
+that ends without recording one shows the user "update failed" in the app over
+a run that may have gone fine. That is also why this comes after the lease
+check and not before it: there is one record per workspace, so a pass that
+stops because someone else is updating must leave the running pass's record
+alone rather than overwrite it with its own.
+
 **Clean tree.** The worker branches off your `HEAD` and the rollback captures it.
-If `git status --porcelain` is non-empty, surface it and stop.
+If `git status --porcelain` is non-empty, surface it and stop -- recording
+`run-status verdict REFUSED --detail "<what is uncommitted, one plain line>"`
+first, since nothing has been touched and the app is now watching this run.
 
 ## 2. Resolve the target
 
@@ -194,7 +200,9 @@ itself"), and **get an explicit go-ahead before continuing**. This is the one
 confirmation the otherwise-unattended flow keeps: it fires immediately at
 launch, while the user is still present, and it asks whether to *attempt* an
 unsupported version at all -- a question no later rollback offer can substitute
-for. An override at or below the ceiling needs no confirmation.
+for. If they decline, that ends the pass: record `run-status verdict REFUSED
+--detail "<the version they asked for, and that they chose not to attempt
+it>"`. An override at or below the ceiling needs no confirmation.
 
 To preview what the release actually changes, always diff from the **merge
 base**, never from `HEAD` -- a `git diff HEAD "$REF"` also shows every *local*

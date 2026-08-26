@@ -1178,13 +1178,16 @@ MARKER_FILENAME = "marker.json"
 SNAPSHOTS_DIRNAME = "snapshots"
 # The run-status file: the whole machine-readable contract between an
 # update-self pass and the Minds app. The lead records the run's start here
-# (``run-status start``, before anything else in the pass) and its one
-# terminal verdict (``run-status verdict``); the app's poll reads the file
+# (``run-status start``, once it holds the updating-workspace lease) and its
+# one terminal verdict (``run-status verdict``); the app's poll reads the file
 # over ``mngr exec`` alongside the apply marker and the run's chat agent, and
 # needs nothing else -- a run recorded here is visible to the app whoever
 # launched it. One file per workspace: a new run's ``start`` overwrites the
 # previous run's record, which is exactly the app's model (the last run's
-# outcome stands until a new run supersedes it).
+# outcome stands until a new run supersedes it). The lease is what keeps that
+# single record honest, which is why the start waits for it -- and why a
+# verdict is recorded against the agent recording it rather than against
+# whatever name the file happens to carry.
 RUN_STATUS_FILENAME = "run.json"
 # The emergency record, written when a rollback could not put a healthy
 # workspace back. The marker cannot carry this: it comes down on the emergency
@@ -4076,12 +4079,24 @@ def _cmd_run_status_start(args: argparse.Namespace) -> int:
 def _cmd_run_status_verdict(args: argparse.Namespace) -> int:
     repo_root = _repo_root(args).resolve()
     now = time.time
+    recorder = args.chat or os.environ.get(ENV_DRI_AGENT, "")
     status = read_run_status(repo_root)
+    if status is not None and recorder and status.chat_agent_name != recorder:
+        # The record on disk is some other pass's. The app matches a record to
+        # a workspace's row by chat name, so stamping this verdict onto that
+        # name would file it under a run the app is not watching -- and this
+        # run would end with no verdict at all, which the app reads as a
+        # failure.
+        sys.stderr.write(
+            f"warning: {run_status_path(repo_root)} records {status.chat_agent_name or '<unnamed>'}, "
+            f"not {recorder}; recording this verdict under {recorder} instead.\n"
+        )
+        status = None
     if status is None:
-        # A verdict with no recorded start still deserves a record: the app can
-        # at least report how the run ended, and the env names the agent.
+        # A verdict with no record of its own start still deserves one: the app
+        # can at least report how the run ended, and the env names the agent.
         status = RunStatus(
-            chat_agent_name=os.environ.get(ENV_DRI_AGENT, ""),
+            chat_agent_name=recorder,
             is_unattended=False,
             started_at=now(),
             updated_at=0.0,
@@ -4312,6 +4327,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         "verdict",
         choices=RUN_VERDICTS,
         help="How the run ended.",
+    )
+    verdict_parser.add_argument(
+        "--chat",
+        default="",
+        help=f"This run's chat agent name (default: ${ENV_DRI_AGENT}).",
     )
     verdict_parser.add_argument(
         "--detail",
