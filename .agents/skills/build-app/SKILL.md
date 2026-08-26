@@ -541,7 +541,12 @@ Flags:
   text beside it, and a transparent background is what keeps it from
   reading as a sticker in a row of line icons. Only use color if the
   user explicitly asks for a colored icon.
-- `--no-icon`: register new non-pickable machinery without an icon (never a user-facing app).
+- `--no-icon`: skip the icon requirement for a brand-new entry. It does
+  NOT hide the entry -- the app still appears in the pickers, drawn
+  with the generic letter monogram (hiding is `--internal`'s job).
+  Always provide an icon instead; use this only when the user
+  explicitly declines one, or for entries whose icon is never rendered
+  (the built-ins the UI hides by name, short-lived preview tabs).
 - `--program`: name of the supervisord program that runs the app --
   the program-name-equals-service-name convention both paths follow, so
   pass the app's own name. Its presence on the registry entry is what
