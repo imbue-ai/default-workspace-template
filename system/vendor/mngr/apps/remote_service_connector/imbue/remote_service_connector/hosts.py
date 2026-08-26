@@ -660,8 +660,7 @@ def _lease_pool_host(
     leased: LeaseHostResponse | None = None
     is_pool_exhausted = False
     no_host_keys_detail: str | None = None
-    conn = db.get_pool_db_connection()
-    try:
+    with db.pooled_db_connection() as conn:
         with conn:
             with conn.cursor() as cur:
                 # Serialize this user's leases for the duration of the
@@ -805,8 +804,6 @@ def _lease_pool_host(
                         container_host_public_key=container_host_public_key,
                     )
                     break
-    finally:
-        conn.close()
     if leased is not None:
         return leased
     # Nothing leased. The quarantines above are already committed (the
@@ -854,8 +851,7 @@ def release_host(request: Request, host_db_id: UUID) -> dict[str, object]:
     """
     with handle_endpoint_errors():
         user = accounts_web_module.authenticate_web_request(request)
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 # ``str(host_db_id)`` because psycopg2 can't adapt the
                 # Python ``UUID`` type that FastAPI parsed from the path
@@ -959,8 +955,6 @@ def release_host(request: Request, host_db_id: UUID) -> dict[str, object]:
                 )
             else:
                 _delete_pool_host_row(conn, host_db_id)
-        finally:
-            conn.close()
         return ReleaseHostResponse(status="released").model_dump()
 
 
@@ -1013,8 +1007,7 @@ def rename_host(request: Request, host_db_id: UUID, body: RenameHostRequest) -> 
     """
     with handle_endpoint_errors():
         user = accounts_web_module.authenticate_web_request(request)
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT leased_to_user, status FROM pool_hosts WHERE id = %s",
@@ -1034,8 +1027,6 @@ def rename_host(request: Request, host_db_id: UUID, body: RenameHostRequest) -> 
                     (body.host_name, str(host_db_id)),
                 )
                 conn.commit()
-        finally:
-            conn.close()
         return RenameHostResponse(host_db_id=host_db_id, host_name=body.host_name).model_dump()
 
 
@@ -1052,8 +1043,7 @@ def list_leased_hosts(request: Request) -> list[dict[str, object]]:
     """
     with handle_endpoint_errors():
         user = accounts_web_module.authenticate_web_request(request)
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT id, vps_address, ssh_port, ssh_user, container_ssh_port, agent_id, host_id, "
@@ -1063,8 +1053,6 @@ def list_leased_hosts(request: Request) -> list[dict[str, object]]:
                     (user.user_id_prefix,),
                 )
                 rows = cur.fetchall()
-        finally:
-            conn.close()
         return [
             LeasedHostInfo(
                 host_db_id=r[0],
@@ -1095,13 +1083,10 @@ def count_total_workspaces(user_id_prefix: str) -> int:
 
 
 def _count_user_workspaces(user_id_prefix: str, count_sql: str) -> int:
-    conn = db.get_pool_db_connection()
-    try:
+    with db.pooled_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(count_sql, (user_id_prefix,))
             row = cur.fetchone()
-    finally:
-        conn.close()
     return int(row[0]) if row is not None else 0
 
 
@@ -1263,8 +1248,7 @@ def _enable_sharing_core(
     except InvalidShareCoordinateError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    conn = db.get_pool_db_connection()
-    try:
+    with db.pooled_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT leased_to_user, status, vps_address, container_ssh_port, ssh_user, host_id, "
@@ -1272,8 +1256,6 @@ def _enable_sharing_core(
                 (str(host_db_id),),
             )
             row = cur.fetchone()
-    finally:
-        conn.close()
     if row is None:
         raise HTTPException(status_code=404, detail="No such host")
     (
@@ -1623,8 +1605,7 @@ def _release_lease_after_failed_claim(host_db_id: UUID) -> None:
     and the hourly sweep retries rows stuck in ``removing``.
     """
     try:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 # Same projection as the release endpoint, so the teardown has
                 # the slice's lima bookkeeping.
@@ -1646,8 +1627,6 @@ def _release_lease_after_failed_claim(host_db_id: UUID) -> None:
                 )
                 conn.commit()
             _finish_releasing_pool_host(conn, host_db_id, lima_instance_name, lima_disk_name, bare_metal_server_id)
-        finally:
-            conn.close()
     except (PoolHostCleanupError, paramiko.SSHException, OSError, psycopg2.Error) as exc:
         logger.warning("Failed to release lease %s after a failed claim (sweep will retry): %s", host_db_id, exc)
 

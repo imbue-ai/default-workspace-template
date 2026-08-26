@@ -275,22 +275,18 @@ def _mint_and_record_key(
 
 def _workspace_record_exists(user_id: str, short_name: str) -> bool:
     """Whether the user has a workspace record (any state) whose workspace or host id is ``short_name``."""
-    conn = db.get_pool_db_connection()
-    try:
+    with db.pooled_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT 1 FROM workspace_records WHERE user_id = %s AND (host_id = %s OR agent_id = %s)",
                 (user_id, short_name, short_name),
             )
             return cur.fetchone() is not None
-    finally:
-        conn.close()
 
 
 def _workspace_record_is_active(user_id: str, short_name: str) -> bool:
     """Whether the user has an ACTIVE workspace record whose workspace or host id is ``short_name``."""
-    conn = db.get_pool_db_connection()
-    try:
+    with db.pooled_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT 1 FROM workspace_records "
@@ -298,8 +294,6 @@ def _workspace_record_is_active(user_id: str, short_name: str) -> bool:
                 (user_id, short_name, short_name),
             )
             return cur.fetchone() is not None
-    finally:
-        conn.close()
 
 
 @router.post("/buckets")
