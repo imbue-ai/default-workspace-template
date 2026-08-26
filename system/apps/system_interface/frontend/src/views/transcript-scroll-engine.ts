@@ -210,7 +210,10 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
   // When the user last touched a native input (wheel/keys/pointer). macOS
   // momentum keeps emitting wheel events, so "no input for a while" reliably
   // separates browser adjustments from genuine scrolling.
-  let lastNativeInputAtMs = 0;
+  // Negative infinity, not 0: performance.now() starts near 0 at page load, so
+  // a 0 default would read as "recent input" for the first activity window and
+  // misclassify the initial fill's giant clamp as a user scroll.
+  let lastNativeInputAtMs = Number.NEGATIVE_INFINITY;
   const pendingEchoTops: number[] = [];
   // Last observed scrollHeight, to recognize the browser's own clamp of
   // scrollTop after content shrank (no user intent; must not be reduced).
@@ -231,6 +234,8 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
   // compensation write happens only when the content actually changed under
   // the viewport -- this key captures those inputs.
   let lastPositionedKey = "";
+  // afterRender work deferred to a microtask (see afterRender); one per task.
+  let isAfterRenderQueued = false;
 
   // --- persistence / restore ------------------------------------------------
   let persistAgentKey: string | null = null;
@@ -267,15 +272,16 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     getHostEl: () => scrollEl?.parentElement ?? null,
     getListWidthPx: () => lastListWidthPx,
     onHeights: (measured) => {
-      let changed = false;
+      let changed = 0;
       for (const [key, heightPx] of measured) {
         // Live measurement wins: offscreen only fills gaps.
         if (!heightByRowKey.has(key)) {
           heightByRowKey.set(key, heightPx);
-          changed = true;
+          changed += 1;
         }
       }
-      if (changed) {
+      if (changed > 0) {
+        trace?.record("measure-offscreen", { count: changed });
         heightsEpoch += 1;
         m.redraw();
       }
@@ -465,18 +471,21 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       if (element.id === "") {
         continue; // spacer
       }
-      // Measure the row's outer PITCH (distance to the next element's top), not
-      // its border-box height: rows carry CSS margins (.message margin-bottom)
-      // that height excludes, and geometry built from heights drifts from the
-      // DOM by the cumulative margins -- thousands of px deep in a transcript,
-      // which made deep anchors resolve to the wrong row entirely. A next
-      // sibling always exists (the bottom spacer follows the last row).
-      const nextElement = element.nextElementSibling;
-      const topPx = element.getBoundingClientRect().top;
+      // Measure the row's outer size: border-box height plus its OWN margins.
+      // Rows carry CSS margins that height excludes, and geometry built from
+      // bare heights drifts from the DOM by the cumulative margins -- thousands
+      // of px deep in a transcript. The margins must be the row's own, not the
+      // distance to the next sibling: the list is a flex column (margins never
+      // collapse), so next-top minus own-top includes the NEXT row's margin-top
+      // and flip-flops as the mount boundary sweeps past (a row measured
+      // against the spacer loses its neighbor's margin), which oscillated
+      // geometry and bounced the anchored viewport. This matches the offscreen
+      // measurer's convention exactly.
+      const style = getComputedStyle(element);
       const pitchPx =
-        nextElement !== null
-          ? nextElement.getBoundingClientRect().top - topPx
-          : element.getBoundingClientRect().height;
+        element.getBoundingClientRect().height +
+        (parseFloat(style.marginTop) || 0) +
+        (parseFloat(style.marginBottom) || 0);
       if (pitchPx <= 0) {
         continue;
       }
@@ -484,6 +493,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       if (cached === undefined || Math.abs(pitchPx - cached) > MEASURE_HYSTERESIS_PX) {
         heightByRowKey.set(element.id, pitchPx);
         changed = true;
+        trace?.record("measure-live", { key: element.id, px: pitchPx, fromPx: cached ?? null });
       }
     }
     return changed;
@@ -818,6 +828,155 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     scrollEl = null;
   }
 
+  function runAfterRender(element: HTMLElement): void {
+    if (!isVisible()) {
+      return;
+    }
+    // Measure the mounted rows NOW, before positioning: a tall row mounting
+    // into the overscan renders at its real height this same frame, and
+    // positioning against last frame's estimates would paint a one-frame
+    // shift proportional to the estimate error (visible on long messages).
+    if (measureMountedRows()) {
+      heightsEpoch += 1;
+      refreshGeometry();
+      m.redraw(); // pads/ranges were computed pre-measure; re-plan next frame
+    }
+
+    // A native scroll whose event hasn't been handled yet (wheel/keys
+    // mid-flight) shows up as a gap between the DOM position and our
+    // bookkeeping. It must be neither swallowed (writing the stale target
+    // would yank the viewport back) nor left to meet moved geometry (this
+    // frame may have resized spacers/rows above, so the queued event's
+    // position no longer means what the user saw). Fold it in instead:
+    // compensate AND preserve the user's delta in one write, consume the
+    // stale event as an echo, and run the state machine on the result now.
+    const pendingUserDeltaPx = element.scrollTop - scrollTopPx;
+    // This frame's DOM update may have shrunk the content, making the browser
+    // clamp scrollTop before we ran: that gap is not user input. The clamp can
+    // land short of the FINAL maximum (a mid-patch forced layout clamps against
+    // intermediate geometry), so besides the at-max signature, any sizeable
+    // upward gap with no recent native input is an adjustment. Consume its
+    // event as an echo and reposition normally.
+    const maxScrollPx = Math.max(0, element.scrollHeight - element.clientHeight);
+    const isRecentNativeInput = performance.now() - lastNativeInputAtMs < 150;
+    const isPendingClamp =
+      pendingUserDeltaPx < -0.01 && (Math.abs(element.scrollTop - maxScrollPx) <= 1 || !isRecentNativeInput);
+    // NO minimum size: a trackpad gesture starts as a stream of sub-pixel
+    // deltas, and while streaming redraws run every frame, any threshold here
+    // reverts each tiny delta before the next arrives -- pinning the user in
+    // place. Bookkeeping is exact, so exact comparison is safe.
+    const hasPendingUserScroll = Math.abs(pendingUserDeltaPx) > 0.01 && !isPendingClamp;
+    if (isPendingClamp) {
+      pendingEchoTops.push(element.scrollTop);
+      trace?.record("clamp-absorbed", { deltaPx: pendingUserDeltaPx });
+    }
+
+    // Positioning: the single writer of scrollTop, and only when the content
+    // changed (heights, rows, spacers) or the state machine moved -- never in
+    // response to plain native scrolling, which stays entirely the browser's.
+    const positionKey =
+      positionState.kind +
+      "|" +
+      (positionState.kind === "USER_CONTROLLED"
+        ? positionState.anchor.rowKey + "@" + positionState.anchor.offsetPx
+        : "") +
+      "|" +
+      heightsEpoch +
+      "|" +
+      cachedRenderVersion +
+      "|" +
+      spacerTopPx +
+      "|" +
+      spacerBottomPx +
+      "|" +
+      element.scrollHeight +
+      "|" +
+      element.clientHeight;
+    if (positionKey === lastPositionedKey) {
+      planFill();
+      return;
+    }
+    lastPositionedKey = positionKey;
+
+    if (positionState.kind === "FOLLOW") {
+      if (isPointerDown || (pendingUserDeltaPx < -0.01 && !isPendingClamp)) {
+        trace?.record("follow-yield", { pendingUserDeltaPx, isPointerDown });
+      }
+      // The pin only pulls the viewport down while the agent is generating or
+      // history is still filling/measuring in; a quiescent transcript's
+      // relayout (expanding a block at the tail) must not drag the user.
+      const totalEventsNow = dataSource.getTotalEvents();
+      const isQuiescent =
+        !isStreaming() &&
+        !fillInFlight &&
+        spacerTopPx <= 0 &&
+        spacerBottomPx <= 0 &&
+        (geometry === null || geometry.unmeasuredCount === 0) &&
+        (totalEventsNow === null || extent().endIndex >= totalEventsNow);
+      if (!isPointerDown && !isQuiescent && (pendingUserDeltaPx >= -0.01 || isPendingClamp)) {
+        const targetPx = element.scrollHeight - element.clientHeight;
+        if (hasPendingUserScroll) {
+          pendingEchoTops.push(element.scrollTop);
+        }
+        if (Math.abs(element.scrollTop - targetPx) > 0.5) {
+          writeScrollTop(element, targetPx, "follow-pin");
+        } else {
+          scrollTopPx = element.scrollTop;
+        }
+      }
+    } else if (geometry !== null) {
+      let targetPx = scrollTopForAnchor(geometry, positionState.anchor, spacerTopPx);
+      if (targetPx === null && pendingRestore !== null) {
+        // A restored anchor whose window has not loaded yet is not lost --
+        // repairing now would replace it with a nonsense near-tail anchor.
+        // Hold position; the restore flow validates once its window lands.
+        planFill();
+        return;
+      }
+      if (targetPx === null) {
+        // The anchor row vanished (turn regrouping, eviction): repair to the
+        // row now covering the same transcript position instead of jumping.
+        const anchorIndex = currentAnchorEventIndexFallback();
+        const rowIndex = anchorIndex === null ? -1 : rowIndexForEventIndex(rowEventIndexes, anchorIndex);
+        if (rowIndex >= 0) {
+          const repaired: ScrollAnchor = { rowKey: geometryRows[rowIndex].key, offsetPx: 0 };
+          trace?.record("anchor-repair", { toRowKey: repaired.rowKey, atEventIndex: anchorIndex });
+          positionState = { kind: "USER_CONTROLLED", anchor: repaired };
+          targetPx = scrollTopForAnchor(geometry, repaired, spacerTopPx);
+        }
+      }
+      if (targetPx !== null) {
+        const heldPx = targetPx + (hasPendingUserScroll ? pendingUserDeltaPx : 0);
+        if (hasPendingUserScroll) {
+          pendingEchoTops.push(element.scrollTop);
+        }
+        if (Math.abs(element.scrollTop - heldPx) > 0.5) {
+          writeScrollTop(element, heldPx, "anchor-hold");
+        } else {
+          scrollTopPx = element.scrollTop;
+        }
+        if (hasPendingUserScroll) {
+          // The user's in-flight scroll was preserved through the write; feed
+          // it to the state machine now (its own event was consumed above).
+          const foldedAnchor = anchorForUser();
+          if (foldedAnchor !== null) {
+            const bottomGapPx = element.scrollHeight - element.scrollTop - element.clientHeight;
+            const totalEvents = dataSource.getTotalEvents();
+            const atTail =
+              pendingUserDeltaPx > 0 &&
+              bottomGapPx < BOTTOM_THRESHOLD_PX &&
+              spacerBottomPx <= 0 &&
+              (totalEvents === null || extent().endIndex >= totalEvents);
+            trace?.record("scroll-fold", { deltaPx: pendingUserDeltaPx, anchor: foldedAnchor, atTail });
+            dispatchPosition({ kind: "USER_SCROLLED", source: lastInputSource, anchor: foldedAnchor, atTail });
+          }
+        }
+      }
+    }
+
+    planFill();
+  }
+
   // --- public API -----------------------------------------------------------
 
   return {
@@ -914,152 +1073,23 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
 
     afterRender(element: HTMLElement): void {
       attach(element);
-      if (!isVisible()) {
+      // Defer measurement + positioning to a microtask: mithril runs lifecycle
+      // hooks parent-first, so this hook fires BEFORE a newly mounted row's own
+      // oncreate has filled its content (MarkdownContent injects innerHTML in
+      // oncreate). Measuring synchronously here reads such rows as empty,
+      // poisons the height table for a frame, and the anchor compensation
+      // computed from it visibly bounces the viewport. A microtask runs after
+      // every child hook in the same task, still before the browser paints.
+      if (isAfterRenderQueued) {
         return;
       }
-      // Measure the mounted rows NOW, before positioning: a tall row mounting
-      // into the overscan renders at its real height this same frame, and
-      // positioning against last frame's estimates would paint a one-frame
-      // shift proportional to the estimate error (visible on long messages).
-      if (measureMountedRows()) {
-        heightsEpoch += 1;
-        refreshGeometry();
-        m.redraw(); // pads/ranges were computed pre-measure; re-plan next frame
-      }
-
-      // A native scroll whose event hasn't been handled yet (wheel/keys
-      // mid-flight) shows up as a gap between the DOM position and our
-      // bookkeeping. It must be neither swallowed (writing the stale target
-      // would yank the viewport back) nor left to meet moved geometry (this
-      // frame may have resized spacers/rows above, so the queued event's
-      // position no longer means what the user saw). Fold it in instead:
-      // compensate AND preserve the user's delta in one write, consume the
-      // stale event as an echo, and run the state machine on the result now.
-      const pendingUserDeltaPx = element.scrollTop - scrollTopPx;
-      // This frame's DOM update may have shrunk the content, making the browser
-      // clamp scrollTop before we ran: that gap is not user input. The clamp can
-      // land short of the FINAL maximum (a mid-patch forced layout clamps against
-      // intermediate geometry), so besides the at-max signature, any sizeable
-      // upward gap with no recent native input is an adjustment. Consume its
-      // event as an echo and reposition normally.
-      const maxScrollPx = Math.max(0, element.scrollHeight - element.clientHeight);
-      const isRecentNativeInput = performance.now() - lastNativeInputAtMs < 150;
-      const isPendingClamp =
-        pendingUserDeltaPx < -0.01 && (Math.abs(element.scrollTop - maxScrollPx) <= 1 || !isRecentNativeInput);
-      // NO minimum size: a trackpad gesture starts as a stream of sub-pixel
-      // deltas, and while streaming redraws run every frame, any threshold here
-      // reverts each tiny delta before the next arrives -- pinning the user in
-      // place. Bookkeeping is exact, so exact comparison is safe.
-      const hasPendingUserScroll = Math.abs(pendingUserDeltaPx) > 0.01 && !isPendingClamp;
-      if (isPendingClamp) {
-        pendingEchoTops.push(element.scrollTop);
-        trace?.record("clamp-absorbed", { deltaPx: pendingUserDeltaPx });
-      }
-
-      // Positioning: the single writer of scrollTop, and only when the content
-      // changed (heights, rows, spacers) or the state machine moved -- never in
-      // response to plain native scrolling, which stays entirely the browser's.
-      const positionKey =
-        positionState.kind +
-        "|" +
-        (positionState.kind === "USER_CONTROLLED"
-          ? positionState.anchor.rowKey + "@" + positionState.anchor.offsetPx
-          : "") +
-        "|" +
-        heightsEpoch +
-        "|" +
-        cachedRenderVersion +
-        "|" +
-        spacerTopPx +
-        "|" +
-        spacerBottomPx +
-        "|" +
-        element.scrollHeight +
-        "|" +
-        element.clientHeight;
-      if (positionKey === lastPositionedKey) {
-        planFill();
-        return;
-      }
-      lastPositionedKey = positionKey;
-
-      if (positionState.kind === "FOLLOW") {
-        if (isPointerDown || (pendingUserDeltaPx < -0.01 && !isPendingClamp)) {
-          trace?.record("follow-yield", { pendingUserDeltaPx, isPointerDown });
+      isAfterRenderQueued = true;
+      queueMicrotask(() => {
+        isAfterRenderQueued = false;
+        if (scrollEl !== null) {
+          runAfterRender(scrollEl);
         }
-        // The pin only pulls the viewport down while the agent is generating or
-        // history is still filling/measuring in; a quiescent transcript's
-        // relayout (expanding a block at the tail) must not drag the user.
-        const totalEventsNow = dataSource.getTotalEvents();
-        const isQuiescent =
-          !isStreaming() &&
-          !fillInFlight &&
-          spacerTopPx <= 0 &&
-          spacerBottomPx <= 0 &&
-          (geometry === null || geometry.unmeasuredCount === 0) &&
-          (totalEventsNow === null || extent().endIndex >= totalEventsNow);
-        if (!isPointerDown && !isQuiescent && (pendingUserDeltaPx >= -0.01 || isPendingClamp)) {
-          const targetPx = element.scrollHeight - element.clientHeight;
-          if (hasPendingUserScroll) {
-            pendingEchoTops.push(element.scrollTop);
-          }
-          if (Math.abs(element.scrollTop - targetPx) > 0.5) {
-            writeScrollTop(element, targetPx, "follow-pin");
-          } else {
-            scrollTopPx = element.scrollTop;
-          }
-        }
-      } else if (geometry !== null) {
-        let targetPx = scrollTopForAnchor(geometry, positionState.anchor, spacerTopPx);
-        if (targetPx === null && pendingRestore !== null) {
-          // A restored anchor whose window has not loaded yet is not lost --
-          // repairing now would replace it with a nonsense near-tail anchor.
-          // Hold position; the restore flow validates once its window lands.
-          planFill();
-          return;
-        }
-        if (targetPx === null) {
-          // The anchor row vanished (turn regrouping, eviction): repair to the
-          // row now covering the same transcript position instead of jumping.
-          const anchorIndex = currentAnchorEventIndexFallback();
-          const rowIndex = anchorIndex === null ? -1 : rowIndexForEventIndex(rowEventIndexes, anchorIndex);
-          if (rowIndex >= 0) {
-            const repaired: ScrollAnchor = { rowKey: geometryRows[rowIndex].key, offsetPx: 0 };
-            trace?.record("anchor-repair", { toRowKey: repaired.rowKey, atEventIndex: anchorIndex });
-            positionState = { kind: "USER_CONTROLLED", anchor: repaired };
-            targetPx = scrollTopForAnchor(geometry, repaired, spacerTopPx);
-          }
-        }
-        if (targetPx !== null) {
-          const heldPx = targetPx + (hasPendingUserScroll ? pendingUserDeltaPx : 0);
-          if (hasPendingUserScroll) {
-            pendingEchoTops.push(element.scrollTop);
-          }
-          if (Math.abs(element.scrollTop - heldPx) > 0.5) {
-            writeScrollTop(element, heldPx, "anchor-hold");
-          } else {
-            scrollTopPx = element.scrollTop;
-          }
-          if (hasPendingUserScroll) {
-            // The user's in-flight scroll was preserved through the write; feed
-            // it to the state machine now (its own event was consumed above).
-            const foldedAnchor = anchorForUser();
-            if (foldedAnchor !== null) {
-              const bottomGapPx = element.scrollHeight - element.scrollTop - element.clientHeight;
-              const totalEvents = dataSource.getTotalEvents();
-              const atTail =
-                pendingUserDeltaPx > 0 &&
-                bottomGapPx < BOTTOM_THRESHOLD_PX &&
-                spacerBottomPx <= 0 &&
-                (totalEvents === null || extent().endIndex >= totalEvents);
-              trace?.record("scroll-fold", { deltaPx: pendingUserDeltaPx, anchor: foldedAnchor, atTail });
-              dispatchPosition({ kind: "USER_SCROLLED", source: lastInputSource, anchor: foldedAnchor, atTail });
-            }
-          }
-        }
-      }
-
-      planFill();
+      });
     },
 
     detach(): void {
