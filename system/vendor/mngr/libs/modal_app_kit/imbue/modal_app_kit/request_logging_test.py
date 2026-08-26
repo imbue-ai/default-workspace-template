@@ -3,6 +3,8 @@ from typing import Any
 
 import pytest
 
+from imbue.modal_app_kit.request_logging import ACCESS_LOG_PATH_OVERRIDE_STATE_KEY
+from imbue.modal_app_kit.request_logging import ACCESS_LOG_SUPPRESS_SUCCESS_STATE_KEY
 from imbue.modal_app_kit.request_logging import AUTHENTICATED_USER_STATE_KEY
 from imbue.modal_app_kit.request_logging import RequestLoggingMiddleware
 from imbue.modal_app_kit.request_logging import client_ip_from_asgi_scope
@@ -182,6 +184,79 @@ def test_middleware_passes_non_http_scopes_through_unlogged() -> None:
     _run_coroutine_synchronously(middleware({"type": "lifespan"}, None, None))
     assert seen_scopes[0]["type"] == "lifespan"
     assert lines == []
+
+
+class _FlaggingApp:
+    """ASGI app that stashes access-log scope-state flags before responding."""
+
+    def __init__(self, status: int, state: dict[str, Any]) -> None:
+        self.status = status
+        self.state = state
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        scope.setdefault("state", {}).update(self.state)
+        await send({"type": "http.response.start", "status": self.status, "headers": []})
+        await send({"type": "http.response.body", "body": b"{}"})
+
+
+async def _discard_send(message: Any) -> None:
+    del message
+
+
+def test_middleware_suppresses_a_flagged_successful_response_line() -> None:
+    lines: list[str] = []
+    app = _FlaggingApp(status=200, state={ACCESS_LOG_SUPPRESS_SUCCESS_STATE_KEY: True})
+    middleware = RequestLoggingMiddleware(app, line_sink=lines.append)
+
+    _run_coroutine_synchronously(middleware(_http_scope(), None, _discard_send))
+
+    assert lines == []
+
+
+def test_middleware_still_logs_a_flagged_non_success_response() -> None:
+    # The suppression flag covers only successful outcomes: an error on the
+    # same route must keep its full line.
+    lines: list[str] = []
+    app = _FlaggingApp(status=502, state={ACCESS_LOG_SUPPRESS_SUCCESS_STATE_KEY: True})
+    middleware = RequestLoggingMiddleware(app, line_sink=lines.append)
+
+    _run_coroutine_synchronously(middleware(_http_scope(), None, _discard_send))
+
+    assert len(lines) == 1
+    assert json.loads(lines[0])["status"] == 502
+
+
+def test_middleware_logs_a_500_line_even_when_the_crashing_route_flagged_suppression() -> None:
+    lines: list[str] = []
+
+    class _FlaggingCrashingApp:
+        async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+            scope.setdefault("state", {})[ACCESS_LOG_SUPPRESS_SUCCESS_STATE_KEY] = True
+            raise RuntimeError("boom-52731")
+
+    middleware = RequestLoggingMiddleware(_FlaggingCrashingApp(), line_sink=lines.append)
+
+    with pytest.raises(RuntimeError, match="boom-52731"):
+        middleware(_http_scope(), None, None).send(None)
+    assert len(lines) == 1
+    assert json.loads(lines[0])["status"] == 500
+
+
+def test_middleware_logs_the_overridden_path_instead_of_the_real_one() -> None:
+    lines: list[str] = []
+    app = _FlaggingApp(
+        status=401,
+        state={ACCESS_LOG_PATH_OVERRIDE_STATE_KEY: "/frps/auth/<plugin-secret>/relay-abc123"},
+    )
+    middleware = RequestLoggingMiddleware(app, line_sink=lines.append)
+
+    _run_coroutine_synchronously(
+        middleware(_http_scope(path="/frps/auth/the-real-secret/relay-abc123"), None, _discard_send)
+    )
+
+    record = json.loads(lines[0])
+    assert record["path"] == "/frps/auth/<plugin-secret>/relay-abc123"
+    assert "the-real-secret" not in lines[0]
 
 
 def test_format_request_log_line_stamps_the_minds_env_when_deployed(monkeypatch: pytest.MonkeyPatch) -> None:

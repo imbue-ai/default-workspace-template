@@ -258,8 +258,7 @@ class PostgresSyncStore:
     """SyncStore backed by the connector's existing Neon DB (same DB as pool_hosts)."""
 
     def list_records(self, user_id: str) -> list[dict[str, Any]]:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"SELECT {_WORKSPACE_RECORD_COLUMNS} FROM workspace_records "
@@ -267,8 +266,6 @@ class PostgresSyncStore:
                     (user_id,),
                 )
                 rows = cur.fetchall()
-        finally:
-            conn.close()
         return [_workspace_record_row_to_dict(row) for row in rows]
 
     def put_record(self, user_id: str, record: dict[str, Any], sent_fields: AbstractSet[str]) -> dict[str, Any]:
@@ -294,8 +291,7 @@ class PostgresSyncStore:
             return self._put_record_once(user_id, record, sent_fields)
 
     def _put_record_once(self, user_id: str, record: dict[str, Any], sent_fields: AbstractSet[str]) -> dict[str, Any]:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -381,8 +377,6 @@ class PostgresSyncStore:
                         # The caller retries once; the retry finds the winner's
                         # committed row and reports through the CAS path.
                         raise
-        finally:
-            conn.close()
         if written is None:
             # INSERT/UPDATE ... RETURNING on a locked, existing row always
             # yields a row; reaching here means the store broke its own
@@ -395,32 +389,25 @@ class PostgresSyncStore:
         return _workspace_record_row_to_dict(written)
 
     def delete_record(self, user_id: str, host_id: str) -> None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
                         "DELETE FROM workspace_records WHERE user_id = %s AND host_id = %s",
                         (user_id, host_id),
                     )
-        finally:
-            conn.close()
 
     def delete_record_by_workspace(self, user_id: str, workspace_id: str) -> None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
                         "DELETE FROM workspace_records WHERE user_id = %s AND agent_id = %s",
                         (user_id, workspace_id),
                     )
-        finally:
-            conn.close()
 
     def scrub_secrets(self, user_id: str) -> int:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -429,13 +416,10 @@ class PostgresSyncStore:
                         (user_id,),
                     )
                     scrubbed = cur.rowcount
-        finally:
-            conn.close()
         return scrubbed
 
     def get_bundle(self, user_id: str) -> dict[str, Any] | None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT kdf_salt, kdf_time_cost, kdf_memory_kib, kdf_parallelism, wrapped_dek, key_epoch, "
@@ -443,8 +427,6 @@ class PostgresSyncStore:
                     (user_id,),
                 )
                 row = cur.fetchone()
-        finally:
-            conn.close()
         if row is None:
             return None
         return {
@@ -458,8 +440,7 @@ class PostgresSyncStore:
         }
 
     def put_bundle(self, user_id: str, bundle: dict[str, Any]) -> None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -479,14 +460,11 @@ class PostgresSyncStore:
                             bundle["key_epoch"],
                         ),
                     )
-        finally:
-            conn.close()
 
     def put_bundle_if_absent(self, user_id: str, bundle: dict[str, Any]) -> bool:
         # ON CONFLICT DO NOTHING makes the existence check and the insert one
         # atomic statement, so two racing first-time setups cannot both win.
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -504,21 +482,15 @@ class PostgresSyncStore:
                         ),
                     )
                     return cur.rowcount == 1
-        finally:
-            conn.close()
 
     def delete_bundle(self, user_id: str) -> None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute("DELETE FROM account_key_bundles WHERE user_id = %s", (user_id,))
-        finally:
-            conn.close()
 
     def list_destroyed_records_before(self, cutoff: datetime) -> list[dict[str, Any]]:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT user_id, host_id, agent_id, backup_bucket, destroyed_at FROM workspace_records "
@@ -527,8 +499,6 @@ class PostgresSyncStore:
                     (cutoff,),
                 )
                 rows = cur.fetchall()
-        finally:
-            conn.close()
         return [
             {
                 "user_id": row[0],
@@ -554,13 +524,10 @@ class PostgresSyncStore:
         if excluding_workspace_id is not None:
             query += " AND agent_id <> %s"
             params = params + (excluding_workspace_id,)
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(query + " LIMIT 1", params)
                 return cur.fetchone() is not None
-        finally:
-            conn.close()
 
 
 class OrphanBucketStore(Protocol):
@@ -575,21 +542,17 @@ class PostgresOrphanBucketStore:
     """OrphanBucketStore backed by the connector's Neon DB (orphan_backup_buckets table)."""
 
     def get_first_seen(self, bucket_name: str) -> datetime | None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT first_seen_orphaned_at FROM orphan_backup_buckets WHERE bucket_name = %s",
                     (bucket_name,),
                 )
                 row = cur.fetchone()
-        finally:
-            conn.close()
         return row[0] if row is not None else None
 
     def get_or_record_first_seen(self, bucket_name: str) -> datetime:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -599,20 +562,15 @@ class PostgresOrphanBucketStore:
                         (bucket_name,),
                     )
                     row = cur.fetchone()
-        finally:
-            conn.close()
         if row is None:
             raise SyncStoreConsistencyError(f"orphan stamp upsert for {bucket_name} returned no row")
         return row[0]
 
     def delete_stamp(self, bucket_name: str) -> None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute("DELETE FROM orphan_backup_buckets WHERE bucket_name = %s", (bucket_name,))
-        finally:
-            conn.close()
 
 
 @functools.cache
