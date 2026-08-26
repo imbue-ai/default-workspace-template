@@ -2469,6 +2469,10 @@ def test_the_provisioner_runs_under_the_image_builds_environment(
         assert env["HOME"] == "/root"
         assert env["PATH"].startswith("/root/.local/bin:")
         assert env["HTTPS_PROXY"] == "http://proxy.example:3128"
+    # Only the recovery re-run is forced past the provision guard: the rolled-
+    # back tree is the one the guard's marker was written for, so an unforced
+    # re-run would skip and leave the global tools at the merged versions.
+    assert [env.get("PROVISION_FORCE") for env in provisioner_envs] == [None, "1"]
 
 
 def test_a_hung_forward_step_rolls_back_naming_the_step(
@@ -4114,6 +4118,9 @@ def test_recover_no_restart_restores_disk_state_only(apply_repo: Path) -> None:
     assert not runner.ran("mngr")
     assert http.get_urls == [] and http.page_urls == []
     assert runner.ran(*_PROVISION)
+    # Forced past the provision guard, whose marker the rolled-back tree matches.
+    provisioner_env = runner.envs[runner.calls.index(list(_PROVISION))]
+    assert provisioner_env is not None and provisioner_env["PROVISION_FORCE"] == "1"
     assert not _marker_exists(apply_repo)
 
 

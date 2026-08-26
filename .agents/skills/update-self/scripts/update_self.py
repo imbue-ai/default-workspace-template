@@ -1914,18 +1914,31 @@ def clear_provision_incomplete(repo_root: Path) -> None:
     provision_incomplete_path(repo_root).unlink(missing_ok=True)
 
 
-def provisioner_env() -> dict:
+def provisioner_env(*, is_forced: bool = False) -> dict:
     """The canonical environment for a live provisioner run (see
-    :data:`_PROVISIONER_HOME`)."""
+    :data:`_PROVISIONER_HOME`).
+
+    ``is_forced`` sets ``PROVISION_FORCE=1``, which runs the script past its
+    content-addressed skip guard (``system/scripts/_provision_guard.sh``).
+    """
     env = dict(os.environ)
     env["HOME"] = _PROVISIONER_HOME
     env["PATH"] = _PROVISIONER_PATH
+    if is_forced:
+        env["PROVISION_FORCE"] = "1"
     return env
 
 
-def _run_provisioner(runner: Runner, repo_root: Path) -> str | None:
+def _run_provisioner(
+    runner: Runner, repo_root: Path, *, is_forced: bool = False
+) -> str | None:
     """Re-run the pinned-toolchain provisioner live; return why it failed, or
     ``None`` on success.
+
+    ``is_forced`` is for the rollback re-run: it runs from the restored tree,
+    which is exactly the tree the provision guard's marker was written for, so
+    without forcing it the guard would skip the very run that is meant to put
+    the global toolchain back.
 
     Never raises -- a hang and a spawn failure (no ``bash``, an exec error)
     both come back as the reason: the forward apply carries on past a failed
@@ -1938,7 +1951,7 @@ def _run_provisioner(runner: Runner, repo_root: Path) -> str | None:
         result = runner.run_process_group(
             ["bash", PROVISIONER_SCRIPT],
             cwd=str(repo_root),
-            env=provisioner_env(),
+            env=provisioner_env(is_forced=is_forced),
             timeout=_PROVISIONER_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired:
@@ -3048,7 +3061,7 @@ def _recover_running_state(
         failed = set(restore_snapshots(snapshots))
         restored = {record.name for record in snapshots} - failed
         if provisioner_ran:
-            provisioner_failure = _run_provisioner(runner, repo_root)
+            provisioner_failure = _run_provisioner(runner, repo_root, is_forced=True)
             if provisioner_failure is not None:
                 sys.stderr.write(
                     "recovery: re-running the provisioner from the restored tree failed "
@@ -3720,7 +3733,7 @@ def recover(
     if no_restart:
         failed = restore_snapshots(marker.snapshots)
         if marker.provisioner_ran:
-            provisioner_failure = _run_provisioner(runner, repo_root)
+            provisioner_failure = _run_provisioner(runner, repo_root, is_forced=True)
             if provisioner_failure is not None:
                 sys.stderr.write(
                     "recover: re-running the provisioner from the restored tree failed "

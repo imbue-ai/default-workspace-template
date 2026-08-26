@@ -908,7 +908,11 @@ def _recover_interrupted_update() -> str:
     network, no package manager and no working ``mngr`` (git restores plus
     plain copies of the pre-apply snapshots) -- with one exception: an apply
     that had reached its provisioner step is rolled back by re-running
-    ``setup_system.sh``, which does reach the network. It runs right here,
+    ``setup_system.sh``, which does reach the network. The script forces that
+    re-run past the content-addressed provision guard (``PROVISION_FORCE=1``):
+    the restored tree is the very tree the guard's marker was written for, so
+    an unforced run would skip and leave the global toolchain at the
+    rolled-back-away versions. It runs right here,
     before the venv converge (which must converge against the *restored* tree,
     not the half-applied one) and before any service or agent starts.
     ``--no-restart`` because nothing is running yet -- services boot fresh from
