@@ -48,12 +48,6 @@
   --color-warning-bg: #fde68a;
   --color-success: #22a06b;
   --color-info: #2563eb;
-  /* Neutral / slate scale (share-modal buttons, terminal); 500/600 = stop-button. */
-  --color-neutral-50: #f8fafc;
-  --color-neutral-100: #f1f5f9;
-  --color-neutral-200: #e2e8f0;
-  --color-neutral-700: #334155;
-  --color-neutral-900: #1e293b;
   /* Foreground on accent/coloured surfaces (e.g. white button text). */
   --color-text-on-accent: #ffffff;
   /* Inverse surface — dark ("black") bg with on-accent text; inverse buttons + tooltips. */
@@ -3853,7 +3847,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   font-size: var(--font-size-body);
   line-height: 1.4;
   color: var(--color-text-secondary);
-  background: var(--color-neutral-50);
+  background: var(--color-surface-secondary);
   border-bottom: 1px solid var(--color-border);
 }
 
