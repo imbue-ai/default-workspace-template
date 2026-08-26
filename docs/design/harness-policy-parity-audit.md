@@ -375,7 +375,7 @@ below is taken on the auditors' word.
 **Re-testing codex: you must reproduce mngr's trust setup, or you will measure nothing.** codex
 refuses to run command hooks unless they are trusted, so a naive probe sees *zero* hook events and
 looks exactly like "the policy is not wired" — I hit this twice before working it out. **This is a
-probe artifact, not a gap:** production is covered three ways, all verified present —
+flaw in the probe, not a gap in production:** production is covered three ways, all verified present —
 `--dangerously-bypass-hook-trust --enable hooks` on the launch command (pinned by
 `mngr_codex/plugin_test.py:829`), `merge_project_trust` seeding `[projects."<path>"] trust_level =
 "trusted"`, and `auto_dismiss_dialogs = true` so mngr answers the TUI's trust prompt on startup.

@@ -116,16 +116,27 @@ done
 # this shim's stderr BECOMES the tool result the model reads -- the same channel the blockers
 # above already use -- so both can ride a command's output instead.
 
-# Open-steps carryover, once per turn. agy's statusline removes the `active` marker on the idle
-# edge and re-touches it on the busy edge, so the marker's INODE changes exactly once per turn
-# (its mtime does not -- that is touched on every sample). Stamping the inode gives a turn key
-# without a mngr change. Best effort: never let a reminder cost a command.
+# Open-steps carryover, at most once per turn. agy's statusline removes the `active` marker on
+# the idle edge and re-touches it on every busy sample, so the marker's INODE is the only
+# per-turn signal -- its mtime advances constantly, and its birth time is unreliable on the
+# overlay filesystems these agents run on (measured: unchanged across a delete+recreate).
+#
+# The inode alone is NOT sufficient, because the kernel is free to hand the recreated marker
+# the SAME inode -- CI reproduced exactly that. So the stamp also ages out: if it is older than
+# the re-arm window the reminder fires regardless. That makes the failure mode "an extra
+# reminder in a very long turn" rather than "the reminder silently stops", which is the right
+# way round for a soft policy. Best effort throughout: a reminder never costs a command.
 TURN_STAMP="${MNGR_AGENT_STATE_DIR:-/tmp}/agy_shim_turn"
+TURN_REARM_SECONDS=900
 TURN_KEY=$(PATH="$SAFE_PATH" stat -c %i "${MNGR_AGENT_STATE_DIR:-}/active" 2>/dev/null || echo "")
-if [ -n "$TURN_KEY" ] && [ "$TURN_KEY" != "$(cat "$TURN_STAMP" 2>/dev/null)" ]; then
-    printf '%s' "$TURN_KEY" >"$TURN_STAMP" 2>/dev/null || true
-    reminder=$(PATH="$SAFE_PATH" "$REAL_BASH" "$SCRIPTS_DIR/agent_open_tickets_reminder.sh" </dev/null 2>/dev/null) || reminder=""
-    [ -n "$reminder" ] && printf '%s\n' "$reminder" >&2
+if [ -n "$TURN_KEY" ]; then
+    stamped=$(cat "$TURN_STAMP" 2>/dev/null || echo "")
+    stamp_age=$(( $(date +%s) - $(PATH="$SAFE_PATH" stat -c %Y "$TURN_STAMP" 2>/dev/null || echo 0) ))
+    if [ "$TURN_KEY" != "$stamped" ] || [ "$stamp_age" -ge "$TURN_REARM_SECONDS" ]; then
+        printf '%s' "$TURN_KEY" >"$TURN_STAMP" 2>/dev/null || true
+        reminder=$(PATH="$SAFE_PATH" "$REAL_BASH" "$SCRIPTS_DIR/agent_open_tickets_reminder.sh" </dev/null 2>/dev/null) || reminder=""
+        [ -n "$reminder" ] && printf '%s\n' "$reminder" >&2
+    fi
 fi
 
 # Require-a-step nudge. Soft by design, and PARTIAL on agy by construction: agy's own editing

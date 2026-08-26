@@ -8,6 +8,7 @@ a guard that never fires.
 
 import os
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -212,12 +213,37 @@ def test_the_reminder_does_not_repeat_within_one_turn(tmp_path: Path) -> None:
 
 
 def test_the_reminder_returns_on_the_next_turn(tmp_path: Path) -> None:
+    """The idle->busy edge of a new turn recreates the marker, which is a new inode."""
     env = _with_open_step(tmp_path)
     _run("-c", "echo first", env=env)
     marker = Path(env["MNGR_AGENT_STATE_DIR"]) / "active"
     marker.unlink()
-    marker.write_text("")  # a new inode: the idle->busy edge of the next turn
+    # Force a genuinely different inode. A bare unlink+create often reuses the SAME one -- CI
+    # did exactly that and the reminder correctly did not re-fire, so asserting on a recreate
+    # would be asserting on the kernel's allocator rather than on this code.
+    hold = [tmp_path / f"hold{i}" for i in range(64)]
+    for h in hold:
+        h.write_text("")
+    marker.write_text("")
+    for h in hold:
+        h.unlink()
     result = _run("-c", "echo next-turn", env=env)
+    assert "Open task reminder" in result.stderr
+
+
+def test_the_reminder_re_arms_rather_than_dying_when_an_inode_is_reused(
+    tmp_path: Path,
+) -> None:
+    """The inode is the only per-turn signal agy offers, and the kernel may hand the recreated
+    marker the same one -- so the stamp ages out too. A soft policy must fail toward firing an
+    extra time, never toward going quiet."""
+    env = _with_open_step(tmp_path)
+    _run("-c", "echo first", env=env)
+    stamp = Path(env["MNGR_AGENT_STATE_DIR"]) / "agy_shim_turn"
+    assert stamp.exists(), "the first command of a turn must stamp the turn key"
+    aged = time.time() - 4000
+    os.utime(stamp, (aged, aged))
+    result = _run("-c", "echo much-later", env=env)
     assert "Open task reminder" in result.stderr
 
 
