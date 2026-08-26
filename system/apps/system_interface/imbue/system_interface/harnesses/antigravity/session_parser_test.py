@@ -6,7 +6,9 @@ import json
 
 from imbue.system_interface.harnesses.antigravity.agy_transcript import DecodedStep
 from imbue.system_interface.harnesses.antigravity.agy_transcript import DecodedToolCall
+from imbue.system_interface.harnesses.antigravity.agy_transcript import decode_step
 from imbue.system_interface.harnesses.antigravity.session_parser import parse_step
+from imbue.system_interface.harnesses.antigravity.testing import load_captured_step
 from imbue.system_interface.harnesses.events import MAX_TOOL_OUTPUT_LENGTH
 
 _BASE_STEP = DecodedStep(
@@ -193,3 +195,30 @@ def test_tk_step_decoration_past_the_cut_is_preserved() -> None:
     events = parse_step(_named_tool_step(name="run_command", args="{}", result=output))
     result = next(event for event in events if event["type"] == "tool_result")
     assert "Updated abc123 -> closed" in result["output"]
+
+
+def test_a_terminal_tool_step_always_emits_a_result_even_with_no_output() -> None:
+    """The invariant that keeps the activity indicator honest.
+
+    ``session_parser`` emits a ``tool_result`` only when ``tool_result_text is not None``, so a
+    decoder that returned None for an unrecognised body would leave that call permanently
+    unmatched -- the frontend would show a tool that never finishes, for the life of the agent.
+    Only ``run_command`` bodies are measured, so the unrecognised path must stay harmless.
+    Asserted at the EVENT level, because the decoder returning "" is not by itself proof the
+    result reaches the chat.
+    """
+    events = parse_step(_tool_step(terminal=True, status="DONE", result=""))
+    assert any(event["type"] == "tool_result" for event in events), (
+        "a settled tool call with no recognisable output must still be matched by a result"
+    )
+
+
+def test_a_real_conversation_yields_the_tk_lines_the_progress_view_reads() -> None:
+    """End-to-end guard for the timeline: the decoration lines must survive decoding, hiding
+    and truncation all the way into the emitted event."""
+    step_type, status, payload = load_captured_step("tk_create")
+    events = parse_step(decode_step("conv", 3, step_type, status, payload))
+    result = next(event for event in events if event["type"] == "tool_result")
+    assert "Created a7-step-7dlr: Run sequential test commands" in result["output"]
+    call = next(event for event in events if event["type"] == "assistant_message")
+    assert call["tool_calls"][0]["display"] == "hidden", "a pure tk call is a structural marker"

@@ -13,6 +13,7 @@ from imbue.system_interface.harnesses.antigravity.agy_transcript import STEP_TYP
 from imbue.system_interface.harnesses.antigravity.agy_transcript import STEP_TYPE_PLANNER_RESPONSE
 from imbue.system_interface.harnesses.antigravity.agy_transcript import STEP_TYPE_USER_INPUT
 from imbue.system_interface.harnesses.antigravity.agy_transcript import TruncatedError
+from imbue.system_interface.harnesses.antigravity.agy_transcript import _iter_messages
 from imbue.system_interface.harnesses.antigravity.agy_transcript import decode_step
 from imbue.system_interface.harnesses.antigravity.testing import build_metadata as _timestamp_metadata
 from imbue.system_interface.harnesses.antigravity.testing import build_step_payload as _step
@@ -193,3 +194,13 @@ def test_a_truncated_body_yields_empty_text_rather_than_raising() -> None:
     payload = _step(metadata, body=b"") + b"\xf2\x08\xff\xff\xff"
     step = decode_step("conv", 1, _TOOL_CALL, 3, payload)
     assert step.tool_result_text == ""
+
+
+def test_iter_messages_skips_fixed_width_fields_on_the_same_field_number() -> None:
+    """``_iter_fields`` yields ``bytes`` for the 64-bit and 32-bit wire types too, so filtering
+    on isinstance alone would hand an 8-byte double on to be read as a nested message. Only
+    length-delimited values are real sub-messages."""
+    double_on_field_1 = _varint((1 << 3) | 1) + b"\x00" * 8
+    message_on_field_1 = _lfield(1, _sfield(1, "real"))
+    found = list(_iter_messages(double_on_field_1 + message_on_field_1, 1))
+    assert found == [_sfield(1, "real")]
