@@ -31,10 +31,16 @@ of the canonical ``response_item`` lines). We accept both user-turn shapes and i
 the rest of ``item_completed`` (already covered by ``response_item``). Everything else
 in ``event_msg`` (``agent_message`` echoes, ``token_count``) is skipped in this core cut.
 
+A turn that fails carries its reason on the persisted ``task_complete`` event, in
+``error`` (``{message, codex_error_info}``); we surface that as an assistant message so a
+failed turn is never silent. It is the only durable copy -- codex classes its live
+``EventMsg::Error`` non-persistent, so it never reaches the rollout at all.
+
 Lossy by design for this first cut -- all deferred to later slices: ``usage``
-(``token_count`` -> Phase 2, and coarse), ``is_auth_error`` (lives in codex's
-``logs_2.sqlite``, never the transcript), subagent linkage, tk step-progress.
-``stop_reason`` is left null.
+(``token_count`` -> Phase 2, and coarse), subagent linkage, tk step-progress.
+``stop_reason`` is left null. A sign-in failure codex records only in its
+``logs_2.sqlite`` (never the transcript) is still missed; the ``task_complete`` path
+catches the ones that fail a turn.
 
 Event ids prefer codex's own stable identity (the assistant message ``id``, or a
 tool call's ``call_id``) so the watcher dedups codex 0.144.3's re-serialised
@@ -55,9 +61,12 @@ from typing import Any
 
 from loguru import logger as _loguru_logger
 
+from imbue.system_interface.harnesses.auth_patterns import is_auth_error_text
 from imbue.system_interface.harnesses.codex.tool_labels import is_tk_lifecycle
 from imbue.system_interface.harnesses.codex.tool_labels import keeps_full_tool_input
 from imbue.system_interface.harnesses.codex.tool_labels import tool_labels
+from imbue.system_interface.harnesses.error_patterns import classify_api_error
+from imbue.system_interface.harnesses.error_patterns import is_provider_fault
 from imbue.system_interface.harnesses.events import MAX_TOOL_INPUT_PREVIEW_LENGTH
 from imbue.system_interface.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.system_interface.harnesses.events import SpecialEventKind
@@ -78,6 +87,27 @@ SOURCE = "codex/common_transcript"
 # placeholder ``claude_session_parser`` uses when the model is absent, keeping the
 # frontend's non-optional ``model`` field populated.
 _UNKNOWN_MODEL = "unknown"
+
+# codex names its failures with a structured ``codex_error_info`` tag alongside the
+# human-readable ``error.message`` (``CodexErrorInfo`` in codex-rs/protocol/src/protocol.rs).
+# Prefer it over regexing the prose: it is the harness telling us exactly what went wrong.
+# Only the tags that mean "the model API rejected or failed this request" are mapped; a
+# tag absent from both tables (ContextWindowExceeded, SandboxError, ...) leaves the text to
+# ``classify_api_error`` and, failing that, renders as a plain message.
+_CODEX_ERROR_INFO_KINDS: dict[str, str] = {
+    "server_overloaded": "overloaded",
+    "internal_server_error": "api_error",
+    "bad_request": "invalid_request",
+}
+
+# codex tags that mean "these credentials cannot continue" -- the family that earns the
+# switch-provider subtext rather than a generic API-error note. Quota exhaustion belongs
+# here for the same reason claude's "Credit balance is too low" does: the only way forward
+# is different credentials (see auth_patterns' scope note).
+_CODEX_AUTH_ERROR_INFOS: frozenset[str] = frozenset(
+    {"unauthorized", "usage_limit_exceeded", "session_budget_exceeded"}
+)
+
 
 def _join_output_text(content: Any) -> str:
     """Join the ``text`` of ``content`` blocks whose ``type`` is ``output_text``."""
@@ -162,8 +192,50 @@ def _input_preview(tool_name: str, raw_input: str) -> str:
     return raw_input
 
 
+def _codex_error_info_tag(codex_error_info: Any) -> str | None:
+    """The bare variant name of a ``codex_error_info``, or None when absent/unreadable.
+
+    codex serialises this Rust enum externally-tagged, so a unit variant arrives as the
+    plain string ``"server_overloaded"`` while one carrying fields arrives as the single-key
+    object ``{"http_connection_failed": {"http_status_code": 503}}``. Both reduce to the
+    variant name, which is all either table keys on.
+    """
+    if isinstance(codex_error_info, str):
+        return codex_error_info
+    if isinstance(codex_error_info, dict) and len(codex_error_info) == 1:
+        tag = next(iter(codex_error_info))
+        return tag if isinstance(tag, str) else None
+    return None
+
+
+def _classify_codex_error(error: dict[str, Any]) -> tuple[str, bool, str | None]:
+    """Map a codex ``ErrorEvent`` to ``(text, is_auth_error, api_error_kind)``.
+
+    The structured ``codex_error_info`` wins when it is a tag we know; otherwise the
+    human-readable message goes through the same shared classifiers every other harness
+    uses, so a codex build that adds a tag we have not mapped still gets classified off
+    its prose rather than silently rendering as an ordinary message.
+    """
+    message = error.get("message")
+    text = message if isinstance(message, str) else ""
+    tag = _codex_error_info_tag(error.get("codex_error_info"))
+    if tag in _CODEX_AUTH_ERROR_INFOS:
+        return text, True, None
+    if is_auth_error_text(text):
+        return text, True, None
+    kind = _CODEX_ERROR_INFO_KINDS.get(tag) if tag is not None else None
+    return text, False, kind if kind is not None else classify_api_error(text)
+
+
 def _assistant_event(
-    timestamp: str, event_id: str, *, text: str, tool_calls: list[dict[str, str]], model: str = _UNKNOWN_MODEL
+    timestamp: str,
+    event_id: str,
+    *,
+    text: str,
+    tool_calls: list[dict[str, str]],
+    model: str = _UNKNOWN_MODEL,
+    is_auth_error: bool = False,
+    api_error_kind: str | None = None,
 ) -> dict[str, Any]:
     return {
         "timestamp": timestamp,
@@ -182,13 +254,12 @@ def _assistant_event(
         # deferred (token_count -> Phase 2)
         "usage": None,
         "message_uuid": event_id,
-        # deferred (codex auth errors live in logs_2.sqlite)
-        "is_auth_error": False,
-        # Required by the shared contract (Response.ts). Detection deferred: codex's
-        # provider-error record shape is undocumented; False/None is the honest fill.
-        "is_api_error": False,
-        "api_error_kind": None,
-        "is_provider_fault": False,
+        # Set only for a failed turn (see the ``task_complete`` branch in parse_record);
+        # an ordinary assistant message leaves the whole family at its false/None default.
+        "is_auth_error": is_auth_error,
+        "is_api_error": api_error_kind is not None,
+        "api_error_kind": api_error_kind,
+        "is_provider_fault": is_provider_fault(api_error_kind),
     }
 
 
@@ -357,6 +428,11 @@ def parse_lines(
 
     # --- event_msg: the clean human prompt + the turn-abort marker ---
     if outer == "event_msg":
+        # The turn's effective model, same source the assistant-message path uses below --
+        # read here too so a failed turn's error message is stamped with the model that
+        # actually ran rather than "unknown".
+        turn_model = turn_state.get("model") if turn_state is not None else None
+        turn_model = turn_model if isinstance(turn_model, str) and turn_model else _UNKNOWN_MODEL
         # The clean human prompt. Older codex emitted it as ``user_message``; newer
         # codex folds every display echo into ``item_completed`` carrying a typed
         # ``item``, so the human turn is now ``item_completed`` with
@@ -417,7 +493,30 @@ def parse_lines(
                 else SpecialEventKind.TURN_COMPLETED
             )
             event_id = _marker_event_id(payload, payload_type, line_index)
-            return [
+            events: list[dict[str, Any]] = []
+            # A turn that ended in failure carries the reason here, in ``error`` -- and this
+            # is the ONLY durable copy: codex's live ``EventMsg::Error`` is classed
+            # non-persistent and never reaches the rollout (policy.rs, "Transient,
+            # non-durable events"), so a failure dropped here is a failure the user never
+            # sees. Surfaced as an assistant message, ordered BEFORE the turn-completed
+            # marker so the text is on screen by the time the activity dot clears.
+            error = payload.get("error") if payload_type == "task_complete" else None
+            if isinstance(error, dict):
+                error_text, is_auth_error, api_error_kind = _classify_codex_error(error)
+                if error_text:
+                    error_event_id = _marker_event_id(payload, "task_complete_error", line_index)
+                    events.append(
+                        _assistant_event(
+                            timestamp,
+                            error_event_id,
+                            text=error_text,
+                            tool_calls=[],
+                            model=turn_model,
+                            is_auth_error=is_auth_error,
+                            api_error_kind=api_error_kind,
+                        )
+                    )
+            events.append(
                 {
                     "timestamp": timestamp,
                     "type": SPECIAL_EVENT_TYPE,
@@ -427,7 +526,8 @@ def parse_lines(
                     "source": SOURCE,
                     "message_uuid": event_id,
                 }
-            ]
+            )
+            return events
         return []
 
     if outer != "response_item":

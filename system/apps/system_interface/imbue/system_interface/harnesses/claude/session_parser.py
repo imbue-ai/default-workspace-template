@@ -18,9 +18,9 @@ from tk_command_parsing.parser import parse_command
 
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
-from imbue.system_interface.harnesses.claude.auth_patterns import is_auth_error_text
-from imbue.system_interface.harnesses.claude.error_patterns import classify_api_error
-from imbue.system_interface.harnesses.claude.error_patterns import is_provider_fault
+from imbue.system_interface.harnesses.auth_patterns import is_auth_error_text
+from imbue.system_interface.harnesses.error_patterns import classify_api_error
+from imbue.system_interface.harnesses.error_patterns import is_provider_fault
 from imbue.system_interface.harnesses.claude.tool_labels import tool_labels
 from imbue.system_interface.harnesses.events import MAX_TOOL_INPUT_PREVIEW_LENGTH
 from imbue.system_interface.harnesses.message_display import stamp_user_message_display
