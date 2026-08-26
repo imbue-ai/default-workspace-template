@@ -16,7 +16,7 @@ Supersedes the scroll portions of [chat-scroll-and-selection-bugs.md](chat-scrol
 
 - Opening a chat paints the tail page instantly (as today), then the physical layer grows in the background (~500 around the user, then ~2000-event chunks) until 50k events or the whole chat is loaded. Eviction re-centers the physical window on the user's location.
 - While `FOLLOW`: new events keep the viewport pinned to the bottom. Streaming never jitters the viewport.
-- Any upward intent — wheel/touchpad, scrollbar, keyboard (PageUp/Up/Home), selection-drag autoscroll — enters `USER_CONTROLLED`. The anchor is the first rendered row whose top edge is at/below the viewport top, plus its px offset (a ProgressBlock turn is one anchor unit).
+- Any upward intent — wheel/touchpad, scrollbar, keyboard (PageUp/Up/Home), selection-drag autoscroll — enters `USER_CONTROLLED`. The anchor is the rendered row CONTAINING the viewport top (the top message on screen), plus its px offset into the row (zero or negative). Anchoring the spanning row rather than the next one is what keeps the top message immobile when its own height corrects — a measurement replacing an estimate, or an expand/collapse — since those shift only rows after it. (A ProgressBlock turn is one anchor unit.)
 - While `USER_CONTROLLED`: the anchored row does not move on screen, no matter what lands — streamed events, backfill pages, offscreen measurements, spacer re-estimates. Scrolling to the true bottom (nothing newer unloaded) or sending a message returns to `FOLLOW`.
 - Wheel/non-scrollbar input never repositions content programmatically; it only updates the custom scrollbar to match the screen.
 - Custom overlay scrollbar (auto-hide, right edge): the physical region maps in pixel space (exact), the virtual regions on each end map in index space — clicking at 70% of a virtual region lands on the event 70% of the way through it (thumb drags identical; track clicks jump to position).
@@ -75,10 +75,10 @@ export interface Viewport {
 
 // --- State machine 1: scroll position --------------------------------------
 
-/** Anchor: the first row whose top edge sits at/below the viewport top. */
+/** Anchor: the row containing the viewport top (the top message on screen). */
 export interface ScrollAnchor {
   readonly rowKey: RowKey;
-  /** rowTop - viewportTop, px; small by construction (less than that row's height). */
+  /** rowTop - viewportTop, px; zero or negative while the viewport top is inside the row. */
   readonly offsetPx: number;
 }
 

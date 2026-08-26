@@ -46,10 +46,11 @@ describe("buildPhysicalGeometry", () => {
 });
 
 describe("anchorFromViewport", () => {
-  it("anchors to the first row whose top edge is at/below the viewport top", () => {
-    // Viewport top at 120: row b (top 100) starts above it, so row c (top 350)
-    // is the first whose start appears at/below the top of the screen.
-    expect(anchorFromViewport(geometry, viewportAt(120))).toEqual({ rowKey: "c", offsetPx: 230 });
+  it("anchors to the row containing the viewport top, with a negative offset into it", () => {
+    // Viewport top at 120 sits inside row b (100..350): b is the top message on
+    // screen, so it is the anchor -- holding it is what keeps that message put
+    // when its own height corrects (measurement, expand/collapse).
+    expect(anchorFromViewport(geometry, viewportAt(120))).toEqual({ rowKey: "b", offsetPx: -20 });
   });
 
   it("anchors with offset 0 when a row top aligns exactly with the viewport top", () => {
@@ -63,8 +64,15 @@ describe("anchorFromViewport", () => {
     });
   });
 
-  it("falls back to the last row with a negative offset below every row top", () => {
+  it("anchors inside a tall trailing row", () => {
     expect(anchorFromViewport(geometry, viewportAt(400))).toEqual({ rowKey: "d", offsetPx: -20 });
+  });
+
+  it("anchors the first row with a positive offset while over the top spacer", () => {
+    expect(anchorFromViewport(geometry, viewportAt(500, { spacerTopPx: 1000 }))).toEqual({
+      rowKey: "a",
+      offsetPx: 500,
+    });
   });
 
   it("returns null for empty geometry", () => {
@@ -86,7 +94,7 @@ describe("scrollTopForAnchor", () => {
 
   it("holds the anchored row still when heights above it change", () => {
     const anchor = anchorFromViewport(geometry, viewportAt(360))!;
-    expect(anchor.rowKey).toBe("d");
+    expect(anchor.rowKey).toBe("c");
     // Row b grows by 500px (e.g. a measurement landing); the anchor row's top
     // moves down by 500, and the derived scrollTop follows it exactly.
     const grown = buildPhysicalGeometry([

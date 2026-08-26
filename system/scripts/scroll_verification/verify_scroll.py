@@ -171,6 +171,34 @@ def main():
             state and state["transitions"],
         )
 
+        # --- A4: wheel-up immediately, while fills and measurements still land ---
+        # The reported live bug: the row spanning the viewport top gets its real
+        # measurement (estimate -> actual) mid-scroll; anchoring the NEXT row let
+        # the top message reflow. Anchor the spanning row and it cannot move.
+        page.goto(f"{BASE_URL}/?debug=scroll")
+        page.wait_for_selector(".transcript-scroll", timeout=30000)
+        page.wait_for_timeout(400)
+        page.mouse.move(600, 400)
+        early_violations = []
+        witness = None
+        last_top = None
+        for step in range(25):
+            page.mouse.wheel(0, -260)
+            page.wait_for_timeout(70)
+            state = page.evaluate(GET_STATE)
+            top_row = state["topRow"] if state else None
+            if top_row is None:
+                continue
+            if witness == top_row["id"] and last_top is not None and top_row["top"] < last_top - 5:
+                early_violations.append((step, last_top, top_row["top"]))
+            witness = top_row["id"]
+            last_top = top_row["top"]
+        check(
+            "A4 no jumps wheel-scrolling up while unmeasured history loads",
+            len(early_violations) == 0,
+            early_violations[:3],
+        )
+
         # --- B: wheel-up during streaming: disengage + no downward jumps ---
         appender = threading.Thread(
             target=stream_appender, args=(15, 0.25), daemon=True
