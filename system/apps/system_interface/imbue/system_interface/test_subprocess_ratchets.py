@@ -26,6 +26,7 @@ from imbue.imbue_common.ratchet_testing.core import FileExtension
 from imbue.imbue_common.ratchet_testing.core import RegexPattern
 from imbue.imbue_common.ratchet_testing.core import check_regex_ratchet
 from imbue.imbue_common.ratchet_testing.core import get_ast_nodes_of_type
+from imbue.imbue_common.ratchet_testing.ratchets import TEST_FILE_PATTERNS
 
 _SOURCE = Path(__file__).parent.parent.parent
 
@@ -61,9 +62,8 @@ _BACKGROUND_SPAWN_RULE = RatchetRuleInfo(
 # subprocess_runner.py is the boundary itself. The test files stand up their own children to
 # exercise unrelated machinery (a git repo to discover, a server to talk to), outside the
 # terminal shape these rules are about.
-_TEST_FILES = ("*_test.py", "test_*.py", "conftest.py", "testing.py")
-_ALLOWED_RAW_SPAWN_FILES = ("subprocess_runner.py", *_TEST_FILES)
-_ALLOWED_BACKGROUND_SPAWN_FILES = ("agent_manager.py", *_TEST_FILES)
+_ALLOWED_RAW_SPAWN_FILES = ("subprocess_runner.py", *TEST_FILE_PATTERNS)
+_ALLOWED_BACKGROUND_SPAWN_FILES = ("agent_manager.py", *TEST_FILE_PATTERNS)
 
 # Every ConcurrencyGroup entry point that reaches the subprocess runner. Shared by the rule and
 # by the guard standing behind agent_manager.py's exemption from it: the exemption waives all of
