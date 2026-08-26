@@ -2754,7 +2754,10 @@ def write_version_history_entry(
     nothing is written, so a resumed apply never duplicates it. The commit
     stages exactly this one file and must never carry an ``update-self:``
     subject (that prefix is the template-state marker the merge commit alone
-    owns).
+    owns). It skips hooks like the rollback commit does -- this runs after the
+    marker is cleared, so a hook that refuses it would leave the file staged
+    and every later apply/recover refusing the dirty tree. Should the commit
+    still fail, the file is unstaged and :class:`LedgerCommitError` names it.
     """
     path = repo_root / _VERSION_HISTORY_REL
     if not path.exists():
@@ -2779,13 +2782,42 @@ def write_version_history_entry(
         text=True,
         check=True,
     )
-    runner.run(
-        ["git", "commit", "-m", f"version history: updated to {target_ref}"],
-        cwd=str(repo_root),
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    try:
+        runner.run(
+            [
+                "git",
+                "commit",
+                "--no-verify",
+                "-m",
+                f"version history: updated to {target_ref}",
+            ],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, OSError) as exc:
+        runner.run(
+            ["git", "reset", "-q", "--", _VERSION_HISTORY_REL],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        raise LedgerCommitError(
+            f"committing {_VERSION_HISTORY_REL} failed ({exc}); the entry is left "
+            f"in {_VERSION_HISTORY_REL} as an unstaged working-tree change -- commit "
+            "it by hand (it is the only change), or discard it, before the next "
+            "apply, which refuses a dirty tree"
+        ) from exc
+
+
+class LedgerCommitError(ApplyError):
+    """The version-history entry was written but could not be committed.
+
+    Raised after the file has been unstaged again, so the message can tell the
+    caller exactly what is left behind and what to do about it.
+    """
 
 
 # --- The apply orchestration ---------------------------------------------------
@@ -3521,7 +3553,7 @@ def apply_update(
                 merge_sha,
                 today or datetime.date.today().isoformat(),
             )
-        except (subprocess.CalledProcessError, OSError) as exc:
+        except (LedgerCommitError, subprocess.CalledProcessError, OSError) as exc:
             sys.stderr.write(
                 f"warning: the update landed but the version-history entry could not "
                 f"be recorded ({exc}); record it manually per the update-self skill.\n"

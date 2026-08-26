@@ -3804,6 +3804,54 @@ def test_ledger_creates_starter_seeds_origin_and_appends_idempotently(
     assert _commit_count(repo) == commits_before
 
 
+def test_the_ledger_commit_skips_hooks_like_the_rollback_commit_does(
+    tmp_path: Path,
+) -> None:
+    # This commit lands after the marker is cleared. A hook refusing it would
+    # leave docs/VERSION_HISTORY.md staged, and every later apply and recover
+    # would refuse the dirty tree until someone cleaned up by hand.
+    repo = _make_real_repo(tmp_path)
+    hooks = tmp_path / "hooks"
+    hooks.mkdir()
+    (hooks / "pre-commit").write_text("#!/bin/sh\necho refused >&2\nexit 1\n")
+    (hooks / "pre-commit").chmod(0o755)
+    _git_in(repo, "config", "core.hooksPath", str(hooks))
+    merge_sha = _head_sha(repo)
+
+    update_self.write_version_history_entry(
+        repo, update_self.Runner(), "minds-v0.4.2", merge_sha, _TODAY
+    )
+
+    assert _git_in(repo, "log", "-1", "--format=%s") == (
+        "version history: updated to minds-v0.4.2"
+    )
+    assert _git_in(repo, "status", "--porcelain") == ""
+
+
+def test_a_ledger_commit_that_fails_leaves_the_file_unstaged_and_named(
+    apply_repo: Path, capsys
+) -> None:
+    runner = _apply_runner(_DOCS_DIFF, apply_repo)
+    runner.respond(
+        ("git", "commit"),
+        subprocess.CalledProcessError(128, ["git", "commit"], stderr="index.lock"),
+    )
+
+    code = _apply(
+        runner,
+        _FakeHttp(_all_healthy),
+        _FakeSpawner(),
+        apply_repo,
+        target_ref="minds-v0.4.2",
+    )
+
+    assert code == 0
+    assert runner.ran("git", "reset", "-q", "--", "docs/VERSION_HISTORY.md")
+    err = capsys.readouterr().err
+    assert "could not be recorded" in err
+    assert "docs/VERSION_HISTORY.md as an unstaged working-tree change" in err
+
+
 def test_ledger_origin_names_the_release_when_one_is_reachable(tmp_path: Path) -> None:
     repo = _make_real_repo(tmp_path)
     subprocess.run(["git", "tag", "minds-v0.1.0"], cwd=repo, check=True)
