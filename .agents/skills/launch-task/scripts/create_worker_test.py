@@ -622,14 +622,16 @@ def test_mngr_failure_is_fatal(tmp_path: Path) -> None:
         ("mngr", "create"),
         subprocess.CalledProcessError(returncode=1, cmd=["mngr"]),
     )
-    with pytest.raises(subprocess.CalledProcessError):
-        create_worker_mod.launch(
-            name="demo-worker",
-            template="worker",
-            runtime_dir=runtime,
-            task_file=task,
-            runner=runner,
-        )
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=runner,
+    )
+    assert rc == 2
+    # Nothing past the create runs: no sync, no task message.
+    assert [c.argv[:2] for c in runner.calls] == [["git", "status"], ["mngr", "create"]]
 
 
 def _launch_argv(runtime: Path, task: Path) -> list[str]:
@@ -1537,6 +1539,31 @@ def test_destroy_existing_clears_a_stopped_predecessor_before_creating(
     assert destroy_index < create_index
 
 
+def test_destroy_existing_clears_a_done_predecessor_before_creating(tmp_path: Path) -> None:
+    # A worker whose agent exited on its own (DONE) has no live process either,
+    # so it is as safe to clear as one `mngr stop` stopped.
+    runtime, task, _ = _make_layout(tmp_path)
+    runner = _RecordingRunner()
+    runner.respond(
+        ("mngr", "list"), _StubResult(stdout=_agent_listing("demo-worker", "DONE"))
+    )
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=runner,
+        destroy_existing=True,
+    )
+
+    assert rc == 0
+    argvs = [c.argv for c in runner.calls]
+    destroy_index = argvs.index(["mngr", "destroy", "demo-worker", "--force"])
+    create_index = next(i for i, argv in enumerate(argvs) if argv[:2] == ["mngr", "create"])
+    assert destroy_index < create_index
+
+
 def test_destroy_existing_refuses_a_predecessor_that_is_still_running(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1608,6 +1635,37 @@ def test_destroy_existing_proceeds_to_create_when_the_listing_cannot_be_read(
     argvs = [c.argv for c in runner.calls]
     assert not any(argv[:2] == ["mngr", "destroy"] for argv in argvs)
     assert any(argv[:2] == ["mngr", "create"] for argv in argvs)
+
+
+def test_a_refused_mngr_create_is_reported_not_raised(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The backstop behind an unreadable listing is mngr create's own refusal;
+    # it has to come back as an exit code and a message, not a traceback.
+    runtime, task, _ = _make_layout(tmp_path)
+    runner = _RecordingRunner()
+    runner.respond(
+        ("mngr", "list"), subprocess.TimeoutExpired(cmd="mngr list", timeout=60)
+    )
+    runner.respond(
+        ("mngr", "create"),
+        subprocess.CalledProcessError(returncode=1, cmd=["mngr", "create"]),
+    )
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=runner,
+        destroy_existing=True,
+    )
+
+    assert rc == 2
+    argvs = [c.argv for c in runner.calls]
+    assert not any(argv[:2] == ["mngr", "rsync"] for argv in argvs)
+    assert not any(argv[:2] == ["mngr", "message"] for argv in argvs)
+    assert "`mngr create demo-worker` failed" in capsys.readouterr().err
 
 
 def test_destroy_existing_argvs_accepted_by_live_cli(tmp_path: Path) -> None:
