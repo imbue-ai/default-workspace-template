@@ -11,6 +11,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -3381,6 +3382,93 @@ def test_a_tree_without_the_bands_package_runs_unbanded_rather_than_failing(
     # that does not exist.
     assert update_self._load_bands(tmp_path) is None
     assert update_self.as_expendable(["npm", "ci"]) == ["npm", "ci"]
+
+
+def _write_bands_package(repo_root: Path, body: str) -> Path:
+    package = repo_root / "system/services/oom_priority/src/oom_priority"
+    package.mkdir(parents=True)
+    package.joinpath("__init__.py").write_text("")
+    package.joinpath("bands.py").write_text(body)
+    return package
+
+
+def test_a_bands_module_predating_the_tag_helper_degrades_instead_of_crashing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The live failure this guards: the module loads from the *pre-merge* tree,
+    # so its surface is whatever release the workspace is updating from --
+    # every release through minds-v0.4.1 shipped a bands.py with no
+    # `oom_tag_shell_prefix`. Reading it unguarded raised an AttributeError at
+    # the first expendable-wrapped step, which is past the merge and past the
+    # snapshots, where only ApplyFailed is caught: the workspace was left
+    # half-applied with a marker and no rollback. Importable-but-older must
+    # degrade exactly like absent.
+    monkeypatch.delitem(sys.modules, "oom_priority", raising=False)
+    monkeypatch.delitem(sys.modules, "oom_priority.bands", raising=False)
+    _write_bands_package(
+        tmp_path,
+        "AGENT_SUBPROCESS = 900\n"
+        "SERVICE_BANDS = {'system_interface': 20}\n"
+        "def set_oom_score_adj(pid, adj):\n"
+        "    return False\n",
+    )
+
+    bands = update_self._load_bands(tmp_path)
+
+    assert bands is None
+    monkeypatch.setattr(update_self, "_BANDS", bands)
+    assert update_self.as_expendable(["npm", "ci"]) == ["npm", "ci"]
+
+
+def test_a_bands_module_carrying_the_whole_surface_is_used(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The other side of the refusal, so it cannot be satisfied by refusing
+    # everything: a module carrying the whole required surface is accepted and
+    # actually tagged with, even though this one predates UPDATE_APPLY -- which
+    # is deliberately left off the required list because it has a real fallback.
+    monkeypatch.delitem(sys.modules, "oom_priority", raising=False)
+    monkeypatch.delitem(sys.modules, "oom_priority.bands", raising=False)
+    _write_bands_package(
+        tmp_path,
+        "AGENT_SUBPROCESS = 900\n"
+        "SERVICE_BANDS = {'system_interface': 20}\n"
+        "def set_oom_score_adj(pid, adj):\n"
+        "    return False\n"
+        "def oom_tag_shell_prefix(adj):\n"
+        "    return f'tag {adj}; '\n",
+    )
+
+    bands = update_self._load_bands(tmp_path)
+
+    assert bands is not None
+    monkeypatch.setattr(update_self, "_BANDS", bands)
+    assert update_self.as_expendable(["npm", "ci"]) == [
+        "sh",
+        "-c",
+        'tag 900; exec "$@"',
+        "sh",
+        "npm",
+        "ci",
+    ]
+
+
+def test_every_bands_attribute_the_script_reads_is_declared_required() -> None:
+    # The load-time refusal only protects what _REQUIRED_BANDS_ATTRIBUTES names.
+    # A `_BANDS.<attr>` added later without being listed is the same
+    # cross-version crash again, and it would surface in a half-applied
+    # workspace rather than here. (An attribute reached through `getattr` with a
+    # default is already guarded and does not match this form.)
+    source = _MODULE_PATH.read_text()
+    read_attributes = set(re.findall(r"(?<![A-Za-z0-9_])_BANDS\.(\w+)", source))
+    assert read_attributes, "the attribute-read pattern stopped matching the script"
+
+    undeclared = read_attributes - set(update_self._REQUIRED_BANDS_ATTRIBUTES)
+
+    assert not undeclared, (
+        f"{sorted(undeclared)} are read off the pre-merge tree's bands module but are "
+        "not in _REQUIRED_BANDS_ATTRIBUTES, so a tree predating them still loads"
+    )
 
 
 @pytest.mark.parametrize(
