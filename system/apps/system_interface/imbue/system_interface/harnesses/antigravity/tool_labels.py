@@ -18,11 +18,8 @@ tools are listed in the docstring table of the harness spec. Re-confirm on an ag
 
 from __future__ import annotations
 
-from typing import Final
-
-from tk_command_parsing.parser import parse_command
-
 from typing import Any
+from typing import Final
 
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.harnesses.tool_labels import GENERIC_CAPTION
@@ -30,6 +27,7 @@ from imbue.system_interface.harnesses.tool_labels import basename
 from imbue.system_interface.harnesses.tool_labels import parse_input_preview
 from imbue.system_interface.harnesses.tool_labels import quoted
 from imbue.system_interface.harnesses.tool_labels import shorten
+from imbue.system_interface.harnesses.tool_output import is_tk_lifecycle_anywhere
 
 # A target renderer: how a tool's target argument reads in the caption.
 _BASENAME: Final[str] = "basename"
@@ -50,6 +48,17 @@ _LABELS: Final[dict[str, tuple[str, str, tuple[str, ...], str]]] = {
     "search_web": ("WebSearch", "Searching the web", ("Query",), _QUOTED),
     "read_url_content": ("WebFetch", "Fetching", ("Url", "URL"), _SHORTEN),
     "generate_image": ("ImageGen", "Generating an image", ("Prompt", "ImageName"), _QUOTED),
+    # The remainder of agy's declared tool set. Captions stay in the shared vocabulary where a
+    # claude equivalent exists (find_by_name is claude's Glob); the agy-only ones name what
+    # they do. Without these the header read "Tool: manage_task" and the caption fell through
+    # to the generic placeholder.
+    "find_by_name": ("Glob", "Searching for", ("Pattern",), _QUOTED),
+    "manage_task": ("Task", "Managing a background task", ("Action",), _QUOTED),
+    "schedule": ("Schedule", "Scheduling", ("Prompt",), _QUOTED),
+    "define_subagent": ("Agent", "Defining a sub-agent", ("name",), _QUOTED),
+    "manage_subagents": ("Agent", "Managing sub-agents", ("Action",), _QUOTED),
+    "send_message": ("Message", "Messaging a sub-agent", ("Recipient",), _QUOTED),
+    "ask_question": ("Question", "Asking a question", (), _QUOTED),
 }
 
 # Subagent delegation gets the exact fixed caption claude uses for its Agent/Task tools.
@@ -63,7 +72,7 @@ _KEEPS_FULL_BODY_TOOLS: Final[frozenset[str]] = frozenset(
 )
 # tk lifecycle verbs whose command must survive truncation (mirrors claude/codex): a batched
 # ``tk create --step`` plan / long ``tk close`` summary feeds the chat progress view.
-_TK_LIFECYCLE_VERBS: Final[frozenset[str]] = frozenset({"create", "start", "close"})
+_RUN_COMMAND_TOOL_NAME: Final[str] = "run_command"
 
 
 @pure
@@ -92,8 +101,11 @@ def _render_target(value: str, renderer: str) -> str:
 def tool_labels(tool_name: str, args_json: str, native_caption: str) -> tuple[str, str]:
     """``(header_label, caption_label)`` for one agy tool call.
 
-    ``args_json`` is the raw (untruncated) ChatToolCall args JSON; ``native_caption`` is
-    agy's own ``f30`` short caption, used as the fallback.
+    ``args_json`` is the raw (untruncated) ChatToolCall args JSON. ``native_caption`` is agy's
+    own model-authored ``toolAction`` verb phrase ("Creating step", "Running test call 1 of
+    20"), read from the step body; it is the fallback when we cannot synthesize a
+    shared-vocabulary label. It replaces the metadata ``f30`` caption this used to read, which
+    was absent on every row of both live stores measured.
     """
     if tool_name in _SUBAGENT_TOOL_NAMES:
         return _SUBAGENT_HEADER, _SUBAGENT_CAPTION
@@ -115,14 +127,15 @@ def tool_labels(tool_name: str, args_json: str, native_caption: str) -> tuple[st
 
 
 @pure
-def run_command_line(tool_name: str, args_json: str) -> str | None:
-    """The shell command behind a ``run_command`` call, or None for any other tool.
+def shell_command(tool_name: str, args_json: str) -> str | None:
+    """The shell command this tool call runs, or None if it is not a shell call.
 
-    agy's own arg-key casing lives in this module, so both tk questions below -- "keep the
-    full input?" and "is this a pure lifecycle marker?" -- ask it here rather than each
-    re-deriving where the command string is.
+    The ONE question each harness answers for itself. Whether that command is a tk lifecycle
+    invocation is decided centrally (``tool_output.is_pure_tk_lifecycle_command`` for the hide
+    rule, ``is_tk_lifecycle_anywhere`` for the truncation exemption), so the rules live in one
+    place and cannot drift between harnesses.
     """
-    if tool_name != "run_command":
+    if tool_name != _RUN_COMMAND_TOOL_NAME:
         return None
     return _first_string_ci(parse_input_preview(args_json), ("CommandLine",))
 
@@ -133,9 +146,5 @@ def keeps_full_tool_input(tool_name: str, args_json: str) -> bool:
     ``--step`` titles / close summaries). Mirrors the claude/codex exemption."""
     if tool_name in _KEEPS_FULL_BODY_TOOLS:
         return True
-    command = run_command_line(tool_name, args_json)
-    if command is not None:
-        parsed = parse_command(command)
-        if parsed is not None and any(segment.tk_verb in _TK_LIFECYCLE_VERBS for segment in parsed.segments):
-            return True
-    return False
+    command = shell_command(tool_name, args_json)
+    return command is not None and is_tk_lifecycle_anywhere(command)

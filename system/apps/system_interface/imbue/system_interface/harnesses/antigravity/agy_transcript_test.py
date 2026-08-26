@@ -7,6 +7,8 @@ any live ``.db``.
 
 from __future__ import annotations
 
+import pytest
+
 from imbue.system_interface.harnesses.antigravity.agy_transcript import STEP_TYPE_ERROR_MESSAGE
 from imbue.system_interface.harnesses.antigravity.agy_transcript import STEP_TYPE_PLANNER_RESPONSE
 from imbue.system_interface.harnesses.antigravity.agy_transcript import STEP_TYPE_USER_INPUT
@@ -14,12 +16,15 @@ from imbue.system_interface.harnesses.antigravity.agy_transcript import Truncate
 from imbue.system_interface.harnesses.antigravity.agy_transcript import decode_step
 from imbue.system_interface.harnesses.antigravity.testing import build_metadata as _timestamp_metadata
 from imbue.system_interface.harnesses.antigravity.testing import build_step_payload as _step
+from imbue.system_interface.harnesses.antigravity.testing import build_tool_body as _tool_body
 from imbue.system_interface.harnesses.antigravity.testing import build_tool_metadata as _tool_metadata
 from imbue.system_interface.harnesses.antigravity.testing import encode_varint as _varint
 from imbue.system_interface.harnesses.antigravity.testing import len_field as _lfield
+from imbue.system_interface.harnesses.antigravity.testing import load_captured_step
 from imbue.system_interface.harnesses.antigravity.testing import str_field as _sfield
 
-import pytest
+# The live tool-step type on agy 1.1.20; every tool call arrives as 132.
+_TOOL_CALL = 132
 
 
 def _tag(field: int, wire: int) -> bytes:
@@ -57,26 +62,30 @@ def test_tool_step_detected_by_metadata_and_carries_captions() -> None:
         "run_command",
         '{"CommandLine":"python3 showcase.py"}',
         call_id="X1",
-        short="Running python3 showcase.py",
-        long="Executing showcase script",
     )
-    # result body lives in a non-metadata top-level field
-    payload = _step(metadata, body=_lfield(28, _sfield(21, "Hello from the script")))
-    step = decode_step("conv", 16, 21, 3, payload)
+    payload = _step(
+        metadata,
+        body=_tool_body(
+            result="Hello from the script",
+            tool_summary="Script execution",
+            tool_action="Running python3 showcase.py",
+        ),
+    )
+    step = decode_step("conv", 16, _TOOL_CALL, 3, payload)
     assert step.tool_call is not None
     assert step.tool_call.name == "run_command"
     assert step.tool_call.call_id == "X1"
     assert step.tool_call.args == '{"CommandLine":"python3 showcase.py"}'
-    assert step.tool_call.caption_short == "Running python3 showcase.py"
-    assert step.tool_call.caption_long == "Executing showcase script"
+    assert step.tool_call.tool_action == "Running python3 showcase.py"
+    assert step.tool_call.tool_summary == "Script execution"
     assert step.tool_result_text == "Hello from the script"
 
 
 def test_running_tool_step_withholds_result() -> None:
     """A non-terminal (RUNNING=2) tool row exposes its call but not its result yet."""
-    metadata = _tool_metadata("run_command", '{"CommandLine":"sleep 9"}', short="Running sleep")
-    payload = _step(metadata, body=_lfield(28, _sfield(21, "partial output")))
-    step = decode_step("conv", 3, 21, 2, payload)
+    metadata = _tool_metadata("run_command", '{"CommandLine":"sleep 9"}')
+    payload = _step(metadata, body=_tool_body(result="partial output"))
+    step = decode_step("conv", 3, _TOOL_CALL, 2, payload)
     assert step.status_name == "RUNNING"
     assert step.is_terminal is False
     assert step.tool_call is not None
@@ -84,8 +93,8 @@ def test_running_tool_step_withholds_result() -> None:
 
 
 def test_error_status_tool_flags_error_result() -> None:
-    metadata = _tool_metadata("run_command", "{}", short="Running")
-    step = decode_step("conv", 3, 21, 7, _step(metadata, body=_lfield(28, _sfield(21, "boom"))))
+    metadata = _tool_metadata("run_command", "{}")
+    step = decode_step("conv", 3, _TOOL_CALL, 7, _step(metadata, body=_tool_body(result="boom")))
     assert step.status_name == "ERROR"
     assert step.is_error_result is True
 
@@ -118,3 +127,69 @@ def test_truncated_payload_raises() -> None:
 def test_created_at_renders_iso() -> None:
     step = decode_step("conv", 0, STEP_TYPE_USER_INPUT, 3, _step(_timestamp_metadata(seconds=1_700_000_000)))
     assert step.created_at == "2023-11-14T22:13:20Z"
+
+
+# --- decoding a REAL payload -------------------------------------------------------------
+# Every test above builds its own payload with the helpers in ``testing``. None of those
+# shapes reproduced what actually broke the decoder, which is how a bug that corrupted 100%
+# of agy tool results passed CI for the life of the harness. These use captured rows.
+
+
+def test_a_real_tk_create_decodes_to_the_command_output_not_its_arguments() -> None:
+    """THE bug. The decoder used to keep the longest printable run it could find anywhere in
+    the step, and for agy that is the ARGUMENTS blob -- so the tk lines the progress view is
+    built from never reached the chat and no step node ever rendered."""
+    step_type, status, payload = load_captured_step("tk_create")
+    step = decode_step("conv", 3, step_type, status, payload)
+    assert step.tool_result_text is not None
+    assert "Created a7-step-7dlr: Run sequential test commands" in step.tool_result_text
+    assert '"CommandLine"' not in step.tool_result_text, "returned the arguments, not the output"
+
+
+def test_a_real_tk_close_keeps_the_title_and_summary_lines() -> None:
+    """``tk close`` prints the transition FIRST and the title/summary after, so a decoder that
+    truncates loses exactly the decoration the progress view needs."""
+    step_type, status, payload = load_captured_step("tk_close")
+    step = decode_step("conv", 51, step_type, status, payload)
+    assert step.tool_result_text is not None
+    assert "Updated a7-step-7dlr -> closed" in step.tool_result_text
+    assert "tk-step a7-step-7dlr title:" in step.tool_result_text
+    assert "tk-step a7-step-7dlr summary:" in step.tool_result_text
+
+
+def test_a_real_step_carries_agys_own_captions() -> None:
+    """agy writes a noun and a verb phrase per call, in the step BODY. The metadata caption
+    fields we used to read (f30/f31) are absent on every captured row."""
+    step_type, status, payload = load_captured_step("tk_create")
+    step = decode_step("conv", 3, step_type, status, payload)
+    assert step.tool_call is not None
+    assert step.tool_call.tool_action == "Creating step"
+    assert step.tool_call.tool_summary == "Task tracking"
+
+
+def test_a_real_plain_command_decodes_its_output() -> None:
+    """Not a tk-only fix: every agy tool result was the arguments blob."""
+    step_type, status, payload = load_captured_step("plain_command")
+    step = decode_step("conv", 7, step_type, status, payload)
+    assert step.tool_result_text is not None
+    assert "Completed test call 1/20" in step.tool_result_text
+
+
+def test_an_unrecognised_body_yields_empty_text_never_none() -> None:
+    """Only ``run_command`` bodies are measured. If a differently-shaped tool body returned
+    None, ``session_parser`` would emit no ``tool_result`` at all, leaving the call unmatched
+    and the activity indicator pinned at TOOL_RUNNING for the life of the agent -- worse than
+    the bug being fixed. ``""`` keeps the "a terminal tool step always has a result" invariant.
+    """
+    payload = _step(_tool_metadata("view_file", '{"AbsolutePath":"/x"}'), body=b"")
+    step = decode_step("conv", 1, _TOOL_CALL, 3, payload)
+    assert step.tool_result_text == ""
+
+
+def test_a_truncated_body_yields_empty_text_rather_than_raising() -> None:
+    """The watcher stops scanning a conversation on TruncatedError, which is right for a
+    mid-write row and permanent for a corrupt one. Result decoding swallows it."""
+    metadata = _tool_metadata("run_command", '{"CommandLine":"ls"}')
+    payload = _step(metadata, body=b"") + b"\xf2\x08\xff\xff\xff"
+    step = decode_step("conv", 1, _TOOL_CALL, 3, payload)
+    assert step.tool_result_text == ""

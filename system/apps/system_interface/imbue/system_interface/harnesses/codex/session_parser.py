@@ -55,8 +55,8 @@ from typing import Any
 
 from loguru import logger as _loguru_logger
 
-from imbue.system_interface.harnesses.codex.tool_labels import is_tk_lifecycle
 from imbue.system_interface.harnesses.codex.tool_labels import keeps_full_tool_input
+from imbue.system_interface.harnesses.codex.tool_labels import shell_command
 from imbue.system_interface.harnesses.codex.tool_labels import tool_labels
 from imbue.system_interface.harnesses.events import MAX_TOOL_INPUT_PREVIEW_LENGTH
 from imbue.system_interface.harnesses.events import SPECIAL_EVENT_TYPE
@@ -64,6 +64,7 @@ from imbue.system_interface.harnesses.events import SpecialEventKind
 from imbue.system_interface.harnesses.message_display import stamp_user_message_display
 from imbue.system_interface.harnesses.tool_output import classify_tool_call_display
 from imbue.system_interface.harnesses.tool_output import find_permission_request
+from imbue.system_interface.harnesses.tool_output import is_pure_tk_lifecycle_command
 from imbue.system_interface.harnesses.tool_output import truncate_tool_output
 
 logger = _loguru_logger
@@ -78,6 +79,7 @@ SOURCE = "codex/common_transcript"
 # placeholder ``claude_session_parser`` uses when the model is absent, keeping the
 # frontend's non-optional ``model`` field populated.
 _UNKNOWN_MODEL = "unknown"
+
 
 def _join_output_text(content: Any) -> str:
     """Join the ``text`` of ``content`` blocks whose ``type`` is ``output_text``."""
@@ -144,7 +146,9 @@ def _labelled_tool_call(call_id: str, tool_name: str, raw_input: str) -> dict[st
     }
     # The render decision ships with the call (a hidden tk marker, or the permission
     # card), recognised from the UNTRUNCATED input backend-side.
-    display = classify_tool_call_display(is_pure_tk=is_tk_lifecycle(tool_name, raw_input), raw_input=raw_input)
+    command = shell_command(tool_name, raw_input)
+    is_pure_tk = command is not None and is_pure_tk_lifecycle_command(command)
+    display = classify_tool_call_display(is_pure_tk=is_pure_tk, raw_input=raw_input)
     if display is not None:
         tool_call["display"] = display.value
     return tool_call
@@ -411,11 +415,7 @@ def parse_lines(
         # rollouts: ``task_complete`` lands just after the final assistant message, so
         # the dot clears only once the text is already on screen.
         if payload_type in ("task_started", "task_complete"):
-            kind = (
-                SpecialEventKind.TURN_STARTED
-                if payload_type == "task_started"
-                else SpecialEventKind.TURN_COMPLETED
-            )
+            kind = SpecialEventKind.TURN_STARTED if payload_type == "task_started" else SpecialEventKind.TURN_COMPLETED
             event_id = _marker_event_id(payload, payload_type, line_index)
             return [
                 {
