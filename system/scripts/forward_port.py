@@ -26,9 +26,10 @@ The markup is validated before it is stored, because it is eventually inlined
 into the workspace DOM: ``validate_icon`` accepts exactly one well-formed
 ``<svg>`` element with nothing that executes or reaches off the page, capped
 at ``MAX_ICON_LENGTH`` (see its docstring). An icon is REQUIRED when a
-registration would create a new, non-``--internal`` entry (``--no-icon`` opts
-out, for machinery hidden from the app pickers); existing entries re-register
-untouched.
+registration would create a new, non-``--internal`` entry; existing entries
+re-register untouched. ``--no-icon`` skips the requirement, keeping the
+generic letter monogram -- it does not hide the entry (that is
+``--internal``'s job).
 """
 
 import argparse
@@ -380,7 +381,7 @@ def main() -> None:
         help="Full URL where the app is accessible (e.g. http://localhost:7681)",
     )
     parser.add_argument("--icon-file", help="Path to the app's .svg icon; its contents are read now, validated, and stored (the path is not recorded). Omit to leave any stored icon untouched.")
-    parser.add_argument("--no-icon", action="store_true", help="Register a brand-new entry without an icon -- only for machinery hidden from the app pickers")
+    parser.add_argument("--no-icon", action="store_true", help="Register a brand-new entry without an icon, keeping the generic letter monogram. Does NOT hide the entry (that is --internal's job). Prefer --icon-file; use only when an icon was explicitly declined or would never be rendered.")
     parser.add_argument(
         "--program",
         help=(
@@ -456,7 +457,7 @@ def main() -> None:
                 if icon is None and not args.no_icon and is_new_pickable:
                     parser.error(
                         f"app {args.name!r} is new and has no icon: pass --icon-file with a house-style "
-                        "SVG (see the build-app skill), or --no-icon for non-pickable machinery"
+                        "SVG (see the build-app skill), or --no-icon to keep the generic letter monogram"
                     )
                 _upsert(
                     apps_file,

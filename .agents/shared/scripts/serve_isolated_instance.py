@@ -220,7 +220,7 @@ def _register_service(
             service_name,
             "--url",
             f"http://localhost:{port}",
-            "--no-icon",  # previews and wrappers are not pickable apps
+            "--no-icon",  # short-lived preview tabs; the generic monogram is fine
         ],
         cwd=str(repo_root),
         capture_output=True,
