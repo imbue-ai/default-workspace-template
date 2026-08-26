@@ -295,8 +295,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
 
     logWs.onmessage = (event: MessageEvent) => {
       const data = JSON.parse(event.data as string) as
-        | { line: string }
-        | { done: true; success: boolean; error: string | null };
+        { line: string } | { done: true; success: boolean; error: string | null };
 
       if ("line" in data) {
         logLines.push(data.line);
