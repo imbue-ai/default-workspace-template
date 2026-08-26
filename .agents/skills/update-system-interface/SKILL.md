@@ -314,8 +314,9 @@ Interpret the exit code and report it to the user:
   merge stays in history while its content does not), so that one also needs a
   fresh worker pass off the current `HEAD`.
 
-Once you no longer need the preview (after a successful apply, *or* after a
-rejection where nothing was merged), tear it down:
+Whenever Step 5 ends -- whatever its exit code: a successful apply, a rollback
+(`2`), an emergency (`3`), a precondition refusal (`1`), or a rejection where
+nothing was merged -- tear the preview down:
 
 ```bash
 python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py unpreview --slug update-<slug>
@@ -334,12 +335,14 @@ service:
 python3 system/scripts/layout.py close si-preview
 ```
 
-Do this whenever you tear the preview down -- after a successful apply *or*
-after a rejection where nothing was merged. Once the preview is down and its tab
-is closed, the worker can be destroyed per `launch-task`. Close the
-`update-$SLUG` ticket the orchestration opened, and release the editing lease
-taken in Step 4 with `tk close "$LEASE_ID" "Apply finished."` (on a
-rejection no lease was taken -- Step 4 never ran).
+Do this on every one of those exits, not only the successful one. Once the
+preview is down and its tab is closed, the worker can be destroyed per
+`launch-task` (after a failed apply, keep it until the diagnosis is done -- its
+branch and report are the retry's input). Close the `update-$SLUG` ticket the
+orchestration opened, and release the editing lease taken in Step 4 with
+`tk close "$LEASE_ID" "Apply finished."` -- on every exit code, since a lease
+left open blocks the next pass (on a rejection no lease was taken -- Step 4
+never ran).
 
 Why this exists as a script and not a checklist: if the backend fails to start,
 the user loses their entire chat UI -- there is nowhere left to surface an error
