@@ -671,7 +671,8 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     }
     // A notification at the position we already hold is movement-free (late
     // clamp echoes arrive like this): nothing to express, never reduce it.
-    if (Math.abs(topPx - scrollTopPx) <= 0.5) {
+    // Exact comparison: a real sub-pixel user movement must still reduce.
+    if (Math.abs(topPx - scrollTopPx) <= 0.01) {
       trace?.record("scroll-noop", { topPx });
       return;
     }
@@ -944,8 +945,12 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       const maxScrollPx = Math.max(0, element.scrollHeight - element.clientHeight);
       const isRecentNativeInput = performance.now() - lastNativeInputAtMs < 150;
       const isPendingClamp =
-        pendingUserDeltaPx < -1 && (Math.abs(element.scrollTop - maxScrollPx) <= 1 || !isRecentNativeInput);
-      const hasPendingUserScroll = Math.abs(pendingUserDeltaPx) > 1 && !isPendingClamp;
+        pendingUserDeltaPx < -0.01 && (Math.abs(element.scrollTop - maxScrollPx) <= 1 || !isRecentNativeInput);
+      // NO minimum size: a trackpad gesture starts as a stream of sub-pixel
+      // deltas, and while streaming redraws run every frame, any threshold here
+      // reverts each tiny delta before the next arrives -- pinning the user in
+      // place. Bookkeeping is exact, so exact comparison is safe.
+      const hasPendingUserScroll = Math.abs(pendingUserDeltaPx) > 0.01 && !isPendingClamp;
       if (isPendingClamp) {
         pendingEchoTops.push(element.scrollTop);
         trace?.record("clamp-absorbed", { deltaPx: pendingUserDeltaPx });
@@ -979,7 +984,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       lastPositionedKey = positionKey;
 
       if (positionState.kind === "FOLLOW") {
-        if (isPointerDown || (pendingUserDeltaPx < -1 && !isPendingClamp)) {
+        if (isPointerDown || (pendingUserDeltaPx < -0.01 && !isPendingClamp)) {
           trace?.record("follow-yield", { pendingUserDeltaPx, isPointerDown });
         }
         // The pin only pulls the viewport down while the agent is generating or
@@ -991,8 +996,9 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
           !fillInFlight &&
           spacerTopPx <= 0 &&
           spacerBottomPx <= 0 &&
+          (geometry === null || geometry.unmeasuredCount === 0) &&
           (totalEventsNow === null || extent().endIndex >= totalEventsNow);
-        if (!isPointerDown && !isQuiescent && (pendingUserDeltaPx >= -1 || isPendingClamp)) {
+        if (!isPointerDown && !isQuiescent && (pendingUserDeltaPx >= -0.01 || isPendingClamp)) {
           const targetPx = element.scrollHeight - element.clientHeight;
           if (hasPendingUserScroll) {
             pendingEchoTops.push(element.scrollTop);

@@ -297,6 +297,43 @@ def main():
         )
         appender.join()
 
+        # --- B6: sub-pixel gesture starts must not be eaten while streaming ---
+        # A trackpad gesture begins with many deltas of ~1px. While the agent
+        # streams, content changes every frame, so positioning runs every frame;
+        # any threshold that classifies small deltas as "not user input" reverts
+        # each one before the next arrives -- the viewport stays pinned to the
+        # bottom no matter how long the user scrolls (the reproduced live bug).
+        page.evaluate(
+            "(() => { const el = document.querySelector('.transcript-scroll'); el.scrollTop = el.scrollHeight; })()"
+        )
+        page.wait_for_timeout(700)
+        appender3 = threading.Thread(target=stream_appender, args=(30, 0.08), daemon=True)
+        appender3.start()
+        # Frame-rate churn like a live streaming message: grow the last row's
+        # text every frame so positioning re-runs continuously.
+        page.evaluate("""(() => {
+          window.__growTimer = setInterval(() => {
+            const el = document.querySelector('.transcript-scroll');
+            const rows = Array.from(el.querySelectorAll('.message-list > [id]'));
+            const last = rows[rows.length - 1];
+            if (last) { last.appendChild(document.createTextNode(' stream')); }
+          }, 16);
+        })()""")
+        page.wait_for_timeout(300)
+        for _ in range(30):
+            page.mouse.wheel(0, -1)
+            page.wait_for_timeout(8)
+        page.wait_for_timeout(700)
+        state = page.evaluate(GET_STATE)
+        dbg = page.evaluate("window.__scrollDebugState()")
+        page.evaluate("clearInterval(window.__growTimer)")
+        appender3.join()
+        check(
+            "B6 a stream of 1px wheel-ups leaves the tail while streaming",
+            dbg["positionKind"] == "USER_CONTROLLED" and state["bottomGap"] >= 25,
+            (dbg["positionKind"], round(state["bottomGap"])),
+        )
+
         # --- C: anchored reading position is rock-solid while fills/streams land ---
         state = page.evaluate(GET_STATE)
         witness = state["topRow"]["id"]
