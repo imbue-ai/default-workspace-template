@@ -46,10 +46,10 @@ export interface Viewport {
 
 // --- State machine 1: scroll position --------------------------------------
 
-/** Anchor: the first row whose top edge sits at/below the viewport top. */
+/** Anchor: the row containing the viewport top (the top message on screen). */
 export interface ScrollAnchor {
   readonly rowKey: RowKey;
-  /** rowTop - viewportTop, px; small by construction (less than that row's height). */
+  /** rowTop - viewportTop, px; zero or negative while the viewport top is inside the row. */
   readonly offsetPx: number;
 }
 

@@ -73,11 +73,15 @@ function lowerBoundRowTop(rowTops: readonly number[], target: number): number {
 }
 
 /**
- * The anchor for a viewport: the first row whose top edge is at/below the
- * viewport top, with its offset from the viewport top. When the viewport sits
- * below every row top (inside a tall trailing row), the last row anchors with a
- * negative offset so anchoring never fails while content exists. Null only for
- * empty geometry.
+ * The anchor for a viewport: the row CONTAINING the viewport top (the last row
+ * whose top is at/above it), with its offset from the viewport top -- zero or
+ * negative while inside the row. Anchoring the spanning row, not the next one,
+ * is what keeps the top message put: the spanning row's own height changes (its
+ * first real measurement replacing an estimate, an expand/collapse below the
+ * fold) shift only rows AFTER it in the geometry, so holding its top demands no
+ * scroll correction and the content at the top of the screen cannot move.
+ * Ahead of the first row (over the top spacer) the first row anchors with a
+ * positive offset. Null only for empty geometry.
  */
 export function anchorFromViewport(geometry: PhysicalGeometry, viewport: Viewport): ScrollAnchor | null {
   if (geometry.rowKeys.length === 0) {
@@ -85,10 +89,12 @@ export function anchorFromViewport(geometry: PhysicalGeometry, viewport: Viewpor
   }
   const viewportTopContentPx = viewport.scrollTopPx - viewport.spacerTopPx;
   const firstAtOrBelow = lowerBoundRowTop(geometry.rowTops, viewportTopContentPx);
-  const anchorIndex = firstAtOrBelow < geometry.rowKeys.length ? firstAtOrBelow : geometry.rowKeys.length - 1;
+  const isExactRowTop =
+    firstAtOrBelow < geometry.rowTops.length && geometry.rowTops[firstAtOrBelow] === viewportTopContentPx;
+  const spanningIndex = isExactRowTop ? firstAtOrBelow : Math.max(0, firstAtOrBelow - 1);
   return {
-    rowKey: geometry.rowKeys[anchorIndex],
-    offsetPx: geometry.rowTops[anchorIndex] - viewportTopContentPx,
+    rowKey: geometry.rowKeys[spanningIndex],
+    offsetPx: geometry.rowTops[spanningIndex] - viewportTopContentPx,
   };
 }
 

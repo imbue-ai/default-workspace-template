@@ -129,7 +129,8 @@ jobs:
   # than a workspace member (see the root [tool.uv.workspace].exclude), so
   # test-offload's image -- built from `uv sync --all-packages` -- does not
   # contain it, the root pytest run ignores it, and the root `ty check` excludes
-  # it. This job is the ONLY thing that exercises it; deleting or skipping it
+  # its modules (all but resources/, which runs in the box against the monorepo
+  # venv and is checked there instead). This job is the ONLY thing that exercises it; deleting or skipping it
   # leaves the project entirely unverified. Runs on the orchestrator (not
   # offload) because it needs its own lock/venv, and only when something it
   # depends on changed -- the diff needs the real base ref, like check-changelog

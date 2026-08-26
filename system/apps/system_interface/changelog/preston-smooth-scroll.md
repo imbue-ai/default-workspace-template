@@ -6,4 +6,6 @@ The old machinery is deleted: the shared scroll controller (transcript-scroll.ts
 
 A ResizeObserver on the message list catches content resizing outside any redraw (image loads, font swaps) so positioning corrects on the next frame, closing a one-frame FOLLOW gap flash during initial fill.
 
+Live testing fix: the anchor is now the row CONTAINING the viewport top (offset into the row), not the next row whose top edge is visible. Holding the spanning row means its own height corrections -- a first real measurement replacing an estimate mid-scroll, or expanding/collapsing content below the fold -- shift only rows after it, so the top message on screen cannot move. This eliminates the jumps seen while wheel-scrolling up through not-yet-measured history and when expanding blocks.
+
 Not yet manually verified: the subagent view click-through itself (the standalone fixture carries no subagent session linkage); it shares the verified engine and render path, but should be eyeballed in a real minds workspace. Possible follow-ups noted in the spec: a "jump to latest" pill and a thumb-drag position tooltip.

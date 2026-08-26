@@ -322,8 +322,8 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
    * the window's FIRST row while older history remains unloaded. That boundary
    * row (the partial turn at the window start) keeps its key while absorbing
    * every backfilled page above, so an anchor on it follows the boundary up
-   * into newly loaded content. Anchoring to the first interior row (with a
-   * negative offset) pins to content that stays put instead.
+   * into newly loaded content. Anchoring to the first interior row pins to
+   * content that stays put instead.
    */
   function anchorForUser(): ScrollAnchor | null {
     if (geometry === null) {
