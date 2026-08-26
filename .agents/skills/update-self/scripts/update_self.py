@@ -3422,7 +3422,7 @@ def apply_update(
                     is_frontend_expected=is_frontend_expected,
                     provisioner_ran=marker.provisioner_ran,
                 )
-            except subprocess.CalledProcessError as rollback_exc:
+            except (subprocess.CalledProcessError, OSError) as rollback_exc:
                 sys.stderr.write(f"the rollback itself failed: {rollback_exc}\n")
                 is_recovered = False
             if is_recovered:
@@ -3601,7 +3601,7 @@ def recover(
             f"Interrupted apply of {marker.merge_ref} (last completed phase: "
             f"{marker.phase}) rolled back by recover",
         )
-    except subprocess.CalledProcessError as exc:
+    except (subprocess.CalledProcessError, OSError) as exc:
         # The marker is kept: the tree is still mid-motion and a later recover
         # (or the DRI agent) must be able to try again.
         sys.stderr.write(f"recover: restoring the tree failed: {exc}\n")

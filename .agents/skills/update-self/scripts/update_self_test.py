@@ -2624,6 +2624,22 @@ def test_a_rollback_whose_own_git_fails_is_an_emergency_that_keeps_the_copies(
     assert str(kept) in capsys.readouterr().err
 
 
+def test_a_rollback_whose_git_cannot_be_spawned_is_an_emergency_too(
+    apply_repo: Path,
+) -> None:
+    # The same escape hatch for the other way a rollback step fails: an
+    # OSError (git itself missing, an exec failure) is not a CalledProcessError,
+    # and must reach the same emergency exit rather than a traceback.
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+    runner.respond(("npm", "run", "build"), _Result(returncode=1, stderr="boom"))
+    runner.respond(("git", "checkout"), FileNotFoundError("git: not found"))
+
+    assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 3
+
+    assert "boom" in _read_emergency(apply_repo)["reason"]
+    assert not _marker_exists(apply_repo)
+
+
 def test_a_backend_only_emergency_is_not_pointed_at_the_bundle_copy(
     apply_repo: Path, capsys
 ) -> None:
@@ -4115,6 +4131,22 @@ def test_recover_without_a_confirmed_frontend_leaves_the_record_standing(
     assert "confirmed healthy" not in closing_line
     assert "cannot confirm it" in closing_line
     assert expected_account in closing_line
+
+
+def test_recover_keeps_the_marker_when_its_git_cannot_be_spawned(
+    apply_repo: Path, capsys
+) -> None:
+    # Like a failed git command, a git that cannot be spawned leaves the tree
+    # mid-motion: report it, keep the marker for the next pass, no traceback.
+    _plant_snapshotted_marker(apply_repo)
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+    runner.respond(("git", "checkout"), FileNotFoundError("git: not found"))
+
+    code = _recover(runner, _FakeHttp(_all_healthy), apply_repo)
+
+    assert code == 1
+    assert "git: not found" in capsys.readouterr().err
+    assert _marker_exists(apply_repo)
 
 
 def test_recover_provisioner_failure_still_counts_as_recovered(
