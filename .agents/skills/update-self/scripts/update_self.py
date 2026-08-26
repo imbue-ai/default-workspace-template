@@ -122,6 +122,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -1407,6 +1408,40 @@ class Runner:
         """Resolve ``executable`` on PATH, as the shell running us would."""
         return shutil.which(executable)
 
+    def run_process_group(
+        self, argv: Sequence[str], *, cwd: str, env: dict, timeout: float
+    ) -> subprocess.CompletedProcess:
+        """``run`` for a command whose own children must not outlive it.
+
+        The command leads a new session, and a timeout kills that whole
+        process group before ``TimeoutExpired`` is raised. ``subprocess.run``'s
+        timeout kills only the direct child, so a hung ``bash setup_system.sh``
+        would otherwise leave its curl or installer running on after the apply
+        had rolled back around it. Output is captured as text, like ``run``
+        with ``capture_output=True, text=True``.
+        """
+        process = subprocess.Popen(
+            list(argv),
+            cwd=cwd,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except OSError:
+                pass  # the group is already gone
+            process.communicate()
+            raise
+        return subprocess.CompletedProcess(
+            list(argv), process.returncode, stdout, stderr
+        )
+
 
 @dataclass(frozen=True)
 class FetchedPage:
@@ -1900,12 +1935,9 @@ def _run_provisioner(runner: Runner, repo_root: Path) -> str | None:
     exception.
     """
     try:
-        result = runner.run(
+        result = runner.run_process_group(
             ["bash", PROVISIONER_SCRIPT],
             cwd=str(repo_root),
-            capture_output=True,
-            text=True,
-            check=False,
             env=provisioner_env(),
             timeout=_PROVISIONER_TIMEOUT_SECONDS,
         )
