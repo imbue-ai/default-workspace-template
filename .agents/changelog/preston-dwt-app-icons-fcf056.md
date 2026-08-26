@@ -1,0 +1,1 @@
+build-app now requires an icon for every new app: draw a house-style .svg in pre-flight, pass it to the scaffolder via the new required --icon-file (validated with forward_port.py, shipped as system/apps/<package>/icon.svg, registered on every start); the escape-hatch path stores the icon the same way the files app does.
