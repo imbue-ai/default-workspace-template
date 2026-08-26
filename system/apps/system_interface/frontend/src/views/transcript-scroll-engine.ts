@@ -193,7 +193,6 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
   let observedListEl: Element | null = null;
   let pointerReleaseListener: (() => void) | null = null;
   let isPointerDown = false;
-  let measureScheduled = false;
 
   // --- input classification -------------------------------------------------
   let lastInputSource: ScrollInputSource = "wheel";
@@ -473,23 +472,6 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     return changed;
   }
 
-  function scheduleMeasure(): void {
-    if (measureScheduled) {
-      return;
-    }
-    measureScheduled = true;
-    requestAnimationFrame(() => {
-      measureScheduled = false;
-      if (!isVisible()) {
-        return;
-      }
-      if (measureMountedRows()) {
-        heightsEpoch += 1;
-        m.redraw();
-      }
-    });
-  }
-
   // --- geometry -------------------------------------------------------------
 
   function refreshGeometry(): void {
@@ -677,6 +659,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       return;
     }
     pendingEchoTops.length = 0; // a genuine scroll invalidates stale echoes
+    const didScrollUp = topPx < scrollTopPx;
     scrollTopPx = topPx;
     lastActivityAtMs = performance.now();
     if (geometry === null) {
@@ -686,9 +669,14 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     if (anchor === null) {
       return;
     }
+    // ANY upward movement is intent to leave the tail, even within the bottom
+    // band: a trackpad gesture's first events move only a few px, and deciding
+    // by position alone would re-pin the user to the bottom until one event
+    // cleared the band -- the "stuck at the bottom" feel.
     const bottomGapPx = element.scrollHeight - topPx - element.clientHeight;
     const totalEvents = dataSource.getTotalEvents();
     const atTail =
+      !didScrollUp &&
       bottomGapPx < BOTTOM_THRESHOLD_PX &&
       spacerBottomPx <= 0 &&
       (totalEvents === null || extent().endIndex >= totalEvents);
@@ -900,7 +888,15 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       if (!isVisible()) {
         return;
       }
-      scheduleMeasure();
+      // Measure the mounted rows NOW, before positioning: a tall row mounting
+      // into the overscan renders at its real height this same frame, and
+      // positioning against last frame's estimates would paint a one-frame
+      // shift proportional to the estimate error (visible on long messages).
+      if (measureMountedRows()) {
+        heightsEpoch += 1;
+        refreshGeometry();
+        m.redraw(); // pads/ranges were computed pre-measure; re-plan next frame
+      }
 
       // A native scroll whose event hasn't been handled yet (wheel/keys
       // mid-flight) shows up as a gap between the DOM position and our
@@ -985,6 +981,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
               const bottomGapPx = element.scrollHeight - element.scrollTop - element.clientHeight;
               const totalEvents = dataSource.getTotalEvents();
               const atTail =
+                pendingUserDeltaPx > 0 &&
                 bottomGapPx < BOTTOM_THRESHOLD_PX &&
                 spacerBottomPx <= 0 &&
                 (totalEvents === null || extent().endIndex >= totalEvents);

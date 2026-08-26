@@ -172,6 +172,22 @@ def main():
             state and state["transitions"],
         )
 
+        # --- B0: one tiny wheel tick must leave the tail and stay left ---
+        # Direction decides intent: a few-px first gesture event must not be
+        # re-pinned to the bottom by the positional band.
+        page.mouse.move(600, 400)
+        page.mouse.wheel(0, -24)
+        page.wait_for_timeout(700)
+        state = page.evaluate(GET_STATE)
+        dbg = page.evaluate("window.__scrollDebugState()")
+        check(
+            "B0 a small wheel tick leaves FOLLOW and is not yanked back",
+            dbg["positionKind"] == "USER_CONTROLLED" and 5 <= state["bottomGap"] <= 80,
+            (dbg["positionKind"], round(state["bottomGap"])),
+        )
+        page.mouse.wheel(0, 200)
+        page.wait_for_timeout(300)
+
         # --- A4: wheel-up immediately, while fills and measurements still land ---
         # The reported live bug: the row spanning the viewport top gets its real
         # measurement (estimate -> actual) mid-scroll; anchoring the NEXT row let
@@ -180,6 +196,31 @@ def main():
         page.wait_for_selector(".transcript-scroll", timeout=30000)
         page.wait_for_timeout(400)
         page.mouse.move(600, 400)
+        # Per-frame flash sampler: a mounting tall row must not shift the top
+        # message even for a single painted frame (rAF granularity, which the
+        # polling loop below cannot see).
+        page.evaluate("""(() => {
+          window.__frameFlashes = [];
+          let prev = null;
+          const sample = () => {
+            const el = document.querySelector('.transcript-scroll');
+            if (el) {
+              const list = el.querySelector('.message-list');
+              const elRect = el.getBoundingClientRect();
+              let top = null;
+              for (const r of Array.from(list.children).filter(c => c.id !== '')) {
+                const rect = r.getBoundingClientRect();
+                if (rect.bottom > elRect.top + 1) { top = { id: r.id, top: rect.top - elRect.top }; break; }
+              }
+              if (top && prev && prev.id === top.id && top.top < prev.top - 6) {
+                window.__frameFlashes.push([prev.top, top.top, top.id.slice(0, 18)]);
+              }
+              prev = top;
+            }
+            requestAnimationFrame(sample);
+          };
+          requestAnimationFrame(sample);
+        })()""")
         early_violations = []
         witness = None
         last_top = None
@@ -194,11 +235,24 @@ def main():
                 early_violations.append((step, last_top, top_row["top"]))
             witness = top_row["id"]
             last_top = top_row["top"]
+        frame_flashes = page.evaluate("window.__frameFlashes")
         check(
             "A4 no jumps wheel-scrolling up while unmeasured history loads",
             len(early_violations) == 0,
             early_violations[:3],
         )
+        check(
+            "A5 no single-frame flashes as tall rows mount during the scroll",
+            len(frame_flashes) == 0,
+            frame_flashes[:3],
+        )
+
+        # Fresh FOLLOW start for phase B: the A4 reload restores the persisted
+        # USER_CONTROLLED position, so clear it and reload once more.
+        page.evaluate("localStorage.clear()")
+        page.goto(f"{BASE_URL}/?debug=scroll")
+        page.wait_for_selector(".transcript-scroll", timeout=30000)
+        page.wait_for_timeout(1200)
 
         # --- B: wheel-up during streaming: disengage + no downward jumps ---
         appender = threading.Thread(
