@@ -3890,6 +3890,28 @@ def test_env_converge_failure_is_a_warning_not_a_rollback(
     assert not runner.ran("git", "checkout", _ROLLBACK, "--")
 
 
+def test_an_env_converge_that_cannot_be_spawned_is_a_warning_not_a_traceback(
+    apply_repo: Path, capsys
+) -> None:
+    # Post-success bookkeeping: an update that landed healthy must not turn
+    # into a non-zero exit because `uv` could not be resolved afterwards.
+    runner = _apply_runner(_DOCS_DIFF, apply_repo)
+    runner.respond(("uv", "run", "env-converge"), FileNotFoundError("uv: not found"))
+
+    code = _apply(
+        runner,
+        _FakeHttp(_all_healthy),
+        _FakeSpawner(),
+        apply_repo,
+        target_ref="minds-v0.4.2",
+    )
+
+    assert code == 0
+    err = capsys.readouterr().err
+    assert "env-converge upgrade` failed" in err
+    assert "uv: not found" in err
+
+
 # --- recover -------------------------------------------------------------------
 
 

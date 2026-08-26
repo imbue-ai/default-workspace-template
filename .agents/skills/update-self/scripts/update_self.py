@@ -3538,12 +3538,16 @@ def apply_update(
                 check=False,
                 timeout=_ENV_CONVERGE_TIMEOUT_SECONDS,
             )
-        except subprocess.TimeoutExpired:
+        except (subprocess.TimeoutExpired, OSError) as exc:
             converge = subprocess.CompletedProcess(
                 ["uv", "run", "env-converge", "upgrade"],
                 returncode=124,
                 stdout="",
-                stderr=f"did not finish within {_ENV_CONVERGE_TIMEOUT_SECONDS:g}s",
+                stderr=(
+                    f"did not finish within {_ENV_CONVERGE_TIMEOUT_SECONDS:g}s"
+                    if isinstance(exc, subprocess.TimeoutExpired)
+                    else f"could not be run ({exc})"
+                ),
             )
         if getattr(converge, "returncode", 0) != 0:
             stderr = (getattr(converge, "stderr", "") or "").strip()
