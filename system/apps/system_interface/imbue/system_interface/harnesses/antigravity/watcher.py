@@ -273,7 +273,12 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
     def _scan_conversation(self, conv_id: str, db_path: Path, pending: list[dict[str, Any]]) -> None:
         scan_from = self._scan_from.get(conv_id, 0)
         rows = self._read_rows(db_path, scan_from)
-        terminal_prefix_end = scan_from - 1
+        # Advanced over the rows we actually READ, not over the absolute index space. Anchoring
+        # it to `scan_from - 1` meant the cursor moved only when the lowest surviving idx was
+        # exactly `scan_from`; agy's indices need not start there, so it stuck at 0 and every
+        # poll re-read and re-decoded the whole conversation.
+        next_scan_from = scan_from
+        is_prefix_terminal = True
         for idx, step_type, status, payload in rows:
             try:
                 decoded = decode_step(conv_id, idx, step_type, status, bytes(payload))
@@ -288,11 +293,13 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
                 self._index_by_id[event_id] = len(self._events)
                 self._events.append(event)
                 pending.append(event)
-            # Advance the cursor only through the unbroken leading run of terminal rows, so a
+            # Advance only through the unbroken leading run of terminal rows, so a
             # still-running row (and anything after it) is re-scanned until it settles.
-            if decoded.is_terminal and idx == terminal_prefix_end + 1:
-                terminal_prefix_end = idx
-        self._scan_from[conv_id] = terminal_prefix_end + 1
+            if is_prefix_terminal and decoded.is_terminal:
+                next_scan_from = idx + 1
+            else:
+                is_prefix_terminal = False
+        self._scan_from[conv_id] = next_scan_from
 
     def _read_rows(self, db_path: Path, scan_from: int) -> list[tuple[int, int, int, bytes]]:
         # Read-only + WAL-aware; agy is concurrently writing. A transient lock/checkpoint
@@ -492,7 +499,13 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
         if not self._queue.has_entries():
             return
         if not is_alive():
-            self._return_queue_to_composer()
+            # HELD, not taken. "Returned to the composer" is the RESPONSE to a stop request;
+            # this is a background thread with no response, so taking the entries here would
+            # not return them anywhere -- it would destroy them (never Delivered, never
+            # Returned), which is the swallow rung 2 above exists to forbid. They stay queued
+            # and on screen instead: deliverable if the agent comes back, and recoverable
+            # through stop, which does have somewhere to put them.
+            logger.debug("antigravity: holding the queue for {} -- it is not alive", self._agent_id)
             return
         if self.is_turn_open():
             # A turn opened before we got here, so anything presented as "about to be typed"
@@ -549,7 +562,11 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
         path. The prefix arm is defence in depth for a block that only partly committed.
         """
         deadline = time.monotonic() + self._delivery_witness_seconds
-        lines = block.split("\n")
+        # ENTRIES, not the block's lines. The prefix arm's count indexes `claimed`, which is
+        # per-entry, and an entry may itself contain newlines -- counting lines resolved MORE
+        # entries than agy had committed, and the surplus was destroyed: never sent, never
+        # returned. Resolved here once; a claim's contents cannot change under it.
+        contents = self._claimed_contents(claimed)
         witnessed: list[dict[str, Any]] = []
         is_deadline_passed = False
         while not is_deadline_passed:
@@ -563,7 +580,7 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
                 cleaned = text.strip()
                 if cleaned == block.strip():
                     return claimed, witnessed
-                covered = _covered_prefix(lines, cleaned)
+                covered = _covered_prefix(contents, cleaned)
                 if covered:
                     return claimed[:covered], witnessed
             is_deadline_passed = time.monotonic() >= deadline
@@ -575,21 +592,30 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
                     return (), witnessed
         return (), witnessed
 
-    def _return_queue_to_composer(self) -> None:
-        """A dead agent's queue goes back to the user, not into the bin."""
-        _block, taken = self._queue.take_unclaimed()
-        if taken:
-            logger.info("antigravity: returned {} queued message(s) -- {} is not alive", len(taken), self._agent_id)
+    def _claimed_contents(self, claimed: tuple[str, ...]) -> tuple[str, ...]:
+        """The claimed entries' texts in claim order, or () if any of them has gone.
+
+        ``begin_flush`` deliberately leaves claimed entries in the queue, so this is a lookup
+        rather than something the caller has to carry. Empty on ANY miss: a short tuple would
+        silently shift the prefix arm onto the wrong entries, which is the bug it fixes.
+        """
+        by_id = {str(entry["queued_id"]): str(entry["content"]) for entry in self._queue.snapshot()}
+        if not all(queued_id in by_id for queued_id in claimed):
+            return ()
+        return tuple(by_id[queued_id] for queued_id in claimed)
 
 
-def _covered_prefix(lines: list[str], committed: str) -> int:
-    """How many leading lines of the block ``committed`` accounts for (0 = none).
+def _covered_prefix(contents: tuple[str, ...], committed: str) -> int:
+    """How many leading ENTRIES of the block ``committed`` accounts for (0 = none).
+
+    The count indexes the claim, so it must be entries rather than lines: entries are joined
+    with newlines to form the block but may contain newlines of their own.
 
     Whole-block equality is handled by the caller; this is only the partial arm.
     """
     if not committed:
         return 0
-    for count in range(len(lines) - 1, 0, -1):
-        if committed == "\n".join(lines[:count]).strip():
+    for count in range(len(contents) - 1, 0, -1):
+        if committed == "\n".join(contents[:count]).strip():
             return count
     return 0
