@@ -248,7 +248,10 @@ def main():
         )
 
         # Fresh FOLLOW start for phase B: the A4 reload restores the persisted
-        # USER_CONTROLLED position, so clear it and reload once more.
+        # USER_CONTROLLED position, so clear it and reload once more. The engine
+        # debounces persistence by 300ms, so a clear issued right after scrolling
+        # gets overwritten when the pending persist fires; let it fire first.
+        page.wait_for_timeout(600)
         page.evaluate("localStorage.clear()")
         page.goto(f"{BASE_URL}/?debug=scroll")
         page.wait_for_selector(".transcript-scroll", timeout=30000)
@@ -481,8 +484,15 @@ def main():
         pre_anchor = pre_state["topRow"]["id"] if pre_state["topRow"] else None
         page.reload()
         page.wait_for_selector(".transcript-scroll", timeout=30000)
-        page.wait_for_timeout(2500)
-        state = page.evaluate(GET_STATE)
+        # The restore completes once the fill reaches the persisted location;
+        # on a large transcript that can outlast a fixed wait. Poll for the
+        # restore trace record.
+        state = None
+        for _ in range(40):
+            page.wait_for_timeout(250)
+            state = page.evaluate(GET_STATE)
+            if state and state["kinds"].get("restore", 0) >= 1:
+                break
         restored = state["kinds"].get("restore", 0) >= 1
         top_after = state["topRow"]["id"] if state["topRow"] else None
         check(
