@@ -59,7 +59,7 @@ def _status_to_response(status: auth.AuthStatus) -> ClaudeAuthStatusResponse:
 # the text the user sees -- and it has to stay true on the subscription fast path, which stores
 # the credential through the CLI and deliberately starts no restart at all.
 _UNCONFIRMED_DETAIL: Final[str] = (
-    "Could not confirm the sign-in: `claude auth status` did not finish in time. "
+    "Could not confirm the sign-in: the check for it did not finish in time. "
     "Your sign-in was applied; reopen this dialog to check."
 )
 # 503 rather than 500 throughout: the check may well answer on the next try.
