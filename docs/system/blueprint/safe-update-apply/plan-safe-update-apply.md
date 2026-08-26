@@ -18,7 +18,7 @@
 
 ### Unattended operation
 
-- The pass is fully unattended after launch: the user starts an update and can walk away; no mid-flight confirmation gates. A user who initiates an update also wants it applied -- our average user holds no opinions on technical choices -- and everything the apply lands is git (usually with a host backup behind it), so post-hoc rollback replaces pre-approval.
+- The pass is fully unattended after launch: the user starts an update and can walk away; the only mid-flight stop is the customization-survival hold below. A user who initiates an update also wants it applied -- our average user holds no opinions on technical choices -- and everything the apply lands is git (usually with a host backup behind it), so post-hoc rollback replaces pre-approval.
 - The old 5a approval gate becomes a **results message** composed after the apply: the same composition rules, now reporting what landed, every decision made on the user's behalf (conflict resolutions, provisioning caveats), and a standing rollback offer -- honored by landing a forward revert through the same apply machinery (`apply --merge-ref <revert branch>`, no `--target-ref`), with the Step 1 backup as the full-rewind fallback.
 - A missing or unconfirmed pre-pass backup (`host-backup-now` exits 1/2/3) is flagged in the results message instead of blocking the pass: git plus the apply's own rollback and `recover` remain the recovery path.
 - Merge-conflict questions the worker cannot settle are decided by the lead -- defaulting to preserving the workspace's local behavior -- recorded, and surfaced afterwards with the alternative still on offer. Merge mechanics never escalate; what the user's creations *end up as* can (next bullet).
