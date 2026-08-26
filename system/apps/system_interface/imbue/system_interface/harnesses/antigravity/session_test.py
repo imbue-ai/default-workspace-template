@@ -48,7 +48,7 @@ def _tracker(state_dir: Path) -> AntigravityQueueTracker:
 
 
 def _queued(session: AntigravityHarnessSession) -> list[str]:
-    return [str(entry["content"]) for entry in session.switch_queue_snapshot()]
+    return [str(entry["content"]) for entry in session._queue().snapshot()]
 
 
 def test_an_idle_agent_is_still_only_enqueued(tmp_path: Path) -> None:
@@ -139,7 +139,7 @@ def test_a_message_accepted_against_an_idle_agy_reads_as_sending(tmp_path: Path)
     state_dir = tmp_path / "agent-idle-queue"
     session = _session(state_dir, sent)
     session.send("beep", "m1")
-    entries = session.switch_queue_snapshot()
+    entries = session._queue().snapshot()
     assert [e["is_sending"] for e in entries] == [True], "presented as Sending, not Queued"
     assert session.is_tap_available(has_queued=True) is False, "nothing for a tap to do"
 
@@ -152,7 +152,7 @@ def test_a_message_accepted_mid_turn_reads_as_queued(tmp_path: Path) -> None:
     (state_dir / ACTIVE_MARKER_FILENAME).write_text("")
     session = _session(state_dir, sent)
     session.send("beep", "m1")
-    assert [e["is_sending"] for e in session.switch_queue_snapshot()] == [False]
+    assert [e["is_sending"] for e in session._queue().snapshot()] == [False]
 
 
 def test_a_failed_delivery_demotes_it_back_to_queued(tmp_path: Path) -> None:
@@ -164,7 +164,7 @@ def test_a_failed_delivery_demotes_it_back_to_queued(tmp_path: Path) -> None:
     tracker = _tracker(state_dir)
     _block, claimed, generation = tracker.begin_flush()
     tracker.finish_flush(claimed, generation, delivered=())
-    assert [e["is_sending"] for e in session.switch_queue_snapshot()] == [False]
+    assert [e["is_sending"] for e in session._queue().snapshot()] == [False]
 
 
 def test_a_turn_opening_first_demotes_it_back_to_queued(tmp_path: Path) -> None:
@@ -173,6 +173,6 @@ def test_a_turn_opening_first_demotes_it_back_to_queued(tmp_path: Path) -> None:
     state_dir = tmp_path / "agent-raced"
     session = _session(state_dir, sent)
     session.send("beep", "m1")
-    assert [e["is_sending"] for e in session.switch_queue_snapshot()] == [True]
+    assert [e["is_sending"] for e in session._queue().snapshot()] == [True]
     assert _tracker(state_dir).demote_pending() is True
-    assert [e["is_sending"] for e in session.switch_queue_snapshot()] == [False]
+    assert [e["is_sending"] for e in session._queue().snapshot()] == [False]

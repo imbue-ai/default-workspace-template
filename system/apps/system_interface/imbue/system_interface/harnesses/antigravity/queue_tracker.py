@@ -7,7 +7,7 @@ matching text, which a byte-identical message typed into agy's own terminal can 
 
 Instead agy is never allowed to park anything: EVERY message is held here, and one worker --
 the only typist -- delivers the block once agy is idle. See
-``docs/design/antigravity-swallow-fix-plan.md``.
+``system/apps/system_interface/imbue/system_interface/harnesses/core-contracts/messages-lifecycle-contract-state-of-things.md`` (E12).
 
 LIFETIME (contract Part B). The queue must survive a ``system_interface`` restart -- the
 session is still alive, and "never silently dropped while the session lives" applies -- but

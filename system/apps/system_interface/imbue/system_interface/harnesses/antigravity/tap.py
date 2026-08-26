@@ -2,7 +2,7 @@
 
 Both are claude's shapes with agy's one structural advantage: **we hold the queue**, so neither
 action has to retrieve anything from inside agy. See
-``docs/design/antigravity-swallow-fix-plan.md``.
+``system/apps/system_interface/imbue/system_interface/harnesses/core-contracts/messages-lifecycle-contract-state-of-things.md`` (E12).
 
 **Neither of these typists types.** The tap does not send the block; it cancels the turn and
 wakes the flush worker, which is the only code in the system that delivers. Two typists meant

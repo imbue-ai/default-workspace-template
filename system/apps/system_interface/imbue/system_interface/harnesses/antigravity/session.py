@@ -6,7 +6,7 @@ Two reasons this subclass exists.
 where nothing can observe it and from where agy merges it into one turn. So this session
 NEVER types: every message is enqueued, and the watcher's flush worker -- the single typist --
 delivers it when no turn is open. See :meth:`send` and
-``docs/design/antigravity-swallow-fix-plan.md``.
+``system/apps/system_interface/imbue/system_interface/harnesses/core-contracts/messages-lifecycle-contract-state-of-things.md`` (E12).
 
 **The model chip.** See :meth:`switch_options`.
 """
@@ -14,7 +14,6 @@ delivers it when no turn is open. See :meth:`send` and
 import threading
 from datetime import datetime
 from datetime import timezone
-from typing import Any
 
 from loguru import logger
 
@@ -87,21 +86,9 @@ class AntigravityHarnessSession(FileHarnessSession):
         """
         return self._queue().is_sending() or super().is_sending()
 
-    def in_flight_block(self) -> str:
-        """The in-flight text, for stop's return block.
-
-        Claimed entries are deliberately NOT included: they are still in the queue (that is
-        what keeps them on screen), so stop already accounts for them there, and returning
-        them here as well would place every flushing message into the composer twice. The
-        base's registry block is still returned, for the same reason ``is_sending`` still
-        consults it.
-        """
-        return super().in_flight_block()
-
-    def switch_queue_snapshot(self) -> list[dict[str, Any]]:
-        """The held queue, for tests and diagnostics (the live wire copy goes through the
-        watcher's snapshot callback)."""
-        return self._queue().snapshot()
+    # ``in_flight_block`` is deliberately NOT overridden. Claimed entries stay in the queue --
+    # that is what keeps them on screen -- so stop already accounts for them there, and
+    # returning them here too would put every flushing message into the composer twice.
 
     def _queue(self) -> AntigravityQueueTracker:
         """The agent's tracker -- the same instance the watcher reads (see queue_tracker).

@@ -80,12 +80,23 @@ below) — never a mngr release.
 A project layer's hooks need the layer trusted and each hook trusted by hash; mngr already
 marks the work dir trusted and passes `--dangerously-bypass-hook-trust`, which covers both.
 
+**Re-testing codex by hand: reproduce mngr's trust setup or you will measure nothing.** codex
+refuses to run command hooks unless they are trusted, so a probe without it sees *zero* hook
+events and looks exactly like "the policy is not wired". Production is covered three ways:
+`--dangerously-bypass-hook-trust --enable hooks` on the launch command (pinned by
+`mngr_codex/plugin_test.py`), `merge_project_trust` seeding `[projects."<path>"] trust_level =
+"trusted"`, and `auto_dismiss_dialogs = true` for the TUI prompt. Pass the flag and seed the
+project entry when reproducing.
+
 ### agy  (wiring: `system/scripts/agy_shim/bash` + one PATH entry from the plugin)
 agy has **no usable hook surface**. Measured on 1.1.20: it declares `PreToolUse`/`PostToolUse`
 but never fires them; the events that do fire (`SessionStart`, `PreInvocation`,
 `PostInvocation`, `Stop`) carry no tool identity -- no `tool_name`, no `tool_input`, no
 command -- and no hook output channel reaches the model (plain stdout and the binary's own
-`systemMessage` key were both tested; the model could not see the injected marker).
+`systemMessage` key were both tested; the model could not see the injected marker). The
+payload is conversation-scoped only: `conversationId`, `invocationNum`, `modelName`,
+`transcriptPath`, `workspacePaths`, `artifactDirectoryPath`, plus `error`, `executionNum`,
+`fullyIdle` and `terminationReason` on `Stop`.
 
 It does, however, run every shell tool call as `bash -c "<CommandLine>"`, resolving `bash`
 from `PATH`. So the guards run from a **shim named `bash`**, early on the agent's PATH, which
