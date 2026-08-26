@@ -3623,7 +3623,7 @@ def apply_update(
                         f"{bundle_reject}; building live instead.\n"
                     )
 
-        exc: ApplyFailed | None = None
+        failure: ApplyFailed | None = None
         try:
             marker.snapshots = take_snapshots(plan, repo_root, runner, marker.snapshots)
             _advance(PHASE_SNAPSHOTTED)
@@ -3768,7 +3768,7 @@ def apply_update(
                 clear_emergency(repo_root)
             _refresh_workspace_view(repo_root, runner)
         except ApplyFailed as failed:
-            exc = failed
+            failure = failed
         except Exception as unexpected:
             # The last resort, and the one place a blind catch is the correct
             # answer: past this point the merge is landed and the pre-apply
@@ -3779,16 +3779,16 @@ def apply_update(
             # and a missing executable have each already got out. The traceback
             # goes in `detail` so the DRI agent can still see the bug the
             # rollback just tidied away.
-            exc = ApplyFailed(
+            failure = ApplyFailed(
                 f"the apply raised an unexpected "
                 f"{type(unexpected).__name__}: {unexpected}",
                 live_service_restarted=marker.live_service_restarted,
                 detail=traceback.format_exc(),
                 detail_heading="traceback",
             )
-        if exc is not None:
+        if failure is not None:
             sys.stderr.write(
-                f"apply failed: {exc}\n{_detail_block(exc)}"
+                f"apply failed: {failure}\n{_detail_block(failure)}"
                 f"{_phase_timing_line(marker)}"
                 f"rolling back to {marker.rollback_to[:12]} and restoring the "
                 "workspace...\n"
@@ -3799,7 +3799,7 @@ def apply_update(
                     repo_root,
                     runner,
                     marker.rollback_to,
-                    f"Apply failed and was auto-reverted: {exc.headline()}",
+                    f"Apply failed and was auto-reverted: {failure.headline()}",
                 )
                 outcome = _recover_running_state(
                     plan,
@@ -3808,7 +3808,7 @@ def apply_update(
                     runner,
                     http,
                     sleeper,
-                    live_service_restarted=exc.live_service_restarted
+                    live_service_restarted=failure.live_service_restarted
                     or marker.live_service_restarted,
                     snapshots=marker.snapshots,
                     is_frontend_expected=is_frontend_expected,
@@ -3836,7 +3836,7 @@ def apply_update(
                 plan,
                 repo_root,
                 f"apply of {merge_ref} failed and its rollback could not restore "
-                f"health: {exc.headline()}",
+                f"health: {failure.headline()}",
                 marker.dri_agent,
                 now,
             )
