@@ -374,6 +374,14 @@ def test_meta_tag_injection_names_the_variant_and_skips_when_consistent() -> Non
     assert _inject_update_staleness_meta_tag(shell, None) == shell
 
 
+def test_meta_tag_injection_escapes_the_variant() -> None:
+    # The variant is this module's own constant today; the tag is an attribute
+    # value, so whatever lands there must not be able to close it.
+    injected = _inject_update_staleness_meta_tag("<head></head>", 'x"><script>')
+    assert 'content="x&quot;&gt;&lt;script&gt;"' in injected
+    assert "<script>" not in injected
+
+
 def _evaluate_path_expression(node: ast.expr, known: dict[str, str]) -> str | None:
     """Evaluate a string literal, a name, a ``Path(...)`` call, or a ``/`` join."""
     if isinstance(node, ast.Constant):

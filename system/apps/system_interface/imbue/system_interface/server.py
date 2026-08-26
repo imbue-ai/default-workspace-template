@@ -570,7 +570,7 @@ def _inject_update_staleness_meta_tag(html_content: str, staleness: str | None) 
     """
     if staleness is None:
         return html_content
-    meta_tag = f'<meta name="{UPDATE_STALENESS_META_TAG}" content="{staleness}">'
+    meta_tag = f'<meta name="{UPDATE_STALENESS_META_TAG}" content="{html.escape(staleness, quote=True)}">'
     return html_content.replace("</head>", f"{meta_tag}\n</head>")
 
 
