@@ -3049,6 +3049,24 @@ def _install_or_build_bundle(
     )
 
 
+class RecoveryOutcome(NamedTuple):
+    """What a rollback's recovery confirmed.
+
+    ``is_recovered`` is the exit-code question: the backend is healthy, and so
+    is the frontend when one was expected. ``is_frontend_confirmed`` is the
+    stricter fact the emergency record and the closing line turn on -- the
+    live UI was probed and serves a working frontend -- which can hold even
+    when none was expected (the rollback put a UI back that was already down
+    when the apply began).
+    """
+
+    is_recovered: bool
+    is_frontend_confirmed: bool
+
+
+_NOT_RECOVERED = RecoveryOutcome(is_recovered=False, is_frontend_confirmed=False)
+
+
 def _recover_running_state(
     plan: ApplyPlan,
     repo_root: Path,
@@ -3061,9 +3079,15 @@ def _recover_running_state(
     snapshots: Sequence[SnapshotRecord],
     is_frontend_expected: bool,
     provisioner_ran: bool,
-) -> bool:
+) -> RecoveryOutcome:
     """After the tree is restored to known-good, restore the pre-apply state and
-    confirm the workspace is healthy. Returns True iff confirmed.
+    confirm the workspace is healthy.
+
+    The frontend is always probed once the backend answers, but only held
+    against the rollback when ``is_frontend_expected``: a UI that was already
+    down when the apply began does not make the rollback a failure, while one
+    that works afterwards is still worth knowing about (it is what lets the
+    emergency record come down).
 
     Restores are file copies (no network, no package manager, no ``mngr``);
     rebuild/refresh fallbacks run only where there is no copy to put back. The
@@ -3127,15 +3151,23 @@ def _recover_running_state(
             )
     except (ApplyFailed, OSError) as exc:
         sys.stderr.write(f"recovery step failed: {exc}\n")
-        return False
-    if healthy and is_frontend_expected:
-        frontend_failure = describe_frontend_failure(http, base_url, sleeper)
-        if frontend_failure is not None:
+        return _NOT_RECOVERED
+    if not healthy:
+        return _NOT_RECOVERED
+    frontend_failure = describe_frontend_failure(http, base_url, sleeper)
+    if frontend_failure is not None:
+        if is_frontend_expected:
             sys.stderr.write(f"recovery left the frontend broken: {frontend_failure}\n")
-            return False
-    if healthy:
-        _refresh_workspace_view(repo_root, runner)
-    return healthy
+            return _NOT_RECOVERED
+        sys.stderr.write(
+            "recovery: the live UI is not serving a working frontend, and was not "
+            "when the apply began either, so the rollback is not held to that "
+            f"standard: {frontend_failure}\n"
+        )
+    _refresh_workspace_view(repo_root, runner)
+    return RecoveryOutcome(
+        is_recovered=True, is_frontend_confirmed=frontend_failure is None
+    )
 
 
 def _phase_timing_line(marker: ApplyMarker) -> str:
@@ -3154,8 +3186,8 @@ def _phase_timing_line(marker: ApplyMarker) -> str:
     return "apply phase timings: " + ", ".join(parts) + "\n"
 
 
-def _report_rolled_back(is_frontend_expected: bool) -> None:
-    if is_frontend_expected:
+def _report_rolled_back(is_frontend_confirmed: bool) -> None:
+    if is_frontend_confirmed:
         sys.stderr.write(
             "rolled back to last-known-good; the live workspace is confirmed healthy. "
             "The requested update did NOT land -- the worker branch and its report are "
@@ -3526,8 +3558,12 @@ def apply_update(
             # is more than this exit code carries: an apply over a UI that was
             # already broken lands, exits 0 naming the breakage, and leaves a
             # user who still cannot see the workspace -- exactly the state the
-            # record exists to keep visible.
-            if is_frontend_expected and unresolved_frontend_failure is None:
+            # record exists to keep visible. Confirmed means probed and
+            # working, whatever the baseline was: an apply that lands over a
+            # broken UI and finds it working afterwards is the repair the
+            # record was waiting for.
+            is_frontend_probed = plan.frontend or plan.needs_restart
+            if is_frontend_probed and unresolved_frontend_failure is None:
                 clear_emergency(repo_root)
             _refresh_workspace_view(repo_root, runner)
         except ApplyFailed as exc:
@@ -3545,7 +3581,7 @@ def apply_update(
                     marker.rollback_to,
                     f"Apply failed and was auto-reverted: {exc.headline()}",
                 )
-                is_recovered = _recover_running_state(
+                outcome = _recover_running_state(
                     plan,
                     repo_root,
                     resolved_base,
@@ -3560,16 +3596,15 @@ def apply_update(
                 )
             except (subprocess.CalledProcessError, OSError) as rollback_exc:
                 sys.stderr.write(f"the rollback itself failed: {rollback_exc}\n")
-                is_recovered = False
-            if is_recovered:
+                outcome = _NOT_RECOVERED
+            if outcome.is_recovered:
                 clear_marker(repo_root)
                 discard_snapshots(repo_root)
-                # Same rule as the success path: the frontend is the half
-                # ``_recover_running_state`` only probes when one was expected,
-                # so that is the only case whose health it confirms.
-                if is_frontend_expected:
+                # Same rule as the success path: only a probed, working
+                # frontend takes the record down.
+                if outcome.is_frontend_confirmed:
                     clear_emergency(repo_root)
-                _report_rolled_back(is_frontend_expected)
+                _report_rolled_back(outcome.is_frontend_confirmed)
                 return 2
             # The marker is cleared even on the emergency path: this is a
             # deliberate, fully-reported exit, and re-running the same failed
@@ -3779,7 +3814,7 @@ def recover(
         )
         return 0
 
-    is_recovered = _recover_running_state(
+    outcome = _recover_running_state(
         plan,
         repo_root,
         resolved_base,
@@ -3791,18 +3826,18 @@ def recover(
         is_frontend_expected=bool(marker.frontend_expected),
         provisioner_ran=marker.provisioner_ran,
     )
-    if is_recovered:
+    if outcome.is_recovered:
         clear_marker(repo_root)
         discard_snapshots(repo_root)
         # Same rule again, and it decides both what this clears and what it
-        # may claim: the frontend is probed only when one was expected, so a
-        # recovery of an apply that had no working UI to be held to has
-        # confirmed the backend and nothing else. This line is often the only
-        # account of an unattended recovery, so it must not sign off on a UI
-        # nobody looked at -- and an apply killed before it measured its
+        # may claim: only a probed, working frontend is confirmed health. A
+        # rollback that could not be held to that standard -- no working UI
+        # when the apply began, or an apply killed before it measured its
         # baseline (the marker predates the merge, the baseline probe follows
-        # it) has no observation of that UI to report at all.
-        if marker.frontend_expected:
+        # it) -- and finds the UI still down has confirmed the backend and
+        # nothing else, and this line, often the only account of an
+        # unattended recovery, must not sign off on more.
+        if outcome.is_frontend_confirmed:
             clear_emergency(repo_root)
             confirmation = "the live workspace is confirmed healthy"
         else:
