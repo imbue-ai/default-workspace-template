@@ -2631,6 +2631,62 @@ def test_the_emergency_record_comes_down_only_over_a_confirmed_ui(
     assert update_self.emergency_path(apply_repo).exists() is is_record_kept
 
 
+def test_an_apply_that_repairs_an_already_broken_ui_clears_the_emergency_record(
+    apply_repo: Path, capsys
+) -> None:
+    # The record's usual aftermath is a UI that is down, which is exactly the
+    # baseline that used to keep it from ever being cleared: an apply held to
+    # no frontend standard would land, find the UI working, and still leave
+    # the banner up until some later apply that happened to start healthy.
+    _plant_emergency(apply_repo)
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+
+    def page_responder(url: str) -> update_self.FetchedPage:
+        # Down before the apply, serving once the merged backend is up.
+        return _built_app_page(url) if runner.ran(*_RESTART) else _placeholder_page(url)
+
+    code = _apply(
+        runner,
+        _FakeHttp(_all_healthy, page_responder=page_responder),
+        _FakeSpawner(),
+        apply_repo,
+    )
+
+    assert code == 0
+    assert not update_self.emergency_path(apply_repo).exists()
+    assert "confirmed healthy" in capsys.readouterr().err.strip().splitlines()[-1]
+
+
+def test_a_rollback_that_repairs_an_already_broken_ui_clears_the_emergency_record(
+    apply_repo: Path, capsys
+) -> None:
+    _plant_emergency(apply_repo)
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+    runner.respond(("npm", "run", "build"), _Result(returncode=1, stderr="boom"))
+    builds = {"seen": 0}
+
+    def count_builds(argv: list[str]) -> None:
+        if argv[:3] == ["npm", "run", "build"]:
+            builds["seen"] += 1
+
+    runner.on_command = count_builds
+
+    def page_responder(url: str) -> update_self.FetchedPage:
+        # Down at the baseline; the restored pre-apply bundle serves.
+        return _built_app_page(url) if builds["seen"] else _placeholder_page(url)
+
+    code = _apply(
+        runner,
+        _FakeHttp(_all_healthy, page_responder=page_responder),
+        _FakeSpawner(),
+        apply_repo,
+    )
+
+    assert code == 2
+    assert not update_self.emergency_path(apply_repo).exists()
+    assert "confirmed healthy" in capsys.readouterr().err.strip().splitlines()[-1]
+
+
 def test_a_regressed_frontend_is_rolled_back(apply_repo: Path) -> None:
     # The app-shell probe answers, in order: built (the pre-apply baseline),
     # the placeholder (the apply regressed it), built again (the rollback
@@ -4322,6 +4378,22 @@ def test_recover_keeps_the_marker_when_its_git_cannot_be_spawned(
     assert code == 1
     assert "git: not found" in capsys.readouterr().err
     assert _marker_exists(apply_repo)
+
+
+def test_recover_that_finds_a_working_ui_over_a_broken_baseline_clears_the_record(
+    apply_repo: Path, capsys
+) -> None:
+    # The baseline only decides what the rollback is held to, not what it may
+    # observe: a UI that works after the rollback is the evidence the record
+    # is stale, even when the apply began over a broken one.
+    _plant_emergency(apply_repo)
+    _plant_snapshotted_marker(apply_repo, frontend_expected=False)
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+
+    assert _recover(runner, _FakeHttp(_all_healthy), apply_repo) == 0
+
+    assert not update_self.emergency_path(apply_repo).exists()
+    assert "confirmed healthy" in capsys.readouterr().err.strip().splitlines()[-1]
 
 
 def test_recover_provisioner_failure_still_counts_as_recovered(

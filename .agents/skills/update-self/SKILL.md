@@ -743,7 +743,9 @@ Nothing takes that record down by itself, and the banner keys off its mere
 presence, so **clearing it is part of the repair**. Only an outcome that ends
 with the live workspace *confirmed healthy* clears it, and the frontend counts:
 a later update that lands over a UI it could confirm, or a `recover` of a *new*
-interruption that probes the workspace afterwards. Neither describes the
+interruption that probes the workspace afterwards -- in both cases whatever
+the UI was doing before that apply began, since a working UI found afterwards
+is the repair the record was waiting for. Neither describes the
 ordinary case, and two nearby outcomes are deliberately not among them -- the
 boot-time recovery runs before anything is up, so it has nothing to probe, and
 an apply over a UI that was already broken exits `0` naming that breakage
