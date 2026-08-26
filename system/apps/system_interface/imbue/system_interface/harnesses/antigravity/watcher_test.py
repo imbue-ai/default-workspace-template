@@ -7,9 +7,13 @@ thread, so the scan/cursor/two-phase logic is tested without timing flakiness.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
+
+import pytest
 
 from imbue.system_interface.activity_state import ACTIVE_MARKER_FILENAME
 from imbue.system_interface.agent_discovery import AgentInfo
+from imbue.system_interface.harnesses.antigravity import watcher as watcher_module
 from imbue.system_interface.harnesses.antigravity.queue_tracker import drop_tracker
 from imbue.system_interface.harnesses.antigravity.testing import append_step
 from imbue.system_interface.harnesses.antigravity.testing import build_metadata
@@ -374,3 +378,109 @@ def test_the_queue_entry_departs_before_its_turn_arrives(tmp_path: Path) -> None
     assert order.index("queue-empty") < order.index("transcript"), (
         f"the entry must leave the queue BEFORE its turn appears; got {order}"
     )
+
+
+def test_the_poll_loop_cannot_emit_the_turn_before_its_chip_departs(tmp_path: Path) -> None:
+    """Contract A3b, against the OTHER thread -- the half the ordering test could not see.
+
+    ``test_the_queue_entry_departs_before_its_turn_arrives`` drives ``_attempt_flush`` on a
+    watcher whose poll thread was never started, so the flush worker is the only collector and
+    its careful ordering always holds. Live there are two: ``_collect_new_events`` is
+    destructive, so whichever thread scans the delivered row first is the one that emits it --
+    and the poll thread wakes on agy's own sqlite write, so it wins essentially every time and
+    ships the committed turn while the chip is still on screen. That is the "chat, then still
+    queued, then the queue disappears" blip, and it survived the fix that was supposed to kill
+    it.
+
+    Interleaving is forced rather than raced: the poll tick fires from INSIDE the send, which
+    is exactly when agy has written the row and the watchdog would have woken it.
+    """
+    conv = "conv-race"
+    sent: list[str] = []
+    order: list[str] = []
+    emitted: list[dict[str, Any]] = []
+
+    watcher = _make_watcher(tmp_path, [conv])
+    next_idx = [100]
+
+    def _send(text: str) -> bool:
+        sent.append(text)
+        append_step(_conv_db_path(tmp_path, conv), (next_idx[0], _TYPE_USER, _STATUS_DONE, _user_payload(text)))
+        next_idx[0] += 1
+        # The poll thread, waking on agy's write mid-send. Without the embargo this emits the
+        # user turn here -- before finish_flush has removed the entry.
+        watcher._poll_once()
+        return True
+
+    def _on_events(_agent_id: str, events: list[dict[str, Any]]) -> None:
+        order.append("transcript")
+        emitted.extend(events)
+
+    watcher.set_flush_hooks(_send, lambda: True)
+    watcher.set_queue_snapshot_callback(lambda snap: order.append("queue-empty" if not snap else "queue-present"))
+    watcher._on_events = _on_events
+
+    build_steps_db(
+        _conv_db_path(tmp_path, conv),
+        [
+            (0, _TYPE_USER, _STATUS_DONE, _user_payload("go")),
+            (1, _TYPE_PLANNER, _STATUS_DONE, _planner_payload("done")),
+        ],
+    )
+    watcher._collect_new_events()
+    watcher._publish_turn_state()
+    watcher._queue.attach(publish=watcher._publish_snapshot, wake=lambda: None)
+    watcher._queue.enqueue("deliver me", "t0")
+    order.clear()
+
+    watcher._attempt_flush()
+
+    assert sent == ["deliver me"]
+    assert "transcript" in order, "the committed turn must still be emitted"
+    assert order.index("queue-empty") < order.index("transcript"), (
+        f"the entry must leave the queue BEFORE its turn appears, whichever thread scanned it; got {order}"
+    )
+    # Conservation: the embargo must DELAY the row, never drop it or double it. A fix that
+    # simply swallowed the poll thread's copy would satisfy the ordering assert above.
+    delivered_rows = [e for e in emitted if e.get("type") == "user_message" and e.get("content") == "deliver me"]
+    assert len(delivered_rows) == 1, f"the delivered turn must be emitted exactly once; got {len(delivered_rows)}"
+
+
+def test_the_embargo_is_released_when_a_flush_never_witnesses_its_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The embargo must not be able to wedge the transcript.
+
+    It is a deadline, not a flag, precisely so a flush thread that dies mid-send cannot mute
+    the poll thread forever -- but the ordinary no-delivery path must clear it immediately
+    rather than leaving the transcript muted for the full ceiling.
+    """
+    conv = "conv-embargo"
+    sent: list[str] = []
+    # Shorten the witness window: this test is about what happens AFTER it expires, and the
+    # real 15s is dead wait here.
+    monkeypatch.setattr(watcher_module, "_DELIVERY_WITNESS_SECONDS", 0.1)
+    watcher = _flushing_watcher(tmp_path, conv, sent, does_commit=False)
+    build_steps_db(
+        _conv_db_path(tmp_path, conv),
+        [
+            (0, _TYPE_USER, _STATUS_DONE, _user_payload("go")),
+            (1, _TYPE_PLANNER, _STATUS_DONE, _planner_payload("done")),
+        ],
+    )
+    watcher._collect_new_events()
+    watcher._publish_turn_state()
+    watcher._queue.attach(publish=watcher._publish_snapshot, wake=lambda: None)
+    watcher._queue.enqueue("never lands", "t0")
+
+    watcher._attempt_flush()
+
+    assert sent == ["never lands"], "the send was attempted"
+    assert watcher._emit_embargo_until == 0.0, "a flush that witnessed nothing must still lift the embargo"
+
+    # And the poll thread emits again straight away.
+    emitted: list[str] = []
+    watcher._on_events = lambda _agent_id, events: emitted.append("transcript")
+    append_step(_conv_db_path(tmp_path, conv), (200, _TYPE_PLANNER, _STATUS_DONE, _planner_payload("later")))
+    watcher._poll_once()
+    assert emitted == ["transcript"], "the transcript must not stay muted after a failed flush"

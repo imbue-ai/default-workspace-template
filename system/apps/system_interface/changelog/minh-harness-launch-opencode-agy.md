@@ -29,3 +29,7 @@ Messages sent to a busy Agy agent now show up as queued instead of being swallow
 Stop and shoulder tap work on Agy. Stop ends the current turn and puts everything that had not been sent yet back in the composer, in order, without restarting the agent. Shoulder tap ends the turn and sends the waiting messages straight away instead of waiting for Agy to finish.
 
 The message lifecycle for Agy is covered by the same conservation test the other harnesses have: randomised rounds of sending, stopping and tapping, checking after every round that each message ended up in exactly one place -- delivered, or back in the composer -- never lost and never duplicated.
+
+A message sent to an idle Agy no longer flashes through a queued state. It stayed "Sending…" in principle already -- the backend only marks a message queued when a turn is actually open -- but the chat drew the "Queued messages" header and the shoulder-tap button above it anyway, so a message that was on its way looked parked. The group now appears only when something genuinely is waiting. Codex gets the same fix: its shoulder-tap resend was mislabelled the same way.
+
+A queued message also no longer briefly appears twice as it is delivered. The chip is removed before the turn it became is shown, which was already how the delivery path worked -- but the watcher reads Agy's transcript from two places at once, and the other one usually noticed the new turn first and put it on screen while the chip was still there. That path now waits for the hand-off, so the message is only ever in one state at a time.
