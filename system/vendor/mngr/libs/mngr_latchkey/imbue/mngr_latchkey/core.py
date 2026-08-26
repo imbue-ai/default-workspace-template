@@ -137,7 +137,7 @@ CREDENTIALS_STORE_FILENAME: Final[str] = "credentials.json.enc"
 # the first to report the account whose credentials it injects to detent as
 # ``customMetadata.account`` -- what the per-account permission grants
 # (:mod:`imbue.mngr_latchkey.account_scopes`) read.
-LATCHKEY_MIN_VERSION: Final[str] = "3.5.0"
+LATCHKEY_MIN_VERSION: Final[str] = "3.6.0"
 
 # Fixed port that every containerized/VM/VPS agent sees on its own 127.0.0.1
 # when reaching the Latchkey gateway. A per-agent SSH reverse tunnel bridges
@@ -250,7 +250,7 @@ LATCHKEY_AUTH_OPTION_SET: Final[str] = "set"
 # instead mints a fresh access token from the app's client id and secret, but
 # expires and is renewed the same way. A future latchkey credential kind that
 # gains ``refreshCredentials`` has to be added here, or it will never be renewed
-# for remote workspaces.
+# for remote hosts.
 LATCHKEY_CREDENTIAL_TYPE_OAUTH: Final[str] = "oauth"
 LATCHKEY_CREDENTIAL_TYPE_ZOOM_SERVER_TO_SERVER: Final[str] = "zoomServerToServer"
 LATCHKEY_RENEWABLE_CREDENTIAL_TYPES: Final[frozenset[str]] = frozenset(

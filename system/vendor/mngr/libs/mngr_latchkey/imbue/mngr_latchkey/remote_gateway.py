@@ -63,7 +63,7 @@ from imbue.mngr_latchkey.store import permissions_path_for_host
 from imbue.mngr_latchkey.store import plugin_data_dir
 
 # Version of the upstream ``latchkey`` CLI to install on the VPS.
-LATCHKEY_VERSION: Final[str] = "3.5.0"
+LATCHKEY_VERSION: Final[str] = "3.6.0"
 
 # datalib release the VPS fetches the "dispatch curl" + Chrome-impersonating
 # curl from (``curl-<triple>.tar.gz``). The gateway runs the dispatch curl as
@@ -500,7 +500,7 @@ def services_granted_to_any_host(latchkey_directory: Path, host_ids: Iterable[Ho
     """Union the canonical service names granted by any of ``host_ids``.
 
     A service reaches a VPS only because some host's permissions grant it, so
-    this is the set whose credentials remote workspaces actually depend on.
+    this is the set whose credentials remote hosts actually depend on.
     Resolved per host through the same permissions-to-services mapping
     :func:`sync_credentials` uses, so the two cannot disagree about what a host
     is entitled to. A host with no permissions file contributes nothing.
