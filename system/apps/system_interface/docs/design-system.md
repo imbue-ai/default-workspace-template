@@ -19,6 +19,22 @@ document is the durable hand-off so any agent can pick the work up cold.
 
 ### Progress log
 
+- **Radius scale realigned to the minds design system — DONE.** Replaced the
+  value-named `--radius-3/4/base/8/10/12/-composer/-bubble/-pill` scale with the
+  four steps minds uses (`apps/minds`, its `DevStyleguide`): `--radius-sm` 4 /
+  `--radius-md` 6 / `--radius-lg` 8 / `--radius-xl` 16 px, plus `--radius-pill`.
+  Unlike the earlier value-named choice, the `sm/md/lg` *names* are safe here:
+  they equal Tailwind's own defaults, so the `rounded-md/lg` (6/8) utilities the
+  views use are unshifted, and no view uses `rounded-xl` (the one step that
+  differs, 16 vs Tailwind's 12). This is **not** a no-op — it snaps three
+  off-scale roles onto minds' steps: badges/attachment chips/permission card
+  10 → 8, modals + login dialog + model dropdown + drag-drop overlay 12 → 8
+  (minds puts modals at `lg`), and the user chat bubble 18 → 16; the tiny
+  3px accents (scrollbars, inline code, tab-title input) go to 4. The 12px
+  `--si-pane-radius` chrome/pane frame is kept as its own exception, matching
+  minds' `CONTENT_CORNER_RADIUS` window-frame rounding. Role map now mirrors
+  minds: md = default control, lg = inputs/cards/modals/panels, xl = largest
+  surfaces (composer, bubble), pill = full.
 - **Typography — DONE.** Shipped a role-based type system instead of the raw
   `--text-*` numeric scale originally proposed in section 3 (see the "type system
   evolved" note there for why). Six semantic classes — `.type-heading-lg`,
