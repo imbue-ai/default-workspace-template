@@ -1436,10 +1436,14 @@ class _FakeSpawner(update_self.Spawner):
     raw_spawns: list[list[str]] = field(default_factory=list)
     envs: list[dict] = field(default_factory=list)
     last: _FakeSpawned | None = None
+    # A boot that never starts, as subprocess reports one: not an exit code.
+    spawn_error: OSError | None = None
 
     def spawn(
         self, argv: Sequence[str], cwd: str, env: dict, output_path: Path
     ) -> _FakeSpawned:
+        if self.spawn_error is not None:
+            raise self.spawn_error
         self.raw_spawns.append(list(argv))
         self.spawns.append(_unwrap_expendable(list(argv)))
         self.envs.append(dict(env))
@@ -2269,6 +2273,30 @@ def test_a_failed_preflight_reports_why_the_backend_did_not_boot(
     assert "ModuleNotFoundError: No module named 'frontmatter'" in message
     assert "DEBUG loading agents" not in message
     assert "starting up" not in message
+
+
+def test_a_preflight_that_cannot_be_launched_reads_as_a_failed_preflight(
+    apply_repo: Path, capsys
+) -> None:
+    # Not booting and failing to boot are the same verdict, and a console
+    # script missing from the PATH the apply inherited is exactly what a tool
+    # reinstall that half-succeeded leaves behind. Unguarded it is an OSError
+    # out of subprocess, past the merge and the snapshots.
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    spawner = _FakeSpawner(spawn_error=FileNotFoundError(2, "No such file", "mngr"))
+
+    code = _apply(
+        runner,
+        _FakeHttp(lambda url: 200 if _is_live(url) else None),
+        spawner,
+        apply_repo,
+    )
+
+    assert code == 2
+    # Never restarted, like any other rejected pre-flight, and rolled back.
+    assert not runner.ran(*_RESTART)
+    assert runner.ran("git", "checkout", _ROLLBACK, "--")
+    assert "could not be launched" in capsys.readouterr().err
 
 
 def test_a_failed_preflight_that_produced_no_output_says_so(
@@ -3699,6 +3727,22 @@ def test_the_refresh_survives_a_tool_with_no_receipt(apply_repo: Path) -> None:
     assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
 
     assert len(runner.argvs_starting("uv", "tool", "install")) == 2
+
+
+def test_the_refresh_survives_a_uv_that_cannot_be_run_at_all(
+    apply_repo: Path, capsys
+) -> None:
+    # The same verdict as a non-zero `uv tool dir`, reached the other way: uv
+    # missing from the PATH the apply inherited raises rather than exiting.
+    # Reading the extras is best effort, so it must cost the extras and a
+    # warning -- not roll a landed merge back through the last-resort catch.
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    runner.respond(("uv", "tool", "dir"), FileNotFoundError(2, "No such file", "uv"))
+
+    assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
+
+    assert len(runner.argvs_starting("uv", "tool", "install")) == 2
+    assert "could not be run" in capsys.readouterr().err
 
 
 def test_the_refresh_reports_a_receipt_it_cannot_read(
