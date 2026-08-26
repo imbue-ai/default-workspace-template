@@ -1663,6 +1663,8 @@ class ApplyMarker:
     @classmethod
     def from_json(cls, text: str) -> "ApplyMarker":
         raw = json.loads(text)
+        if not isinstance(raw, dict):
+            raise ValueError(f"expected a JSON object, got {type(raw).__name__}")
         return cls(
             dri_agent=str(raw.get("dri_agent", "")),
             rollback_to=str(raw["rollback_to"]),
