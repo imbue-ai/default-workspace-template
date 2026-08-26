@@ -739,57 +739,6 @@ def _exec_supervisord() -> None:
     os.execvp("supervisord", ["supervisord", "-n", "-c", str(SUPERVISORD_CONF)])
 
 
-# Bound on the boot-time venv converge. A venv that already matches the
-# lockfile no-ops in well under a second; a genuinely drifted one (image bake
-# older than the landed branch tip) reinstalls from uv's baked warm cache,
-# which stays comfortably inside this bound.
-_UV_SYNC_TIMEOUT_SECONDS = 600.0
-
-
-def _sync_workspace_venv() -> None:
-    """Converge the workspace .venv to the landed lockfile before any agent runs.
-
-    The venv is a bake-time artifact (build_workspace.sh at image build / host
-    provisioning) while the working tree is a landing-time artifact (the
-    create's git-mirror checkout) -- and on docker and pool-lease hosts nothing
-    re-runs the sync at create, so the two can disagree whenever the baked
-    image lags the landed branch. Left alone, the FIRST implicit ``uv run``
-    sync reconciles them lazily: mid-boot, concurrent with the services and
-    the initial chat agent, and with root-closure scope rather than
-    --all-packages. Whatever imports from the venv during that rewrite window
-    fails intermittently (ModuleNotFoundError for imbue_common and friends).
-
-    Converging here -- once, up front, before the chat agent exists and before
-    supervisord starts anything -- removes both the race window and the scope
-    gap; every later implicit sync then no-ops. ``--frozen`` asserts the
-    committed lockfile is canonical, matching build_workspace.sh. Best-effort:
-    a failure is logged loudly but never blocks boot (the per-``uv run``
-    implicit syncs remain the fallback).
-    """
-    try:
-        result = subprocess.run(
-            ["uv", "sync", "--all-packages", "--frozen"],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=_UV_SYNC_TIMEOUT_SECONDS,
-        )
-    except subprocess.TimeoutExpired:
-        logger.error(
-            "uv sync --all-packages timed out after {}s; continuing boot",
-            _UV_SYNC_TIMEOUT_SECONDS,
-        )
-        return
-    if result.returncode != 0:
-        logger.error(
-            "uv sync --all-packages failed (rc={}): {}",
-            result.returncode,
-            (result.stderr or result.stdout).strip()[-500:],
-        )
-        return
-    logger.info("Workspace venv converged (uv sync --all-packages --frozen)")
-
-
 def _run_env_converge_fast_phase() -> None:
     """Apply the overlay symlinks BEFORE any service starts.
 
