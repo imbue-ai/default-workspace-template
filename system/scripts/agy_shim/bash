@@ -17,10 +17,12 @@
 # single-sourced across claude, codex and agy. The policies themselves are stated in
 # system/apps/system_interface/imbue/system_interface/harnesses/core-contracts/tool-call-policies.md.
 #
-# WHAT IT DOES NOT ENFORCE. The require-a-step nudge (#5) is deliberately absent: its skip list
-# is keyed on claude TOOL NAMES, and every call here is `Bash`, so it would nudge agy's
-# read-only shell work while never seeing agy's own edit tool -- wrong in both directions. That
-# discipline lives in AGENTS.md for agy.
+# WHAT IT ENFORCES ONLY HALFWAY. The require-a-step nudge (#5) DOES run here, but it can only
+# ever see the shell half of the agent's work: agy's own editing tools (write_to_file,
+# replace_file_content) never reach a shell, so no payload for them ever arrives. It is judged
+# from the COMMAND rather than the tool name, so the synthesised `Bash` payload is classified
+# correctly and agy's read-only shell work is not nudged. The rest of that discipline lives in
+# AGENTS.md for agy.
 #
 # FAIL OPEN. This sits on the path of every command the agent runs, so anything unexpected --
 # a missing script, no jq, a crashing checker -- logs and runs the command. Only an explicit

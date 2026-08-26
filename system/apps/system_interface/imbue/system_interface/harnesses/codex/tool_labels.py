@@ -281,8 +281,12 @@ def is_single_delegated_call(raw_input: str) -> bool:
     ``tool_use_id``s and no field naming the outer call. So any verdict phrased as "this call is
     ONLY an X" -- the tk hide rule, the permission card -- is unknowable for a batched program,
     and the readers of those verdicts all inspect only the FIRST call.
+
+    ``<= 1``, not ``== 1``: ZERO matches means the input is not a code-mode program at all, and
+    a call with no batching to be confused by is exactly the case those verdicts CAN answer.
+    Reading zero as "batched" suppressed the permission card on every non-code-mode call.
     """
-    return len(_CODE_MODE_CALL_RE.findall(raw_input)) == 1
+    return len(_CODE_MODE_CALL_RE.findall(raw_input)) <= 1
 
 
 @pure

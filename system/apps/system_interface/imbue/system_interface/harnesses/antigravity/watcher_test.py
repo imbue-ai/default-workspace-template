@@ -274,9 +274,13 @@ def test_the_flush_delivers_once_the_turn_is_closed(tmp_path: Path) -> None:
     assert sent == ["next thing"]
 
 
-def test_a_dead_agent_has_its_queue_returned_not_destroyed(tmp_path: Path) -> None:
-    """The queue is empty when an agent is stopped -- but the messages the user sent and saw
-    accepted must END UP somewhere. Deleting them is the swallow wearing a different hat."""
+def test_a_dead_agent_has_its_queue_held_not_destroyed(tmp_path: Path) -> None:
+    """The messages the user sent and saw accepted must END UP somewhere.
+
+    The flush worker is a background thread with no response, so it has no composer to hand
+    them to -- taking them here would delete them (never Delivered, never Returned). They stay
+    queued and on screen, recoverable through stop, which does have somewhere to put them.
+    """
     conv = "conv-dead"
     sent: list[str] = []
     watcher = _flushing_watcher(tmp_path, conv, sent, is_alive=False)
@@ -288,7 +292,81 @@ def test_a_dead_agent_has_its_queue_returned_not_destroyed(tmp_path: Path) -> No
     watcher._attempt_flush()
 
     assert sent == [], "a dead agent is never typed into -- mngr's send would auto-start it"
-    assert watcher.get_queued_messages() == [], "and the queue does not linger"
+    assert [e["content"] for e in watcher.get_queued_messages()] == ["stranded"], "and it is not binned"
+    block, taken = watcher.take_unclaimed_queue()
+    assert (block, len(taken)) == ("stranded", 1), "stop can still return it to the composer"
+
+
+def test_a_partial_commit_resolves_ENTRIES_not_lines(tmp_path: Path) -> None:
+    """The prefix arm indexes the CLAIM, which is per-entry -- and an entry may hold newlines.
+
+    Counting the block's lines instead resolved more entries than agy committed, and the
+    surplus was destroyed: never sent, never returned, no test the wiser.
+    """
+    conv = "conv-partial"
+    watcher = _make_watcher(tmp_path, [conv])
+    watcher._delivery_witness_seconds = 0.1
+    build_steps_db(
+        _conv_db_path(tmp_path, conv),
+        [
+            (0, _TYPE_USER, _STATUS_DONE, _user_payload("go")),
+            (1, _TYPE_PLANNER, _STATUS_DONE, _planner_payload("done")),
+        ],
+    )
+
+    def _send(_text: str) -> bool:
+        # agy committed only the FIRST entry -- which is itself two lines.
+        append_step(_conv_db_path(tmp_path, conv), (2, _TYPE_USER, _STATUS_DONE, _user_payload("foo\nbar")))
+        return True
+
+    watcher.set_flush_hooks(_send, lambda: True)
+    watcher._collect_new_events()
+    watcher._publish_turn_state()
+    watcher._queue.enqueue("foo\nbar", "t0")
+    watcher._queue.enqueue("baz", "t1")
+
+    watcher._attempt_flush()
+
+    assert [e["content"] for e in watcher.get_queued_messages()] == ["baz"], "the uncommitted entry survives"
+
+
+def test_the_scan_cursor_advances_when_indices_do_not_start_at_zero(tmp_path: Path) -> None:
+    """agy's lowest surviving idx need not be 0, and the cursor must still move.
+
+    Anchored to the absolute index space it only advanced when the first row's idx happened to
+    equal ``scan_from``, so it stuck at 0 and re-decoded the whole conversation every poll.
+    """
+    conv = "conv-cursor"
+    watcher = _make_watcher(tmp_path, [conv])
+    build_steps_db(
+        _conv_db_path(tmp_path, conv),
+        [
+            (100, _TYPE_USER, _STATUS_DONE, _user_payload("go")),
+            (101, _TYPE_PLANNER, _STATUS_DONE, _planner_payload("done")),
+        ],
+    )
+
+    watcher._collect_new_events()
+
+    assert watcher._scan_from[conv] == 102, "a settled prefix is never re-read"
+
+
+def test_the_scan_cursor_stops_at_a_running_row(tmp_path: Path) -> None:
+    """...but only through the unbroken terminal prefix: a running row is re-scanned."""
+    conv = "conv-cursor-running"
+    watcher = _make_watcher(tmp_path, [conv])
+    build_steps_db(
+        _conv_db_path(tmp_path, conv),
+        [
+            (100, _TYPE_USER, _STATUS_DONE, _user_payload("go")),
+            (101, _TYPE_RUN_COMMAND, _STATUS_RUNNING, _tool_payload()),
+            (102, _TYPE_PLANNER, _STATUS_DONE, _planner_payload("done")),
+        ],
+    )
+
+    watcher._collect_new_events()
+
+    assert watcher._scan_from[conv] == 101, "the running row and everything after it is re-read"
 
 
 def test_the_flush_still_drains_after_a_cancelled_tool_chain(tmp_path: Path) -> None:

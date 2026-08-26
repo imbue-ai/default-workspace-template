@@ -284,7 +284,10 @@ if [ -f "$agy_installer_dir/agy_install-1.1.16.sh" ]; then
 else
     bash "$agy_installer_dir/default-workspace-template-install-agy" /usr/local/bin
 fi
-command -v agy >/dev/null && agy --version >/dev/null
+# NOT guarded by `command -v agy &&`: errexit ignores a failure on the left of an AND-OR
+# list, so a missing binary sailed past and the build verification could not fail. Bare,
+# a missing agy is a 127 and `set -e` fires.
+agy --version >/dev/null
 
 # Bake the pi extension packages (subagents, web access) into the image at a
 # NON-home path: the runtime volume shadows the build-time HOME, so ~/.pi cannot
