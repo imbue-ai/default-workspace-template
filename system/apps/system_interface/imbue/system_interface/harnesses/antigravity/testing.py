@@ -8,6 +8,8 @@ builders change with it.
 
 from __future__ import annotations
 
+import base64
+import json
 import sqlite3
 from pathlib import Path
 
@@ -46,15 +48,35 @@ def build_metadata(seconds: int = 1_700_000_000, *, source: int = 4, extra: byte
     return len_field(1, created_at) + uint_field(3, source) + extra
 
 
-def build_tool_metadata(name: str, args: str, *, call_id: str = "abc123", short: str = "", long: str = "") -> bytes:
-    """Metadata carrying a ChatToolCall (f4) + optional captions (f30/f31)."""
+def build_tool_metadata(name: str, args: str, *, call_id: str = "abc123") -> bytes:
+    """Metadata carrying a ChatToolCall (f4).
+
+    agy declares caption fields at f30/f31 but never populates them (0 of 41 rows on two live
+    stores); the captions live in the step BODY. Use ``build_tool_body`` for those.
+    """
     call = str_field(1, call_id) + str_field(2, name) + str_field(3, args)
-    extra = len_field(4, call)
-    if short:
-        extra += str_field(30, short)
-    if long:
-        extra += str_field(31, long)
-    return build_metadata(source=2, extra=extra)
+    return build_metadata(source=2, extra=len_field(4, call))
+
+
+def build_tool_body(
+    *, result: str = "", tool_summary: str = "", tool_action: str = "", args: dict[str, str] | None = None
+) -> bytes:
+    """A tool step's BODY (f140), in agy's real shape.
+
+    Repeated ``{key, value}`` argument pairs on f1 -- which is where the tool's own arguments
+    AND agy's ``toolSummary``/``toolAction`` captions live -- plus a result container on f2
+    whose f1 is the command's output. Mirrors what the live stores contain; see
+    ``docs/design/antigravity-transcript-schema.md``.
+    """
+    pairs = dict(args or {})
+    if tool_summary:
+        pairs["toolSummary"] = tool_summary
+    if tool_action:
+        pairs["toolAction"] = tool_action
+    body = b"".join(len_field(1, str_field(1, k) + str_field(2, v)) for k, v in pairs.items())
+    if result:
+        body += len_field(2, str_field(1, result))
+    return len_field(140, body)
 
 
 def build_step_payload(metadata: bytes, body: bytes = b"") -> bytes:
@@ -95,3 +117,15 @@ def set_step_status(path: Path, idx: int, status: int, step_payload: bytes) -> N
         connection.commit()
     finally:
         connection.close()
+
+
+def load_captured_step(name: str) -> tuple[int, int, bytes]:
+    """A REAL agy step row captured from a live conversation store.
+
+    Returns ``(step_type, status, payload)``. See ``fixtures/README.md`` -- synthetic payloads
+    built by the helpers above cannot reproduce the shapes that broke the decoder, so anything
+    asserting on decoding behaviour should use one of these instead.
+    """
+    captured = json.loads((Path(__file__).parent / "fixtures" / "agy_steps.json").read_text())
+    row = captured[name]
+    return row["step_type"], row["status"], base64.b64decode(row["payload_b64"])

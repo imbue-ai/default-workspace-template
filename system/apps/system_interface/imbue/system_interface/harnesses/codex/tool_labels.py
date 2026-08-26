@@ -72,15 +72,13 @@ the function -- ``Tool: create_goal`` -- making the leak visible instead of dres
 
 import re
 
-from tk_command_parsing.parser import parse_command
-
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.harnesses.tool_labels import GENERIC_CAPTION
 from imbue.system_interface.harnesses.tool_labels import basename
 from imbue.system_interface.harnesses.tool_labels import mcp_caption
 from imbue.system_interface.harnesses.tool_labels import quoted
 from imbue.system_interface.harnesses.tool_labels import shorten
-from imbue.system_interface.harnesses.tool_output import is_pure_tk_lifecycle_command
+from imbue.system_interface.harnesses.tool_output import is_tk_lifecycle_anywhere
 
 CODE_MODE_TOOL_NAME = "exec"
 WAIT_TOOL_NAME = "wait"
@@ -118,9 +116,7 @@ _APPLY_PATCH_LABELS: dict[str, tuple[str, str]] = {
 # apply_patch takes a backtick template literal, so the filename ends at a real newline
 # when the body arrives raw, or at the ``\n`` escape when it arrives JSON-serialised in
 # ``function_call.arguments``. Stop at either, plus the closing quote.
-_APPLY_PATCH_HEADER_RE = re.compile(
-    r"\*\*\*\s+(Add|Update|Delete) File:\s*([^\"\\\r\n]+)", re.IGNORECASE
-)
+_APPLY_PATCH_HEADER_RE = re.compile(r"\*\*\*\s+(Add|Update|Delete) File:\s*([^\"\\\r\n]+)", re.IGNORECASE)
 
 
 @pure
@@ -241,7 +237,6 @@ def _code_mode_labels(js: str) -> tuple[str, str]:
 # tk lifecycle verbs whose command must survive input truncation (mirrors the claude
 # parser's set): a batched `tk create --step` plan and a long `tk close` summary feed the
 # chat progress view, so clipping them mid-body would truncate the plan.
-_TK_LIFECYCLE_VERBS = frozenset({"create", "start", "close"})
 
 
 @pure
@@ -272,28 +267,28 @@ def keeps_full_tool_input(tool_name: str, raw_input: str) -> bool:
     # `cd /code && tk create --step ...` renders as work yet its full command must survive
     # for the step timeline's input fallback -- over-preserving is harmless, over-hiding
     # is not.
-    if function_name == "exec_command":
-        cmd = _js_string_argument(raw_input, "cmd")
-        if cmd is not None:
-            parsed = parse_command(cmd)
-            if parsed is not None and any(segment.tk_verb in _TK_LIFECYCLE_VERBS for segment in parsed.segments):
-                return True
-    return False
+    command = shell_command(tool_name, raw_input)
+    return command is not None and is_tk_lifecycle_anywhere(command)
 
 
 @pure
-def is_tk_lifecycle(tool_name: str, raw_input: str) -> bool:
-    """True for a code-mode ``exec`` whose ``exec_command`` is a PURE tk lifecycle
-    invocation -- the HIDE rule (see ``tool_output.is_pure_tk_lifecycle_command``): a
-    command that merely reaches a tk verb in a later segment still renders as work.
+def shell_command(tool_name: str, raw_input: str) -> str | None:
+    """The shell command this tool call runs, or None if it is not a shell call.
+
+    The ONE question each harness answers for itself. Whether that command is a tk lifecycle
+    invocation is decided centrally (``tool_output.is_pure_tk_lifecycle_command`` for the hide
+    rule, ``is_tk_lifecycle_anywhere`` for the truncation exemption), so the rules live in one
+    place and cannot drift between harnesses.
+
+    codex runs the shell from inside code mode, so the command is an argument of an
+    ``exec_command`` call in the emitted JS rather than a tool input of its own.
     """
     if tool_name != CODE_MODE_TOOL_NAME:
-        return False
+        return None
     call_match = _CODE_MODE_CALL_RE.search(raw_input)
     if call_match is None or call_match.group(1) != "exec_command":
-        return False
-    cmd = _js_string_argument(raw_input, "cmd")
-    return cmd is not None and is_pure_tk_lifecycle_command(cmd)
+        return None
+    return _js_string_argument(raw_input, "cmd")
 
 
 @pure

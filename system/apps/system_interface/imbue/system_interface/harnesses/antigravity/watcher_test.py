@@ -16,6 +16,7 @@ from imbue.system_interface.harnesses.antigravity.testing import append_step
 from imbue.system_interface.harnesses.antigravity.testing import build_metadata
 from imbue.system_interface.harnesses.antigravity.testing import build_step_payload
 from imbue.system_interface.harnesses.antigravity.testing import build_steps_db
+from imbue.system_interface.harnesses.antigravity.testing import build_tool_body
 from imbue.system_interface.harnesses.antigravity.testing import build_tool_metadata
 from imbue.system_interface.harnesses.antigravity.testing import encode_varint
 from imbue.system_interface.harnesses.antigravity.testing import len_field
@@ -28,7 +29,10 @@ _STATUS_RUNNING = 2
 _STATUS_DONE = 3
 _TYPE_USER = 14
 _TYPE_PLANNER = 15
-_TYPE_RUN_COMMAND = 21
+# The live tool-step type on agy 1.1.20: every tool call arrives as 132, whatever the
+# tool. The per-tool types (21 = RUN_COMMAND et al) are an older encoding never seen on
+# either measured store.
+_TYPE_RUN_COMMAND = 132
 
 
 def _user_payload(text: str) -> bytes:
@@ -40,8 +44,8 @@ def _planner_payload(text: str) -> bytes:
 
 
 def _tool_payload(result: str = "output", *, short: str = "Running ls") -> bytes:
-    metadata = build_tool_metadata("run_command", '{"CommandLine":"ls"}', short=short)
-    return build_step_payload(metadata, body=len_field(28, str_field(21, result)))
+    metadata = build_tool_metadata("run_command", '{"CommandLine":"ls"}')
+    return build_step_payload(metadata, body=build_tool_body(result=result, tool_action=short))
 
 
 def _make_watcher(tmp_path: Path, conv_ids: list[str]) -> AntigravitySessionWatcher:

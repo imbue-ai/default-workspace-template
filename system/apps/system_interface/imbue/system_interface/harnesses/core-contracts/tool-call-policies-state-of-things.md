@@ -99,9 +99,23 @@ the shim every call is `Bash`, so it would nudge agy's read-only shell work whil
 agy's own edit tool -- wrong in both directions. That discipline lives in `AGENTS.md`.
 **#7 and #8 are n/a**: agy has no `UserPromptSubmit`, and its stderr goes to a tmux pane
 nobody reads -- the same conclusion pi reached for #8.
-**#3 is fully live**: agy sets `WaitMsBeforeAsync` on every `run_command` and runs the child
-synchronously, so there is no agent-controllable background flag and the `--backgrounded` arm
-has nothing to detect.
+**#3 is live, with a correction to an earlier claim.** This section previously said agy "sets
+`WaitMsBeforeAsync` on every `run_command` and runs the child synchronously, so there is no
+agent-controllable background flag". That is wrong. `WaitMsBeforeAsync` is a **required
+agent-supplied parameter** -- "milliseconds to wait before detaching to background" -- and agy
+also declares `manage_task` for driving backgrounded shells. Two live stores show two different
+values (5000 and 3000), i.e. the model chooses per call. The guard is still live, because the
+shim sits on the command before any of that; but the `--backgrounded` arm is not provably
+unreachable, and an agent that wants to background a command can.
+
+**The cwd Stop hook is claude-only, by construction -- do not port it.** claude's
+`.claude/settings.json` carries `[ -e .git ] || "Be sure to return to the repo root..."`. It
+exists because claude's `Bash` tool keeps one shell cwd ACROSS calls, so an agent that wanders
+breaks every later hook that uses a relative path. agy and codex cannot hit that: agy's `Cwd`
+and codex's `workdir` are required per-call parameters. Measured across 41 live agy calls, `Cwd`
+was present every time, only ever the agent's own workspace root, with zero `cd` invocations.
+The hook has nothing to protect there, and it appears exactly once in this repo -- it was never
+given to codex or pi either. This paragraph records why, so it is not "fixed" later.
 
 ### pi  (wiring: `.pi/extensions/policy_guards.ts` in this repo)
 Pi has **no shell-hook surface** — its only extension point is a TypeScript module. It

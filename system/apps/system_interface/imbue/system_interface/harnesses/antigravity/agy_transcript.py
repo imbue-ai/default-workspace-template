@@ -33,13 +33,25 @@ _STEP_USER_INPUT: Final[int] = 19
 _STEP_PLANNER_RESPONSE: Final[int] = 20
 _STEP_ERROR_MESSAGE: Final[int] = 24
 # CortexStepMetadata. created_at (f1) is a google.protobuf.Timestamp { f1 seconds; f2 nanos }.
-# f4 is a ChatToolCall present on tool steps; f30/f31 are agy's own short/long captions
-# (e.g. "Running python3 showcase.py" / "Executing showcase python script").
+# f4 is a ChatToolCall present on tool steps. agy also declares caption fields at f30/f31, but
+# they are absent on every row of both live stores measured (0 of 41) -- the captions live in
+# the step BODY instead, as ``toolSummary``/``toolAction`` argument pairs.
 _METADATA_CREATED_AT: Final[int] = 1
 _METADATA_SOURCE: Final[int] = 3
 _METADATA_TOOL_CALL: Final[int] = 4
-_METADATA_CAPTION_SHORT: Final[int] = 30
-_METADATA_CAPTION_LONG: Final[int] = 31
+
+# The step BODY: agy's own record of the call it ran, alongside the metadata. Field numbers
+# measured against agy 1.1.20 on two live conversation stores -- see
+# docs/design/antigravity-transcript-schema.md.
+_STEP_BODY: Final[int] = 140
+_BODY_ARG_PAIR: Final[int] = 1
+_BODY_RESULT: Final[int] = 2
+_ARG_KEY: Final[int] = 1
+_ARG_VALUE: Final[int] = 2
+_RESULT_TEXT: Final[int] = 1
+# The argument keys carrying agy's own model-authored captions.
+_ARG_TOOL_SUMMARY: Final[str] = "toolSummary"
+_ARG_TOOL_ACTION: Final[str] = "toolAction"
 _TIMESTAMP_SECONDS: Final[int] = 1
 # CortexStepUserInput: the typed message lands in query (f1) or user_response (f2).
 _USER_INPUT_QUERY: Final[int] = 1
@@ -72,6 +84,13 @@ _STEP_TYPE_NAMES: Final[dict[int, str]] = {
     15: "PLANNER_RESPONSE",
     17: "ERROR_MESSAGE",
     21: "RUN_COMMAND",
+    # The live tool-step type on agy 1.1.20 -- every tool call, whatever the tool, arrives as
+    # 132 (41 of 41 measured); the per-tool types above are the older, now-unused encoding.
+    # Dispatch keys off the decoded tool call rather than this name, so the name is only for
+    # diagnostics -- but an unmapped type reads as "STEP_TYPE_132" in logs, which misleads.
+    132: "TOOL_CALL",
+    # Session identity: one per conversation, SYSTEM source, no user-visible content.
+    23: "SESSION_IDENTITY",
     91: "GENERATE_IMAGE",
     98: "CONVERSATION_HISTORY",
     101: "SYSTEM_MESSAGE",
@@ -123,11 +142,13 @@ class TruncatedError(Exception):
 class DecodedToolCall(FrozenModel):
     call_id: str
     name: str
-    # ``args`` is a JSON string (ChatToolCall.f3). ``caption_short``/``caption_long`` are agy's
-    # own f30/f31 captions, the fallback when we can't synthesize a shared-vocabulary label.
+    # ``args`` is a JSON string (ChatToolCall.f3).
     args: str
-    caption_short: str
-    caption_long: str
+    # agy's own model-authored captions, read from the step BODY's argument pairs -- a noun
+    # phrase ("Task tracking") and a verb phrase ("Creating step"), written per call. The
+    # metadata caption fields (f30/f31) these replace were absent on every measured row.
+    tool_summary: str
+    tool_action: str
 
 
 class DecodedStep(FrozenModel):
@@ -242,9 +263,13 @@ def _iso_timestamp(metadata: bytes | None) -> str:
         return ""
 
 
-def _decode_tool_call(metadata: bytes) -> DecodedToolCall | None:
+def _decode_tool_call(metadata: bytes, body_args: dict[str, str]) -> DecodedToolCall | None:
     """A tool step carries a ``ChatToolCall`` at ``metadata.f4`` with a name; robust to new
-    agy tool types because they keep this shape rather than a per-tool schema."""
+    agy tool types because they keep this shape rather than a per-tool schema.
+
+    ``body_args`` comes from the step body (:func:`_body_args`) and carries agy's own captions,
+    which live there rather than on the metadata.
+    """
     call = _first_message(metadata, _METADATA_TOOL_CALL)
     if call is None:
         return None
@@ -255,64 +280,65 @@ def _decode_tool_call(metadata: bytes) -> DecodedToolCall | None:
         call_id=_first_str(call, _TOOL_CALL_ID),
         name=name,
         args=_first_str(call, _TOOL_CALL_ARGS),
-        caption_short=_first_str(metadata, _METADATA_CAPTION_SHORT),
-        caption_long=_first_str(metadata, _METADATA_CAPTION_LONG),
+        tool_summary=body_args.get(_ARG_TOOL_SUMMARY, ""),
+        tool_action=body_args.get(_ARG_TOOL_ACTION, ""),
     )
 
 
-def _longest_printable(blob: bytes, depth: int = 0) -> str:
-    """The longest printable string anywhere in ``blob`` (recursively), used to recover a
-    tool result whose exact field varies per tool. Proven to surface command output, grep
-    hits, and edit diffs; imperfect for a few tools (a bare directory-listing URI), which is
-    acceptable -- the result body is secondary to the title/caption."""
-    best = ""
-    if depth > 8:
-        return best
+def _iter_messages(blob: bytes, field_number: int) -> Iterator[bytes]:
+    """Every length-delimited value on ``field_number`` -- the repeated counterpart to
+    :func:`_first_message`, which only ever returns the first.
+
+    The ``_WIRE_LEN`` test is load-bearing: :func:`_iter_fields` also yields ``bytes`` for the
+    fixed-width wire types, so an ``isinstance`` check alone would hand an 8-byte double on to
+    be read as a nested message.
+    """
+    for field, wire, value in _iter_fields(blob):
+        if field == field_number and wire == _WIRE_LEN and isinstance(value, (bytes, bytearray)):
+            yield bytes(value)
+
+
+def _body_args(payload: bytes) -> dict[str, str]:
+    """The call's argument pairs from the step body: the tool's own arguments (``CommandLine``,
+    ``Cwd``, ...) plus agy's model-authored ``toolSummary``/``toolAction`` captions."""
     try:
-        fields = list(_iter_fields(blob))
+        body = _first_message(payload, _STEP_BODY)
+        if body is None:
+            return {}
+        args: dict[str, str] = {}
+        for pair in _iter_messages(body, _BODY_ARG_PAIR):
+            key, value = _first_str(pair, _ARG_KEY), _first_str(pair, _ARG_VALUE)
+            if key and value:
+                args[key] = value
+        return args
     except TruncatedError:
-        return best
-    for _field, wire, value in fields:
-        if wire != _WIRE_LEN or not isinstance(value, (bytes, bytearray)):
-            continue
-        raw = bytes(value)
-        if len(raw) >= 8 and _looks_like_text(raw):
-            text = raw.decode("utf-8", "replace")
-            if len(text) > len(best):
-                best = text
-        else:
-            nested = _longest_printable(raw, depth + 1)
-            if len(nested) > len(best):
-                best = nested
-    return best
-
-
-def _looks_like_text(raw: bytes) -> bool:
-    """A heuristic: decodes to mostly-printable text (unicode-aware, so emoji/accented
-    command output counts) and does not obviously open as a nested protobuf message (which
-    tends to start with a small field-tag byte)."""
-    if raw[:1] in (b"\x08", b"\n", b"\x12", b"\x1a", b'"', b"*", b"2"):
-        return False
-    decoded = raw.decode("utf-8", "replace")
-    printable = sum(1 for char in decoded if char.isprintable() or char in "\t\n\r")
-    return printable / len(decoded) > 0.9
+        return {}
 
 
 def _tool_result_text(payload: bytes) -> str:
-    """The tool result text, from the top-level body fields (everything but the metadata).
-    Clipped to ``_MAX_RESULT_CHARS`` so we never hold a huge blob."""
-    best = ""
+    """The command's output, read from the step body's result field.
+
+    NOT a search. This used to keep the longest printable run found anywhere in the payload,
+    which returned the tool's ARGUMENTS rather than its output for 41 of 41 tool steps measured
+    across two live stores -- so no tk line ever reached the chat and the step progress view
+    never drew a node. The arguments JSON is simply longer than a typical command's output.
+
+    Returns "" and never None. The caller emits a ``tool_result`` event only when this is not
+    None, so returning None for a body shape we do not recognise would leave that call
+    permanently unmatched and pin the activity indicator at TOOL_RUNNING for the life of the
+    agent -- worse than the bug this replaces. Only ``run_command`` bodies are measured (every
+    observed step is one); the other tools are unverified, so the unrecognised path must stay
+    harmless. The RUNNING case never reaches here: ``decode_step`` calls this only when the
+    step is terminal.
+    """
     try:
-        fields = list(_iter_fields(payload))
+        body = _first_message(payload, _STEP_BODY)
+        result = _first_message(body, _BODY_RESULT) if body is not None else None
     except TruncatedError:
         return ""
-    for field, wire, value in fields:
-        if field == _STEP_METADATA or wire != _WIRE_LEN or not isinstance(value, (bytes, bytearray)):
-            continue
-        candidate = _longest_printable(bytes(value))
-        if len(candidate) > len(best):
-            best = candidate
-    return best[:_MAX_RESULT_CHARS]
+    if result is None:
+        return ""
+    return _first_str(result, _RESULT_TEXT)[:_MAX_RESULT_CHARS]
 
 
 def decode_step(conv_id: str, idx: int, step_type: int, status: int, payload: bytes) -> DecodedStep:
@@ -326,7 +352,8 @@ def decode_step(conv_id: str, idx: int, step_type: int, status: int, payload: by
     status_name = _STEP_STATUS_NAMES.get(status, f"STEP_STATUS_{status}")
     step_type_name = _STEP_TYPE_NAMES.get(step_type, f"STEP_TYPE_{step_type}")
 
-    tool_call = _decode_tool_call(metadata) if metadata is not None else None
+    body_args = _body_args(payload)
+    tool_call = _decode_tool_call(metadata, body_args) if metadata is not None else None
     is_terminal = status_name in TERMINAL_STATUS_NAMES
 
     user_text: str | None = None

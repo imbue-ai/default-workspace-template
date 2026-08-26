@@ -9,7 +9,6 @@ from imbue.system_interface.harnesses.antigravity.agy_transcript import DecodedT
 from imbue.system_interface.harnesses.antigravity.session_parser import parse_step
 from imbue.system_interface.harnesses.events import MAX_TOOL_OUTPUT_LENGTH
 
-
 _BASE_STEP = DecodedStep(
     conv_id="c1",
     idx=0,
@@ -77,8 +76,8 @@ def _tool_step(*, terminal: bool, status: str, result: str | None) -> DecodedSte
             call_id="X1",
             name="run_command",
             args='{"CommandLine":"python3 showcase.py"}',
-            caption_short="Running python3 showcase.py",
-            caption_long="",
+            tool_summary="Script execution",
+            tool_action="Running python3 showcase.py",
         ),
         tool_result_text=result,
         is_error_result=(status == "ERROR"),
@@ -128,7 +127,7 @@ def _named_tool_step(*, name: str, args: str, result: str | None = None, **kwarg
     return _step(
         idx=2,
         step_type_name="RUN_COMMAND",
-        tool_call=DecodedToolCall(call_id="t1", name=name, args=args, caption_short="", caption_long=""),
+        tool_call=DecodedToolCall(call_id="t1", name=name, args=args, tool_summary="", tool_action=""),
         tool_result_text=result,
         **kwargs,
     )

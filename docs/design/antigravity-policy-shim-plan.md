@@ -162,9 +162,13 @@ Review caught these before they shipped; each is now covered by a test:
   release -- which breaks tool-call-policies.md's "nothing in mngr" rule.
 - **#5 dropped.** Its skip list is keyed on claude tool names; under the shim it inverts.
 
-Also settled by measurement rather than assumption: agy sets `WaitMsBeforeAsync` on every
+~~Also settled by measurement rather than assumption: agy sets `WaitMsBeforeAsync` on every
 `run_command` and runs the child synchronously, so #3's `--backgrounded` arm has nothing to
-detect and the guard is fully live rather than partial.
+detect and the guard is fully live rather than partial.~~ **Retracted.** agy's declared schema
+shows `WaitMsBeforeAsync` is a required *agent-supplied* parameter (ms before detaching to
+background), and `manage_task` exists to drive backgrounded shells; two live stores carry two
+different values. The guard is still live, but not because backgrounding is impossible. See
+`harnesses/core-contracts/tool-call-policies-state-of-things.md`.
 
 ## 8. What this does NOT fix
 
