@@ -65,6 +65,11 @@ _TEST_FILES = ("*_test.py", "test_*.py", "conftest.py", "testing.py")
 _ALLOWED_RAW_SPAWN_FILES = ("subprocess_runner.py", *_TEST_FILES)
 _ALLOWED_BACKGROUND_SPAWN_FILES = ("agent_manager.py", *_TEST_FILES)
 
+# Every ConcurrencyGroup entry point that reaches the subprocess runner. Shared by the rule and
+# by the guard standing behind agent_manager.py's exemption from it: the exemption waives all of
+# these at once, so a guard that knew about fewer would leave the rest unchecked in that file.
+_BACKGROUND_SPAWN_NAMES = ("run_process_in_background", "run_process_to_completion", "run_background")
+
 
 def _called_name(call: ast.Call) -> str | None:
     """The bare name of what ``call`` invokes, for both ``f(...)`` and ``obj.f(...)``."""
@@ -85,29 +90,25 @@ def test_prevent_subprocess_spawns_outside_the_detached_runner() -> None:
 
 
 def test_prevent_background_process_spawns_outside_the_one_that_detaches_itself() -> None:
-    pattern = RegexPattern(
-        r"run_process_in_background\(|run_process_to_completion\(|run_background\(",
-        multiline=False,
-    )
+    pattern = RegexPattern("|".join(rf"{name}\(" for name in _BACKGROUND_SPAWN_NAMES), multiline=False)
     chunks = check_regex_ratchet(_SOURCE, FileExtension(".py"), pattern, _ALLOWED_BACKGROUND_SPAWN_FILES)
     assert len(chunks) <= snapshot(0), _BACKGROUND_SPAWN_RULE.format_failure(chunks)
 
 
-def test_the_allowlisted_background_spawn_detaches_itself() -> None:
-    """agent_manager.py is exempt from the rule above, so nothing else would notice its spawn
+def test_the_allowlisted_background_spawns_detach_themselves() -> None:
+    """agent_manager.py is exempt from the rule above, so nothing else would notice a spawn there
     going back to attached."""
     agent_manager_path = _SOURCE / "imbue" / "system_interface" / "agent_manager.py"
     spawns = [
         call
         for call in get_ast_nodes_of_type(agent_manager_path, ast.Call)
-        if _called_name(call) == "run_process_in_background"
+        if _called_name(call) in _BACKGROUND_SPAWN_NAMES
     ]
-    assert len(spawns) == 1, (
-        "agent_manager.py gained another background spawn; the shared rule cannot see them, "
-        "so each one has to be checked here"
-    )
-    detachment = {keyword.arg: keyword.value for keyword in spawns[0].keywords}.get("is_detached_from_terminal")
-    assert isinstance(detachment, ast.Constant) and detachment.value is True, (
-        "agent_manager.py's background spawn must pass is_detached_from_terminal=True; without it the "
-        "child inherits this service's controlling terminal and can stop the whole service when killed"
-    )
+    assert spawns, "agent_manager.py's background spawn is gone or renamed, so this guard checks nothing"
+    for spawn in spawns:
+        detachment = {keyword.arg: keyword.value for keyword in spawn.keywords}.get("is_detached_from_terminal")
+        assert isinstance(detachment, ast.Constant) and detachment.value is True, (
+            f"the {_called_name(spawn)} call on line {spawn.lineno} of agent_manager.py must pass "
+            "is_detached_from_terminal=True; without it the child inherits this service's controlling "
+            "terminal and can stop the whole service when killed"
+        )
