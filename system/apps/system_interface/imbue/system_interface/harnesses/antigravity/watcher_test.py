@@ -9,11 +9,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import pytest
-
 from imbue.system_interface.activity_state import ACTIVE_MARKER_FILENAME
 from imbue.system_interface.agent_discovery import AgentInfo
-from imbue.system_interface.harnesses.antigravity import watcher as watcher_module
 from imbue.system_interface.harnesses.antigravity.queue_tracker import drop_tracker
 from imbue.system_interface.harnesses.antigravity.testing import append_step
 from imbue.system_interface.harnesses.antigravity.testing import build_metadata
@@ -446,9 +443,7 @@ def test_the_poll_loop_cannot_emit_the_turn_before_its_chip_departs(tmp_path: Pa
     assert len(delivered_rows) == 1, f"the delivered turn must be emitted exactly once; got {len(delivered_rows)}"
 
 
-def test_the_embargo_is_released_when_a_flush_never_witnesses_its_block(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_the_embargo_is_released_when_a_flush_never_witnesses_its_block(tmp_path: Path) -> None:
     """The embargo must not be able to wedge the transcript.
 
     It is a deadline, not a flag, precisely so a flush thread that dies mid-send cannot mute
@@ -457,10 +452,9 @@ def test_the_embargo_is_released_when_a_flush_never_witnesses_its_block(
     """
     conv = "conv-embargo"
     sent: list[str] = []
-    # Shorten the witness window: this test is about what happens AFTER it expires, and the
-    # real 15s is dead wait here.
-    monkeypatch.setattr(watcher_module, "_DELIVERY_WITNESS_SECONDS", 0.1)
     watcher = _flushing_watcher(tmp_path, conv, sent, does_commit=False)
+    # This test is about what happens AFTER the window expires; the real 15s is dead wait.
+    watcher._delivery_witness_seconds = 0.1
     build_steps_db(
         _conv_db_path(tmp_path, conv),
         [

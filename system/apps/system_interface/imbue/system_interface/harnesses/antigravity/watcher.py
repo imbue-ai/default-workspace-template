@@ -104,6 +104,9 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
     _flush_wake: threading.Event
     _flush_thread: threading.Thread | None
     _emit_embargo_until: float
+    # Instance-level so a test can shorten it by assignment. A module constant would have to be
+    # monkeypatched, which the ratchets forbid (and rightly -- it leaks across tests).
+    _delivery_witness_seconds: float
     _observer: Any
 
     @classmethod
@@ -121,6 +124,7 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
         self._wake = threading.Event()
         self._stopping = threading.Event()
         self._emit_embargo_until = 0.0
+        self._delivery_witness_seconds = _DELIVERY_WITNESS_SECONDS
         self._thread: threading.Thread | None = None
         # The session's identity: the marker mngr stamps on every launch/resume. A journal
         # written under a different token belongs to a session that has since restarted, and
@@ -544,7 +548,7 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
         newline is inserted in the composer, not submitted), so the whole-block arm is the live
         path. The prefix arm is defence in depth for a block that only partly committed.
         """
-        deadline = time.monotonic() + _DELIVERY_WITNESS_SECONDS
+        deadline = time.monotonic() + self._delivery_witness_seconds
         lines = block.split("\n")
         witnessed: list[dict[str, Any]] = []
         is_deadline_passed = False
