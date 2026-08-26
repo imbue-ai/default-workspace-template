@@ -3761,6 +3761,12 @@ def recover(
         f"phase: {marker.phase}, DRI agent: '{marker.dri_agent}'); rolling back to "
         f"{marker.rollback_to[:12]}...\n"
     )
+    # This process now owns the marker: a DRI agent re-running the apply
+    # meanwhile would otherwise see the dead apply's pid, adopt the marker, and
+    # merge concurrently with this rollback. With a live pid recorded it
+    # refuses instead, like it does for a running apply.
+    marker.pid = os.getpid()
+    write_marker(marker, repo_root, now)
     name_status = _diff_name_status(repo_root, marker.rollback_to, runner)
     plan = plan_apply([path for _, path in name_status])
     try:
