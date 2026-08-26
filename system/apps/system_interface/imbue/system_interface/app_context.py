@@ -1,5 +1,4 @@
 import threading
-from pathlib import Path
 from typing import Any
 
 import httpx
@@ -62,10 +61,6 @@ class SystemInterfaceState(MutableModel):
     # A factory (not a shared default): the HEAD read happens per state build,
     # not at import.
     update_staleness: UpdateStalenessTracker = Field(default_factory=UpdateStalenessTracker.capture)
-    # The bundle directory the shell routes serve from. ``None`` means the
-    # package's own ``static/``; a test serving a built shell points it at a
-    # directory it wrote, instead of patching the module global.
-    static_directory: Path | None = None
 
     _watchers_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     _latchkey_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
