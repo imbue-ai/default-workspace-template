@@ -1429,9 +1429,11 @@ class ApplyFailed(ApplyError):
     ``live_service_restarted`` records whether the live services agent was
     already (re)started before the failure -- recovery restarts only then, so a
     failure before the restart never blips a UI that is still serving
-    known-good code. ``detail`` is captured output explaining the failure (the
-    pre-flight boot's own log); stderr gets all of it, the rollback commit only
-    :meth:`headline`.
+    known-good code. ``detail`` is captured output explaining the failure --
+    the pre-flight boot's own log, or the traceback of an error nobody foresaw
+    -- and ``detail_heading`` names which, since the two are read very
+    differently by whoever diagnoses the rollback. stderr gets all of it, the
+    rollback commit only :meth:`headline`.
     """
 
     def __init__(
@@ -1440,10 +1442,12 @@ class ApplyFailed(ApplyError):
         *,
         live_service_restarted: bool = False,
         detail: str = "",
+        detail_heading: str = "failure output",
     ) -> None:
         super().__init__(message)
         self.live_service_restarted = live_service_restarted
         self.detail = detail
+        self.detail_heading = detail_heading
 
     def headline(self) -> str:
         """The message plus only the last line of ``detail`` (the payload --
@@ -2470,8 +2474,8 @@ def wait_healthy(
     return False
 
 
-def _detail_block(detail: str) -> str:
-    return f"--- pre-flight boot output ---\n{detail}\n" if detail else ""
+def _detail_block(exc: ApplyFailed) -> str:
+    return f"--- {exc.detail_heading} ---\n{exc.detail}\n" if exc.detail else ""
 
 
 def _tail(text: str, limit: int) -> str:
@@ -2491,7 +2495,8 @@ def _preflight(
 ) -> str | None:
     """Boot the merged backend on a throwaway port and probe it, without
     touching the live service. Returns ``None`` iff it serves a healthy
-    response; otherwise the tail of what the throwaway boot wrote."""
+    response; otherwise what went wrong -- the tail of what the throwaway boot
+    wrote, or, for a boot that could not be spawned at all, a line saying so."""
     port = find_free_port()
     env = dict(os.environ)
     env["SYSTEM_INTERFACE_HOST"] = "127.0.0.1"
@@ -3686,6 +3691,7 @@ def apply_update(
                         "service not restarted",
                         detail=preflight_output
                         or "(the pre-flight boot wrote nothing at all)",
+                        detail_heading="pre-flight boot output",
                     )
                 # Recorded before the restart is attempted, so a kill anywhere
                 # past this line leaves a marker that tells recovery to restart.
@@ -3778,10 +3784,11 @@ def apply_update(
                 f"{type(unexpected).__name__}: {unexpected}",
                 live_service_restarted=marker.live_service_restarted,
                 detail=traceback.format_exc(),
+                detail_heading="traceback",
             )
         if exc is not None:
             sys.stderr.write(
-                f"apply failed: {exc}\n{_detail_block(exc.detail)}"
+                f"apply failed: {exc}\n{_detail_block(exc)}"
                 f"{_phase_timing_line(marker)}"
                 f"rolling back to {marker.rollback_to[:12]} and restoring the "
                 "workspace...\n"
