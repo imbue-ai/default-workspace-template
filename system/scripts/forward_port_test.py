@@ -40,6 +40,12 @@ def _read_apps(apps_file: Path) -> list[dict[str, str]]:
     return tomllib.loads(apps_file.read_text()).get("apps", [])
 
 
+def _icon_file_args(tmp_path: Path, markup: str) -> list[str]:
+    icon_file = tmp_path / "icon.svg"
+    icon_file.write_text(markup)
+    return ["--icon-file", str(icon_file)]
+
+
 _ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M2 2h12v12H2z"/></svg>'
 _OTHER_ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/></svg>'
 
@@ -58,7 +64,7 @@ _OTHER_ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circ
 )
 def test_valid_names_register_and_are_persisted(tmp_path: Path, name: str) -> None:
     apps_file = tmp_path / "apps.toml"
-    result = _run(["--name", name, "--url", "http://localhost:7681"], apps_file)
+    result = _run(["--name", name, "--url", "http://localhost:7681", "--no-icon"], apps_file)
     assert result.returncode == 0, result.stderr
     rows = _read_apps(apps_file)
     assert len(rows) == 1
@@ -107,7 +113,7 @@ def test_remove_also_rejects_invalid_names(tmp_path: Path) -> None:
 def test_upsert_then_remove_round_trips(tmp_path: Path) -> None:
     apps_file = tmp_path / "apps.toml"
 
-    result = _run(["--name", "web", "--url", "http://localhost:5000"], apps_file)
+    result = _run(["--name", "web", "--url", "http://localhost:5000", "--no-icon"], apps_file)
     assert result.returncode == 0, result.stderr
 
     label_after_create = _read_apps(apps_file)[0]["label"]
@@ -144,20 +150,6 @@ def test_auth_name_is_reserved(tmp_path: Path) -> None:
     assert not apps_file.exists()
 
 
-def test_register_with_an_icon_stores_the_markup_itself(tmp_path: Path) -> None:
-    """The registry carries the SVG markup, not a path to it, so every consumer
-    can draw the icon without filesystem access to the registering service."""
-    apps_file = tmp_path / "apps.toml"
-    result = _run(
-        ["--name", "web", "--url", "http://localhost:8000", "--icon", _ICON], apps_file
-    )
-    assert result.returncode == 0, result.stderr
-    rows = _read_apps(apps_file)
-    assert len(rows) == 1
-    # Round trip through TOML: what comes back out is exactly what went in.
-    assert rows[0]["icon"] == _ICON
-
-
 def test_register_from_an_icon_file_stores_the_contents_not_the_path(tmp_path: Path) -> None:
     apps_file = tmp_path / "apps.toml"
     icon_file = tmp_path / "icon.svg"
@@ -176,7 +168,7 @@ def test_register_from_an_icon_file_stores_the_contents_not_the_path(tmp_path: P
 
 def test_register_without_an_icon_omits_the_key(tmp_path: Path) -> None:
     apps_file = tmp_path / "apps.toml"
-    result = _run(["--name", "web", "--url", "http://localhost:8000"], apps_file)
+    result = _run(["--name", "web", "--url", "http://localhost:8000", "--no-icon"], apps_file)
     assert result.returncode == 0, result.stderr
     rows = _read_apps(apps_file)
     assert len(rows) == 1
@@ -188,7 +180,7 @@ def test_reregistering_without_an_icon_keeps_the_one_already_set(tmp_path: Path)
     icon; that must not silently drop the icon back to the generic glyph."""
     apps_file = tmp_path / "apps.toml"
     result = _run(
-        ["--name", "web", "--url", "http://localhost:8000", "--icon", _ICON], apps_file
+        ["--name", "web", "--url", "http://localhost:8000", *_icon_file_args(tmp_path, _ICON)], apps_file
     )
     assert result.returncode == 0, result.stderr
 
@@ -203,12 +195,12 @@ def test_reregistering_without_an_icon_keeps_the_one_already_set(tmp_path: Path)
 def test_reregistering_with_an_icon_replaces_the_previous_one(tmp_path: Path) -> None:
     apps_file = tmp_path / "apps.toml"
     result = _run(
-        ["--name", "web", "--url", "http://localhost:8000", "--icon", _ICON], apps_file
+        ["--name", "web", "--url", "http://localhost:8000", *_icon_file_args(tmp_path, _ICON)], apps_file
     )
     assert result.returncode == 0, result.stderr
 
     result = _run(
-        ["--name", "web", "--url", "http://localhost:8000", "--icon", _OTHER_ICON], apps_file
+        ["--name", "web", "--url", "http://localhost:8000", *_icon_file_args(tmp_path, _OTHER_ICON)], apps_file
     )
     assert result.returncode == 0, result.stderr
     rows = _read_apps(apps_file)
@@ -218,7 +210,7 @@ def test_reregistering_with_an_icon_replaces_the_previous_one(tmp_path: Path) ->
 
 def test_register_without_internal_omits_the_key(tmp_path: Path) -> None:
     apps_file = tmp_path / "apps.toml"
-    result = _run(["--name", "web", "--url", "http://localhost:8000"], apps_file)
+    result = _run(["--name", "web", "--url", "http://localhost:8000", "--no-icon"], apps_file)
     assert result.returncode == 0, result.stderr
     rows = _read_apps(apps_file)
     assert "internal" not in rows[0]
@@ -253,7 +245,7 @@ def test_reregistering_without_internal_clears_a_previously_internal_entry(tmp_p
 
 def test_register_without_program_omits_the_key(tmp_path: Path) -> None:
     apps_file = tmp_path / "apps.toml"
-    result = _run(["--name", "web", "--url", "http://localhost:8000"], apps_file)
+    result = _run(["--name", "web", "--url", "http://localhost:8000", "--no-icon"], apps_file)
     assert result.returncode == 0, result.stderr
     rows = _read_apps(apps_file)
     assert "program" not in rows[0]
@@ -262,7 +254,7 @@ def test_register_without_program_omits_the_key(tmp_path: Path) -> None:
 def test_register_with_program_stores_the_supervisord_program_name(tmp_path: Path) -> None:
     apps_file = tmp_path / "apps.toml"
     result = _run(
-        ["--name", "web", "--url", "http://localhost:8000", "--program", "web"], apps_file
+        ["--name", "web", "--url", "http://localhost:8000", "--no-icon", "--program", "web"], apps_file
     )
     assert result.returncode == 0, result.stderr
     rows = _read_apps(apps_file)
@@ -275,7 +267,7 @@ def test_reregistering_without_program_clears_a_previously_stored_one(tmp_path: 
     leave a stale stop/start capability behind."""
     apps_file = tmp_path / "apps.toml"
     result = _run(
-        ["--name", "web", "--url", "http://localhost:8000", "--program", "web"], apps_file
+        ["--name", "web", "--url", "http://localhost:8000", "--no-icon", "--program", "web"], apps_file
     )
     assert result.returncode == 0, result.stderr
 
@@ -310,7 +302,7 @@ def test_an_oversized_icon_is_rejected(tmp_path: Path) -> None:
     oversized = f'<svg xmlns="http://www.w3.org/2000/svg"><path d="{padding}"/></svg>'
     assert len(oversized) > forward_port.MAX_ICON_LENGTH
     result = _run(
-        ["--name", "web", "--url", "http://localhost:8000", "--icon", oversized], apps_file
+        ["--name", "web", "--url", "http://localhost:8000", *_icon_file_args(tmp_path, oversized)], apps_file
     )
     assert result.returncode != 0
     assert "invalid icon" in result.stderr
@@ -338,33 +330,37 @@ def test_an_oversized_icon_is_rejected(tmp_path: Path) -> None:
 def test_a_payload_that_is_not_a_safe_single_svg_is_rejected(tmp_path: Path, payload: str) -> None:
     apps_file = tmp_path / "apps.toml"
     result = _run(
-        ["--name", "web", "--url", "http://localhost:8000", f"--icon={payload}"], apps_file
+        ["--name", "web", "--url", "http://localhost:8000", *_icon_file_args(tmp_path, payload)], apps_file
     )
     assert result.returncode != 0
     assert "invalid icon" in result.stderr
     assert not apps_file.exists()
 
 
-def test_icon_and_icon_file_cannot_be_combined(tmp_path: Path) -> None:
-    apps_file = tmp_path / "apps.toml"
-    icon_file = tmp_path / "icon.svg"
-    icon_file.write_text(_ICON)
-    result = _run(
-        [
-            "--name",
-            "web",
-            "--url",
-            "http://localhost:8000",
-            "--icon",
-            _ICON,
-            "--icon-file",
-            str(icon_file),
-        ],
-        apps_file,
-    )
+def test_a_non_svg_icon_file_is_refused(tmp_path: Path) -> None:
+    png_file = tmp_path / "icon.png"
+    png_file.write_bytes(b"\x89PNG\r\n\x1a\n")
+    result = _run(["--name", "web", "--url", "http://localhost:8000", "--icon-file", str(png_file)], tmp_path / "apps.toml")
     assert result.returncode != 0
-    assert "mutually exclusive" in result.stderr
+    assert "must be an .svg file" in result.stderr
 
+def test_a_bad_icon_file_does_not_brick_an_existing_apps_restart(tmp_path: Path) -> None:
+    """A corrupted icon file fails a NEW registration, but an already-registered
+    app must still restart: warn, register without it, keep the stored icon."""
+    apps_file = tmp_path / "apps.toml"
+    result = _run(
+        ["--name", "web", "--url", "http://localhost:8000", *_icon_file_args(tmp_path, _ICON)], apps_file
+    )
+    assert result.returncode == 0, result.stderr
+
+    bad_file = tmp_path / "icon.svg"
+    bad_file.write_text("<div>not an svg</div>")
+    result = _run(["--name", "web", "--url", "http://localhost:8001", "--icon-file", str(bad_file)], apps_file)
+    assert result.returncode == 0, result.stderr
+    assert "warning" in result.stderr
+    rows = _read_apps(apps_file)
+    assert rows[0]["url"] == "http://localhost:8001"
+    assert rows[0]["icon"] == _ICON
 
 def test_a_missing_icon_file_fails_loudly(tmp_path: Path) -> None:
     apps_file = tmp_path / "apps.toml"

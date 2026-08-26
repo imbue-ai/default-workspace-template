@@ -774,10 +774,10 @@ export function Sidebar(): m.Component<SidebarAttrs> {
    * against any open panel.
    */
   function railMenuActions(row: SidebarTabRow, attrs: SidebarAttrs): ObjectMenuActions {
-    // An instance row's menu carries the instance's own verbs, with the
-    // SERVICE's Share and Stop/Start trailing in their own group -- so the
-    // service stays reachable from any of its instances, Everything's rows
-    // included. A bare app row IS the service, and keeps the flat menu.
+    // An instance row's menu carries the instance's own verbs plus the
+    // SERVICE's Share and Stop/Start (via serviceGroup) -- so the service
+    // stays reachable from any of its instances, Everything's rows included.
+    // A bare app row IS the service, and uses the ordinary slots.
     const instanceServiceName =
       row.kind === "app" && instanceNameFromRef(row.ref) !== null ? serviceNameFromRef(row.ref) : null;
     const serviceApp =
@@ -853,7 +853,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     if (row.kind === "app") {
       // An instance row deletes like every other object -- confirm-gated,
       // leaves every project, the app keeps running. The service verbs sit in
-      // the menu's own service group (see railMenuActions).
+      // serviceGroup (see railMenuActions).
       if (instanceNameFromRef(row.ref) !== null) {
         return { label: `Delete ${row.label}`, run: () => attrs.onDeleteFromMachine(row) };
       }

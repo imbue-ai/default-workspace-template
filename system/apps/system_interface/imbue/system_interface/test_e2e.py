@@ -2424,7 +2424,7 @@ def test_overflowed_tabs_list_as_plain_rows_and_the_strip_keeps_its_handles(tmp_
         strip_tab.hover()
         expect(strip_tab.locator(".dv-custom-tab-action")).to_have_count(2, timeout=5000)
         strip_tab.locator('.dv-custom-tab-action[aria-label="Tab options"]').click()
-        expect(page.locator("[role='menuitem']", has_text="Hide tab")).to_be_visible(timeout=5000)
+        expect(page.locator("[role='menuitem']", has_text="Close tab")).to_be_visible(timeout=5000)
         page.keyboard.press("Escape")
 
 
