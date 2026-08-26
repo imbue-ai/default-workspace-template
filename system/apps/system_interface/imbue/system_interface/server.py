@@ -596,8 +596,18 @@ def _shell_update_staleness() -> str | None:
     return get_state().update_staleness.staleness()
 
 
+def _static_directory() -> Path:
+    """The bundle directory to serve from: the state's override, else the default.
+
+    The override exists so a test can serve a real built shell by pointing the
+    state at a directory it wrote, rather than rebinding the module global.
+    """
+    override = get_state().static_directory
+    return override if override is not None else STATIC_DIRECTORY
+
+
 def _index() -> Response:
-    index_path = STATIC_DIRECTORY / "index.html"
+    index_path = _static_directory() / "index.html"
     staleness = _shell_update_staleness()
     if index_path.exists():
         config: Config = get_state().config
@@ -659,7 +669,7 @@ def _frontend_not_built_response() -> Response:
     # served tree was replaced under a running service, which is otherwise
     # invisible from the supervisor logs.
     _loguru_logger.warning(
-        "Served the not-built placeholder: no frontend bundle at {}", STATIC_DIRECTORY / "index.html"
+        "Served the not-built placeholder: no frontend bundle at {}", _static_directory() / "index.html"
     )
     return _shell_response(render_frontend_not_built_page(terminal_origin_label()), is_frontend_built=False)
 
@@ -676,14 +686,14 @@ def _index_catch_all(path: str) -> Response:
 
 
 def _favicon() -> Response:
-    favicon_path = STATIC_DIRECTORY / "favicon.ico"
+    favicon_path = _static_directory() / "favicon.ico"
     if favicon_path.exists():
         return send_file(favicon_path, mimetype="image/x-icon")
     return Response(status=404)
 
 
 def _serve_asset(filename: str) -> Response:
-    assets_directory = STATIC_DIRECTORY / "assets"
+    assets_directory = _static_directory() / "assets"
     # A missing asset is a plain 404, as for the favicon above, rather than the
     # HTML error page ``send_from_directory`` would raise. Existence and safety
     # are both left to ``send_from_directory``: ``filename`` arrives with any
