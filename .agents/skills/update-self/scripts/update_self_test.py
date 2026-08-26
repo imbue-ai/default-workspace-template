@@ -1304,6 +1304,9 @@ class _RecordingRunner(update_self.Runner):
     def which(self, executable: str) -> str | None:
         return self.executables.get(executable)
 
+    def run_process_group(self, argv: Sequence[str], **kwargs) -> _Result:
+        return self.run(argv, **kwargs)
+
     def run(self, argv: Sequence[str], **kwargs) -> _Result:
         self.raw_calls.append(list(argv))
         argv_list = _unwrap_expendable(list(argv))
@@ -2367,6 +2370,32 @@ def test_a_provisioner_that_cannot_be_spawned_is_a_recorded_failure_not_a_crash(
     assert code == 0
     assert "bash: not found" in _read_provision_incomplete(apply_repo)["reason"]
     assert not _marker_exists(apply_repo)
+
+
+def test_a_timed_out_provisioner_takes_its_own_children_with_it(
+    tmp_path: Path,
+) -> None:
+    # subprocess.run's timeout kills only bash; the installer or curl it
+    # spawned would run on after the apply rolled back around it. The real
+    # Runner has to take the whole process group down.
+    pid_file = tmp_path / "child.pid"
+    script = f"sleep 60 & echo $! > {pid_file}; wait"
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        update_self.Runner().run_process_group(
+            ["bash", "-c", script], cwd=str(tmp_path), env=dict(os.environ), timeout=0.5
+        )
+
+    child_pid = int(pid_file.read_text())
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        try:
+            os.kill(child_pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.05)
+    else:
+        pytest.fail(f"the provisioner's child {child_pid} outlived the timeout")
 
 
 def test_a_clean_provisioner_run_clears_an_earlier_incomplete_record(
