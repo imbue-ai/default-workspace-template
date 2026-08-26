@@ -27,7 +27,6 @@ from simple_websocket import ConnectionClosed
 from werkzeug.exceptions import HTTPException
 from werkzeug.exceptions import NotFound
 
-from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.mngr.errors import MngrError
 from imbue.mngr.primitives import AgentId
@@ -109,6 +108,7 @@ from imbue.system_interface.models import StartAgentResponse
 from imbue.system_interface.models import StopAgentResponse
 from imbue.system_interface.models import TerminalSessionInfo
 from imbue.system_interface.plugins import get_plugin_manager
+from imbue.system_interface.subprocess_runner import run_detached_command
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 _LOOPBACK_CLIENT_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
@@ -1026,10 +1026,9 @@ def _mark_fast_mode_prompt_answered(agent_id: str) -> Response:
         error = ErrorResponse(detail=f"Agent '{agent_id}' not found")
         return _json_response(error.model_dump(), status_code=404)
 
-    result = run_local_command_modern_version(
+    result = run_detached_command(
         command=_build_fast_mode_answered_label_command(agent_state.name),
         cwd=None,
-        is_checked=False,
         timeout=_LABEL_TIMEOUT_SECONDS,
     )
     if result.returncode != 0:
@@ -1157,10 +1156,9 @@ def _restart_agent_process(agent_name: str) -> tuple[bool, str]:
     Refused by mngr for an ``is_primary=true`` agent; callers guard that with a
     clearer 400 before calling.
     """
-    result = run_local_command_modern_version(
+    result = run_detached_command(
         command=["mngr", "start", agent_name, "--restart", "--no-resume"],
         cwd=None,
-        is_checked=False,
         timeout=60.0,
     )
     is_restarted = result.returncode == 0
@@ -2100,10 +2098,9 @@ def _list_tmux_sessions() -> tuple[TerminalSessionInfo, ...]:
     A missing tmux server (no sessions yet) returns a non-zero exit code, which
     we treat as an empty list rather than an error.
     """
-    result = run_local_command_modern_version(
+    result = run_detached_command(
         command=["tmux", "list-sessions", "-F", "#{session_name}\t#{session_id}\t#{session_path}"],
         cwd=None,
-        is_checked=False,
         timeout=5.0,
     )
     if result.returncode != 0:
@@ -2154,10 +2151,9 @@ def _kill_terminal_session(session_name: str) -> str | None:
     """
     # ``=`` forces an exact session-name match so tmux's prefix fallback can't
     # target a different session.
-    result = run_local_command_modern_version(
+    result = run_detached_command(
         command=["tmux", "kill-session", "-t", f"={session_name}"],
         cwd=None,
-        is_checked=False,
         timeout=5.0,
     )
     if result.returncode != 0:
@@ -2379,10 +2375,9 @@ def _run_forward_port_removal(name: str) -> str | None:
     registry's lock and does the atomic replace, so this only has to invoke it
     and report what it said when it refused.
     """
-    result = run_local_command_modern_version(
+    result = run_detached_command(
         command=["uv", "run", "python3", str(_FORWARD_PORT_SCRIPT), "--remove", "--name", name],
         cwd=_WORKSPACE_ROOT_DIRECTORY,
-        is_checked=False,
         timeout=_FORWARD_PORT_TIMEOUT_SECONDS,
     )
     if result.returncode != 0:
@@ -2517,10 +2512,9 @@ def _get_screen_capture(agent_id: str) -> Response:
     scrollback_flag = ["-S", "-"] if include_scrollback else []
     command = ["tmux", "capture-pane", "-t", session_name, *scrollback_flag, "-p"]
 
-    result = run_local_command_modern_version(
+    result = run_detached_command(
         command=command,
         cwd=None,
-        is_checked=False,
         timeout=5.0,
     )
     success = result.returncode == 0
@@ -2847,10 +2841,9 @@ def _destroy_agent(agent_id: str) -> Response:
 
     agent_name = agent_state.name
 
-    result = run_local_command_modern_version(
+    result = run_detached_command(
         command=_build_destroy_command(agent_name),
         cwd=None,
-        is_checked=False,
         timeout=_DESTROY_TIMEOUT_SECONDS,
     )
     success = result.returncode == 0
@@ -2904,10 +2897,9 @@ def _stop_agent(agent_id: str) -> Response:
     # Stopping is lighter work than a destroy (no resource teardown), but it
     # rides the same mngr CLI startup and host-lock path, so it shares the
     # destroy's generous bound.
-    result = run_local_command_modern_version(
+    result = run_detached_command(
         command=_build_stop_command(agent_state.name),
         cwd=None,
-        is_checked=False,
         timeout=_DESTROY_TIMEOUT_SECONDS,
     )
     if result.returncode != 0:

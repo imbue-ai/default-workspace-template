@@ -26,10 +26,14 @@ import re
 from loguru import logger
 
 from imbue.concurrency_group.errors import ProcessError
-from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.system_interface.subprocess_runner import run_detached_command
 
-# The status commands are near-instant; this bounds a wedged CLI so a create cannot hang.
+# Bounds a wedged CLI so a create cannot hang. These commands are not instant: they are the
+# same shape as `claude auth status`, measured at 3-8s on its first run after an idle gap (see
+# _CLAUDE_AUTH_STATUS_TIMEOUT_SECONDS in harnesses/claude/auth.py). 20s rather than that
+# constant's 25s because codex and pi ship much smaller binaries than claude's 256MB and their
+# cold start has not been measured here -- matching it would be a guess.
 _AUTH_CHECK_TIMEOUT_SECONDS = 20.0
 
 
@@ -71,9 +75,8 @@ def _is_signed_in(check: HarnessAuthCheck) -> bool:
     out, since we cannot confirm the harness is usable.
     """
     try:
-        result = run_local_command_modern_version(
+        result = run_detached_command(
             list(check.command),
-            is_checked=False,
             timeout=_AUTH_CHECK_TIMEOUT_SECONDS,
             name=check.command[0],
         )

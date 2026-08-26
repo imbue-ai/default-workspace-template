@@ -20,6 +20,7 @@ from flask.testing import FlaskClient
 
 from imbue.system_interface import welcome_resend
 from imbue.system_interface.agent_discovery import AgentInfo
+from imbue.system_interface.harnesses.claude import auth_endpoints
 from imbue.system_interface.harnesses.claude.auth import ClaudeAuthService
 from imbue.system_interface.harnesses.claude.auth import ProcessSetupError
 from imbue.system_interface.harnesses.claude.auth import RestartPhase
@@ -140,6 +141,45 @@ def test_status_endpoint_logged_out_when_claude_missing(isolated_claude_config: 
         response = client.get("/api/claude-auth/status")
     assert response.status_code == 200
     assert response.get_json()["logged_in"] is False
+
+
+def _timed_out_runner(_cmd: list[str], _timeout: float, _env: object = None) -> FakeFinishedProcess:
+    return FakeFinishedProcess(stdout="", returncode=-15, is_timed_out=True)
+
+
+def test_status_endpoint_refuses_to_answer_when_the_check_times_out(isolated_claude_config: Path) -> None:
+    """503, not `logged_in: false`.
+
+    The frontend's load check stays quiet on a failed request, where a false would have popped
+    the login modal over a signed-in workspace.
+    """
+    service = ClaudeAuthService(command_runner=_timed_out_runner)
+    with _client(claude_auth_service=service) as client:
+        response = client.get("/api/claude-auth/status")
+    assert response.status_code == 503
+    assert "logged_in" not in response.get_json()
+
+
+def test_submitting_credentials_does_not_report_rejection_when_the_check_times_out(
+    isolated_claude_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The credentials were written and the restart started; only the confirmation timed out.
+
+    The modal renders this handler's `detail` verbatim, and its `logged_in: false` branch says
+    "Claude did not accept the credentials" -- which would send the user back to re-enter
+    credentials that already worked.
+    """
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    service = ClaudeAuthService(command_runner=_timed_out_runner)
+    with _client(claude_auth_service=service) as client:
+        response = client.post(
+            "/api/claude-auth/submit-credentials",
+            json={"credentials": "ANTHROPIC_API_KEY=sk-test-1234"},
+        )
+    assert response.status_code == 503
+    body = response.get_json()
+    assert body["detail"] == auth_endpoints._UNCONFIRMED_DETAIL
+    assert "logged_in" not in body
 
 
 def test_setup_token_flow_via_poll_completion(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -86,6 +86,45 @@ def test_get_auth_status_returns_logged_out_when_runner_raises(isolated_claude_c
     assert status.auth_mode is auth.AuthMode.NONE
 
 
+def test_get_auth_status_refuses_to_answer_when_the_check_times_out(isolated_claude_config: Path) -> None:
+    """A check that ran out of time says nothing about this workspace's auth.
+
+    `claude auth status` is killed with SIGTERM on timeout, so it prints nothing, and the parse
+    path would otherwise read that silence as "signed out" and pop the login modal over a
+    workspace that is signed in. Raising rather than returning a defaulted status is what stops
+    a caller from passing that silence along as an answer.
+    """
+
+    def _runner(_cmd: list[str], _timeout: float, _env: object = None) -> FakeFinishedProcess:
+        return FakeFinishedProcess(stdout="", returncode=-15, is_timed_out=True)
+
+    service = auth.ClaudeAuthService(command_runner=_runner)
+    with pytest.raises(auth.AuthStatusUnavailableError):
+        service.get_auth_status()
+
+
+def test_get_auth_status_keeps_the_answer_of_a_check_that_finished_just_past_the_deadline(
+    isolated_claude_config: Path,
+) -> None:
+    """`is_timed_out` is recomputed after the output drain, so a check that exited cleanly a
+    moment before the deadline carries it alongside a complete payload. Raising there would
+    throw away a perfectly good answer."""
+
+    def _runner(_cmd: list[str], _timeout: float, _env: object = None) -> FakeFinishedProcess:
+        return FakeFinishedProcess(stdout=json.dumps({"loggedIn": True}), returncode=0, is_timed_out=True)
+
+    service = auth.ClaudeAuthService(command_runner=_runner)
+    assert service.get_auth_status().logged_in is True
+
+
+def test_get_auth_status_still_answers_a_real_logged_out_result(isolated_claude_config: Path) -> None:
+    def _runner(_cmd: list[str], _timeout: float, _env: object = None) -> FakeFinishedProcess:
+        return FakeFinishedProcess(stdout=json.dumps({"loggedIn": False}))
+
+    service = auth.ClaudeAuthService(command_runner=_runner)
+    assert service.get_auth_status().logged_in is False
+
+
 def test_get_auth_status_parses_logged_in_json(isolated_claude_config: Path) -> None:
     def _runner(_cmd: list[str], _timeout: float, _env: object = None) -> FakeFinishedProcess:
         return FakeFinishedProcess(stdout='{"loggedIn": true, "email": "x@y.com", "subscriptionType": "Pro"}')
@@ -875,6 +914,29 @@ def test_oauth_login_fast_path_completes_without_restart(isolated_claude_config:
     assert completions == ["welcome"]
     assert all(cmd[0] != "mngr" or cmd[1] == "list" for cmd in command_log)
     assert not (isolated_claude_config / "settings.json").exists()
+
+
+def test_oauth_login_fast_path_still_resends_the_welcome_when_the_status_check_times_out(
+    isolated_claude_config: Path,
+) -> None:
+    """The fast path is the only completion that runs the welcome hook inline rather than on
+    the background apply thread, so a `get_auth_status` that raises must not swallow it: the
+    sign-in already succeeded, and the session record is gone, so there is nothing to retry."""
+
+    def _runner(cmd: list[str], _timeout: float, _env: object = None) -> FakeFinishedProcess:
+        if cmd[1] == "list":
+            return FakeFinishedProcess(stdout=_LIST_PAYLOAD)
+        return FakeFinishedProcess(stdout="", returncode=-15, is_timed_out=True)
+
+    fake_process = FakePexpectProcess([(0, _FAKE_URL), (0, "Login successful.\r\n")])
+    service = auth.ClaudeAuthService(command_runner=_runner, pexpect_spawner=lambda *_a, **_k: fake_process)
+    start = service.start_oauth_login(auth.OAuthProvider.CLAUDEAI)
+
+    completions: list[str] = []
+    with pytest.raises(auth.AuthStatusUnavailableError):
+        service.poll_oauth_login(start.session_id, lambda: completions.append("welcome"))
+
+    assert completions == ["welcome"]
 
 
 def test_oauth_login_fast_path_clears_stale_failed_restart_progress(isolated_claude_config: Path) -> None:

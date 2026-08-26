@@ -18,6 +18,7 @@ calls.
 from __future__ import annotations
 
 import json
+from typing import Final
 
 from flask import Flask
 from flask import Response
@@ -52,6 +53,19 @@ def _status_to_response(status: auth.AuthStatus) -> ClaudeAuthStatusResponse:
     return ClaudeAuthStatusResponse.model_validate(status.model_dump())
 
 
+# What to tell the user when the auth check times out on a path that has already applied the
+# sign-in. Saying "not signed in" there would be the same lie this 503 exists to avoid, just
+# further along the flow. Every one of those handlers renders the `detail` verbatim, so this is
+# the text the user sees -- and it has to stay true on the subscription fast path, which stores
+# the credential through the CLI and deliberately starts no restart at all.
+_UNCONFIRMED_DETAIL: Final[str] = (
+    "Could not confirm the sign-in: `claude auth status` did not finish in time. "
+    "Your sign-in was applied; reopen this dialog to check."
+)
+# 503 rather than 500 throughout: the check may well answer on the next try.
+_UNAVAILABLE_STATUS_CODE: Final[int] = 503
+
+
 def _error_response(detail: str, status_code: int = 400) -> Response:
     # Every auth-flow failure funnels through here; without this log the
     # container's service log shows only the access line for the 4xx/5xx,
@@ -61,10 +75,14 @@ def _error_response(detail: str, status_code: int = 400) -> Response:
 
 
 def get_status() -> Response:
-    """GET /api/claude-auth/status -- current auth state."""
+    """GET /api/claude-auth/status -- current auth state, or 503 if it could not be determined."""
     service: auth.ClaudeAuthService = get_state().claude_auth_service
     try:
         status = service.get_auth_status()
+    except auth.AuthStatusUnavailableError as e:
+        # A check that ran out of time is not a signed-out answer, and answering as if it were
+        # pops the login modal over a workspace that is signed in.
+        return _error_response(str(e), status_code=_UNAVAILABLE_STATUS_CODE)
     except auth.ClaudeAuthError as e:
         return _error_response(str(e), status_code=500)
     return _json_response(_status_to_response(status).model_dump())
@@ -99,6 +117,8 @@ def poll_setup_token() -> Response:
         return _error_response(f"Invalid request body: {e}")
     try:
         result = service.poll_setup_token(body.session_id, welcome_resender.check_and_resend_welcome)
+    except auth.AuthStatusUnavailableError:
+        return _error_response(_UNCONFIRMED_DETAIL, status_code=_UNAVAILABLE_STATUS_CODE)
     except auth.ClaudeAuthError as e:
         return _error_response(str(e), status_code=400)
     if not result.is_complete or result.status is None:
@@ -121,6 +141,8 @@ def submit_setup_token_code() -> Response:
         status = service.submit_setup_token_code(
             body.session_id, body.code, welcome_resender.check_and_resend_welcome
         )
+    except auth.AuthStatusUnavailableError:
+        return _error_response(_UNCONFIRMED_DETAIL, status_code=_UNAVAILABLE_STATUS_CODE)
     except auth.ClaudeAuthError as e:
         return _error_response(str(e), status_code=400)
     return _json_response(_status_to_response(status).model_dump())
@@ -149,6 +171,8 @@ def submit_credentials() -> Response:
         )
     except auth.CredentialPasteError as e:
         return _error_response(str(e), status_code=400)
+    except auth.AuthStatusUnavailableError:
+        return _error_response(_UNCONFIRMED_DETAIL, status_code=_UNAVAILABLE_STATUS_CODE)
     except auth.ClaudeAuthError as e:
         return _error_response(str(e), status_code=500)
     return _json_response(_status_to_response(status).model_dump())
@@ -190,6 +214,8 @@ def poll_oauth_login() -> Response:
         return _error_response(f"Invalid request body: {e}")
     try:
         result = service.poll_oauth_login(body.session_id, welcome_resender.check_and_resend_welcome)
+    except auth.AuthStatusUnavailableError:
+        return _error_response(_UNCONFIRMED_DETAIL, status_code=_UNAVAILABLE_STATUS_CODE)
     except auth.ClaudeAuthError as e:
         return _error_response(str(e), status_code=400)
     if not result.is_complete or result.status is None:
@@ -212,6 +238,8 @@ def submit_oauth_login_code() -> Response:
         status = service.submit_oauth_login_code(
             body.session_id, body.code, welcome_resender.check_and_resend_welcome
         )
+    except auth.AuthStatusUnavailableError:
+        return _error_response(_UNCONFIRMED_DETAIL, status_code=_UNAVAILABLE_STATUS_CODE)
     except auth.ClaudeAuthError as e:
         return _error_response(str(e), status_code=400)
     return _json_response(_status_to_response(status).model_dump())

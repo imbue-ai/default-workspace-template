@@ -1,6 +1,5 @@
 import asyncio
 import json
-import shlex
 import subprocess
 from pathlib import Path
 
@@ -8,6 +7,7 @@ import pytest
 from harbor.models.agent.context import AgentContext
 from pydantic import ValidationError
 
+from imbue.minds_evals import evidence_collection
 from imbue.minds_evals import ui_flows
 from imbue.minds_evals.data_types import CaseConfig
 from imbue.minds_evals.data_types import DECIDE_SENTINEL
@@ -16,9 +16,13 @@ from imbue.minds_evals.driver import LiteralTurnSource
 from imbue.minds_evals.driver import MindsPersonaDriver
 from imbue.minds_evals.driver import PersonaLLMTurnSource
 from imbue.minds_evals.driver import SnapshotMode
+from imbue.minds_evals.driver import _case_clone_dir
 from imbue.minds_evals.driver import _new_agent_reply_texts
+from imbue.minds_evals.driver import build_case_clone_command
+from imbue.minds_evals.driver import build_clone_probe_command
 from imbue.minds_evals.driver import build_eval_base_clone_command
 from imbue.minds_evals.driver import build_eval_case_commit_command
+from imbue.minds_evals.driver import build_vendor_mngr_command
 from imbue.minds_evals.driver import derive_user_id
 from imbue.minds_evals.driver import parse_agent_flag
 from imbue.minds_evals.driver import parse_case_config
@@ -32,10 +36,14 @@ from imbue.minds_evals.expectations import parse_expectations
 from imbue.minds_evals.mock_environment_test import ConversationModel
 from imbue.minds_evals.mock_environment_test import MockBoxEnvironment
 from imbue.minds_evals.mock_environment_test import ScriptedExecRule
+from imbue.minds_evals.mock_environment_test import failed_result
 from imbue.minds_evals.mock_environment_test import mngr_exec_json
 from imbue.minds_evals.mock_environment_test import ok_result
+from imbue.minds_evals.testing import TEMPLATE_SUPERVISORD_CONF
 from imbue.minds_evals.testing import commit_readme_revision
 from imbue.minds_evals.testing import make_local_git_repo
+from imbue.minds_evals.testing import program_block
+from imbue.minds_evals.testing import workspace_state_output
 
 
 def _case_config(
@@ -194,15 +202,81 @@ def test_build_eval_base_clone_command_pins_a_sha_off_a_non_default_branch(tmp_p
     assert (eval_base_dir / "README.md").read_text() == "side branch\n"
 
 
+def _prepare_eval_base(tmp_path: Path) -> tuple[Path, Path, str]:
+    """A local stand-in for the pinned workspace template, cloned the way clone prep clones it.
+
+    Returns the eval-base clone (pinned to the SHA on a named branch, exactly as in the box), a
+    per-case clone taken from it, and the pinned SHA.
+    """
+    source = make_local_git_repo(tmp_path, "fake-dwt", commit_count=1)
+    pinned_sha = commit_readme_revision(source.repo_dir, "pinned\n", "pin")
+    eval_base_dir = tmp_path / "eval-base"
+    subprocess.run(
+        [
+            "bash",
+            "-c",
+            build_eval_base_clone_command(
+                dwt_repo=str(source.repo_dir), dwt_branch="main", dwt_sha=pinned_sha, eval_base_dir=str(eval_base_dir)
+            ),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    clone_dir = tmp_path / "case-clone"
+    subprocess.run(["git", "clone", "-q", str(eval_base_dir), str(clone_dir)], check=True)
+    return eval_base_dir, clone_dir, pinned_sha
+
+
+def test_clone_prep_answers_both_shas_the_captured_bundle_is_replayed_from(tmp_path: Path) -> None:
+    # Each SHA lands under its own section, and both are the pin: the per-case clone's HEAD is the
+    # eval base's HEAD, which is what makes the bundle's base reproducible from the dwt tip.
+    eval_base_dir, clone_dir, pinned_sha = _prepare_eval_base(tmp_path)
+
+    result = subprocess.run(
+        ["bash", "-c", build_clone_probe_command(str(clone_dir), str(eval_base_dir))],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    sections = evidence_collection.split_sections(result.stdout)
+    assert sections["dwt_tip_sha"].strip() == pinned_sha
+    assert sections["base_sha"].strip() == pinned_sha
+
+
+def test_clone_prep_commands_shell_quote_every_box_path() -> None:
+    # The case id is author-controlled and reaches four box commands, so each is pinned here with an
+    # id that needs escaping. The box path constants render identically whether or not they are
+    # quoted, so only a case-id path can catch a site left bare -- hence the spelled-out commands.
+    assert build_case_clone_command(_case_clone_dir("todo app")) == (
+        "mkdir -p /work/clones && rm -rf '/work/clones/todo app' && git clone /work/eval-base '/work/clones/todo app'"
+    )
+    assert build_clone_probe_command(_case_clone_dir("todo app"), "/work/eval-base") == (
+        r"printf '<<<MINDS_EVALS_SECTION:base_sha>>>\n'; git -C '/work/clones/todo app' rev-parse HEAD; "
+        r"printf '<<<MINDS_EVALS_SECTION:dwt_tip_sha>>>\n'; git -C /work/eval-base rev-parse HEAD"
+    )
+    vendor_command = build_vendor_mngr_command(_case_clone_dir("todo app"))
+    assert vendor_command.startswith("mkdir -p '/work/clones/todo app'/system/vendor/mngr && ")
+    # The trailing slash is rsync's "contents of", not "the directory itself".
+    assert " /work/mngr/ '/work/clones/todo app'/system/vendor/mngr/" in vendor_command
+    assert "cd '/work/clones/todo app' && " in build_eval_case_commit_command(
+        _case_clone_dir("todo app"), "eval case todo app"
+    )
+
+
 def _write_modal_config(tmp_path: Path) -> Path:
     modal_config = tmp_path / "modal.toml"
     modal_config.write_text('[default]\ntoken_id = "ak-test"\ntoken_secret = "as-test"\nactive = true\n')
     return modal_config
 
 
-def _setup_rules() -> list[ScriptedExecRule]:
+def _setup_rules(is_boot_snapshot_failed: bool = False) -> list[ScriptedExecRule]:
     """The scripted box for everything except the stateful conversation endpoints (which the
-    ConversationModel serves): boot, workspace create, clone prep, snapshot, and cleanup."""
+    ConversationModel serves): boot, workspace create, clone prep, snapshot, and cleanup.
+
+    ``is_boot_snapshot_failed`` makes the pre-turn-1 workspace-state probe fail at the bridge, the
+    way a workspace whose exec path is not up yet fails it; the collection-time probe still answers.
+    """
     activation_script = (
         "# Activated env 'staging'.\n"
         "export MINDS_ROOT_NAME=minds-staging\n"
@@ -210,16 +284,22 @@ def _setup_rules() -> list[ScriptedExecRule]:
         "export MNGR_PREFIX=minds-staging-\n"
         "unset MODAL_PROFILE\n"
     )
-    workspace_state = (
-        "<<<MINDS_EVALS_SECTION:repo_root>>>\n/home/user/workspace\n"
-        "<<<MINDS_EVALS_SECTION:registry_status>>>\npresent\n"
-        "<<<MINDS_EVALS_SECTION:registry>>>\n"
-        '[[apps]]\nname = "todo"\nurl = "http://localhost:8081"\nlabel = "todo-bb"\n'
-        "<<<MINDS_EVALS_SECTION:services>>>\ntodo   RUNNING   pid 103\n"
-        "<<<MINDS_EVALS_SECTION:supervisord>>>\n"
-        "[program:todo]\ncommand=python3 system/scripts/forward_port.py "
-        "--url http://localhost:8081 --name todo\n"
-        "<<<MINDS_EVALS_SECTION:isolated_instances>>>\n"
+
+    # The same probe answers twice: the pre-turn-1 snapshot, then evidence collection. Only the
+    # second lists `todo`, which is what makes it the delivered app. `terminal` is in the registry
+    # but in no forward_port.py call -- see `resolve_preexisting_registrations`.
+    template_registry = (
+        '[[apps]]\nname = "system_interface"\nurl = "http://localhost:8000"\n\n'
+        '[[apps]]\nname = "terminal"\nurl = "http://localhost:7681"\n'
+    )
+    template_services = "system_interface   RUNNING   pid 101\nterminal   RUNNING   pid 102\n"
+    boot_state = workspace_state_output(
+        template_registry, services=template_services, supervisord=TEMPLATE_SUPERVISORD_CONF
+    )
+    delivered_state = workspace_state_output(
+        template_registry + '\n[[apps]]\nname = "todo"\nurl = "http://localhost:8081"\nlabel = "todo-bb"\n',
+        services=template_services + "todo   RUNNING   pid 103\n",
+        supervisord=TEMPLATE_SUPERVISORD_CONF + program_block("todo", ("todo", "http://localhost:8081")),
     )
     return [
         ScriptedExecRule("cat /work/mngr_sha", [ok_result("b" * 40 + "\n")]),
@@ -242,7 +322,15 @@ def _setup_rules() -> list[ScriptedExecRule]:
         ),
         ScriptedExecRule("tar czf /tmp/post_message", [ok_result(mngr_exec_json(""))]),
         # The evidence-collection phase, which runs against the live workspace before teardown.
-        ScriptedExecRule("MINDS_EVALS_SECTION:repo_root", [ok_result(mngr_exec_json(workspace_state))]),
+        ScriptedExecRule(
+            "MINDS_EVALS_SECTION:repo_root",
+            [
+                failed_result("mngr exec: workspace not reachable")
+                if is_boot_snapshot_failed
+                else ok_result(mngr_exec_json(boot_state)),
+                ok_result(mngr_exec_json(delivered_state)),
+            ],
+        ),
         ScriptedExecRule("base64 -d | python3 -", [ok_result(mngr_exec_json("7\n"))]),
         ScriptedExecRule(
             "git bundle create",
@@ -586,6 +674,13 @@ def test_driver_collects_outcome_evidence_before_the_workspace_is_torn_down(tmp_
     assert statuses["http_0_registered_apps_todo"] == "passed"
     assert manifest["is_evidence_complete"] is True
 
+    # Only the app the agent added is scored; the terminal was already serving before turn 1, and
+    # only the registry half catches it (see `resolve_preexisting_registrations`).
+    assert "terminal" in manifest["preexisting_registrations"]
+    assert "todo" not in manifest["preexisting_registrations"]
+    assert "app_registered_service_terminal" not in statuses
+    assert "http_0_registered_apps_terminal" not in statuses
+
     # The bundle's base is the prepared clone's HEAD, so only the agent's own commits are captured.
     repo_state = json.loads(environment.uploaded_content_by_target["/logs/agent/verification/repo_state.json"])
     assert repo_state["base_sha"] == "c" * 40
@@ -596,8 +691,10 @@ def test_driver_collects_outcome_evidence_before_the_workspace_is_torn_down(tmp_
     assert manifest["dwt_tip_sha"] == "e" * 40
 
     # Collection happens while the workspace is alive: before the destroy sweep, never after.
+    # The bundle capture is the collector's alone, unlike the workspace-state probe (which also
+    # answers the pre-turn-1 snapshot), so it dates the collection phase unambiguously.
     collection_index = next(
-        index for index, command in enumerate(environment.exec_commands) if "MINDS_EVALS_SECTION:repo_root" in command
+        index for index, command in enumerate(environment.exec_commands) if "git bundle create" in command
     )
     destroy_index = next(
         index for index, command in enumerate(environment.exec_commands) if "mngr destroy - --force" in command
@@ -606,6 +703,53 @@ def test_driver_collects_outcome_evidence_before_the_workspace_is_torn_down(tmp_
 
     assert context.metadata is not None
     assert context.metadata["verification"]["is_evidence_complete"] is True
+
+
+def test_driver_leaves_the_delivered_apps_unmeasured_when_the_boot_snapshot_fails(tmp_path: Path) -> None:
+    # Without the pre-turn-1 snapshot nothing in the registry can be told apart from what the
+    # workspace booted with. That is the instrument failing, so the trial still runs to the end and
+    # every check that depends on the distinction is recorded as unmeasured -- never as a failure
+    # that charges the agent for the template's own apps, and never as an empty set that would
+    # credit the agent with them.
+    conversation = ConversationModel(
+        chat_agent_id="chat-1",
+        chat_agent_name="eval-todo-app",
+        pre_events=[],
+        turn_reply_events=[_reply_events("All done; open the preview.")],
+    )
+    expectations = parse_expectations(
+        {"outcome": "A working to-do web app.", "deliverable": {"kind": "minds-app"}}, "todo-app"
+    )
+
+    _driver, environment, context = _run_driver(
+        tmp_path,
+        ("Build it",),
+        conversation,
+        trial_name="todo-app__boot1",
+        timeout_seconds=1800.0,
+        rules=_setup_rules(is_boot_snapshot_failed=True),
+        expectations=expectations,
+    )
+
+    state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
+    assert state["test_state"] == "finished"
+
+    manifest = json.loads(environment.uploaded_content_by_target["/logs/agent/verification/manifest.json"])
+    assert manifest["preexisting_registrations"] is None
+    entries = {entry["entry_id"]: entry for entry in manifest["entries"]}
+    assert (entries["app_registered"]["status"], entries["app_registered"]["reason"]) == (
+        "error",
+        evidence_collection.REASON_PREEXISTING_UNKNOWN,
+    )
+    assert entries["http_0_registered_apps"]["reason"] == evidence_collection.REASON_PREEXISTING_UNKNOWN
+    assert not any(entry["status"] == "failed" for entry in manifest["entries"])
+    assert manifest["is_evidence_complete"] is False
+    # The registry is still captured verbatim, so the trial stays diagnosable after the fact.
+    assert 'name = "todo"' in environment.uploaded_content_by_target["/logs/agent/verification/apps.toml"]
+    # The verdict reaches the trial's metadata as unmeasured, so a grader sees a harness gap rather
+    # than a clean bill of health.
+    assert context.metadata is not None
+    assert context.metadata["verification"]["is_evidence_complete"] is False
 
 
 def test_driver_skips_the_expectation_probes_on_a_timed_out_trial(tmp_path: Path) -> None:
@@ -680,7 +824,7 @@ def test_eval_case_commit_is_reproducible(tmp_path: Path) -> None:
     # A commit hash covers its dates, so a wall-clock commit would give every trial a different base
     # sha for an identical tree -- and the deliverable bundle, based on that commit, could never be
     # unbundled onto a regenerated clone. That replayability is the whole point of capturing it.
-    command = build_eval_case_commit_command("'/work/clones/todo-app'", "'eval case todo-app'")
+    command = build_eval_case_commit_command("/work/clones/todo-app", "eval case todo-app")
 
     assert "GIT_AUTHOR_DATE='1970-01-01T00:00:00 +0000'" in command
     assert "GIT_COMMITTER_DATE='1970-01-01T00:00:00 +0000'" in command
@@ -695,7 +839,7 @@ def test_eval_case_commit_is_reproducible(tmp_path: Path) -> None:
         subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
         (repo / "app.py").write_text("print('hi')\n")
         subprocess.run(
-            ["bash", "-c", build_eval_case_commit_command(shlex.quote(str(repo)), "'eval case todo-app'")],
+            ["bash", "-c", build_eval_case_commit_command(str(repo), "eval case todo-app")],
             check=True,
         )
         shas.append(

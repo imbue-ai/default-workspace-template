@@ -1,0 +1,1 @@
+No user-visible change. A test double for `ConcurrencyGroup` in the workspace-diagnostics tests grew the `is_detached_from_terminal` parameter that the real `run_process_to_completion` gained, so its override still matches the method it stands in for.

@@ -32,7 +32,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["imbue"]
-exclude = ["*_test.py", "test_*.py", "**/conftest.py", "**/testing.py"]
+exclude = ["*_test.py", "test_*.py", "**/conftest.py", "**/testing.py", "**/_terminal_freeze_test_script.py"]
 
 [tool.uv.sources]
 imbue-common = { workspace = true }
@@ -66,6 +66,9 @@ omit = [
   "*/tests/*",
   "*/conftest.py",
   "*/utils/testing.py",
+  # Only ever executed as a script in a subprocess (by test_terminal_isolation.py), so
+  # coverage can never see it run.
+  "*/_terminal_freeze_test_script.py",
 ]
 
 [tool.inline-snapshot]

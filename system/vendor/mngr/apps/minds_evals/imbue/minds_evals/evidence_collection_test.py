@@ -27,6 +27,13 @@ from imbue.minds_evals.mock_verification_agent_test import ScriptedVerificationA
 from imbue.minds_evals.mock_verification_agent_test import click_action
 from imbue.minds_evals.mock_verification_agent_test import done_action
 from imbue.minds_evals.mock_verification_agent_test import reading
+from imbue.minds_evals.testing import SCRIPT_REGISTERED_APPS
+from imbue.minds_evals.testing import TEMPLATE_CONFIG_REGISTRATIONS
+from imbue.minds_evals.testing import TEMPLATE_PREEXISTING_APPS
+from imbue.minds_evals.testing import TEMPLATE_SUPERVISORD_CONF
+from imbue.minds_evals.testing import probe_sections
+from imbue.minds_evals.testing import program_block
+from imbue.minds_evals.testing import workspace_state_output
 
 _REGISTRY_TOML = (
     '[[apps]]\nname = "system_interface"\nurl = "http://localhost:8000"\nlabel = "system_interface-aa"\n\n'
@@ -36,6 +43,8 @@ _SERVICES_TEXT = (
     "system_interface                 RUNNING   pid 101, uptime 0:10:00\n"
     "todo                             RUNNING   pid 103, uptime 0:05:00\n"
 )
+
+
 # The registry row is joined to its program through the forward_port.py call in the program's block,
 # which is how a multi-port app's extra origin rows and a renamed program both resolve correctly.
 _SUPERVISORD_CONF = (
@@ -73,10 +82,6 @@ def _case_config(expectations: Expectations | None, verification_timeout_seconds
     )
 
 
-def _sections(**named_bodies: str) -> str:
-    return "".join("<<<MINDS_EVALS_SECTION:{}>>>\n{}".format(name, body) for name, body in named_bodies.items())
-
-
 def _http_check(target: str = "registered-apps", expect_status: int = 200, expect_body_regex: str = "") -> HttpCheck:
     return HttpCheck(
         check_id="http_0", target=target, expect_status=expect_status, expect_body_regex=expect_body_regex
@@ -86,11 +91,11 @@ def _http_check(target: str = "registered-apps", expect_status: int = 200, expec
 # --- pure parsing helpers ---
 
 
-def test_parse_apps_registry_reads_names_urls_and_marks_builtins() -> None:
-    apps = evidence_collection.parse_apps_registry(_REGISTRY_TOML)
+def test_parse_apps_registry_reads_names_urls_and_marks_preexisting_rows() -> None:
+    apps = evidence_collection.parse_apps_registry(_REGISTRY_TOML, TEMPLATE_PREEXISTING_APPS)
 
     assert apps is not None
-    assert [(app.name, app.url, app.is_builtin) for app in apps] == [
+    assert [(app.name, app.url, app.is_preexisting) for app in apps] == [
         ("system_interface", "http://localhost:8000", True),
         ("todo", "http://localhost:8081", False),
     ]
@@ -98,26 +103,26 @@ def test_parse_apps_registry_reads_names_urls_and_marks_builtins() -> None:
 
 def test_the_templates_own_file_browser_is_not_a_deliverable() -> None:
     # `files` ships with the workspace template and registers through exactly the path a delivered
-    # app does, so nothing about its row says otherwise. Counting it charges the agent for a
-    # builtin, and -- when that builtin is unhealthy -- aims the UI flows at a dead port.
+    # app does, so nothing about its row says otherwise. Counting it charges the agent for an app it
+    # never wrote, and -- when that app is unhealthy -- aims the UI flows at a dead port.
     apps = evidence_collection.parse_apps_registry(
-        '[[apps]]\nname = "files"\nurl = "http://localhost:8300"\nlabel = "files-aa"\n'
+        '[[apps]]\nname = "files"\nurl = "http://localhost:8300"\nlabel = "files-aa"\n', TEMPLATE_PREEXISTING_APPS
     )
 
     assert apps is not None
-    assert [(app.name, app.is_builtin) for app in apps] == [("files", True)]
+    assert [(app.name, app.is_preexisting) for app in apps] == [("files", True)]
 
 
 @pytest.mark.parametrize("registry_text", ["not = [toml", 'apps = "wrong shape"'])
 def test_parse_apps_registry_reports_an_unreadable_registry_as_none(registry_text: str) -> None:
     # None ("could not read it") and () ("read it; it lists nothing") are different claims: the
     # second is the agent shipping nothing, which must score against the agent.
-    assert evidence_collection.parse_apps_registry(registry_text) is None
+    assert evidence_collection.parse_apps_registry(registry_text, TEMPLATE_PREEXISTING_APPS) is None
 
 
 @pytest.mark.parametrize("registry_text", ["", "   ", "other = 1"])
 def test_parse_apps_registry_reports_a_readable_but_empty_registry_as_no_apps(registry_text: str) -> None:
-    assert evidence_collection.parse_apps_registry(registry_text) == ()
+    assert evidence_collection.parse_apps_registry(registry_text, TEMPLATE_PREEXISTING_APPS) == ()
 
 
 def test_parse_service_states_reads_program_states() -> None:
@@ -146,7 +151,7 @@ def test_parse_service_states_yields_nothing_for_an_error_message(services_text:
 def test_service_entries_find_a_grouped_supervisord_program() -> None:
     # supervisorctl prints a grouped program as `group:process`; a bare-name lookup alone would read
     # a perfectly healthy grouped service as absent and score it against the agent.
-    delivered = (RegisteredApp(name="todo", url="http://localhost:8081", is_builtin=False, is_internal=False),)
+    delivered = (RegisteredApp(name="todo", url="http://localhost:8081", is_preexisting=False, is_internal=False),)
 
     entries = evidence_collection.service_entries(
         "app_registered", delivered, {"apps:todo": "RUNNING"}, {"todo": "todo"}, True
@@ -158,14 +163,14 @@ def test_service_entries_find_a_grouped_supervisord_program() -> None:
 def test_split_sections_keeps_the_first_occurrence_of_a_marker() -> None:
     # An HTTP body and a test command's output are agent-controlled and are emitted after their
     # markers, so a later duplicate must never overwrite an earlier, harness-emitted section.
-    forged = _sections(status="200 0.01\n", body="") + _sections(status="500 9.9\n")
+    forged = probe_sections(status="200 0.01\n", body="") + probe_sections(status="500 9.9\n")
 
     assert evidence_collection.split_sections(forged)["status"] == "200 0.01\n"
 
 
 def test_split_sections_separates_one_commands_several_answers() -> None:
     assert evidence_collection.split_sections(
-        "noise\n" + _sections(repo_root="/home/user/workspace\n", registry="x = 1\n", services="")
+        "noise\n" + probe_sections(repo_root="/home/user/workspace\n", registry="x = 1\n", services="")
     ) == {"repo_root": "/home/user/workspace\n", "registry": "x = 1\n", "services": ""}
 
 
@@ -212,9 +217,9 @@ def test_http_entry_status_checks_a_declared_body_regex() -> None:
 
 def test_resolve_http_targets_fans_registered_apps_out_over_delivered_apps_only() -> None:
     apps = (
-        RegisteredApp(name="terminal", url="http://localhost:7681", is_builtin=True, is_internal=False),
-        RegisteredApp(name="todo", url="http://localhost:8081", is_builtin=False, is_internal=False),
-        RegisteredApp(name="halfway", url="", is_builtin=False, is_internal=False),
+        RegisteredApp(name="terminal", url="http://localhost:7681", is_preexisting=True, is_internal=False),
+        RegisteredApp(name="todo", url="http://localhost:8081", is_preexisting=False, is_internal=False),
+        RegisteredApp(name="halfway", url="", is_preexisting=False, is_internal=False),
     )
 
     delivered = evidence_collection.resolve_delivered_apps(apps, frozenset())
@@ -225,14 +230,18 @@ def test_resolve_http_targets_fans_registered_apps_out_over_delivered_apps_only(
     assert evidence_collection.resolve_http_targets(_http_check(target="absent"), delivered) == ()
 
 
-def test_registration_entry_distinguishes_an_unreadable_registry_from_an_empty_one() -> None:
-    delivered = (RegisteredApp(name="todo", url="http://localhost:8081", is_builtin=False, is_internal=False),)
+def test_registration_entry_distinguishes_an_unresolved_registry_from_an_empty_one() -> None:
+    delivered = (RegisteredApp(name="todo", url="http://localhost:8081", is_preexisting=False, is_internal=False),)
 
-    absent = evidence_collection.registration_entry("app_registered", 1, None, is_registry_present=False)
-    unreadable = evidence_collection.registration_entry("app_registered", 1, None, is_registry_present=True)
+    absent = evidence_collection.registration_entry(
+        "app_registered", 1, None, evidence_collection.REASON_REGISTRY_ABSENT
+    )
+    unreadable = evidence_collection.registration_entry(
+        "app_registered", 1, None, evidence_collection.REASON_REGISTRY_UNREADABLE
+    )
     # An empty registry is the agent shipping nothing -- the failure this whole eval exists to catch
     # -- so it must score against the agent rather than error the trial.
-    empty = evidence_collection.registration_entry("app_registered", 1, (), is_registry_present=True)
+    empty = evidence_collection.registration_entry("app_registered", 1, (), "")
 
     assert (absent.status, absent.reason) == (CheckStatus.ERROR, evidence_collection.REASON_REGISTRY_ABSENT)
     assert (unreadable.status, unreadable.reason) == (
@@ -240,18 +249,15 @@ def test_registration_entry_distinguishes_an_unreadable_registry_from_an_empty_o
         evidence_collection.REASON_REGISTRY_UNREADABLE,
     )
     assert (empty.status, empty.reason) == (CheckStatus.FAILED, evidence_collection.REASON_TOO_FEW_APPS)
+    assert evidence_collection.registration_entry("app_registered", 1, delivered, "").status is CheckStatus.PASSED
     assert (
-        evidence_collection.registration_entry("app_registered", 1, delivered, is_registry_present=True).status
-        is CheckStatus.PASSED
-    )
-    assert (
-        evidence_collection.registration_entry("app_registered", 2, delivered, is_registry_present=True).reason
+        evidence_collection.registration_entry("app_registered", 2, delivered, "").reason
         == evidence_collection.REASON_TOO_FEW_APPS
     )
 
 
 def test_service_entries_flag_a_registered_app_whose_service_is_not_running() -> None:
-    delivered = (RegisteredApp(name="todo", url="http://localhost:8081", is_builtin=False, is_internal=False),)
+    delivered = (RegisteredApp(name="todo", url="http://localhost:8081", is_preexisting=False, is_internal=False),)
 
     programs = {"todo": "todo"}
     running = evidence_collection.service_entries("app_registered", delivered, {"todo": "RUNNING"}, programs, True)
@@ -292,6 +298,102 @@ def test_parse_supervised_registrations_accepts_either_flag_order() -> None:
     assert evidence_collection.parse_supervised_registrations(conf) == {"todo": "todo"}
 
 
+def test_the_config_half_names_only_the_apps_it_registers_itself() -> None:
+    # The config half of the pre-existing set, joined through the forward_port.py calls in the file
+    # rather than read off a hand-kept name list -- which is what keeps it correct as the template
+    # gains and loses apps. An app that registers from inside its program's script is not here at
+    # all; the registry half is what covers those.
+    config_registrations = frozenset(evidence_collection.parse_supervised_registrations(TEMPLATE_SUPERVISORD_CONF))
+
+    assert config_registrations == TEMPLATE_CONFIG_REGISTRATIONS
+    assert not config_registrations & SCRIPT_REGISTERED_APPS
+
+
+@pytest.mark.parametrize(
+    ("registry_names", "config_registrations", "expected"),
+    [
+        pytest.param(
+            frozenset({"system_interface", "terminal"}),
+            frozenset({"system_interface", "files", "browser"}),
+            frozenset({"system_interface", "terminal", "files", "browser"}),
+            id="the-boot-snapshot-catches-an-app-the-config-never-names",
+        ),
+        pytest.param(
+            frozenset({"system_interface"}),
+            frozenset({"system_interface", "browser"}),
+            frozenset({"system_interface", "browser"}),
+            id="the-config-half-covers-an-app-that-had-not-registered-by-snapshot-time",
+        ),
+        pytest.param(
+            frozenset({"terminal"}),
+            frozenset(),
+            frozenset({"terminal"}),
+            id="the-registry-half-alone-is-enough",
+        ),
+        pytest.param(
+            None,
+            frozenset({"system_interface"}),
+            None,
+            id="without-the-registry-half-nothing-can-be-called-preexisting",
+        ),
+    ],
+)
+def test_resolve_preexisting_registrations_unions_both_halves_and_needs_the_registry(
+    registry_names: frozenset[str] | None, config_registrations: frozenset[str], expected: frozenset[str] | None
+) -> None:
+    # The cases pin what each half contributes and that the registry half is the one that must be
+    # readable; see `resolve_preexisting_registrations` for why neither is complete alone.
+    assert evidence_collection.resolve_preexisting_registrations(registry_names, config_registrations) == expected
+
+
+def test_parse_registry_names_separates_an_unreadable_registry_from_an_empty_one() -> None:
+    assert evidence_collection.parse_registry_names(_REGISTRY_TOML) == frozenset({"system_interface", "todo"})
+    assert evidence_collection.parse_registry_names("") == frozenset()
+    assert evidence_collection.parse_registry_names("not = [toml") is None
+
+
+def test_parse_registry_snapshot_reads_names_only_from_a_registry_that_is_there() -> None:
+    # Absent, unparseable, and no probe output at all each leave the snapshot unknown, never empty.
+    # The first case resolves from the registry alone: none of these outputs carries a config
+    # section, and only a missing registry makes the set unknown.
+    present = workspace_state_output(_REGISTRY_TOML)
+    assert evidence_collection.parse_registry_snapshot(present) == frozenset({"system_interface", "todo"})
+    assert evidence_collection.parse_registry_snapshot(workspace_state_output("", registry_status="absent")) is None
+    unparseable = workspace_state_output("not = [toml")
+    assert evidence_collection.parse_registry_snapshot(unparseable) is None
+    assert evidence_collection.parse_registry_snapshot("") is None
+
+
+def test_parse_registry_snapshot_takes_both_halves_from_the_one_probe() -> None:
+    # One probe, both halves: here the registry knows only the script-registered rows and the config
+    # knows only the rest, so the snapshot has to end up with both.
+    registry = "".join(
+        '[[apps]]\nname = "{}"\nurl = "http://localhost:7681"\n\n'.format(name)
+        for name in sorted(SCRIPT_REGISTERED_APPS)
+    )
+    output = workspace_state_output(registry, supervisord=TEMPLATE_SUPERVISORD_CONF)
+
+    assert evidence_collection.parse_registry_snapshot(output) == TEMPLATE_PREEXISTING_APPS
+
+
+def test_a_workspace_serving_an_extra_app_at_boot_makes_it_preexisting() -> None:
+    # An eval config may point dwt_repo/dwt_branch at a fork that ships apps stock dwt does not.
+    # Those are still there before the agent runs, so they are not the case's deliverable.
+    forked_conf = TEMPLATE_SUPERVISORD_CONF + program_block("notes", ("notes", "http://localhost:8400"))
+    preexisting = evidence_collection.parse_registry_snapshot(
+        workspace_state_output(_REGISTRY_TOML, supervisord=forked_conf)
+    )
+
+    assert preexisting is not None
+    apps = evidence_collection.parse_apps_registry(
+        '[[apps]]\nname = "notes"\nurl = "http://localhost:8400"\n\n'
+        '[[apps]]\nname = "todo2"\nurl = "http://localhost:8081"\n',
+        preexisting,
+    )
+    assert apps is not None
+    assert [app.name for app in evidence_collection.resolve_delivered_apps(apps, frozenset())] == ["todo2"]
+
+
 def test_parse_isolated_instance_services_reads_every_concatenated_state_file() -> None:
     # The probe cats every instance.json, so the parser decodes one object at a time.
     instances = (
@@ -319,7 +421,7 @@ def test_parse_apps_registry_reads_the_internal_marker() -> None:
         '[[apps]]\nname = "todo-list"\nurl = "http://localhost:8080"\nlabel = "todo-list-nyk8ptte"\n'
     )
 
-    apps = evidence_collection.parse_apps_registry(registry)
+    apps = evidence_collection.parse_apps_registry(registry, TEMPLATE_PREEXISTING_APPS)
 
     assert apps is not None
     assert [(app.name, app.is_internal) for app in apps] == [("owner-exec", True), ("todo-list", False)]
@@ -330,8 +432,8 @@ def test_resolve_delivered_apps_excludes_internal_machinery() -> None:
     # its root by design. Counted as delivered it both inflated the app count and failed the implied
     # root-path probe -- charging the agent for a daemon it never shipped.
     apps = (
-        RegisteredApp(name="owner-exec", url="http://127.0.0.1:8793", is_builtin=False, is_internal=True),
-        RegisteredApp(name="todo-list", url="http://localhost:8080", is_builtin=False, is_internal=False),
+        RegisteredApp(name="owner-exec", url="http://127.0.0.1:8793", is_preexisting=False, is_internal=True),
+        RegisteredApp(name="todo-list", url="http://localhost:8080", is_preexisting=False, is_internal=False),
     )
 
     delivered = evidence_collection.resolve_delivered_apps(apps, frozenset())
@@ -342,7 +444,9 @@ def test_resolve_delivered_apps_excludes_internal_machinery() -> None:
 def test_service_entries_fall_back_to_a_program_named_like_the_row() -> None:
     # Covers a service that registers its port at runtime rather than through a forward_port call in
     # supervisord.conf, so the config join finds nothing but the program plainly exists.
-    delivered = (RegisteredApp(name="todo-list", url="http://localhost:8080", is_builtin=False, is_internal=False),)
+    delivered = (
+        RegisteredApp(name="todo-list", url="http://localhost:8080", is_preexisting=False, is_internal=False),
+    )
 
     entries = evidence_collection.service_entries("app_registered", delivered, {"todo-list": "RUNNING"}, {}, True)
 
@@ -354,9 +458,9 @@ def test_resolve_delivered_apps_excludes_abandoned_preview_rows() -> None:
     # Counting it would both satisfy app_registered on something that was never the deliverable and
     # fail the root-path probe on its dead port.
     apps = (
-        RegisteredApp(name="terminal", url="http://localhost:7681", is_builtin=True, is_internal=False),
-        RegisteredApp(name="shop", url="http://localhost:9000", is_builtin=False, is_internal=False),
-        RegisteredApp(name="shop-preview", url="http://localhost:9100", is_builtin=False, is_internal=False),
+        RegisteredApp(name="terminal", url="http://localhost:7681", is_preexisting=True, is_internal=False),
+        RegisteredApp(name="shop", url="http://localhost:9000", is_preexisting=False, is_internal=False),
+        RegisteredApp(name="shop-preview", url="http://localhost:9100", is_preexisting=False, is_internal=False),
     )
 
     delivered = evidence_collection.resolve_delivered_apps(apps, frozenset({"shop-preview"}))
@@ -368,7 +472,7 @@ def test_resolve_delivered_apps_keeps_a_real_app_whose_name_looks_like_a_preview
     # Exclusion is by the instance runner's own record, not by name pattern: instance names are
     # caller-supplied, so a pattern would drop a genuine deliverable that happens to be named this
     # way and still miss throwaways named anything else.
-    apps = (RegisteredApp(name="recipes-test", url="http://localhost:9000", is_builtin=False, is_internal=False),)
+    apps = (RegisteredApp(name="recipes-test", url="http://localhost:9000", is_preexisting=False, is_internal=False),)
 
     assert [app.name for app in evidence_collection.resolve_delivered_apps(apps, frozenset())] == ["recipes-test"]
 
@@ -377,7 +481,7 @@ def test_service_entries_flag_a_registry_row_no_program_supervises() -> None:
     # An app started by hand and never wired into supervisord would not survive a restart, which is
     # a real shortfall of the minds-app contract -- recorded under its own reason so it stays
     # distinguishable from a program that exists and crashed.
-    delivered = (RegisteredApp(name="handmade", url="http://localhost:9000", is_builtin=False, is_internal=False),)
+    delivered = (RegisteredApp(name="handmade", url="http://localhost:9000", is_preexisting=False, is_internal=False),)
 
     entries = evidence_collection.service_entries(
         "app_registered", delivered, {"todo": "RUNNING"}, {"todo": "todo"}, True
@@ -388,7 +492,9 @@ def test_service_entries_flag_a_registry_row_no_program_supervises() -> None:
 
 
 def test_service_entries_resolve_a_program_named_differently_from_the_row() -> None:
-    delivered = (RegisteredApp(name="shop-admin", url="http://localhost:9001", is_builtin=False, is_internal=False),)
+    delivered = (
+        RegisteredApp(name="shop-admin", url="http://localhost:9001", is_preexisting=False, is_internal=False),
+    )
 
     entries = evidence_collection.service_entries(
         "app_registered", delivered, {"dashboard": "RUNNING"}, {"shop-admin": "dashboard"}, True
@@ -425,17 +531,16 @@ def _collector_rules(
     supervisord_conf: str = _SUPERVISORD_CONF,
     isolated_instances: str = "",
 ) -> list[ScriptedExecRule]:
-    probe = _sections(
-        repo_root="/home/user/workspace\n",
-        registry_status=registry_status + "\n",
-        registry=registry_text,
+    probe = workspace_state_output(
+        registry_text,
+        registry_status=registry_status,
         services=services_text,
         supervisord=supervisord_conf,
         isolated_instances=isolated_instances,
     )
-    repo_state = _sections(head_sha="b" * 40 + "\n", status="", commit_count="3\n", bundle="")
-    http = _sections(status=http_status + "\n", headers="HTTP/1.1 200 OK\r\n", body="<h1>todo</h1>")
-    test_result = _sections(exit_code=test_exit_code + "\n", output="1 passed\n")
+    repo_state = probe_sections(head_sha="b" * 40 + "\n", status="", commit_count="3\n", bundle="")
+    http = probe_sections(status=http_status + "\n", headers="HTTP/1.1 200 OK\r\n", body="<h1>todo</h1>")
+    test_result = probe_sections(exit_code=test_exit_code + "\n", output="1 passed\n")
     return [
         ScriptedExecRule("MINDS_EVALS_SECTION:repo_root", [ok_result(mngr_exec_json(probe))]),
         ScriptedExecRule("base64 -d | python3 -", [ok_result(mngr_exec_json("2\n"))]),
@@ -452,6 +557,7 @@ def _run_collector(
     rules: list[ScriptedExecRule],
     deadline_offset_seconds: float = 600.0,
     is_expectations_collection_wanted: bool = True,
+    preexisting_registrations: frozenset[str] | None = TEMPLATE_PREEXISTING_APPS,
 ) -> tuple[evidence_collection.EvidenceCollector, MockBoxEnvironment]:
     environment = MockBoxEnvironment(tmp_path, rules)
     logs_dir = tmp_path / "agent"
@@ -463,6 +569,7 @@ def _run_collector(
         case=case,
         clone_base_sha="a" * 40,
         dwt_tip_sha="e" * 40,
+        preexisting_registrations=preexisting_registrations,
         host_logs_dir=logs_dir,
         deadline=time.monotonic() + deadline_offset_seconds,
     )
@@ -530,9 +637,9 @@ def test_collector_scores_a_workspace_that_registered_nothing_against_the_agent(
     # failure the eval exists to catch, so it must be a scored FAILED, never an ERROR that would
     # make finalize.py abandon the whole grade as a harness problem.
     case = _case_config(_authored())
-    builtins_only = '[[apps]]\nname = "system_interface"\nurl = "http://localhost:8000"\n'
+    preexisting_only = '[[apps]]\nname = "system_interface"\nurl = "http://localhost:8000"\n'
 
-    collector, _environment = _run_collector(tmp_path, case, _collector_rules(registry_text=builtins_only))
+    collector, _environment = _run_collector(tmp_path, case, _collector_rules(registry_text=preexisting_only))
 
     statuses = _entry_status_by_id(collector)
     assert statuses["app_registered"] is CheckStatus.FAILED
@@ -558,6 +665,65 @@ def test_collector_ignores_an_abandoned_preview_row(tmp_path: Path) -> None:
     assert "http_0_registered_apps_todo_preview" not in statuses
     assert statuses["app_registered"] is CheckStatus.PASSED
     assert statuses["http_0_registered_apps_todo"] is CheckStatus.PASSED
+
+
+def test_collector_publishes_the_preexisting_set_it_excluded(tmp_path: Path) -> None:
+    # A manifest reader can see what was subtracted from the registry instead of having to infer it.
+    case = _case_config(_authored())
+
+    collector, _environment = _run_collector(tmp_path, case, _collector_rules())
+
+    assert collector.manifest().preexisting_registrations == tuple(sorted(TEMPLATE_PREEXISTING_APPS))
+
+
+def test_collector_scores_an_app_the_workspace_already_served_as_no_delivery(tmp_path: Path) -> None:
+    # The registry lists one app, but the workspace was already serving it before the agent ran, so
+    # the agent delivered nothing -- which is agent-side evidence, not a harness error.
+    case = _case_config(_authored())
+    registry = '[[apps]]\nname = "notes"\nurl = "http://localhost:8400"\nlabel = "notes-aa"\n'
+
+    collector, _environment = _run_collector(
+        tmp_path,
+        case,
+        _collector_rules(registry_text=registry),
+        preexisting_registrations=TEMPLATE_PREEXISTING_APPS | {"notes"},
+    )
+
+    statuses = _entry_status_by_id(collector)
+    assert statuses["app_registered"] is CheckStatus.FAILED
+    assert "app_registered_service_notes" not in statuses
+    assert collector.manifest().is_evidence_complete is True
+
+
+def test_collector_cannot_score_apps_without_a_preexisting_set(tmp_path: Path) -> None:
+    # Without a pre-existing set there is no way to tell what the agent added from what booted with
+    # the workspace. That is the instrument failing, so every entry whose meaning depends on the
+    # distinction is unmeasured -- never a failure charged to the agent.
+    case = _case_config(_authored())
+
+    collector, _environment = _run_collector(tmp_path, case, _collector_rules(), preexisting_registrations=None)
+
+    entries_by_id = {entry.entry_id: entry for entry in collector.entries}
+    assert entries_by_id["app_registered"].status is CheckStatus.ERROR
+    assert entries_by_id["app_registered"].reason == evidence_collection.REASON_PREEXISTING_UNKNOWN
+    assert entries_by_id["http_0_registered_apps"].status is CheckStatus.ERROR
+    assert entries_by_id["http_0_registered_apps"].reason == evidence_collection.REASON_PREEXISTING_UNKNOWN
+    assert not any(entry.status is CheckStatus.FAILED for entry in collector.entries)
+    manifest = collector.manifest()
+    assert manifest.is_evidence_complete is False
+    assert manifest.preexisting_registrations is None
+
+
+def test_collector_still_captures_the_registry_without_a_preexisting_set(tmp_path: Path) -> None:
+    # The unconditional capture is what makes a trial diagnosable after the fact, so it must not be
+    # gated on being able to resolve the delivered set.
+    case = _case_config(_authored())
+
+    _collector, environment = _run_collector(tmp_path, case, _collector_rules(), preexisting_registrations=None)
+
+    uploaded = environment.uploaded_content_by_target
+    assert uploaded["/logs/agent/verification/apps.toml"] == _REGISTRY_TOML
+    assert uploaded["/logs/agent/verification/services.txt"] == _SERVICES_TEXT
 
 
 def test_collector_records_an_absent_registry_as_an_error_not_a_failure(tmp_path: Path) -> None:
@@ -601,7 +767,9 @@ def test_collector_records_a_ships_nothing_trial_as_evidence_not_an_error(tmp_pa
     # to be handled before the call, not after. It is the ships-nothing outcome this eval exists to
     # catch: it must read as recorded agent-side evidence, never as the harness failing to measure.
     case = _case_config(_authored())
-    zero_commit_repo_state = _sections(head_sha="b" * 40 + "\n", status="", commit_count="0\n", bundle="no-commits")
+    zero_commit_repo_state = probe_sections(
+        head_sha="b" * 40 + "\n", status="", commit_count="0\n", bundle="no-commits"
+    )
     rules = _collector_rules()
     rules[2] = ScriptedExecRule("git bundle create", [ok_result(mngr_exec_json(zero_commit_repo_state))])
 
@@ -728,9 +896,13 @@ def test_oracle_evidence_files_record_every_declared_check_as_passed() -> None:
     # Both SHAs travel, so a replay can regenerate the base clone and verify it before unbundling.
     assert manifest["base_sha"] and manifest["dwt_tip_sha"]
     assert json.loads(files[evidence_collection.REPO_STATE_FILENAME])["dwt_tip_sha"]
-    registry_apps = evidence_collection.parse_apps_registry(files[evidence_collection.APPS_REGISTRY_FILENAME])
+    # Read against the set the manifest itself publishes, so the fabricated bundle cannot claim one
+    # exclusion and record another.
+    registry_apps = evidence_collection.parse_apps_registry(
+        files[evidence_collection.APPS_REGISTRY_FILENAME], frozenset(manifest["preexisting_registrations"])
+    )
     assert registry_apps is not None
-    assert [app.name for app in registry_apps if not app.is_builtin] == ["delivered-app"]
+    assert [app.name for app in registry_apps if not app.is_preexisting] == ["delivered-app"]
     assert "RUNNING" in files[evidence_collection.SERVICES_FILENAME]
 
 
@@ -805,6 +977,7 @@ def _flow_collector(
     rules: list[ScriptedExecRule],
     flows: list[dict[str, str]] | None = None,
     host_id: str = _HOST_ID,
+    preexisting_registrations: frozenset[str] | None = TEMPLATE_PREEXISTING_APPS,
 ) -> tuple[evidence_collection.EvidenceCollector, MockBoxEnvironment]:
     environment = MockBoxEnvironment(tmp_path, rules)
     logs_dir = tmp_path / "agent"
@@ -816,6 +989,7 @@ def _flow_collector(
         case=_case_config(_authored(ui_flows=flows if flows is not None else _FLOWS)),
         clone_base_sha="a" * 40,
         dwt_tip_sha="e" * 40,
+        preexisting_registrations=preexisting_registrations,
         host_logs_dir=logs_dir,
         deadline=time.monotonic() + 600.0,
         verification_agent=agent,
@@ -894,9 +1068,11 @@ def test_the_flow_drives_an_app_that_actually_answers(tmp_path: Path) -> None:
     rules[http_rule_index] = ScriptedExecRule(
         "http_headers",
         [
-            ok_result(mngr_exec_json(_sections(status="000 0.0001\n", headers="", body=""))),
+            ok_result(mngr_exec_json(probe_sections(status="000 0.0001\n", headers="", body=""))),
             ok_result(
-                mngr_exec_json(_sections(status="200 0.0041\n", headers="HTTP/1.1 200 OK\r\n", body="<h1>todo</h1>"))
+                mngr_exec_json(
+                    probe_sections(status="200 0.0041\n", headers="HTTP/1.1 200 OK\r\n", body="<h1>todo</h1>")
+                )
             ),
         ],
     )
@@ -1104,10 +1280,10 @@ def test_collector_stops_a_flow_at_the_step_budget(tmp_path: Path) -> None:
 def test_collector_fails_a_flow_when_nothing_was_ever_served(tmp_path: Path) -> None:
     # No delivered app is the agent shipping nothing; the browser was never the problem.
     agent = ScriptedVerificationAgent(actions=[done_action()], readings=[reading()])
-    builtins_only = '[[apps]]\nname = "system_interface"\nurl = "http://localhost:8000"\n'
+    preexisting_only = '[[apps]]\nname = "system_interface"\nurl = "http://localhost:8000"\n'
 
     collector, _environment = _flow_collector(
-        tmp_path, agent, [*_executor_rules(), *_collector_rules(registry_text=builtins_only)]
+        tmp_path, agent, [*_executor_rules(), *_collector_rules(registry_text=preexisting_only)]
     )
 
     entry = _flow_entries(collector)[0]
@@ -1125,6 +1301,20 @@ def test_collector_records_an_unreadable_registry_as_an_error_not_a_missing_app(
 
     entry = _flow_entries(collector)[0]
     assert entry.status is CheckStatus.ERROR
+
+
+def test_collector_records_flows_as_unmeasured_without_a_preexisting_set(tmp_path: Path) -> None:
+    agent = ScriptedVerificationAgent(actions=[done_action()], readings=[reading()])
+
+    collector, _environment = _flow_collector(
+        tmp_path,
+        agent,
+        [*_executor_rules(), *_collector_rules()],
+        preexisting_registrations=None,
+    )
+
+    entry = _flow_entries(collector)[0]
+    assert (entry.status, entry.reason) == (CheckStatus.ERROR, evidence_collection.REASON_PREEXISTING_UNKNOWN)
 
 
 def test_collector_will_not_build_an_origin_from_a_missing_host_id(tmp_path: Path) -> None:
