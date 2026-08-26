@@ -545,4 +545,10 @@ cd system/apps/system_interface/frontend
 npm run build
 ```
 
-This compiles the frontend into `imbue/system_interface/static/`.
+This compiles the frontend into `imbue/system_interface/static/`. The
+`postbuild` step stamps the output with `git rev-parse HEAD:./` -- the hash of
+the *committed* frontend tree, not of the files just built. A build from a
+frontend tree with uncommitted changes is stamped as its last commit, so the
+update apply's stamp check (which compares it against the merged tree) cannot
+tell that bundle from one built at that commit. Commit before building a
+bundle that will be handed to the apply.
