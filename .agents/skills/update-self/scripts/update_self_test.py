@@ -2153,6 +2153,47 @@ def test_a_bundle_the_tree_cannot_vouch_for_is_accepted_on_the_index_alone(
 # --- apply: failure -> rollback --------------------------------------------------
 
 
+def test_a_step_that_cannot_be_spawned_rolls_back_and_names_the_step(
+    apply_repo: Path, capsys
+) -> None:
+    # A forward step whose executable is not on the PATH this apply inherited
+    # raises FileNotFoundError out of subprocess, not a non-zero exit. Before
+    # `_run_checked` caught OSError it escaped the whole forward block (which
+    # catches only ApplyFailed), so the merge stayed landed with no rollback.
+    # It must instead read as an ordinary failed step, named.
+    runner = _apply_runner(_FRONTEND_MANIFEST_DIFF + _FRONTEND_DIFF, apply_repo)
+    runner.respond(("npm", "ci"), FileNotFoundError(2, "No such file", "npm"))
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 2
+    assert runner.ran("git", "checkout", _ROLLBACK, "--")
+    assert not _marker_exists(apply_repo)
+    assert "npm ci could not be run" in capsys.readouterr().err
+
+
+def test_an_unexpected_error_in_the_forward_apply_still_rolls_back(
+    apply_repo: Path, capsys
+) -> None:
+    # The last resort. A real one of these shipped: the staged apply read
+    # `oom_tag_shell_prefix` off a pre-merge bands module too old to have it,
+    # and the AttributeError escaped past the merge and the snapshots with only
+    # ApplyFailed caught -- leaving the workspace half-applied with a marker and
+    # no rollback. Whatever the bug, the merge must still come back out.
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+    runner.respond(("npm", "run", "build"), AttributeError("no attribute 'boom'"))
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 2
+    assert runner.ran("git", "checkout", _ROLLBACK, "--")
+    assert not _marker_exists(apply_repo)
+    err = capsys.readouterr().err
+    assert "unexpected AttributeError" in err
+    # The traceback survives the tidying, so the bug is still diagnosable.
+    assert "Traceback (most recent call last)" in err
+
+
 def test_failed_build_rolls_back_the_merge_and_restores_the_bundle(
     apply_repo: Path,
 ) -> None:
