@@ -24,11 +24,13 @@ from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import make_threaded_server
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8642
-SOURCE_JSONL = Path(sys.argv[2]).expanduser()
-FIXTURE_ROOT = Path(sys.argv[3]).expanduser()
+# One or more source session JSONLs, served as consecutive sessions of one
+# agent (oldest first). Multiple files reproduce a transcript spliced from
+# several real sessions, like the workspace fills used for manual testing.
+SOURCE_JSONLS = [Path(arg).expanduser() for arg in sys.argv[2:-1]]
+FIXTURE_ROOT = Path(sys.argv[-1]).expanduser()
 AGENT_ID = "agent-scrollfix-1"
 AGENT_NAME = "scroll-fixture"
-SESSION_ID = "scrollfix-session-001"
 
 
 def build_fixture() -> AgentInfo:
@@ -37,9 +39,13 @@ def build_fixture() -> AgentInfo:
     claude_config_dir = FIXTURE_ROOT / "claude_config"
     projects_dir = claude_config_dir / "projects" / "fixture-project"
     projects_dir.mkdir(parents=True, exist_ok=True)
-    (agent_state_dir / "claude_session_id_history").write_text(f"{SESSION_ID}\n")
+    history_lines = []
+    for index, source in enumerate(SOURCE_JSONLS):
+        session_id = f"scrollfix-session-{index:03d}"
+        shutil.copyfile(source, projects_dir / f"{session_id}.jsonl")
+        history_lines.append(f"{session_id} startup")
+    (agent_state_dir / "claude_session_id_history").write_text("\n".join(history_lines) + "\n")
     (agent_state_dir / "env").write_text(f"CLAUDE_CONFIG_DIR={claude_config_dir}\n")
-    shutil.copyfile(SOURCE_JSONL, projects_dir / f"{SESSION_ID}.jsonl")
     return AgentInfo(
         id=AGENT_ID,
         name=AGENT_NAME,

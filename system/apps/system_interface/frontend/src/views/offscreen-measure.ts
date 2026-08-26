@@ -101,9 +101,16 @@ export function createOffscreenMeasurer(options: OffscreenMeasurerOptions): Offs
       m.render(containerEl, [row.render()]);
       const rowEl = containerEl.firstElementChild;
       if (rowEl instanceof HTMLElement) {
-        const heightPx = rowEl.getBoundingClientRect().height;
-        if (heightPx > 0) {
-          heightByRowKey.set(row.key, heightPx);
+        // Outer pitch, matching the live measurer: border-box height plus the
+        // row's own margins (flex column, so margins never collapse and the
+        // pitch is per-row deterministic).
+        const style = getComputedStyle(rowEl);
+        const pitchPx =
+          rowEl.getBoundingClientRect().height +
+          (parseFloat(style.marginTop) || 0) +
+          (parseFloat(style.marginBottom) || 0);
+        if (pitchPx > 0) {
+          heightByRowKey.set(row.key, pitchPx);
         }
       }
     }
