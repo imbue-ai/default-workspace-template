@@ -1268,23 +1268,11 @@ body {
   animation-delay: 0.3s;
 }
 
-/* ── Scrollbar ── */
-.app-content::-webkit-scrollbar {
-  width: 6px;
-}
-
-.app-content::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.app-content::-webkit-scrollbar-thumb {
-  background: var(--color-border);
-  border-radius: 3px;
-}
-
-.app-content::-webkit-scrollbar-thumb:hover {
-  background: var(--color-text-faint);
-}
+/* ── Scrollbar ──
+   The transcript scrollbar is deliberately NATIVE (no ::-webkit-scrollbar
+   styling): the OS draws overlay scrollbars that match every other app, and the
+   always-visible custom thumb both looked foreign and amplified the small
+   scroll-height corrections a virtualized list makes as rows measure. */
 
 /* ── Structured tool call blocks (non-markdown) ── */
 .tool-call-block {

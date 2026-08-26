@@ -11,6 +11,7 @@ import { hoverTooltipAttrs } from "./hoverTooltip";
 import type { PermissionResolution } from "./message-classification";
 import { isSkillExpansionUserMessage } from "./message-classification";
 import { PermissionCard, isFiledPermissionRequest } from "./permission-card";
+import { findScrollContainer, withViewportAnchor } from "./toggle-anchor";
 
 // Per-kind user_message rendering lives in user-message-display.ts (the display
 // half of the classify/display split). Re-exported here so existing importers --
@@ -297,9 +298,15 @@ export function renderToolCallBlock(toolCall: ToolCall, toolResult: ToolResultEv
       {
         class: "tool-call-header",
         onclick(e: Event) {
-          const block = (e.currentTarget as HTMLElement).parentElement;
+          const header = e.currentTarget as HTMLElement;
+          const block = header.parentElement;
           if (block) {
-            block.classList.toggle("tool-call-block--expanded");
+            // Hold the first visible line fixed across the height change --
+            // native anchoring is inconsistent when this block starts above
+            // the viewport (see toggle-anchor).
+            withViewportAnchor(findScrollContainer(header), header, () => {
+              block.classList.toggle("tool-call-block--expanded");
+            });
           }
         },
       },

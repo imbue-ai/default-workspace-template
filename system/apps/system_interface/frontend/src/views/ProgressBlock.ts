@@ -22,6 +22,7 @@ import {
 } from "./message-renderers";
 import type { StepNode, StepStatus, TimelineItem } from "./turn-grouping";
 import { statusDoneIcon, statusPendingIcon, statusRingIcon } from "./icons";
+import { findScrollContainer, withViewportAnchor } from "./toggle-anchor";
 
 interface ProgressBlockAttrs {
   /** Timeline items in transcript order (steps, ungrouped runs, chips). */
@@ -113,7 +114,18 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
             type: "button",
             class: "pv-tl-title",
             disabled: !canExpand,
-            onclick: canExpand ? () => toggle(step.ticket_id) : undefined,
+            onclick: canExpand
+              ? (e: Event) => {
+                  // Hold the first visible line fixed across the expand/collapse:
+                  // redraw synchronously inside the anchor hold so the height
+                  // change is measured in the same frame (see toggle-anchor).
+                  const header = e.currentTarget as HTMLElement;
+                  withViewportAnchor(findScrollContainer(header), header, () => {
+                    toggle(step.ticket_id);
+                    m.redraw.sync();
+                  });
+                }
+              : undefined,
           },
           [
             step.title,

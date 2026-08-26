@@ -50,6 +50,7 @@ import { buildConversationRows, renderTranscriptSegments, type RowDescriptor } f
 import { ActivityIndicator } from "./ActivityIndicator";
 import { renderQueuedMessages } from "./QueuedMessageView";
 import { renderOutgoingMessages } from "./OutgoingMessageView";
+import { getOutgoingMessages } from "../models/OutgoingMessages";
 
 function getAgentTerminalUrl(agentId: string): string {
   // The ttyd dispatch script is invoked as `bash -c "$SCRIPT" <args...>` where
@@ -147,6 +148,14 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   // Paging (scroll-driven fetch) in-flight guard. Covers older/newer pages and
   // offset jumps -- only one is outstanding at a time.
   let backfillInFlight = false;
+  // The newest optimistic "Sending..." bubble already reacted to, so each SEND
+  // re-engages tail follow exactly once: sending a message is an explicit return
+  // to the live tail, even for a reader scrolled deep into history -- without
+  // this, the sent message lands below an unmoving viewport and the streaming
+  // reply is never followed (hit live). Keyed on the bubble id (monotonic per
+  // send), not the count, which falls back to its old value when a bubble
+  // resolves into the real transcript.
+  let lastSeenOutgoingId: string | null = null;
   // After an offset jump replaces the window, pin the viewport once to the top of
   // the freshly loaded rows (just below the top reserved spacer) so the user lands
   // on the jumped-to content rather than in the reserved region above it. With the
@@ -305,7 +314,8 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
 
     logWs.onmessage = (event: MessageEvent) => {
       const data = JSON.parse(event.data as string) as
-        { line: string } | { done: true; success: boolean; error: string | null };
+        | { line: string }
+        | { done: true; success: boolean; error: string | null };
 
       if ("line" in data) {
         logLines.push(data.line);
@@ -425,7 +435,33 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     currentAgentId = agentId;
     scroll.reset();
     backfillInFlight = false;
+    lastSeenOutgoingId = null;
     loadAgent(agentId);
+  }
+
+  /**
+   * Re-engage tail follow when a message was just sent from this panel.
+   *
+   * Detected off the optimistic outgoing bubbles (painted synchronously by the
+   * composer's send path) rather than by wiring the composer to this panel's
+   * scroll state directly. When the loaded window sits off the live tail (after
+   * an offset jump), the tail window is re-fetched too -- following requires the
+   * tail to actually be loaded.
+   */
+  function refollowAfterSend(agentId: string): void {
+    const outgoing = getOutgoingMessages(agentId);
+    if (outgoing.length === 0) {
+      return;
+    }
+    const newestId = outgoing[outgoing.length - 1].id;
+    if (newestId === lastSeenOutgoingId) {
+      return;
+    }
+    lastSeenOutgoingId = newestId;
+    scroll.userScrolledUp = false;
+    if (hasMoreAfter(agentId)) {
+      loadAgent(agentId);
+    }
   }
 
   // A retry of the snapshot that 404'd is outstanding; only one at a time.
@@ -610,6 +646,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
 
     ensureAgentLoaded(agentId);
     manageStreamConnection(agentId);
+    refollowAfterSend(agentId);
 
     if (isConversationNotFound(agentId)) {
       fetchScreenCapture(agentId);
