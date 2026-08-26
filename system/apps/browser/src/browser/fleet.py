@@ -20,12 +20,15 @@ then drive that browser by its name.
 
 Commands::
 
-    agentic-browser-fleet ls
-    agentic-browser-fleet new [name]
-    agentic-browser-fleet task <name> "<prompt>" [--reclaim] [--no-wait] [--max-wait S] [--no-pane]
-    agentic-browser-fleet lock <name> [--no-wait] [--max-wait S]    # foreground hold; Ctrl-C releases
-    agentic-browser-fleet unlock <name>                             # alias: release
-    agentic-browser-fleet release <name>
+    agentic-browser-fleet ls [--include-tabs]
+    agentic-browser-fleet new [name]            # prints the `playwright-cli attach --cdp=` line
+    agentic-browser-fleet close <name>          # ends the browser; DELETES its profile
+    agentic-browser-fleet acquire <name> [--reclaim] [--no-wait] [--max-wait S]
+    agentic-browser-fleet release <name>        # alias: unlock
+    agentic-browser-fleet handoff <name> "<reason>"   # alias: request-human
+
+Driving is NOT here -- the agent attaches `playwright-cli` to the gated CDP endpoint this
+CLI hands out. `playwright-cli --help` is the command reference.
 
 The daemon address is discovered from ``data/.state/apps.toml`` (the same
 registry ``layout.py`` reads), overridable via ``MINDS_BROWSER_SERVICE_URL``,
