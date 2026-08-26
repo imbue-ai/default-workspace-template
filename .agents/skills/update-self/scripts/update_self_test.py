@@ -3702,6 +3702,37 @@ def test_the_recovery_rebuild_does_not_run_npm_ci_over_a_restored_node_modules(
     assert (node_modules / "left-pad.js").read_text() == "restored"
 
 
+def test_a_rollback_rebuilds_the_tool_envs_it_could_not_copy_aside(
+    apply_repo: Path, capsys
+) -> None:
+    # The venv copy alone is not the environment: the two uv tools are
+    # recorded (and restored) separately, and one that could not be located at
+    # snapshot time has no copy to put back. A rollback that keyed the rebuild
+    # on the venv alone reported success with both tools still built from the
+    # rolled-back-away tree -- the ModuleNotFoundError-on-mngr state.
+    (apply_repo / ".venv").mkdir()
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)  # no tools on PATH
+    spawner = _FakeSpawner(output="ImportError: boom", exited=True)
+
+    code = _apply(
+        runner,
+        _FakeHttp(lambda url: 200 if _is_live(url) else None),
+        spawner,
+        apply_repo,
+    )
+
+    assert code == 2
+    # The forward installs are wrapped expendable; recovery's are not, and
+    # they must have happened even though the venv copy went back fine.
+    recovery_installs = [
+        c for c in runner.raw_calls if c[:3] == ["uv", "tool", "install"]
+    ]
+    assert len(recovery_installs) == 2
+    err = capsys.readouterr().err
+    assert "could not locate the uv tool environment behind 'mngr'" in err
+    assert "could not locate the uv tool environment behind 'system-interface'" in err
+
+
 def test_the_spawner_captures_both_streams_of_a_real_child(tmp_path: Path) -> None:
     # The capture has to survive a real Popen: stderr is redirected onto
     # stdout's file and the parent closes its handle while the child keeps
