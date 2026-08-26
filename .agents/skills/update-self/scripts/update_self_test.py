@@ -1437,13 +1437,11 @@ class _Clock:
 
 def _apply_runner(name_status: str, repo_root: Path) -> _RecordingRunner:
     runner = _RecordingRunner(repo_root=repo_root)
-    # Clean for the precondition check; any later status call is the rollback's
-    # "is there anything staged to commit" question, and by then the restore
-    # has staged the reverted paths.
-    runner.respond(
-        ("git", "status", "--porcelain"),
-        [_Result(stdout=""), _Result(stdout="M  restored-path")],
-    )
+    # Clean for the precondition check. The rollback's own "is anything staged
+    # to commit" question is the index diff, and by then the restore has
+    # staged the reverted paths.
+    runner.respond(("git", "status", "--porcelain"), _Result(stdout=""))
+    runner.respond(("git", "diff", "--cached", "--quiet"), _Result(returncode=1))
     # Not yet merged: the merge-base ancestor check answers "no".
     runner.respond(("git", "merge-base", "--is-ancestor"), _Result(returncode=1))
     # No merge left staged by a killed apply (the MERGE_HEAD lookup).
@@ -3868,9 +3866,9 @@ def _recover(
     now: Callable[[], float] = lambda: 10_000.0,
     is_pid_live: Callable[[int], bool] = lambda pid: False,
 ) -> int:
-    # recover runs no precondition status check; its one status call is the
-    # rollback commit's, and the restore has staged the reverted paths by then.
-    runner.respond(("git", "status", "--porcelain"), _Result(stdout="M  restored"))
+    # The rollback commit's "is anything staged" question: the restore has
+    # staged the reverted paths by then.
+    runner.respond(("git", "diff", "--cached", "--quiet"), _Result(returncode=1))
     return update_self.recover(
         repo_root,
         if_stale=if_stale,
@@ -4269,6 +4267,44 @@ def test_recover_aborts_a_merge_killed_before_it_committed(
         != 0
     )
     assert not _marker_exists(repo)
+
+
+def test_recover_with_nothing_to_restore_commits_nothing_over_an_untracked_file(
+    tmp_path: Path,
+) -> None:
+    # An apply killed before its merge landed leaves the tree already at the
+    # rollback point, so there is nothing to commit -- and an untracked file
+    # (any stray file in the workspace) must not turn that into a failed
+    # `git commit` that keeps the marker, and so re-fails recovery, every boot.
+    repo = _make_real_repo(tmp_path)
+    (repo / ".gitignore").write_text("data/\n")
+    _git_in(repo, "add", "-A")
+    _git_in(repo, "commit", "-q", "-m", "base")
+    (repo / "stray-notes.txt").write_text("untracked\n")
+    rollback_to = _head_sha(repo)
+    commits_before = _commit_count(repo)
+    update_self.write_marker(
+        update_self.ApplyMarker(
+            dri_agent="the-lead",
+            rollback_to=rollback_to,
+            merge_ref="worker",
+            target_ref=None,
+            ff_only=True,
+            worker_bundle=None,
+            phase=update_self.PHASE_STARTED,
+            pid=12345,
+            started_at=1.0,
+            updated_at=1.0,
+        ),
+        repo,
+        now=lambda: 2.0,
+    )
+
+    assert _recover_boot_path(repo) == 0
+
+    assert not _marker_exists(repo)
+    assert _commit_count(repo) == commits_before
+    assert (repo / "stray-notes.txt").exists()
 
 
 # --- surface-chat-tab ------------------------------------------------------
