@@ -968,7 +968,11 @@ class ClaudeAuthService(MutableModel):
             logger.warning("claude auth status failed to launch: {}", e)
             return self._with_derived_mode(AuthStatus(logged_in=False), combined_extra)
 
-        if result.is_timed_out:
+        # `is_timed_out` is recomputed once the runner has drained the child's output, not at
+        # the moment it decided to kill, so a check that exited on its own a moment before the
+        # deadline reports it alongside a zero exit and a complete payload. Only a command that
+        # did not finish has nothing to say; a nonzero or absent code is what marks the kill.
+        if result.is_timed_out and result.returncode != 0:
             raise AuthStatusUnavailableError(
                 f"claude auth status did not finish within {_CLAUDE_AUTH_STATUS_TIMEOUT_SECONDS:.0f}s"
             )
