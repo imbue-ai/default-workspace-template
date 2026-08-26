@@ -465,9 +465,9 @@ Per `.agents/shared/references/worker-reporting.md` (`<TASK_FILE_GLOB>` ->
     change mirrored into the live env/pin -- the apply's own provisioner re-run
     and services restart then carry it) or **rebuild-only for the current
     workspace** (only a `build_arg` / `start_arg` / runtime-flag change a
-    running container can't adopt, which the lead must put to the user before
-    applying). A genuinely-breaking, unapplyable change is a `stuck` report,
-    not a `done`.
+    running container can't adopt, which the lead surfaces as a results-message
+    caveat needing a workspace recreate). A genuinely-breaking, unapplyable
+    change is a `stuck` report, not a `done`.
   - **Global-dependency bump with a dependent** (if the merge bumps a global dep
     that something depends on) -- the version delta and what your online research
     turned up, **which dependent(s)** and whether each is **built-in** (its code is
