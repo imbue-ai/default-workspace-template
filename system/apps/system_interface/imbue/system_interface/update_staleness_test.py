@@ -98,12 +98,14 @@ def test_relevance_rules(path: str, is_relevant: bool) -> None:
     assert _is_path_relevant_to_this_server(path) is is_relevant
 
 
-def test_every_imported_workspace_package_is_covered() -> None:
-    """Every workspace package the app depends on must make it stale.
+def _imported_workspace_package_source_paths() -> list[str]:
+    """One representative source path per local workspace package this app depends on.
 
-    The prefix list is hand-maintained, and a dependency added without a prefix
-    would leave a real skew showing no banner -- a silent failure the rest of
-    the suite cannot see, because nothing else knows what this process imports.
+    Read from the app's own manifest rather than written out: the prefix lists
+    on both sides of the restart knowledge are hand-maintained, and a
+    dependency added without a prefix would leave a real skew showing no
+    banner -- a silent failure the rest of the suite cannot see, because
+    nothing else knows what this process imports.
     """
     repo_root = WORKSPACE_ROOT_DIRECTORY
     app_root = repo_root / "system/apps/system_interface"
@@ -115,15 +117,19 @@ def test_every_imported_workspace_package_is_covered() -> None:
         for parent in ("system/libs", "system/services", "system/apps", "system/vendor/mngr/libs")
         for manifest in (repo_root / parent).glob("*/pyproject.toml")
     }
-
-    uncovered = [
-        name
-        for name in sorted(names & set(local_packages))
+    return sorted(
+        f"{local_packages[name].relative_to(repo_root)}/src/module.py"
+        for name in names & set(local_packages)
         if name != "system-interface"
-        and not _is_path_relevant_to_this_server(f"{local_packages[name].relative_to(repo_root)}/src/module.py")
-    ]
+    )
 
-    assert uncovered == []
+
+_IMPORTED_WORKSPACE_PACKAGE_SOURCE_PATHS = _imported_workspace_package_source_paths()
+
+
+@pytest.mark.parametrize("path", _IMPORTED_WORKSPACE_PACKAGE_SOURCE_PATHS)
+def test_every_imported_workspace_package_is_covered(path: str) -> None:
+    assert _is_path_relevant_to_this_server(path)
 
 
 def _commit_files(repo: Path, message: str, *relpaths: str) -> None:
@@ -485,6 +491,11 @@ _RESTART_REQUIRING_PATHS = (
     # imported by the system interface.
     ("system/supervisord.conf", False),
     ("system/libs/bootstrap/src/bootstrap/manager.py", False),
+) + tuple(
+    # Every workspace package this process imports: the apply must restart the
+    # services agent for it, and this server is stale after it.
+    (path, True)
+    for path in _IMPORTED_WORKSPACE_PACKAGE_SOURCE_PATHS
 )
 
 
