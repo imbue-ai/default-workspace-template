@@ -1307,9 +1307,15 @@ def _protect_from_memory_shed(repo_root: Path) -> None:
     losing the apply mid-motion is the half-applied state this design exists to
     prevent. Only the authority paths that would repair a failed apply
     (owner-exec, the terminal) stay below it. Best-effort by construction; an
-    apply that cannot be protected is still an apply worth running. Called from
-    ``__main__`` rather than from the command functions so exercising them in a
-    test cannot re-band the test runner.
+    apply that cannot be protected is still an apply worth running -- and it
+    usually cannot be: lowering ``oom_score_adj`` below the value a process
+    inherited needs ``CAP_SYS_RESOURCE``, which the container does not grant,
+    so an apply launched from a chat agent (a band far above this one) or
+    from the recovery cron keeps its launcher's band and the write below
+    fails with the warning. The band holds only when launched from something
+    already at or below it. Called from ``__main__`` rather than from the
+    command functions so exercising them in a test cannot re-band the test
+    runner.
     """
     global _BANDS
     _BANDS = _load_bands(repo_root)
@@ -1323,8 +1329,10 @@ def _protect_from_memory_shed(repo_root: Path) -> None:
         band = _BANDS.SERVICE_BANDS.get("system_interface", 20)
     if not _BANDS.set_oom_score_adj(os.getpid(), band):
         sys.stderr.write(
-            "warning: could not lower this process's memory-shed priority; a shed "
-            "during the apply would skip the rollback.\n"
+            "warning: could not lower this process's memory-shed priority (lowering "
+            "it below the launcher's band needs CAP_SYS_RESOURCE, so this is expected "
+            "from a chat agent or the recovery cron); the apply keeps the band it was "
+            "launched in, and a shed during it would skip the rollback.\n"
         )
 
 
