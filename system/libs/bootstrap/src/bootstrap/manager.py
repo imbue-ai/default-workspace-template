@@ -61,6 +61,11 @@ UPDATE_APPLY_SCRIPT = Path(".agents/skills/update-self/scripts/update_self.py")
 # than this process's.
 WORKSPACE_ROOT_DIR = Path("/home/user/workspace")
 UPDATE_RECOVER_CRON_NAME = "update-apply-recover"
+# `recover`'s exit code for "the tree is rolled back, but the pre-apply state
+# could not be put back" (the script's own emergency code; it has recorded an
+# emergency.json beside the marker). Distinct from the exit 1 of a rollback
+# that could not even restore the tree, which keeps the marker for a retry.
+UPDATE_RECOVER_EXIT_EMERGENCY = 3
 # Bound on the boot-time rollback: git restores, plain file copies of the
 # pre-apply snapshots (the venv copy is the big one), and -- when the apply had
 # reached its provisioner step -- a re-run of setup_system.sh, which does reach
@@ -847,9 +852,12 @@ def _recover_interrupted_update() -> str:
 
     Returns the DRI agent to re-engage afterwards, or ``""`` when there is
     nobody to wake (no marker, the guard declined, the rollback failed, or the
-    marker named no agent). Waking is the caller's job and deliberately not
-    done here: it starts a live agent, which must not happen until the
-    workspace venv has been converged.
+    marker named no agent). A rollback that restored the tree but not the
+    pre-apply state (exit ``UPDATE_RECOVER_EXIT_EMERGENCY``) still names the
+    agent: the marker is gone and the workspace is booting over that mismatch,
+    which is precisely the state that wants a person. Waking is the caller's
+    job and deliberately not done here: it starts a live agent, which must not
+    happen until the workspace venv has been converged.
 
     The apply's marker persisting across a boot means the container stopped (or
     died) between the merge landing and the apply finishing -- the half-applied
@@ -897,6 +905,15 @@ def _recover_interrupted_update() -> str:
         logger.error("update-apply recovery could not run ({}); continuing boot", e)
         return ""
     recovery_output = result.stderr.strip()[-1000:]
+    if result.returncode == UPDATE_RECOVER_EXIT_EMERGENCY:
+        logger.error(
+            "update-apply recovery rolled the tree back but could not put the "
+            "pre-apply state back; the services are booting over that mismatch and "
+            "the emergency record beside {} names what is left to repair: {}",
+            UPDATE_APPLY_MARKER,
+            recovery_output,
+        )
+        return dri_agent
     if result.returncode != 0:
         logger.error(
             "update-apply recovery failed (rc={}); continuing boot with the "

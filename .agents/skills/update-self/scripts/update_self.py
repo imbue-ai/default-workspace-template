@@ -98,7 +98,10 @@ than agent prose:
     gone a grace period without an update, and silently exits 0 in every
     normal state. ``--no-restart`` is the boot path (nothing is running yet,
     so disk state is the whole job). Bare ``recover`` is the explicit
-    agent-driven rollback.
+    agent-driven rollback. Exit codes: 0 rolled back (or nothing to do) /
+    1 the tree restore failed, marker kept for the next pass / 3 the tree is
+    rolled back but the pre-apply state or health could not be put back
+    (emergency recorded, marker cleared).
 
 Impact analysis -- which services and skills depend on a changed file -- is
 deliberately NOT scripted here: it requires open-ended exploration (imports,
@@ -3729,11 +3732,13 @@ def recover(
     ``--no-restart`` is the boot path: nothing is running yet, so disk state is
     the whole job (bootstrap starts the services fresh from the restored tree)
     and the health probes would only time out against a server that has not
-    booted. The marker survives a failed *tree restore* so the next pass
-    retries it; a rollback that restored the tree but could not confirm a
-    healthy workspace clears the marker before reporting the emergency, like
-    the apply's own emergency path -- re-running the same failed rollback from
-    cron would not help.
+    booted. The marker survives a failed *tree restore* (exit 1) so the next
+    pass retries it; a rollback that restored the tree but could not put the
+    pre-apply state back (boot path) or confirm a healthy workspace (live
+    path) clears the marker and records the emergency (exit 3), like the
+    apply's own emergency path -- re-running the same failed rollback from
+    cron would not help, and the record is what makes the state visible once
+    the marker is gone.
     """
     resolved_base = (
         base_url or os.environ.get(ENV_WORKSPACE_URL, DEFAULT_WORKSPACE_URL)
@@ -3805,14 +3810,26 @@ def recover(
             # copy (a full disk, a permission fault) leaves the copy sitting
             # right there, and putting it back by hand is the way out. Deleting
             # them here would destroy the only remaining route.
-            sys.stderr.write(
-                f"recover: could not restore: {', '.join(sorted(failed))}. The tree is "
+            reason = (
+                f"could not restore: {', '.join(sorted(failed))}. The tree is "
                 "rolled back but the pre-apply state is NOT -- the copies are kept at "
                 f"{_snapshots_root(repo_root)}, so copying one back by hand is the "
                 "quickest repair; whatever has no copy left has to be rebuilt. "
-                "Services will boot against that mismatch.\n"
+                "Services will boot against that mismatch."
             )
-            return 0
+            sys.stderr.write(f"recover: {reason}\n")
+            # Nothing is running to probe, so this is the boot path's emergency:
+            # the marker is gone, the services are about to boot over a
+            # non-restored venv or bundle, and without the record nothing
+            # would show it.
+            write_emergency(
+                repo_root,
+                f"an interrupted apply of {marker.merge_ref} was rolled back at boot, "
+                f"but {reason}",
+                marker.dri_agent,
+                now,
+            )
+            return 3
         discard_snapshots(repo_root)
         sys.stderr.write(
             "recovered: the tree and pre-apply state are rolled back; services will "
@@ -3874,7 +3891,7 @@ def recover(
         marker.dri_agent,
         now,
     )
-    return 1
+    return 3
 
 
 def _cmd_apply(args: argparse.Namespace) -> int:
