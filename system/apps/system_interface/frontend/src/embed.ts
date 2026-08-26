@@ -22,14 +22,19 @@ import {
 } from "@minds/embed-contract";
 import * as embedContract from "@minds/embed-contract";
 
-// The contract-v3 resolutions type postdates the vendored embed_contract
-// snapshot (this repo does not edit system/vendor by hand); a named import of
-// a missing export fails the rollup build, so probe the namespace and fall
-// back to the literal. A stale vendored endpoint's validator drops the
-// message until the sync lands -- cards keep the transcript-driven flip in
-// the meantime.
+// These types can postdate the vendored embed_contract snapshot (they arrive
+// with the next mngr release sync; this repo does not edit system/vendor by
+// hand). A named import of a missing export fails the rollup build, so probe
+// the namespace and fall back to the literal. A stale vendored endpoint's
+// validator drops the (to it) unknown type until the sync lands -- permission
+// cards keep the transcript-driven flip in the meantime, and share settings
+// simply goes live with no code change here once the sync lands.
 export const PERMISSION_RESOLUTIONS: "minds:permission-resolutions" =
   "PERMISSION_RESOLUTIONS" in embedContract ? embedContract.PERMISSION_RESOLUTIONS : "minds:permission-resolutions";
+// Workspace -> embedder: open the minds shell's Share tab focused on one app.
+// Payload: { serviceName }.
+export const OPEN_SHARE_SETTINGS: "minds:open-share-settings" =
+  "OPEN_SHARE_SETTINGS" in embedContract ? embedContract.OPEN_SHARE_SETTINGS : "minds:open-share-settings";
 
 type EmbedderMessageHandler = (message: ContractMessage) => void;
 

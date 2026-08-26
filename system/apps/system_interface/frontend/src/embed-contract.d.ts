@@ -19,10 +19,12 @@ declare module "@minds/embed-contract" {
   // than named-importing, which would fail the build.
   export const PERMISSION_RESOLUTIONS: "minds:permission-resolutions";
   export const MAX_PERMISSION_RESOLUTION_ENTRIES: number;
+  export const OPEN_SHARE_SETTINGS: "minds:open-share-settings";
 
   export const REQUEST_ID_PATTERN: RegExp;
   export const AGENT_ID_PATTERN: RegExp;
   export const HOST_ID_PATTERN: RegExp;
+  export const SERVICE_NAME_PATTERN: RegExp;
 
   export type ContractMessage = { type: string } & Record<string, unknown>;
 
