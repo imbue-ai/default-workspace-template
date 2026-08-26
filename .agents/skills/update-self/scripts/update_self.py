@@ -2036,9 +2036,26 @@ def snapshot_targets(
             (TOOL_NAME, TOOL_NAME),
         ):
             tool_dir = _tool_environment_dir(executable, tool_name, runner)
-            if tool_dir is not None:
-                targets.append((f"tool-{tool_name}", tool_dir))
+            if tool_dir is None:
+                sys.stderr.write(
+                    f"note: could not locate the uv tool environment behind "
+                    f"'{executable}' (not a uv tool on PATH), so it will not be "
+                    "copied aside; a failed apply will have to rebuild it to recover.\n"
+                )
+                continue
+            targets.append((f"tool-{tool_name}", tool_dir))
     return targets
+
+
+# The snapshot names that together cover the backend environments a manifest
+# change rebuilds. A rollback that could not put every one of them back has to
+# re-resolve all three from the restored tree: a restored venv over a tool
+# environment still built from the rolled-back-away tree is the
+# ModuleNotFoundError-on-``mngr`` state that reads as recovered while nothing
+# works.
+_ENVIRONMENT_SNAPSHOT_NAMES = frozenset(
+    {"venv", f"tool-{MNGR_TOOL_NAME}", f"tool-{TOOL_NAME}"}
+)
 
 
 def take_snapshots(
@@ -3083,7 +3100,7 @@ def _recover_running_state(
             # No stamp comparison here: the tree is rolled back, and an older
             # tree's build may predate the stamping postbuild step.
             _assert_bundle_built(repo_root, None, live_service_restarted=False)
-        if plan.backend_manifest and "venv" not in restored:
+        if plan.backend_manifest and not _ENVIRONMENT_SNAPSHOT_NAMES <= restored:
             _refresh_backend_dependencies(repo_root, runner, keep_protected)
         if live_service_restarted:
             _run_checked(
