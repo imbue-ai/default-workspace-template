@@ -65,7 +65,7 @@ document is the durable hand-off so any agent can pick the work up cold.
   `text-primary`/`surface`/`on-accent` (it self-inverts via its own
   `prefers-color-scheme` rules, so no new token); the progress-block warm greys →
   the neutral `--color-text-secondary`/`-faint` (progress view greys are now
-  neutral, a small deliberate shift). Note: `--color-info` is defined but unused.
+  neutral, a small deliberate shift).
 - **Primitives (P3) — Button DONE; Badge/Spinner/Toggle/Input still to come.**
   Shipped the `.btn` primitive (variants `primary|secondary|ghost|destructive|
   inverse|icon`, sizes `md|sm`, states incl. a new `:active` press and
@@ -111,9 +111,13 @@ document is the durable hand-off so any agent can pick the work up cold.
 
 - **Off-grid spacing strays** (~57 declarations using 9/10/14/18/22/28px etc.)
   left raw — snapping them to the scale is a *visual* decision, not a no-op.
-- **Defined-but-unused tokens** kept to document the scale: `--elevation-md`,
-  `--ease-standard`, `--color-info`. Drop or adopt as desired. Also
-  `--duration-sidebar-transition` (200ms) now duplicates `--dur-slow`.
+- **Defined-but-unused tokens — REMOVED.** The seven tokens that were defined but
+  never referenced (`--color-info`, `--ease-standard`, `--elevation-md`,
+  `--spacing-page`, `--width-sidebar`, `--width-sidebar-collapsed`,
+  `--duration-sidebar-transition`) have been dropped, so the `@theme` block is now
+  entirely live — every remaining token is referenced by the shipped CSS. (The
+  policy: no scale-completing or speculative colour/one-off tokens; add a token
+  when a use exists, not before.)
 - **Medium-weight (500) audit** — walk remaining `font-weight:500` sites now that
   the type system is in (controls stay off medium).
 - **Two modals left off the shared shell** on purpose: the full-bleed image

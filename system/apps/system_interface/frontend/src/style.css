@@ -47,7 +47,6 @@
   --color-warning: #b45309;
   --color-warning-bg: #fde68a;
   --color-success: #22a06b;
-  --color-info: #2563eb;
   /* Foreground on accent/coloured surfaces (e.g. white button text). */
   --color-text-on-accent: #ffffff;
   /* Inverse surface — dark ("black") bg with on-accent text; inverse buttons + tooltips. */
@@ -56,7 +55,6 @@
   --font-family-base: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --font-family-heading: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --font-family-mono: "SF Mono", "Cascadia Code", ui-monospace, monospace;
-  --spacing-page: 1.5rem;
   /* Spacing scale — 4px base (with 2/6px half-steps). Named --space-* (NOT the
      Tailwind --spacing base that backs p-/m-/gap- utilities) so those utilities
      keep their value. Only exact on-grid px (2/4/6/8/12/16/20/24/32) migrate onto
@@ -72,19 +70,12 @@
   --space-6: 24px;
   --space-8: 32px;
   --width-message-column: 740px;
-  --width-sidebar: 250px;
-  --width-sidebar-collapsed: 3.25rem;
-  --duration-sidebar-transition: 200ms;
-  /* Motion scale — one unit (ms). Durations back the common UI transitions;
-     --ease-standard is the house easing (kept for future use -- the existing
-     `ease`/`ease-out` keywords and the modals' overshoot cubic-bezier are
-     different curves and are left as-is, so it has no consumer yet and is
-     tree-shaken from :root until used). Off-scale durations (100/150/300/320ms,
-     and the long looping animation timings) are left raw. */
+  /* Motion scale — one unit (ms). Durations back the common UI transitions.
+     Off-scale durations (100/150/300/320ms, and the long looping animation
+     timings) are left raw. */
   --dur-fast: 80ms;
   --dur-base: 120ms;
   --dur-slow: 200ms;
-  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
   /* Z-index scale — names the workspace's stacking layers (see design-system.md).
      Modal backdrops + the image lightbox sit at --z-overlay; the JS hover-tooltip
      clears them at --z-tooltip. Two mid values (50, 2) have no layer name and stay
@@ -120,11 +111,8 @@
   /* Elevation scale. NOT named --shadow-* on purpose: Tailwind's own --shadow-
      {sm,md,lg} back the `shadow-*` utilities (shadow-lg is used in the launcher +
      sidebar views), so redefining those names would silently shift them -- the
-     same non-colliding-name lesson as the type scale. --elevation-md has no exact
-     consumer yet (the near-match menu/dropdown shadows are two-layer and stay
-     raw); it is kept for the scale. */
+     same non-colliding-name lesson as the type scale. */
   --elevation-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
-  --elevation-md: 0 2px 10px rgba(0, 0, 0, 0.08);
   --elevation-lg: 0 8px 32px rgba(0, 0, 0, 0.2);
   --elevation-overlay: 0 8px 40px rgba(0, 0, 0, 0.5);
   --logo-url: none;
@@ -552,8 +540,8 @@ body {
   font-weight: 400;
   line-height: 1.4;
   white-space: nowrap;
-  /* design-system-exception: same geometry as --elevation-md but a heavier 0.25
-     alpha so the small bubble reads on any surface; not the scale value. */
+  /* design-system-exception: a 0 2px 10px shadow with a heavier 0.25 alpha so the
+     small bubble reads on any surface; off the elevation scale. */
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
   opacity: 0;
   visibility: hidden;
