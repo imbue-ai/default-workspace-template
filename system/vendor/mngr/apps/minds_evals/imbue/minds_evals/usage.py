@@ -19,9 +19,11 @@ looks cheaper than one that does the same work inline, which would make cost gam
 usage is captured, delegation is at least *detected*: any trial that delegates is marked
 ``is_cost_complete = False`` rather than quietly reporting a clean total.
 
-Both are priced with ``mngr_usage``'s table rather than a local copy, so these numbers stay bound to
-the prices the LiteLLM proxy bills at (``mngr_usage``'s litellm_pricing_test pins that table to
-litellm's own price map, which is what the proxy bills from).
+Both are priced with ``mngr_usage``'s table rather than a local copy, so these numbers and the
+in-box proxy's own are computed from one set of rates -- ``proxy_config`` builds the proxy's config
+from the same table. Those rates are pinned to litellm's map by ``litellm_pricing_test``, which
+covers the four flat per-token buckets; the fast-mode multiplier applied on top of them is this
+app's own and is pinned to nothing.
 
 **Speed tier and what it does to cost.** Fast mode bills the same tokens at twice the standard rate
 ($10/$50 per MTok against $5/$25 on Opus 5 and Opus 4.8), and it is chosen per request, so a model id
@@ -49,6 +51,7 @@ from pydantic import Field
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from imbue.minds_evals.data_types import DeciderResult
+from imbue.minds_evals.ui_flows import VerifierUsage
 from imbue.mngr_usage.data_types import TokenSnapshot
 from imbue.mngr_usage.pricing import compute_cost
 
@@ -415,6 +418,21 @@ def decider_usage_metadata(usage: DeciderUsage) -> dict[str, Any]:
         "fallback_count": usage.fallback_count,
         "tokens": {"input": usage.input_token_count, "output": usage.output_token_count},
         "cost_usd": usage.cost_usd,
+    }
+
+
+@pure
+def verifier_usage_metadata(usage: VerifierUsage) -> dict[str, Any]:
+    """The UI-flow verification agent's own spend. Reported next to the decider's and priced the
+    same way: harness spend, never folded into what the agent under test consumed."""
+    pricing_key = canonical_model_key(usage.model)
+    tokens = TokenSnapshot(input=usage.input_token_count, output=usage.output_token_count)
+    return {
+        "model": usage.model,
+        "call_count": usage.call_count,
+        "failed_call_count": usage.failed_call_count,
+        "tokens": {"input": usage.input_token_count, "output": usage.output_token_count},
+        "cost_usd": compute_cost(pricing_key, tokens) if pricing_key is not None else None,
     }
 
 
