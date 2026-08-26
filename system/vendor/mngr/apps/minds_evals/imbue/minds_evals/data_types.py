@@ -32,22 +32,13 @@ DEFAULT_AVG_WORD_COUNT_BASELINE: Final[float] = 120.0
 # generous default costs nothing beyond a longer harbor agent timeout.
 DEFAULT_VERIFICATION_TIMEOUT_SECONDS: Final[float] = 1800.0
 
-# Apps every Minds workspace serves out of the box -- the workspace template's own, which live
-# under its `system/apps/<name>` tree and register through the same path a delivered app does. A
-# deliverable app is any entry in the workspace's registry that is not one of these.
-#
-# The list has to track what the template ships: a builtin missing from it is counted as something
-# the agent delivered, which both inflates the delivered count and charges the agent for a builtin
-# that happens to be unhealthy.
-BUILTIN_APP_NAMES: Final[tuple[str, ...]] = ("system_interface", "terminal", "browser", "files")
-
 # What "kind": "minds-app" implies when nothing refines it: one delivered app,
 # answering 200 on its root path.
 DEFAULT_MIN_REGISTERED_APPS: Final[int] = 1
 MINDS_APP_EXPECTED_HTTP_STATUS: Final[int] = 200
 
-# The http-check target that fans out to every registered non-builtin app rather
-# than naming one service.
+# The http-check target that fans out to every delivered app rather than naming
+# one service.
 REGISTERED_APPS_HTTP_TARGET: Final[str] = "registered-apps"
 
 
@@ -126,7 +117,7 @@ class AppCheck(FrozenModel):
     """An expanded registry/service check: enough delivered apps are registered and their services run."""
 
     check_id: str = Field(description="Stable id, used as the manifest entry's id prefix")
-    min_registered_apps: int = Field(description="How many non-builtin apps must appear in the registry")
+    min_registered_apps: int = Field(description="How many delivered apps must appear in the registry")
     is_supervisord_service_required: bool = Field(description="Whether each registered app's service must be running")
 
 
@@ -244,7 +235,9 @@ class RegisteredApp(FrozenModel):
     # and not an omission: a row written before labels existed has none, and forward routes it under
     # its own name.
     label: str = Field(default="", description="The service's origin label; empty when the row has none")
-    is_builtin: bool = Field(description="Whether this is one of the apps every workspace ships with")
+    # Measured from the workspace before the first turn, not matched against a hand-kept name list
+    # (see `evidence_collection.resolve_preexisting_registrations` for how the set is read).
+    is_preexisting: bool = Field(description="Whether the workspace already served this row before the agent ran")
     # The registry's own `internal = true` marker: machinery that forwards a port but has no page of
     # its own to show, so the workspace never offers it as an app to open.
     is_internal: bool = Field(description="Whether the registry marks this row as not an openable app")
@@ -268,6 +261,13 @@ class EvidenceManifest(FrozenModel):
     # works because the eval-case commit is made with fixed dates and is therefore reproducible.
     base_sha: str = Field(description="HEAD of the prepared eval-case clone; the git bundle's base")
     dwt_tip_sha: str = Field(description="The workspace-template tip the base clone was made from")
+    # What the collector subtracted from the registry to arrive at the delivered set, so a reader
+    # can see the exclusion rather than infer it. The manifest itself has to keep "unknown" apart
+    # from "the workspace served nothing": a case with no expectations records no entry that would
+    # otherwise carry the `preexisting_unknown` reason.
+    preexisting_registrations: tuple[str, ...] | None = Field(
+        description="Sorted registry names the workspace already served before the agent ran; None if unknown"
+    )
     is_expectations_declared: bool = Field(description="Whether the case declared expectations at all")
     is_evidence_complete: bool = Field(description="True when no entry has status ERROR")
     started_at: str = Field(description="UTC ISO timestamp the collection phase began")

@@ -261,8 +261,9 @@ nothing outscores one that ships a working app in terse messages. A case that de
 - `minds-app` is a **kind with implied checks**, not a hand-written check list: at least one
   *delivered* app registered in the workspace's `data/.state/apps.toml`, its supervisord service
   running, an HTTP 200 from each delivered app's root path, and the delivered repo captured as a git
-  bundle. "Delivered" is narrower than "not a builtin" -- see below. Optional `min_registered_apps`, `http`, and `files` entries *refine* that set
-  rather than replacing it. Unknown kinds and unknown keys are rejected at generation time.
+  bundle. "Delivered" is narrower than "not pre-existing" -- see below. Optional
+  `min_registered_apps`, `http`, and `files` entries *refine* that set rather than replacing it.
+  Unknown kinds and unknown keys are rejected at generation time.
 - `test_commands` are run in the delivered repo and recorded for the judge, but never gated: gating
   them would punish cases whose prompts never mentioned tests.
 - `ui_flows` are natural-language flows through the delivered UI, each with a verifiable end
@@ -311,11 +312,42 @@ The harness probes the app **as delivered** and never starts it. Minds' promise 
 running app tab, so "built it but never started or registered it" is a delivery failure, not
 something for the harness to repair.
 
-**What counts as a delivered app.** Not every registry row is one. Rows the registry marks
-`internal = true` are machinery that forwards a port but has no page of its own to show -- the
-owner-exec daemon, for instance, which answers 404 on `/` by design. A live trial confirmed this is
-not hypothetical: counting it both inflated the delivered-app count and failed the implied root-path
-probe, charging the agent for a daemon it never shipped.
+**What counts as a delivered app.** Not every registry row is one, and nothing about a row's shape
+says which is which: the workspace template's own apps (`system_interface`, `terminal`, `browser`,
+`files`, ...) register through exactly the path a delivered app does.
+
+The **pre-existing** rows -- what the workspace already served before the agent ran -- are read from
+a single probe taken **before turn 1**, once the workspace has booted and been signed in. It is the
+same `workspace_state` probe the evidence phase runs later, and it answers two questions at once,
+because neither alone is complete. A hand-maintained list of names is no better: `files` was once
+missing from one, so a template app in BACKOFF was scored as the deliverable and the UI flows drove
+the forward proxy's error page.
+
+1. **The app registry as it actually stood.** A measurement rather than an inference, and the only
+   source that sees a template app which registers its port from inside the script its supervisord
+   program runs -- the terminal does exactly that, as do the owner-exec and vm-exec daemons.
+2. **The workspace's own `system/supervisord.conf`**, which the same probe cats and which at that
+   moment is still the pinned template's file verbatim, parsed through its `forward_port.py --name`
+   invocations. This covers a template app whose service is slow enough that it had not registered
+   its port yet: the file is on disk from the moment the workspace is cloned, whatever its services
+   are doing. Not the directory names under `system/apps/`: a registry name is a caller-supplied
+   flag, and a multi-port app registers extra origin rows that match no directory.
+
+The pre-existing set is their union, which stays correct for a dwt fork or branch that ships extra
+apps -- an eval config may point `dwt_repo`/`dwt_branch` anywhere. The manifest records it as
+`preexisting_registrations` (`null` when the set is unknown, which is not the same claim as a
+workspace that served nothing).
+
+The registry is the half that must be readable. Without it the set is **unknown**, not empty --
+otherwise every app the workspace booted with would count as delivered. The app, HTTP, and UI-flow
+entries are then recorded `error` with reason `preexisting_unknown`, so the trial is unmeasured
+rather than scored wrong. The registry and service capture still happens either way.
+
+Rows the registry marks `internal = true` are machinery that forwards a port but has no page of its
+own to show -- the owner-exec daemon, for instance, which answers 404 on `/` by design. A live trial
+confirmed this is not hypothetical: counting it both inflated the delivered-app count and failed the
+implied root-path probe, charging the agent for a daemon it never shipped. (The template supervises
+that daemon too, so it is pre-existing as well; either exclusion alone is enough.)
 
 A throwaway "isolated instance"
 preview server registers through the same `forward_port.py` path and leaves its row behind when

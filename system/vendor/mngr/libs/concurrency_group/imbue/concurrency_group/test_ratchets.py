@@ -4,6 +4,7 @@ import pytest
 from inline_snapshot import snapshot
 
 from imbue.imbue_common.ratchet_testing import standard_ratchet_checks as rc
+from imbue.imbue_common.ratchet_testing.ratchets import TEST_FILE_PATTERNS
 
 _DIR = Path(__file__).parent.parent.parent
 
@@ -237,7 +238,13 @@ def test_prevent_bare_urwid_tty_signal_keys() -> None:
 
 
 def test_prevent_direct_subprocess() -> None:
-    rc.check_direct_subprocess(_DIR, snapshot(3))
+    # _terminal_freeze_test_script.py is a test harness (the rule already exempts test files
+    # wholesale, it just does not recognise this filename). It must spawn through raw Popen:
+    # what it is testing is the child's process group, and ConcurrencyGroup exposes no way to
+    # set one. It reaps its own children explicitly.
+    rc.check_direct_subprocess(
+        _DIR, snapshot(3), excluded_patterns=TEST_FILE_PATTERNS + ("_terminal_freeze_test_script.py",)
+    )
 
 
 def test_prevent_bare_tmux_targets() -> None:
