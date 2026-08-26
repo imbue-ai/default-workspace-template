@@ -2718,7 +2718,7 @@ def _worker_bundle_reject_reason(
     copied over the live UI while the source says otherwise -- the "source
     updated, UI didn't" state a user once had to catch by eye. A rejected
     bundle is not a failed apply: the live build remains the fallback, so the
-    correct bundle is still produced (only the "what the user previewed is
+    correct bundle is still produced (only the "what the worker validated is
     what ships" guarantee is lost, which the caller's note says).
     """
     if worker_bundle is None:
@@ -2794,7 +2794,7 @@ def _install_or_build_bundle(
 
     ``worker_bundle`` is the worker's already-built ``static/`` once the caller
     has verified it against the merged source (:func:`_worker_bundle_reject_reason`)
-    -- the artifact the user previewed, and installing it is a plain copy that
+    -- the artifact the worker validated, and installing it is a plain copy that
     needs neither npm nor a registry. ``None`` means build live, tagged
     expendable: a shed build is an ordinary failure the rollback absorbs.
     """
