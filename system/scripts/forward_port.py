@@ -36,6 +36,7 @@ import fcntl
 import os
 import re
 import secrets
+import sys
 import tempfile
 import xml.etree.ElementTree as ElementTree
 from pathlib import Path
@@ -429,10 +430,9 @@ def main() -> None:
         parser.error(name_error)
 
     icon: str | None = None
+    icon_error: str | None = None
     if args.icon_file is not None:
-        icon, read_error = read_icon_file(Path(args.icon_file))
-        if read_error is not None:
-            parser.error(read_error)
+        icon, icon_error = read_icon_file(Path(args.icon_file))
 
     apps_file = _apps_file()
     lock_path = apps_file.parent / ".apps.lock"
@@ -444,7 +444,16 @@ def main() -> None:
             if args.remove:
                 _remove(apps_file, args.name)
             else:
-                if icon is None and not args.no_icon and not args.internal and not _has_entry(apps_file, args.name):
+                is_new_pickable = not args.internal and not _has_entry(apps_file, args.name)
+                # A bad icon file fails a NEW registration (the author is present to
+                # fix it) but must not brick an existing app's restart: warn and
+                # register without it, keeping any already-stored icon (the UI
+                # falls back to the letter monogram when none is stored).
+                if icon_error is not None:
+                    if is_new_pickable:
+                        parser.error(icon_error)
+                    sys.stderr.write(f"warning: {icon_error}; registering without an icon\n")
+                if icon is None and not args.no_icon and is_new_pickable:
                     parser.error(
                         f"app {args.name!r} is new and has no icon: pass --icon-file with a house-style "
                         "SVG (see the build-app skill), or --no-icon for non-pickable machinery"

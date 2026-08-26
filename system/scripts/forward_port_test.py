@@ -344,6 +344,24 @@ def test_a_non_svg_icon_file_is_refused(tmp_path: Path) -> None:
     assert result.returncode != 0
     assert "must be an .svg file" in result.stderr
 
+def test_a_bad_icon_file_does_not_brick_an_existing_apps_restart(tmp_path: Path) -> None:
+    """A corrupted icon file fails a NEW registration, but an already-registered
+    app must still restart: warn, register without it, keep the stored icon."""
+    apps_file = tmp_path / "apps.toml"
+    result = _run(
+        ["--name", "web", "--url", "http://localhost:8000", *_icon_file_args(tmp_path, _ICON)], apps_file
+    )
+    assert result.returncode == 0, result.stderr
+
+    bad_file = tmp_path / "icon.svg"
+    bad_file.write_text("<div>not an svg</div>")
+    result = _run(["--name", "web", "--url", "http://localhost:8001", "--icon-file", str(bad_file)], apps_file)
+    assert result.returncode == 0, result.stderr
+    assert "warning" in result.stderr
+    rows = _read_apps(apps_file)
+    assert rows[0]["url"] == "http://localhost:8001"
+    assert rows[0]["icon"] == _ICON
+
 def test_a_missing_icon_file_fails_loudly(tmp_path: Path) -> None:
     apps_file = tmp_path / "apps.toml"
     result = _run(
