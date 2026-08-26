@@ -104,6 +104,7 @@ lead already pasted into the task body).
 from __future__ import annotations
 
 import argparse
+import functools
 import io
 import json
 import os
@@ -692,15 +693,15 @@ def _destroy_stopped_predecessor(name: str, runner: Runner) -> int | None:
     return None
 
 
-def _worker_is_idle(worker_name: str) -> bool:
+def _worker_is_idle(worker_name: str, runner: Runner) -> bool:
     """Whether the worker's agent has ended its turn (state WAITING/STOPPED).
 
-    Queried from ``mngr list`` (the same source the lead's other liveness
-    checks use). Deliberately failure-tolerant: any query error answers
-    "not idle" so a transient mngr hiccup can never abort a healthy await --
-    the timeout remains the backstop.
+    Queried from ``mngr list`` through ``runner`` (the same source the lead's
+    other liveness checks use). Deliberately failure-tolerant: any query error
+    answers "not idle" so a transient mngr hiccup can never abort a healthy
+    await -- the timeout remains the backstop.
     """
-    return _worker_state(worker_name, Runner()) in ("WAITING", _STOPPED_STATE)
+    return _worker_state(worker_name, runner) in ("WAITING", _STOPPED_STATE)
 
 
 def await_report(
@@ -951,7 +952,7 @@ def launch_sync(
         out=buffer,
         worker_name=name,
         pending_shed_check=_worker_has_pending_shed,
-        idle_check=_worker_is_idle,
+        idle_check=functools.partial(_worker_is_idle, runner=runner),
     )
     branch = f"mngr/{name}"
     if await_rc != 0:
@@ -1025,7 +1026,7 @@ def _run_await(args: argparse.Namespace) -> int:
         poll_interval_seconds=args.poll_interval,
         worker_name=args.name,
         pending_shed_check=_worker_has_pending_shed,
-        idle_check=_worker_is_idle,
+        idle_check=functools.partial(_worker_is_idle, runner=Runner()),
     )
 
 

@@ -1386,6 +1386,8 @@ def test_launch_sync_timeout_keeps_worker_alive(tmp_path: Path) -> None:
 
     assert rc == create_worker_mod._AWAIT_TIMEOUT_RC
     assert _destroy_argvs(runner) == []
+    # The idle poll goes through the injected runner, not a real `mngr list`.
+    assert any(c.argv[:2] == ["mngr", "list"] for c in runner.calls)
     payload = json.loads(result_json.read_text())
     assert payload["timed_out"] is True
     assert payload["branch"] == "mngr/demo-worker"
