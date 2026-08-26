@@ -42,6 +42,7 @@ from bootstrap.manager import (
     _recover_interrupted_update,
     _wake_update_dri_agent,
     _write_update_recovery_cron_entry,
+    main,
 )
 
 # --- _configure_git_global ---
@@ -983,6 +984,37 @@ def test_a_partial_restore_at_boot_is_an_error_that_still_wakes_the_dri_agent(
     assert dri_agent == "agent-omega"
     assert len(stub.calls) == 1
     assert any("could not put the pre-apply state back" in line for line in errors)
+
+
+def test_main_rolls_back_before_the_venv_sync_and_wakes_the_agent_after_it(
+    monkeypatch: pytest.MonkeyPatch, _bootstrap_env: Path
+) -> None:
+    # The two orderings the boot path is built around: the rollback must run
+    # before the venv converge (which has to converge against the restored
+    # tree, not the half-applied one), and the DRI agent must be woken only
+    # after it (a live agent's `uv run` would race the venv rewrite).
+    _write_apply_marker("agent-omega")
+    stub = _StubSubprocess()
+    stub.on_command = _clear_marker_on_recover
+    monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
+    # The steps that touch the host or replace the process.
+    for name in (
+        "_migrate_legacy_claude_state_best_effort",
+        "_write_update_recovery_cron_entry",
+        "_ensure_supervisor_log_dir",
+        "_exec_supervisord",
+    ):
+        monkeypatch.setattr(f"bootstrap.manager.{name}", lambda: None)
+    monkeypatch.delenv("LATCHKEY_GATEWAY", raising=False)
+
+    main()
+
+    recover_index = next(
+        index for index, argv in enumerate(stub.calls) if "recover" in argv
+    )
+    sync_index = stub.calls.index(["uv", "sync", "--all-packages", "--frozen"])
+    wake_index = stub.calls.index(["mngr", "start", "agent-omega"])
+    assert recover_index < sync_index < wake_index
 
 
 def test_recover_names_nobody_when_the_marker_recorded_no_agent(

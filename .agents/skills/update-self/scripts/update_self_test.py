@@ -1234,6 +1234,12 @@ def _bundle_exists(repo_root: Path) -> bool:
     return (repo_root / update_self.FRONTEND_BUILD_INDEX).exists()
 
 
+def _installed_stamp(repo_root: Path) -> str | None:
+    """The served bundle's source stamp: what tells the pre-apply copy (the
+    fixture writes none) from a bundle the emulated build produced."""
+    return update_self._read_bundle_stamp(repo_root / update_self.STATIC_DIR)
+
+
 def _make_apply_repo(tmp_path: Path) -> Path:
     repo_root = tmp_path / "repo"
     (repo_root / update_self.FRONTEND_DIR).mkdir(parents=True)
@@ -2110,7 +2116,10 @@ def test_a_live_build_whose_bundle_does_not_match_the_merged_source_rolls_back(
 
     assert code == 2
     assert runner.ran("git", "checkout", _ROLLBACK, "--")
+    # The pre-apply copy is back, not the mismatched build (which the
+    # emulated build left in place, so the index alone cannot tell them apart).
     assert _bundle_exists(apply_repo)
+    assert _installed_stamp(apply_repo) is None
 
 
 def test_a_bundle_the_tree_cannot_vouch_for_is_accepted_on_the_index_alone(
@@ -2700,6 +2709,7 @@ def test_a_regressed_frontend_is_rolled_back(apply_repo: Path) -> None:
         return answer(url)
 
     runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+    runner.build_stamp = "built-by-this-apply"
 
     code = _apply(
         runner,
@@ -2710,7 +2720,10 @@ def test_a_regressed_frontend_is_rolled_back(apply_repo: Path) -> None:
 
     assert code == 2
     assert runner.ran("git", "checkout", _ROLLBACK, "--")
-    assert _bundle_exists(apply_repo)  # restored from the pre-apply copy
+    # Restored from the pre-apply copy, not the regressing build the emulated
+    # build left in place.
+    assert _bundle_exists(apply_repo)
+    assert _installed_stamp(apply_repo) is None
 
 
 def test_a_build_that_writes_no_bundle_is_a_failure_not_a_success(
@@ -3329,8 +3342,12 @@ def test_only_the_hungry_forward_steps_are_expendable_and_recovery_is_not(
         if c[:2] == ["npm", "ci"] or c[:3] == ["npm", "run", "build"]
     ]
     assert recovery_npm, "recovery should have rebuilt without the expendable tag"
-    recovery_uv = [c for c in unwrapped if c[:1] == ["uv"]]
-    assert recovery_uv, "recovery should have refreshed the envs without the tag"
+    # The refresh itself, not just any uv call: `uv tool dir` runs unwrapped
+    # on the forward pass too, so it cannot stand in for the recovery refresh.
+    recovery_installs = [c for c in unwrapped if c[:3] == ["uv", "tool", "install"]]
+    recovery_syncs = [c for c in unwrapped if c[:2] == ["uv", "sync"]]
+    assert len(recovery_installs) == 2, "recovery should reinstall both tools untagged"
+    assert recovery_syncs, "recovery should re-sync the venv untagged"
 
 
 def test_the_expendable_wrapper_hands_the_command_its_argv_intact(
@@ -3867,18 +3884,32 @@ def test_the_starter_this_recreates_is_the_one_the_template_ships() -> None:
     # preamble edited on one side alone would silently make that instruction
     # impossible to follow and hand a recreated ledger a different header.
     ledger = _WORKSPACE_ROOT / update_self._VERSION_HISTORY_REL
-    # Only in a tree that still ships the starter, which is the one the two can
-    # actually drift apart in. This file ships into every workspace made from
-    # the template, and there the same path is that workspace's own ledger:
-    # entries are appended to it (and a published template drops it entirely),
-    # so an entry of any kind means this is not the shipped block any more.
+    # This file ships into every workspace made from the template, and there
+    # the same path is that workspace's own ledger: entries are appended to it
+    # (and a published template drops it entirely). The starter block is what
+    # is left once the entry lines are taken back out, so the comparison
+    # holds in a live workspace too rather than skipping for good after its
+    # first update.
     if not ledger.exists():
         pytest.skip("no ledger here: a published template drops it")
     shipped = ledger.read_text()
-    if any(line.startswith(("- ", "### ")) for line in shipped.splitlines()):
-        pytest.skip("this ledger has entries: a live workspace's, not the starter")
 
-    assert shipped == update_self._VERSION_HISTORY_STARTER
+    assert _without_ledger_entries(shipped) == _without_ledger_entries(
+        update_self._VERSION_HISTORY_STARTER
+    )
+
+
+def _without_ledger_entries(text: str) -> list[str]:
+    """The ledger's prose and headings, entry lines removed and blank runs
+    collapsed -- what a workspace's appended entries leave untouched."""
+    kept: list[str] = []
+    for line in text.splitlines():
+        if line.startswith(("- ", "### ")):
+            continue
+        if line.strip() == "" and kept and kept[-1] == "":
+            continue
+        kept.append(line)
+    return kept
 
 
 def test_ledger_creates_starter_seeds_origin_and_appends_idempotently(
