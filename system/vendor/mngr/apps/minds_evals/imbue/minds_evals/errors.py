@@ -33,3 +33,12 @@ class InstructionParseError(MindsEvalsError, ValueError):
     """Raised when the task instruction does not carry a parseable case config block."""
 
     ...
+
+
+class AgentKwargError(MindsEvalsError, ValueError):
+    """Raised when an `--ak key=value` agent kwarg cannot be read as the type it selects.
+
+    Raised from the driver's constructor, so a run stops before any box boots rather than after a
+    trial has burned a workspace on a setting that was never applied."""
+
+    ...

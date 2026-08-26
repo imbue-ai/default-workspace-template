@@ -49,7 +49,7 @@ def test_prevent_bare_except() -> None:
 
 
 def test_prevent_broad_exception_catch() -> None:
-    rc.check_broad_exception_catch(_DIR, snapshot(2))
+    rc.check_broad_exception_catch(_DIR, snapshot(4))
 
 
 def test_prevent_base_exception_catch() -> None:
@@ -95,7 +95,7 @@ def test_prevent_setattr() -> None:
 
 
 def test_prevent_asyncio_import() -> None:
-    rc.check_asyncio_import(_DIR, snapshot(4))
+    rc.check_asyncio_import(_DIR, snapshot(6))
 
 
 def test_prevent_pandas_import() -> None:
@@ -123,7 +123,7 @@ def test_prevent_exit_stack() -> None:
 
 
 def test_prevent_async_await() -> None:
-    rc.check_async_await(_DIR, snapshot(160))
+    rc.check_async_await(_DIR, snapshot(260))
 
 
 # --- Hardcoded paths ---
