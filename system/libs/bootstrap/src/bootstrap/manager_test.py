@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 from imbue.mngr.api.address_parsers import parse_new_agent_location
 from imbue.mngr.cli.output_helpers import write_json_line
+from loguru import logger
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 
 from bootstrap.manager import (
@@ -22,6 +23,7 @@ from bootstrap.manager import (
     UPDATE_APPLY_MARKER,
     UPDATE_APPLY_SCRIPT,
     UPDATE_RECOVER_CRON_NAME,
+    UPDATE_RECOVER_EXIT_EMERGENCY,
     WORKSPACE_ROOT_DIR,
     TimezoneFetchError,
     _apply_container_timezone,
@@ -957,6 +959,30 @@ def test_recover_failure_does_not_wake_or_raise(
     assert _recover_interrupted_update() == ""
 
     assert len(stub.calls) == 1
+
+
+def test_a_partial_restore_at_boot_is_an_error_that_still_wakes_the_dri_agent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Exit 3: the tree is rolled back, the marker is gone, but a snapshot
+    # could not be put back and the services are about to boot over that
+    # mismatch. That is the state most in need of a person, so it is logged
+    # as an error (a clean rollback is a warning) and the agent is still named.
+    monkeypatch.chdir(tmp_path)
+    _write_apply_marker("agent-omega")
+    stub = _StubSubprocess(returncode=UPDATE_RECOVER_EXIT_EMERGENCY)
+    stub.on_command = _clear_marker_on_recover
+    monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
+    errors: list[str] = []
+    sink = logger.add(lambda message: errors.append(str(message)), level="ERROR")
+    try:
+        dri_agent = _recover_interrupted_update()
+    finally:
+        logger.remove(sink)
+
+    assert dri_agent == "agent-omega"
+    assert len(stub.calls) == 1
+    assert any("could not put the pre-apply state back" in line for line in errors)
 
 
 def test_recover_names_nobody_when_the_marker_recorded_no_agent(

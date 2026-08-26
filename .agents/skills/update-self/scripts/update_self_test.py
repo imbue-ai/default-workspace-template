@@ -4264,7 +4264,10 @@ def test_recover_no_restart_keeps_the_copies_it_could_not_put_back(
 
     code = _recover(runner, _FakeHttp(_all_healthy), apply_repo, no_restart=True)
 
-    assert code == 0
+    # The boot path's emergency: nothing is running to probe, the marker is
+    # gone, and the services are about to boot over a non-restored bundle --
+    # so the exit code says so and the record is what keeps it visible.
+    assert code == 3
     assert not _marker_exists(apply_repo)
     assert (copy / "index.html").read_text() == "the pre-apply bundle"
     err = capsys.readouterr().err
@@ -4272,6 +4275,10 @@ def test_recover_no_restart_keeps_the_copies_it_could_not_put_back(
     assert str(snapshots_root) in err
     # Never the unqualified "the tree and pre-apply state are rolled back".
     assert "pre-apply state is NOT" in err
+    record = _read_emergency(apply_repo)
+    assert record["dri_agent"] == "the-lead"
+    assert "could not restore: bundle" in record["reason"]
+    assert record["snapshots_dir"] == str(snapshots_root)
 
 
 def test_recover_reaches_the_same_end_state_as_the_in_process_rollback(
@@ -4330,7 +4337,7 @@ def test_recover_reports_an_emergency_when_it_cannot_restore_health(
 
     code = _recover(runner, _FakeHttp(lambda _url: 500), apply_repo)
 
-    assert code == 1
+    assert code == 3  # the apply's own emergency code, distinct from exit 1
     err = capsys.readouterr().err
     assert "EMERGENCY" in err
     assert not _marker_exists(apply_repo)
