@@ -399,8 +399,12 @@ class ClaudeAuthStatusResponse(FrozenModel):
     masked_key_suffix: str | None = Field(
         default=None, description="Last few characters of the managed key/token, for display"
     )
-    workspace_host_id: str | None = Field(
-        default=None, description="This mind's mngr host id, for the desktop app's key-mint page link"
+    workspace_id: str | None = Field(
+        default=None,
+        description=(
+            "This workspace's id (its services agent id; the machine's host id as a fallback), "
+            "for the desktop app's key-mint page link"
+        ),
     )
     restart_phase: str | None = Field(
         default=None, description="Phase of the post-auth agent restart: 'restarting', 'finishing', 'done', 'failed'"

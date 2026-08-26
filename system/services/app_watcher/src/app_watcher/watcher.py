@@ -49,6 +49,10 @@ class ServiceRegisteredEvent(EventEnvelope):
     # route ``<label>.<host>`` origins to this service. Empty for a legacy row
     # written before labels existed (consumers fall back to the service name).
     label: str = ""
+    # The app's registered SVG icon markup, verbatim from apps.toml (validated
+    # on the way in by forward_port.py). Consumers must sanitize before
+    # inlining; empty when the app registered none.
+    icon: str = ""
 
 
 class ServiceDeregisteredEvent(EventEnvelope):
@@ -100,6 +104,7 @@ def _write_events(
             name = str(app.get("name", ""))
             url = str(app.get("url", ""))
             label = str(app.get("label", ""))
+            icon = str(app.get("icon", ""))
             if not name or not url:
                 continue
             current_names.add(name)
@@ -111,6 +116,7 @@ def _write_events(
                 service=name,
                 url=url,
                 label=label,
+                icon=icon,
             )
             f.write(event.model_dump_json() + "\n")
 
