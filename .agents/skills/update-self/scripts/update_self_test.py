@@ -1289,6 +1289,7 @@ class _RecordingRunner(update_self.Runner):
     calls: list[list[str]] = field(default_factory=list)
     raw_calls: list[list[str]] = field(default_factory=list)
     envs: list[dict | None] = field(default_factory=list)
+    timeouts: list[float | None] = field(default_factory=list)
     executables: dict[str, str] = field(default_factory=dict)
     repo_root: Path | None = None
     is_build_output_written: bool = True
@@ -1312,6 +1313,7 @@ class _RecordingRunner(update_self.Runner):
         argv_list = _unwrap_expendable(list(argv))
         self.calls.append(argv_list)
         self.envs.append(kwargs.get("env"))
+        self.timeouts.append(kwargs.get("timeout"))
         if self.on_command is not None:
             self.on_command(argv_list)
         result = self._canned_result(argv_list)
@@ -4297,6 +4299,34 @@ def test_recover_provisioner_failure_still_counts_as_recovered(
     err = capsys.readouterr().err
     assert "still counts as recovered" in err
     assert not _marker_exists(apply_repo)
+
+
+@pytest.mark.parametrize("no_restart", [False, True], ids=["live", "boot"])
+def test_a_hung_provisioner_does_not_wedge_recovery(
+    apply_repo: Path, capsys, no_restart: bool
+) -> None:
+    # Both recovery re-runs used to call bash directly with no budget: a
+    # provisioner that hung (rather than failed) wedged recovery for good, and
+    # on the cron path held the flock forever. They go through the same
+    # bounded runner as the forward run, and a hang is a named failure that
+    # still counts as recovered.
+    _plant_snapshotted_marker(apply_repo, provisioner_ran=True)
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+    runner.respond(
+        ("bash",), subprocess.TimeoutExpired(cmd="bash setup_system.sh", timeout=1800)
+    )
+
+    code = _recover(runner, _FakeHttp(_all_healthy), apply_repo, no_restart=no_restart)
+
+    assert code == 0
+    assert not _marker_exists(apply_repo)
+    assert "did not finish within" in capsys.readouterr().err
+    provisioner_timeouts = [
+        timeout
+        for argv, timeout in zip(runner.calls, runner.timeouts)
+        if tuple(argv[: len(_PROVISION)]) == _PROVISION
+    ]
+    assert provisioner_timeouts == [update_self._PROVISIONER_TIMEOUT_SECONDS]
 
 
 # --- recover: an apply killed inside `git merge` (real git) ---------------------
