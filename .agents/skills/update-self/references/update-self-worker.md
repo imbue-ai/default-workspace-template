@@ -345,6 +345,29 @@ tests, or exercise its scripts -- and called out in the report.
   (see §6). Your `npm ci` / `uv sync` runs here also pre-warm the shared uv and
   npm caches, which the live apply's own refresh then reuses, so the live
   motion is faster and less network-dependent than a cold one.
+- **Customization survival** -- for every user customization the update touches
+  (from 4a: workspace-added apps, widgets, and skills; user-modified built-in
+  surfaces; and user-built apps that hook into the system interface's API or
+  its state), verify that the *merged result* still carries it in substance.
+  Suites passing is not the bar -- the user's thing still being there and
+  working is, and a merge can be textually clean while functionally destroying
+  it. For a visual surface, screenshot the merged instance you booted above
+  and, for the before picture, the running workspace's surface (read-only) or
+  an isolated instance of the pre-merge tree -- then actually look at the
+  pair. For an app or integration, exercise its hook points against the
+  merged instance. Classify each customization:
+  - **intact** -- unchanged in look and behavior.
+  - **intact-but-changed** -- still present and working, but moved, restyled,
+    or otherwise cosmetically different (a widget in a new position). Never
+    blocks; record it with the before/after evidence so the lead's results
+    message can name it and offer to restore the old arrangement.
+  - **cannot be kept** -- the update's new structure has no place for it, or
+    it is functionally broken and your attempts to re-fit it on the new base
+    failed. Reach this class only *after* genuinely trying to adapt the
+    customization -- "tried and failed", never "looks hard". This is the one
+    verdict that stops the pass: raise it as a `question` gate (Step 6) with
+    the evidence and the options you see; never let it ride into `done` as a
+    footnote.
 
 ### 4c. Review gates
 
@@ -421,14 +444,18 @@ Per `.agents/shared/references/worker-reporting.md` (`<TASK_FILE_GLOB>` ->
 `data/.tasks/update-self/task.md`; `<RUNTIME_REPORTS_DIR>` ->
 `data/.tasks/update-self/reports`). Valid `name:` values:
 
-- `question` (`type: gate`) -- a genuine, unresolvable conflict; body: the file,
-  what each side did, the options. Also the channel for the 4c review-gate
-  escape hatch, which is a *process* question rather than a conflict; body: the
-  rule's conditions as you read them, what your situation is, and what you would
-  do instead. Say which of the two it is in the first line -- the lead answers
-  both itself: a conflict by choosing a resolution (defaulting to this
-  workspace's current behavior), a process question by the §4c rule. Push and
-  stop; resume on the lead's reply.
+- `question` (`type: gate`) -- three cases; say which it is in the first line.
+  (a) A genuine, unresolvable merge conflict; body: the file, what each side
+  did, the options. The lead answers this itself, defaulting to this
+  workspace's current behavior. (b) The 4c review-gate escape hatch, a
+  *process* question rather than a conflict; body: the rule's conditions as
+  you read them, what your situation is, and what you would do instead. The
+  lead answers it by the §4c rule. (c) A **customization the update cannot
+  keep** (the 4b survival verdict); body: what the user built, what the update
+  does to it, the adaptation you attempted and why it failed, the
+  before/after evidence (paths in your worktree), and the options you see.
+  This is the one case the lead escalates to the user, and the pass waits
+  with the workspace untouched. Push and stop; resume on the lead's reply.
 - `done` (`type: status`) -- merged, triaged, validated on `mngr/update-self`. Body
   gives the lead everything for the report audit, the apply, and the results
   message:
@@ -444,6 +471,11 @@ Per `.agents/shared/references/worker-reporting.md` (`<TASK_FILE_GLOB>` ->
     sentence on what had to be reconciled. The lead's results message points
     the user at each surface you judged nontrivial (with the rollback offer
     attached to it), so judge this explicitly.
+  - **Customization survival** -- each user customization the update touches,
+    classified intact / intact-but-changed / cannot-be-kept per 4b, with the
+    before/after evidence paths for anything not plainly intact. A
+    cannot-be-kept should already have gone out as a `question` gate; it
+    never rides silently inside a `done`.
   - **Built system-interface bundle** -- when you built the system interface
     (for validation), the absolute path of the built bundle in
     your worktree
