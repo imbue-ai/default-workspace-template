@@ -110,6 +110,24 @@ describe("renderAssistantMessageChildren API errors", () => {
     );
     expect(collectClasses(children)).not.toContain("message-api-error");
   });
+
+  it("gives a credentials/quota failure the switch-provider note", () => {
+    // is_api_error stays false: the backend files this family under is_auth_error alone,
+    // so the red block has to key on either flag or the message renders as plain prose.
+    const event = { ...apiErrorEvent("400 ... extra usage ...", null, false), is_auth_error: true };
+    const children = renderAssistantMessageChildren(event, new Map(), "agent-1");
+    const classes = collectClasses(children);
+    expect(classes).toContain("message-api-error");
+    expect(classes).toContain("message-api-error-note");
+    expect(allText(children)).toContain("Choose or add another provider to continue this conversation!");
+  });
+
+  it("prefers the switch-provider note over the not-our-fault one", () => {
+    const event = { ...apiErrorEvent("500 overloaded", "overloaded", true), is_auth_error: true };
+    const text = allText(renderAssistantMessageChildren(event, new Map(), "agent-1"));
+    expect(text).toContain("Choose or add another provider");
+    expect(text).not.toContain("isn't Minds' fault");
+  });
 });
 
 describe("isSkillExpansionUserMessage", () => {

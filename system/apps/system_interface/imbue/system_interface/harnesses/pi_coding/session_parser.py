@@ -29,6 +29,9 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from imbue.system_interface.harnesses.auth_patterns import is_auth_error_text
+from imbue.system_interface.harnesses.error_patterns import classify_api_error
+from imbue.system_interface.harnesses.error_patterns import is_provider_fault
 from imbue.system_interface.harnesses.events import MAX_TOOL_INPUT_PREVIEW_LENGTH
 from imbue.system_interface.harnesses.message_display import stamp_user_message_display
 from imbue.system_interface.harnesses.pi_coding.tool_labels import keeps_full_tool_input
@@ -127,6 +130,23 @@ def _usage(message: dict[str, Any]) -> dict[str, int | None] | None:
 
 def _assistant_event(event_id: str, timestamp: str, message: dict[str, Any]) -> dict[str, Any]:
     model = message.get("model")
+    # A failed request comes back as an ordinary assistant message with EMPTY ``content``,
+    # ``stopReason: "error"``, and the whole failure in a sibling ``errorMessage`` -- a bare
+    # ``"<status> {json}"`` (verified live). Reading the text off ``content`` alone therefore
+    # yields "", which rendered as a blank bubble and made a stuck agent look silent. Gate on
+    # stopReason so a real assistant turn that merely quotes an error JSON is never mistaken
+    # for one (the same guard claude gets from its ``<synthetic>`` model check).
+    error_text = ""
+    if message.get("stopReason") == "error":
+        raw_error = message.get("errorMessage")
+        if isinstance(raw_error, str):
+            error_text = raw_error
+    text = error_text if error_text else _text_from_content(message.get("content"))
+    # An auth/quota failure is NOT also an api error: each carries its own subtext, and the
+    # two would otherwise stack under one message. classify_api_error already declines a
+    # literal 401, but pi's quota exhaustion arrives as a 400, so the family wins explicitly.
+    is_auth_error = bool(error_text) and is_auth_error_text(error_text)
+    api_error_kind = classify_api_error(error_text) if error_text and not is_auth_error else None
     return {
         "timestamp": timestamp,
         "type": "assistant_message",
@@ -134,18 +154,15 @@ def _assistant_event(event_id: str, timestamp: str, message: dict[str, Any]) -> 
         "source": SOURCE,
         "role": "assistant",
         "model": model if isinstance(model, str) and model else _UNKNOWN_MODEL,
-        "text": _text_from_content(message.get("content")),
+        "text": text,
         "tool_calls": _tool_calls_from_content(message.get("content")),
         "stop_reason": message.get("stopReason"),
         "usage": _usage(message),
         "message_uuid": event_id,
-        # pi has no auth-error concept in its transcript; keep the field present-but-false.
-        "is_auth_error": False,
-        # Required by the shared contract (Response.ts). Detection deferred, like
-        # is_auth_error: False/None is the honest fill until pi's error shape is known.
-        "is_api_error": False,
-        "api_error_kind": None,
-        "is_provider_fault": False,
+        "is_auth_error": is_auth_error,
+        "is_api_error": api_error_kind is not None,
+        "api_error_kind": api_error_kind,
+        "is_provider_fault": is_provider_fault(api_error_kind),
     }
 
 

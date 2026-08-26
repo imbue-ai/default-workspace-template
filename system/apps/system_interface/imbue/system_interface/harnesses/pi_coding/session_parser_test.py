@@ -130,3 +130,64 @@ def test_parses_captured_live_session_with_tools() -> None:
     call_ids = {c["tool_call_id"] for e in events if e["type"] == "assistant_message" for c in e["tool_calls"]}
     result_ids = {e["tool_call_id"] for e in events if e["type"] == "tool_result"}
     assert result_ids <= call_ids
+
+
+# The failure shape below is verbatim from a live pi agent stuck on an Anthropic billing
+# rejection: empty content, stopReason "error", the whole failure in `errorMessage`.
+_LIVE_ERROR_MESSAGE = (
+    '400 {"type":"error","error":{"type":"invalid_request_error","message":"Third-party apps now '
+    "draw from your extra usage, not your plan limits. Add more at claude.ai/settings/usage and "
+    'keep going."},"request_id":"req_011CeQNupztwPtoPGrLhoqpJ"}'
+)
+
+
+def _error_message(error_message: str) -> dict[str, Any]:
+    return {
+        "role": "assistant",
+        "content": [],
+        "model": "claude-opus-4-8",
+        "stopReason": "error",
+        "errorMessage": error_message,
+    }
+
+
+def test_failed_turn_surfaces_error_message_as_the_assistant_text() -> None:
+    # Regression: content is empty on a failed turn, so reading text from content alone
+    # produced a blank bubble and the user saw nothing at all.
+    event = parse_record(_message_record("e1", _error_message(_LIVE_ERROR_MESSAGE)))[0]
+    assert event["type"] == "assistant_message"
+    assert event["text"] == _LIVE_ERROR_MESSAGE
+    assert event["stop_reason"] == "error"
+
+
+def test_quota_failure_is_flagged_auth_not_api_error() -> None:
+    # Arrives as a 400 invalid_request_error, but the only way forward is different
+    # credentials -- so it must land in the auth/quota family (which carries the
+    # switch-provider subtext), not the generic API-error one.
+    event = parse_record(_message_record("e2", _error_message(_LIVE_ERROR_MESSAGE)))[0]
+    assert event["is_auth_error"] is True
+    assert event["is_api_error"] is False
+    assert event["is_provider_fault"] is False
+
+
+def test_bare_status_provider_fault_is_classified() -> None:
+    message = _error_message('529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}')
+    event = parse_record(_message_record("e3", message))[0]
+    assert event["is_auth_error"] is False
+    assert event["api_error_kind"] == "overloaded"
+    assert event["is_provider_fault"] is True
+
+
+def test_successful_turn_quoting_an_error_is_not_flagged() -> None:
+    # The stopReason gate: a real reply that merely quotes an error JSON (routine in a
+    # coding chat) must not be styled as a failure.
+    message = {
+        "role": "assistant",
+        "model": "claude-opus-4-8",
+        "stopReason": "endTurn",
+        "content": [{"type": "text", "text": 'You hit 529 {"type":"overloaded_error"} -- retry.'}],
+    }
+    event = parse_record(_message_record("e4", message))[0]
+    assert event["is_api_error"] is False
+    assert event["is_auth_error"] is False
+    assert event["api_error_kind"] is None

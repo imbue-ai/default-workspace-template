@@ -329,6 +329,21 @@ function providerFaultNote(kind: string | null): string {
   return `This isn't Minds' fault -- ${cause}. Try again in a moment.`;
 }
 
+/** The note under a credentials/quota failure. These used to pop the sign-in modal
+ *  off the transcript; now the transcript just says what to do, and the sign-in
+ *  surface stays where the user chose to go looking for it (the "Agent auth" button
+ *  under the composer, or /login). */
+const AUTH_ERROR_NOTE = "Choose or add another provider to continue this conversation!";
+
+/** The grey subtext under a failed assistant turn, or null when it needs none.
+ *  Auth/quota wins over provider-fault: the backend never sets both, and if a future
+ *  harness did, "switch provider" is the more actionable of the two. */
+function errorNote(event: AssistantMessageEvent): string | null {
+  if (event.is_auth_error === true) return AUTH_ERROR_NOTE;
+  if (event.is_provider_fault) return providerFaultNote(event.api_error_kind);
+  return null;
+}
+
 export function renderAssistantMessageChildren(
   event: AssistantMessageEvent,
   toolResults: Map<string, ToolResultEvent>,
@@ -340,13 +355,15 @@ export function renderAssistantMessageChildren(
 
   const children: m.Children[] = [];
   if (textContent) {
-    if (event.is_api_error) {
-      // A model API error: render the failure text in light red, and for a
-      // provider-side fault (5xx / overloaded) add a grey "not Minds' fault" note.
+    if (event.is_api_error || event.is_auth_error === true) {
+      // A failed turn: render the failure text in light red, plus a grey subtext saying
+      // what to do about it -- switch provider for a credentials/quota failure, wait it
+      // out for a provider-side fault (5xx / overloaded). Some kinds get no subtext.
+      const note = errorNote(event);
       children.push(
         m("div.message-api-error", [
           m(MarkdownContent, { content: textContent, requestedAt: event.timestamp }),
-          event.is_provider_fault ? m("div.message-api-error-note", providerFaultNote(event.api_error_kind)) : null,
+          note !== null ? m("div.message-api-error-note", note) : null,
         ]),
       );
     } else {

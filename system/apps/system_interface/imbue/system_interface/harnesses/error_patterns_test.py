@@ -1,7 +1,7 @@
 """Unit tests for the Claude API-error classifier."""
 
-from imbue.system_interface.harnesses.claude.error_patterns import classify_api_error
-from imbue.system_interface.harnesses.claude.error_patterns import is_provider_fault
+from imbue.system_interface.harnesses.error_patterns import classify_api_error
+from imbue.system_interface.harnesses.error_patterns import is_provider_fault
 
 
 def test_overloaded_is_a_provider_fault() -> None:
@@ -52,3 +52,15 @@ def test_ordinary_assistant_text_is_not_an_error() -> None:
 
 def test_none_kind_is_not_a_provider_fault() -> None:
     assert is_provider_fault(None) is False
+
+
+def test_bare_status_form_is_classified() -> None:
+    # pi surfaces a failure with no "API Error:" prefix -- just the status then the JSON.
+    assert classify_api_error('529 {"type":"error","error":{"type":"overloaded_error"}}') == "overloaded"
+    assert classify_api_error("503 Service Unavailable") == "overloaded"
+
+
+def test_bare_status_is_anchored_to_the_start() -> None:
+    # A status merely mentioned mid-sentence is routine in a coding chat and must not
+    # be read as a failure.
+    assert classify_api_error("the docs say a 529 means overloaded") is None

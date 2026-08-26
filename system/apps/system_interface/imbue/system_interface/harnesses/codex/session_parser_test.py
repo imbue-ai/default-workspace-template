@@ -304,3 +304,68 @@ def test_turn_context_effective_model_stamps_assistant_messages() -> None:
     assert parse_lines(fallback, 3, {}, turn_state) == []
     later = parse_lines(_assistant_line("m3", "z"), 4, {}, turn_state)
     assert later[0]["model"] == "gpt-5.2"
+
+
+def _failed_turn(error: dict[str, Any]) -> dict[str, Any]:
+    """A task_complete rollout line for a turn that ended in failure.
+
+    Shape from codex-rs/protocol/src/protocol.rs (``TurnCompleteEvent.error`` ->
+    ``ErrorEvent {message, codex_error_info}``). This is the only durable copy of a
+    failure: codex's live ``EventMsg::Error`` is classed non-persistent and never
+    reaches the rollout.
+    """
+    return {
+        "timestamp": "2026-07-19T10:00:02Z",
+        "type": "event_msg",
+        "payload": {"type": "task_complete", "turn_id": "tid1", "error": error},
+    }
+
+
+def test_failed_turn_surfaces_its_error_before_the_completion_marker() -> None:
+    events = parse_lines(_failed_turn({"message": "stream disconnected", "codex_error_info": None}), 3, {})
+    assert [event["type"] for event in events] == ["assistant_message", "special"]
+    # Ordered so the text is on screen by the time the marker clears the activity dot.
+    assert events[0]["text"] == "stream disconnected"
+    assert events[0]["event_id"] == "codex-turn-tid1-task_complete_error"
+    assert events[1]["kind"] == "turn_completed"
+
+
+def test_successful_turn_emits_only_the_marker() -> None:
+    events = parse_lines(
+        {"timestamp": "2026-07-19T10:00:02Z", "type": "event_msg", "payload": {"type": "task_complete"}}, 3, {}
+    )
+    assert [event["type"] for event in events] == ["special"]
+
+
+def test_structured_error_info_classifies_a_provider_fault() -> None:
+    events = parse_lines(_failed_turn({"message": "we hit a snag", "codex_error_info": "server_overloaded"}), 3, {})
+    assert events[0]["api_error_kind"] == "overloaded"
+    assert events[0]["is_provider_fault"] is True
+    assert events[0]["is_auth_error"] is False
+
+
+def test_usage_limit_is_flagged_auth_not_api_error() -> None:
+    # Quota exhaustion earns the switch-provider subtext, so it must not also be
+    # stamped as a generic API error (the two subtexts would stack).
+    events = parse_lines(_failed_turn({"message": "usage limit", "codex_error_info": "usage_limit_exceeded"}), 3, {})
+    assert events[0]["is_auth_error"] is True
+    assert events[0]["is_api_error"] is False
+    assert events[0]["api_error_kind"] is None
+
+
+def test_struct_variant_error_info_reduces_to_its_tag() -> None:
+    # A CodexErrorInfo variant carrying fields serialises externally-tagged, as a
+    # single-key object rather than a bare string.
+    error = {"message": "bad request", "codex_error_info": {"bad_request": {"http_status_code": 400}}}
+    assert parse_lines(_failed_turn(error), 3, {})[0]["api_error_kind"] == "invalid_request"
+
+
+def test_unmapped_error_info_falls_back_to_the_message_text() -> None:
+    # A codex build adding a tag we have not mapped still gets classified off its prose.
+    error = {"message": 'API Error: 529 {"type":"overloaded_error"}', "codex_error_info": "some_future_tag"}
+    assert parse_lines(_failed_turn(error), 3, {})[0]["api_error_kind"] == "overloaded"
+
+
+def test_failed_turn_without_a_message_emits_only_the_marker() -> None:
+    events = parse_lines(_failed_turn({"message": "", "codex_error_info": "bad_request"}), 3, {})
+    assert [event["type"] for event in events] == ["special"]
