@@ -157,8 +157,6 @@ def _wait_under_deadline(pid: int, options: int) -> int | None:
         return os.waitpid(pid, options)[1]
     except _DeadlineExpired:
         return None
-    except ChildProcessError:
-        return 0
     finally:
         signal.alarm(0)
 

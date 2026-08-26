@@ -493,6 +493,7 @@ class ConcurrencyGroup(MutableModel, AbstractContextManager):
         cwd: Path | None = None,
         env: Mapping[str, str] | None = None,
         shutdown_event: ReadOnlyEvent | None = None,
+        # Run the child in its own session (see ``run_process_in_background``).
         is_detached_from_terminal: bool = False,
         # Optional log-safe label for the process (see ``run_process_in_background``).
         name: str | None = None,
