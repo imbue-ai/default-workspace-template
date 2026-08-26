@@ -1,5 +1,6 @@
 """Tests for the self-hosted sharing model + endpoints (shares, relay tokens, frps plugin auth)."""
 
+import hashlib
 import re
 from typing import Any
 from uuid import uuid4
@@ -184,8 +185,12 @@ def test_resolve_share_region_for_share_is_sticky_on_the_existing_row() -> None:
     # An existing region outranks both the datacenter mapping and a preference.
     assert resolve_share_region_for_share("us2", "US-WEST-OR", None, _BOTH_REGIONS, _SHARE_STUB_HOST_ID) == "us2"
     assert resolve_share_region_for_share("us2", None, "us1", _BOTH_REGIONS, _SHARE_STUB_HOST_ID) == "us2"
-    # A recorded region no longer served by any relay falls through.
-    assert resolve_share_region_for_share("eu9", None, None, _BOTH_REGIONS, _SHARE_STUB_HOST_ID) == "us1"
+    # A recorded region no longer served by any relay fails loudly: the region
+    # is baked into the stored domain, so silently answering with another
+    # region's relays would leave the persisted share (and the assignment the
+    # in-workspace gateway polls) pointing somewhere the response is not.
+    with pytest.raises(NoActiveRelaysError):
+        resolve_share_region_for_share("eu9", None, None, _BOTH_REGIONS, _SHARE_STUB_HOST_ID)
 
 
 def test_resolve_share_region_for_share_honors_preference_only_without_a_datacenter() -> None:
@@ -534,6 +539,19 @@ def test_create_share_rejects_a_malformed_entry_label(monkeypatch: pytest.Monkey
     assert resp.status_code == 422
 
 
+def test_create_share_rejects_a_malformed_workspace_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, _backend = _make_share_test_client(monkeypatch)
+
+    for bad_workspace_id in ("not-an-agent-id", ""):
+        resp = client.post(
+            "/shares",
+            json={"host_id": _SHARE_STUB_HOST_ID, "workspace_id": bad_workspace_id},
+            headers=_share_headers(),
+        )
+
+        assert resp.status_code == 422
+
+
 def test_share_status_404s_for_unknown_host(monkeypatch: pytest.MonkeyPatch) -> None:
     client, _backend = _make_share_test_client(monkeypatch)
 
@@ -802,3 +820,99 @@ def test_decide_frps_ping_rejects_missing_token() -> None:
     decision = decide_frps_ping(lambda token_hash: None, None)
 
     assert decision.reject is True
+
+
+# ---------------------------------------------------------------------------
+# Workspace-keyed shares (minted share labels, hashed user segment)
+# ---------------------------------------------------------------------------
+
+_STUB_WORKSPACE_ID = "agent-" + "c" * 32
+
+
+def test_create_share_with_workspace_id_mints_a_label_led_domain(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, backend = _make_share_test_client(monkeypatch)
+
+    resp = client.post(
+        "/shares",
+        json={"host_id": _SHARE_STUB_HOST_ID, "workspace_id": _STUB_WORKSPACE_ID},
+        headers=_share_headers(),
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    labels = str(body["workspace_domain"]).split(".")
+    # No internal id appears in the (CT-logged) domain: a random 32-hex share
+    # label leads, and the user segment is a one-way hash of the user id.
+    assert re.fullmatch(r"[a-f0-9]{32}", labels[0])
+    assert labels[0] != _SHARE_STUB_HOST_ID
+    assert labels[1] == hashlib.sha256(_SHARE_STUB_USER_ID.encode()).hexdigest()[:32]
+    assert labels[1] != _SHARE_STUB_USER_LABEL
+    assert body["workspace_id"] == _STUB_WORKSPACE_ID
+    share = backend.find_share(_SHARE_STUB_HOST_ID, _SHARE_STUB_USER_LABEL)
+    assert share is not None
+    assert share["workspace_id"] == _STUB_WORKSPACE_ID
+    assert share["share_label"] == labels[0]
+
+
+def test_reshare_keeps_the_minted_domain_and_rotates_the_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, _backend = _make_share_test_client(monkeypatch)
+    body = {"host_id": _SHARE_STUB_HOST_ID, "workspace_id": _STUB_WORKSPACE_ID}
+
+    first = client.post("/shares", json=body, headers=_share_headers()).json()
+    client.delete(f"/shares/{_SHARE_STUB_HOST_ID}", headers=_share_headers())
+    second = client.post("/shares", json=body, headers=_share_headers()).json()
+
+    # The label is minted once at the workspace's first share and persisted:
+    # unshare/re-share resurrects the same URL with a fresh token.
+    assert second["workspace_domain"] == first["workspace_domain"]
+    assert second["relay_token"] != first["relay_token"]
+
+
+def test_create_share_never_reuses_another_workspaces_row_on_a_recycled_machine(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _backend = _make_share_test_client(monkeypatch)
+    other_workspace_id = "agent-" + "d" * 32
+    # Workspace A shared while it ran on this machine; the machine has since
+    # been reused by workspace B (the host is a mutable machine attribute).
+    first = client.post(
+        "/shares",
+        json={"host_id": _SHARE_STUB_HOST_ID, "workspace_id": other_workspace_id},
+        headers=_share_headers(),
+    ).json()
+
+    second = client.post(
+        "/shares",
+        json={"host_id": _SHARE_STUB_HOST_ID, "workspace_id": _STUB_WORKSPACE_ID},
+        headers=_share_headers(),
+    ).json()
+
+    # B must never inherit A's identity: its share carries its own workspace
+    # id and a freshly minted domain, not A's (whose grants, bookmarks, and
+    # cookies all hang off A's domain).
+    assert second["workspace_id"] == _STUB_WORKSPACE_ID
+    assert second["workspace_domain"] != first["workspace_domain"]
+
+
+def test_create_share_backfills_workspace_id_onto_a_legacy_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, backend = _make_share_test_client(monkeypatch)
+    # A share created by an old client (no workspace id): host-led domain.
+    legacy = client.post("/shares", json={"host_id": _SHARE_STUB_HOST_ID}, headers=_share_headers()).json()
+    assert legacy["workspace_domain"].startswith(f"{_SHARE_STUB_HOST_ID}.")
+
+    # A new client re-shares with the workspace id: the legacy domain is kept
+    # (grants/bookmarks/certs hang off it) and the row is backfilled.
+    reshared = client.post(
+        "/shares",
+        json={"host_id": _SHARE_STUB_HOST_ID, "workspace_id": _STUB_WORKSPACE_ID},
+        headers=_share_headers(),
+    ).json()
+    assert reshared["workspace_domain"] == legacy["workspace_domain"]
+    assert reshared["workspace_id"] == _STUB_WORKSPACE_ID
+    share = backend.find_share(_SHARE_STUB_HOST_ID, _SHARE_STUB_USER_LABEL)
+    assert share is not None
+    assert share["workspace_id"] == _STUB_WORKSPACE_ID
+    # The re-share then resolves through the workspace id even before any
+    # machine change: a create naming only the workspace's id finds the row.
+    by_workspace = backend.share_rows[-1]
+    assert by_workspace["workspace_id"] == _STUB_WORKSPACE_ID

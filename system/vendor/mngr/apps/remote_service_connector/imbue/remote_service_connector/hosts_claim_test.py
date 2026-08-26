@@ -1,5 +1,7 @@
 """Tests for the web-create claim endpoint (lease + adopt + share bring-up)."""
 
+import hashlib
+import re
 from uuid import UUID
 
 import pytest
@@ -74,8 +76,11 @@ def test_claim_leases_adopts_and_enables_sharing(monkeypatch: pytest.MonkeyPatch
     assert body["display_name"] == "My Workspace"
     # The test host has no datacenter record, so the region is the
     # deterministic hash-of-host-id spread: host-ccc... lands on us2.
-    expected_domain = f"{_HOST_ID_STR}.{_OWNER_LABEL}.us2.{_CONTENT_DOMAIN}"
-    assert body["workspace_domain"] == expected_domain
+    domain_labels = str(body["workspace_domain"]).split(".")
+    assert re.fullmatch(r"[a-f0-9]{32}", domain_labels[0])
+    assert domain_labels[1] == hashlib.sha256(_USER_STUB_USER_ID.encode()).hexdigest()[:32]
+    assert body["workspace_domain"].endswith(f".us2.{_CONTENT_DOMAIN}")
+    expected_domain = str(body["workspace_domain"])
     assert body["region"] == "us2"
     # The chrome's routable entry origin is recorded later, by the frps
     # NewProxy callback once the workspace's tunnel claims its service labels

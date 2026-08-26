@@ -53,8 +53,12 @@ INTEGER_ENTITLEMENT_NAMES: frozenset[str] = frozenset(QUOTA_ENTITLEMENT_NAMES) -
 class PlanEntitlements(BaseModel):
     """The quota values a plan grants (also the per-user entitlement values)."""
 
-    max_remote_workspaces: int = Field(description="Max running remote workspaces (leased/stopping/starting rows)")
-    max_total_workspaces: int = Field(description="Max total remote workspaces, running + stopped")
+    max_remote_workspaces: int = Field(
+        description="Max running remote machines (leased/stopping/starting pool rows; wire name kept for compat)"
+    )
+    max_total_workspaces: int = Field(
+        description="Max total remote machines, running + stopped (wire name kept for compat)"
+    )
     max_buckets: int = Field(description="Max R2 buckets")
     max_total_bucket_bytes: int = Field(description="Max total bytes across all the account's buckets")
     monthly_llm_spend_usd: float = Field(description="Monthly LLM spend cap in USD (rolling; 0 disables key minting)")
