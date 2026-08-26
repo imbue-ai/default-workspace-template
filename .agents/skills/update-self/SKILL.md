@@ -395,7 +395,7 @@ conflict, and a wrong call is recoverable because the results message names
 the decision and keeps the other side on offer. Relay your resolution via
 `mngr message`, consume the report, and re-arm.
 
-The one other thing a `question` can be is the worker's review-gate escape hatch
+The second kind of `question` is the worker's review-gate escape hatch
 (its §4c): a *process* question about whether or at what scope the gates run.
 That is not the user's to answer -- **answer it yourself** per `lead-proxy.md`.
 The default answer is to apply the §4c rule as written: the rule already is the
