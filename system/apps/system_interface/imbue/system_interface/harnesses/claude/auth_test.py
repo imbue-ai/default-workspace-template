@@ -103,6 +103,20 @@ def test_get_auth_status_refuses_to_answer_when_the_check_times_out(isolated_cla
         service.get_auth_status()
 
 
+def test_get_auth_status_keeps_the_answer_of_a_check_that_finished_just_past_the_deadline(
+    isolated_claude_config: Path,
+) -> None:
+    """`is_timed_out` is recomputed after the output drain, so a check that exited cleanly a
+    moment before the deadline carries it alongside a complete payload. Raising there would
+    throw away a perfectly good answer."""
+
+    def _runner(_cmd: list[str], _timeout: float, _env: object = None) -> FakeFinishedProcess:
+        return FakeFinishedProcess(stdout=json.dumps({"loggedIn": True}), returncode=0, is_timed_out=True)
+
+    service = auth.ClaudeAuthService(command_runner=_runner)
+    assert service.get_auth_status().logged_in is True
+
+
 def test_get_auth_status_still_answers_a_real_logged_out_result(isolated_claude_config: Path) -> None:
     def _runner(_cmd: list[str], _timeout: float, _env: object = None) -> FakeFinishedProcess:
         return FakeFinishedProcess(stdout=json.dumps({"loggedIn": False}))
