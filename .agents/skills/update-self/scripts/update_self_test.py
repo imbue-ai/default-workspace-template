@@ -1596,6 +1596,7 @@ _FRONTEND_DIFF = "M\tsystem/apps/system_interface/frontend/src/views/Chat.ts\n"
 _BACKEND_DIFF = "M\tsystem/apps/system_interface/imbue/system_interface/server.py\n"
 _VENDORED_DIFF = "M\tsystem/vendor/mngr/libs/mngr/imbue/mngr/api/list.py\n"
 _SETTINGS_DIFF = "M\t.mngr/settings.toml\n"
+_APT_SNAPSHOT_DIFF = "M\t.mngr/apt-snapshot-timestamp\n"
 _BACKEND_MANIFEST_DIFF = "M\tsystem/apps/system_interface/pyproject.toml\n"
 _FRONTEND_MANIFEST_DIFF = "M\tsystem/apps/system_interface/frontend/package.json\n"
 _DOCS_DIFF = "M\tREADME.md\nM\t.agents/changelog/some-entry.md\n"
@@ -1625,7 +1626,11 @@ def test_plan_apply_vendored_source_and_settings_require_restart() -> None:
     assert vendored.requires_restart and vendored.needs_restart
     assert not vendored.backend  # not a system-interface change
     settings = update_self.plan_apply([".mngr/settings.toml"])
-    assert settings.requires_restart and settings.provisioner
+    assert settings.requires_restart
+    # The provisioner never reads the create config, so no re-run for it; the
+    # apt snapshot timestamp is the one .mngr/ file it does read.
+    assert not settings.provisioner
+    assert update_self.plan_apply([".mngr/apt-snapshot-timestamp"]).provisioner
     # An imported workspace library is in-process code of the service the
     # restart bounces, so it restarts without being a system-interface change.
     imported = update_self.plan_apply(
@@ -1763,10 +1768,10 @@ def test_apply_vendored_source_change_restarts_without_building(
     assert not runner.ran("uv", "tool", "install")  # source-only: no env refresh
 
 
-def test_apply_settings_change_provisions_before_any_restart(
+def test_apply_apt_snapshot_change_provisions_before_any_restart(
     apply_repo: Path,
 ) -> None:
-    runner = _apply_runner(_SETTINGS_DIFF + _BACKEND_DIFF, apply_repo)
+    runner = _apply_runner(_APT_SNAPSHOT_DIFF + _BACKEND_DIFF, apply_repo)
 
     code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
 
@@ -1774,6 +1779,21 @@ def test_apply_settings_change_provisions_before_any_restart(
     provision_index = runner.calls.index(list(_PROVISION))
     restart_index = runner.calls.index(list(_RESTART))
     assert provision_index < restart_index
+
+
+def test_apply_settings_change_restarts_without_a_provisioner_run(
+    apply_repo: Path,
+) -> None:
+    # setup_system.sh never reads .mngr/settings.toml, so a settings-only
+    # release must not pay its 1800s-budget run (and risk a spurious
+    # provision-incomplete record); the live reader is bounced instead.
+    runner = _apply_runner(_SETTINGS_DIFF, apply_repo)
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    assert not runner.ran(*_PROVISION)
+    assert runner.ran(*_RESTART)
 
 
 def test_apply_backend_manifest_refreshes_all_three_environments(

@@ -585,8 +585,9 @@ it.)
 
 **Carry rebuild-only findings into the results message; they do not block the
 apply.** The apply is deterministic and has no opt-outs: it re-runs the
-provisioner whenever a provisioner-classified file changed, and there is no
-flag to land the merge without that. When the worker's report flags either of
+provisioner whenever a file the provisioner reads changed (its scripts and
+`.mngr/apt-snapshot-timestamp`), and there is no flag to land the merge
+without that. When the worker's report flags either of
 these, apply anyway and make the finding a *leading caveat* of the results
 message -- named plainly, never a footnote:
 
@@ -634,8 +635,9 @@ the merge landing and the workspace being consistent with it. It fast-forwards
 the worker's `update-self:` merge commit (preserved verbatim -- the marker
 `assist` relies on), snapshots the pre-apply state (built bundle, root
 `.venv`, both uv tool environments, `node_modules`), refreshes the affected
-environments, re-runs `system/scripts/setup_system.sh` when
-provisioner-classified paths changed (before any restart), installs or builds
+environments, re-runs `system/scripts/setup_system.sh` when a file it reads
+changed (its scripts, `.mngr/apt-snapshot-timestamp`; before any restart),
+installs or builds
 the frontend bundle, pre-flights, restarts the services agent when anything
 restart-requiring changed (system-interface backend, vendored-mngr source,
 `.mngr/settings.toml`, supervisord/bootstrap), probes the live UI to the

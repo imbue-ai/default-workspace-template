@@ -510,6 +510,15 @@ _PROVISIONER_SCRIPTS = frozenset(
 )
 
 
+# The files the provisioner actually reads when it runs: its own scripts and
+# the committed apt snapshot timestamp (read by ``write_apt_sources.sh``). A
+# change elsewhere in the ``provisioner`` class -- the ``.mngr/`` create config
+# -- does not change what ``setup_system.sh`` would do, so re-running it for
+# one is an 1800s-budget no-op that can only leave a spurious
+# provision-incomplete record behind.
+_PROVISIONER_INPUTS = _PROVISIONER_SCRIPTS | {".mngr/apt-snapshot-timestamp"}
+
+
 def _is_provisioner(path: str) -> bool:
     """Whether ``path`` shapes how the workspace/agent is *provisioned*.
 
@@ -598,8 +607,10 @@ def classify_path(path: str) -> PathClass:
       impact analysis before it can be called a silent merge.
     - ``provisioner`` -- the pinned-toolchain scripts and the ``.mngr/`` create
       config (see :func:`_is_provisioner`); shapes image-build / create-time
-      provisioning, so a change is re-run live (idempotent scripts) or flagged
-      for a workspace rebuild, never applied by a service restart alone.
+      provisioning, so a change is never applied by a service restart alone:
+      the apply re-runs the idempotent provisioner for the files it reads
+      (:data:`_PROVISIONER_INPUTS`), and the create config is the worker's to
+      mirror live or flag for a workspace rebuild.
     - ``dockerfile`` -- ``system/Dockerfile``; split by hunk into live-applicable
       vs rebuild-only by worker judgement.
     - ``docs`` -- a ``README.md`` or a ``changelog/*.md`` entry wherever it lives,
@@ -1526,9 +1537,10 @@ class ApplyPlan(NamedTuple):
     The system-interface split (frontend vs backend, source vs manifest) is
     finer than :func:`classify_path`'s single ``system_interface`` class,
     because those four need different work; the rest rides on it --
-    ``provisioner`` for the pinned-toolchain re-run and ``requires_restart``
-    for the paths a live process must be bounced over (vendored-mngr source,
-    ``.mngr/settings.toml``, the service class).
+    ``provisioner`` for the pinned-toolchain re-run (keyed on the files the
+    provisioner reads, :data:`_PROVISIONER_INPUTS`, not on the whole class)
+    and ``requires_restart`` for the paths a live process must be bounced
+    over (vendored-mngr source, ``.mngr/settings.toml``, the service class).
     """
 
     frontend_src: bool
@@ -1576,7 +1588,7 @@ def plan_apply(paths: Sequence[str]) -> ApplyPlan:
         info = classify_path(path)
         if info.requires_restart:
             requires_restart = True
-        if info.reveal_class == CLASS_PROVISIONER:
+        if path in _PROVISIONER_INPUTS:
             provisioner = True
         if path in (
             f"{FRONTEND_DIR}/package.json",
