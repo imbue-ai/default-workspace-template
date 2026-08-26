@@ -2551,16 +2551,30 @@ def _commit_rollback(
     repo_root: Path, runner: Runner, rollback_to: str, reason: str
 ) -> None:
     """Commit the staged restore as a forward revert, if there is anything to
-    commit (a re-entered rollback may find the commit already landed)."""
-    status = runner.run(
-        ["git", "status", "--porcelain"],
+    commit (a re-entered rollback may find the commit already landed).
+
+    The gate asks the index, not ``git status``: the commit stages nothing of
+    its own, and status also lists untracked files, over which a commit of an
+    empty index fails -- which would keep the marker at every boot.
+    """
+    staged_argv = ["git", "diff", "--cached", "--quiet"]
+    staged = runner.run(
+        staged_argv,
         cwd=str(repo_root),
         capture_output=True,
         text=True,
-        check=True,
+        check=False,
     )
-    if not status.stdout.strip():
+    returncode = getattr(staged, "returncode", 0)
+    if returncode == 0:
         return
+    if returncode != 1:
+        raise subprocess.CalledProcessError(
+            returncode,
+            staged_argv,
+            output=getattr(staged, "stdout", ""),
+            stderr=getattr(staged, "stderr", ""),
+        )
     message = f"{_ROLLBACK_SUBJECT_PREFIX} (restore to {rollback_to[:12]})\n\n{reason}"
     runner.run(
         ["git", "commit", "--no-verify", "-m", message],
