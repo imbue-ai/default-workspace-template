@@ -3037,28 +3037,22 @@ def _recover_running_state(
 
     Restores are file copies (no network, no package manager, no ``mngr``);
     rebuild/refresh fallbacks run only where there is no copy to put back. The
-    provisioner re-run is best-effort by design: a failure (often no network)
-    still counts as recovered, with the tools named as left ahead of the tree.
-    Nothing here is tagged expendable -- there is no further rollback to absorb
-    a shed. Never raises: this is the last line of defense, and the exit code
-    is all the caller has to go on.
+    provisioner re-run is best-effort by design: a failure (often no network),
+    a hang past its budget, or a spawn failure still counts as recovered, with
+    the tools named as left ahead of the tree. Nothing here is tagged
+    expendable -- there is no further rollback to absorb a shed. Never raises:
+    this is the last line of defense, and the exit code is all the caller has
+    to go on.
     """
     try:
         failed = set(restore_snapshots(snapshots))
         restored = {record.name for record in snapshots} - failed
         if provisioner_ran:
-            result = runner.run(
-                ["bash", PROVISIONER_SCRIPT],
-                cwd=str(repo_root),
-                capture_output=True,
-                text=True,
-                check=False,
-                env=provisioner_env(),
-            )
-            if getattr(result, "returncode", 0) != 0:
+            provisioner_failure = _run_provisioner(runner, repo_root)
+            if provisioner_failure is not None:
                 sys.stderr.write(
                     "recovery: re-running the provisioner from the restored tree failed "
-                    f"(exit {result.returncode}), so the globally pinned tools may be left "
+                    f"({provisioner_failure}), so the globally pinned tools may be left "
                     "ahead of the tree. The rollback still counts as recovered -- re-run "
                     f"`bash {PROVISIONER_SCRIPT}` once the cause (often no network) is fixed.\n"
                 )
@@ -3726,18 +3720,11 @@ def recover(
     if no_restart:
         failed = restore_snapshots(marker.snapshots)
         if marker.provisioner_ran:
-            result = runner.run(
-                ["bash", PROVISIONER_SCRIPT],
-                cwd=str(repo_root),
-                capture_output=True,
-                text=True,
-                check=False,
-                env=provisioner_env(),
-            )
-            if getattr(result, "returncode", 0) != 0:
+            provisioner_failure = _run_provisioner(runner, repo_root)
+            if provisioner_failure is not None:
                 sys.stderr.write(
                     "recover: re-running the provisioner from the restored tree failed "
-                    f"(exit {result.returncode}); the globally pinned tools may be left "
+                    f"({provisioner_failure}); the globally pinned tools may be left "
                     "ahead of the tree.\n"
                 )
         clear_marker(repo_root)
