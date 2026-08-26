@@ -483,10 +483,12 @@ restore the old arrangement.
 
 If they choose to skip the update, that ends the pass: record `run-status
 verdict REFUSED --detail "<what the update could not keep, and that they chose
-to keep it instead>"` before tearing down. Nothing was applied, and without the
-verdict the app reports the answer they gave to the one question it asked them
-as a failed update. The other two answers carry on into §5 and get their
-verdict there, so record nothing for those.
+to keep it instead>"` before tearing down. The app files `REFUSED` as a failure
+either way -- it badges the machine and cancels its schedule -- but without the
+verdict it waits for this run's agent to vanish and then reports a run that
+stalled for no stated reason at all; the detail line is the only thing that
+tells the user the outcome was their own answer. The other two answers carry on
+into §5 and get their verdict there, so record nothing for those.
 
 ## 5. Terminal status
 
