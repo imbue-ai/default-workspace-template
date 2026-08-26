@@ -133,6 +133,7 @@ import tarfile
 import tempfile
 import time
 import tomllib
+import traceback
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -2415,9 +2416,9 @@ def _run_checked(
     env: dict | None = None,
     timeout: float | None = None,
 ) -> None:
-    """Run an apply command; raise :class:`ApplyFailed` on a non-zero exit, or
-    when it outlives its ``timeout`` budget (a hung step is a failure with a
-    name, not an open-ended wait)."""
+    """Run an apply command; raise :class:`ApplyFailed` on a non-zero exit, when
+    it cannot be spawned at all, or when it outlives its ``timeout`` budget (a
+    hung step is a failure with a name, not an open-ended wait)."""
     try:
         result = runner.run(
             list(argv),
@@ -2433,6 +2434,15 @@ def _run_checked(
             f"{what} did not finish within {timeout:g}s (hung or stalled)",
             live_service_restarted=live_service_restarted,
         ) from None
+    except OSError as exc:
+        # A step that cannot be spawned at all -- npm, uv or mngr not on the
+        # PATH this apply inherited, or a cwd the merged tree does not have.
+        # Named here rather than left to the caller's last-resort catch, so the
+        # rollback commit says which step it was.
+        raise ApplyFailed(
+            f"{what} could not be run ({type(exc).__name__}: {exc})",
+            live_service_restarted=live_service_restarted,
+        ) from exc
     if getattr(result, "returncode", 0) != 0:
         stderr = (getattr(result, "stderr", "") or "").strip()
         raise ApplyFailed(
@@ -2494,12 +2504,18 @@ def _preflight(
     env.pop("MNGR_AGENT_ID", None)
     with tempfile.TemporaryDirectory() as scratch:
         output_path = Path(scratch) / "preflight-boot.log"
-        spawned = spawner.spawn(
-            expend([TOOL_NAME]),
-            cwd=str(repo_root / APP_DIR),
-            env=env,
-            output_path=output_path,
-        )
+        try:
+            spawned = spawner.spawn(
+                expend([TOOL_NAME]),
+                cwd=str(repo_root / APP_DIR),
+                env=env,
+                output_path=output_path,
+            )
+        except OSError as exc:
+            # Not booting and failing is the same verdict as failing to boot,
+            # and reaching this with the console script missing is exactly what
+            # a tool reinstall that half-succeeded leaves behind.
+            return f"the merged backend could not be launched ({type(exc).__name__}: {exc})"
         try:
             if wait_healthy(
                 http,
@@ -2669,14 +2685,18 @@ def _tool_extras(
     """
     tool_dir = env.get("UV_TOOL_DIR")
     if tool_dir is None:
-        result = runner.run(
-            ["uv", "tool", "dir"],
-            cwd=str(repo_root),
-            capture_output=True,
-            text=True,
-            check=False,
-            env=env,
-        )
+        try:
+            result = runner.run(
+                ["uv", "tool", "dir"],
+                cwd=str(repo_root),
+                capture_output=True,
+                text=True,
+                check=False,
+                env=env,
+            )
+        except OSError as exc:
+            _warn_extras_lost(tool_name, f"'uv tool dir' could not be run ({exc})")
+            return []
         if getattr(result, "returncode", 0) != 0:
             _warn_extras_lost(tool_name, f"'uv tool dir' exited {result.returncode}")
             return []
@@ -3598,6 +3618,7 @@ def apply_update(
                         f"{bundle_reject}; building live instead.\n"
                     )
 
+        exc: ApplyFailed | None = None
         try:
             marker.snapshots = take_snapshots(plan, repo_root, runner, marker.snapshots)
             _advance(PHASE_SNAPSHOTTED)
@@ -3740,7 +3761,25 @@ def apply_update(
             if is_frontend_probed and unresolved_frontend_failure is None:
                 clear_emergency(repo_root)
             _refresh_workspace_view(repo_root, runner)
-        except ApplyFailed as exc:
+        except ApplyFailed as failed:
+            exc = failed
+        except Exception as unexpected:
+            # The last resort, and the one place a blind catch is the correct
+            # answer: past this point the merge is landed and the pre-apply
+            # copies are the only ones left, so an exception nobody predicted
+            # must still reach the rollback below. Letting it escape is what
+            # strands the workspace half-applied -- which is how a bands module
+            # older than this script (an AttributeError inside `as_expendable`)
+            # and a missing executable have each already got out. The traceback
+            # goes in `detail` so the DRI agent can still see the bug the
+            # rollback just tidied away.
+            exc = ApplyFailed(
+                f"the apply raised an unexpected "
+                f"{type(unexpected).__name__}: {unexpected}",
+                live_service_restarted=marker.live_service_restarted,
+                detail=traceback.format_exc(),
+            )
+        if exc is not None:
             sys.stderr.write(
                 f"apply failed: {exc}\n{_detail_block(exc.detail)}"
                 f"{_phase_timing_line(marker)}"
