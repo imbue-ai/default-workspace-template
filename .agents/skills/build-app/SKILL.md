@@ -521,7 +521,9 @@ Flags:
   omitting it on re-registration keeps the stored icon. The file's
   *contents* are stored: a single safe `<svg>` element (no script,
   style, event handlers, or external references; at most 16384
-  characters) -- registration fails loudly otherwise.
+  characters). A bad file fails a new registration loudly, but only
+  warns on re-registration (the stored icon is kept), so a corrupted
+  icon cannot crash-loop a running app.
 
   **Draw the icon in the workspace's house style**: monochrome line
   art on a transparent background, exactly like the built-in glyphs.
