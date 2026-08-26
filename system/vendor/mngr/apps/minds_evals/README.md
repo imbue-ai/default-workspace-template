@@ -57,7 +57,9 @@ only way harbor gets the dependencies it declares. Practical consequences:
 
 - `uv sync --all-packages` at the repo root does not install this app; run `uv sync` from this
   directory (or `just test-minds-evals`, which does it for you).
-- `just test-quick` / `just test-offload` / the root `ty check` all skip this directory. Its tests
+- `just test-quick` / `just test-offload` skip this directory, and the root `ty check` skips its
+  modules -- but not `imbue/minds_evals/resources/`, which runs in the box against the monorepo venv
+  and is type-checked by the root workspace for that reason. Its tests
   and type check run under `just test-minds-evals`, which the `test-minds-evals` CI job invokes on
   any PR touching this app or the monorepo packages it depends on.
 - `imbue/minds_evals/resources/` and `imbue/minds_evals/templates/` import packages this project
