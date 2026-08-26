@@ -70,8 +70,10 @@ def run_detached_command(
 ) -> FinishedProcess:
     """Run ``command`` to completion in its own session, returning how it went.
 
-    A failure is reported on the result, not raised: the caller reads ``returncode`` and
-    ``is_timed_out`` and decides what to tell the user.
+    A command that ran and failed is reported on the result, not raised: the caller reads
+    ``returncode`` and ``is_timed_out`` and decides what to tell the user. One that could not be
+    spawned at all -- binary missing, ``cwd`` unusable -- raises ``ProcessSetupError``, so a
+    caller that has to survive that needs its own guard.
     """
     return run_local_command_modern_version(
         command=command,
