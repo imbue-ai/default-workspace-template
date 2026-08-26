@@ -4696,3 +4696,102 @@ def test_wait_and_open_chat_tab_gives_up_at_the_deadline() -> None:
     )
     # Tried at t=0, 5, 10; the check after the third failure sees 10 < 12 and sleeps to 15, then stops.
     assert calls == 4
+
+
+# --- run-status (the Minds app's status contract) --------------------------
+
+
+def test_run_status_start_and_verdict_round_trip(tmp_path, monkeypatch) -> None:
+    # The whole app-facing contract: `start` records who is running and under
+    # what authorization, `verdict` lands the outcome on the same record, and
+    # the run's start survives the verdict write (the app tells runs apart by
+    # their start).
+    monkeypatch.setenv("MNGR_AGENT_NAME", "update-abc123")
+    assert update_self.main(["run-status", "start", "--unattended", "--repo-root", str(tmp_path)]) == 0
+    status = update_self.read_run_status(tmp_path)
+    assert status is not None
+    assert status.chat_agent_name == "update-abc123"
+    assert status.is_unattended
+    assert status.verdict is None
+    started_at = status.started_at
+
+    assert (
+        update_self.main(
+            [
+                "run-status",
+                "verdict",
+                "UPDATED_WITH_REBUILD_ITEMS",
+                "--resulting-ref",
+                "minds-v0.4.0",
+                "--detail",
+                "Landed; one rebuild item left.",
+                "--repo-root",
+                str(tmp_path),
+            ]
+        )
+        == 0
+    )
+    status = update_self.read_run_status(tmp_path)
+    assert status is not None
+    assert status.verdict == "UPDATED_WITH_REBUILD_ITEMS"
+    assert status.resulting_ref == "minds-v0.4.0"
+    assert status.detail == "Landed; one rebuild item left."
+    assert status.verdict_at is not None
+    assert status.started_at == started_at
+    assert status.is_unattended
+
+
+def test_run_status_start_supersedes_the_previous_runs_verdict(tmp_path, monkeypatch) -> None:
+    # One file per workspace: a new run's start must overwrite the last run's
+    # record outright, or the app would read the old verdict as the new run's.
+    monkeypatch.setenv("MNGR_AGENT_NAME", "update-old")
+    assert update_self.main(["run-status", "start", "--repo-root", str(tmp_path)]) == 0
+    assert update_self.main(["run-status", "verdict", "REFUSED", "--repo-root", str(tmp_path)]) == 0
+    assert update_self.main(["run-status", "start", "--chat", "update-new", "--repo-root", str(tmp_path)]) == 0
+    status = update_self.read_run_status(tmp_path)
+    assert status is not None
+    assert status.chat_agent_name == "update-new"
+    assert status.verdict is None
+    assert status.detail == ""
+
+
+def test_run_status_verdict_without_a_start_still_records(tmp_path, monkeypatch) -> None:
+    # A pass that skipped its start (an older skill copy, an agent that missed
+    # the step) still owes the app its outcome; the env names the agent.
+    monkeypatch.setenv("MNGR_AGENT_NAME", "update-late")
+    assert (
+        update_self.main(
+            [
+                "run-status",
+                "verdict",
+                "NEEDS_RECREATION",
+                "--in-place-compatible-ref",
+                "minds-v0.3.9",
+                "--repo-root",
+                str(tmp_path),
+            ]
+        )
+        == 0
+    )
+    status = update_self.read_run_status(tmp_path)
+    assert status is not None
+    assert status.chat_agent_name == "update-late"
+    assert status.verdict == "NEEDS_RECREATION"
+    assert status.in_place_compatible_ref == "minds-v0.3.9"
+
+
+def test_run_status_start_requires_an_agent_name(tmp_path, monkeypatch, capsys) -> None:
+    monkeypatch.delenv("MNGR_AGENT_NAME", raising=False)
+    assert update_self.main(["run-status", "start", "--repo-root", str(tmp_path)]) == 1
+    assert "no chat agent name" in capsys.readouterr().err
+    assert update_self.read_run_status(tmp_path) is None
+
+
+def test_read_run_status_ignores_a_corrupt_file(tmp_path, capsys) -> None:
+    # Same lenience as the marker: status reporting must never wedge the pass
+    # that would overwrite the bad file.
+    path = update_self.run_status_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    path.write_text("not json")
+    assert update_self.read_run_status(tmp_path) is None
+    assert "not a valid run status" in capsys.readouterr().err
