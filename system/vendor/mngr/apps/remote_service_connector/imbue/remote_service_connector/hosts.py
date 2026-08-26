@@ -660,8 +660,7 @@ def _lease_pool_host(
     leased: LeaseHostResponse | None = None
     is_pool_exhausted = False
     no_host_keys_detail: str | None = None
-    conn = db.get_pool_db_connection()
-    try:
+    with db.pooled_db_connection() as conn:
         with conn:
             with conn.cursor() as cur:
                 # Serialize this user's leases for the duration of the
@@ -805,8 +804,6 @@ def _lease_pool_host(
                         container_host_public_key=container_host_public_key,
                     )
                     break
-    finally:
-        conn.close()
     if leased is not None:
         return leased
     # Nothing leased. The quarantines above are already committed (the
@@ -854,8 +851,7 @@ def release_host(request: Request, host_db_id: UUID) -> dict[str, object]:
     """
     with handle_endpoint_errors():
         user = accounts_web_module.authenticate_web_request(request)
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 # ``str(host_db_id)`` because psycopg2 can't adapt the
                 # Python ``UUID`` type that FastAPI parsed from the path
@@ -959,8 +955,6 @@ def release_host(request: Request, host_db_id: UUID) -> dict[str, object]:
                 )
             else:
                 _delete_pool_host_row(conn, host_db_id)
-        finally:
-            conn.close()
         return ReleaseHostResponse(status="released").model_dump()
 
 
@@ -1013,8 +1007,7 @@ def rename_host(request: Request, host_db_id: UUID, body: RenameHostRequest) -> 
     """
     with handle_endpoint_errors():
         user = accounts_web_module.authenticate_web_request(request)
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT leased_to_user, status FROM pool_hosts WHERE id = %s",
@@ -1034,8 +1027,6 @@ def rename_host(request: Request, host_db_id: UUID, body: RenameHostRequest) -> 
                     (body.host_name, str(host_db_id)),
                 )
                 conn.commit()
-        finally:
-            conn.close()
         return RenameHostResponse(host_db_id=host_db_id, host_name=body.host_name).model_dump()
 
 
@@ -1052,8 +1043,7 @@ def list_leased_hosts(request: Request) -> list[dict[str, object]]:
     """
     with handle_endpoint_errors():
         user = accounts_web_module.authenticate_web_request(request)
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT id, vps_address, ssh_port, ssh_user, container_ssh_port, agent_id, host_id, "
@@ -1063,8 +1053,6 @@ def list_leased_hosts(request: Request) -> list[dict[str, object]]:
                     (user.user_id_prefix,),
                 )
                 rows = cur.fetchall()
-        finally:
-            conn.close()
         return [
             LeasedHostInfo(
                 host_db_id=r[0],
@@ -1095,13 +1083,10 @@ def count_total_workspaces(user_id_prefix: str) -> int:
 
 
 def _count_user_workspaces(user_id_prefix: str, count_sql: str) -> int:
-    conn = db.get_pool_db_connection()
-    try:
+    with db.pooled_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(count_sql, (user_id_prefix,))
             row = cur.fetchone()
-    finally:
-        conn.close()
     return int(row[0]) if row is not None else 0
 
 
@@ -1118,7 +1103,8 @@ _SHARE_GRANTS_REMOTE_PATH = "/home/user/workspace/data/.secrets/share_grants.tom
 class EnableSharingResponse(BaseModel):
     """Response from POST /hosts/{host_db_id}/enable-sharing."""
 
-    host_id: str = Field(description="The workspace's mngr host id")
+    host_id: str = Field(description="The workspace's current machine (mngr host id)")
+    workspace_id: str | None = Field(default=None, description="The workspace's id (agent-<32hex>), when known")
     workspace_domain: str = Field(description="The share's bare workspace domain")
     region: str = Field(description="The relay region the share is pinned to")
     entry_label: str | None = Field(
@@ -1262,20 +1248,26 @@ def _enable_sharing_core(
     except InvalidShareCoordinateError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    conn = db.get_pool_db_connection()
-    try:
+    with db.pooled_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT leased_to_user, status, vps_address, container_ssh_port, ssh_user, host_id, "
-                "container_host_public_key FROM pool_hosts WHERE id = %s",
+                "container_host_public_key, agent_id FROM pool_hosts WHERE id = %s",
                 (str(host_db_id),),
             )
             row = cur.fetchone()
-    finally:
-        conn.close()
     if row is None:
         raise HTTPException(status_code=404, detail="No such host")
-    (leased_to_user, status, vps_address, container_ssh_port, ssh_user, host_id, container_host_public_key) = row
+    (
+        leased_to_user,
+        status,
+        vps_address,
+        container_ssh_port,
+        ssh_user,
+        host_id,
+        container_host_public_key,
+        workspace_id,
+    ) = row
     if leased_to_user != user.user_id_prefix:
         raise HTTPException(status_code=403, detail="You do not own this host lease")
     if status != "leased":
@@ -1288,7 +1280,12 @@ def _enable_sharing_core(
 
     management_key_pem = os.environ["POOL_SSH_PRIVATE_KEY"]
     store = shares_module.get_share_store()
-    existing_share = store.get_share(host_id, user_label)
+    # The workspace id (the pool row's pre-provisioned agent id) is the
+    # share's durable key; the host-keyed fallback inside only covers rows old
+    # clients created, never a row claimed by a different workspace.
+    existing_share = shares_module.find_share_for_workspace(
+        store, host_id, user_label, workspace_id if workspace_id else None
+    )
     relay_rows = shares_module.active_relay_rows()
     region = shares_module.resolve_share_region_for_share(
         existing_region=str(existing_share["region"]) if existing_share is not None else None,
@@ -1297,12 +1294,28 @@ def _enable_sharing_core(
         eligible_regions=relays_module.eligible_regions(relay_rows),
         host_id=host_id,
     )
-    coordinate = shares_module.make_share_coordinate(
-        host_id=host_id,
-        user_label=user_label,
-        region=region,
-        content_domain=shares_module.share_content_domain(),
-    )
+    if existing_share is not None:
+        coordinate = shares_module.coordinate_from_stored_share(
+            existing_share, user_label, workspace_id_backfill=workspace_id
+        )
+    elif workspace_id:
+        coordinate = shares_module.make_workspace_share_coordinate(
+            host_id=host_id,
+            workspace_id=workspace_id,
+            share_label=shares_module.generate_share_label(),
+            user_id=full_user_id,
+            region=region,
+            content_domain=shares_module.share_content_domain(),
+        )
+    else:
+        # A pool row without an agent id should not exist; keep the legacy
+        # host-led coordinate as the safe degradation.
+        coordinate = shares_module.make_share_coordinate(
+            host_id=host_id,
+            user_label=user_label,
+            region=region,
+            content_domain=shares_module.share_content_domain(),
+        )
     relay_token = shares_module.generate_relay_token()
     # No entry label is supplied here: the frps NewProxy callback records it
     # once the workspace's tunnel claims its service labels, so the connector
@@ -1348,6 +1361,7 @@ def _enable_sharing_core(
     recorded_entry_label = share_row.get("entry_label") if share_row is not None else None
     return EnableSharingResponse(
         host_id=host_id,
+        workspace_id=coordinate.workspace_id,
         workspace_domain=coordinate.workspace_domain,
         region=region,
         entry_label=recorded_entry_label,
@@ -1591,8 +1605,7 @@ def _release_lease_after_failed_claim(host_db_id: UUID) -> None:
     and the hourly sweep retries rows stuck in ``removing``.
     """
     try:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 # Same projection as the release endpoint, so the teardown has
                 # the slice's lima bookkeeping.
@@ -1614,8 +1627,6 @@ def _release_lease_after_failed_claim(host_db_id: UUID) -> None:
                 )
                 conn.commit()
             _finish_releasing_pool_host(conn, host_db_id, lima_instance_name, lima_disk_name, bare_metal_server_id)
-        finally:
-            conn.close()
     except (PoolHostCleanupError, paramiko.SSHException, OSError, psycopg2.Error) as exc:
         logger.warning("Failed to release lease %s after a failed claim (sweep will retry): %s", host_db_id, exc)
 

@@ -47,16 +47,24 @@ def verify_bucket_ownership(bucket_name: str, user_id_prefix: str) -> None:
 # retention is an explicit future option).
 DESTROYED_WORKSPACE_BACKUP_RETENTION_SECONDS: Final[float] = 60.0 * 60.0 * 24.0 * 30.0
 
-# Workspace-backup buckets are named by their workspace's host id, so the
-# short name after the owner prefix is always `host-<hex>`. This shape is
-# reserved: `bucket create` refuses it for names no workspace record backs,
-# so the reapers can identify workspace-backup buckets by name alone.
-WORKSPACE_BACKUP_SHORT_NAME_RE: Final = re.compile(r"^host-[a-f0-9]+$")
-RESERVED_BUCKET_SHORT_NAME_PREFIX: Final[str] = "host-"
+# Workspace-backup buckets are named by their workspace id (`agent-<hex>`,
+# the workspace's system-services agent id); buckets provisioned before the
+# workspace-keyed naming carry the machine's host id (`host-<hex>`) and are
+# grandfathered. Both shapes are reserved: `bucket create` refuses them for
+# names no workspace record backs, so the reapers can identify
+# workspace-backup buckets by name alone. The record's explicit
+# `backup_bucket` column is the preferred association; name derivation is
+# the legacy fallback.
+WORKSPACE_BACKUP_SHORT_NAME_RE: Final = re.compile(r"^(?:host|agent)-[a-f0-9]+$")
+RESERVED_BUCKET_SHORT_NAME_PREFIXES: Final[tuple[str, ...]] = ("host-", "agent-")
 
 
 def parse_workspace_backup_bucket_name(bucket_name: str) -> tuple[str, str] | None:
-    """Split a full bucket name into (user_id_prefix, host_id) when it is a workspace-backup bucket."""
+    """Split a full bucket name into (user_id_prefix, short_name) when it is a workspace-backup bucket.
+
+    The short name is the workspace id (`agent-<hex>`) for workspace-keyed
+    buckets, or the machine's host id (`host-<hex>`) for grandfathered ones.
+    """
     if R2_BUCKET_NAME_SEP not in bucket_name:
         return None
     user_id_prefix, _, short_name = bucket_name.partition(R2_BUCKET_NAME_SEP)
