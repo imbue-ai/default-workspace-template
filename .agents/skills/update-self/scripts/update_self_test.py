@@ -2454,6 +2454,22 @@ def test_marker_phase_timings_roundtrip_and_tolerate_older_markers(
     assert read.phase_timings == {}
 
 
+def test_a_marker_that_is_not_an_object_is_ignored_not_fatal(
+    apply_repo: Path, capsys
+) -> None:
+    # Well-formed JSON of the wrong shape (a list, a string) must degrade like
+    # a torn write does: read_marker promises a corrupt marker never wedges the
+    # recovery decision, and the cron re-reads it every five minutes forever.
+    update_self.marker_path(apply_repo).parent.mkdir(parents=True)
+    update_self.marker_path(apply_repo).write_text(json.dumps([{"phase": "merged"}]))
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+
+    assert update_self.read_marker(apply_repo) is None
+    assert "not a valid marker" in capsys.readouterr().err
+    assert _recover(runner, _FakeHttp(_all_healthy), apply_repo, if_stale=True) == 0
+    assert runner.calls == []
+
+
 def test_emergency_when_rollback_cannot_restore_health(
     apply_repo: Path, capsys, monkeypatch: pytest.MonkeyPatch
 ) -> None:
