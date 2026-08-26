@@ -2190,8 +2190,12 @@ def test_an_unexpected_error_in_the_forward_apply_still_rolls_back(
     assert not _marker_exists(apply_repo)
     err = capsys.readouterr().err
     assert "unexpected AttributeError" in err
-    # The traceback survives the tidying, so the bug is still diagnosable.
+    # The traceback survives the tidying, so the bug is still diagnosable --
+    # under its own heading, since a traceback filed as the pre-flight boot's
+    # output sends the reader to a step that never ran.
     assert "Traceback (most recent call last)" in err
+    assert "--- traceback ---" in err
+    assert "pre-flight boot output" not in err
 
 
 def test_failed_build_rolls_back_the_merge_and_restores_the_bundle(
