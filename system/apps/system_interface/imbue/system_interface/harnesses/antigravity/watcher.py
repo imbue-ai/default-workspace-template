@@ -70,6 +70,15 @@ _FLUSH_RETRY_SECONDS: Final[float] = 5.0
 _DELIVERY_WITNESS_SECONDS: Final[float] = 15.0
 _DELIVERY_POLL_SECONDS: Final[float] = 0.25
 
+# Wedge-breaker for the emit embargo (see ``_attempt_flush``), NOT its functional bound -- the
+# ``finally`` clears the embargo on every path a flush can leave by. This only decides how long
+# the transcript stays muted if the flush THREAD itself dies mid-send, so it has to outlast a
+# real send (mngr's message.lock wait + TUI-ready + confirm) plus the full witness window.
+# A timestamp rather than a bool for exactly that reason: a bool left set by a lost thread mutes
+# the transcript permanently, which is far worse than the ordering bug it exists to fix.
+# ponytail: one fixed ceiling; derive it from mngr's own send timeout if that ever moves.
+_EMIT_EMBARGO_CEILING_SECONDS: Final[float] = 120.0
+
 
 class AntigravitySessionWatcher(AgentSessionWatcher):
     """Watches an agy agent's conversation ``.db``(s) and emits parsed UI events."""
@@ -94,6 +103,7 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
     _flush_is_alive: Any
     _flush_wake: threading.Event
     _flush_thread: threading.Thread | None
+    _emit_embargo_until: float
     _observer: Any
 
     @classmethod
@@ -110,6 +120,7 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
         self._scan_from: dict[str, int] = {}
         self._wake = threading.Event()
         self._stopping = threading.Event()
+        self._emit_embargo_until = 0.0
         self._thread: threading.Thread | None = None
         # The session's identity: the marker mngr stamps on every launch/resume. A journal
         # written under a different token belongs to a session that has since restarted, and
@@ -212,17 +223,36 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
             self._wake.clear()
             if self._stopping.is_set():
                 return
-            # The ONLY caller of set_session. Adopting a new agy session discards the old
-            # one's queue, so it must never happen as a side effect of a read -- a broadcast
-            # asking "is the tap available?" used to be able to trigger exactly that.
-            self._queue.set_session(session_token(self._state_dir))
-            with self._lock:
-                pending = self._collect_new_events()
-                # Publish inside the lock, from the same events the emit used: the hold
-                # decision and the dot must never read different transcripts.
-                self._publish_turn_state()
-            if pending:
-                self._on_events(self._agent_id, pending)
+            self._poll_once()
+
+    def _poll_once(self) -> None:
+        """One poll tick: adopt the session, collect, publish, emit.
+
+        Extracted from the loop so a test can drive a tick deterministically -- the A3b
+        ordering guarantee is between THIS and the flush worker, so a test that cannot
+        interleave them cannot see the bug (the original depart-before-arrive test ran on a
+        watcher whose poll thread was never started, which is why the race shipped green).
+        """
+        # The ONLY caller of set_session. Adopting a new agy session discards the old
+        # one's queue, so it must never happen as a side effect of a read -- a broadcast
+        # asking "is the tap available?" used to be able to trigger exactly that.
+        self._queue.set_session(session_token(self._state_dir))
+        with self._lock:
+            # THE EMBARGO (contract A3b). While a flush holds the claim, this thread must not
+            # emit: `_collect_new_events` is destructive, so whichever thread sees the
+            # delivered row first is the one that emits it, and this one wakes on agy's own
+            # sqlite write (the watchdog handler) -- so it wins essentially every time and
+            # puts the committed turn on screen while its chip is still showing. The flush
+            # worker is already collecting on its own cadence inside the witness window and
+            # releases what it saw only AFTER finish_flush, so skipping the collect here
+            # loses nothing; it just stops this thread overtaking that ordering.
+            is_embargoed = time.monotonic() < self._emit_embargo_until
+            pending = [] if is_embargoed else self._collect_new_events()
+            # Published unconditionally, embargo or not: the hold decision and the activity
+            # dot must never read a staler transcript than the flush worker is acting on.
+            self._publish_turn_state()
+        if pending:
+            self._on_events(self._agent_id, pending)
 
     # --- scanning ------------------------------------------------------------------------
 
@@ -447,6 +477,9 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
         5. **Send, then look.** mngr's ack is the busy marker's mtime, which advances even for
            a message that merely parked -- so the ack is not evidence. The evidence is agy's
            own store gaining a user turn whose text is ours.
+        6. **Embargo the poll thread** for the span of the send, so the turn our block becomes
+           departs the queue before it arrives in the transcript (A3b) no matter which thread
+           happened to scan the row first.
         """
         send, is_alive = self._flush_send, self._flush_is_alive
         if send is None or is_alive is None:
@@ -469,6 +502,10 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
         delivered: tuple[str, ...] = ()
         witnessed: list[dict[str, Any]] = []
         try:
+            # Mute the poll thread for the span of this flush, so the turn our block becomes
+            # cannot be emitted by it before the entry departs below. Set INSIDE the try, so
+            # every path out of here runs the finally that clears it.
+            self._emit_embargo_until = time.monotonic() + _EMIT_EMBARGO_CEILING_SECONDS
             if send(block):
                 delivered, witnessed = self._observe_delivery(before, block, claimed)
         finally:
@@ -485,6 +522,10 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
                 logger.info("antigravity: {} did not witness a turn for its block", self._agent_id)
             if witnessed:
                 self._on_events(self._agent_id, witnessed)
+            # Cleared LAST, after the witnessed batch has gone out. Clearing it before that
+            # emit would let the poll thread wake in between and ship a later row first,
+            # inverting the transcript -- the ordering this whole embargo exists to protect.
+            self._emit_embargo_until = 0.0
 
     def _observe_delivery(
         self, before: tuple[str, ...], block: str, claimed: tuple[str, ...]

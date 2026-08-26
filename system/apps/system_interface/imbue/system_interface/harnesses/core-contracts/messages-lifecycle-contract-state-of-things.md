@@ -217,6 +217,24 @@ send while the turn is already generating. Dropping them at hand-off instead wou
 off screen before the turn renders, which A1a forbids outright and which E1 records as the
 worse failure. Same shape as codex's shoulder-tap resend, same render path.
 
+**A3b needs an embargo here, because two threads collect the transcript.** The watcher's poll
+loop and its flush worker both call the same destructive scan, so whichever sees the delivered
+row first is the one that emits it — and the poll loop wakes on agy's own sqlite write, so it
+won this race essentially every time and put the committed turn on screen while the chip was
+still there. The flush therefore mutes the poll loop's *emission* from claim until after
+`finish_flush`, which is what makes depart-before-arrive hold in the live two-thread case
+rather than only in a single-threaded test.
+
+Residual, accepted: the transcript stalls for the length of the embargo. Normally that is the
+few hundred ms of a send into an idle agent (we only type when no turn is open, so there is
+nothing to emit anyway). The bad case is this section's own merge residual — our block never
+appears as its own row, another actor's turn is generating, and the transcript holds for the
+full witness window. The upgrade path is a *user-message barrier* rather than a blanket mute:
+let non-user events through and buffer only from the first `user_message` onward. A naive
+type filter is wrong (same-pass inversions would render the assistant reply above the user
+turn), so the barrier is the only correct version and it is not worth its cost for a path this
+rare.
+
 ### E13. antigravity — the cancel key is a single ctrl+c, and a double press exits
 agy binds `cli.escape` to both `esc` and `ctrl+c`. `esc` carries text-editing meaning in too
 many TUI contexts to deliver blind; `ctrl+c` is unambiguous on the FIRST press, but agy treats a
