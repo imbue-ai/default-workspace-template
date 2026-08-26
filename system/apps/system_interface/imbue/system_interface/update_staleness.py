@@ -30,6 +30,7 @@ from pathlib import Path
 
 from loguru import logger as _loguru_logger
 from pydantic import Field
+from pydantic import PrivateAttr
 
 from imbue.concurrency_group.errors import ProcessError
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
@@ -68,6 +69,9 @@ UPDATE_STALENESS_META_TAG = "system-interface-update-staleness"
 # Bound on the git reads. rev-parse/diff on a local repo are milliseconds; the
 # bound only keeps a wedged git from stalling the app shell.
 _GIT_TIMEOUT_SECONDS = 10.0
+# How long a timed-out git gets between SIGTERM and SIGKILL. A read-only git
+# holds nothing worth a graceful exit, and this runs on a request thread.
+_GIT_SHUTDOWN_TIMEOUT_SECONDS = 1.0
 
 # What makes THIS running process stale: the code it holds in memory, the
 # manifests its environment was resolved from, and the settings file it
@@ -100,6 +104,8 @@ _LIVE_SETTINGS_FILE = ".mngr/settings.toml"
 _BACKEND_MANIFESTS = frozenset(
     {
         "system/apps/system_interface/pyproject.toml",
+        "system/services/oom_priority/pyproject.toml",
+        "system/libs/tk_command_parsing/pyproject.toml",
         "pyproject.toml",
         "uv.lock",
     }
@@ -137,6 +143,7 @@ def _read_git(command: list[str], repo_root: Path) -> str | None:
             cwd=repo_root,
             is_checked=False,
             timeout=_GIT_TIMEOUT_SECONDS,
+            shutdown_timeout_sec=_GIT_SHUTDOWN_TIMEOUT_SECONDS,
         )
     except (ProcessError, OSError) as e:
         logger.warning(
@@ -172,21 +179,27 @@ def _read_changed_paths(repo_root: Path, since_head: str) -> list[str] | None:
     ``None`` when the diff cannot be taken (``since_head`` gone, a wedged git):
     like :func:`_read_head`, everything degrades to "no banner".
     """
-    output = _read_git(["git", "diff", "--name-only", since_head, "HEAD"], repo_root)
+    # ``-z``: without it git C-quotes any path with a non-ASCII byte
+    # (``"system/vendor/mngr/.../l\303\257st.py"``), which then starts with a
+    # quote and matches no prefix rule.
+    output = _read_git(["git", "diff", "--name-only", "-z", since_head, "HEAD"], repo_root)
     if output is None:
         return None
-    return [line.strip() for line in output.splitlines() if line.strip()]
+    return [path for path in output.split("\0") if path]
 
 
 class UpdateStalenessTracker(FrozenModel):
     """Remembers the tree HEAD this server started from and compares later.
 
     Built once per process via :meth:`capture` (a field on
-    ``SystemInterfaceState``); ``staleness`` is asked once per rendered app
-    shell -- a page load -- which is infrequent enough that a bounded ``git
-    rev-parse`` per call costs nothing noticeable. The caller is responsible
-    for keeping it to that: the not-built placeholder's ``HEAD`` poll also
-    reaches the shell route, ten seconds apart per open tab, and must not ask.
+    ``SystemInterfaceState``); ``staleness`` is asked on every app-shell
+    ``GET`` -- the root route and its catch-all for client-side routes, so a
+    page load rather than the app's API traffic. Each ask costs one bounded
+    ``git rev-parse``; the tree diff behind the moved-tree verdict runs only
+    when ``HEAD`` differs from the last ask, since the verdict for a given
+    ``HEAD`` cannot change (it is a content comparison against a fixed
+    baseline). The caller keeps the not-built placeholder's ``HEAD`` poll --
+    ten seconds apart per open tab -- from asking at all.
     """
 
     repo_root: Path = Field(description="The workspace root this server serves from")
@@ -194,6 +207,9 @@ class UpdateStalenessTracker(FrozenModel):
         description="The tree HEAD when this process started; None disables the "
         "moved-tree comparison (the marker check still applies)"
     )
+    # The last (current HEAD, moved-tree verdict) pair. Written as one tuple,
+    # so a race between request threads only repeats the diff.
+    _moved_tree_verdict: tuple[str, bool] | None = PrivateAttr(default=None)
 
     @classmethod
     def capture(cls, repo_root: Path = WORKSPACE_ROOT_DIRECTORY) -> "UpdateStalenessTracker":
@@ -232,9 +248,18 @@ class UpdateStalenessTracker(FrozenModel):
         current = _read_head(self.repo_root)
         if current is None or current == self.startup_head:
             return None
+        return STALENESS_TREE_MOVED if self._has_tree_moved_for_this_server(current) else None
+
+    def _has_tree_moved_for_this_server(self, current_head: str) -> bool:
+        cached = self._moved_tree_verdict
+        if cached is not None and cached[0] == current_head:
+            return cached[1]
+        assert self.startup_head is not None
         changed = _read_changed_paths(self.repo_root, self.startup_head)
         if changed is None:
-            return None
-        if any(_is_path_relevant_to_this_server(path) for path in changed):
-            return STALENESS_TREE_MOVED
-        return None
+            # Not cached: an unreadable diff is a transient to retry, not a
+            # verdict.
+            return False
+        is_moved = any(_is_path_relevant_to_this_server(path) for path in changed)
+        self._moved_tree_verdict = (current_head, is_moved)
+        return is_moved
