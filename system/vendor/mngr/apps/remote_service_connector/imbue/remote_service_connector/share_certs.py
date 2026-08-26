@@ -205,16 +205,13 @@ class PostgresAcmeAccountStore:
     """AcmeAccountStore backed by the connector's existing Neon DB."""
 
     def get_account(self, ca_name: str, directory_url: str) -> dict[str, Any] | None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT account_key_pem, account_uri FROM acme_accounts WHERE ca_name = %s AND directory_url = %s",
                     (ca_name, directory_url),
                 )
                 row = cur.fetchone()
-        finally:
-            conn.close()
         if row is None:
             return None
         return {"account_key_pem": row[0], "account_uri": row[1]}
@@ -222,8 +219,7 @@ class PostgresAcmeAccountStore:
     def save_account(
         self, ca_name: str, directory_url: str, account_key_pem: str, account_uri: str, eab_kid: str | None
     ) -> None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     # ON CONFLICT DO NOTHING: two concurrent first-issuance
@@ -235,8 +231,6 @@ class PostgresAcmeAccountStore:
                         "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (ca_name, directory_url) DO NOTHING",
                         (ca_name, directory_url, account_key_pem, account_uri, eab_kid),
                     )
-        finally:
-            conn.close()
 
 
 @functools.cache

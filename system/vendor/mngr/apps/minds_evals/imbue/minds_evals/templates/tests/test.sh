@@ -4,9 +4,9 @@
 # all judging and scoring; finalize.py combines the dimension scores (reward =
 # quality, or an even split of quality and outcome, zeroed unless every gate
 # passed) and distinguishes a graded 0.0 from a grading-infrastructure failure
-# (judge API error / no parseable reward file / unmeasurable outcome evidence),
-# leaving no reward file in the latter case so harbor errors the trial instead
-# of scoring it 0.
+# (judge API error / no parseable reward file / unreadable case file /
+# unmeasurable outcome evidence), leaving no reward file in the latter case so
+# harbor errors the trial instead of scoring it 0.
 set -euo pipefail
 
 # Rebuild the judged transcript from the raw event stream at grade time (so

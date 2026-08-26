@@ -42,9 +42,10 @@ CRITERION_BY_CLASS = (
 
 # Every helper below degrades to an empty result instead of raising, by design: a criterion that
 # raises aborts rewardkit's whole run with no reward file for ANY dimension, which would grade a
-# broken instrument as a broken trial. A missing or malformed input therefore scores 0.0 here and
-# is diagnosed by finalize.py, which re-reads the manifest itself and turns "no determinable
-# evidence" into a grading-infrastructure failure. Do not add raises to this file.
+# broken instrument as a broken trial. A missing or malformed input therefore scores 0.0 here (or,
+# for case.json, registers no criteria at all) and is diagnosed by finalize.py, which re-reads both
+# files itself and turns "no determinable evidence" and "no trustworthy case file" alike into a
+# grading-infrastructure failure. Do not add raises to this file.
 def _load_json(path: Path) -> dict[str, Any]:
     try:
         loaded = json.loads(path.read_text())

@@ -158,56 +158,43 @@ class PostgresEntitlementsStore:
         }
 
     def get_plan(self, plan_name: str) -> dict[str, Any] | None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(f"SELECT {_PLAN_COLUMNS_SQL} FROM plans WHERE plan_name = %s", (plan_name,))
                 row = cur.fetchone()
-        finally:
-            conn.close()
         return self._plan_row_to_dict(row) if row is not None else None
 
     def list_plans(self) -> list[dict[str, Any]]:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(f"SELECT {_PLAN_COLUMNS_SQL} FROM plans ORDER BY plan_name")
                 rows = cur.fetchall()
-        finally:
-            conn.close()
         return [self._plan_row_to_dict(row) for row in rows]
 
     def get_entitlements(self, user_id: str) -> dict[str, Any] | None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"SELECT {_ENTITLEMENT_COLUMNS_SQL} FROM account_entitlements WHERE user_id = %s",
                     (user_id,),
                 )
                 row = cur.fetchone()
-        finally:
-            conn.close()
         return self._entitlements_row_to_dict(row) if row is not None else None
 
     def get_entitlements_by_prefix(self, user_id_prefix: str) -> dict[str, Any] | None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"SELECT {_ENTITLEMENT_COLUMNS_SQL} FROM account_entitlements WHERE user_id_prefix = %s",
                     (user_id_prefix,),
                 )
                 row = cur.fetchone()
-        finally:
-            conn.close()
         return self._entitlements_row_to_dict(row) if row is not None else None
 
     def insert_entitlements_if_absent(self, row: dict[str, Any]) -> None:
         column_names = ["user_id", "user_id_prefix", "plan_name", *QUOTA_ENTITLEMENT_NAMES]
         placeholders = ", ".join(["%s"] * len(column_names))
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -215,8 +202,6 @@ class PostgresEntitlementsStore:
                         f"VALUES ({placeholders}) ON CONFLICT (user_id) DO NOTHING",
                         tuple(row[name] for name in column_names),
                     )
-        finally:
-            conn.close()
 
     def update_entitlements(self, user_id: str, values: dict[str, Any]) -> None:
         allowed = {"plan_name", *QUOTA_ENTITLEMENT_NAMES, *SUSPENSION_COLUMN_NAMES}
@@ -224,16 +209,13 @@ class PostgresEntitlementsStore:
         if unknown:
             raise UnknownEntitlementColumnError(sorted(unknown))
         assignments = ", ".join(f"{name} = %s" for name in values)
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
                         f"UPDATE account_entitlements SET {assignments}, updated_at = NOW() WHERE user_id = %s",
                         (*values.values(), user_id),
                     )
-        finally:
-            conn.close()
 
 
 @functools.cache

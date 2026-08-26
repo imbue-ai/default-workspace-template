@@ -244,7 +244,6 @@ class _TimedOutConcurrencyGroup(ConcurrencyGroup):
         cwd: Path | None = None,
         env: Mapping[str, str] | None = None,
         shutdown_event: ReadOnlyEvent | None = None,
-        is_detached_from_terminal: bool = False,
         name: str | None = None,
     ) -> FinishedProcess:
         return FinishedProcess(

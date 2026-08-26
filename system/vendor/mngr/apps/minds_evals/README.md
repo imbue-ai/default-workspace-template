@@ -68,10 +68,12 @@ only way harbor gets the dependencies it declares. Practical consequences:
   and is type-checked by the root workspace for that reason. Its tests
   and type check run under `just test-minds-evals`, which the `test-minds-evals` CI job invokes on
   any PR touching this app or the monorepo packages it depends on.
-- `imbue/minds_evals/resources/` and `imbue/minds_evals/templates/` import packages this project
-  deliberately does not depend on (`litellm` and `mngr_forward` in the box, `rewardkit` in the
-  verifier container). They are shipped as source into environments that do have them, so this
-  project's type check and coverage skip both directories.
+- `imbue/minds_evals/resources/` and `imbue/minds_evals/templates/` are both shipped as source into
+  environments this project's venv does not reproduce, but they resolve opposite ways. This project
+  excludes `resources/` from its type check and leans on the root workspace, so
+  `test_meta_ratchets.py` at the repo root keeps the two configs from excluding it at once.
+  `templates/` is type-checked here: it runs in the verifier container, whose `rewardkit` the dev
+  group installs in this project too. Coverage omits both.
 
 ## Usage
 
@@ -439,9 +441,15 @@ Reward composition changes only for expectation cases: `reward = gates_all_passe
 app are equally imperfect". It is a constant, not per-case configuration -- per-case weights would
 make rewards incomparable across cases.
 
-One new grading-infrastructure failure: an expectations case whose `state.json` says the conversation
-finished but which produced no evidence bundle errors the trial rather than scoring 0. An absent
-bundle on an unfinished or timed-out trial is expected and is not an error.
+Two new grading-infrastructure failures. An expectations case whose `state.json` says the
+conversation finished but which produced no evidence bundle errors the trial rather than scoring 0;
+an absent bundle on an unfinished or timed-out trial is expected and is not an error. And a
+`tests/case.json` that is missing, unparseable, not a JSON object, or whose `expectations` is
+neither an object nor `null` errors the trial too -- the generator writes that file into every task,
+so a broken one is the harness failing, and reading it as "this case declared no expectations" would
+grade a commissioned deliverable at quality-only weight. That check does not depend on how the trial
+went: the case file is part of the task, not of the run. A valid case file with `expectations`
+absent or `null` is the bare case (`greeting`) and keeps grading quality-only.
 
 ## Reward mapping
 

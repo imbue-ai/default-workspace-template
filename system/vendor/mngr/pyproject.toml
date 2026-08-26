@@ -205,9 +205,10 @@ format-command="uv run ruff format --force-exclude --config pyproject.toml --std
 # execute in, and the standalone project (which has no mngr_forward) cannot
 # resolve them. Do NOT collapse the entries below into a plain
 # "apps/minds_evals/": that excludes resources/ too, and since the standalone
-# project excludes it as well, it leaves those files type-checked nowhere. The
-# cost of naming the package's own modules instead is that a new subpackage
-# importing harbor fails here until it is added -- loudly, which is the point.
+# project excludes it as well, it leaves those files type-checked nowhere
+# (test_meta_ratchets.py probes ty for exactly that). The cost of naming the
+# package's own modules instead is that a new subpackage importing harbor fails
+# here until it is added -- loudly, which is the point.
 exclude = [
     "scripts/style_guide.py",
     "contrib/",
@@ -290,9 +291,6 @@ omit = [
     # Schedule plugin cron runner and verification run on Modal and require infrastructure to test
     "libs/mngr_schedule/imbue/mngr_schedule/implementations/modal/cron_runner.py",
     "libs/mngr_schedule/imbue/mngr_schedule/implementations/modal/verification.py",
-    # Pty/process-group harness for test_terminal_isolation.py; only ever executed as a
-    # script in a subprocess, so coverage can never see it run.
-    "libs/concurrency_group/imbue/concurrency_group/_terminal_freeze_test_script.py",
     # don't bother with anything in scripts
     "scripts/*",
 ]

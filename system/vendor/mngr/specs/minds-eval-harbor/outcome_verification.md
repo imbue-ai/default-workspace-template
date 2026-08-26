@@ -342,6 +342,11 @@ Failure semantics, extending finalize.py's existing rule:
 - The unmeasured-outcome detection signal is **`manifest.json`**, not the directory: the driver creates `verification/` unconditionally at setup (the regrade rule above), so the directory always exists and its absence can never be the signal.
   A case that declares expectations, whose `state.json` says the conversation finished, and whose `manifest.json` is absent or empty = grading-infrastructure failure: the collection phase never ran on a trial that needed it, so no reward file, harbor errors the trial (same path as a judge API failure today).
   On a timed-out or otherwise unfinished trial, partial-or-absent evidence is expected, not an error -- the structural gates already zero that trial's reward, exactly as they do today.
+- The case file is the other input `finalize.py` must be able to trust: `case.json` missing, unparseable, not a JSON object, or carrying an `expectations` that is neither an object nor `null` = grading-infrastructure failure.
+  The generator writes it into every task's tests directory, so a broken one is a harness invariant violation rather than agent behavior -- and every read of it degrades to "declared no expectations", which would grade a commissioned deliverable as a quality-only case at full weight, indistinguishable from a case that never asked for one.
+  Unlike the evidence rules, this one is unconditional: the case file is part of the task, not of the run, so neither a failed gate nor a timeout can make a broken one acceptable.
+  A valid case file whose `expectations` is absent or `null` is the legitimate bare case and stays quality-only.
+  `checks.py` cannot make this call -- an unreadable case file simply registers no criteria there, because raising would abort every dimension.
 - Structural gates are untouched: outcome verification never rescues a trial whose conversation gates failed.
 
 Oracle: `solve.sh` fabricates a green bundle -- a manifest with every declared check `passed`, a plausible `apps.toml`, canned flow logs, no screenshots (the judge prompt states screenshots may be absent) -- so `-a oracle` exercises generation, the new artifacts, both new criteria files, and the composition.

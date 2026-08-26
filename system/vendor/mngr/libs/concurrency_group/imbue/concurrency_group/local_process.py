@@ -230,7 +230,6 @@ def run_background(
     env: Mapping[str, str] | None = None,
     # Open file descriptors to keep open in (and inherit into) the spawned child, by their fd numbers.
     pass_fds: Sequence[int] = (),
-    is_detached_from_terminal: bool = False,
     process_class: type[ProcessClassType] = RunningProcess,  # ty: ignore[invalid-parameter-default]
     process_class_kwargs: Mapping[str, object] | None = None,
     name: str | None = None,
@@ -255,9 +254,6 @@ def run_background(
     line callback, instead of retaining all of it for later ``read_stdout()``. Use it for
     processes that stream for a long time, where the full history is both unwanted and
     unbounded; ``read_stdout()``/``read_stderr()`` then raise ``OutputNotAccumulatedError``.
-
-    ``is_detached_from_terminal=True`` runs the child in its own session; see
-    :func:`run_local_command_modern_version` for why a background service needs that.
     """
     true_shutdown_event = shutdown_event if shutdown_event is not None else Event()
     process = process_class(
@@ -281,7 +277,6 @@ def run_background(
             shutdown_timeout_sec=shutdown_timeout_sec,
             env=env,
             pass_fds=pass_fds,
-            is_detached_from_terminal=is_detached_from_terminal,
             name=name,
             is_output_accumulated=is_output_accumulated,
         )
