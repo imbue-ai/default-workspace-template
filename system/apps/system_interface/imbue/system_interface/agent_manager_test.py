@@ -765,6 +765,17 @@ def test_delivered_auto_open_survives_a_restart(broadcaster: WebSocketBroadcaste
     assert _layout_ops(_drain(q)) == []
 
 
+def test_a_ledger_of_the_wrong_shape_is_logged_and_starts_empty(tmp_path: Path, loguru_records: list[str]) -> None:
+    # Valid JSON that is not the ledger's shape (a hand edit, a file from some
+    # other tool) must not read as "nothing delivered" in silence: that is the
+    # one path that re-pops every tab, and it should be findable in the log.
+    ledger_path = tmp_path / "auto_opened_chats.json"
+    ledger_path.write_text('["assist-once"]')
+    ledger = AutoOpenLedger(path=ledger_path)
+    assert ledger.is_delivered("assist-once") is False
+    assert any("wrong shape" in record for record in loguru_records)
+
+
 def test_agent_removed_event_removes_agent(agent_manager: AgentManager, broadcaster: WebSocketBroadcaster) -> None:
     """An AGENT_REMOVED event removes the agent from the tracked list and broadcasts."""
     test_agent_id = MngrAgentId()

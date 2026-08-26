@@ -53,6 +53,12 @@ class AutoOpenLedger(MutableModel):
             return set()
         delivered = data.get("delivered") if isinstance(data, dict) else None
         if not isinstance(delivered, list):
+            _loguru_logger.warning(
+                "Ignoring an auto-open ledger of the wrong shape at {} (expected a JSON object with a "
+                "'delivered' list, got {})",
+                self.path,
+                type(data).__name__,
+            )
             return set()
         return {str(agent_id) for agent_id in delivered}
 
