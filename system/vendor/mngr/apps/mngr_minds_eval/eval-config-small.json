@@ -11,7 +11,23 @@
         "Sounds good.",
         "DECIDE_FROM_PERSONA",
         "DECIDE_FROM_PERSONA"
-      ]
+      ],
+      "expectations": {
+        "outcome": "A working to-do list web app, delivered as a running Minds app tab the client can open. Tasks can be added, marked complete, and deleted, and the list survives a page reload.",
+        "deliverable": {"kind": "minds-app"},
+        "ui_flows": [
+          {
+            "name": "add-complete-delete",
+            "steps": "Open the app. Add a task named 'buy milk'. Mark it complete. Add a task named 'walk dog'. Delete 'walk dog'.",
+            "expect": "'buy milk' is visible and shown as completed; 'walk dog' is gone."
+          },
+          {
+            "name": "persistence",
+            "steps": "Open the app. Add a task named 'persist me'. Reload the page.",
+            "expect": "'persist me' is still visible after the reload."
+          }
+        ]
+      }
     },
     {
       "id": "landing-page",
@@ -21,7 +37,18 @@
         "Sounds good.",
         "DECIDE_FROM_PERSONA",
         "DECIDE_FROM_PERSONA"
-      ]
+      ],
+      "expectations": {
+        "outcome": "A single-page marketing site for a product called 'Focus', delivered as a running Minds app tab the client can open. The page carries a hero headline, three feature cards, and an email signup form.",
+        "deliverable": {"kind": "minds-app"},
+        "ui_flows": [
+          {
+            "name": "hero-and-signup",
+            "steps": "Open the page. Read the hero headline and the feature cards. Type 'founder@example.com' into the email signup field and submit it.",
+            "expect": "The page shows a hero headline, three feature cards, and an email signup form that accepted the address and acknowledged the submission rather than erroring."
+          }
+        ]
+      }
     },
     {
       "id": "greeting",

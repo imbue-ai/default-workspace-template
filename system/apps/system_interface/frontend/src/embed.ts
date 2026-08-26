@@ -22,16 +22,19 @@ import {
 } from "@minds/embed-contract";
 import * as embedContract from "@minds/embed-contract";
 
-// PERMISSION_REQUEST_RESOLVED postdates the vendored embed_contract snapshot (it arrives with
-// the next mngr release sync; this repo deliberately does not edit system/vendor by hand). A
-// named import of a missing export fails the rollup build, so probe the namespace and fall
-// back to the literal. Until the sync lands the endpoint drops the (to it) unknown type before
-// any handler runs, so the resolution relay stays dormant and cards keep the transcript-driven
-// flip; the moment the sync lands the relay goes live with no code change here.
+// These types postdate the vendored embed_contract snapshot (they arrive with the next mngr
+// release sync; this repo deliberately does not edit system/vendor by hand). A named import of
+// a missing export fails the rollup build, so probe the namespace and fall back to the literal.
+// Until the sync lands, each side simply drops the (to it) unknown type before any handler
+// runs; the moment the sync lands the feature goes live with no code change here.
 export const PERMISSION_REQUEST_RESOLVED: "minds:permission-request-resolved" =
   "PERMISSION_REQUEST_RESOLVED" in embedContract
     ? embedContract.PERMISSION_REQUEST_RESOLVED
     : "minds:permission-request-resolved";
+// Workspace -> embedder: open the minds shell's Share tab focused on one app.
+// Payload: { serviceName }.
+export const OPEN_SHARE_SETTINGS: "minds:open-share-settings" =
+  "OPEN_SHARE_SETTINGS" in embedContract ? embedContract.OPEN_SHARE_SETTINGS : "minds:open-share-settings";
 
 type EmbedderMessageHandler = (message: ContractMessage) => void;
 

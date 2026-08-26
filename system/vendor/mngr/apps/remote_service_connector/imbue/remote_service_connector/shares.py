@@ -24,7 +24,10 @@ import logging
 import os
 import re
 import secrets
+import threading
+import time
 from collections.abc import Callable
+from collections.abc import Mapping
 from typing import Any
 from typing import Protocol
 
@@ -33,7 +36,9 @@ from fastapi import APIRouter
 from fastapi import HTTPException
 from fastapi import Request
 from pydantic import BaseModel
+from pydantic import ConfigDict
 from pydantic import Field
+from pydantic import PrivateAttr
 from pydantic import field_validator
 
 import imbue.remote_service_connector.accounts_web as accounts_web_module
@@ -52,6 +57,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _SHARE_HOST_ID_RE = re.compile(r"^host-[a-f0-9]{32}$")
+# Same shape the LLM-key mint accepts for workspace ids (llm_keys._WORKSPACE_ID_RE).
+_SHARE_WORKSPACE_ID_RE = re.compile(r"^agent-[0-9a-f]{8,64}$")
 _SHARE_USER_LABEL_RE = re.compile(r"^[a-f0-9]{32}$")
 _SHARE_DNS_LABEL_RE = re.compile(r"^(?=.{1,63}$)[a-z0-9]+(?:-[a-z0-9]+)*$")
 
@@ -87,17 +94,28 @@ ASSIGNMENT_POLL_SECONDS = 60
 
 
 class ShareCoordinate(BaseModel):
-    """The hostname coordinates of one shared workspace."""
+    """The hostname coordinates of one shared workspace.
+
+    The row key (``host_id`` + ``user_label``) and the domain labels are
+    distinct: new shares lead with a random ``share_label`` and a hashed user
+    segment (so CT-logged certificate domains publicize no internal id),
+    while grandfathered rows lead with the machine's host id and the raw
+    user label. ``workspace_id`` is the owning workspace when known.
+    """
 
     host_id: str
+    workspace_id: str | None = None
+    share_label: str | None = None
+    leading_label: str
+    user_segment: str
     user_label: str
     region: str
     content_domain: str
 
     @property
     def workspace_domain(self) -> str:
-        """The bare workspace origin / registrable base, e.g. ``host-<hex>.<user-label>.<region>.<domain>``."""
-        return f"{self.host_id}.{self.user_label}.{self.region}.{self.content_domain}"
+        """The bare workspace origin, e.g. ``<share-label>.<user-hash>.<region>.<domain>``."""
+        return f"{self.leading_label}.{self.user_segment}.{self.region}.{self.content_domain}"
 
     @property
     def vhost_wildcard(self) -> str:
@@ -112,7 +130,7 @@ class ShareCoordinate(BaseModel):
     @property
     def registrable_site(self) -> str:
         """The per-user registrable site (the Public-Suffix-List-backed isolation boundary)."""
-        return f"{self.user_label}.{self.region}.{self.content_domain}"
+        return f"{self.user_segment}.{self.region}.{self.content_domain}"
 
 
 def derive_share_user_label(user_id: str) -> str:
@@ -128,16 +146,22 @@ def derive_share_user_label(user_id: str) -> str:
     return label
 
 
-def make_share_coordinate(host_id: str, user_label: str, region: str, content_domain: str) -> ShareCoordinate:
-    """Build a validated :class:`ShareCoordinate`.
+def derive_share_user_segment(user_id: str) -> str:
+    """The domain's per-user segment for new shares: the first 32 hex of SHA-256 of the user id.
 
-    Every component must be a legal hostname label (or label run) so the
-    resulting workspace domain is a valid, cert-issuable hostname.
+    One-way on purpose: certificate domains land in public CT logs, so the
+    segment must not reveal the SuperTokens user id (while staying stable per
+    account -- the registrable site groups all of one account's shares).
     """
-    if _SHARE_HOST_ID_RE.match(host_id) is None:
-        raise InvalidShareCoordinateError(f"host id must be 'host-<32hex>', got {host_id!r}")
-    if _SHARE_USER_LABEL_RE.match(user_label) is None:
-        raise InvalidShareCoordinateError(f"user label must be 32 hex characters, got {user_label!r}")
+    return hashlib.sha256(user_id.encode("utf-8")).hexdigest()[:32]
+
+
+def generate_share_label() -> str:
+    """Mint the random 32-hex leading label of a new share domain (persisted on the share row)."""
+    return secrets.token_hex(16)
+
+
+def _validate_share_domain_parts(region: str, content_domain: str) -> None:
     if _SHARE_DNS_LABEL_RE.match(region) is None:
         raise InvalidShareCoordinateError(f"region must be a DNS label, got {region!r}")
     domain_labels = content_domain.split(".")
@@ -145,7 +169,82 @@ def make_share_coordinate(host_id: str, user_label: str, region: str, content_do
         raise InvalidShareCoordinateError(
             f"content domain must be dot-joined lowercase DNS labels, got {content_domain!r}"
         )
-    return ShareCoordinate(host_id=host_id, user_label=user_label, region=region, content_domain=content_domain)
+
+
+def make_share_coordinate(host_id: str, user_label: str, region: str, content_domain: str) -> ShareCoordinate:
+    """Build a validated legacy-shape :class:`ShareCoordinate` (host-id-led domain).
+
+    Used for rows without a minted share label: shares created by clients
+    that predate workspace-keyed sharing.
+    """
+    if _SHARE_HOST_ID_RE.match(host_id) is None:
+        raise InvalidShareCoordinateError(f"host id must be 'host-<32hex>', got {host_id!r}")
+    if _SHARE_USER_LABEL_RE.match(user_label) is None:
+        raise InvalidShareCoordinateError(f"user label must be 32 hex characters, got {user_label!r}")
+    _validate_share_domain_parts(region, content_domain)
+    return ShareCoordinate(
+        host_id=host_id,
+        leading_label=host_id,
+        user_segment=user_label,
+        user_label=user_label,
+        region=region,
+        content_domain=content_domain,
+    )
+
+
+def make_workspace_share_coordinate(
+    host_id: str,
+    workspace_id: str,
+    share_label: str,
+    user_id: str,
+    region: str,
+    content_domain: str,
+) -> ShareCoordinate:
+    """Build a validated workspace-keyed :class:`ShareCoordinate` (share-label-led domain)."""
+    if _SHARE_HOST_ID_RE.match(host_id) is None:
+        raise InvalidShareCoordinateError(f"host id must be 'host-<32hex>', got {host_id!r}")
+    if _SHARE_USER_LABEL_RE.match(share_label) is None:
+        raise InvalidShareCoordinateError(f"share label must be 32 hex characters, got {share_label!r}")
+    _validate_share_domain_parts(region, content_domain)
+    return ShareCoordinate(
+        host_id=host_id,
+        workspace_id=workspace_id,
+        share_label=share_label,
+        leading_label=share_label,
+        user_segment=derive_share_user_segment(user_id),
+        user_label=derive_share_user_label(user_id),
+        region=region,
+        content_domain=content_domain,
+    )
+
+
+def coordinate_from_stored_share(
+    share_row: Mapping[str, Any],
+    user_label: str,
+    workspace_id_backfill: str | None = None,
+) -> ShareCoordinate:
+    """Rebuild the coordinate of an existing share row from its stored domain.
+
+    A re-share must never change an existing share's domain (grants, visitor
+    bookmarks, certificate SANs, and session cookies all hang off it), so the
+    stored ``workspace_domain`` -- not a re-derivation -- is authoritative.
+    """
+    domain = str(share_row["workspace_domain"])
+    labels = domain.split(".")
+    if len(labels) < 4:
+        raise InvalidShareCoordinateError(f"stored workspace domain is not label-shaped: {domain!r}")
+    workspace_id = share_row.get("workspace_id") or workspace_id_backfill
+    share_label = share_row.get("share_label")
+    return ShareCoordinate(
+        host_id=str(share_row["host_id"]),
+        workspace_id=str(workspace_id) if workspace_id else None,
+        share_label=str(share_label) if share_label else None,
+        leading_label=labels[0],
+        user_segment=labels[1],
+        user_label=user_label,
+        region=labels[2],
+        content_domain=".".join(labels[3:]),
+    )
 
 
 def generate_relay_token() -> str:
@@ -205,19 +304,23 @@ def resolve_share_region_for_share(
     """Pick the region for one share bring-up, sticky on the share's existing row.
 
     The region is baked into the workspace domain (DNS, PSL boundary, cert
-    SANs, session cookies), so a re-share must never silently move it: an
-    existing row's region wins as long as a relay still serves it. A fresh
-    share prefers the host's datacenter mapping (pool hosts); a host the
-    connector has no datacenter record of (a local workspace) may instead be
-    steered by the caller's ``preferred_region`` -- the desktop measures its
-    own latency to each relay, which is the best proximity signal available
-    for a workspace running on the user's machine. Unknown preferred regions
-    are ignored (not errors), so a stale client never breaks on fleet changes.
+    SANs, session cookies), so a re-share must never move it: an existing
+    row's region always wins, and when no relay serves that region any more
+    the bring-up fails loudly (:class:`NoActiveRelaysError`) rather than
+    answering with relays the stored domain could never use. A fresh share
+    prefers the host's datacenter mapping (pool hosts); a host the connector
+    has no datacenter record of (a local workspace) may instead be steered by
+    the caller's ``preferred_region`` -- the desktop measures its own latency
+    to each relay, which is the best proximity signal available for a
+    workspace running on the user's machine. Unknown preferred regions are
+    ignored (not errors), so a stale client never breaks on fleet changes.
     """
     if not eligible_regions:
         raise NoActiveRelaysError(None)
-    if existing_region is not None and existing_region in eligible_regions:
-        return existing_region
+    if existing_region is not None:
+        if existing_region in eligible_regions:
+            return existing_region
+        raise NoActiveRelaysError(existing_region)
     if datacenter is None and preferred_region is not None and preferred_region in eligible_regions:
         return preferred_region
     return resolve_share_region(datacenter, eligible_regions, host_id)
@@ -294,25 +397,80 @@ def decide_frps_new_proxy(
     return _frps_allow()
 
 
+# Env var holding the TTL (in seconds) each *allowed* Ping decision is cached
+# for in-process. Heartbeats arrive per tunnel session (one per relay of the
+# region) every ~10s, so without a cache every live share costs a DB read per
+# ping; with it, reads per token drop to one per TTL per container. Only
+# allows are cached: a rejected ping severs its session (the token stops
+# pinging), and never caching rejects means a freshly re-authorized session
+# can never be re-severed by a stale entry. Set to ``0`` to disable (every
+# ping hits the DB). Unset falls back to the default below.
+_FRPS_PING_CACHE_TTL_ENV = "MINDS_FRPS_PING_CACHE_TTL_SECONDS"
+_DEFAULT_FRPS_PING_CACHE_TTL_SECONDS = 30.0
+
+# Process-local cache mapping a relay-token hash -> expiry (monotonic) of its
+# cached allow. Guarded by a lock since uvicorn serves requests from a thread
+# pool. Size is naturally bounded by the number of active shares (only tokens
+# that resolved to an active share are ever inserted).
+_ping_allow_cache: dict[str, float] = {}
+_ping_allow_cache_lock = threading.Lock()
+
+
+def _frps_ping_cache_ttl_seconds() -> float:
+    """Resolve the Ping allow-cache TTL from the environment.
+
+    Falls back to the default on an unset/empty value and on an unparseable
+    one (logging a warning in the latter case) so a typo'd Modal secret
+    degrades to "cache normally" rather than crashing the heartbeat path.
+    """
+    raw = os.environ.get(_FRPS_PING_CACHE_TTL_ENV)
+    if raw is None or not raw.strip():
+        return _DEFAULT_FRPS_PING_CACHE_TTL_SECONDS
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        logger.warning(
+            "Invalid %s=%r; falling back to %.0fs",
+            _FRPS_PING_CACHE_TTL_ENV,
+            raw,
+            _DEFAULT_FRPS_PING_CACHE_TTL_SECONDS,
+        )
+        return _DEFAULT_FRPS_PING_CACHE_TTL_SECONDS
+
+
 def decide_frps_ping(
-    share_lookup: Callable[[str], dict[str, Any] | None], relay_token: str | None
+    share_lookup: Callable[[str], dict[str, Any] | None],
+    relay_token: str | None,
+    monotonic: Callable[[], float] = time.monotonic,
 ) -> FrpsAuthDecision:
     """Authorize an frps ``Ping`` heartbeat: reject only on an affirmative non-active share.
 
     Rejecting a ping makes frpc close its whole session (frps answers the
-    heartbeat with an error Pong), which is exactly how a suspended or
-    unshared workspace's LIVE tunnel is severed within one heartbeat interval
-    (~10s). But frp also fails closed on plugin errors, so this path fails
-    OPEN on the connector's own internal errors: tunnel uptime stays coupled
-    only to the connector being reachable, and a non-active share slips
-    through only until the next successful lookup. ``Login``/``NewProxy``
-    keep their fail-closed handling -- they are security decisions, while a
-    heartbeat merely continues an already-authorized session.
+    heartbeat with an error Pong), which is how a suspended or unshared
+    workspace's LIVE tunnel is severed. Allowed decisions are cached
+    in-process for ``MINDS_FRPS_PING_CACHE_TTL_SECONDS`` (see above), so the
+    sever guarantee is one heartbeat interval (~10s) plus at most that TTL --
+    a deliberate trade of kill-switch latency for O(shares/TTL) DB reads
+    instead of one per ping. frp also fails closed on plugin errors, so this
+    path fails OPEN on the connector's own internal errors (never cached):
+    tunnel uptime stays coupled only to the connector being reachable, and a
+    non-active share slips through only until the next successful lookup.
+    ``Login``/``NewProxy`` keep their fail-closed, uncached handling -- they
+    are security decisions, while a heartbeat merely continues an
+    already-authorized session.
     """
     if relay_token is None:
         return _frps_reject("missing relay token")
+    token_hash = hash_relay_token(relay_token)
+    ttl_seconds = _frps_ping_cache_ttl_seconds()
+    now = monotonic()
+    if ttl_seconds > 0:
+        with _ping_allow_cache_lock:
+            cached_expiry = _ping_allow_cache.get(token_hash)
+        if cached_expiry is not None and cached_expiry > now:
+            return _frps_allow()
     try:
-        share = share_lookup(hash_relay_token(relay_token))
+        share = share_lookup(token_hash)
     except psycopg2.Error as exc:
         emit_metric("frps_ping_fail_open", 1, {})
         logger.warning("Allowing frps ping despite a share lookup failure", exc_info=exc)
@@ -320,6 +478,9 @@ def decide_frps_ping(
     if share is None or share["state"] != "active":
         emit_metric("frps_ping_rejected", 1, {})
         return _frps_reject("unknown or inactive relay token")
+    if ttl_seconds > 0:
+        with _ping_allow_cache_lock:
+            _ping_allow_cache[token_hash] = now + ttl_seconds
     return _frps_allow()
 
 
@@ -361,7 +522,8 @@ def _extract_frps_subdomain(content: dict[str, Any]) -> str:
 
 # Columns every share SELECT returns, so row-to-dict projection stays in one place.
 _SHARE_COLUMNS = (
-    "host_id, user_id, region, workspace_domain, state, created_at, updated_at, last_tunnel_login_at, entry_label"
+    "host_id, user_id, region, workspace_domain, state, created_at, updated_at, last_tunnel_login_at, entry_label, "
+    "workspace_id, share_label"
 )
 _SHARE_COLUMN_NAMES = tuple(name.strip() for name in _SHARE_COLUMNS.split(","))
 
@@ -379,6 +541,11 @@ class ShareStore(Protocol):
     """Abstraction over the shares / relay_tokens / issued_certs tables so endpoints are unit-testable."""
 
     def get_share(self, host_id: str, user_label: str) -> dict[str, Any] | None: ...
+
+    def get_share_by_workspace(self, workspace_id: str, user_label: str) -> dict[str, Any] | None:
+        """The user's share row for one workspace id, or None (rows from old clients have none)."""
+        ...
+
     def list_shares(self, user_label: str) -> list[dict[str, Any]]: ...
     def activate_share_and_rotate_token(
         self, coordinate: ShareCoordinate, max_active_shares: int, token_hash: str, entry_label: str | None
@@ -409,37 +576,40 @@ class ShareStore(Protocol):
 class PostgresShareStore:
     """ShareStore backed by the connector's existing Neon DB."""
 
+    def get_share_by_workspace(self, workspace_id: str, user_label: str) -> dict[str, Any] | None:
+        with db.pooled_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT {_SHARE_COLUMNS} FROM shares WHERE workspace_id = %s AND user_id = %s",
+                    (workspace_id, user_label),
+                )
+                row = cur.fetchone()
+        return _share_row_to_dict(row) if row is not None else None
+
     def get_share(self, host_id: str, user_label: str) -> dict[str, Any] | None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"SELECT {_SHARE_COLUMNS} FROM shares WHERE host_id = %s AND user_id = %s",
                     (host_id, user_label),
                 )
                 row = cur.fetchone()
-        finally:
-            conn.close()
         return _share_row_to_dict(row) if row is not None else None
 
     def list_shares(self, user_label: str) -> list[dict[str, Any]]:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"SELECT {_SHARE_COLUMNS} FROM shares WHERE user_id = %s ORDER BY created_at",
                     (user_label,),
                 )
                 rows = cur.fetchall()
-        finally:
-            conn.close()
         return [_share_row_to_dict(row) for row in rows]
 
     def activate_share_and_rotate_token(
         self, coordinate: ShareCoordinate, max_active_shares: int, token_hash: str, entry_label: str | None
     ) -> None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     # Serialize per-user activation so concurrent creates cannot
@@ -458,18 +628,23 @@ class PostgresShareStore:
                     # desktop's client-side flow) must not erase one a previous
                     # bring-up recorded, hence the COALESCE.
                     cur.execute(
-                        "INSERT INTO shares (host_id, user_id, region, workspace_domain, state, entry_label) "
-                        "VALUES (%s, %s, %s, %s, 'active', %s) "
+                        "INSERT INTO shares (host_id, user_id, region, workspace_domain, state, entry_label, "
+                        "workspace_id, share_label) "
+                        "VALUES (%s, %s, %s, %s, 'active', %s, %s, %s) "
                         "ON CONFLICT (host_id, user_id) DO UPDATE SET "
                         "region = EXCLUDED.region, workspace_domain = EXCLUDED.workspace_domain, "
                         "state = 'active', updated_at = NOW(), "
-                        "entry_label = COALESCE(EXCLUDED.entry_label, shares.entry_label)",
+                        "entry_label = COALESCE(EXCLUDED.entry_label, shares.entry_label), "
+                        "workspace_id = COALESCE(EXCLUDED.workspace_id, shares.workspace_id), "
+                        "share_label = COALESCE(EXCLUDED.share_label, shares.share_label)",
                         (
                             coordinate.host_id,
                             coordinate.user_label,
                             coordinate.region,
                             coordinate.workspace_domain,
                             entry_label,
+                            coordinate.workspace_id,
+                            coordinate.share_label,
                         ),
                     )
                     # The token swap rides the SAME transaction (and the same
@@ -486,32 +661,24 @@ class PostgresShareStore:
                         "INSERT INTO relay_tokens (token_hash, host_id, user_id) VALUES (%s, %s, %s)",
                         (token_hash, coordinate.host_id, coordinate.user_label),
                     )
-        finally:
-            conn.close()
 
     def update_share_entry_label(self, host_id: str, user_label: str, entry_label: str) -> None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
                         "UPDATE shares SET entry_label = %s, updated_at = NOW() WHERE host_id = %s AND user_id = %s",
                         (entry_label, host_id, user_label),
                     )
-        finally:
-            conn.close()
 
     def deactivate_share(self, host_id: str, user_label: str) -> None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
                         "UPDATE shares SET state = 'inactive', updated_at = NOW() WHERE host_id = %s AND user_id = %s",
                         (host_id, user_label),
                     )
-        finally:
-            conn.close()
 
     def suspend_shares_for_user(self, user_label: str) -> int:
         """Flip every active share of one user to ``suspended``, keeping the relay tokens.
@@ -520,8 +687,7 @@ class PostgresShareStore:
         workspace still holds the plaintext token, so once the share is back
         to ``active`` its next tunnel login succeeds with no re-share.
         """
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -530,12 +696,9 @@ class PostgresShareStore:
                         (user_label,),
                     )
                     return cur.rowcount
-        finally:
-            conn.close()
 
     def unsuspend_shares_for_user(self, user_label: str) -> int:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -544,24 +707,18 @@ class PostgresShareStore:
                         (user_label,),
                     )
                     return cur.rowcount
-        finally:
-            conn.close()
 
     def delete_relay_tokens(self, host_id: str, user_label: str) -> None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
                         "DELETE FROM relay_tokens WHERE host_id = %s AND user_id = %s",
                         (host_id, user_label),
                     )
-        finally:
-            conn.close()
 
     def find_share_by_token_hash(self, token_hash: str) -> dict[str, Any] | None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT s.host_id, s.user_id, s.region, s.workspace_domain, s.state "
@@ -570,8 +727,6 @@ class PostgresShareStore:
                     (token_hash,),
                 )
                 row = cur.fetchone()
-        finally:
-            conn.close()
         if row is None:
             return None
         return {
@@ -583,21 +738,17 @@ class PostgresShareStore:
         }
 
     def find_active_share_by_workspace_domain(self, workspace_domain: str) -> dict[str, Any] | None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"SELECT {_SHARE_COLUMNS} FROM shares WHERE workspace_domain = %s AND state = 'active'",
                     (workspace_domain,),
                 )
                 row = cur.fetchone()
-        finally:
-            conn.close()
         return _share_row_to_dict(row) if row is not None else None
 
     def record_tunnel_login(self, host_id: str, user_label: str) -> None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -605,40 +756,31 @@ class PostgresShareStore:
                         "WHERE host_id = %s AND user_id = %s",
                         (host_id, user_label),
                     )
-        finally:
-            conn.close()
 
     def get_pool_host_datacenter(self, host_id: str) -> str | None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT region FROM pool_hosts WHERE host_id = %s ORDER BY created_at DESC LIMIT 1",
                     (host_id,),
                 )
                 row = cur.fetchone()
-        finally:
-            conn.close()
         if row is None or row[0] is None:
             return None
         return str(row[0])
 
     def get_latest_cert_not_after(self, workspace_domain: str) -> str | None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT not_after FROM issued_certs WHERE workspace_domain = %s ORDER BY not_after DESC LIMIT 1",
                     (workspace_domain,),
                 )
                 row = cur.fetchone()
-        finally:
-            conn.close()
         return str(row[0]) if row is not None else None
 
     def count_certs_issued_in_last_day(self, host_id: str, user_label: str) -> int:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT COUNT(*) FROM issued_certs "
@@ -646,8 +788,6 @@ class PostgresShareStore:
                     (host_id, user_label),
                 )
                 row = cur.fetchone()
-        finally:
-            conn.close()
         return int(row[0]) if row is not None else 0
 
     def record_issued_cert(
@@ -660,8 +800,7 @@ class PostgresShareStore:
         sans_json: str,
         not_after: str,
     ) -> None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -670,8 +809,6 @@ class PostgresShareStore:
                         "VALUES (%s, %s, %s, %s, %s, %s, %s)",
                         (workspace_domain, host_id, user_label, ca_name, cert_chain_pem, sans_json, not_after),
                     )
-        finally:
-            conn.close()
 
 
 @functools.cache
@@ -768,7 +905,16 @@ def entry_label_from_claimed_domains(workspace_domain: str, claimed_custom_domai
 
 
 class CreateShareRequest(BaseModel):
-    host_id: str = Field(description="The workspace's host coordinate (host-<32hex>) to share")
+    host_id: str = Field(description="The machine the workspace currently runs on (host-<32hex>)")
+    workspace_id: str | None = Field(
+        default=None,
+        description=(
+            "The workspace's id (agent-<32hex>). When present, the share is workspace-keyed: its "
+            "domain leads with a minted share label (persisted on the row) instead of the host id, "
+            "and re-shares resolve through the workspace id even if the machine changes. Absent "
+            "from old clients, whose shares keep the legacy host-led domains."
+        ),
+    )
     entry_label: str | None = Field(
         default=None,
         description=(
@@ -799,6 +945,16 @@ class CreateShareRequest(BaseModel):
             raise InvalidShareCoordinateError(f"entry_label must be a single origin label, got {value!r}")
         return normalized
 
+    @field_validator("workspace_id")
+    @classmethod
+    def _validate_workspace_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip().lower()
+        if _SHARE_WORKSPACE_ID_RE.match(normalized) is None:
+            raise InvalidShareCoordinateError(f"workspace_id must be 'agent-<hex>', got {value!r}")
+        return normalized
+
     @field_validator("preferred_region")
     @classmethod
     def _validate_preferred_region(cls, value: str | None) -> str | None:
@@ -817,6 +973,33 @@ class FrpsAuthRequest(BaseModel):
     content: dict[str, Any] = Field(default_factory=dict)
 
 
+def find_share_for_workspace(
+    store: ShareStore, host_id: str, user_label: str, workspace_id: str | None
+) -> dict[str, Any] | None:
+    """The existing share row a bring-up for this workspace should reuse, or None.
+
+    The workspace id is the share's durable key: prefer it so a re-share finds
+    the workspace's row (and keeps its domain) even if the machine changed. The
+    host-keyed fallback exists only for rows old clients created (workspace_id
+    NULL): a host-keyed row claimed by a DIFFERENT workspace belongs to that
+    workspace (the machine was reused), so reusing it would hand this
+    workspace the other one's domain and rotate its relay token away -- treat
+    it as absent instead. Callers that supply no workspace id (old clients)
+    can only key by host and keep the unrestricted lookup.
+    """
+    if workspace_id is not None:
+        row = store.get_share_by_workspace(workspace_id, user_label)
+        if row is not None:
+            return row
+    row = store.get_share(host_id, user_label)
+    if row is None:
+        return None
+    row_workspace_id = row.get("workspace_id")
+    if workspace_id is not None and row_workspace_id is not None and str(row_workspace_id) != workspace_id:
+        return None
+    return row
+
+
 @router.post("/shares")
 def create_share(request: Request, body: CreateShareRequest) -> dict[str, object]:
     """Enable sharing for one workspace: create (or reactivate) its share and mint a fresh relay token.
@@ -831,7 +1014,7 @@ def create_share(request: Request, body: CreateShareRequest) -> dict[str, object
         user_label = derive_share_user_label(user_id)
         store = get_share_store()
         relay_rows = active_relay_rows()
-        existing_share = store.get_share(body.host_id, user_label)
+        existing_share = find_share_for_workspace(store, body.host_id, user_label, body.workspace_id)
         region = resolve_share_region_for_share(
             existing_region=str(existing_share["region"]) if existing_share is not None else None,
             datacenter=store.get_pool_host_datacenter(body.host_id),
@@ -839,12 +1022,33 @@ def create_share(request: Request, body: CreateShareRequest) -> dict[str, object
             eligible_regions=relays_module.eligible_regions(relay_rows),
             host_id=body.host_id,
         )
-        coordinate = make_share_coordinate(
-            host_id=body.host_id,
-            user_label=user_label,
-            region=region,
-            content_domain=share_content_domain(),
-        )
+        if existing_share is not None:
+            # Re-share: the stored domain is authoritative (grants, visitor
+            # bookmarks, certs, and cookies hang off it); backfill the
+            # workspace id when a new client supplied it.
+            coordinate = coordinate_from_stored_share(
+                existing_share, user_label, workspace_id_backfill=body.workspace_id
+            )
+        elif body.workspace_id is not None:
+            coordinate = make_workspace_share_coordinate(
+                host_id=body.host_id,
+                workspace_id=body.workspace_id,
+                share_label=generate_share_label(),
+                user_id=user_id,
+                region=region,
+                content_domain=share_content_domain(),
+            )
+        else:
+            # An old client's first share of a workspace: keep the legacy
+            # host-led domain it expects. CLEANUP: drop this branch (and
+            # make_share_coordinate) once no in-window client omits
+            # workspace_id from POST /shares.
+            coordinate = make_share_coordinate(
+                host_id=body.host_id,
+                user_label=user_label,
+                region=region,
+                content_domain=share_content_domain(),
+            )
         relay_endpoints = relay_endpoints_for_share_region(relay_rows, region)
         relay_token = generate_relay_token()
         store.activate_share_and_rotate_token(
@@ -852,6 +1056,7 @@ def create_share(request: Request, body: CreateShareRequest) -> dict[str, object
         )
         return {
             "host_id": coordinate.host_id,
+            "workspace_id": coordinate.workspace_id,
             "workspace_domain": coordinate.workspace_domain,
             "region": region,
             "relay_endpoints": relay_endpoints,
@@ -945,6 +1150,7 @@ def get_share_status(request: Request, host_id: str) -> dict[str, object]:
         relay_logins = relays_module.get_relay_store().list_share_relay_logins(host_id, user_label)
         return {
             "host_id": share["host_id"],
+            "workspace_id": share.get("workspace_id"),
             "workspace_domain": share["workspace_domain"],
             "region": share["region"],
             "state": share["state"],
@@ -956,8 +1162,80 @@ def get_share_status(request: Request, host_id: str) -> dict[str, object]:
         }
 
 
+# How often (seconds) accumulated successful-ping metrics are flushed as
+# metric records. Flushing piggybacks on request handling (no background
+# threads in this codebase) with a final flush from the app's lifespan
+# shutdown, so a gracefully scaled-down container loses nothing and a hard
+# kill loses at most one window.
+_FRPS_PING_METRICS_FLUSH_INTERVAL_SECONDS = 60.0
+
+
+class FrpsPingMetricsAggregator(BaseModel):
+    """Accumulates authorized-ping counts and duration sums per relay, emitting periodic metric records.
+
+    Successful heartbeats emit no per-request access-log line (they would be
+    the vast majority of connector log volume), so this is their
+    observability: a count and a duration-ms sum per relay per flush window.
+    Sums rather than averages, so any query can compute the exact weighted
+    average at any grouping.
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    flush_interval_seconds: float
+    emit: Callable[[str, float, Mapping[str, str]], None]
+
+    _lock: Any = PrivateAttr(default_factory=threading.Lock)
+    _count_by_relay: dict[str, int] = PrivateAttr(default_factory=dict)
+    _duration_ms_sum_by_relay: dict[str, float] = PrivateAttr(default_factory=dict)
+    _window_started_monotonic: float | None = PrivateAttr(default=None)
+
+    def record_authorized_ping(self, relay_id: str, duration_ms: float, now: float) -> None:
+        with self._lock:
+            if self._window_started_monotonic is None:
+                self._window_started_monotonic = now
+            self._count_by_relay[relay_id] = self._count_by_relay.get(relay_id, 0) + 1
+            self._duration_ms_sum_by_relay[relay_id] = self._duration_ms_sum_by_relay.get(relay_id, 0.0) + duration_ms
+            if now - self._window_started_monotonic < self.flush_interval_seconds:
+                return
+            drained_window = self._drain_window(now)
+        self._emit_window(drained_window)
+
+    def flush(self, now: float) -> None:
+        """Emit whatever the current window holds (the lifespan-shutdown final flush)."""
+        with self._lock:
+            drained_window = self._drain_window(now)
+        self._emit_window(drained_window)
+
+    def _drain_window(self, now: float) -> list[tuple[str, int, float]]:
+        drained_window = [
+            (relay_id, count, self._duration_ms_sum_by_relay.get(relay_id, 0.0))
+            for relay_id, count in sorted(self._count_by_relay.items())
+        ]
+        self._count_by_relay.clear()
+        self._duration_ms_sum_by_relay.clear()
+        self._window_started_monotonic = now
+        return drained_window
+
+    def _emit_window(self, drained_window: list[tuple[str, int, float]]) -> None:
+        for relay_id, count, duration_ms_sum in drained_window:
+            self.emit("frps_ping_authorized", count, {"relay": relay_id})
+            self.emit("frps_ping_authorized_duration_ms_total", round(duration_ms_sum, 1), {"relay": relay_id})
+
+
+_ping_metrics_aggregator = FrpsPingMetricsAggregator(
+    flush_interval_seconds=_FRPS_PING_METRICS_FLUSH_INTERVAL_SECONDS,
+    emit=emit_metric,
+)
+
+
+def flush_frps_ping_metrics() -> None:
+    """Final flush of accumulated ping metrics; wired to the app's lifespan shutdown."""
+    _ping_metrics_aggregator.flush(time.monotonic())
+
+
 @router.post("/frps/auth/{plugin_secret}/{relay_id}")
-def frps_auth(plugin_secret: str, relay_id: str, body: FrpsAuthRequest) -> dict[str, object]:
+def frps_auth(request: Request, plugin_secret: str, relay_id: str, body: FrpsAuthRequest) -> dict[str, object]:
     """Authorize an frps server-plugin operation (``Login`` / ``NewProxy`` / ``Ping``) for one relay.
 
     The relay's frps calls this for every workspace tunnel connect, hostname
@@ -969,23 +1247,40 @@ def frps_auth(plugin_secret: str, relay_id: str, body: FrpsAuthRequest) -> dict[
     directly under that share's own domain (see ``decide_frps_new_proxy``),
     and a ``Ping`` whose token no longer resolves to an active share is
     rejected fail-open (see ``decide_frps_ping``) -- the live-tunnel kill
-    switch. Every operation must present a relay token resolving to an active
+    switch, effective within one heartbeat interval plus the ping allow-cache
+    TTL. Every operation must present a relay token resolving to an active
     share (token-less bodies are rejected whatever the op); beyond that,
     operations other than the ones we subscribe to are allowed unchanged --
     frps should not be configured to send them, and constraining an
     unexpected op further would break the tunnel for no security gain.
+
+    Allowed pings are not access-logged (see the aggregator above); every
+    other outcome logs one structured line, with the secret path segment
+    redacted.
     """
     with handle_endpoint_errors():
+        # The path embeds the shared plugin secret, which must never reach the
+        # log store; the structured access-log line carries this sanitized
+        # form instead (Modal's own native access line is not ours to scrub).
+        # Set before the secret check so a rejected attempt's line is
+        # sanitized too.
+        request.state.access_log_path_override = f"/frps/auth/<plugin-secret>/{relay_id}"
         _require_frps_plugin_secret(plugin_secret)
         if body.op == _FRPS_PING_OP:
             # Heartbeats skip the relay-row lookup: the plugin secret already
             # authenticates the caller, and a DB read here would couple every
             # live tunnel to the relays table (see decide_frps_ping's
             # fail-open rationale).
-            return decide_frps_ping(
+            ping_started_monotonic = time.monotonic()
+            decision = decide_frps_ping(
                 get_share_store().find_share_by_token_hash,
                 _extract_frps_relay_token(body.op, body.content),
-            ).model_dump()
+            )
+            if not decision.reject:
+                now = time.monotonic()
+                request.state.access_log_suppress_success = True
+                _ping_metrics_aggregator.record_authorized_ping(relay_id, (now - ping_started_monotonic) * 1000.0, now)
+            return decision.model_dump()
         relay_row = next(
             (row for row in active_relay_rows() if str(row["relay_id"]) == relay_id),
             None,
