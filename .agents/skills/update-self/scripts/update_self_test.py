@@ -594,10 +594,21 @@ def test_classify_path_restart_flag() -> None:
         "system/vendor/mngr/libs/mngr/pyproject.toml",
         # The one provisioner path a live process re-reads on every request.
         ".mngr/settings.toml",
+        # The two workspace libraries the system interface imports in-process
+        # (the staleness detector counts the same two trees).
+        "system/services/oom_priority/src/oom_priority/bands.py",
+        "system/libs/tk_command_parsing/src/tk_command_parsing/parser.py",
     ]
     for path in requires:
         assert update_self.classify_path(path).requires_restart, path
     does_not = [
+        # Tests and non-code under the imported libraries are never loaded by
+        # the running service.
+        "system/services/oom_priority/src/oom_priority/bands_test.py",
+        "system/services/oom_priority/bin/script_import_paths_test.py",
+        "system/libs/tk_command_parsing/README.md",
+        # A service that is not imported keeps the shared_runtime rule.
+        "system/services/host_backup/src/host_backup/runner.py",
         # The system interface's own restart decision stays with the apply's
         # finer frontend/backend split, not this flag.
         "system/apps/system_interface/imbue/system_interface/server.py",
@@ -1615,6 +1626,13 @@ def test_plan_apply_vendored_source_and_settings_require_restart() -> None:
     assert not vendored.backend  # not a system-interface change
     settings = update_self.plan_apply([".mngr/settings.toml"])
     assert settings.requires_restart and settings.provisioner
+    # An imported workspace library is in-process code of the service the
+    # restart bounces, so it restarts without being a system-interface change.
+    imported = update_self.plan_apply(
+        ["system/services/oom_priority/src/oom_priority/bands.py"]
+    )
+    assert imported.requires_restart and imported.needs_restart
+    assert not imported.backend
 
 
 def test_plan_apply_docs_only_needs_nothing() -> None:

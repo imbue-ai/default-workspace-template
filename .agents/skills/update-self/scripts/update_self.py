@@ -526,6 +526,22 @@ _MANIFEST_BASENAMES = frozenset(
     {"pyproject.toml", "uv.lock", "package.json", "package-lock.json"}
 )
 
+# Workspace libraries the running system interface imports in-process (its
+# pyproject depends on both as editable installs): the OOM banding library and
+# the tk command parser. Like the vendored mngr, their source is "picked up
+# live" only by a fresh process, so a change must bounce the services agent.
+# The staleness detector (system_interface/update_staleness.py) counts the
+# same two trees, and this is what keeps the two rules from disagreeing.
+_SYSTEM_INTERFACE_IMPORTED_LIB_PREFIXES = (
+    "system/services/oom_priority/",
+    "system/libs/tk_command_parsing/",
+)
+
+
+def _is_test_file(path: str) -> bool:
+    name = path.rsplit("/", 1)[-1]
+    return name.endswith("_test.py") or name.startswith("test_")
+
 
 class PathClass(NamedTuple):
     """How one changed path should be applied and validated.
@@ -613,7 +629,11 @@ def classify_path(path: str) -> PathClass:
     program at once. Activating one service precisely means restarting the
     individual programs a change touches, which cannot be inferred from paths
     alone -- so it stays with the worker's impact analysis and the lead (see
-    the update-self skill's 5c), and this returns ``False``.
+    the update-self skill's 5c), and this returns ``False``. The two libraries
+    the system interface itself imports
+    (:data:`_SYSTEM_INTERFACE_IMPORTED_LIB_PREFIXES`) are the exception to
+    the exception: a non-test ``.py`` there is in-process code of the very
+    service the restart bounces, so it carries the flag like vendored mngr.
     """
     is_manifest = Path(path).name in _MANIFEST_BASENAMES
     project = _project_for_path(path)
@@ -656,7 +676,14 @@ def classify_path(path: str) -> PathClass:
         or path.startswith("system/services/")
         or path.startswith("system/apps/")
     ):
-        return PathClass(CLASS_SHARED_RUNTIME, project, is_manifest, False)
+        is_imported_by_system_interface = (
+            path.startswith(_SYSTEM_INTERFACE_IMPORTED_LIB_PREFIXES)
+            and path.endswith(".py")
+            and not _is_test_file(path)
+        )
+        return PathClass(
+            CLASS_SHARED_RUNTIME, project, is_manifest, is_imported_by_system_interface
+        )
     if path == "CLAUDE.md" or "/changelog/" in path or path.endswith(".md"):
         return PathClass(CLASS_DOCS, project, is_manifest, False)
     return PathClass(CLASS_OTHER, project, is_manifest, False)
@@ -1491,11 +1518,6 @@ def _is_backend_manifest(path: str) -> bool:
         and parts[3] == "libs"
         and parts[5] == "pyproject.toml"
     )
-
-
-def _is_test_file(path: str) -> bool:
-    name = path.rsplit("/", 1)[-1]
-    return name.endswith("_test.py") or name.startswith("test_")
 
 
 class ApplyPlan(NamedTuple):
