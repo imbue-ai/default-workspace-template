@@ -95,7 +95,7 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
     _stopping: threading.Event
     _thread: threading.Thread | None
     # The queue we hold on agy's behalf, its delivery capabilities, and the worker that
-    # performs the delivery. See docs/design/antigravity-message-lifecycle-plan.md.
+    # performs the delivery. See system/apps/system_interface/imbue/system_interface/harnesses/core-contracts/messages-lifecycle-contract-state-of-things.md.
     _queue: AntigravityQueueTracker
     _turn_state: TurnState
     _queue_snapshot_callback: Any

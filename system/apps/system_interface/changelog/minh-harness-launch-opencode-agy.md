@@ -51,3 +51,5 @@ Antigravity agents now get the two reminders every other harness already had: th
 The reminder to declare a step also got more accurate everywhere: it no longer fires on read-only commands like `ls` or `cat`, it correctly recognises a bare `ticket` command, and it no longer mistakes a word like `gtk` for a task-tracker call.
 
 Pi's refusal messages now match the other harnesses word for word, so the same mistake gets the same explanation whichever agent you are talking to.
+
+Removed six design documents whose work has shipped. Their durable content -- the measured shape of Antigravity's transcript and hook surface, the per-harness state of each guard, and how to re-measure both -- now lives in the harness contracts and the transcript-schema reference, which is where someone changing this code will actually look. Deleting a plan once it is built keeps the next reader from following a stale map.

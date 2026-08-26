@@ -409,12 +409,12 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         ),
         auth_instructions="Open the agent's terminal and run /login to add accounts or keys.",
     ),
-    # opencode and antigravity are LAUNCH-ONLY so far: their mngr plugins can create and run
-    # an agent, but neither has a transcript watcher, activity tracker, model resolver or
-    # catalog of its own yet. They are registered anyway, because an UNregistered harness is
-    # not neutral -- ``parse_harness`` would fall it back to claude and point claude's watcher
-    # at another harness's state dir. So each names the shared placeholders (see
-    # ``harnesses/placeholder.py``) until its own implementation lands, one harness at a time.
+    # opencode is LAUNCH-ONLY: its mngr plugin can create and run an agent, but it has no
+    # transcript watcher, activity tracker, model resolver or catalog of its own. It is
+    # registered anyway, because an UNregistered harness is not neutral -- ``parse_harness``
+    # would fall it back to claude and point claude's watcher at another harness's state dir.
+    # So it names the shared placeholders (see ``harnesses/placeholder.py``) until its own
+    # implementation lands. antigravity has since landed all four and no longer uses them.
     #
     # ``auth_check`` is deliberately None for both. ``find_unauthenticated_harness_reason`` is
     # FAIL-CLOSED: an auth probe whose command or output pattern is wrong refuses every create
