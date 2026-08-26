@@ -1176,6 +1176,16 @@ ENV_DRI_AGENT = "MNGR_AGENT_NAME"
 STATE_DIR_REL = "data/.state/update-apply"
 MARKER_FILENAME = "marker.json"
 SNAPSHOTS_DIRNAME = "snapshots"
+# The run-status file: the whole machine-readable contract between an
+# update-self pass and the Minds app. The lead records the run's start here
+# (``run-status start``, before anything else in the pass) and its one
+# terminal verdict (``run-status verdict``); the app's poll reads the file
+# over ``mngr exec`` alongside the apply marker and the run's chat agent, and
+# needs nothing else -- a run recorded here is visible to the app whoever
+# launched it. One file per workspace: a new run's ``start`` overwrites the
+# previous run's record, which is exactly the app's model (the last run's
+# outcome stands until a new run supersedes it).
+RUN_STATUS_FILENAME = "run.json"
 # The emergency record, written when a rollback could not put a healthy
 # workspace back. The marker cannot carry this: it comes down on the emergency
 # path (that exit is deliberate and fully reported, and re-running the same
@@ -1199,6 +1209,16 @@ PROVISION_INCOMPLETE_FILENAME = "provision-incomplete.json"
 # healthy on the merged tree -- so there is no phase past the restart: the
 # post-success bookkeeping (ledger, env-converge) runs marker-free, because an
 # interruption there must never read as an update worth rolling back.
+#
+# INVARIANT: the marker is on disk before anything that can disturb the live
+# interface. The restart is the last phase, and every earlier phase works on
+# the side (even the pre-flight boots the merged backend on its own port), so
+# by the time the workspace's interface can stop answering, the marker has
+# been present for the whole apply. The Minds app's misdiagnosis guard depends
+# on exactly this ordering -- its stuck-edge probe reads the marker over
+# ``mngr exec`` *after* an outage begins, and declines unattended recovery on
+# finding it -- so a reordering that lets a service-disturbing step precede
+# the marker write would silently break that guard.
 PHASE_STARTED = "started"
 PHASE_MERGED = "merged"
 PHASE_SNAPSHOTTED = "snapshotted"
@@ -1824,6 +1844,120 @@ def write_marker(
 
 def clear_marker(repo_root: Path) -> None:
     marker_path(repo_root).unlink(missing_ok=True)
+
+
+# The terminal verdicts a run may record, mirrored by the Minds app's
+# ``UpdateVerdict`` enum. The app drops a verdict string it does not know, so
+# adding one here is a contract change that needs the app taught first.
+RUN_VERDICT_UPDATED = "UPDATED"
+RUN_VERDICT_UPDATED_WITH_REBUILD_ITEMS = "UPDATED_WITH_REBUILD_ITEMS"
+RUN_VERDICT_ALREADY_CURRENT = "ALREADY_CURRENT"
+RUN_VERDICT_NEEDS_RECREATION = "NEEDS_RECREATION"
+RUN_VERDICT_STUCK = "STUCK"
+RUN_VERDICT_REFUSED = "REFUSED"
+RUN_VERDICTS = (
+    RUN_VERDICT_UPDATED,
+    RUN_VERDICT_UPDATED_WITH_REBUILD_ITEMS,
+    RUN_VERDICT_ALREADY_CURRENT,
+    RUN_VERDICT_NEEDS_RECREATION,
+    RUN_VERDICT_STUCK,
+    RUN_VERDICT_REFUSED,
+)
+
+
+@dataclass
+class RunStatus:
+    """One update-self run's record for the Minds app: who is running, and how it ended.
+
+    ``started_at``/``verdict_at``/``updated_at`` are epoch seconds, matching
+    the marker's timestamps. ``verdict`` is ``None`` while the run is going;
+    the fields after it are only meaningful once it is set.
+    """
+
+    chat_agent_name: str
+    is_unattended: bool
+    started_at: float
+    updated_at: float
+    verdict: str | None = None
+    detail: str = ""
+    resulting_ref: str = ""
+    in_place_compatible_ref: str = ""
+    verdict_at: float | None = None
+
+    def to_json(self) -> str:
+        return json.dumps(
+            {
+                "chat_agent_name": self.chat_agent_name,
+                "is_unattended": self.is_unattended,
+                "started_at": self.started_at,
+                "updated_at": self.updated_at,
+                "verdict": self.verdict,
+                "detail": self.detail,
+                "resulting_ref": self.resulting_ref,
+                "in_place_compatible_ref": self.in_place_compatible_ref,
+                "verdict_at": self.verdict_at,
+            },
+            indent=2,
+        )
+
+    @classmethod
+    def from_json(cls, text: str) -> "RunStatus":
+        raw = json.loads(text)
+        if not isinstance(raw, dict):
+            raise ValueError(f"expected a JSON object, got {type(raw).__name__}")
+        verdict = raw.get("verdict")
+        verdict_at = raw.get("verdict_at")
+        return cls(
+            chat_agent_name=str(raw.get("chat_agent_name", "")),
+            is_unattended=bool(raw.get("is_unattended", False)),
+            started_at=float(raw.get("started_at", 0.0)),
+            updated_at=float(raw.get("updated_at", 0.0)),
+            verdict=str(verdict) if verdict is not None else None,
+            detail=str(raw.get("detail", "")),
+            resulting_ref=str(raw.get("resulting_ref", "")),
+            in_place_compatible_ref=str(raw.get("in_place_compatible_ref", "")),
+            verdict_at=float(verdict_at) if verdict_at is not None else None,
+        )
+
+
+def run_status_path(repo_root: Path) -> Path:
+    return repo_root / STATE_DIR_REL / RUN_STATUS_FILENAME
+
+
+def read_run_status(repo_root: Path) -> RunStatus | None:
+    """Read the run-status file, or ``None`` when absent or unreadable.
+
+    Same lenience as :func:`read_marker`, for the same reason: this is status
+    reporting, and a corrupt file must not wedge the pass that would overwrite
+    it.
+    """
+    path = run_status_path(repo_root)
+    try:
+        text = path.read_text()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        sys.stderr.write(f"warning: could not read {path} ({exc}); ignoring it.\n")
+        return None
+    try:
+        return RunStatus.from_json(text)
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        sys.stderr.write(
+            f"warning: {path} is not a valid run status ({exc}); ignoring it.\n"
+        )
+        return None
+
+
+def write_run_status(
+    status: RunStatus, repo_root: Path, now: Callable[[], float]
+) -> None:
+    """Persist ``status`` atomically (write-then-rename), stamping ``updated_at``."""
+    status.updated_at = now()
+    path = run_status_path(repo_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    scratch = path.with_suffix(".json.tmp")
+    scratch.write_text(status.to_json())
+    scratch.replace(path)
 
 
 def emergency_path(repo_root: Path) -> Path:
@@ -3915,6 +4049,53 @@ def _cmd_apply(args: argparse.Namespace) -> int:
     )
 
 
+def _cmd_run_status_start(args: argparse.Namespace) -> int:
+    repo_root = _repo_root(args).resolve()
+    chat_agent_name = args.chat or os.environ.get(ENV_DRI_AGENT, "")
+    if not chat_agent_name:
+        print(
+            f"error: no chat agent name: pass --chat or run with {ENV_DRI_AGENT} set.",
+            file=sys.stderr,
+        )
+        return 1
+    now = time.time
+    write_run_status(
+        RunStatus(
+            chat_agent_name=chat_agent_name,
+            is_unattended=args.unattended,
+            started_at=now(),
+            updated_at=0.0,
+        ),
+        repo_root,
+        now,
+    )
+    print(f"Recorded the run's start for {chat_agent_name}.")
+    return 0
+
+
+def _cmd_run_status_verdict(args: argparse.Namespace) -> int:
+    repo_root = _repo_root(args).resolve()
+    now = time.time
+    status = read_run_status(repo_root)
+    if status is None:
+        # A verdict with no recorded start still deserves a record: the app can
+        # at least report how the run ended, and the env names the agent.
+        status = RunStatus(
+            chat_agent_name=os.environ.get(ENV_DRI_AGENT, ""),
+            is_unattended=False,
+            started_at=now(),
+            updated_at=0.0,
+        )
+    status.verdict = args.verdict
+    status.detail = args.detail
+    status.resulting_ref = args.resulting_ref
+    status.in_place_compatible_ref = args.in_place_compatible_ref
+    status.verdict_at = now()
+    write_run_status(status, repo_root, now)
+    print(f"Recorded the {args.verdict} verdict.")
+    return 0
+
+
 def _cmd_recover(args: argparse.Namespace) -> int:
     return recover(
         _repo_root(args).resolve(),
@@ -4097,6 +4278,58 @@ def main(argv: Sequence[str] | None = None) -> int:
         "health probes (services boot fresh from the restored state).",
     )
     recover_parser.set_defaults(func=_cmd_recover)
+
+    run_status_parser = sub.add_parser(
+        "run-status",
+        help="Record this run for the Minds app (data/.state/update-apply/run.json).",
+        parents=[common],
+    )
+    run_status_sub = run_status_parser.add_subparsers(
+        dest="run_status_command", required=True
+    )
+    start_parser = run_status_sub.add_parser(
+        "start",
+        help="Record that a run has begun, overwriting the previous run's record.",
+        parents=[common],
+    )
+    start_parser.add_argument(
+        "--chat",
+        default="",
+        help=f"This run's chat agent name (default: ${ENV_DRI_AGENT}).",
+    )
+    start_parser.add_argument(
+        "--unattended",
+        action="store_true",
+        help="The dispatch message pre-authorized this run to land unattended.",
+    )
+    start_parser.set_defaults(func=_cmd_run_status_start)
+    verdict_parser = run_status_sub.add_parser(
+        "verdict",
+        help="Record the run's one terminal verdict onto the current record.",
+        parents=[common],
+    )
+    verdict_parser.add_argument(
+        "verdict",
+        choices=RUN_VERDICTS,
+        help="How the run ended.",
+    )
+    verdict_parser.add_argument(
+        "--detail",
+        default="",
+        help="One plain-language line for the Minds app's modal.",
+    )
+    verdict_parser.add_argument(
+        "--resulting-ref",
+        default="",
+        help="The ref the workspace is on now (success verdicts).",
+    )
+    verdict_parser.add_argument(
+        "--in-place-compatible-ref",
+        default="",
+        help="On REFUSED/NEEDS_RECREATION: the newest ref that could still be "
+        "applied in place, when one exists.",
+    )
+    verdict_parser.set_defaults(func=_cmd_run_status_verdict)
 
     args = parser.parse_args(argv)
     try:

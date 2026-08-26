@@ -49,6 +49,21 @@ each bash invocation starts a fresh shell).
 
 ## 1. Preconditions
 
+**Record the run for the Minds app.** Before anything else -- so the app can
+see a run is under way from the first moment, whoever launched it:
+
+```bash
+python3 .agents/skills/update-self/scripts/update_self.py run-status start
+```
+
+Append `--unattended` when your dispatch message says the run is unattended
+(pre-authorized, nobody watching). This writes
+`data/.state/update-apply/run.json`, which the Minds app polls; the pass owes
+that file exactly one more write -- a `run-status verdict` when it ends, from
+whichever section ends it. Each terminal path below names its verdict; a pass
+that ends without recording one shows the user "update failed" in the app over
+a run that may have gone fine.
+
 **Back up first.** Before dispatching anything, capture a restore point of the
 whole workspace so the pass is recoverable -- the apply re-runs provisioners and
 restarts services, and a backup is the last-resort recovery path if everything
@@ -145,7 +160,11 @@ it is running); the app is too old to report its version (update the minds app
 itself first, then re-run); every release upstream is already newer than the app;
 or the workspace is already on the release it may take -- which is either "you are
 current" or "updating the app unlocks the newer one," and the `error:` line says
-which. Do **not** work around it by resolving a ref by hand.
+which. Do **not** work around it by resolving a ref by hand. Record the
+verdict before relaying: `run-status verdict ALREADY_CURRENT` when the error
+says the workspace is current, else `run-status verdict REFUSED --detail
+"<the error line, in plain terms>"` -- with `--in-place-compatible-ref` when
+the error names a release the workspace could still take.
 
 ### The version ceiling
 
@@ -467,7 +486,9 @@ restore the old arrangement.
   specific file or component, and the **actual error text or log excerpt
   verbatim** (not paraphrased), with a pointer to the full report and logs under
   `data/.tasks/update-self/reports/`. Never leave the user at a dead end, and never
-  hand them a failure so vague it's useless in a bug report.
+  hand them a failure so vague it's useless in a bug report. Record
+  `run-status verdict STUCK --detail "<one plain line on what failed>"` as
+  part of composing this.
 - **`done`** -> the report audit below.
 
 ### 5a. Audit the report; compose the results message after the apply
@@ -804,7 +825,9 @@ branch, worktree, and report are all kept, so once the failure is diagnosed
 the re-land is quick -- offer exactly that ("I can look into what went wrong
 and try again once it's fixed"), and never make the user feel the whole pass
 must be redone from scratch. If the closing line said the frontend was already
-broken beforehand, report that as its own problem alongside.
+broken beforehand, report that as its own problem alongside. Record
+`run-status verdict REFUSED --detail "<what failed, one plain line>"` --
+nothing was applied, and the workspace is back as it was.
 
 ### Rolling back on request
 
@@ -842,6 +865,10 @@ starts at some later version), offer both in the same breath: "I can apply
 <X> now; <Y> needs the fresh-workspace migration." Resolve targets with
 `--override` to land the compatible one if the user takes that option.
 
+Record `run-status verdict NEEDS_RECREATION --detail "<why, one plain line>"`,
+with `--in-place-compatible-ref <X>` when that compatible release exists --
+the app's modal offers the migration handoff off exactly this verdict.
+
 ## 6. Teardown
 
 **Tear down any stray preview.** This pass no longer creates previews, but an
@@ -861,8 +888,17 @@ its tab (`python3 system/scripts/layout.py close <name>`).
 rollback the retry path is the worker: its branch, worktree, and report are
 what make a diagnosed retry a quick re-land, so do not stop the worker or
 consume the report until the retry is resolved with the user (release the
-leases either way, so another pass is not blocked while you wait). Then
-consume the report and **stop** the worker -- do not destroy it:
+leases either way, so another pass is not blocked while you wait).
+
+Record the success verdict first -- `UPDATED`, or
+`UPDATED_WITH_REBUILD_ITEMS` when §5c left something a person must finish:
+
+```bash
+python3 .agents/skills/update-self/scripts/update_self.py run-status verdict UPDATED \
+    --resulting-ref "$REF" --detail "<one plain line for the app's modal>"
+```
+
+Then consume the report and **stop** the worker -- do not destroy it:
 
 ```bash
 mkdir -p data/.tasks/update-self/reports/consumed
