@@ -263,7 +263,7 @@ def keeps_full_tool_input(tool_name: str, raw_input: str) -> bool:
     # carries the patch header (same case _code_mode_labels handles) -- treat it as a patch.
     if function_name is None and _APPLY_PATCH_HEADER_RE.search(raw_input) is not None:
         return True
-    # Segment-wise, deliberately BROADER than the hide rule (`is_tk_lifecycle`): a batched
+    # Segment-wise, deliberately BROADER than the hide rule (`is_pure_tk_lifecycle_command`):
     # `cd /code && tk create --step ...` renders as work yet its full command must survive
     # for the step timeline's input fallback -- over-preserving is harmless, over-hiding
     # is not.

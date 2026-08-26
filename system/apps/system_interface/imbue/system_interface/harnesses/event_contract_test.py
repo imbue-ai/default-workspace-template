@@ -253,10 +253,7 @@ def test_codex_error_marker_survives_the_permission_rebuild() -> None:
     head with "...", so probing the truncated output would render a failed script as a
     clean success."""
     filler = "x" * 3000
-    output = (
-        "Script failed: boom\n" + filler
-        + '\n{"request_id": "req-9", "payload": {"kind": "predefined"}}'
-    )
+    output = "Script failed: boom\n" + filler + '\n{"request_id": "req-9", "payload": {"kind": "predefined"}}'
     event = codex_parse_lines(
         {
             "timestamp": "2026-01-01T00:00:05Z",
@@ -291,12 +288,13 @@ def test_antigravity_events_satisfy_the_contract() -> None:
     tool_step = base.model_copy_update(
         ("idx", 2),
         ("step_type_name", "RUN_COMMAND"),
-        ("tool_call", DecodedToolCall(
-            call_id="t1", name="run_command", args='{"CommandLine": "ls"}', caption_short="", caption_long=""
-        )),
+        (
+            "tool_call",
+            DecodedToolCall(
+                call_id="t1", name="run_command", args='{"CommandLine": "ls"}', tool_summary="", tool_action=""
+            ),
+        ),
         ("tool_result_text", "a.txt"),
     )
-    events = [
-        event for step in (user_step, assistant_step, tool_step) for event in agy_parse_step(step)
-    ]
+    events = [event for step in (user_step, assistant_step, tool_step) for event in agy_parse_step(step)]
     _assert_contract(events, "antigravity")
