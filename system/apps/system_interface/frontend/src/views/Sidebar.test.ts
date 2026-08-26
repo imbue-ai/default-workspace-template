@@ -649,22 +649,22 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
     redraw();
 
     const menu = openRowMenuByContextClick(root, redraw, "Chat 1");
-    // Refresh, Rename, the filing group, Stop, Delete -- exactly
+    // The acting group, then the removal group -- exactly
     // objectMenuEntries("chat", ...) as the rail builds it. No Share, which is
     // an app-only affordance, and no "Delete from this machine", which folded
     // into the shared Delete verb.
     expect(menuItemLabels(menu)).toEqual([
       "Refresh",
-      "Rename",
       "Add to project...",
+      "Rename",
       "Remove from project",
       "Stop Chat 1",
       "Delete Chat 1",
     ]);
     expect(menu?.textContent).not.toContain("Delete from this machine");
-    // Hiding a tab is the tab's own job; from here the row is a thing the
+    // Closing a tab is the tab's own job; from here the row is a thing the
     // project shows, so the verb that belongs to it is taking it out.
-    expect(menu?.textContent).not.toContain("Hide tab");
+    expect(menu?.textContent).not.toContain("Close tab");
   });
 
   it("withholds Stop and Delete from the primary agent's own chat, as the tab menu does", () => {
@@ -684,8 +684,8 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
 
       expect(menuItemLabels(openRowMenuByContextClick(root, redraw, "Chat 1"))).toEqual([
         "Refresh",
-        "Rename",
         "Add to project...",
+        "Rename",
         "Remove from project",
       ]);
     } finally {
@@ -848,7 +848,7 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
     expect(attrs.onRemoveFromView).toHaveBeenCalledTimes(1);
   });
 
-  it("gives a terminal row no Rename and no Hide tab, whether or not it is open", () => {
+  it("gives a terminal row no Rename and no Close tab, whether or not it is open", () => {
     const rows: SidebarTabRow[] = [{ ref: "terminal:build", kind: "terminal", label: "Terminal 1", isOpen: false }];
     const { root, redraw } = mountSidebar(makeAttrs({ rows }));
     root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));

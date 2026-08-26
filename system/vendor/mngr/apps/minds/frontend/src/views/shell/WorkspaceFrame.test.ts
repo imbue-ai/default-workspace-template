@@ -1,11 +1,34 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { PermissionResolutionEntry } from "./WorkspaceFrame";
+import { describe, expect, it } from "vitest";
 import {
+  WORKSPACE_ORIGIN_FAMILY,
   buildEmbedHandlers,
-  fetchPermissionResolutionEntries,
-  pushResolutionSnapshot,
   requestIdFromMessage,
 } from "./WorkspaceFrame";
+
+describe("WORKSPACE_ORIGIN_FAMILY", () => {
+  it("accepts the canonical agent-keyed content origins", () => {
+    expect(
+      WORKSPACE_ORIGIN_FAMILY.test("agent-0f3c2b71a4de49b1a2c3d4e5f6a7b8c9.localhost"),
+    ).toBe(true);
+    expect(
+      WORKSPACE_ORIGIN_FAMILY.test(
+        "system_interface-x1y2.agent-0f3c2b71a4de49b1a2c3d4e5f6a7b8c9.localhost",
+      ),
+    ).toBe(true);
+  });
+
+  it("still accepts a legacy host-keyed origin awaiting the redirect heal", () => {
+    expect(
+      WORKSPACE_ORIGIN_FAMILY.test("host-0f3c2b71a4de49b1a2c3d4e5f6a7b8c9.localhost"),
+    ).toBe(true);
+  });
+
+  it("rejects origins outside the workspace families", () => {
+    expect(WORKSPACE_ORIGIN_FAMILY.test("localhost")).toBe(false);
+    expect(WORKSPACE_ORIGIN_FAMILY.test("evil-agent-abc.example.com")).toBe(false);
+    expect(WORKSPACE_ORIGIN_FAMILY.test("agent-abc.localhost.example.com")).toBe(false);
+  });
+});
 
 // The live pattern from the embed contract module (served by Flask at
 // /_static/embed_contract.js, so it cannot be imported into the bundle):
@@ -53,13 +76,11 @@ function makeContract() {
     OPEN_AI_KEYS_ACK: "minds:open-ai-keys-ack",
     BRING_APP_TO_FRONT: "minds:bring-app-to-front",
     CLOSE_ACTIVE_TAB: "minds:close-active-tab",
-    PERMISSION_RESOLUTIONS: "minds:permission-resolutions",
     REQUEST_ID_PATTERN,
   } as Parameters<typeof buildEmbedHandlers>[0]["contract"];
 }
 
 const WORKSPACE_AGENT_ID = "agent-ab12";
-const WORKSPACE_HOST_ID = "host-ab12";
 
 function makeHandlers() {
   const contract = makeContract();
@@ -75,7 +96,6 @@ function makeHandlers() {
       frontCount += 1;
     },
     workspaceAgentId: () => WORKSPACE_AGENT_ID,
-    workspaceHostId: () => WORKSPACE_HOST_ID,
     openRequestPopup: (requestId) => popupOpens.push(requestId),
   });
   return {
@@ -107,12 +127,13 @@ describe("buildEmbedHandlers", () => {
   });
 
   it("acknowledges the AI-keys page only after routing to it", () => {
-    // The mint endpoint keys on the HOST id: the one the workspace sent wins,
-    // else the mounted surface's.
+    // The mint endpoint keys on the workspace id: the coordinate the
+    // workspace sent wins (older template code sends its host id, which the
+    // page dual-accepts), else the mounted surface's workspace id.
     const { contract, handlers, navigations, acks } = makeHandlers();
     handlers[contract.OPEN_AI_KEYS_PAGE]({});
     expect(navigations).toEqual([
-      { path: "/settings/ai-keys", params: { workspace: WORKSPACE_HOST_ID } },
+      { path: "/settings/ai-keys", params: { workspace: WORKSPACE_AGENT_ID } },
     ]);
     expect(acks).toEqual([contract.OPEN_AI_KEYS_ACK]);
 
@@ -133,85 +154,5 @@ describe("buildEmbedHandlers", () => {
     ]);
     expect(popupOpens).toEqual([]);
     expect(frontCount()).toBe(1);
-  });
-});
-
-describe("fetchPermissionResolutionEntries", () => {
-  afterEach(() => {
-    // restoreAllMocks does NOT undo vi.stubGlobal; only this does.
-    vi.unstubAllGlobals();
-  });
-
-  it("maps the wire shape onto entries, drops off-shape rows, and reports failures as null", async () => {
-    // Null (not an empty array) on failure: an empty answer would wrongly
-    // tell the workspace "asked and none are resolved".
-    const requested: string[] = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string) => {
-        requested.push(url);
-        return {
-          ok: true,
-          json: async () => ({
-            resolutions: [
-              { request_id: "evt-1", resolution: "granted" },
-              { request_id: "evt-2", resolution: "shredded" },
-              { resolution: "denied" },
-              { request_id: "evt-3", resolution: "denied" },
-            ],
-          }),
-        } as unknown as Response;
-      }),
-    );
-    expect(await fetchPermissionResolutionEntries("agent-ab12")).toEqual([
-      { requestId: "evt-1", resolution: "granted" },
-      { requestId: "evt-3", resolution: "denied" },
-    ]);
-    expect(requested).toEqual([
-      "/ui/api/inbox/resolutions?workspace=agent-ab12",
-    ]);
-
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => ({ ok: false, status: 500 }) as unknown as Response),
-    );
-    expect(await fetchPermissionResolutionEntries("agent-ab12")).toBeNull();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () =>
-          ({ ok: true, json: async () => ({}) }) as unknown as Response,
-      ),
-    );
-    expect(await fetchPermissionResolutionEntries("agent-ab12")).toBeNull();
-  });
-});
-
-describe("pushResolutionSnapshot", () => {
-  it("pushes the workspace's verdicts into the frame, and nothing on a failed or empty lookup", async () => {
-    // The snapshot is what keeps a rebuilt page from offering Approve/Deny
-    // for an already-decided request; a failed lookup must stay silent (the
-    // cards then follow the transcript's own resolution notices), and an
-    // empty snapshot sends nothing -- there is nothing to flip.
-    const entries: PermissionResolutionEntry[] = [
-      { requestId: "evt-1", resolution: "granted" },
-    ];
-    const sends: PermissionResolutionEntry[][] = [];
-    await pushResolutionSnapshot(
-      async (ws) => (ws === "agent-ab12" ? entries : null),
-      (e) => sends.push(e),
-      "agent-ab12",
-    );
-    await pushResolutionSnapshot(
-      async () => null,
-      (e) => sends.push(e),
-      "agent-ab12",
-    );
-    await pushResolutionSnapshot(
-      async () => [],
-      (e) => sends.push(e),
-      "agent-ab12",
-    );
-    expect(sends).toEqual([entries]);
   });
 });

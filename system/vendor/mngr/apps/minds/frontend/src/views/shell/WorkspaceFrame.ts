@@ -10,12 +10,7 @@
 
 import m from "mithril";
 import { electronBridge } from "../../electron-bridge";
-import { fetchJson } from "../../models/create";
-import type {
-  PermissionResolvedSender,
-  ShellState,
-  WorkspaceFrameHandle,
-} from "./shell-state";
+import type { PermissionResolvedSender, ShellState, WorkspaceFrameHandle } from "./shell-state";
 
 // The embed contract module is served verbatim at /_static/embed_contract.js
 // (single shared source with the workspace side; see docs/embed-contract.md).
@@ -26,26 +21,21 @@ interface EmbedContractModule {
   OPEN_AI_KEYS_ACK: string;
   BRING_APP_TO_FRONT: string;
   CLOSE_ACTIVE_TAB: string;
-  PERMISSION_RESOLUTIONS: string;
+  PERMISSION_REQUEST_RESOLVED: string;
   REQUEST_ID_PATTERN: RegExp;
   createEmbedderEndpoint(options: {
     getFrameWindow: () => Window | null;
     isExpectedOrigin: (origin: string) => boolean;
     handlers: Record<string, (message: Record<string, unknown>) => void>;
-  }): {
-    send(type: string, payload?: Record<string, unknown>): void;
-    dispose(): void;
-  };
+  }): { send(type: string, payload?: Record<string, unknown>): void; dispose(): void };
 }
 
-/** One answered permission request, as relayed back into the asking frame. */
-export interface PermissionResolutionEntry {
-  requestId: string;
-  resolution: "granted" | "denied";
-}
-
-const WORKSPACE_ORIGIN_FAMILY =
-  /^(?:[a-z0-9_-]+\.)*host-[a-f0-9]+\.(?:localhost|127\.0\.0\.1)$/i;
+// The canonical content origin is agent-keyed (the workspace id); host-keyed
+// origins are the legacy shape a stale frame may still sit on before the
+// plugin's redirect heals it, so both families are expected senders. Exported
+// for tests only.
+export const WORKSPACE_ORIGIN_FAMILY =
+  /^(?:[a-z0-9_-]+\.)*(?:host|agent)-[a-f0-9]+\.(?:localhost|127\.0\.0\.1)$/i;
 
 async function loadEmbedContract(): Promise<EmbedContractModule> {
   // Runtime URL import (the module is served by Flask, not bundled); the
@@ -69,8 +59,7 @@ export function requestIdFromMessage(
   requestIdPattern: RegExp,
 ): string | null {
   const requestId = message.requestId;
-  if (typeof requestId !== "string" || !requestIdPattern.test(requestId))
-    return null;
+  if (typeof requestId !== "string" || !requestIdPattern.test(requestId)) return null;
   return requestId;
 }
 
@@ -81,12 +70,9 @@ export interface EmbedHandlerDeps {
   navigate: (path: string, params?: Record<string, string>) => void;
   sendAck: (type: string) => void;
   bringAppToFront: () => void;
-  /** The mounted machine's agent-scoped id, for the ?workspace= an overlay
-   * floats over. */
+  /** The mounted workspace's id, for the ?workspace= an overlay floats
+   * over. */
   workspaceAgentId: () => string;
-  /** The mounted machine's host-scoped id: the AI-keys mint endpoint resolves
-   * the owning account from it. */
-  workspaceHostId: () => string;
   openRequestPopup: (requestId: string | null) => void;
 }
 
@@ -96,21 +82,11 @@ export interface EmbedHandlerDeps {
 export function buildEmbedHandlers(
   deps: EmbedHandlerDeps,
 ): Record<string, (message: Record<string, unknown>) => void> {
-  const {
-    contract,
-    navigate,
-    sendAck,
-    bringAppToFront,
-    workspaceAgentId,
-    workspaceHostId,
-    openRequestPopup,
-  } = deps;
-  const handlers: Record<string, (message: Record<string, unknown>) => void> =
-    {};
+  const { contract, navigate, sendAck, bringAppToFront, workspaceAgentId, openRequestPopup } =
+    deps;
+  const handlers: Record<string, (message: Record<string, unknown>) => void> = {};
   handlers[contract.OPEN_REQUEST_MODAL] = (message) => {
-    openRequestPopup(
-      requestIdFromMessage(message, contract.REQUEST_ID_PATTERN),
-    );
+    openRequestPopup(requestIdFromMessage(message, contract.REQUEST_ID_PATTERN));
   };
   handlers[contract.OPEN_HELP] = () => {
     // Float Get help over this machine (kept mounted), matching the titlebar
@@ -118,59 +94,17 @@ export function buildEmbedHandlers(
     navigate("/help", { workspace: workspaceAgentId() });
   };
   handlers[contract.OPEN_AI_KEYS_PAGE] = (message) => {
-    // Float the AI-keys mint dialog over this machine (kept mounted), matching
-    // OPEN_HELP above. The mint page keys on the HOST id (ai_keys.py resolves
-    // the owning account from the workspace record's host_id): prefer the host
-    // id the workspace sent, else derive it from the mounted surface.
-    const messageHostId =
-      typeof message.hostId === "string" ? message.hostId : null;
-    navigate("/settings/ai-keys", {
-      workspace: messageHostId ?? workspaceHostId(),
-    });
+    // Float the AI-keys mint dialog over this workspace (kept mounted),
+    // matching OPEN_HELP above. The mint page keys on the workspace id
+    // (ai_keys.py dual-accepts a legacy host id too, which is what workspaces
+    // running pre-workspace-id template code still send in `hostId`): prefer
+    // the coordinate the workspace sent, else this surface's workspace id.
+    const messageCoordinate = typeof message.hostId === "string" && message.hostId ? message.hostId : null;
+    navigate("/settings/ai-keys", { workspace: messageCoordinate ?? workspaceAgentId() });
     sendAck(contract.OPEN_AI_KEYS_ACK);
   };
   handlers[contract.BRING_APP_TO_FRONT] = () => bringAppToFront();
   return handlers;
-}
-
-/** GET the mounted workspace's recorded verdicts from the desktop client,
- * mapped onto the contract's entry shape; null on any failure (network,
- * non-200, or an off-shape body). Exported for the frame's wiring and tests. */
-export async function fetchPermissionResolutionEntries(
-  workspaceAgentId: string,
-): Promise<PermissionResolutionEntry[] | null> {
-  const url = `/ui/api/inbox/resolutions?workspace=${encodeURIComponent(workspaceAgentId)}`;
-  let body: { resolutions?: { request_id?: unknown; resolution?: unknown }[] };
-  try {
-    body = await fetchJson(url);
-  } catch {
-    return null;
-  }
-  if (!Array.isArray(body.resolutions)) return null;
-  const entries: PermissionResolutionEntry[] = [];
-  for (const raw of body.resolutions) {
-    if (typeof raw.request_id !== "string") continue;
-    if (raw.resolution !== "granted" && raw.resolution !== "denied") continue;
-    entries.push({ requestId: raw.request_id, resolution: raw.resolution });
-  }
-  return entries;
-}
-
-/** Push the workspace's verdict snapshot into its freshly loaded frame, so a
- * rebuilt page never offers Approve/Deny for an already-decided request.
- * Sent once on load and once shortly after (both idempotent), covering a page
- * whose contract endpoint registers a beat after the document's load event; a
- * failed lookup sends nothing, leaving the cards to the transcript's own
- * resolution notices. Exported for the frame's wiring and tests. */
-export async function pushResolutionSnapshot(
-  fetchEntries: (
-    workspaceAgentId: string,
-  ) => Promise<PermissionResolutionEntry[] | null>,
-  send: (entries: PermissionResolutionEntry[]) => void,
-  workspaceAgentId: string,
-): Promise<void> {
-  const entries = await fetchEntries(workspaceAgentId);
-  if (entries !== null && entries.length > 0) send(entries);
 }
 
 // electronBridge.onCloseActiveTab has no unregister, so the preload callback
@@ -187,16 +121,11 @@ function ensureCloseActiveTabRegistered(): void {
 
 export function WorkspaceFrame(): m.Component<WorkspaceFrameAttrs> {
   let frameElement: HTMLIFrameElement | null = null;
-  let endpoint: {
-    send(type: string, payload?: Record<string, unknown>): void;
-    dispose(): void;
-  } | null = null;
+  let endpoint: { send(type: string, payload?: Record<string, unknown>): void; dispose(): void } | null = null;
   let contract: EmbedContractModule | null = null;
   let armedWorkspaceAnyId: string | null = null;
   let unsubscribeWorkspaces: (() => void) | null = null;
   let closeActiveTabForwarder: (() => void) | null = null;
-  let onFrameLoad: (() => void) | null = null;
-  let snapshotResendTimer: ReturnType<typeof setTimeout> | null = null;
   let permissionResolvedSender: PermissionResolvedSender | null = null;
   let frameHandle: WorkspaceFrameHandle | null = null;
   let isRemoved = false;
@@ -217,8 +146,7 @@ export function WorkspaceFrame(): m.Component<WorkspaceFrameAttrs> {
   // at the workspace root rather than wherever its own app had routed itself.
   function reloadFrame(shell: ShellState): void {
     if (frameElement === null || armedWorkspaceAnyId === null) return;
-    frameElement.src =
-      shell.stores.workspaces.workspaceFrameUrl(armedWorkspaceAnyId);
+    frameElement.src = shell.stores.workspaces.workspaceFrameUrl(armedWorkspaceAnyId);
   }
 
   return {
@@ -235,9 +163,9 @@ export function WorkspaceFrame(): m.Component<WorkspaceFrameAttrs> {
       };
       shell.workspaceFrame = frameHandle;
 
-      // A frame armed before the workspace list arrives may be keyed by an
-      // agent id with no host mapping yet (/goto/ only routes host ids);
-      // re-arm when the mapping lands and the URL therefore changes.
+      // A frame armed before the workspace list arrives may be keyed by a
+      // legacy host id with no alias mapping yet; re-arm when the mapping
+      // lands and the URL therefore changes to the workspace-id form.
       unsubscribeWorkspaces = shell.stores.workspaces.onChanged(() => {
         if (armedWorkspaceAnyId !== null) armFrame(shell, armedWorkspaceAnyId);
       });
@@ -248,17 +176,13 @@ export function WorkspaceFrame(): m.Component<WorkspaceFrameAttrs> {
         // routes for an abandoned workspace.
         if (isRemoved) return;
         contract = loaded;
-        const mountedAnyId = (): string =>
-          armedWorkspaceAnyId ?? workspaceAnyId;
+        const mountedAnyId = (): string => armedWorkspaceAnyId ?? workspaceAnyId;
         const handlers = buildEmbedHandlers({
           contract: loaded,
           navigate: (path, params) => m.route.set(path, params),
           sendAck: (type) => endpoint?.send(type),
           bringAppToFront: () => electronBridge.bringAppToFront(),
-          workspaceAgentId: () =>
-            shell.stores.workspaces.toAgentScopedId(mountedAnyId()),
-          workspaceHostId: () =>
-            shell.stores.workspaces.toHostScopedId(mountedAnyId()),
+          workspaceAgentId: () => shell.stores.workspaces.toAgentScopedId(mountedAnyId()),
           openRequestPopup: (requestId) => {
             shell.openInbox(requestId === null ? {} : { selected: requestId });
             m.redraw();
@@ -288,36 +212,9 @@ export function WorkspaceFrame(): m.Component<WorkspaceFrameAttrs> {
         activeCloseActiveTabForwarder = closeActiveTabForwarder;
         ensureCloseActiveTabRegistered();
         permissionResolvedSender = (requestId, verdict) => {
-          // The same message type as the load-time snapshot, with one
-          // unsolicited entry: the workspace keeps a single verdict code path.
-          endpoint?.send(loaded.PERMISSION_RESOLUTIONS, {
-            resolutions: [{ requestId, resolution: verdict }],
-          });
+          endpoint?.send(loaded.PERMISSION_REQUEST_RESOLVED, { requestId, resolution: verdict });
         };
         shell.registerPermissionResolvedSender(permissionResolvedSender);
-        // Every (re)load of the workspace page starts it with an empty verdict
-        // cache; push its snapshot so no card offers Approve/Deny for a
-        // request decided while the page was not live. Sent twice (idempotent)
-        // in case the page registers its endpoint a beat after its load event.
-        const sendSnapshot = () => {
-          void pushResolutionSnapshot(
-            fetchPermissionResolutionEntries,
-            (entries) =>
-              endpoint?.send(loaded.PERMISSION_RESOLUTIONS, {
-                resolutions: entries,
-              }),
-            shell.stores.workspaces.toAgentScopedId(mountedAnyId()),
-          );
-        };
-        onFrameLoad = () => {
-          sendSnapshot();
-          if (snapshotResendTimer !== null) clearTimeout(snapshotResendTimer);
-          snapshotResendTimer = setTimeout(sendSnapshot, 2000);
-        };
-        frameElement?.addEventListener("load", onFrameLoad);
-        // The frame usually finished loading before the contract module did;
-        // that load event predates the listener, so push once now as well.
-        onFrameLoad();
       });
     },
     onupdate(vnode) {
@@ -329,9 +226,7 @@ export function WorkspaceFrame(): m.Component<WorkspaceFrameAttrs> {
         activeCloseActiveTabForwarder = null;
       }
       if (permissionResolvedSender !== null) {
-        vnode.attrs.shell.unregisterPermissionResolvedSender(
-          permissionResolvedSender,
-        );
+        vnode.attrs.shell.unregisterPermissionResolvedSender(permissionResolvedSender);
         permissionResolvedSender = null;
       }
       // Clear the shell's handle only if it is still ours, so this teardown can
@@ -340,13 +235,6 @@ export function WorkspaceFrame(): m.Component<WorkspaceFrameAttrs> {
         vnode.attrs.shell.workspaceFrame = null;
       }
       frameHandle = null;
-      if (onFrameLoad !== null)
-        frameElement?.removeEventListener("load", onFrameLoad);
-      onFrameLoad = null;
-      if (snapshotResendTimer !== null) {
-        clearTimeout(snapshotResendTimer);
-        snapshotResendTimer = null;
-      }
       endpoint?.dispose();
       endpoint = null;
       unsubscribeWorkspaces?.();

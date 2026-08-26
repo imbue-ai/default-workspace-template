@@ -74,7 +74,8 @@ the healthcheck script -- over SSH, restarting the services, `dns` upserts the
 region's records, and `list` / `destroy` manage existing instances.
 
 - `frps.toml` -- SNI-passthrough vhost + the connector-auth server plugin
-  (`Login` / `NewProxy` only; visitor connections never call the connector).
+  (`Login` / `NewProxy` / `Ping`; visitor connections never call the
+  connector).
 - `nftables.conf` -- tier-2 abuse guard: per-source-IP new-connection rate and
   concurrent-connection caps on the vhost port. (Per-workspace bandwidth quotas
   are tier 3, deferred, and enforced connector-side.)

@@ -1275,6 +1275,18 @@ modal = [
 ]
 
 [[package]]
+name = "harbor-rewardkit"
+version = "0.1.7"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "litellm" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/8b/c2/250143b4373cf4f654e8efffa51e5058b16485769315b5ce1704c9366723/harbor_rewardkit-0.1.7.tar.gz", hash = "sha256:1afd6bf4aac87a6d95a563d6e2062df175e104ef8c3b94361b5054670ba0d278", size = 29966, upload-time = "2026-06-27T05:59:28.786Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6a/be/b5e8a882023f420ad6636344f0cf890892f9e586fc7c370b4395f5333609/harbor_rewardkit-0.1.7-py3-none-any.whl", hash = "sha256:cb9938e551a0ac2cd21f68e819c3f6f6b3a7cebb2e8ae4a19fb3148d5514539c", size = 46396, upload-time = "2026-06-27T05:59:27.88Z" },
+]
+
+[[package]]
 name = "hf-xet"
 version = "1.5.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1829,6 +1841,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "harbor-rewardkit" },
     { name = "imbue-common", extra = ["dev"] },
     { name = "import-linter" },
     { name = "pytest" },
@@ -1852,6 +1865,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "harbor-rewardkit", specifier = "==0.1.*" },
     { name = "imbue-common", extras = ["dev"], editable = "../../libs/imbue_common" },
     { name = "import-linter", specifier = ">=2.0" },
     { name = "pytest", specifier = ">=9.0" },

@@ -7,7 +7,7 @@ from flask.testing import FlaskClient
 from pydantic import Field
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
-from imbue.minds.config.data_types import WorkspacePaths
+from imbue.minds.config.data_types import InstallationPaths
 from imbue.minds.desktop_client.app import create_desktop_client
 from imbue.minds.desktop_client.auth import FileAuthStore
 from imbue.minds.desktop_client.backend_resolver import AgentDisplayInfo
@@ -25,12 +25,12 @@ from imbue.minds.desktop_client.latchkey.handlers.predefined import ManualCreden
 from imbue.minds.desktop_client.latchkey.handlers.predefined import _build_account_choices
 from imbue.minds.desktop_client.latchkey.testing import FakeLatchkeyGatewayClient
 from imbue.minds.desktop_client.latchkey.testing import build_fake_gateway_client
+from imbue.minds.desktop_client.request_events import RequestInbox
 from imbue.minds.desktop_client.request_events import RequestStatus
+from imbue.minds.desktop_client.request_events import create_latchkey_predefined_permission_request_event
 from imbue.minds.desktop_client.request_events import load_response_events
 from imbue.minds.desktop_client.request_handler import UiPredefinedPermissionDetail
 from imbue.minds.desktop_client.request_handler import UiUnknownScopeDetail
-from imbue.minds.desktop_client.testing import StaticPendingRequests
-from imbue.minds.desktop_client.testing import create_predefined_permission_request
 from imbue.minds.utils.testing import RecordingMngrCaller
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import HostId
@@ -428,7 +428,7 @@ def test_detail_payload_with_unknown_credentials_does_not_promise_browser(tmp_pa
         credential_status="unknown",
         auth_options_json=json.dumps([]),
     )
-    event = create_predefined_permission_request(
+    event = create_latchkey_predefined_permission_request_event(
         agent_id=str(AgentId()),
         scope="slack-api",
         rationale="need to read a channel",
@@ -982,6 +982,7 @@ def test_deny_writes_response_event_without_touching_permissions_file(tmp_path: 
     handler.deny(
         request_event_id="evt-abc",
         agent_id=agent_id,
+        scope=_SLACK_SERVICE_INFO.scope,
         display_name=_SLACK_SERVICE_INFO.display_name,
     )
 
@@ -1000,6 +1001,7 @@ def test_deny_sends_mngr_message(tmp_path: Path) -> None:
     handler.deny(
         request_event_id="evt-abc",
         agent_id=AgentId(),
+        scope=_SLACK_SERVICE_INFO.scope,
         display_name=_SLACK_SERVICE_INFO.display_name,
     )
 
@@ -1059,6 +1061,7 @@ def test_deny_calls_gateway_delete_permission_request_only(tmp_path: Path) -> No
     handler.deny(
         request_event_id="evt-deny",
         agent_id=AgentId(),
+        scope=_SLACK_SERVICE_INFO.scope,
         display_name=_SLACK_SERVICE_INFO.display_name,
     )
 
@@ -1069,7 +1072,7 @@ def test_deny_calls_gateway_delete_permission_request_only(tmp_path: Path) -> No
 def _build_authenticated_client(
     tmp_path: Path,
     handler: LatchkeyPermissionGrantHandler,
-    inbox: StaticPendingRequests,
+    inbox: RequestInbox,
 ) -> FlaskClient:
     """Wire ``handler`` into a desktop-client app with a valid session cookie.
 
@@ -1080,13 +1083,13 @@ def _build_authenticated_client(
     auth_dir = tmp_path / "auth"
     auth_store = FileAuthStore(data_directory=auth_dir)
     backend_resolver: BackendResolverInterface = StaticBackendResolver(url_by_agent_and_service={})
-    paths = WorkspacePaths(data_dir=tmp_path)
+    paths = InstallationPaths(data_dir=tmp_path)
     app = create_desktop_client(
         auth_store=auth_store,
         backend_resolver=backend_resolver,
         http_client=None,
         paths=paths,
-        pending_requests=inbox,
+        request_inbox=inbox,
         request_event_handlers=(handler,),
     )
     client = app.test_client()
@@ -1117,24 +1120,25 @@ def test_apply_deny_request_succeeds_for_unknown_scope(tmp_path: Path) -> None:
         gateway_client=fake_client,
     )
     agent_id = AgentId()
-    event = create_predefined_permission_request(
+    event = create_latchkey_predefined_permission_request_event(
         agent_id=str(agent_id),
         scope="not-in-catalog-scope",
         rationale="please",
     )
-    inbox = StaticPendingRequests(pending=(event,))
+    inbox = RequestInbox().add_request(event)
     client = _build_authenticated_client(tmp_path, handler, inbox)
 
-    response = client.post(f"/requests/{event.request_id}/deny")
+    response = client.post(f"/requests/{event.event_id}/deny")
 
     assert response.status_code == 200
     assert response.get_json() == {"outcome": "DENIED"}
     # Gateway DELETE for the pending request must have been issued.
-    assert fake_client.deleted_request_ids == (event.request_id,)
+    assert fake_client.deleted_request_ids == (str(event.event_id),)
     # Response event was appended on disk, carrying the raw scope.
     response_events = load_response_events(tmp_path)
     assert len(response_events) == 1
     assert response_events[0].status == str(RequestStatus.DENIED)
+    assert response_events[0].scope == "not-in-catalog-scope"
     # Agent was notified; the message falls back to the raw scope as
     # the display name since no catalog entry exists.
     mngr_argvs = _wait_for_recorded_mngr_argvs(handler)
@@ -1388,7 +1392,7 @@ def test_grant_fails_when_the_signed_in_account_is_ambiguous(tmp_path: Path) -> 
 def test_detail_payload_offers_every_account_plus_a_new_one(tmp_path: Path) -> None:
     latchkey = _make_multi_account_latchkey(tmp_path, {"alice@x": "valid", "bob@x": "valid"})
     handler = _build_handler_for_latchkey(tmp_path, latchkey)
-    event = create_predefined_permission_request(
+    event = create_latchkey_predefined_permission_request_event(
         agent_id=str(AgentId()),
         scope="slack-api",
         rationale="need to read a channel",
@@ -1419,7 +1423,7 @@ def test_detail_payload_offers_a_requested_account_that_is_not_connected(tmp_pat
     """
     latchkey = _make_multi_account_latchkey(tmp_path, {"alice@x": "valid"})
     handler = _build_handler_for_latchkey(tmp_path, latchkey)
-    event = create_predefined_permission_request(
+    event = create_latchkey_predefined_permission_request_event(
         agent_id=str(AgentId()),
         scope="slack-api",
         rationale="need to read a channel",
@@ -1543,7 +1547,7 @@ def test_build_account_choices_hints_at_what_a_stale_stored_account_needs(
 
 def test_build_request_detail_payload_mirrors_the_fragment_derivation(tmp_path: Path) -> None:
     handler = _build_handler(tmp_path, credential_status="missing")
-    event = create_predefined_permission_request(
+    event = create_latchkey_predefined_permission_request_event(
         agent_id=str(AgentId()),
         scope="slack-api",
         permissions=("slack-read-all",),
@@ -1557,7 +1561,7 @@ def test_build_request_detail_payload_mirrors_the_fragment_derivation(tmp_path: 
 
     if not isinstance(payload, UiPredefinedPermissionDetail):
         pytest.fail(f"expected a predefined detail payload, got {payload!r}")
-    assert payload.request_id == event.request_id
+    assert payload.request_id == str(event.event_id)
     assert payload.scope == "slack-api"
     assert "slack-read-all" in _offered_permissions(payload)
     assert "slack-read-all" in payload.checked_permissions
@@ -1578,7 +1582,7 @@ def test_build_request_detail_payload_groups_permissions_for_the_dialog(tmp_path
     apart visually.
     """
     handler = _build_handler(tmp_path, credential_status="valid")
-    event = create_predefined_permission_request(
+    event = create_latchkey_predefined_permission_request_event(
         agent_id=str(AgentId()),
         scope="slack-api",
         permissions=("slack-chat-read",),
@@ -1623,7 +1627,7 @@ def test_build_request_detail_payload_carries_catalog_descriptions_on_the_rows(t
     not describe carry an empty string, not a missing key.
     """
     handler = _build_handler(tmp_path, credential_status="valid")
-    event = create_predefined_permission_request(
+    event = create_latchkey_predefined_permission_request_event(
         agent_id=str(AgentId()),
         scope="slack-api",
         permissions=("slack-read-all",),
@@ -1681,7 +1685,7 @@ def test_build_request_detail_payload_pre_checks_the_union_of_existing_grants_an
     handler = _build_handler(tmp_path, credential_status="valid")
     host_id = HostId()
     _seed_default_account_grant(tmp_path, host_id, ("slack-chat-read",))
-    event = create_predefined_permission_request(
+    event = create_latchkey_predefined_permission_request_event(
         agent_id=str(AgentId()),
         scope="slack-api",
         permissions=("slack-write-all",),
@@ -1711,7 +1715,7 @@ def test_build_request_detail_payload_offers_but_never_auto_checks_the_wildcard(
     handler = _build_handler(tmp_path, credential_status="valid")
     host_id = HostId()
     _seed_default_account_grant(tmp_path, host_id, ("slack-chat-read",))
-    event = create_predefined_permission_request(
+    event = create_latchkey_predefined_permission_request_event(
         agent_id=str(AgentId()),
         scope="slack-api",
         permissions=("slack-read-all",),
@@ -1737,7 +1741,7 @@ def test_build_request_detail_payload_with_empty_request_and_no_grants_pre_check
     by hand.
     """
     handler = _build_handler(tmp_path, credential_status="valid")
-    event = create_predefined_permission_request(
+    event = create_latchkey_predefined_permission_request_event(
         agent_id=str(AgentId()),
         scope="slack-api",
         permissions=(),
@@ -1756,7 +1760,7 @@ def test_build_request_detail_payload_with_empty_request_and_no_grants_pre_check
 
 def test_build_request_detail_payload_reports_unknown_scopes(tmp_path: Path) -> None:
     handler = _build_handler(tmp_path, credential_status="valid")
-    event = create_predefined_permission_request(
+    event = create_latchkey_predefined_permission_request_event(
         agent_id=str(AgentId()),
         scope="not-a-real-scope",
         rationale="whatever",

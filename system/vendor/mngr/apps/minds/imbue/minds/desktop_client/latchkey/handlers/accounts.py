@@ -1,4 +1,4 @@
-"""Accounts permission grant/deny flow (wire ``request_type == "accounts"``).
+"""Accounts permission grant/deny flow (``RequestType.ACCOUNTS_PERMISSION``).
 
 This module is a sibling handler under
 :mod:`imbue.minds.desktop_client.latchkey.handlers`. It owns the flow for
@@ -27,21 +27,24 @@ from loguru import logger
 from pydantic import Field
 
 from imbue.minds.desktop_client.backend_resolver import BackendResolverInterface
-from imbue.minds.desktop_client.backend_resolver import resolve_workspace_display_name
-from imbue.minds.desktop_client.latchkey.gateway_client import AccountsRequestPayload
+from imbue.minds.desktop_client.backend_resolver import MngrCliBackendResolver
 from imbue.minds.desktop_client.latchkey.gateway_client import LatchkeyGatewayClient
 from imbue.minds.desktop_client.latchkey.gateway_client import LatchkeyGatewayClientError
-from imbue.minds.desktop_client.latchkey.gateway_client import REQUEST_TYPE_ACCOUNTS
-from imbue.minds.desktop_client.latchkey.gateway_client import StreamedPermissionRequest
 from imbue.minds.desktop_client.latchkey.handlers.messaging import MngrMessageSender
-from imbue.minds.desktop_client.latchkey.handlers.resolution import resolve_request
+from imbue.minds.desktop_client.request_events import LatchkeyAccountsPermissionRequestEvent
+from imbue.minds.desktop_client.request_events import RequestEvent
+from imbue.minds.desktop_client.request_events import RequestInbox
+from imbue.minds.desktop_client.request_events import RequestResponseEvent
 from imbue.minds.desktop_client.request_events import RequestStatus
+from imbue.minds.desktop_client.request_events import RequestType
+from imbue.minds.desktop_client.request_events import append_response_event
+from imbue.minds.desktop_client.request_events import create_request_response_event
 from imbue.minds.desktop_client.request_handler import RequestDetailPayload
 from imbue.minds.desktop_client.request_handler import RequestEventHandler
 from imbue.minds.desktop_client.request_handler import UiAccountsPermissionDetail
 from imbue.minds.desktop_client.request_handler import UiUnsupportedDetail
-from imbue.minds.desktop_client.responses import make_json_error_response
 from imbue.minds.desktop_client.responses import make_response
+from imbue.minds.desktop_client.state import get_state
 from imbue.mngr.primitives import AgentId
 
 # Label shown on the inbox list card (lower-case, short).
@@ -56,8 +59,28 @@ def _format_denied_message() -> str:
     return "Your request to list this device's signed-in accounts was denied."
 
 
+def _json_error(message: str, status_code: int) -> Response:
+    return make_response(
+        content=json.dumps({"error": message}),
+        media_type="application/json",
+        status_code=status_code,
+    )
+
+
+def _resolve_workspace_name(
+    backend_resolver: BackendResolverInterface,
+    agent_id: AgentId,
+    fallback: str,
+) -> str:
+    ws_name = backend_resolver.get_workspace_name(agent_id) or ""
+    if ws_name:
+        return ws_name
+    info = backend_resolver.get_agent_display_info(agent_id)
+    return info.agent_name if info else fallback
+
+
 class AccountsPermissionGrantHandler(RequestEventHandler):
-    """Handler for accounts permission requests.
+    """Per-``RequestType.ACCOUNTS_PERMISSION`` handler.
 
     Thin, like the file-sharing sibling: it renders the yes/no dialog, asks the
     gateway to approve (no override -- the effect is fixed) or delete the pending
@@ -80,27 +103,27 @@ class AccountsPermissionGrantHandler(RequestEventHandler):
     # -- RequestEventHandler interface ---------------------------------------
 
     def handles_request_type(self) -> str:
-        return REQUEST_TYPE_ACCOUNTS
+        return str(RequestType.ACCOUNTS_PERMISSION)
 
     def kind_label(self) -> str:
         return _KIND_LABEL
 
-    def display_name_for_event(self, req_event: StreamedPermissionRequest) -> str:
-        if not isinstance(req_event.payload, AccountsRequestPayload):
+    def display_name_for_event(self, req_event: RequestEvent) -> str:
+        if not isinstance(req_event, LatchkeyAccountsPermissionRequestEvent):
             return ""
         return "Account access"
 
     def build_request_detail_payload(
         self,
-        req_event: StreamedPermissionRequest,
+        req_event: RequestEvent,
         backend_resolver: BackendResolverInterface,
     ) -> RequestDetailPayload:
-        if not isinstance(req_event.payload, AccountsRequestPayload):
+        if not isinstance(req_event, LatchkeyAccountsPermissionRequestEvent):
             return UiUnsupportedDetail(message="Unsupported request type")
         parsed_agent_id = AgentId(req_event.agent_id)
-        ws_name = resolve_workspace_display_name(backend_resolver, parsed_agent_id, fallback=req_event.agent_id)
+        ws_name = _resolve_workspace_name(backend_resolver, parsed_agent_id, fallback=req_event.agent_id)
         return UiAccountsPermissionDetail(
-            request_id=req_event.request_id,
+            request_id=str(req_event.event_id),
             agent_id=req_event.agent_id,
             ws_name=ws_name,
             rationale=req_event.rationale,
@@ -109,11 +132,11 @@ class AccountsPermissionGrantHandler(RequestEventHandler):
     def apply_grant_request(
         self,
         request: Request,
-        req_event: StreamedPermissionRequest,
+        req_event: RequestEvent,
     ) -> Response:
-        if not isinstance(req_event.payload, AccountsRequestPayload):
-            return make_json_error_response("Unsupported request type", status_code=500)
-        request_event_id = req_event.request_id
+        if not isinstance(req_event, LatchkeyAccountsPermissionRequestEvent):
+            return _json_error("Unsupported request type", status_code=500)
+        request_event_id = str(req_event.event_id)
         parsed_agent_id = AgentId(req_event.agent_id)
 
         # All-or-nothing grant: no override body, so the gateway applies the
@@ -123,20 +146,19 @@ class AccountsPermissionGrantHandler(RequestEventHandler):
             self.gateway_client.approve_permission_request(request_event_id)
         except LatchkeyGatewayClientError as e:
             logger.warning("Could not approve accounts request {} via gateway: {}", request_event_id, e)
-            return make_json_error_response(
+            return _json_error(
                 f"Could not approve the accounts request through the latchkey gateway: {e}",
                 status_code=502,
             )
 
         message = _format_granted_message()
-        resolve_request(
-            self.mngr_message_sender,
-            self.data_dir,
+        response_event = self._write_response_and_notify(
             request_event_id=request_event_id,
             agent_id=parsed_agent_id,
             status=RequestStatus.GRANTED,
             message=message,
         )
+        self._mirror_response_into_inbox(response_event)
         return make_response(
             content=json.dumps({"outcome": "GRANTED", "message": message}),
             media_type="application/json",
@@ -145,11 +167,11 @@ class AccountsPermissionGrantHandler(RequestEventHandler):
     def apply_deny_request(
         self,
         request: Request,
-        req_event: StreamedPermissionRequest,
+        req_event: RequestEvent,
     ) -> Response:
-        if not isinstance(req_event.payload, AccountsRequestPayload):
-            return make_json_error_response("Unsupported request type", status_code=500)
-        request_event_id = req_event.request_id
+        if not isinstance(req_event, LatchkeyAccountsPermissionRequestEvent):
+            return _json_error("Unsupported request type", status_code=500)
+        request_event_id = str(req_event.event_id)
         parsed_agent_id = AgentId(req_event.agent_id)
         # DELETE tolerates 404 -- if the request is already gone we still want to
         # write the response event and notify the agent.
@@ -163,17 +185,47 @@ class AccountsPermissionGrantHandler(RequestEventHandler):
             )
 
         message = _format_denied_message()
-        resolve_request(
-            self.mngr_message_sender,
-            self.data_dir,
+        response_event = self._write_response_and_notify(
             request_event_id=request_event_id,
             agent_id=parsed_agent_id,
             status=RequestStatus.DENIED,
             message=message,
         )
+        self._mirror_response_into_inbox(response_event)
         return make_response(
             content=json.dumps({"outcome": "DENIED", "message": message}),
             media_type="application/json",
         )
 
     # -- Internals -----------------------------------------------------------
+
+    def _write_response_and_notify(
+        self,
+        request_event_id: str,
+        agent_id: AgentId,
+        status: RequestStatus,
+        message: str,
+    ) -> RequestResponseEvent:
+        """Persist the response event and ping the agent. Returns the new event."""
+        response_event = create_request_response_event(
+            request_event_id=request_event_id,
+            status=status,
+            agent_id=str(agent_id),
+            request_type=str(RequestType.ACCOUNTS_PERMISSION),
+        )
+        append_response_event(self.data_dir, response_event)
+        self.mngr_message_sender.send(agent_id, message)
+        return response_event
+
+    def _mirror_response_into_inbox(
+        self,
+        response_event: RequestResponseEvent,
+    ) -> None:
+        """Mirror the on-disk response event into the in-memory inbox (and wake the SSE)."""
+        inbox: RequestInbox | None = get_state().request_inbox
+        if inbox is None:
+            return
+        get_state().request_inbox = inbox.add_response(response_event)
+        backend_resolver: BackendResolverInterface = get_state().backend_resolver
+        if isinstance(backend_resolver, MngrCliBackendResolver):
+            backend_resolver.notify_change()

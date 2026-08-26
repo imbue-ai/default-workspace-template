@@ -10,7 +10,7 @@ from flask.testing import FlaskClient
 from pydantic import Field
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
-from imbue.minds.config.data_types import WorkspacePaths
+from imbue.minds.config.data_types import InstallationPaths
 from imbue.minds.desktop_client.app import create_desktop_client
 from imbue.minds.desktop_client.auth import FileAuthStore
 from imbue.minds.desktop_client.backend_resolver import BackendResolverInterface
@@ -18,15 +18,13 @@ from imbue.minds.desktop_client.backend_resolver import StaticBackendResolver
 from imbue.minds.desktop_client.cookie_manager import SESSION_COOKIE_NAME
 from imbue.minds.desktop_client.cookie_manager import create_session_cookie
 from imbue.minds.desktop_client.latchkey.gateway_client import LatchkeyGatewayClient
-from imbue.minds.desktop_client.latchkey.gateway_client import REQUEST_TYPE_ACCOUNTS
 from imbue.minds.desktop_client.latchkey.handlers.accounts import AccountsPermissionGrantHandler
 from imbue.minds.desktop_client.latchkey.handlers.messaging import MngrMessageSender
-from imbue.minds.desktop_client.latchkey.handlers.messaging import format_resolution_notice
-from imbue.minds.desktop_client.request_events import RequestStatus
+from imbue.minds.desktop_client.request_events import RequestInbox
+from imbue.minds.desktop_client.request_events import RequestType
+from imbue.minds.desktop_client.request_events import create_latchkey_accounts_permission_request_event
 from imbue.minds.desktop_client.request_events import load_response_events
 from imbue.minds.desktop_client.request_handler import UiAccountsPermissionDetail
-from imbue.minds.desktop_client.testing import StaticPendingRequests
-from imbue.minds.desktop_client.testing import create_accounts_permission_request
 from imbue.mngr.primitives import AgentId
 
 _HttpxHandler: Final = Callable[[httpx.Request], httpx.Response]
@@ -71,7 +69,7 @@ def _make_accounts_handler(
 def _build_authenticated_client(
     tmp_path: Path,
     handler: AccountsPermissionGrantHandler,
-    inbox: StaticPendingRequests,
+    inbox: RequestInbox,
 ) -> FlaskClient:
     auth_store = FileAuthStore(data_directory=tmp_path / "auth")
     backend_resolver: BackendResolverInterface = StaticBackendResolver(url_by_agent_and_service={})
@@ -79,8 +77,8 @@ def _build_authenticated_client(
         auth_store=auth_store,
         backend_resolver=backend_resolver,
         http_client=None,
-        paths=WorkspacePaths(data_dir=tmp_path),
-        pending_requests=inbox,
+        paths=InstallationPaths(data_dir=tmp_path),
+        request_inbox=inbox,
         request_event_handlers=(handler,),
     )
     client = app.test_client()
@@ -90,7 +88,7 @@ def _build_authenticated_client(
 
 def test_handler_claims_accounts_request_type(tmp_path: Path) -> None:
     handler, _sender = _make_accounts_handler(tmp_path, lambda _req: httpx.Response(200))
-    assert handler.handles_request_type() == REQUEST_TYPE_ACCOUNTS
+    assert handler.handles_request_type() == str(RequestType.ACCOUNTS_PERMISSION)
 
 
 def test_grant_calls_gateway_approve_writes_response_notifies_agent(tmp_path: Path) -> None:
@@ -104,29 +102,24 @@ def test_grant_calls_gateway_approve_writes_response_notifies_agent(tmp_path: Pa
 
     handler, sender = _make_accounts_handler(tmp_path, _gateway_handler)
     agent_id = AgentId()
-    event = create_accounts_permission_request(agent_id=str(agent_id), rationale="need data")
-    inbox = StaticPendingRequests(pending=(event,))
+    event = create_latchkey_accounts_permission_request_event(agent_id=str(agent_id), rationale="need data")
+    inbox = RequestInbox().add_request(event)
     client = _build_authenticated_client(tmp_path, handler, inbox)
 
-    response = client.post(f"/requests/{event.request_id}/grant")
+    response = client.post(f"/requests/{event.event_id}/grant")
     assert response.status_code == 200
     assert response.get_json()["outcome"] == "GRANTED"
 
     # Gateway received the approve POST with NO override body (the effect is fixed).
     assert captured["method"] == "POST"
-    assert str(captured["path"]).endswith(f"/permission-requests/approve/{event.request_id}")
+    assert str(captured["path"]).endswith(f"/permission-requests/approve/{event.event_id}")
     assert captured["content"] == b""
 
     response_events = load_response_events(tmp_path)
     assert len(response_events) == 1
     assert response_events[0].status == "GRANTED"
-    assert response_events[0].request_event_id == event.request_id
-    assert sender.sent_messages == [
-        (
-            str(agent_id),
-            format_resolution_notice(response.get_json()["message"], event.request_id, RequestStatus.GRANTED),
-        )
-    ]
+    assert response_events[0].request_event_id == str(event.event_id)
+    assert sender.sent_messages == [(str(agent_id), response.get_json()["message"])]
 
 
 def test_deny_deletes_request_writes_response_notifies_agent(tmp_path: Path) -> None:
@@ -139,11 +132,11 @@ def test_deny_deletes_request_writes_response_notifies_agent(tmp_path: Path) -> 
 
     handler, sender = _make_accounts_handler(tmp_path, _gateway_handler)
     agent_id = AgentId()
-    event = create_accounts_permission_request(agent_id=str(agent_id), rationale="need data")
-    inbox = StaticPendingRequests(pending=(event,))
+    event = create_latchkey_accounts_permission_request_event(agent_id=str(agent_id), rationale="need data")
+    inbox = RequestInbox().add_request(event)
     client = _build_authenticated_client(tmp_path, handler, inbox)
 
-    response = client.post(f"/requests/{event.request_id}/deny")
+    response = client.post(f"/requests/{event.event_id}/deny")
     assert response.status_code == 200
     assert response.get_json()["outcome"] == "DENIED"
     assert captured["method"] == "DELETE"
@@ -151,17 +144,12 @@ def test_deny_deletes_request_writes_response_notifies_agent(tmp_path: Path) -> 
     response_events = load_response_events(tmp_path)
     assert len(response_events) == 1
     assert response_events[0].status == "DENIED"
-    assert sender.sent_messages == [
-        (
-            str(agent_id),
-            format_resolution_notice(response.get_json()["message"], event.request_id, RequestStatus.DENIED),
-        )
-    ]
+    assert sender.sent_messages == [(str(agent_id), response.get_json()["message"])]
 
 
 def test_build_request_detail_payload_carries_the_rationale(tmp_path: Path) -> None:
     handler, _sender = _make_accounts_handler(tmp_path, lambda _req: httpx.Response(200))
-    event = create_accounts_permission_request(
+    event = create_latchkey_accounts_permission_request_event(
         agent_id=str(AgentId()),
         rationale="needs to find the right account",
     )
@@ -173,5 +161,5 @@ def test_build_request_detail_payload_carries_the_rationale(tmp_path: Path) -> N
 
     if not isinstance(payload, UiAccountsPermissionDetail):
         pytest.fail(f"expected a accounts detail payload, got {payload!r}")
-    assert payload.request_id == event.request_id
+    assert payload.request_id == str(event.event_id)
     assert payload.rationale == "needs to find the right account"

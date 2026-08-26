@@ -114,12 +114,6 @@ class PendingCreateAttemptStoreError(MindError):
     ...
 
 
-class PendingRequestsUnavailableError(MindError):
-    """Raised when a verdict must be recorded but no pending-requests view is configured."""
-
-    ...
-
-
 class DeployLifecycleConfigError(MindError, ValueError):
     """Raised when a deploy lifecycle config combination is invalid."""
 

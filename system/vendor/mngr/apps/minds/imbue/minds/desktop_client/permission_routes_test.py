@@ -16,8 +16,13 @@ from flask.testing import FlaskClient
 from pydantic import Field
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
-from imbue.minds.config.data_types import WorkspacePaths
+from imbue.imbue_common.event_envelope import EventId
+from imbue.imbue_common.event_envelope import EventSource
+from imbue.imbue_common.event_envelope import EventType
+from imbue.imbue_common.event_envelope import IsoTimestamp
+from imbue.minds.config.data_types import InstallationPaths
 from imbue.minds.desktop_client.app import _build_requests_payload
+from imbue.minds.desktop_client.app import _displayable_pending_requests
 from imbue.minds.desktop_client.app import create_desktop_client
 from imbue.minds.desktop_client.auth import FileAuthStore
 from imbue.minds.desktop_client.backend_resolver import AgentDisplayInfo
@@ -25,16 +30,19 @@ from imbue.minds.desktop_client.backend_resolver import BackendResolverInterface
 from imbue.minds.desktop_client.backend_resolver import StaticBackendResolver
 from imbue.minds.desktop_client.cookie_manager import SESSION_COOKIE_NAME
 from imbue.minds.desktop_client.cookie_manager import create_session_cookie
-from imbue.minds.desktop_client.latchkey.gateway_client import AccountsRequestPayload
-from imbue.minds.desktop_client.latchkey.gateway_client import PermissionEffect
-from imbue.minds.desktop_client.latchkey.gateway_client import StreamedPermissionRequest
 from imbue.minds.desktop_client.latchkey.handlers.messaging import MngrMessageSender
 from imbue.minds.desktop_client.latchkey.handlers.predefined import GrantOutcome
 from imbue.minds.desktop_client.latchkey.handlers.predefined import GrantResult
 from imbue.minds.desktop_client.latchkey.handlers.predefined import LatchkeyPermissionGrantHandler
 from imbue.minds.desktop_client.latchkey.handlers.predefined import ManualCredentialSubmission
 from imbue.minds.desktop_client.latchkey.testing import build_fake_gateway_client
+from imbue.minds.desktop_client.request_events import REQUESTS_EVENT_SOURCE_NAME
+from imbue.minds.desktop_client.request_events import RequestEvent
+from imbue.minds.desktop_client.request_events import RequestInbox
+from imbue.minds.desktop_client.request_events import RequestResponseEvent
 from imbue.minds.desktop_client.request_events import RequestStatus
+from imbue.minds.desktop_client.request_events import RequestType
+from imbue.minds.desktop_client.request_events import create_latchkey_predefined_permission_request_event
 from imbue.minds.desktop_client.request_events import create_request_response_event
 from imbue.minds.desktop_client.request_handler import RequestDetailPayload
 from imbue.minds.desktop_client.request_handler import RequestEventHandler
@@ -42,9 +50,6 @@ from imbue.minds.desktop_client.request_handler import UiManualCredentialsPrompt
 from imbue.minds.desktop_client.request_handler import UiUnsupportedDetail
 from imbue.minds.desktop_client.responses import make_response
 from imbue.minds.desktop_client.state import get_state
-from imbue.minds.desktop_client.testing import StaticPendingRequests
-from imbue.minds.desktop_client.testing import create_predefined_permission_request
-from imbue.minds.desktop_client.ui_api_inbox import displayable_pending_requests
 from imbue.minds.utils.testing import RecordingMngrCaller
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import HostId
@@ -60,16 +65,15 @@ from imbue.mngr_latchkey.testing import FakeLatchkey
 _OTHER_REQUEST_TYPE = "OTHER"
 
 
-def _make_other_request_event(agent_id: str) -> StreamedPermissionRequest:
-    """Build a pending request of an unclaimed ``request_type`` for dispatcher tests."""
-    return StreamedPermissionRequest(
-        request_id=f"req-{uuid.uuid4().hex}",
+def _make_other_request_event(agent_id: str) -> RequestEvent:
+    """Build a generic RequestEvent with a custom ``request_type`` for dispatcher tests."""
+    return RequestEvent(
+        timestamp=IsoTimestamp("2026-01-01T00:00:00.000000Z"),
+        type=EventType("other_request"),
+        event_id=EventId(f"evt-{uuid.uuid4().hex}"),
+        source=EventSource(REQUESTS_EVENT_SOURCE_NAME),
         agent_id=agent_id,
-        rationale="dispatcher test",
         request_type=_OTHER_REQUEST_TYPE,
-        payload=AccountsRequestPayload(),
-        target="/tmp/permissions.json",
-        effect=PermissionEffect(),
     )
 
 
@@ -122,11 +126,9 @@ class _RecordingHandler(LatchkeyPermissionGrantHandler):
             request_event_id=request_event_id,
             status=status,
             agent_id=str(agent_id),
+            request_type=str(RequestType.LATCHKEY_PERMISSION),
+            scope=service_info.scope,
         )
-        # The real inner grant records the verdict through the shared resolve
-        # epilogue; this recording double must resolve the request the same way
-        # so the routes under test see pending state empty out.
-        get_state().pending_requests.record_response(response_event)
         return GrantResult(
             outcome=self.grant_outcome,
             message=self.grant_message,
@@ -138,29 +140,31 @@ class _RecordingHandler(LatchkeyPermissionGrantHandler):
         self,
         request_event_id: str,
         agent_id: AgentId,
+        scope: str,
         display_name: str,
-    ) -> str:
+    ) -> tuple[str, RequestResponseEvent]:
         self.deny_calls.append(
             {
                 "request_event_id": request_event_id,
                 "agent_id": str(agent_id),
+                "scope": scope,
                 "display_name": display_name,
             }
         )
-        get_state().pending_requests.record_response(
-            create_request_response_event(
-                request_event_id=request_event_id,
-                status=RequestStatus.DENIED,
-                agent_id=str(agent_id),
-            )
+        response_event = create_request_response_event(
+            request_event_id=request_event_id,
+            status=RequestStatus.DENIED,
+            agent_id=str(agent_id),
+            request_type=str(RequestType.LATCHKEY_PERMISSION),
+            scope=scope,
         )
-        return self.deny_message
+        return self.deny_message, response_event
 
 
-def _get_app_request_inbox(client: FlaskClient) -> StaticPendingRequests:
+def _get_app_request_inbox(client: FlaskClient) -> RequestInbox:
     """Pull the live request inbox out of the Flask app behind a test client."""
-    inbox = get_state(client.application).pending_requests
-    assert isinstance(inbox, StaticPendingRequests)
+    inbox = get_state(client.application).request_inbox
+    assert isinstance(inbox, RequestInbox)
     return inbox
 
 
@@ -268,7 +272,7 @@ class _HostKnownStaticResolver(StaticBackendResolver):
 def _build_authenticated_client(
     tmp_path: Path,
     handler: _RecordingHandler,
-    inbox: StaticPendingRequests,
+    inbox: RequestInbox,
     agent_id: AgentId | None = None,
     host_id: HostId | None = None,
 ) -> FlaskClient:
@@ -283,14 +287,14 @@ def _build_authenticated_client(
         )
     else:
         backend_resolver = StaticBackendResolver(url_by_agent_and_service={})
-    paths = WorkspacePaths(data_dir=tmp_path)
+    paths = InstallationPaths(data_dir=tmp_path)
 
     app = create_desktop_client(
         auth_store=auth_store,
         backend_resolver=backend_resolver,
         http_client=None,
         paths=paths,
-        pending_requests=inbox,
+        request_inbox=inbox,
         request_event_handlers=(handler,),
     )
     client = app.test_client()
@@ -308,50 +312,45 @@ def test_requests_payload_excludes_unresolvable_hosts(tmp_path: Path) -> None:
     """
     known_agent = AgentId()
     stopped_agent = AgentId()
-    visible_request = create_predefined_permission_request(
+    visible_request = create_latchkey_predefined_permission_request_event(
         agent_id=str(known_agent),
         scope="slack-api",
         rationale="visible",
     )
-    hidden_request = create_predefined_permission_request(
+    hidden_request = create_latchkey_predefined_permission_request_event(
         agent_id=str(stopped_agent),
         scope="slack-api",
         rationale="hidden",
     )
-    inbox = StaticPendingRequests(
-        pending=(
-            visible_request,
-            hidden_request,
-        )
-    )
+    inbox = RequestInbox().add_request(visible_request).add_request(hidden_request)
     backend_resolver = _HostKnownStaticResolver(
         url_by_agent_and_service={},
         fixed_host_id=HostId(),
         known_agent_ids=(known_agent,),
     )
 
-    displayable = displayable_pending_requests(inbox, backend_resolver)
+    displayable = _displayable_pending_requests(inbox, backend_resolver)
     payload = _build_requests_payload(inbox, backend_resolver)
 
-    assert [req.request_id for req in displayable] == [visible_request.request_id]
+    assert [str(req.event_id) for req in displayable] == [str(visible_request.event_id)]
     assert payload["count"] == 1
-    assert payload["request_ids"] == [visible_request.request_id]
+    assert payload["request_ids"] == [str(visible_request.event_id)]
 
 
 def test_post_permission_grant_calls_handler_and_resolves_inbox(tmp_path: Path) -> None:
     agent_id = AgentId()
     host_id = HostId()
-    request = create_predefined_permission_request(
+    request = create_latchkey_predefined_permission_request_event(
         agent_id=str(agent_id),
         scope="slack-api",
         rationale="reason",
     )
-    inbox = StaticPendingRequests(pending=(request,))
+    inbox = RequestInbox().add_request(request)
     handler = _make_recording_handler(tmp_path)
     client = _build_authenticated_client(tmp_path, handler, inbox, agent_id=agent_id, host_id=host_id)
 
     response = client.post(
-        f"/requests/{request.request_id}/grant",
+        f"/requests/{request.event_id}/grant",
         data={"permissions": ["slack-read-all", "slack-write-all"], "account": _TEST_ACCOUNT},
     )
 
@@ -367,38 +366,38 @@ def test_post_permission_grant_calls_handler_and_resolves_inbox(tmp_path: Path) 
     assert call["host_id"] == str(host_id)
     # The request must no longer appear as pending after grant.
     final_inbox = _get_app_request_inbox(client)
-    assert final_inbox.list_pending() == ()
+    assert final_inbox.get_pending_count() == 0
 
 
 def test_post_permission_grant_rejects_empty_permissions(tmp_path: Path) -> None:
     agent_id = AgentId()
-    request = create_predefined_permission_request(
+    request = create_latchkey_predefined_permission_request_event(
         agent_id=str(agent_id),
         scope="slack-api",
         rationale="reason",
     )
-    inbox = StaticPendingRequests(pending=(request,))
+    inbox = RequestInbox().add_request(request)
     handler = _make_recording_handler(tmp_path)
     client = _build_authenticated_client(tmp_path, handler, inbox)
 
-    response = client.post(f"/requests/{request.request_id}/grant", data={})
+    response = client.post(f"/requests/{request.event_id}/grant", data={})
 
     assert response.status_code == 400
     assert handler.grant_calls == []
     # The request must remain pending so the user can try again.
     final_inbox = _get_app_request_inbox(client)
-    assert final_inbox.list_pending() != ()
+    assert final_inbox.get_pending_count() == 1
 
 
 def test_post_permission_grant_with_failed_signin_keeps_request_pending(tmp_path: Path) -> None:
     """A failed sign-in is reported as FAILED and must not auto-deny the request."""
     agent_id = AgentId()
-    request = create_predefined_permission_request(
+    request = create_latchkey_predefined_permission_request_event(
         agent_id=str(agent_id),
         scope="slack-api",
         rationale="reason",
     )
-    inbox = StaticPendingRequests(pending=(request,))
+    inbox = RequestInbox().add_request(request)
     handler = _make_recording_handler(
         tmp_path,
         grant_outcome=GrantOutcome.FAILED,
@@ -407,7 +406,7 @@ def test_post_permission_grant_with_failed_signin_keeps_request_pending(tmp_path
     client = _build_authenticated_client(tmp_path, handler, inbox, agent_id=agent_id)
 
     response = client.post(
-        f"/requests/{request.request_id}/grant",
+        f"/requests/{request.event_id}/grant",
         data={"permissions": ["slack-read-all"], "account": _TEST_ACCOUNT},
     )
 
@@ -419,18 +418,18 @@ def test_post_permission_grant_with_failed_signin_keeps_request_pending(tmp_path
     assert "user cancelled" in payload["message"]
     # The request must remain pending so the user can click Approve again.
     final_inbox = _get_app_request_inbox(client)
-    assert final_inbox.list_pending() != ()
+    assert final_inbox.get_pending_count() == 1
 
 
 def test_post_permission_grant_with_manual_credentials_keeps_request_pending(tmp_path: Path) -> None:
     """NEEDS_MANUAL_CREDENTIALS must return the credential form and not resolve the inbox."""
     agent_id = AgentId()
-    request = create_predefined_permission_request(
+    request = create_latchkey_predefined_permission_request_event(
         agent_id=str(agent_id),
         scope="slack-api",
         rationale="reason",
     )
-    inbox = StaticPendingRequests(pending=(request,))
+    inbox = RequestInbox().add_request(request)
     expected_prompt = UiManualCredentialsPrompt(
         parameters=(CredentialCommandParameter(name="token", label="Token"),),
         message="Slack does not support browser sign-in",
@@ -444,7 +443,7 @@ def test_post_permission_grant_with_manual_credentials_keeps_request_pending(tmp
     client = _build_authenticated_client(tmp_path, handler, inbox, agent_id=agent_id)
 
     response = client.post(
-        f"/requests/{request.request_id}/grant",
+        f"/requests/{request.event_id}/grant",
         data={"permissions": ["slack-read-all"], "account": _TEST_ACCOUNT},
     )
 
@@ -458,23 +457,23 @@ def test_post_permission_grant_with_manual_credentials_keeps_request_pending(tmp
     # The request must remain pending so the user can fill the form in and
     # click Approve again.
     final_inbox = _get_app_request_inbox(client)
-    assert final_inbox.list_pending() != ()
+    assert final_inbox.get_pending_count() == 1
 
 
 def test_post_permission_grant_forwards_the_submitted_credential_form(tmp_path: Path) -> None:
     """The values typed into the credential form must reach the grant flow."""
     agent_id = AgentId()
-    request = create_predefined_permission_request(
+    request = create_latchkey_predefined_permission_request_event(
         agent_id=str(agent_id),
         scope="slack-api",
         rationale="reason",
     )
-    inbox = StaticPendingRequests(pending=(request,))
+    inbox = RequestInbox().add_request(request)
     handler = _make_recording_handler(tmp_path)
     client = _build_authenticated_client(tmp_path, handler, inbox, agent_id=agent_id)
 
     response = client.post(
-        f"/requests/{request.request_id}/grant",
+        f"/requests/{request.event_id}/grant",
         data={
             "permissions": ["slack-read-all"],
             "account": _TEST_ACCOUNT,
@@ -492,17 +491,17 @@ def test_post_permission_grant_forwards_the_submitted_credential_form(tmp_path: 
 
 def test_post_permission_grant_rejects_a_malformed_credential_form(tmp_path: Path) -> None:
     agent_id = AgentId()
-    request = create_predefined_permission_request(
+    request = create_latchkey_predefined_permission_request_event(
         agent_id=str(agent_id),
         scope="slack-api",
         rationale="reason",
     )
-    inbox = StaticPendingRequests(pending=(request,))
+    inbox = RequestInbox().add_request(request)
     handler = _make_recording_handler(tmp_path)
     client = _build_authenticated_client(tmp_path, handler, inbox, agent_id=agent_id)
 
     response = client.post(
-        f"/requests/{request.request_id}/grant",
+        f"/requests/{request.event_id}/grant",
         data={
             "permissions": ["slack-read-all"],
             "account": _TEST_ACCOUNT,
@@ -517,22 +516,22 @@ def test_post_permission_grant_rejects_a_malformed_credential_form(tmp_path: Pat
 
 def test_post_permission_deny_calls_handler_and_resolves_inbox(tmp_path: Path) -> None:
     agent_id = AgentId()
-    request = create_predefined_permission_request(
+    request = create_latchkey_predefined_permission_request_event(
         agent_id=str(agent_id),
         scope="slack-api",
         rationale="reason",
     )
-    inbox = StaticPendingRequests(pending=(request,))
+    inbox = RequestInbox().add_request(request)
     handler = _make_recording_handler(tmp_path)
     client = _build_authenticated_client(tmp_path, handler, inbox)
 
-    response = client.post(f"/requests/{request.request_id}/deny")
+    response = client.post(f"/requests/{request.event_id}/deny")
 
     assert response.status_code == 200
     assert response.get_json() == {"outcome": "DENIED"}
     assert len(handler.deny_calls) == 1
     final_inbox = _get_app_request_inbox(client)
-    assert final_inbox.list_pending() == ()
+    assert final_inbox.get_pending_count() == 0
 
 
 def test_inbox_page_drops_request_after_resolution(tmp_path: Path) -> None:
@@ -543,17 +542,17 @@ def test_inbox_page_drops_request_after_resolution(tmp_path: Path) -> None:
     grant/deny form included) instead of re-rendering it.
     """
     agent_id = AgentId()
-    request = create_predefined_permission_request(
+    request = create_latchkey_predefined_permission_request_event(
         agent_id=str(agent_id),
         scope="slack-api",
         rationale="reason",
     )
-    inbox = StaticPendingRequests(pending=(request,))
+    inbox = RequestInbox().add_request(request)
     handler = _make_recording_handler(tmp_path)
     client = _build_authenticated_client(tmp_path, handler, inbox, agent_id=agent_id)
 
     # Deny resolves the request without needing a discovered host.
-    deny = client.post(f"/requests/{request.request_id}/deny")
+    deny = client.post(f"/requests/{request.event_id}/deny")
     assert deny.status_code == 200
 
     # The resolved request no longer appears in the inbox list, so it can't be
@@ -561,31 +560,31 @@ def test_inbox_page_drops_request_after_resolution(tmp_path: Path) -> None:
     listing = client.get("/ui/api/inbox")
     assert listing.status_code == 200
     card_ids = [card["id"] for card in listing.get_json()["cards"]]
-    assert request.request_id not in card_ids
+    assert str(request.event_id) not in card_ids
 
 
 def test_post_permission_grant_after_resolution_returns_409(tmp_path: Path) -> None:
     """A second grant on an already-resolved request is rejected, not re-applied."""
     agent_id = AgentId()
     host_id = HostId()
-    request = create_predefined_permission_request(
+    request = create_latchkey_predefined_permission_request_event(
         agent_id=str(agent_id),
         scope="slack-api",
         rationale="reason",
     )
-    inbox = StaticPendingRequests(pending=(request,))
+    inbox = RequestInbox().add_request(request)
     handler = _make_recording_handler(tmp_path)
     client = _build_authenticated_client(tmp_path, handler, inbox, agent_id=agent_id, host_id=host_id)
 
     first = client.post(
-        f"/requests/{request.request_id}/grant",
+        f"/requests/{request.event_id}/grant",
         data={"permissions": ["slack-read-all"], "account": _TEST_ACCOUNT},
     )
     assert first.status_code == 200
     assert len(handler.grant_calls) == 1
 
     second = client.post(
-        f"/requests/{request.request_id}/grant",
+        f"/requests/{request.event_id}/grant",
         data={"permissions": ["slack-read-all"], "account": _TEST_ACCOUNT},
     )
     assert second.status_code == 409
@@ -596,36 +595,36 @@ def test_post_permission_grant_after_resolution_returns_409(tmp_path: Path) -> N
 def test_post_permission_deny_after_resolution_returns_409(tmp_path: Path) -> None:
     """A second deny on an already-resolved request is rejected, not re-applied."""
     agent_id = AgentId()
-    request = create_predefined_permission_request(
+    request = create_latchkey_predefined_permission_request_event(
         agent_id=str(agent_id),
         scope="slack-api",
         rationale="reason",
     )
-    inbox = StaticPendingRequests(pending=(request,))
+    inbox = RequestInbox().add_request(request)
     handler = _make_recording_handler(tmp_path)
     client = _build_authenticated_client(tmp_path, handler, inbox)
 
-    assert client.post(f"/requests/{request.request_id}/deny").status_code == 200
+    assert client.post(f"/requests/{request.event_id}/deny").status_code == 200
     assert len(handler.deny_calls) == 1
 
-    second = client.post(f"/requests/{request.request_id}/deny")
+    second = client.post(f"/requests/{request.event_id}/deny")
     assert second.status_code == 409
     assert len(handler.deny_calls) == 1
 
 
 def test_post_permission_grant_unknown_service_returns_400(tmp_path: Path) -> None:
     agent_id = AgentId()
-    request = create_predefined_permission_request(
+    request = create_latchkey_predefined_permission_request_event(
         agent_id=str(agent_id),
         scope="not-a-real-scope",
         rationale="reason",
     )
-    inbox = StaticPendingRequests(pending=(request,))
+    inbox = RequestInbox().add_request(request)
     handler = _make_recording_handler(tmp_path)
     client = _build_authenticated_client(tmp_path, handler, inbox)
 
     response = client.post(
-        f"/requests/{request.request_id}/grant",
+        f"/requests/{request.event_id}/grant",
         data={"permissions": ["some-perm"], "account": _TEST_ACCOUNT},
     )
 
@@ -643,43 +642,43 @@ def test_post_permission_grant_returns_503_when_host_not_yet_discovered(tmp_path
     retry, instead of silently mis-keying state.
     """
     agent_id = AgentId()
-    request = create_predefined_permission_request(
+    request = create_latchkey_predefined_permission_request_event(
         agent_id=str(agent_id),
         scope="slack-api",
         rationale="reason",
     )
-    inbox = StaticPendingRequests(pending=(request,))
+    inbox = RequestInbox().add_request(request)
     handler = _make_recording_handler(tmp_path)
     # No ``agent_id=`` kwarg -> default ``StaticBackendResolver`` -> host
     # cannot be resolved.
     client = _build_authenticated_client(tmp_path, handler, inbox)
 
     response = client.post(
-        f"/requests/{request.request_id}/grant",
+        f"/requests/{request.event_id}/grant",
         data={"permissions": ["slack-read-all"], "account": _TEST_ACCOUNT},
     )
 
     assert response.status_code == 503
     assert handler.grant_calls == []
     final_inbox = _get_app_request_inbox(client)
-    assert final_inbox.list_pending() != ()
+    assert final_inbox.get_pending_count() == 1
 
 
 def test_unauthenticated_grant_post_returns_403(tmp_path: Path) -> None:
     agent_id = AgentId()
-    request = create_predefined_permission_request(
+    request = create_latchkey_predefined_permission_request_event(
         agent_id=str(agent_id),
         scope="slack-api",
         rationale="reason",
     )
-    inbox = StaticPendingRequests(pending=(request,))
+    inbox = RequestInbox().add_request(request)
     handler = _make_recording_handler(tmp_path)
     client = _build_authenticated_client(tmp_path, handler, inbox)
     # Drop the cookie to simulate an unauthenticated request.
     client.delete_cookie(SESSION_COOKIE_NAME)
 
     response = client.post(
-        f"/requests/{request.request_id}/grant",
+        f"/requests/{request.event_id}/grant",
         data={"permissions": ["slack-read-all"], "account": _TEST_ACCOUNT},
     )
 
@@ -707,29 +706,29 @@ class _StubOtherHandler(RequestEventHandler):
     def kind_label(self) -> str:
         return "other"
 
-    def display_name_for_event(self, req_event: StreamedPermissionRequest) -> str:
+    def display_name_for_event(self, req_event: RequestEvent) -> str:
         return ""
 
     def build_request_detail_payload(
         self,
-        req_event: StreamedPermissionRequest,
+        req_event: RequestEvent,
         backend_resolver: BackendResolverInterface,
     ) -> RequestDetailPayload:
         return UiUnsupportedDetail(message="stub")
 
-    def apply_grant_request(self, request: Request, req_event: StreamedPermissionRequest) -> Response:
-        self.grant_event_ids.append(req_event.request_id)
+    def apply_grant_request(self, request: Request, req_event: RequestEvent) -> Response:
+        self.grant_event_ids.append(str(req_event.event_id))
         return make_response(content="granted", status_code=200)
 
-    def apply_deny_request(self, request: Request, req_event: StreamedPermissionRequest) -> Response:
-        self.deny_event_ids.append(req_event.request_id)
+    def apply_deny_request(self, request: Request, req_event: RequestEvent) -> Response:
+        self.deny_event_ids.append(str(req_event.event_id))
         return make_response(content="denied", status_code=200)
 
 
 def _build_authenticated_client_with_handlers(
     tmp_path: Path,
     handlers: tuple[RequestEventHandler, ...],
-    inbox: StaticPendingRequests,
+    inbox: RequestInbox,
     known_agent_ids: tuple[AgentId, ...] = (),
     host_id: HostId | None = None,
 ) -> FlaskClient:
@@ -744,13 +743,13 @@ def _build_authenticated_client_with_handlers(
         )
     else:
         backend_resolver = StaticBackendResolver(url_by_agent_and_service={})
-    paths = WorkspacePaths(data_dir=tmp_path)
+    paths = InstallationPaths(data_dir=tmp_path)
     app = create_desktop_client(
         auth_store=auth_store,
         backend_resolver=backend_resolver,
         http_client=None,
         paths=paths,
-        pending_requests=inbox,
+        request_inbox=inbox,
         request_event_handlers=handlers,
     )
     client = app.test_client()
@@ -764,17 +763,12 @@ def test_dispatcher_routes_grant_to_handler_matching_request_type(tmp_path: Path
     other_agent_id = AgentId()
     permission_agent_id = AgentId()
     other_request = _make_other_request_event(agent_id=str(other_agent_id))
-    permission_request = create_predefined_permission_request(
+    permission_request = create_latchkey_predefined_permission_request_event(
         agent_id=str(permission_agent_id),
         scope="slack-api",
         rationale="reason",
     )
-    inbox = StaticPendingRequests(
-        pending=(
-            other_request,
-            permission_request,
-        )
-    )
+    inbox = RequestInbox().add_request(other_request).add_request(permission_request)
     other_handler = _StubOtherHandler()
     permission_handler = _make_recording_handler(tmp_path)
     # The permission handler's grant POST resolves the agent_id to its
@@ -788,25 +782,25 @@ def test_dispatcher_routes_grant_to_handler_matching_request_type(tmp_path: Path
     )
 
     # Granting an OTHER event must hit the other handler only.
-    other_response = client.post(f"/requests/{other_request.request_id}/grant")
+    other_response = client.post(f"/requests/{other_request.event_id}/grant")
     assert other_response.status_code == 200
-    assert other_handler.grant_event_ids == [other_request.request_id]
+    assert other_handler.grant_event_ids == [str(other_request.event_id)]
     assert permission_handler.grant_calls == []
 
     # Granting a LATCHKEY_PERMISSION event must hit the permission handler only.
     perm_response = client.post(
-        f"/requests/{permission_request.request_id}/grant",
+        f"/requests/{permission_request.event_id}/grant",
         data={"permissions": ["slack-read-all"], "account": _TEST_ACCOUNT},
     )
     assert perm_response.status_code == 200
-    assert other_handler.grant_event_ids == [other_request.request_id]
+    assert other_handler.grant_event_ids == [str(other_request.event_id)]
     assert len(permission_handler.grant_calls) == 1
 
 
 def test_dispatcher_returns_400_when_no_handler_claims_request_type(tmp_path: Path) -> None:
     """A request whose type no registered handler claims must produce a 400, not a 500."""
     other_request = _make_other_request_event(agent_id=str(AgentId()))
-    inbox = StaticPendingRequests(pending=(other_request,))
+    inbox = RequestInbox().add_request(other_request)
     # Only the latchkey-permission handler is registered, so the OTHER
     # request has nowhere to go.
     permission_handler = _make_recording_handler(tmp_path)
@@ -816,7 +810,7 @@ def test_dispatcher_returns_400_when_no_handler_claims_request_type(tmp_path: Pa
         inbox=inbox,
     )
 
-    response = client.post(f"/requests/{other_request.request_id}/grant")
+    response = client.post(f"/requests/{other_request.event_id}/grant")
     assert response.status_code == 400
     assert permission_handler.grant_calls == []
 
@@ -829,12 +823,12 @@ def test_notifications_snapshot_tracks_a_request_from_arrival_to_approval(tmp_pa
     attribution, brand-mark service), and resolution via a recorded response.
     """
     agent_id = AgentId()
-    request = create_predefined_permission_request(
+    request = create_latchkey_predefined_permission_request_event(
         agent_id=str(agent_id),
         scope="slack-api",
         rationale="Needs to read the team channel.",
     )
-    inbox = StaticPendingRequests(pending=(request,))
+    inbox = RequestInbox().add_request(request)
     handler = _make_recording_handler(tmp_path)
     client = _build_authenticated_client(tmp_path, handler, inbox, agent_id=agent_id)
     state = get_state(client.application)
@@ -845,8 +839,8 @@ def test_notifications_snapshot_tracks_a_request_from_arrival_to_approval(tmp_pa
 
     assert snapshot.notifications.unresolved_count == 1
     (entry,) = snapshot.notifications.entries
-    assert entry.id == request.request_id
-    assert entry.request_id == request.request_id
+    assert entry.id == str(request.event_id)
+    assert entry.request_id == str(request.event_id)
     assert entry.is_resolved is False
     assert entry.outcome is None
     assert entry.title == "Slack"
@@ -856,11 +850,13 @@ def test_notifications_snapshot_tracks_a_request_from_arrival_to_approval(tmp_pa
     assert entry.service_name == "slack"
 
     response_event = create_request_response_event(
-        request_event_id=request.request_id,
+        request_event_id=str(request.event_id),
         status=RequestStatus.GRANTED,
         agent_id=str(agent_id),
+        request_type=str(RequestType.LATCHKEY_PERMISSION),
+        scope="slack-api",
     )
-    inbox.record_response(response_event)
+    state.request_inbox = inbox.add_response(response_event)
 
     resolved_snapshot = publisher.build_snapshot()
 
