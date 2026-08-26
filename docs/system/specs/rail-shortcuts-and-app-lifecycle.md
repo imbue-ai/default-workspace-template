@@ -184,7 +184,7 @@ New endpoints:
 
 Stop is the **service** level, and it coexists with the **instance** level that already exists: Quit on a chat destroys that agent, Quit on a terminal kills that tmux session, and Quit on a browser session retires that one fleet browser.
 The browser therefore has both levels -- Quit a single session (existing, unchanged) and Stop the whole fleet daemon (new).
-Plain apps have no per-pane process, so their instance level is simply closing the pane (Hide tab); Stop is their only process verb.
+Plain apps have no per-pane process, so their instance level is simply closing the pane (Close tab); Stop is their only process verb.
 
 Verb changes:
 

@@ -8,7 +8,7 @@ on refresh. Run it with the ``markdown`` package available, e.g.::
 
 Then register + surface it as a workspace tab::
 
-    python3 system/scripts/forward_port.py --name queuing-specs --url http://localhost:8791
+    python3 system/scripts/forward_port.py --name queuing-specs --url http://localhost:8791 --no-icon
     python3 system/scripts/layout.py open queuing-specs
 """
 
