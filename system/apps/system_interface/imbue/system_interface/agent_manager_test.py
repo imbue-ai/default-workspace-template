@@ -702,7 +702,7 @@ def test_stale_assist_chat_present_at_startup_is_not_auto_opened(
     """A chat that has been around for a while when the server starts is left as the saved
     layout has it, so a restart never pops old tabs."""
     agent = _assist_agent_details("assist-existing")
-    agent_manager._seed_auto_open_at_startup(_startup_agent_info(agent, tmp_path, timedelta(days=2)))
+    agent_manager._seed_auto_opens_at_startup([_startup_agent_info(agent, tmp_path, timedelta(days=2))])
     q = _register_client(broadcaster)
     agent_manager.flush_pending_auto_opens()
     agent_manager._handle_observe_event(make_full_agent_state_event([agent]))
@@ -716,7 +716,7 @@ def test_fresh_undelivered_chat_present_at_startup_is_owed_its_open(
     """A recent labeled chat nobody has been shown yet -- an unattended run whose apply
     restarted this interface -- gets its tab the first time a client registers."""
     agent = _assist_agent_details("update-3am")
-    agent_manager._seed_auto_open_at_startup(_startup_agent_info(agent, tmp_path, timedelta(hours=6)))
+    agent_manager._seed_auto_opens_at_startup([_startup_agent_info(agent, tmp_path, timedelta(hours=6))])
     q = _register_client(broadcaster)
     agent_manager.flush_pending_auto_opens()
 
@@ -759,7 +759,7 @@ def test_delivered_auto_open_survives_a_restart(broadcaster: WebSocketBroadcaste
     assert len(_layout_ops(_drain(q))) == 1
 
     after = AgentManager.build(broadcaster, auto_open_ledger=AutoOpenLedger(path=ledger_path))
-    after._seed_auto_open_at_startup(_startup_agent_info(agent, tmp_path, timedelta(minutes=5)))
+    after._seed_auto_opens_at_startup([_startup_agent_info(agent, tmp_path, timedelta(minutes=5))])
     after.flush_pending_auto_opens()
     after._handle_observe_event(make_full_agent_state_event([agent]))
     assert _layout_ops(_drain(q)) == []

@@ -1325,8 +1325,7 @@ class AgentManager:
                         harness=agent_info.harness,
                     )
                     self._agents[agent_info.id] = agent_state
-                    if _is_auto_open_labeled(agent_info.labels):
-                        self._seed_auto_open_at_startup(agent_info)
+            self._seed_auto_opens_at_startup(agents)
 
             for agent_info in agents:
                 if agent_info.id == self._own_agent_id and agent_info.work_dir:
@@ -1336,8 +1335,27 @@ class AgentManager:
         except (OSError, ValueError, RuntimeError, MngrError) as e:
             _loguru_logger.opt(exception=e).error("Initial agent discovery failed")
 
-    def _seed_auto_open_at_startup(self, agent_info: AgentInfo) -> None:
+    def _seed_auto_opens_at_startup(self, agents: list[AgentInfo]) -> None:
+        """Queue or record the auto-open of every labeled chat found at startup.
+
+        The decisions are taken under the manager lock (they write the pending
+        map); the ledger writes they imply are file I/O and happen after it is
+        released.
+        """
+        with self._lock:
+            ids_to_record_as_delivered = [
+                agent_info.id
+                for agent_info in agents
+                if _is_auto_open_labeled(agent_info.labels) and self._seed_auto_open_at_startup(agent_info)
+            ]
+        for agent_id in ids_to_record_as_delivered:
+            self._auto_open_ledger.mark_delivered(agent_id)
+
+    def _seed_auto_open_at_startup(self, agent_info: AgentInfo) -> bool:
         """Decide what a labeled chat found at startup is owed: its open, or nothing.
+
+        Returns whether the chat must now be recorded as delivered; the caller
+        writes that outside the lock this runs under.
 
         A restart normally restores the saved layout rather than reopening
         tabs, so a chat already delivered stays as the user left it. The one
@@ -1348,15 +1366,15 @@ class AgentManager:
         interface that kept no ledger is kept from popping again.
         """
         if self._auto_open_ledger.is_delivered(agent_info.id):
-            return
+            return False
         is_fresh = (
             agent_info.create_time is not None
             and datetime.now(timezone.utc) - agent_info.create_time < _AUTO_OPEN_STARTUP_FRESHNESS
         )
         if is_fresh and agent_info.state in RUNNING_LIFECYCLE_STATES:
             self._pending_auto_open_name_by_id[agent_info.id] = agent_info.name
-        else:
-            self._auto_open_ledger.mark_delivered(agent_info.id)
+            return False
+        return True
 
     def _refresh_agents(self) -> None:
         """Re-discover all agents and broadcast updates."""
