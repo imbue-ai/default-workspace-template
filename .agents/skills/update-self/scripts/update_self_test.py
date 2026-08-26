@@ -4171,6 +4171,29 @@ def test_explicit_recover_refuses_a_live_apply(apply_repo: Path, capsys) -> None
     assert runner.calls == []
 
 
+def test_recover_claims_the_marker_with_its_own_pid_before_touching_the_tree(
+    apply_repo: Path,
+) -> None:
+    # The apply's own concurrency check reads the marker's pid: a DRI agent
+    # re-running the apply during a cron recover would find the dead apply's
+    # pid, adopt the marker, and merge on top of the half-restored tree.
+    _plant_snapshotted_marker(apply_repo, pid=12345)
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+    pid_at_restore: list[int] = []
+
+    def observe(argv: list[str]) -> None:
+        if argv[:2] == ["git", "checkout"] and not pid_at_restore:
+            marker = update_self.read_marker(apply_repo)
+            assert marker is not None
+            pid_at_restore.append(marker.pid)
+
+    runner.on_command = observe
+
+    assert _recover(runner, _FakeHttp(_all_healthy), apply_repo) == 0
+
+    assert pid_at_restore == [os.getpid()]
+
+
 def test_recover_restores_snapshots_and_restarts_when_the_apply_had(
     apply_repo: Path,
 ) -> None:
