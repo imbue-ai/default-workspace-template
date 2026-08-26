@@ -27,8 +27,10 @@ back to a finished result and an offer to roll back anything they don't
 like, not to questions. This is safe because everything the apply lands is
 git (usually with a host backup behind it) and the worker validates before
 anything goes live -- so review happens *after* the apply instead of gating
-it. The worker owns the merge, the conflict triage, and the validation; the
-apply script owns going live.
+it. The one thing that still waits for the user is an update that cannot
+keep something they built (the Step 4 hold) -- the question they would
+genuinely want asked. The worker owns the merge, the conflict triage, and
+the validation; the apply script owns going live.
 
 The default target is the **latest stable `minds-v*` tag** (released,
 already-tested), not `origin/main` -- and never newer than the Minds app driving
@@ -353,8 +355,9 @@ this file's frontmatter (already fetched into `upstream`).
 
 ## Reporting back
 Per `.agents/shared/references/worker-reporting.md`. Valid `name:` values:
-`question` (mid-flight gate: a genuine, unresolvable conflict, or the §4c
-review-gate escape hatch), `done` / `stuck` (terminal). Substitutions:
+`question` (mid-flight gate: a genuine, unresolvable conflict, the §4c
+review-gate escape hatch, or a §4b customization the update cannot keep),
+`done` / `stuck` (terminal). Substitutions:
 `<TASK_FILE_GLOB>` -> `data/.tasks/update-self/task.md`;
 `<RUNTIME_REPORTS_DIR>` -> `data/.tasks/update-self/reports`.
 BODY_EOF
@@ -381,13 +384,16 @@ uv run .agents/skills/launch-task/scripts/create_worker.py await \
 ## 4. Proxy the `question` gate
 
 Per `.agents/shared/references/lead-proxy.md` (worker `update-self`, branch
-`mngr/update-self`, reports dir `data/.tasks/update-self/reports/`). Almost
-always this is a genuine, unresolvable conflict -- a real decision about how to
-reconcile a file both sides rewrote incompatibly. **Decide it yourself**: the
-pass is unattended, the average user has no opinion on a technical conflict,
-and a wrong call is recoverable because the results message names the decision
-and keeps the other side on offer. Relay your resolution via `mngr message`,
-consume the report, and re-arm.
+`mngr/update-self`, reports dir `data/.tasks/update-self/reports/`). A
+`question` is one of three things; the first two you answer yourself, and only
+the third reaches the user.
+
+For a genuine, unresolvable **merge conflict** -- a real decision about how to
+reconcile a file both sides rewrote incompatibly -- **decide it yourself**:
+the pass is unattended, the average user has no opinion on a technical
+conflict, and a wrong call is recoverable because the results message names
+the decision and keeps the other side on offer. Relay your resolution via
+`mngr message`, consume the report, and re-arm.
 
 The one other thing a `question` can be is the worker's review-gate escape hatch
 (its §4c): a *process* question about whether or at what scope the gates run.
@@ -411,7 +417,26 @@ present each one with the alternative still on offer ("I kept your version;
 if you'd rather match the official release exactly there, I can do that").
 When a conflict genuinely has no safe default, still prefer the local side
 and make that decision a leading caveat of the results message rather than
-stopping the pass.
+stopping the pass -- unless it rises to the customization hold below, which
+is judged on the outcome for the user's own creations, not on the merge
+mechanics.
+
+The third kind of `question` is the worker's **customization hold** (its §4b
+survival verdict): something the user built -- a widget, an app hooking into
+the system interface's API or state, a customized surface -- that the update
+**cannot keep**, even after the worker genuinely tried to re-fit it on the
+new base. This is the one gate that escalates to the user, because it is the
+one question they would actually care about: apply-then-offer-rollback is a
+bad remedy when either choice visibly breaks their thing right now. Compose
+it from their point of view, per the §5a composition rules: what they built,
+what the update does to it, the worker's before/after evidence, and the
+concrete choices -- apply the update and lose it, skip the update, or the
+worker's best adaptation option -- with a recommendation. Reassure that
+nothing has been applied and the workspace is untouched, and **wait**: if the
+user is away, the pass holds (worker alive, leases held) until they answer.
+A cosmetic shift -- the widget moved but still works -- is *not* a hold: that
+applies unattended and is named in the results message with an offer to
+restore the old arrangement.
 
 ## 5. Terminal status
 
@@ -469,7 +494,8 @@ pass -- what changed, every decision made on their behalf, any caveats, and
 the standing offer to roll back anything they don't like.
 
 **These composition rules govern every user-facing message this flow produces --
-the results message here and a `stuck` result (Step 5) alike.** Whenever the update can't simply proceed, the message names the
+the results message here, the Step 4 customization hold, and a `stuck` result
+(Step 5) alike.** Whenever the update can't simply proceed, the message names the
 blocker in plain terms and **proposes a way forward, or invites the user to
 resolve it with you** -- it never dead-ends. The one thing that varies is how
 much mechanism to keep: the results message drops technical
@@ -504,15 +530,21 @@ order:
    that instead"). The choice between a local divergence and the tested
    release is one the user may well care about, and it is cheap to offer now
    and expensive to unwind later.
-5. **Validation** -- did the suite pass; is any failure pre-existing/unrelated.
-6. **Caveats** -- only if any; what to expect after applying.
-7. **Pre-existing issues** -- only if any, and only after verifying attribution
+5. **Your customizations** -- when the report classed a user creation
+   intact-but-changed, show it: what moved or changed (describe the
+   before/after; attach the worker's evidence when the surface supports it)
+   and the offer to restore the old arrangement. A cannot-be-kept creation
+   never reaches this message unresolved -- it already stopped the pass at
+   the Step 4 hold.
+6. **Validation** -- did the suite pass; is any failure pre-existing/unrelated.
+7. **Caveats** -- only if any; what to expect after applying.
+8. **Pre-existing issues** -- only if any, and only after verifying attribution
    (see the worker guidance's §4a): state plainly whether each lives in
    **built-in** code (present at the target ref -> report upstream) or the
    **user's own** code. Never call built-in code "workspace-added."
-8. **The offer** -- see the language rule below.
+9. **The offer** -- see the language rule below.
 
-**Detail in the informational sections (3-5); plain language at the decision
+**Detail in the informational sections (3-6); plain language at the decision
 points.** Spend deliberate plain-language care only where the message asks the
 user to **decide or act** -- the verdict headline, any caveat that needs their
 action, and the closing offer. Those carry no jargon: never "merge," "land," or
