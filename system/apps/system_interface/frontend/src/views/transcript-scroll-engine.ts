@@ -88,8 +88,11 @@ const BOTTOM_THRESHOLD_PX = 40;
 // (breaks the sub-pixel measure->redraw->reflow feedback loop).
 const MEASURE_HYSTERESIS_PX = 1;
 // A scroll event within this distance of a pending programmatic write is that
-// write's echo, not user input.
-const ECHO_TOLERANCE_PX = 1.5;
+// write's echo, not user input. Tight on purpose: echoes carry the exact
+// read-back value, and a loose tolerance would eat the first tiny wheel-up
+// events of a gesture while the streaming pin keeps echoes pending -- the
+// "stuck at the bottom" feel.
+const ECHO_TOLERANCE_PX = 0.25;
 // Debounce for persisting scroll state to localStorage.
 const PERSIST_DEBOUNCE_MS = 300;
 // The scrollbar is shown for this long after scroll/drag activity (plus while hovered).
@@ -113,6 +116,13 @@ export interface TranscriptScrollEngineConfig {
   dataSource: TranscriptScrollDataSource;
   /** Defaults to always-visible (SubagentView); ChatPanel feeds dockview's tab visibility. */
   isVisible?: () => boolean;
+  /**
+   * Whether the agent is mid-generation. While FOLLOW, the bottom pin only
+   * pulls the viewport down when this is true (or history is still filling in):
+   * an idle transcript relayout (expanding a block at the tail) must not drag
+   * the user. Defaults to true.
+   */
+  isStreaming?: () => boolean;
 }
 
 export interface TranscriptRenderPlan {
@@ -159,6 +169,7 @@ function isTraceEnabled(): boolean {
 export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfig): TranscriptScrollEngine {
   const dataSource = config.dataSource;
   const isVisible = config.isVisible ?? (() => true);
+  const isStreaming = config.isStreaming ?? (() => true);
 
   // --- state machines -------------------------------------------------------
   let positionState: ScrollPositionState = FOLLOW_STATE;
@@ -214,6 +225,12 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
 
   // --- selection freeze -----------------------------------------------------
   let freezeRange: VisibleRowRange | null = null;
+
+  // Positioning is EVENT-DRIVEN, not continuous: during pure native scrolling
+  // the engine writes nothing (nothing competes with the browser). A single
+  // compensation write happens only when the content actually changed under
+  // the viewport -- this key captures those inputs.
+  let lastPositionedKey = "";
 
   // --- persistence / restore ------------------------------------------------
   let persistAgentKey: string | null = null;
@@ -695,11 +712,22 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     planFill();
   }
 
-  function onWheel(): void {
+  function onWheel(event: WheelEvent): void {
     lastNativeInputAtMs = performance.now();
     lastInputSource = "wheel";
     lastActivityAtMs = performance.now();
     markOtherInteraction();
+    // ANY upward wheel intent detaches from the tail immediately -- before the
+    // native scroll even happens, so no pin or echo bookkeeping can eat it.
+    // The bottom band is only for RE-attaching on the way down.
+    if (event.deltaY < 0 && positionState.kind === "FOLLOW" && geometry !== null) {
+      const anchor = anchorForUser();
+      if (anchor !== null) {
+        trace?.record("wheel-detach", { deltaY: event.deltaY });
+        dispatchPosition({ kind: "USER_SCROLLED", source: "wheel", anchor, atTail: false });
+        m.redraw();
+      }
+    }
   }
 
   function onKeyDown(): void {
@@ -726,7 +754,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     detachListeners();
     scrollEl = element;
     element.addEventListener("scroll", onScrollEvent, { passive: true });
-    element.addEventListener("wheel", onWheel, { passive: true });
+    element.addEventListener("wheel", onWheel as EventListener, { passive: true });
     element.addEventListener("keydown", onKeyDown);
     element.addEventListener("pointerdown", onPointerDown);
     pointerReleaseListener = () => {
@@ -923,15 +951,48 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
         trace?.record("clamp-absorbed", { deltaPx: pendingUserDeltaPx });
       }
 
-      // Positioning: the single writer of scrollTop. FOLLOW pins the bottom
-      // (deferred while a pointer drag/selection is in progress, and yielding
-      // to an in-flight upward scroll -- that is the user leaving the tail);
-      // USER_CONTROLLED holds the anchor row at its stored offset.
+      // Positioning: the single writer of scrollTop, and only when the content
+      // changed (heights, rows, spacers) or the state machine moved -- never in
+      // response to plain native scrolling, which stays entirely the browser's.
+      const positionKey =
+        positionState.kind +
+        "|" +
+        (positionState.kind === "USER_CONTROLLED"
+          ? positionState.anchor.rowKey + "@" + positionState.anchor.offsetPx
+          : "") +
+        "|" +
+        heightsEpoch +
+        "|" +
+        cachedRenderVersion +
+        "|" +
+        spacerTopPx +
+        "|" +
+        spacerBottomPx +
+        "|" +
+        element.scrollHeight +
+        "|" +
+        element.clientHeight;
+      if (positionKey === lastPositionedKey) {
+        planFill();
+        return;
+      }
+      lastPositionedKey = positionKey;
+
       if (positionState.kind === "FOLLOW") {
         if (isPointerDown || (pendingUserDeltaPx < -1 && !isPendingClamp)) {
           trace?.record("follow-yield", { pendingUserDeltaPx, isPointerDown });
         }
-        if (!isPointerDown && (pendingUserDeltaPx >= -1 || isPendingClamp)) {
+        // The pin only pulls the viewport down while the agent is generating or
+        // history is still filling/measuring in; a quiescent transcript's
+        // relayout (expanding a block at the tail) must not drag the user.
+        const totalEventsNow = dataSource.getTotalEvents();
+        const isQuiescent =
+          !isStreaming() &&
+          !fillInFlight &&
+          spacerTopPx <= 0 &&
+          spacerBottomPx <= 0 &&
+          (totalEventsNow === null || extent().endIndex >= totalEventsNow);
+        if (!isPointerDown && !isQuiescent && (pendingUserDeltaPx >= -1 || isPendingClamp)) {
           const targetPx = element.scrollHeight - element.clientHeight;
           if (hasPendingUserScroll) {
             pendingEchoTops.push(element.scrollTop);
@@ -1030,6 +1091,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       pendingJumpIndex = null;
       pendingJumpLandIndex = null;
       freezeRange = null;
+      lastPositionedKey = "";
       lastScrollbarFraction = null;
       frozenThumbSizeFraction = null;
       offscreenMeasurer.cancel();

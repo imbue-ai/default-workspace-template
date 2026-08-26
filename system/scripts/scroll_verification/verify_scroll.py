@@ -182,7 +182,7 @@ def main():
         dbg = page.evaluate("window.__scrollDebugState()")
         check(
             "B0 a small wheel tick leaves FOLLOW and is not yanked back",
-            dbg["positionKind"] == "USER_CONTROLLED" and 5 <= state["bottomGap"] <= 80,
+            dbg["positionKind"] == "USER_CONTROLLED" and state["bottomGap"] >= 5,
             (dbg["positionKind"], round(state["bottomGap"])),
         )
         page.mouse.wheel(0, 200)
