@@ -7,6 +7,7 @@ scrollTop deltas.
 """
 
 import json
+import os
 import sys
 import threading
 import time
@@ -15,7 +16,7 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
-BASE_URL = "http://127.0.0.1:8642"
+BASE_URL = os.environ.get("SCROLL_VERIFY_URL", "http://127.0.0.1:8642")
 # Required: the fixture session JSONL the server tails (streaming scenarios append to it).
 SESSION_FILE = Path(sys.argv[1])
 
@@ -332,6 +333,44 @@ def main():
             "E3 anchored view pixel-stable while history fills in above (drift <= 2px)",
             witness is not None and drift3 <= 2.0,
             f"drift={drift3}",
+        )
+
+        # --- E4: expanding a block at the top of the screen must not move it ---
+        # Reproduces the live bug pair: rows carry CSS margins, so height-based
+        # geometry drifted from the DOM cumulatively and deep anchors resolved
+        # rows off; expanding a block then wrote a large false compensation.
+        expand_checks = []
+        for _ in range(30):
+            target = page.evaluate("""(() => {
+              const el = document.querySelector('.transcript-scroll');
+              const elRect = el.getBoundingClientRect();
+              for (const t of el.querySelectorAll('.tool-call-header')) {
+                const r = t.getBoundingClientRect();
+                if (r.top > elRect.top + 4 && r.top < elRect.top + 260 && r.height > 4) {
+                  return { x: r.x + 40, y: r.y + r.height / 2 };
+                }
+              }
+              return null;
+            })()""")
+            if target is None:
+                page.mouse.wheel(0, -900)
+                page.wait_for_timeout(80)
+                continue
+            for _toggle in range(2):
+                before = page.evaluate(GET_STATE)
+                page.mouse.click(target["x"], target["y"])
+                page.wait_for_timeout(400)
+                after = page.evaluate(GET_STATE)
+                if before["topRow"] and after["topRow"]:
+                    same = before["topRow"]["id"] == after["topRow"]["id"]
+                    delta = abs(after["topRow"]["top"] - before["topRow"]["top"]) if same else 999
+                    expand_checks.append((same, round(delta, 2)))
+            if len(expand_checks) >= 6:
+                break
+        check(
+            "E4 expanding/collapsing a block at the top keeps the top message put",
+            len(expand_checks) >= 2 and all(same and delta <= 4 for same, delta in expand_checks),
+            expand_checks,
         )
 
         # --- F: persistence across reload ---

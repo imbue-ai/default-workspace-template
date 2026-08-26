@@ -449,13 +449,24 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       if (element.id === "") {
         continue; // spacer
       }
-      const heightPx = element.getBoundingClientRect().height;
-      if (heightPx <= 0) {
+      // Measure the row's outer PITCH (distance to the next element's top), not
+      // its border-box height: rows carry CSS margins (.message margin-bottom)
+      // that height excludes, and geometry built from heights drifts from the
+      // DOM by the cumulative margins -- thousands of px deep in a transcript,
+      // which made deep anchors resolve to the wrong row entirely. A next
+      // sibling always exists (the bottom spacer follows the last row).
+      const nextElement = element.nextElementSibling;
+      const topPx = element.getBoundingClientRect().top;
+      const pitchPx =
+        nextElement !== null
+          ? nextElement.getBoundingClientRect().top - topPx
+          : element.getBoundingClientRect().height;
+      if (pitchPx <= 0) {
         continue;
       }
       const cached = heightByRowKey.get(element.id);
-      if (cached === undefined || Math.abs(heightPx - cached) > MEASURE_HYSTERESIS_PX) {
-        heightByRowKey.set(element.id, heightPx);
+      if (cached === undefined || Math.abs(pitchPx - cached) > MEASURE_HYSTERESIS_PX) {
+        heightByRowKey.set(element.id, pitchPx);
         changed = true;
       }
     }
