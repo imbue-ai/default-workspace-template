@@ -22,12 +22,14 @@ from __future__ import annotations
 
 import fcntl
 import json
+import math
 import os
 import pty
 import signal
 import subprocess
 import sys
 import termios
+import time
 from pathlib import Path
 from typing import Final
 
@@ -42,8 +44,9 @@ _CHILD_TIMEOUT_SECONDS: Final[float] = 5.0
 # The toucher either dies at once or is stopped mid-syscall and never dies, so waiting out
 # a full default shutdown budget would only add dead time before the runner's SIGKILL.
 _CHILD_SHUTDOWN_TIMEOUT_SECONDS: Final[float] = 3.0
-# Backstop on every blocking wait in session mode, so a harness that goes wrong fails the
-# test with a recorded verdict instead of hanging until pytest's own timeout fires.
+# Backstop on session mode as a whole -- shared by its two blocking waits rather than granted
+# to each -- so a harness that goes wrong fails the test with a recorded verdict instead of
+# hanging past the timeout the test sizes against this budget.
 _SESSION_DEADLINE_SECONDS: Final[int] = 20
 # Exit code for the toucher finding no terminal to reach, distinguishing the detached run
 # from any other way the child could have died.
@@ -150,9 +153,15 @@ def _run_service(result_path: Path, marker_path: Path, is_detached_from_terminal
     return 0
 
 
-def _wait_under_deadline(pid: int, options: int) -> int | None:
-    """``waitpid`` bounded by SIGALRM; ``None`` means the deadline expired first."""
-    signal.alarm(_SESSION_DEADLINE_SECONDS)
+def _wait_under_deadline(pid: int, options: int, deadline: float) -> int | None:
+    """``waitpid`` bounded by SIGALRM; ``None`` means the deadline expired first.
+
+    ``deadline`` is a monotonic instant shared by every wait in the run, so the alarm is armed
+    for what is left of it. Floored at a second because ``alarm(0)`` cancels rather than fires:
+    a wait entered with nothing left still gets one, which is ample for reaping a process that
+    has already been SIGKILLed, and otherwise ends in a recorded ``service_unreapable``.
+    """
+    signal.alarm(max(1, math.ceil(deadline - time.monotonic())))
     try:
         return os.waitpid(pid, options)[1]
     except _DeadlineExpired:
@@ -163,6 +172,7 @@ def _wait_under_deadline(pid: int, options: int) -> int | None:
 
 def _run_session(result_path: Path, marker_path: Path, is_detached_from_terminal: bool) -> int:
     signal.signal(signal.SIGALRM, _raise_deadline_expired)
+    deadline = time.monotonic() + _SESSION_DEADLINE_SECONDS
 
     service_result_path = result_path.with_suffix(".service.json")
     _master_fd, terminal_fd = pty.openpty()
@@ -195,7 +205,7 @@ def _run_session(result_path: Path, marker_path: Path, is_detached_from_terminal
     # group if this process is killed while the service sits stopped.
     _write_json(result_path, {**verdict, "outcome": "running"})
 
-    status = _wait_under_deadline(service.pid, os.WUNTRACED)
+    status = _wait_under_deadline(service.pid, os.WUNTRACED, deadline)
     if status is None:
         verdict["outcome"] = "deadline_expired"
     elif os.WIFSTOPPED(status):
@@ -212,7 +222,7 @@ def _run_session(result_path: Path, marker_path: Path, is_detached_from_terminal
             os.killpg(service.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-        if _wait_under_deadline(service.pid, 0) is None:
+        if _wait_under_deadline(service.pid, 0, deadline) is None:
             verdict["outcome"] = "service_unreapable"
     service.poll()
 
