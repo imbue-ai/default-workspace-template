@@ -64,6 +64,8 @@ _IRRELEVANT_PATHS = (
         ("pyproject.toml", True),
         ("uv.lock", True),
         ("system/apps/system_interface/pyproject.toml", True),
+        ("system/services/oom_priority/pyproject.toml", True),
+        ("system/libs/tk_command_parsing/pyproject.toml", True),
         # The backend this process is running.
         ("system/apps/system_interface/imbue/system_interface/server.py", True),
         # ... but not its tests, which no running process holds.
@@ -155,6 +157,33 @@ def test_tracker_reports_a_tree_that_moved_under_the_server(git_work_dir: Path) 
     repo = git_work_dir
     tracker = UpdateStalenessTracker.capture(repo_root=repo)
     _commit_files(repo, "an update landed after this server started", _RELEVANT_PATH)
+    assert tracker.staleness() == STALENESS_TREE_MOVED
+
+
+def test_tracker_reports_a_moved_path_git_would_otherwise_quote(git_work_dir: Path) -> None:
+    # Without ``-z`` git C-quotes a path with a non-ASCII byte, and the quoted
+    # form starts with ``"`` -- which no prefix rule matches, so a real move
+    # of such a file would show no banner.
+    repo = git_work_dir
+    tracker = UpdateStalenessTracker.capture(repo_root=repo)
+    _commit_files(repo, "an update with a non-ASCII path", "system/vendor/mngr/libs/mngr/imbue/mngr/api/l\u00efst.py")
+    assert tracker.staleness() == STALENESS_TREE_MOVED
+
+
+def test_tracker_reuses_the_moved_tree_verdict_while_head_is_unchanged(git_work_dir: Path) -> None:
+    # The shell route asks on every page load; the diff behind the verdict
+    # runs once per HEAD. Proven by making the diff impossible after the first
+    # ask -- the startup commit's object is removed, so a fresh diff fails and
+    # would read as "no banner" -- while HEAD, the cache key, stays the same.
+    repo = git_work_dir
+    tracker = UpdateStalenessTracker.capture(repo_root=repo)
+    assert tracker.startup_head is not None
+    _commit_files(repo, "moved after startup", _RELEVANT_PATH)
+    assert tracker.staleness() == STALENESS_TREE_MOVED
+
+    (repo / ".git" / "objects" / tracker.startup_head[:2] / tracker.startup_head[2:]).unlink()
+    fresh = UpdateStalenessTracker(repo_root=repo, startup_head=tracker.startup_head)
+    assert fresh.staleness() is None
     assert tracker.staleness() == STALENESS_TREE_MOVED
 
 
