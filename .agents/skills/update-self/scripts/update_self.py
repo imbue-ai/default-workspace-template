@@ -1858,10 +1858,12 @@ def _run_provisioner(runner: Runner, repo_root: Path) -> str | None:
     """Re-run the pinned-toolchain provisioner live; return why it failed, or
     ``None`` on success.
 
-    Never raises: the forward apply carries on past a failed provisioner (a
-    failed tool install leaves the tree and services consistent; whether the
-    update is good is what the probes decide) and records the failure instead,
-    so the caller needs the reason, not an exception.
+    Never raises -- a hang and a spawn failure (no ``bash``, an exec error)
+    both come back as the reason: the forward apply carries on past a failed
+    provisioner (a failed tool install leaves the tree and services
+    consistent; whether the update is good is what the probes decide) and
+    records the failure instead, so the caller needs the reason, not an
+    exception.
     """
     try:
         result = runner.run(
@@ -1878,6 +1880,8 @@ def _run_provisioner(runner: Runner, repo_root: Path) -> str | None:
             f"bash {PROVISIONER_SCRIPT} did not finish within "
             f"{_PROVISIONER_TIMEOUT_SECONDS:g}s (hung or stalled)"
         )
+    except OSError as exc:
+        return f"bash {PROVISIONER_SCRIPT} could not be run ({exc})"
     returncode = getattr(result, "returncode", 0)
     if returncode == 0:
         return None

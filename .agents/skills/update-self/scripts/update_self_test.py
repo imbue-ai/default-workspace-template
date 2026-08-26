@@ -2317,6 +2317,22 @@ def test_a_hung_provisioner_is_a_named_failure_not_an_open_ended_wait(
     assert "did not finish within" in _read_provision_incomplete(apply_repo)["reason"]
 
 
+def test_a_provisioner_that_cannot_be_spawned_is_a_recorded_failure_not_a_crash(
+    apply_repo: Path,
+) -> None:
+    # An OSError out of the spawn (no bash, an exec failure) used to escape the
+    # forward step block, which catches only ApplyFailed: no rollback, and the
+    # marker left over a half-applied tree.
+    runner = _apply_runner(_PROVISIONER_DIFF, apply_repo)
+    runner.respond(("bash",), FileNotFoundError("bash: not found"))
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    assert "bash: not found" in _read_provision_incomplete(apply_repo)["reason"]
+    assert not _marker_exists(apply_repo)
+
+
 def test_a_clean_provisioner_run_clears_an_earlier_incomplete_record(
     apply_repo: Path,
 ) -> None:
