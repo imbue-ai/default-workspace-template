@@ -1292,6 +1292,20 @@ DEFAULT_RECOVER_GRACE_SECONDS = 600.0
 # predate the package. ``None`` means no banding and no expendable tagging.
 _BANDS = None
 
+# Everything this script reads off that module -- which belongs to the
+# *pre-merge* tree, so its surface is some older release's and an attribute
+# added since is simply absent. Checked once at load, and a module missing any
+# of it is refused wholesale, because the alternative is an ``AttributeError``
+# mid-apply, past the merge and the snapshots, where nothing catches it and the
+# workspace is left half-applied. A new read belongs in this tuple.
+# ``UPDATE_APPLY`` is deliberately absent: it has a real fallback.
+_REQUIRED_BANDS_ATTRIBUTES = (
+    "AGENT_SUBPROCESS",
+    "SERVICE_BANDS",
+    "oom_tag_shell_prefix",
+    "set_oom_score_adj",
+)
+
 
 def _load_bands(repo_root: Path):
     """Import ``oom_priority.bands`` from ``repo_root``'s tree, or ``None``.
@@ -1299,8 +1313,10 @@ def _load_bands(repo_root: Path):
     Deliberately not a module-level import: the apply is staged and executed
     from ``data/.tasks/update-self/skill-at-target/...``, so the package can
     only be found relative to the repo being applied to -- and an older tree
-    may not carry it at all, which must degrade to "no banding" rather than a
-    crash (the staged copy runs against older pre-merge trees by design).
+    may not carry it at all, or may carry a version of it predating part of
+    :data:`_REQUIRED_BANDS_ATTRIBUTES`. Either must degrade to "no banding"
+    rather than a crash (the staged copy runs against older pre-merge trees by
+    design).
     """
     bands_src = repo_root / "system" / "services" / "oom_priority" / "src"
     if not (bands_src / "oom_priority" / "bands.py").is_file():
@@ -1319,6 +1335,15 @@ def _load_bands(repo_root: Path):
         return None
     finally:
         sys.path.remove(str(bands_src))
+    missing = [name for name in _REQUIRED_BANDS_ATTRIBUTES if not hasattr(bands, name)]
+    if missing:
+        sys.stderr.write(
+            f"note: {bands_src} carries an oom_priority package predating "
+            f"{', '.join(missing)}, so this apply runs unbanded and its build steps "
+            "are not tagged expendable; a memory shed during it may take the update "
+            "rather than a rebuildable child.\n"
+        )
+        return None
     return bands
 
 
@@ -1380,7 +1405,8 @@ def as_expendable(argv: Sequence[str]) -> list[str]:
     on the rollback/recover paths: there is no further rollback to absorb a
     shed there, so every recovery step keeps the orchestrator's protection.
 
-    A no-op passthrough when the tree carries no ``oom_priority`` package.
+    A no-op passthrough when the pre-merge tree carries no usable
+    ``oom_priority`` package (see :func:`_load_bands`).
     """
     if _BANDS is None:
         return list(argv)
