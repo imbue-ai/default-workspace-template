@@ -235,7 +235,11 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     return [m("div", { class: css.ROW_STACK }, getLanes().map(laneRow)), renderAccounts()];
   }
 
-  /** Ours: the mockup shows one connection. Uses its OptionRow grammar. */
+  /** Ours: the mockup shows one connection. A signed-in account is a STATE, not a place to
+   *  navigate to, so the row is not a button -- it reads as a listed fact with two explicit
+   *  actions beside it. Re-auth stays reachable because an expired credential is otherwise
+   *  a dead end: without it the only way back is to delete the account, which orphans every
+   *  chat bound to it rather than reviving them. */
   function renderAccounts(): m.Children {
     const signedIn = getAccounts();
     if (signedIn.length === 0) return null;
@@ -245,16 +249,19 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         "div",
         { class: css.ROW_STACK },
         signedIn.map((account) =>
-          m("div", { class: "flex items-stretch gap-1.5", key: account.id }, [
+          m("div", { class: css.ACCOUNT_ROW, key: account.id }, [
+            m(
+              "span",
+              { class: "flex w-6 shrink-0 items-center justify-center" },
+              m.trust(providerMark(account.lane, 20)),
+            ),
+            m("span", { class: `${css.OPTION_ROW_NAME} min-w-0 flex-1 truncate` }, account.label),
             m(
               "button",
               {
                 type: "button",
-                class: `${css.OPTION_ROW} min-w-0 flex-1`,
-                title: "Sign in again, keeping this account",
-                // Re-authenticating writes the SAME folder, so the account keeps its id and
-                // every chat bound to it recovers. A new one would leave them all pointed
-                // at a credential that has expired.
+                class: css.ROW_ACTION,
+                title: "Sign in again, keeping this account and every chat on it",
                 onclick: () => {
                   const owner = getLanes().find((candidate) => candidate.id === account.lane);
                   if (owner !== undefined) {
@@ -262,20 +269,13 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
                   }
                 },
               },
-              m("span", { class: "flex min-w-0 items-center gap-2" }, [
-                m(
-                  "span",
-                  { class: "flex w-6 shrink-0 items-center justify-center" },
-                  m.trust(providerMark(account.lane, 20)),
-                ),
-                m("span", { class: `${css.OPTION_ROW_NAME} truncate` }, account.label),
-              ]),
+              "Sign in again",
             ),
             m(
               "button",
               {
                 type: "button",
-                class: `${css.SECONDARY_BTN} px-2.5 text-[0.75rem]`,
+                class: css.ROW_ACTION,
                 "aria-label": confirmingDelete === account.id ? "Confirm removal" : `Remove ${account.label}`,
                 onclick: () => {
                   if (confirmingDelete !== account.id) {

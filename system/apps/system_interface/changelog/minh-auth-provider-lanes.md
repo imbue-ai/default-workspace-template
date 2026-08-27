@@ -357,3 +357,25 @@ from the nearest existing CSS rather than copied:
 is now a mockup class. What is left is the overlay and the spinner's keyframes, which are
 genuinely shared. `claudeLogoIcon` goes too -- `providerMarks.ts` owns that artwork now, and
 unlike the old helper it takes a size.
+
+# Describe the sign-in terminal as its own, not as the parent's
+
+Every agy sign-in failed in a real workspace -- sixteen seconds, then "Could not read the
+sign-in details from the terminal" -- while the identical code succeeded in one second from
+a shell in the same container. The difference was one inherited environment variable:
+`TERM_PROGRAM=tmux`, from the tmux session supervisord runs the server under.
+
+Node CLIs answer "may I use this feature" from the emulator's NAME, through libraries like
+`supports-hyperlinks`. Told it was inside tmux, agy stopped emitting the OSC 8 hyperlink its
+OAuth URL is recovered from, and reported nothing wrong -- the flow simply ran to its
+deadline. `spawn_pty` now drops the variables that name the parent's terminal
+(`TERM_PROGRAM`, `TERM_PROGRAM_VERSION`, `TMUX`, `TMUX_PANE`) and pins `TERM`, because the
+PTY it creates is not that terminal. Bisected in the failing workspace, one variable at a
+time; stripping them takes the flow from failing every time to 704 characters in 1.0s.
+
+# A signed-in account is a fact, not a place to navigate to
+
+The rows were whole buttons, which made them look like they led somewhere. They are plain
+rows now, with two named actions beside them: "Sign in again" and remove. Re-auth stays
+because an expired credential is otherwise a dead end -- the only other way out is deleting
+the account, which orphans every chat bound to it instead of reviving them.
