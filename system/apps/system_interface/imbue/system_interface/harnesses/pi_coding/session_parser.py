@@ -30,6 +30,8 @@ import json
 from typing import Any
 
 from imbue.system_interface.harnesses.auth_errors import is_auth_error_text
+from imbue.system_interface.harnesses.error_patterns import classify_api_error
+from imbue.system_interface.harnesses.error_patterns import is_provider_fault
 from imbue.system_interface.harnesses.events import MAX_TOOL_INPUT_PREVIEW_LENGTH
 from imbue.system_interface.harnesses.message_display import stamp_user_message_display
 from imbue.system_interface.harnesses.pi_coding.tool_labels import keeps_full_tool_input
@@ -129,6 +131,16 @@ def _usage(message: dict[str, Any]) -> dict[str, int | None] | None:
 
 def _assistant_event(event_id: str, timestamp: str, message: dict[str, Any]) -> dict[str, Any]:
     model = message.get("model")
+    # A FAILED turn puts nothing in `content` and the whole failure in `errorMessage`, so
+    # reading text from `content` alone painted a blank bubble -- an agent stuck on a billing
+    # rejection looked exactly like an agent that had stopped answering.
+    #
+    # Gated on `stopReason` rather than on `errorMessage` being present: a genuine reply that
+    # quotes an error JSON (asking the agent about one, say) must not be styled as a failure.
+    failed = message.get("stopReason") == "error"
+    error_text = str(message.get("errorMessage") or "") if failed else ""
+    text = _text_from_content(message.get("content")) or error_text
+    api_error_kind = classify_api_error(error_text)
     return {
         "timestamp": timestamp,
         "type": "assistant_message",
@@ -136,7 +148,7 @@ def _assistant_event(event_id: str, timestamp: str, message: dict[str, Any]) -> 
         "source": SOURCE,
         "role": "assistant",
         "model": model if isinstance(model, str) and model else _UNKNOWN_MODEL,
-        "text": _text_from_content(message.get("content")),
+        "text": text,
         "tool_calls": _tool_calls_from_content(message.get("content")),
         "stop_reason": message.get("stopReason"),
         "usage": _usage(message),
@@ -146,13 +158,14 @@ def _assistant_event(event_id: str, timestamp: str, message: dict[str, Any]) -> 
         # `401 {"type":"error","error":{"type":"authentication_error", ...}}`. pi passes the
         # provider's words through rather than writing its own, so the shared vocabulary is
         # what reads them.
-        "is_auth_error": is_auth_error_text(str(message.get("errorMessage") or "")),
-        # Required by the shared contract (Response.ts). Still deferred: an auth failure is
-        # distinguishable (above), but pi does not say whether any OTHER error was the
-        # provider's fault, so guessing a kind would be worse than saying nothing.
-        "is_api_error": False,
-        "api_error_kind": None,
-        "is_provider_fault": False,
+        "is_auth_error": is_auth_error_text(error_text),
+        # pi passes the provider's own body through, so the shared classifier reads it the same
+        # way it reads claude's -- the status and the structured type are the parts that do not
+        # change when a provider rewords its prose. `classify_api_error` yields to the auth
+        # vocabulary, so these three are all off whenever `is_auth_error` is on.
+        "is_api_error": api_error_kind is not None,
+        "api_error_kind": api_error_kind,
+        "is_provider_fault": is_provider_fault(api_error_kind),
     }
 
 

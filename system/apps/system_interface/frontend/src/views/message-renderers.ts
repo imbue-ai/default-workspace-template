@@ -8,7 +8,7 @@ import { MarkdownContent } from "../markdown";
 import type { TranscriptEvent, AssistantMessageEvent, ToolResultEvent, ToolCall } from "../models/Response";
 import { getAgentById } from "../models/AgentManager";
 import { openProviderChooser } from "../models/Providers";
-import { openSubagentTab } from "./DockviewWorkspace";
+import { openSubagentTab, startChatOnAccount } from "./DockviewWorkspace";
 import { hoverTooltipAttrs } from "./hoverTooltip";
 import type { PermissionResolution } from "./message-classification";
 import { isSkillExpansionUserMessage } from "./message-classification";
@@ -347,7 +347,7 @@ export function renderToolCallBlock(toolCall: ToolCall, toolResult: ToolResultEv
 function renderReauthAction(agentId: string): m.Children {
   const accountId = getAgentById(agentId)?.labels?.account ?? "";
   return m("div.message-api-error-note", [
-    "This provider's sign-in is no longer working. ",
+    "This provider is no longer working. ",
     m(
       "button",
       {
@@ -357,6 +357,22 @@ function renderReauthAction(agentId: string): m.Children {
       },
       "Sign in again",
     ),
+    // Two ways out, because only the first one revives THIS conversation: a chat binds to its
+    // account when it is created and nothing rebinds it, so "switch provider" cannot mean
+    // moving this chat -- it means starting a fresh one somewhere that works. Both are offered
+    // because the right choice depends on whether the credential is fixable, which the user
+    // knows and we do not: an expired login is, a spent quota mostly is not.
+    " or ",
+    m(
+      "button",
+      {
+        type: "button",
+        class: "message-api-error-action",
+        onclick: () => openProviderChooser({ onSignedIn: (chosen) => startChatOnAccount(chosen) }),
+      },
+      "switch to another provider",
+    ),
+    ".",
   ]);
 }
 

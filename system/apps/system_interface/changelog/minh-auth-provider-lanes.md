@@ -946,3 +946,39 @@ card that opens from the composer at the bottom of the panel, is about three row
 thousand-model catalog was being shown through that keyhole. It is now anchored at its base and
 grows up, showing ten rows before it scrolls, with the search field beneath the list so the
 edge nearest your hand stays put. A slim always-visible scrollbar says when there is more.
+
+# Absorb PR #502's backend half
+
+#502 is closed. Its frontend work was already here and further along; its parser work was not.
+
+**A failed pi turn drew an empty bubble.** pi puts nothing in `content` when a turn fails and
+the whole failure in a sibling `errorMessage`. The parser read text from `content` alone, so it
+emitted `text: ""` -- an agent stuck on a rejected key looked exactly like one that had stopped
+answering. The text now comes off `errorMessage`, gated on `stopReason: "error"` so a genuine
+reply that quotes an error JSON is not styled as a failure.
+
+**codex threw away why a turn died.** The reason arrives on `task_complete.error`, and that is
+the ONLY durable copy -- codex classes its live `EventMsg::Error` non-persistent, so it never
+reaches the rollout. We kept it on the turn marker for the auth flag and never showed it, which
+meant it existed and was unreachable. It is now surfaced as an assistant message ordered before
+the marker, classified off the structured `codex_error_info` tag where codex gives us one and
+off the prose otherwise.
+
+**One auth table, not two.** claude answered "is this an auth error?" from its own
+`claude/auth_patterns.py` while pi, codex and antigravity used the shared `auth_errors.py`.
+Folded in and deleted: claude's entries were never claude-specific -- a credit balance and a
+proxy budget are facts about a billing relationship, not about a CLI. `error_patterns.py` moves
+up alongside it and gains pi's bare `"<status> {json}"` surface form, anchored to the start of
+the string so a status code quoted mid-message is not read as a failure.
+
+**The two families cannot stack.** `classify_api_error` now returns None for anything the auth
+vocabulary claims. They overlap by construction -- Anthropic reports exhausted third-party usage
+as a 400 `invalid_request_error`, which is in both tables -- and a message carrying both
+subtexts would offer two contradictory next steps.
+
+**The auth subtext offers both ways out.** "Sign in again" re-authenticates this chat's own
+account in place, which is the only thing that revives THIS conversation. "Switch to another
+provider" opens the chooser and starts a fresh chat on whatever is picked, because a chat binds
+to its account at creation and nothing rebinds it. Which one is right depends on whether the
+credential is fixable -- an expired login is, a spent quota mostly is not -- and the user knows
+that where we do not.

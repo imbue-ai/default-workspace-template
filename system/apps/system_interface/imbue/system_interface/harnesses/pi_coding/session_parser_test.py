@@ -130,3 +130,48 @@ def test_parses_captured_live_session_with_tools() -> None:
     call_ids = {c["tool_call_id"] for e in events if e["type"] == "assistant_message" for c in e["tool_calls"]}
     result_ids = {e["tool_call_id"] for e in events if e["type"] == "tool_result"}
     assert result_ids <= call_ids
+
+
+_ANTHROPIC_401 = '401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}'
+_ANTHROPIC_529 = '529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}'
+
+
+def test_failed_turn_shows_its_error_instead_of_a_blank_bubble() -> None:
+    """pi puts nothing in `content` when a turn fails and everything in `errorMessage`.
+
+    Reading text from `content` alone emitted `text: ""`, so the transcript painted an empty
+    bubble -- an agent stuck on a rejected key looked like one that had simply stopped.
+    """
+    message = {"role": "assistant", "content": [], "stopReason": "error", "errorMessage": _ANTHROPIC_401}
+    event = parse_record(_message_record("m", message))[0]
+    assert event["text"] == _ANTHROPIC_401
+    assert event["is_auth_error"] is True
+    # Auth and API are exclusive: two subtexts would offer two contradictory next steps.
+    assert event["is_api_error"] is False
+
+
+def test_failed_turn_classifies_a_provider_fault() -> None:
+    message = {"role": "assistant", "content": [], "stopReason": "error", "errorMessage": _ANTHROPIC_529}
+    event = parse_record(_message_record("m", message))[0]
+    assert event["is_api_error"] is True
+    assert event["api_error_kind"] == "overloaded"
+    assert event["is_provider_fault"] is True
+    assert event["is_auth_error"] is False
+
+
+def test_a_reply_that_merely_quotes_an_error_is_not_one() -> None:
+    """The gate is `stopReason`, not the presence of `errorMessage`.
+
+    Asking the agent about a 401 gets a reply whose text contains one; styling that as a
+    failure would put a sign-in button under an ordinary answer.
+    """
+    message = {
+        "role": "assistant",
+        "content": [{"type": "text", "text": f"You are seeing {_ANTHROPIC_401} because the key expired."}],
+        "stopReason": "end_turn",
+        "errorMessage": _ANTHROPIC_401,
+    }
+    event = parse_record(_message_record("m", message))[0]
+    assert event["is_auth_error"] is False
+    assert event["is_api_error"] is False
+    assert "You are seeing" in event["text"]

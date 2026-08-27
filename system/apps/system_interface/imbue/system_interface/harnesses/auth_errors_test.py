@@ -51,3 +51,25 @@ def test_an_error_signing_in_cannot_fix_is_not_flagged(text: str) -> None:
     """The notice offers a re-auth. Offering it for a rate limit teaches the user to ignore
     the notice, which is worse than not showing one."""
     assert is_auth_error_text(text) is False
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param("Credit balance is too low", id="claude-credit-balance"),
+        pytest.param("This organization has been disabled", id="claude-org-disabled"),
+        pytest.param("OAuth token does not meet scope requirements", id="claude-oauth-scope"),
+        pytest.param("Budget has been exceeded for this key", id="litellm-budget"),
+        pytest.param("ExceededBudget", id="litellm-budget-code"),
+        pytest.param("Authentication Error, Invalid proxy server token passed", id="litellm-proxy-token"),
+        pytest.param("usage_limit_exceeded", id="codex-quota"),
+    ],
+)
+def test_folded_claude_and_quota_patterns(text: str) -> None:
+    """These came from `claude/auth_patterns.py`, now folded in.
+
+    Exhausted ENTITLEMENT rather than a rejected credential, and deliberately the same family:
+    none is an authentication failure in the HTTP sense, but the only way forward for all of
+    them is different credentials, which is what the subtext offers.
+    """
+    assert is_auth_error_text(text) is True
