@@ -41,22 +41,29 @@ def _baked() -> BakedPoolHost:
     return BakedPoolHost(agent_id="a", host_id="h", host_name="slice-x", ssh_host="1.2.3.4", ssh_port=22001)
 
 
-def test_finalize_tears_down_chat_agent_when_sentinel_present() -> None:
-    # All steps succeed; the sentinel-wait returns 0, i.e. the sentinel is present.
+def test_finalize_hardens_and_clears_identity_and_does_nothing_else() -> None:
+    """Two steps, in this order.
+
+    There used to be a third and a fourth: wait for DEFAULT_WORKSPACE_TEMPLATE's initial-chat
+    sentinel, then destroy the chat the bootstrap made. The template stopped making one -- a
+    chat binds to a provider account when it is CREATED and nothing rebinds it, so a chat made
+    before anyone had signed in could never take a turn -- and waiting for a sentinel that can
+    never appear cost the full timeout on every bake to reach its own skip branch.
+    """
     runner = _ScriptedRunner({})
-    finalize_baked_pool_host(runner, _baked(), host_name="slice-x", sentinel_timeout_seconds=5)
-    labels = [label for label, _cmd in runner.calls]
-    assert labels == ["sshd-harden", "git-identity-reset", "sentinel-wait", "chat-destroy", "sentinel-rm"]
-    destroy_cmd = next(cmd for label, cmd in runner.calls if label == "chat-destroy")
-    assert "uv run mngr destroy" in destroy_cmd and "slice-x" in destroy_cmd
+    finalize_baked_pool_host(runner, _baked(), host_name="slice-x")
+    assert [label for label, _cmd in runner.calls] == ["sshd-harden", "git-identity-reset"]
 
 
 def test_finalize_clears_baked_git_identity() -> None:
     # The bake copies the operator's git identity into the workspace checkout; finalize must
-    # unset it so adopting users' agents don't inherit the baker as their commit
-    # author (the bootstrap re-supplies its neutral fallback on adoption).
+    # unset it so adopting users' agents don't inherit the baker as their commit author.
+    #
+    # What re-supplies it on adoption is the template bootstrap, which sets an only-if-unset
+    # identity on EVERY boot rather than behind a first-run signal -- so this unset is always
+    # recovered from, whatever else the adopted workspace does or does not do on first start.
     runner = _ScriptedRunner({})
-    finalize_baked_pool_host(runner, _baked(), host_name="slice-x", sentinel_timeout_seconds=5)
+    finalize_baked_pool_host(runner, _baked(), host_name="slice-x")
     reset_cmd = next(cmd for label, cmd in runner.calls if label == "git-identity-reset")
     assert "git -C /home/user/workspace config --local --unset user.name" in reset_cmd
     assert "git -C /home/user/workspace config --local --unset user.email" in reset_cmd
@@ -64,56 +71,23 @@ def test_finalize_clears_baked_git_identity() -> None:
     assert "minds-bootstrap" not in reset_cmd
     # An already-absent key (git config --unset exit 5) is tolerated, not a failure.
     assert "[ $? -eq 5 ]" in reset_cmd
-    # It runs before the sentinel wait, so it applies even when no chat agent exists.
-    labels = [label for label, _cmd in runner.calls]
-    assert labels.index("git-identity-reset") < labels.index("sentinel-wait")
 
 
 def test_finalize_git_identity_reset_failure_is_best_effort() -> None:
-    # The rewrite hook is the authoritative per-agent attribution, so a failed
-    # identity reset is logged, not fatal, and teardown still proceeds.
+    # The rewrite hook is the authoritative per-agent attribution, so a failed identity reset
+    # is logged rather than failing the bake.
     runner = _ScriptedRunner({"git-identity-reset": (1, "", "boom")})
-    finalize_baked_pool_host(runner, _baked(), host_name="slice-x", sentinel_timeout_seconds=5)
-    assert "chat-destroy" in [label for label, _cmd in runner.calls]
+    finalize_baked_pool_host(runner, _baked(), host_name="slice-x")
+    assert "git-identity-reset" in [label for label, _cmd in runner.calls]
 
-
-def test_finalize_still_resets_git_identity_when_no_chat_agent() -> None:
-    # Even when the sentinel times out (no chat agent), the identity reset must
-    # have already run, since it precedes the sentinel wait.
-    runner = _ScriptedRunner({"sentinel-wait": (124, "", "")})
-    finalize_baked_pool_host(runner, _baked(), host_name="slice-x", sentinel_timeout_seconds=5)
-    labels = [label for label, _cmd in runner.calls]
-    assert "git-identity-reset" in labels
-    assert "chat-destroy" not in labels
-
-
-def test_finalize_skips_teardown_on_sentinel_timeout() -> None:
-    # timeout exit 124 => bootstrap never made a chat agent => nothing to tear down.
-    runner = _ScriptedRunner({"sentinel-wait": (124, "", "")})
-    finalize_baked_pool_host(runner, _baked(), host_name="slice-x", sentinel_timeout_seconds=5)
-    labels = [label for label, _cmd in runner.calls]
-    assert "chat-destroy" not in labels
-
-
-def test_finalize_raises_on_transport_error_during_sentinel_wait() -> None:
-    # A non-timeout failure (e.g. ssh exit 255) must NOT be silently skipped:
-    # that would ship a pool host with a stale bootstrap chat agent.
-    runner = _ScriptedRunner({"sentinel-wait": (255, "", "ssh: connect failed")})
-    with pytest.raises(PoolBakeError):
-        finalize_baked_pool_host(runner, _baked(), host_name="slice-x", sentinel_timeout_seconds=5)
 
 
 def test_finalize_sshd_harden_failure_is_best_effort() -> None:
-    # sshd-harden is best-effort: a failure is logged, not fatal, and teardown proceeds.
+    # sshd-harden is best-effort: a failure is logged, not fatal, and the rest still runs.
     runner = _ScriptedRunner({"sshd-harden": (1, "", "boom")})
-    finalize_baked_pool_host(runner, _baked(), host_name="slice-x", sentinel_timeout_seconds=5)
-    assert "chat-destroy" in [label for label, _cmd in runner.calls]
+    finalize_baked_pool_host(runner, _baked(), host_name="slice-x")
+    assert "git-identity-reset" in [label for label, _cmd in runner.calls]
 
-
-def test_finalize_raises_when_chat_destroy_fails() -> None:
-    runner = _ScriptedRunner({"chat-destroy": (1, "", "skew")})
-    with pytest.raises(PoolBakeError):
-        finalize_baked_pool_host(runner, _baked(), host_name="slice-x", sentinel_timeout_seconds=5)
 
 
 def test_wait_for_deferred_install_polls_for_marker_or_finished_process() -> None:

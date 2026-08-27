@@ -56,11 +56,6 @@ BAKED_SERVICES_AGENT_NAME: Final[str] = "system-services"
 # ``aws`` / ``imbue_cloud`` templates already work.
 DEFAULT_WORKSPACE_TEMPLATE_BAKE_TEMPLATES: Final[tuple[str, ...]] = ("main", "pool_host")
 
-# Path inside the pool host's container of the DEFAULT_WORKSPACE_TEMPLATE bootstrap's initial-chat
-# sentinel. The bootstrap writes it after creating the chat agent on first boot;
-# removing it (after destroying that chat agent) makes the user's first lease +
-# start re-create the chat agent under the user's own workspace name.
-INITIAL_CHAT_SENTINEL_PATH: Final[str] = "/home/user/workspace/data/.state/initial_chat_created"
 
 # The baked services checkout whose repo-local git identity we clear at finalize
 # time. mngr's cross-host create (GIT_MIRROR) copies the *operator's* ``git config
@@ -88,11 +83,6 @@ _MNGR_CREATE_TIMEOUT_SECONDS: Final[int] = 1800
 # its own).
 _VENDOR_RSYNC_MANUAL_EXCLUDES: Final[tuple[str, ...]] = (".git", "uv.lock")
 _GITIGNORE_RSYNC_FILTER: Final[str] = ":- .gitignore"
-# How long to wait (inside the container) for the DEFAULT_WORKSPACE_TEMPLATE bootstrap to write its
-# initial-chat sentinel before giving up on the chat-agent teardown. The
-# bootstrap may never create a chat agent (e.g. inference creds absent), in which
-# case there is nothing to tear down and the bake proceeds.
-_SENTINEL_WAIT_TIMEOUT_SECONDS: Final[int] = 480
 # Exit code GNU ``timeout`` returns when it kills the wrapped command on timeout.
 _COMMAND_TIMEOUT_EXIT_CODE: Final[int] = 124
 
@@ -512,9 +502,8 @@ def finalize_baked_pool_host(
     baked: BakedPoolHost,
     *,
     host_name: str,
-    sentinel_timeout_seconds: int = _SENTINEL_WAIT_TIMEOUT_SECONDS,
 ) -> None:
-    """Harden the container sshd and tear down the DEFAULT_WORKSPACE_TEMPLATE bootstrap chat agent (shared DEFAULT_WORKSPACE_TEMPLATE post-bake).
+    """Harden the container sshd and clear its baked git identity (shared DEFAULT_WORKSPACE_TEMPLATE post-bake).
 
     Runs entirely *inside* the baked container via the caller-supplied
     ``run_in_container`` transport, so it works for both an OVH VPS (``mngr exec``)
@@ -568,44 +557,11 @@ def finalize_baked_pool_host(
             "Could not clear baked git identity on {} (exit {}): {}", host_name, identity_rc, identity_err.strip()
         )
 
-    sentinel = shlex.quote(INITIAL_CHAT_SENTINEL_PATH)
-    wait_command = (
-        f"timeout {int(sentinel_timeout_seconds)} bash -c {shlex.quote(f'until test -f {sentinel}; do sleep 5; done')}"
-    )
-    wait_rc, _wait_out, wait_err = run_in_container(
-        baked, "sentinel-wait", wait_command, float(sentinel_timeout_seconds + 60)
-    )
-    if wait_rc == _COMMAND_TIMEOUT_EXIT_CODE:
-        # The ``timeout`` wrapper killed the wait: the bootstrap never created a
-        # chat agent (e.g. inference creds absent), so there is nothing to tear
-        # down. This is the only non-zero code we treat as "skip".
-        logger.warning(
-            "No initial-chat sentinel appeared for {} within {}s; skipping chat-agent teardown",
-            host_name,
-            sentinel_timeout_seconds,
-        )
-        return
-    if wait_rc != 0:
-        # Any other failure (e.g. the container was unreachable -- ssh exit 255)
-        # is NOT "no chat agent": silently skipping would ship a pool host with a
-        # stale bootstrap chat agent. Fail the bake so the caller can roll back.
-        raise PoolBakeError(
-            f"waiting for the initial-chat sentinel on {host_name} failed (exit {wait_rc}): {wait_err.strip()}"
-        )
-
-    logger.info("  Destroying bootstrap-created chat agent: {}", host_name)
-    # Use the canonical in-container mngr invocation (uv run mngr in the workspace checkout),
-    # which works regardless of transport / login PATH in the DEFAULT_WORKSPACE_TEMPLATE image.
-    destroy_command = f"cd {checkout} && uv run mngr destroy {shlex.quote(host_name)} --force"
-    destroy_rc, _destroy_out, destroy_err = run_in_container(baked, "chat-destroy", destroy_command, 120.0)
-    if destroy_rc != 0:
-        raise PoolBakeError(
-            f"destroying bootstrap chat agent {host_name!r} failed (exit {destroy_rc}): {destroy_err.strip()}"
-        )
-    logger.info("  Removing initial-chat sentinel: {}", INITIAL_CHAT_SENTINEL_PATH)
-    rm_command = shlex.join(["rm", "-f", INITIAL_CHAT_SENTINEL_PATH])
-    rm_rc, _rm_out, rm_err = run_in_container(baked, "sentinel-rm", rm_command, 30.0)
-    if rm_rc != 0:
-        raise PoolBakeError(
-            f"removing initial-chat sentinel {INITIAL_CHAT_SENTINEL_PATH!r} failed (exit {rm_rc}): {rm_err.strip()}"
-        )
+    # No bootstrap-created chat to wait for or tear down. DEFAULT_WORKSPACE_TEMPLATE stopped
+    # creating one: a chat binds to a provider account when it is CREATED and nothing rebinds
+    # it, so a chat made at boot -- before anyone has signed in -- could never take a turn
+    # whatever the user later authenticated to. An adopted workspace opens on its new-tab
+    # screen, and its first chat is whichever one the user starts, on the account they picked.
+    #
+    # The wait went with it rather than being left to time out: reaching its skip branch cost
+    # the full timeout on every single bake.
