@@ -26,6 +26,7 @@ from typing import Final
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.harnesses.harness_type import HarnessType
+from imbue.system_interface.harnesses.pty_auth import DEFAULT_PTY_COLUMNS
 
 
 class LaneNotFoundError(KeyError):
@@ -121,6 +122,12 @@ class PtyMethod(FrozenModel):
     # key can land on a screen that has not rendered yet.
     keys: tuple[str, ...] = ()
     key_gap_s: float = 0.6
+    # How wide to spawn the terminal. A value the CLI prints as plain text wraps at this
+    # width, and de-wrapping it back together depends on the CLI not painting anything else
+    # on those rows -- so for a long value it is far safer to make the screen wider than the
+    # value than to reassemble it. 80 is the honest default for a menu; a lane printing a
+    # ~700-character OAuth URL overrides it.
+    pty_columns: int = DEFAULT_PTY_COLUMNS
 
     # When the sign-in URL is fixed, there is nothing to scrape for it and `scrape` names
     # the one-time CODE instead.
@@ -304,9 +311,17 @@ _AGY_URL_SCRAPE = Scrape(
     trigger=r"https://accounts\.google\.com/o/oauth2/auth\S*",
     strict=rf"https://accounts\.google\.com/o/oauth2/auth{_AGY_URL_CHARSET}*",
     continuation=rf"^{_AGY_URL_CHARSET}+$",
+    # The real URL is ~700 characters. Without a floor the strict pattern happily matches
+    # the first row of a wrapped one -- which is a valid-looking URL missing response_type,
+    # so Google answers 401 rather than anything that reads as truncation.
+    min_length=400,
 )
 _AGY_FAILURES: Final = ((r"Got an error: ([^\r\n]*)", "{1}"),)
 _AGY_MENU = r"Select login method:"
+# Wider than the ~700-character URL agy prints, so it lands on one row and never has to be
+# de-wrapped. 1.1.21 emits an OSC 8 hyperlink whose target survives wrapping; 1.1.16 -- the
+# pinned version -- does not, so on the pin the only intact copy is the unwrapped one.
+_AGY_PTY_COLUMNS: Final = 1000
 
 LANE_GOOGLE = Lane(
     id="google",
@@ -324,6 +339,7 @@ LANE_GOOGLE = Lane(
             expect_before_keys=_AGY_MENU,
             # The cursor already sits on "1. Google OAuth", so Enter selects it.
             keys=("\r",),
+            pty_columns=_AGY_PTY_COLUMNS,
             scrape=_AGY_URL_SCRAPE,
             failures=_AGY_FAILURES,
             # agy drops straight into its chat TUI on success and prints no success line.
@@ -339,6 +355,7 @@ LANE_GOOGLE = Lane(
             # real CLI: the menu says "Use arrow keys to navigate, Enter to select" and
             # typing the row's digit does nothing, so this cannot be shortened to ("2",).
             keys=("\x1b[B", "\r", "\r"),
+            pty_columns=_AGY_PTY_COLUMNS,
             scrape=_AGY_URL_SCRAPE,
             failures=_AGY_FAILURES,
             frame_marker=None,

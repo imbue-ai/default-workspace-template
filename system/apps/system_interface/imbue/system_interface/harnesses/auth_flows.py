@@ -247,7 +247,9 @@ class AuthFlowService:
         """Spawn the CLI, get it to the point of showing something, and scrape it."""
         env = {**os.environ, **account_env(session.lane.harness, account_path)}
         binary = _binary_for(session.lane)
-        session.process = self._spawner(binary, list(method.argv), method.scrape_timeout_s, env=env)
+        session.process = self._spawner(
+            binary, list(method.argv), method.scrape_timeout_s, env=env, columns=method.pty_columns
+        )
 
         # A keystroke script is blind without this: a reordered menu would make the same keys
         # choose a different login method, and nothing downstream would notice.

@@ -277,3 +277,17 @@ refused creates that were about to work fine.
 
 `harnesses/auth_check.py` goes with it. Its probe table duplicated `signed_in.py`'s, which
 is the one that decides whether an account is real.
+
+# Spawn agy's sign-in wide enough that the URL cannot wrap
+
+agy prints a ~700-character OAuth URL as plain text. At 80 columns the pinned 1.1.16 wraps
+it and emits no OSC 8 hyperlink to recover it from, so the scrape returned the first row --
+a URL that still parses, still has a client_id, and is missing `response_type`. Google
+answers that with a 401 rather than anything that reads as truncation.
+
+The terminal is now spawned wider than the value (`pty_columns` on the method), which is far
+more reliable than de-wrapping rows the CLI may have painted over. `min_length` on the scrape
+is the backstop: a short extraction is a fragment, so keep draining rather than hand it over.
+
+Verified against 1.1.16 specifically: 78 characters and no `response_type` before, the full
+704 after.
