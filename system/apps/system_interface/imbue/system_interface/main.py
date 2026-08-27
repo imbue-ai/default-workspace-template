@@ -13,6 +13,7 @@ from imbue.system_interface.app_context import get_state
 from imbue.system_interface.config import Config
 from imbue.system_interface.config import load_config
 from imbue.system_interface.event_queues import AgentEventQueues
+from imbue.system_interface.harnesses.auth_flows import AuthFlowService
 from imbue.system_interface.harnesses.claude.auth import ClaudeAuthService
 from imbue.system_interface.layout_ops import LayoutMutex
 from imbue.system_interface.server import create_application
@@ -80,6 +81,9 @@ def build_production_state(
         # The service consults the resender before an auth-apply restart so a
         # never-welcomed chat agent restarts idle (the welcome resend is its
         # resumption) instead of receiving the "please continue" message.
+        # One long-lived service per app for the same reason as the one below: it holds
+        # the in-flight sign-in PTY between the start call and the polls that advance it.
+        auth_flows=AuthFlowService(),
         claude_auth_service=ClaudeAuthService(
             resolve_never_welcomed_agent_name=welcome_resender.never_welcomed_agent_name,
         ),

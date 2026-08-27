@@ -104,3 +104,20 @@ Two behaviours worth calling out because they are not obvious from the code:
 codex's API-key alternate is not offered yet: it feeds the key on stdin, and every command
 runner in production system_interface pins stdin to DEVNULL. Its ChatGPT device flow is
 unaffected.
+
+# Expose the chooser over HTTP
+
+`accounts_endpoints.py` adds `GET /api/lanes` (the chooser's rows and the ways into each),
+`GET /api/accounts` (signed-in accounts with the label the picker shows), and the flow
+routes: `POST /api/accounts` to start a sign-in, then GET/POST/DELETE on
+`/api/accounts/flow/<id>` to poll it, submit a code or key, and abort. `DELETE
+/api/accounts/<id>` removes one.
+
+Every method carries its `shape`, so the modal picks one of three screens without needing to
+know anything about harnesses. The account label is composed server-side because turning a
+harness into "(Claude Code)" needs the lane table, and the client would otherwise keep a
+second copy of it.
+
+The flow service is constructed once in `create_application` and read back through the app
+state, because it holds the live sign-in PTY between the call that starts a flow and the
+polls that advance it.
