@@ -42,10 +42,14 @@ export interface ButtonOptions {
   extra?: string;
 }
 
+// No border-color or radius here: two utilities on the same property tie-break
+// by their order in the COMPILED bundle, not by class order, so a base
+// border-transparent would defeat every variant's border colour (and a base
+// rounded-md would defeat the round option). Each property is emitted exactly
+// once, resolved in the builder.
 const BTN_BASE =
   "btn inline-flex items-center justify-center gap-1.5 " +
-  `${TEXT_BODY_SIZE} leading-none font-medium whitespace-nowrap cursor-pointer ` +
-  "border border-transparent rounded-md " +
+  `${TEXT_BODY_SIZE} leading-none font-medium whitespace-nowrap cursor-pointer border ` +
   "transition-[color,background-color,border-color] duration-(--dur-base) ease-[ease] " +
   "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent " +
   "disabled:opacity-50 disabled:cursor-not-allowed aria-disabled:opacity-50 aria-disabled:cursor-not-allowed " +
@@ -55,10 +59,11 @@ const BTN_VARIANTS: Record<ButtonVariant, string> = {
   primary:
     "bg-accent text-on-accent border-accent not-disabled:hover:bg-accent-hover not-disabled:hover:border-accent-hover",
   secondary: "bg-surface text-primary border-default not-disabled:hover:bg-fill-hover",
-  ghost: "bg-transparent text-secondary not-disabled:hover:bg-fill-hover not-disabled:hover:text-primary",
+  ghost:
+    "bg-transparent text-secondary border-transparent not-disabled:hover:bg-fill-hover not-disabled:hover:text-primary",
   destructive:
     "bg-danger text-on-accent border-danger not-disabled:hover:bg-danger-hover not-disabled:hover:border-danger-hover",
-  "ghost-destructive": "bg-transparent text-danger not-disabled:hover:bg-danger-surface",
+  "ghost-destructive": "bg-transparent text-danger border-transparent not-disabled:hover:bg-danger-surface",
   inverse:
     "bg-inverse text-on-accent border-inverse not-disabled:hover:bg-inverse-hover not-disabled:hover:border-inverse-hover",
   stop: "bg-stop text-on-accent border-stop not-disabled:hover:bg-stop-hover not-disabled:hover:border-stop-hover",
@@ -80,8 +85,13 @@ export function buttonClass(variant: ButtonVariant = "secondary", options: Butto
   // `btn--<variant>` is a bare marker like `btn` (tests find "the primary
   // button" by it) -- interpolating it is fine because it is not a utility the
   // scanner needs to see.
-  const parts = [BTN_BASE, `btn--${variant}`, size, selected ? BTN_SELECTED : BTN_VARIANTS[variant]];
-  if (round) parts.push("rounded-full");
+  const parts = [
+    BTN_BASE,
+    `btn--${variant}`,
+    size,
+    round ? "rounded-full" : "rounded-md",
+    selected ? BTN_SELECTED : BTN_VARIANTS[variant],
+  ];
   if (block) parts.push("w-full");
   if (extra !== "") parts.push(extra);
   return parts.join(" ");
@@ -129,16 +139,18 @@ export interface BadgeOptions {
   extra?: string;
 }
 
+// Border colour comes from the tone, never the base -- same
+// one-utility-per-property rule as the button builder above.
 const BADGE_BASE =
   "badge inline-flex items-center gap-1 px-2 py-0.5 " +
   `${TEXT_HELPER_SIZE} font-normal leading-[1.4] whitespace-nowrap ` +
-  "border border-transparent rounded-lg";
+  "border rounded-lg";
 
 const BADGE_TONES: Record<BadgeTone, string> = {
   neutral: "bg-surface text-secondary border-default",
   accent: "bg-surface text-accent border-accent",
   danger: "bg-danger-surface text-danger border-danger-border",
-  warning: "bg-warning-surface text-warning",
+  warning: "bg-warning-surface text-warning border-transparent",
   success: "bg-success/14 text-success border-success/35",
 };
 
