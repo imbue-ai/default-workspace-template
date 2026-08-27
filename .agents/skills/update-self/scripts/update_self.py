@@ -1123,8 +1123,8 @@ def _cmd_bootstrap_skill(args: argparse.Namespace) -> int:
 # The served app, the editable tool the live service runs from, and the build
 # surfaces. These mirror system/scripts/build_workspace.sh -- the source of
 # truth for how the served environment is constructed.
-APP_DIR = "system/apps/system_interface"
-FRONTEND_DIR = f"{APP_DIR}/frontend"
+SYSTEM_INTERFACE_DIR = "system/apps/system_interface"
+FRONTEND_DIR = f"{SYSTEM_INTERFACE_DIR}/frontend"
 # The vendored mngr the workspace runs on, and the uv tool built from it. An
 # editable install pins the *source path*, not the dependency closure -- so the
 # moment a merge advances this tree, the ``mngr`` CLI starts running new code
@@ -1146,7 +1146,7 @@ _MANIFEST_TOOL_NAMES = {MNGR_TOOL_NAME: "mngr", TOOL_NAME: "system-interface"}
 # The frontend build output the backend serves at ``/``. Both ``node_modules``
 # and this ``static/`` bundle are gitignored, so they never appear in a diff --
 # they are protected by the pre-apply snapshots instead.
-STATIC_DIR = f"{APP_DIR}/imbue/system_interface/static"
+STATIC_DIR = f"{SYSTEM_INTERFACE_DIR}/imbue/system_interface/static"
 FRONTEND_BUILD_INDEX = f"{STATIC_DIR}/index.html"
 # The identity stamp the frontend build writes into the bundle: the git tree
 # hash of the frontend source directory at the checkout's HEAD commit (an npm
@@ -1635,7 +1635,7 @@ def _is_backend_manifest(path: str) -> bool:
     install -e system/vendor/mngr/libs/mngr`` resolves through.
     """
     if path in (
-        f"{APP_DIR}/pyproject.toml",
+        f"{SYSTEM_INTERFACE_DIR}/pyproject.toml",
         "uv.lock",
         "pyproject.toml",
         f"{MNGR_VENDOR_DIR}/pyproject.toml",
@@ -1722,7 +1722,7 @@ def plan_apply(paths: Sequence[str]) -> ApplyPlan:
         elif _is_backend_manifest(path):
             backend_manifest = True
         elif (
-            path.startswith(f"{APP_DIR}/imbue/")
+            path.startswith(f"{SYSTEM_INTERFACE_DIR}/imbue/")
             and path.endswith(".py")
             and not _is_test_file(path)
         ):
@@ -2612,7 +2612,7 @@ def _preflight(
         try:
             spawned = spawner.spawn(
                 expend([TOOL_NAME]),
-                cwd=str(repo_root / APP_DIR),
+                cwd=str(repo_root / SYSTEM_INTERFACE_DIR),
                 env=env,
                 output_path=output_path,
             )
@@ -2928,7 +2928,7 @@ def _refresh_backend_dependencies(
     _reinstall_tool(
         MNGR_TOOL_NAME, MNGR_EXECUTABLE, MNGR_DIR, repo_root, runner, expend, timeout
     )
-    _reinstall_tool(TOOL_NAME, TOOL_NAME, APP_DIR, repo_root, runner, expend, timeout)
+    _reinstall_tool(TOOL_NAME, TOOL_NAME, SYSTEM_INTERFACE_DIR, repo_root, runner, expend, timeout)
     _run_checked(
         runner,
         expend(["uv", "sync", "--all-packages", "--frozen"]),
