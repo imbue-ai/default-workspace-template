@@ -1436,12 +1436,15 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       const isActive = performance.now() - lastActivityAtMs < SCROLLBAR_SHOW_MS;
       if (scrollbarState.kind === "SCROLLBAR" && lastScrollbarFraction !== null && frozenThumbSizeFraction !== null) {
         // While the user works the scrollbar, the thumb follows their pointer
-        // through the frozen mapping and keeps its engage-time size.
+        // through the frozen mapping and keeps its engage-time size. Visibility
+        // stays time-based: the SCROLLBAR state outlives the pointer release
+        // (only another interaction clears it), and the bar must still fade in
+        // a quiescent view.
         const sizeFraction = frozenThumbSizeFraction;
         return {
           thumbStartFraction: lastScrollbarFraction * (1 - sizeFraction),
           thumbSizeFraction: sizeFraction,
-          isActive: true,
+          isActive,
           hasTrack: true,
         };
       }
