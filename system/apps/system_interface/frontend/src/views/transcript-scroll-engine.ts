@@ -1194,10 +1194,13 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
         pendingJumpLandIndex = null;
       }
 
-      // Spacer sizing: live smoothing only while the user is not on the
-      // scrollbar (the SCROLLBAR state freezes the whole mapping, spacers
-      // included). Anchor/bottom positioning in afterRender absorbs the change,
-      // so nothing visibly moves.
+      // Spacer sizing. Anchor/bottom positioning in afterRender absorbs any
+      // change, so nothing visibly moves. The SCROLLBAR state freezes the
+      // track mapping and the px/event ESTIMATE (stable scrubbing math) --
+      // but NOT the spacer sizes: a drag that jumps into unloaded history
+      // re-centers the physical window, and stale spacers would leave the
+      // viewport over an unpadded void (blank, and outside any spacer, so
+      // the loading overlay never shows). Sizes always track the extent.
       const totalEvents = dataSource.getTotalEvents() ?? 0;
       const { firstIndex, endIndex } = extent();
       if (scrollbarState.kind === "ELSEWHERE") {
@@ -1220,6 +1223,19 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
         estimatePxPerEvent = update.estimatePxPerEvent;
         spacerTopPx = update.spacerTopPx;
         spacerBottomPx = update.spacerBottomPx;
+      } else {
+        const frozenTopPx = Math.round(Math.max(0, firstIndex) * estimatePxPerEvent);
+        const frozenBottomPx = Math.round(Math.max(0, totalEvents - endIndex) * estimatePxPerEvent);
+        if (frozenTopPx !== spacerTopPx || frozenBottomPx !== spacerBottomPx) {
+          trace?.record("spacer", {
+            estimate: estimatePxPerEvent,
+            topPx: frozenTopPx,
+            bottomPx: frozenBottomPx,
+            deltaPx: frozenTopPx - spacerTopPx,
+          });
+        }
+        spacerTopPx = frozenTopPx;
+        spacerBottomPx = frozenBottomPx;
       }
 
       if (geometry === null || geometryRows.length === 0) {
