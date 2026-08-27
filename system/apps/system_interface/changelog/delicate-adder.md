@@ -16,14 +16,14 @@ system, not a pixel-identical render.
   (`--color-info`, `--ease-standard`, `--elevation-md`, `--spacing-page`,
   `--width-sidebar`/`-collapsed`, `--duration-sidebar-transition`) were pruned so
   every token is referenced by the shipped CSS. Corner radii collapse onto a
-  `--radius-*` scale, spacing onto a 4px `--space-*` scale, motion timing/easing,
-  drop shadows onto an elevation scale, and the former magic z-index numbers onto
-  named tokens. The spacing scale uses **Tailwind's own `--spacing-*` namespace**:
-  defining `--spacing-N` (as `calc(var(--spacing) * N)` off the stock 0.25rem
-  base) both backs the `p-N`/`m-N`/`gap-N`/`w-N` utilities and exposes
-  `var(--spacing-N)` for hand-written CSS, so a utility in the markup and a
-  `var()` in the CSS reference the *same* custom property — one name, one source,
-  zero drift.
+  `--radius-*` scale, spacing onto Tailwind's 4px spacing scale, motion
+  timing/easing, drop shadows onto an elevation scale, and the former magic
+  z-index numbers onto named tokens. Spacing is a **single knob** — Tailwind's
+  stock 0.25rem `--spacing` base: the `p-N`/`m-N`/`gap-N`/`w-N` utilities generate
+  from it, and hand-written CSS references the same scale via the `--spacing(N)`
+  function (`padding: --spacing(3)` compiles to `calc(var(--spacing) * 3)`), so
+  markup and CSS share one source with no per-step token to define or keep in
+  sync.
 
 - **Shared component primitives.** A unified `.btn` (with `round`/`filled`/`stop`
   and `ghost-destructive` variants), plus `.badge`, `.input`, `.toggle`, and a
