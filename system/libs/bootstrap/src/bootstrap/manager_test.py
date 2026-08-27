@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import shutil
 import subprocess
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -353,7 +354,21 @@ def _bootstrap_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-1")
+    monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("MNGR_AGENT_WORK_DIR", raising=False)
+    # A chat runs on a provider account, and the boot chat is skipped without one. These
+    # tests are about the create itself, so give them one.
+    accounts = tmp_path / ".minds" / "accounts"
+    accounts.mkdir(parents=True)
+    (accounts / "index.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "accounts": [{"id": "a1", "lane": "anthropic", "seq": 1, "display": "Anthropic"}],
+                "mru": "a1",
+            }
+        )
+    )
     (tmp_path / "data.json").write_text(json.dumps({"host_name": "my-workspace"}))
     agent_dir = tmp_path / "agents" / "agent-1"
     agent_dir.mkdir(parents=True)
@@ -395,6 +410,40 @@ def test_maybe_create_initial_chat_persists_created_agent_id(
     assert (
         _bootstrap_env / INITIAL_CHAT_AGENT_ID_FILENAME
     ).read_text() == "agent-created"
+
+
+def test_maybe_create_initial_chat_skips_when_no_provider_account(
+    monkeypatch: pytest.MonkeyPatch, _bootstrap_env: Path
+) -> None:
+    """A chat binds to an account when it is CREATED and nothing rebinds it later, so a chat
+    made before anyone has signed in can never take a turn -- whatever the user signs into
+    afterwards. The workspace opens on the new-tab screen instead.
+
+    The signal is still written: the decision is made once, and `pool_bake` waits on it.
+    """
+    (_bootstrap_env / ".minds" / "accounts" / "index.json").write_text(
+        json.dumps({"version": 1, "accounts": [], "mru": None})
+    )
+    stub = _StubSubprocess(returncode=0)
+    monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
+
+    _maybe_create_initial_chat()
+
+    assert stub.calls == [], "no chat should have been created"
+    assert (_bootstrap_env / "data" / ".state" / "initial_chat_created").exists()
+
+
+def test_maybe_create_initial_chat_skips_when_the_account_store_is_absent(
+    monkeypatch: pytest.MonkeyPatch, _bootstrap_env: Path
+) -> None:
+    """The genuinely fresh case: nothing has ever written an index."""
+    shutil.rmtree(_bootstrap_env / ".minds")
+    stub = _StubSubprocess(returncode=0)
+    monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
+
+    _maybe_create_initial_chat()
+
+    assert stub.calls == []
 
 
 def test_maybe_create_initial_chat_skips_when_signal_present(
