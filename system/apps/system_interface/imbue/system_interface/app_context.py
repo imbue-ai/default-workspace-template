@@ -1,4 +1,5 @@
 import threading
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -32,6 +33,11 @@ class SystemInterfaceStateError(RuntimeError):
     """Raised when the SystemInterfaceState is not attached to a Flask app."""
 
 
+# The frontend build's output, inside the package: what the shell routes serve
+# in production.
+DEFAULT_STATIC_DIRECTORY = Path(__file__).parent / "static"
+
+
 class SystemInterfaceState(MutableModel):
     """Holds every shared service handle and config for one system-interface app.
 
@@ -62,6 +68,11 @@ class SystemInterfaceState(MutableModel):
     # A factory (not a shared default): the HEAD read happens per state build,
     # not at import.
     update_staleness: UpdateStalenessTracker = Field(default_factory=UpdateStalenessTracker.capture)
+    static_directory: Path = Field(
+        default=DEFAULT_STATIC_DIRECTORY,
+        description="The bundle directory the shell routes serve from: the package's own static/ unless the "
+        "state is built with another (a test serving a shell it wrote)",
+    )
 
     _watchers_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     _latchkey_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)

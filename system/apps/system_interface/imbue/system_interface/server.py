@@ -116,7 +116,6 @@ _LOOPBACK_CLIENT_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
 logger = _loguru_logger
 
-STATIC_DIRECTORY = Path(__file__).parent / "static"
 
 # Stamped on every app-shell response so a caller can tell the real app from
 # the "not built" placeholder, which is otherwise an identical HTTP 200 HTML
@@ -588,7 +587,7 @@ def _shell_update_staleness() -> str | None:
 
 
 def _index() -> Response:
-    index_path = STATIC_DIRECTORY / "index.html"
+    index_path = get_state().static_directory / "index.html"
     if index_path.exists():
         staleness = _shell_update_staleness()
         config: Config = get_state().config
@@ -650,7 +649,7 @@ def _frontend_not_built_response() -> Response:
     # served tree was replaced under a running service, which is otherwise
     # invisible from the supervisor logs.
     _loguru_logger.warning(
-        "Served the not-built placeholder: no frontend bundle at {}", STATIC_DIRECTORY / "index.html"
+        "Served the not-built placeholder: no frontend bundle at {}", get_state().static_directory / "index.html"
     )
     return _shell_response(render_frontend_not_built_page(terminal_origin_label()), is_frontend_built=False)
 
@@ -667,14 +666,14 @@ def _index_catch_all(path: str) -> Response:
 
 
 def _favicon() -> Response:
-    favicon_path = STATIC_DIRECTORY / "favicon.ico"
+    favicon_path = get_state().static_directory / "favicon.ico"
     if favicon_path.exists():
         return send_file(favicon_path, mimetype="image/x-icon")
     return Response(status=404)
 
 
 def _serve_asset(filename: str) -> Response:
-    assets_directory = STATIC_DIRECTORY / "assets"
+    assets_directory = get_state().static_directory / "assets"
     # A missing asset is a plain 404, as for the favicon above, rather than the
     # HTML error page ``send_from_directory`` would raise. Existence and safety
     # are both left to ``send_from_directory``: ``filename`` arrives with any
