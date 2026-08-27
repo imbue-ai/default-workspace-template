@@ -37,7 +37,6 @@ import {
   getProtoAgents,
   removeAgentsUpdatedListener,
 } from "../models/AgentManager";
-import { openAgentAuth } from "../models/AgentAuth";
 import { openProviderChooser } from "../models/Providers";
 import { maybePromptForFastMode } from "./fast-mode-prompt";
 import { apiUrl } from "../base-path";
@@ -214,28 +213,6 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     m.redraw();
   }
 
-  // Snapshot-load path: SSE only carries events emitted after subscription,
-  // so an auth-error that happened before the user opened the panel (e.g.
-  // the auto-`/welcome` failing during fresh mind creation) wouldn't open
-  // the modal otherwise. Walking back to the last assistant_message means
-  // an already-recovered agent (whose history contains old auth errors
-  // but has since produced healthy replies) does not open it on reload --
-  // only an agent whose current state is broken does. The modal itself is
-  // a single app-level instance driven by global auth state (see
-  // models/ClaudeAuth.ts), so this just flips that shared flag.
-  function checkLatestAssistantForAuthError(agentId: string): void {
-    const events = getEventsForAgent(agentId);
-    for (let i = events.length - 1; i >= 0; i--) {
-      const event = events[i];
-      if (event.type === "assistant_message") {
-        if (event.is_auth_error === true) {
-          openAgentAuth(agentId);
-        }
-        return;
-      }
-    }
-  }
-
   // Screen capture state (shown when agent has no conversation)
   let screenContent: string | null = null;
   let screenError: string | null = null;
@@ -368,9 +345,6 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       // Buffer SSE deltas arriving during the snapshot fetch so the wholesale
       // snapshot replace in fetchEvents cannot drop a live event on first load.
       await loadSnapshotWithStream(agentId);
-      if (agentId === currentAgentId) {
-        checkLatestAssistantForAuthError(agentId);
-      }
     } catch (error) {
       // Where the load got to is recorded against the agent by `fetchEvents` and
       // read back in the view, so that a later attempt -- from any caller,
