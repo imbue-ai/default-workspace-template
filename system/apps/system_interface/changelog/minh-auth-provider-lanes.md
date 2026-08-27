@@ -441,3 +441,28 @@ back to the start. Submitting now holds a "Signing in..." screen until the flow 
 
 The deadline changes with it. The 15-minute budget is for a user away in a browser; once the
 code is in, nobody is away, so it drops to two minutes and says which thing timed out.
+
+# Check that the harness accepted a pasted key before calling it signed in
+
+A key-paste lane wrote its file and committed the account in the same breath. Nothing asked
+whether the harness could actually use what was written, so a provider id we got wrong or a
+schema that drifted produced an account that looked signed in and a chat that silently could
+not take a turn.
+
+pi is now probed like every other harness. `pi --list-models`, scoped to the account, names
+the provider's models when the credential was read and says "No usable API key is
+configured" when it was not -- which is exactly the question worth asking here. It does not
+reach the provider, so it distinguishes a well-formed credential from an unusable one, not a
+valid key from an invalid one; the honest limit, and still the difference between failing at
+the field and failing at the first turn.
+
+A probe that cannot run at all (`UNKNOWN`) still commits: that is the check failing, not
+evidence against a key the user just pasted.
+
+`AuthFlowService.create` takes the probe as an argument for the same reason it takes the
+spawner. Without that the flow tests were shelling out to whichever CLIs this machine
+happened to have, which took them from 0.3s to 13.6s and made them assert on the machine.
+
+Verified against the pinned pi 0.83.0: it reads the `auth.json` we write verbatim, and
+`--list-models` under that folder returns only that provider's models -- so "one provider per
+folder scopes the model list" holds, and the schema has not drifted.
