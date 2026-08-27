@@ -77,3 +77,30 @@ and an account folder is ours:
   secret by a hash of the canonical `CODEX_HOME` when the store is a keyring, so without the
   pin a sign-in can write nothing to `auth.json`, leave the bind symlink dangling, and still
   have `codex login status` report success against that same dir.
+
+# Run a sign-in against an account folder
+
+`harnesses/auth_flows.py` drives one sign-in end to end: mint a folder, seed it, run the
+lane's method into it, and commit an index row only if the harness agrees it worked. Every
+failure path removes the folder, so a half-authenticated one is never offered as usable.
+
+`harnesses/signed_in.py` is the probe that decides. It answers three ways, not two: collapsing
+"could not run the probe" into "signed out" would delete a folder the user had just completed
+a browser round trip into, since the probes shell out to CLIs that fetch over the network.
+
+Flows are single-flight -- the PTY machinery holds one session, and a user signing in is
+doing one thing. Starting a second flow abandons the first.
+
+Two behaviours worth calling out because they are not obvious from the code:
+
+- Nothing advances on its own. The PTY is read when a client polls, so a browser tab closed
+  mid-flow would leave a CLI waiting indefinitely (codex's device flow polls for fifteen
+  minutes). Every flow arms a wall-clock timer that terminates the process and removes the
+  folder.
+- Success is never read off the screen; the harness's own probe decides, because two of the
+  three terminal lanes print no success line at all. Failure IS read off the screen, so a
+  rejected code fails in seconds instead of waiting out the deadline.
+
+codex's API-key alternate is not offered yet: it feeds the key on stdin, and every command
+runner in production system_interface pins stdin to DEVNULL. Its ChatGPT device flow is
+unaffected.
