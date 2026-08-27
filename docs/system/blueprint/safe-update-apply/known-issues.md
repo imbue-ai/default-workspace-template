@@ -170,10 +170,11 @@ memory but stays discoverable for the bug collector. Concretely:
 
 **Fixed (except the collector):** SKILL §6's success path runs `mngr stop
 update-self` directly (no new `stop` subcommand -- the mngr command is the
-right tool), and `create_worker.py launch --destroy-existing` destroys a
-previous STOPPED worker of the same name pre-flight while still refusing a
-RUNNING/WAITING one; SKILL §3b passes it. The bug-report collector change is
-being made separately.
+right tool), and SKILL §3b clears the stopped predecessor before launching
+with plain `mngr list` / `mngr destroy` (a STOPPED or DONE worker of that
+name is destroyed, any other state is a genuine conflict), so the launcher
+needs no flag for it. The bug-report collector change is being made
+separately.
 
 ### 5. `apply` runs `npm ci` live even when the worker's bundle will be installed
 
@@ -329,8 +330,8 @@ that set is not, and the report names the scope.
   runs inside `apply_update`, post-success only, idempotent.
 - Dirty tree resolved by discarding it (A): SKILL 1 now surfaces and stops.
 - Long merge-to-restart skew window (A, and the geebspace class generally):
-  one apply owns merge through probe; `classify_path` marks
-  `.mngr/settings.toml` and vendored-mngr source `requires_restart`.
+  one apply owns merge through probe, and every apply restarts the services
+  agent rather than keying the restart on a per-path rule.
 - uv tool `$HOME` shadow-environment repairs (A): `_uv_tool_env` resolves
   `UV_TOOL_DIR` from the shebang of the binary actually on PATH;
   `_refresh_backend_dependencies` refreshes all three environments. (The same
