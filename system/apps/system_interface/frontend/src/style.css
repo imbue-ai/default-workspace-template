@@ -3141,10 +3141,10 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 }
 
 /* Buttons */
-/* Claude-login modal buttons now use the shared .btn primitive
-   (--primary -> btn--primary, --ghost -> btn--secondary, --block -> btn--block
-   for full width; the anchor CTAs use btn--primary.btn--block.no-underline,
-   replacing the old --link decoration strip). */
+/* Claude-login modal buttons now use the shared Button primitive
+   (views/Button.ts). The one anchor CTA -- the OAuth sign-in link, a real
+   navigation -- carries buttonClass("primary") directly with no-underline,
+   replacing the old --link decoration strip. */
 
 /* Inline error callout */
 .claude-login-error-callout {

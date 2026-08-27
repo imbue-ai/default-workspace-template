@@ -19,6 +19,29 @@ document is the durable hand-off so any agent can pick the work up cold.
 
 ### Progress log
 
+- **Button primitive promoted to a component — DONE.** The button recipe moved
+  from `views/primitives.ts` into `views/Button.ts`, which holds the recipe
+  (`buttonClass`) plus the closure component (`Button`) that carries it — the
+  same two-layer shape as apps/minds (`views/components/Button.ts` over
+  `constants.ts`; that split originated in the Jinja/SPA dual-renderer era and
+  had been ported here only halfway, constants without components).
+  `m(Button, ...)` renders a real `<button type="button">`, applies the
+  recipe, and passes through every attr it doesn't consume (`views/attrs.ts`
+  mirrors minds' `splitAttrs`; a caller's `class` never passes through —
+  additive classes ride `extra`). A usage census sized the API: of 40 recipe
+  uses, 36 were plain `m("button")` (now all `m(Button)`), 1 is a real anchor
+  (the OAuth sign-in link — genuine navigation, keeps `buttonClass` directly),
+  1 was a fake anchor (`href="#"` + preventDefault on the mint-page opener —
+  now a real Button), and 2 are raw-DOM lightbox nodes (keep `buttonClass`; the
+  download link must stay an `<a download>`). So there is deliberately no
+  ButtonLink or ButtonSubmit component — two escape-hatch call sites don't
+  justify one, and no `m("form")` exists. Also folded ChatPanel's hand-rolled
+  `RELOAD_BUTTON_CLASS` into `Button` (sm, with the `message-list-reload`
+  marker as `extra`) — a deliberate normalization to the shared 28px/medium
+  look. The unmounted-vnode walkers in the view tests now expand
+  closure-component vnodes so marker queries (`btn--primary`, ...) see the
+  rendered markup.
+
 - **Tailwind-ification (architecture parity with apps/minds) — IN PROGRESS.**
   The setup now mirrors the minds desktop client: styling belongs in the markup
   as utilities; `style.css` is tokens + escape hatches. Landed: (1) explicit

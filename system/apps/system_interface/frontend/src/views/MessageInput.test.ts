@@ -121,6 +121,13 @@ function flatten(node: unknown): AnyVnode[] {
     return node.flatMap(flatten);
   }
   const vnode = node as AnyVnode;
+  // A closure-component vnode (e.g. m(Button, ...)) carries no markup of its
+  // own -- its view runs only when mithril renders it -- so expand it and
+  // flatten what it renders.
+  if (typeof vnode.tag === "function") {
+    const component = (vnode.tag as (v: AnyVnode) => { view: (v: AnyVnode) => unknown })(vnode);
+    return flatten(component.view(vnode));
+  }
   return [vnode, ...flatten(vnode.children)];
 }
 

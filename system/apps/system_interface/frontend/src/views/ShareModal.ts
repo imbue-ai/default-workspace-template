@@ -11,7 +11,8 @@
 import m from "mithril";
 import { Modal } from "./Modal";
 import { hoverTooltipAttrs } from "./hoverTooltip";
-import { MODAL_MESSAGE_CLASS, MODAL_TITLE_CLASS, buttonClass } from "./primitives";
+import { Button } from "./Button";
+import { MODAL_MESSAGE_CLASS, MODAL_TITLE_CLASS } from "./primitives";
 
 interface ShareModalAttrs {
   serviceName: string;
@@ -30,10 +31,12 @@ export const ShareModal: m.Component<ShareModalAttrs> = {
           m("h3", { class: MODAL_TITLE_CLASS }, `Share "${serviceName}"`),
           // ml-auto pins the close button to the right of the title row.
           m(
-            "button",
+            Button,
             {
-              class: buttonClass("ghost", { icon: true, sm: true, extra: "ml-auto" }),
-              type: "button",
+              variant: "ghost",
+              icon: true,
+              sm: true,
+              extra: "ml-auto",
               "aria-label": "Close",
               onclick: onClose,
               ...hoverTooltipAttrs("Close"),
@@ -41,7 +44,7 @@ export const ShareModal: m.Component<ShareModalAttrs> = {
             "×",
           ),
         ],
-        actions: [m("button", { class: buttonClass("secondary"), onclick: onClose }, "Close")],
+        actions: [m(Button, { onclick: onClose }, "Close")],
       },
       [
         m("p", { class: MODAL_MESSAGE_CLASS }, [

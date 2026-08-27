@@ -1,9 +1,10 @@
-// Shared class-string builders for the component primitives (mirrors
-// apps/minds' views/components/constants.ts). The recipes live HERE as Tailwind
-// utility strings carried by the markup, not as .btn/.input/.badge CSS classes
-// -- one source of truth in code; to restyle every button, edit this file.
+// Shared class-string builders for the input/badge/modal primitives. The
+// recipes live as Tailwind utility strings carried by the markup, not as
+// .input/.badge CSS classes -- one source of truth in code; to restyle every
+// input, edit this file. The button primitive lives in views/Button.ts (its
+// recipe plus the Button component that carries it).
 //
-// Each builder leads with a bare marker class ("btn", "input", "badge",
+// Each builder leads with a bare marker class ("input", "badge",
 // "modal-card", ...). The markers carry no styling of their own; they are
 // stable hooks for tests, for the few contextual stylesheet rules that key off
 // them (e.g. `.claude-login-subtle-body .input`), and for readability in the
@@ -14,88 +15,12 @@
 // generated. Keep every utility name a contiguous literal -- never build one
 // by string interpolation.
 
-// Type + motion fragments shared by the recipes below. Sizes reference the
-// --font-size-* role tokens (see style.css) rather than Tailwind's text-*
-// steps, so the type scale stays the single source of truth.
-const TEXT_BODY_SIZE = "text-(length:--font-size-body)";
+// Type + motion fragments shared by the recipes here and in views/Button.ts.
+// Sizes reference the --font-size-* role tokens (see style.css) rather than
+// Tailwind's text-* steps, so the type scale stays the single source of truth.
+export const TEXT_BODY_SIZE = "text-(length:--font-size-body)";
 const TEXT_HELPER_SIZE = "text-(length:--font-size-helper)";
 const TEXT_HEADING_SIZE = "text-(length:--font-size-heading)";
-
-/* ── Button ──────────────────────────────────────────────────────────────────
- * One button system. Variants: primary | secondary | ghost | destructive |
- * ghost-destructive (quiet destructive: danger text, no fill) | inverse |
- * stop (the composer's slate interrupt fill). Options: sm, icon (square),
- * round (circle), selected (accent-tint pressed look), block (full width),
- * extra (appended utilities/markers). States: hover (guarded so a disabled
- * button never tints), :focus-visible, :disabled + [aria-disabled], :active
- * press. */
-
-export type ButtonVariant =
-  "primary" | "secondary" | "ghost" | "destructive" | "ghost-destructive" | "inverse" | "stop";
-
-export interface ButtonOptions {
-  sm?: boolean;
-  icon?: boolean;
-  round?: boolean;
-  selected?: boolean;
-  block?: boolean;
-  extra?: string;
-}
-
-// No border-color or radius here: two utilities on the same property tie-break
-// by their order in the COMPILED bundle, not by class order, so a base
-// border-transparent would defeat every variant's border colour (and a base
-// rounded-md would defeat the round option). Each property is emitted exactly
-// once, resolved in the builder.
-const BTN_BASE =
-  "btn inline-flex items-center justify-center gap-1.5 " +
-  `${TEXT_BODY_SIZE} leading-none font-medium whitespace-nowrap cursor-pointer border ` +
-  "transition-[color,background-color,border-color] duration-(--dur-base) ease-[ease] " +
-  "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent " +
-  "disabled:opacity-50 disabled:cursor-not-allowed aria-disabled:opacity-50 aria-disabled:cursor-not-allowed " +
-  "not-disabled:not-aria-disabled:active:translate-y-px";
-
-const BTN_VARIANTS: Record<ButtonVariant, string> = {
-  primary:
-    "bg-accent text-on-accent border-accent not-disabled:hover:bg-accent-hover not-disabled:hover:border-accent-hover",
-  secondary: "bg-surface text-primary border-default not-disabled:hover:bg-fill-hover",
-  ghost:
-    "bg-transparent text-secondary border-transparent not-disabled:hover:bg-fill-hover not-disabled:hover:text-primary",
-  destructive:
-    "bg-danger text-on-accent border-danger not-disabled:hover:bg-danger-hover not-disabled:hover:border-danger-hover",
-  "ghost-destructive": "bg-transparent text-danger border-transparent not-disabled:hover:bg-danger-surface",
-  inverse:
-    "bg-inverse text-on-accent border-inverse not-disabled:hover:bg-inverse-hover not-disabled:hover:border-inverse-hover",
-  stop: "bg-stop text-on-accent border-stop not-disabled:hover:bg-stop-hover not-disabled:hover:border-stop-hover",
-};
-
-// The selected (accent-tint) palette replaces the variant's colors outright --
-// the builder resolves the conflict in code instead of leaning on the cascade.
-const BTN_SELECTED = "bg-accent-light text-accent border-accent";
-
-export function buttonClass(variant: ButtonVariant = "secondary", options: ButtonOptions = {}): string {
-  const { sm = false, icon = false, round = false, selected = false, block = false, extra = "" } = options;
-  const size = icon
-    ? sm
-      ? "h-[28px] w-[28px] p-0"
-      : "h-[34px] w-[34px] p-0"
-    : sm
-      ? "h-[28px] px-3"
-      : "h-[34px] px-3.5";
-  // `btn--<variant>` is a bare marker like `btn` (tests find "the primary
-  // button" by it) -- interpolating it is fine because it is not a utility the
-  // scanner needs to see.
-  const parts = [
-    BTN_BASE,
-    `btn--${variant}`,
-    size,
-    round ? "rounded-full" : "rounded-md",
-    selected ? BTN_SELECTED : BTN_VARIANTS[variant],
-  ];
-  if (block) parts.push("w-full");
-  if (extra !== "") parts.push(extra);
-  return parts.join(" ");
-}
 
 /* ── Input ───────────────────────────────────────────────────────────────────
  * One text-field style for <input> / <textarea>. Options: mono (id/token-like
@@ -140,7 +65,7 @@ export interface BadgeOptions {
 }
 
 // Border colour comes from the tone, never the base -- same
-// one-utility-per-property rule as the button builder above.
+// one-utility-per-property rule as the button builder in views/Button.ts.
 const BADGE_BASE =
   "badge inline-flex items-center gap-1 px-2 py-0.5 " +
   `${TEXT_HELPER_SIZE} font-normal leading-[1.4] whitespace-nowrap ` +

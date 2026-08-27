@@ -50,7 +50,7 @@ import { buildConversationRows, renderTranscriptSegments, type RowDescriptor } f
 import { ActivityIndicator } from "./ActivityIndicator";
 import { renderQueuedMessages } from "./QueuedMessageView";
 import { renderOutgoingMessages } from "./OutgoingMessageView";
-import { buttonClass } from "./primitives";
+import { Button } from "./Button";
 
 function getAgentTerminalUrl(agentId: string): string {
   // The ttyd dispatch script is invoked as `bash -c "$SCRIPT" <args...>` where
@@ -406,10 +406,6 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     });
   }
 
-  const RELOAD_BUTTON_CLASS =
-    "message-list-reload cursor-pointer rounded-md border border-default px-3 py-1 text-sm " +
-    "text-primary hover:bg-fill-hover";
-
   function manageStreamConnection(agentId: string): void {
     if (!isConversationNotFound(agentId)) {
       connectToStream(agentId);
@@ -662,7 +658,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     if (hasNothingToShow && load.error !== null) {
       return m("div", { class: "message-list-error flex flex-col items-center justify-center h-full gap-3" }, [
         m("p", { class: "text-red-500" }, `Error: ${load.error}`),
-        m("button", { class: RELOAD_BUTTON_CLASS, onclick: () => reloadAfterFailure(agentId) }, "Refresh"),
+        m(Button, { sm: true, extra: "message-list-reload", onclick: () => reloadAfterFailure(agentId) }, "Refresh"),
       ]);
     }
 
@@ -680,7 +676,11 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
             { class: "message-list-stale-notice flex items-center gap-3 border-b border-default px-3 py-1.5" },
             [
               m("span", { class: "text-sm text-red-500" }, `Couldn't refresh this conversation: ${load.error}`),
-              m("button", { class: RELOAD_BUTTON_CLASS, onclick: () => reloadAfterFailure(agentId) }, "Refresh"),
+              m(
+                Button,
+                { sm: true, extra: "message-list-reload", onclick: () => reloadAfterFailure(agentId) },
+                "Refresh",
+              ),
             ],
           );
 
@@ -933,10 +933,10 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                   m(ModelBar, { agentId }),
                   m("div", { class: "composer-under-bar-actions" }, [
                     m(
-                      "button",
+                      Button,
                       {
-                        type: "button",
-                        class: buttonClass("ghost", { sm: true }),
+                        variant: "ghost",
+                        sm: true,
                         onclick: () => openAgentTerminalTab(agentId),
                       },
                       "Open agent terminal",
@@ -944,10 +944,10 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                     // Persistent entry to the sign-in modal so the user can switch
                     // auth modes without waiting for an auth error.
                     m(
-                      "button",
+                      Button,
                       {
-                        type: "button",
-                        class: buttonClass("ghost", { sm: true }),
+                        variant: "ghost",
+                        sm: true,
                         onclick: () => openAgentAuth(agentId),
                       },
                       "Agent auth",

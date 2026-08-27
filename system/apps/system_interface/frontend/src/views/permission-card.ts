@@ -23,7 +23,7 @@ import { isPermissionRequestCall } from "./message-classification";
 import { icon } from "./icons";
 import type { IconName } from "./icons";
 import { serviceMarkUrl } from "./service-marks";
-import { buttonClass } from "./primitives";
+import { Button } from "./Button";
 
 /** The rich fields a created permission request echoes back on stdout, parsed
  *  from the tool result. `requestId` is always present (it's what the modal
@@ -437,10 +437,9 @@ export function renderPermissionCard(
     ]),
     m("div", { class: "permission-request-actions" }, [
       m(
-        "button",
+        Button,
         {
-          class: buttonClass("primary"),
-          type: "button",
+          variant: "primary",
           onclick(e: Event) {
             e.preventDefault();
             e.stopPropagation();

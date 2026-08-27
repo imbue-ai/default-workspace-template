@@ -419,6 +419,13 @@ function findVnode(
   }
   if (node !== null && typeof node === "object") {
     const vnode = node as { tag?: unknown; children?: unknown };
+    // A closure-component vnode (e.g. m(Button, ...)) carries no markup of its
+    // own -- its view runs only when mithril renders it -- so expand it and
+    // search what it renders.
+    if (typeof vnode.tag === "function") {
+      const component = (vnode.tag as (v: unknown) => { view: (v: unknown) => unknown })(vnode);
+      return findVnode(component.view(vnode), pred);
+    }
     if (pred(vnode)) return vnode;
     return findVnode(vnode.children, pred);
   }

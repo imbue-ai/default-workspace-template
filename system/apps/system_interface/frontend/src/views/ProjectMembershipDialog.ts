@@ -19,7 +19,8 @@ import m from "mithril";
 import { Modal } from "./Modal";
 import type { ProjectInfo } from "../models/Projects";
 import { squiggleMarkup } from "./squiggles";
-import { MODAL_MESSAGE_CLASS, buttonClass } from "./primitives";
+import { Button } from "./Button";
+import { MODAL_MESSAGE_CLASS } from "./primitives";
 
 const ROW_GLYPH_SIZE = 16;
 
@@ -107,11 +108,11 @@ export function ProjectMembershipDialog(): m.Component<ProjectMembershipDialogAt
           },
           title: "Add to project",
           actions: [
-            m("button", { class: buttonClass("secondary"), onclick: attrs.onCancel }, "Cancel"),
+            m(Button, { onclick: attrs.onCancel }, "Cancel"),
             m(
-              "button",
+              Button,
               {
-                class: buttonClass("primary"),
+                variant: "primary",
                 disabled: selected.size === 0,
                 onclick() {
                   attrs.onConfirm([...selected]);

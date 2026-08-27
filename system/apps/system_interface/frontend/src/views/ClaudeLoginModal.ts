@@ -40,7 +40,8 @@ import { OPEN_AI_KEYS_ACK, OPEN_AI_KEYS_PAGE } from "@minds/embed-contract";
 import { apiUrl } from "../base-path";
 import { clearEmbedderMessageHandler, sendToEmbedder, setEmbedderMessageHandler } from "../embed";
 import { claudeLogoIcon, icon, loginSpinnerIcon, warningIcon } from "./icons";
-import { buttonClass, inputClass } from "./primitives";
+import { Button, buttonClass } from "./Button";
+import { inputClass } from "./primitives";
 
 interface ClaudeAuthStatus {
   logged_in: boolean;
@@ -573,10 +574,10 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
           "Connect your Claude.ai account to use your Pro or Max plan quota in this mind.",
         ),
         m(
-          "button",
+          Button,
           {
-            class: buttonClass("primary", { block: true }),
-            type: "button",
+            variant: "primary",
+            block: true,
             onclick: () => void startOauthLogin("claudeai"),
           },
           "Continue with Claude subscription",
@@ -730,15 +731,15 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
       ),
       m("div.claude-login-step", [
         m("div.claude-login-step-label", [m("span.claude-login-step-num", "1"), "Get your credentials"]),
+        // A button, not a link: opening the mint page is a message to the
+        // embedding minds chrome (see openImbueMintPage), not a navigation --
+        // there is no URL a real anchor could carry.
         m(
-          "a",
+          Button,
           {
-            class: buttonClass("primary", { block: true, extra: "no-underline" }),
-            href: "#",
-            onclick: (event: MouseEvent) => {
-              event.preventDefault();
-              openImbueMintPage();
-            },
+            variant: "primary",
+            block: true,
+            onclick: () => openImbueMintPage(),
           },
           [m("span", "Open the Imbue key page"), m.trust(icon("external-link", { size: 15 }))],
         ),
@@ -830,10 +831,9 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
             },
           }),
           m(
-            "button",
+            Button,
             {
-              class: buttonClass("primary"),
-              type: "button",
+              variant: "primary",
               disabled: !code.trim(),
               onclick: () => {
                 void submitSetupTokenCode();
@@ -871,10 +871,9 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
                     },
                   }),
                   m(
-                    "button",
+                    Button,
                     {
-                      class: buttonClass("primary"),
-                      type: "button",
+                      variant: "primary",
                       disabled: !directToken.trim(),
                       onclick: () => {
                         submitDirectToken();
@@ -1034,7 +1033,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
     if (mode === "select_provider" || mode === "verifying" || mode === "applying") return null;
     if (mode === "success") {
       return m("div.claude-login-footer", [
-        m("button", { class: buttonClass("primary"), type: "button", onclick: () => attrsRef?.onDismiss() }, "Done"),
+        m(Button, { variant: "primary", onclick: () => attrsRef?.onDismiss() }, "Done"),
       ]);
     }
     if (mode === "error") {
@@ -1045,10 +1044,10 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
       // a single primary action here is not a dead end.
       return m("div.claude-login-footer", [
         m(
-          "button",
+          Button,
           {
-            class: buttonClass("primary", { block: true }),
-            type: "button",
+            variant: "primary",
+            block: true,
             onclick: () => goBackToProviderSelection(),
           },
           "Start over",
@@ -1057,16 +1056,11 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
     }
     if (mode === "api_key_form") {
       return m("div.claude-login-footer.claude-login-footer--spread", [
+        m(Button, { onclick: () => goBackToProviderSelection() }, "Back"),
         m(
-          "button",
-          { class: buttonClass("secondary"), type: "button", onclick: () => goBackToProviderSelection() },
-          "Back",
-        ),
-        m(
-          "button",
+          Button,
           {
-            class: buttonClass("primary"),
-            type: "button",
+            variant: "primary",
             disabled: !apiKey.trim(),
             onclick: () => {
               submitApiKey();
@@ -1078,16 +1072,11 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
     }
     if (mode === "imbue_form") {
       return m("div.claude-login-footer.claude-login-footer--spread", [
+        m(Button, { onclick: () => goBackToProviderSelection() }, "Back"),
         m(
-          "button",
-          { class: buttonClass("secondary"), type: "button", onclick: () => goBackToProviderSelection() },
-          "Back",
-        ),
-        m(
-          "button",
+          Button,
           {
-            class: buttonClass("primary"),
-            type: "button",
+            variant: "primary",
             disabled: !imbueBlob.trim(),
             onclick: () => {
               submitImbueBlob();
@@ -1100,13 +1089,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
     // awaiting_setup_token: no primary action -- the flow completes via
     // polling (or one of the subtle affordances, which carry their own
     // buttons). Back returns to provider selection and aborts the session.
-    return m("div.claude-login-footer", [
-      m(
-        "button",
-        { class: buttonClass("secondary"), type: "button", onclick: () => goBackToProviderSelection() },
-        "Back",
-      ),
-    ]);
+    return m("div.claude-login-footer", [m(Button, { onclick: () => goBackToProviderSelection() }, "Back")]);
   }
 
   return {

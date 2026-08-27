@@ -21,7 +21,8 @@ import { getAgentById } from "../models/AgentManager";
 import { isWorkingActivityState } from "./ActivityIndicator";
 import { hoverTooltipAttrs } from "./hoverTooltip";
 import { icon, stopIcon } from "./icons";
-import { MODAL_MESSAGE_CLASS, MODAL_TITLE_CLASS, buttonClass } from "./primitives";
+import { Button } from "./Button";
+import { MODAL_MESSAGE_CLASS, MODAL_TITLE_CLASS } from "./primitives";
 
 const MAX_TEXTAREA_HEIGHT_PX = 200;
 
@@ -376,12 +377,11 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
             ),
             m("div.modal-actions", [
               m(
-                "button",
+                Button,
                 {
-                  class: buttonClass("secondary"),
                   // Focus it so Enter and Space dismiss too, and so the notice is reachable
                   // without a mouse.
-                  oncreate: (buttonVnode: m.VnodeDOM) => (buttonVnode.dom as HTMLButtonElement).focus(),
+                  oncreate: (buttonVnode) => (buttonVnode.dom as HTMLButtonElement).focus(),
                   onclick: () => dismissDeclinedCommandNotice(),
                 },
                 "OK",
@@ -405,11 +405,11 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
             m("div.modal-header", m("h3", { class: MODAL_TITLE_CLASS }, title)),
             m("p", { class: MODAL_MESSAGE_CLASS }, explanation),
             m("div.modal-actions", [
-              m("button", { class: buttonClass("secondary"), onclick: () => dismissAuthCommandNotice() }, "Cancel"),
+              m(Button, { onclick: () => dismissAuthCommandNotice() }, "Cancel"),
               m(
-                "button",
+                Button,
                 {
-                  class: buttonClass("primary"),
+                  variant: "primary",
                   onclick: () => {
                     dismissAuthCommandNotice();
                     if (agentId) {
@@ -490,10 +490,12 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
             }),
             m("div", { class: "message-input-toolbar" }, [
               m(
-                "button",
+                Button,
                 {
-                  type: "button",
-                  class: buttonClass("ghost", { icon: true, round: true, extra: "shrink-0" }),
+                  variant: "ghost",
+                  icon: true,
+                  round: true,
+                  extra: "message-input-attach-button shrink-0",
                   ...hoverTooltipAttrs("Attach files"),
                   "aria-label": "Attach files",
                   onclick: openFilePicker,
@@ -502,10 +504,13 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
               ),
               isStopButtonVisible
                 ? m(
-                    "button",
+                    Button,
                     {
-                      type: "button",
-                      class: buttonClass("stop", { icon: true, round: true, sm: true, extra: "shrink-0" }),
+                      variant: "stop",
+                      icon: true,
+                      round: true,
+                      sm: true,
+                      extra: "message-input-stop-button shrink-0",
                       ...hoverTooltipAttrs("Interrupt and bring queued messages to the composer"),
                       "aria-label": "Interrupt and bring queued messages to the composer",
                       onclick: handleStopToComposer,
@@ -515,10 +520,12 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
                 : null,
               canSend
                 ? m(
-                    "button",
+                    Button,
                     {
-                      type: "button",
-                      class: buttonClass("primary", { icon: true, round: true, extra: "shrink-0" }),
+                      variant: "primary",
+                      icon: true,
+                      round: true,
+                      extra: "message-input-send-button shrink-0",
                       ...hoverTooltipAttrs("Send message"),
                       "aria-label": "Send message",
                       onclick: handleSend,

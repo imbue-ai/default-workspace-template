@@ -13,7 +13,7 @@
 import { attachHoverTooltip } from "./views/hoverTooltip";
 import type { HoverTooltip } from "./views/hoverTooltip";
 import { icon } from "./views/icons";
-import { buttonClass } from "./views/primitives";
+import { buttonClass } from "./views/Button";
 
 function filenameFromUrl(imageUrl: string): string {
   try {

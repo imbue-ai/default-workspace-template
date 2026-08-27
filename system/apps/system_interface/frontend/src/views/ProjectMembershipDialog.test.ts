@@ -32,6 +32,14 @@ function* walk(node: unknown): Generator<VnodeLike> {
   }
   if (node !== null && typeof node === "object") {
     const vnode = node as VnodeLike;
+    // A closure-component vnode (e.g. m(Button, ...)) carries no markup of its
+    // own -- its view runs only when mithril renders it -- so expand it and
+    // walk what it renders.
+    if (typeof vnode.tag === "function") {
+      const component = (vnode.tag as (v: VnodeLike) => { view: (v: VnodeLike) => unknown })(vnode);
+      yield* walk(component.view(vnode));
+      return;
+    }
     yield vnode;
     if (vnode.children !== undefined) yield* walk(vnode.children);
   }
