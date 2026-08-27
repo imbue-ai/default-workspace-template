@@ -29,8 +29,13 @@ from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.pty_auth import DEFAULT_PTY_COLUMNS
 
 
-class LaneNotFoundError(KeyError):
-    """No such lane, or no such method on it."""
+class LaneNotFoundError(LookupError):
+    """No such lane, or no such method on it.
+
+    LookupError rather than KeyError: `KeyError.__str__` is `repr(args[0])`, so a message
+    written for a person came back through the 404 body wrapped in its own quotes --
+    `"'no such lane: bogus'"`. Nothing that formats one of these should have to know that.
+    """
 
 
 class DrainUntil(StrEnum):
