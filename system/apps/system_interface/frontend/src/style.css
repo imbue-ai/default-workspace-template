@@ -1164,30 +1164,6 @@ body {
   background-color: var(--c-surface-secondary);
 }
 
-/* ── Streaming indicator ── */
-@keyframes streaming-bounce {
-  0%,
-  60%,
-  100% {
-    opacity: 0.2;
-  }
-  30% {
-    opacity: 0.8;
-  }
-}
-
-.streaming-dot {
-  animation: streaming-bounce 1.2s ease-in-out infinite;
-}
-
-.streaming-dot-2 {
-  animation-delay: 0.15s;
-}
-
-.streaming-dot-3 {
-  animation-delay: 0.3s;
-}
-
 /* ── Scrollbar ── */
 .app-content::-webkit-scrollbar {
   width: 6px;
@@ -1206,112 +1182,14 @@ body {
   background: var(--c-text-faint);
 }
 
-/* ── Structured tool call blocks (non-markdown) ── */
-.tool-call-block {
-  margin-top: 0.25em;
-  margin-bottom: 0.25em;
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius-md);
-  background: var(--c-bg-sidebar);
-  overflow: hidden;
-}
-
-.tool-call-header {
-  display: flex;
-  align-items: center;
-  gap: --spacing(1.5);
-  padding: 3px 10px;
-  font-family: var(--font-mono);
-  font-size: var(--font-size-body);
-  color: var(--c-text-secondary);
-  cursor: pointer;
-  user-select: none;
-  transition: background 100ms;
-}
-
-/* System/hook messages shown as collapsed blocks instead of user bubbles */
+/* The structured (non-markdown) tool-call block and the collapsed system-chip
+   variant live as utilities in views/ToolCallBlock.ts (shared by
+   message-renderers.ts and user-message-display.ts); the model-API-error tint
+   is utilities in message-renderers.ts. What stays here is the one rule a
+   utility cannot carry: the collapsed row's tightened rhythm, which must
+   outrank the unlayered .message rule above. */
 .message-system-collapsed {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
   margin-bottom: --spacing(1);
-}
-
-.message-system-collapsed .tool-call-block {
-  max-width: 80%;
-  margin: 0;
-}
-
-.tool-call-header:hover {
-  background: var(--c-bg-hover);
-}
-
-.tool-call-chevron {
-  font-size: 10px; /* design-system-exception: icon glyph (chevron), sized independently of the text scale */
-  transition: transform 150ms;
-  display: inline-block;
-}
-
-.tool-call-block--expanded .tool-call-chevron {
-  transform: rotate(90deg);
-}
-
-.tool-call-details {
-  display: none;
-  border-top: 1px solid var(--c-border);
-}
-
-.tool-call-block--expanded .tool-call-details {
-  display: block;
-}
-
-.tool-call-input,
-.tool-call-output {
-  padding: --spacing(2) --spacing(3);
-}
-
-.tool-call-input + .tool-call-output {
-  border-top: 1px solid var(--c-border-faint);
-}
-
-.tool-call-input pre,
-.tool-call-output pre {
-  margin: 0;
-  background: transparent;
-  border: none;
-  padding: 0;
-  overflow-x: auto;
-}
-
-.tool-call-input pre code,
-.tool-call-output pre code {
-  font-family: var(--font-mono);
-  font-size: var(--font-size-helper);
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-all;
-  background: transparent;
-  padding: 0;
-}
-
-.tool-call-output--error pre code {
-  color: var(--c-danger);
-}
-
-/* ── Model API error (e.g. "API Error: 529 Overloaded") ── */
-/* Light-red tint on the failure text; a grey note below when it's the model
-   provider's fault (a 5xx / overloaded) rather than our request. */
-.message-api-error {
-  border-radius: var(--radius-md);
-  padding: 0.5em 0.75em;
-  background: rgba(220, 38, 38, 0.08);
-  color: var(--c-danger);
-}
-
-.message-api-error-note {
-  margin-top: 0.4em;
-  font-size: 0.85em;
-  color: rgba(120, 120, 120, 0.95);
 }
 
 /* The sub-agent link card (renderSubagentCard in views/message-renderers.ts) is

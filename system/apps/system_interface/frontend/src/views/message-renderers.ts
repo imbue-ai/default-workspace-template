@@ -11,6 +11,7 @@ import { hoverTooltipAttrs } from "./hoverTooltip";
 import type { PermissionResolution } from "./message-classification";
 import { isSkillExpansionUserMessage } from "./message-classification";
 import { PermissionCard, isFiledPermissionRequest } from "./permission-card";
+import { renderToolBlock } from "./ToolCallBlock";
 import { badgeClass } from "./Badge";
 
 // Per-kind user_message rendering lives in user-message-display.ts (the display
@@ -314,34 +315,15 @@ export function renderToolCallBlock(toolCall: ToolCall, toolResult: ToolResultEv
   // argument, which is not something this view should have to know. The raw input
   // stays in the block body below (preserve-raw). Falls back to the tool name for
   // events parsed before the labels existed.
-  const headerText = toolCall.header_label || `Tool: ${toolCall.tool_name}`;
-  const inputText = toolCall.input_preview || "";
-  const outputText = toolResult?.output || "";
-  const isError = toolResult?.is_error === true;
-
-  return m("div", { class: "tool-call-block" }, [
-    m(
-      "div",
-      {
-        class: "tool-call-header",
-        onclick(e: Event) {
-          const block = (e.currentTarget as HTMLElement).parentElement;
-          if (block) {
-            block.classList.toggle("tool-call-block--expanded");
-          }
-        },
-      },
-      [m("span", { class: "tool-call-chevron" }, "\u25B8"), m("span", headerText)],
-    ),
-    m("div", { class: "tool-call-details" }, [
-      inputText ? m("div", { class: "tool-call-input" }, [m("pre", m("code", inputText))]) : null,
-      outputText
-        ? m("div", { class: isError ? "tool-call-output tool-call-output--error" : "tool-call-output" }, [
-            m("pre", m("code", outputText)),
-          ])
-        : null,
-    ]),
-  ]);
+  return renderToolBlock({
+    headerText: toolCall.header_label || `Tool: ${toolCall.tool_name}`,
+    inputText: toolCall.input_preview || "",
+    outputText: toolResult?.output || "",
+    isError: toolResult?.is_error === true,
+    // The markdown rhythm: the same vertical slot a paragraph-adjacent block
+    // gets in the assistant flow.
+    extra: "my-[0.25em]",
+  });
 }
 
 /**
@@ -372,9 +354,15 @@ export function renderAssistantMessageChildren(
       // A model API error: render the failure text in light red, and for a
       // provider-side fault (5xx / overloaded) add a grey "not Minds' fault" note.
       children.push(
-        m("div.message-api-error", [
+        m("div", { class: "message-api-error rounded-md bg-danger/8 px-[0.75em] py-[0.5em] text-danger" }, [
           m(MarkdownContent, { content: textContent, requestedAt: event.timestamp }),
-          event.is_provider_fault ? m("div.message-api-error-note", providerFaultNote(event.api_error_kind)) : null,
+          event.is_provider_fault
+            ? m(
+                "div",
+                { class: "message-api-error-note mt-[0.4em] text-[0.85em] text-faint" },
+                providerFaultNote(event.api_error_kind),
+              )
+            : null,
         ]),
       );
     } else {
