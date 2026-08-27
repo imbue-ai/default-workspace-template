@@ -95,7 +95,25 @@ yes = true
 
 # Agent type defaults -- apply to all claude agents created from this repo
 [agent_types.claude]
-auto_dismiss_dialogs = true
+auto_dismiss_dialogs_at_startup = true
+# Dialogs mngr may answer on the user's behalf when one is holding the TUI's input at send
+# time. Anything not listed here that needs a real answer refuses the send with an error
+# naming what is in the way, rather than mngr guessing; anything Esc closes harmlessly is
+# dismissed regardless of this list.
+#
+# Answer every dialog mngr knows a sensible answer for, and fall back to pressing "1" on one
+# it cannot name. A named dialog is answered by cycling the selector onto its own chosen option
+# -- never by pressing Enter on whatever happens to be highlighted -- so that half grants no
+# power to guess. The alternative, an explicit list, silently stops covering each dialog added
+# upstream: the model and effort switch confirmations were listed here, so a usage-limit or
+# LSP-install prompt blocked sends until someone noticed and added it.
+#
+# The "and unknown" half IS a guess, chosen deliberately: a workspace chat has no good way to
+# show a dialog nobody has named, so refusing there strands the message until someone opens
+# the terminal tab. It is bounded -- the digit only goes to a pane actually showing a numbered
+# selector, and if the surface does not clear, the send still refuses rather than pressing on.
+# Narrow it to ALL_KNOWN_DIALOGS to go back to refusing anything unnamed.
+sensibly_deal_with_dialogs = ["ALL_KNOWN_AND_UNKNOWN_DIALOGS"]
 auto_allow_permissions = true
 auto_disable_questions = true
 cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode,TodoWrite,TaskCreate,TaskList,TaskUpdate"""
@@ -122,7 +140,11 @@ cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode,Tod
 # It must ride the mngr-managed --settings overlay because nothing provisions the
 # shared ~/.claude/settings.json: in shared config-dir mode mngr writes nothing
 # into the shared dir, and claude itself only creates it lazily.
-settings_overrides__extend = {model = "opus[1m]", fastMode = false, skipDangerousModePermissionPrompt = true}
+# tui = "fullscreen" pins the input bar and any dialog to the pane instead of letting them
+# scroll out of view, so what mngr captures at send time is what is actually holding the
+# input. tmux here runs with `alternate-screen off` (see the tmux.conf written below), so
+# the workspace terminal panel keeps its scrollback either way.
+settings_overrides__extend = {model = "opus[1m]", fastMode = false, skipDangerousModePermissionPrompt = true, tui = "fullscreen"}
 # Launch every claude agent through the OOM band wrapper instead of `claude`
 # directly. The wrapper (system/services/oom_priority/bin/agent_oom_launch.py) sets its own
 # oom_score_adj to the user- or worker-agent band, records its pid in the
@@ -210,7 +232,7 @@ command = "sleep infinity"
 # daemon, so both are banded (the daemon is where turns run, so it is the one that
 # matters for memory).
 command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/agent_oom_launch.py codex"
-auto_dismiss_dialogs = true
+auto_dismiss_dialogs_at_startup = true
 auto_allow_permissions = true
 model = "gpt-5.6-sol"
 model_reasoning_effort = "medium"
@@ -280,9 +302,9 @@ Then stop. If the user's next message asks for suggestions or says they are not 
 # model bar reads the live values via the pi lifecycle extension.
 #
 # auto_allow_permissions MUST be true -- pi has no approval gate and its config
-# validator rejects false. auto_dismiss_dialogs adds pi's `--approve` (trust
+# validator rejects false. auto_dismiss_dialogs_at_startup adds pi's `--approve` (trust
 # project-local files for the run) so an unattended agent is not blocked on the
-# first-run trust dialog, matching agent_types.codex's auto_dismiss_dialogs.
+# first-run trust dialog, matching agent_types.codex's auto_dismiss_dialogs_at_startup.
 [agent_types.pi-coding]
 # Launch through the OOM band wrapper -- see the codex block above. The wrapper execs
 # `pi` in place, and mngr's own prelude/`-e <extension>` splice after this base.
@@ -297,7 +319,7 @@ auto_allow_permissions = true
 # -- and never has to write to -- the shared tree. The boot warm-up in seed_home_skeleton.sh
 # fills the cache once so even the FIRST agent after a boot is fast.
 share_home_npm_dir = true
-auto_dismiss_dialogs = true
+auto_dismiss_dialogs_at_startup = true
 check_installation = false
 # Harness-only instructions, appended to every pi agent's system prompt.
 append_system_prompt__extend = ["""Do not use any built-in tools related to memory or task planning -- their output does not reach the user's workspace chat. Use the `tk` utility for any todos; it is the only task tracker in this workspace. Don't ever use tools for asking user questions or anything that would block the terminal -- just use your words.""", """# The /welcome command
@@ -352,7 +374,7 @@ append_system_prompt__extend = ["""Do not use any built-in tools related to memo
 # plugin via `mngr plugin add` in system/scripts/build_workspace.sh), so no parent_type.
 # The agy binary is baked into the image (system/scripts/setup_system.sh, which runs the
 # version-locked system/scripts/agy_install-1.1.16.sh), so check_installation is off.
-# auto_allow_permissions + auto_dismiss_dialogs run the container agent unattended,
+# auto_allow_permissions + auto_dismiss_dialogs_at_startup run the container agent unattended,
 # matching agent_types.codex (auto_allow adds agy's --dangerously-skip-permissions;
 # auto_dismiss silently trusts the source repo). update_policy = NEVER freezes the baked
 # build -- agy has no version field of its own, so NEVER sets AGY_CLI_DISABLE_AUTO_UPDATE
@@ -372,7 +394,7 @@ append_system_prompt__extend = ["""Do not use any built-in tools related to memo
 # / notifications off keep the surface quiet.
 [agent_types.antigravity]
 auto_allow_permissions = true
-auto_dismiss_dialogs = true
+auto_dismiss_dialogs_at_startup = true
 check_installation = false
 update_policy = "NEVER"
 # Launch through the OOM band wrapper, like every other harness. agy takes it as a plain
