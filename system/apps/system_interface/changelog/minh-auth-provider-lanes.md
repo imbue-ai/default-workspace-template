@@ -680,3 +680,21 @@ The mockup's names are now registered over this app's existing palette, the 62 l
 them, and a test asserts every color utility in the ported styles resolves to a defined token.
 Values stay this app's: the mockup is two-layer light/dark and this app is light only, so a
 token whose point is the dark half is deliberately absent rather than faked.
+
+# Groundwork for the combo card
+
+Two things the model-bar replacement needs that were not there.
+
+`flyout-position.ts`: pure geometry for a submenu that opens BESIDE a panel, top-aligned with
+the row that triggered it. Its sibling `dropdown-position.ts` only does the horizontal case (a
+popup under its trigger); a flyout needs both axes, a height cap, and a flip to the other side
+when there is no room. Six tests cover the placements that are easy to get wrong.
+
+`ModelBar.test.ts`: a render smoke test over every branch of the CURRENT bar -- empty, no
+catalog, matched model, the shrug, read-only, effort, fast, and a dynamic harness with no
+static options. Written against today's component on purpose, so the rewrite has a before and
+after to compare rather than a blank page. It asserts what the user can see and click, not
+internals, so it should survive a faithful rewrite and fail on an unfaithful one.
+
+Writing it found that a read-only slot is deliberately still a `<button>`: a disabled one
+suppresses `:hover` and would kill the tooltip explaining why the model cannot be switched.

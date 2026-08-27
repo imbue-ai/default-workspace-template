@@ -127,8 +127,13 @@ def test_resolve_raises_when_nothing_exists_or_the_id_is_unknown(tmp_path: Path)
         resolve_account("nope", tmp_path)
 
 
-def test_committing_the_same_folder_twice_keeps_the_original_row(tmp_path: Path) -> None:
-    """Re-authenticating commits the same folder again; the seq must not move."""
+def test_committing_the_same_folder_twice_keeps_its_id_and_position(tmp_path: Path) -> None:
+    """Re-authenticating commits the same folder again.
+
+    The id and the seq must not move -- agents hold the id by label, and renumbering would
+    orphan them. The DISPLAY may: re-keying the bring-your-own-key lane can name a different
+    provider, and leaving the old noun there makes every label say something untrue.
+    """
     other = _add(tmp_path, "anthropic", "Anthropic")
     account_id, _ = mint_account_dir(tmp_path)
     first = commit_account(account_id, "anthropic", "Anthropic", tmp_path)
@@ -136,9 +141,11 @@ def test_committing_the_same_folder_twice_keeps_the_original_row(tmp_path: Path)
 
     second = commit_account(account_id, "anthropic", "Renamed", tmp_path)
 
-    assert second == first
+    assert (second.id, second.seq, second.lane) == (first.id, first.seq, first.lane)
+    assert second.display == "Renamed"
     index = read_index(tmp_path)
     assert [a.id for a in index.accounts] == [other.id, account_id]
+    assert [a.display for a in index.accounts] == ["Anthropic", "Renamed"]
     assert index.mru == account_id
 
 
