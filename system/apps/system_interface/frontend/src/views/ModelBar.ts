@@ -93,7 +93,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
   // laid out by their parent -- see `openCard`.
   let cardAnchor: DOMRect | null = null;
   let flyout: "model" | "providers" | null = null;
-  let flyoutRowTop = 0;
+  let flyoutRowBottom = 0;
   // Which account's trash has been armed into "Remove?". Cleared whenever the flyout or the
   // card closes, so someone who clicked the bin to see what it did does not come back later
   // to a primed one.
@@ -207,7 +207,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
         // machinery unnecessary, which is ~60 lines of slope math not ported.
         onclick: (event: MouseEvent) => {
           if (!opts.openable) return;
-          flyoutRowTop = (event.currentTarget as HTMLElement).getBoundingClientRect().top - 6;
+          flyoutRowBottom = (event.currentTarget as HTMLElement).getBoundingClientRect().bottom;
           const opening = flyout !== opts.which;
           setFlyout(opening ? opts.which : null);
           if (opening) {
@@ -355,23 +355,23 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     );
   }
 
-  /** Where a flyout sits: beside the card, top-aligned with the row that opened it. */
+  /** Where a flyout sits: beside the card, standing on the row that opened it. */
   function flyoutPlacement(): string {
     const anchor = cardAnchor;
     if (anchor === null) return "";
     const placed = placeFlyout({
       cardLeft: cardLeft(anchor),
       cardWidth: css.CARD_WIDTH,
-      rowTop: flyoutRowTop,
+      rowBottom: flyoutRowBottom,
       flyoutWidth: css.FLYOUT_WIDTH,
-      maxFlyoutHeight: 420,
+      maxFlyoutHeight: css.FLYOUT_MAX_HEIGHT,
       viewportWidth: window.innerWidth,
       viewportHeight: window.innerHeight,
       margin: CARD_MARGIN,
       overlap: css.FLYOUT_OVERLAP,
     });
     return (
-      `left: ${placed.left}px; top: ${placed.top}px; ` +
+      `left: ${placed.left}px; bottom: ${placed.bottom}px; ` +
       `width: ${css.FLYOUT_WIDTH}px; max-height: ${placed.maxHeight}px;`
     );
   }
@@ -500,20 +500,6 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     const visible = filtered.slice(0, MODEL_SEARCH_CAP);
     const loading = (searchable || dynamic) && (offeredLoading || !offeredLoaded);
     return flyoutShell([
-      // Searchable only when there are enough rows to need it -- pi's catalog runs to
-      // thousands, claude's to four.
-      searchable || all.length > 8
-        ? m("input", {
-            class: "model-selector-search",
-            type: "text",
-            placeholder: "Search models",
-            value: modelQuery,
-            oncreate: (inputVnode: m.VnodeDOM) => (inputVnode.dom as HTMLInputElement).focus(),
-            oninput: (event: Event) => {
-              modelQuery = (event.target as HTMLInputElement).value;
-            },
-          })
-        : null,
       // One list or the other, never a hole beside keyed rows -- mithril refuses a fragment
       // that mixes the two, and it throws during the DOM diff rather than at build time.
       m(
@@ -548,6 +534,27 @@ export function ModelBar(): m.Component<{ agentId: string }> {
                 );
               }),
       ),
+      // BELOW the list, not above it: the flyout is anchored at its base and grows upward, so
+      // the bottom is the edge that stays put next to the row you came from.
+      //
+      // The wrapper is the styled control; the bare input inside carries `outline: none`.
+      // Putting the wrapper's class straight on an <input> is what left the browser's own
+      // focus ring showing through, which is the orange halo in the report.
+      searchable || all.length > 8
+        ? m("div", { class: "model-selector-search" }, [
+            m("span", { class: "model-selector-search-icon" }, m.trust(icon("search", { size: 13 }))),
+            m("input", {
+              class: "model-selector-search-input",
+              type: "text",
+              placeholder: "Search models",
+              value: modelQuery,
+              oncreate: (inputVnode: m.VnodeDOM) => (inputVnode.dom as HTMLInputElement).focus(),
+              oninput: (event: Event) => {
+                modelQuery = (event.target as HTMLInputElement).value;
+              },
+            }),
+          ])
+        : null,
     ]);
   }
 

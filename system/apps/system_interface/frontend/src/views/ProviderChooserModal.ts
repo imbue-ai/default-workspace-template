@@ -768,10 +768,21 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         body = method === null ? null : stepsBody(current, method);
       }
 
-      // An entry screen is a fixed-height scroll region so the panel does not jump when you
-      // drill in; the short deep forms flex. The mockup's rule, verbatim.
-      const isEntryScreen = current === null || mode === "menu";
-      const bodyClass = isEntryScreen && !isSuccess && !isPending ? css.BODY_SCROLLING : css.BODY_FLEXING;
+      // Which of the four sizes this screen is. A verdict is a sentence and gets the small
+      // panel; the lane list is the widest thing the flow shows. The body then sizes to its
+      // content within that, so a two-line confirmation is a two-line panel rather than the
+      // tallest screen's height filled out with white space.
+      const screen: "status" | "menu" | "form" | "chooser" =
+        isSuccess || isPending || error !== null
+          ? "status"
+          : current === null
+            ? "chooser"
+            : mode === "menu"
+              ? "menu"
+              : "form";
+      // The entry screen keeps a floor: the flow always returns there, and a panel that shrinks
+      // under the pointer on the way back reads as something having gone wrong.
+      const bodyClass = screen === "chooser" ? css.BODY_ENTRY : css.BODY;
 
       return m(
         "div.claude-login-overlay",
@@ -800,7 +811,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
                 confirmingDelete = null;
               },
             },
-            m("div", { class: css.PANEL }, [
+            m("div", { class: `${css.PANEL} ${css.panelWidth(screen)}` }, [
               m("div", { class: css.HEADER }, [
                 current !== null
                   ? m(

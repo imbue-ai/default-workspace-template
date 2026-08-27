@@ -2,50 +2,52 @@ import { describe, expect, it } from "vitest";
 
 import { placeFlyout } from "./flyout-position";
 
+/** A card open near the bottom of a 1280x800 window, which is where the composer puts it. */
 const BASE = {
   cardLeft: 400,
   cardWidth: 340,
-  rowTop: 300,
-  flyoutWidth: 280,
-  maxFlyoutHeight: 420,
-  viewportWidth: 1400,
-  viewportHeight: 900,
-  margin: 12,
+  rowBottom: 560,
+  flyoutWidth: 300,
+  maxFlyoutHeight: 334,
+  viewportWidth: 1280,
+  viewportHeight: 800,
+  margin: 8,
   overlap: 4,
 };
 
 describe("placeFlyout", () => {
-  it("tucks under the card's trailing edge and top-aligns with the row", () => {
-    expect(placeFlyout(BASE)).toMatchObject({ left: 736, top: 300, side: "trailing" });
+  it("tucks under the card's right edge and stands on the row", () => {
+    expect(placeFlyout(BASE)).toMatchObject({ left: 736, bottom: 240, side: "trailing" });
   });
 
-  it("stays beside the row when it opens near the bottom, capping its height instead", () => {
-    // The bug this file was rewritten for: lifting the flyout so its full height fits put the
-    // list in the opposite corner from the card that opened it.
-    const placed = placeFlyout({ ...BASE, rowTop: 700 });
-    expect(placed.top).toBe(700);
-    expect(placed.maxHeight).toBe(900 - 700 - 12);
+  it("grows upward rather than being squeezed by the space below the row", () => {
+    // The whole reason this file diverges from the mockup: the card opens from the composer at
+    // the bottom of the panel, so downward there is nothing -- 560px of room sits ABOVE.
+    const nearBottom = placeFlyout({ ...BASE, rowBottom: 780 });
+    expect(nearBottom.bottom).toBe(20);
+    expect(nearBottom.maxHeight).toBe(334);
   });
 
-  it("flips to the leading side when the trailing side has no room", () => {
+  it("caps the height when the row is near the top instead of overflowing", () => {
+    const nearTop = placeFlyout({ ...BASE, rowBottom: 100 });
+    expect(nearTop.maxHeight).toBe(92);
+  });
+
+  it("flips to the leading side when the trailing side would not fit", () => {
     const placed = placeFlyout({ ...BASE, viewportWidth: 900 });
     expect(placed.side).toBe("leading");
-    expect(placed.left).toBe(124);
+    expect(placed.left).toBe(104);
   });
 
-  it("stays trailing when neither side fits, rather than flipping into the same problem", () => {
+  it("pins inside the viewport when neither side fits", () => {
     const placed = placeFlyout({ ...BASE, cardLeft: 20, viewportWidth: 400 });
-    expect(placed.side).toBe("trailing");
-    expect(placed.left).toBeGreaterThanOrEqual(12);
+    expect(placed.left).toBeGreaterThanOrEqual(8);
+    expect(placed.left + BASE.flyoutWidth).toBeLessThanOrEqual(400);
   });
 
-  it("never places the box off the left edge", () => {
-    const placed = placeFlyout({ ...BASE, cardLeft: -200, viewportWidth: 300 });
-    expect(placed.left).toBeGreaterThanOrEqual(12);
-  });
-
-  it("never places the box above the viewport", () => {
-    const placed = placeFlyout({ ...BASE, rowTop: -50 });
-    expect(placed.top).toBe(12);
+  it("keeps the base on screen when the row is off it", () => {
+    const placed = placeFlyout({ ...BASE, rowBottom: -50 });
+    expect(placed.bottom).toBe(792);
+    expect(placed.maxHeight).toBe(0);
   });
 });
