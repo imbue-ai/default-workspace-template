@@ -22,7 +22,9 @@ endpoints minds itself dials, which is what the SSH facet measures),
 :class:`ProviderErrorConnectivityTrigger` (a provider discovery cannot reach is
 the earliest evidence a cold start on a dead network produces),
 :func:`is_network_dependent_workspace` / :func:`is_network_dependent_provider`
-(the on-device rule that exempts local, docker and lima from all of it), and
+(the on-device rule that exempts a machine dialled on this device from all of
+it, read from the coordinate discovery reports and only otherwise from the
+provider's backend name), and
 :func:`read_environment_block` (what the recovery surfaces render). They sit
 with the restart paths that consult them: the gate on
 :class:`UnattendedRecoveryDispatcher` is the one place a signal withholds an
@@ -59,9 +61,9 @@ from imbue.minds.desktop_client.backend_resolver import BackendResolverInterface
 from imbue.minds.desktop_client.backend_resolver import MngrCliBackendResolver
 from imbue.minds.desktop_client.environment_signals import ConnectivityDetector
 from imbue.minds.desktop_client.environment_signals import EnvironmentBlock
+from imbue.minds.desktop_client.environment_signals import EnvironmentCondition
 from imbue.minds.desktop_client.environment_signals import SshEndpoint
-from imbue.minds.desktop_client.mngr_command import format_output_tail
-from imbue.minds.desktop_client.mngr_command import mngr_failure_verdict
+from imbue.minds.desktop_client.mngr_command import run_mngr_to_completion
 from imbue.minds.desktop_client.provider_display import friendly_provider_label
 from imbue.minds.desktop_client.system_interface_health import AgentHealth
 from imbue.minds.desktop_client.system_interface_health import SystemInterfaceHealthTracker
@@ -69,9 +71,9 @@ from imbue.minds.desktop_client.workspace_lifecycle import HOST_START_TIMEOUT_SE
 from imbue.minds.desktop_client.workspace_lifecycle import HOST_STOP_TIMEOUT_SECONDS
 from imbue.minds.desktop_client.workspace_operations import WorkspaceOperationKind
 from imbue.minds.desktop_client.workspace_operations import WorkspaceOperationRegistryInterface
+from imbue.minds.desktop_client.workspace_ssh_tunnel import is_loopback_host
 from imbue.minds.errors import MindError
 from imbue.minds.errors import MngrCommandError
-from imbue.minds.errors import MngrCommandTimeoutError
 from imbue.mngr.api.discovery_events import DISCOVERY_STREAM_POLL_INTERVAL_SECONDS
 from imbue.mngr.api.discovery_events import DiscoveryError
 from imbue.mngr.errors import HOST_SHUTDOWN_NOT_SUPPORTED_MESSAGE
@@ -95,13 +97,6 @@ HOST_ACCESS_REJECTED_REASON: Final[str] = (
 # How long a single workspace probe through the plugin is allowed to hang.
 # Short and snappy so a wedged workspace doesn't gate the recovery UI.
 _WORKSPACE_PROBE_TIMEOUT_SECONDS: Final[float] = 2.0
-# Default hard timeout for an ``mngr`` subprocess run via ``_run_mngr``. A
-# "definitely wedged" ceiling, not an estimate -- generous for quick calls like
-# a container bounce. The restart sequence's host stop/start steps do NOT use
-# it: a host stop can mirror state for minutes (BYO cloud) and a host start can
-# restore a workspace from object storage (imbue_cloud), so those steps pass
-# the shared ``workspace_lifecycle`` budgets explicitly.
-_MNGR_COMMAND_TIMEOUT_SECONDS: Final[float] = 120.0
 # How long we wait for the system interface to answer again after a restart.
 # ``mngr start`` cold-boots the container, so this waits for exactly the event
 # the create flow's readiness wait already measures -- a cold-booted workspace's
@@ -135,12 +130,18 @@ _DISCOVERY_FRESHNESS_MISSED_SNAPSHOT_COUNT: Final[int] = 3
 # between the first machine's verdict and the last's. Short enough that the
 # reading still describes the network the decision is being made on.
 _GATE_READING_REUSE_SECONDS: Final[float] = 2.0
-# Provider backends whose machines live on this device. Their workspaces are
-# reachable with the network unplugged, so no connectivity reading ever gates or
-# explains anything about them. Not ``mind_liveness``'s set of the same shape:
-# that one is scoped to backends minds can also shut down, which excludes
-# ``local`` -- and a local workspace is the last one a dead network should be
-# allowed to withhold a restart from.
+# Provider backends whose machines *can* live on this device. Their workspaces
+# are then reachable with the network unplugged, so no connectivity reading ever
+# gates or explains anything about them. Only "can": a docker provider is
+# routinely pointed at a daemon on another machine (``host = "ssh://box"`` in
+# its config) and reports this same backend name. So a name outside this set
+# settles the question outright, while one inside it defers to the coordinates
+# minds dials (:func:`is_loopback_host`) -- the machine's own, or its machines'
+# for the provider form -- and answers alone only where no coordinate has been
+# reported. Not ``mind_liveness``'s set of the same shape: that one is scoped
+# to backends minds can also shut down, which excludes ``local`` -- and a local
+# workspace is the last one a dead network should be allowed to withhold a
+# restart from.
 _ON_DEVICE_PROVIDER_BACKENDS: Final[frozenset[str]] = frozenset({"local", "docker", "lima"})
 
 
@@ -159,13 +160,17 @@ class WorkspaceSshEndpointSource(MutableModel):
     machines that exist then. Deduped, because the agents on one host share its
     endpoint and probing it three times measures nothing extra.
 
-    Machines on a backend that runs on this device are left out. Discovery
-    reports SSH info for them like any other host -- a docker container is
-    reached at ``127.0.0.1`` on the port its daemon mapped, not through some
-    local channel -- and an endpoint that answers with the wifi off cannot say
-    anything about the network. Handing one over would settle the SSH facet as
-    reachable on every probe, which is the facet reading the whole
-    incompatible-network verdict rests on.
+    Machines dialled on this device are left out. Discovery reports SSH info for
+    them like any other host -- a docker container is reached at ``127.0.0.1``
+    on the port its daemon mapped, not through some local channel -- and an
+    endpoint that answers with the wifi off cannot say anything about the
+    network. Handing one over would settle the SSH facet as reachable on every
+    probe, which is the facet reading the whole incompatible-network verdict
+    rests on. The filter is the endpoint's own address rather than its
+    provider's backend name, so the one workspace that could still slip through
+    -- one whose backend cannot be identified, which every other caller treats
+    conservatively as needing the network -- is judged on where it is actually
+    dialled.
 
     Endpoints on hosts discovery reports as RUNNING come first, because the
     detector samples only the first few and one endpoint answering settles the
@@ -188,10 +193,8 @@ class WorkspaceSshEndpointSource(MutableModel):
         endpoints_on_running_hosts: list[SshEndpoint] = []
         other_endpoints: list[SshEndpoint] = []
         for agent_id in self.backend_resolver.list_known_agent_ids():
-            if not is_network_dependent_workspace(self.backend_resolver, agent_id):
-                continue
             ssh_info = self.backend_resolver.get_ssh_info(agent_id)
-            if ssh_info is None:
+            if ssh_info is None or is_loopback_host(ssh_info.host):
                 continue
             endpoint = SshEndpoint(host=ssh_info.host, port=ssh_info.port)
             if endpoint in endpoints_on_running_hosts or endpoint in other_endpoints:
@@ -228,8 +231,10 @@ class ProviderErrorConnectivityTrigger(MutableModel):
 
     A remote provider erroring is the earliest evidence available, and it costs
     nothing to act on: the probe answers the question the user is about to ask,
-    and a healthy answer settles it. Local backends are ignored -- a stopped
-    docker daemon errors the same way and says nothing about the network.
+    and a healthy answer settles it. Providers whose machines are dialled on
+    this device are ignored (:func:`is_network_dependent_provider` decides
+    which) -- a stopped docker daemon errors the same way and says nothing about
+    the network.
 
     Registered on the resolver's change callbacks, which fire on every discovery
     event, so the probe is taken on a worker (it blocks for seconds) and once
@@ -335,20 +340,35 @@ class ProviderErrorConnectivityTrigger(MutableModel):
 def is_network_dependent_workspace(backend_resolver: BackendResolverInterface, agent_id: AgentId) -> bool:
     """Whether reaching this workspace requires the device to have a working network.
 
-    Workspaces on a backend that runs on this device (``local``, ``docker``,
-    ``lima``) are reachable over loopback with the wifi off, so a connectivity
-    reading has nothing to say about them: it must never withhold their restart,
-    and must never be offered as the explanation for their failure.
+    Answered from the coordinate minds dials whenever discovery reports one,
+    because that is the fact every caller is really asking about: an endpoint on
+    loopback answers with the wifi off and one anywhere else does not. It is
+    also the only form that gets a docker provider pointed at another machine
+    (``host = "ssh://box"`` in its config) right -- its containers are reached
+    at that box's address, over the network, while the backend name still reads
+    ``docker``. It is the config field rather than ``DOCKER_HOST`` because that
+    field alone is what mngr builds each container's coordinate from; a daemon
+    reached through the environment variable or the docker context is reported
+    at ``127.0.0.1``, which mngr cannot connect to either (see mngr's
+    ``docs/concepts/docker_usage.md``).
+
+    With no coordinate reported, the provider's backend answers instead:
+    ``local``, ``docker`` and ``lima`` run their machines on this device, so a
+    connectivity reading has nothing to say about them -- it must never withhold
+    their restart, and must never be offered as the explanation for their
+    failure.
 
     Everything else answers True, including a workspace whose provider or
     backend cannot be identified. That is the conservative direction for this
-    question and only for this question: a wrong True can at most delay an
-    unattended restart until a probe confirms the network is fine (and that
-    probe is what the caller is about to run anyway), whereas a wrong False
-    would restore exactly the doomed-dispatch behaviour this exists to prevent.
-    Nothing here suppresses anything on its own -- a confirmed-bad reading is
-    still required for that.
+    question: a wrong True can at most delay an unattended restart until a probe
+    confirms the network is fine (and that probe is what the caller is about to
+    run anyway), whereas a wrong False would restore exactly the doomed-dispatch
+    behaviour this exists to prevent. Nothing here suppresses anything on its
+    own -- a confirmed-bad reading is still required for that.
     """
+    ssh_info = backend_resolver.get_ssh_info(agent_id)
+    if ssh_info is not None:
+        return not is_loopback_host(ssh_info.host)
     if not isinstance(backend_resolver, MngrCliBackendResolver):
         return True
     display_info = backend_resolver.get_agent_display_info(agent_id)
@@ -370,13 +390,50 @@ def is_network_dependent_provider(
 
     Answers True for a provider it cannot identify, for the same reason and with
     the same safety as the per-workspace form: a wrong True costs one probe.
+
+    A backend that can run on this device is not enough to say that it does. A
+    docker provider pointed at a remote daemon reports the same backend name,
+    and discovery carries only the base provider config, so there is no daemon
+    URL here to read; its machines answer for it instead, one of them dialled
+    off this device making the whole provider network-dependent.
+
+    A provider discovery has reported no machine coordinates for keeps the
+    answer its backend name gave, which for an on-device backend is False. That
+    leaves the caller here short in one shape: the provider-error trigger asks
+    about a provider on a cold start over a dead network, where discovery has
+    listed nothing, so a remote-daemon docker provider still reads as on-device
+    and raises no notice. Answering True on no evidence is not free either --
+    this is also the fallback :func:`is_network_dependent_workspace` reaches for
+    a machine with no coordinate of its own, and a dead network must never be
+    allowed to withhold a ``local`` workspace's restart.
     """
     if not isinstance(backend_resolver, MngrCliBackendResolver):
         return True
     for provider in backend_resolver.list_providers():
         if provider.provider_name == provider_name:
-            return str(provider.config.backend) not in _ON_DEVICE_PROVIDER_BACKENDS
+            if str(provider.config.backend) not in _ON_DEVICE_PROVIDER_BACKENDS:
+                return True
+            return _is_any_machine_dialled_off_this_device(backend_resolver, provider_name)
     return True
+
+
+def _is_any_machine_dialled_off_this_device(
+    backend_resolver: MngrCliBackendResolver, provider_name: ProviderInstanceName
+) -> bool:
+    """Whether any machine discovery reports on ``provider_name`` is reached off this device.
+
+    False for a provider discovery has listed no machines for, which is a
+    provider that has said nothing rather than one that has said "on device";
+    the caller's docstring records what that costs.
+    """
+    for agent_id in backend_resolver.list_known_agent_ids():
+        display_info = backend_resolver.get_agent_display_info(agent_id)
+        if display_info is None or display_info.provider_name != str(provider_name):
+            continue
+        ssh_info = backend_resolver.get_ssh_info(agent_id)
+        if ssh_info is not None and not is_loopback_host(ssh_info.host):
+            return True
+    return False
 
 
 def _is_discovery_fresh(last_snapshot_at: datetime | None, poll_interval_seconds: float) -> bool:
@@ -610,6 +667,26 @@ def read_environment_block(
     return connectivity_detector.get_reading().environment_block
 
 
+def read_environment_condition(
+    connectivity_detector: ConnectivityDetector | None,
+    backend_resolver: BackendResolverInterface,
+    workspace_agent_id: AgentId,
+) -> EnvironmentCondition:
+    """:func:`read_environment_block` for a surface, which also needs to know when nothing was measured.
+
+    The same two halves, and the same cached reading. What differs is the
+    answer for a reading that has not been taken: a surface handed NONE for one
+    treats the device as cleared and blames the provider or the machine, which
+    after a wake is exactly wrong. UNKNOWN lets it decline instead. Still NONE
+    for a machine on this device, about which the reading says nothing either way.
+    """
+    if connectivity_detector is None:
+        return EnvironmentCondition.NONE
+    if not is_network_dependent_workspace(backend_resolver, workspace_agent_id):
+        return EnvironmentCondition.NONE
+    return connectivity_detector.get_reading().environment_condition
+
+
 def _build_restart_agent_address(agent_id: AgentId, workspace_display_info: AgentDisplayInfo | None) -> str:
     """Render ``agent_id`` as ``AGENT@HOST.PROVIDER`` when discovery can supply both components.
 
@@ -700,69 +777,6 @@ def _did_start_boot_a_host(stdout: str) -> bool | None:
         )
         return None
     return bool(parsed["was_host_started"])
-
-
-def _run_mngr(
-    concurrency_group: ConcurrencyGroup,
-    argv: list[str],
-    env: dict[str, str],
-    timeout_seconds: float = _MNGR_COMMAND_TIMEOUT_SECONDS,
-) -> str:
-    """Run an ``mngr`` subprocess to completion and return its stdout on a clean exit.
-
-    Raises ``MngrCommandError`` for every non-clean outcome (a timeout surfaces as
-    the ``MngrCommandTimeoutError`` subclass, a nonzero exit and a launch failure
-    as a bare ``MngrCommandError``), so callers catch a single domain error.
-    """
-    stdout, returncode, stderr = _run_mngr_capturing(concurrency_group, argv, env, timeout_seconds=timeout_seconds)
-    if returncode != 0:
-        # Only mngr's verdict rides the message (see ``mngr_failure_verdict``);
-        # the timeline it printed getting there rides the tail, exactly as the
-        # timeout path below does.
-        raise MngrCommandError(
-            f"exited {returncode}: {mngr_failure_verdict(stderr)}",
-            output_tail=format_output_tail(stdout, stderr),
-        )
-    return stdout
-
-
-def _run_mngr_capturing(
-    concurrency_group: ConcurrencyGroup,
-    argv: list[str],
-    env: dict[str, str],
-    timeout_seconds: float = _MNGR_COMMAND_TIMEOUT_SECONDS,
-) -> tuple[str, int, str]:
-    """Run an ``mngr`` subprocess, returning ``(stdout, returncode, stderr)`` without raising on nonzero exit.
-
-    A nonzero exit is reported through the returned ``returncode`` rather than
-    raised, so stdout is preserved for the caller to inspect. A failure to launch
-    the process raises ``MngrCommandError``; a timeout raises the more specific
-    ``MngrCommandTimeoutError``.
-    """
-    try:
-        finished = concurrency_group.run_process_to_completion(
-            argv,
-            timeout=timeout_seconds,
-            is_checked_after=False,
-            env=env,
-        )
-    except (OSError, ConcurrencyGroupError) as exc:
-        # The command never ran (a fork/exec failure, or a concurrency-group
-        # setup/strand/shutdown failure). Callers handle failure locally, so we
-        # wrap it as the single MngrCommandError they already catch.
-        raise MngrCommandError(str(exc)) from exc
-    if finished.is_timed_out:
-        # A killed subprocess never printed a verdict, so its captured output is
-        # the only record of which step it died in; carry it on the error
-        # (bounded, out of the message) instead of discarding it.
-        raise MngrCommandTimeoutError(
-            f"timed out after {int(timeout_seconds)}s",
-            output_tail=format_output_tail(finished.stdout, finished.stderr),
-        )
-    # A finished, non-timed-out process always carries a returncode; the Optional
-    # is for the not-yet-finished case, which this branch has ruled out.
-    returncode = finished.returncode if finished.returncode is not None else 1
-    return finished.stdout, returncode, finished.stderr
 
 
 class RestartReadinessOutcome(UpperCaseStrEnum):
@@ -1057,11 +1071,11 @@ class UnattendedRecoveryDispatcher(MutableModel):
         """
         try:
             block = detector.probe_now(max_reuse_age_seconds=_GATE_READING_REUSE_SECONDS).environment_block
-        # The group refusing the SSH round is the spawn failure one frame later,
-        # and gets the same answer for the same reason: it only refuses once the
-        # app is going down, so there is nothing left to dispatch onto -- and a
-        # dispatch that then loses its own spawn would report a RESTART_FAILED,
-        # at error level, on the way out.
+        # The group refusing one of the probe's rounds is the spawn failure one
+        # frame later, and gets the same answer for the same reason: it only
+        # refuses once the app is going down, so there is nothing left to
+        # dispatch onto -- and a dispatch that then loses its own spawn would
+        # report a RESTART_FAILED, at error level, on the way out.
         except (ConcurrencyGroupError, ConcurrencyExceptionGroup) as exc:
             logger.warning("Dropping the gated start of {}: the group can no longer probe: {}", agent_id, exc)
             return
@@ -1118,22 +1132,33 @@ class UnattendedRecoveryDispatcher(MutableModel):
         outage was the network the whole time, so most of them will have) needs
         nothing, and one that has moved on to RESTARTING or RESTART_FAILED is
         already being handled by whatever moved it.
+
+        Machines are claimed one at a time, in the order they sort, rather than
+        the set being emptied up front. Both halves of that matter, because this
+        drain gets one attempt: the detector fires on the bad -> good edge alone
+        and stops watching at it, so a machine dropped here waits behind a
+        waiting-for-network card on a working network with nothing left to come
+        back for it. Fencing each release covers what a release is expected to
+        raise; claiming one at a time covers what it is not, leaving everything
+        this call never reached still owed for the next drain to find.
         """
-        with self._owed_lock:
-            owed_agent_ids = sorted(self._owed_agent_ids)
-            self._owed_agent_ids.clear()
-        for aid_str in owed_agent_ids:
-            # Per machine, because the set was cleared before any of it ran and
-            # the detector has already stopped watching: one release raising
-            # would otherwise leave every machine after it stuck behind a
-            # waiting-for-network card, on a working network, with nothing left
-            # to come back for them. The two families are the ones a restart's
-            # registry and tracker calls raise -- the same pair the detector's
-            # own callback fence names.
+        while (aid_str := self._claim_next_owed_agent_id()) is not None:
+            # The two families are the ones a restart's registry and tracker
+            # calls raise -- the same pair the detector's own callback fence
+            # names.
             try:
                 self._release_owed_start(AgentId(aid_str))
             except (MindError, MngrError) as exc:
                 logger.opt(exception=exc).warning("The owed start of {} could not be released: {}", aid_str, exc)
+
+    def _claim_next_owed_agent_id(self) -> str | None:
+        """Take the lowest-sorting owed machine out of the set, or None once it is empty."""
+        with self._owed_lock:
+            if not self._owed_agent_ids:
+                return None
+            aid_str = min(self._owed_agent_ids)
+            self._owed_agent_ids.remove(aid_str)
+            return aid_str
 
     def _release_owed_start(self, agent_id: AgentId) -> None:
         """Start one owed machine, if it still needs and may take a start."""
@@ -1236,7 +1261,7 @@ def run_restart_sequence(
     else:
         registry.append_log(workspace_agent_id, "Stopping the system-services agent.")
         try:
-            _run_mngr(
+            run_mngr_to_completion(
                 concurrency_group,
                 _build_mngr_stop_argv(mngr_binary, services_agent_address),
                 env,
@@ -1274,7 +1299,7 @@ def run_restart_sequence(
 
     registry.append_log(workspace_agent_id, "Starting the system-services agent.")
     try:
-        start_stdout = _run_mngr(
+        start_stdout = run_mngr_to_completion(
             concurrency_group,
             _build_mngr_start_argv(mngr_binary, services_agent_address),
             env,

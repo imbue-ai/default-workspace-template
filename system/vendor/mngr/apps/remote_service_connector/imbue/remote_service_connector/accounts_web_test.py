@@ -1,8 +1,8 @@
 """Tests for the hosted accounts surface (browser auth, device handoff, OAuth, attribution)."""
 
-import http.client
+import re
 import secrets
-import urllib.error
+import tomllib
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import NoReturn
 from urllib.parse import parse_qs
 from urllib.parse import quote
+from urllib.parse import unquote
 from urllib.parse import urlencode
 from urllib.parse import urlsplit
 
@@ -30,6 +31,7 @@ from imbue.remote_service_connector.accounts_web import is_valid_loopback_redire
 from imbue.remote_service_connector.attribution import ATTRIBUTION_COOKIE_NAME
 from imbue.remote_service_connector.auth import UserAuth
 from imbue.remote_service_connector.auth import derive_user_id_prefix
+from imbue.remote_service_connector.errors import DownloadLinkError
 from imbue.remote_service_connector.testing import FakeProvider
 from imbue.remote_service_connector.testing import FakeSuperTokensBackend
 from imbue.remote_service_connector.testing import InMemoryDeviceAuthCodeStore
@@ -1209,49 +1211,23 @@ releaseDate: '2026-08-18T23:46:47.920Z'
 _STABLE_ARM64_DMG = "https://download.todesktop.com/x/Minds%200.4.1%20-%20Build%20b1-arm64.dmg"
 
 
-def _resolve(manifest: str | None) -> str | None:
-    def fetch() -> str:
-        if manifest is None:
-            raise urllib.error.URLError("unreachable")
-        return manifest
-
-    return accounts_web.resolve_stable_mac_arm64_url(fetch=fetch)
+def _parse_manifest(manifest: str) -> str:
+    return accounts_web._arm64_dmg_url_from(manifest)
 
 
-def _hold_stable_download(manifest: str | None) -> None:
+def _hold_stable_download(manifest: str) -> None:
     """Seed what the route reads, so it stays off the network."""
-    hold_stable_download_link(_resolve(manifest))
+    hold_stable_download_link(_parse_manifest(manifest))
 
 
 def test_the_download_link_is_the_dmg_stable_serves() -> None:
-    assert _resolve(_STABLE_MANIFEST) == _STABLE_ARM64_DMG
-
-
-def test_an_unreachable_manifest_leaves_the_fallback_in_place() -> None:
-    """Fails open like the attribution write beside it.
-
-    Returning None rather than raising is what lets the TTL cache hold the
-    failure, so an outage costs one read per window instead of one per request.
-    """
-    assert _resolve(None) is None
-
-
-def test_a_body_that_arrives_broken_fails_open_like_an_unreachable_one() -> None:
-    """Neither of these is an OSError."""
-
-    def truncated() -> str:
-        raise http.client.IncompleteRead(b"version: 0.4.1\n")
-
-    def undecodable() -> str:
-        return b"\xff\xfe".decode()
-
-    assert accounts_web.resolve_stable_mac_arm64_url(fetch=truncated) is None
-    assert accounts_web.resolve_stable_mac_arm64_url(fetch=undecodable) is None
+    assert _parse_manifest(_STABLE_MANIFEST) == _STABLE_ARM64_DMG
 
 
 def test_a_manifest_naming_no_arm64_dmg_at_all_is_refused() -> None:
     """The link is only correct if the manifest names exactly one arm64 .dmg."""
-    assert _resolve("version: 0.4.1\nfiles: []\n") is None
+    with pytest.raises(DownloadLinkError):
+        _parse_manifest("version: 0.4.1\nfiles: []\n")
 
 
 def test_the_route_reads_a_cached_link_rather_than_the_feed() -> None:
@@ -1277,12 +1253,12 @@ def test_download_serves_what_stable_serves_not_todesktops_own_latest(
 
 def test_download_falls_back_when_stable_cannot_be_read(monkeypatch: pytest.MonkeyPatch) -> None:
     client, _st, _codes = _make_accounts_web_test_client(monkeypatch)
-    _hold_stable_download(None)
+    hold_stable_download_link(None)
 
     resp = client.get("/download?platform=mac", follow_redirects=False)
 
     assert resp.status_code == 302
-    assert resp.headers["location"] == "https://dl.todesktop.com/26032588hqdzk/mac/dmg/arm64"
+    assert resp.headers["location"] == accounts_web._DEFAULT_TARGET_BY_PLATFORM[accounts_web._MAC_ARM64_PLATFORM]
 
 
 def test_the_same_url_named_twice_is_still_one_answer() -> None:
@@ -1295,7 +1271,7 @@ def test_the_same_url_named_twice_is_still_one_answer() -> None:
         "  - url: https://download.todesktop.com/x/Only-arm64.dmg\n"
         "    size: 1\n"
     )
-    assert _resolve(repeated) == "https://download.todesktop.com/x/Only-arm64.dmg"
+    assert _parse_manifest(repeated) == "https://download.todesktop.com/x/Only-arm64.dmg"
 
 
 def test_two_different_dmgs_are_ambiguous_and_refused() -> None:
@@ -1307,19 +1283,101 @@ def test_two_different_dmgs_are_ambiguous_and_refused() -> None:
         "  - url: https://download.todesktop.com/x/Two-arm64.dmg\n"
         "    size: 2\n"
     )
-    assert _resolve(two) is None
+    with pytest.raises(DownloadLinkError):
+        _parse_manifest(two)
 
 
 def test_a_dmg_hosted_anywhere_but_todesktop_is_not_a_candidate() -> None:
     """The feed says where to send people, so a compromised one must not be able to."""
     elsewhere = "version: 0.4.1\nfiles:\n  - url: https://evil.example/Minds-arm64.dmg\n    size: 1\n"
-    assert _resolve(elsewhere) is None
+    with pytest.raises(DownloadLinkError):
+        _parse_manifest(elsewhere)
 
 
 def test_a_bare_filename_is_not_a_candidate() -> None:
     """electron-builder writes these; relative would resolve against the connector's own host."""
     relative = "version: 0.4.1\nfiles:\n  - url: Minds-0.4.1-arm64.dmg\n    size: 1\n"
-    assert _resolve(relative) is None
+    with pytest.raises(DownloadLinkError):
+        _parse_manifest(relative)
+
+
+def test_the_download_fallback_names_the_build_stable_declares() -> None:
+    """Promoting stable bumps this by hand, so nothing else would notice it drifting.
+
+    Ahead of stable is the direction to avoid: ``allowDowngrade`` is false, so an
+    install that takes the fallback never comes back down.
+    """
+    repo_root = Path(__file__).parents[4]
+    declared = tomllib.loads((repo_root / "apps/minds/release-channels.toml").read_text())["channels"]["stable"]
+    fallback = unquote(accounts_web._DEFAULT_TARGET_BY_PLATFORM[accounts_web._MAC_ARM64_PLATFORM])
+
+    assert f"Minds {declared['version']} - Build {declared['build_id']}" in fallback, (
+        "the connector's download fallback no longer names the build stable serves -- see the "
+        "Release channels section of apps/minds/docs/deploy/release.md"
+    )
+
+
+def test_the_download_fallback_names_the_todesktop_app_builds_are_served_from() -> None:
+    """The app id is the segment of the hand-typed url the tests above both skip.
+
+    The prefix check stops at the host and the drift test reads only the name, so
+    a typo here would otherwise ship and surface as a 404 during the outage the
+    fallback exists to cover.
+    """
+    repo_root = Path(__file__).parents[4]
+    todesktop_config = (repo_root / "apps/minds/todesktop.js").read_text()
+    declared_app_id = re.search(r"^\s*id: '([^']+)',$", todesktop_config, re.MULTILINE)
+    assert declared_app_id is not None, "apps/minds/todesktop.js no longer declares `id` as a quoted literal"
+
+    fallback = accounts_web._DEFAULT_TARGET_BY_PLATFORM[accounts_web._MAC_ARM64_PLATFORM]
+
+    assert fallback.startswith(f"{accounts_web._TODESKTOP_DOWNLOAD_PREFIX}{declared_app_id.group(1)}/"), (
+        "the connector's download fallback names a different ToDesktop app than minds is built as"
+    )
+
+
+def test_the_download_fallback_would_pass_the_rules_the_feed_is_held_to() -> None:
+    """The route serves this url beside the ones it resolves, so it has to look like one.
+
+    The drift test above reads only the version and build id out of the name, so
+    a mistyped host or suffix passes it.
+    """
+    fallback = accounts_web._DEFAULT_TARGET_BY_PLATFORM[accounts_web._MAC_ARM64_PLATFORM]
+
+    assert fallback.startswith(accounts_web._TODESKTOP_DOWNLOAD_PREFIX)
+    assert fallback.endswith(accounts_web._ARM64_DMG_SUFFIX)
+
+
+def test_a_manifest_nested_deep_enough_to_exhaust_the_stack_is_refused() -> None:
+    """A RecursionError is not a YAMLError, so it would otherwise reach the route as a 500.
+
+    Four kilobytes of brackets, so a size cap would not catch this one.
+    """
+    nested = "a: " + "[" * 2000 + "]" * 2000 + "\n"
+
+    with pytest.raises(DownloadLinkError):
+        _parse_manifest(nested)
+
+
+@pytest.mark.parametrize(
+    "unconvertible",
+    [
+        pytest.param("releaseDate: 2026-13-45T23:46:47.920Z\n", id="month out of range"),
+        pytest.param("releaseDate: 2026-02-30\n", id="day out of range for month"),
+        pytest.param("size: " + "9" * 5000 + "\n", id="int past the digit cap"),
+        pytest.param("releaseDate: !!timestamp nonsense\n", id="unparsable timestamp"),
+        pytest.param("size: !!int notanumber\n", id="unparsable int"),
+        pytest.param("draft: !!bool notabool\n", id="unparsable bool"),
+    ],
+)
+def test_a_scalar_that_resolves_but_will_not_convert_is_refused(unconvertible: str) -> None:
+    """The constructors raise ValueError/AttributeError/KeyError, none of them a parse error.
+
+    Each would otherwise reach the route as a 500 rather than the fallback -- and
+    cache nothing, so every download would re-fetch and re-raise.
+    """
+    with pytest.raises(DownloadLinkError):
+        _parse_manifest(_STABLE_MANIFEST + unconvertible)
 
 
 def test_an_arm64_dmg_under_another_key_is_not_an_artifact() -> None:
@@ -1331,7 +1389,7 @@ def test_an_arm64_dmg_under_another_key_is_not_an_artifact() -> None:
     """
     decoy = _STABLE_MANIFEST + "path: https://download.todesktop.com/x/Something-Else-arm64.dmg\n"
 
-    assert _resolve(decoy) == "https://download.todesktop.com/x/Minds%200.4.1%20-%20Build%20b1-arm64.dmg"
+    assert _parse_manifest(decoy) == "https://download.todesktop.com/x/Minds%200.4.1%20-%20Build%20b1-arm64.dmg"
 
 
 def test_browser_signin_refused_for_suspended_account(monkeypatch: pytest.MonkeyPatch) -> None:

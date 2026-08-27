@@ -24,6 +24,10 @@ class ReportingProbeError(ConnectorError, RuntimeError):
     """
 
 
+class DownloadLinkError(ConnectorError, RuntimeError):
+    """Raised when the download link cannot be resolved from a release channel."""
+
+
 class CloudflareApiError(ConnectorError, RuntimeError):
     """Raised when the Cloudflare API returns an error response."""
 

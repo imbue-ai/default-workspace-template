@@ -70,13 +70,23 @@ class StepAction(FrozenModel):
 class StepCookie(FrozenModel):
     """The pre-arm cookie a flow's first step installs before its opening navigation.
 
+    Scoped by domain rather than by the one origin the flow opens, because that is how the forward
+    proxy issues the session it gates on (see `forward_instance.session_cookie_domain`).
+
+    The fields carry every attribute the proxy sets except `Partitioned`, which is deliberately
+    absent: it keys the jar by the embedding top-level site, and a flow drives the app top-level
+    rather than inside a frame, so sending it would only risk the cookie being dropped.
+
     Field names are this project's; the step script translates them into the shape Playwright's
     `add_cookies` wants, so the third-party spelling stays at the one call site that needs it.
     """
 
     name: str = Field(description="The cookie the forward proxy gates its session on")
     value: str = Field(description="The token minted for this trial")
-    url: str = Field(description="The origin the cookie is scoped to")
+    # Refused empty here rather than in the box: Playwright rejects a cookie with neither a URL nor
+    # a domain, and there that would be recorded against the flow instead of as the harness bug it is.
+    domain: str = Field(min_length=1, description="The domain the cookie covers, leading dot included")
+    path: str = Field(default="/", description="The path prefix the cookie is sent for")
     is_http_only: bool = Field(default=True, description="Whether script on the page may read it")
     is_secure: bool = Field(default=True, description="Whether it rides only HTTPS")
     same_site: str = Field(default="None", description="Playwright's SameSite value: Strict, Lax or None")

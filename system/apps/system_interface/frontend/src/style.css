@@ -137,8 +137,10 @@ body {
 
 /* ── Queued messages (the shoulder-tap group) ── */
 /* Messages the harness has parked while the agent is mid-turn, rendered below the
-   last committed turn as a distinct group under a subtle header row. This is a
-   full snapshot from the backend -- there is no optimistic/"sending" state. */
+   last committed turn as a distinct group under a subtle header row. This is a full
+   snapshot from the backend. An entry the backend flags "is_sending" is NOT parked --
+   it is one it is about to type, or is typing -- and renders as the "Sending..."
+   bubble; a snapshot that is entirely is_sending gets no group chrome at all. */
 .queued-group {
   display: flex;
   flex-direction: column;
@@ -254,18 +256,6 @@ body {
 
 .queued-message .message-user-bubble {
   opacity: 0.85;
-}
-
-/* Frozen queued group: while a shoulder-tap restart is in flight, the captured
-   messages are held greyed (ignoring the backend snapshot briefly emptying) so
-   they do not blip out and back, until a backend arrival releases the hold. No
-   countdown is shown. */
-.queued-group--frozen {
-  opacity: 0.55;
-}
-
-.queued-header--frozen {
-  color: var(--color-text-secondary);
 }
 
 /* The (i) info affordance next to 'Queued messages'. */
@@ -2255,6 +2245,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 }
 
 .custom-url-dialog-cancel,
+.custom-url-dialog-danger,
 .custom-url-dialog-open {
   padding: 6px 16px;
   font-family: var(--font-family-base);
@@ -2271,8 +2262,26 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   color: var(--color-text-primary);
 }
 
-.custom-url-dialog-cancel:hover {
+.custom-url-dialog-cancel:hover:not(:disabled) {
   background: var(--color-bg-hover);
+}
+
+.custom-url-dialog-cancel:disabled,
+.custom-url-dialog-danger:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Force, on the send-failure notice: it restarts the agent, ending any turn in progress and
+   losing that work, so it must not look like the easy button next to Cancel and Retry. */
+.custom-url-dialog-danger {
+  background: white;
+  color: #dc2626;
+  border-color: #fecaca;
+}
+
+.custom-url-dialog-danger:hover:not(:disabled) {
+  background: #fef2f2;
 }
 
 .custom-url-dialog-open {
@@ -3525,6 +3534,13 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   color: var(--color-text-secondary);
   line-height: 1.5;
   margin: 8px 0 4px;
+  /* The send-failure notice puts a server's own words in here, and those are not always the one
+     tidy sentence the other users of this class pass. A proxy or an unhandled route answers with
+     a whole HTML page, and an unbroken token (a URL, a traceback line) would otherwise widen the
+     dialog past the viewport or push its OK button off the bottom. Harmless for fixed text. */
+  overflow-wrap: anywhere;
+  max-height: 40vh;
+  overflow-y: auto;
 }
 
 /* Step checklist shown while the background agent restart runs */
