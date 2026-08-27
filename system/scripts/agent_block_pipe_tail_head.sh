@@ -7,6 +7,18 @@ set -euo pipefail
 # Read JSON input from stdin
 input=$(cat)
 
+# Only a SHELL call carries a command to police. codex renames its code-mode `exec_command` to
+# `Bash`, but it ALSO delivers `apply_patch` through this same hook with the PATCH BODY in
+# `.tool_input.command` -- so without this gate, editing any file whose contents contain a
+# `| head` (a shell script, a README, the docs in this repo) is hard-blocked and the whole
+# code-mode program aborts. Measured against codex-cli 0.147.0. claude/agy are unaffected:
+# claude's edit tools carry `file_path`/`new_string` and never `command`, and agy's shim
+# synthesises `{"tool_name":"Bash",...}`.
+tool_name=$(echo "$input" | jq -r '.tool_name // empty')
+if [[ -n "$tool_name" && "$tool_name" != "Bash" ]]; then
+    exit 0
+fi
+
 # Extract the command from tool_input.command using jq
 command=$(echo "$input" | jq -r '.tool_input.command // empty')
 

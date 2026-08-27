@@ -55,8 +55,9 @@ from typing import Any
 
 from loguru import logger as _loguru_logger
 
-from imbue.system_interface.harnesses.codex.tool_labels import is_tk_lifecycle
+from imbue.system_interface.harnesses.codex.tool_labels import is_single_delegated_call
 from imbue.system_interface.harnesses.codex.tool_labels import keeps_full_tool_input
+from imbue.system_interface.harnesses.codex.tool_labels import shell_command
 from imbue.system_interface.harnesses.codex.tool_labels import tool_labels
 from imbue.system_interface.harnesses.events import MAX_TOOL_INPUT_PREVIEW_LENGTH
 from imbue.system_interface.harnesses.events import SPECIAL_EVENT_TYPE
@@ -64,6 +65,7 @@ from imbue.system_interface.harnesses.events import SpecialEventKind
 from imbue.system_interface.harnesses.message_display import stamp_user_message_display
 from imbue.system_interface.harnesses.tool_output import classify_tool_call_display
 from imbue.system_interface.harnesses.tool_output import find_permission_request
+from imbue.system_interface.harnesses.tool_output import is_pure_tk_lifecycle_command
 from imbue.system_interface.harnesses.tool_output import truncate_tool_output
 
 logger = _loguru_logger
@@ -145,7 +147,18 @@ def _labelled_tool_call(call_id: str, tool_name: str, raw_input: str) -> dict[st
     }
     # The render decision ships with the call (a hidden tk marker, or the permission
     # card), recognised from the UNTRUNCATED input backend-side.
-    display = classify_tool_call_display(is_pure_tk=is_tk_lifecycle(tool_name, raw_input), raw_input=raw_input)
+    #
+    # Both verdicts claim the call is ONLY the thing they name, and both are derived from the
+    # FIRST delegated call in the program -- so on a batched program they are claims we cannot
+    # check. Getting it wrong is not cosmetic: `tk start s1` followed by real work classified
+    # HIDDEN and the real work vanished from the chat entirely, which is the exact failure the
+    # standalone policies exist to prevent. A batched program renders as ordinary work instead.
+    command = shell_command(tool_name, raw_input)
+    is_pure_tk = command is not None and is_pure_tk_lifecycle_command(command)
+    if is_single_delegated_call(raw_input):
+        display = classify_tool_call_display(is_pure_tk=is_pure_tk, raw_input=raw_input)
+    else:
+        display = None
     if display is not None:
         tool_call["display"] = display.value
     return tool_call

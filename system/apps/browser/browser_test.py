@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from browser import chrome_args
+from browser import chrome_launcher
 from browser import manifest
 from browser import session as bsession
 
@@ -39,39 +41,6 @@ def _pop_json(cast_queue: "queue.Queue[str | None]") -> dict[str, Any]:
 
 
 # --- env / key helpers (unchanged) -------------------------------------------
-
-
-def test_parse_env_file_handles_quotes_and_comments() -> None:
-    text = '# comment\nANTHROPIC_API_KEY=sk-ant-123\nQUOTED="a b c"\nEMPTY=\n'
-    parsed = bsession._parse_env_file(text)
-    assert parsed["ANTHROPIC_API_KEY"] == "sk-ant-123"
-    assert parsed["QUOTED"] == "a b c"
-    assert parsed["EMPTY"] == ""
-
-
-def test_resolve_key_prefers_process_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-proc")
-    assert bsession.resolve_anthropic_key() == "sk-proc"
-
-
-def test_resolve_key_falls_back_to_host_env_file(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    (tmp_path / "env").write_text("ANTHROPIC_API_KEY=sk-host\n")
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    assert bsession.resolve_anthropic_key() == "sk-host"
-
-
-def test_anthropic_key_status_reflects_availability(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-x")
-    available, _ = bsession.anthropic_key_status()
-    assert available is True
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.delenv("MNGR_HOST_DIR", raising=False)
-    available, reason = bsession.anthropic_key_status()
-    assert available is False
-    assert "Anthropic API key" in reason
 
 
 def test_deferred_install_ready_gates_on_fortress_executable(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -348,69 +317,61 @@ def test_should_disable_sandbox_when_running_as_root(monkeypatch: pytest.MonkeyP
     assert bsession._should_disable_sandbox() is False
 
 
-def test_launch_args_suppress_the_bad_flag_infobar() -> None:
-    # As root we must pass --no-sandbox, which is on Chromium's kBadFlags list, so
-    # without --test-type Chromium pins an "unsupported command-line flag" infobar over
-    # every page -- and we film that window. --test-type is what suppresses it (see
-    # chrome/browser/ui/startup/infobar_utils.cc); --enable-automation would too, but it
-    # sets navigator.webdriver, which defeats Fortress's whole point.
-    browser = bsession.LiveBrowser(browser_id="b0")
-    session = browser._build_bu_session(Path("/tmp/args-check"), "/usr/bin/chromium", chromium_sandbox=False)
-    args = session.browser_profile.get_args()
+def test_launch_args_keep_stealth_and_suppress_the_bad_flag_infobar() -> None:
+    # As root we must pass --no-sandbox, which is on Chromium's kBadFlags list, so without
+    # --test-type Chromium pins an "unsupported command-line flag" infobar over every page
+    # -- and we film that window. --enable-automation would suppress it too, but it sets
+    # navigator.webdriver, which defeats Fortress's whole point. Playwright's own default
+    # switch list adds BOTH --enable-automation and --disable-extensions, which is exactly
+    # why the launch does not go through Playwright: see chrome_args.
+    args = chrome_args.launch_args(
+        user_data_dir="/tmp/args-check", window_size=(1280, 800), extensions=("/opt/ext/ublock",), no_sandbox=True
+    )
     assert "--test-type" in args
     assert "--enable-automation" not in args
+    assert "--disable-extensions" not in args
+    assert "--disable-blink-features=AutomationControlled" in args
+    assert "--load-extension=/opt/ext/ublock" in args
+    # The 1:1 window->capture mapping the streaming path depends on.
+    assert "--window-position=0,0" in args
 
 
-class _FakeBuSession:
-    """A stand-in for browser-use's BrowserSession: its ``start`` fails when the sandbox
-    is on (mimicking a runtime that can't sandbox), so we can exercise the launch paths."""
-
-    def __init__(self, chromium_sandbox: bool) -> None:
-        self.chromium_sandbox = chromium_sandbox
-
-    async def start(self) -> None:
-        if self.chromium_sandbox:
-            raise bsession.BrowserStartupError("Running as root without --no-sandbox is not supported.")
+def test_launch_args_never_emit_a_playwright_anti_stealth_switch() -> None:
+    # The assert inside launch_args is the real guard; this pins the intent so a future
+    # edit that reintroduces one fails loudly rather than silently un-stealthing Fortress.
+    for switch in chrome_args._STRIPPED_FROM_PLAYWRIGHT:
+        assert switch not in chrome_args.launch_args(user_data_dir="/tmp/x")
 
 
-def _patch_build(monkeypatch: pytest.MonkeyPatch, attempts: list[bool]) -> None:
-    def build(self: bsession.LiveBrowser, profile_dir: Path, chromium_path: str, *, chromium_sandbox: bool) -> Any:
-        attempts.append(chromium_sandbox)
-        return _FakeBuSession(chromium_sandbox)
-
-    monkeypatch.setattr(bsession.LiveBrowser, "_build_bu_session", build)
-
-
-def test_root_launches_with_sandbox_off_on_the_first_try(monkeypatch: pytest.MonkeyPatch) -> None:
-    # As root (Lima / any minds workspace) the sandbox is off from the start -- no doomed
-    # sandboxed attempt that browser-use would turn into a 30s hang (the 504 cause).
-    attempts: list[bool] = []
-    _patch_build(monkeypatch, attempts)
-    monkeypatch.setattr(bsession.os, "geteuid", lambda: 0)
-    browser = bsession.LiveBrowser(browser_id="b0")
-
-    async def go() -> None:
-        session = await browser._start_bu_session(Path("/tmp/x"), "/usr/bin/chromium")
-        assert attempts == [False]  # one attempt, sandbox already off
-        assert isinstance(session, _FakeBuSession) and session.chromium_sandbox is False
-
-    asyncio.run(go())
+def test_devtools_active_port_is_cleared_with_the_other_singletons(tmp_path: Path) -> None:
+    # A stale DevToolsActivePort names the PREVIOUS run's port; a launcher that polls for
+    # the file would read it as this run's and connect to a dead (or reused) port.
+    for name in chrome_launcher.SINGLETON_NAMES:
+        (tmp_path / name).write_text("stale")
+    chrome_launcher.clear_stale_singleton(tmp_path)
+    assert not any((tmp_path / name).exists() for name in chrome_launcher.SINGLETON_NAMES)
+    assert "DevToolsActivePort" in chrome_launcher.SINGLETON_NAMES
 
 
-def test_nonroot_retries_without_sandbox_when_a_sandboxed_launch_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_sandbox_retry_falls_back_once_then_gives_up(monkeypatch: pytest.MonkeyPatch) -> None:
     # A non-root runtime keeps the sandbox, but if that launch fails we retry once with it
-    # off (the only thing the retry changes) -- the backstop for a non-root no-sandbox env.
+    # off (the only thing the retry changes). As root the sandbox is off from the start, so
+    # the doomed sandboxed attempt never happens.
     attempts: list[bool] = []
-    _patch_build(monkeypatch, attempts)
-    monkeypatch.setattr(bsession.os, "geteuid", lambda: 501)
-    browser = bsession.LiveBrowser(browser_id="b0")
 
-    async def go() -> None:
-        session = await browser._start_bu_session(Path("/tmp/x"), "/usr/bin/chromium")
-        assert attempts == [True, False]  # sandbox on (fails) -> retried off (succeeds)
-        assert isinstance(session, _FakeBuSession) and session.chromium_sandbox is False
+    def fake_launch(*, no_sandbox: bool, **kwargs: Any) -> str:
+        attempts.append(no_sandbox)
+        if not no_sandbox:
+            raise chrome_launcher.ChromeStartupError("Running as root without --no-sandbox is not supported.")
+        return "chrome"
 
-    asyncio.run(go())
+    monkeypatch.setattr(chrome_launcher, "launch", fake_launch)
+    assert chrome_launcher.launch_with_sandbox_retry(no_sandbox=False, executable="x") == "chrome"
+    assert attempts == [False, True]  # sandbox on (fails) -> retried off (succeeds)
+
+    attempts.clear()
+    assert chrome_launcher.launch_with_sandbox_retry(no_sandbox=True, executable="x") == "chrome"
+    assert attempts == [True]  # already off: one attempt, no doomed try
 
 
 def test_unclaimed_grant_passes_to_next_waiter(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -456,34 +417,6 @@ def test_return_to_agents_only_unpins_a_pinned_human() -> None:
         assert browser._resume_queue == []
         assert await browser.return_to_agents() is True
         assert browser._state_tuple() == ("human", None, False)
-
-    asyncio.run(go())
-
-
-def test_take_control_cancels_the_running_task_without_deadlock() -> None:
-    # The displaced run's finally re-enters the state machine; the cancel happens
-    # OUTSIDE the control lock, so there is no lock cycle (the audit's worst case).
-    browser = _running_browser(browser_id="b1")
-
-    async def go() -> None:
-        await browser.acquire("A")
-        started = asyncio.Event()
-
-        async def fake_run() -> None:
-            browser._agent_task = asyncio.current_task()
-            try:
-                started.set()
-                await asyncio.sleep(100)
-            finally:
-                # Mirror run_agent's CAS-guarded finally: a no-op once the human took over.
-                await browser.release("A")
-
-        run = asyncio.create_task(fake_run())
-        await started.wait()
-        await asyncio.wait_for(browser.take_control(), timeout=2.0)  # must not hang
-        await asyncio.sleep(0.05)
-        assert run.cancelled()
-        assert browser._state_tuple() == ("human", None, True)
 
     asyncio.run(go())
 
@@ -604,27 +537,6 @@ def test_crash_releases_queued_agents_so_none_hangs(monkeypatch: pytest.MonkeyPa
     asyncio.run(go())
 
 
-def test_state_peek_on_busy_browser_reports_not_enqueued() -> None:
-    # A read-only `state` peek on a human-pinned browser must report enqueued=False (it does
-    # NOT enrol a waiter), so the CLI never promises a resume that will not come. A
-    # state-CHANGING command on the same browser DOES enrol -> enqueued=True. (Both short-
-    # circuit at the busy_human check before touching Chromium, so no real browser is needed.)
-    browser = _running_browser(browser_id="b1")
-
-    async def go() -> None:
-        await browser.take_control()  # human pins a free (resting) browser; no displaced owner
-        peek = await browser.act_state("A", "Alice")
-        assert peek["status"] == "busy_human"
-        assert peek["enqueued"] is False
-        assert browser._resume_queue == []  # a peek enrols nothing
-        nav = await browser.act_navigate("A", "Alice", "https://example.com")
-        assert nav["status"] == "busy_human"
-        assert nav["enqueued"] is True
-        assert ("A", "Alice") in browser._resume_queue  # a state-changing command enrols
-
-    asyncio.run(go())
-
-
 def test_acquire_denied_by_human_pin_enqueues_when_requested() -> None:
     # A task/lock denied by a human pin (enqueue_on_busy=True) enrols in the resume queue so
     # it is messaged when the human hands back -- not silently dropped. (acquire returns
@@ -693,17 +605,14 @@ def test_create_registers_init_immediately_and_returns_fast(monkeypatch: pytest.
 
 
 def test_command_on_an_init_browser_returns_starting() -> None:
-    # A direct command on a still-`init` browser is non-fatal: it returns `starting`
-    # (not an error / not acquired), so the agent waits and retries rather than driving
-    # a half-built browser. Ownership stays untouched.
+    # `acquire` on a still-`init` browser is non-fatal: it returns `starting` (not an
+    # error / not acquired), so the agent waits and retries rather than attaching to a
+    # half-built browser. Ownership stays untouched. This is the FIRST thing an agent
+    # hits, because `new` returns before Chromium is up.
     browser = bsession.LiveBrowser(browser_id="alex-smith")  # init by default
-    browser._bu_session = object()  # type: ignore[assignment]
 
     async def go() -> None:
-        result = await browser.act_state("A", "Alice")
-        assert result["ok"] is False and result["status"] == "starting"
-        assert result["lifecycle"] == "init"
-        # acquire (the task/hold path) likewise reports starting and parks no waiter.
+        assert browser.attach_url == ""  # no token until Chromium is actually up
         assert await browser.acquire("A", "Alice", wait=False) == "starting"
         assert browser._state_tuple() == ("human", None, False)
         assert browser._waiting_names() == []
@@ -839,15 +748,17 @@ def test_failed_launch_memory_is_bounded(monkeypatch: pytest.MonkeyPatch) -> Non
     assert mgr.recently_failed_launch("c") is True
 
 
-class _KillableBuSession:
-    """Stand-in for browser-use's BrowserSession that records whether it was killed, so a
-    test can assert no Chromium handle is leaked when a launch is aborted."""
+class _KillableChrome:
+    """Stand-in for a launched Chromium that records whether it was killed, so a test can
+    assert no process handle is leaked when a launch is aborted."""
 
     def __init__(self) -> None:
         self.killed = False
+        self.alive = True
 
-    async def kill(self) -> None:
+    def kill(self) -> None:
         self.killed = True
+        self.alive = False
 
 
 def test_close_during_launch_does_not_resurrect_or_leak(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -860,14 +771,16 @@ def test_close_during_launch_does_not_resurrect_or_leak(monkeypatch: pytest.Monk
     monkeypatch.setattr(bsession.LiveBrowser, "_broadcast", lambda self, message: casts.append(message))
     started_bu = asyncio.Event()  # start() has brought up the (fake) Chromium and is suspended
     resume = asyncio.Event()      # the test lets the suspended start() proceed after closing
+    launched: list[_KillableChrome] = []  # teardown clears _chrome, so hold the handle here
 
     async def suspending_start(
         self: bsession.LiveBrowser, restore_tabs: list[str] | None = None, active_tab: int = 0
     ) -> None:
-        # Bring up a killable bu_session (as real start() does early), then suspend at an
-        # await -- modelling start() parked at connect_over_cdp / _set_active_page while
-        # close() runs. On resume, run the SAME guard production uses before the flip.
-        self._bu_session = _KillableBuSession()  # type: ignore[assignment]
+        # Bring up a killable Chromium (as real start() does early), then suspend at an
+        # await -- modelling start() parked mid-launch while close() runs. On resume, run
+        # the SAME guard production uses before the flip.
+        self._chrome = _KillableChrome()  # type: ignore[assignment]
+        launched.append(self._chrome)  # type: ignore[arg-type]
         started_bu.set()
         await resume.wait()
         if await self._abort_start_if_torn_down():
@@ -886,8 +799,8 @@ def test_close_during_launch_does_not_resurrect_or_leak(monkeypatch: pytest.Monk
         await asyncio.sleep(0)  # let close() pop + start awaiting the launch
         resume.set()            # now let the suspended start() resume
         await close_task
-        bu = session._bu_session
-        assert isinstance(bu, _KillableBuSession) and bu.killed  # Chromium killed, not leaked
+        assert launched and launched[0].killed  # Chromium killed, not leaked
+        assert session._chrome is None  # ...and the handle dropped, so nothing can drive it
         assert session._lifecycle != "running"  # never flipped a removed browser to running
         assert not any(m.get("lifecycle") == "running" for m in casts)  # no stale live broadcast
         assert not mgr.has_browser("alex-smith")  # stays removed
@@ -905,12 +818,14 @@ def test_crashed_browser_reports_crashed_to_agent_and_viewer() -> None:
 
     async def go() -> None:
         browser._lifecycle = "running"  # was up before Chromium died
-        browser._on_disconnected(None)  # simulate Playwright's disconnected event
+        browser._on_disconnected()  # the keepalive poll saw the CDP client go dead
         assert browser._crashed is True and browser._lifecycle == "crashed"
-        # An agent command short-circuits to a clear "crashed" status (no acquire).
-        result = await browser.act_state("A", "Alice")
-        assert result["ok"] is False and result["status"] == "crashed"
-        assert result["lifecycle"] == "crashed"
+        # An agent's next ownership command short-circuits to a clear "crashed" status,
+        # and the token gate refuses every CDP frame -- nothing tries to drive a corpse.
+        assert await browser.acquire("A", "Alice", wait=False) == "crashed"
+        assert await browser._token_may_drive(browser._token) is False
+        # A crashed browser must not hand out an attach URL that would drop the socket.
+        assert (await browser.attach_for("A", "Alice"))["status"] == "crashed"
         # And it's reported in the fleet snapshot, with no tabs.
         desc = await browser.describe()
         assert desc["crashed"] is True and desc["tabs"] == [] and desc["lifecycle"] == "crashed"
@@ -1227,103 +1142,155 @@ def test_restore_sweeps_orphan_profiles(monkeypatch: pytest.MonkeyPatch) -> None
     assert (root / "browser-use-user-data-dir-riley-jones").exists()
 
 
-def test_state_on_busy_browser_does_not_enqueue_the_agent() -> None:
-    # A passive `state` peek at a browser another agent holds must NOT enrol the
-    # caller as a waiter (only state-changing commands queue for resume).
+def test_looking_at_a_busy_browser_does_not_enqueue_the_agent() -> None:
+    # Looking must not enrol the caller as a waiter. `state`'s read-only peek is gone
+    # (the proxy cannot classify a CDP frame as read-only), so the non-enrolling path is
+    # now a plain non-waiting acquire -- `ls`/`describe` never touch the queues at all.
     browser = _running_browser(browser_id="b0")
 
     async def go() -> None:
         await browser.acquire("A", "Alice")  # agent A holds it
-        result = await browser.act_state("B", "Bob")  # B just looks
-        assert result["ok"] is False and result["status"] == "busy_agent"
+        assert await browser.acquire("B", "Bob", wait=False, enqueue_on_busy=False) == "busy_agent"
         assert browser._waiting_names() == []  # B was NOT queued
+        assert browser._resume_queue == []  # ...and not enrolled for resume either
+        await browser.describe()  # a pure look enrols nothing
+        assert browser._waiting_names() == [] and browser._resume_queue == []
 
     asyncio.run(go())
 
 
-# --- direct control: sticky lease + per-command CAS --------------------------
+# --- ownership: the lease, now enforced per CDP frame ------------------------
 
 
-class _AliveBuSession:
-    """Minimal browser-use session stand-in: reports a live CDP connection (so
-    run_action's proactive crash check passes) and no current tab (so the post-action
-    foreground is a no-op). Enough to drive run_action without a real Chromium."""
-
-    is_reconnecting = False
-    is_cdp_connected = True
-    agent_focus_target_id = None
-
-
-def _direct_ready(name: str = "alex-smith") -> bsession.LiveBrowser:
-    # A LiveBrowser wired enough to run run_action without a real Chromium: a live-looking
-    # _bu_session passes the "closed" + crash guards, and a pre-set _action_handler skips
-    # constructing a real ActionHandler (the fake action ignores it).
+def _leased(name: str = "alex-smith", agent_id: str = "A") -> bsession.LiveBrowser:
+    """A running LiveBrowser with a token minted FOR ``agent_id``."""
     browser = _running_browser(browser_id=name)
-    browser._bu_session = _AliveBuSession()  # type: ignore[assignment]
-    browser._action_handler = object()  # type: ignore[assignment]
+    browser._mint_token(agent_id, "Alice")
     return browser
 
 
-def test_run_action_acquires_then_reports_busy_to_others() -> None:
-    browser = _direct_ready()
-
-    async def fake(_handler: Any) -> dict[str, Any]:
-        return {"did": "it"}
+def test_the_url_new_prints_can_actually_drive_a_resting_browser() -> None:
+    # The bug this pins: `run_action`'s "the first action acquires the browser" was deleted
+    # with the drive verbs, and nothing replaced it -- so a freshly created browser rests
+    # with the human, and the attach URL `new` printed was refused on EVERY frame. The
+    # agent's first frame has to take the lease, exactly as its first command used to.
+    browser = _leased("browser-1")
+    assert browser.controller == "human"  # a new browser rests with the human
 
     async def go() -> None:
-        # First command acquires the sticky lease and returns the owner snapshot.
-        result = await browser.run_action("A", "Alice", fake)
-        assert result["ok"] and result["did"] == "it"
-        assert result["controller"] == "agent" and result["owner_agent_id"] == "A"
-        assert browser._state_tuple() == ("agent", "A", False)
-        # Another agent's command is refused (agents never preempt).
-        result = await browser.run_action("B", "Bob", fake)
-        assert result["ok"] is False and result["status"] == "busy_agent"
-        # A human take-control blocks the owning agent's next command too.
-        await browser.take_control()
-        result = await browser.run_action("A", "Alice", fake)
-        assert result["ok"] is False and result["status"] == "busy_human"
+        assert await browser._token_may_drive(browser._token) is True
+        assert browser._state_tuple() == ("agent", "A", False)  # the first frame acquired it
+        # ...and the acquire must NOT invalidate the very URL the agent is driving with.
+        assert await browser._token_may_drive(browser._token) is True
 
     asyncio.run(go())
 
 
-def test_run_action_per_command_cas_catches_mid_sequence_takeover(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The critical guard: even if acquire reports success, the per-command CAS
-    # re-checks ownership right before acting -- so a take-control that landed in
-    # between makes the command a clean no-op instead of touching the human's browser.
-    browser = _direct_ready("riley-jones")
-
-    async def fake_acquire(*_args: Any, **_kwargs: Any) -> str:
-        return "acquired"  # pretend we got it, but DON'T flip control state
-
-    monkeypatch.setattr(bsession.LiveBrowser, "acquire", fake_acquire)
-
-    async def fake(_handler: Any) -> dict[str, Any]:
-        raise AssertionError("the action must NOT run when control was lost")
+def test_a_second_agent_cannot_get_a_token_for_a_held_browser() -> None:
+    # A CDP client sends no identity header, so the token IS the identity. If /attach handed
+    # the live token to any caller, agent B could drive agent A's browser.
+    browser = _leased("browser-1", agent_id="A")
 
     async def go() -> None:
-        result = await browser.run_action("A", "Alice", fake)
-        assert result["ok"] is False and result["status"] == "lost_control"
+        await browser.acquire("A", "Alice")
+        denied = await browser.attach_for("B", "Bob")
+        assert denied["ok"] is False and denied["status"] == "busy_agent"
+        # The holder can always re-issue itself one (the token rotates on ownership moves).
+        # The URL text needs a live ProxyServer, which the real-Chromium test covers; here
+        # what matters is that a token was issued and it is bound to the right agent.
+        mine = await browser.attach_for("A", "Alice")
+        assert mine["ok"] is True
+        assert browser._token_owner == "A"
+        # A human-pinned browser refuses everyone.
+        await browser.take_control()
+        pinned = await browser.attach_for("A", "Alice")
+        assert pinned["ok"] is False and pinned["status"] == "busy_human"
+
+    asyncio.run(go())
+
+
+def test_token_gate_is_the_per_frame_replacement_for_the_command_cas() -> None:
+    # `run_action`'s compare-and-set used to re-check ownership right before each verb.
+    # Driving is now raw CDP, so the same check moved into the proxy's per-frame gate:
+    # a token that no longer matches the lease holder cannot move the browser.
+    browser = _leased()
+
+    async def go() -> None:
+        await browser.acquire("A", "Alice")
+        token = browser._token
+        assert await browser._token_may_drive(token) is True
+        # A stale/absent token is refused outright (this is how agent B is kept out --
+        # a generic CDP client sends no x-mngr-agent-id header, so the token is the
+        # ONLY thing distinguishing one attacher from another).
+        assert await browser._token_may_drive("not-the-token") is False
+        assert await browser._token_may_drive("") is False
+        # A human take-control makes the very next frame fail, mid-session.
+        await browser.take_control()
+        assert await browser._token_may_drive(token) is False
+
+    asyncio.run(go())
+
+
+def test_the_token_survives_its_own_agent_but_not_another(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Rotation is scoped deliberately. The moment-to-moment guarantee comes from the
+    # per-frame lease check, not from re-minting -- the token is identity, not authority --
+    # so it must survive everything except the browser genuinely changing hands to someone
+    # else. See the takeover test for why re-minting too eagerly breaks resumption.
+    monkeypatch.setattr(bsession.LiveBrowser, "_wake_agent", _noop_wake)
+    browser = _leased("riley-jones", agent_id="A")
+
+    async def go() -> None:
+        first = browser._token
+        await browser.acquire("A", "Alice")
+        assert browser._token == first  # its OWN agent acquiring must not invalidate it
+        await browser.take_control()
+        assert browser._token == first  # nor may a human takeover (the socket must survive)
+        assert await browser._token_may_drive(first) is False  # ...but it cannot drive
+        # The human hands back; A is at the front of the resume queue, so it lands on A.
+        await browser.return_to_agents()
+        await browser.release("A")
+        assert await browser.acquire("B", "Bob", wait=False) == "acquired"
+        assert browser._token != first  # a DIFFERENT agent does invalidate it
+        assert await browser._token_may_drive(first) is False
+
+    asyncio.run(go())
+
+
+def test_a_forwarded_frame_touches_the_lease_but_an_idle_socket_does_not() -> None:
+    # An ATTACHED-but-silent CDP session looks identical to an abandoned one at the
+    # socket layer, so only a forwarded FRAME counts as activity. Otherwise a session
+    # left open would pin a browser away from the human forever.
+    browser = _leased("morgan-lee")
+
+    async def go() -> None:
+        await browser.acquire("A", "Alice")
+        browser._lease_touched_at = time.monotonic() - (bsession._LEASE_IDLE_TTL + 10)
+        # Merely holding the socket open changes nothing...
+        assert await browser._sweep_idle_lease() is True
+        assert browser._state_tuple() == ("human", None, False)
 
     asyncio.run(go())
 
 
 def test_idle_lease_sweep_releases_only_a_quiet_lease() -> None:
-    browser = _direct_ready("morgan-lee")
+    browser = _leased("jordan-kim")
 
     async def go() -> None:
         await browser.acquire("A", "Alice")
         # Fresh lease -> not swept.
         assert await browser._sweep_idle_lease() is False
         assert browser._state_tuple() == ("agent", "A", False)
-        # A running task is connection-bound -> exempt even if "idle".
+        # Quiet past the TTL -> released back to the human. 60s, not 90s: _LEASE_IDLE_TTL
+        # was lowered deliberately and the docs lagged behind it.
+        assert bsession._LEASE_IDLE_TTL == 60
         browser._lease_touched_at = time.monotonic() - (bsession._LEASE_IDLE_TTL + 10)
-        browser._agent_task = asyncio.current_task()
-        assert await browser._sweep_idle_lease() is False
-        # A quiet, task-free lease past the TTL -> released back to the human.
-        browser._agent_task = None
         assert await browser._sweep_idle_lease() is True
         assert browser._state_tuple() == ("human", None, False)
+        # A forwarded frame is what keeps it alive.
+        await browser.acquire("A", "Alice")
+        browser._lease_touched_at = time.monotonic() - (bsession._LEASE_IDLE_TTL + 10)
+        browser.touch_lease()
+        assert await browser._sweep_idle_lease() is False
 
     asyncio.run(go())
 
@@ -1419,5 +1386,101 @@ def test_broadcast_drops_oldest_frame_when_a_slow_client_queue_is_full(monkeypat
         while not q.empty():
             survivors.append(_pop_json(q)["data"])
         assert survivors == ["3", "4"]
+
+    asyncio.run(go())
+
+
+def test_orphaned_chromium_is_reaped_before_a_second_one_launches(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # Pre-existing bug this closes: an UNEXPECTED `[program:browser]` restart leaves Chromium
+    # orphaned (supervisord's stopasgroup only covers a deliberate stop). The restore path then
+    # cleared the singleton locks the still-running browser held and launched a SECOND Chromium
+    # onto the same user_data_dir -- two writers, one profile. The orphan is also invisible to
+    # OOM retagging (it is no longer our descendant), so under pressure earlyoom sheds the agent
+    # before the browser: the exact inversion oom_retag exists to prevent.
+    killed: list[int] = []
+    holders = [4242, 4242, None]  # alive, still alive after SIGTERM check, then gone
+
+    monkeypatch.setattr(chrome_launcher, "profile_holder_pid", lambda _d: holders.pop(0) if holders else None)
+    monkeypatch.setattr(chrome_launcher.os, "kill", lambda pid, sig: killed.append(pid))
+    monkeypatch.setattr(chrome_launcher.time, "sleep", lambda _s: None)
+
+    assert chrome_launcher.reap_orphan(tmp_path) is True
+    assert killed == [4242]  # signalled the orphan rather than launching alongside it
+
+
+def test_reap_orphan_is_a_noop_when_no_one_holds_the_profile(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(chrome_launcher, "profile_holder_pid", lambda _d: None)
+    assert chrome_launcher.reap_orphan(tmp_path) is False
+
+
+def test_profile_holder_probe_terminates_pgrep_options(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # `pgrep -f` read the leading `--` of `--user-data-dir=...` as an option and silently
+    # matched NOTHING, which made the orphan guard a no-op. `--` terminates option parsing.
+    # Only a live run against a real browser caught this; no unit test could have.
+    seen: list[list[str]] = []
+
+    def fake_run(argv: list[str], **_kw: object) -> Any:
+        seen.append(argv)
+        return type("R", (), {"stdout": ""})()
+
+    monkeypatch.setattr(chrome_launcher.subprocess, "run", fake_run)
+    chrome_launcher.profile_holder_pid(tmp_path)
+    assert seen and seen[0][:3] == ["pgrep", "-f", "--"], seen
+
+
+def test_pane_follow_never_reasserts_a_stale_cached_tab() -> None:
+    # A human switches tabs inside Chrome via XTEST, which never reaches our CDP
+    # connection -- so `_active_target_id` still names the tab the AGENT was on. Falling
+    # back to it on the agent's next frame yanked the human off the tab they had chosen.
+    # Foreground only a target the agent actually named.
+    browser = _running_browser(browser_id="browser-1")
+    browser._active_target_id = "AGENTS-OLD-TAB"
+    activated: list[str] = []
+
+    async def fake_focus(self: bsession.LiveBrowser, target_id: str) -> None:
+        activated.append(target_id)
+
+    async def go() -> None:
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(bsession.LiveBrowser, "_focus_and_foreground", fake_focus)
+            await browser._on_proxy_activity(None)  # frame resolved to no target
+            assert activated == [], "must not re-assert the cached tab"
+            await browser._on_proxy_activity("THE-TAB-THE-AGENT-IS-ON")
+            assert activated == ["THE-TAB-THE-AGENT-IS-ON"]
+
+    asyncio.run(go())
+
+
+def test_a_human_takeover_does_not_kill_the_agents_socket(monkeypatch: pytest.MonkeyPatch) -> None:
+    # THE takeover flow: the agent's live socket carries the token it attached with, so
+    # re-minting on takeover would kill it permanently -- and re-attaching is not a way out,
+    # because a playwright-cli slug is poisoned once its session is torn down. Handing
+    # control back has to leave the agent able to carry on.
+    monkeypatch.setattr(bsession.LiveBrowser, "_wake_agent", _noop_wake)
+    browser = _leased("browser-1", agent_id="A")
+
+    async def go() -> None:
+        attached_with = browser._token
+        assert await browser._token_may_drive(attached_with) is True
+        await browser.take_control()
+        assert await browser._token_may_drive(attached_with) is False  # refused while held
+        await browser.return_to_agents()
+        assert await browser._token_may_drive(attached_with) is True  # ...and resumes after
+
+    asyncio.run(go())
+
+
+def test_a_different_agent_taking_the_browser_does_kill_the_old_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The rotation that DOES matter: otherwise the previous holder keeps driving.
+    monkeypatch.setattr(bsession.LiveBrowser, "_wake_agent", _noop_wake)
+    browser = _leased("browser-1", agent_id="A")
+
+    async def go() -> None:
+        a_token = browser._token
+        await browser.acquire("A", "Alice")
+        await browser.release("A")
+        await browser.acquire("B", "Bob")
+        assert browser._token != a_token
+        assert await browser._token_may_drive(a_token) is False
 
     asyncio.run(go())

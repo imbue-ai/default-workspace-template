@@ -8,7 +8,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from imbue.system_interface.harnesses.codex.session_parser import _labelled_tool_call
 from imbue.system_interface.harnesses.codex.session_parser import parse_lines
+from imbue.system_interface.harnesses.codex.tool_labels import CODE_MODE_TOOL_NAME
 
 
 def _user_line(text: str, timestamp: str = "2026-07-19T10:00:00.123Z") -> dict:
@@ -314,3 +316,46 @@ def test_turn_context_effective_model_stamps_assistant_messages() -> None:
     assert parse_lines(fallback, 3, {}, turn_state) == []
     later = parse_lines(_assistant_line("m3", "z"), 4, {}, turn_state)
     assert later[0]["model"] == "gpt-5.2"
+
+
+# --- code mode batches several delegated calls into ONE tool call -------------------------
+# Measured on codex-cli 0.147.0: one `custom_tool_call` holding three `tools.exec_command`
+# calls produced three PreToolUse events with three unrelated `tool_use_id`s and no field
+# naming the outer call. So "this call is ONLY an X" is unknowable for a batched program, and
+# both structural verdicts are derived from the FIRST call in it.
+
+
+def _display(js: str) -> str | None:
+    return _labelled_tool_call("c1", CODE_MODE_TOOL_NAME, js).get("display")
+
+
+def _exec(cmd: str) -> str:
+    return f'const r = await tools.exec_command({{cmd:"{cmd}",workdir:"/w"}});'
+
+
+def test_a_lone_tk_lifecycle_call_is_still_hidden() -> None:
+    assert _display(_exec("tk start s1")) == "hidden"
+
+
+def test_a_batched_program_containing_tk_is_not_hidden() -> None:
+    """THE bug this guards. `tk start` first and real work second classified the whole call as a
+    structural marker, so the real work vanished from the chat entirely -- the exact failure the
+    standalone policies exist to prevent."""
+    assert _display(_exec("tk start s1") + "\n" + _exec("sed -i s/a/b/ prod.py")) is None
+
+
+def test_a_lone_permission_request_still_renders_its_card() -> None:
+    post = "curl -XPOST http://latchkey-self.invalid/permission-requests -d @/tmp/r.json"
+    assert _display(_exec(post)) == "permission_request"
+
+
+def test_two_permission_requests_in_one_program_render_no_card() -> None:
+    """The card is built from the first request object echoed in the result, so a second one is
+    never shown -- a buttonless or wrong card. Rendering as ordinary work is honest."""
+    post = "curl -XPOST http://latchkey-self.invalid/permission-requests -d @/tmp/{}.json"
+    assert _display(_exec(post.format("a")) + "\n" + _exec(post.format("b"))) is None
+
+
+def test_ordinary_work_is_unaffected() -> None:
+    assert _display(_exec("pytest -q")) is None
+    assert _display(_exec("pytest -q") + "\n" + _exec("ruff check .")) is None
