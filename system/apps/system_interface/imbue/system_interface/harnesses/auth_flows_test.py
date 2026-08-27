@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from imbue.system_interface.accounts import AccountError
 from imbue.system_interface.accounts import read_index
 from imbue.system_interface.harnesses.auth_flows import AuthFlowService
 from imbue.system_interface.harnesses.auth_flows import FlowError
@@ -179,7 +180,8 @@ def test_re_authenticating_reuses_the_folder_so_bound_chats_recover(
 
 
 def test_re_authenticating_an_unknown_account_is_refused(service: AuthFlowService) -> None:
-    with pytest.raises(FlowError):
+    """The index answers this now, not `is_dir()` -- so the error names the account."""
+    with pytest.raises(AccountError):
         service.start("opencode-go", "api_key", account_id="nope")
 
 
@@ -284,3 +286,66 @@ def test_a_probe_that_cannot_run_does_not_throw_the_key_away(tmp_path: Path) -> 
 
     assert status.state is FlowState.OK
     assert len(read_index(tmp_path).accounts) == 1
+
+
+def test_an_abandoned_re_auth_leaves_the_live_account_alone(
+    service: AuthFlowService, tmp_path: Path
+) -> None:
+    """Aborting a re-auth used to delete the account it was re-authenticating.
+
+    Every failure path discarded the folder, and a re-auth adopts a COMMITTED one -- so
+    pressing Back, closing the modal or letting the deadline pass took the credential with
+    it and orphaned every chat bound to that id.
+    """
+    started = service.start("opencode-go", "api_key")
+    service.submit_key(started.flow_id, "live-key", "opencode-go")
+    (account,) = read_index(tmp_path).accounts
+    path = tmp_path / ".minds" / "accounts" / account.id / "auth.json"
+
+    again = service.start("opencode-go", "api_key", account_id=account.id)
+    service.abort(again.flow_id)
+
+    assert path.exists(), "aborting a re-auth deleted the account it was re-authenticating"
+    assert json.loads(path.read_text())["opencode-go"]["key"] == "live-key"
+    assert read_index(tmp_path).accounts == (account,)
+
+
+def test_a_rejected_re_auth_key_puts_the_working_one_back(tmp_path: Path) -> None:
+    """The probe needs the file in place to answer, so the write comes first -- but the
+    folder is a live account, and a rejected key left there breaks every bound agent
+    silently, at its next turn, with the row still saying the account is fine."""
+    verdicts = [SignedIn.YES, SignedIn.NO]
+    service = AuthFlowService.create(
+        home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: verdicts.pop(0)
+    )
+    started = service.start("opencode-go", "api_key")
+    service.submit_key(started.flow_id, "good-key", "opencode-go")
+    (account,) = read_index(tmp_path).accounts
+    path = tmp_path / ".minds" / "accounts" / account.id / "auth.json"
+
+    again = service.start("opencode-go", "api_key", account_id=account.id)
+    status = service.submit_key(again.flow_id, "bad-key", "opencode-go")
+
+    assert status.state is FlowState.FAILED
+    assert json.loads(path.read_text())["opencode-go"]["key"] == "good-key"
+    assert read_index(tmp_path).accounts == (account,)
+
+
+def test_a_rejected_first_key_leaves_no_folder_behind(tmp_path: Path) -> None:
+    """The other half of the same rule: a folder this flow minted IS ours to remove."""
+    service = AuthFlowService.create(
+        home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.NO
+    )
+    started = service.start("opencode-go", "api_key")
+
+    assert service.submit_key(started.flow_id, "bad", "opencode-go").state is FlowState.FAILED
+    assert list((tmp_path / ".minds" / "accounts").glob("*/")) == []
+
+
+def test_an_account_id_that_is_a_path_is_refused(service: AuthFlowService) -> None:
+    """`Path` joins swallow an absolute segment whole and ".." walks out of the root, and
+    every failure path removes the resolved directory -- so an id off the wire has to be
+    resolved through the index, not the filesystem."""
+    for hostile in ("../..", "/home/user/workspace", "../../.claude"):
+        with pytest.raises((FlowError, AccountError)):
+            service.start("opencode-go", "api_key", account_id=hostile)

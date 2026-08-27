@@ -119,6 +119,10 @@ def start_flow() -> Response:
         started = get_state().auth_flows.start(lane_id, method_id, account_id)
     except LaneNotFoundError as e:
         return _error_response(str(e), status_code=404)
+    # A re-auth names an account, and `start` resolves it through the index rather than the
+    # filesystem -- so an unknown or folder-less id arrives here rather than as a 500.
+    except accounts.AccountError as e:
+        return _error_response(str(e), status_code=404)
     except FlowError as e:
         return _error_response(str(e))
     return _json_response(started.model_dump())
