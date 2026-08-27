@@ -203,3 +203,22 @@ The composer still refuses `/login` and `/logout`, for a better reason than befo
 one would run the agent's own auth flow inside its terminal, where we cannot see the result.
 The notice now offers the provider chooser, which signs in to a fresh account and leaves the
 agent's own credential alone.
+
+# Adopt a pasted credential as an account instead of overwriting the shared login
+
+`/api/claude-auth/submit-credentials` -- the endpoint the Electron chrome POSTs after the
+user visits the Imbue keys page -- now mints an account of its own. It used to overwrite
+the workspace's shared `settings.json` and restart every claude agent so they would see it;
+nothing running is disturbed now, and the account's existence is the signed-in-with-Imbue
+flag rather than a separate thing to record.
+
+The endpoint stays where it is because it is a cross-repo contract, as does
+`/api/claude-auth/status`, which mngr's deployment test uses as a readiness probe. The six
+routes that only ever served the deleted modal are gone.
+
+The claude key field takes an env-file paste as well as a bare key, so a proxied setup --
+which only means anything with `ANTHROPIC_BASE_URL` alongside its key -- can be expressed.
+Both shapes go through the same strict parse that rejects unmanaged keys and mixed modes.
+
+Abandoned sign-in folders are swept at boot: a minted folder with no index row is
+unreachable by definition, so nothing else would ever look at it.
