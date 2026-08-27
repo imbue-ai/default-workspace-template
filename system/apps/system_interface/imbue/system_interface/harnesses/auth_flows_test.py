@@ -484,3 +484,67 @@ def test_re_keying_does_not_overwrite_a_browser_sign_in(tmp_path: Path) -> None:
     assert adopted.id != signed_in.id
     settings = json.loads((tmp_path / ".minds" / "accounts" / signed_in.id / "settings.json").read_text())
     assert settings["env"]["ANTHROPIC_API_KEY"].endswith("C" * 40)
+
+
+def test_a_re_auth_is_judged_on_the_new_sign_in_not_the_old_credential(tmp_path: Path) -> None:
+    """The one thing re-auth exists for, and it could not fail.
+
+    A re-auth keeps the folder, and three of the four promote probes are presence checks --
+    `claude auth status --json` reports loggedIn for a bogus key, and so do codex and pi. So
+    a user whose account died, who hit re-auth and then declined in the browser, was told
+    "signed in again" on the strength of the credential that was already there.
+    """
+    saw: list[bool] = []
+
+    def probe(_harness: object, path: Path) -> SignedIn:
+        # What the CLI would see: is there a credential in this folder right now?
+        saw.append((path / "auth.json").exists())
+        return SignedIn.YES if saw[-1] else SignedIn.NO
+
+    service = AuthFlowService.create(home=tmp_path, work_dir=tmp_path / "work", probe=probe)
+    started = service.start("opencode-go", "api_key")
+    service.submit_key(started.flow_id, "live-key", "opencode-go")
+    (account,) = read_index(tmp_path).accounts
+    path = tmp_path / ".minds" / "accounts" / account.id / "auth.json"
+
+    process = FakePexpectProcess([(0, "Visit https://example.com/auth")], drain_chunks=["Visit https://example.com/auth\r\n"])
+    driving = AuthFlowService.create(
+        home=tmp_path, work_dir=tmp_path / "work", spawner=lambda *_a, **_k: process, probe=probe
+    )
+    driving.start("google", "oauth", account_id=account.id)
+
+    assert not path.exists(), "the old credential is still there for the probe to answer with"
+
+
+def test_an_abandoned_re_auth_puts_the_old_credential_back(tmp_path: Path) -> None:
+    """Taking it away is only safe if every exit restores it: the credential the account had
+    is more use than none, and the user asked to REPLACE it, not to lose it."""
+    service = AuthFlowService.create(
+        home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.YES
+    )
+    started = service.start("opencode-go", "api_key")
+    service.submit_key(started.flow_id, "live-key", "opencode-go")
+    (account,) = read_index(tmp_path).accounts
+    path = tmp_path / ".minds" / "accounts" / account.id / "auth.json"
+    before = path.read_text()
+
+    process = FakePexpectProcess([(0, "Visit https://example.com/auth")], drain_chunks=["Visit https://example.com/auth\r\n"])
+    driving = AuthFlowService.create(
+        home=tmp_path, work_dir=tmp_path / "work", spawner=lambda *_a, **_k: process, probe=lambda *_a: SignedIn.YES
+    )
+    again = driving.start("google", "oauth", account_id=account.id)
+    driving.abort(again.flow_id)
+
+    assert path.read_text() == before
+
+
+def test_a_first_sign_in_clears_nothing(tmp_path: Path) -> None:
+    """There is nothing to take away, and nothing to put back if it fails."""
+    process = FakePexpectProcess([(0, "Visit https://example.com/auth")], drain_chunks=["Visit https://example.com/auth\r\n"])
+    service = AuthFlowService.create(
+        home=tmp_path, work_dir=tmp_path / "work", spawner=lambda *_a, **_k: process, probe=lambda *_a: SignedIn.NO
+    )
+    started = service.start("google", "oauth")
+    service.abort(started.flow_id)
+
+    assert read_index(tmp_path).accounts == ()
