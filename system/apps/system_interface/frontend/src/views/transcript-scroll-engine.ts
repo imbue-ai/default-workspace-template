@@ -536,7 +536,8 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     }
   }
 
-  function smoothWriteScrollTop(element: HTMLElement, targetPx: number, reason: string): void {
+  /** Start (or retarget) a glide toward targetPx; glides always run against scrollEl. */
+  function smoothWriteScrollTop(targetPx: number, reason: string): void {
     smoothTargetPx = targetPx;
     smoothReason = reason;
     if (smoothRafId === null) {
@@ -1087,7 +1088,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
           fillInFlight || spacerTopPx > 0 || spacerBottomPx > 0 || (geometry !== null && geometry.unmeasuredCount > 0);
         if (Math.abs(pinDeltaPx) > 0.5) {
           if (!isChurning && Math.abs(pinDeltaPx) <= element.clientHeight * 1.5) {
-            smoothWriteScrollTop(element, targetPx, "follow-pin");
+            smoothWriteScrollTop(targetPx, "follow-pin");
           } else {
             cancelSmoothScroll();
             writeScrollTop(element, targetPx, "follow-pin");
@@ -1394,7 +1395,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
         // of px; written directly, every move is a visible teleport. Glide
         // between drag steps; a genuine far jump (track click) still snaps.
         if (Math.abs(targetTopPx - scrollEl.scrollTop) <= scrollEl.clientHeight * 4) {
-          smoothWriteScrollTop(scrollEl, targetTopPx, "scrollbar-physical");
+          smoothWriteScrollTop(targetTopPx, "scrollbar-physical");
         } else {
           cancelSmoothScroll();
           writeScrollTop(scrollEl, targetTopPx, "scrollbar-physical");
