@@ -26,3 +26,29 @@ Three details worth knowing, because the next harness will meet them:
 
 No behaviour change and no user-visible change: same flows, same regexes, same timeouts,
 same expect-list ordering.
+
+# Add the account store and the lane table
+
+`accounts.py` owns the account store: one folder per signed-in provider account, with a
+random name that carries no meaning, and one index file that is the sole source of truth for
+which lane it belongs to and what it is called. The index write is the commit point of a
+sign-in, so an interrupted flow leaves a folder with no row (swept at boot) rather than a row
+pointing at a half-authenticated folder.
+
+`harnesses/lanes.py` is the table of (AI provider + harness) pairings a user can sign in to,
+and how each one signs in. Five lanes -- Anthropic, OpenAI, Google, Opencode Go, and
+bring-your-own-key -- over four harnesses, since both Opencode Go and raw keys run on pi.
+
+Every value in that table was measured against the real CLIs rather than read off
+documentation, which was wrong about several. The three shapes that fell out:
+
+- **URL out, code back** (Anthropic, Google): scrape the sign-in URL, the user approves in a
+  browser and pastes a code.
+- **Code out, nothing back** (OpenAI): the URL is fixed, the CLI prints a one-time code the
+  user types into the browser, and the CLI polls and exits on its own -- so process exit is
+  the success signal, the inverse of every other lane.
+- **Paste** (Opencode Go, API key): a file write. No terminal at all.
+
+Success is never scraped off the screen. agy and codex print no success line, so the
+harness's own signed-in probe is what decides. Failure IS a pattern, so a rejected code
+fails in seconds instead of waiting out a timeout.
