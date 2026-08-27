@@ -316,9 +316,18 @@ function chatTile(harness: ChatHarness, label: string, first: boolean = false): 
  *  the value that reaches ``mngr create --type``, and a tile naming something
  *  mngr does not call itself is rejected before the create ever runs. */
 export function openNewTiles(): readonly LaunchTile[] {
+  // No opencode tile, deliberately: the harness is registered (so an opencode agent
+  // created from a terminal is identified as itself rather than mistaken for claude,
+  // and its mngr plugin stays on the shared launch contract) but it has no transcript
+  // watcher and is not planned to get one, so a tile would promise a chat that always
+  // renders blank.
   const tiles: LaunchTile[] = [chatTile("claude", "Chat")];
   if (areOtherHarnessesEnabled()) {
-    tiles.push(chatTile("codex", "Codex chat"), chatTile("pi-coding", "Pi chat"));
+    tiles.push(
+      chatTile("codex", "Codex chat"),
+      chatTile("pi-coding", "Pi chat"),
+      chatTile("antigravity", "Agy chat"),
+    );
   }
   // Introductory chats: the same create with the `first` template stacked on
   // top (fast launch where the harness supports it, /welcome, the first=true
