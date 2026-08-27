@@ -95,7 +95,7 @@ yes = true
 
 # Agent type defaults -- apply to all claude agents created from this repo
 [agent_types.claude]
-auto_dismiss_dialogs = true
+auto_dismiss_dialogs_at_startup = true
 auto_allow_permissions = true
 auto_disable_questions = true
 cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode,TodoWrite,TaskCreate,TaskList,TaskUpdate"""
