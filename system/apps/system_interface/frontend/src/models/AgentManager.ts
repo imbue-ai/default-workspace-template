@@ -853,7 +853,7 @@ export async function allocateTerminalName(): Promise<string> {
  *  ``pi-coding``; ``pi`` is only an mngr-side alias the endpoint's enum does not
  *  accept. Declared here, beside the request that carries it, so no view has to
  *  restate the set. */
-export type ChatHarness = "claude" | "codex" | "pi-coding";
+export type ChatHarness = "claude" | "codex" | "pi-coding" | "opencode" | "antigravity";
 
 /** A freshly-created chat agent's identity: its id and its name pair (the
  *  canonical true name plus the human-readable display name the server minted

@@ -14,6 +14,11 @@
  * own in-flight request.
  * (Interrupt-to-composer lives on the composer's Stop button -- see MessageInput.)
  * There is no harness branch anywhere in here.
+ *
+ * A published entry is not necessarily a PARKED one: the backend flags an entry it is
+ * about to type, or is typing, as ``is_sending``, and such an entry renders as the
+ * "Sending…" bubble rather than a queued chip. A snapshot that is entirely ``is_sending``
+ * therefore gets no group chrome at all -- see ``renderQueuedMessages``.
  */
 
 import m from "mithril";
@@ -98,6 +103,16 @@ export function renderQueuedMessages(agentId: string): m.Vnode[] {
   const queued = getQueuedMessagesForAgent(agentId);
   if (queued.length === 0) {
     return [];
+  }
+  // Nothing is actually parked: every entry the backend published is one it is about to
+  // type or is typing (agy's idle send, codex's shoulder-tap resend). Painting the
+  // "Queued messages" header and the tap button over those tells the user a message is
+  // WAITING when the backend is reporting the opposite -- and the header is the only
+  // reason an idle send ever looked queued, since the bubbles themselves already render
+  // as "Sending…". Bare bubbles, no group wrapper: identical markup to the optimistic
+  // ones they replace, so the handoff is invisible rather than a reflow.
+  if (queued.every((message) => message.is_sending === true)) {
+    return queued.map((message) => renderQueuedBubble(message));
   }
   // The button's enabled state = the backend's availability flag, AND-ed with the local
   // double-fire guard. The frontend computes nothing about availability itself: if the

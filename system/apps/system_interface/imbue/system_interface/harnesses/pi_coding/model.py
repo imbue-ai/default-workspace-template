@@ -18,7 +18,7 @@ The live selection is read by the shared reader
 ``model_state.json`` the pi lifecycle extension writes at the agent state-dir root,
 refreshed at session start (before the first turn), on every ``/model`` or thinking-level
 change, and on resume. There is no launch default -- pi is many-provider/many-auth -- so
-the bar shows logo-only until the extension records a model. This resolver only owns the
+the bar renders no slots until the extension records a model. This resolver only owns the
 WRITE (switch) side and the auth-gated picker offer set (:meth:`list_offered_models`).
 """
 

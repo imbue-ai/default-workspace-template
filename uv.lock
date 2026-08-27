@@ -1020,8 +1020,10 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "imbue-mngr" },
+    { name = "imbue-mngr-antigravity" },
     { name = "imbue-mngr-claude" },
     { name = "imbue-mngr-codex" },
+    { name = "imbue-mngr-opencode" },
     { name = "imbue-mngr-pi-coding" },
     { name = "import-linter" },
     { name = "inline-snapshot" },
@@ -1054,8 +1056,10 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "imbue-mngr", editable = "system/vendor/mngr/libs/mngr" },
+    { name = "imbue-mngr-antigravity", editable = "system/vendor/mngr/libs/mngr_antigravity" },
     { name = "imbue-mngr-claude", editable = "system/vendor/mngr/libs/mngr_claude" },
     { name = "imbue-mngr-codex", editable = "system/vendor/mngr/libs/mngr_codex" },
+    { name = "imbue-mngr-opencode", editable = "system/vendor/mngr/libs/mngr_opencode" },
     { name = "imbue-mngr-pi-coding", editable = "system/vendor/mngr/libs/mngr_pi_coding" },
     { name = "import-linter", specifier = ">=2.0" },
     { name = "inline-snapshot", specifier = ">=0.31" },
@@ -1915,6 +1919,17 @@ requires-dist = [
 ]
 
 [[package]]
+name = "imbue-mngr-antigravity"
+version = "0.1.8"
+source = { editable = "system/vendor/mngr/libs/mngr_antigravity" }
+dependencies = [
+    { name = "imbue-mngr" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "imbue-mngr", editable = "system/vendor/mngr/libs/mngr" }]
+
+[[package]]
 name = "imbue-mngr-claude"
 version = "0.2.17"
 source = { editable = "system/vendor/mngr/libs/mngr_claude" }
@@ -1948,6 +1963,17 @@ requires-dist = [
     { name = "imbue-mngr", editable = "system/vendor/mngr/libs/mngr" },
     { name = "websockets", specifier = ">=13" },
 ]
+
+[[package]]
+name = "imbue-mngr-opencode"
+version = "0.2.17"
+source = { editable = "system/vendor/mngr/libs/mngr_opencode" }
+dependencies = [
+    { name = "imbue-mngr" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "imbue-mngr", editable = "system/vendor/mngr/libs/mngr" }]
 
 [[package]]
 name = "imbue-mngr-pi-coding"
@@ -6801,8 +6827,10 @@ dependencies = [
     { name = "httpx" },
     { name = "imbue-common" },
     { name = "imbue-mngr" },
+    { name = "imbue-mngr-antigravity" },
     { name = "imbue-mngr-claude" },
     { name = "imbue-mngr-codex" },
+    { name = "imbue-mngr-opencode" },
     { name = "imbue-mngr-pi-coding" },
     { name = "oom-priority" },
     { name = "pexpect" },
@@ -6838,8 +6866,10 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "imbue-common", editable = "system/vendor/mngr/libs/imbue_common" },
     { name = "imbue-mngr", editable = "system/vendor/mngr/libs/mngr" },
+    { name = "imbue-mngr-antigravity", editable = "system/vendor/mngr/libs/mngr_antigravity" },
     { name = "imbue-mngr-claude", editable = "system/vendor/mngr/libs/mngr_claude" },
     { name = "imbue-mngr-codex", editable = "system/vendor/mngr/libs/mngr_codex" },
+    { name = "imbue-mngr-opencode", editable = "system/vendor/mngr/libs/mngr_opencode" },
     { name = "imbue-mngr-pi-coding", editable = "system/vendor/mngr/libs/mngr_pi_coding" },
     { name = "oom-priority", editable = "system/services/oom_priority" },
     { name = "pexpect", specifier = ">=4.9" },
