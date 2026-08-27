@@ -21,12 +21,15 @@ Two properties the shapes forced:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
 import threading
 import uuid
 from collections.abc import Callable
+from collections.abc import Iterator
+from collections.abc import Sequence
 from enum import StrEnum
 from collections.abc import Mapping
 from pathlib import Path
@@ -149,6 +152,11 @@ class _Session:
     lane: Lane
     method: PtyMethod | PasteMethod
     account_id: str
+    # Whether THIS flow created the folder. A re-auth adopts a committed account, and every
+    # failure path used to discard the folder unconditionally -- so aborting, mistyping a code
+    # or letting the deadline pass would delete a live account's credentials and orphan every
+    # chat bound to it. Only a folder we minted is ours to throw away.
+    minted: bool
     process: Any
     output: str
     state: FlowState
@@ -171,12 +179,13 @@ class _Session:
         return _extract(buffer, method.scrape, method.frame_marker) is not None
 
 
-def _new_session(lane: Lane, method: PtyMethod | PasteMethod, account_id: str) -> _Session:
+def _new_session(lane: Lane, method: PtyMethod | PasteMethod, account_id: str, minted: bool) -> _Session:
     session = _Session()
     session.flow_id = uuid.uuid4().hex
     session.lane = lane
     session.method = method
     session.account_id = account_id
+    session.minted = minted
     session.process = None
     session.output = ""
     session.state = FlowState.PENDING
@@ -232,20 +241,24 @@ class AuthFlowService:
 
         with self._lock:
             self._drop_locked()
+            minted = account_id is None
             if account_id is None:
                 account_id, account_path = accounts.mint_account_dir(self._home)
             else:
+                # Resolve through the index rather than trusting the caller's string. An id
+                # reaching here from a POST body is joined into a path and later removed, and
+                # `Path` joins swallow an absolute segment whole ("<root>" / "/etc" -> "/etc")
+                # while ".." walks straight out of the accounts root.
+                account_id = accounts.resolve_account(account_id, self._home).id
                 account_path = accounts.account_dir(account_id, self._home)
-                if not account_path.is_dir():
-                    raise FlowError(f"no such account: {account_id}")
             seed_account(lane.harness, account_path, self._work_dir)
 
             if isinstance(method, PasteMethod):
                 # Nothing to drive; the caller supplies the credential on submit.
-                self._session = _new_session(lane, method, account_id)
+                self._session = _new_session(lane, method, account_id, minted)
                 return FlowStart(flow_id=self._session.flow_id, shape=FlowShape.PASTE)
 
-            session = _new_session(lane, method, account_id)
+            session = _new_session(lane, method, account_id, minted)
             self._session = session
             url, code = self._drive_locked(session, method, account_path)
             self._arm_deadline_locked(session, method.flow_deadline_s)
@@ -349,15 +362,21 @@ class AuthFlowService:
             if not isinstance(method, PasteMethod):
                 raise FlowError("this sign-in does not take a key")
             path = accounts.account_dir(session.account_id, self._home)
-            display = _write_paste(method.sink, path, api_key, key_provider, session.lane)
-            # Writing the file is not the same as the harness accepting it. Ask before
-            # committing, so a key the harness cannot use fails here -- where the user is
-            # looking at the field they just typed into -- rather than later, as a chat that
-            # silently cannot take a turn.
-            verdict = self._probe(session.lane.harness, path)
-            if verdict is SignedIn.NO:
-                self._fail_locked(session, f"{session.lane.provider_name} did not accept that key.")
-                return FlowStatus(state=FlowState.FAILED, detail=session.detail)
+            # Write, ask, and put the old credential back if the answer is no. The probe needs
+            # the file in place to answer at all, so the write has to happen first -- but on a
+            # re-auth the folder is a LIVE account, and leaving a rejected key there would
+            # quietly break every agent bound to it until each one's next turn.
+            with _restored_on_failure(_credential_paths(method.sink, path)) as restore:
+                display = _write_paste(method.sink, path, api_key, key_provider, session.lane)
+                # Writing the file is not the same as the harness accepting it. Ask before
+                # committing, so a key the harness cannot use fails here -- where the user is
+                # looking at the field they just typed into -- rather than later, as a chat that
+                # silently cannot take a turn.
+                verdict = self._probe(session.lane.harness, path)
+                if verdict is SignedIn.NO:
+                    restore()
+                    self._fail_locked(session, f"{session.lane.provider_name} did not accept that key.")
+                    return FlowStatus(state=FlowState.FAILED, detail=session.detail)
             # UNKNOWN means the check itself could not run (the CLI is missing, the network
             # blinked). That is not evidence against a key the user just pasted, and throwing
             # it away would be the worse mistake.
@@ -441,7 +460,7 @@ class AuthFlowService:
     def _fail_locked(self, session: _Session, detail: str) -> None:
         session.state = FlowState.FAILED
         session.detail = detail
-        self._teardown_locked(session, keep_folder=False)
+        self._teardown_locked(session, keep_folder=not session.minted)
 
     def _teardown_locked(self, session: _Session, keep_folder: bool) -> None:
         if session.timer is not None:
@@ -456,7 +475,7 @@ class AuthFlowService:
 
     def _drop_locked(self) -> None:
         if self._session is not None and self._session.state is FlowState.PENDING:
-            self._teardown_locked(self._session, keep_folder=False)
+            self._teardown_locked(self._session, keep_folder=not self._session.minted)
         self._session = None
 
     def _expire(self, session: _Session, seconds: float) -> None:
@@ -519,6 +538,40 @@ def write_claude_env(account_path: Path, managed_env: Mapping[str, str]) -> None
     existing["env"] = {**kept, **managed_env}
     settings.write_text(json.dumps(existing, indent=2) + "\n")
     settings.chmod(0o600)
+
+
+def _credential_paths(sink: PasteSink, account_path: Path) -> tuple[Path, ...]:
+    """The files a sink writes, so a rejected credential can be rolled back."""
+    if sink is PasteSink.PI_AUTH_JSON:
+        return (account_path / "auth.json",)
+    if sink is PasteSink.CLAUDE_ENV:
+        return (account_path / "settings.json",)
+    raise FlowError(f"{sink} has no writer yet")
+
+
+@contextlib.contextmanager
+def _restored_on_failure(paths: Sequence[Path]) -> Iterator[Callable[[], None]]:
+    """Yield a `restore()` that puts the named files back as they were.
+
+    Snapshot-and-restore rather than write-to-temp-then-move: a sink may merge with what is
+    already there (claude's settings.json keeps every unmanaged key), so the new content is
+    not derivable without writing it, and only the previous bytes are worth keeping.
+    """
+    before = {path: (path.read_bytes() if path.exists() else None) for path in paths}
+
+    def restore() -> None:
+        for path, content in before.items():
+            if content is None:
+                path.unlink(missing_ok=True)
+            else:
+                path.write_bytes(content)
+                path.chmod(0o600)
+
+    try:
+        yield restore
+    except Exception:
+        restore()
+        raise
 
 
 def _write_paste(

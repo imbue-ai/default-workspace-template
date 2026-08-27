@@ -534,3 +534,29 @@ reuses the same link block the browser lanes use, so the copy-link fallback come
 
 Only Opencode Go sets it. OpenRouter and the generic API-key lane are providers you either
 already have an account with or are picking deliberately, so they stay a single field.
+
+# Stop sign-in failures from deleting the account they were signing into
+
+Re-authenticating adopts an existing account folder so that every chat already bound to it
+recovers. But every failure path -- abort, a mistyped code, a rejected key, the deadline --
+discarded the folder, because a flow could not tell a folder it minted from one it adopted.
+Pressing Back during a re-auth deleted the credential and orphaned every bound chat. A flow now
+records whether it minted its folder, and only removes its own.
+
+The key paste has the same shape one level down: the harness has to see the file to judge it,
+so the write lands before the verdict, and on a live account a rejected key would sit there
+breaking every bound agent at its next turn with the row still saying the account is fine. The
+previous file is now put back when the answer is no.
+
+An account id arriving in a request body is resolved through the index rather than joined onto
+a path. `Path` joins swallow an absolute segment whole and `..` walks out of the accounts root,
+and the resolved directory is what the failure paths remove.
+
+# Keep a deleted account's chat history
+
+claude is bound by pointing `CLAUDE_CONFIG_DIR` at the account folder, and claude writes its
+session transcripts to `<config dir>/projects/`. So removing an account took every bound chat's
+history with it -- the chats did not just stop working, they rendered empty. Discarding an
+account now removes its credentials and leaves `projects/` alone, and the boot reconcile leaves
+a folder holding only that behind rather than sweeping it as debris. Signing in again is
+recoverable; a deleted transcript is not.

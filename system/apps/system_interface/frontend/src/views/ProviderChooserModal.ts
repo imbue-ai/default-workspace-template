@@ -608,7 +608,14 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
                     type: "button",
                     key: candidate.id,
                     class: css.OPTION_ROW,
-                    onclick: () => begin(current, candidate, { fromChooser: false }),
+                    // Carry the account through. Picking another way in during a RE-AUTH is
+                    // still that account's re-auth: dropping the id here would mint a new
+                    // account and orphan every chat bound to the old one, on success.
+                    onclick: () =>
+                      begin(current, candidate, {
+                        fromChooser: false,
+                        accountId: reauthAccountId ?? undefined,
+                      }),
                   },
                   [
                     m("span", { class: "flex min-w-0 flex-col" }, [

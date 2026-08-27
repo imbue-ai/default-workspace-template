@@ -22,6 +22,7 @@ mutation takes `_INDEX_LOCK` across the whole read-modify-write.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
@@ -189,16 +190,43 @@ def commit_account(account_id: str, lane: str, display: str, home: Path | None =
     return account
 
 
+# The one subdirectory of an account folder that is the user's, not the credential's.
+# claude is bound by pointing CLAUDE_CONFIG_DIR at the account, and it writes its session
+# JSONLs to `<config dir>/projects/` -- so the folder holds chat history as well as a
+# credential, and removing the account wholesale would take every bound chat's transcript
+# with it. Deleting a credential is reversible by signing in again; deleting a transcript
+# is not.
+KEPT_ON_DISCARD: Final = ("projects",)
+
+
 def discard_account_dir(account_id: str, home: Path | None = None) -> None:
-    """Remove a minted-but-uncommitted folder after a failed or abandoned sign-in."""
-    shutil.rmtree(account_dir(account_id, home), ignore_errors=True)
+    """Remove an account folder's credentials, keeping anything the user cannot re-create.
+
+    Used both for a minted-but-uncommitted folder after an abandoned sign-in, and for a
+    committed account the user deleted. What survives is `KEPT_ON_DISCARD`; when nothing
+    survives the folder itself goes.
+    """
+    root = account_dir(account_id, home)
+    if not root.is_dir():
+        return
+    for child in sorted(root.iterdir()):
+        if child.name in KEPT_ON_DISCARD:
+            continue
+        if child.is_dir() and not child.is_symlink():
+            shutil.rmtree(child, ignore_errors=True)
+        else:
+            child.unlink(missing_ok=True)
+    # Empty unless something was kept, in which case the husk stays and `reconcile` leaves
+    # it alone.
+    with contextlib.suppress(OSError):
+        root.rmdir()
 
 
 def delete_account(account_id: str, home: Path | None = None) -> None:
     """Drop the row, remove the folder, and clear the mru if it pointed here.
 
-    Agents bound to this account keep their transcripts and fail on their next turn with
-    their harness's own error. Nothing rebinds them: their `account` label becomes a
+    Agents bound to this account keep their transcripts -- see `KEPT_ON_DISCARD` -- and fail
+    on their next turn with their harness's own error. Nothing rebinds them: their `account` label becomes a
     dangling reference, which is the cost of delete-and-re-add over re-authenticating in
     place.
     """
@@ -281,9 +309,15 @@ def reconcile(home: Path | None = None) -> tuple[tuple[str, ...], tuple[str, ...
         known = {a.id for a in index.accounts}
         removed = []
         for child in sorted(root.iterdir()):
-            if child.is_dir() and child.name not in known:
-                shutil.rmtree(child, ignore_errors=True)
-                removed.append(child.name)
+            if not child.is_dir() or child.name in known:
+                continue
+            # A folder holding only what `discard_account_dir` keeps is not debris from a
+            # half-finished sign-in -- it is a deleted account's chat history, deliberately
+            # left behind. Removing it here would undo that one boot later.
+            if {c.name for c in child.iterdir()} <= set(KEPT_ON_DISCARD):
+                continue
+            shutil.rmtree(child, ignore_errors=True)
+            removed.append(child.name)
 
         kept = tuple(a for a in index.accounts if account_dir(a.id, home).is_dir())
         dropped = tuple(a.id for a in index.accounts if a not in kept)
