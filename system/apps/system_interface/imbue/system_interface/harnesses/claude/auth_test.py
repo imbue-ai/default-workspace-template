@@ -14,17 +14,12 @@ test reads the developer's real shared Claude settings.
 from __future__ import annotations
 
 import json
-import threading
-import tomllib
 from pathlib import Path
 
 import pytest
-from mngr_cli_contract.contract import assert_mngr_argv_valid
 
-from imbue.mngr.cli.exit_codes import EXIT_CODE_PROVIDER_INACCESSIBLE
 from imbue.system_interface.harnesses.claude import auth
 from imbue.system_interface.testing import FakeFinishedProcess
-from imbue.system_interface.testing import FakePexpectProcess
 
 _FAKE_URL = "https://claude.com/cai/oauth/authorize?code=true&state=abc"
 _FAKE_TOKEN = "sk-ant-oat01-" + "FAKETOKEN0" * 9 + "12345"
@@ -301,46 +296,6 @@ _LIST_PAYLOAD = json.dumps(
         ]
     }
 )
-
-
-
-
-def test_claude_binary_agent_types_cover_every_claude_parented_settings_type() -> None:
-    """CLAUDE_BINARY_AGENT_TYPES must equal the claude-rooted types in .mngr/settings.toml.
-
-    The restart filter matches literal type names from `mngr list`, so a new
-    agent type whose parent chain reaches `claude` would silently dodge
-    auth-change restarts unless it is added to the set (how the `chat` type
-    briefly slipped through). Derives the expected set from the settings file
-    so the two cannot drift.
-    """
-    # Walk up to the repo root rather than counting parents: this file sits two
-    # packages deeper than it used to, and a hardcoded index silently reads the wrong
-    # directory when the layout changes again.
-    settings_path = next(
-        candidate / ".mngr" / "settings.toml"
-        for candidate in Path(__file__).parents
-        if (candidate / ".mngr" / "settings.toml").is_file()
-    )
-    with settings_path.open("rb") as settings_file:
-        agent_types = tomllib.load(settings_file).get("agent_types", {})
-
-    def _is_claude_rooted(type_name: str) -> bool:
-        seen: set[str] = set()
-        current = type_name
-        while current not in seen:
-            seen.add(current)
-            if current == "claude":
-                return True
-            parent = agent_types.get(current, {}).get("parent_type")
-            if not isinstance(parent, str):
-                return False
-            current = parent
-        return False
-
-    claude_rooted = {name for name in agent_types if _is_claude_rooted(name)} | {"claude"}
-    assert auth.CLAUDE_BINARY_AGENT_TYPES == frozenset(claude_rooted)
-
 
 
 

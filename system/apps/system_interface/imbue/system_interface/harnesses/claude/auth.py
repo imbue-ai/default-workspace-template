@@ -109,24 +109,8 @@ _CODE_ECHO_QUIET_SECONDS: Final = 0.3
 # in the request path.
 _CLAUDE_AUTH_STATUS_TIMEOUT_SECONDS: Final = 10.0
 
-# Agent types whose window-0 process is a real claude binary and therefore
-# holds credentials frozen from process start: every claude-parented type in
-# .mngr/settings.toml (a test asserts this set matches the settings file, so
-# a new claude-derived type cannot silently dodge auth-change restarts the
-# way `chat` briefly did when it split off from `claude`). Since roles moved
-# to create templates, a new claude role resolves to the `claude` type itself;
-# `chat` and `worker` are here for agents created before that, whose persisted
-# type is still one of those names. The `main` services agent is deliberately
-# absent: its window 0 sleeps forever and restarting it would tear down
-# supervisord and every background service.
-CLAUDE_BINARY_AGENT_TYPES: Final[frozenset[str]] = frozenset(("claude", "chat", "worker"))
 
 # Sent (via `mngr message`) to agents that were RUNNING when the auth-change
-# restart tore them down, so unattended work resumes instead of silently
-# stopping. WAITING agents are not messaged: their next user message starts
-# them under the fresh env anyway.
-
-
 class ClaudeAuthError(PtyAuthError):
     """Raised when an auth flow operation cannot complete."""
 
