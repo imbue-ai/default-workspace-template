@@ -17,17 +17,20 @@ pointing at a half-authenticated folder the UI would offer as usable.
 
 Concurrency: three operations mutate the index (commit, delete, set-mru) and they are served
 concurrently by Flask. An atomic rename prevents a *torn* file, not a *lost update*, so every
-mutation takes `_INDEX_LOCK` across the whole read-modify-write.
+mutation takes `_index_lock` across the whole read-modify-write -- an flock, because the
+server is not the only process that writes here.
 """
 
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import json
 import os
 import shutil
 import threading
 import uuid
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Final
 
@@ -48,7 +51,30 @@ _ACCOUNTS_RELATIVE_PATH: Final = (".minds", "accounts")
 
 _ACCOUNTS_ROOT_ENV_VAR: Final = "MINDS_ACCOUNTS_ROOT"
 
-_INDEX_LOCK = threading.Lock()
+_INDEX_THREAD_LOCK = threading.Lock()
+_LOCK_FILENAME: Final = "index.lock"
+
+
+@contextlib.contextmanager
+def _index_lock(home: Path | None = None) -> Iterator[None]:
+    """Hold the index across the whole read-modify-write, against every writer.
+
+    A thread lock alone is not enough: the server is not the only process that mints
+    accounts -- `migrate_claude_auth.py` runs standalone and commits one, and boot's
+    `reconcile` removes every folder the index does not name. Two processes interleaving a
+    read-modify-write lose an account; one racing the sweep has its brand-new folder deleted
+    out from under it.
+    """
+    with _INDEX_THREAD_LOCK:
+        root = accounts_root(home)
+        root.mkdir(parents=True, exist_ok=True)
+        lock_path = root / _LOCK_FILENAME
+        with lock_path.open("w") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle, fcntl.LOCK_UN)
 
 
 class AccountError(RuntimeError):
@@ -116,6 +142,8 @@ def read_index(home: Path | None = None) -> AccountIndex:
         payload = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError) as e:
         raise AccountError(f"account index at {path} is unreadable: {e}") from e
+    if not isinstance(payload, dict):
+        raise AccountError(f"account index at {path} is not an object: {type(payload).__name__}")
     version = payload.get("version", 0)
     if version > INDEX_VERSION:
         raise AccountError(
@@ -128,7 +156,7 @@ def read_index(home: Path | None = None) -> AccountIndex:
 def _write_index(index: AccountIndex, home: Path | None = None) -> None:
     """Serialize the index through a temp file and rename it into place.
 
-    Callers must already hold `_INDEX_LOCK`; the rename only buys atomicity of the file's
+    Callers must already hold `_index_lock`; the rename only buys atomicity of the file's
     contents, not of the read-modify-write around it.
     """
     path = index_path(home)
@@ -169,7 +197,7 @@ def commit_account(account_id: str, lane: str, display: str, home: Path | None =
     path = account_dir(account_id, home)
     if not path.is_dir():
         raise AccountError(f"cannot commit account {account_id}: {path} does not exist")
-    with _INDEX_LOCK:
+    with _index_lock(home):
         index = read_index(home)
         # Re-authenticating writes the same folder a second time. The row already exists and
         # agents hold its id by label, so keep it as-is rather than renumbering; only the
@@ -230,7 +258,7 @@ def delete_account(account_id: str, home: Path | None = None) -> None:
     dangling reference, which is the cost of delete-and-re-add over re-authenticating in
     place.
     """
-    with _INDEX_LOCK:
+    with _index_lock(home):
         index = read_index(home)
         remaining = tuple(a for a in index.accounts if a.id != account_id)
         if len(remaining) == len(index.accounts):
@@ -248,7 +276,7 @@ def delete_account(account_id: str, home: Path | None = None) -> None:
 
 
 def set_mru(account_id: str, home: Path | None = None) -> None:
-    with _INDEX_LOCK:
+    with _index_lock(home):
         index = read_index(home)
         if not any(a.id == account_id for a in index.accounts):
             raise AccountError(f"no such account: {account_id}")
@@ -304,11 +332,13 @@ def reconcile(home: Path | None = None) -> tuple[tuple[str, ...], tuple[str, ...
     root = accounts_root(home)
     if not root.is_dir():
         return ((), ())
-    with _INDEX_LOCK:
+    with _index_lock(home):
         index = read_index(home)
         known = {a.id for a in index.accounts}
         removed = []
         for child in sorted(root.iterdir()):
+            if child.name == _LOCK_FILENAME:
+                continue
             if not child.is_dir() or child.name in known:
                 continue
             # A folder holding only what `discard_account_dir` keeps is not debris from a
