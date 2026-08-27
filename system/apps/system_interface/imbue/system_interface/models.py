@@ -331,12 +331,12 @@ class TerminalSessionInfo(FrozenModel):
 
 
 class CreateChatRequest(FrozenModel):
-    """Request body for creating a chat agent (any harness; claude is the default)."""
+    """Request body for creating a chat agent. The account decides which harness it runs on."""
 
     name: str = Field(
         default="",
         description="Display name for the new chat agent; empty mints the first free "
-        '"<word> N" for the harness server-side ("Chat 1", "Codex 2", ...)',
+        '"<word> N" for the account\'s harness server-side ("Chat 1", "Codex 2", ...)',
     )
     first: bool = Field(
         default=False,
@@ -344,7 +344,7 @@ class CreateChatRequest(FrozenModel):
     )
     account_id: str = Field(
         default="",
-        description="Signed-in account to bind the chat to; empty picks the most recently used one on the harness",
+        description="Signed-in account to bind the chat to; empty picks the most recently used one",
     )
 
 
