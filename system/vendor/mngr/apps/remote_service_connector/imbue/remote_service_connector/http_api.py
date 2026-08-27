@@ -47,6 +47,7 @@ from imbue.remote_service_connector.errors import R2StorageResultTruncatedError
 from imbue.remote_service_connector.errors import RelayNotFoundError
 from imbue.remote_service_connector.errors import ShareNotFoundError
 from imbue.remote_service_connector.errors import ShareQuotaExceededError
+from imbue.remote_service_connector.errors import WorkspaceRecordLeaseActiveError
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +78,8 @@ def raise_as_http(exc: Exception) -> NoReturn:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     if isinstance(exc, R2BucketActiveWorkspaceError):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if isinstance(exc, WorkspaceRecordLeaseActiveError):
+        raise HTTPException(status_code=409, detail={"code": "lease_active", "message": str(exc)}) from exc
     if isinstance(exc, EmailNotVerifiedError):
         raise HTTPException(
             status_code=403,
