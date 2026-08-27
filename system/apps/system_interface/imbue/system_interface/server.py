@@ -53,6 +53,7 @@ from imbue.system_interface.attachments import store_uploaded_file
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
 from imbue.system_interface.file_serving import try_serve_file
+from imbue.system_interface import accounts_endpoints
 from imbue.system_interface.harnesses.claude import auth_endpoints
 from imbue.system_interface.harnesses.interrupt import restart_drain
 from imbue.system_interface.harnesses.model import ModelIdentity
@@ -3504,6 +3505,7 @@ def create_application(state: SystemInterfaceState) -> Flask:
         endpoint="_set_member_location_endpoint",
     )
     auth_endpoints.register_routes(application)
+    accounts_endpoints.register_routes(application)
     latchkey_endpoints.register_routes(application)
     application.add_url_rule("/api/layout/broadcast", view_func=_layout_broadcast_endpoint, methods=["POST"])
     application.add_url_rule(

@@ -43,6 +43,7 @@ from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
+from imbue.system_interface.harnesses.auth_flows import AuthFlowService
 from imbue.system_interface.harnesses.claude.auth import ClaudeAuthService
 from imbue.system_interface.harnesses.claude.auth import RestartProgress
 from imbue.system_interface.harnesses.interrupt import MESSAGE_LOCK_FILENAME
@@ -232,6 +233,7 @@ def build_test_state(
     # Match production: route the codex ledger's live user-turns (Fix 1) onto the event fan-out.
     manager.set_transcript_broadcaster(event_queues.broadcast_all_ignored)
     return SystemInterfaceState(
+        auth_flows=AuthFlowService(),
         config=config if config is not None else Config(),
         provider_names=None,
         include_filters=(),
