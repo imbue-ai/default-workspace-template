@@ -127,7 +127,7 @@ def classify_path(path: str) -> PathClass:
 
     - ``system_interface`` -- ``system/apps/system_interface/**``; the apply
       rebuilds or installs the bundle and refreshes the backend's environment
-      on a manifest change (:func:`_refresh_backend_dependencies`).
+      on a manifest change (:func:`refresh_backend_dependencies`).
     - ``service`` -- ``system/supervisord.conf`` and ``system/libs/bootstrap/**``.
     - ``editable_tool`` -- ``system/vendor/mngr/**``; a manifest change needs
       ``uv sync --all-packages`` / an editable reinstall.

@@ -145,7 +145,7 @@ from update_apply_contract import (
     run_status_path,
     write_run_status,
 )
-from update_banding import _protect_from_memory_shed
+from update_banding import protect_from_memory_shed
 from update_classification import classify_merge
 from update_runtime import ApplyPreconditionError, HttpClient, Runner, Spawner
 from update_target import (
@@ -935,5 +935,5 @@ def _shed_protection_target(argv: Sequence[str]) -> Path | None:
 if __name__ == "__main__":
     _banding_root = _shed_protection_target(sys.argv[1:])
     if _banding_root is not None:
-        _protect_from_memory_shed(_banding_root.resolve())
+        protect_from_memory_shed(_banding_root.resolve())
     sys.exit(main())

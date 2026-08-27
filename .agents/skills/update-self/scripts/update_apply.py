@@ -37,13 +37,13 @@ from update_apply_contract import (
     PHASE_STARTED,
     ApplyMarker,
     SnapshotRecord,
-    _default_is_pid_a_live_apply,
-    _snapshots_root,
     clear_emergency,
     clear_marker,
     clear_provision_incomplete,
+    default_is_pid_a_live_apply,
     provision_incomplete_path,
     read_marker,
+    snapshots_root,
     write_emergency,
     write_marker,
     write_provision_incomplete,
@@ -51,12 +51,12 @@ from update_apply_contract import (
 from update_banding import ExpendWrapper, as_expendable, keep_protected
 from update_classification import ApplyPlan, plan_apply, read_provisioner_inputs
 from update_environment import (
-    _ENVIRONMENT_REFRESH_TIMEOUT_SECONDS,
-    _ENVIRONMENT_SNAPSHOT_NAMES,
-    _refresh_backend_dependencies,
-    _run_provisioner,
+    ENVIRONMENT_REFRESH_TIMEOUT_SECONDS,
+    ENVIRONMENT_SNAPSHOT_NAMES,
     discard_snapshots,
+    refresh_backend_dependencies,
     restore_snapshots,
+    run_provisioner,
     take_snapshots,
 )
 from update_layout import (
@@ -70,12 +70,12 @@ from update_layout import (
 )
 from update_ledger import LedgerCommitError, write_version_history_entry
 from update_probes import (
-    _HEALTH_ATTEMPTS,
-    _HEALTH_INTERVAL_SECONDS,
+    HEALTH_ATTEMPTS,
+    HEALTH_INTERVAL_SECONDS,
     HEALTH_PATH,
-    _preflight,
-    _refresh_workspace_view,
     describe_frontend_failure,
+    preflight,
+    refresh_workspace_view,
     wait_healthy,
 )
 from update_runtime import (
@@ -84,12 +84,12 @@ from update_runtime import (
     HttpClient,
     Runner,
     Spawner,
-    _abort_in_progress_merge,
-    _assert_clean_tree,
-    _detail_block,
-    _diff_name_status,
-    _git_out,
-    _run_checked,
+    abort_in_progress_merge,
+    assert_clean_tree,
+    detail_block,
+    diff_name_status,
+    git_out,
+    run_checked,
 )
 
 # Per-step wall-clock budgets for the forward apply steps. Nothing about an
@@ -212,7 +212,7 @@ def _has_rollback_since(merge_ref: str, repo_root: Path, runner: Runner) -> bool
     Scoped to ``merge_ref..HEAD``, and matching a subject this script itself
     writes, so ordinary workspace commits can never trip it.
     """
-    log = _git_out(runner, repo_root, ["log", "--format=%s", f"{merge_ref}..HEAD"])
+    log = git_out(runner, repo_root, ["log", "--format=%s", f"{merge_ref}..HEAD"])
     return any(line.startswith(_ROLLBACK_SUBJECT_PREFIX) for line in log.splitlines())
 
 
@@ -342,7 +342,7 @@ def _install_or_build_bundle(
                 f"({type(exc).__name__}: {exc})"
             ) from exc
         return
-    _run_checked(
+    run_checked(
         runner,
         expend(["npm", "run", "build"]),
         repo_root / FRONTEND_DIR,
@@ -404,7 +404,7 @@ def _recover_running_state(
         failed = set(restore_snapshots(snapshots))
         restored = {record.name for record in snapshots} - failed
         if provisioner_ran:
-            provisioner_failure = _run_provisioner(runner, repo_root, is_forced=True)
+            provisioner_failure = run_provisioner(runner, repo_root, is_forced=True)
             if provisioner_failure is not None:
                 sys.stderr.write(
                     "recovery: re-running the provisioner from the restored tree failed "
@@ -416,8 +416,8 @@ def _recover_running_state(
             # No copy to put back: compile from source. node_modules likewise
             # has to match the restored lockfile when its own copy is gone.
             if plan.frontend_manifest and "node_modules" not in restored:
-                _run_checked(runner, ["npm", "ci"], repo_root / FRONTEND_DIR, "npm ci")
-            _run_checked(
+                run_checked(runner, ["npm", "ci"], repo_root / FRONTEND_DIR, "npm ci")
+            run_checked(
                 runner,
                 ["npm", "run", "build"],
                 repo_root / FRONTEND_DIR,
@@ -426,10 +426,10 @@ def _recover_running_state(
             # No stamp comparison here: the tree is rolled back, and an older
             # tree's build may predate the stamping postbuild step.
             _assert_bundle_built(repo_root, None, live_service_restarted=False)
-        if plan.backend_manifest and not _ENVIRONMENT_SNAPSHOT_NAMES <= restored:
-            _refresh_backend_dependencies(repo_root, runner, keep_protected)
+        if plan.backend_manifest and not ENVIRONMENT_SNAPSHOT_NAMES <= restored:
+            refresh_backend_dependencies(repo_root, runner, keep_protected)
         if live_service_restarted:
-            _run_checked(
+            run_checked(
                 runner,
                 ["mngr", "start", "--restart", "system-services"],
                 repo_root,
@@ -438,8 +438,8 @@ def _recover_running_state(
         healthy = wait_healthy(
             http,
             f"{base_url}{HEALTH_PATH}",
-            _HEALTH_ATTEMPTS,
-            _HEALTH_INTERVAL_SECONDS,
+            HEALTH_ATTEMPTS,
+            HEALTH_INTERVAL_SECONDS,
             sleeper,
         )
     except (ApplyFailed, OSError) as exc:
@@ -457,7 +457,7 @@ def _recover_running_state(
             "when the apply began either, so the rollback is not held to that "
             f"standard: {frontend_failure}\n"
         )
-    _refresh_workspace_view(repo_root, runner)
+    refresh_workspace_view(repo_root, runner)
     return RecoveryOutcome(
         is_recovered=True, is_frontend_confirmed=frontend_failure is None
     )
@@ -515,7 +515,7 @@ def _report_emergency(
     # out of exactly the failure that gets here. Only pointed at when the apply
     # touched the frontend -- after a backend-only apply the bundle copy is
     # byte-identical to what is already being served.
-    bundle_copy = _snapshots_root(repo_root) / "bundle"
+    bundle_copy = snapshots_root(repo_root) / "bundle"
     if plan.frontend and bundle_copy.exists():
         sys.stderr.write(
             f"the pre-apply frontend bundle was kept at {bundle_copy} -- copying it over "
@@ -538,7 +538,7 @@ def apply_update(
     base_url: str | None = None,
     now: Callable[[], float] = time.time,
     today: str | None = None,
-    is_pid_live: Callable[[int], bool] = _default_is_pid_a_live_apply,
+    is_pid_live: Callable[[int], bool] = default_is_pid_a_live_apply,
     expend: ExpendWrapper = as_expendable,
 ) -> int:
     """Land ``merge_ref`` and make the live workspace consistent with it, as one
@@ -589,14 +589,14 @@ def apply_update(
         # clean tree rather than refusing on the dirt it left. Only here: on a
         # fresh apply an in-progress merge belongs to someone else, and the
         # clean-tree refusal below is the right answer.
-        _abort_in_progress_merge(repo_root, runner)
+        abort_in_progress_merge(repo_root, runner)
 
-    _assert_clean_tree(repo_root, runner)
+    assert_clean_tree(repo_root, runner)
 
     if marker is None:
         marker = ApplyMarker(
             dri_agent=os.environ.get(ENV_DRI_AGENT, ""),
-            rollback_to=_git_out(runner, repo_root, ["rev-parse", "HEAD"]),
+            rollback_to=git_out(runner, repo_root, ["rev-parse", "HEAD"]),
             merge_ref=merge_ref,
             target_ref=target_ref,
             ff_only=ff_only,
@@ -667,7 +667,7 @@ def apply_update(
             return 1
     _advance(PHASE_MERGED)
 
-    name_status = _diff_name_status(repo_root, marker.rollback_to, runner)
+    name_status = diff_name_status(repo_root, marker.rollback_to, runner)
     plan = plan_apply(
         [path for _, path in name_status], read_provisioner_inputs(repo_root)
     )
@@ -723,7 +723,7 @@ def apply_update(
         _advance(PHASE_SNAPSHOTTED)
 
         if plan.frontend_manifest and usable_worker_bundle is None:
-            _run_checked(
+            run_checked(
                 runner,
                 expend(["npm", "ci"]),
                 repo_root / FRONTEND_DIR,
@@ -731,8 +731,8 @@ def apply_update(
                 timeout=_NPM_CI_TIMEOUT_SECONDS,
             )
         if plan.backend_manifest:
-            _refresh_backend_dependencies(
-                repo_root, runner, expend, _ENVIRONMENT_REFRESH_TIMEOUT_SECONDS
+            refresh_backend_dependencies(
+                repo_root, runner, expend, ENVIRONMENT_REFRESH_TIMEOUT_SECONDS
             )
         _advance(PHASE_REFRESHED)
 
@@ -753,7 +753,7 @@ def apply_update(
             # the restored tree (best-effort) even then.
             marker.provisioner_ran = True
             write_marker(marker, repo_root, now)
-            provisioner_failure = _run_provisioner(runner, repo_root)
+            provisioner_failure = run_provisioner(runner, repo_root)
             if provisioner_failure is not None:
                 sys.stderr.write(
                     f"warning: {provisioner_failure}\nContinuing without rolling "
@@ -769,7 +769,7 @@ def apply_update(
         # backend that cannot boot is then rejected while the live bundle
         # is still the one that was serving, instead of after ``static/``
         # has been rewritten and must be restored from its snapshot.
-        preflight_output = _preflight(repo_root, http, spawner, sleeper, expend)
+        preflight_output = preflight(repo_root, http, spawner, sleeper, expend)
         if preflight_output is not None:
             raise ApplyFailed(
                 "merged backend failed to boot in a pre-flight check; live "
@@ -802,7 +802,7 @@ def apply_update(
         # this line leaves a marker that tells recovery to restart.
         marker.live_service_restarted = True
         write_marker(marker, repo_root, now)
-        _run_checked(
+        run_checked(
             runner,
             ["mngr", "start", "--restart", "system-services"],
             repo_root,
@@ -814,8 +814,8 @@ def apply_update(
         if not wait_healthy(
             http,
             f"{resolved_base}{HEALTH_PATH}",
-            _HEALTH_ATTEMPTS,
-            _HEALTH_INTERVAL_SECONDS,
+            HEALTH_ATTEMPTS,
+            HEALTH_INTERVAL_SECONDS,
             sleeper,
         ):
             raise ApplyFailed(
@@ -869,7 +869,7 @@ def apply_update(
         # record was waiting for.
         if unresolved_frontend_failure is None:
             clear_emergency(repo_root)
-        _refresh_workspace_view(repo_root, runner)
+        refresh_workspace_view(repo_root, runner)
     except ApplyFailed as failed:
         failure = failed
     except Exception as unexpected:
@@ -890,7 +890,7 @@ def apply_update(
         )
     if failure is not None:
         sys.stderr.write(
-            f"apply failed: {failure}\n{_detail_block(failure)}"
+            f"apply failed: {failure}\n{detail_block(failure)}"
             f"{_phase_timing_line(marker)}"
             f"rolling back to {marker.rollback_to[:12]} and restoring the "
             "workspace...\n"
@@ -950,7 +950,7 @@ def apply_update(
         # tip, so the sha is re-derivable on any re-run -- which is what keeps
         # the ledger append a no-op after an interruption.
         try:
-            merge_sha = _git_out(runner, repo_root, ["rev-parse", merge_ref])
+            merge_sha = git_out(runner, repo_root, ["rev-parse", merge_ref])
             write_version_history_entry(
                 repo_root,
                 runner,
@@ -1029,7 +1029,7 @@ def recover(
     sleeper: Callable[[float], None] = time.sleep,
     base_url: str | None = None,
     now: Callable[[], float] = time.time,
-    is_pid_live: Callable[[int], bool] = _default_is_pid_a_live_apply,
+    is_pid_live: Callable[[int], bool] = default_is_pid_a_live_apply,
 ) -> int:
     """Roll back an interrupted apply from its marker.
 
@@ -1081,7 +1081,7 @@ def recover(
     # refuses instead, like it does for a running apply.
     marker.pid = os.getpid()
     write_marker(marker, repo_root, now)
-    name_status = _diff_name_status(repo_root, marker.rollback_to, runner)
+    name_status = diff_name_status(repo_root, marker.rollback_to, runner)
     plan = plan_apply(
         [path for _, path in name_status], read_provisioner_inputs(repo_root)
     )
@@ -1089,7 +1089,7 @@ def recover(
         # Before anything commits: an apply killed inside its merge left the
         # merge staged, and committing on top of that would land it instead of
         # rolling it back.
-        _abort_in_progress_merge(repo_root, runner)
+        abort_in_progress_merge(repo_root, runner)
         _restore_tree(name_status, marker.rollback_to, repo_root, runner)
         _commit_rollback(
             repo_root,
@@ -1107,7 +1107,7 @@ def recover(
     if no_restart:
         failed = restore_snapshots(marker.snapshots)
         if marker.provisioner_ran:
-            provisioner_failure = _run_provisioner(runner, repo_root, is_forced=True)
+            provisioner_failure = run_provisioner(runner, repo_root, is_forced=True)
             if provisioner_failure is not None:
                 sys.stderr.write(
                     "recover: re-running the provisioner from the restored tree failed "
@@ -1124,7 +1124,7 @@ def recover(
             reason = (
                 f"could not restore: {', '.join(sorted(failed))}. The tree is "
                 "rolled back but the pre-apply state is NOT -- the copies are kept at "
-                f"{_snapshots_root(repo_root)}, so copying one back by hand is the "
+                f"{snapshots_root(repo_root)}, so copying one back by hand is the "
                 "quickest repair; whatever has no copy left has to be rebuilt. "
                 "Services will boot against that mismatch."
             )

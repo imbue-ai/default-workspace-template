@@ -35,7 +35,7 @@ MNGR_EXECUTABLE = "mngr"
 TOOL_NAME = "system-interface"
 
 # uv records how a tool was installed here, inside the tool's own directory.
-_RECEIPT = "uv-receipt.toml"
+RECEIPT = "uv-receipt.toml"
 
 # The plugin set each tool is built with, as build_workspace.sh reads it. The
 # receipt only knows the plugins a tool was installed with *last time*, so a
@@ -44,7 +44,7 @@ _RECEIPT = "uv-receipt.toml"
 # the manifest uses for each tool.
 PLUGIN_MANIFEST_PATH = "system/config/mngr_plugins.toml"
 
-_MANIFEST_TOOL_NAMES = {MNGR_TOOL_NAME: "mngr", TOOL_NAME: "system-interface"}
+MANIFEST_TOOL_NAMES = {MNGR_TOOL_NAME: "mngr", TOOL_NAME: "system-interface"}
 
 # The frontend build output the backend serves at ``/``. Both ``node_modules``
 # and this ``static/`` bundle are gitignored, so they never appear in a diff --
@@ -76,9 +76,9 @@ BUNDLE_STAMP_FILENAME = ".source-tree-hash"
 # the script fixes to /root/.local (this is what a Claude pin bump hit). Only
 # the two values that diverge are pinned; everything else ambient (proxies,
 # apt configuration) is kept.
-_PROVISIONER_HOME = "/root"
+PROVISIONER_HOME = "/root"
 
-_PROVISIONER_PATH = (
+PROVISIONER_PATH = (
     "/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 )
 

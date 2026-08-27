@@ -19,8 +19,8 @@ from update_runtime import (
     HttpClient,
     Runner,
     Spawner,
-    _tail,
     find_free_port,
+    tail,
 )
 
 # The shared post-change refresh motion, repo-relative. It owns *how* a changed
@@ -52,9 +52,9 @@ SERVE_PATH = "/"
 # genuinely broken change (the pre-flight also stops early when the boot
 # process dies). Tune these down against the per-phase timings the apply
 # marker records, not by guesswork.
-_HEALTH_ATTEMPTS = 240
+HEALTH_ATTEMPTS = 240
 
-_HEALTH_INTERVAL_SECONDS = 1.0
+HEALTH_INTERVAL_SECONDS = 1.0
 
 _PREFLIGHT_ATTEMPTS = 240
 
@@ -86,7 +86,7 @@ def wait_healthy(
     return False
 
 
-def _preflight(
+def preflight(
     repo_root: Path,
     http: HttpClient,
     spawner: Spawner,
@@ -133,7 +133,7 @@ def _preflight(
                 return None
         finally:
             spawned.terminate()
-        return _tail(spawned.read_output(), _PREFLIGHT_OUTPUT_TAIL_LINES)
+        return tail(spawned.read_output(), _PREFLIGHT_OUTPUT_TAIL_LINES)
 
 
 def probe_frontend(http: HttpClient, base_url: str) -> FrontendProbe:
@@ -211,7 +211,7 @@ def describe_frontend_failure(
     return _probe_frontend_until_answered(http, base_url, sleeper).failure
 
 
-def _refresh_workspace_view(repo_root: Path, runner: Runner) -> None:
+def refresh_workspace_view(repo_root: Path, runner: Runner) -> None:
     """Ask every open view of this workspace to reload the changed interface.
 
     Best-effort and never fatal: the change is already on disk and will load on
