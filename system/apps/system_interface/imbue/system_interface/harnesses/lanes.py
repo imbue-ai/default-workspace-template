@@ -231,11 +231,10 @@ _CLAUDE_FAILURES: Final = (
 LANE_ANTHROPIC = Lane(
     id="anthropic",
     provider_name="Anthropic",
-    # No subtitle: "Anthropic" over "Claude Code" already says everything a line here could.
-    # A row only earns one when it has something non-obvious to offer -- free usage, a price,
-    # a scope. Saying "use your subscription" under every familiar name is noise that makes
-    # the rows that DO say something harder to notice.
-    subtitle="",
+    # Every row carries a subtitle, and what it says is what you GET: a subscription you may
+    # already pay for, a free tier, a price, a scope. The provider name alone does not tell
+    # someone deciding between these whether their existing plan is usable here.
+    subtitle="Use your Claude Pro or Max subscription, or pay per token.",
     harness=HarnessType.CLAUDE,
     methods=(
         PtyMethod(
@@ -286,7 +285,7 @@ LANE_ANTHROPIC = Lane(
 LANE_OPENAI = Lane(
     id="openai",
     provider_name="OpenAI",
-    subtitle="",
+    subtitle="Use your ChatGPT Plus or Pro subscription. Free accounts get limited coding usage.",
     harness=HarnessType.CODEX,
     methods=(
         PtyMethod(
@@ -420,7 +419,7 @@ _PI_KEY_PROVIDERS: Final = tuple(
 LANE_OPENCODE_GO = Lane(
     id="opencode-go",
     provider_name="Opencode Go",
-    subtitle="Access the latest and greatest open models.",
+    subtitle="Access the latest and greatest open models, for $10/mo.",
     harness=HarnessType.PI_CODING,
     methods=(
         PasteMethod(
@@ -443,7 +442,7 @@ LANE_OPENCODE_GO = Lane(
 LANE_OPENROUTER = Lane(
     id="openrouter",
     provider_name="OpenRouter",
-    subtitle="One account, most open models. Pay per token, no subscription.",
+    subtitle="One account, any model. Pay per token, not subscription.",
     harness=HarnessType.PI_CODING,
     methods=(
         PasteMethod(
