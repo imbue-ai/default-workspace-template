@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from imbue.system_interface.harnesses.auth_errors import is_auth_error_text
 from imbue.system_interface.harnesses.events import MAX_TOOL_INPUT_PREVIEW_LENGTH
 from imbue.system_interface.harnesses.message_display import stamp_user_message_display
 from imbue.system_interface.harnesses.pi_coding.tool_labels import keeps_full_tool_input
@@ -140,10 +141,15 @@ def _assistant_event(event_id: str, timestamp: str, message: dict[str, Any]) -> 
         "stop_reason": message.get("stopReason"),
         "usage": _usage(message),
         "message_uuid": event_id,
-        # pi has no auth-error concept in its transcript; keep the field present-but-false.
-        "is_auth_error": False,
-        # Required by the shared contract (Response.ts). Detection deferred, like
-        # is_auth_error: False/None is the honest fill until pi's error shape is known.
+        # Measured: a rejected key ends the assistant message with `stopReason: "error"` and
+        # `errorMessage` holding the provider's raw body -- for anthropic,
+        # `401 {"type":"error","error":{"type":"authentication_error", ...}}`. pi passes the
+        # provider's words through rather than writing its own, so the shared vocabulary is
+        # what reads them.
+        "is_auth_error": is_auth_error_text(str(message.get("errorMessage") or "")),
+        # Required by the shared contract (Response.ts). Still deferred: an auth failure is
+        # distinguishable (above), but pi does not say whether any OTHER error was the
+        # provider's fault, so guessing a kind would be worse than saying nothing.
         "is_api_error": False,
         "api_error_kind": None,
         "is_provider_fault": False,
