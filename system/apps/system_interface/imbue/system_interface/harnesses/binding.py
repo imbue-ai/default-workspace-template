@@ -163,8 +163,8 @@ def create_args(harness: HarnessType, account_dir: Path, agent_state_dir: Path) 
     return ["--extra-provision-command", link]
 
 
-def resolve_binding(account_id: str = "", home: Path | None = None) -> Account | None:
-    """The account a new agent should run under, or None when there are none.
+def resolve_binding(account_id: str = "", home: Path | None = None) -> Account:
+    """The account a new agent should run under.
 
     An explicit id wins; otherwise the most recently used account, which is bumped on every
     launch -- so signing in and then starting a chat "just works" without the caller having
@@ -174,11 +174,11 @@ def resolve_binding(account_id: str = "", home: Path | None = None) -> Account |
     caller for both invites a chat that names codex while running on an agy credential, and
     there is no way to notice that until its first turn fails.
 
-    None means "no account", NOT "fall back to a shared login" -- there is no longer any such
-    thing. The shared settings-env writer is deleted and `~/.claude` is left alone, so an
-    agent created against None is simply unauthenticated. The UI's job is to make that
-    unreachable (the launcher opens the chooser instead); this returns it rather than raising
-    because the caller has better copy for it than an exception does.
+    Raises when there are none. There is no shared login to fall back to -- the settings-env
+    writer is deleted and `~/.claude` is left alone -- so an agent created without an account
+    is simply unauthenticated, and returning one used to let a caller create it anyway. The UI
+    makes that unreachable (the launcher opens the chooser), and this is the backstop for
+    anything that does not.
     """
     if account_id:
         account = accounts.resolve_account(account_id, home)
@@ -189,7 +189,7 @@ def resolve_binding(account_id: str = "", home: Path | None = None) -> Account |
     index = accounts.read_index(home)
     usable = [a for a in index.accounts if harness_for(a) is not None]
     if not usable:
-        return None
+        raise accounts.AccountError("no provider accounts exist yet")
     # The most recently used account, else the oldest -- which is the same rule the picker
     # shows (`Providers.ts`: `recent ?? accounts[0]`). It matters that the two agree: the
     # launcher and a new project's starter chat both land here, and a disagreement means

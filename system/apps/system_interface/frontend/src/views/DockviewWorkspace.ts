@@ -4242,6 +4242,17 @@ function soleLauncherPanelId(): string | null {
  * it anywhere else would file it into the wrong view.
  */
 export async function startProjectChat(projectId: string): Promise<void> {
+  // A new project's starter chat needs an account like any other, and a workspace with none
+  // would otherwise fail the create and surface it as a blocking alert on every project
+  // creation. The project itself is already made; the chat waits for a provider.
+  if (getAccounts().length === 0) {
+    openProviderChooser({
+      onSignedIn: () => {
+        void startProjectChat(projectId);
+      },
+    });
+    return;
+  }
   let created: CreatedChatAgent;
   try {
     // The display name ("Chat N") is minted server-side, exactly as the

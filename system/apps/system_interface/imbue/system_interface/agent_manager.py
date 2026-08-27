@@ -1171,7 +1171,7 @@ class AgentManager:
             account = resolve_binding(account_id)
         except (AccountError, BindingError) as e:
             raise AgentCreationError(str(e)) from e
-        harness = harness_for(account) if account is not None else HarnessType.CLAUDE
+        harness = harness_for(account)
         assert harness is not None, "resolve_binding rejects an account whose lane is unknown"
 
         explicit_name = requested_name.strip()
@@ -1207,20 +1207,18 @@ class AgentManager:
             self._proto_agents[agent_id] = proto_info
             self._log_queues[agent_id] = log_queue
 
-        account_args: list[str] = []
-        if account is not None:
-            # Launching on an account makes it the most recently used one, which is what
-            # the new-tab picker offers next time. Set here rather than in the picker so a
-            # chat started from the rail's shortcut counts the same.
-            set_mru(account.id)
-            account_args = [
-                *binding_create_args(harness, account_dir(account.id), self._get_agent_state_dir(agent_id)),
-                # The binding is invisible from the outside once mngr has baked the command,
-                # so record it as a label: it is how the UI shows which account a chat runs
-                # on, and how a re-auth knows which chats it just revived.
-                "--label",
-                f"account={account.id}",
-            ]
+        # Launching on an account makes it the most recently used one, which is what the
+        # new-tab picker offers next time. Set here rather than in the picker so a chat
+        # started from the rail's shortcut counts the same.
+        set_mru(account.id)
+        account_args = [
+            *binding_create_args(harness, account_dir(account.id), self._get_agent_state_dir(agent_id)),
+            # The binding is invisible from the outside once mngr has baked the command, so
+            # record it as a label: it is how the UI shows which account a chat runs on, and
+            # how a re-auth knows which chats it just revived.
+            "--label",
+            f"account={account.id}",
+        ]
 
         # The workspace's very first chat gets the `first` template, which is what delivers
         # `/welcome`. Bootstrap used to own this by creating a chat at boot; it cannot now,
@@ -1254,8 +1252,7 @@ class AgentManager:
         project_label = _chat_project_label(primary_labels, project_id)
         if project_label:
             labels["project"] = project_label
-        if account is not None:
-            labels["account"] = account.id
+        labels["account"] = account.id
         canonical_name = canonical_agent_name(display_name)
         self._launch_creation_thread(agent_id, canonical_name, cmd, Path(work_dir), log_queue, labels, harness)
 

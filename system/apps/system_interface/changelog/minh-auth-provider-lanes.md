@@ -765,3 +765,14 @@ for lack of credentials. Its caller -- the auth-success chokepoint in the sign-i
 deleted with the modal, so the module has had no live path since; and there is no boot chat to
 address now either. `/welcome` reaches the first chat through the `first` create template, on a
 chat that has an account by construction, so there is nothing left to recover from.
+
+# Creating a chat with no provider is refused, not bound to nothing
+
+`resolve_binding` returned None when nothing was signed in, and the caller created the agent
+anyway -- one that could not take a turn and said nothing about why. It raises now. There is no
+shared login behind that None any more: the settings-env writer is deleted and `~/.claude` is
+left alone.
+
+Every surface that starts a chat checks first and opens the chooser instead, including a new
+project's starter chat -- which previously turned the failure into a blocking browser alert on
+every project creation. Signing in from there finishes what was asked for and starts the chat.

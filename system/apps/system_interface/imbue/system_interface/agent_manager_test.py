@@ -152,6 +152,19 @@ def _last_agents_updated(messages: list[dict[str, Any]]) -> dict[str, Any] | Non
     return None
 
 
+@pytest.fixture(autouse=True)
+def _signed_in_account() -> None:
+    """One account, because creating a chat now requires one.
+
+    There is no shared login to fall back to: `resolve_binding` raises rather than returning
+    None, so a chat create with no account is refused. Autouse because every create in this
+    module wants the ordinary case; the two that care about a SPECIFIC account mint their own
+    and pass its id, and this one is simply not chosen.
+    """
+    account_id, _ = mint_account_dir()
+    commit_account(account_id, "anthropic", "Anthropic")
+
+
 def test_get_agents_initially_empty(agent_manager: AgentManager) -> None:
     agents = agent_manager.get_agents()
     assert agents == []
