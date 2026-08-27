@@ -37,7 +37,6 @@ import {
   getProtoAgents,
   removeAgentsUpdatedListener,
 } from "../models/AgentManager";
-import { openProviderChooser } from "../models/Providers";
 import { maybePromptForFastMode } from "./fast-mode-prompt";
 import { apiUrl } from "../base-path";
 import { EmptySlot } from "./EmptySlot";
@@ -908,10 +907,10 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                       events: getEventsForAgent(agentId),
                     }),
                 m(MessageInput, { agentId }),
-                // Below the chat input: the original flex row -- model bar on the left, the
-                // agent-terminal + harness-auth actions right-aligned. The "Powered by" credit is
-                // rendered last as a centered overlay (absolute, pointer-events:none) so it sits
-                // in the middle without reshaping the row. Shared font, no background of its own.
+                // Below the chat input: model bar on the left, the agent-terminal action
+                // right-aligned. There was a "Providers" button here too, as a temporary home
+                // for the chooser while the model bar could not reach it; the card's Provider
+                // row is that entry point now, so the button is gone.
                 m("div", { class: "composer-under-bar" }, [
                   m(ModelBar, { agentId }),
                   m("div", { class: "composer-under-bar-actions" }, [
@@ -924,18 +923,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                       },
                       "Open agent terminal",
                     ),
-                    // Persistent entry to the provider chooser, so the user can add or
-                    // switch providers without waiting for an auth error. This is a
-                    // temporary home: the chooser's real entry points are the new-tab
-                    // screen's picker and the model bar, and this button goes away with
-                    // them. The auth-error paths still open the old modal for now.
-                    m(
-                      "button",
-                      { type: "button", class: "composer-under-bar-action", onclick: () => openProviderChooser() },
-                      "Providers",
-                    ),
                   ]),
-                  // The centered harness credit (may render nothing), overlaid on the bar.
                 ]),
               ]),
         ],

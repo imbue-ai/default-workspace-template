@@ -1,66 +1,60 @@
 /**
- * Pure geometry for a side flyout -- a submenu that opens BESIDE its parent panel,
- * top-aligned with the row that triggered it.
+ * Pure geometry for the combo card's side flyout, ported from the mockup.
  *
- * Replaced `dropdown-position.ts`, which handled the horizontal-only case (a popup under its
- * trigger) for the model bar this card supersedes. A flyout needs both axes, a height cap and
- * a side to flip to, and nothing else wanted the old one.
+ * The mockup's rule, verbatim (`ModelBar.tsx`): the flyout's left edge tucks 4px UNDER the
+ * card's right edge (macOS submenu geometry -- a gap reads as two separate panels), its top
+ * aligns with the row that opened it minus 6px, and its height is capped to whatever space
+ * remains below that top.
  *
- * Kept free of the DOM so it is unit-testable; the caller measures the live rects and
- * feeds them in.
+ * An earlier version of this file also LIFTED a flyout opened from a row near the bottom so
+ * its full height would fit. That was invented, not ported, and it is what put the list in the
+ * top-right corner of the screen while the card sat at the bottom: capping the height keeps the
+ * flyout beside the row that opened it, which is the whole point of a submenu.
  *
- * Three rules, in priority order:
- *   1. HARD: the flyout stays inside the viewport, with `margin` on every edge.
- *   2. SOFT: it top-aligns with the row that opened it (system-menu behaviour) and tucks
- *      slightly UNDER the parent's trailing edge rather than floating off it with a gap.
- *   3. LAST RESORT: when there is no room on the trailing side, it flips to the leading
- *      side -- a flyout half off-screen is worse than one on the other side.
+ * Kept free of the DOM so it is unit-testable; the caller measures and feeds it in.
  */
 
 export interface FlyoutPlacementInput {
-  /** Viewport rect of the panel the flyout opens beside. */
-  parent: { left: number; right: number };
+  /** Viewport left of the card, and its width. */
+  cardLeft: number;
+  cardWidth: number;
   /** Viewport y of the top edge of the row that opened the flyout. */
   rowTop: number;
-  /** Measured (or intended) size of the flyout box. */
   flyoutWidth: number;
-  /** The tallest the flyout may ever be, before the viewport cap. */
+  /** The tallest the flyout may be before the viewport caps it. */
   maxFlyoutHeight: number;
   viewportWidth: number;
   viewportHeight: number;
-  /** Gap to keep between the flyout and each viewport edge. */
+  /** Gap kept between the flyout and each viewport edge. */
   margin: number;
-  /** How far the flyout tucks under the parent's edge. Positive overlaps. */
+  /** How far the flyout tucks under the card's edge. Positive overlaps. */
   overlap: number;
 }
 
 export interface FlyoutPlacement {
   left: number;
   top: number;
-  /** Cap, not a fixed height: the content decides, up to this. */
+  /** A cap, not a height: the content decides, up to this. */
   maxHeight: number;
-  /** Which side it ended up on, so the caller can mirror a shadow or an arrow. */
   side: "trailing" | "leading";
 }
 
 export function placeFlyout(input: FlyoutPlacementInput): FlyoutPlacement {
-  const { parent, rowTop, flyoutWidth, maxFlyoutHeight, viewportWidth, viewportHeight, margin, overlap } = input;
+  const { cardLeft, cardWidth, rowTop, flyoutWidth, maxFlyoutHeight } = input;
+  const { viewportWidth, viewportHeight, margin, overlap } = input;
 
-  const trailing = parent.right - overlap;
-  const leading = parent.left + overlap - flyoutWidth;
-  // Prefer trailing; flip only when the whole box would not fit there but WOULD fit leading.
+  const trailing = cardLeft + cardWidth - overlap;
+  const leading = cardLeft + overlap - flyoutWidth;
+  // Prefer the trailing side; flip only when the box would not fit there but would fit on the
+  // other. A flyout half off-screen is worse than one on the unexpected side.
   const fitsTrailing = trailing + flyoutWidth <= viewportWidth - margin;
-  const fitsLeading = leading >= margin;
-  const side: "trailing" | "leading" = fitsTrailing || !fitsLeading ? "trailing" : "leading";
+  const side: "trailing" | "leading" = fitsTrailing || leading < margin ? "trailing" : "leading";
   const wanted = side === "trailing" ? trailing : leading;
-  // Rule 1 still binds on the chosen side: at absurd viewport widths neither side fits, and
-  // pinning to the left margin keeps the first characters readable.
+  // At absurd viewport widths neither side fits; pin to the left margin so the first
+  // characters stay readable.
   const left = Math.min(Math.max(wanted, margin), Math.max(margin, viewportWidth - margin - flyoutWidth));
 
-  const room = viewportHeight - margin - rowTop;
-  // Top-aligning a row near the bottom would leave a sliver, so lift the flyout enough to
-  // show either its full height or everything the viewport can hold, whichever is smaller.
-  const height = Math.min(maxFlyoutHeight, viewportHeight - 2 * margin);
-  const top = room >= height ? rowTop : Math.max(margin, viewportHeight - margin - height);
-  return { left, top, maxHeight: Math.min(maxFlyoutHeight, viewportHeight - margin - top), side };
+  // Top-aligned with the row, never above the viewport. The height gives way, not the position.
+  const top = Math.max(margin, rowTop);
+  return { left, top, maxHeight: Math.max(0, Math.min(maxFlyoutHeight, viewportHeight - top - margin)), side };
 }

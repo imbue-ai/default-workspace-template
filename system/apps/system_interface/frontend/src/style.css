@@ -66,9 +66,15 @@
   --color-subtle: var(--color-border-faint);
   --color-default: var(--color-border);
   --color-strong: var(--color-border-code);
-  /* surfaces: bg-surface-primary, and the modal scrim */
+  /* surfaces: bg-surface-primary, the modal scrim, and the inverted chip a tooltip sits on */
   --color-surface-primary: var(--color-surface);
   --color-surface-overlay: rgb(0 0 0 / 0.35);
+  /* The mockup's inverse pair is a light/dark mirror; this app is light only, so it is a
+     fixed dark chip -- which is what a tooltip wants either way. Registered rather than
+     omitted because the combo card's locked-provider hint is the one affordance that surface
+     exists to ship, and an unknown utility renders as nothing at all. */
+  --color-surface-inverse: #202020;
+  --color-inverse-primary: #ffffff;
   /* fills: the resting / hover / pressed tints over a surface */
   --color-fill-subtle: var(--color-bg-sidebar);
   --color-fill-hover: var(--color-bg-hover);

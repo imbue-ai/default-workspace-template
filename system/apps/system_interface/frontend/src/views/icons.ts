@@ -89,6 +89,9 @@ export interface IconOptions {
   size?: number;
   strokeWidth?: number;
   className?: string;
+  // Draw the glyph solid instead of as an outline. Only sensible for shapes that read as a
+  // silhouette -- the composer chip's "fast mode" bolt, which has to say "on" at 12px.
+  filled?: boolean;
 }
 
 /** Full <svg> string for a stroke-outline icon. */
@@ -96,9 +99,10 @@ export function icon(name: IconName, opts: IconOptions = {}): string {
   const dims = opts.size === undefined ? "" : ` width="${opts.size}" height="${opts.size}"`;
   const cls = opts.className ? ` class="${opts.className}"` : "";
   const strokeWidth = opts.strokeWidth ?? 2;
+  const paint = opts.filled ? 'fill="currentColor" stroke="none"' : 'fill="none" stroke="currentColor"';
   return (
-    `<svg xmlns="${XMLNS}"${cls}${dims} viewBox="0 0 24 24" fill="none" ` +
-    `stroke="currentColor" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">` +
+    `<svg xmlns="${XMLNS}"${cls}${dims} viewBox="0 0 24 24" ${paint} ` +
+    `stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">` +
     `${STROKE_PATHS[name]}</svg>`
   );
 }
