@@ -21,6 +21,7 @@ from imbue.system_interface import accounts
 from imbue.system_interface.app_context import get_state
 from imbue.system_interface.harnesses.auth_flows import FlowError
 from imbue.system_interface.harnesses.auth_flows import flow_shape
+from imbue.system_interface.harnesses.lanes import HARNESS_LABEL
 from imbue.system_interface.harnesses.lanes import LANES
 from imbue.system_interface.harnesses.lanes import LaneNotFoundError
 from imbue.system_interface.harnesses.lanes import PasteMethod
@@ -111,6 +112,13 @@ def list_accounts() -> Response:
                 "id": account.id,
                 "lane": account.lane,
                 "harness": lane.harness.value,
+                # The composed label ("Groq (Pi) 2") for anything showing one string, and its
+                # parts for the combo card, which renders the provider and the harness at
+                # different sizes on one row. Composed here either way, so the numbering rule
+                # lives in one place.
+                "provider": account.display,
+                "harness_label": HARNESS_LABEL[lane.harness],
+                "seq": shown[key],
                 "label": account_label(account.display, lane.harness, shown[key]),
             }
         )

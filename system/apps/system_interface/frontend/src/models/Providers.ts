@@ -51,9 +51,13 @@ export interface Lane {
 export interface ProviderAccount {
   id: string;
   lane: string;
-  /** Which harness runs this account. Nothing here reads it yet; the combo card will, to
-   *  grey the providers a started chat cannot switch to. */
+  /** Which harness runs this account -- what the combo card greys a row by. */
   harness: string;
+  /** The provider noun on its own ("Groq"), and the harness's display name ("Pi"). The card
+   *  renders them at different sizes on one row; `label` is the same thing composed. */
+  provider: string;
+  harness_label: string;
+  seq: number;
   /** Already composed server-side ("Anthropic (Claude Code) 2") -- see accounts_endpoints. */
   label: string;
 }
@@ -82,6 +86,16 @@ export function getLanes(): Lane[] {
 
 export function getAccounts(): ProviderAccount[] {
   return accounts;
+}
+
+/** The account a chat is running on, from its own `account` label.
+ *
+ * Null when the chat predates accounts, or when the account has since been deleted -- the
+ * label is a dangling id in that case, which is the accepted cost of delete-and-re-add.
+ */
+export function accountForAgent(accountId: string | undefined): ProviderAccount | null {
+  if (!accountId) return null;
+  return accounts.find((candidate) => candidate.id === accountId) ?? null;
 }
 
 export function getMruAccountId(): string | null {
