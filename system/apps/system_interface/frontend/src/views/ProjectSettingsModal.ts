@@ -29,6 +29,7 @@ import { Modal } from "./Modal";
 import { deleteProjectRequest, updateProjectSettings } from "../models/Projects";
 import type { ProjectInfo } from "../models/Projects";
 import { SQUIGGLE_GLYPHS, squiggleMarkup } from "./squiggles";
+import { MODAL_LABEL_CLASS, MODAL_MESSAGE_CLASS, buttonClass, inputClass } from "./primitives";
 
 export interface ProjectSettingsModalAttrs {
   project: ProjectInfo;
@@ -158,7 +159,7 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
   // The delete step's copy, shown at the foot of the body while confirming; its
   // Keep/Delete buttons ride the shell's action row (see the view).
   function deleteConfirmationMessage(attrs: ProjectSettingsModalAttrs): m.Vnode {
-    return m("p.modal-message", [
+    return m("p", { class: MODAL_MESSAGE_CLASS }, [
       "Delete ",
       m("strong", attrs.project.name),
       "? This removes the view only — everything it shows keeps running, and stays in Everything and " +
@@ -169,8 +170,9 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
   function deleteConfirmationActions(attrs: ProjectSettingsModalAttrs): m.Children {
     return [
       m(
-        "button.btn.btn--secondary",
+        "button",
         {
+          class: buttonClass("secondary"),
           disabled: isDeleting,
           onclick() {
             isConfirmingDelete = false;
@@ -179,9 +181,9 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
         "Keep project",
       ),
       m(
-        "button.btn.btn--destructive",
+        "button",
         {
-          class: "disabled:opacity-50",
+          class: buttonClass("destructive"),
           disabled: isDeleting,
           onclick: () => deleteProject(attrs),
         },
@@ -193,9 +195,9 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
   function editActions(attrs: ProjectSettingsModalAttrs, trimmedName: string): m.Children {
     return [
       m(
-        "button.btn.btn--secondary",
+        "button",
         {
-          class: "mr-auto disabled:opacity-50",
+          class: buttonClass("secondary", { extra: "mr-auto" }),
           disabled: isSaving || isDeleting,
           onclick() {
             isConfirmingDelete = true;
@@ -204,16 +206,14 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
         "Delete",
       ),
       m(
-        "button.btn.btn--secondary",
-        {
-          onclick: attrs.onCancel,
-          disabled: isSaving || isDeleting,
-        },
+        "button",
+        { class: buttonClass("secondary"), onclick: attrs.onCancel, disabled: isSaving || isDeleting },
         "Cancel",
       ),
       m(
-        "button.btn.btn--primary",
+        "button",
         {
+          class: buttonClass("primary"),
           onclick: () => save(attrs),
           disabled: isSaving || isDeleting || !trimmedName,
         },
@@ -262,8 +262,9 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
             m("span", { class: "text-primary truncate text-sm font-medium" }, trimmedName || "Untitled project"),
           ]),
 
-          m("label.modal-label", "Name"),
-          m("input.input.mb-3", {
+          m("label", { class: MODAL_LABEL_CLASS }, "Name"),
+          m("input", {
+            class: inputClass({ extra: "mb-3" }),
             type: "text",
             value: name,
             placeholder: "project name",
@@ -279,10 +280,10 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
             },
           }),
 
-          m("label.modal-label", "Color"),
+          m("label", { class: MODAL_LABEL_CLASS }, "Color"),
           m("div", { class: "mb-3 flex flex-wrap gap-2" }, PALETTE.map(colorSwatch)),
 
-          m("label.modal-label", "Squiggle"),
+          m("label", { class: MODAL_LABEL_CLASS }, "Squiggle"),
           m(
             "div",
             { class: "mb-3 grid grid-cols-5 gap-2" },

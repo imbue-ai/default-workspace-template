@@ -13,6 +13,7 @@
 import { attachHoverTooltip } from "./views/hoverTooltip";
 import type { HoverTooltip } from "./views/hoverTooltip";
 import { icon } from "./views/icons";
+import { buttonClass } from "./views/primitives";
 
 function filenameFromUrl(imageUrl: string): string {
   try {
@@ -84,7 +85,7 @@ export function openImageLightbox(imageUrl: string, altText: string): void {
   actions.className = "image-lightbox-actions";
 
   const downloadLink = document.createElement("a");
-  downloadLink.className = "btn btn--icon image-lightbox-iconbtn";
+  downloadLink.className = buttonClass("ghost", { icon: true, extra: "image-lightbox-iconbtn" });
   downloadLink.href = imageUrl;
   downloadLink.download = filename;
   // Same-origin images download in place; a cross-origin (public-URL) image the
@@ -95,7 +96,7 @@ export function openImageLightbox(imageUrl: string, altText: string): void {
   downloadLink.innerHTML = icon("download", { size: 20 });
 
   const closeButton = document.createElement("button");
-  closeButton.className = "btn btn--icon image-lightbox-iconbtn";
+  closeButton.className = buttonClass("ghost", { icon: true, extra: "image-lightbox-iconbtn" });
   closeButton.type = "button";
   closeButton.setAttribute("aria-label", "Close image viewer");
   closeButton.innerHTML = icon("close", { size: 20 });

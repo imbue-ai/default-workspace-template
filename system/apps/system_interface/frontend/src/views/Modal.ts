@@ -17,6 +17,13 @@
 
 import m from "mithril";
 import { backdropDismissAttrs } from "./modalBackdrop";
+import {
+  MODAL_ACTIONS_CLASS,
+  MODAL_CARD_CLASS,
+  MODAL_HEADER_CLASS,
+  MODAL_OVERLAY_CLASS,
+  MODAL_TITLE_CLASS,
+} from "./primitives";
 
 export interface ModalAttrs {
   // Called when the backdrop is dismissed (a primary mousedown on the overlay).
@@ -46,14 +53,16 @@ export const Modal: m.Component<ModalAttrs> = {
     if (width !== undefined) {
       cardAttrs.style = `width: ${width}px`;
     }
-    const headerContent = header ?? (title === undefined ? null : m("h3.modal-title", title));
+    const headerContent = header ?? (title === undefined ? null : m("h3", { class: MODAL_TITLE_CLASS }, title));
     return m(
-      "div.modal-overlay",
-      { ...(overlay ?? {}), ...backdropDismissAttrs(onDismiss) },
-      m("div.modal-card", cardAttrs, [
-        headerContent === null || headerContent === undefined ? null : m("div.modal-header", headerContent),
+      "div",
+      { class: MODAL_OVERLAY_CLASS, ...(overlay ?? {}), ...backdropDismissAttrs(onDismiss) },
+      m("div", { class: MODAL_CARD_CLASS, ...cardAttrs }, [
+        headerContent === null || headerContent === undefined
+          ? null
+          : m("div", { class: MODAL_HEADER_CLASS }, headerContent),
         vnode.children,
-        actions === undefined ? null : m("div.modal-actions", actions),
+        actions === undefined ? null : m("div", { class: MODAL_ACTIONS_CLASS }, actions),
       ]),
     );
   },

@@ -11,6 +11,7 @@
 import m from "mithril";
 import { Modal } from "./Modal";
 import { hoverTooltipAttrs } from "./hoverTooltip";
+import { MODAL_MESSAGE_CLASS, MODAL_TITLE_CLASS, buttonClass } from "./primitives";
 
 interface ShareModalAttrs {
   serviceName: string;
@@ -26,18 +27,24 @@ export const ShareModal: m.Component<ShareModalAttrs> = {
         onDismiss: onClose,
         width: 480,
         header: [
-          m("h3.modal-title", `Share "${serviceName}"`),
+          m("h3", { class: MODAL_TITLE_CLASS }, `Share "${serviceName}"`),
           // ml-auto pins the close button to the right of the title row.
           m(
-            "button.btn.btn--icon.btn--sm.ml-auto",
-            { type: "button", "aria-label": "Close", onclick: onClose, ...hoverTooltipAttrs("Close") },
+            "button",
+            {
+              class: buttonClass("ghost", { icon: true, sm: true, extra: "ml-auto" }),
+              type: "button",
+              "aria-label": "Close",
+              onclick: onClose,
+              ...hoverTooltipAttrs("Close"),
+            },
             "×",
           ),
         ],
-        actions: [m("button.btn.btn--secondary", { onclick: onClose }, "Close")],
+        actions: [m("button", { class: buttonClass("secondary"), onclick: onClose }, "Close")],
       },
       [
-        m("p.modal-message", [
+        m("p", { class: MODAL_MESSAGE_CLASS }, [
           "To share this service externally, open the Minds desktop app, go to ",
           m("strong", "workspace settings"),
           ", and enable sharing for the ",
@@ -45,7 +52,8 @@ export const ShareModal: m.Component<ShareModalAttrs> = {
           " service.",
         ]),
         m(
-          "p.modal-message",
+          "p",
+          { class: MODAL_MESSAGE_CLASS },
           "Shared traffic is encrypted end-to-end into this workspace, and access is granted per email address.",
         ),
       ],

@@ -13,6 +13,7 @@ import {
 } from "./conversation-rows";
 import { resolveSelectionRowRange } from "./scroll-selection";
 import { createTranscriptScroll } from "./transcript-scroll";
+import { badgeClass } from "./primitives";
 
 interface SubagentViewAttrs {
   agentId: string;
@@ -175,7 +176,7 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
 
       const header = m("header", { class: "app-header" }, [
         m("h1", { class: "app-header-title" }, title),
-        agentType ? m("span", { class: "badge badge--neutral badge--mono" }, agentType) : null,
+        agentType ? m("span", { class: badgeClass("neutral", { mono: true }) }, agentType) : null,
       ]);
 
       let content: m.Vnode;

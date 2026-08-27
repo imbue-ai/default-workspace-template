@@ -5,6 +5,7 @@
 
 import m from "mithril";
 import { Modal } from "./Modal";
+import { MODAL_MESSAGE_CLASS, buttonClass } from "./primitives";
 
 interface DestroyConfirmDialogAttrs {
   agentName: string;
@@ -44,11 +45,14 @@ export const DestroyConfirmDialog: m.Component<DestroyConfirmDialogAttrs> = {
         onDismiss: onCancel,
         title,
         actions: [
-          m("button.btn.btn--secondary", { onclick: onCancel }, "Cancel"),
-          m("button.btn.btn--destructive", { onclick: onConfirm }, confirmLabel),
+          m("button", { class: buttonClass("secondary"), onclick: onCancel }, "Cancel"),
+          m("button", { class: buttonClass("destructive"), onclick: onConfirm }, confirmLabel),
         ],
       },
-      [m("p.modal-message", question), details === undefined ? null : m("p.modal-message", details)],
+      [
+        m("p", { class: MODAL_MESSAGE_CLASS }, question),
+        details === undefined ? null : m("p", { class: MODAL_MESSAGE_CLASS }, details),
+      ],
     );
   },
 };

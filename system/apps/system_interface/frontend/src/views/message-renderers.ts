@@ -11,6 +11,7 @@ import { hoverTooltipAttrs } from "./hoverTooltip";
 import type { PermissionResolution } from "./message-classification";
 import { isSkillExpansionUserMessage } from "./message-classification";
 import { PermissionCard, isFiledPermissionRequest } from "./permission-card";
+import { badgeClass } from "./primitives";
 
 // Per-kind user_message rendering lives in user-message-display.ts (the display
 // half of the classify/display split). Re-exported here so existing importers --
@@ -256,7 +257,7 @@ export function renderSubagentCard(toolCall: ToolCall, agentId: string, isRunnin
     m("div", { class: "subagent-card-header" }, [
       statusIndicator,
       m("span", { class: "subagent-card-description" }, description),
-      agentType ? m("span", { class: "badge badge--accent badge--mono shrink-0" }, agentType) : null,
+      agentType ? m("span", { class: badgeClass("accent", { mono: true, extra: "shrink-0" }) }, agentType) : null,
     ]),
     // The click-through needs the subagent session_id, which only arrives once the call is
     // linked. The label stays "View conversation" throughout so it doesn't flip-flop; before
