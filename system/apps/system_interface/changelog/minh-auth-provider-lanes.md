@@ -333,3 +333,27 @@ We diverge only where our scope does, and only in the part that differs: no `Run
 dropdown or tertiary line (provider -> harness is fixed in V1), the inverted OpenAI step 2
 (a code plus Copy, which the mockup has no screen for), and the signed-in / re-auth / delete
 rows (the mockup shows one connection). Each still sits inside the mockup's frame.
+
+# Port the sign-in flow from the mockup rather than approximating it
+
+The chooser is now a port of `prototypes/minds-harness` -- `IntroChooserModal`'s row list as
+the entry screen, `ProviderSignInModal`'s body behind it -- with the mockup's modes, title
+rules, layout rules and class strings. What was missing before, because it had been rebuilt
+from the nearest existing CSS rather than copied:
+
+- the spinner screen while a CLI is being spawned and scraped, and again while a submitted
+  credential is checked. Both take seconds, and an empty panel reads as a click that missed;
+- the "All set" screen with its check, the provider's own mark under it, and a Done footer,
+  so every provider gets the confirmation only claude used to have;
+- an error screen with the warning glyph and a Try again, instead of a banner over a
+  half-drawn form that is no longer actionable;
+- the entry screen being a fixed-height scroll region while deep forms flex, so the panel
+  holds its size when you drill in;
+- the two-step key screen (pick a provider, then paste) with "Saved as ‹VAR› for this mind",
+  where before there was one undifferentiated field;
+- the header's title naming what you are signing in to, and back stepping one layer.
+
+62 of the 66 `.claude-login-*` rules are deleted with it: everything the modal used to need
+is now a mockup class. What is left is the overlay and the spinner's keyframes, which are
+genuinely shared. `claudeLogoIcon` goes too -- `providerMarks.ts` owns that artwork now, and
+unlike the old helper it takes a size.
