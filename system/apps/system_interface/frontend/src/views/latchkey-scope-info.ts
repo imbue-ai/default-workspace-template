@@ -28,9 +28,7 @@ export interface ScopeInfo {
 }
 
 type CacheEntry =
-  | { state: "loading" }
-  | { state: "ready"; info: ScopeInfo | null }
-  | { state: "failed"; retryAtMs: number };
+  { state: "loading" } | { state: "ready"; info: ScopeInfo | null } | { state: "failed"; retryAtMs: number };
 
 const cache = new Map<string, CacheEntry>();
 
