@@ -726,3 +726,10 @@ An unknown lane id came back from the API wrapped in its own quotes -- `"'no suc
 -- because the error subclassed `KeyError`, whose `__str__` is `repr(args[0])`. It is a
 `LookupError` now, so a message written for a person arrives as one. Found by the first
 request-level test written against these routes.
+
+# Open the chooser on a specific account
+
+`openProviderChooser` takes an optional account id. With one, the chooser lands directly on that
+account's sign-in rather than on the lane list -- which is what a dead-account notice and a
+per-provider card both need, and what the account row's own "Sign in again" button now uses so
+there is one path rather than two.

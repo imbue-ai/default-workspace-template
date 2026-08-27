@@ -46,6 +46,7 @@ import {
   getFlow,
   getLanes,
   loadAccounts,
+  takeChooserAccountId,
   loadLanes,
   startFlow,
   submitCode,
@@ -326,12 +327,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
                 type: "button",
                 class: css.ROW_ACTION,
                 title: "Sign in again, keeping this account and every chat on it",
-                onclick: () => {
-                  const owner = getLanes().find((candidate) => candidate.id === account.lane);
-                  if (owner !== undefined) {
-                    void begin(owner, owner.methods[0], { fromChooser: true, accountId: account.id });
-                  }
-                },
+                onclick: () => void reauthenticate(account.id, account.lane),
               },
               "Sign in again",
             ),
@@ -669,9 +665,22 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     ]);
   }
 
+  /** Start this account's own lane's primary sign-in, into the folder it already has. */
+  async function reauthenticate(accountId: string, laneId: string): Promise<void> {
+    const owner = getLanes().find((candidate) => candidate.id === laneId);
+    if (owner === undefined) return;
+    await begin(owner, owner.methods[0], { fromChooser: true, accountId });
+  }
+
   return {
-    oninit() {
-      void load();
+    async oninit() {
+      await load();
+      // Opened ON an account rather than to add one: a dead-account notice, or a provider
+      // card whose credential expired. Land on that account's sign-in, not the lane list.
+      const accountId = takeChooserAccountId();
+      if (accountId === null) return;
+      const account = getAccounts().find((candidate) => candidate.id === accountId);
+      if (account !== undefined) await reauthenticate(account.id, account.lane);
     },
 
     onremove() {
