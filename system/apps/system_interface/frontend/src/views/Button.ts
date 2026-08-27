@@ -1,6 +1,6 @@
 import m from "mithril";
 import { splitAttrs } from "./attrs";
-import { TEXT_BODY_SIZE } from "./primitives";
+import { TEXT_BODY_SIZE } from "./typography";
 
 /* ── Button ──────────────────────────────────────────────────────────────────
  * One button system: the class recipe (buttonClass) and the component that

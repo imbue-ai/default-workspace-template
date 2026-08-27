@@ -19,6 +19,19 @@ document is the durable hand-off so any agent can pick the work up cold.
 
 ### Progress log
 
+- **Primitives grab-bag dissolved (one file per primitive) — DONE.**
+  `views/primitives.ts` is gone: the modal shell recipe (`MODAL_*_CLASS`) now
+  lives beside the component that emits it in `views/Modal.ts`, the input and
+  badge recipes in `views/Input.ts` / `views/Badge.ts`, and the shared
+  type-size fragments in `views/typography.ts`. Censuses sized the two
+  remaining recipes before deciding their shape: input has 5 call sites across
+  two element types (4 `<input>`, 1 `<textarea>`) and badge has 2 (both static
+  `<span>`s; only the neutral/accent tones are in use), so both deliberately
+  stay class builders — no invariant to enforce, nothing a wrapper would
+  simplify. The promote-to-component bar is the Button precedent below
+  (36 sites plus real invariants). Value-exact no-op: recipes moved files,
+  no utility changed.
+
 - **Button primitive promoted to a component — DONE.** The button recipe moved
   from `views/primitives.ts` into `views/Button.ts`, which holds the recipe
   (`buttonClass`) plus the closure component (`Button`) that carries it — the

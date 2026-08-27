@@ -20,7 +20,7 @@ import { Modal } from "./Modal";
 import type { ProjectInfo } from "../models/Projects";
 import { squiggleMarkup } from "./squiggles";
 import { Button } from "./Button";
-import { MODAL_MESSAGE_CLASS } from "./primitives";
+import { MODAL_MESSAGE_CLASS } from "./Modal";
 
 const ROW_GLYPH_SIZE = 16;
 
