@@ -75,7 +75,9 @@ class PasteSink(StrEnum):
     CLAUDE_ENV = "claude_env"
     # A 0600 JSON map keyed by pi's provider id.
     PI_AUTH_JSON = "pi_auth_json"
-    # Fed to `codex login --with-api-key` on stdin; codex writes its own store.
+    # Fed to `codex login --with-api-key` on stdin; codex writes its own store. Not offered
+    # yet: every command runner in production system_interface pins stdin to DEVNULL, so this
+    # needs one that can write to a child before it can be a real method.
     CODEX_STDIN = "codex_stdin"
 
 
@@ -289,12 +291,6 @@ LANE_OPENAI = Lane(
             eof_policy=EofPolicy.SUCCESS,
             # codex renders plainly, without Ink's synchronized updates.
             frame_marker=None,
-        ),
-        PasteMethod(
-            id="api_key",
-            label="Use an API key",
-            description="Paste a raw OpenAI API key instead.",
-            sink=PasteSink.CODEX_STDIN,
         ),
     ),
 )
