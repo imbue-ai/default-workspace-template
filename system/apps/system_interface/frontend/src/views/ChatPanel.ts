@@ -406,8 +406,8 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   }
 
   const RELOAD_BUTTON_CLASS =
-    "message-list-reload cursor-pointer rounded-md border border-border px-3 py-1 text-sm " +
-    "text-text-primary hover:bg-bg-hover";
+    "message-list-reload cursor-pointer rounded-md border border-default px-3 py-1 text-sm " +
+    "text-primary hover:bg-fill-hover";
 
   function manageStreamConnection(agentId: string): void {
     if (!isConversationNotFound(agentId)) {
@@ -614,10 +614,10 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     if (isConversationNotFound(agentId)) {
       fetchScreenCapture(agentId);
       return m("div", { class: "message-list-not-found flex flex-col items-center justify-center h-full gap-4 p-8" }, [
-        m("p", { class: "text-lg font-semibold text-text-primary" }, "No conversation data"),
-        m("p", { class: "text-text-secondary" }, "This agent has no Claude session. It may have crashed on startup."),
+        m("p", { class: "text-lg font-semibold text-primary" }, "No conversation data"),
+        m("p", { class: "text-secondary" }, "This agent has no Claude session. It may have crashed on startup."),
         screenLoading
-          ? m("p", { class: "text-text-secondary" }, "Loading terminal output...")
+          ? m("p", { class: "text-secondary" }, "Loading terminal output...")
           : screenContent
             ? m(
                 "pre",
@@ -628,7 +628,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                 screenContent,
               )
             : screenError
-              ? m("p", { class: "text-text-secondary text-sm" }, `Could not capture terminal: ${screenError}`)
+              ? m("p", { class: "text-secondary text-sm" }, `Could not capture terminal: ${screenError}`)
               : null,
       ]);
     }
@@ -654,7 +654,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       return m(
         "div",
         { class: "message-list-loading flex items-center justify-center h-full" },
-        m("p", { class: "text-text-secondary" }, "Loading events..."),
+        m("p", { class: "text-secondary" }, "Loading events..."),
       );
     }
 
@@ -674,10 +674,14 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     const failedReloadNotice =
       load.error === null
         ? null
-        : m("div", { class: "message-list-stale-notice flex items-center gap-3 border-b border-border px-3 py-1.5" }, [
-            m("span", { class: "text-sm text-red-500" }, `Couldn't refresh this conversation: ${load.error}`),
-            m("button", { class: RELOAD_BUTTON_CLASS, onclick: () => reloadAfterFailure(agentId) }, "Refresh"),
-          ]);
+        : m(
+            "div",
+            { class: "message-list-stale-notice flex items-center gap-3 border-b border-default px-3 py-1.5" },
+            [
+              m("span", { class: "text-sm text-red-500" }, `Couldn't refresh this conversation: ${load.error}`),
+              m("button", { class: RELOAD_BUTTON_CLASS, onclick: () => reloadAfterFailure(agentId) }, "Refresh"),
+            ],
+          );
 
     // Whether a live text selection is anchored in this panel's transcript. Gates
     // both eviction (below) and the tail-follow pin's effect on the window (via the
@@ -706,7 +710,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
         return m(
           "div",
           { class: "message-list-empty flex items-center justify-center h-full" },
-          m("p", { class: "text-text-secondary" }, "No events yet for this agent."),
+          m("p", { class: "text-secondary" }, "No events yet for this agent."),
         );
       }
       return m("div", { class: "message-list-wrapper" }, [
@@ -905,7 +909,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                   class:
                     "message-list-window-loading absolute inset-0 flex items-center justify-center p-6 pointer-events-none",
                 },
-                m("p", { class: "text-text-secondary" }, "Loading messages..."),
+                m("p", { class: "text-secondary" }, "Loading messages..."),
               )
             : null,
           // Only show message input when not in proto-agent mode

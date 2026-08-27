@@ -95,7 +95,7 @@ const ON_MACHINE_TITLE = "On this machine";
 
 // The small-caps heading over each block. Uppercasing is the stylesheet's job,
 // so the titles stay readable as text (and as test assertions).
-const SECTION_HEADING_CLASS = "type-section text-text-faint";
+const SECTION_HEADING_CLASS = "type-section text-faint";
 
 /** The order kinds are offered in, in the filter menu and in kindsInRows. */
 const KIND_ORDER: readonly MemberKind[] = ["chat", "browser", "terminal", "app", "url"];
@@ -426,7 +426,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
       "label",
       {
         key: kind,
-        class: "flex h-8 cursor-pointer items-center gap-2 px-3 text-[13px] text-text-primary hover:bg-bg-hover",
+        class: "flex h-8 cursor-pointer items-center gap-2 px-3 text-[13px] text-primary hover:bg-fill-hover",
       },
       [
         m("span", { class: "relative flex h-4 w-4 shrink-0 items-center justify-center" }, [
@@ -442,7 +442,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
             },
             class:
               "absolute inset-0 m-0 h-4 w-4 cursor-pointer appearance-none rounded border " +
-              (isShown ? "border-accent bg-accent" : "border-border bg-surface"),
+              (isShown ? "border-accent bg-accent" : "border-default bg-surface"),
           }),
           isShown
             ? m(
@@ -454,7 +454,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
         ]),
         m(
           "span",
-          { class: "text-text-faint flex w-5 shrink-0 items-center justify-center" },
+          { class: "text-faint flex w-5 shrink-0 items-center justify-center" },
           m.trust(kindIconMarkup(kind)),
         ),
         LAUNCHER_KIND_PLURAL_LABELS[kind],
@@ -471,7 +471,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
       "div",
       {
         class:
-          "absolute top-full right-0 z-30 mt-1 min-w-[170px] rounded-lg border border-border bg-surface py-1 shadow-lg",
+          "absolute top-full right-0 z-30 mt-1 min-w-[170px] rounded-lg border border-default bg-surface py-1 shadow-lg",
         oncreate: (vnode: m.VnodeDOM) => {
           menuElement = vnode.dom as HTMLElement;
           document.addEventListener("pointerdown", onDocumentPointerDown);
@@ -485,7 +485,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
       },
       [
         kindsInRows(section.rows).map((kind) => filterMenuRow(section, kind)),
-        m("div", { class: "my-1 border-t border-border" }),
+        m("div", { class: "my-1 border-t border-default" }),
         // Muted like a secondary action either way; only clickable (and only
         // wearing the rows' hover) while a filter is actually on.
         m(
@@ -495,7 +495,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
             disabled: isPristine,
             class:
               "flex h-8 w-full items-center px-3 text-left text-[13px] " +
-              (isPristine ? "text-text-faint cursor-default" : "text-text-secondary cursor-pointer hover:bg-bg-hover"),
+              (isPristine ? "text-faint cursor-default" : "text-secondary cursor-pointer hover:bg-fill-hover"),
             onclick: () => resetHiddenKinds(hidden),
           },
           "Reset filters",
@@ -516,24 +516,16 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
         type: "button",
         class:
           "new-tab-launcher-row flex h-9 w-full cursor-pointer items-center gap-3 rounded-md px-2 text-left " +
-          "text-[13px] hover:bg-bg-hover " +
-          (stoppedApp !== null ? "new-tab-launcher-row-stopped text-text-faint opacity-60" : "text-text-primary"),
+          "text-[13px] hover:bg-fill-hover " +
+          (stoppedApp !== null ? "new-tab-launcher-row-stopped text-faint opacity-60" : "text-primary"),
         ...(stoppedApp !== null ? hoverTooltipAttrs(`${row.label} — ${appStoppedDetail(stoppedApp)}`) : {}),
         onclick: () => onOpen(row),
       },
       [
-        m(
-          "span",
-          { class: "text-text-faint flex w-5 shrink-0 items-center justify-center" },
-          m.trust(rowIconMarkup(row)),
-        ),
+        m("span", { class: "text-faint flex w-5 shrink-0 items-center justify-center" }, m.trust(rowIconMarkup(row))),
         m("span", { class: "min-w-0 flex-1 truncate" }, row.label),
-        m("span", { class: "text-text-faint w-24 shrink-0 truncate" }, LAUNCHER_KIND_LABELS[row.kind]),
-        m(
-          "span",
-          { class: "text-text-faint w-28 shrink-0 truncate text-right" },
-          formatRecency(row.lastActiveMs, nowMs),
-        ),
+        m("span", { class: "text-faint w-24 shrink-0 truncate" }, LAUNCHER_KIND_LABELS[row.kind]),
+        m("span", { class: "text-faint w-28 shrink-0 truncate text-right" }, formatRecency(row.lastActiveMs, nowMs)),
       ],
     );
   }
@@ -557,8 +549,8 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
             type: "button",
             "aria-expanded": openFilterFor === section.key ? "true" : "false",
             class:
-              "text-text-faint flex h-6 w-6 cursor-pointer items-center justify-center rounded " +
-              "hover:bg-bg-hover hover:text-text-primary",
+              "text-faint flex h-6 w-6 cursor-pointer items-center justify-center rounded " +
+              "hover:bg-fill-hover hover:text-primary",
             onclick: () => {
               openFilterFor = openFilterFor === section.key ? null : section.key;
             },
@@ -569,7 +561,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
         openFilterFor === section.key ? filterMenu(section) : null,
       ]),
       visible.length === 0
-        ? m("p", { class: "text-text-faint px-2 py-1 text-[13px]" }, emptyMessage)
+        ? m("p", { class: "text-faint px-2 py-1 text-[13px]" }, emptyMessage)
         : visible.map((row) => memberRow(row, nowMs, onOpen)),
     ]);
   }
@@ -607,11 +599,9 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
                   type: "button",
                   "aria-disabled": isDisabled ? "true" : undefined,
                   class:
-                    "new-tab-launcher-tile border-border flex h-9 min-w-0 flex-1 items-center justify-center gap-2 " +
+                    "new-tab-launcher-tile border-default flex h-9 min-w-0 flex-1 items-center justify-center gap-2 " +
                     "rounded-lg border px-4 text-[13px] font-medium " +
-                    (isDisabled
-                      ? "text-text-faint cursor-not-allowed"
-                      : "text-text-primary hover:bg-bg-hover cursor-pointer"),
+                    (isDisabled ? "text-faint cursor-not-allowed" : "text-primary hover:bg-fill-hover cursor-pointer"),
                   onclick: isDisabled ? undefined : () => attrs.onOpenNew(tile.target),
                   // Keyed on the unbacked file viewer itself rather than on
                   // `isDisabled`: every tile is disabled while a create is in
@@ -624,7 +614,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
                 [
                   m(
                     "span",
-                    { class: "text-text-faint flex shrink-0 items-center" },
+                    { class: "text-faint flex shrink-0 items-center" },
                     m.trust(launcherIcon(tile.target.kind, GLYPH_SIZE)),
                   ),
                   // Truncates rather than wrapping: a second line would change

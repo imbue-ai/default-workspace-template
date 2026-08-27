@@ -244,7 +244,7 @@ describe("Sidebar switcher dropdown", () => {
     redraw();
     expect(switcherRow(root, "Alpha").querySelector(".project-rail-check")).not.toBeNull();
     expect(switcherRow(root, "Beta").querySelector(".project-rail-check")).toBeNull();
-    expect(switcherRow(root, "Alpha").className).not.toContain("bg-bg-sidebar");
+    expect(switcherRow(root, "Alpha").className).not.toContain("bg-sidebar");
     // The active row's pencil is still there (revealed on hover, swapping
     // places with the checkmark) -- rendered in the DOM either way, since the
     // swap is pure CSS opacity, not conditional rendering.
@@ -257,7 +257,7 @@ describe("Sidebar switcher dropdown", () => {
     redraw();
     const everythingRow = switcherRow(root, "Everything");
     expect(everythingRow.querySelector(".project-rail-check")).not.toBeNull();
-    expect(everythingRow.className).not.toContain("bg-bg-sidebar");
+    expect(everythingRow.className).not.toContain("bg-sidebar");
     expect(everythingRow.querySelector('[aria-label^="Edit"]')).toBeNull();
   });
 
@@ -403,8 +403,8 @@ describe("Sidebar switcher dropdown", () => {
     click(root.querySelector(".project-rail-header"));
     redraw();
     const newProjectRow = switcherRow(root, "New project");
-    expect(newProjectRow.className).toContain("text-text-faint");
-    expect(newProjectRow.className).toContain("hover:text-text-primary");
+    expect(newProjectRow.className).toContain("text-faint");
+    expect(newProjectRow.className).toContain("hover:text-primary");
   });
 });
 

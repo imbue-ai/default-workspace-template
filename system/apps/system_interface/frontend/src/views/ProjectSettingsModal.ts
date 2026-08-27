@@ -122,7 +122,7 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
       class: "h-6 w-6 cursor-pointer rounded-full border-0 p-0",
       style:
         `background: ${swatch}; outline-offset: 2px; ` +
-        `outline: ${isSelected ? "2px solid var(--color-text-primary)" : "none"};`,
+        `outline: ${isSelected ? "2px solid var(--c-text-primary)" : "none"};`,
       title: swatch,
       "aria-label": `Color ${swatch}`,
       "aria-pressed": isSelected ? "true" : "false",
@@ -141,7 +141,7 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
         // The selection ring is a shadow rather than a thicker border, so
         // picking a glyph never nudges the grid.
         style:
-          `border-color: ${isSelected ? color : "var(--color-border)"};` +
+          `border-color: ${isSelected ? color : "var(--c-border)"};` +
           (isSelected ? ` box-shadow: 0 0 0 1px ${color};` : ""),
         "aria-label": `Squiggle ${index + 1}`,
         "aria-pressed": isSelected ? "true" : "false",
@@ -259,7 +259,7 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
               { class: "flex h-10 w-10 shrink-0 items-center justify-center" },
               m.trust(squiggleMarkup(glyphIndex, color, PREVIEW_GLYPH_SIZE)),
             ),
-            m("span", { class: "text-text-primary truncate text-sm font-medium" }, trimmedName || "Untitled project"),
+            m("span", { class: "text-primary truncate text-sm font-medium" }, trimmedName || "Untitled project"),
           ]),
 
           m("label.modal-label", "Name"),

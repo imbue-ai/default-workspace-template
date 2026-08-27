@@ -62,7 +62,7 @@ export function AgentTerminalPanel(): m.Component<AgentTerminalPanelAttrs> {
         return m(
           "div",
           { class: "agent-terminal-starting flex items-center justify-center h-full" },
-          m("p", { class: "text-text-secondary" }, "Starting agent..."),
+          m("p", { class: "text-secondary" }, "Starting agent..."),
         );
       }
 

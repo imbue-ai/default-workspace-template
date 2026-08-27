@@ -74,8 +74,8 @@ const StoppedAppPlaceholder: m.Component<{ app: AppEntry }> = {
         "data-service-name": app.name,
       },
       [
-        m("div", { class: "text-[15px] font-medium text-text-primary" }, label),
-        m("div", { class: "text-[13px] text-text-faint" }, appStoppedDetail(app)),
+        m("div", { class: "text-[15px] font-medium text-primary" }, label),
+        m("div", { class: "text-[13px] text-faint" }, appStoppedDetail(app)),
         isAppStoppable(app)
           ? m(
               "button",
@@ -83,7 +83,7 @@ const StoppedAppPlaceholder: m.Component<{ app: AppEntry }> = {
                 type: "button",
                 class:
                   "si-stopped-app-start mt-1 flex h-8 cursor-pointer items-center rounded-md border " +
-                  "border-border px-4 text-[13px] font-medium text-text-primary hover:bg-bg-hover",
+                  "border-default px-4 text-[13px] font-medium text-primary hover:bg-fill-hover",
                 onclick: () => {
                   // The `apps_updated` push is the authority on success; a
                   // failed request leaves the placeholder (and the button, for

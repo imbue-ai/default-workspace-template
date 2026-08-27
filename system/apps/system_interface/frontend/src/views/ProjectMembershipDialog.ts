@@ -55,7 +55,7 @@ export function ProjectMembershipDialog(): m.Component<ProjectMembershipDialogAt
       "label",
       {
         class:
-          "flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 hover:bg-bg-hover " +
+          "flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 hover:bg-fill-hover " +
           (isFixed ? "cursor-default opacity-60" : ""),
       },
       [
@@ -77,8 +77,8 @@ export function ProjectMembershipDialog(): m.Component<ProjectMembershipDialogAt
           { class: "flex h-4 w-4 shrink-0 items-center justify-center" },
           m.trust(squiggleMarkup(project.glyph, project.color, ROW_GLYPH_SIZE)),
         ),
-        m("span", { class: "min-w-0 flex-1 truncate text-[13px] text-text-primary" }, project.name),
-        isFixed ? m("span", { class: "shrink-0 text-[11px] text-text-faint" }, "already added") : null,
+        m("span", { class: "min-w-0 flex-1 truncate text-[13px] text-primary" }, project.name),
+        isFixed ? m("span", { class: "shrink-0 text-[11px] text-faint" }, "already added") : null,
       ],
     );
   }
@@ -122,7 +122,7 @@ export function ProjectMembershipDialog(): m.Component<ProjectMembershipDialogAt
         [
           m("p.modal-message", ["Choose the projects that should also show ", m("strong", attrs.memberLabel), "."]),
           attrs.projects.length === 0
-            ? m("p", { class: "py-2 text-[13px] text-text-faint" }, "There are no projects on this machine yet.")
+            ? m("p", { class: "py-2 text-[13px] text-faint" }, "There are no projects on this machine yet.")
             : m(
                 "div",
                 { class: "mb-3 flex max-h-[40vh] flex-col gap-0.5 overflow-y-auto" },
