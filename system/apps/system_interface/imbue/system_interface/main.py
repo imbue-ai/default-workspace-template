@@ -83,7 +83,7 @@ def build_production_state(
         # resumption) instead of receiving the "please continue" message.
         # One long-lived service per app for the same reason as the one below: it holds
         # the in-flight sign-in PTY between the start call and the polls that advance it.
-        auth_flows=AuthFlowService(),
+        auth_flows=AuthFlowService.create(),
         claude_auth_service=ClaudeAuthService(
             resolve_never_welcomed_agent_name=welcome_resender.never_welcomed_agent_name,
         ),

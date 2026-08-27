@@ -25,8 +25,8 @@ import json
 import os
 import re
 import threading
-import time
 import uuid
+from collections.abc import Callable
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -67,6 +67,9 @@ logger = _loguru_logger
 _CODE_ECHO_QUIET_SECONDS: Final = 0.3
 _CODE_ECHO_DEADLINE_SECONDS: Final = 3.0
 _READY_WAIT_SECONDS: Final = 20.0
+# How still a screen has to be before we call it drawn, when the method names no anchor to
+# expect. Short enough that a fast CLI is not held up; `settle_s` is the overall budget.
+_SETTLE_QUIET_SECONDS: Final = 0.2
 
 
 class FlowError(PtyAuthError):
@@ -114,6 +117,7 @@ def _never_done(_buffer: str) -> bool:
     return False
 
 
+
 def _extract(raw: str, scrape: Scrape, frame_marker: str | None) -> str | None:
     """Recover a scraped value, preferring an OSC 8 hyperlink target when there is one."""
     strict = re.compile(scrape.strict)
@@ -132,26 +136,58 @@ def _extract(raw: str, scrape: Scrape, frame_marker: str | None) -> str | None:
 class _Session:
     """One live flow. Mutable by design; guarded by the service's lock."""
 
-    def __init__(self, flow_id: str, lane: Lane, method: PtyMethod | PasteMethod, account_id: str) -> None:
-        self.flow_id = flow_id
-        self.lane = lane
-        self.method = method
-        self.account_id = account_id
-        self.process: Any = None
-        self.output = ""
-        self.state = FlowState.PENDING
-        self.detail: str | None = None
-        self.timer: threading.Timer | None = None
+    flow_id: str
+    lane: Lane
+    method: PtyMethod | PasteMethod
+    account_id: str
+    process: Any
+    output: str
+    state: FlowState
+    detail: str | None
+    timer: threading.Timer | None
+
+    def is_value_ready(self, buffer: str) -> bool:
+        """Whether the scraped value can be read yet -- the drain loop's stop condition.
+
+        A bound method rather than a closure over the method: the drain loop needs a
+        predicate, and this is the one piece of per-flow state it has to see.
+        """
+        method = self.method
+        if isinstance(method, PasteMethod):
+            return True
+        return _extract(buffer, method.scrape, method.frame_marker) is not None
+
+
+def _new_session(lane: Lane, method: PtyMethod | PasteMethod, account_id: str) -> _Session:
+    session = _Session()
+    session.flow_id = uuid.uuid4().hex
+    session.lane = lane
+    session.method = method
+    session.account_id = account_id
+    session.process = None
+    session.output = ""
+    session.state = FlowState.PENDING
+    session.detail = None
+    session.timer = None
+    return session
 
 
 class AuthFlowService:
     """Starts, advances, and tears down sign-in flows."""
 
-    def __init__(self, home: Path | None = None, work_dir: Path | None = None) -> None:
-        self._home = home
-        self._work_dir = work_dir or Path("/home/user/workspace")
-        self._lock = threading.Lock()
-        self._session: _Session | None = None
+    _home: Path | None
+    _work_dir: Path
+    _lock: threading.Lock
+    _session: _Session | None
+
+    @classmethod
+    def create(cls, home: Path | None = None, work_dir: Path | None = None) -> "AuthFlowService":
+        service = cls()
+        service._home = home
+        service._work_dir = work_dir or Path("/home/user/workspace")
+        service._lock = threading.Lock()
+        service._session = None
+        return service
 
     # -- lifecycle ------------------------------------------------------------------------
 
@@ -176,12 +212,12 @@ class AuthFlowService:
 
             if isinstance(method, PasteMethod):
                 # Nothing to drive; the caller supplies the credential on submit.
-                self._session = _Session(uuid.uuid4().hex, lane, method, account_id)
+                self._session = _new_session(lane, method, account_id)
                 return FlowStart(flow_id=self._session.flow_id, shape=FlowShape.PASTE)
 
-            session = _Session(uuid.uuid4().hex, lane, method, account_id)
+            session = _new_session(lane, method, account_id)
             self._session = session
-            url, code = self._drive_locked(session, account_path)
+            url, code = self._drive_locked(session, method, account_path)
             self._arm_deadline_locked(session, method.flow_deadline_s)
             return FlowStart(
                 flow_id=session.flow_id,
@@ -190,10 +226,10 @@ class AuthFlowService:
                 code=code,
             )
 
-    def _drive_locked(self, session: _Session, account_path: Path) -> tuple[str | None, str | None]:
+    def _drive_locked(
+        self, session: _Session, method: PtyMethod, account_path: Path
+    ) -> tuple[str | None, str | None]:
         """Spawn the CLI, get it to the point of showing something, and scrape it."""
-        method = session.method
-        assert isinstance(method, PtyMethod), "only a PTY flow is driven"
         env = {**os.environ, **account_env(session.lane.harness, account_path)}
         binary = _binary_for(session.lane)
         session.process = spawn_pty(binary, list(method.argv), method.scrape_timeout_s, env=env)
@@ -208,12 +244,21 @@ class AuthFlowService:
                 self._fail_locked(session, "The sign-in screen did not appear as expected.")
                 raise FlowError(session.detail or "unexpected screen")
             session.output += (session.process.before or "") + (session.process.after or "")
-        elif method.settle_s:
-            time.sleep(method.settle_s)
+        else:
+            # No anchor to expect, so wait for the screen itself to stop changing. Better
+            # than a fixed pause: a CLI that draws fast is not made slow, and one that
+            # animates forever still gets its full budget.
+            session.output = drain_pty_stream_until_quiet(
+                session.process, session.output, _SETTLE_QUIET_SECONDS, method.settle_s
+            )
 
         for key in method.keys:
             session.process.send(key)
-            time.sleep(method.key_gap_s)
+            # Let the TUI redraw before the next key. A burst reads as a paste, and a menu
+            # that has not repainted yet may apply the second key to the previous screen.
+            session.output = drain_pty_stream_until_quiet(
+                session.process, session.output, method.key_gap_s, method.key_gap_s * 2
+            )
 
         index = session.process.expect(
             [re.compile(method.scrape.trigger), pexpect.EOF, pexpect.TIMEOUT],
@@ -226,13 +271,9 @@ class AuthFlowService:
         # A URL is drained until it can be extracted -- the CLI animates forever afterwards,
         # so there is no quiet gap to wait for. A minted token is drained to process exit,
         # because the CLI prints it and leaves.
-        if method.scrape.drain_until is DrainUntil.EOF:
-            is_done = _never_done
-        else:
-
-            def is_done(buf: str) -> bool:
-                return _extract(buf, method.scrape, method.frame_marker) is not None
-
+        is_done: Callable[[str], bool] = (
+            _never_done if method.scrape.drain_until is DrainUntil.EOF else session.is_value_ready
+        )
         session.output = drain_pty_stream(session.process, session.output, is_done)
         value = _extract(session.output, method.scrape, method.frame_marker)
         if value is None:
@@ -246,7 +287,9 @@ class AuthFlowService:
         with self._lock:
             session = self._require_locked(flow_id)
             method = session.method
-            if isinstance(method, PasteMethod) or method.submit is Submit.NONE:
+            if isinstance(method, PasteMethod):
+                raise FlowError("this sign-in does not take a code")
+            if method.submit is Submit.NONE:
                 raise FlowError("this sign-in does not take a code")
             # Two writes: the code, then Enter separately, or the paste heuristic swallows it.
             session.process.send(code)
@@ -254,7 +297,7 @@ class AuthFlowService:
                 session.process, session.output, _CODE_ECHO_QUIET_SECONDS, _CODE_ECHO_DEADLINE_SECONDS
             )
             session.process.send("\r")
-            return self._settle_locked(session)
+            return self._settle_locked(session, method)
 
     def submit_key(self, flow_id: str, api_key: str, key_provider: str | None = None) -> FlowStatus:
         with self._lock:
@@ -271,9 +314,10 @@ class AuthFlowService:
             session = self._require_locked(flow_id)
             if session.state is not FlowState.PENDING:
                 return FlowStatus(state=session.state, detail=session.detail, account_id=session.account_id)
-            if isinstance(session.method, PasteMethod):
+            method = session.method
+            if isinstance(method, PasteMethod):
                 return FlowStatus(state=FlowState.PENDING)
-            return self._settle_locked(session)
+            return self._settle_locked(session, method)
 
     def abort(self, flow_id: str) -> None:
         with self._lock:
@@ -282,10 +326,8 @@ class AuthFlowService:
 
     # -- internals ------------------------------------------------------------------------
 
-    def _settle_locked(self, session: _Session) -> FlowStatus:
+    def _settle_locked(self, session: _Session, method: PtyMethod) -> FlowStatus:
         """Read what the CLI has said so far and decide, without blocking on it."""
-        method = session.method
-        assert isinstance(method, PtyMethod), "only a PTY flow settles from the terminal"
         session.output = drain_pty_stream(session.process, session.output, lambda _: False, deadline_seconds=1.0)
 
         for pattern, copy in method.failures:
@@ -342,6 +384,12 @@ class AuthFlowService:
             self._teardown_locked(self._session, keep_folder=False)
         self._session = None
 
+    def _expire(self, session: _Session, seconds: float) -> None:
+        with self._lock:
+            if self._session is session and session.state is FlowState.PENDING:
+                logger.info("Sign-in flow {} expired after {}s", session.flow_id, seconds)
+                self._fail_locked(session, "The sign-in timed out. Start over to get a fresh link.")
+
     def _require_locked(self, flow_id: str) -> _Session:
         if self._session is None or self._session.flow_id != flow_id:
             raise FlowError("that sign-in is no longer active")
@@ -349,14 +397,7 @@ class AuthFlowService:
 
     def _arm_deadline_locked(self, session: _Session, seconds: float) -> None:
         """Nothing else bounds a flow: the PTY only advances when a client polls."""
-
-        def expire() -> None:
-            with self._lock:
-                if self._session is session and session.state is FlowState.PENDING:
-                    logger.info("Sign-in flow {} expired after {}s", session.flow_id, seconds)
-                    self._fail_locked(session, "The sign-in timed out. Start over to get a fresh link.")
-
-        session.timer = threading.Timer(seconds, expire)
+        session.timer = threading.Timer(seconds, self._expire, args=(session, seconds))
         session.timer.daemon = True
         session.timer.start()
 

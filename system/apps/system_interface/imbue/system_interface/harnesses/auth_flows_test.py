@@ -24,7 +24,7 @@ from imbue.system_interface.harnesses.lanes import get_method
 def service(tmp_path: Path) -> AuthFlowService:
     work_dir = tmp_path / "workspace"
     work_dir.mkdir()
-    return AuthFlowService(home=tmp_path, work_dir=work_dir)
+    return AuthFlowService.create(home=tmp_path, work_dir=work_dir)
 
 
 def test_the_shape_comes_from_the_method_not_the_harness() -> None:
