@@ -96,9 +96,7 @@ export function isRenameableKind(kind: ObjectMenuKind): boolean {
  * ``objectMenuEntries`` below), with the rail also passing null
  * ``removeFromProject`` under Everything. ``quit``'s null is per-object: a
  * handful of them -- the workspace's own primary chat, a terminal or browser
- * still allocating its session -- have no destroy available yet. ``rename``'s
- * null is per-object as well, for the rare object whose name is derived rather
- * than its owner's to choose (the History pane -- see ``historyPaneMenuActions``).
+ * still allocating its session -- have no destroy available yet.
  * ``share`` and ``quit`` each carry their own
  * label because "Share {name}" / "Quit {name}" always names the object the
  * way the surface calling this currently displays it, and only the caller
@@ -123,9 +121,6 @@ export function isRenameableKind(kind: ObjectMenuKind): boolean {
 export interface ObjectMenuActions {
   refresh: () => void;
   share: { label: string; run: () => void } | null;
-  /** Open the app's version timeline. Read only when ``kind`` is "app"; null
-   *  wherever the row would not earn its place -- ``isAppHistoryOffered`` in
-   *  appHistory.ts is where that decision lives, and nothing restates it here. */
   history: (() => void) | null;
   rename: (() => void) | null;
   hideTab: (() => void) | null;
@@ -164,17 +159,11 @@ export interface ObjectMenuActions {
  * session" for a terminal (see ``refreshPanelContent`` in DockviewWorkspace,
  * which is where that distinction actually lives -- this module only fixes
  * that the verb is offered, not what it does).
- * Rename is offered for the kinds ``isRenameableKind`` allows -- and, within
- * such a kind, only for an object that supplies the verb, since a null
- * ``rename`` omits it like any other.
  * Share is an app-only affordance: the share surface is per registered
  * service, and the other three kinds have none. It renders from whichever
  * slot supplied it -- the bare app's own ``share`` or the instance menu's
  * ``serviceGroup`` -- and likewise the process verb comes from ``stop`` (a
  * chat) or ``serviceGroup.lifecycle`` (an app instance's service).
- * History is app-only too -- only an app is versioned code -- and sits
- * directly under Refresh, ahead of Share, in that one position whether or not
- * Share is drawn beside it.
  * Close tab and Remove from project are each one SURFACE's job, which the
  * two callers say by supplying only their own: closing is what you want
  * while looking at the tab, and unfiling is what you want while looking at

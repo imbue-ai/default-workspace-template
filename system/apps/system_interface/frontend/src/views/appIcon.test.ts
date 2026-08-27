@@ -18,7 +18,6 @@ import { icon } from "./icons";
 
 const FALLBACK = '<svg class="generic-glyph"></svg>';
 
-// A perfectly good registered icon, for the cases about an icon being IGNORED.
 const SQUARE_ICON = '<svg viewBox="0 0 24 24" fill="none"><path d="M6 6h12v12H6z"/></svg>';
 
 /** Parse sanitized markup back into an element, so assertions read attributes
@@ -347,8 +346,6 @@ describe("serviceIconMarkup", () => {
   });
 
   it("draws the History primitive with the shell's own clock, not the registry's icon", () => {
-    // The glyph is the shell's whether or not the versioning service
-    // registered one, at whatever size the surface asks for.
     registry.apps = [
       { name: "versioning", url: "http://localhost:8082", label: "versioning-gh78", icon: SQUARE_ICON },
     ];
@@ -359,9 +356,6 @@ describe("serviceIconMarkup", () => {
   });
 
   it("draws the History primitive's clock even with no registry row for it", () => {
-    // The rail draws a row before the first ``apps_updated`` lands, and a
-    // History pane restored from a saved layout must not flash a dead-ref
-    // glyph on the way in.
     registry.apps = [];
     expect(serviceIconMarkup("versioning", 16, FALLBACK)).toBe(icon("history", { size: 16 }));
   });

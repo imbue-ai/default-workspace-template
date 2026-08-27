@@ -347,10 +347,6 @@ export function appMonogramMarkup(appName: string, sizePx: number): string {
  *
  * An unknown name (an app that has since been deregistered, a ref from a
  * hand-edited layout) has no icon to draw and takes the fallback.
- *
- * The History primitive is the one service whose glyph is the SHELL's rather
- * than the registry's: it wears the built-in clock wherever it is drawn,
- * whether or not the versioning service registered an icon (see appHistory.ts).
  */
 export function serviceIconMarkup(serviceName: string | null, sizePx: number, fallbackMarkup: string): string {
   if (serviceName === null) return fallbackMarkup;

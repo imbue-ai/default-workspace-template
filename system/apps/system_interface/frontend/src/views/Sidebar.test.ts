@@ -191,8 +191,6 @@ function makeAttrs(overrides: Partial<SidebarAttrs> = {}): SidebarAttrs {
     onRenameRow: vi.fn(),
     onRemoveFromView: vi.fn(),
     onShareApp: vi.fn(),
-    // The default machine here runs no versioning service, so no row offers a
-    // history; the tests that care supply their own resolver.
     historyActionForService: vi.fn(() => null),
     systemHistoryAction: vi.fn(() => null),
     onAddRowToProjects: vi.fn(),
@@ -296,8 +294,6 @@ describe("Sidebar switcher dropdown", () => {
   });
 
   it("offers System history below the views, and runs it", () => {
-    // The shell is versioned but not tab-able, so the rail's own header menu
-    // is the one place its timeline row can live.
     const ran: string[] = [];
     const attrs = makeAttrs({ systemHistoryAction: vi.fn(() => () => ran.push("system")) });
     const { root, redraw } = mountSidebar(attrs);
@@ -306,12 +302,10 @@ describe("Sidebar switcher dropdown", () => {
 
     click(switcherRow(root, "System history"));
     expect(ran).toEqual(["system"]);
-    // Never mistaken for switching to a view.
     expect(attrs.onSelectView).not.toHaveBeenCalled();
   });
 
   it("draws no System history row where there is no timeline to open", () => {
-    // The resolver answers null and nothing is drawn -- no row onto a 404.
     const { root, redraw } = mountSidebar(makeAttrs({ systemHistoryAction: vi.fn(() => null) }));
     click(root.querySelector(".project-rail-header"));
     redraw();
@@ -737,8 +731,6 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
   });
 
   it("offers History on an app row, keyed by the service rather than the instance", () => {
-    // The timeline belongs to the APP, so an instance row asks about "curio",
-    // not "curio-2".
     const attrs = makeAttrs({
       rows: [{ ref: "service:curio?instance=curio-2", kind: "app", label: "Curio 2", isOpen: true }],
       historyActionForService: vi.fn((serviceName: string) => (serviceName === "curio" ? () => undefined : null)),
@@ -752,8 +744,6 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
   });
 
   it("offers no History on a row whose app has no timeline, nor on any other kind", () => {
-    // The resolver answers null (see isAppHistoryOffered); a chat is not
-    // versioned code at all, so its row must not even ask.
     const attrs = makeAttrs({
       rows: [
         { ref: "service:curio?instance=curio-2", kind: "app", label: "Curio 2", isOpen: true },
@@ -771,8 +761,6 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
   });
 
   it("leaves a History row exactly Refresh and Remove from project", () => {
-    // Asserted as the WHOLE list, so a verb added to the app menu later cannot
-    // quietly reappear here -- above all the delete.
     const attrs = makeAttrs({
       rows: [{ ref: "service:versioning?instance=versioning-1", kind: "app", label: "History", isOpen: true }],
       historyActionForService: vi.fn(() => () => undefined),
@@ -788,8 +776,6 @@ describe("Sidebar row menu (shared object-menu entries)", () => {
   });
 
   it("leaves a History row in Everything just Refresh", () => {
-    // Everything is the home: nothing leaves it, so the one verb about where
-    // the pane shows falls away with it.
     const attrs = makeAttrs({
       activeViewId: EVERYTHING_VIEW_ID,
       rows: [{ ref: "service:versioning?instance=versioning-1", kind: "app", label: "History", isOpen: true }],
@@ -1381,8 +1367,6 @@ describe("Sidebar shortcut menus (modes)", () => {
   });
 
   it("offers History on the Browser and Terminal rows, keyed by their own services", () => {
-    // Those rows CREATE sessions, so no pane of either ever carries an app
-    // menu -- this is the only way into their timelines, and it leads the menu.
     const ran: string[] = [];
     const attrs = makeAttrs({
       historyActionForService: vi.fn((serviceName: string) => () => ran.push(serviceName)),
@@ -1405,8 +1389,6 @@ describe("Sidebar shortcut menus (modes)", () => {
   });
 
   it("offers History on the File Viewer row, even unbacked", () => {
-    // The row renders disabled where no `files` app backs it, but what is
-    // versioned is the file viewer's own code, which exists either way.
     const attrs = makeAttrs({ historyActionForService: vi.fn(() => () => undefined) });
     const { root, redraw } = mountSidebar(attrs);
     root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
@@ -1421,7 +1403,6 @@ describe("Sidebar shortcut menus (modes)", () => {
   });
 
   it("asks for no History on the Chat row, which is not versioned code", () => {
-    // A chat is an mngr agent, not a folder under `system/apps`.
     const attrs = makeAttrs({ historyActionForService: vi.fn(() => () => undefined) });
     const { root, redraw } = mountSidebar(attrs);
     root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
@@ -1432,7 +1413,6 @@ describe("Sidebar shortcut menus (modes)", () => {
   });
 
   it("leaves a shortcut menu unchanged where the app has no timeline", () => {
-    // No row, and no divider left hanging above the group.
     const { root, redraw } = mountSidebar(makeAttrs({ historyActionForService: vi.fn(() => null) }));
     root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
     redraw();

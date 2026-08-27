@@ -38,11 +38,6 @@ export function browserDisplayName(browserName: string): string {
   return match === null ? `Browser ${browserName}` : `Browser ${match[1]}`;
 }
 
-/** What a registered app is called before anyone renamed it. Two special
- *  cases: the built-in file viewer reads "File Viewer" (see Sidebar's
- *  SHORTCUT_ROWS) while its registered name is `files`, and the versioning
- *  service is the shell's History primitive, so every surface says "History"
- *  (see appHistory.ts). Every other app reads as its registered name. */
 export function appServiceDisplayName(serviceName: string): string {
   if (serviceName === "files") return "File Viewer";
   if (isHistoryService(serviceName)) return HISTORY_PANE_TITLE;

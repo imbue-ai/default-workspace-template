@@ -370,8 +370,6 @@ _DEFAULT_TAIL_COUNT = 50
 # local backend URL from this registry entry.
 _BROWSER_SERVICE_NAME = "browser"
 
-# Name under which the Versioning app registers itself; the /api/versioned-apps
-# passthrough resolves its local backend URL from this registry entry.
 _VERSIONING_SERVICE_NAME = "versioning"
 
 # The name this shell registers itself under. It is an app like any other in
@@ -2321,8 +2319,7 @@ def _terminal_notify_endpoint() -> Response:
 
 
 def _relay_backend_response(backend_response: httpx.Response) -> Response:
-    """Relay a passthrough's backend answer verbatim: body, status (a rejection
-    is the backend's to make), and content type, defaulting to JSON."""
+    """Relay a passthrough's backend answer verbatim: body, status and content type."""
     return Response(
         backend_response.content,
         status=backend_response.status_code,
@@ -2402,15 +2399,7 @@ def _destroy_browser_passthrough(name: str) -> Response:
 
 
 def _versioned_apps_passthrough() -> Response:
-    """Same-origin passthrough for the Versioning app's ``GET /api/apps``.
-
-    That list -- the folders it serves ``/app/<name>`` for, neither a subset nor
-    a superset of this registry -- is what the shell's menus gate every History
-    row on; the server-side hop exists because sibling origins are same-site but
-    not same-origin (same reason as :func:`_browsers_passthrough`). A 503 (not
-    registered / unreachable) is read by the frontend as "keep the list you
-    had", never as an empty one.
-    """
+    """Same-origin passthrough for the Versioning app's ``GET /api/apps``."""
     state = get_state()
     base_url = state.agent_manager.get_service_url(_VERSIONING_SERVICE_NAME)
     if base_url is None:

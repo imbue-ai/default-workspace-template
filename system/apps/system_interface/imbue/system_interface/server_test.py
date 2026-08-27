@@ -3771,9 +3771,6 @@ def test_browsers_passthrough_returns_503_when_backend_is_unreachable() -> None:
     assert "unreachable" in response.get_json()["detail"]
 
 
-# One ordinary app, plus the workspace shell under its hyphenated name -- which
-# nothing registers, the whole reason this list is asked for rather than derived
-# from the port registry.
 _VERSIONING_SERVES = ("curio", "system-interface")
 
 
@@ -3787,9 +3784,7 @@ def test_versioned_apps_passthrough_relays_the_versioning_apps_own_list() -> Non
 
 
 def test_versioned_apps_passthrough_returns_503_when_service_not_registered() -> None:
-    """No registered ``versioning`` service is a 503, never an empty list -- the
-    frontend reads no-answer as "keep what you had", while an empty list would
-    silently take every History row away."""
+    """No registered ``versioning`` service is a 503, never an empty list."""
     response = _client_with_registered_service("versioning", None).get("/api/versioned-apps")
     assert response.status_code == 503
     assert "not registered" in response.get_json()["detail"]

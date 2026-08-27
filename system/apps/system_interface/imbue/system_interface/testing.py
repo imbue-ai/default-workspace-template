@@ -411,13 +411,7 @@ def serve_app(app: Flask) -> Iterator[ServedApp]:
 
 
 def build_stub_versioning_backend(served_app_names: Sequence[str]) -> Flask:
-    """A stand-in for the Versioning app's own ``GET /api/apps``, to hand to ``serve_app``.
-
-    The shell relays that list through ``GET /api/versioned-apps`` and gates
-    every History row on it. Only ``name`` is read, but the full ``AppRef``
-    shape is answered so the stub stays faithful to the real payload. Shared by
-    the passthrough's unit tests and the e2e History tests.
-    """
+    """A stand-in for the Versioning app's own ``GET /api/apps``, to hand to ``serve_app``."""
     stub = Flask(__name__, static_folder=None)
 
     def list_apps() -> Response:
