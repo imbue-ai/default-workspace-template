@@ -160,3 +160,19 @@ new-tab picker exists to name one.
 
 The chooser lists what is already signed in, with a two-click remove: deleting an account
 strands every chat bound to it, so the second click is the confirmation.
+
+# Replace the harness feature flags with the provider picker
+
+`FEATURE_FLAG_ENABLE_OTHER_HARNESSES` and
+`FEATURE_FLAG_ENABLE_INTRODUCTORY_AGENTS_IN_OTHER_HARNESSES` are gone, and with them the
+whole meta-tag injection they were the only users of, plus `flip_feature_flags.sh`.
+
+The new-tab screen now offers one **New chat** tile and a **Provider** picker under it.
+The picker lists the accounts you have signed in and an "+ Add provider" row; the chat
+starts on whichever is selected, and the rail's Chat shortcut reads the same selection so
+the two cannot disagree. With nothing signed in the picker says so and the tile opens the
+chooser rather than starting a chat that could not take a turn.
+
+Launching bumps that account's most-recently-used marker, so the picker offers it again
+next time. `first` is gone from the frontend: that create template belongs to the
+workspace's own first run, not to a tile anyone clicks.

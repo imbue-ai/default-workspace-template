@@ -33,7 +33,7 @@ import { Sidebar } from "./Sidebar";
 import type { QuickAddTabType, SidebarTabRow } from "./Sidebar";
 import type { AppEntry } from "../models/AgentManager";
 import { checkAuthStatusOnLoad, isLoginModalOpen, closeLoginModal } from "../models/ClaudeAuth";
-import { closeProviderChooser, isProviderChooserOpen } from "../models/Providers";
+import { closeProviderChooser, isProviderChooserOpen, loadAccounts } from "../models/Providers";
 import { getAuthInstructionsAgentId } from "../models/AgentAuth";
 import { getFastModePromptAgentId } from "../models/FastModePrompt";
 
@@ -44,6 +44,10 @@ export function App(): m.Component {
       // credentials at all (the create flow injects none), so the sign-in
       // modal is the designed first-boot step rather than an error path.
       checkAuthStatusOnLoad();
+      // The new-tab picker and the rail's Chat shortcut both read the account list,
+      // and both can be the first thing a user clicks, so load it once at boot
+      // rather than on the chooser's own oninit.
+      void loadAccounts().catch(() => undefined);
     },
     view() {
       return m(

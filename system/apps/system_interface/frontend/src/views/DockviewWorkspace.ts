@@ -131,6 +131,7 @@ import {
   setMemberTitle,
 } from "../models/MemberTitles";
 import { createBrowser } from "../models/Browsers";
+import { getAccounts, getSelectedAccount, openProviderChooser } from "../models/Providers";
 import { appServiceDisplayName, browserDisplayName, chatDisplayName, terminalDisplayName } from "./derived-names";
 import {
   applyMemberLastUsedChange,
@@ -2855,13 +2856,13 @@ async function openNewChat(
   targetGroup: DockviewGroupPanel | null,
   launcherPanelId: string | null,
   harness: ChatHarness = "claude",
-  isFirst: boolean = false,
+  accountId: string = "",
 ): Promise<void> {
   const viewId = mountedViewId;
   const projectId = viewId !== null && !isEverythingView(viewId) ? viewId : "";
   let created: CreatedChatAgent;
   try {
-    created = await createChatAgent(projectId, harness, isFirst);
+    created = await createChatAgent(projectId, harness, accountId);
   } catch (e) {
     alert(`Failed to create chat: ${(e as Error).message}`);
     return;
@@ -3330,10 +3331,9 @@ export function openSubagentTab(agentId: string, subagentSessionId: string, desc
  * `isLauncherAwaitingCreate`), so the wait is visible rather than silent.
  */
 function openTabOfTypeInGroup(
-  // A LaunchTarget rather than the rail's QuickAddTabType: the launcher's tiles
-  // include the flag-gated harness chats, which have no rail shortcut and carry
-  // a harness the rail never names. The rail builds its plain-chat target in
-  // ``openTabOfType``.
+  // A LaunchTarget rather than the rail's QuickAddTabType: a chat target carries
+  // the account it runs on, which the rail never names. The rail builds its own
+  // chat target in ``openTabOfType``.
   target: LaunchTarget,
   targetGroup: DockviewGroupPanel | null,
   launcherPanelId: string | null,
@@ -3351,13 +3351,18 @@ function openTabOfTypeInGroup(
     launchersAwaitingCreate.add(launcherPanelId);
     m.redraw();
   }
-  // Every chat tile is the same create -- the same `chat` role in the primary's
-  // work dir -- stacked on the harness the tile names, plus the `first` template
-  // when it asks for it (fast launch where the harness supports it, /welcome, the
-  // first=true label). Both ride the target's own fields, so nothing here decodes
-  // a name. No dialog either: the name is auto-minted like every other create.
+  // Every chat is the same create -- the same `chat` role in the primary's work
+  // dir -- on the harness of the account the provider picker selected. No dialog:
+  // the name is auto-minted like every other create.
   if (target.kind === "chat") {
-    return openNewChat(targetGroup, launcherPanelId, target.harness, target.first).finally(() => {
+    // Nothing signed in yet, so there is nothing to launch on. Send the user to
+    // the chooser rather than creating a chat that cannot take a turn.
+    if (target.accountId === "" && getAccounts().length === 0) {
+      releaseLauncherCreate(launcherPanelId);
+      openProviderChooser();
+      return null;
+    }
+    return openNewChat(targetGroup, launcherPanelId, target.harness, target.accountId).finally(() => {
       releaseLauncherCreate(launcherPanelId);
       m.redraw();
     });
@@ -3463,10 +3468,17 @@ export function getAwaitingShortcutIds(): ReadonlySet<string> {
  *  pane on the files app (see ``openShortcut``). */
 function createNewForShortcut(shortcutId: FocusableTabType): void {
   if (shortcutsAwaitingCreate.has(shortcutId)) return;
-  // The rail names no harness and no template: its "chat" is the launcher's
-  // first tile -- a plain claude chat, flags ignored.
+  // The rail's "chat" is the launcher's New chat tile: the same provider the
+  // picker has selected, so the two cannot start chats on different accounts.
+  const selected = getSelectedAccount();
   const pending = openTabOfTypeInGroup(
-    shortcutId === "chat" ? { kind: "chat", harness: "claude", first: false } : { kind: shortcutId },
+    shortcutId === "chat"
+      ? {
+          kind: "chat",
+          harness: (selected?.harness as ChatHarness | undefined) ?? "claude",
+          accountId: selected?.id ?? "",
+        }
+      : { kind: shortcutId },
     null,
     null,
   );

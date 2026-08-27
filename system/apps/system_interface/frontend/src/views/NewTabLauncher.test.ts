@@ -1,13 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 
-// The launcher consults the alt-harness feature flag for its tile list. The
-// real implementation caches a meta-tag read, which a test cannot safely poke;
-// this keeps it a plain switch, off by default like the real flag.
-let otherHarnessesEnabled = false;
-let introductoryAgentsEnabled = false;
-vi.mock("../base-path", () => ({
-  areOtherHarnessesEnabled: () => otherHarnessesEnabled,
-  areIntroductoryAgentsEnabled: () => introductoryAgentsEnabled,
+// The New chat tile runs on whichever account the provider picker has selected,
+// so a mutable stand-in lets each case pose a different set of signed-in
+// providers (the real module is state fed by /api/accounts).
+const providerState: { accounts: { id: string; harness: string; label: string }[] } = { accounts: [] };
+vi.mock("../models/Providers", () => ({
+  getAccounts: () => providerState.accounts,
+  getSelectedAccount: () => providerState.accounts[0] ?? null,
+  selectAccount: () => undefined,
+  openProviderChooser: () => undefined,
 }));
 
 // The launcher asks the machine's app list whether a "files" app backs its
@@ -282,9 +283,20 @@ function buttonsOf(tree: unknown): VnodeLike[] {
   return tagsOf(tree, "button");
 }
 
+/** The tables' funnel buttons, in table order. Selected by their aria-expanded
+ *  rather than by index: the tiles and the provider picker also render buttons,
+ *  and how many depends on what the user has signed in. */
+function sectionFilterButtonsOf(tree: unknown): VnodeLike[] {
+  return buttonsOf(tree).filter((button) => button.attrs?.["aria-expanded"] !== undefined);
+}
+
 /** Just the "Open new" tiles, which share a class no other button carries.
  *  `buttonsOf` also returns the tables' row buttons, which have no tile state
  *  of their own to assert on. */
+function rowsOf(tree: unknown): VnodeLike[] {
+  return buttonsOf(tree).filter((button) => String(button.attrs?.className ?? "").includes("new-tab-launcher-row"));
+}
+
 function tilesOf(tree: unknown): VnodeLike[] {
   // Mithril moves a `class` attr onto `className` during normalization, so that
   // is where a rendered vnode's classes actually are.
@@ -326,9 +338,14 @@ function render(overrides: Partial<NewTabLauncherAttrs> = {}): unknown {
 
 describe("NewTabLauncher", () => {
   it("offers the four Open new tiles, with the file viewer inert until an app backs it", () => {
-    const tiles = buttonsOf(render()).slice(0, 4);
+    const tiles = tilesOf(render());
     // Each tile renders its glyph markup and then its label.
-    expect(tiles.map((tile) => texts(tile.children)[1])).toEqual(["Chat", "File viewer", "Browser", "Terminal"]);
+    expect(tiles.map((tile) => texts(tile.children)[1])).toEqual([
+      "New chat",
+      "File viewer",
+      "Browser",
+      "Terminal",
+    ]);
     expect(tiles[1].attrs?.["aria-disabled"]).toBe("true");
     expect(tiles[1].attrs?.onclick).toBeUndefined();
     expect(tiles[0].attrs?.onclick).toBeTypeOf("function");
@@ -337,7 +354,7 @@ describe("NewTabLauncher", () => {
   it("lets the file viewer act once a files app backs it", () => {
     appState.apps = [{ name: "files", url: "http://files.test", label: "files-abc123" }];
     try {
-      const tiles = buttonsOf(render()).slice(0, 4);
+      const tiles = tilesOf(render());
       expect(tiles[1].attrs?.["aria-disabled"]).toBeUndefined();
       expect(tiles[1].attrs?.onclick).toBeTypeOf("function");
     } finally {
@@ -345,52 +362,39 @@ describe("NewTabLauncher", () => {
     }
   });
 
-  it("offers the harness tiles only where the host enables the alt harnesses", () => {
-    // The real flag caches a meta-tag read; the mock above keeps it a plain
-    // switch so this test cannot leak an enabled flag into its neighbours.
-    otherHarnessesEnabled = true;
+  it("offers one chat tile, whatever providers are signed in", () => {
+    // The harness a chat runs on is the picker's job now, not a tile's, so the
+    // tile row does not grow with the accounts the user adds.
+    providerState.accounts = [
+      { id: "a", harness: "claude", label: "Anthropic (Claude Code)" },
+      { id: "b", harness: "antigravity", label: "Google (Antigravity CLI)" },
+    ];
     try {
-      const labels = buttonsOf(render()).map((tile) => texts(tile.children)[1]);
-      expect(labels.slice(0, 3)).toEqual(["Chat", "Codex chat", "Pi chat"]);
+      const labels = tilesOf(render()).map((tile) => texts(tile.children)[1]);
+      expect(labels).toEqual(["New chat", "File viewer", "Browser", "Terminal"]);
     } finally {
-      otherHarnessesEnabled = false;
-    }
-  });
-
-  it("offers the introductory-chat tiles only where the host enables them", () => {
-    introductoryAgentsEnabled = true;
-    try {
-      const labels = buttonsOf(render()).map((tile) => texts(tile.children)[1]);
-      expect(labels.slice(0, 4)).toEqual([
-        "Chat",
-        "Introductory Claude chat",
-        "Introductory Codex chat",
-        "Introductory Pi chat",
-      ]);
-    } finally {
-      introductoryAgentsEnabled = false;
+      providerState.accounts = [];
     }
   });
 
   it("starts a new object of the tile's kind", () => {
     const started: string[] = [];
-    const tiles = buttonsOf(render({ onOpenNew: (target) => started.push(target.kind) }));
+    const tiles = tilesOf(render({ onOpenNew: (target) => started.push(target.kind) }));
     (tiles[3].attrs?.onclick as () => void)();
     expect(started).toEqual(["terminal"]);
   });
 
-  it("hands the clicked tile's harness straight through", () => {
-    otherHarnessesEnabled = true;
+  it("hands the selected provider's harness straight through", () => {
+    providerState.accounts = [{ id: "a", harness: "pi-coding", label: "Opencode Go (Pi)" }];
     try {
       const started: string[] = [];
-      const tiles = buttonsOf(
+      const tiles = tilesOf(
         render({ onOpenNew: (target) => started.push(target.kind === "chat" ? target.harness : target.kind) }),
       );
-      // Chat, Codex chat, Pi chat, then the non-chat tiles.
-      (tiles[2].attrs?.onclick as () => void)();
+      (tiles[0].attrs?.onclick as () => void)();
       expect(started).toEqual(["pi-coding"]);
     } finally {
-      otherHarnessesEnabled = false;
+      providerState.accounts = [];
     }
   });
 
@@ -443,16 +447,16 @@ describe("NewTabLauncher", () => {
   it("opens a member without touching membership, and files a machine row in", () => {
     const opened: string[] = [];
     const filed: string[] = [];
-    // After the four tiles and the "In this project" funnel come that table's
-    // two rows, then the machine funnel and its single row.
-    const buttons = buttonsOf(
-      render({
-        onOpenMember: (each) => opened.push(each.ref),
-        onOpenFromMachine: (each) => filed.push(each.ref),
-      }),
-    );
-    (buttons[5].attrs?.onclick as () => void)();
-    (buttons[8].attrs?.onclick as () => void)();
+    // The row buttons, in render order: the "In this project" table's two, then
+    // the machine table's single one. Selected by class so the tiles, the
+    // provider picker and the two funnels cannot shift the indices.
+    const tree = render({
+      onOpenMember: (each) => opened.push(each.ref),
+      onOpenFromMachine: (each) => filed.push(each.ref),
+    });
+    const rows = rowsOf(tree);
+    (rows[0].attrs?.onclick as () => void)();
+    (rows[2].attrs?.onclick as () => void)();
     expect(opened).toEqual(["chat:a1"]);
     expect(filed).toEqual(["service:gtd"]);
   });
@@ -462,7 +466,7 @@ describe("NewTabLauncher", () => {
     const vnode = { attrs: launcherAttrs() } as Parameters<LauncherView>[0];
 
     // Open the "In this project" funnel, then uncheck its Chat box.
-    (buttonsOf(component.view(vnode))[4].attrs?.onclick as () => void)();
+    (sectionFilterButtonsOf(component.view(vnode))[0].attrs?.onclick as () => void)();
     const checkbox = inputsOf(component.view(vnode))[0];
     expect(checkbox.attrs?.checked).toBe(true);
     (checkbox.attrs?.onchange as () => void)();
@@ -482,7 +486,7 @@ describe("NewTabLauncher", () => {
 
     // Open the "In this project" funnel. Its menu names kinds in the plural,
     // and its reset row is inert while nothing is hidden.
-    (buttonsOf(component.view(vnode))[4].attrs?.onclick as () => void)();
+    (sectionFilterButtonsOf(component.view(vnode))[0].attrs?.onclick as () => void)();
     let tree = component.view(vnode);
     expect(texts(tree)).toContain("Chats");
     expect(resetOf(tree).attrs?.disabled).toBe(true);
@@ -503,7 +507,7 @@ describe("NewTabLauncher", () => {
     // Same table, but with rows the filter hid rather than none to begin with.
     const component = NewTabLauncher();
     const vnode = { attrs: launcherAttrs({ memberRows: [MACHINE_ROWS[0]] }) } as Parameters<LauncherView>[0];
-    (buttonsOf(component.view(vnode))[4].attrs?.onclick as () => void)();
+    (sectionFilterButtonsOf(component.view(vnode))[0].attrs?.onclick as () => void)();
     const checkbox = inputsOf(component.view(vnode))[0];
     (checkbox.attrs?.onchange as () => void)();
     expect(texts(component.view(vnode))).toContain("No tabs match this filter.");
@@ -511,44 +515,22 @@ describe("NewTabLauncher", () => {
 });
 
 describe("openNewTiles", () => {
-  // A chat tile's harness reaches `mngr create --type` verbatim. The tile's own
-  // word for pi is "Pi"; mngr's agent type is "pi-coding" ("pi" is only an
-  // mngr-side alias, which the create endpoint's enum rejects outright), so a
-  // tile carrying its own word instead of the agent type could not create at all.
-  const harnessOf = (label: string) => {
-    const target = openNewTiles().find((tile) => tile.label === label)?.target;
-    return target?.kind === "chat" ? target.harness : undefined;
-  };
+  const chatTarget = () => openNewTiles().find((tile) => tile.label === "New chat")?.target;
 
-  it("names mngr's agent type on every chat tile", () => {
-    otherHarnessesEnabled = true;
+  it("carries the selected account and its harness", () => {
+    // The harness reaches `mngr create --type` verbatim, and mngr's agent type for
+    // pi is "pi-coding" ("pi" is only an alias the create endpoint's enum rejects),
+    // so what the account reports is what has to arrive here unchanged.
+    providerState.accounts = [{ id: "abc", harness: "pi-coding", label: "Opencode Go (Pi)" }];
     try {
-      expect(harnessOf("Chat")).toBe("claude");
-      expect(harnessOf("Codex chat")).toBe("codex");
-      expect(harnessOf("Pi chat")).toBe("pi-coding");
-      // Same trap as pi: the tile's word is "Agy", but mngr's agent type is
-      // "antigravity" ("agy" is only an alias the create endpoint's enum rejects).
-      expect(harnessOf("Agy chat")).toBe("antigravity");
+      expect(chatTarget()).toEqual({ kind: "chat", harness: "pi-coding", accountId: "abc" });
     } finally {
-      otherHarnessesEnabled = false;
+      providerState.accounts = [];
     }
   });
 
-  it("puts an introductory tile on its harness, asking only for the `first` template", () => {
-    introductoryAgentsEnabled = true;
-    try {
-      expect(harnessOf("Introductory Pi chat")).toBe("pi-coding");
-      const intro = openNewTiles().find((tile) => tile.label === "Introductory Pi chat")?.target;
-      expect(intro).toEqual({ kind: "chat", harness: "pi-coding", first: true });
-      // The plain tiles are the same create without that template.
-      expect(openNewTiles().find((tile) => tile.label === "Chat")?.target).toEqual({
-        kind: "chat",
-        harness: "claude",
-        first: false,
-      });
-    } finally {
-      introductoryAgentsEnabled = false;
-    }
+  it("carries no account when nothing is signed in, which is what opens the chooser", () => {
+    expect(chatTarget()).toEqual({ kind: "chat", harness: "claude", accountId: "" });
   });
 
   it("gives the non-chat tiles no harness to send", () => {

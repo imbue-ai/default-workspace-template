@@ -881,12 +881,15 @@ export interface CreatedChatAgent {
 export async function createChatAgent(
   projectId: string,
   harness: ChatHarness = "claude",
-  isFirst: boolean = false,
+  accountId: string = "",
 ): Promise<CreatedChatAgent> {
   const response = await fetch(apiUrl("/api/agents/create-chat"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ project_id: projectId, harness, first: isFirst }),
+    // No `first`: the `first` create template belongs to the workspace's own first
+    // run, not to anything a user clicks. An empty account_id lets the server pick
+    // the most recently used one on this harness.
+    body: JSON.stringify({ project_id: projectId, harness, account_id: accountId }),
   });
   if (!response.ok) {
     const data = (await response.json().catch(() => ({}))) as { detail?: string };
