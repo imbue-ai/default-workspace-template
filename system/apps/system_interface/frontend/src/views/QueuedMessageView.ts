@@ -22,6 +22,7 @@ import type { QueuedMessage } from "../models/AgentManager";
 import { shoulderTap } from "../models/Response";
 import { hoverTooltipAttrs } from "./hoverTooltip";
 import { prependToComposer } from "./MessageInput";
+import { OUTGOING_ROW_CLASS, OUTGOING_STATUS_CLASS } from "./OutgoingMessageView";
 import { describeRequestError } from "../models/request-error";
 import { buttonClass } from "./primitives";
 
@@ -70,16 +71,12 @@ async function shoulderTapQueuedMessages(agentId: string): Promise<void> {
  *  to the committed turn. */
 function renderQueuedBubble(queued: QueuedMessage): m.Vnode {
   if (queued.is_sending === true) {
-    return m(
-      "div",
-      { class: "message message-user outgoing-message outgoing-message--sending", key: `queued-${queued.queued_id}` },
-      [
-        m("div", { class: "message-user-bubble" }, [
-          m("div", { class: "message-content whitespace-pre-wrap" }, queued.content),
-        ]),
-        m("div", { class: "outgoing-status" }, "Sending…"),
-      ],
-    );
+    return m("div", { class: OUTGOING_ROW_CLASS, key: `queued-${queued.queued_id}` }, [
+      m("div", { class: "message-user-bubble" }, [
+        m("div", { class: "message-content whitespace-pre-wrap" }, queued.content),
+      ]),
+      m("div", { class: OUTGOING_STATUS_CLASS }, "Sending…"),
+    ]);
   }
   return m("div", { class: "message message-user queued-message", key: `queued-${queued.queued_id}` }, [
     m("div", { class: "message-user-bubble" }, [
@@ -108,15 +105,26 @@ export function renderQueuedMessages(agentId: string): m.Vnode[] {
   const isInFlight = inFlightAgentIds.has(agentId);
   const isDisabled = isInFlight || !getShoulderTapAvailableForAgent(agentId);
 
-  const header = m("div", { class: "queued-header", key: "queued-header" }, [
-    m("span", { class: "queued-header-title" }, [
-      m("span", { class: "queued-header-label" }, "Queued messages"),
+  // Header row spanning the message column's left..right bounds: the label (plus
+  // its (i) info icon) left-aligned and allowed to shrink/ellipsize, the
+  // [Shoulder tap] button pinned right and never crowded or shrunk.
+  const header = m("div", { class: "queued-header flex items-center justify-between gap-3", key: "queued-header" }, [
+    m("span", { class: "queued-header-title flex min-w-0 items-center gap-1.5" }, [
+      m(
+        "span",
+        {
+          class:
+            "queued-header-label min-w-0 truncate text-(length:--font-size-helper) font-medium tracking-[0.02em] text-secondary",
+        },
+        "Queued messages",
+      ),
       // A subtle (i) explaining when queued messages get sent. JS hover tooltip
       // (native title= is unreliable in the webview), same pattern as the button.
       m(
         "span",
         {
-          class: "queued-info",
+          class:
+            "queued-info shrink-0 cursor-help text-(length:--font-size-helper) leading-none text-secondary opacity-70 hover:opacity-100",
           tabindex: 0,
           ...hoverTooltipAttrs(QUEUED_INFO_TOOLTIP),
           "aria-label": QUEUED_INFO_TOOLTIP,
@@ -128,7 +136,7 @@ export function renderQueuedMessages(agentId: string): m.Vnode[] {
       "button",
       {
         type: "button",
-        class: buttonClass("secondary", { sm: true, extra: "queued-action queued-action--flush" }),
+        class: buttonClass("secondary", { sm: true, extra: "queued-action queued-action--flush shrink-0" }),
         disabled: isDisabled,
         ...hoverTooltipAttrs(SHOULDER_TAP_TOOLTIP),
         "aria-label": SHOULDER_TAP_TOOLTIP,
@@ -139,7 +147,7 @@ export function renderQueuedMessages(agentId: string): m.Vnode[] {
   ]);
 
   return [
-    m("div", { class: "queued-group", key: "queued-group" }, [
+    m("div", { class: "queued-group mb-5 flex flex-col items-stretch gap-2", key: "queued-group" }, [
       header,
       ...queued.map((message) => renderQueuedBubble(message)),
     ]),

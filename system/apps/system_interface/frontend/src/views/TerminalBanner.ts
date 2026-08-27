@@ -59,38 +59,51 @@ export function TerminalBanner(): m.Component {
     },
     view() {
       if (hidden) return null;
-      return m("div.terminal-banner", [
-        m("span.terminal-banner-text", [
-          "This terminal lives in memory. It survives closing the tab, reloading, and terminal-service restarts, but not a container restart. ",
-          m(
-            "a.terminal-banner-link",
-            { href: PERSISTENCE_DOC_URL, target: "_blank", rel: "noopener noreferrer" },
-            "Learn how to persist terminal state.",
-          ),
-        ]),
-        m("span.terminal-banner-actions", [
-          m(
-            "button",
-            {
-              class: buttonClass("secondary", { sm: true }),
-              onclick: () => {
-                hidden = true;
+      return m(
+        "div",
+        {
+          class:
+            "terminal-banner flex flex-none items-center justify-between gap-3 border-b border-default " +
+            "bg-surface-secondary px-2.5 py-1.5 text-(length:--font-size-body) leading-[1.4] text-secondary",
+        },
+        [
+          m("span", { class: "terminal-banner-text min-w-0" }, [
+            "This terminal lives in memory. It survives closing the tab, reloading, and terminal-service restarts, but not a container restart. ",
+            m(
+              "a",
+              {
+                class: "terminal-banner-link text-accent underline",
+                href: PERSISTENCE_DOC_URL,
+                target: "_blank",
+                rel: "noopener noreferrer",
               },
-            },
-            "Dismiss",
-          ),
-          m(
-            "button",
-            {
-              class: buttonClass("secondary", { sm: true }),
-              onclick: () => {
-                void persistNeverShowAgain();
+              "Learn how to persist terminal state.",
+            ),
+          ]),
+          m("span", { class: "terminal-banner-actions flex flex-none gap-1.5" }, [
+            m(
+              "button",
+              {
+                class: buttonClass("secondary", { sm: true }),
+                onclick: () => {
+                  hidden = true;
+                },
               },
-            },
-            "Never show again",
-          ),
-        ]),
-      ]);
+              "Dismiss",
+            ),
+            m(
+              "button",
+              {
+                class: buttonClass("secondary", { sm: true }),
+                onclick: () => {
+                  void persistNeverShowAgain();
+                },
+              },
+              "Never show again",
+            ),
+          ]),
+        ],
+      );
     },
   };
 }

@@ -363,39 +363,16 @@ body {
   pointer-events: none;
 }
 
-/* ── Title bar ── */
-.app-header {
-  padding: 14px 32px;
-  border-bottom: 1px solid var(--c-border);
-  display: flex;
-  align-items: baseline;
-  gap: --spacing(3);
-  flex-shrink: 0;
-  background: var(--c-bg);
-}
-
-.app-header-title {
-  font-family: var(--font-sans);
-  font-size: var(--font-size-heading);
-  font-weight: 600;
-  color: var(--c-text-primary);
-}
-
-/* The subagent header's model/type badge now uses the shared .badge primitive
-   (.badge--neutral.badge--mono). */
-
-/* ── Messages area ── */
-.app-content {
-  /* The chat transcript area is pure white, distinct from the shared off-white
-     --c-bg used by the surrounding shell (footer, tabs, other panels). */
-  background: var(--c-bg-chat);
-  /* Native scroll anchoring stays ON (the browser default) so the viewport holds
-     steady when rows above it load or measure to their real height, with no
-     per-frame JS scrollTop writes. The virtualization spacers opt out of anchoring
-     individually (see the spacer divs in ChatPanel / SubagentView) so the browser
-     anchors to a real message row rather than a resizing spacer. The app only
-     writes scrollTop for the discrete tail-follow and jump pins. */
-}
+/* ── Title bar / messages area ── */
+/* The app header and content area (ChatPanel / SubagentView) are styled with
+   utilities in their views. On .app-content, native scroll anchoring stays ON
+   (the browser default) so the viewport holds steady when rows above it load or
+   measure to their real height, with no per-frame JS scrollTop writes. The
+   virtualization spacers opt out of anchoring individually (see the spacer divs
+   in ChatPanel / SubagentView) so the browser anchors to a real message row
+   rather than a resizing spacer. The app only writes scrollTop for the discrete
+   tail-follow and jump pins. Its scrollbar treatment stays below (Scrollbar
+   section). */
 
 /* ── User bubble ── */
 .message {
@@ -431,64 +408,10 @@ body {
 }
 
 /* ── Queued messages (the shoulder-tap group) ── */
-/* Messages the harness has parked while the agent is mid-turn, rendered below the
-   last committed turn as a distinct group under a subtle header row. This is a
-   full snapshot from the backend -- there is no optimistic/"sending" state. */
-.queued-group {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: --spacing(2);
-  margin-bottom: --spacing(5);
-}
-
-/* Header row spanning the message column's left..right bounds: 'Queued messages'
-   left-aligned with the chat message column / composer, the [Shoulder tap] button
-   pinned to the column's right. When the column is narrow the label truncates
-   rather than crowding the button -- space-between + gap keeps spacing between
-   them, and the button never shrinks. */
-.queued-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: --spacing(3);
-}
-
-/* Left group: the 'Queued messages' label plus its (i) info icon, kept together
-   and allowed to shrink/ellipsize so the [Shoulder tap] button on the right is
-   never crowded. */
-.queued-header-title {
-  display: flex;
-  align-items: center;
-  gap: --spacing(1.5);
-  min-width: 0;
-}
-
-.queued-header-label {
-  font-family: var(--font-sans);
-  font-size: var(--font-size-helper);
-  font-weight: 500;
-  letter-spacing: 0.02em;
-  color: var(--c-text-secondary);
-  /* Let the label shrink and ellipsize in a narrow column instead of overlapping
-     the button. */
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* Queued-action button now uses the shared .btn primitive (btn--secondary
-   btn--sm). The .queued-action class is retained only to hold its flex layout;
-   its tooltip is the shared JS hover bubble (views/hoverTooltip.ts), positioned
-   in JS and clamped to the viewport, so no CSS anchor is needed. */
-.queued-action {
-  flex-shrink: 0;
-}
-
-/* A queued bubble reuses the user-bubble view but is marked as not-yet-sent: a
-   slightly muted fill distinguishes it from a committed turn (the labeled 'Queued
-   messages' group is what sets it apart; no outline). */
+/* The group/header layout lives as utilities in views/QueuedMessageView.ts.
+   Only the bubble treatment stays here: a queued bubble reuses the shared
+   user-bubble markup (rendered by the common bubble code), so the not-yet-sent
+   muting is applied contextually off the .queued-message marker. */
 .queued-message {
   margin-bottom: 0;
 }
@@ -497,56 +420,17 @@ body {
   opacity: 0.85;
 }
 
-/* Frozen queued group: while a shoulder-tap restart is in flight, the captured
-   messages are held greyed (ignoring the backend snapshot briefly emptying) so
-   they do not blip out and back, until a backend arrival releases the hold. No
-   countdown is shown. */
-.queued-group--frozen {
-  opacity: 0.55;
-}
-
-.queued-header--frozen {
-  color: var(--c-text-secondary);
-}
-
-/* The (i) info affordance next to 'Queued messages'. */
-.queued-info {
-  flex-shrink: 0;
-  font-size: var(--font-size-helper);
-  line-height: 1;
-  color: var(--c-text-secondary);
-  opacity: 0.7;
-  cursor: help;
-}
-
-.queued-info:hover {
-  opacity: 1;
-}
-
-/* Optimistic "Sending…" bubble: shown at the tail the instant the user sends,
-   until the real (queued/committed) state arrives or it fails. Reuses the
-   user-bubble view with a small status caption; a failed one turns its caption
-   red and stays put. */
+/* Optimistic "Sending…" bubble (views/OutgoingMessageView.ts): its row/caption
+   styling lives as utilities there. Here only what must ride the cascade: the
+   zeroed row margin (outranking the unlayered .message rhythm rule above, which
+   a utility cannot) and the dashed bubble border (the bubble markup comes from
+   the shared user-bubble code, so it is styled contextually). */
 .outgoing-message {
   margin-bottom: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-}
-
-.outgoing-message--sending {
-  opacity: 0.6;
 }
 
 .outgoing-message .message-user-bubble {
   border: 1px dashed var(--c-border);
-}
-
-.outgoing-status {
-  margin-top: 3px;
-  font-family: var(--font-sans);
-  font-size: var(--font-size-helper);
-  color: var(--c-text-secondary);
 }
 
 /* ── Assistant message ── */
@@ -555,12 +439,7 @@ body {
 }
 
 /* ── Lifted Composer ── */
-.app-footer {
-  padding: 0 --spacing(8) --spacing(6);
-  flex-shrink: 0;
-  background: var(--c-bg-chat);
-  border: none;
-}
+/* The footer strip itself (.app-footer) is styled with utilities in ChatPanel. */
 
 /* The row below the chat input: model bar on the left, agent-terminal + harness-auth actions
    right-aligned -- the original flex row, undisturbed. The "Powered by" credit is centered over
@@ -1423,91 +1302,9 @@ body {
   color: rgba(120, 120, 120, 0.95);
 }
 
-/* ── Sub-agent link card ── */
-.subagent-card {
-  margin-top: 0.75em;
-  margin-bottom: 0.75em;
-  border: 1px solid var(--c-accent);
-  border-radius: var(--radius-md);
-  background: var(--c-accent-light);
-  padding: --spacing(3) --spacing(4);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: --spacing(3);
-}
-
-.subagent-card-header {
-  display: flex;
-  align-items: center;
-  gap: --spacing(2);
-  min-width: 0;
-  flex: 1;
-}
-
-/* Live status dot: pulsing green while the sub-agent works. Reuses the
-   agent-activity-pulse keyframes so it matches the main chat's activity dot. */
-.subagent-card-status-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.subagent-card-status-dot--running {
-  background: var(--c-accent);
-  animation: agent-activity-pulse 1.4s ease-in-out infinite;
-}
-
-/* Settled checkmark shown once the sub-agent finishes, mirroring a done progress step. */
-.subagent-card-status-check {
-  flex-shrink: 0;
-  color: var(--c-text-secondary);
-}
-
-/* Once finished, the card drops its green accent for neutral grey -- green reads as active. */
-.subagent-card--done {
-  border-color: var(--c-border);
-  background: var(--c-surface-secondary);
-}
-
-.subagent-card-description {
-  font-size: var(--font-size-body);
-  font-weight: 500;
-  color: var(--c-text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* The subagent-card type badge now uses the shared .badge primitive
-   (.badge--accent.badge--mono, plus shrink-0 for the card's flex row). */
-
-.subagent-card-link {
-  font-size: var(--font-size-body);
-  color: var(--c-accent);
-  text-decoration: none;
-  white-space: nowrap;
-  flex-shrink: 0;
-  transition: color var(--dur-base);
-}
-
-.subagent-card-link:hover {
-  color: var(--c-accent-hover);
-  text-decoration: underline;
-}
-
-/* The "View conversation" label before the subagent is linked to its session: there is no
-   conversation to open yet, so it renders muted and non-interactive until linkage lands. */
-.subagent-card-link--pending {
-  color: var(--c-text-faint);
-  cursor: default;
-}
-
-.subagent-card-link--pending:hover {
-  color: var(--c-text-secondary);
-  text-decoration: none;
-}
+/* The sub-agent link card (renderSubagentCard in views/message-renderers.ts) is
+   styled entirely with utilities in its view; its pulsing status dot reuses the
+   agent-activity-pulse keyframes below. */
 
 /* ── Permission request card ──
    An agent permission request, rendered as a standalone card (not a generic
@@ -3504,36 +3301,5 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   cursor: default;
 }
 
-/* Terminal lifecycle banner: a thin bar above each terminal tab explaining
-   that terminal state lives in memory only. */
-.terminal-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: --spacing(3);
-  flex: 0 0 auto;
-  padding: 6px 10px;
-  font-size: var(--font-size-body);
-  line-height: 1.4;
-  color: var(--c-text-secondary);
-  background: var(--c-surface-secondary);
-  border-bottom: 1px solid var(--c-border);
-}
-
-.terminal-banner-text {
-  min-width: 0;
-}
-
-.terminal-banner-link {
-  color: var(--c-accent);
-  text-decoration: underline;
-}
-
-.terminal-banner-actions {
-  display: flex;
-  gap: --spacing(1.5);
-  flex: 0 0 auto;
-}
-
-/* Terminal-banner buttons now use the shared .btn primitive
-   (btn--secondary btn--sm). */
+/* The terminal lifecycle banner (views/TerminalBanner.ts) is styled entirely
+   with utilities in its view. */
