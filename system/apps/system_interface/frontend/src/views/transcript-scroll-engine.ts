@@ -241,6 +241,10 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
 
   // --- fill -----------------------------------------------------------------
   let fillInFlight = false;
+  // Bumped by setAgent so a fill still in flight for the previous agent cannot
+  // apply its completion (clearing the single-flight guard out from under the
+  // new agent's fill, or landing the old agent's jump) after the switch.
+  let fillEpoch = 0;
   /** Scrollbar target (or restore target) in a virtual region awaiting its window. */
   let pendingJumpIndex: number | null = null;
   /** A landed at-offset fetch whose JUMPED_TO_INDEX dispatch awaits fresh geometry. */
@@ -736,6 +740,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     fillInFlight = true;
     trace?.record("fill", { action });
     const jumpIndexAtDispatch = pendingJumpIndex;
+    const epochAtDispatch = fillEpoch;
     dataSource
       .executeFill(action)
       .catch((error: unknown) => {
@@ -744,6 +749,9 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
         console.warn("Transcript fill action failed", action, error);
       })
       .then(() => {
+        if (fillEpoch !== epochAtDispatch) {
+          return; // setAgent reset everything; this completion is the old agent's
+        }
         fillInFlight = false;
         if (action.kind === "fetch-at-offset" && jumpIndexAtDispatch !== null) {
           // The jump's window landed; anchor to the target once geometry rebuilds.
@@ -1315,6 +1323,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       scrollTopPx = 0;
       pendingEchoTops.length = 0;
       fillInFlight = false;
+      fillEpoch += 1;
       pendingJumpIndex = null;
       pendingJumpLandIndex = null;
       pendingTailIntent = false;
