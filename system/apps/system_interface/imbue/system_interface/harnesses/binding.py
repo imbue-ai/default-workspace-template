@@ -27,7 +27,6 @@ provisioning just created -- the same `ln -sfn` mngr itself used, one step later
 from __future__ import annotations
 
 import shlex
-import shutil
 from pathlib import Path
 from typing import Final
 
@@ -191,40 +190,3 @@ def harness_for(account: Account) -> HarnessType | None:
     except LaneNotFoundError:
         logger.warning("Account {} names unknown lane {}", account.id, account.lane)
         return None
-
-
-# What claude reads when nothing pins CLAUDE_CONFIG_DIR: the workspace terminals, the
-# supervisord services, and `claude_p.py` (which eight skills plus build-app and
-# migrate-workspace call for scripted steps). None of those has an agent, so none can be
-# bound -- they land here or nowhere.
-_DEFAULT_CLAUDE_HOME: Final = ".claude"
-
-
-def adopt_default_claude_home(account_path: Path, home: Path | None = None) -> None:
-    """Point `~/.claude` at an account, carrying anything already there into it.
-
-    The agentless callers above resolve `~/.claude` and cannot be given an account, so the
-    first claude account becomes what they use. A plain `ln -sfn` would not do: onto an
-    existing directory it creates a link INSIDE it, and forced it would drop `projects/`,
-    which is where the transcript watcher and mngr's resume gate both look. So the existing
-    tree is merged in first -- the account wins any collision, since its credential is the
-    one being adopted -- and only then replaced by the link.
-    """
-    root = (home or Path.home()) / _DEFAULT_CLAUDE_HOME
-    account_path.mkdir(parents=True, exist_ok=True)
-    if root.is_symlink():
-        root.unlink()
-    elif root.is_dir():
-        for existing in root.iterdir():
-            destination = account_path / existing.name
-            if not destination.exists():
-                shutil.move(str(existing), str(destination))
-        shutil.rmtree(root, ignore_errors=True)
-    elif root.exists():
-        root.unlink()
-    else:
-        # Nothing there at all -- a workspace that has never run claude. Just link it.
-        pass
-    root.parent.mkdir(parents=True, exist_ok=True)
-    root.symlink_to(account_path, target_is_directory=True)
-    logger.info("Pointed {} at account {}", root, account_path.name)

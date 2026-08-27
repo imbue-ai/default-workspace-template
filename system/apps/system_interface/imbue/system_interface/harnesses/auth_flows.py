@@ -39,7 +39,6 @@ from loguru import logger as _loguru_logger
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface import accounts
 from imbue.system_interface.harnesses.binding import account_env
-from imbue.system_interface.harnesses.binding import adopt_default_claude_home
 from imbue.system_interface.harnesses.binding import seed_account
 from imbue.system_interface.harnesses.claude.auth import ANTHROPIC_API_KEY_ENV_VAR
 from imbue.system_interface.harnesses.claude.auth import MANAGED_AUTH_ENV_KEYS
@@ -52,7 +51,6 @@ from imbue.system_interface.harnesses.lanes import PasteSink
 from imbue.system_interface.harnesses.lanes import PtyMethod
 from imbue.system_interface.harnesses.lanes import Scrape
 from imbue.system_interface.harnesses.lanes import Submit
-from imbue.system_interface.harnesses.lanes import LANE_ANTHROPIC
 from imbue.system_interface.harnesses.lanes import get_lane
 from imbue.system_interface.harnesses.lanes import get_method
 from imbue.system_interface.harnesses.pty_auth import PtyAuthError
@@ -344,9 +342,7 @@ class AuthFlowService:
             account_id, path = accounts.mint_account_dir(self._home)
             seed_account(lane.harness, path, self._work_dir)
             write_claude_env(path, managed_env)
-            account = accounts.commit_account(account_id, lane.id, lane.provider_name, self._home)
-            self._adopt_if_first_claude_locked(account)
-            return account
+            return accounts.commit_account(account_id, lane.id, lane.provider_name, self._home)
 
     def poll(self, flow_id: str) -> FlowStatus:
         with self._lock:
@@ -398,22 +394,9 @@ class AuthFlowService:
 
     def _commit_locked(self, session: _Session, display: str) -> FlowStatus:
         account = accounts.commit_account(session.account_id, session.lane.id, display, self._home)
-        self._adopt_if_first_claude_locked(account)
         session.state = FlowState.OK
         self._teardown_locked(session, keep_folder=True)
         return FlowStatus(state=FlowState.OK, account_id=account.id)
-
-    def _adopt_if_first_claude_locked(self, account: accounts.Account) -> None:
-        """Give the agentless claude callers a real credential to resolve.
-
-        Workspace terminals, supervisord services and `claude_p.py` all read `~/.claude`
-        with no agent to bind, so the FIRST claude account becomes theirs. Only the first:
-        later ones are additional accounts, and silently repointing the default under them
-        would move what every skill runs as.
-        """
-        if account.lane != LANE_ANTHROPIC.id or account.seq != 1:
-            return
-        adopt_default_claude_home(accounts.account_dir(account.id, self._home), self._home)
 
     def _fail_locked(self, session: _Session, detail: str) -> None:
         session.state = FlowState.FAILED
