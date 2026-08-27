@@ -16,7 +16,6 @@ from imbue.system_interface.accounts import resolve_account
 from imbue.system_interface.accounts import set_mru
 from imbue.system_interface.harnesses.binding import BindingError
 from imbue.system_interface.harnesses.binding import account_credential_path
-from imbue.system_interface.harnesses.binding import adopt_default_claude_home
 from imbue.system_interface.harnesses.binding import account_env
 from imbue.system_interface.harnesses.binding import agent_credential_path
 from imbue.system_interface.harnesses.binding import create_args
@@ -180,40 +179,3 @@ def test_an_explicit_account_beats_the_most_recently_used_one(tmp_path: Path) ->
     _account(tmp_path, "anthropic", "Anthropic")
 
     assert _bound_id(wanted, tmp_path) == wanted
-
-
-def test_adopting_the_default_home_carries_the_existing_tree_in(tmp_path: Path) -> None:
-    """`projects/` must survive: the transcript watcher and mngr's resume gate both read it.
-
-    A plain `ln -sfn` onto a real directory links INSIDE it, and a forced one drops the
-    tree outright -- which is why the contents are moved before the link is made.
-    """
-    home = tmp_path / "home"
-    existing = home / ".claude"
-    (existing / "projects" / "a-chat").mkdir(parents=True)
-    (existing / "projects" / "a-chat" / "transcript.jsonl").write_text("{}\n")
-    (existing / ".credentials.json").write_text('{"old": true}')
-    account = tmp_path / "account"
-    account.mkdir()
-    (account / ".credentials.json").write_text('{"new": true}')
-
-    adopt_default_claude_home(account, home)
-
-    assert (home / ".claude").is_symlink()
-    assert (home / ".claude").resolve() == account.resolve()
-    assert (account / "projects" / "a-chat" / "transcript.jsonl").read_text() == "{}\n"
-    # The account's own credential wins: it is the one being adopted.
-    assert (account / ".credentials.json").read_text() == '{"new": true}'
-
-
-def test_adopting_the_default_home_twice_repoints_rather_than_nesting(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    home.mkdir()
-    first = tmp_path / "first"
-    second = tmp_path / "second"
-
-    adopt_default_claude_home(first, home)
-    adopt_default_claude_home(second, home)
-
-    assert (home / ".claude").resolve() == second.resolve()
-    assert not (second / ".claude").exists(), "a second adopt must not link inside the first"

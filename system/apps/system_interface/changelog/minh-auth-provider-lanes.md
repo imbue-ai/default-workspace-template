@@ -250,28 +250,17 @@ modal's spinner. `auth.py` goes from 1358 lines to ~750.
 The lane table covers those flows now, and it covers them for every harness rather than
 just claude.
 
-# The first claude account becomes the workspace's default login
-
-`~/.claude` is repointed at the first claude account signed in. Workspace terminals,
-supervisord services and `claude_p.py` -- which eight skills plus build-app and
-migrate-workspace call for scripted steps -- all resolve that path with no agent to bind,
-so without this they keep running on whatever was there before while every chat uses an
-account.
-
-Anything already at `~/.claude` is moved into the account first, then replaced by the link.
-A plain `ln -sfn` onto a real directory links INSIDE it, and a forced one drops `projects/`
--- where the transcript watcher and mngr's resume gate both look. Only the first account
-adopts it; a later one is an additional account, not a new default for every skill.
-
 # Nothing signed in means the New chat tile opens the chooser
 
-With the default login now being an account, "no accounts" really does mean no credential,
-so starting a chat there would produce one that cannot take a turn. The picker says "No
+"No accounts" means no credential to launch on, so starting a chat there would produce one
+that cannot take a turn. The picker says "No
 provider configured" and the tile opens the chooser instead.
 
-**Breaking:** an existing workspace's `~/.claude` moves into an account the first time
-anyone signs in. Running chats keep the credential they started with; new ones use the
-account.
+`~/.claude` is left alone. An account is only ever reached through the env var a bound
+agent carries, so no account is special and nothing outside an agent picks one up: running
+`claude` from a workspace terminal is simply not authenticated unless someone signed that
+shell in themselves. Special-casing the first account to become the default would have made
+one account permanently different from the rest for no reason the model asks for.
 
 The submit-credentials response keeps `auth_mode` and gains `account_id`. mngr's
 `test_litellm_via_workspace` asserts on the first and now creates its chat on the second,
