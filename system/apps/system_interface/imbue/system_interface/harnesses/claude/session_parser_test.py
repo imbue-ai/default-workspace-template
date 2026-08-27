@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 
+from imbue.system_interface.harnesses.claude.session_parser import is_interrupt_sentinel_record
 from imbue.system_interface.harnesses.claude.session_parser import parse_lines
 from imbue.system_interface.harnesses.tool_output import _MAX_PERMISSION_REQUEST_PROBES
 
@@ -1116,3 +1117,28 @@ def test_chip_classification_survives_an_attachment_block() -> None:
     assert events[0]["display"] == "chip"
     assert events[0]["display_label"] == "Browser fleet"
     assert events[0]["display_body"] == "Browser foo-1 is free"
+
+
+def test_is_interrupt_sentinel_record_matches_both_shapes() -> None:
+    """The raw-record predicate matches both sentinel shapes, string and array content forms."""
+    for text in ("[Request interrupted by user]", "[Request interrupted by user for tool use]"):
+        for content in (text, [{"type": "text", "text": text}]):
+            raw = {"type": "user", "message": {"role": "user", "content": content}}
+            assert is_interrupt_sentinel_record(raw)
+
+
+def test_is_interrupt_sentinel_record_rejects_non_sentinels() -> None:
+    """Non-user records, tool_results quoting the sentinel, and plain user text do not match."""
+    quoting_tool_result = {
+        "type": "user",
+        "message": {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "[Request interrupted by user]"}],
+        },
+    }
+    assert not is_interrupt_sentinel_record(quoting_tool_result)
+    assert not is_interrupt_sentinel_record(
+        {"type": "assistant", "message": {"content": "[Request interrupted by user]"}}
+    )
+    assert not is_interrupt_sentinel_record({"type": "user", "message": {"role": "user", "content": "hello"}})
+    assert not is_interrupt_sentinel_record({"type": "user", "message": None})

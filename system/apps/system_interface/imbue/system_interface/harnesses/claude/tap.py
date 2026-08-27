@@ -62,7 +62,7 @@ from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_discovery import get_host_dir
 from imbue.system_interface.harnesses.claude.session_parser import INTERRUPT_SENTINEL_TEXT
 from imbue.system_interface.harnesses.claude.session_parser import extract_text_content
-from imbue.system_interface.harnesses.claude.session_parser import is_interrupt_sentinel_text
+from imbue.system_interface.harnesses.claude.session_parser import is_interrupt_sentinel_record
 from imbue.system_interface.harnesses.interrupt import InterruptToComposer
 from imbue.system_interface.harnesses.interrupt import PressChord
 from imbue.system_interface.harnesses.interrupt import RestartProcess
@@ -531,27 +531,17 @@ class _AbortVerdict(StrEnum):
     UNCONFIRMED = "unconfirmed"
 
 
-def _is_interrupt_abort_record(raw: dict[str, Any]) -> bool:
-    """True iff ``raw`` is a user record whose text is an interrupt sentinel (either shape).
-
-    Pinned to the PARSED user-record shape, never a raw substring: ``extract_text_content``
-    reads only ``text`` blocks, so a ``tool_result`` quoting the sentinel (routine when an agent
-    greps its own session JSONL) yields empty text and cannot false-confirm the abort -- the
-    exact inversion the confirm-before-clear ordering exists to prevent.
-    """
-    if raw.get("type") != _USER_RECORD_TYPE:
-        return False
-    message = raw.get("message")
-    if not isinstance(message, dict):
-        return False
-    return is_interrupt_sentinel_text(extract_text_content(message.get("content")))
-
-
 def _tail_has_interrupt_abort(tail_lines: list[str]) -> bool:
-    """True iff any complete raw line in the post-baseline tail is an interrupt-abort record."""
+    """True iff any complete raw line in the post-baseline tail is an interrupt-abort record.
+
+    Pinned to the PARSED user-record shape via ``is_interrupt_sentinel_record``, never a raw
+    substring: a ``tool_result`` quoting the sentinel (routine when an agent greps its own
+    session JSONL) cannot false-confirm the abort -- the exact inversion the
+    confirm-before-clear ordering exists to prevent.
+    """
     for line in tail_lines:
         raw = _load_json_object(line)
-        if raw is not None and _is_interrupt_abort_record(raw):
+        if raw is not None and is_interrupt_sentinel_record(raw):
             return True
     return False
 

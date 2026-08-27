@@ -5,6 +5,7 @@ import os
 import threading
 import time
 from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 from typing import Any
 
@@ -1795,3 +1796,129 @@ def test_get_latest_main_session_file_none_without_history(tmp_path: Path) -> No
     watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
 
     assert watcher.get_latest_main_session_file() is None
+
+
+# --- interrupt stranded-marker heal ------------------------------------------
+
+
+def _interrupt_sentinel_event(index: int, text: str, epoch: float) -> dict[str, Any]:
+    timestamp = datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+    return {
+        "type": "user",
+        "uuid": f"uuid-{index}",
+        "timestamp": timestamp,
+        "message": {"role": "user", "content": [{"type": "text", "text": text}]},
+    }
+
+
+def _activity_events_file() -> Path:
+    return Path(os.environ["MNGR_HOST_DIR"]) / "events" / "mngr" / "activity" / "events.jsonl"
+
+
+def test_poll_heals_active_marker_stranded_by_terminal_interrupt(tmp_path: Path) -> None:
+    """A terminal-side interrupt (no hook fires) must not leave the agent reporting a live turn.
+
+    The sentinel record on disk is the only evidence the turn died; the poll loop clears the
+    ``active`` marker the interrupted turn's UserPromptSubmit created and emits the activity
+    event that makes ``mngr observe`` re-probe -- otherwise the chat indicator shows
+    "Thinking..." forever while the terminal sits idle.
+    """
+    agent_state_dir, claude_config_dir, session_file = _setup_empty_agent(tmp_path)
+    marker = agent_state_dir / "active"
+    marker.touch()
+    now = time.time()
+    os.utime(marker, (now - 300.0, now - 300.0))
+
+    collected: list[dict[str, Any]] = []
+    watcher = _make_watcher(agent_state_dir, claude_config_dir, collected)
+    watcher._discover_sessions()
+
+    with open(session_file, "ab") as f:
+        f.write((json.dumps(_user_event(0)) + "\n").encode("utf-8"))
+        f.write(
+            (json.dumps(_interrupt_sentinel_event(1, "[Request interrupted by user]", now)) + "\n").encode("utf-8")
+        )
+    watcher._poll_for_changes()
+
+    assert not marker.exists()
+    activity_lines = _activity_events_file().read_text().splitlines()
+    assert len(activity_lines) == 1
+    assert json.loads(activity_lines[0])["type"] == "activity"
+
+
+def test_poll_heals_marker_on_mid_tool_interrupt_sentinel(tmp_path: Path) -> None:
+    """The mid-tool ``for tool use`` sentinel shape (the dominant interrupt) also heals."""
+    agent_state_dir, claude_config_dir, session_file = _setup_empty_agent(tmp_path)
+    marker = agent_state_dir / "active"
+    marker.touch()
+    now = time.time()
+    os.utime(marker, (now - 300.0, now - 300.0))
+
+    watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
+    watcher._discover_sessions()
+
+    sentinel = _interrupt_sentinel_event(0, "[Request interrupted by user for tool use]", now)
+    with open(session_file, "ab") as f:
+        f.write((json.dumps(sentinel) + "\n").encode("utf-8"))
+    watcher._poll_for_changes()
+
+    assert not marker.exists()
+
+
+def test_poll_leaves_marker_touched_after_the_interrupt(tmp_path: Path) -> None:
+    """A marker at/after the sentinel belongs to a NEWER turn (resubmit or queue flush): keep it."""
+    agent_state_dir, claude_config_dir, session_file = _setup_empty_agent(tmp_path)
+    marker = agent_state_dir / "active"
+    marker.touch()
+    now = time.time()
+
+    watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
+    watcher._discover_sessions()
+
+    sentinel = _interrupt_sentinel_event(0, "[Request interrupted by user]", now - 30.0)
+    with open(session_file, "ab") as f:
+        f.write((json.dumps(sentinel) + "\n").encode("utf-8"))
+    watcher._poll_for_changes()
+
+    assert marker.exists()
+    assert not _activity_events_file().exists()
+
+
+def test_poll_heal_without_marker_is_a_noop(tmp_path: Path) -> None:
+    """A sentinel with no marker (the turn already settled) heals nothing and emits nothing."""
+    agent_state_dir, claude_config_dir, session_file = _setup_empty_agent(tmp_path)
+    watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
+    watcher._discover_sessions()
+
+    sentinel = _interrupt_sentinel_event(0, "[Request interrupted by user]", time.time())
+    with open(session_file, "ab") as f:
+        f.write((json.dumps(sentinel) + "\n").encode("utf-8"))
+    watcher._poll_for_changes()
+
+    assert not (agent_state_dir / "active").exists()
+    assert not _activity_events_file().exists()
+
+
+def test_poll_ignores_sentinel_in_non_latest_main_session(tmp_path: Path) -> None:
+    """Only the LATEST main session's sentinels heal: an old session's interrupt is history."""
+    agent_state_dir = tmp_path / "agent_state"
+    agent_state_dir.mkdir()
+    claude_config_dir = tmp_path / "claude_config"
+    projects_dir = claude_config_dir / "projects"
+    now = time.time()
+
+    old_sentinel = _interrupt_sentinel_event(0, "[Request interrupted by user]", now)
+    _write_session_file(projects_dir, "old-session", [old_sentinel])
+    _write_session_file(projects_dir, "new-session", [_user_event(1)])
+    (agent_state_dir / "claude_session_id_history").write_text("old-session\nnew-session\n")
+
+    marker = agent_state_dir / "active"
+    marker.touch()
+    os.utime(marker, (now - 300.0, now - 300.0))
+
+    watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
+    watcher._discover_sessions()
+    watcher._poll_for_changes()
+
+    assert marker.exists()
+    assert not _activity_events_file().exists()
