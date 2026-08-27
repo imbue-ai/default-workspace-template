@@ -48,10 +48,13 @@ def test_mint_then_commit_round_trips(tmp_path: Path) -> None:
 
 def test_the_folder_name_carries_no_identity(tmp_path: Path) -> None:
     """The whole point of a random id: nothing on disk claims a lane or a number."""
-    account = _add(tmp_path, "opencode-go", "Opencode Go")
-    assert "opencode" not in account.id
-    assert str(account.seq) not in account.id
-    assert account_dir(account.id, tmp_path).name == account.id
+    first = _add(tmp_path, "opencode-go", "Opencode Go")
+    second = _add(tmp_path, "opencode-go", "Opencode Go")
+    assert "opencode" not in first.id
+    # Same lane, adjacent seq, unrelated ids -- nothing about the folder is derived.
+    assert first.id != second.id
+    assert not second.id.startswith(first.id[:8])
+    assert account_dir(first.id, tmp_path).name == first.id
 
 
 def test_seq_counts_per_lane(tmp_path: Path) -> None:
