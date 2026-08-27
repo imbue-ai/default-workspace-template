@@ -1,15 +1,14 @@
 /**
- * Pure geometry for the combo card's side flyout, ported from the mockup.
+ * Pure geometry for the combo card's side flyout.
  *
- * The mockup's rule, verbatim (`ModelBar.tsx`): the flyout's left edge tucks 4px UNDER the
- * card's right edge (macOS submenu geometry -- a gap reads as two separate panels), its top
- * aligns with the row that opened it minus 6px, and its height is capped to whatever space
- * remains below that top.
+ * The flyout's BASE sits level with the row that opened it and the list grows UPWARD. That is
+ * not the mockup's rule (it top-aligns and caps downward), and the reason is that this card
+ * opens from the composer at the BOTTOM of the panel: a list capped by the space below its row
+ * had roughly three rows to work with, which is what pi's thousand-model catalog was being
+ * squeezed into. Growing up gives it the whole window instead.
  *
- * An earlier version of this file also LIFTED a flyout opened from a row near the bottom so
- * its full height would fit. That was invented, not ported, and it is what put the list in the
- * top-right corner of the screen while the card sat at the bottom: capping the height keeps the
- * flyout beside the row that opened it, which is the whole point of a submenu.
+ * The search field belongs at the bottom of that column for the same reason -- it stays put,
+ * next to the row you came from, while the list extends away from your hand.
  *
  * Kept free of the DOM so it is unit-testable; the caller measures and feeds it in.
  */
@@ -18,8 +17,8 @@ export interface FlyoutPlacementInput {
   /** Viewport left of the card, and its width. */
   cardLeft: number;
   cardWidth: number;
-  /** Viewport y of the top edge of the row that opened the flyout. */
-  rowTop: number;
+  /** Viewport y of the BOTTOM edge of the row that opened the flyout: the base to sit on. */
+  rowBottom: number;
   flyoutWidth: number;
   /** The tallest the flyout may be before the viewport caps it. */
   maxFlyoutHeight: number;
@@ -33,14 +32,16 @@ export interface FlyoutPlacementInput {
 
 export interface FlyoutPlacement {
   left: number;
-  top: number;
+  /** Distance from the viewport's BOTTOM to the flyout's base -- it is anchored there and
+   *  grows upward, so this is what stays fixed as the content changes. */
+  bottom: number;
   /** A cap, not a height: the content decides, up to this. */
   maxHeight: number;
   side: "trailing" | "leading";
 }
 
 export function placeFlyout(input: FlyoutPlacementInput): FlyoutPlacement {
-  const { cardLeft, cardWidth, rowTop, flyoutWidth, maxFlyoutHeight } = input;
+  const { cardLeft, cardWidth, rowBottom, flyoutWidth, maxFlyoutHeight } = input;
   const { viewportWidth, viewportHeight, margin, overlap } = input;
 
   const trailing = cardLeft + cardWidth - overlap;
@@ -54,7 +55,13 @@ export function placeFlyout(input: FlyoutPlacementInput): FlyoutPlacement {
   // characters stay readable.
   const left = Math.min(Math.max(wanted, margin), Math.max(margin, viewportWidth - margin - flyoutWidth));
 
-  // Top-aligned with the row, never above the viewport. The height gives way, not the position.
-  const top = Math.max(margin, rowTop);
-  return { left, top, maxHeight: Math.max(0, Math.min(maxFlyoutHeight, viewportHeight - top - margin)), side };
+  // The base never leaves the viewport, and never sits so low the flyout has nowhere to grow.
+  const base = Math.min(Math.max(rowBottom, margin), viewportHeight - margin);
+  return {
+    left,
+    bottom: viewportHeight - base,
+    // Everything between the base and the top margin is available to grow into.
+    maxHeight: Math.max(0, Math.min(maxFlyoutHeight, base - margin)),
+    side,
+  };
 }

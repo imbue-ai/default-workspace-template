@@ -20,6 +20,14 @@ export const FLYOUT_WIDTH = 300;
 /** macOS submenu geometry: the flyout tucks 4px UNDER the card's right edge. */
 export const FLYOUT_OVERLAP = 4;
 
+/** Show ten rows before the list starts scrolling. Fewer and a long catalog reads as a
+ *  keyhole -- pi's was showing three; many more and the flyout is a wall. Derived rather than
+ *  guessed so it stays true if the row height changes. */
+const FLYOUT_ROW_HEIGHT = 29;
+const FLYOUT_VISIBLE_ROWS = 10;
+/** Rows, plus the search field standing under them, plus the shell's own padding. */
+export const FLYOUT_MAX_HEIGHT = FLYOUT_ROW_HEIGHT * FLYOUT_VISIBLE_ROWS + 42;
+
 // --- the composer trigger ------------------------------------------------------------------
 export const TRIGGER =
   "flex h-[30px] items-center gap-1.5 rounded-lg px-2 type-helper whitespace-nowrap " +
@@ -93,7 +101,9 @@ export const SWITCH_CHECK = "text-accent";
 export const FLYOUT =
   "fixed z-[120] flex flex-col overflow-hidden rounded-xl border border-subtle " +
   "bg-surface-primary p-1 shadow-overlay";
-export const FLYOUT_SCROLL = "min-h-0 flex-1 overflow-y-auto";
+/** `model-flyout-scroll` gives it a visible slim scrollbar; without one nothing says the
+ *  list continues past the edge. */
+export const FLYOUT_SCROLL = "model-flyout-scroll min-h-0 flex-1 overflow-y-auto";
 /** `pr-7` reserves the slot the trash occupies on hover, so the row's text never reflows. */
 const FLYOUT_ROW_BASE =
   "flex w-full items-center gap-1.5 rounded-md px-1.5 pr-7 text-left text-[13px] leading-[29px] " +

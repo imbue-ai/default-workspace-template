@@ -17,14 +17,23 @@
 
 export const MODAL =
   "overflow-hidden rounded-xl bg-white shadow-[0_1px_3px_rgba(0,0,0,0.06),0_16px_40px_rgba(0,0,0,0.18)]";
-/* Half again as big as the mockup on every side. This is the first thing a new workspace
-   shows and it carries the decision the whole product hangs on -- the mockup's 460 was sized
-   for a screenshot, not for someone actually choosing. Padding scales with it (px-4 -> px-6,
-   pt-3 -> pt-5) so the extra room becomes air rather than longer lines. */
-export const PANEL = "flex w-[690px] flex-1 flex-col";
+/** The panel's frame. The WIDTH comes from `panelWidth` below, per screen.
+ *
+ *  The mockup uses one 460px panel with a fixed 498px body for every screen. Both parts were
+ *  wrong here: one width makes the lane list cramped and the "All set" check marooned, and a
+ *  fixed body height gave a two-line confirmation six hundred pixels of white space under it.
+ *  So the panel sizes to its screen, and the body sizes to its content up to a cap. */
+export const PANEL = "flex flex-1 flex-col transition-[width] duration-150 ease-out";
+
+/** Each screen's width. Four steps on one scale, so drilling in never feels like a new dialog:
+ *  a confirmation is a sentence, a method list is a column of rows, a form is a column of
+ *  fields, and the lane list is the widest thing the flow ever shows. */
+export function panelWidth(screen: "status" | "menu" | "form" | "chooser"): string {
+  return { status: "w-[440px]", menu: "w-[600px]", form: "w-[640px]", chooser: "w-[690px]" }[screen];
+}
 
 export const HEADER = "flex items-center gap-1.5 px-6 pb-4 pt-5";
-export const TITLE = "text-[1.0625rem] font-semibold tracking-[-0.005em] text-primary";
+export const TITLE = "text-[1.25rem] font-semibold tracking-[-0.01em] text-primary";
 export const BACK_BUTTON =
   "-ml-2 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-secondary " +
   "hover:bg-fill-hover hover:text-primary cursor-pointer";
@@ -32,14 +41,16 @@ export const CLOSE_BUTTON =
   "-mr-1 ml-auto flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-secondary " +
   "hover:bg-fill-hover hover:text-primary cursor-pointer";
 
-/** The body.
+/** The body: as tall as its content, and no taller, until it hits the cap and scrolls.
  *
- *  The entry screen is a FIXED-height scroll region, and every other screen carries that
- *  same height as a MINIMUM. The mockup does this by measuring the chooser once and keeping
- *  it as a floor: the flow always opens there, so anything shorter afterwards reads as the
- *  card shrinking under you. A short form pads to the floor instead. */
-export const BODY_SCROLLING = "h-[498px] overflow-y-auto overscroll-contain px-6 pb-5 pt-1";
-export const BODY_FLEXING = "min-h-[498px] flex-1 overflow-y-auto px-6 pb-5 pt-1";
+ *  The cap is a viewport fraction rather than a constant because the flow's tallest screen is
+ *  a list that grows with the number of providers, and a constant either clips it on a laptop
+ *  or wastes a desktop. */
+export const BODY = "max-h-[min(62vh,560px)] overflow-y-auto overscroll-contain px-6 pb-5 pt-1";
+/** The entry screen keeps a floor as well, so returning to it does not shrink the panel under
+ *  the pointer -- the mockup's rule, kept for the one screen the flow always comes back to. */
+export const BODY_ENTRY = `${BODY} min-h-[380px]`;
+
 export const ROW_STACK = "flex flex-col gap-2";
 
 export const CHOOSER_ROW =
@@ -106,14 +117,19 @@ export const CODE =
   "flex-1 rounded-lg bg-fill-subtle p-3 text-center font-mono text-[22px] tracking-[0.12em] " +
   "text-primary select-all";
 
-/** verifying / success / error, one shape for all three. */
-export const STATUS = "flex flex-col items-center px-2 py-6 text-center";
-const STATUS_DISC = "mb-3.5 flex h-[52px] w-[52px] items-center justify-center rounded-full";
+/** verifying / success / error, one shape for all three.
+ *
+ *  The verdict is the whole screen, so it is sized like one: a bigger disc, a heading at full
+ *  strength rather than a step back, and a detail line in the body colour. It read as a caption
+ *  under a small icon before -- quiet enough to look like an afterthought on a screen that has
+ *  nothing else on it. */
+export const STATUS = "flex flex-col items-center px-2 py-8 text-center";
+const STATUS_DISC = "mb-4 flex h-[64px] w-[64px] items-center justify-center rounded-full";
 export const STATUS_DISC_PENDING = `${STATUS_DISC} text-accent`;
 export const STATUS_DISC_SUCCESS = `${STATUS_DISC} bg-accent-light text-accent`;
 export const STATUS_DISC_ERROR = `${STATUS_DISC} bg-[#fdecea] text-[#8a1c11]`;
-export const STATUS_TITLE = "text-[0.9375rem] font-semibold text-secondary";
-export const STATUS_DETAIL = "mt-1 max-w-[320px] text-sm text-tertiary";
+export const STATUS_TITLE = "text-[1.375rem] font-semibold tracking-[-0.01em] text-primary";
+export const STATUS_DETAIL = "mt-1.5 max-w-[340px] text-[0.9375rem] leading-snug text-secondary";
 /** The provider's own mark, under the success check -- so "signed in" names WHICH. */
 export const STATUS_MARK = "mt-3 flex items-center justify-center gap-2 text-[0.75rem] text-tertiary";
 

@@ -912,3 +912,29 @@ on reload, not on reboot, and not the next time the list happens to be empty, be
 who removed their last provider has already met the screen. The chooser itself is half again as
 big: it is the first thing a new workspace shows and it carries the decision the product hangs
 on.
+
+# Size each sign-in screen to itself
+
+One 690x498 panel for every screen meant the "All set" confirmation -- a check, a heading and a
+line of text -- sat in six hundred pixels of white. The panel now takes one of four widths by
+what it is showing (a verdict, a method list, a form, the lane list) and the body sizes to its
+content up to a viewport-relative cap, so it grows when there is enough to scroll and shrinks
+when there is not. The entry screen keeps a floor, because the flow always returns there and a
+panel that shrinks under the pointer on the way back reads as a fault.
+
+The verdict screen is sized like the whole screen it is: a 64px disc, the heading at full
+weight and full contrast rather than a step back, and the detail line in the body colour.
+
+# Fix the model search field
+
+It was the wrapper's class on a bare `<input>`, so it had a border but no icon and nothing
+suppressing the browser's own focus ring -- the orange halo. The markup the stylesheet was
+written for (wrapper, icon, borderless input) already existed; it just was not used.
+
+# Grow the model list upward
+
+The flyout stood at the row that opened it and was capped by the space BELOW -- which, for a
+card that opens from the composer at the bottom of the panel, is about three rows. pi's
+thousand-model catalog was being shown through that keyhole. It is now anchored at its base and
+grows up, showing ten rows before it scrolls, with the search field beneath the list so the
+edge nearest your hand stays put. A slim always-visible scrollbar says when there is more.
