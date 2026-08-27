@@ -3964,8 +3964,8 @@ def hold_stable_download_link(url: str | None) -> None:
     ``GET /download`` resolves the stable channel manifest over the network, so
     every test runs with an entry held (see the autouse fixture) and none of
     them reach the live feed. Tests that care what the link resolves to hold
-    their own; the resolver's own tests call ``resolve_stable_mac_arm64_url``,
-    which does not read this cache.
+    their own; the parsing tests call ``_arm64_dmg_url_from``, which does not
+    read this cache.
     """
     cache = _stable_download_cache()
     cache.clear()
@@ -3975,6 +3975,19 @@ def hold_stable_download_link(url: str | None) -> None:
 def clear_stable_download_link() -> None:
     """Drop the held link, so the next read reaches the live feed."""
     _stable_download_cache().clear()
+
+
+def read_stable_download_link() -> str | None:
+    """What the last resolution left in the cache; ``None`` is a read that failed.
+
+    Reading the cache rather than calling the resolver is what tells a route
+    that resolved from one that never asked: the call would fill an empty cache
+    itself.
+    """
+    cache = _stable_download_cache()
+    key = hashkey()
+    assert key in cache, "nothing has resolved the stable download link"
+    return cache[key]
 
 
 def _stable_download_cache() -> MutableMapping[Any, Any]:
