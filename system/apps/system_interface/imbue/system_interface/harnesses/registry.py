@@ -83,20 +83,11 @@ class PopupAction(StrEnum):
 
     # The can't-send-from-chat notice.
     NOTICE = "notice"
-    # Open the harness's agent-auth surface (see ``HarnessSpec.auth_modal``).
+    # Open the provider chooser. Every harness signs in the same way now, so this needs
+    # nothing per-harness beyond the commands that trigger it.
     OPEN_AUTH = "open_auth"
     # The keep-fast-mode prompt flow.
     FAST_MODE_PROMPT = "fast_mode_prompt"
-
-
-class AuthModalKind(StrEnum):
-    """Which agent-auth surface a harness's ``open_auth`` popups open. Wire strings."""
-
-    # The in-app login modal (claude -- its auth is mind-global).
-    MANAGED = "managed"
-    # A notice showing the harness's ``auth_instructions``, for harnesses whose
-    # sign-in runs in their own TUI.
-    TERMINAL = "terminal"
 
 
 class HarnessPopup(FrozenModel):
@@ -300,10 +291,6 @@ class HarnessSpec(FrozenModel):
     # catalog. An empty tuple is the honest statement that a harness has none (pi's
     # composer sends everything as-is and it never launches fast).
     popups: tuple[HarnessPopup, ...] = ()
-    # The user-facing agent-auth surface the ``open_auth`` popup action (and the stream
-    # auth-error hook) opens; ``terminal`` surfaces show ``auth_instructions``.
-    auth_modal: AuthModalKind = AuthModalKind.TERMINAL
-    auth_instructions: str | None = None
     # The tmux key the cancel/tap actions deliver to end a live turn. Claude binds its own
     # ``meta+q`` chord (scoped to its chat context so a stray press cannot be reinterpreted);
     # antigravity uses a single native ``ctrl+c``, which needs no provisioning -- NOT escape,
@@ -338,7 +325,6 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
             _MODEL_BAR_POPUP_WITH_FAST,
             _FAST_MODE_PROMPT_POPUP,
         ),
-        auth_modal=AuthModalKind.MANAGED,
     ),
     HarnessType.CODEX: HarnessSpec(
         name=HarnessType.CODEX,
@@ -373,7 +359,6 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
             _MODEL_BAR_POPUP_WITH_FAST,
             _FAST_MODE_PROMPT_POPUP,
         ),
-        auth_instructions=("Open the agent's terminal and run /logout, then /login, to sign in or switch accounts."),
     ),
     HarnessType.PI_CODING: HarnessSpec(
         name=HarnessType.PI_CODING,
@@ -398,7 +383,6 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
             ),
             _MODEL_BAR_POPUP,
         ),
-        auth_instructions="Open the agent's terminal and run /login to add accounts or keys.",
     ),
     # opencode is LAUNCH-ONLY: its mngr plugin can create and run an agent, but it has no
     # transcript watcher, activity tracker, model resolver or catalog of its own. It is
@@ -459,7 +443,6 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         popups=(_MODEL_BAR_POPUP,),
         # No `/login` popup, unlike codex and pi: agy has no such command. Signing in is what
         # a bare `agy` does on first launch, which is what the instructions below say.
-        auth_instructions="Open the agent's terminal and run `agy` (no arguments) to sign in.",
     ),
 }
 

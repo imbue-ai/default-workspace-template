@@ -297,32 +297,25 @@ def set_mru(account_id: str, home: Path | None = None) -> None:
 
 
 def resolve_account(account_id: str, home: Path | None = None) -> Account:
-    """Resolve an explicit id, or the mru, or the only sensible fallback.
+    """Resolve an explicit id to its row, checking that its folder is still there.
 
-    An empty id means "whatever a new chat should use". That is the mru when it still
-    resolves, else the first account -- an mru can name a deleted account only if something
-    raced, but falling back beats refusing.
+    Deliberately does NOT answer "which account should a new agent use". That question needs
+    to know which lanes this build actually has, which lives in `binding.resolve_binding` --
+    and two functions answering it differently is how the launcher and a new project's
+    starter chat ended up on different accounts.
     """
     index = read_index(home)
     if not index.accounts:
         raise AccountError("no provider accounts exist yet")
-    if account_id:
-        for account in index.accounts:
-            if account.id == account_id:
-                # A row whose folder is gone would bind an agent to a directory that is not
-                # there, and the harness fails every call rather than reporting signed-out.
-                # Refusing here is what turns that into something the user can act on.
-                if not account_dir(account.id, home).is_dir():
-                    raise AccountError(
-                        f"account {account_id} has no folder on disk; sign in to it again"
-                    )
-                return account
-        raise AccountError(f"no such account: {account_id}")
-    if index.mru:
-        for account in index.accounts:
-            if account.id == index.mru:
-                return account
-    return index.accounts[0]
+    for account in index.accounts:
+        if account.id == account_id:
+            # A row whose folder is gone would bind an agent to a directory that is not
+            # there, and the harness fails every call rather than reporting signed-out.
+            # Refusing here is what turns that into something the user can act on.
+            if not account_dir(account.id, home).is_dir():
+                raise AccountError(f"account {account_id} has no folder on disk; sign in to it again")
+            return account
+    raise AccountError(f"no such account: {account_id}")
 
 
 def reconcile(home: Path | None = None) -> tuple[tuple[str, ...], tuple[str, ...]]:

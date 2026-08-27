@@ -164,7 +164,7 @@ def create_args(harness: HarnessType, account_dir: Path, agent_state_dir: Path) 
 
 
 def resolve_binding(account_id: str = "", home: Path | None = None) -> Account | None:
-    """The account a new agent should run under, or None for the workspace's shared login.
+    """The account a new agent should run under, or None when there are none.
 
     An explicit id wins; otherwise the most recently used account, which is bumped on every
     launch -- so signing in and then starting a chat "just works" without the caller having
@@ -174,7 +174,11 @@ def resolve_binding(account_id: str = "", home: Path | None = None) -> Account |
     caller for both invites a chat that names codex while running on an agy credential, and
     there is no way to notice that until its first turn fails.
 
-    None is not an error: a workspace with no accounts keeps today's behaviour exactly.
+    None means "no account", NOT "fall back to a shared login" -- there is no longer any such
+    thing. The shared settings-env writer is deleted and `~/.claude` is left alone, so an
+    agent created against None is simply unauthenticated. The UI's job is to make that
+    unreachable (the launcher opens the chooser instead); this returns it rather than raising
+    because the caller has better copy for it than an exception does.
     """
     if account_id:
         account = accounts.resolve_account(account_id, home)
@@ -186,7 +190,15 @@ def resolve_binding(account_id: str = "", home: Path | None = None) -> Account |
     usable = [a for a in index.accounts if harness_for(a) is not None]
     if not usable:
         return None
-    return next((a for a in usable if a.id == index.mru), usable[-1])
+    # The most recently used account, else the oldest -- which is the same rule the picker
+    # shows (`Providers.ts`: `recent ?? accounts[0]`). It matters that the two agree: the
+    # launcher and a new project's starter chat both land here, and a disagreement means
+    # two chats started seconds apart run on different providers with nothing saying so.
+    chosen = next((a for a in usable if a.id == index.mru), usable[0])
+    # Back through `resolve_account` for the folder check. The explicit-id path above has
+    # always had it; this one did not, so a row whose folder had gone bound an agent to a
+    # directory that is not there -- which surfaces as an empty model bar, not as an error.
+    return accounts.resolve_account(chosen.id, home)
 
 
 def harness_for(account: Account) -> HarnessType | None:

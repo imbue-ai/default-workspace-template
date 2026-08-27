@@ -338,10 +338,6 @@ class CreateChatRequest(FrozenModel):
         description="Display name for the new chat agent; empty mints the first free "
         '"<word> N" for the account\'s harness server-side ("Chat 1", "Codex 2", ...)',
     )
-    first: bool = Field(
-        default=False,
-        description="Stack the `first` create template: /welcome, the first=true label, and a fast-mode launch",
-    )
     account_id: str = Field(
         default="",
         description="Signed-in account to bind the chat to; empty picks the most recently used one",

@@ -90,7 +90,7 @@ def test_a_probe_that_cannot_run_is_unknown_not_signed_out(tmp_path: Path) -> No
     into, because the probes shell out to CLIs that fetch over the network."""
 
     def run(**_kwargs: Any) -> _Finished:
-        raise ProcessError("no such binary")
+        raise ProcessError(command=("claude",), stdout="", stderr="no such binary")
 
     assert is_signed_in(HarnessType.CLAUDE, tmp_path, run) is SignedIn.UNKNOWN
 

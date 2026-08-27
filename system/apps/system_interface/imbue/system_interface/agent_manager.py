@@ -1156,8 +1156,9 @@ class AgentManager:
         collision mngr itself would reject).
 
         ``account_id`` binds the chat to one signed-in account; empty picks the most recently
-        used one, and falls back to the workspace's shared login when there are none -- which
-        is the claude harness, exactly as before accounts existed.
+        used one. With no accounts at all the chat is created unbound and on the claude
+        harness -- there is no shared login behind that any more, so it will not be able to
+        take a turn. The launcher opens the chooser rather than reaching this.
 
         There is no signed-out preflight any more. An account is committed only after the
         harness's own probe agreed it was signed in, and a chat runs on the account it binds

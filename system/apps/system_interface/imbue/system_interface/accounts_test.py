@@ -108,22 +108,20 @@ def test_deleting_an_unknown_account_raises(tmp_path: Path) -> None:
         delete_account("nope", tmp_path)
 
 
-def test_resolve_prefers_an_explicit_id_then_mru_then_the_first(tmp_path: Path) -> None:
+def test_resolve_answers_an_explicit_id_only(tmp_path: Path) -> None:
+    """"Which account should a new agent use" is `binding.resolve_binding`'s question, not
+    this one -- it needs to know which lanes the build has. Two functions answering it
+    differently is how the launcher and a new project's starter chat diverged."""
     first = _add(tmp_path, "anthropic", "Anthropic")
     second = _add(tmp_path, "google", "Google")
 
     assert resolve_account(first.id, tmp_path) == first
-    # Committing `second` made it the mru, so an empty id resolves there.
-    assert resolve_account("", tmp_path) == second
-
-    # An mru naming a deleted account falls back rather than refusing.
-    delete_account(second.id, tmp_path)
-    assert resolve_account("", tmp_path) == first
+    assert resolve_account(second.id, tmp_path) == second
 
 
 def test_resolve_raises_when_nothing_exists_or_the_id_is_unknown(tmp_path: Path) -> None:
     with pytest.raises(AccountError):
-        resolve_account("", tmp_path)
+        resolve_account("whatever", tmp_path)
     _add(tmp_path, "anthropic", "Anthropic")
     with pytest.raises(AccountError):
         resolve_account("nope", tmp_path)

@@ -236,7 +236,7 @@ def test_a_cli_that_never_announces_success_is_decided_by_its_probe(tmp_path: Pa
     # accepted the very bug this test is named after: the fixture's probe says YES, so
     # reaching it means OK and not reaching it means PENDING -- both used to pass.
     assert status.state is FlowState.OK
-    assert service._session is None, "a committed flow is torn down"
+    assert read_index(tmp_path).accounts != (), "reaching the probe is what commits the account"
 
 
 def test_the_probe_is_not_run_before_the_code_is_handed_over(tmp_path: Path) -> None:
