@@ -108,3 +108,12 @@ export const STATUS_TITLE = "text-[0.9375rem] font-semibold text-[#666666]";
 export const STATUS_DETAIL = "mt-1 max-w-[320px] text-sm text-[#8c8c8c]";
 /** The provider's own mark, under the success check -- so "signed in" names WHICH. */
 export const STATUS_MARK = "mt-3 flex items-center justify-center gap-2 text-[0.75rem] text-[#8c8c8c]";
+
+/** A signed-in account: the OptionRow's frame without its affordances, because the row is a
+ *  listed fact rather than somewhere to navigate. Its actions carry the interactivity. */
+export const ACCOUNT_ROW =
+  "flex w-full items-center gap-2 rounded-lg border border-[#e4e3df] bg-white p-3 text-left " +
+  "shadow-[0_1px_2px_rgba(0,0,0,0.04)]";
+export const ROW_ACTION =
+  "shrink-0 rounded-md px-2 py-1 text-[0.75rem] text-[#666666] transition-colors " +
+  "hover:bg-[#edecea] hover:text-[#202020] cursor-pointer";

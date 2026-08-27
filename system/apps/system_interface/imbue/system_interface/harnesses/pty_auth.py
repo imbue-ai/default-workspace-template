@@ -106,6 +106,11 @@ def spawn_pty(
     environment -- ``{**os.environ, **scoped}`` -- or the child loses ``PATH``
     and never starts. ``TERM`` in particular is load-bearing: without it the
     CLI may not emit the escape sequences the replay depends on.
+
+    The variables naming which terminal EMULATOR the parent is attached to are
+    dropped, and ``TERM`` is pinned (see ``terminal_env``): this is a fresh PTY
+    of our own, and a description of somebody else's terminal is not just noise
+    -- a modern CLI reads it to decide what it may emit.
     """
     return pexpect.spawn(
         executable,
@@ -113,9 +118,41 @@ def spawn_pty(
         timeout=timeout,
         encoding="utf-8",
         dimensions=(lines, columns),
-        env=dict(env) if env is not None else None,
+        env=terminal_env(env),
         cwd=cwd,
     )
+
+
+# What a CLI reads to identify the terminal EMULATOR, as opposed to its capabilities. These
+# describe whatever the server itself was launched under -- for the workspace's system
+# interface that is the tmux session supervisord runs in -- and they are simply not true of
+# the PTY spawned here.
+_INHERITED_TERMINAL_IDENTITY: Final[tuple[str, ...]] = (
+    "TERM_PROGRAM",
+    "TERM_PROGRAM_VERSION",
+    "TMUX",
+    "TMUX_PANE",
+)
+
+# Pinned rather than inherited: a full-capability terminal, which is what we actually give
+# the child. `pyte` replays what it emits at that assumption.
+_PINNED_TERM: Final = "xterm-256color"
+
+
+def terminal_env(env: Mapping[str, str] | None) -> dict[str, str] | None:
+    """Describe the PTY we are actually creating, not the one the parent is attached to.
+
+    Inheriting `TERM_PROGRAM=tmux` was enough to make agy stop emitting the OSC 8 hyperlink
+    its OAuth URL is recovered from, and the sign-in then failed on every attempt with no
+    error the CLI itself reported -- so this is a correctness fix, not tidiness. Node CLIs
+    reach for these variables through libraries like `supports-hyperlinks`, which answer
+    "can I use this feature" from the emulator's NAME; a stale name is a wrong answer.
+    """
+    if env is None:
+        return None
+    scrubbed = {key: value for key, value in env.items() if key not in _INHERITED_TERMINAL_IDENTITY}
+    scrubbed["TERM"] = _PINNED_TERM
+    return scrubbed
 
 
 def safe_terminate(process: Any) -> None:
