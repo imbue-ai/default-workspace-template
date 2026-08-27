@@ -316,3 +316,20 @@ browser handoff that does not fire never dead-ends anyone.
 OpenAI's flow inverts the direction (it shows a code you carry to the browser rather than
 taking one back), so its second step shows the code with a Copy button instead of a field.
 That is the only place the two browser shapes differ; everything around them is shared.
+
+# Port the chooser's UI from the mockup verbatim
+
+The chooser had been re-derived against the older `.claude-login-*` CSS rather than copied
+from `prototypes/minds-harness`, which is the design source. This app runs the same Tailwind
+v4 and its `@theme` block already carries the mockup's exact hexes, so the mockup's class
+strings port across unchanged -- meaning re-deriving them was strictly worse than copying.
+
+`providerSignInStyles.ts` now holds those strings as literals, annotated with the mockup file
+each came from, so a later diff against the mockup still means something. The panel, header,
+scroll region, chooser rows, option rows, section labels, numbered steps, inputs and buttons
+are all the mockup's.
+
+We diverge only where our scope does, and only in the part that differs: no `Runs on`
+dropdown or tertiary line (provider -> harness is fixed in V1), the inverted OpenAI step 2
+(a code plus Copy, which the mockup has no screen for), and the signed-in / re-auth / delete
+rows (the mockup shows one connection). Each still sits inside the mockup's frame.
