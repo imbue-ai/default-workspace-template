@@ -238,3 +238,14 @@ Tests get their own accounts root (`MINDS_ACCOUNTS_ROOT`, set by the isolation f
 Without it a test run wrote into the developer's own `~/.minds` -- a chat create resolves an
 account several calls down -- and the leaked account then bound every later create in the
 session. That is not hypothetical; it happened while writing this.
+
+# Delete the claude auth service's now-unreachable half
+
+With the modal gone and the paste repointed at the account store, everything in
+`ClaudeAuthService` except `get_auth_status` was unreachable: the setup-token and OAuth PTY
+flows, the agent-restart cluster, and the shared `settings.json` writer they fed. All of it
+is deleted, along with the restart-progress fields that only ever existed to drive the
+modal's spinner. `auth.py` goes from 1358 lines to ~750.
+
+The lane table covers those flows now, and it covers them for every harness rather than
+just claude.

@@ -23,7 +23,6 @@ from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_discovery import SendFailure
 from imbue.system_interface.harnesses.claude.auth import ClaudeAuthService
 from imbue.system_interface.harnesses.claude.auth import ProcessSetupError
-from imbue.system_interface.harnesses.claude.auth import RestartPhase
 from imbue.system_interface.server import create_application
 from imbue.system_interface.testing import FakeFinishedProcess
 from imbue.system_interface.accounts import account_dir
@@ -31,7 +30,6 @@ from imbue.system_interface.accounts import read_index
 from imbue.system_interface.harnesses.auth_flows import AuthFlowService
 from imbue.system_interface.testing import FakePexpectProcess
 from imbue.system_interface.testing import build_test_state
-from imbue.system_interface.testing import wait_for_background_apply
 from imbue.system_interface.welcome_resend import WelcomeResender
 
 # The initial chat agent's id, as the bootstrap would persist it.

@@ -409,15 +409,6 @@ class ClaudeAuthStatusResponse(FrozenModel):
             "for the desktop app's key-mint page link"
         ),
     )
-    restart_phase: str | None = Field(
-        default=None, description="Phase of the post-auth agent restart: 'restarting', 'finishing', 'done', 'failed'"
-    )
-    restart_detail: str | None = Field(default=None, description="Human-readable detail for the current restart phase")
-    restart_error: str | None = Field(default=None, description="Error message when restart_phase is 'failed'")
-    restart_reason: str | None = Field(
-        default=None,
-        description="Why the restart is running: 'credentials_saved', 'subscription_switch', 'console_switch'",
-    )
 
 
 class ClaudeOAuthLoginStartRequest(FrozenModel):
