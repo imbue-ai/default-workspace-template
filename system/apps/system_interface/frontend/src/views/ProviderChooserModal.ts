@@ -782,7 +782,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
               : "form";
       // The entry screen keeps a floor: the flow always returns there, and a panel that shrinks
       // under the pointer on the way back reads as something having gone wrong.
-      const bodyClass = screen === "chooser" ? css.BODY_ENTRY : css.BODY;
+      const size = css.panelSize(screen);
 
       return m(
         "div.claude-login-overlay",
@@ -811,7 +811,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
                 confirmingDelete = null;
               },
             },
-            m("div", { class: `${css.PANEL} ${css.panelWidth(screen)}` }, [
+            m("div", { class: `${css.PANEL} ${size.width}` }, [
               m("div", { class: css.HEADER }, [
                 current !== null
                   ? m(
@@ -830,7 +830,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
               m(
                 "div",
                 {
-                  class: bodyClass,
+                  class: size.body,
                   oncreate: (node: m.VnodeDOM) => {
                     if (current === null) (node.dom as HTMLElement).scrollTop = savedScroll;
                   },
