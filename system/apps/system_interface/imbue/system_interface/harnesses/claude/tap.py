@@ -238,13 +238,15 @@ def _load_json_object(line: str) -> dict[str, Any] | None:
     return raw if isinstance(raw, dict) else None
 
 
-def _is_interrupt_sentinel_record(raw: dict[str, Any]) -> bool:
+def _is_plain_interrupt_sentinel_record(raw: dict[str, Any]) -> bool:
     """True iff ``raw`` is the user record claude writes when a turn is interrupted.
 
     Matches the plain streaming-abort sentinel (``[Request interrupted by user]``). The
     mid-tool ``for tool use`` variant is a different string and is deliberately NOT matched
-    here (it is the sibling interrupt plan's concern). Mirrors the parser's own suppression
-    (``_parse_user_message``), which is why the raw tail -- not parsed events -- is scanned.
+    here (it is the sibling interrupt plan's concern) -- unlike the both-shapes
+    ``is_interrupt_sentinel_record`` the abort scan uses. Mirrors the parser's own
+    suppression (``_parse_user_message``), which is why the raw tail -- not parsed events --
+    is scanned.
     """
     if raw.get("type") != _USER_RECORD_TYPE:
         return False
@@ -285,7 +287,7 @@ def compute_tail_facts(tail_lines: list[str]) -> _TailFacts:
             continue
         # A record is at most one of these (a sentinel is a ``user`` record), so two
         # independent checks are equivalent to -- and clearer than -- an if/elif chain.
-        if _is_interrupt_sentinel_record(raw):
+        if _is_plain_interrupt_sentinel_record(raw):
             last_sentinel_index = index
         if raw.get("type") == _ASSISTANT_RECORD_TYPE:
             last_assistant_index = index
