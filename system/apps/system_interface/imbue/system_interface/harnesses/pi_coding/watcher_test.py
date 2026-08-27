@@ -180,9 +180,7 @@ def test_drain_older_than_process_start_does_not_pop(tmp_path: Path) -> None:
     watcher = _build(tmp_path)
     assert [entry["content"] for entry in watcher.get_queued_messages()] == ["parked now"]
 
-    _append_session(
-        session, [_message_record("old", _user("drained long ago"), timestamp="2026-08-07T11:50:00.000Z")]
-    )
+    _append_session(session, [_message_record("old", _user("drained long ago"), timestamp="2026-08-07T11:50:00.000Z")])
     assert [entry["content"] for entry in watcher.get_queued_messages()] == ["parked now"]
 
 

@@ -198,16 +198,24 @@ function hasPermissionRequest(e: AssistantMessageEvent, toolResults: Map<string,
   return e.tool_calls.some((tc) => isFiledPermissionRequest(tc, toolResults.get(tc.tool_call_id) ?? null));
 }
 
-/** The Bash command string for a tool call, or null if not a Bash call (or its
- *  input_preview is not parseable -- e.g. a truncated non-tk command). tk
- *  lifecycle inputs are exempt from input truncation, so they parse cleanly. */
+/** The shell command string for a tool call, or null if its input carries none. tk
+ *  lifecycle inputs are exempt from input truncation, so they parse cleanly.
+ *
+ *  Deliberately NOT gated on tool name. It used to accept only claude's `Bash` and pi's
+ *  `bash`, which was the single piece of harness knowledge left in this file -- and it meant
+ *  agy (`run_command`) was the one harness with no input fallback at all when output
+ *  decoration was missing. The decoration regexes below are already tk-anchored and
+ *  TK_CREATE_OR_CLOSE_RAW pre-filters, so any tool whose input happens to carry a "command"
+ *  key is safe to read here. */
 function tkCommand(tc: ToolCall): string | null {
-  // claude's `Bash` and pi's `bash` both carry the command under the "command" key;
-  // codex's `exec` is handled via its own tk-input path, not here.
-  if (tc.tool_name !== "Bash" && tc.tool_name !== "bash") return null;
   try {
-    const obj = JSON.parse(tc.input_preview) as { command?: unknown };
-    return typeof obj.command === "string" ? obj.command : null;
+    const obj = JSON.parse(tc.input_preview) as Record<string, unknown>;
+    // claude and pi spell it "command"; agy spells it "CommandLine". Both are read, so this
+    // stays a property of the INPUT rather than of which harness produced it.
+    for (const key of ["command", "CommandLine"]) {
+      if (typeof obj[key] === "string") return obj[key] as string;
+    }
+    return null;
   } catch {
     return null;
   }

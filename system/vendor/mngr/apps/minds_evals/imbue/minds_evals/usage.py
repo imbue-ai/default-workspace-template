@@ -7,23 +7,26 @@ Two different LLM consumers run during a trial and they must not be conflated:
   session files itself (its ``AgentSessionWatcher``, which reimplements mngr's common_transcript
   conversion) and attaches a ``usage`` block and a ``model`` to every ``assistant_message``. So
   nothing has to be collected out of the workspace before it is destroyed -- the driver's own
-  transcript is the source.
+  transcript is an account that is always available. Under ``--ak proxy=true`` the in-box proxy's
+  per-request log is a second account, and ``resolve_workspace_usage`` decides which one a trial
+  reports.
 - the **decider**, the harness's simulated-user model. It is a cost of running the eval, not a
   property of the thing being measured, so it is reported separately as metadata.
 
-**What this source does not see: delegated work.** The events endpoint serves main-session events
+**What the transcript does not see: delegated work.** The events endpoint serves main-session events
 only -- a subagent's turns are deliberately routed to a separate per-subagent stream so they do not
 render inline in the parent thread -- and work handed to a freshly created mngr worker agent belongs
-to that agent's stream entirely. Neither one's tokens reach the sum below, so an agent that delegates
-looks cheaper than one that does the same work inline, which would make cost gameable. Until that
-usage is captured, delegation is at least *detected*: any trial that delegates is marked
-``is_cost_complete = False`` rather than quietly reporting a clean total.
+to that agent's stream entirely. Neither one's tokens reach the transcript's sum, so an agent that
+delegates looks cheaper than one that does the same work inline, which would make cost gameable. The
+proxy is the account that includes that work, because every call in the workspace crosses it. When
+only the transcript is available, delegation is at least *detected*: any trial that delegates is
+marked ``is_cost_complete = False`` rather than quietly reporting a clean total.
 
 Both are priced with ``mngr_usage``'s table rather than a local copy, so these numbers and the
 in-box proxy's own are computed from one set of rates -- ``proxy_config`` builds the proxy's config
 from the same table. Those rates are pinned to litellm's map by ``litellm_pricing_test``, which
-covers the four flat per-token buckets; the fast-mode multiplier applied on top of them is this
-app's own and is pinned to nothing.
+covers the four flat per-token buckets; the fast-mode multiplier applied on top of them is
+``mngr_usage``'s own ``FAST_MODE_PRICE_MULTIPLIER``, pinned by ``pricing_test``.
 
 **Speed tier and what it does to cost.** Fast mode bills the same tokens at twice the standard rate
 ($10/$50 per MTok against $5/$25 on Opus 5 and Opus 4.8), and it is chosen per request, so a model id
@@ -506,6 +509,36 @@ def summarize_proxy_usage(records: Sequence[Mapping[str, Any]]) -> TrialUsage:
         is_speed_observed=bool(records) and all(_SPEED_KEY in record for record in records),
         fast_message_count=sum(entry.fast_message_count for entry in per_model),
         fast_tokens=total_fast_tokens,
+    )
+
+
+class ResolvedWorkspaceUsage(FrozenModel):
+    """The workspace agent's usage as a trial reports it, alongside the transcript account it may
+    have been taken from, so the two can be reconciled after the fact."""
+
+    reported: TrialUsage = Field(description="The account every consumer of the trial's usage reports")
+    transcript: TrialUsage = Field(description="What the workspace event stream alone accounts for")
+    is_from_proxy: bool = Field(description="Whether `reported` is the proxy's account rather than the transcript's")
+
+
+@pure
+def resolve_workspace_usage(
+    events: Sequence[Mapping[str, Any]], proxy_records: Sequence[Mapping[str, Any]]
+) -> ResolvedWorkspaceUsage:
+    """Decide which account of the workspace agent's spend a trial reports, from both sources.
+
+    The proxy is the complete account whenever one metered the trial: it is the boundary every call
+    crosses, so it includes delegated work the transcript never sees. On a delegating case the two
+    differ by that work, so preferring the transcript would publish the understated figure.
+
+    Every consumer must go through this, so a trial's several reports of its own cost cannot
+    disagree.
+    """
+    transcript_usage = summarize_workspace_usage(events)
+    if not proxy_records:
+        return ResolvedWorkspaceUsage(reported=transcript_usage, transcript=transcript_usage, is_from_proxy=False)
+    return ResolvedWorkspaceUsage(
+        reported=summarize_proxy_usage(proxy_records), transcript=transcript_usage, is_from_proxy=True
     )
 
 
