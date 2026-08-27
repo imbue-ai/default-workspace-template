@@ -427,7 +427,7 @@ def test_the_three_definitions_of_the_apply_state_paths_agree() -> None:
     interrupted apply to roll back.
     """
     repo_root = WORKSPACE_ROOT_DIRECTORY
-    script = _module_string_constants(repo_root / ".agents/skills/update-self/scripts/update_self.py")
+    script = _module_string_constants(repo_root / ".agents/skills/update-self/scripts/update_apply_contract.py")
     bootstrap = _module_string_constants(repo_root / "system/libs/bootstrap/src/bootstrap/manager.py")
 
     state_dir = script["STATE_DIR_REL"]

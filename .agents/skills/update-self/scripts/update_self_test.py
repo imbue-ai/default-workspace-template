@@ -8,7 +8,6 @@ skill bootstrap that extracts the target ref's own copy of the flow.
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
 import re
@@ -21,16 +20,22 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 import pytest
+import update_apply
+import update_apply_contract
+import update_banding
+import update_classification
+import update_environment
+import update_layout
+import update_ledger
+import update_probes
+import update_runtime
+import update_self
+import update_target
 
-_MODULE_PATH = Path(__file__).with_name("update_self.py")
+_SCRIPTS_DIR = Path(__file__).parent
 # ``.agents/skills/update-self/scripts/`` -> the workspace root.
-_WORKSPACE_ROOT = _MODULE_PATH.parents[4]
-_spec = importlib.util.spec_from_file_location("update_self", _MODULE_PATH)
-assert _spec is not None and _spec.loader is not None
-update_self = importlib.util.module_from_spec(_spec)
-# Register before exec so the module's own dataclasses can resolve __module__.
-sys.modules[_spec.name] = update_self
-_spec.loader.exec_module(update_self)
+_WORKSPACE_ROOT = _SCRIPTS_DIR.parents[3]
+_MODULE_PATH = _SCRIPTS_DIR / "update_self.py"
 
 
 # --- pick_latest_stable_tag / resolve_target -------------------------------
@@ -43,49 +48,49 @@ def test_pick_latest_stable_tag_ignores_prereleases() -> None:
         "minds-v0.3.7-rc1",
         "minds-v0.3.6",
     ]
-    assert update_self.pick_latest_stable_tag(tags) == "minds-v0.3.7"
+    assert update_target.pick_latest_stable_tag(tags) == "minds-v0.3.7"
 
 
 def test_pick_latest_stable_tag_uses_semver_not_lexical_order() -> None:
     # Lexically "0.3.9" > "0.3.10"; semantically 0.3.10 is newer.
     tags = ["minds-v0.3.9", "minds-v0.3.10", "minds-v0.4.0"]
-    assert update_self.pick_latest_stable_tag(tags) == "minds-v0.4.0"
+    assert update_target.pick_latest_stable_tag(tags) == "minds-v0.4.0"
     tags_no_major = ["minds-v0.3.9", "minds-v0.3.10"]
-    assert update_self.pick_latest_stable_tag(tags_no_major) == "minds-v0.3.10"
+    assert update_target.pick_latest_stable_tag(tags_no_major) == "minds-v0.3.10"
 
 
 def test_pick_latest_stable_tag_returns_none_when_all_prerelease_or_empty() -> None:
-    assert update_self.pick_latest_stable_tag([]) is None
-    assert update_self.pick_latest_stable_tag(["minds-v0.3.7-rc1", "v1.2.3"]) is None
+    assert update_target.pick_latest_stable_tag([]) is None
+    assert update_target.pick_latest_stable_tag(["minds-v0.3.7-rc1", "v1.2.3"]) is None
 
 
 def test_resolve_target_defaults_to_latest_stable() -> None:
     tags = ["minds-v0.3.6", "minds-v0.3.7", "minds-v0.3.7-rc1"]
-    result = update_self.resolve_target(None, tags)
-    assert result == update_self.ResolvedTarget("minds-v0.3.7", "tag")
+    result = update_target.resolve_target(None, tags)
+    assert result == update_target.ResolvedTarget("minds-v0.3.7", "tag")
 
 
 def test_resolve_target_override_main_is_remote_qualified_branch() -> None:
     # Must resolve to the remote branch, not the stale local `main`.
-    assert update_self.resolve_target("main", ["minds-v0.3.7"]) == (
-        update_self.ResolvedTarget("upstream/main", "branch")
+    assert update_target.resolve_target("main", ["minds-v0.3.7"]) == (
+        update_target.ResolvedTarget("upstream/main", "branch")
     )
-    assert update_self.resolve_target(
+    assert update_target.resolve_target(
         "main", ["minds-v0.3.7"], remote="official"
-    ) == update_self.ResolvedTarget("official/main", "branch")
+    ) == update_target.ResolvedTarget("official/main", "branch")
 
 
 def test_resolve_target_override_known_tag_vs_arbitrary_ref() -> None:
     tags = ["minds-v0.3.6", "minds-v0.3.7"]
-    assert update_self.resolve_target("minds-v0.3.6", tags).kind == "tag"
+    assert update_target.resolve_target("minds-v0.3.6", tags).kind == "tag"
     # An override git can validate later but that is not a known tag/main.
-    passthrough = update_self.resolve_target("abc1234", tags)
-    assert passthrough == update_self.ResolvedTarget("abc1234", "ref")
+    passthrough = update_target.resolve_target("abc1234", tags)
+    assert passthrough == update_target.ResolvedTarget("abc1234", "ref")
 
 
 def test_resolve_target_raises_when_no_stable_tag_and_no_override() -> None:
     try:
-        update_self.resolve_target(None, ["minds-v0.3.7-rc1"])
+        update_target.resolve_target(None, ["minds-v0.3.7-rc1"])
     except ValueError as exc:
         assert "no stable minds-v* tag" in str(exc)
     else:
@@ -99,10 +104,10 @@ def test_ceiling_caps_selection_at_the_app_version() -> None:
     # The headline case: upstream has moved past the app driving this workspace.
     tags = ["minds-v0.3.8", "minds-v0.3.9", "minds-v0.4.0", "minds-v0.4.1"]
     assert (
-        update_self.pick_latest_stable_tag(tags, ceiling="minds-v0.3.9")
+        update_target.pick_latest_stable_tag(tags, ceiling="minds-v0.3.9")
         == "minds-v0.3.9"
     )
-    result = update_self.resolve_target(None, tags, ceiling="minds-v0.3.9")
+    result = update_target.resolve_target(None, tags, ceiling="minds-v0.3.9")
     assert result.ref == "minds-v0.3.9"
     assert result.ceiling == "minds-v0.3.9"
     assert result.exceeds_ceiling is False
@@ -113,7 +118,7 @@ def test_ceiling_picks_the_newest_tag_below_it_when_the_exact_tag_is_absent() ->
     # never cut); the newest tag below it is still safe to take.
     tags = ["minds-v0.3.8", "minds-v0.4.0"]
     assert (
-        update_self.pick_latest_stable_tag(tags, ceiling="minds-v0.3.9")
+        update_target.pick_latest_stable_tag(tags, ceiling="minds-v0.3.9")
         == "minds-v0.3.8"
     )
 
@@ -122,11 +127,11 @@ def test_ceiling_compares_by_semver_not_lexically() -> None:
     tags = ["minds-v0.3.9", "minds-v0.3.10"]
     # Lexically "0.3.10" < "0.3.9", so a lexical cap would wrongly admit 0.3.10.
     assert (
-        update_self.pick_latest_stable_tag(tags, ceiling="minds-v0.3.9")
+        update_target.pick_latest_stable_tag(tags, ceiling="minds-v0.3.9")
         == "minds-v0.3.9"
     )
     assert (
-        update_self.pick_latest_stable_tag(tags, ceiling="minds-v0.3.10")
+        update_target.pick_latest_stable_tag(tags, ceiling="minds-v0.3.10")
         == "minds-v0.3.10"
     )
 
@@ -135,8 +140,8 @@ def test_non_release_ceiling_imposes_no_cap() -> None:
     # A dev app reports its branch rather than a release tag; there is no version
     # to compare, so the flow behaves exactly as it did before the ceiling.
     tags = ["minds-v0.3.9", "minds-v0.4.0"]
-    assert update_self.pick_latest_stable_tag(tags, ceiling="main") == "minds-v0.4.0"
-    result = update_self.resolve_target(None, tags, ceiling="main")
+    assert update_target.pick_latest_stable_tag(tags, ceiling="main") == "minds-v0.4.0"
+    result = update_target.resolve_target(None, tags, ceiling="main")
     assert result.ref == "minds-v0.4.0"
     assert result.ceiling == "main"
 
@@ -145,7 +150,7 @@ def test_resolve_target_explains_when_every_tag_is_above_the_ceiling() -> None:
     # Distinct from "upstream has no stable tags at all": here the user's fix is
     # to update the app, so the message has to say so.
     try:
-        update_self.resolve_target(None, ["minds-v0.4.0"], ceiling="minds-v0.3.9")
+        update_target.resolve_target(None, ["minds-v0.4.0"], ceiling="minds-v0.3.9")
     except ValueError as exc:
         assert "newer than this workspace's minds app" in str(exc)
         assert "minds-v0.3.9" in str(exc)
@@ -155,16 +160,16 @@ def test_resolve_target_explains_when_every_tag_is_above_the_ceiling() -> None:
 
 def test_override_above_the_ceiling_is_flagged_but_not_blocked() -> None:
     tags = ["minds-v0.3.9", "minds-v0.4.0"]
-    newer = update_self.resolve_target("minds-v0.4.0", tags, ceiling="minds-v0.3.9")
+    newer = update_target.resolve_target("minds-v0.4.0", tags, ceiling="minds-v0.3.9")
     assert newer.ref == "minds-v0.4.0"
     assert newer.exceeds_ceiling is True
 
 
 def test_override_at_or_below_the_ceiling_is_not_flagged() -> None:
     tags = ["minds-v0.3.6", "minds-v0.3.9"]
-    older = update_self.resolve_target("minds-v0.3.6", tags, ceiling="minds-v0.3.9")
+    older = update_target.resolve_target("minds-v0.3.6", tags, ceiling="minds-v0.3.9")
     assert older.exceeds_ceiling is False
-    at_ceiling = update_self.resolve_target(
+    at_ceiling = update_target.resolve_target(
         "minds-v0.3.9", tags, ceiling="minds-v0.3.9"
     )
     assert at_ceiling.exceeds_ceiling is False
@@ -175,11 +180,13 @@ def test_unprovable_overrides_are_flagged() -> None:
     # them; they must surface for confirmation rather than pass silently.
     tags = ["minds-v0.3.9"]
     assert (
-        update_self.resolve_target("main", tags, ceiling="minds-v0.3.9").exceeds_ceiling
+        update_target.resolve_target(
+            "main", tags, ceiling="minds-v0.3.9"
+        ).exceeds_ceiling
         is True
     )
     assert (
-        update_self.resolve_target(
+        update_target.resolve_target(
             "abc1234", tags, ceiling="minds-v0.3.9"
         ).exceeds_ceiling
         is True
@@ -187,7 +194,7 @@ def test_unprovable_overrides_are_flagged() -> None:
     # A prerelease, by contrast, *is* provable -- it carries a real version, and
     # 0.3.7-rc1 sits below the 0.3.9 ceiling -- so it is not flagged.
     assert (
-        update_self.resolve_target(
+        update_target.resolve_target(
             "minds-v0.3.7-rc1", tags, ceiling="minds-v0.3.9"
         ).exceeds_ceiling
         is False
@@ -196,7 +203,7 @@ def test_unprovable_overrides_are_flagged() -> None:
 
 def test_overrides_are_never_flagged_without_a_ceiling() -> None:
     assert (
-        update_self.resolve_target(
+        update_target.resolve_target(
             "main", ["minds-v0.3.9"], ceiling=None
         ).exceeds_ceiling
         is False
@@ -274,7 +281,7 @@ def test_fetch_app_template_ref_returns_the_apps_pinned_ref(
         status="200",
     )
 
-    assert update_self.fetch_app_template_ref() == "minds-v0.3.9"
+    assert update_target.fetch_app_template_ref() == "minds-v0.3.9"
 
 
 def test_fetch_app_template_ref_blocks_when_the_gateway_denies_the_route(
@@ -291,8 +298,8 @@ def test_fetch_app_template_ref_blocks_when_the_gateway_denies_the_route(
     )
 
     try:
-        update_self.fetch_app_template_ref()
-    except update_self.CeilingUnavailableError as exc:
+        update_target.fetch_app_template_ref()
+    except update_target.CeilingUnavailableError as exc:
         assert "too old to report its version" in str(exc)
         assert "Update the minds app itself first" in str(exc)
     else:
@@ -310,8 +317,8 @@ def test_fetch_app_template_ref_blocks_when_the_app_predates_the_route(
     )
 
     try:
-        update_self.fetch_app_template_ref()
-    except update_self.CeilingUnavailableError as exc:
+        update_target.fetch_app_template_ref()
+    except update_target.CeilingUnavailableError as exc:
         assert "too old to report its version" in str(exc)
     else:
         raise AssertionError("expected a 404 to block rather than return no ceiling")
@@ -323,8 +330,8 @@ def test_fetch_app_template_ref_blocks_when_the_gateway_call_fails(
     _install_fake_latchkey(monkeypatch, tmp_path, body="", status="000", exit_code=7)
 
     try:
-        update_self.fetch_app_template_ref()
-    except update_self.CeilingUnavailableError as exc:
+        update_target.fetch_app_template_ref()
+    except update_target.CeilingUnavailableError as exc:
         assert "could not reach the minds app" in str(exc)
         assert "connection refused" in str(exc)
     else:
@@ -339,8 +346,8 @@ def test_fetch_app_template_ref_blocks_on_an_unparseable_body(
     )
 
     try:
-        update_self.fetch_app_template_ref()
-    except update_self.CeilingUnavailableError as exc:
+        update_target.fetch_app_template_ref()
+    except update_target.CeilingUnavailableError as exc:
         assert "could not be parsed" in str(exc)
     else:
         raise AssertionError("expected an unparseable body to block")
@@ -483,13 +490,13 @@ def test_resolve_target_cli_does_not_block_an_override_it_is_already_on(
 
 
 def test_already_current_message_only_blames_the_app_when_it_is_to_blame() -> None:
-    held_back = update_self.already_current_message(
+    held_back = update_target.already_current_message(
         "minds-v0.3.9", "minds-v0.4.0", "minds-v0.3.9", True
     )
     assert "minds-v0.3.9" in held_back and "minds-v0.4.0" in held_back
     assert "needs a newer app" in held_back
 
-    current = update_self.already_current_message(
+    current = update_target.already_current_message(
         "minds-v0.3.9", "minds-v0.3.9", "minds-v0.3.9", False
     )
     assert "nothing to update" in current
@@ -523,66 +530,73 @@ def test_resolve_target_cli_exits_nonzero_with_a_readable_message_when_blocked(
 
 def test_classify_path_reveal_classes() -> None:
     cases = {
-        "system/apps/system_interface/src/App.tsx": update_self.CLASS_SYSTEM_INTERFACE,
-        "system/supervisord.conf": update_self.CLASS_SERVICE,
-        "system/libs/bootstrap/src/bootstrap/main.py": update_self.CLASS_SERVICE,
-        "system/vendor/mngr/libs/mngr/foo.py": update_self.CLASS_EDITABLE_TOOL,
-        "system/scripts/forward_port.py": update_self.CLASS_SHARED_RUNTIME,
-        ".agents/skills/update-self/SKILL.md": update_self.CLASS_SHARED_RUNTIME,
-        "system/services/oom_priority/src/oom_priority/ledger.py": update_self.CLASS_SHARED_RUNTIME,
+        "system/apps/system_interface/src/App.tsx": update_classification.CLASS_SYSTEM_INTERFACE,
+        "system/supervisord.conf": update_classification.CLASS_SERVICE,
+        "system/libs/bootstrap/src/bootstrap/main.py": update_classification.CLASS_SERVICE,
+        "system/vendor/mngr/libs/mngr/foo.py": update_classification.CLASS_EDITABLE_TOOL,
+        "system/scripts/forward_port.py": update_classification.CLASS_SHARED_RUNTIME,
+        ".agents/skills/update-self/SKILL.md": update_classification.CLASS_SHARED_RUNTIME,
+        "system/services/oom_priority/src/oom_priority/ledger.py": update_classification.CLASS_SHARED_RUNTIME,
         # Provisioning files: the toolchain entry point (would otherwise read as
         # shared_runtime under system/scripts/) and the .mngr/ create config (would
         # otherwise fall through to other) -- both need the provisioner reveal.
         # The installers the entry point chains stay shared_runtime; the apply
         # keys its provisioner re-run on them separately (read_provisioner_inputs).
-        "system/scripts/setup_system.sh": update_self.CLASS_PROVISIONER,
-        "system/scripts/install_secret_scanners.sh": update_self.CLASS_SHARED_RUNTIME,
-        "system/scripts/_provision_guard.sh": update_self.CLASS_SHARED_RUNTIME,
-        ".mngr/settings.toml": update_self.CLASS_PROVISIONER,
-        "system/Dockerfile": update_self.CLASS_DOCKERFILE,
-        "CLAUDE.md": update_self.CLASS_DOCS,
-        "changelog/some-entry.md": update_self.CLASS_DOCS,
-        "system/config/parent.toml": update_self.CLASS_OTHER,
+        "system/scripts/setup_system.sh": update_classification.CLASS_PROVISIONER,
+        "system/scripts/install_secret_scanners.sh": update_classification.CLASS_SHARED_RUNTIME,
+        "system/scripts/_provision_guard.sh": update_classification.CLASS_SHARED_RUNTIME,
+        ".mngr/settings.toml": update_classification.CLASS_PROVISIONER,
+        "system/Dockerfile": update_classification.CLASS_DOCKERFILE,
+        "CLAUDE.md": update_classification.CLASS_DOCS,
+        "changelog/some-entry.md": update_classification.CLASS_DOCS,
+        "system/config/parent.toml": update_classification.CLASS_OTHER,
         # A README is docs even under a prefix with its own reveal class --
         # it must never trigger that class's reveal action (e.g. a service
         # restart for system/libs/bootstrap/README.md).
-        "system/libs/bootstrap/README.md": update_self.CLASS_DOCS,
-        "system/apps/system_interface/README.md": update_self.CLASS_DOCS,
-        "system/vendor/mngr/README.md": update_self.CLASS_DOCS,
+        "system/libs/bootstrap/README.md": update_classification.CLASS_DOCS,
+        "system/apps/system_interface/README.md": update_classification.CLASS_DOCS,
+        "system/vendor/mngr/README.md": update_classification.CLASS_DOCS,
         # Changelog entries likewise, in every project's bucket -- a release
         # ships them under runtime prefixes, so without this nearly every update
         # would restart a service (or run an impact analysis) over markdown.
-        ".agents/changelog/some-entry.md": update_self.CLASS_DOCS,
-        "system/libs/bootstrap/changelog/some-entry.md": update_self.CLASS_DOCS,
-        "system/apps/system_interface/changelog/some-entry.md": update_self.CLASS_DOCS,
+        ".agents/changelog/some-entry.md": update_classification.CLASS_DOCS,
+        "system/libs/bootstrap/changelog/some-entry.md": update_classification.CLASS_DOCS,
+        "system/apps/system_interface/changelog/some-entry.md": update_classification.CLASS_DOCS,
         # But the match is one level deep and markdown-only, so an app that
         # happens to be *named* changelog still reveals as code.
-        "system/apps/changelog/main.py": update_self.CLASS_SHARED_RUNTIME,
+        "system/apps/changelog/main.py": update_classification.CLASS_SHARED_RUNTIME,
     }
     for path, expected in cases.items():
-        assert update_self.classify_path(path).reveal_class == expected, path
+        assert update_classification.classify_path(path).reveal_class == expected, path
 
 
 def test_classify_path_project_mapping() -> None:
     assert (
-        update_self.classify_path("system/apps/system_interface/foo.py").project
+        update_classification.classify_path(
+            "system/apps/system_interface/foo.py"
+        ).project
         == "system/apps/system_interface"
     )
     assert (
-        update_self.classify_path("system/vendor/mngr/x.py").project
+        update_classification.classify_path("system/vendor/mngr/x.py").project
         == "system/vendor/mngr"
     )
-    assert update_self.classify_path("system/scripts/forward_port.py").project == "."
+    assert (
+        update_classification.classify_path("system/scripts/forward_port.py").project
+        == "."
+    )
 
 
 def test_classify_path_manifest_flag() -> None:
-    assert update_self.classify_path(
+    assert update_classification.classify_path(
         "system/apps/system_interface/pyproject.toml"
     ).is_manifest
-    assert update_self.classify_path(
+    assert update_classification.classify_path(
         "system/vendor/mngr/libs/mngr/pyproject.toml"
     ).is_manifest
-    assert not update_self.classify_path("system/scripts/forward_port.py").is_manifest
+    assert not update_classification.classify_path(
+        "system/scripts/forward_port.py"
+    ).is_manifest
 
 
 # --- classify_merge --------------------------------------------------------
@@ -598,7 +612,7 @@ def test_classify_merge_splits_merged_and_pulled_in() -> None:
         "system/apps/system_interface/src/App.tsx",
         "PURPOSE.md",  # local only, not an upstream update -> ignored
     ]
-    result = update_self.classify_merge(upstream_changed, local_changed)
+    result = update_classification.classify_merge(upstream_changed, local_changed)
 
     merged_paths = [entry["path"] for entry in result.merged]
     pulled_paths = [entry["path"] for entry in result.pulled_in]
@@ -620,12 +634,14 @@ def test_classify_merge_summary_fields() -> None:
         "system/apps/system_interface/src/App.tsx",
         "system/vendor/mngr/libs/mngr/foo.py",
     ]
-    result = update_self.classify_merge(upstream_changed, local_changed)
+    result = update_classification.classify_merge(upstream_changed, local_changed)
     assert result.reveal_classes_merged == [
-        update_self.CLASS_EDITABLE_TOOL,
-        update_self.CLASS_SYSTEM_INTERFACE,
+        update_classification.CLASS_EDITABLE_TOOL,
+        update_classification.CLASS_SYSTEM_INTERFACE,
     ]
-    assert result.reveal_classes_pulled_in == [update_self.CLASS_SHARED_RUNTIME]
+    assert result.reveal_classes_pulled_in == [
+        update_classification.CLASS_SHARED_RUNTIME
+    ]
     assert result.projects_to_validate == [
         "system/apps/system_interface",
         "system/vendor/mngr",
@@ -638,13 +654,13 @@ def test_classify_merge_surfaces_provisioner_bump() -> None:
     # untouched. They come in as a clean pull, but must still surface under the
     # provisioner reveal class (not shared_runtime/other) so the flow re-runs the
     # provisioner or flags a rebuild rather than silently dropping the new pin.
-    result = update_self.classify_merge(
+    result = update_classification.classify_merge(
         ["system/scripts/setup_system.sh", ".mngr/settings.toml"], []
     )
-    assert result.reveal_classes_pulled_in == [update_self.CLASS_PROVISIONER]
+    assert result.reveal_classes_pulled_in == [update_classification.CLASS_PROVISIONER]
     assert [entry["reveal_class"] for entry in result.pulled_in] == [
-        update_self.CLASS_PROVISIONER,
-        update_self.CLASS_PROVISIONER,
+        update_classification.CLASS_PROVISIONER,
+        update_classification.CLASS_PROVISIONER,
     ]
 
 
@@ -653,7 +669,7 @@ def test_classify_merge_reports_no_merge_work_on_a_pure_clean_pull() -> None:
     # shipped it, so the mechanical half of the review-gate rule clears. Local
     # changes to files upstream did NOT touch do not flip it -- they are not
     # part of the merge at all.
-    result = update_self.classify_merge(
+    result = update_classification.classify_merge(
         ["system/scripts/forward_port.py", "system/supervisord.conf"],
         ["PURPOSE.md", "system/apps/my_app/server.py"],
     )
@@ -662,7 +678,7 @@ def test_classify_merge_reports_no_merge_work_on_a_pure_clean_pull() -> None:
 
 
 def test_classify_merge_empty() -> None:
-    result = update_self.classify_merge([], [])
+    result = update_classification.classify_merge([], [])
     assert result.merged == []
     assert result.pulled_in == []
     assert result.projects_to_validate == []
@@ -1035,7 +1051,7 @@ def test_bootstrap_skill_stages_local_copy_when_ref_predates_skill(
 
 def test_held_back_is_true_only_when_the_ceiling_chose_the_lower_target() -> None:
     assert (
-        update_self.is_held_back_by_ceiling(
+        update_target.is_held_back_by_ceiling(
             resolved_ref="minds-v0.3.9",
             latest_available="minds-v0.4.0",
             ceiling="minds-v0.3.9",
@@ -1045,7 +1061,7 @@ def test_held_back_is_true_only_when_the_ceiling_chose_the_lower_target() -> Non
     )
     # Already on the newest release: nothing was held back.
     assert (
-        update_self.is_held_back_by_ceiling(
+        update_target.is_held_back_by_ceiling(
             resolved_ref="minds-v0.4.0",
             latest_available="minds-v0.4.0",
             ceiling="minds-v0.4.0",
@@ -1063,7 +1079,7 @@ def test_held_back_is_false_when_the_users_own_override_picked_the_older_tag() -
     app held the update back when they picked the older tag themselves.
     """
     assert (
-        update_self.is_held_back_by_ceiling(
+        update_target.is_held_back_by_ceiling(
             resolved_ref="minds-v0.3.6",
             latest_available="minds-v0.4.0",
             ceiling="minds-v0.3.9",
@@ -1082,7 +1098,7 @@ def test_held_back_is_false_when_the_app_imposes_no_cap() -> None:
     the selection was never bounded. Both routes are asserted.
     """
     assert (
-        update_self.is_held_back_by_ceiling(
+        update_target.is_held_back_by_ceiling(
             resolved_ref="minds-v0.4.0",
             latest_available="minds-v0.4.0",
             ceiling="main",
@@ -1092,7 +1108,7 @@ def test_held_back_is_false_when_the_app_imposes_no_cap() -> None:
     )
     # No ceiling supplied at all -- only a direct caller does this.
     assert (
-        update_self.is_held_back_by_ceiling(
+        update_target.is_held_back_by_ceiling(
             resolved_ref="minds-v0.4.0",
             latest_available="minds-v0.4.0",
             ceiling=None,
@@ -1114,10 +1130,10 @@ def test_prerelease_ceiling_caps_rather_than_disabling_the_cap() -> None:
     tags = ["minds-v0.3.9", "minds-v0.4.0", "minds-v0.4.1"]
     # Semver: 0.4.0-rc1 precedes 0.4.0, so 0.4.0 itself is above this ceiling.
     assert (
-        update_self.pick_latest_stable_tag(tags, ceiling="minds-v0.4.0-rc1")
+        update_target.pick_latest_stable_tag(tags, ceiling="minds-v0.4.0-rc1")
         == "minds-v0.3.9"
     )
-    result = update_self.resolve_target(None, tags, ceiling="minds-v0.4.0-rc1")
+    result = update_target.resolve_target(None, tags, ceiling="minds-v0.4.0-rc1")
     assert result.ref == "minds-v0.3.9"
     assert result.ceiling == "minds-v0.4.0-rc1"
 
@@ -1125,7 +1141,7 @@ def test_prerelease_ceiling_caps_rather_than_disabling_the_cap() -> None:
 def test_a_prerelease_ceiling_still_admits_its_own_earlier_releases() -> None:
     tags = ["minds-v0.3.9", "minds-v0.4.0"]
     assert (
-        update_self.pick_latest_stable_tag(tags, ceiling="minds-v0.4.1-rc1")
+        update_target.pick_latest_stable_tag(tags, ceiling="minds-v0.4.1-rc1")
         == "minds-v0.4.0"
     )
 
@@ -1135,25 +1151,25 @@ def test_capping_by_a_prerelease_does_not_make_prereleases_selectable() -> None:
     # the default target is still only ever a stable release.
     tags = ["minds-v0.3.9", "minds-v0.4.0-rc1", "minds-v0.4.0-rc2"]
     assert (
-        update_self.pick_latest_stable_tag(tags, ceiling="minds-v0.4.0-rc2")
+        update_target.pick_latest_stable_tag(tags, ceiling="minds-v0.4.0-rc2")
         == "minds-v0.3.9"
     )
 
 
 def test_parse_version_orders_prereleases_semver_style() -> None:
-    below = update_self.parse_version("minds-v0.4.0-rc1")
-    above = update_self.parse_version("minds-v0.4.0")
+    below = update_target.parse_version("minds-v0.4.0-rc1")
+    above = update_target.parse_version("minds-v0.4.0")
     assert below is not None and above is not None
     # A prerelease sorts below the release it precedes.
     assert below < above
     # Numeric identifiers compare numerically, not lexically: rc.10 follows rc.2.
-    rc2 = update_self.parse_version("minds-v0.4.0-rc.2")
-    rc10 = update_self.parse_version("minds-v0.4.0-rc.10")
+    rc2 = update_target.parse_version("minds-v0.4.0-rc.2")
+    rc10 = update_target.parse_version("minds-v0.4.0-rc.10")
     assert rc2 is not None and rc10 is not None
     assert rc2 < rc10
     # A branch or bare commit has no version at all, and stays uncomparable.
-    assert update_self.parse_version("main") is None
-    assert update_self.parse_version("abc1234") is None
+    assert update_target.parse_version("main") is None
+    assert update_target.parse_version("abc1234") is None
 
 
 # --- SKILL.md task-file template cross-version contract --------------------
@@ -1223,7 +1239,7 @@ _TODAY = "2026-08-19"
 
 
 def _write_bundle(repo_root: Path, stamp: str | None = None) -> None:
-    static = repo_root / update_self.STATIC_DIR
+    static = repo_root / update_layout.STATIC_DIR
     (static / "assets").mkdir(parents=True, exist_ok=True)
     (static / "index.html").write_text(
         f'<!doctype html><html><head><script type="module" src="/assets/{_ASSET_NAME}">'
@@ -1231,22 +1247,22 @@ def _write_bundle(repo_root: Path, stamp: str | None = None) -> None:
     )
     (static / "assets" / _ASSET_NAME).write_text("console.log('app');")
     if stamp is not None:
-        (static / update_self.BUNDLE_STAMP_FILENAME).write_text(stamp + "\n")
+        (static / update_layout.BUNDLE_STAMP_FILENAME).write_text(stamp + "\n")
 
 
 def _bundle_exists(repo_root: Path) -> bool:
-    return (repo_root / update_self.FRONTEND_BUILD_INDEX).exists()
+    return (repo_root / update_layout.FRONTEND_BUILD_INDEX).exists()
 
 
 def _installed_stamp(repo_root: Path) -> str | None:
     """The served bundle's source stamp: what tells the pre-apply copy (the
     fixture writes none) from a bundle the emulated build produced."""
-    return update_self._read_bundle_stamp(repo_root / update_self.STATIC_DIR)
+    return update_apply._read_bundle_stamp(repo_root / update_layout.STATIC_DIR)
 
 
 def _make_apply_repo(tmp_path: Path) -> Path:
     repo_root = tmp_path / "repo"
-    (repo_root / update_self.FRONTEND_DIR).mkdir(parents=True)
+    (repo_root / update_layout.FRONTEND_DIR).mkdir(parents=True)
     return repo_root
 
 
@@ -1285,7 +1301,7 @@ class _Result:
 
 
 @dataclass
-class _RecordingRunner(update_self.Runner):
+class _RecordingRunner(update_runtime.Runner):
     """Records every ``run`` call; returns canned results keyed by argv prefix.
 
     A response may be a single ``_Result`` or a list consumed in order (the
@@ -1349,7 +1365,7 @@ class _RecordingRunner(update_self.Runner):
 
     def _emulate_build(self, is_successful: bool) -> None:
         assert self.repo_root is not None
-        static = self.repo_root / update_self.STATIC_DIR
+        static = self.repo_root / update_layout.STATIC_DIR
         # vite's `emptyOutDir: true` -- the output is destroyed before any new
         # output is written, so a failure part-way through leaves nothing.
         shutil.rmtree(static, ignore_errors=True)
@@ -1363,7 +1379,7 @@ class _RecordingRunner(update_self.Runner):
         return bool(self.argvs_starting(*prefix))
 
 
-class _FakeHttp(update_self.HttpClient):
+class _FakeHttp(update_runtime.HttpClient):
     """Returns whatever ``responder(url)`` yields for the health-probe GETs;
     ``page_responder`` drives the frontend probe and defaults to a healthy
     built app shell."""
@@ -1371,7 +1387,8 @@ class _FakeHttp(update_self.HttpClient):
     def __init__(
         self,
         responder: Callable[[str], int | None],
-        page_responder: Callable[[str], update_self.FetchedPage | None] | None = None,
+        page_responder: Callable[[str], update_runtime.FetchedPage | None]
+        | None = None,
     ) -> None:
         self._responder = responder
         self._page_responder = page_responder or _built_app_page
@@ -1382,35 +1399,35 @@ class _FakeHttp(update_self.HttpClient):
         self.get_urls.append(url)
         return self._responder(url)
 
-    def get_page(self, url: str, timeout: float) -> update_self.FetchedPage | None:
+    def get_page(self, url: str, timeout: float) -> update_runtime.FetchedPage | None:
         self.page_urls.append(url)
         return self._page_responder(url)
 
 
-def _built_app_page(url: str) -> update_self.FetchedPage:
+def _built_app_page(url: str) -> update_runtime.FetchedPage:
     if url.endswith(".js"):
-        return update_self.FetchedPage(
+        return update_runtime.FetchedPage(
             status=200,
             body="console.log('app');",
             headers={"content-type": "text/javascript"},
         )
-    return update_self.FetchedPage(
+    return update_runtime.FetchedPage(
         status=200,
         body=f'<!doctype html><script type="module" src="/assets/{_ASSET_NAME}"></script>',
         headers={
             "content-type": "text/html",
-            update_self.FRONTEND_BUILT_HEADER: "true",
+            update_probes.FRONTEND_BUILT_HEADER: "true",
         },
     )
 
 
-def _placeholder_page(url: str) -> update_self.FetchedPage:
-    return update_self.FetchedPage(
+def _placeholder_page(url: str) -> update_runtime.FetchedPage:
+    return update_runtime.FetchedPage(
         status=200,
         body="<!doctype html><p>Frontend not built</p>",
         headers={
             "content-type": "text/html",
-            update_self.FRONTEND_BUILT_HEADER: "false",
+            update_probes.FRONTEND_BUILT_HEADER: "false",
         },
     )
 
@@ -1432,7 +1449,7 @@ class _FakeSpawned:
 
 
 @dataclass
-class _FakeSpawner(update_self.Spawner):
+class _FakeSpawner(update_runtime.Spawner):
     output: str = ""
     exited: bool = False
     spawns: list[list[str]] = field(default_factory=list)
@@ -1501,7 +1518,7 @@ def _apply(
     is_pid_live: Callable[[int], bool] = lambda pid: False,
     expend: Callable[[Sequence[str]], list[str]] = _tagging_expend,
 ) -> int:
-    return update_self.apply_update(
+    return update_apply.apply_update(
         merge_ref,
         repo_root,
         ff_only=ff_only,
@@ -1532,7 +1549,12 @@ def _is_live(url: str) -> bool:
 
 
 def _snapshot_copy(repo_root: Path, name: str) -> Path:
-    return repo_root / update_self.STATE_DIR_REL / update_self.SNAPSHOTS_DIRNAME / name
+    return (
+        repo_root
+        / update_apply_contract.STATE_DIR_REL
+        / update_apply_contract.SNAPSHOTS_DIRNAME
+        / name
+    )
 
 
 def _placeholder_after(runner: _RecordingRunner, *prefix: str):
@@ -1542,7 +1564,7 @@ def _placeholder_after(runner: _RecordingRunner, *prefix: str):
     baseline probe, and a broken one from the step under test onwards.
     """
 
-    def page_responder(url: str) -> update_self.FetchedPage:
+    def page_responder(url: str) -> update_runtime.FetchedPage:
         return _placeholder_page(url) if runner.ran(*prefix) else _built_app_page(url)
 
     return page_responder
@@ -1555,7 +1577,7 @@ def _refreshed_the_view(runner: _RecordingRunner, repo_root: Path) -> bool:
 
 
 def _marker_exists(repo_root: Path) -> bool:
-    return update_self.marker_path(repo_root).exists()
+    return update_apply_contract.marker_path(repo_root).exists()
 
 
 def _plant_marker(
@@ -1563,16 +1585,16 @@ def _plant_marker(
     *,
     dri_agent: str = "the-lead",
     merge_ref: str = _MERGE_REF,
-    phase: str = update_self.PHASE_BUILT,
+    phase: str = update_apply_contract.PHASE_BUILT,
     pid: int = 12345,
     updated_at: float = 1000.0,
     live_service_restarted: bool = False,
     provisioner_ran: bool = False,
     snapshots: list | None = None,
     frontend_expected: bool | None = True,
-) -> "update_self.ApplyMarker":
+) -> "update_apply_contract.ApplyMarker":
     """Write the marker an interrupted apply would have left behind."""
-    marker = update_self.ApplyMarker(
+    marker = update_apply_contract.ApplyMarker(
         dri_agent=dri_agent,
         rollback_to=_ROLLBACK,
         merge_ref=merge_ref,
@@ -1588,7 +1610,7 @@ def _plant_marker(
         frontend_expected=frontend_expected,
         snapshots=snapshots or [],
     )
-    update_self.write_marker(marker, repo_root, now=lambda: updated_at)
+    update_apply_contract.write_marker(marker, repo_root, now=lambda: updated_at)
     return marker
 
 
@@ -1599,17 +1621,19 @@ def _plant_snapshotted_marker(repo_root: Path, **kwargs) -> list:
     and the starting point of every recover test that has something to restore.
     """
     plan = _plan(["system/apps/system_interface/frontend/src/App.ts"])
-    snapshots = update_self.take_snapshots(plan, repo_root, _RecordingRunner(), [])
+    snapshots = update_environment.take_snapshots(
+        plan, repo_root, _RecordingRunner(), []
+    )
     _plant_marker(repo_root, snapshots=snapshots, **kwargs)
     return snapshots
 
 
 def _read_emergency(repo_root: Path) -> dict:
-    return json.loads(update_self.emergency_path(repo_root).read_text())
+    return json.loads(update_apply_contract.emergency_path(repo_root).read_text())
 
 
 _RESTART = ("mngr", "start", "--restart", "system-services")
-_PROVISION = ("bash", update_self.PROVISIONER_SCRIPT)
+_PROVISION = ("bash", update_layout.PROVISIONER_SCRIPT)
 
 _FRONTEND_DIFF = "M\tsystem/apps/system_interface/frontend/src/views/Chat.ts\n"
 _BACKEND_DIFF = "M\tsystem/apps/system_interface/imbue/system_interface/server.py\n"
@@ -1625,11 +1649,11 @@ _DOCS_DIFF = "M\tREADME.md\nM\t.agents/changelog/some-entry.md\n"
 
 # The real tree's provisioner inputs: the entry point, the apt snapshot
 # timestamp, and whatever setup_system.sh chains today.
-_PROVISIONER_INPUTS = update_self.read_provisioner_inputs(_WORKSPACE_ROOT)
+_PROVISIONER_INPUTS = update_classification.read_provisioner_inputs(_WORKSPACE_ROOT)
 
 
-def _plan(paths: list[str]) -> update_self.ApplyPlan:
-    return update_self.plan_apply(paths, _PROVISIONER_INPUTS)
+def _plan(paths: list[str]) -> update_classification.ApplyPlan:
+    return update_classification.plan_apply(paths, _PROVISIONER_INPUTS)
 
 
 def test_plan_apply_maps_each_change_class() -> None:
@@ -1758,10 +1782,10 @@ def test_apply_backend_change_preflights_restarts_and_probes(
 
     assert code == 0
     # Pre-flight boots the bare tool on a throwaway port before the restart.
-    assert spawner.spawns == [[update_self.TOOL_NAME]]
+    assert spawner.spawns == [[update_layout.TOOL_NAME]]
     assert runner.ran(*_RESTART)
     assert any(
-        _is_live(url) and update_self.HEALTH_PATH in url for url in http.get_urls
+        _is_live(url) and update_probes.HEALTH_PATH in url for url in http.get_urls
     )
     assert not runner.ran("npm", "run", "build")
 
@@ -1839,10 +1863,10 @@ def test_apply_docs_only_still_preflights_restarts_and_probes(apply_repo: Path) 
     assert runner.ran("git", "merge", "--ff-only", _MERGE_REF)
     assert not runner.ran("npm")
     assert not runner.ran(*_PROVISION)
-    assert spawner.spawns == [[update_self.TOOL_NAME]]
+    assert spawner.spawns == [[update_layout.TOOL_NAME]]
     assert runner.ran(*_RESTART)
     assert any(
-        _is_live(url) and update_self.HEALTH_PATH in url for url in http.get_urls
+        _is_live(url) and update_probes.HEALTH_PATH in url for url in http.get_urls
     )
     assert not _marker_exists(apply_repo)
 
@@ -1890,7 +1914,7 @@ def test_re_applying_a_rolled_back_merge_refuses_instead_of_claiming_success(
         _Result(stdout="Roll back update apply (restore to abc123def456)\n"),
     )
 
-    with pytest.raises(update_self.ApplyPreconditionError) as raised:
+    with pytest.raises(update_runtime.ApplyPreconditionError) as raised:
         _apply(
             runner,
             _FakeHttp(_all_healthy),
@@ -1938,7 +1962,7 @@ def test_apply_dirty_tree_refuses_before_touching_anything(apply_repo: Path) -> 
     runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
     runner.respond(("git", "status", "--porcelain"), _Result(stdout=" M foo\n"))
 
-    with pytest.raises(update_self.ApplyPreconditionError):
+    with pytest.raises(update_runtime.ApplyPreconditionError):
         _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
 
     assert not runner.ran("git", "merge")
@@ -1957,7 +1981,7 @@ def test_apply_unresolvable_merge_ref_leaves_no_marker_behind(
         _Result(returncode=128, stderr="fatal: not a valid object name"),
     )
 
-    with pytest.raises(update_self.ApplyPreconditionError):
+    with pytest.raises(update_runtime.ApplyPreconditionError):
         _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
 
     assert not runner.ran("git", "merge", "--ff-only")
@@ -1990,7 +2014,7 @@ def test_apply_installs_the_workers_bundle_instead_of_building(
     # The worker's validated artifact is installed as-is; no live build runs.
     assert not runner.ran("npm", "run", "build")
     installed = (
-        apply_repo / update_self.STATIC_DIR / "assets" / _ASSET_NAME
+        apply_repo / update_layout.STATIC_DIR / "assets" / _ASSET_NAME
     ).read_text()
     assert installed == "console.log('worker');"
 
@@ -2023,7 +2047,7 @@ def _make_worker_bundle(tmp_path: Path, stamp: str | None) -> Path:
     )
     (worker_bundle / "assets" / _ASSET_NAME).write_text("console.log('worker');")
     if stamp is not None:
-        (worker_bundle / update_self.BUNDLE_STAMP_FILENAME).write_text(stamp + "\n")
+        (worker_bundle / update_layout.BUNDLE_STAMP_FILENAME).write_text(stamp + "\n")
     return worker_bundle
 
 
@@ -2033,7 +2057,7 @@ def _verifiable_runner(name_status: str, repo_root: Path) -> _RecordingRunner:
     its output like the real postbuild step)."""
     runner = _apply_runner(name_status, repo_root)
     runner.respond(
-        ("git", "rev-parse", f"HEAD:{update_self.FRONTEND_DIR}"),
+        ("git", "rev-parse", f"HEAD:{update_layout.FRONTEND_DIR}"),
         _Result(stdout=_FRONTEND_TREE_HASH + "\n"),
     )
     runner.build_stamp = _FRONTEND_TREE_HASH
@@ -2041,7 +2065,7 @@ def _verifiable_runner(name_status: str, repo_root: Path) -> _RecordingRunner:
 
 
 def _installed_asset(repo_root: Path) -> str:
-    return (repo_root / update_self.STATIC_DIR / "assets" / _ASSET_NAME).read_text()
+    return (repo_root / update_layout.STATIC_DIR / "assets" / _ASSET_NAME).read_text()
 
 
 def test_a_verified_worker_bundle_is_installed_without_the_npm_refresh(
@@ -2142,7 +2166,7 @@ def test_a_bundle_the_tree_cannot_vouch_for_is_accepted_on_the_index_alone(
     worker_bundle = _make_worker_bundle(tmp_path, stamp=None)
     runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
     runner.respond(
-        ("git", "rev-parse", f"HEAD:{update_self.FRONTEND_DIR}"),
+        ("git", "rev-parse", f"HEAD:{update_layout.FRONTEND_DIR}"),
         _Result(returncode=128, stderr="fatal: not a tree"),
     )
 
@@ -2325,9 +2349,9 @@ def test_a_failed_preflight_that_produced_no_output_says_so(
 def test_preflight_output_is_tailed_to_the_interesting_end() -> None:
     # A backend that logs its way to a crash would otherwise bury the traceback
     # under startup chatter, so keep the end and say what was dropped.
-    limit = update_self._PREFLIGHT_OUTPUT_TAIL_LINES
+    limit = update_probes._PREFLIGHT_OUTPUT_TAIL_LINES
 
-    tailed = update_self._tail(
+    tailed = update_runtime._tail(
         "\n".join([f"chatter {index}" for index in range(limit + 10)] + ["the error"]),
         limit,
     )
@@ -2403,7 +2427,9 @@ _PROVISIONER_DIFF = "M\tsystem/scripts/setup_system.sh\n"
 
 
 def _read_provision_incomplete(repo_root: Path) -> dict:
-    return json.loads(update_self.provision_incomplete_path(repo_root).read_text())
+    return json.loads(
+        update_apply_contract.provision_incomplete_path(repo_root).read_text()
+    )
 
 
 def test_a_failed_provisioner_alone_lands_the_update_and_records_the_gap(
@@ -2429,7 +2455,7 @@ def test_a_failed_provisioner_alone_lands_the_update_and_records_the_gap(
     assert record["merge_ref"] == _MERGE_REF
     err = capsys.readouterr().err
     assert "applied with incomplete provisioning" in err
-    assert f"bash {update_self.PROVISIONER_SCRIPT}" in err
+    assert f"bash {update_layout.PROVISIONER_SCRIPT}" in err
     assert not _marker_exists(apply_repo)
 
 
@@ -2473,7 +2499,7 @@ def test_a_timed_out_provisioner_takes_its_own_children_with_it(
     script = f"sleep 60 & echo $! > {pid_file}; wait"
 
     with pytest.raises(subprocess.TimeoutExpired):
-        update_self.Runner().run_process_group(
+        update_runtime.Runner().run_process_group(
             ["bash", "-c", script], cwd=str(tmp_path), env=dict(os.environ), timeout=0.5
         )
 
@@ -2492,7 +2518,7 @@ def test_a_timed_out_provisioner_takes_its_own_children_with_it(
 def test_a_clean_provisioner_run_clears_an_earlier_incomplete_record(
     apply_repo: Path,
 ) -> None:
-    update_self.write_provision_incomplete(
+    update_apply_contract.write_provision_incomplete(
         apply_repo, "an earlier failure", "someone", _MERGE_REF, lambda: 1.0
     )
     runner = _apply_runner(_PROVISIONER_DIFF, apply_repo)
@@ -2500,7 +2526,7 @@ def test_a_clean_provisioner_run_clears_an_earlier_incomplete_record(
     code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
 
     assert code == 0
-    assert not update_self.provision_incomplete_path(apply_repo).exists()
+    assert not update_apply_contract.provision_incomplete_path(apply_repo).exists()
 
 
 def test_a_failed_provisioner_followed_by_a_failed_probe_still_rolls_back(
@@ -2523,7 +2549,7 @@ def test_a_failed_provisioner_followed_by_a_failed_probe_still_rolls_back(
     assert code == 2
     assert runner.ran("git", "checkout", _ROLLBACK, "--")
     assert len(runner.argvs_starting(*_PROVISION)) == 2  # forward, then recovery
-    assert not update_self.provision_incomplete_path(apply_repo).exists()
+    assert not update_apply_contract.provision_incomplete_path(apply_repo).exists()
     err = capsys.readouterr().err
     assert "still counts as recovered" in err
     assert "confirmed healthy" in err
@@ -2598,7 +2624,7 @@ def test_provisioner_inputs_are_read_off_the_entry_point(tmp_path: Path) -> None
     ):
         (scripts / name).write_text("")
 
-    assert update_self.read_provisioner_inputs(tmp_path) == {
+    assert update_classification.read_provisioner_inputs(tmp_path) == {
         "system/scripts/setup_system.sh",
         ".mngr/apt-snapshot-timestamp",
         # Sourced and run, respectively.
@@ -2614,7 +2640,7 @@ def test_provisioner_inputs_are_read_off_the_entry_point(tmp_path: Path) -> None
 def test_provisioner_inputs_on_a_tree_without_the_entry_point() -> None:
     # The apply may run against a tree that predates the script (or a test
     # repo without one): the fixed two still count, nothing else does.
-    assert update_self.read_provisioner_inputs(Path("/nonexistent")) == {
+    assert update_classification.read_provisioner_inputs(Path("/nonexistent")) == {
         "system/scripts/setup_system.sh",
         ".mngr/apt-snapshot-timestamp",
     }
@@ -2624,7 +2650,7 @@ def test_the_real_provisioner_chains_more_than_its_entry_point() -> None:
     # A parse that silently matched nothing in the real script would key every
     # installer pin bump off the list of two, exactly the gap this exists to
     # close.
-    inputs = update_self.read_provisioner_inputs(_WORKSPACE_ROOT)
+    inputs = update_classification.read_provisioner_inputs(_WORKSPACE_ROOT)
     chained = inputs - {
         "system/scripts/setup_system.sh",
         ".mngr/apt-snapshot-timestamp",
@@ -2650,7 +2676,7 @@ def test_a_hung_forward_step_rolls_back_naming_the_step(
     err = capsys.readouterr().err
     assert "npm ci did not finish within 1200s" in err
     assert "apply phase timings:" in err
-    assert update_self.PHASE_SNAPSHOTTED in err
+    assert update_apply_contract.PHASE_SNAPSHOTTED in err
 
 
 def test_every_apply_reports_its_per_phase_timings(apply_repo: Path, capsys) -> None:
@@ -2665,12 +2691,12 @@ def test_every_apply_reports_its_per_phase_timings(apply_repo: Path, capsys) -> 
         line for line in err.splitlines() if line.startswith("apply phase timings:")
     )
     for phase in (
-        update_self.PHASE_MERGED,
-        update_self.PHASE_SNAPSHOTTED,
-        update_self.PHASE_REFRESHED,
-        update_self.PHASE_PROVISIONED,
-        update_self.PHASE_BUILT,
-        update_self.PHASE_RESTARTED,
+        update_apply_contract.PHASE_MERGED,
+        update_apply_contract.PHASE_SNAPSHOTTED,
+        update_apply_contract.PHASE_REFRESHED,
+        update_apply_contract.PHASE_PROVISIONED,
+        update_apply_contract.PHASE_BUILT,
+        update_apply_contract.PHASE_RESTARTED,
     ):
         assert f"{phase} +" in timing_line
 
@@ -2680,22 +2706,22 @@ def test_marker_phase_timings_roundtrip_and_tolerate_older_markers(
 ) -> None:
     marker = _plant_marker(tmp_path)
     marker.phase_timings = {
-        update_self.PHASE_MERGED: 1001.0,
-        update_self.PHASE_BUILT: 1007.5,
+        update_apply_contract.PHASE_MERGED: 1001.0,
+        update_apply_contract.PHASE_BUILT: 1007.5,
     }
-    update_self.write_marker(marker, tmp_path, now=lambda: 1010.0)
-    read = update_self.read_marker(tmp_path)
+    update_apply_contract.write_marker(marker, tmp_path, now=lambda: 1010.0)
+    read = update_apply_contract.read_marker(tmp_path)
     assert read is not None
     assert read.phase_timings == {
-        update_self.PHASE_MERGED: 1001.0,
-        update_self.PHASE_BUILT: 1007.5,
+        update_apply_contract.PHASE_MERGED: 1001.0,
+        update_apply_contract.PHASE_BUILT: 1007.5,
     }
 
     # A marker written by an older apply carries no timings at all.
-    older = json.loads(update_self.marker_path(tmp_path).read_text())
+    older = json.loads(update_apply_contract.marker_path(tmp_path).read_text())
     del older["phase_timings"]
-    update_self.marker_path(tmp_path).write_text(json.dumps(older))
-    read = update_self.read_marker(tmp_path)
+    update_apply_contract.marker_path(tmp_path).write_text(json.dumps(older))
+    read = update_apply_contract.read_marker(tmp_path)
     assert read is not None
     assert read.phase_timings == {}
 
@@ -2706,11 +2732,13 @@ def test_a_marker_that_is_not_an_object_is_ignored_not_fatal(
     # Well-formed JSON of the wrong shape (a list, a string) must degrade like
     # a torn write does: read_marker promises a corrupt marker never wedges the
     # recovery decision, and the cron re-reads it every five minutes forever.
-    update_self.marker_path(apply_repo).parent.mkdir(parents=True)
-    update_self.marker_path(apply_repo).write_text(json.dumps([{"phase": "merged"}]))
+    update_apply_contract.marker_path(apply_repo).parent.mkdir(parents=True)
+    update_apply_contract.marker_path(apply_repo).write_text(
+        json.dumps([{"phase": "merged"}])
+    )
     runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
 
-    assert update_self.read_marker(apply_repo) is None
+    assert update_apply_contract.read_marker(apply_repo) is None
     assert "not a valid marker" in capsys.readouterr().err
     assert _recover(runner, _FakeHttp(_all_healthy), apply_repo, if_stale=True) == 0
     assert runner.calls == []
@@ -2745,7 +2773,7 @@ def test_emergency_when_rollback_cannot_restore_health(
 
 
 def _plant_emergency(repo_root: Path) -> None:
-    update_self.write_emergency(
+    update_apply_contract.write_emergency(
         repo_root, "an earlier apply's rollback failed", "the-lead", lambda: 1.0
     )
 
@@ -2765,7 +2793,7 @@ def test_the_emergency_record_comes_down_only_over_a_confirmed_ui(
     diff: str,
     is_build_failing: bool,
     expected_code: int,
-    page_responder: Callable[[str], update_self.FetchedPage],
+    page_responder: Callable[[str], update_runtime.FetchedPage],
     is_record_kept: bool,
 ) -> None:
     # The banner keys off the record's mere presence, so an outcome that ends
@@ -2789,7 +2817,7 @@ def test_the_emergency_record_comes_down_only_over_a_confirmed_ui(
     code = _apply(runner, http, _FakeSpawner(), apply_repo)
 
     assert code == expected_code
-    assert update_self.emergency_path(apply_repo).exists() is is_record_kept
+    assert update_apply_contract.emergency_path(apply_repo).exists() is is_record_kept
 
 
 def test_an_apply_that_repairs_an_already_broken_ui_clears_the_emergency_record(
@@ -2802,7 +2830,7 @@ def test_an_apply_that_repairs_an_already_broken_ui_clears_the_emergency_record(
     _plant_emergency(apply_repo)
     runner = _apply_runner(_BACKEND_DIFF, apply_repo)
 
-    def page_responder(url: str) -> update_self.FetchedPage:
+    def page_responder(url: str) -> update_runtime.FetchedPage:
         # Down before the apply, serving once the merged backend is up.
         return _built_app_page(url) if runner.ran(*_RESTART) else _placeholder_page(url)
 
@@ -2814,7 +2842,7 @@ def test_an_apply_that_repairs_an_already_broken_ui_clears_the_emergency_record(
     )
 
     assert code == 0
-    assert not update_self.emergency_path(apply_repo).exists()
+    assert not update_apply_contract.emergency_path(apply_repo).exists()
     assert "confirmed healthy" in capsys.readouterr().err.strip().splitlines()[-1]
 
 
@@ -2832,7 +2860,7 @@ def test_a_rollback_that_repairs_an_already_broken_ui_clears_the_emergency_recor
 
     runner.on_command = count_builds
 
-    def page_responder(url: str) -> update_self.FetchedPage:
+    def page_responder(url: str) -> update_runtime.FetchedPage:
         # Down at the baseline; the restored pre-apply bundle serves.
         return _built_app_page(url) if builds["seen"] else _placeholder_page(url)
 
@@ -2844,7 +2872,7 @@ def test_a_rollback_that_repairs_an_already_broken_ui_clears_the_emergency_recor
     )
 
     assert code == 2
-    assert not update_self.emergency_path(apply_repo).exists()
+    assert not update_apply_contract.emergency_path(apply_repo).exists()
     assert "confirmed healthy" in capsys.readouterr().err.strip().splitlines()[-1]
 
 
@@ -2854,7 +2882,7 @@ def test_a_regressed_frontend_is_rolled_back(apply_repo: Path) -> None:
     # restored it) -- so the apply must roll back and confirm recovery.
     shell_answers = [_built_app_page, _placeholder_page, _built_app_page]
 
-    def page_responder(url: str) -> update_self.FetchedPage:
+    def page_responder(url: str) -> update_runtime.FetchedPage:
         if url.endswith(".js"):
             return _built_app_page(url)
         answer = shell_answers.pop(0) if len(shell_answers) > 1 else shell_answers[0]
@@ -3003,7 +3031,7 @@ def test_a_blip_on_the_baseline_probe_does_not_disarm_the_regression_check(
     # apply -- which really does break the frontend -- is still rolled back.
     unanswered: list[str] = []
 
-    def before_the_build(url: str) -> update_self.FetchedPage | None:
+    def before_the_build(url: str) -> update_runtime.FetchedPage | None:
         if not unanswered:
             unanswered.append(url)
             return None
@@ -3011,7 +3039,7 @@ def test_a_blip_on_the_baseline_probe_does_not_disarm_the_regression_check(
 
     runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
 
-    def page_responder(url: str) -> update_self.FetchedPage | None:
+    def page_responder(url: str) -> update_runtime.FetchedPage | None:
         if runner.ran("npm", "run", "build"):
             return _placeholder_page(url)
         return before_the_build(url)
@@ -3037,8 +3065,8 @@ def test_a_blip_on_the_baseline_probe_does_not_disarm_the_regression_check(
 # unserved /assets path.
 
 
-def _html(body: str, **headers: str) -> update_self.FetchedPage:
-    return update_self.FetchedPage(
+def _html(body: str, **headers: str) -> update_runtime.FetchedPage:
+    return update_runtime.FetchedPage(
         status=200, body=body, headers={"content-type": "text/html", **headers}
     )
 
@@ -3053,13 +3081,13 @@ _SHELL_WITH_SCRIPT = _html(
     [
         (None, None, "did not answer a request for the app shell", False),
         (
-            update_self.FetchedPage(status=503, body="", headers={}),
+            update_runtime.FetchedPage(status=503, body="", headers={}),
             None,
             "returned HTTP 503",
             True,
         ),
         (
-            _html("not built", **{update_self.FRONTEND_BUILT_HEADER: "false"}),
+            _html("not built", **{update_probes.FRONTEND_BUILT_HEADER: "false"}),
             None,
             "'frontend not built' placeholder",
             True,
@@ -3078,7 +3106,7 @@ _SHELL_WITH_SCRIPT = _html(
         ),
         (
             _SHELL_WITH_SCRIPT,
-            update_self.FetchedPage(status=404, body="", headers={}),
+            update_runtime.FetchedPage(status=404, body="", headers={}),
             "returned HTTP 404",
             True,
         ),
@@ -3097,15 +3125,15 @@ _SHELL_WITH_SCRIPT = _html(
     ],
 )
 def test_probe_frontend_names_each_way_the_ui_can_be_broken(
-    shell: update_self.FetchedPage | None,
-    asset: update_self.FetchedPage | None,
+    shell: update_runtime.FetchedPage | None,
+    asset: update_runtime.FetchedPage | None,
     expected: str,
     is_answered: bool,
 ) -> None:
-    def page_responder(url: str) -> update_self.FetchedPage | None:
+    def page_responder(url: str) -> update_runtime.FetchedPage | None:
         return asset if url.endswith(".js") else shell
 
-    probe = update_self.probe_frontend(
+    probe = update_probes.probe_frontend(
         _FakeHttp(_all_healthy, page_responder=page_responder), _LIVE_BASE
     )
 
@@ -3116,7 +3144,7 @@ def test_probe_frontend_names_each_way_the_ui_can_be_broken(
 
 
 def test_a_healthy_built_app_is_no_failure_at_all() -> None:
-    probe = update_self.probe_frontend(
+    probe = update_probes.probe_frontend(
         _FakeHttp(_all_healthy, page_responder=_built_app_page), _LIVE_BASE
     )
 
@@ -3128,19 +3156,25 @@ def test_the_frontend_probe_retries_a_non_answer_but_not_a_verdict() -> None:
     # so it is worth asking again; a verdict -- here the placeholder, arriving
     # as a perfectly healthy 200 -- is the service telling us the frontend is
     # broken, and asking again only spends the budget to reach the same answer.
-    answers: list[update_self.FetchedPage | None] = [None, None, _built_app_page("/")]
+    answers: list[update_runtime.FetchedPage | None] = [
+        None,
+        None,
+        _built_app_page("/"),
+    ]
     retried = _FakeHttp(
         _all_healthy,
         page_responder=lambda url: answers.pop(0) if answers else _built_app_page(url),
     )
 
-    assert update_self.describe_frontend_failure(retried, _LIVE_BASE, _no_sleep) is None
+    assert (
+        update_probes.describe_frontend_failure(retried, _LIVE_BASE, _no_sleep) is None
+    )
     assert not answers  # it kept asking until it got an answer
 
     verdict = _FakeHttp(_all_healthy, page_responder=_placeholder_page)
 
     assert (
-        update_self.describe_frontend_failure(verdict, _LIVE_BASE, _no_sleep)
+        update_probes.describe_frontend_failure(verdict, _LIVE_BASE, _no_sleep)
         is not None
     )
     assert len(verdict.page_urls) == 1
@@ -3154,10 +3188,10 @@ def test_a_service_that_never_answers_spends_the_budget_and_still_names_a_failur
     # the user cannot see either.
     silent = _FakeHttp(_all_healthy, page_responder=lambda _url: None)
 
-    failure = update_self.describe_frontend_failure(silent, _LIVE_BASE, _no_sleep)
+    failure = update_probes.describe_frontend_failure(silent, _LIVE_BASE, _no_sleep)
 
     assert failure is not None
-    assert len(silent.page_urls) == update_self._FRONTEND_PROBE_ATTEMPTS
+    assert len(silent.page_urls) == update_probes._FRONTEND_PROBE_ATTEMPTS
 
 
 # --- the view refresh ---------------------------------------------------------------
@@ -3200,7 +3234,7 @@ def test_restore_tree_removes_adds_and_checks_out_the_rest(tmp_path: Path) -> No
     # known-good version to check out, so it has to be removed instead.
     runner = _RecordingRunner()
 
-    update_self._restore_tree(
+    update_apply._restore_tree(
         [
             ("A", "system/apps/system_interface/imbue/system_interface/new_module.py"),
             ("M", "system/apps/system_interface/imbue/system_interface/server.py"),
@@ -3263,7 +3297,7 @@ def test_marker_records_the_dri_agent_and_phases(
     dri: list[str] = []
 
     def observe_marker() -> None:
-        marker = update_self.read_marker(apply_repo)
+        marker = update_apply_contract.read_marker(apply_repo)
         if marker is not None:
             phases.append(marker.phase)
             dri.append(marker.dri_agent)
@@ -3290,13 +3324,13 @@ def test_marker_records_the_dri_agent_and_phases(
     # interrupted apply is read back from the last phase the marker names, so a
     # phase that is skipped or stamped early sends recovery to the wrong place.
     ladder = [
-        update_self.PHASE_STARTED,
-        update_self.PHASE_MERGED,
-        update_self.PHASE_SNAPSHOTTED,
-        update_self.PHASE_REFRESHED,
-        update_self.PHASE_PROVISIONED,
-        update_self.PHASE_BUILT,
-        update_self.PHASE_RESTARTED,
+        update_apply_contract.PHASE_STARTED,
+        update_apply_contract.PHASE_MERGED,
+        update_apply_contract.PHASE_SNAPSHOTTED,
+        update_apply_contract.PHASE_REFRESHED,
+        update_apply_contract.PHASE_PROVISIONED,
+        update_apply_contract.PHASE_BUILT,
+        update_apply_contract.PHASE_RESTARTED,
     ]
     assert set(phases) == set(ladder)
     ranks = [ladder.index(phase) for phase in phases]
@@ -3386,7 +3420,9 @@ def test_a_live_marker_blocks_a_concurrent_apply(apply_repo: Path) -> None:
 
 
 def test_a_dead_marker_for_the_same_merge_is_resumed(apply_repo: Path) -> None:
-    _plant_marker(apply_repo, dri_agent="earlier-run", phase=update_self.PHASE_MERGED)
+    _plant_marker(
+        apply_repo, dri_agent="earlier-run", phase=update_apply_contract.PHASE_MERGED
+    )
     runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
     # The interrupted run already landed the merge.
     runner.respond(("git", "merge-base", "--is-ancestor"), _Result(returncode=0))
@@ -3404,7 +3440,9 @@ def test_a_dead_marker_for_the_same_merge_is_resumed(apply_repo: Path) -> None:
 def test_resuming_an_apply_killed_mid_merge_aborts_the_half_merge_first(
     apply_repo: Path,
 ) -> None:
-    _plant_marker(apply_repo, dri_agent="earlier-run", phase=update_self.PHASE_STARTED)
+    _plant_marker(
+        apply_repo, dri_agent="earlier-run", phase=update_apply_contract.PHASE_STARTED
+    )
     runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
     # The interrupted run died inside `git merge`: the merge is staged
     # (MERGE_HEAD present) but never became a commit.
@@ -3509,11 +3547,11 @@ def test_the_expendable_wrapper_hands_the_command_its_argv_intact(
     # or glob what it is handed. It is a shell, so an argument carrying a space
     # or a metacharacter is exactly where this would go wrong -- and it would
     # go wrong silently, as a build that ran against the wrong path.
-    bands = update_self._load_bands(_WORKSPACE_ROOT)
+    bands = update_banding._load_bands(_WORKSPACE_ROOT)
     assert bands is not None, "the in-tree oom_priority package should be importable"
-    monkeypatch.setattr(update_self, "_BANDS", bands)
+    monkeypatch.setattr(update_banding, "_BANDS", bands)
 
-    wrapped = update_self.as_expendable(["npm", "run", "build --out dir", "*"])
+    wrapped = update_banding.as_expendable(["npm", "run", "build --out dir", "*"])
 
     assert wrapped[:2] == ["sh", "-c"]
     # argv is passed positionally, never interpolated into the script.
@@ -3521,7 +3559,7 @@ def test_the_expendable_wrapper_hands_the_command_its_argv_intact(
     assert wrapped[2].endswith('exec "$@"')
     assert wrapped[3:] == ["sh", "npm", "run", "build --out dir", "*"]
     # And the counterpart wrapper leaves the command exactly as it was.
-    assert update_self.keep_protected(wrapped) == wrapped
+    assert update_banding.keep_protected(wrapped) == wrapped
 
 
 def test_a_tree_without_the_bands_package_runs_unbanded_rather_than_failing(
@@ -3531,8 +3569,8 @@ def test_a_tree_without_the_bands_package_runs_unbanded_rather_than_failing(
     # predates `oom_priority` must degrade to no banding -- with `as_expendable`
     # falling back to a plain passthrough rather than a wrapper naming a band
     # that does not exist.
-    assert update_self._load_bands(tmp_path) is None
-    assert update_self.as_expendable(["npm", "ci"]) == ["npm", "ci"]
+    assert update_banding._load_bands(tmp_path) is None
+    assert update_banding.as_expendable(["npm", "ci"]) == ["npm", "ci"]
 
 
 def _write_bands_package(repo_root: Path, body: str) -> Path:
@@ -3564,11 +3602,11 @@ def test_a_bands_module_predating_the_tag_helper_degrades_instead_of_crashing(
         "    return False\n",
     )
 
-    bands = update_self._load_bands(tmp_path)
+    bands = update_banding._load_bands(tmp_path)
 
     assert bands is None
-    monkeypatch.setattr(update_self, "_BANDS", bands)
-    assert update_self.as_expendable(["npm", "ci"]) == ["npm", "ci"]
+    monkeypatch.setattr(update_banding, "_BANDS", bands)
+    assert update_banding.as_expendable(["npm", "ci"]) == ["npm", "ci"]
 
 
 def test_a_bands_module_carrying_the_whole_surface_is_used(
@@ -3590,11 +3628,11 @@ def test_a_bands_module_carrying_the_whole_surface_is_used(
         "    return f'tag {adj}; '\n",
     )
 
-    bands = update_self._load_bands(tmp_path)
+    bands = update_banding._load_bands(tmp_path)
 
     assert bands is not None
-    monkeypatch.setattr(update_self, "_BANDS", bands)
-    assert update_self.as_expendable(["npm", "ci"]) == [
+    monkeypatch.setattr(update_banding, "_BANDS", bands)
+    assert update_banding.as_expendable(["npm", "ci"]) == [
         "sh",
         "-c",
         'tag 900; exec "$@"',
@@ -3610,11 +3648,11 @@ def test_every_bands_attribute_the_script_reads_is_declared_required() -> None:
     # cross-version crash again, and it would surface in a half-applied
     # workspace rather than here. (An attribute reached through `getattr` with a
     # default is already guarded and does not match this form.)
-    source = _MODULE_PATH.read_text()
+    source = (_SCRIPTS_DIR / "update_banding.py").read_text()
     read_attributes = set(re.findall(r"(?<![A-Za-z0-9_])_BANDS\.(\w+)", source))
     assert read_attributes, "the attribute-read pattern stopped matching the script"
 
-    undeclared = read_attributes - set(update_self._REQUIRED_BANDS_ATTRIBUTES)
+    undeclared = read_attributes - set(update_banding._REQUIRED_BANDS_ATTRIBUTES)
 
     assert not undeclared, (
         f"{sorted(undeclared)} are read off the pre-merge tree's bands module but are "
@@ -3682,7 +3720,7 @@ def _with_receipt(
     """Point ``uv tool dir`` at ``tool_dir`` and give ``tool`` a receipt there."""
     runner.respond(("uv", "tool", "dir"), _Result(stdout=f"{tool_dir}\n"))
     (tool_dir / tool).mkdir(parents=True, exist_ok=True)
-    (tool_dir / tool / update_self._RECEIPT).write_text(body)
+    (tool_dir / tool / update_layout._RECEIPT).write_text(body)
 
 
 def _install_argv(runner: _RecordingRunner, source_dir: str) -> list[str]:
@@ -3705,7 +3743,7 @@ def test_the_refresh_preserves_a_tools_registered_plugins(
     _with_receipt(
         runner,
         tmp_path / "tools",
-        update_self.MNGR_TOOL_NAME,
+        update_layout.MNGR_TOOL_NAME,
         """
         [tool]
         requirements = [
@@ -3718,12 +3756,12 @@ def test_the_refresh_preserves_a_tools_registered_plugins(
 
     assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
 
-    assert _install_argv(runner, update_self.MNGR_DIR) == [
+    assert _install_argv(runner, update_layout.MNGR_DIR) == [
         "uv",
         "tool",
         "install",
         "-e",
-        update_self.MNGR_DIR,
+        update_layout.MNGR_DIR,
         "--with-editable",
         "/repo/system/vendor/mngr/libs/mngr_claude",
         "--with-editable",
@@ -3745,7 +3783,7 @@ def test_the_refresh_registers_the_merged_trees_new_plugins(
     _with_receipt(
         runner,
         tmp_path / "tools",
-        update_self.MNGR_TOOL_NAME,
+        update_layout.MNGR_TOOL_NAME,
         f"""
         [tool]
         requirements = [
@@ -3754,7 +3792,7 @@ def test_the_refresh_registers_the_merged_trees_new_plugins(
         ]
         """,
     )
-    manifest = apply_repo / update_self.PLUGIN_MANIFEST_PATH
+    manifest = apply_repo / update_layout.PLUGIN_MANIFEST_PATH
     manifest.parent.mkdir(parents=True, exist_ok=True)
     manifest.write_text(
         """
@@ -3774,12 +3812,12 @@ def test_the_refresh_registers_the_merged_trees_new_plugins(
 
     assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
 
-    assert _install_argv(runner, update_self.MNGR_DIR) == [
+    assert _install_argv(runner, update_layout.MNGR_DIR) == [
         "uv",
         "tool",
         "install",
         "-e",
-        update_self.MNGR_DIR,
+        update_layout.MNGR_DIR,
         "--with-editable",
         f"{apply_repo}/system/vendor/mngr/libs/mngr_claude",
         "--with-editable",
@@ -3788,12 +3826,12 @@ def test_the_refresh_registers_the_merged_trees_new_plugins(
         f"{apply_repo}/system/vendor/mngr/libs/mngr_wait",
         "--reinstall",
     ]
-    assert _install_argv(runner, update_self.SYSTEM_INTERFACE_DIR) == [
+    assert _install_argv(runner, update_layout.SYSTEM_INTERFACE_DIR) == [
         "uv",
         "tool",
         "install",
         "-e",
-        update_self.SYSTEM_INTERFACE_DIR,
+        update_layout.SYSTEM_INTERFACE_DIR,
         "--with-editable",
         f"{apply_repo}/system/vendor/mngr/libs/mngr_claude",
         "--with-editable",
@@ -3812,18 +3850,18 @@ def test_the_refresh_repins_the_base_to_the_in_tree_source(
     _with_receipt(
         runner,
         tmp_path / "tools",
-        update_self.MNGR_TOOL_NAME,
+        update_layout.MNGR_TOOL_NAME,
         '[tool]\nrequirements = [{ name = "imbue-mngr" }]\n',
     )
 
     assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
 
-    assert _install_argv(runner, update_self.MNGR_DIR) == [
+    assert _install_argv(runner, update_layout.MNGR_DIR) == [
         "uv",
         "tool",
         "install",
         "-e",
-        update_self.MNGR_DIR,
+        update_layout.MNGR_DIR,
         "--reinstall",
     ]
 
@@ -3838,16 +3876,16 @@ def test_the_refresh_targets_the_installation_actually_on_path(
     bin_dir = tmp_path / "root" / ".local" / "bin"
     bin_dir.mkdir(parents=True)
     tools = tmp_path / "root" / ".local" / "share" / "uv" / "tools"
-    (bin_dir / update_self.MNGR_EXECUTABLE).write_text(
-        f"#!{tools}/{update_self.MNGR_TOOL_NAME}/bin/python3\nimport sys\n"
+    (bin_dir / update_layout.MNGR_EXECUTABLE).write_text(
+        f"#!{tools}/{update_layout.MNGR_TOOL_NAME}/bin/python3\nimport sys\n"
     )
-    (tools / update_self.MNGR_TOOL_NAME).mkdir(parents=True)
-    (tools / update_self.MNGR_TOOL_NAME / update_self._RECEIPT).write_text(
+    (tools / update_layout.MNGR_TOOL_NAME).mkdir(parents=True)
+    (tools / update_layout.MNGR_TOOL_NAME / update_layout._RECEIPT).write_text(
         "[tool]\nrequirements = []\n"
     )
     runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
-    runner.executables[update_self.MNGR_EXECUTABLE] = str(
-        bin_dir / update_self.MNGR_EXECUTABLE
+    runner.executables[update_layout.MNGR_EXECUTABLE] = str(
+        bin_dir / update_layout.MNGR_EXECUTABLE
     )
 
     assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
@@ -3857,12 +3895,12 @@ def test_the_refresh_targets_the_installation_actually_on_path(
         for argv, env in zip(runner.calls, runner.envs)
         if argv[:4] == ["uv", "tool", "install", "-e"] and env is not None
     }
-    assert envs[update_self.MNGR_DIR]["UV_TOOL_DIR"] == str(tools)
-    assert envs[update_self.MNGR_DIR]["UV_TOOL_BIN_DIR"] == str(bin_dir)
+    assert envs[update_layout.MNGR_DIR]["UV_TOOL_DIR"] == str(tools)
+    assert envs[update_layout.MNGR_DIR]["UV_TOOL_BIN_DIR"] == str(bin_dir)
     # Targeting is per executable, not global: the other tool is not on PATH
     # here, so its install is left to uv's own default rather than aimed at the
     # directory that happens to hold mngr.
-    assert "UV_TOOL_DIR" not in envs[update_self.SYSTEM_INTERFACE_DIR]
+    assert "UV_TOOL_DIR" not in envs[update_layout.SYSTEM_INTERFACE_DIR]
 
 
 def test_the_refresh_survives_a_tool_with_no_receipt(apply_repo: Path) -> None:
@@ -3904,39 +3942,39 @@ def test_the_refresh_reports_a_receipt_it_cannot_read(
     _with_receipt(
         runner,
         tmp_path / "tools",
-        update_self.MNGR_TOOL_NAME,
+        update_layout.MNGR_TOOL_NAME,
         "[tool]\nrequirements = [",
     )
 
     assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
 
-    assert _install_argv(runner, update_self.MNGR_DIR) == [
+    assert _install_argv(runner, update_layout.MNGR_DIR) == [
         "uv",
         "tool",
         "install",
         "-e",
-        update_self.MNGR_DIR,
+        update_layout.MNGR_DIR,
         "--reinstall",
     ]
     reported = capsys.readouterr().err
-    assert update_self.MNGR_TOOL_NAME in reported and "drops any plugins" in reported
+    assert update_layout.MNGR_TOOL_NAME in reported and "drops any plugins" in reported
 
 
 def test_tool_location_comes_from_the_console_scripts_shebang(tmp_path: Path) -> None:
     bin_dir = tmp_path / "root" / ".local" / "bin"
     bin_dir.mkdir(parents=True)
     tools = tmp_path / "root" / ".local" / "share" / "uv" / "tools"
-    script = bin_dir / update_self.MNGR_EXECUTABLE
+    script = bin_dir / update_layout.MNGR_EXECUTABLE
     script.write_text(
-        f"#!{tools}/{update_self.MNGR_TOOL_NAME}/bin/python3\n"
+        f"#!{tools}/{update_layout.MNGR_TOOL_NAME}/bin/python3\n"
         "# -*- coding: utf-8 -*-\nimport sys\n"
     )
-    (tools / update_self.MNGR_TOOL_NAME).mkdir(parents=True)
-    (tools / update_self.MNGR_TOOL_NAME / update_self._RECEIPT).write_text(
+    (tools / update_layout.MNGR_TOOL_NAME).mkdir(parents=True)
+    (tools / update_layout.MNGR_TOOL_NAME / update_layout._RECEIPT).write_text(
         "[tool]\nrequirements = []\n"
     )
 
-    location = update_self._tool_location(script, update_self.MNGR_TOOL_NAME)
+    location = update_environment._tool_location(script, update_layout.MNGR_TOOL_NAME)
 
     assert location == (tools, bin_dir)
 
@@ -3956,10 +3994,12 @@ def test_tool_location_declines_what_it_cannot_read(
     # Anything we cannot interpret means we do not know which installation this
     # is, and the caller falls back to letting uv decide -- guessing a directory
     # would be worse than uv's own default.
-    script = tmp_path / update_self.MNGR_EXECUTABLE
+    script = tmp_path / update_layout.MNGR_EXECUTABLE
     script.write_text(contents)
 
-    assert update_self._tool_location(script, update_self.MNGR_TOOL_NAME) is None
+    assert (
+        update_environment._tool_location(script, update_layout.MNGR_TOOL_NAME) is None
+    )
 
 
 def test_tool_location_declines_the_workspace_venvs_console_script(
@@ -3971,16 +4011,18 @@ def test_tool_location_declines_the_workspace_venvs_console_script(
     # apply refuses to run on. No receipt, no deal.
     venv_bin = tmp_path / "workspace" / ".venv" / "bin"
     venv_bin.mkdir(parents=True)
-    script = venv_bin / update_self.TOOL_NAME
+    script = venv_bin / update_layout.TOOL_NAME
     script.write_text(f"#!{venv_bin}/python3\nimport sys\n")
 
-    assert update_self._tool_location(script, update_self.TOOL_NAME) is None
+    assert update_environment._tool_location(script, update_layout.TOOL_NAME) is None
 
 
 def test_tool_location_declines_a_script_it_cannot_open(tmp_path: Path) -> None:
     missing = tmp_path / "does-not-exist"
 
-    assert update_self._tool_location(missing, update_self.MNGR_TOOL_NAME) is None
+    assert (
+        update_environment._tool_location(missing, update_layout.MNGR_TOOL_NAME) is None
+    )
 
 
 # --- snapshots (real directories) --------------------------------------------------
@@ -3989,10 +4031,10 @@ def test_tool_location_declines_a_script_it_cannot_open(tmp_path: Path) -> None:
 def test_snapshots_roundtrip_bundle_envs_and_node_modules(tmp_path: Path) -> None:
     repo_root = _make_apply_repo(tmp_path)
     _write_bundle(repo_root)
-    (repo_root / update_self.FRONTEND_DIR / "node_modules").mkdir(parents=True)
-    (repo_root / update_self.FRONTEND_DIR / "node_modules" / "left-pad.js").write_text(
-        "old"
-    )
+    (repo_root / update_layout.FRONTEND_DIR / "node_modules").mkdir(parents=True)
+    (
+        repo_root / update_layout.FRONTEND_DIR / "node_modules" / "left-pad.js"
+    ).write_text("old")
     (repo_root / ".venv").mkdir()
     (repo_root / ".venv" / "marker.txt").write_text("old-venv")
     plan = _plan(
@@ -4004,21 +4046,21 @@ def test_snapshots_roundtrip_bundle_envs_and_node_modules(tmp_path: Path) -> Non
     )
     runner = _RecordingRunner()  # no tools on PATH -> no tool-env targets
 
-    snapshots = update_self.take_snapshots(plan, repo_root, runner, [])
+    snapshots = update_environment.take_snapshots(plan, repo_root, runner, [])
 
     assert {record.name for record in snapshots} == {"bundle", "node_modules", "venv"}
     # Destroy the originals, as the failed forward steps would.
-    shutil.rmtree(repo_root / update_self.STATIC_DIR)
+    shutil.rmtree(repo_root / update_layout.STATIC_DIR)
     (repo_root / ".venv" / "marker.txt").write_text("wrecked")
-    shutil.rmtree(repo_root / update_self.FRONTEND_DIR / "node_modules")
+    shutil.rmtree(repo_root / update_layout.FRONTEND_DIR / "node_modules")
 
-    failed = update_self.restore_snapshots(snapshots)
+    failed = update_environment.restore_snapshots(snapshots)
 
     assert failed == []
     assert _bundle_exists(repo_root)
     assert (repo_root / ".venv" / "marker.txt").read_text() == "old-venv"
     assert (
-        repo_root / update_self.FRONTEND_DIR / "node_modules" / "left-pad.js"
+        repo_root / update_layout.FRONTEND_DIR / "node_modules" / "left-pad.js"
     ).read_text() == "old"
 
 
@@ -4029,10 +4071,10 @@ def test_existing_snapshot_copies_are_reused_not_overwritten(tmp_path: Path) -> 
     _write_bundle(repo_root)
     plan = _plan(["system/apps/system_interface/frontend/src/App.ts"])
     runner = _RecordingRunner()
-    first = update_self.take_snapshots(plan, repo_root, runner, [])
-    (repo_root / update_self.FRONTEND_BUILD_INDEX).write_text("wrecked mid-apply")
+    first = update_environment.take_snapshots(plan, repo_root, runner, [])
+    (repo_root / update_layout.FRONTEND_BUILD_INDEX).write_text("wrecked mid-apply")
 
-    second = update_self.take_snapshots(plan, repo_root, runner, first)
+    second = update_environment.take_snapshots(plan, repo_root, runner, first)
 
     assert [record.copy for record in second] == [record.copy for record in first]
     copy_index = Path(first[0].copy) / "index.html"
@@ -4043,7 +4085,9 @@ def test_a_missing_snapshot_target_degrades_to_a_note(tmp_path: Path, capsys) ->
     repo_root = _make_apply_repo(tmp_path)  # no bundle was ever built
     plan = _plan(["system/apps/system_interface/frontend/src/App.ts"])
 
-    snapshots = update_self.take_snapshots(plan, repo_root, _RecordingRunner(), [])
+    snapshots = update_environment.take_snapshots(
+        plan, repo_root, _RecordingRunner(), []
+    )
 
     assert snapshots == []
     assert "nothing to copy aside" in capsys.readouterr().err
@@ -4059,13 +4103,17 @@ def test_a_copy_that_cannot_be_taken_degrades_to_a_warning(
     repo_root = _make_apply_repo(tmp_path)
     _write_bundle(repo_root)
     # The copies' destination cannot be created: its parent is a regular file.
-    (repo_root / update_self.STATE_DIR_REL).mkdir(parents=True)
-    (repo_root / update_self.STATE_DIR_REL / update_self.SNAPSHOTS_DIRNAME).write_text(
-        "not a directory"
-    )
+    (repo_root / update_apply_contract.STATE_DIR_REL).mkdir(parents=True)
+    (
+        repo_root
+        / update_apply_contract.STATE_DIR_REL
+        / update_apply_contract.SNAPSHOTS_DIRNAME
+    ).write_text("not a directory")
     plan = _plan(["system/apps/system_interface/frontend/src/App.ts"])
 
-    snapshots = update_self.take_snapshots(plan, repo_root, _RecordingRunner(), [])
+    snapshots = update_environment.take_snapshots(
+        plan, repo_root, _RecordingRunner(), []
+    )
 
     assert snapshots == []
     assert "could not copy 'bundle' aside" in capsys.readouterr().err
@@ -4080,7 +4128,7 @@ def test_the_recovery_rebuild_does_not_run_npm_ci_over_a_restored_node_modules(
     # rollback restored -- and then need a registry to get it back. This
     # workspace has never built a bundle, so recovery takes the rebuild branch
     # (there is no bundle copy to restore) with node_modules already back.
-    node_modules = unbuilt_apply_repo / update_self.FRONTEND_DIR / "node_modules"
+    node_modules = unbuilt_apply_repo / update_layout.FRONTEND_DIR / "node_modules"
     node_modules.mkdir(parents=True)
     (node_modules / "left-pad.js").write_text("restored")
     runner = _apply_runner(_FRONTEND_MANIFEST_DIFF + _FRONTEND_DIFF, unbuilt_apply_repo)
@@ -4139,7 +4187,7 @@ def test_the_spawner_captures_both_streams_of_a_real_child(tmp_path: Path) -> No
     # merge, and which nothing else would ever record.
     output_path = tmp_path / "boot.log"
 
-    spawned = update_self.Spawner().spawn(
+    spawned = update_runtime.Spawner().spawn(
         [
             sys.executable,
             "-c",
@@ -4208,7 +4256,7 @@ def test_the_starter_this_recreates_is_the_one_the_template_ships() -> None:
     # at this constant for the exact block. Nothing else compares the two, so a
     # preamble edited on one side alone would silently make that instruction
     # impossible to follow and hand a recreated ledger a different header.
-    ledger = _WORKSPACE_ROOT / update_self._VERSION_HISTORY_REL
+    ledger = _WORKSPACE_ROOT / update_ledger._VERSION_HISTORY_REL
     # This file ships into every workspace made from the template, and there
     # the same path is that workspace's own ledger: entries are appended to it
     # (and a published template drops it entirely). The starter block is what
@@ -4220,7 +4268,7 @@ def test_the_starter_this_recreates_is_the_one_the_template_ships() -> None:
     shipped = ledger.read_text()
 
     assert _without_ledger_entries(shipped) == _without_ledger_entries(
-        update_self._VERSION_HISTORY_STARTER
+        update_ledger._VERSION_HISTORY_STARTER
     )
 
 
@@ -4242,9 +4290,9 @@ def test_ledger_creates_starter_seeds_origin_and_appends_idempotently(
 ) -> None:
     repo = _make_real_repo(tmp_path)
     merge_sha = _head_sha(repo)
-    runner = update_self.Runner()
+    runner = update_runtime.Runner()
 
-    update_self.write_version_history_entry(
+    update_ledger.write_version_history_entry(
         repo, runner, "minds-v0.4.2", merge_sha, _TODAY
     )
 
@@ -4275,7 +4323,7 @@ def test_ledger_creates_starter_seeds_origin_and_appends_idempotently(
     # A retried landing is a no-op: same note + same sha appends nothing and
     # commits nothing.
     commits_before = _commit_count(repo)
-    update_self.write_version_history_entry(
+    update_ledger.write_version_history_entry(
         repo, runner, "minds-v0.4.2", merge_sha, _TODAY
     )
     assert (repo / "docs/VERSION_HISTORY.md").read_text() == text
@@ -4296,8 +4344,8 @@ def test_the_ledger_commit_skips_hooks_like_the_rollback_commit_does(
     _git_in(repo, "config", "core.hooksPath", str(hooks))
     merge_sha = _head_sha(repo)
 
-    update_self.write_version_history_entry(
-        repo, update_self.Runner(), "minds-v0.4.2", merge_sha, _TODAY
+    update_ledger.write_version_history_entry(
+        repo, update_runtime.Runner(), "minds-v0.4.2", merge_sha, _TODAY
     )
 
     assert _git_in(repo, "log", "-1", "--format=%s") == (
@@ -4342,8 +4390,8 @@ def test_ledger_origin_names_the_release_when_one_is_reachable(tmp_path: Path) -
     )
     merge_sha = _head_sha(repo)
 
-    update_self.write_version_history_entry(
-        repo, update_self.Runner(), "minds-v0.2.0", merge_sha, _TODAY
+    update_ledger.write_version_history_entry(
+        repo, update_runtime.Runner(), "minds-v0.2.0", merge_sha, _TODAY
     )
 
     text = (repo / "docs/VERSION_HISTORY.md").read_text()
@@ -4455,7 +4503,7 @@ def _recover(
     # The rollback commit's "is anything staged" question: the restore has
     # staged the reverted paths by then.
     runner.respond(("git", "diff", "--cached", "--quiet"), _Result(returncode=1))
-    return update_self.recover(
+    return update_apply.recover(
         repo_root,
         if_stale=if_stale,
         grace_seconds=grace_seconds,
@@ -4539,7 +4587,7 @@ def test_recover_claims_the_marker_with_its_own_pid_before_touching_the_tree(
 
     def observe(argv: list[str]) -> None:
         if argv[:2] == ["git", "checkout"] and not pid_at_restore:
-            marker = update_self.read_marker(apply_repo)
+            marker = update_apply_contract.read_marker(apply_repo)
             assert marker is not None
             pid_at_restore.append(marker.pid)
 
@@ -4555,7 +4603,7 @@ def test_recover_restores_snapshots_and_restarts_when_the_apply_had(
 ) -> None:
     _plant_snapshotted_marker(apply_repo, live_service_restarted=True)
     # Wreck the bundle, as a kill mid-build leaves it.
-    shutil.rmtree(apply_repo / update_self.STATIC_DIR)
+    shutil.rmtree(apply_repo / update_layout.STATIC_DIR)
     runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
 
     code = _recover(runner, _FakeHttp(_all_healthy), apply_repo)
@@ -4571,7 +4619,7 @@ def test_recover_no_restart_restores_disk_state_only(apply_repo: Path) -> None:
     _plant_snapshotted_marker(
         apply_repo, live_service_restarted=True, provisioner_ran=True
     )
-    shutil.rmtree(apply_repo / update_self.STATIC_DIR)
+    shutil.rmtree(apply_repo / update_layout.STATIC_DIR)
     runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
     http = _FakeHttp(_all_healthy)
 
@@ -4599,7 +4647,9 @@ def test_recover_no_restart_keeps_the_copies_it_could_not_put_back(
     failed for anything but a missing copy leaves the copy sitting right there.
     """
     snapshots_root = (
-        apply_repo / update_self.STATE_DIR_REL / update_self.SNAPSHOTS_DIRNAME
+        apply_repo
+        / update_apply_contract.STATE_DIR_REL
+        / update_apply_contract.SNAPSHOTS_DIRNAME
     )
     copy = snapshots_root / "bundle"
     copy.mkdir(parents=True)
@@ -4609,7 +4659,7 @@ def test_recover_no_restart_keeps_the_copies_it_could_not_put_back(
     _plant_marker(
         apply_repo,
         snapshots=[
-            update_self.SnapshotRecord(
+            update_apply_contract.SnapshotRecord(
                 name="bundle",
                 source=str(apply_repo / "blocked" / "static"),
                 copy=str(copy),
@@ -4653,7 +4703,7 @@ def test_recover_reaches_the_same_end_state_as_the_in_process_rollback(
 
     # In-process: a frontend apply whose build fails and rolls back.
     repo_a = tmp_path / "a" / "repo"
-    (repo_a / update_self.FRONTEND_DIR).mkdir(parents=True)
+    (repo_a / update_layout.FRONTEND_DIR).mkdir(parents=True)
     _write_bundle(repo_a)
     runner_a = _apply_runner(_FRONTEND_DIFF, repo_a)
     runner_a.respond(("npm", "run", "build"), _Result(returncode=1, stderr="boom"))
@@ -4662,17 +4712,17 @@ def test_recover_reaches_the_same_end_state_as_the_in_process_rollback(
     # Interrupted: the same apply killed right after its build destroyed the
     # bundle, recovered by `recover` from the marker instead.
     repo_b = tmp_path / "b" / "repo"
-    (repo_b / update_self.FRONTEND_DIR).mkdir(parents=True)
+    (repo_b / update_layout.FRONTEND_DIR).mkdir(parents=True)
     _write_bundle(repo_b)
-    _plant_snapshotted_marker(repo_b, phase=update_self.PHASE_SNAPSHOTTED)
-    shutil.rmtree(repo_b / update_self.STATIC_DIR)
+    _plant_snapshotted_marker(repo_b, phase=update_apply_contract.PHASE_SNAPSHOTTED)
+    shutil.rmtree(repo_b / update_layout.STATIC_DIR)
     runner_b = _apply_runner(_FRONTEND_DIFF, repo_b)
     assert _recover(runner_b, _FakeHttp(_all_healthy), repo_b) == 0
 
     # Same restore motions, same served bundle back on disk.
     assert _restore_relevant(runner_a.calls) == _restore_relevant(runner_b.calls)
-    index_a = (repo_a / update_self.FRONTEND_BUILD_INDEX).read_text()
-    index_b = (repo_b / update_self.FRONTEND_BUILD_INDEX).read_text()
+    index_a = (repo_a / update_layout.FRONTEND_BUILD_INDEX).read_text()
+    index_b = (repo_b / update_layout.FRONTEND_BUILD_INDEX).read_text()
     assert index_a == index_b
 
 
@@ -4715,7 +4765,7 @@ def test_recover_clears_the_emergency_record_when_it_confirms_health(
     runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
 
     assert _recover(runner, _FakeHttp(_all_healthy), apply_repo) == 0
-    assert not update_self.emergency_path(apply_repo).exists()
+    assert not update_apply_contract.emergency_path(apply_repo).exists()
 
 
 @pytest.mark.parametrize(
@@ -4743,7 +4793,7 @@ def test_recover_without_a_confirmed_frontend_leaves_the_record_standing(
     http = _FakeHttp(_all_healthy, page_responder=_placeholder_page)
 
     assert _recover(runner, http, apply_repo) == 0
-    assert update_self.emergency_path(apply_repo).exists()
+    assert update_apply_contract.emergency_path(apply_repo).exists()
     closing_line = capsys.readouterr().err.strip().splitlines()[-1]
     assert "confirmed healthy" not in closing_line
     assert "cannot confirm it" in closing_line
@@ -4778,7 +4828,7 @@ def test_recover_that_finds_a_working_ui_over_a_broken_baseline_clears_the_recor
 
     assert _recover(runner, _FakeHttp(_all_healthy), apply_repo) == 0
 
-    assert not update_self.emergency_path(apply_repo).exists()
+    assert not update_apply_contract.emergency_path(apply_repo).exists()
     assert "confirmed healthy" in capsys.readouterr().err.strip().splitlines()[-1]
 
 
@@ -4822,7 +4872,7 @@ def test_a_hung_provisioner_does_not_wedge_recovery(
         for argv, timeout in zip(runner.calls, runner.timeouts)
         if tuple(argv[: len(_PROVISION)]) == _PROVISION
     ]
-    assert provisioner_timeouts == [update_self._PROVISIONER_TIMEOUT_SECONDS]
+    assert provisioner_timeouts == [update_environment._PROVISIONER_TIMEOUT_SECONDS]
 
 
 # --- recover: an apply killed inside `git merge` (real git) ---------------------
@@ -4874,12 +4924,12 @@ def _repo_left_mid_merge(tmp_path: Path, *, is_conflicting: bool) -> tuple[Path,
 
 def _recover_boot_path(repo: Path) -> int:
     """``recover --no-restart``: the boot path, which touches only disk state."""
-    return update_self.recover(
+    return update_apply.recover(
         repo,
         if_stale=False,
         grace_seconds=600.0,
         no_restart=True,
-        runner=update_self.Runner(),
+        runner=update_runtime.Runner(),
         http=_FakeHttp(_all_healthy),
         sleeper=lambda _s: None,
         base_url=_LIVE_BASE,
@@ -4899,15 +4949,15 @@ def test_recover_aborts_a_merge_killed_before_it_committed(
     without the abort recovery never makes progress.
     """
     repo, rollback_to = _repo_left_mid_merge(tmp_path, is_conflicting=is_conflicting)
-    update_self.write_marker(
-        update_self.ApplyMarker(
+    update_apply_contract.write_marker(
+        update_apply_contract.ApplyMarker(
             dri_agent="the-lead",
             rollback_to=rollback_to,
             merge_ref="worker",
             target_ref=None,
             ff_only=False,
             worker_bundle=None,
-            phase=update_self.PHASE_STARTED,
+            phase=update_apply_contract.PHASE_STARTED,
             pid=12345,
             started_at=1.0,
             updated_at=1.0,
@@ -4946,15 +4996,15 @@ def test_recover_with_nothing_to_restore_commits_nothing_over_an_untracked_file(
     (repo / "stray-notes.txt").write_text("untracked\n")
     rollback_to = _head_sha(repo)
     commits_before = _commit_count(repo)
-    update_self.write_marker(
-        update_self.ApplyMarker(
+    update_apply_contract.write_marker(
+        update_apply_contract.ApplyMarker(
             dri_agent="the-lead",
             rollback_to=rollback_to,
             merge_ref="worker",
             target_ref=None,
             ff_only=True,
             worker_bundle=None,
-            phase=update_self.PHASE_STARTED,
+            phase=update_apply_contract.PHASE_STARTED,
             pid=12345,
             started_at=1.0,
             updated_at=1.0,
@@ -5038,7 +5088,7 @@ def test_run_status_start_and_verdict_round_trip(tmp_path, monkeypatch) -> None:
         )
         == 0
     )
-    status = update_self.read_run_status(tmp_path)
+    status = update_apply_contract.read_run_status(tmp_path)
     assert status is not None
     assert status.chat_agent_name == "update-abc123"
     assert status.is_unattended
@@ -5061,7 +5111,7 @@ def test_run_status_start_and_verdict_round_trip(tmp_path, monkeypatch) -> None:
         )
         == 0
     )
-    status = update_self.read_run_status(tmp_path)
+    status = update_apply_contract.read_run_status(tmp_path)
     assert status is not None
     assert status.verdict == "UPDATED_WITH_REBUILD_ITEMS"
     assert status.resulting_ref == "minds-v0.4.0"
@@ -5097,7 +5147,7 @@ def test_run_status_start_supersedes_the_previous_runs_verdict(
         )
         == 0
     )
-    status = update_self.read_run_status(tmp_path)
+    status = update_apply_contract.read_run_status(tmp_path)
     assert status is not None
     assert status.chat_agent_name == "update-new"
     assert status.verdict is None
@@ -5127,7 +5177,7 @@ def test_run_status_verdict_is_recorded_under_the_agent_recording_it(
         == 0
     )
 
-    status = update_self.read_run_status(tmp_path)
+    status = update_apply_contract.read_run_status(tmp_path)
     assert status is not None
     assert status.chat_agent_name == "update-real"
     assert status.verdict == "UPDATED"
@@ -5155,7 +5205,7 @@ def test_run_status_verdict_without_a_start_still_records(
         )
         == 0
     )
-    status = update_self.read_run_status(tmp_path)
+    status = update_apply_contract.read_run_status(tmp_path)
     assert status is not None
     assert status.chat_agent_name == "update-late"
     assert status.verdict == "NEEDS_RECREATION"
@@ -5166,16 +5216,16 @@ def test_run_status_start_requires_an_agent_name(tmp_path, monkeypatch, capsys) 
     monkeypatch.delenv("MNGR_AGENT_NAME", raising=False)
     assert update_self.main(["run-status", "start", "--repo-root", str(tmp_path)]) == 1
     assert "no chat agent name" in capsys.readouterr().err
-    assert update_self.read_run_status(tmp_path) is None
+    assert update_apply_contract.read_run_status(tmp_path) is None
 
 
 def test_read_run_status_ignores_a_corrupt_file(tmp_path, capsys) -> None:
     # Same lenience as the marker: status reporting must never wedge the pass
     # that would overwrite the bad file.
-    path = update_self.run_status_path(tmp_path)
+    path = update_apply_contract.run_status_path(tmp_path)
     path.parent.mkdir(parents=True)
     path.write_text("not json")
-    assert update_self.read_run_status(tmp_path) is None
+    assert update_apply_contract.read_run_status(tmp_path) is None
     assert "not a valid run status" in capsys.readouterr().err
 
 
@@ -5196,14 +5246,14 @@ def test_run_status_hold_and_resume_round_trip(tmp_path, monkeypatch) -> None:
         )
         == 0
     )
-    held = update_self.read_run_status(tmp_path)
+    held = update_apply_contract.read_run_status(tmp_path)
     assert held is not None
     assert held.hold_reason == "CUSTOMIZATION"
     assert held.hold_detail == "Your dashboard widget has no place in the new layout."
     assert held.verdict is None
 
     assert update_self.main(["run-status", "resume", "--repo-root", str(tmp_path)]) == 0
-    resumed = update_self.read_run_status(tmp_path)
+    resumed = update_apply_contract.read_run_status(tmp_path)
     assert resumed is not None
     assert resumed.hold_reason is None
     assert resumed.hold_detail == ""
@@ -5224,7 +5274,7 @@ def test_run_status_delegate_names_the_worker_until_the_verdict(
         )
         == 0
     )
-    delegated = update_self.read_run_status(tmp_path)
+    delegated = update_apply_contract.read_run_status(tmp_path)
     assert delegated is not None
     assert delegated.worker_agent_name == "update-self"
     assert delegated.chat_agent_name == "update-lead"
@@ -5236,7 +5286,7 @@ def test_run_status_delegate_names_the_worker_until_the_verdict(
         )
         == 0
     )
-    ended = update_self.read_run_status(tmp_path)
+    ended = update_apply_contract.read_run_status(tmp_path)
     assert ended is not None
     assert ended.worker_agent_name is None
 
@@ -5253,7 +5303,7 @@ def test_run_status_start_clears_the_previous_runs_worker(
         == 0
     )
     assert update_self.main(["run-status", "start", "--repo-root", str(tmp_path)]) == 0
-    status = update_self.read_run_status(tmp_path)
+    status = update_apply_contract.read_run_status(tmp_path)
     assert status is not None
     assert status.worker_agent_name is None
 
@@ -5275,7 +5325,7 @@ def test_run_status_verdict_clears_a_hold(tmp_path, monkeypatch) -> None:
         )
         == 0
     )
-    status = update_self.read_run_status(tmp_path)
+    status = update_apply_contract.read_run_status(tmp_path)
     assert status is not None
     assert status.verdict == "REFUSED"
     assert status.hold_reason is None
@@ -5297,21 +5347,21 @@ def test_the_marker_mirrors_the_apply_into_the_run_record(
     monkeypatch.setenv("MNGR_AGENT_NAME", "update-lead")
     assert update_self.main(["run-status", "start", "--repo-root", str(tmp_path)]) == 0
 
-    _plant_marker(tmp_path, phase=update_self.PHASE_MERGED, updated_at=2000.0)
-    status = update_self.read_run_status(tmp_path)
+    _plant_marker(tmp_path, phase=update_apply_contract.PHASE_MERGED, updated_at=2000.0)
+    status = update_apply_contract.read_run_status(tmp_path)
     assert status is not None
-    assert status.apply_phase == update_self.PHASE_MERGED
+    assert status.apply_phase == update_apply_contract.PHASE_MERGED
     assert status.apply_updated_at == 2000.0
     assert status.chat_agent_name == "update-lead"
 
-    _plant_marker(tmp_path, phase=update_self.PHASE_BUILT, updated_at=2100.0)
-    status = update_self.read_run_status(tmp_path)
+    _plant_marker(tmp_path, phase=update_apply_contract.PHASE_BUILT, updated_at=2100.0)
+    status = update_apply_contract.read_run_status(tmp_path)
     assert status is not None
-    assert status.apply_phase == update_self.PHASE_BUILT
+    assert status.apply_phase == update_apply_contract.PHASE_BUILT
     assert status.apply_updated_at == 2100.0
 
-    update_self.clear_marker(tmp_path)
-    status = update_self.read_run_status(tmp_path)
+    update_apply_contract.clear_marker(tmp_path)
+    status = update_apply_contract.read_run_status(tmp_path)
     assert status is not None
     assert status.apply_phase is None
     assert status.apply_updated_at is None
@@ -5321,9 +5371,9 @@ def test_the_marker_does_not_invent_a_run_record(tmp_path) -> None:
     # An apply run by hand outside a pass has no run to report to; a record
     # conjured here would name no chat and lock the app's row for good.
     _plant_marker(tmp_path)
-    assert update_self.read_run_status(tmp_path) is None
-    update_self.clear_marker(tmp_path)
-    assert update_self.read_run_status(tmp_path) is None
+    assert update_apply_contract.read_run_status(tmp_path) is None
+    update_apply_contract.clear_marker(tmp_path)
+    assert update_apply_contract.read_run_status(tmp_path) is None
 
 
 def test_a_failed_preflight_rejects_the_merge_before_the_bundle_is_touched(
@@ -5341,7 +5391,7 @@ def test_a_failed_preflight_rejects_the_merge_before_the_bundle_is_touched(
     code = _apply(runner, _FakeHttp(only_live_healthy), spawner, apply_repo)
 
     assert code == 2
-    assert spawner.spawns == [[update_self.TOOL_NAME]]
+    assert spawner.spawns == [[update_layout.TOOL_NAME]]
     assert not runner.ran("npm", "run", "build")
     assert not runner.ran(*_RESTART)
     assert _bundle_exists(apply_repo)

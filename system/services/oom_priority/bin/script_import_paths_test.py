@@ -18,7 +18,7 @@ _SCANNED_DIRS = (
     _BIN_DIR,
     _REPO_ROOT / "system" / "scripts",
 )
-# The update-self apply (``.agents/skills/update-self/scripts/update_self.py``)
+# The update-self apply (``.agents/skills/update-self/scripts/update_banding.py``)
 # also bands itself under a bare python3, but its insert is computed from the
 # repo root it is applied to (it is staged and run against other trees), so
 # the literal pattern below cannot see it; it guards its own target with an
