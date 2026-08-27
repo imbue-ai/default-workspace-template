@@ -4,7 +4,6 @@ import os
 import queue
 import subprocess
 import time
-import zipfile
 from collections.abc import Mapping
 from http.cookies import SimpleCookie
 from pathlib import Path
@@ -29,7 +28,7 @@ from imbue.imbue_common.sentry.testing import TEST_S3_BUCKET
 from imbue.imbue_common.sentry.testing import capturing_sentry_client
 from imbue.imbue_common.sentry.testing import recording_s3_bucket
 from imbue.imbue_common.sentry.testing import registered_attachments_uploader
-from imbue.minds.config.data_types import WorkspacePaths
+from imbue.minds.config.data_types import InstallationPaths
 from imbue.minds.desktop_client.agent_creator import AgentCreator
 from imbue.minds.desktop_client.app import _build_requests_payload
 from imbue.minds.desktop_client.app import _build_workspace_list
@@ -66,16 +65,14 @@ from imbue.minds.desktop_client.state import get_state
 from imbue.minds.desktop_client.sync_scheduler import WorkspaceSyncScheduler
 from imbue.minds.desktop_client.system_interface_health import AgentHealth
 from imbue.minds.desktop_client.system_interface_health import SystemInterfaceHealthTracker
+from imbue.minds.desktop_client.testing import blocking_release_wait_body
 from imbue.minds.desktop_client.testing import build_resolver_with_system_services
 from imbue.minds.desktop_client.testing import drain_ui_channel_frames
+from imbue.minds.desktop_client.testing import exec_json_envelope
+from imbue.minds.desktop_client.testing import install_stub_mngr_on_path
 from imbue.minds.desktop_client.testing import record_provider_discovery_error
 from imbue.minds.desktop_client.testing import tamper_session_cookie_signed_content
 from imbue.minds.desktop_client.testing import write_stub_mngr
-from imbue.minds.desktop_client.workspace_diagnostics import CONSOLE_ATTACHMENT_KEY
-from imbue.minds.desktop_client.workspace_diagnostics import TRANSCRIPT_ATTACHMENT_KEY
-from imbue.minds.desktop_client.workspace_diagnostics import WORKSPACE_LOGS_ATTACHMENT_KEY
-from imbue.minds.desktop_client.workspace_diagnostics import WORKSPACE_ZIP_ATTACHMENT_KEY
-from imbue.minds.desktop_client.workspace_diagnostics import build_staged_diagnostics_filename
 from imbue.minds.desktop_client.workspace_record_store import ReplicaRecord
 from imbue.minds.primitives import CookieSigningKey
 from imbue.minds.primitives import OneTimeCode
@@ -611,7 +608,7 @@ def test_destroying_marker_includes_ids_with_live_destroy(tmp_path: Path) -> Non
     failed destroy id whose marker dir exists on disk.
     """
     agent_id = AgentId()
-    paths = WorkspacePaths(data_dir=tmp_path)
+    paths = InstallationPaths(data_dir=tmp_path)
     destroying_dir = tmp_path / "destroying" / str(agent_id)
     destroying_dir.mkdir(parents=True)
     # The current process pid is alive, so the helper sees the destroy as
@@ -628,12 +625,12 @@ def test_destroying_marker_includes_ids_with_live_destroy(tmp_path: Path) -> Non
 
 
 def test_destroying_marker_returns_empty_when_paths_is_none() -> None:
-    """The test-server helper builds a minimal app without WorkspacePaths;
+    """The test-server helper builds a minimal app without InstallationPaths;
     the helper must tolerate that without raising."""
     assert _finalize_and_mark_destroying(None, StaticBackendResolver(url_by_agent_and_service={}), None, None) == {}
 
 
-def _write_dead_destroy_dir(paths: WorkspacePaths, agent_id: AgentId, host_id: HostId) -> None:
+def _write_dead_destroy_dir(paths: InstallationPaths, agent_id: AgentId, host_id: HostId) -> None:
     """Create a destroying/<agent_id>/ dir whose wrapper pid is already dead.
 
     Spawns and reaps a trivial child so its pid is reliably not alive, then
@@ -658,7 +655,7 @@ def test_finalize_and_mark_destroying_finalizes_when_host_gone(tmp_path: Path) -
     intact) so the machine's backups stay reachable, but it no longer
     reads as the machine's owner.
     """
-    paths = WorkspacePaths(data_dir=tmp_path)
+    paths = InstallationPaths(data_dir=tmp_path)
     agent_id = AgentId.generate()
     _write_dead_destroy_dir(paths, agent_id, HostId.generate())
     cli = make_fake_imbue_cloud_cli()
@@ -694,7 +691,7 @@ def test_finalize_and_mark_destroying_keeps_failed_when_host_still_up(tmp_path: 
     The machine must remain visible and owned so the user can retry, instead
     of vanishing while its host keeps running (and billing).
     """
-    paths = WorkspacePaths(data_dir=tmp_path)
+    paths = InstallationPaths(data_dir=tmp_path)
     agent_id = AgentId.generate()
     _write_dead_destroy_dir(paths, agent_id, HostId.generate())
     cli = make_fake_imbue_cloud_cli()
@@ -825,11 +822,10 @@ def _create_test_client_with_stores(
     # When set, wired into the app state so routes that reach the backup
     # reaper through ``get_state().sync_scheduler.backup_reaper`` work.
     sync_scheduler: WorkspaceSyncScheduler | None = None,
-    # When set (with mngr_binary/mngr_host_dir), workspace-scoped bug reports
-    # actually run the diagnostics collection exec instead of short-circuiting.
+    # When set, workspace-scoped bug reports actually run the diagnostics
+    # collection subprocess -- resolving ``mngr`` via PATH, so tests stub it
+    # there -- instead of short-circuiting.
     root_concurrency_group: ConcurrencyGroup | None = None,
-    mngr_binary: str = "mngr",
-    mngr_host_dir: Path | None = None,
 ) -> tuple[FlaskClient, FileAuthStore]:
     """Create a desktop client with session store and config for testing new routes.
 
@@ -853,13 +849,11 @@ def _create_test_client_with_stores(
         session_store=session_store,
         minds_config=minds_config,
         request_inbox=request_inbox,
-        paths=WorkspacePaths(data_dir=tmp_path),
+        paths=InstallationPaths(data_dir=tmp_path),
         mngr_caller=mngr_caller,
         imbue_cloud_cli=imbue_cloud_cli,
         sync_scheduler=sync_scheduler,
         root_concurrency_group=root_concurrency_group,
-        mngr_binary=mngr_binary,
-        mngr_host_dir=mngr_host_dir,
     )
     client = app.test_client()
     return client, auth_store
@@ -1061,7 +1055,7 @@ def test_backup_password_change_rejects_mismatched_confirmation(tmp_path: Path) 
     response = client.post("/_chrome/backup-password", json={"new_password": "one", "new_password_confirm": "two"})
     assert response.status_code == 400
     assert "match" in response.get_json()["error"]
-    assert not bundle_mirror_path(WorkspacePaths(data_dir=tmp_path), "user-1").exists()
+    assert not bundle_mirror_path(InstallationPaths(data_dir=tmp_path), "user-1").exists()
 
 
 def test_backup_password_change_requires_a_signed_in_account(tmp_path: Path) -> None:
@@ -1077,7 +1071,7 @@ def test_backup_password_change_wraps_the_dek_and_pushes_the_bundle(tmp_path: Pa
     cli.add_account(user_id="user-1", email="a@b.com")
     client, auth_store = _create_test_client_with_stores(tmp_path, cli=cli)
     _authenticate_client(client, auth_store)
-    paths = WorkspacePaths(data_dir=tmp_path)
+    paths = InstallationPaths(data_dir=tmp_path)
 
     response = client.post(
         "/_chrome/backup-password",
@@ -1099,7 +1093,7 @@ def test_backup_password_change_may_return_to_the_empty_password(tmp_path: Path)
     cli.add_account(user_id="user-1", email="a@b.com")
     client, auth_store = _create_test_client_with_stores(tmp_path, cli=cli)
     _authenticate_client(client, auth_store)
-    paths = WorkspacePaths(data_dir=tmp_path)
+    paths = InstallationPaths(data_dir=tmp_path)
     assert (
         client.post(
             "/_chrome/backup-password", json={"new_password": "temp", "new_password_confirm": "temp"}
@@ -1123,7 +1117,7 @@ def test_backup_password_change_refuses_accounts_locked_on_this_device(tmp_path:
     cli.add_account(user_id="user-1", email="a@b.com")
     # Another device set a password and synced a secrets-carrying record; this
     # device has no DEK for the account (it is locked here).
-    other_device = WorkspacePaths(data_dir=tmp_path / "other-device")
+    other_device = InstallationPaths(data_dir=tmp_path / "other-device")
     bundle = set_master_password_for_account(other_device, "user-1", SecretStr("hunter2"))
     assert bundle is not None
     cli.sync_bundle_push("a@b.com", bundle)
@@ -1136,7 +1130,7 @@ def test_backup_password_change_refuses_accounts_locked_on_this_device(tmp_path:
         device_label="other-device",
         encrypted_secrets="b3BhcXVl",
     )
-    cli.sync_records_by_email["a@b.com"] = {"host-remote-1": remote.to_wire(1)}
+    cli.sync_records_by_email["a@b.com"] = {remote.agent_id: remote.to_wire(1)}
 
     client, auth_store = _create_test_client_with_stores(tmp_path, cli=cli)
     _authenticate_client(client, auth_store)
@@ -1157,7 +1151,7 @@ def test_backup_password_change_refuses_accounts_locked_on_this_device(tmp_path:
     # The server bundle (wrapping the real DEK) is untouched and no divergent
     # local DEK was minted.
     assert cli.sync_bundle_by_email["a@b.com"] == bundle_before
-    assert not is_account_unlocked(WorkspacePaths(data_dir=tmp_path), "user-1")
+    assert not is_account_unlocked(InstallationPaths(data_dir=tmp_path), "user-1")
 
 
 # -- get-help / report-a-bug tests --
@@ -1234,7 +1228,7 @@ def test_help_report_accepts_a_description(tmp_path: Path) -> None:
 
 def _write_console_tail(tmp_path: Path, contents: str) -> Path:
     """Write the rolling console tail the Electron shell keeps, as the route expects to find it."""
-    log_dir = WorkspacePaths(data_dir=tmp_path).log_dir
+    log_dir = InstallationPaths(data_dir=tmp_path).log_dir
     log_dir.mkdir(parents=True, exist_ok=True)
     tail_path = log_dir / ELECTRON_CONSOLE_TAIL_FILENAME
     tail_path.write_text(contents)
@@ -1258,16 +1252,11 @@ def test_help_report_outside_a_workspace_still_attaches_the_captured_console(tmp
         with capturing_sentry_client() as captured_events:
             response = client.post("/help/report", json={"description": "the app froze", "include_logs": True})
     assert response.status_code == 200
-    staged_consoles = list(WorkspacePaths(data_dir=tmp_path).log_dir.glob("bug-report-*-console.log"))
-    assert len(staged_consoles) == 1, staged_consoles
-    assert staged_consoles[0].read_text(encoding="utf-8") == tail_text
     report = _submitted_report(captured_events[0])
-    # No console omission -- it attached. The workspace content was never on
-    # offer outside a workspace, so its checkboxes read as not requested.
-    assert report["attachment_omissions"] == {
-        WORKSPACE_LOGS_ATTACHMENT_KEY: "not_requested",
-        TRANSCRIPT_ATTACHMENT_KEY: "not_requested",
-    }
+    # No note: the request flags already say the workspace content was never
+    # on offer outside a workspace, and the console attached.
+    assert report["collection_note"] is None
+    assert report["logs_requested"] is True
     # Staged is not attached: the console must ARRIVE -- an event extra naming its
     # uploaded copy, and the tail's bytes at the uploaded key. Without this, losing
     # the one app.py line that maps the staged file into report_file_paths would
@@ -1276,57 +1265,22 @@ def test_help_report_outside_a_workspace_still_attaches_the_captured_console(tmp
     assert f"{EXTRAS_UPLOADED_FILES_KEY}_bug_report_console" in extra, sorted(extra)
     # The S3 key is minted from the staged file's own name; the logical
     # bug_report_console name lives only in the event extra asserted above.
-    console_uploads = [(key, body) for key, body in uploads if "-console.log" in key]
+    console_uploads = [(key, body) for key, body in uploads if key.startswith("console.log")]
     assert len(console_uploads) == 1, [key for key, _ in uploads]
     assert gzip.decompress(console_uploads[0][1]).decode("utf-8") == tail_text
     # The rolling file is app-lifetime history; a report copies rather than consumes it.
     assert tail_path.exists()
 
 
-def test_help_report_leaves_another_reports_staged_file_alone(tmp_path: Path) -> None:
-    """A staged file belonging to another report is neither attached nor deleted.
-
-    Staged names carry their own collection's slug, so a later report cannot
-    clobber them, and attachments are one-shot by exact path, so nothing can ride
-    along on an event that did not name it. Deleting them at submit time would
-    instead race the background upload that is still reading them.
-    """
-    client, _ = _create_test_client_with_stores(tmp_path)
-    tail_path = _write_console_tail(tmp_path, "2026-01-01T00:00:00Z [console:WARNING] hmm (app.js:2)\n")
-    log_dir = WorkspacePaths(data_dir=tmp_path).log_dir
-    other_report_file = log_dir / build_staged_diagnostics_filename(CONSOLE_ATTACHMENT_KEY, "0" * 32)
-    other_report_file.write_text("collected for a report that is still uploading\n")
-
-    with recording_s3_bucket(), registered_attachments_uploader(ErrorAttachmentsS3Uploader()):
-        with capturing_sentry_client() as captured_events:
-            response = client.post(
-                "/help/report",
-                json={"description": "second", "include_logs": False, "include_transcript": False},
-            )
-
-    assert response.status_code == 200
-    assert other_report_file.exists()
-    assert tail_path.exists()
-    extra: Mapping[str, Any] = captured_events[0]["extra"]
-    assert f"{EXTRAS_UPLOADED_FILES_KEY}_bug_report_console" not in extra
-
-
 def test_help_report_never_attaches_a_file_for_an_unticked_box(tmp_path: Path) -> None:
-    """An unticked box contributes no file, even with a staged one sitting there.
+    """An unticked box contributes no file to the event.
 
-    The prefetch that runs when the form opens collects for the boxes ticked at
-    that moment, so a user who unticks one before pressing Send leaves a staged
-    file behind that must not ride along. Attachments are named one by one, by
-    exact path, so a file this report did not ask for cannot reach the event --
-    and the transcript's reason still reads ``not_requested`` rather than any
-    failure of the collection that did run.
+    Attachments are named one by one, by exact path, so a file this report did
+    not ask for cannot reach the event -- and the recorded request flags say
+    the transcript was never asked for, whatever the collection that did run
+    ends up doing.
     """
     client, _ = _create_test_client_with_stores(tmp_path)
-    logs_dir = WorkspacePaths(data_dir=tmp_path).log_dir
-    logs_dir.mkdir(parents=True, exist_ok=True)
-    opted_out_zip = logs_dir / build_staged_diagnostics_filename(WORKSPACE_ZIP_ATTACHMENT_KEY, "1" * 32)
-    with zipfile.ZipFile(opted_out_zip, "w") as archive:
-        archive.writestr("chats/agent-earlier-claude.jsonl", "chat the user later opted out of\n")
 
     with capturing_sentry_client() as captured_events:
         response = client.post(
@@ -1340,24 +1294,20 @@ def test_help_report_never_attaches_a_file_for_an_unticked_box(tmp_path: Path) -
         )
 
     assert response.status_code == 200
-    assert opted_out_zip.exists()
     extra: Mapping[str, Any] = captured_events[0]["extra"]
     assert f"{EXTRAS_UPLOADED_FILES_KEY}_bug_report_workspace" not in extra
     report = TypeAdapter(dict[str, Any]).validate_python(extra["bug_report"])
-    assert report["attachment_omissions"][TRANSCRIPT_ATTACHMENT_KEY] == "not_requested"
+    assert report["transcript_requested"] is False
 
 
-def test_help_report_reports_an_unticked_box_as_not_requested_even_when_collection_cannot_run(
+def test_help_report_resolves_immediately_when_collection_cannot_run(
     tmp_path: Path,
 ) -> None:
-    """An unticked checkbox reads ``not_requested`` on every path, including collection failures.
+    """A report that cannot collect resolves immediately, with the note saying why.
 
     The minimal test app has no root concurrency group, so a workspace-scoped report can neither run
-    the collection exec nor hand it to a background strand. That degrades to a report answered
-    immediately with every attachment already final -- nothing may be left pending when nothing will
-    ever finish it. The failure reason belongs only to the attachment the user asked for; the unticked
-    one was never going to be collected, and stamping it ``exec_failed`` would misdirect whoever reads
-    the reason codes off the event.
+    the collection exec nor hand it to a background strand. That resolves to a report answered
+    immediately: the note says collection could not run, and the request flags record what was asked.
     """
     client, _ = _create_test_client_with_stores(tmp_path)
     with capturing_sentry_client() as captured_events:
@@ -1376,60 +1326,54 @@ def test_help_report_reports_an_unticked_box_as_not_requested_even_when_collecti
     # mapping rather than assumed to be one (same pattern as report_collector_test).
     extra: Mapping[str, Any] = captured_events[0]["extra"]
     report = TypeAdapter(dict[str, Any]).validate_python(extra["bug_report"])
-    assert report["attachment_omissions"] == {
-        WORKSPACE_LOGS_ATTACHMENT_KEY: "not_requested",
-        TRANSCRIPT_ATTACHMENT_KEY: "exec_failed",
-        # The console rides the logs checkbox, so unticking logs leaves it unrequested too.
-        CONSOLE_ATTACHMENT_KEY: "not_requested",
-    }
-    assert report["attachments_pending"] == []
+    assert report["collection_note"] == "workspace collection could not run in this app"
     assert report["logs_requested"] is False
     assert report["transcript_requested"] is True
 
 
-def test_help_report_hands_the_captured_console_tail_to_the_collection(
-    tmp_path: Path, root_concurrency_group: ConcurrencyGroup
+def test_help_report_stages_the_console_even_when_the_collection_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, root_concurrency_group: ConcurrencyGroup
 ) -> None:
-    """The route reads the rolling tail and hands it to the collection when logs are requested.
+    """The console stages app-side at plan time, untouched by a failing collection.
 
-    The fake mngr exits without the collector sentinel, so the workspace content
-    shares the collection's ``exec_failed`` reason -- while the console the
-    route handed over still stages app-side, unscanned, untouched by the failed
-    exec. Had the route never read the tail, the console would instead read
-    ``no_console_output`` -- so this pins the route-to-collection wiring and the
-    console's independence from the exec at once.
+    The fake mngr -- installed first on PATH, which is how collection resolves
+    the real binary -- answers with a failure envelope, so the workspace
+    archive never materializes and the status document records the failure
+    note. The console still stages and attaches: it is the shell's own output
+    and rides no exec, which is exactly what its staging being decoupled from
+    the collection buys.
     """
-    mngr_binary = tmp_path / "fake-mngr"
-    mngr_binary.write_text("#!/bin/sh\necho 'Error: agent is not running'\nexit 1\n")
-    mngr_binary.chmod(0o755)
-    client, _ = _create_test_client_with_stores(
-        tmp_path,
-        root_concurrency_group=root_concurrency_group,
-        mngr_binary=str(mngr_binary),
-        mngr_host_dir=tmp_path / "mngr-host",
-    )
+    failure_envelope = exec_json_envelope("", success=False, stderr="agent is not running")
+    install_stub_mngr_on_path(tmp_path / "failing-mngr-bin", monkeypatch, f"echo '{failure_envelope}'\nexit 1")
+    client, _ = _create_test_client_with_stores(tmp_path, root_concurrency_group=root_concurrency_group)
     tail_text = "2026-01-01T00:00:00Z [console:ERROR] boom (app.js:1)\n"
     _write_console_tail(tmp_path, tail_text)
-    with capturing_sentry_client() as captured_events:
-        response = client.post(
-            "/help/report",
-            json={
-                "description": "it broke",
-                "workspace_agent_id": "agent-" + "0" * 32,
-                "include_logs": True,
-                "include_transcript": False,
-            },
-        )
-    assert response.status_code == 200
-    assert len(captured_events) == 1
-    report = _submitted_report(captured_events[0])
-    assert report["attachment_omissions"] == {
-        WORKSPACE_LOGS_ATTACHMENT_KEY: "exec_failed",
-        TRANSCRIPT_ATTACHMENT_KEY: "not_requested",
-    }
-    staged_consoles = list(WorkspacePaths(data_dir=tmp_path).log_dir.glob("bug-report-*-console.log"))
-    assert len(staged_consoles) == 1, staged_consoles
-    assert staged_consoles[0].read_text(encoding="utf-8") == tail_text
+    with recording_s3_bucket() as uploads, registered_attachments_uploader(ErrorAttachmentsS3Uploader()):
+        with capturing_sentry_client() as captured_events:
+            response = client.post(
+                "/help/report",
+                json={
+                    "description": "it broke",
+                    "workspace_agent_id": "agent-" + "0" * 32,
+                    "include_logs": True,
+                    "include_transcript": False,
+                },
+            )
+        assert response.status_code == 200
+        assert len(captured_events) == 1
+        event = captured_events[0]
+        report = _submitted_report(event)
+        # The console resolved at plan time and attached; only the workspace
+        # archive is left to the (doomed) background collection, and the note
+        # points a reader at the status document that will say how it went.
+        assert report["collection_note"] is not None and "bug_report_attachment_status" in report["collection_note"]
+        console_key = _s3_key_from_uri(_uploaded_files_uri(event, "bug_report_console"))
+        assert gzip.decompress(_wait_for_upload(uploads, console_key)).decode("utf-8") == tail_text
+        # Waited out so the background strand finishes inside the recording
+        # bucket rather than uploading into a torn-down one.
+        status_key = _s3_key_from_uri(_uploaded_files_uri(event, "bug_report_attachment_status"))
+        status_document = _wait_for_upload(uploads, status_key).decode("utf-8")
+        assert "workspace archive: not attached (workspace collection failed:" in status_document
 
 
 def _submitted_report(event: Event) -> dict[str, Any]:
@@ -1472,22 +1416,24 @@ def _wait_for_upload(uploads: list[tuple[str, bytes]], key: str, timeout_seconds
     return contents
 
 
-def _write_blocking_fake_mngr(tmp_path: Path, started_path: Path, release_path: Path) -> Path:
-    """A fake mngr that announces it started, waits to be released, then fails the collection.
+def _install_blocking_mngr_on_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, started_path: Path, release_path: Path
+) -> None:
+    """Install an ``mngr`` stub first on PATH that announces it started, waits to be released, then fails.
 
     Lets a test hold the diagnostics collection open while it inspects what the
-    submit already answered, without depending on how long anything takes.
+    submit already answered, without depending on how long anything takes. Both
+    of a collection's execs (the gateway-tail mirror's and the collector's) run this
+    same stub; the first to run consumes the wait, and either way both end as
+    failed runs, so the collection resolves to a failure note and no archive.
     """
-    binary = tmp_path / "blocking-fake-mngr"
-    binary.write_text(
-        "#!/bin/sh\n"
+    install_stub_mngr_on_path(
+        tmp_path / "blocking-mngr-bin",
+        monkeypatch,
         f'echo started > "{started_path}"\n'
-        f'while [ ! -f "{release_path}" ]; do sleep 0.05; done\n'
-        "echo 'Error: agent is not running'\n"
-        "exit 1\n"
+        + blocking_release_wait_body(release_path)
+        + "\necho 'Error: agent is not running'\nexit 1",
     )
-    binary.chmod(0o755)
-    return binary
 
 
 def _wait_for_path(path: Path, timeout_seconds: float = 30.0) -> None:
@@ -1501,7 +1447,7 @@ def _wait_for_path(path: Path, timeout_seconds: float = 30.0) -> None:
 
 
 def test_help_report_answers_before_its_attachments_have_been_collected(
-    tmp_path: Path, root_concurrency_group: ConcurrencyGroup
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, root_concurrency_group: ConcurrencyGroup
 ) -> None:
     """The submit returns a report id while the collection is demonstrably still running.
 
@@ -1514,13 +1460,8 @@ def test_help_report_answers_before_its_attachments_have_been_collected(
     """
     started_path = tmp_path / "collection-started"
     release_path = tmp_path / "collection-released"
-    mngr_binary = _write_blocking_fake_mngr(tmp_path, started_path, release_path)
-    client, _ = _create_test_client_with_stores(
-        tmp_path,
-        root_concurrency_group=root_concurrency_group,
-        mngr_binary=str(mngr_binary),
-        mngr_host_dir=tmp_path / "mngr-host",
-    )
+    _install_blocking_mngr_on_path(tmp_path, monkeypatch, started_path, release_path)
+    client, _ = _create_test_client_with_stores(tmp_path, root_concurrency_group=root_concurrency_group)
     _write_console_tail(tmp_path, "2026-01-01T00:00:00Z [console:ERROR] boom (app.js:1)\n")
     agent_id = "agent-" + "0" * 32
 
@@ -1546,42 +1487,41 @@ def test_help_report_answers_before_its_attachments_have_been_collected(
 
         event = captured_events[0]
         report = _submitted_report(event)
-        # The pending list still speaks content keys, even though the two
-        # workspace content types will share one staged archive.
-        assert sorted(report["attachments_pending"]) == sorted([WORKSPACE_LOGS_ATTACHMENT_KEY, CONSOLE_ATTACHMENT_KEY])
-        # An unticked box is final immediately; the pending keys have no reason
-        # yet, and inventing one would be a made-up final outcome.
-        assert report["attachment_omissions"] == {TRANSCRIPT_ATTACHMENT_KEY: "not_requested"}
-        # Uploads are reserved per staged FILE (the workspace archive and the
-        # console), not per content type -- the retired per-content names must
-        # not come back.
+        # The note is the event's whole story about the archive: collection is
+        # still running, and the outcome will be in the status document. The
+        # console is not mentioned: it needed no collection, so it resolved
+        # (and attached) at plan time.
+        assert report["collection_note"] is not None and "bug_report_attachment_status" in report["collection_note"]
+        # Uploads are reserved per staged FILE (the workspace archive), not per
+        # content type -- the retired per-content names must not come back.
         extra: Mapping[str, Any] = event["extra"]
         assert f"{EXTRAS_UPLOADED_FILES_KEY}_bug_report_workspace_logs" not in extra
         assert f"{EXTRAS_UPLOADED_FILES_KEY}_bug_report_transcript" not in extra
         workspace_key = _s3_key_from_uri(_uploaded_files_uri(event, "bug_report_workspace"))
         console_key = _s3_key_from_uri(_uploaded_files_uri(event, "bug_report_console"))
         status_key = _s3_key_from_uri(_uploaded_files_uri(event, "bug_report_attachment_status"))
-        assert not [key for key, _contents in uploads if key in (workspace_key, console_key, status_key)]
+        # Nothing reserved has been written while the collection is blocked. The
+        # console is deliberately not in this list: its one-shot upload rides
+        # the event's own callbacks, not the blocked collection.
+        assert not [key for key, _contents in uploads if key in (workspace_key, status_key)]
 
         release_path.write_text("go\n")
         status_document = _wait_for_upload(uploads, status_key).decode("utf-8")
 
         # The status document is what makes the pending event honest: a reader
-        # follows it to learn what each attachment actually did -- and the
-        # console, which never rides the exec, attached despite the failed
-        # collection.
-        assert status_document == (
-            f"bug report event: {event_id}\nworkspace: {agent_id}\n\nconsole: attached\nworkspace_logs: exec_failed\n"
-        )
-        # The collection produced no workspace archive, so nothing was written
-        # to the uri the event published for it; the console's bytes did reach
-        # its reserved key.
+        # follows it to learn what the archive actually did.
+        assert status_document.startswith(f"bug report event: {event_id}\nworkspace: {agent_id}\n\n")
+        assert "workspace archive: not attached (workspace collection failed:" in status_document
+        # The console never depended on the collection, so its bytes reach its
+        # own uploaded key regardless of the failed execs.
         _wait_for_upload(uploads, console_key)
+    # The collection produced no workspace archive, so nothing was written to
+    # the uri the event published for it.
     assert not [key for key, _contents in uploads if key == workspace_key]
 
 
 def test_help_report_reserves_the_workspace_archive_under_a_key_naming_the_zip(
-    tmp_path: Path, root_concurrency_group: ConcurrencyGroup
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, root_concurrency_group: ConcurrencyGroup
 ) -> None:
     """The reserved workspace key ends ``.zip``, and the console's ``.gz``.
 
@@ -1594,13 +1534,8 @@ def test_help_report_reserves_the_workspace_archive_under_a_key_naming_the_zip(
     """
     started_path = tmp_path / "collection-started"
     release_path = tmp_path / "collection-released"
-    mngr_binary = _write_blocking_fake_mngr(tmp_path, started_path, release_path)
-    client, _ = _create_test_client_with_stores(
-        tmp_path,
-        root_concurrency_group=root_concurrency_group,
-        mngr_binary=str(mngr_binary),
-        mngr_host_dir=tmp_path / "mngr-host",
-    )
+    _install_blocking_mngr_on_path(tmp_path, monkeypatch, started_path, release_path)
+    client, _ = _create_test_client_with_stores(tmp_path, root_concurrency_group=root_concurrency_group)
     _write_console_tail(tmp_path, "2026-01-01T00:00:00Z [console:ERROR] boom (app.js:1)\n")
 
     with recording_s3_bucket() as uploads, registered_attachments_uploader(ErrorAttachmentsS3Uploader()):
@@ -1616,12 +1551,10 @@ def test_help_report_reserves_the_workspace_archive_under_a_key_naming_the_zip(
             )
         assert response.status_code == 200
         event = captured_events[0]
-        assert sorted(_submitted_report(event)["attachments_pending"]) == sorted(
-            [WORKSPACE_LOGS_ATTACHMENT_KEY, CONSOLE_ATTACHMENT_KEY, TRANSCRIPT_ATTACHMENT_KEY]
-        )
+        assert _submitted_report(event)["collection_note"] is not None
         workspace_uri = _uploaded_files_uri(event, "bug_report_workspace")
         assert workspace_uri.endswith(".zip"), workspace_uri
-        # The console is plain text and still gzipped on the way up, so the
+        # The logs are plain text and still gzipped on the way up, so the
         # suffix is chosen per staged file rather than switched wholesale.
         console_uri = _uploaded_files_uri(event, "bug_report_console")
         assert console_uri.endswith(f".{COMPRESSED_LOG_EXTENSION}"), console_uri
@@ -1644,7 +1577,7 @@ def _create_test_client_with_api_key(tmp_path: Path, api_key: str) -> FlaskClien
         http_client=None,
         session_store=session_store,
         minds_config=minds_config,
-        paths=WorkspacePaths(data_dir=tmp_path),
+        paths=InstallationPaths(data_dir=tmp_path),
         minds_api_key=api_key,
     )
     return app.test_client()
@@ -1771,7 +1704,7 @@ def test_a_health_edge_republishes_the_workspace_lists_backend_verdict(
         auth_store=FileAuthStore(data_directory=tmp_path / "auth"),
         backend_resolver=resolver,
         http_client=None,
-        paths=WorkspacePaths(data_dir=tmp_path / "minds"),
+        paths=InstallationPaths(data_dir=tmp_path / "minds"),
         system_interface_health_tracker=tracker,
         root_concurrency_group=root_concurrency_group,
         # Fails the restart's ``mngr start`` outright, so the dispatch reaches a
@@ -1841,7 +1774,7 @@ def test_sync_unlock_installs_the_dek_for_a_locked_account(tmp_path: Path) -> No
     # Another device set a password and synced a workspace with secrets: the
     # bundle + a secret-carrying record exist on the (fake) connector, but
     # this device has no DEK file.
-    other_device = WorkspacePaths(data_dir=tmp_path / "other-device")
+    other_device = InstallationPaths(data_dir=tmp_path / "other-device")
     bundle = set_master_password_for_account(other_device, "user-1", SecretStr("hunter2"))
     assert bundle is not None
     cli.sync_bundle_push("a@b.com", bundle)
@@ -1854,7 +1787,7 @@ def test_sync_unlock_installs_the_dek_for_a_locked_account(tmp_path: Path) -> No
         device_label="other-device",
         encrypted_secrets="b3BhcXVl",
     )
-    cli.sync_records_by_email["a@b.com"] = {"host-remote-1": remote.to_wire(1)}
+    cli.sync_records_by_email["a@b.com"] = {remote.agent_id: remote.to_wire(1)}
 
     client, auth_store = _create_test_client_with_stores(tmp_path, cli=cli)
     _authenticate_client(client, auth_store)
@@ -1872,7 +1805,7 @@ def test_sync_unlock_installs_the_dek_for_a_locked_account(tmp_path: Path) -> No
     body = response.get_json()
     assert body["ok"] is True
     assert body["unlocked"] == ["a@b.com"]
-    assert is_account_unlocked(WorkspacePaths(data_dir=tmp_path), "user-1")
+    assert is_account_unlocked(InstallationPaths(data_dir=tmp_path), "user-1")
 
 
 def test_sync_unlock_requires_auth(tmp_path: Path) -> None:
@@ -1887,20 +1820,23 @@ def test_remove_workspace_record_deletes_the_row(tmp_path: Path) -> None:
     _authenticate_client(client, auth_store)
     session_store = get_state(client.application).session_store
     assert session_store is not None
+    workspace_id = str(AgentId.generate())
     session_store.associate_created_workspace(
         user_id="user-1",
-        agent_id=str(AgentId.generate()),
+        agent_id=workspace_id,
         host_id="host-remove-me",
         display_name="stale",
         color=None,
         is_cloud_row=False,
     )
-    assert "host-remove-me" in cli.sync_records_by_email["a@b.com"]
+    assert workspace_id in cli.sync_records_by_email["a@b.com"]
 
+    # Removal still addresses the row by its legacy host id; the fake resolves
+    # it through the row's host column, like the connector's compat shim.
     response = client.post("/_chrome/workspaces/remove-record", json={"host_id": "host-remove-me"})
 
     assert response.status_code == 200
-    assert "host-remove-me" not in cli.sync_records_by_email["a@b.com"]
+    assert workspace_id not in cli.sync_records_by_email["a@b.com"]
     assert session_store.record_store is not None
     assert session_store.record_store.list_records("user-1") == []
 
@@ -1921,7 +1857,7 @@ def test_finalize_and_mark_destroying_deletes_the_machines_share(tmp_path: Path)
     relay hostname reserved and counts against a quota measured in machines
     ever created rather than live ones.
     """
-    paths = WorkspacePaths(data_dir=tmp_path)
+    paths = InstallationPaths(data_dir=tmp_path)
     agent_id = AgentId.generate()
     host_id = HostId.generate()
     _write_dead_destroy_dir(paths, agent_id, host_id)
@@ -1951,7 +1887,7 @@ def test_finalize_and_mark_destroying_tombstones_even_if_the_share_delete_fails(
     A share that survives is litter; a machine that cannot be retired is a
     stuck row the user cannot clear.
     """
-    paths = WorkspacePaths(data_dir=tmp_path)
+    paths = InstallationPaths(data_dir=tmp_path)
     agent_id = AgentId.generate()
     host_id = HostId.generate()
     _write_dead_destroy_dir(paths, agent_id, host_id)

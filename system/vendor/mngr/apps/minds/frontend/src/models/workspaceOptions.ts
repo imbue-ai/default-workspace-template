@@ -32,6 +32,7 @@ export interface WorkspaceOptionsData {
   accounts: WorkspaceOptionsAccount[];
   app_services: string[];
   service_labels: Record<string, string>;
+  service_icons?: Record<string, string>;
   whole_service: string;
 }
 
@@ -130,10 +131,15 @@ interface ShareTargetState {
 
 export interface ShareModelOptions {
   hostId: string;
+  /** The workspace id keying the sharing API; hostId is the legacy fallback. */
+  agentId?: string;
   ownerEmail: string;
   wholeService: string;
   appServices: string[];
   serviceLabels: Record<string, string>;
+  /** Registered SVG icon markup per app service (server-gated; the view
+   * sanitizes again before inlining). Absent = no icon registered. */
+  serviceIcons?: Record<string, string>;
   fetchJson?: FetchJson;
   redraw?: () => void;
   /** Injected timer hooks so tests drive the readiness poll deterministically. */
@@ -191,6 +197,11 @@ export class ShareModel {
 
   get ownerEmail(): string {
     return this.options.ownerEmail;
+  }
+
+  /** The target's registered SVG icon markup, '' when it has none. */
+  targetIcon(target: string): string {
+    return this.options.serviceIcons?.[target] ?? "";
   }
 
   selectTarget(target: string): void {
@@ -408,7 +419,7 @@ export class ShareModel {
   }
 
   private shareApiBase(): string {
-    return `/api/v1/machines/${encodeURIComponent(this.options.hostId)}/sharing`;
+    return `/api/v1/workspace-sharing/${encodeURIComponent(this.options.agentId ?? this.options.hostId)}`;
   }
 
   private mutableTargetState(target: string): ShareTargetState {
@@ -710,10 +721,12 @@ export class WorkspaceOptionsModel {
     this.share?.dispose();
     this.share = new ShareModel({
       hostId: data.host_id || data.agent_id,
+      agentId: data.agent_id || this.agentId,
       ownerEmail: data.account_email,
       wholeService: data.whole_service,
       appServices: data.app_services,
       serviceLabels: data.service_labels,
+      serviceIcons: data.service_icons,
       fetchJson: this.fetchJsonImpl,
       redraw: this.redrawImpl,
       ...this.shareOverrides,

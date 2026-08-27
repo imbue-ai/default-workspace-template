@@ -43,8 +43,8 @@ from imbue.minds.build_info import resolve_git_sha
 from imbue.minds.build_info import resolve_release_id
 from imbue.minds.config.data_types import DEFAULT_DESKTOP_CLIENT_HOST
 from imbue.minds.config.data_types import DEFAULT_DESKTOP_CLIENT_PORT
+from imbue.minds.config.data_types import InstallationPaths
 from imbue.minds.config.data_types import MNGR_BINARY
-from imbue.minds.config.data_types import WorkspacePaths
 from imbue.minds.config.loader import load_client_config
 from imbue.minds.desktop_client.agent_creator import AgentCreator
 from imbue.minds.desktop_client.agent_creator import sweep_orphaned_scratch_clones
@@ -213,7 +213,7 @@ def run(
     root_name = resolve_minds_root_name()
     data_directory = minds_data_dir_for(root_name)
     minds_config = MindsConfig(data_dir=data_directory)
-    paths = WorkspacePaths(data_dir=data_directory)
+    paths = InstallationPaths(data_dir=data_directory)
 
     # Initialize Sentry for the minds backend process. ``setup_logging`` already ran
     # in the CLI group callback, so the loguru sinks Sentry layers on top of exist.
@@ -407,8 +407,9 @@ def run(
         # holding the group's drain for a round of timeouts -- which on a dead
         # network, where a round was measured at 9.25s, is most of the time.
         shutdown_event=root_concurrency_group.shutdown_event,
-        # And so the SSH facet asks its endpoints at once rather than one after
-        # another, which is what made that round the sum of every budget.
+        # And so each of the probe's rounds asks its endpoints at once rather
+        # than one after another, which is what made a round the sum of every
+        # budget instead of the slowest single endpoint.
         concurrency_group=root_concurrency_group,
     )
     sleep_tracker.add_on_wake_callback(connectivity_detector.invalidate_after_wake)
@@ -539,6 +540,10 @@ def run(
     consumer, preauth_cookie, browser_bridge_token = start_mngr_forward(
         config=forward_config,
         resolver=backend_resolver,
+        # So a provider poll that straddled a sleep is not consumed as the
+        # provider's last word: its error says the laptop went away, not the
+        # backend.
+        sleep_tracker=sleep_tracker,
     )
 
     # App-global discovery-pipeline health watchdog. Detects a stalled pipeline
@@ -966,7 +971,7 @@ class _StreamedPermissionRequestHandler(FrozenModel):
 def _resolve_backup_quota_evictor(
     session_store: MultiAccountSessionStore,
     workspace_record_store: WorkspaceRecordStore,
-    paths: WorkspacePaths,
+    paths: InstallationPaths,
     imbue_cloud_cli: ImbueCloudCli,
     account_email: str,
 ) -> Callable[[], bool] | None:

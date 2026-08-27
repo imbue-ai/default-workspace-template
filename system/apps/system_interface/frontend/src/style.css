@@ -137,8 +137,10 @@ body {
 
 /* ── Queued messages (the shoulder-tap group) ── */
 /* Messages the harness has parked while the agent is mid-turn, rendered below the
-   last committed turn as a distinct group under a subtle header row. This is a
-   full snapshot from the backend -- there is no optimistic/"sending" state. */
+   last committed turn as a distinct group under a subtle header row. This is a full
+   snapshot from the backend. An entry the backend flags "is_sending" is NOT parked --
+   it is one it is about to type, or is typing -- and renders as the "Sending..."
+   bubble; a snapshot that is entirely is_sending gets no group chrome at all. */
 .queued-group {
   display: flex;
   flex-direction: column;
@@ -254,18 +256,6 @@ body {
 
 .queued-message .message-user-bubble {
   opacity: 0.85;
-}
-
-/* Frozen queued group: while a shoulder-tap restart is in flight, the captured
-   messages are held greyed (ignoring the backend snapshot briefly emptying) so
-   they do not blip out and back, until a backend arrival releases the hold. No
-   countdown is shown. */
-.queued-group--frozen {
-  opacity: 0.55;
-}
-
-.queued-header--frozen {
-  color: var(--color-text-secondary);
 }
 
 /* The (i) info affordance next to 'Queued messages'. */
@@ -2267,6 +2257,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 }
 
 .custom-url-dialog-cancel,
+.custom-url-dialog-danger,
 .custom-url-dialog-open {
   padding: 6px 16px;
   font-family: var(--font-family-base);
@@ -2283,8 +2274,26 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   color: var(--color-text-primary);
 }
 
-.custom-url-dialog-cancel:hover {
+.custom-url-dialog-cancel:hover:not(:disabled) {
   background: var(--color-bg-hover);
+}
+
+.custom-url-dialog-cancel:disabled,
+.custom-url-dialog-danger:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Force, on the send-failure notice: it restarts the agent, ending any turn in progress and
+   losing that work, so it must not look like the easy button next to Cancel and Retry. */
+.custom-url-dialog-danger {
+  background: white;
+  color: #dc2626;
+  border-color: #fecaca;
+}
+
+.custom-url-dialog-danger:hover:not(:disabled) {
+  background: #fef2f2;
 }
 
 .custom-url-dialog-open {
@@ -2674,219 +2683,6 @@ body > .dv-tab.dv-dragged .dv-default-tab {
 .fast-mode-modal-btn-fast:hover {
   background: var(--color-bg-hover);
 }
-
-/* ── Share modal ── */
-.share-modal-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background: rgba(0, 0, 0, 0.4);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 10000;
-}
-
-.share-modal {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: 12px;
-  padding: 24px;
-  width: 480px;
-  max-width: 90vw;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
-}
-
-.share-modal-title {
-  font-family: var(--font-family-heading);
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--color-text-primary);
-  margin: 0 0 16px;
-}
-
-.share-modal-loading {
-  font-size: 14px;
-  color: var(--color-text-secondary);
-  margin: 0 0 16px;
-}
-
-.share-modal-error {
-  font-size: 14px;
-  color: #dc2626;
-  margin: 0 0 12px;
-}
-
-.share-modal-label {
-  font-size: 14px;
-  color: var(--color-text-secondary);
-  margin: 0 0 12px;
-}
-
-.share-modal-url-row {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 16px;
-}
-
-.share-modal-url-input {
-  flex: 1;
-  padding: 8px 12px;
-  font-family: var(--font-family-mono, monospace);
-  font-size: 13px;
-  color: var(--color-text-primary);
-  background: var(--color-bg);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-base);
-  outline: none;
-}
-
-.share-modal-btn {
-  padding: 6px 16px;
-  font-family: inherit;
-  font-size: 14px;
-  font-weight: 600;
-  border-radius: 6px;
-  cursor: pointer;
-  border: none;
-  background: #1e293b;
-  color: white;
-}
-
-.share-modal-btn:hover:not(:disabled) {
-  background: #334155;
-}
-
-.share-modal-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.share-modal-btn-secondary {
-  background: white;
-  color: #1e293b;
-  border: 1px solid #e2e8f0;
-}
-
-.share-modal-btn-secondary:hover:not(:disabled) {
-  background: #f1f5f9;
-}
-
-.share-modal-btn-destructive {
-  background: white;
-  color: #dc2626;
-  border: 1px solid #fecaca;
-}
-
-.share-modal-btn-destructive:hover:not(:disabled) {
-  background: #fef2f2;
-}
-
-.share-modal-section {
-  margin: 16px 0;
-}
-
-.share-modal-empty {
-  font-size: 13px;
-  color: var(--color-text-secondary);
-  font-style: italic;
-  margin: 8px 0;
-}
-
-.share-modal-email-list {
-  list-style: none;
-  margin: 8px 0;
-  padding: 0;
-}
-
-.share-modal-email-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 4px 8px;
-  font-size: 13px;
-  color: var(--color-text-primary);
-}
-
-.share-modal-email-remove {
-  background: none;
-  border: none;
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  font-size: 14px;
-  padding: 2px 6px;
-  border-radius: 3px;
-}
-
-.share-modal-email-remove:hover {
-  color: #dc2626;
-  background: rgba(220, 38, 38, 0.1);
-}
-
-.share-modal-add-email {
-  display: flex;
-  gap: 8px;
-  margin-top: 8px;
-}
-
-.share-modal-email-input {
-  flex: 1;
-  padding: 6px 10px;
-  font-family: var(--font-family-base);
-  font-size: 13px;
-  color: var(--color-text-primary);
-  background: var(--color-bg);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-base);
-  outline: none;
-}
-
-.share-modal-email-input:focus {
-  border-color: var(--color-accent);
-}
-
-.share-modal-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 16px;
-}
-
-.share-modal-header .share-modal-title {
-  margin: 0;
-}
-
-.share-modal-close-x {
-  background: none;
-  border: none;
-  color: var(--color-text-secondary);
-  font-size: 18px;
-  cursor: pointer;
-  padding: 4px 8px;
-  border-radius: 4px;
-  line-height: 1;
-}
-
-.share-modal-close-x:hover {
-  background: var(--color-bg-hover);
-  color: var(--color-text-primary);
-}
-
-.share-modal-footer {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-top: 16px;
-}
-
-.share-modal-footer-left {
-  display: flex;
-  gap: 8px;
-}
-
-/* share-modal-btn-create uses the base .share-modal-btn styling (dark button) */
 
 /* === Claude login modal === */
 
@@ -3750,6 +3546,13 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   color: var(--color-text-secondary);
   line-height: 1.5;
   margin: 8px 0 4px;
+  /* The send-failure notice puts a server's own words in here, and those are not always the one
+     tidy sentence the other users of this class pass. A proxy or an unhandled route answers with
+     a whole HTML page, and an unbroken token (a URL, a traceback line) would otherwise widen the
+     dialog past the viewport or push its OK button off the bottom. Harmless for fixed text. */
+  overflow-wrap: anywhere;
+  max-height: 40vh;
+  overflow-y: auto;
 }
 
 /* Step checklist shown while the background agent restart runs */

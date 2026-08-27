@@ -137,7 +137,7 @@ CREDENTIALS_STORE_FILENAME: Final[str] = "credentials.json.enc"
 # the first to report the account whose credentials it injects to detent as
 # ``customMetadata.account`` -- what the per-account permission grants
 # (:mod:`imbue.mngr_latchkey.account_scopes`) read.
-LATCHKEY_MIN_VERSION: Final[str] = "3.5.0"
+LATCHKEY_MIN_VERSION: Final[str] = "3.6.0"
 
 # Fixed port that every containerized/VM/VPS agent sees on its own 127.0.0.1
 # when reaching the Latchkey gateway. A per-agent SSH reverse tunnel bridges
@@ -250,7 +250,7 @@ LATCHKEY_AUTH_OPTION_SET: Final[str] = "set"
 # instead mints a fresh access token from the app's client id and secret, but
 # expires and is renewed the same way. A future latchkey credential kind that
 # gains ``refreshCredentials`` has to be added here, or it will never be renewed
-# for remote workspaces.
+# for remote hosts.
 LATCHKEY_CREDENTIAL_TYPE_OAUTH: Final[str] = "oauth"
 LATCHKEY_CREDENTIAL_TYPE_ZOOM_SERVER_TO_SERVER: Final[str] = "zoomServerToServer"
 LATCHKEY_RENEWABLE_CREDENTIAL_TYPES: Final[frozenset[str]] = frozenset(
@@ -786,7 +786,7 @@ def _log_gateway_output_line(line: str, is_stdout: bool) -> None:
     own rotating, timestamped JSONL log -- the same ``make_jsonl_file_sink``
     every other mngr/minds log uses -- so gateway output is timestamped and
     size-rotated like the rest of the logs. ``mngr latchkey forward`` points
-    that log at ``<plugin_data_dir>/forward_logs/events.jsonl`` so the gateway's
+    that log at ``<plugin_data_dir>/events.jsonl`` so the gateway's
     (potentially chatty) output stays in one dedicated, rotated file.
     """
     del is_stdout

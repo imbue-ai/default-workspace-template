@@ -14,10 +14,12 @@ declare module "@minds/embed-contract" {
   export const CLOSE_ACTIVE_TAB: "minds:close-active-tab";
   export const OPEN_AI_KEYS_ACK: "minds:open-ai-keys-ack";
   export const PERMISSION_REQUEST_RESOLVED: "minds:permission-request-resolved";
+  export const OPEN_SHARE_SETTINGS: "minds:open-share-settings";
 
   export const REQUEST_ID_PATTERN: RegExp;
   export const AGENT_ID_PATTERN: RegExp;
   export const HOST_ID_PATTERN: RegExp;
+  export const SERVICE_NAME_PATTERN: RegExp;
 
   export type ContractMessage = { type: string } & Record<string, unknown>;
 

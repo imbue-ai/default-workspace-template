@@ -542,8 +542,11 @@ whether the rate applied to it is the one it was billed at. Three things to know
 1. **Repricing is done, but only where the tier is observable.** `mngr_usage` carries a
    `FAST_MODE_PRICE_MULTIPLIER` and `compute_cost(..., is_fast_mode=True)`, and the eval prices
    each tier's tokens at its own rate. This only helps a proxied trial: without the proxy the tier is
-   invisible and everything is priced standard, which for a default Minds workspace is half the real
-   figure. Two consequences worth carrying forward: **every eval cost recorded before this** was
+   invisible and everything is priced standard. Measured on a default Minds workspace, tier-blindness
+   alone puts the figure at 68% of the real one -- less of an understatement than the 2x rate
+   suggests, because only the chat agent runs fast. An unproxied trial compounds that with the
+   delegated spend it cannot see and lands far lower: 26% and 32% on two measured trials. Two
+   consequences worth carrying forward: **every eval cost recorded before this** was
    standard-rate and should be read as a floor, and **mngr's own usage reporting** has the same gap
    in production -- minds runs fast mode by default, and nothing outside a proxy sees the tier, so
    user-facing cost numbers understate fast-mode traffic. Deciding what to do about that is a
@@ -558,9 +561,13 @@ whether the rate applied to it is the one it was billed at. Three things to know
    does not accept it, so a non-Opus arm silently runs standard instead of erroring. Convenient, but
    it means the downgrade is invisible unless the recorded tier is actually read.
 
-3. **Controlling the tier is implemented in the per-model override work (PR 407);** observing it
-   lives here. An arm therefore declares both its model and its tier, and the recorded tier is what
-   confirms the override actually took effect rather than being assumed.
+3. **The tier cannot currently be controlled at all, only observed.** The workspace's `first`
+   create template passes `-S agent_types.claude.settings_overrides.fastMode=true` when it creates
+   the starting chat, and a `--setting` outranks any settings file placed in the per-case clone, so
+   nothing the eval writes there changes the tier. Pinning it means creating the graded agent rather
+   than talking to the one the workspace starts. Until then a model arm carries whatever tier its
+   model can serve, so an Opus arm bills at roughly twice a Haiku arm's rate for reasons that are not
+   about the model.
 
 Also worth knowing when reading cache numbers: switching tier invalidates the prompt cache, so an
 arm that flips fast mode mid-run pays cache writes it would not otherwise have paid.
