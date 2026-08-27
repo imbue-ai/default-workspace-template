@@ -605,3 +605,10 @@ three times left three rows, two of them holding dead credentials and the newest
 becoming the account every new chat launched on. Re-keying now writes into the account it
 already owns. That account is labelled distinctly, so it is matched without ever overwriting an
 account the user signed into through a browser.
+
+# Selecting the sign-in code no longer closes the sign-in
+
+The chooser dismissed on backdrop *click*, and a click fires wherever the press ended -- so
+selecting the device code or the several-hundred-character sign-in URL and releasing past the
+dialog's edge read as "close this" and aborted the flow the code was being copied out of. It
+uses the shared backdrop helper, which keys off mouse down on the backdrop itself.

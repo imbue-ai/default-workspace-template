@@ -33,6 +33,7 @@
 import m from "mithril";
 
 import { icon, loginSpinnerIcon, warningIcon } from "./icons";
+import { backdropDismissAttrs } from "./modalBackdrop";
 import { providerMark } from "./providerMarks";
 import * as css from "./providerSignInStyles";
 import type { Lane, LaneMethod, ProviderAccount } from "../models/Providers";
@@ -723,11 +724,11 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
 
       return m(
         "div.claude-login-overlay",
-        {
-          onclick: (event: MouseEvent) => {
-            if (event.target === event.currentTarget) onClose();
-          },
-        },
+        // Dismissal keys off mouse DOWN, via the shared helper, because a click fires
+        // wherever the press ENDED: selecting the device code or the several-hundred
+        // character sign-in URL and releasing past the dialog's edge would otherwise read
+        // as "close this" and abort the flow the code was being copied out of.
+        backdropDismissAttrs(onClose),
         [
           current !== null && mode === "apiKey" ? keyProviderMenu(current) : null,
           m(
