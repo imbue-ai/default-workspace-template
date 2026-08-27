@@ -19,6 +19,23 @@ document is the durable hand-off so any agent can pick the work up cold.
 
 ### Progress log
 
+- **Elevation realigned to the minds design system — DONE.** Replaced the three
+  value-heavy `--elevation-sm/-lg/-overlay` tokens with minds' two soft steps
+  (`apps/minds`): `--shadow-raised` (`0 1px 3px 0 rgba(0,0,0,.1), 0 1px 2px -1px
+  rgba(0,0,0,.1)` — the resting lift on interactive cards) and `--shadow-overlay`
+  (`0 1px 1px 0 rgba(0,0,0,.08), 0 3px 12px 0 rgba(0,0,0,.08)` — one soft floating
+  shadow for everything above the page). The names generate novel
+  `shadow-raised/shadow-overlay` utilities, so they don't collide with Tailwind's
+  `shadow-{sm,md,lg}` (`shadow-lg` is used in the launcher/sidebar). **Not a
+  no-op** — it both collapses ~7 bespoke raw shadows onto the two steps *and*
+  lightens the floating surfaces: modals `0 8px 32px/20%` → overlay, the lightbox
+  `0 8px 40px/50%` → overlay, the sign-in modal, the model picker (was two-layer
+  charcoal), the CSS tooltip (was `/25%`), the `.minds-tooltip` and dockview tab
+  strip (already minds' overlay value, now tokenized), and the drop-label pill all
+  now share `--shadow-overlay`; the `.claude-login-alt` resting card uses
+  `--shadow-raised`. Left raw on purpose: the composer's two directional brand
+  glows (charcoal + accent-green, no minds equivalent), the swatch focus *ring*
+  (not elevation), and the login-alt `:hover` between-tier lift.
 - **Radius scale realigned to the minds design system — DONE.** Replaced the
   value-named `--radius-3/4/base/8/10/12/-composer/-bubble/-pill` scale with the
   four steps minds uses (`apps/minds`, its `DevStyleguide`): `--radius-sm` 4 /
