@@ -16,6 +16,7 @@ from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import HostName
 from imbue.mngr.primitives import ProviderInstanceName
 from imbue.system_interface.agent_discovery import MngrMessenger
+from imbue.system_interface.agent_discovery import _first_failure
 from imbue.system_interface.agent_discovery import read_claude_config_dir_from_env_file
 
 
@@ -243,3 +244,42 @@ def test_reports_the_harness_reason_for_a_refused_send() -> None:
     assert failure.reason == refusal
     # mngr classified it, and that classification comes through beside the words.
     assert failure.kind == "input_blocked"
+
+
+def test_a_delivered_but_blocked_send_reports_the_dialog_not_an_unreachable_agent() -> None:
+    """mngr keeps "landed, then blocked" apart from "never landed"; the notice must too.
+
+    Reading only ``failures`` dropped this into the unreachable catch-all, which was false --
+    the agent is sitting on a dialog -- and, because the recovery buttons follow the kind,
+    withheld the Retry that answering the dialog makes work while offering a restart.
+    """
+    result = MessageResult()
+    result.blocked_agents.append(
+        (
+            "alpha",
+            "Failed to send message to agent alpha: Claude is waiting for you to confirm a model switch."
+            " Answer it in the agent's terminal.",
+        )
+    )
+    failure = _first_failure(result)
+    assert failure.kind == "input_blocked"
+    assert failure.reason.startswith("Claude is waiting for you to confirm a model switch.")
+    assert "Failed to send message to agent" not in failure.reason
+
+
+def test_a_real_failure_still_outranks_a_blocked_one() -> None:
+    """A send that never landed is the more urgent truth, so it is reported first."""
+    result = MessageResult()
+    result.failures.append(
+        AgentSendFailure(agent_name="alpha", reason="the pane is gone", kind=SendFailureKind.AGENT_UNREACHABLE)
+    )
+    result.blocked_agents.append(("alpha", "a dialog is up"))
+    failure = _first_failure(result)
+    assert failure.reason == "the pane is gone"
+    assert failure.kind == "agent_unreachable"
+
+
+def test_nothing_matched_is_still_the_unreachable_catch_all() -> None:
+    failure = _first_failure(MessageResult())
+    assert failure.kind == "agent_unreachable"
+    assert failure.reason == "The agent could not be reached."

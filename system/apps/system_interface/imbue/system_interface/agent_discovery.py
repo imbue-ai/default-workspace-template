@@ -23,6 +23,7 @@ from imbue.mngr.api.message import send_key_chord_to_agents
 from imbue.mngr.api.message import send_message_to_agents
 from imbue.mngr.config.data_types import MngrContext
 from imbue.mngr.config.loader import load_config
+from imbue.mngr.errors import SendFailureKind
 from imbue.mngr.main import get_or_create_plugin_manager
 from imbue.mngr.primitives import AgentAddress
 from imbue.mngr.primitives import AgentId
@@ -254,9 +255,31 @@ def _first_failure(result: MessageResult) -> SendFailure:
     for failure in result.failures:
         if failure.reason:
             return SendFailure(reason=failure.reason, kind=str(failure.kind))
+    # A send can also land and THEN be blocked: the text was accepted and a dialog appeared
+    # behind it that mngr could not clear. mngr keeps that apart from a failure -- the message
+    # is not lost -- so it is in blocked_agents, and reading only failures above dropped it into
+    # the catch-all below. That told the user their agent was unreachable when it was sitting
+    # on a dialog, and, because the buttons follow the kind, offered a restart instead of the
+    # Retry that answering the dialog makes work.
+    for agent_name, blocked_message in result.blocked_agents:
+        if blocked_message:
+            return SendFailure(
+                reason=_without_send_prefix(blocked_message, agent_name), kind=str(SendFailureKind.INPUT_BLOCKED)
+            )
     # Nothing matched the id at all, which is its own answer -- and trying again will not change
     # it, so it is classified the same as a pane that is gone.
     return SendFailure(reason="The agent could not be reached.", kind="agent_unreachable")
+
+
+def _without_send_prefix(message: str, agent_name: str) -> str:
+    """Drop mngr's standalone-raise framing from a blocked message before showing it.
+
+    ``blocked_agents`` carries ``str(exception)``, not the bare reason ``failures`` carries, so
+    it still has the "Failed to send message to agent X: " a raised error needs and a notice
+    titled for that agent does not.
+    """
+    prefix = f"Failed to send message to agent {agent_name}: "
+    return message[len(prefix) :] if message.startswith(prefix) else message
 
 
 def _press_to(matches: Sequence[AgentMatch], key: str, mngr_ctx: MngrContext) -> MessageResult:
