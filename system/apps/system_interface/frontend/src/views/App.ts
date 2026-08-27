@@ -38,6 +38,7 @@ import {
   openProviderChooser,
 } from "../models/Providers";
 import { getFastModePromptAgentId } from "../models/FastModePrompt";
+import { startChatOnAccount } from "./DockviewWorkspace";
 
 /** Marks that the workspace has already greeted this user. Local storage rather than a server
  *  flag on purpose: it is a fact about a person having seen a screen, and it has to survive a
@@ -62,7 +63,11 @@ function greetFirstRun(): void {
     // this errs toward silence.
     return;
   }
-  openProviderChooser();
+  // Signing in from the greeting STARTS the chat, rather than closing onto an empty new tab.
+  // The greeting fires only when there is no provider, which is the one state where the new tab
+  // has nothing it can do -- so leaving the user there having just signed in makes them go find
+  // the button that was always the only thing to press.
+  openProviderChooser({ onSignedIn: (accountId) => void startChatOnAccount(accountId) });
   m.redraw();
 }
 

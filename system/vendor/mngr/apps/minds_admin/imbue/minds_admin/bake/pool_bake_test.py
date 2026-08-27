@@ -81,13 +81,11 @@ def test_finalize_git_identity_reset_failure_is_best_effort() -> None:
     assert "git-identity-reset" in [label for label, _cmd in runner.calls]
 
 
-
 def test_finalize_sshd_harden_failure_is_best_effort() -> None:
     # sshd-harden is best-effort: a failure is logged, not fatal, and the rest still runs.
     runner = _ScriptedRunner({"sshd-harden": (1, "", "boom")})
     finalize_baked_pool_host(runner, _baked(), host_name="slice-x")
     assert "git-identity-reset" in [label for label, _cmd in runner.calls]
-
 
 
 def test_wait_for_deferred_install_polls_for_marker_or_finished_process() -> None:
