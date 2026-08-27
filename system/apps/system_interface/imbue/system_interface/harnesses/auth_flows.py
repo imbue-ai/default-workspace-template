@@ -21,12 +21,14 @@ Two properties the shapes forced:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
 import threading
 import uuid
 from collections.abc import Callable
+from collections.abc import Iterator
 from collections.abc import Sequence
 from enum import StrEnum
 from collections.abc import Mapping
@@ -374,7 +376,7 @@ class AuthFlowService:
             # the file in place to answer at all, so the write has to happen first -- but on a
             # re-auth the folder is a LIVE account, and leaving a rejected key there would
             # quietly break every agent bound to it until each one's next turn.
-            with _CredentialSnapshot(_credential_paths(method.sink, path)) as snapshot:
+            with _credentials_restored_on_error(_credential_paths(method.sink, path)) as before:
                 display = _write_paste(method.sink, path, api_key, key_provider, session.lane)
                 # Writing the file is not the same as the harness accepting it. Ask before
                 # committing, so a key the harness cannot use fails here -- where the user is
@@ -383,7 +385,7 @@ class AuthFlowService:
                 verdict = self._probe(session.lane.harness, path)
                 session.last_verdict = verdict
                 if verdict is SignedIn.NO:
-                    snapshot.restore()
+                    _restore_credentials(before)
                     self._fail_locked(session, f"{session.lane.provider_name} did not accept that key.")
                     return FlowStatus(state=FlowState.FAILED, detail=session.detail)
             # UNKNOWN means the check itself could not run (the CLI is missing, the network
@@ -471,11 +473,11 @@ class AuthFlowService:
                     return FlowStatus(state=FlowState.PENDING)
                 self._fail_locked(session, "The sign-in finished without printing a token.")
                 return FlowStatus(state=FlowState.FAILED, detail=session.detail)
-            with _CredentialSnapshot(_credential_paths(method.result_sink, path)) as snapshot:
+            with _credentials_restored_on_error(_credential_paths(method.result_sink, path)) as before:
                 _write_paste(method.result_sink, path, result, None, session.lane)
                 session.last_verdict = self._probe(session.lane.harness, path)
                 if session.last_verdict is SignedIn.NO:
-                    snapshot.restore()
+                    _restore_credentials(before)
                     self._fail_locked(session, "The token that was minted was not accepted.")
                     return FlowStatus(state=FlowState.FAILED, detail=session.detail)
             return self._commit_locked(session, session.lane.provider_name)
@@ -639,31 +641,40 @@ def _credential_paths(sink: PasteSink, account_path: Path) -> tuple[Path, ...]:
     raise FlowError(f"{sink} has no writer yet")
 
 
-class _CredentialSnapshot:
-    """The bytes of an account's credential files before a write, and a way back to them.
+def _read_credentials(paths: Sequence[Path]) -> dict[Path, bytes | None]:
+    """The bytes of an account's credential files, or None where the file is absent."""
+    return {path: (path.read_bytes() if path.exists() else None) for path in paths}
+
+
+def _restore_credentials(before: Mapping[Path, bytes | None]) -> None:
+    """Put back what `_read_credentials` saw.
 
     Snapshot-and-restore rather than write-to-temp-then-move: a sink may merge with what is
     already there (claude's settings.json keeps every unmanaged key), so the new content is
     not derivable without writing it, and only the previous bytes are worth keeping.
     """
+    for path, content in before.items():
+        if content is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_bytes(content)
+            path.chmod(0o600)
 
-    def __init__(self, paths: Sequence[Path]) -> None:
-        self._before = {path: (path.read_bytes() if path.exists() else None) for path in paths}
 
-    def restore(self) -> None:
-        for path, content in self._before.items():
-            if content is None:
-                path.unlink(missing_ok=True)
-            else:
-                path.write_bytes(content)
-                path.chmod(0o600)
+@contextlib.contextmanager
+def _credentials_restored_on_error(paths: Sequence[Path]) -> Iterator[Mapping[Path, bytes | None]]:
+    """Write inside this, and an exception leaves the previous credential in place.
 
-    def __enter__(self) -> _CredentialSnapshot:
-        return self
-
-    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
-        if exc_type is not None:
-            self.restore()
+    The probe cannot judge a file that is not there, so the write has to land first -- and on
+    a re-auth that folder is a LIVE account. A half-written credential left behind breaks
+    every agent bound to it, silently, at its next turn.
+    """
+    before = _read_credentials(paths)
+    try:
+        yield before
+    except Exception:
+        _restore_credentials(before)
+        raise
 
 
 def _write_paste(

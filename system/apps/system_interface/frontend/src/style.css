@@ -37,6 +37,49 @@
   --logo-url: none;
 }
 
+/*
+ * The mockup's token names, over this app's existing palette.
+ *
+ * `prototypes/minds-harness` in imbue-ai/mind-sketches is the design source, and the rule is
+ * that a surface it defines is ported verbatim. Its class strings say `text-tertiary`,
+ * `border-subtle`, `bg-fill-hover`; this app's `@theme` above says `--color-text-faint`,
+ * `--color-border`, `--color-bg-hover`. Same intent, different names -- so "verbatim" was
+ * being hand-translated hex by hex, and 60-odd arbitrary-value classes (`text-[#202020]`)
+ * accumulated in the ported files.
+ *
+ * That translation fails SILENTLY: Tailwind v4 emits nothing at all for an unknown color
+ * utility, so `hover:bg-fill-hover` simply has no hover state -- no build error, no lint, no
+ * type error, nothing to notice in review.
+ *
+ * Registering the mockup's names here makes the rule followable and the diff meaningful. The
+ * VALUES stay this app's -- the mockup is two-layer light/dark and this app is light only, so
+ * a token whose point is the dark half (`--color-inverse-*`) is deliberately absent rather
+ * than faked. A class using one of those is a signal to port the dark mode properly, not to
+ * paper over it.
+ */
+@theme inline {
+  /* text: text-primary / -secondary / -tertiary */
+  --color-primary: var(--color-text-primary);
+  --color-secondary: var(--color-text-secondary);
+  --color-tertiary: var(--color-text-faint);
+  /* borders: border-subtle / -default / -strong */
+  --color-subtle: var(--color-border-faint);
+  --color-default: var(--color-border);
+  --color-strong: var(--color-border-code);
+  /* surfaces: bg-surface-primary, and the modal scrim */
+  --color-surface-primary: var(--color-surface);
+  --color-surface-overlay: rgb(0 0 0 / 0.35);
+  /* fills: the resting / hover / pressed tints over a surface */
+  --color-fill-subtle: var(--color-bg-sidebar);
+  --color-fill-hover: var(--color-bg-hover);
+  --color-fill-active: var(--color-bg-active);
+  /* status: text-/bg-/border-{important,success,warning,info} */
+  --color-important: #d90c00;
+  --color-success: #0c8106;
+  --color-warning: #b45300;
+  --color-info: #166fc7;
+}
+
 body {
   font-family: var(--font-family-base);
   font-size: 15px;

@@ -663,3 +663,20 @@ One default-account rule instead of three. `resolve_account` answers an explicit
 this build has. The live path now also gets the folder check the explicit path always had, and
 it agrees with what the picker shows -- the launcher and a new project's starter chat could
 previously land on different providers with nothing saying so.
+
+# Register the mockup's token names, so "port it verbatim" is a rule you can follow
+
+The design source writes `text-tertiary`, `border-subtle`, `bg-fill-hover`. This app's theme
+says `--color-text-faint`, `--color-border`, `--color-bg-hover`. Same intent, different names --
+so a "verbatim" port was being hand-translated hex by hex, and 62 arbitrary-value classes
+(`text-[#202020]`) had accumulated in the file whose own docstring says the class strings were
+copied unchanged.
+
+The translation fails silently: Tailwind v4 emits nothing at all for an unknown color utility,
+so `hover:bg-fill-hover` against an undefined token simply has no hover state. No build error,
+no lint error, no type error, nothing to see in review.
+
+The mockup's names are now registered over this app's existing palette, the 62 literals use
+them, and a test asserts every color utility in the ported styles resolves to a defined token.
+Values stay this app's: the mockup is two-layer light/dark and this app is light only, so a
+token whose point is the dark half is deliberately absent rather than faked.
