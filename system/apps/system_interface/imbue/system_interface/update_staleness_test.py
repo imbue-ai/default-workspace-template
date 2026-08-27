@@ -1,14 +1,11 @@
 """Tests for the update-staleness tracker and its app-shell surfacing."""
 
 import ast
-import importlib.util
 import re
 import shutil
 import subprocess
-import sys
 import tomllib
 from pathlib import Path
-from types import ModuleType
 
 import pytest
 from pydantic import PrivateAttr
@@ -460,62 +457,3 @@ def test_the_banner_has_a_message_for_every_variant_and_no_others() -> None:
         STALENESS_UPDATE_INTERRUPTED,
         STALENESS_TREE_MOVED,
     }
-
-
-def _load_apply_script() -> ModuleType:
-    """Import the stdlib-only apply script by path.
-
-    The app cannot depend on it (it is a skill script, staged and run on trees
-    where this app may not even be installed), but a test can read it where it
-    lies -- which is the only way to hold the two halves of the restart
-    knowledge against each other.
-    """
-    name = "update_self_under_test"
-    if name in sys.modules:
-        return sys.modules[name]
-    script = WORKSPACE_ROOT_DIRECTORY / ".agents/skills/update-self/scripts/update_self.py"
-    spec = importlib.util.spec_from_file_location(name, script)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    # Registered before exec: the script's dataclasses resolve their own
-    # annotations through sys.modules, and fail on a module that is not there.
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-# Paths the apply restarts the services agent for, and whether THIS process is
-# one of the things left stale by them. The two rules are written separately
-# because neither side can import the other, and the split is deliberate: the
-# apply asks "does anything live need a restart", this app asks "am I running
-# old code". The False rows are the whole reason the second question exists.
-_RESTART_REQUIRING_PATHS = (
-    # The vendored mngr: this process imports it in-process and shells out to
-    # it, so a tree advance leaves it running old code against new state.
-    ("system/vendor/mngr/libs/mngr/imbue/mngr/api/list.py", True),
-    # The settings file this process re-reads on every request.
-    (".mngr/settings.toml", True),
-    # Restart-requiring for other processes, not this one: nothing here is
-    # imported by the system interface.
-    ("system/supervisord.conf", False),
-    ("system/libs/bootstrap/src/bootstrap/manager.py", False),
-) + tuple(
-    # Every workspace package this process imports: the apply must restart the
-    # services agent for it, and this server is stale after it.
-    (path, True)
-    for path in _IMPORTED_WORKSPACE_PACKAGE_SOURCE_PATHS
-)
-
-
-@pytest.mark.parametrize(("path", "leaves_this_server_stale"), _RESTART_REQUIRING_PATHS)
-def test_the_restart_rule_and_the_staleness_rule_stay_in_step(path: str, leaves_this_server_stale: bool) -> None:
-    """Every path the apply restarts for is classified here too, one way or the other.
-
-    Without this, adding a restart-requiring prefix to ``classify_path`` and
-    forgetting this module leaves a real skew showing no banner -- and nothing
-    else in either suite can see that, because each side is individually
-    self-consistent.
-    """
-    classify_path = _load_apply_script().classify_path
-    assert classify_path(path).requires_restart is True
-    assert _is_path_relevant_to_this_server(path) is leaves_this_server_stale

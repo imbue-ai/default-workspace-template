@@ -690,8 +690,9 @@ it.)
 ### 5b. Apply the update (one atomic motion)
 
 **Carry rebuild-only findings into the results message; they do not block the
-apply.** The apply is deterministic and has no opt-outs: it re-runs the
-provisioner whenever a file the provisioner reads changed (its scripts and
+apply.** The apply is deterministic and has no opt-outs: it restarts the
+services agent on every apply, re-runs the provisioner whenever a file the
+provisioner reads changed (`setup_system.sh`, any installer it chains, and
 `.mngr/apt-snapshot-timestamp`), and there is no flag to land the merge
 without that. When the worker's report flags either of
 these, apply anyway and make the finding a *leading caveat* of the results
@@ -749,11 +750,10 @@ the worker's `update-self:` merge commit (preserved verbatim -- the marker
 `assist` relies on), snapshots the pre-apply state (built bundle, root
 `.venv`, both uv tool environments, `node_modules`), refreshes the affected
 environments, re-runs `system/scripts/setup_system.sh` when a file it reads
-changed (its scripts, `.mngr/apt-snapshot-timestamp`; before any restart),
-installs or builds
-the frontend bundle, pre-flights, restarts the services agent when anything
-restart-requiring changed (system-interface backend, vendored-mngr source,
-`.mngr/settings.toml`, supervisord/bootstrap), probes the live UI to the
+changed (the script, any installer it chains, `.mngr/apt-snapshot-timestamp`;
+before the restart), pre-flights the merged backend, installs or builds the
+frontend bundle, restarts the services agent (every apply; nothing live is
+left on pre-merge code), probes the live UI to the
 frontend standard, refreshes every open view, writes the
 `docs/VERSION_HISTORY.md` ledger entry, and runs `uv run env-converge upgrade`
 -- all inside a single near-OOM-exempt process that reverts the entire merge
@@ -878,21 +878,12 @@ the worker's impact analysis, so work the report:
 
 - **`shared_runtime` live consumers** -- a changed `system/scripts/**`,
   `system/libs/**`, `system/services/**`, `system/apps/**`, or `.agents/**`
-  file applies to future agents automatically, but the report's impact
-  analysis names any *live* service depending on it that the apply did not
-  already restart. Restart that service (usually `mngr start --restart
-  system-services`, then `python3 system/scripts/refresh_workspace_view.py` so
-  open views reload; skip both when the apply already restarted).
-
-  This is the one land-then-activate gap the apply deliberately keeps. A
-  supervisord-programmed service (`system/services/**`) goes on running its
-  pre-merge code until its program restarts, and the apply does not restart it:
-  the only restart it owns is the services agent's, which bounces *every*
-  program and blips the user's UI -- far too blunt for, say, a backup-service
-  change. Activating these precisely means restarting the individual programs a
-  change actually touches, which the apply cannot infer from paths alone; until
-  it can, that judgement is the report's and the restart is yours. Say so to
-  the user rather than implying the merge alone made it live.
+  file applies to future agents automatically, and the apply's restart of the
+  services agent (which bounces every supervisord program) has already put
+  every built-in service on the merged code. What the report's impact
+  analysis can still name is a *user-created* consumer -- an app or skill of
+  the user's that reads something the update changed -- and that is yours to
+  check and, if it broke, to carry into the results message.
 - **`Dockerfile`** -- apply the live-applicable hunks the report calls out.
   Version pins live in `system/scripts/setup_system.sh`, so a pin bump is a
   provisioner change the apply already re-ran the script for (keep

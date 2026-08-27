@@ -138,7 +138,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, NamedTuple, Sequence
+from typing import Callable, Collection, NamedTuple, Sequence
 
 # The repo-relative directory holding the update-self skill (SKILL.md,
 # references/, scripts/). Used by ``bootstrap-skill`` to extract the target
@@ -499,62 +499,58 @@ CLASS_DOCKERFILE = "dockerfile"
 CLASS_DOCS = "docs"
 CLASS_OTHER = "other"
 
-# Files whose effects land at image-build / workspace-create / first-boot
-# provisioning time -- the pinned global toolchain and the create/agent config --
-# rather than at runtime. A change to one never reaches a *live* workspace by
-# restarting a service (nothing running imports it): it needs the provisioning
-# step re-run live (these scripts are idempotent) or a workspace rebuild. Split
-# out of ``shared_runtime``/``other`` so the apply re-runs the provisioner for
-# them instead of concluding there is nothing live to do.
-_PROVISIONER_SCRIPTS = frozenset(
-    {
-        "system/scripts/setup_system.sh",  # pinned global toolchain (latchkey, uv, claude, ...)
-        "system/scripts/_provision_guard.sh",  # the guard that gates the above
-        "system/scripts/write_apt_sources.sh",
-        # The sibling installers setup_system.sh chains, each the single source
-        # of truth for its own pin.
-        "system/scripts/install_secret_scanners.sh",
-        "system/scripts/agy_install-1.1.16.sh",
-        "system/scripts/install_owner_exec.sh",
-        "system/scripts/install_dufs.sh",
-    }
-)
+# The pinned-toolchain provisioner: the one script every provider runs to
+# install the global toolchain (system packages, language runtimes, pinned
+# CLIs). Its effects land at image-build / workspace-create time rather than at
+# runtime, so a change to it -- or to any installer it chains -- never reaches
+# a *live* workspace by restarting a service: the apply re-runs it live
+# (idempotent) for the files it reads (:func:`read_provisioner_inputs`).
+PROVISIONER_SCRIPT = "system/scripts/setup_system.sh"
+# The one file outside ``system/scripts/`` the provisioner reads: the committed
+# apt snapshot timestamp, read by the ``write_apt_sources.sh`` it chains.
+_APT_SNAPSHOT_TIMESTAMP = ".mngr/apt-snapshot-timestamp"
+# A line on which the provisioner runs or sources another script by path
+# (``bash "$dir/x.sh"``, ``. "$(dirname "$0")/x.sh"``), as opposed to one it
+# only mentions in a comment; the basenames on it are the candidates.
+_PROVISIONER_CHAIN_LINE = re.compile(r"^\s*(?:bash|\.)\s+(.*)$", re.MULTILINE)
+_SHELL_SCRIPT_BASENAME = re.compile(r"([\w.-]+\.sh)\b")
 
 
-# The files the provisioner actually reads when it runs: its own scripts and
-# the committed apt snapshot timestamp (read by ``write_apt_sources.sh``). A
-# change elsewhere in the ``provisioner`` class -- the ``.mngr/`` create config
-# -- does not change what ``setup_system.sh`` would do, so re-running it for
-# one is an 1800s-budget no-op that can only leave a spurious
-# provision-incomplete record behind.
-_PROVISIONER_INPUTS = _PROVISIONER_SCRIPTS | {".mngr/apt-snapshot-timestamp"}
+def read_provisioner_inputs(repo_root: Path) -> frozenset[str]:
+    """The repo-relative files whose change means the provisioner must re-run.
+
+    Its entry point, the apt snapshot timestamp, and every sibling installer
+    the entry point chains -- read off the entry point in the tree at
+    ``repo_root`` (the merged tree, so a release that adds or retires an
+    installer is read as it ships) and kept only when the sibling exists there,
+    which drops the image-baked and ``/tmp`` paths the script also invokes.
+    """
+    inputs = {PROVISIONER_SCRIPT, _APT_SNAPSHOT_TIMESTAMP}
+    script = repo_root / PROVISIONER_SCRIPT
+    if script.is_file():
+        for line in _PROVISIONER_CHAIN_LINE.findall(script.read_text()):
+            for name in _SHELL_SCRIPT_BASENAME.findall(line):
+                if (script.parent / name).is_file():
+                    inputs.add(f"{script.parent.relative_to(repo_root)}/{name}")
+    return frozenset(inputs)
 
 
 def _is_provisioner(path: str) -> bool:
     """Whether ``path`` shapes how the workspace/agent is *provisioned*.
 
-    The pinned-toolchain scripts (:data:`_PROVISIONER_SCRIPTS`) plus everything
-    under ``.mngr/`` -- the ``mngr create`` defaults, provider blocks, and the
-    agent Claude-version pin that provisioning applies to every new workspace.
+    The provisioner's entry point plus everything under ``.mngr/`` -- the
+    ``mngr create`` defaults, provider blocks, and the agent Claude-version pin
+    that provisioning applies to every new workspace. The installers the entry
+    point chains classify as ``shared_runtime`` like their neighbours; the
+    apply re-runs the provisioner for them all the same.
     """
-    return path in _PROVISIONER_SCRIPTS or path.startswith(".mngr/")
+    return path == PROVISIONER_SCRIPT or path.startswith(".mngr/")
 
 
 # Basenames whose change means a dependency manifest moved, so the editable
 # install / build needs its env refreshed rather than just picking up new source.
 _MANIFEST_BASENAMES = frozenset(
     {"pyproject.toml", "uv.lock", "package.json", "package-lock.json"}
-)
-
-# Workspace libraries the running system interface imports in-process (its
-# pyproject depends on both as editable installs): the OOM banding library and
-# the tk command parser. Like the vendored mngr, their source is "picked up
-# live" only by a fresh process, so a change must bounce the services agent.
-# The staleness detector (system_interface/update_staleness.py) counts the
-# same two trees, and this is what keeps the two rules from disagreeing.
-_SYSTEM_INTERFACE_IMPORTED_LIB_PREFIXES = (
-    "system/services/oom_priority/",
-    "system/libs/tk_command_parsing/",
 )
 
 
@@ -572,15 +568,12 @@ class PathClass(NamedTuple):
     ``project`` is the pytest
     project whose suite covers the path (``.`` = the root workspace,
     ``system/apps/system_interface`` and ``system/vendor/mngr`` run their own suites);
-    ``is_manifest`` flags a dependency-manifest change that needs an env refresh;
-    ``requires_restart`` flags a path whose change must bounce the services agent
-    before the workspace is consistent with the merged tree.
+    ``is_manifest`` flags a dependency-manifest change that needs an env refresh.
     """
 
     reveal_class: str
     project: str
     is_manifest: bool
-    requires_restart: bool
 
 
 def _project_for_path(path: str) -> str:
@@ -606,22 +599,19 @@ def classify_path(path: str) -> PathClass:
     - ``system_interface`` -- ``system/apps/system_interface/**``; the apply
       rebuilds or installs the bundle and refreshes the backend's environment
       on a manifest change (:func:`_refresh_backend_dependencies`).
-    - ``service`` -- ``system/supervisord.conf`` and ``system/libs/bootstrap/**``; applied by
-      restarting the services agent (``mngr start --restart system-services``,
-      then ``system/scripts/refresh_workspace_view.py`` to rebuild the user's
-      view, which the restart alone leaves showing the previous build).
-    - ``editable_tool`` -- ``system/vendor/mngr/**``; ``.py`` picked up live, a manifest
-      change needs ``uv sync --all-packages`` / an editable reinstall.
+    - ``service`` -- ``system/supervisord.conf`` and ``system/libs/bootstrap/**``.
+    - ``editable_tool`` -- ``system/vendor/mngr/**``; a manifest change needs
+      ``uv sync --all-packages`` / an editable reinstall.
     - ``shared_runtime`` -- ``system/scripts/**``, other ``system/libs/**``,
       ``system/services/**``, ``system/apps/**``, and ``.agents/**``: may be a live runtime dependency of
       a service or a workspace-added skill or app, so it needs the worker's
       impact analysis before it can be called a silent merge.
-    - ``provisioner`` -- the pinned-toolchain scripts and the ``.mngr/`` create
-      config (see :func:`_is_provisioner`); shapes image-build / create-time
-      provisioning, so a change is never applied by a service restart alone:
-      the apply re-runs the idempotent provisioner for the files it reads
-      (:data:`_PROVISIONER_INPUTS`), and the create config is the worker's to
-      mirror live or flag for a workspace rebuild.
+    - ``provisioner`` -- the pinned-toolchain entry point and the ``.mngr/``
+      create config (see :func:`_is_provisioner`); shapes image-build /
+      create-time provisioning, so a change is never applied by a service
+      restart alone: the apply re-runs the idempotent provisioner for the
+      files it reads (:func:`read_provisioner_inputs`), and the create config
+      is the worker's to mirror live or flag for a workspace rebuild.
     - ``dockerfile`` -- ``system/Dockerfile``; split by hunk into live-applicable
       vs rebuild-only by worker judgement.
     - ``docs`` -- a ``README.md`` or a ``changelog/*.md`` entry wherever it lives,
@@ -629,33 +619,6 @@ def classify_path(path: str) -> PathClass:
       ``SKILL.md`` under ``.agents/`` is *not* docs: a skill's prose is what an
       agent runs, so it stays ``shared_runtime``.
     - ``other`` -- anything else.
-
-    ``requires_restart`` is orthogonal to the class: it names the paths whose
-    change leaves a *live* process inconsistent with the merged tree until the
-    services agent restarts. ``service`` always does. ``editable_tool`` does
-    too: the vendored mngr is an editable install, so the moment the tree
-    advances, the running system interface (which imports it in-process) is old
-    code operating on new on-disk state -- "picked up live" only ever held for
-    a fresh process. And ``.mngr/settings.toml`` alone among the provisioner
-    paths: the running system interface re-reads it on every request, so a
-    settings file newer than the code reading it must be paired with a restart
-    or nothing live stops speaking the old schema. A ``.md`` file under either
-    restart-requiring prefix keeps its prefix's class but never the restart:
-    no live process holds documentation in memory (mngr's own help topics are
-    read from disk per request through the editable install), and bouncing the
-    services agent blips the user's UI.
-
-    A supervisord-programmed ``system/services/**`` change is the deliberate
-    exception: it leaves that program running pre-merge code, but the only
-    restart this flag can ask for is the services agent's, which bounces every
-    program at once. Activating one service precisely means restarting the
-    individual programs a change touches, which cannot be inferred from paths
-    alone -- so it stays with the worker's impact analysis and the lead (see
-    the update-self skill's 5c), and this returns ``False``. The two libraries
-    the system interface itself imports
-    (:data:`_SYSTEM_INTERFACE_IMPORTED_LIB_PREFIXES`) are the exception to
-    the exception: a non-test ``.py`` there is in-process code of the very
-    service the restart bounces, so it carries the flag like vendored mngr.
     """
     is_manifest = Path(path).name in _MANIFEST_BASENAMES
     project = _project_for_path(path)
@@ -669,28 +632,22 @@ def classify_path(path: str) -> PathClass:
     # keeps its own class.
     is_changelog_entry = Path(path).parent.name == "changelog" and path.endswith(".md")
     if Path(path).name == "README.md" or is_changelog_entry:
-        return PathClass(CLASS_DOCS, project, is_manifest, False)
+        return PathClass(CLASS_DOCS, project, is_manifest)
     # Provisioning files are matched before the generic ``system/scripts/`` and
-    # catch-all rules below: a toolchain script lives under ``system/scripts/`` (would
-    # otherwise read as ``shared_runtime``) and ``.mngr/settings.toml`` would
-    # otherwise fall through to ``other`` -- either way the apply would miss
-    # its build/create-time impact.
+    # catch-all rules below: the toolchain entry point lives under
+    # ``system/scripts/`` (would otherwise read as ``shared_runtime``) and
+    # ``.mngr/settings.toml`` would otherwise fall through to ``other`` --
+    # either way the worker would miss its build/create-time impact.
     if _is_provisioner(path):
-        return PathClass(
-            CLASS_PROVISIONER, project, is_manifest, path == ".mngr/settings.toml"
-        )
+        return PathClass(CLASS_PROVISIONER, project, is_manifest)
     if path.startswith("system/apps/system_interface/"):
-        return PathClass(CLASS_SYSTEM_INTERFACE, project, is_manifest, False)
-    # Docs under a restart-requiring prefix (a non-README ``docs/*.md``, which
-    # the README/changelog rule above does not catch) keep the class but not
-    # the restart: nothing live holds ``.md`` content in memory.
-    is_doc_file = path.endswith(".md")
+        return PathClass(CLASS_SYSTEM_INTERFACE, project, is_manifest)
     if path == "system/supervisord.conf" or path.startswith("system/libs/bootstrap/"):
-        return PathClass(CLASS_SERVICE, project, is_manifest, not is_doc_file)
+        return PathClass(CLASS_SERVICE, project, is_manifest)
     if path.startswith("system/vendor/mngr/"):
-        return PathClass(CLASS_EDITABLE_TOOL, project, is_manifest, not is_doc_file)
+        return PathClass(CLASS_EDITABLE_TOOL, project, is_manifest)
     if path == "system/Dockerfile":
-        return PathClass(CLASS_DOCKERFILE, project, is_manifest, False)
+        return PathClass(CLASS_DOCKERFILE, project, is_manifest)
     if (
         path.startswith("system/scripts/")
         or path.startswith(".agents/")
@@ -698,17 +655,10 @@ def classify_path(path: str) -> PathClass:
         or path.startswith("system/services/")
         or path.startswith("system/apps/")
     ):
-        is_imported_by_system_interface = (
-            path.startswith(_SYSTEM_INTERFACE_IMPORTED_LIB_PREFIXES)
-            and path.endswith(".py")
-            and not _is_test_file(path)
-        )
-        return PathClass(
-            CLASS_SHARED_RUNTIME, project, is_manifest, is_imported_by_system_interface
-        )
+        return PathClass(CLASS_SHARED_RUNTIME, project, is_manifest)
     if path == "CLAUDE.md" or "/changelog/" in path or path.endswith(".md"):
-        return PathClass(CLASS_DOCS, project, is_manifest, False)
-    return PathClass(CLASS_OTHER, project, is_manifest, False)
+        return PathClass(CLASS_DOCS, project, is_manifest)
+    return PathClass(CLASS_OTHER, project, is_manifest)
 
 
 class MergeClassification(NamedTuple):
@@ -717,8 +667,7 @@ class MergeClassification(NamedTuple):
     ``merged`` are files where local also diverged (reconcile + validate);
     ``pulled_in`` are clean upstream arrivals local left untouched (trust, but
     still apply). Each entry is a dict with ``path``, ``reveal_class``,
-    ``project``, ``is_manifest``, ``requires_restart``, ``disposition``. The
-    summary fields collect the
+    ``project``, ``is_manifest``, ``disposition``. The summary fields collect the
     distinct reveal classes and the projects whose suites the merged set implies.
 
     ``has_merge_work`` is true whenever the merged set is non-empty: any file
@@ -747,7 +696,6 @@ def _entry(path: str, disposition: str) -> dict[str, object]:
         "reveal_class": info.reveal_class,
         "project": info.project,
         "is_manifest": info.is_manifest,
-        "requires_restart": info.requires_restart,
         "disposition": disposition,
     }
 
@@ -1163,10 +1111,6 @@ FRONTEND_BUILD_INDEX = f"{STATIC_DIR}/index.html"
 # exit-0 build, and a build that wrote nothing is caught by the index check
 # (vite empties the output directory first), not by the stamp.
 BUNDLE_STAMP_FILENAME = ".source-tree-hash"
-# The pinned-toolchain provisioner, re-run live when a provisioner-classified
-# path changed (idempotent; the content-addressed provision guard skips what
-# already matches).
-PROVISIONER_SCRIPT = "system/scripts/setup_system.sh"
 # The environment the provisioner runs under when re-run live: the image
 # build's, not the calling agent's. Root's passwd home moves to /home/user at
 # runtime, so an agent-driven run carries HOME=/home/user, and an installer
@@ -1374,16 +1318,16 @@ def _protect_from_memory_shed(repo_root: Path) -> None:
     service: losing a build is an ordinary failure the rollback absorbs, but
     losing the apply mid-motion is the half-applied state this design exists to
     prevent. Only the authority paths that would repair a failed apply
-    (owner-exec, the terminal) stay below it. Best-effort by construction; an
-    apply that cannot be protected is still an apply worth running -- and it
-    usually cannot be: lowering ``oom_score_adj`` below the value a process
-    inherited needs ``CAP_SYS_RESOURCE``, which the container does not grant,
-    so an apply launched from a chat agent (a band far above this one) or
-    from the recovery cron keeps its launcher's band and the write below
-    fails with the warning. The band holds only when launched from something
-    already at or below it. Called from ``__main__`` rather than from the
-    command functions so exercising them in a test cannot re-band the test
-    runner.
+    (owner-exec, the terminal) stay below it. The write succeeds from any
+    launcher in the workspace -- a chat agent, the recovery cron, a terminal:
+    the kernel only refuses an ``oom_score_adj`` below the lowest value the
+    process has ever held (inherited across fork), and nothing in the
+    container has ``CAP_SYS_RESOURCE``, the one capability that raises that
+    floor, so it stays at 0 for every process tree (measured on the docker,
+    lima and imbue_cloud providers). Best-effort all the same: an apply that
+    cannot be protected is still an apply worth running. Called from
+    ``__main__`` rather than from the command functions so exercising them in
+    a test cannot re-band the test runner.
     """
     global _BANDS
     _BANDS = _load_bands(repo_root)
@@ -1397,10 +1341,9 @@ def _protect_from_memory_shed(repo_root: Path) -> None:
         band = _BANDS.SERVICE_BANDS.get("system_interface", 20)
     if not _BANDS.set_oom_score_adj(os.getpid(), band):
         sys.stderr.write(
-            "warning: could not lower this process's memory-shed priority (lowering "
-            "it below the launcher's band needs CAP_SYS_RESOURCE, so this is expected "
-            "from a chat agent or the recovery cron); the apply keeps the band it was "
-            "launched in, and a shed during it would skip the rollback.\n"
+            "warning: could not lower this process's memory-shed priority; the apply "
+            "keeps the band it was launched in, and a shed during it would skip the "
+            "rollback.\n"
         )
 
 
@@ -1651,15 +1594,14 @@ def _is_backend_manifest(path: str) -> bool:
 
 
 class ApplyPlan(NamedTuple):
-    """What one apply must do, derived from the merged diff's paths.
+    """What one apply must do beyond the restart, derived from the merged diff.
 
-    The system-interface split (frontend vs backend, source vs manifest) is
-    finer than :func:`classify_path`'s single ``system_interface`` class,
-    because those four need different work; the rest rides on it --
-    ``provisioner`` for the pinned-toolchain re-run (keyed on the files the
-    provisioner reads, :data:`_PROVISIONER_INPUTS`, not on the whole class)
-    and ``requires_restart`` for the paths a live process must be bounced
-    over (vendored-mngr source, ``.mngr/settings.toml``, the service class).
+    Every apply restarts the services agent, pre-flights the merged backend
+    first, and probes afterwards; the plan only decides the work in front of
+    that. The system-interface split (frontend vs backend, source vs manifest)
+    is finer than :func:`classify_path`'s single ``system_interface`` class
+    because those four need different work; ``provisioner`` is the
+    pinned-toolchain re-run, keyed on the files the provisioner reads.
     """
 
     frontend_src: bool
@@ -1667,7 +1609,6 @@ class ApplyPlan(NamedTuple):
     backend_src: bool
     backend_manifest: bool
     provisioner: bool
-    requires_restart: bool
 
     @property
     def frontend(self) -> bool:
@@ -1677,37 +1618,22 @@ class ApplyPlan(NamedTuple):
     def backend(self) -> bool:
         return self.backend_src or self.backend_manifest
 
-    @property
-    def needs_restart(self) -> bool:
-        """Whether the services agent must restart before the workspace is
-        consistent with the merged tree. The system interface's backend implies
-        it; so does any ``requires_restart``-classified path."""
-        return self.backend or self.requires_restart
 
-    @property
-    def any(self) -> bool:
-        return (
-            self.frontend or self.backend or self.provisioner or self.requires_restart
-        )
-
-
-def plan_apply(paths: Sequence[str]) -> ApplyPlan:
+def plan_apply(paths: Sequence[str], provisioner_inputs: Collection[str]) -> ApplyPlan:
     """Classify the merged diff's ``paths`` into an :class:`ApplyPlan`.
 
-    The frontend build output (``static/``) and ``node_modules`` are gitignored
-    and never appear in a diff; they are covered by snapshots, not the plan.
+    ``provisioner_inputs`` is :func:`read_provisioner_inputs` for the tree
+    being applied. The frontend build output (``static/``) and
+    ``node_modules`` are gitignored and never appear in a diff; they are
+    covered by snapshots, not the plan.
     """
     frontend_src = False
     frontend_manifest = False
     backend_src = False
     backend_manifest = False
     provisioner = False
-    requires_restart = False
     for path in paths:
-        info = classify_path(path)
-        if info.requires_restart:
-            requires_restart = True
-        if path in _PROVISIONER_INPUTS:
+        if path in provisioner_inputs:
             provisioner = True
         if path in (
             f"{FRONTEND_DIR}/package.json",
@@ -1733,7 +1659,6 @@ def plan_apply(paths: Sequence[str]) -> ApplyPlan:
         backend_src=backend_src,
         backend_manifest=backend_manifest,
         provisioner=provisioner,
-        requires_restart=requires_restart,
     )
 
 
@@ -2928,7 +2853,9 @@ def _refresh_backend_dependencies(
     _reinstall_tool(
         MNGR_TOOL_NAME, MNGR_EXECUTABLE, MNGR_DIR, repo_root, runner, expend, timeout
     )
-    _reinstall_tool(TOOL_NAME, TOOL_NAME, SYSTEM_INTERFACE_DIR, repo_root, runner, expend, timeout)
+    _reinstall_tool(
+        TOOL_NAME, TOOL_NAME, SYSTEM_INTERFACE_DIR, repo_root, runner, expend, timeout
+    )
     _run_checked(
         runner,
         expend(["uv", "sync", "--all-packages", "--frozen"]),
@@ -3467,22 +3394,13 @@ def _recover_running_state(
                 repo_root,
                 "mngr start --restart",
             )
-        if plan.needs_restart:
-            healthy = wait_healthy(
-                http,
-                f"{base_url}{HEALTH_PATH}",
-                _HEALTH_ATTEMPTS,
-                _HEALTH_INTERVAL_SECONDS,
-                sleeper,
-            )
-        else:
-            healthy = wait_healthy(
-                http,
-                f"{base_url}{SERVE_PATH}",
-                _HEALTH_ATTEMPTS,
-                _HEALTH_INTERVAL_SECONDS,
-                sleeper,
-            )
+        healthy = wait_healthy(
+            http,
+            f"{base_url}{HEALTH_PATH}",
+            _HEALTH_ATTEMPTS,
+            _HEALTH_INTERVAL_SECONDS,
+            sleeper,
+        )
     except (ApplyFailed, OSError) as exc:
         sys.stderr.write(f"recovery step failed: {exc}\n")
         return _NOT_RECOVERED
@@ -3709,288 +3627,281 @@ def apply_update(
     _advance(PHASE_MERGED)
 
     name_status = _diff_name_status(repo_root, marker.rollback_to, runner)
-    plan = plan_apply([path for _, path in name_status])
+    plan = plan_apply(
+        [path for _, path in name_status], read_provisioner_inputs(repo_root)
+    )
 
     unresolved_frontend_failure: str | None = None
     provisioner_failure: str | None = None
-    if plan.any:
-        # The regression baseline: whether a working frontend is owed afterwards
-        # is decided by what was being served *before* the apply -- measured
-        # once and persisted, so a resumed apply is not judged against the
-        # wreckage its own interrupted run left. Measured for every live plan
-        # (a provisioner-only apply too): the rollback's recovery and its
-        # report are held to this baseline, so leaving it unmeasured would
-        # falsely report a healthy UI as already-broken after a rollback.
-        if marker.frontend_expected is None:
-            marker.frontend_expected = (
-                describe_frontend_failure(http, resolved_base, sleeper) is None
-            )
-            write_marker(marker, repo_root, now)
-        is_frontend_expected = bool(marker.frontend_expected)
+    # The regression baseline: whether a working frontend is owed afterwards
+    # is decided by what was being served *before* the apply -- measured
+    # once and persisted, so a resumed apply is not judged against the
+    # wreckage its own interrupted run left: the rollback's recovery and its
+    # report are held to this baseline, so leaving it unmeasured would
+    # falsely report a healthy UI as already-broken after a rollback.
+    if marker.frontend_expected is None:
+        marker.frontend_expected = (
+            describe_frontend_failure(http, resolved_base, sleeper) is None
+        )
+        write_marker(marker, repo_root, now)
+    is_frontend_expected = bool(marker.frontend_expected)
 
-        # Decide up front whether the worker's already-built bundle will be
-        # installed: when it will, the npm dependency refresh below is dead
-        # work on the critical path (installing the bundle is a plain copy that
-        # needs no node_modules), and `npm ci` is the slowest, most
-        # memory-hungry step of the whole motion. The stamp comparison is what
-        # makes this decision trustworthy -- an unverifiable or stale bundle is
-        # rejected here, so the live-build fallback (and its npm refresh) still
-        # runs for it.
-        expected_bundle_hash: str | None = None
-        usable_worker_bundle: str | None = None
-        if plan.frontend:
-            expected_bundle_hash = _expected_frontend_tree_hash(repo_root, runner)
-            if expected_bundle_hash is None:
-                sys.stderr.write(
-                    f"note: could not resolve the merged tree's {FRONTEND_DIR} hash, so "
-                    "the bundle cannot be verified against the merged source; accepting "
-                    "it on its index alone.\n"
-                )
-            bundle_reject = _worker_bundle_reject_reason(
-                marker.worker_bundle, expected_bundle_hash
-            )
-            if marker.worker_bundle is not None:
-                if bundle_reject is None:
-                    usable_worker_bundle = marker.worker_bundle
-                else:
-                    sys.stderr.write(
-                        f"note: --worker-bundle {marker.worker_bundle} "
-                        f"{bundle_reject}; building live instead.\n"
-                    )
-
-        failure: ApplyFailed | None = None
-        try:
-            marker.snapshots = take_snapshots(plan, repo_root, runner, marker.snapshots)
-            _advance(PHASE_SNAPSHOTTED)
-
-            if plan.frontend_manifest and usable_worker_bundle is None:
-                _run_checked(
-                    runner,
-                    expend(["npm", "ci"]),
-                    repo_root / FRONTEND_DIR,
-                    "npm ci",
-                    timeout=_NPM_CI_TIMEOUT_SECONDS,
-                )
-            if plan.backend_manifest:
-                _refresh_backend_dependencies(
-                    repo_root, runner, expend, _ENVIRONMENT_REFRESH_TIMEOUT_SECONDS
-                )
-            _advance(PHASE_REFRESHED)
-
-            # The provisioner runs before any restart, so nothing boots into a
-            # tree whose pinned global toolchain has not caught up with it. Its
-            # failure alone does not roll the merge back: a failed tool install
-            # leaves the tree and services consistent, and re-running the
-            # provisioner later is cheap and merge-independent -- whereas the
-            # rollback costs the whole release plus a fresh worker pass. So the
-            # apply carries on to the restart and the probes; a load-bearing
-            # provisioner change (a node bump, a new apt dependency) still
-            # fails those and still rolls back, and a landed update records
-            # the gap (``write_provision_incomplete``) rather than hiding it.
-            if plan.provisioner:
-                # Recorded before the run is attempted, like the restart flag:
-                # a provisioner that fails part-way (or is killed) may already
-                # have moved global tool state, so recovery must re-run it from
-                # the restored tree (best-effort) even then.
-                marker.provisioner_ran = True
-                write_marker(marker, repo_root, now)
-                provisioner_failure = _run_provisioner(runner, repo_root)
-                if provisioner_failure is not None:
-                    sys.stderr.write(
-                        f"warning: {provisioner_failure}\nContinuing without rolling "
-                        "back: the tree and services stay consistent without the "
-                        "provisioner, so the update lands if the probes pass and is "
-                        "recorded as provisioning-incomplete; if they fail it rolls "
-                        "back as usual.\n"
-                    )
-                _advance(PHASE_PROVISIONED)
-
-            # The pre-flight runs before the bundle is touched: it needs only
-            # the merged tree and its refreshed environment, and a merged
-            # backend that cannot boot is then rejected while the live bundle
-            # is still the one that was serving, instead of after ``static/``
-            # has been rewritten and must be restored from its snapshot.
-            if plan.needs_restart:
-                preflight_output = _preflight(repo_root, http, spawner, sleeper, expend)
-                if preflight_output is not None:
-                    raise ApplyFailed(
-                        "merged backend failed to boot in a pre-flight check; live "
-                        "service not restarted",
-                        detail=preflight_output
-                        or "(the pre-flight boot wrote nothing at all)",
-                        detail_heading="pre-flight boot output",
-                    )
-
-            if plan.frontend:
-                _install_or_build_bundle(
-                    usable_worker_bundle,
-                    repo_root,
-                    runner,
-                    expend,
-                    _FRONTEND_BUILD_TIMEOUT_SECONDS,
-                )
-                _assert_bundle_built(
-                    repo_root, expected_bundle_hash, live_service_restarted=False
-                )
-                _advance(PHASE_BUILT)
-
-            if plan.needs_restart:
-                # Recorded before the restart is attempted, so a kill anywhere
-                # past this line leaves a marker that tells recovery to restart.
-                marker.live_service_restarted = True
-                write_marker(marker, repo_root, now)
-                _run_checked(
-                    runner,
-                    ["mngr", "start", "--restart", "system-services"],
-                    repo_root,
-                    "mngr start --restart",
-                    live_service_restarted=True,
-                    timeout=_RESTART_TIMEOUT_SECONDS,
-                )
-                _advance(PHASE_RESTARTED)
-                if not wait_healthy(
-                    http,
-                    f"{resolved_base}{HEALTH_PATH}",
-                    _HEALTH_ATTEMPTS,
-                    _HEALTH_INTERVAL_SECONDS,
-                    sleeper,
-                ):
-                    raise ApplyFailed(
-                        "backend did not become healthy after restart",
-                        live_service_restarted=True,
-                    )
-
-            if plan.frontend or plan.needs_restart:
-                # Scoped to a *regression*: only a frontend that was serving
-                # before this apply has to be serving after it. Ahead of the
-                # view refresh, so an apply that regressed the frontend rolls
-                # back rather than asking every open view to reload into it.
-                unresolved_frontend_failure = describe_frontend_failure(
-                    http, resolved_base, sleeper
-                )
-                if unresolved_frontend_failure is not None:
-                    if is_frontend_expected:
-                        raise ApplyFailed(
-                            "the live UI stopped serving a working frontend: "
-                            f"{unresolved_frontend_failure}",
-                            live_service_restarted=plan.needs_restart,
-                        )
-                    sys.stderr.write(
-                        "warning: the live UI is not serving a working frontend, and was "
-                        "not before this apply either, so it was not rolled back for it: "
-                        f"{unresolved_frontend_failure}\n"
-                    )
-            # Past the last rollback point: nothing after the probes can raise
-            # ApplyFailed, so the interruption marker and the snapshots come
-            # down NOW -- before the view refresh (a shell reloading into a
-            # lingering marker would render the "update was interrupted"
-            # banner over an apply that just succeeded) and before the
-            # post-success bookkeeping (so an unattended ``recover`` can never
-            # roll back an update that already went live; the ledger append
-            # and env-converge are both safely re-runnable without a marker).
-            sys.stderr.write(_phase_timing_line(marker))
-            if provisioner_failure is not None:
-                write_provision_incomplete(
-                    repo_root, provisioner_failure, marker.dri_agent, merge_ref, now
-                )
-            elif plan.provisioner:
-                clear_provision_incomplete(repo_root)
-            clear_marker(repo_root)
-            discard_snapshots(repo_root)
-            # The emergency record only comes down on confirmed health, which
-            # is more than this exit code carries: an apply over a UI that was
-            # already broken lands, exits 0 naming the breakage, and leaves a
-            # user who still cannot see the workspace -- exactly the state the
-            # record exists to keep visible. Confirmed means probed and
-            # working, whatever the baseline was: an apply that lands over a
-            # broken UI and finds it working afterwards is the repair the
-            # record was waiting for.
-            is_frontend_probed = plan.frontend or plan.needs_restart
-            if is_frontend_probed and unresolved_frontend_failure is None:
-                clear_emergency(repo_root)
-            _refresh_workspace_view(repo_root, runner)
-        except ApplyFailed as failed:
-            failure = failed
-        except Exception as unexpected:
-            # The last resort, and the one place a blind catch is the correct
-            # answer: past this point the merge is landed and the pre-apply
-            # copies are the only ones left, so an exception nobody predicted
-            # must still reach the rollback below. Letting it escape is what
-            # strands the workspace half-applied -- which is how a bands module
-            # older than this script (an AttributeError inside `as_expendable`)
-            # and a missing executable have each already got out. The traceback
-            # goes in `detail` so the DRI agent can still see the bug the
-            # rollback just tidied away.
-            failure = ApplyFailed(
-                f"the apply raised an unexpected "
-                f"{type(unexpected).__name__}: {unexpected}",
-                live_service_restarted=marker.live_service_restarted,
-                detail=traceback.format_exc(),
-                detail_heading="traceback",
-            )
-        if failure is not None:
+    # Decide up front whether the worker's already-built bundle will be
+    # installed: when it will, the npm dependency refresh below is dead
+    # work on the critical path (installing the bundle is a plain copy that
+    # needs no node_modules), and `npm ci` is the slowest, most
+    # memory-hungry step of the whole motion. The stamp comparison is what
+    # makes this decision trustworthy -- an unverifiable or stale bundle is
+    # rejected here, so the live-build fallback (and its npm refresh) still
+    # runs for it.
+    expected_bundle_hash: str | None = None
+    usable_worker_bundle: str | None = None
+    if plan.frontend:
+        expected_bundle_hash = _expected_frontend_tree_hash(repo_root, runner)
+        if expected_bundle_hash is None:
             sys.stderr.write(
-                f"apply failed: {failure}\n{_detail_block(failure)}"
-                f"{_phase_timing_line(marker)}"
-                f"rolling back to {marker.rollback_to[:12]} and restoring the "
-                "workspace...\n"
+                f"note: could not resolve the merged tree's {FRONTEND_DIR} hash, so "
+                "the bundle cannot be verified against the merged source; accepting "
+                "it on its index alone.\n"
             )
-            try:
-                _restore_tree(name_status, marker.rollback_to, repo_root, runner)
-                _commit_rollback(
-                    repo_root,
-                    runner,
-                    marker.rollback_to,
-                    f"Apply failed and was auto-reverted: {failure.headline()}",
+        bundle_reject = _worker_bundle_reject_reason(
+            marker.worker_bundle, expected_bundle_hash
+        )
+        if marker.worker_bundle is not None:
+            if bundle_reject is None:
+                usable_worker_bundle = marker.worker_bundle
+            else:
+                sys.stderr.write(
+                    f"note: --worker-bundle {marker.worker_bundle} "
+                    f"{bundle_reject}; building live instead.\n"
                 )
-                outcome = _recover_running_state(
-                    plan,
-                    repo_root,
-                    resolved_base,
-                    runner,
-                    http,
-                    sleeper,
-                    live_service_restarted=failure.live_service_restarted
-                    or marker.live_service_restarted,
-                    snapshots=marker.snapshots,
-                    is_frontend_expected=is_frontend_expected,
-                    provisioner_ran=marker.provisioner_ran,
+
+    failure: ApplyFailed | None = None
+    try:
+        marker.snapshots = take_snapshots(plan, repo_root, runner, marker.snapshots)
+        _advance(PHASE_SNAPSHOTTED)
+
+        if plan.frontend_manifest and usable_worker_bundle is None:
+            _run_checked(
+                runner,
+                expend(["npm", "ci"]),
+                repo_root / FRONTEND_DIR,
+                "npm ci",
+                timeout=_NPM_CI_TIMEOUT_SECONDS,
+            )
+        if plan.backend_manifest:
+            _refresh_backend_dependencies(
+                repo_root, runner, expend, _ENVIRONMENT_REFRESH_TIMEOUT_SECONDS
+            )
+        _advance(PHASE_REFRESHED)
+
+        # The provisioner runs before any restart, so nothing boots into a
+        # tree whose pinned global toolchain has not caught up with it. Its
+        # failure alone does not roll the merge back: a failed tool install
+        # leaves the tree and services consistent, and re-running the
+        # provisioner later is cheap and merge-independent -- whereas the
+        # rollback costs the whole release plus a fresh worker pass. So the
+        # apply carries on to the restart and the probes; a load-bearing
+        # provisioner change (a node bump, a new apt dependency) still
+        # fails those and still rolls back, and a landed update records
+        # the gap (``write_provision_incomplete``) rather than hiding it.
+        if plan.provisioner:
+            # Recorded before the run is attempted, like the restart flag:
+            # a provisioner that fails part-way (or is killed) may already
+            # have moved global tool state, so recovery must re-run it from
+            # the restored tree (best-effort) even then.
+            marker.provisioner_ran = True
+            write_marker(marker, repo_root, now)
+            provisioner_failure = _run_provisioner(runner, repo_root)
+            if provisioner_failure is not None:
+                sys.stderr.write(
+                    f"warning: {provisioner_failure}\nContinuing without rolling "
+                    "back: the tree and services stay consistent without the "
+                    "provisioner, so the update lands if the probes pass and is "
+                    "recorded as provisioning-incomplete; if they fail it rolls "
+                    "back as usual.\n"
                 )
-            except (subprocess.CalledProcessError, OSError) as rollback_exc:
-                sys.stderr.write(f"the rollback itself failed: {rollback_exc}\n")
-                outcome = _NOT_RECOVERED
-            if outcome.is_recovered:
-                clear_marker(repo_root)
-                discard_snapshots(repo_root)
-                # Same rule as the success path: only a probed, working
-                # frontend takes the record down.
-                if outcome.is_frontend_confirmed:
-                    clear_emergency(repo_root)
-                _report_rolled_back(outcome.is_frontend_confirmed)
-                return 2
-            # The marker is cleared even on the emergency path: this is a
-            # deliberate, fully-reported exit, and re-running the same failed
-            # rollback from cron would not help. The snapshots are kept -- they
-            # are the operator's way back, and so is the emergency record the
-            # report writes in the marker's place.
-            clear_marker(repo_root)
-            _report_emergency(
-                plan,
+            _advance(PHASE_PROVISIONED)
+
+        # The pre-flight runs before the bundle is touched: it needs only
+        # the merged tree and its refreshed environment, and a merged
+        # backend that cannot boot is then rejected while the live bundle
+        # is still the one that was serving, instead of after ``static/``
+        # has been rewritten and must be restored from its snapshot.
+        preflight_output = _preflight(repo_root, http, spawner, sleeper, expend)
+        if preflight_output is not None:
+            raise ApplyFailed(
+                "merged backend failed to boot in a pre-flight check; live "
+                "service not restarted",
+                detail=preflight_output or "(the pre-flight boot wrote nothing at all)",
+                detail_heading="pre-flight boot output",
+            )
+
+        if plan.frontend:
+            _install_or_build_bundle(
+                usable_worker_bundle,
                 repo_root,
-                f"apply of {merge_ref} failed and its rollback could not restore "
-                f"health: {failure.headline()}",
-                marker.dri_agent,
-                now,
+                runner,
+                expend,
+                _FRONTEND_BUILD_TIMEOUT_SECONDS,
             )
-            return 3
-    else:
-        sys.stderr.write("nothing live needed to change for this merge.\n")
-        # Same reasoning as the live-plan clear above: the merge is landed and
-        # nothing live was (or will be) touched, so a kill during the
-        # bookkeeping below must not leave a marker that reads as an update
-        # worth rolling back.
+            _assert_bundle_built(
+                repo_root, expected_bundle_hash, live_service_restarted=False
+            )
+            _advance(PHASE_BUILT)
+
+        # Every apply restarts the services agent, whatever the diff: the
+        # running system interface imports the vendored mngr and the
+        # workspace libraries in-process and re-reads ``.mngr/settings.toml``
+        # per request, and every other supervisord program runs whatever
+        # code was on disk when it started -- so a restart is the only way
+        # to make "the merged tree is live" true for all of them at once,
+        # and deciding it per path is a list nobody keeps complete.
+        # Recorded before the restart is attempted, so a kill anywhere past
+        # this line leaves a marker that tells recovery to restart.
+        marker.live_service_restarted = True
+        write_marker(marker, repo_root, now)
+        _run_checked(
+            runner,
+            ["mngr", "start", "--restart", "system-services"],
+            repo_root,
+            "mngr start --restart",
+            live_service_restarted=True,
+            timeout=_RESTART_TIMEOUT_SECONDS,
+        )
+        _advance(PHASE_RESTARTED)
+        if not wait_healthy(
+            http,
+            f"{resolved_base}{HEALTH_PATH}",
+            _HEALTH_ATTEMPTS,
+            _HEALTH_INTERVAL_SECONDS,
+            sleeper,
+        ):
+            raise ApplyFailed(
+                "backend did not become healthy after restart",
+                live_service_restarted=True,
+            )
+
+        # Scoped to a *regression*: only a frontend that was serving before
+        # this apply has to be serving after it. Ahead of the view refresh,
+        # so an apply that regressed the frontend rolls back rather than
+        # asking every open view to reload into it.
+        unresolved_frontend_failure = describe_frontend_failure(
+            http, resolved_base, sleeper
+        )
+        if unresolved_frontend_failure is not None:
+            if is_frontend_expected:
+                raise ApplyFailed(
+                    "the live UI stopped serving a working frontend: "
+                    f"{unresolved_frontend_failure}",
+                    live_service_restarted=True,
+                )
+            sys.stderr.write(
+                "warning: the live UI is not serving a working frontend, and was "
+                "not before this apply either, so it was not rolled back for it: "
+                f"{unresolved_frontend_failure}\n"
+            )
+        # Past the last rollback point: nothing after the probes can raise
+        # ApplyFailed, so the interruption marker and the snapshots come
+        # down NOW -- before the view refresh (a shell reloading into a
+        # lingering marker would render the "update was interrupted"
+        # banner over an apply that just succeeded) and before the
+        # post-success bookkeeping (so an unattended ``recover`` can never
+        # roll back an update that already went live; the ledger append
+        # and env-converge are both safely re-runnable without a marker).
+        sys.stderr.write(_phase_timing_line(marker))
+        if provisioner_failure is not None:
+            write_provision_incomplete(
+                repo_root, provisioner_failure, marker.dri_agent, merge_ref, now
+            )
+        elif plan.provisioner:
+            clear_provision_incomplete(repo_root)
         clear_marker(repo_root)
         discard_snapshots(repo_root)
+        # The emergency record only comes down on confirmed health, which
+        # is more than this exit code carries: an apply over a UI that was
+        # already broken lands, exits 0 naming the breakage, and leaves a
+        # user who still cannot see the workspace -- exactly the state the
+        # record exists to keep visible. Confirmed means probed and
+        # working, whatever the baseline was: an apply that lands over a
+        # broken UI and finds it working afterwards is the repair the
+        # record was waiting for.
+        if unresolved_frontend_failure is None:
+            clear_emergency(repo_root)
+        _refresh_workspace_view(repo_root, runner)
+    except ApplyFailed as failed:
+        failure = failed
+    except Exception as unexpected:
+        # The last resort, and the one place a blind catch is the correct
+        # answer: past this point the merge is landed and the pre-apply
+        # copies are the only ones left, so an exception nobody predicted
+        # must still reach the rollback below. Letting it escape is what
+        # strands the workspace half-applied -- which is how a bands module
+        # older than this script (an AttributeError inside `as_expendable`)
+        # and a missing executable have each already got out. The traceback
+        # goes in `detail` so the DRI agent can still see the bug the
+        # rollback just tidied away.
+        failure = ApplyFailed(
+            f"the apply raised an unexpected {type(unexpected).__name__}: {unexpected}",
+            live_service_restarted=marker.live_service_restarted,
+            detail=traceback.format_exc(),
+            detail_heading="traceback",
+        )
+    if failure is not None:
+        sys.stderr.write(
+            f"apply failed: {failure}\n{_detail_block(failure)}"
+            f"{_phase_timing_line(marker)}"
+            f"rolling back to {marker.rollback_to[:12]} and restoring the "
+            "workspace...\n"
+        )
+        try:
+            _restore_tree(name_status, marker.rollback_to, repo_root, runner)
+            _commit_rollback(
+                repo_root,
+                runner,
+                marker.rollback_to,
+                f"Apply failed and was auto-reverted: {failure.headline()}",
+            )
+            outcome = _recover_running_state(
+                plan,
+                repo_root,
+                resolved_base,
+                runner,
+                http,
+                sleeper,
+                live_service_restarted=failure.live_service_restarted
+                or marker.live_service_restarted,
+                snapshots=marker.snapshots,
+                is_frontend_expected=is_frontend_expected,
+                provisioner_ran=marker.provisioner_ran,
+            )
+        except (subprocess.CalledProcessError, OSError) as rollback_exc:
+            sys.stderr.write(f"the rollback itself failed: {rollback_exc}\n")
+            outcome = _NOT_RECOVERED
+        if outcome.is_recovered:
+            clear_marker(repo_root)
+            discard_snapshots(repo_root)
+            # Same rule as the success path: only a probed, working
+            # frontend takes the record down.
+            if outcome.is_frontend_confirmed:
+                clear_emergency(repo_root)
+            _report_rolled_back(outcome.is_frontend_confirmed)
+            return 2
+        # The marker is cleared even on the emergency path: this is a
+        # deliberate, fully-reported exit, and re-running the same failed
+        # rollback from cron would not help. The snapshots are kept -- they
+        # are the operator's way back, and so is the emergency record the
+        # report writes in the marker's place.
+        clear_marker(repo_root)
+        _report_emergency(
+            plan,
+            repo_root,
+            f"apply of {merge_ref} failed and its rollback could not restore "
+            f"health: {failure.headline()}",
+            marker.dri_agent,
+            now,
+        )
+        return 3
 
     # --- Post-success bookkeeping (update-self mode only). -----------------------
     if target_ref is not None:
@@ -4062,8 +3973,6 @@ def apply_update(
         return 0
     sys.stderr.write(
         "applied: the update is landed and the live workspace is confirmed healthy.\n"
-        if plan.any
-        else "applied: the update is landed (nothing live needed to change).\n"
     )
     return 0
 
@@ -4132,7 +4041,9 @@ def recover(
     marker.pid = os.getpid()
     write_marker(marker, repo_root, now)
     name_status = _diff_name_status(repo_root, marker.rollback_to, runner)
-    plan = plan_apply([path for _, path in name_status])
+    plan = plan_apply(
+        [path for _, path in name_status], read_provisioner_inputs(repo_root)
+    )
     try:
         # Before anything commits: an apply killed inside its merge left the
         # merge staged, and committing on top of that would land it instead of
