@@ -20,6 +20,7 @@ import m from "mithril";
 import { getQueuedMessagesForAgent, getShoulderTapAvailableForAgent } from "../models/AgentManager";
 import type { QueuedMessage } from "../models/AgentManager";
 import { shoulderTap } from "../models/Response";
+import { hoverTooltipAttrs } from "./hoverTooltip";
 import { prependToComposer } from "./MessageInput";
 import { describeRequestError } from "../models/request-error";
 
@@ -109,14 +110,14 @@ export function renderQueuedMessages(agentId: string): m.Vnode[] {
   const header = m("div", { class: "queued-header", key: "queued-header" }, [
     m("span", { class: "queued-header-title" }, [
       m("span", { class: "queued-header-label" }, "Queued messages"),
-      // A subtle (i) explaining when queued messages get sent. CSS tooltip (native
-      // title= is unreliable in the webview), same data-tooltip pattern as the button.
+      // A subtle (i) explaining when queued messages get sent. JS hover tooltip
+      // (native title= is unreliable in the webview), same pattern as the button.
       m(
         "span",
         {
           class: "queued-info",
           tabindex: 0,
-          "data-tooltip": QUEUED_INFO_TOOLTIP,
+          ...hoverTooltipAttrs(QUEUED_INFO_TOOLTIP),
           "aria-label": QUEUED_INFO_TOOLTIP,
         },
         "ⓘ",
@@ -128,7 +129,7 @@ export function renderQueuedMessages(agentId: string): m.Vnode[] {
         type: "button",
         class: "btn btn--secondary btn--sm queued-action queued-action--flush",
         disabled: isDisabled,
-        "data-tooltip": SHOULDER_TAP_TOOLTIP,
+        ...hoverTooltipAttrs(SHOULDER_TAP_TOOLTIP),
         "aria-label": SHOULDER_TAP_TOOLTIP,
         onclick: () => shoulderTapQueuedMessages(agentId),
       },

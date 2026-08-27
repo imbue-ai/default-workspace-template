@@ -484,7 +484,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
                 {
                   type: "button",
                   class: "btn btn--icon btn--round shrink-0",
-                  "data-tooltip": "Attach files",
+                  ...hoverTooltipAttrs("Attach files"),
                   "aria-label": "Attach files",
                   onclick: openFilePicker,
                 },
@@ -496,7 +496,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
                     {
                       type: "button",
                       class: "btn btn--icon btn--round btn--sm btn--stop shrink-0",
-                      "data-tooltip": "Interrupt and bring queued messages to the composer",
+                      ...hoverTooltipAttrs("Interrupt and bring queued messages to the composer"),
                       "aria-label": "Interrupt and bring queued messages to the composer",
                       onclick: handleStopToComposer,
                     },
@@ -509,7 +509,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
                     {
                       type: "button",
                       class: "btn btn--icon btn--round btn--primary shrink-0",
-                      "data-tooltip": "Send message",
+                      ...hoverTooltipAttrs("Send message"),
                       "aria-label": "Send message",
                       onclick: handleSend,
                     },

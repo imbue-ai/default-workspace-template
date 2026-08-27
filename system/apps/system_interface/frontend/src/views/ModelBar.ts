@@ -19,6 +19,7 @@ import { ensureHarnessCatalogs, getHarnessCatalog } from "../models/HarnessCatal
 import { changedAxes, effectiveChoice, setModelChoice } from "../models/ModelSettings";
 import type { ModelIdentity } from "../models/ModelSettings";
 import { clampDropdownLeft } from "./dropdown-position";
+import { hoverTooltipAttrs } from "./hoverTooltip";
 import { icon } from "./icons";
 
 /** Shown on hover for any read-only model/effort/fast slot: a read-only harness's model is
@@ -209,10 +210,10 @@ export function ModelBar(): m.Component<{ agentId: string }> {
         {
           type: "button",
           class: "model-selector-trigger" + (opts.interactive ? "" : " model-selector-trigger--readonly"),
-          // A read-only slot is NOT `disabled`: a disabled button suppresses :hover, which
+          // A read-only slot is NOT `disabled`: a disabled button suppresses hover events, which
           // would kill the tooltip. It renders normally, shows the switch-in-terminal tooltip,
           // and no-ops on click instead.
-          "data-tooltip": opts.interactive ? opts.tooltip : READ_ONLY_TOOLTIP,
+          ...hoverTooltipAttrs(opts.interactive ? opts.tooltip : READ_ONLY_TOOLTIP),
           onclick: (event: MouseEvent) => {
             event.stopPropagation();
             if (!opts.interactive) return;
@@ -329,7 +330,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
       if (matched === null) {
         // The current combo matches no catalog option: a shrug, no model/effort/fast.
         return m("div", { class: "model-bar" }, [
-          m("span", { class: "model-bar-shrug", "data-tooltip": "Unrecognized model" }, "\u{1F937}"),
+          m("span", { class: "model-bar-shrug", ...hoverTooltipAttrs("Unrecognized model") }, "\u{1F937}"),
         ]);
       }
 
@@ -417,11 +418,9 @@ export function ModelBar(): m.Component<{ agentId: string }> {
               type: "button",
               class: `toggle${currentFast ? " toggle--on" : ""}` + (interactive ? "" : " toggle--readonly"),
               // Not `disabled` for read-only (see the trigger above: disabled kills the tooltip).
-              "data-tooltip": !interactive
-                ? READ_ONLY_TOOLTIP
-                : currentFast
-                  ? "Disable fast mode"
-                  : "Enable fast mode",
+              ...hoverTooltipAttrs(
+                !interactive ? READ_ONLY_TOOLTIP : currentFast ? "Disable fast mode" : "Enable fast mode",
+              ),
               "aria-label": currentFast ? "Disable fast mode" : "Enable fast mode",
               "aria-pressed": currentFast ? "true" : "false",
               "aria-disabled": interactive ? undefined : "true",
