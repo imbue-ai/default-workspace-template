@@ -28,11 +28,40 @@ from datetime import timedelta
 from datetime import timezone
 
 from pydantic import SecretStr
+from tenacity import retry
+from tenacity import retry_if_exception
+from tenacity import stop_after_attempt
+from tenacity import wait_exponential
 
 from imbue.imbue_common.logging import setup_logging
+from imbue.mngr_vps.errors import VpsApiError
 from imbue.mngr_vultr.cleanup import cleanup_old_vultr_test_instances
 from imbue.mngr_vultr.client import VultrVpsClient
 from imbue.mngr_vultr.testing import VULTR_TEST_OS_ID
+
+
+def _is_transient_vps_api_error(exception: BaseException) -> bool:
+    # 5xx is a Vultr-side failure and status 0 is the client's marker for a
+    # network-level request failure; both are worth retrying. 4xx (bad key,
+    # bad request) is deterministic and must fail immediately.
+    return isinstance(exception, VpsApiError) and (exception.status_code >= 500 or exception.status_code == 0)
+
+
+# The whole cleanup pass is idempotent (list tagged instances, destroy the old
+# ones; re-listing after a partial pass just sees fewer), so retrying the full
+# pass on a transient provider error is safe.
+@retry(
+    retry=retry_if_exception(_is_transient_vps_api_error),
+    stop=stop_after_attempt(4),
+    wait=wait_exponential(multiplier=2, min=2, max=30),
+    reraise=True,
+)
+def _cleanup_with_retry(client: VultrVpsClient, max_age: timedelta) -> int:
+    return cleanup_old_vultr_test_instances(
+        client,
+        max_age=max_age,
+        now=datetime.now(timezone.utc),
+    )
 
 
 def main() -> int:
@@ -55,11 +84,7 @@ def main() -> int:
         return 0
 
     client = VultrVpsClient(api_key=SecretStr(api_key), os_id=VULTR_TEST_OS_ID)
-    cleaned_count = cleanup_old_vultr_test_instances(
-        client,
-        max_age=timedelta(hours=args.max_age_hours),
-        now=datetime.now(timezone.utc),
-    )
+    cleaned_count = _cleanup_with_retry(client, max_age=timedelta(hours=args.max_age_hours))
 
     if cleaned_count > 0:
         print(f"Cleaned up {cleaned_count} old Vultr test instance(s)")
