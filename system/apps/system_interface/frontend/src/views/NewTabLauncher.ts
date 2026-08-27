@@ -375,44 +375,50 @@ export interface NewTabLauncherAttrs {
   onOpenFromMachine: (row: LauncherRow) => void;
 }
 
-/** The provider a new chat starts on, under the tiles.
+/** The provider half of the New chat control.
  *
- *  A picker rather than a tile per provider: which provider a chat runs on is a
- *  choice the user makes once and rarely changes, and it multiplies with the
- *  accounts they have signed in. With none it says so and offers the way to fix
- *  that -- the New chat tile above opens the same chooser.
+ *  Attached to the button rather than sitting on its own row, because the two are one
+ *  decision: this is WHICH new chat the button starts. Separated, the picker read as a
+ *  setting that happened to be nearby, and nothing said the button obeyed it.
  *
- *  Cross-PROVIDER switching mid-chat is not supported yet, which is exactly why
- *  the choice is made here, before the chat exists. */
-function providerPickerView(): m.Children {
+ *  Cross-PROVIDER switching mid-chat is not supported yet, which is exactly why the choice
+ *  belongs here, before the chat exists. */
+function providerSelect(): m.Vnode {
   const account = getSelectedAccount();
   const accounts = getAccounts();
-  return m("div", { class: "flex items-center gap-2 px-2 pt-2" }, [
-    m("span", { class: SECTION_HEADING_CLASS }, "Provider"),
-    m(
-      "select",
-      {
-        class: "border-border text-text-primary bg-surface rounded border px-2 py-1 text-[13px]",
-        value: account?.id ?? NO_PROVIDER_VALUE,
-        onchange: (event: Event) => {
-          const chosen = (event.target as HTMLSelectElement).value;
-          if (chosen === ADD_PROVIDER_VALUE) {
-            openProviderChooser();
-            return;
-          }
-          if (chosen !== NO_PROVIDER_VALUE) selectAccount(chosen);
-        },
+  return m(
+    "select",
+    {
+      class:
+        "text-text-secondary hover:bg-bg-hover hover:text-text-primary min-w-0 max-w-[190px] cursor-pointer " +
+        "appearance-none truncate bg-transparent py-0 pr-6 pl-3 text-[13px] focus:outline-none",
+      // The caret is drawn rather than left to the platform: a native one on a transparent
+      // select renders differently per OS and would not sit on the button's baseline.
+      style:
+        "background-image: url(\"data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' " +
+        "viewBox='0 0 24 24' fill='none' stroke='%238c8c8c' stroke-width='2' stroke-linecap='round' " +
+        "stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E\"); " +
+        "background-repeat: no-repeat; background-position: right 6px center; background-size: 14px;",
+      "aria-label": "Provider for the new chat",
+      value: account?.id ?? NO_PROVIDER_VALUE,
+      onchange: (event: Event) => {
+        const chosen = (event.target as HTMLSelectElement).value;
+        if (chosen === ADD_PROVIDER_VALUE) {
+          openProviderChooser();
+          return;
+        }
+        if (chosen !== NO_PROVIDER_VALUE) selectAccount(chosen);
       },
-      // Built as one list rather than with a conditional hole: mithril refuses a
-      // fragment that mixes keyed vnodes with a null, and every option here is keyed.
-      [
-        ...(accounts.length === 0
-          ? [{ id: NO_PROVIDER_VALUE, label: "No provider configured" }]
-          : accounts.map((candidate) => ({ id: candidate.id, label: candidate.label }))),
-        { id: ADD_PROVIDER_VALUE, label: "+ Add provider" },
-      ].map((option) => m("option", { key: option.id, value: option.id }, option.label)),
-    ),
-  ]);
+    },
+    // Built as one list rather than with a conditional hole: mithril refuses a fragment
+    // that mixes keyed vnodes with a null, and every option here is keyed.
+    [
+      ...(accounts.length === 0
+        ? [{ id: NO_PROVIDER_VALUE, label: "No provider yet" }]
+        : accounts.map((candidate) => ({ id: candidate.id, label: candidate.label }))),
+      { id: ADD_PROVIDER_VALUE, label: "+ Add provider" },
+    ].map((option) => m("option", { key: option.id, value: option.id }, option.label)),
+  );
 }
 
 /** The picker's sentinel options. Neither is an account id, so neither can collide. */
@@ -629,45 +635,59 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
               // down when no app backs it (a workspace from before the dufs
               // service shipped).
               const isUnbackedFilesTile = tile.target.kind === "files" && !isFileViewerBacked();
+              const isChatTile = tile.target.kind === "chat";
               const isDisabled = isUnbackedFilesTile || attrs.isAwaitingCreate === true;
               return m(
-                "button",
+                "div",
                 {
-                  // Keyed by label: several tiles share the "chat" kind, and the
-                  // label is what tells them apart on screen.
                   key: tile.label,
-                  type: "button",
-                  "aria-disabled": isDisabled ? "true" : undefined,
+                  // The chat control carries the frame its own button used to, so the
+                  // provider sits INSIDE it: same height, border, radius and type size as
+                  // the other three, one hairline divider between the two halves. It is
+                  // wider because it holds more, but nothing else about it differs -- the
+                  // row still reads as one set rather than a button with a widget stuck on.
                   class:
-                    "new-tab-launcher-tile border-border flex h-9 min-w-0 flex-1 items-center justify-center gap-2 " +
-                    "rounded-lg border px-4 text-[13px] font-medium " +
-                    (isDisabled
-                      ? "text-text-faint cursor-not-allowed"
-                      : "text-text-primary hover:bg-bg-hover cursor-pointer"),
-                  onclick: isDisabled ? undefined : () => attrs.onOpenNew(tile.target),
-                  // Keyed on the unbacked file viewer itself rather than on
-                  // `isDisabled`: every tile is disabled while a create is in
-                  // flight, and "a file viewer is coming" is not the reason
-                  // for any of the others.
-                  ...(isUnbackedFilesTile && attrs.isAwaitingCreate !== true
-                    ? hoverTooltipAttrs(FILE_VIEWER_TOOLTIP)
-                    : {}),
+                    "border-border flex h-9 items-stretch overflow-hidden rounded-lg border " +
+                    (isChatTile ? "min-w-0 flex-[1.7]" : "min-w-0 flex-1") +
+                    (isDisabled ? " text-text-faint" : " text-text-primary"),
                 },
                 [
                   m(
-                    "span",
-                    { class: "text-text-faint flex shrink-0 items-center" },
-                    m.trust(launcherIcon(tile.target.kind, GLYPH_SIZE)),
+                    "button",
+                    {
+                      type: "button",
+                      "aria-disabled": isDisabled ? "true" : undefined,
+                      class:
+                        "new-tab-launcher-tile flex min-w-0 flex-1 items-center justify-center gap-2 px-4 " +
+                        "text-[13px] font-medium " +
+                        (isDisabled ? "cursor-not-allowed" : "hover:bg-bg-hover cursor-pointer"),
+                      onclick: isDisabled ? undefined : () => attrs.onOpenNew(tile.target),
+                      // Keyed on the unbacked file viewer itself rather than on
+                      // `isDisabled`: every tile is disabled while a create is in
+                      // flight, and "a file viewer is coming" is not the reason
+                      // for any of the others.
+                      ...(isUnbackedFilesTile && attrs.isAwaitingCreate !== true
+                        ? hoverTooltipAttrs(FILE_VIEWER_TOOLTIP)
+                        : {}),
+                    },
+                    [
+                      m(
+                        "span",
+                        { class: "text-text-faint flex shrink-0 items-center" },
+                        m.trust(launcherIcon(tile.target.kind, GLYPH_SIZE)),
+                      ),
+                      // Truncates rather than wrapping: a second line would change
+                      // the tile's height and break the row of tiles out of its
+                      // rhythm, and the label is the only part that can overflow.
+                      m("span", { class: "min-w-0 truncate" }, tile.label),
+                    ],
                   ),
-                  // Truncates rather than wrapping: a second line would change
-                  // the tile's height and break the row of tiles out of its
-                  // rhythm, and the label is the only part that can overflow.
-                  m("span", { class: "min-w-0 truncate" }, tile.label),
+                  isChatTile ? m("span", { class: "bg-border w-px self-stretch" }) : null,
+                  isChatTile ? providerSelect() : null,
                 ],
               );
             }),
           ),
-          providerPickerView(),
           sections.map((section) => sectionView(section, attrs, nowMs)),
         ]),
       ]);

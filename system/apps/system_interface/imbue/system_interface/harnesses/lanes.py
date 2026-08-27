@@ -158,6 +158,9 @@ class PasteMethod(FrozenModel):
     label: str
     description: str
     sink: PasteSink
+    # Where to go to get a key in the first place. A lane whose provider you have to subscribe
+    # to before a key exists needs this; one you already have an account with does not.
+    signup_url: str = ""
 
 
 class KeyProvider(FrozenModel):
@@ -224,7 +227,11 @@ _CLAUDE_FAILURES: Final = (
 LANE_ANTHROPIC = Lane(
     id="anthropic",
     provider_name="Anthropic",
-    subtitle="Use your Claude Pro / Max subscription",
+    # No subtitle: "Anthropic" over "Claude Code" already says everything a line here could.
+    # A row only earns one when it has something non-obvious to offer -- free usage, a price,
+    # a scope. Saying "use your subscription" under every familiar name is noise that makes
+    # the rows that DO say something harder to notice.
+    subtitle="",
     harness=HarnessType.CLAUDE,
     methods=(
         PtyMethod(
@@ -275,7 +282,7 @@ LANE_ANTHROPIC = Lane(
 LANE_OPENAI = Lane(
     id="openai",
     provider_name="OpenAI",
-    subtitle="Use your ChatGPT subscription",
+    subtitle="",
     harness=HarnessType.CODEX,
     methods=(
         PtyMethod(
@@ -318,10 +325,7 @@ _AGY_PTY_COLUMNS: Final = 1000
 LANE_GOOGLE = Lane(
     id="google",
     provider_name="Google",
-    subtitle=(
-        "Have no AI subscriptions? Your Google Account comes with some free usage of "
-        "Google's latest models!"
-    ),
+    subtitle="Free usage of Google's latest models, with any Google account.",
     harness=HarnessType.ANTIGRAVITY,
     methods=(
         PtyMethod(
@@ -412,17 +416,15 @@ _PI_KEY_PROVIDERS: Final = tuple(
 LANE_OPENCODE_GO = Lane(
     id="opencode-go",
     provider_name="Opencode Go",
-    subtitle=(
-        "Sign up for an Opencode Go account and access latest & greatest open source "
-        "models for $10/mo."
-    ),
+    subtitle="Access the latest and greatest open models.",
     harness=HarnessType.PI_CODING,
     methods=(
         PasteMethod(
             id="api_key",
             label="Paste your Opencode Go key",
-            description="From your Opencode account settings.",
+            description="A $10/mo subscription, then one key for every model on it.",
             sink=PasteSink.PI_AUTH_JSON,
+            signup_url="https://opencode.ai/go",
         ),
     ),
     key_providers=(
@@ -437,7 +439,7 @@ LANE_OPENCODE_GO = Lane(
 LANE_OPENROUTER = Lane(
     id="openrouter",
     provider_name="OpenRouter",
-    subtitle="One account, most open models -- pay per token with no subscription.",
+    subtitle="One account, most open models. Pay per token, no subscription.",
     harness=HarnessType.PI_CODING,
     methods=(
         PasteMethod(

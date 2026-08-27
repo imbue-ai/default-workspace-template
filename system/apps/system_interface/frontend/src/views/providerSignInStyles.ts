@@ -28,10 +28,14 @@ export const CLOSE_BUTTON =
   "-mr-1 ml-auto flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#666666] " +
   "hover:bg-[#edecea] hover:text-[#202020] cursor-pointer";
 
-/** The body. An entry screen is a FIXED-height scroll region so the panel holds its size
- *  when you drill in from the chooser instead of jumping; deep forms flex to fit. */
+/** The body.
+ *
+ *  The entry screen is a FIXED-height scroll region, and every other screen carries that
+ *  same height as a MINIMUM. The mockup does this by measuring the chooser once and keeping
+ *  it as a floor: the flow always opens there, so anything shorter afterwards reads as the
+ *  card shrinking under you. A short form pads to the floor instead. */
 export const BODY_SCROLLING = "h-[332px] overflow-y-auto overscroll-contain px-4 pb-3 pt-1";
-export const BODY_FLEXING = "min-h-0 flex-1 overflow-y-auto px-4 pb-3 pt-1";
+export const BODY_FLEXING = "min-h-[332px] flex-1 overflow-y-auto px-4 pb-3 pt-1";
 export const ROW_STACK = "flex flex-col gap-2";
 
 export const CHOOSER_ROW =
