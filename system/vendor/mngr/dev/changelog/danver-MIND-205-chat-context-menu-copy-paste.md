@@ -1,0 +1,1 @@
+Added a `just minds-test-electron-menu` recipe that runs the minds right-click Copy/Cut/Paste/Select All menu end-to-end test (Playwright `_electron`, `apps/minds/test/e2e/context-menu.spec.js`) under `xvfb` for headless Linux -- complementing the existing `minds-test-electron` and `minds-test-electron-flow` recipes.

@@ -446,7 +446,10 @@ def main() -> None:
     "config_path",
     required=True,
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    help="Eval config json: {mngr_branch, dwt_repo?, dwt_branch?, timeout_seconds?, avg_word_count_baseline?, personas:[...]}",
+    help=(
+        "Eval config json: {mngr_branch, dwt_repo?, dwt_branch?, timeout_seconds?, "
+        "verification_timeout_seconds?, avg_word_count_baseline?, personas:[...]}"
+    ),
 )
 @click.option(
     "--output",
