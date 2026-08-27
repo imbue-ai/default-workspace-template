@@ -916,10 +916,18 @@ on.
 # Size each sign-in screen to itself
 
 One 690x498 panel for every screen meant the "All set" confirmation -- a check, a heading and a
-line of text -- sat in six hundred pixels of white. The panel now takes one of four widths by
-what it is showing (a verdict, a method list, a form, the lane list) and the body sizes to its
-content up to a viewport-relative cap, so it grows when there is enough to scroll and shrinks
-when there is not. The entry screen keeps a floor, because the flow always returns there and a
+line of text -- sat in six hundred pixels of white. Each screen now carries BOTH its own width
+and its own height ceiling: 440/320 for a verdict, 600/420 for a method list, 640/480 for a
+form, 690/560 for the lane list.
+
+Height is content-driven rather than set. The overlay centers rather than stretches, the body
+has no height of its own, and the footer sits outside the scroll region -- so the panel is
+exactly header + content + footer until the content passes that screen's ceiling, at which
+point the body scrolls and the panel stops growing. Every ceiling is `min(px, vh)` so the
+tallest screen still fits a laptop, and the entry screen's floor is clamped the same way: an
+unclamped floor above the ceiling would push the panel off the bottom on a short viewport.
+
+The entry screen is the one that keeps that floor, because the flow always returns there and a
 panel that shrinks under the pointer on the way back reads as a fault.
 
 The verdict screen is sized like the whole screen it is: a 64px disc, the heading at full

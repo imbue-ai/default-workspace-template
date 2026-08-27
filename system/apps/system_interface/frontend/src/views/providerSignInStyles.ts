@@ -17,19 +17,41 @@
 
 export const MODAL =
   "overflow-hidden rounded-xl bg-white shadow-[0_1px_3px_rgba(0,0,0,0.06),0_16px_40px_rgba(0,0,0,0.18)]";
-/** The panel's frame. The WIDTH comes from `panelWidth` below, per screen.
+/** The panel's frame. Both dimensions come from `panelSize` below, per screen.
  *
  *  The mockup uses one 460px panel with a fixed 498px body for every screen. Both parts were
  *  wrong here: one width makes the lane list cramped and the "All set" check marooned, and a
  *  fixed body height gave a two-line confirmation six hundred pixels of white space under it.
- *  So the panel sizes to its screen, and the body sizes to its content up to a cap. */
-export const PANEL = "flex flex-1 flex-col transition-[width] duration-150 ease-out";
+ *
+ *  Height is CONTENT-driven, not set: the overlay centers rather than stretches, the body has
+ *  no height of its own, and the footer sits outside the scroll region -- so the panel is
+ *  exactly header + content + footer until the content passes its screen's cap, at which point
+ *  the body scrolls and the panel stops growing. */
+export const PANEL = "flex flex-col transition-[width] duration-150 ease-out";
 
-/** Each screen's width. Four steps on one scale, so drilling in never feels like a new dialog:
- *  a confirmation is a sentence, a method list is a column of rows, a form is a column of
- *  fields, and the lane list is the widest thing the flow ever shows. */
-export function panelWidth(screen: "status" | "menu" | "form" | "chooser"): string {
-  return { status: "w-[440px]", menu: "w-[600px]", form: "w-[640px]", chooser: "w-[690px]" }[screen];
+/** The body's shared part. Its ceiling comes from `panelSize`, because how much room a screen
+ *  deserves is a fact about that screen. */
+const BODY = "overflow-y-auto overscroll-contain px-6 pb-5 pt-1";
+
+/** Each screen's width and its body's ceiling.
+ *
+ *  Four steps on one scale, so drilling in never feels like a new dialog: a confirmation is a
+ *  sentence, a method list is a column of rows, a form is a column of fields, and the lane list
+ *  is the widest and tallest thing the flow ever shows. The ceilings are per-screen for the
+ *  same reason the widths are -- a method list has no business being as tall as the catalog.
+ *
+ *  Each is `min(px, vh)` so the tallest screen still fits a laptop; the entry screen's FLOOR is
+ *  clamped the same way, or on a short viewport a floor above the ceiling would push the panel
+ *  off the bottom of the screen. */
+export function panelSize(screen: "status" | "menu" | "form" | "chooser"): { width: string; body: string } {
+  return {
+    status: { width: "w-[440px]", body: `${BODY} max-h-[min(320px,60vh)]` },
+    menu: { width: "w-[600px]", body: `${BODY} max-h-[min(420px,62vh)]` },
+    form: { width: "w-[640px]", body: `${BODY} max-h-[min(480px,62vh)]` },
+    // The one screen the flow always returns to, so it also keeps a floor: a panel that shrinks
+    // under the pointer on the way back reads as something having gone wrong.
+    chooser: { width: "w-[690px]", body: `${BODY} max-h-[min(560px,62vh)] min-h-[min(380px,45vh)]` },
+  }[screen];
 }
 
 export const HEADER = "flex items-center gap-1.5 px-6 pb-4 pt-5";
@@ -40,16 +62,6 @@ export const BACK_BUTTON =
 export const CLOSE_BUTTON =
   "-mr-1 ml-auto flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-secondary " +
   "hover:bg-fill-hover hover:text-primary cursor-pointer";
-
-/** The body: as tall as its content, and no taller, until it hits the cap and scrolls.
- *
- *  The cap is a viewport fraction rather than a constant because the flow's tallest screen is
- *  a list that grows with the number of providers, and a constant either clips it on a laptop
- *  or wastes a desktop. */
-export const BODY = "max-h-[min(62vh,560px)] overflow-y-auto overscroll-contain px-6 pb-5 pt-1";
-/** The entry screen keeps a floor as well, so returning to it does not shrink the panel under
- *  the pointer -- the mockup's rule, kept for the one screen the flow always comes back to. */
-export const BODY_ENTRY = `${BODY} min-h-[380px]`;
 
 export const ROW_STACK = "flex flex-col gap-2";
 
