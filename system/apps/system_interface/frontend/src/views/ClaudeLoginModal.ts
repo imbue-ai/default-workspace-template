@@ -105,6 +105,60 @@ export interface ClaudeLoginModalAttrs {
 // relay is listening -- this page is not being viewed inside the desktop app.
 const MINT_PAGE_ACK_TIMEOUT_MS = 300;
 
+/* ── Styling ──────────────────────────────────────────────────────────────────
+ * Utilities in the markup; the claude-login-* class names stay as bare markers
+ * (the vitest suite drives the flow by them). The modal deliberately stays off
+ * the shared .modal-* shell: it is a scrollable, sectioned, multi-step flow
+ * whose header/body/footer own their padding, and it sits at z-50 -- a
+ * design-system-exception mid layer below the main modal overlay stack. Its
+ * two entry animations stay in style.css as keyframes. */
+
+const OVERLAY_CLASS =
+  "claude-login-overlay absolute inset-0 z-50 flex items-center justify-center bg-[rgba(20,20,20,0.45)] p-4 " +
+  "backdrop-blur-[3px] animate-[claude-login-overlay-in_150ms_ease-out]";
+
+const MODAL_CLASS =
+  "claude-login-modal relative flex max-h-[calc(100vh-32px)] w-full max-w-[460px] flex-col overflow-hidden " +
+  "rounded-lg bg-surface shadow-overlay animate-[claude-login-modal-in_var(--dur-slow)_cubic-bezier(0.16,1,0.3,1)]";
+
+/** The one-line intro above a form's inputs. */
+const LEAD_CLASS = "claude-login-lead mb-4.5 text-(length:--font-size-body) leading-normal text-secondary";
+
+/** A numbered OAuth-flow step and its label/badge. */
+const STEP_CLASS = "claude-login-step mb-4 last:mb-0";
+const STEP_LABEL_CLASS =
+  "claude-login-step-label mb-2 flex items-center gap-2 text-(length:--font-size-body) font-semibold text-primary";
+const STEP_NUM_CLASS =
+  "claude-login-step-num inline-flex h-[18px] w-[18px] items-center justify-center rounded-full bg-accent " +
+  "text-(length:--font-size-helper) font-semibold text-on-accent";
+
+const HELPER_CLASS = "claude-login-helper mt-1.5 text-(length:--font-size-helper) leading-[1.4] text-secondary";
+
+/** The provider cards behind the "Other ways to sign in" disclosure. `group`
+ *  carries the card hover to the trailing chevron. The hover shadow is a
+ *  design-system-exception: a tighter 6px-blur lift of the raised card,
+ *  between scale tiers. */
+const ALT_CLASS =
+  "claude-login-alt group flex w-full cursor-pointer items-center justify-between gap-3 rounded-lg border " +
+  "bg-surface px-3.5 py-3 text-left shadow-raised transition-[border-color,box-shadow] duration-100 ease-[ease] " +
+  "hover:border-accent hover:shadow-[0_2px_6px_rgba(0,0,0,0.08)] " +
+  "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent";
+
+/** The "Didn't open? Copy the link" fallback line and its inline text action.
+ *  focus-visible:rounded-[2px]: design-system-exception -- a tight one-off
+ *  focus-ring radius on an inline text link, between scale steps. */
+const COPYLINK_CLASS = "claude-login-copylink mt-[9px] text-(length:--font-size-helper) leading-normal text-secondary";
+const COPYLINK_ACTION_CLASS =
+  "claude-login-copylink-action cursor-pointer border-none bg-transparent p-0 " +
+  "text-(length:--font-size-helper) font-semibold text-accent underline underline-offset-2 " +
+  "hover:text-accent-hover focus-visible:rounded-[2px] focus-visible:outline-2 focus-visible:outline-offset-2 " +
+  "focus-visible:outline-accent";
+
+/** An input row (paste-code, direct-token, and the collapsed affordances). */
+const SUBTLE_BODY_CLASS = "claude-login-subtle-body mt-1.5 flex items-center gap-2";
+
+const FOOTER_BASE = "claude-login-footer flex items-center gap-2 border-t border-subtle px-5.5 pt-3.5 pb-4.5";
+
 export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
   let mode: Mode = "select_provider";
   let activeFlow: AuthFlow = "claudeai";
@@ -562,15 +616,53 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
   // recommended default -- a logo, headline, and full-width primary button --
   // and tucks the Imbue and API-key paths behind a collapsed "Other ways to
   // sign in" disclosure so they don't compete for attention.
+  function renderAltCard(name: string, desc: string, onclick: () => void): m.Vnode {
+    return m("button", { class: ALT_CLASS, type: "button", onclick }, [
+      m("span", { class: "claude-login-alt-text flex min-w-0 flex-col gap-[3px]" }, [
+        m("span", { class: "claude-login-alt-name text-(length:--font-size-body) font-semibold text-primary" }, name),
+        m(
+          "span",
+          { class: "claude-login-alt-desc text-(length:--font-size-helper) leading-[1.4] text-secondary" },
+          desc,
+        ),
+      ]),
+      m(
+        "span",
+        {
+          class:
+            "claude-login-alt-go flex flex-none text-faint transition-colors duration-100 ease-[ease] group-hover:text-accent",
+        },
+        m.trust(icon("chevron-right", { size: 18 })),
+      ),
+    ]);
+  }
+
   function renderProviderSelection(): m.Vnode {
     const currentModeLine = describeCurrentMode(currentStatus);
-    return m("div.claude-login-select", [
-      currentModeLine !== null ? m("p.claude-login-current-mode", currentModeLine) : null,
-      m("div.claude-login-primary", [
+    return m("div", { class: "claude-login-select mb-2" }, [
+      currentModeLine !== null
+        ? m(
+            "p",
+            { class: "claude-login-current-mode mb-2.5 text-center text-(length:--font-size-helper) text-faint" },
+            currentModeLine,
+          )
+        : null,
+      m("div", { class: "claude-login-primary flex flex-col items-center px-1 pt-1 pb-0.5 text-center" }, [
         m.trust(claudeLogoIcon()),
-        m("h3.claude-login-primary-headline", "Sign in with your Claude subscription"),
         m(
-          "p.claude-login-primary-sub",
+          "h3",
+          {
+            class:
+              "claude-login-primary-headline mb-1 text-(length:--font-size-heading) font-bold tracking-[-0.005em] text-primary",
+          },
+          "Sign in with your Claude subscription",
+        ),
+        m(
+          "p",
+          {
+            class:
+              "claude-login-primary-sub mx-auto mb-4 max-w-[320px] text-(length:--font-size-body) leading-normal text-secondary",
+          },
           "Connect your Claude.ai account to use your Pro or Max plan quota in this mind.",
         ),
         m(
@@ -583,10 +675,14 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
           "Continue with Claude subscription",
         ),
       ]),
-      m("div.claude-login-alts", [
+      m("div", { class: "claude-login-alts mt-3.5 border-t border-subtle pt-3" }, [
         m(
-          "button.claude-login-alts-toggle",
+          "button",
           {
+            class:
+              "claude-login-alts-toggle mx-auto flex cursor-pointer items-center justify-center gap-1.5 rounded-md " +
+              "border-none bg-transparent px-2 py-1 text-(length:--font-size-body) font-semibold text-secondary " +
+              "hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
             type: "button",
             "aria-expanded": String(alternativesExpanded),
             onclick: () => {
@@ -597,80 +693,39 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
           [
             m("span", "Other ways to sign in"),
             m(
-              `span.claude-login-alts-caret${alternativesExpanded ? ".claude-login-alts-caret--open" : ""}`,
+              "span",
+              {
+                class:
+                  "claude-login-alts-caret inline-flex transition-transform duration-(--dur-base) ease-[ease] " +
+                  (alternativesExpanded ? "claude-login-alts-caret--open rotate-180" : ""),
+              },
               m.trust(icon("chevron-down", { size: 14 })),
             ),
           ],
         ),
         alternativesExpanded
-          ? m("div.claude-login-alts-list", [
-              m(
-                "button.claude-login-alt",
-                {
-                  type: "button",
-                  onclick: () => {
-                    mode = "imbue_form";
-                    m.redraw();
-                  },
+          ? m("div", { class: "claude-login-alts-list mt-2.5 flex flex-col gap-2" }, [
+              renderAltCard(
+                "Sign in with Imbue",
+                "Use an Imbue account to pay per token, no Claude account needed.",
+                () => {
+                  mode = "imbue_form";
+                  m.redraw();
                 },
-                [
-                  m("span.claude-login-alt-text", [
-                    m("span.claude-login-alt-name", "Sign in with Imbue"),
-                    m(
-                      "span.claude-login-alt-desc",
-                      "Use an Imbue account to pay per token, no Claude account needed.",
-                    ),
-                  ]),
-                  m("span.claude-login-alt-go", m.trust(icon("chevron-right", { size: 18 }))),
-                ],
               ),
-              m(
-                "button.claude-login-alt",
-                {
-                  type: "button",
-                  onclick: () => {
-                    mode = "api_key_form";
-                    m.redraw();
-                  },
-                },
-                [
-                  m("span.claude-login-alt-text", [
-                    m("span.claude-login-alt-name", "Use an API key"),
-                    m("span.claude-login-alt-desc", "Paste a raw sk-ant-... API key."),
-                  ]),
-                  m("span.claude-login-alt-go", m.trust(icon("chevron-right", { size: 18 }))),
-                ],
+              renderAltCard("Use an API key", "Paste a raw sk-ant-... API key.", () => {
+                mode = "api_key_form";
+                m.redraw();
+              }),
+              renderAltCard(
+                "Get a long-lived token",
+                "Mint a 1-year subscription token (restarts this mind's agents).",
+                () => void startSetupToken(),
               ),
-              m(
-                "button.claude-login-alt",
-                {
-                  type: "button",
-                  onclick: () => void startSetupToken(),
-                },
-                [
-                  m("span.claude-login-alt-text", [
-                    m("span.claude-login-alt-name", "Get a long-lived token"),
-                    m("span.claude-login-alt-desc", "Mint a 1-year subscription token (restarts this mind's agents)."),
-                  ]),
-                  m("span.claude-login-alt-go", m.trust(icon("chevron-right", { size: 18 }))),
-                ],
-              ),
-              m(
-                "button.claude-login-alt",
-                {
-                  type: "button",
-                  onclick: () => void startOauthLogin("console"),
-                },
-                [
-                  m("span.claude-login-alt-text", [
-                    m("span.claude-login-alt-name", "Anthropic Console (API billing)"),
-                    m(
-                      "span.claude-login-alt-desc",
-                      "Sign in with a Console account to pay per token (restarts this mind's agents).",
-                    ),
-                  ]),
-                  m("span.claude-login-alt-go", m.trust(icon("chevron-right", { size: 18 }))),
-                ],
+              renderAltCard(
+                "Anthropic Console (API billing)",
+                "Sign in with a Console account to pay per token (restarts this mind's agents).",
+                () => void startOauthLogin("console"),
               ),
             ])
           : null,
@@ -680,13 +735,13 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
 
   function renderApiKeyForm(): m.Vnode[] {
     return [
-      m("p.claude-login-lead", "Paste an Anthropic API key. It's saved to this mind's shared Claude settings."),
-      m("div.claude-login-field", [
-        m("label.claude-login-step-label", { for: "claude-login-api-key-input" }, [
-          m("span.claude-login-step-num", "1"),
+      m("p", { class: LEAD_CLASS }, "Paste an Anthropic API key. It's saved to this mind's shared Claude settings."),
+      m("div", { class: "claude-login-field flex flex-col" }, [
+        m("label", { class: STEP_LABEL_CLASS, for: "claude-login-api-key-input" }, [
+          m("span", { class: STEP_NUM_CLASS }, "1"),
           "Your Anthropic API key",
         ]),
-        m("div.claude-login-input-wrap", [
+        m("div", { class: "claude-login-input-wrap relative flex" }, [
           m("input", {
             class: inputClass({ mono: true, withAction: true }),
             id: "claude-login-api-key-input",
@@ -706,8 +761,12 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
             },
           }),
           m(
-            "button.claude-login-input-action",
+            "button",
             {
+              class:
+                "claude-login-input-action absolute top-1/2 right-1.5 -translate-y-1/2 cursor-pointer rounded-sm " +
+                "border-none bg-transparent px-2 py-1 text-(length:--font-size-helper) text-secondary " +
+                "hover:bg-fill-hover hover:text-primary",
               type: "button",
               onclick: () => {
                 apiKeyRevealed = !apiKeyRevealed;
@@ -718,7 +777,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
             apiKeyRevealed ? "Hide" : "Show",
           ),
         ]),
-        m("p.claude-login-helper", "You can find or create API keys at console.anthropic.com."),
+        m("p", { class: HELPER_CLASS }, "You can find or create API keys at console.anthropic.com."),
       ]),
     ];
   }
@@ -726,11 +785,12 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
   function renderImbueForm(): m.Vnode[] {
     return [
       m(
-        "p.claude-login-lead",
+        "p",
+        { class: LEAD_CLASS },
         "Get credentials from the Minds desktop app, then paste them here. Your usage is billed to your Imbue account.",
       ),
-      m("div.claude-login-step", [
-        m("div.claude-login-step-label", [m("span.claude-login-step-num", "1"), "Get your credentials"]),
+      m("div", { class: STEP_CLASS }, [
+        m("div", { class: STEP_LABEL_CLASS }, [m("span", { class: STEP_NUM_CLASS }, "1"), "Get your credentials"]),
         // A button, not a link: opening the mint page is a message to the
         // embedding minds chrome (see openImbueMintPage), not a navigation --
         // there is no URL a real anchor could carry.
@@ -744,17 +804,18 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
           [m("span", "Open the Imbue key page"), m.trust(icon("external-link", { size: 15 }))],
         ),
         m(
-          "p.claude-login-helper",
+          "p",
+          { class: HELPER_CLASS },
           "The key page creates a key for this workspace and copies the credentials to your clipboard.",
         ),
       ]),
-      m("div.claude-login-step", [
-        m("label.claude-login-step-label", { for: "claude-login-imbue-blob-input" }, [
-          m("span.claude-login-step-num", "2"),
+      m("div", { class: STEP_CLASS }, [
+        m("label", { class: STEP_LABEL_CLASS, for: "claude-login-imbue-blob-input" }, [
+          m("span", { class: STEP_NUM_CLASS }, "2"),
           "Paste your credentials",
         ]),
         m("textarea", {
-          class: inputClass({ mono: true, extra: "claude-login-textarea" }),
+          class: inputClass({ mono: true, extra: "claude-login-textarea min-h-16 resize-y leading-normal" }),
           id: "claude-login-imbue-blob-input",
           rows: 3,
           placeholder: "ANTHROPIC_BASE_URL=...\nANTHROPIC_API_KEY=sk-...",
@@ -771,9 +832,9 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
 
   function renderAwaitingSetupToken(): Array<m.Vnode | null> {
     return [
-      m("p.claude-login-lead", "Approve access in your browser, then paste the code it shows you."),
-      m("div.claude-login-step", [
-        m("div.claude-login-step-label", [m("span.claude-login-step-num", "1"), "Open the sign-in page"]),
+      m("p", { class: LEAD_CLASS }, "Approve access in your browser, then paste the code it shows you."),
+      m("div", { class: STEP_CLASS }, [
+        m("div", { class: STEP_LABEL_CLASS }, [m("span", { class: STEP_NUM_CLASS }, "1"), "Open the sign-in page"]),
         m(
           "a",
           {
@@ -784,11 +845,12 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
           },
           [m("span", "Open sign-in page"), m.trust(icon("external-link", { size: 15 }))],
         ),
-        m("p.claude-login-copylink", [
+        m("p", { class: COPYLINK_CLASS }, [
           "Didn't open? ",
           m(
-            "button.claude-login-copylink-action",
+            "button",
             {
+              class: COPYLINK_ACTION_CLASS,
               type: "button",
               onclick: () => {
                 void copyOAuthUrl();
@@ -800,20 +862,35 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
         ]),
         // Known Anthropic-side sign-in bug (their login page, not this flow);
         // surface the workaround so a hit doesn't dead-end the user.
-        m("p.claude-login-copylink", "malformed_certificate? Try switching accounts or logging out first"),
+        m("p", { class: COPYLINK_CLASS }, "malformed_certificate? Try switching accounts or logging out first"),
         // When the clipboard write was rejected, surface the raw URL so the
         // user is never stranded without a way to reach the sign-in page.
-        urlCopyFailed && oauthUrl !== null ? m("div.claude-login-rawurl", { tabindex: 0 }, oauthUrl) : null,
+        urlCopyFailed && oauthUrl !== null
+          ? m(
+              "div",
+              {
+                class:
+                  "claude-login-rawurl mt-2 rounded-md border bg-surface px-2.5 py-2 font-mono " +
+                  "text-(length:--font-size-helper) leading-[1.4] break-all text-primary select-all " +
+                  "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent",
+                tabindex: 0,
+              },
+              oauthUrl,
+            )
+          : null,
       ]),
       // The approval page shows a CODE#STATE string -- pasting it here is
       // the primary way to finish, so the input is always visible. (The
       // background poll still runs silently: if the CLI's own polling ever
       // completes the flow first, the modal just finishes early.)
-      m("div.claude-login-step", [
-        m("div.claude-login-step-label", [m("span.claude-login-step-num", "2"), "Approve, then paste the code shown"]),
-        m("div.claude-login-subtle-body", [
+      m("div", { class: STEP_CLASS }, [
+        m("div", { class: STEP_LABEL_CLASS }, [
+          m("span", { class: STEP_NUM_CLASS }, "2"),
+          "Approve, then paste the code shown",
+        ]),
+        m("div", { class: SUBTLE_BODY_CLASS }, [
           m("input", {
-            class: inputClass({ mono: true }),
+            class: inputClass({ mono: true, extra: "flex-1" }),
             id: "claude-login-code-input",
             type: "text",
             placeholder: "CODE#STATE",
@@ -849,11 +926,11 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
       // would be misleading on the credentials-based sign-ins.
       activeFlow !== "setup_token"
         ? null
-        : m("div.claude-login-subtle", [
+        : m("div", { class: "claude-login-subtle mt-2.5" }, [
             tokenPasteExpanded
-              ? m("div.claude-login-subtle-body", [
+              ? m("div", { class: SUBTLE_BODY_CLASS }, [
                   m("input", {
-                    class: inputClass({ mono: true }),
+                    class: inputClass({ mono: true, extra: "flex-1" }),
                     id: "claude-login-token-input",
                     type: "password",
                     placeholder: "sk-ant-oat01-...",
@@ -883,8 +960,11 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
                   ),
                 ])
               : m(
-                  "button.claude-login-subtle-toggle",
+                  "button",
                   {
+                    class:
+                      "claude-login-subtle-toggle cursor-pointer border-none bg-transparent p-0 " +
+                      "text-(length:--font-size-helper) text-faint hover:text-secondary hover:underline",
                     type: "button",
                     onclick: () => {
                       tokenPasteExpanded = true;
@@ -922,24 +1002,44 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
         state: idx < activeIdx ? ("done" as const) : idx === activeIdx ? ("active" as const) : ("pending" as const),
       })),
     ];
-    return m("div.claude-login-applying", [
+    // The item's text tone and its icon's treatment both key off the step
+    // state; the --state suffix stays as an interpolated marker.
+    const itemTone = { done: "text-secondary", active: "font-medium text-primary", pending: "text-secondary" };
+    const iconBase = "claude-login-checklist-icon inline-flex h-[18px] w-[18px] flex-none items-center justify-center";
+    const iconTone = {
+      done: "text-success",
+      active: "",
+      // The pending dot is the icon span's ::before, drawn from currentColor.
+      pending: "before:h-1.5 before:w-1.5 before:rounded-full before:bg-current before:opacity-40 before:content-['']",
+    };
+    return m("div", { class: "claude-login-applying py-2" }, [
       m(
-        "ul.claude-login-checklist",
+        "ul",
+        { class: "claude-login-checklist flex flex-col gap-2.5" },
         steps.map((step) =>
-          m(`li.claude-login-checklist-item.claude-login-checklist-item--${step.state}`, [
-            m(
-              "span.claude-login-checklist-icon",
-              step.state === "done"
-                ? m.trust(icon("check", { size: 14, strokeWidth: 2.5 }))
-                : step.state === "active"
-                  ? m.trust(loginSpinnerIcon())
-                  : null,
-            ),
-            m("span.claude-login-checklist-label", step.label),
-          ]),
+          m(
+            "li",
+            {
+              class:
+                `claude-login-checklist-item claude-login-checklist-item--${step.state} ` +
+                `flex items-center gap-2.5 text-(length:--font-size-body) ${itemTone[step.state]}`,
+            },
+            [
+              m(
+                "span",
+                { class: `${iconBase} ${iconTone[step.state]}` },
+                step.state === "done"
+                  ? m.trust(icon("check", { size: 14, strokeWidth: 2.5 }))
+                  : step.state === "active"
+                    ? m.trust(loginSpinnerIcon())
+                    : null,
+              ),
+              m("span.claude-login-checklist-label", step.label),
+            ],
+          ),
         ),
       ),
-      detail !== null ? m("p.claude-login-helper.claude-login-helper--center", detail) : null,
+      detail !== null ? m("p", { class: `${HELPER_CLASS} text-center` }, detail) : null,
       renderOldKeyServicesNote(),
     ]);
   }
@@ -950,7 +1050,8 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
   function renderOldKeyServicesNote(): m.Vnode | null {
     if (!switchedAwayFromApiKey) return null;
     return m(
-      "p.claude-login-helper.claude-login-helper--center",
+      "p",
+      { class: `${HELPER_CLASS} text-center` },
       "Any existing API integrated services will continue using the old API key. " +
         "Ask the agent to remove those if you need to.",
     );
@@ -963,10 +1064,36 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
         : kind === "success"
           ? m.trust(icon("check", { size: 26, strokeWidth: 2.5 }))
           : m.trust(warningIcon());
-    return m("div.claude-login-status", [
-      m(`div.claude-login-status-icon.claude-login-status-icon--${kind}`, statusGlyph),
-      m("p.claude-login-status-title", title),
-      detail !== null ? m("p.claude-login-status-detail", detail) : null,
+    const iconTone = {
+      loading: "bg-transparent text-accent",
+      success: "bg-accent-light text-accent",
+      error: "bg-danger-surface text-danger",
+    };
+    return m("div", { class: "claude-login-status flex flex-col items-center px-2 pt-4 pb-2 text-center" }, [
+      m(
+        "div",
+        {
+          class:
+            `claude-login-status-icon claude-login-status-icon--${kind} ` +
+            `mb-3.5 flex h-[52px] w-[52px] items-center justify-center rounded-full ${iconTone[kind]}`,
+        },
+        statusGlyph,
+      ),
+      m(
+        "p",
+        { class: "claude-login-status-title mb-1 text-(length:--font-size-heading) font-semibold text-primary" },
+        title,
+      ),
+      detail !== null
+        ? m(
+            "p",
+            {
+              class:
+                "claude-login-status-detail max-w-[320px] text-(length:--font-size-body) leading-normal text-secondary",
+            },
+            detail,
+          )
+        : null,
     ]);
   }
 
@@ -981,7 +1108,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
         renderStatus("success", "All set", detail),
         // Only the minted-token flow carries an expiry worth mentioning.
         activeFlow === "setup_token"
-          ? m("p.claude-login-helper.claude-login-helper--center", "Your sign-in token is valid for about a year.")
+          ? m("p", { class: `${HELPER_CLASS} text-center` }, "Your sign-in token is valid for about a year.")
           : null,
         renderOldKeyServicesNote(),
       ]);
@@ -1000,7 +1127,16 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
   }
 
   function renderInlineError(): m.Vnode {
-    return m("div.claude-login-error-callout", [m.trust(warningIcon(16)), m("span", errorMessage ?? "")]);
+    return m(
+      "div",
+      {
+        class:
+          "claude-login-error-callout mb-3.5 flex items-start gap-2.5 rounded-lg border border-danger-border " +
+          "bg-danger-surface px-3 py-2.5 text-(length:--font-size-body) leading-[1.45] text-danger " +
+          "[&>svg]:mt-px [&>svg]:flex-none",
+      },
+      [m.trust(warningIcon(16)), m("span", errorMessage ?? "")],
+    );
   }
 
   // ----- Layout (header / body / footer) -----
@@ -1029,12 +1165,22 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
     return renderProviderSelection();
   }
 
+  // The Back/primary pairs spread to the footer's edges; single-action
+  // footers keep their button at the right edge.
+  function renderFooterRow(spread: boolean, children: m.Children): m.Vnode {
+    return m(
+      "div",
+      {
+        class: `${FOOTER_BASE} ${spread ? "claude-login-footer--spread justify-between" : "justify-end"}`,
+      },
+      children,
+    );
+  }
+
   function renderFooter(): m.Vnode | null {
     if (mode === "select_provider" || mode === "verifying" || mode === "applying") return null;
     if (mode === "success") {
-      return m("div.claude-login-footer", [
-        m(Button, { variant: "primary", onclick: () => attrsRef?.onDismiss() }, "Done"),
-      ]);
+      return renderFooterRow(false, [m(Button, { variant: "primary", onclick: () => attrsRef?.onDismiss() }, "Done")]);
     }
     if (mode === "error") {
       // A sign-in failure (failed setup-token start, or a consumed
@@ -1042,7 +1188,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
       // the only forward action is to start the whole flow over. The
       // header close button and backdrop click still dismiss the modal, so
       // a single primary action here is not a dead end.
-      return m("div.claude-login-footer", [
+      return renderFooterRow(false, [
         m(
           Button,
           {
@@ -1055,7 +1201,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
       ]);
     }
     if (mode === "api_key_form") {
-      return m("div.claude-login-footer.claude-login-footer--spread", [
+      return renderFooterRow(true, [
         m(Button, { onclick: () => goBackToProviderSelection() }, "Back"),
         m(
           Button,
@@ -1071,7 +1217,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
       ]);
     }
     if (mode === "imbue_form") {
-      return m("div.claude-login-footer.claude-login-footer--spread", [
+      return renderFooterRow(true, [
         m(Button, { onclick: () => goBackToProviderSelection() }, "Back"),
         m(
           Button,
@@ -1089,7 +1235,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
     // awaiting_setup_token: no primary action -- the flow completes via
     // polling (or one of the subtle affordances, which carry their own
     // buttons). Back returns to provider selection and aborts the session.
-    return m("div.claude-login-footer", [m(Button, { onclick: () => goBackToProviderSelection() }, "Back")]);
+    return renderFooterRow(false, [m(Button, { onclick: () => goBackToProviderSelection() }, "Back")]);
   }
 
   return {
@@ -1111,26 +1257,50 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
     view() {
       const onClose = (): void => attrsRef?.onDismiss();
       return m(
-        "div.claude-login-overlay",
-        backdropDismissAttrs(onClose),
+        "div",
+        { class: OVERLAY_CLASS, ...backdropDismissAttrs(onClose) },
         m(
-          "div.claude-login-modal",
+          "div",
           {
+            class: MODAL_CLASS,
             role: "dialog",
             "aria-modal": "true",
             "aria-label": "Sign in to Claude",
           },
           [
-            m("div.claude-login-header", [
-              m("h2.claude-login-title", titleForMode()),
-              m(
-                "button.claude-login-close",
-                { type: "button", onclick: onClose, "aria-label": "Close" },
-                m.trust(icon("close", { size: 16 })),
-              ),
-            ]),
             m(
-              "div.claude-login-body",
+              "div",
+              {
+                class:
+                  "claude-login-header flex items-center justify-between border-b border-subtle px-5.5 pt-4.5 pb-3.5",
+              },
+              [
+                m(
+                  "h2",
+                  {
+                    class:
+                      "claude-login-title text-(length:--font-size-heading) font-semibold tracking-[-0.005em] text-primary",
+                  },
+                  titleForMode(),
+                ),
+                m(
+                  Button,
+                  {
+                    variant: "ghost",
+                    sm: true,
+                    icon: true,
+                    // -m-1 keeps the 28px hit target from widening the header row.
+                    extra: "claude-login-close -m-1",
+                    onclick: onClose,
+                    "aria-label": "Close",
+                  },
+                  m.trust(icon("close", { size: 16 })),
+                ),
+              ],
+            ),
+            m(
+              "div",
+              { class: "claude-login-body flex-1 overflow-y-auto px-5.5 pt-4.5 pb-1" },
               mode === "awaiting_setup_token" || mode === "api_key_form" || mode === "imbue_form"
                 ? [errorMessage !== null ? renderInlineError() : null, renderBody()]
                 : renderBody(),

@@ -14,9 +14,9 @@ import { TEXT_BODY_SIZE } from "./typography";
  * Revisit if text fields multiply the way buttons did.
  *
  * The leading `input` class is a bare marker (no styling): a hook for tests,
- * for contextual stylesheet rules (e.g. `.claude-login-subtle-body .input`),
- * and for the inspector. The Tailwind scanner reads utility names from the
- * literals in this file: keep every utility name a contiguous literal. */
+ * for any contextual stylesheet rule, and for the inspector. The Tailwind
+ * scanner reads utility names from the literals in this file: keep every
+ * utility name a contiguous literal. */
 
 export interface InputOptions {
   mono?: boolean;
