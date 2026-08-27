@@ -33,7 +33,7 @@ ENV OPENCODE_VERSION=${OPENCODE_VERSION}
 
 # Antigravity (agy) has no version pin here -- upstream publishes a release only
 # under an opaque build id that its "latest" manifest alone reveals, so the lock
-# (URL + per-arch sha512) lives inside system/scripts/agy_install-1.1.16.sh.
+# (URL + per-arch sha512) lives inside system/scripts/agy_install-1.1.22.sh.
 # Bumping agy means adding a new agy_install-<version>.sh, not editing an ARG.
 
 # Pin the pi extension packages baked into the image at /opt/pi-extensions
@@ -76,7 +76,7 @@ RUN chmod +x /usr/local/bin/default-workspace-template-write-apt-sources \
 COPY system/scripts/setup_system.sh /usr/local/bin/default-workspace-template-setup-system
 COPY system/scripts/_provision_guard.sh /usr/local/bin/_provision_guard.sh
 COPY system/scripts/install_secret_scanners.sh /usr/local/bin/default-workspace-template-install-secret-scanners
-COPY system/scripts/agy_install-1.1.16.sh /usr/local/bin/default-workspace-template-install-agy
+COPY system/scripts/agy_install-1.1.22.sh /usr/local/bin/default-workspace-template-install-agy
 RUN chmod +x /usr/local/bin/default-workspace-template-setup-system /usr/local/bin/default-workspace-template-install-secret-scanners /usr/local/bin/default-workspace-template-install-agy && default-workspace-template-setup-system
 
 # Install the pinned owner-exec static binary (the in-container "inner" exec

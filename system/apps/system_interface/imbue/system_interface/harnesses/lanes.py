@@ -122,11 +122,6 @@ class PtyMethod(FrozenModel):
     # key can land on a screen that has not rendered yet.
     keys: tuple[str, ...] = ()
     key_gap_s: float = 0.6
-    # How wide to spawn the terminal. A value the CLI prints as plain text wraps at this
-    # width, and de-wrapping it back together depends on the CLI not painting anything else
-    # on those rows -- so for a long value it is far safer to make the screen wider than the
-    # value than to reassemble it. 80 is the honest default for a menu; a lane printing a
-    # ~700-character OAuth URL overrides it.
     pty_columns: int = DEFAULT_PTY_COLUMNS
 
     # When the sign-in URL is fixed, there is nothing to scrape for it and `scrape` names
@@ -318,9 +313,6 @@ _AGY_URL_SCRAPE = Scrape(
 )
 _AGY_FAILURES: Final = ((r"Got an error: ([^\r\n]*)", "{1}"),)
 _AGY_MENU = r"Select login method:"
-# Wider than the ~700-character URL agy prints, so it lands on one row and never has to be
-# de-wrapped. 1.1.21 emits an OSC 8 hyperlink whose target survives wrapping; 1.1.16 -- the
-# pinned version -- does not, so on the pin the only intact copy is the unwrapped one.
 _AGY_PTY_COLUMNS: Final = 1000
 
 LANE_GOOGLE = Lane(
