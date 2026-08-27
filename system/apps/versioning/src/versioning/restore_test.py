@@ -233,7 +233,6 @@ def test_perform_restore_saves_a_pending_startup_edit_before_overwriting_it(
         is_service_managed=False,
     )
 
-    # The unsaved startup edit survives as its own version rather than vanishing under the restore.
     config_by_version = [
         repo.read_file_at_commit(commit.sha, SUPERVISORD_CONFIG_PATH) or ""
         for commit in repo.read_commits_touching_path(SUPERVISORD_CONFIG_PATH)
@@ -252,7 +251,6 @@ def test_perform_restore_does_not_sweep_another_apps_pending_entry_into_the_rest
         {_NEWS_FILE: "v2", SUPERVISORD_CONFIG_PATH: _config_with_news_command("uv run news --newer")},
         "news: second version",
     )
-    # Another app is mid-edit in the same shared file.
     (scratch_repo / SUPERVISORD_CONFIG_PATH).write_text(
         _config_with_news_command("uv run news --newer").replace("uv run weather", "uv run weather --mid-edit")
     )
@@ -266,8 +264,6 @@ def test_perform_restore_does_not_sweep_another_apps_pending_entry_into_the_rest
         is_service_managed=False,
     )
 
-    # The restore version carries this app's entry only; the neighbour's edit was kept, but
-    # as its own saved-work version rather than as part of going back.
     restore_diff = repo.read_diff_of_commits([result.restore_commit_sha], SUPERVISORD_CONFIG_PATH)
     assert "--mid-edit" not in restore_diff
     assert "--mid-edit" in (scratch_repo / SUPERVISORD_CONFIG_PATH).read_text()

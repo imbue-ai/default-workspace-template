@@ -162,9 +162,6 @@ def perform_restore(
     if app.name in UNRESTORABLE_APP_NAMES:
         raise RestoreError(f"{app.title} can be browsed here but not restored")
     with operation_lock(lock_file):
-        # Saving the dirty config here also keeps the restore commit clean, since staging a
-        # shared file sweeps up whatever else is pending in it -- another app's pending entry
-        # rides along in this save rather than being lost.
         dirty_paths = git_repo.read_dirty_paths_under(app.package_dir)
         is_startup_config_dirty = app.program is not None and (
             len(git_repo.read_dirty_paths_under(SUPERVISORD_CONFIG_PATH)) > 0
