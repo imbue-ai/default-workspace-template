@@ -955,8 +955,30 @@ class AgentManager:
     def _run_liveness_sweep(self) -> None:
         while not self._liveness_stop.is_set():
             self.refresh_app_liveness()
+            self._reconnect_pending_sessions()
             self._liveness_wake.wait(timeout=_LIVENESS_POLL_INTERVAL_SECONDS)
             self._liveness_wake.clear()
+
+    def _reconnect_pending_sessions(self) -> None:
+        """Retry the live backend for tracked agents that do not have one yet.
+
+        Without this the retry is purely event-driven, and the one event that matters --
+        the agent finishing creation -- arrives BEFORE the backend it needs is up. A codex
+        agent's app-server daemon takes seconds to start listening, so the connect attempt
+        made at create time always fails, and nothing tried again until some unrelated
+        observe event happened along. That is the blank chat and empty model bar that fill
+        in "eventually": the wait was never on the daemon, it was on the next event.
+
+        `ensure_live` is idempotent and a no-op for the file harnesses, so this is only ever
+        doing work for a session that is genuinely missing its backend.
+        """
+        with self._lock:
+            tracked = list(self._activity_tracked_agents)
+        for agent_id in tracked:
+            with self._lock:
+                session = self._session_by_agent.get(agent_id)
+            if session is not None:
+                session.ensure_live()
 
     def refresh_app_liveness(self) -> None:
         """Re-derive every app's ``is_running`` and broadcast when any changed.

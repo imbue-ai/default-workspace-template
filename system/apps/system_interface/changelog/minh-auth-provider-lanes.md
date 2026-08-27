@@ -392,3 +392,16 @@ user saw an empty model bar rather than anything naming the real problem.
 are removed, and a row without a folder is dropped (clearing the most-recently-used pointer
 if it named one) so the provider is simply offered for sign-in again. `resolve_account`
 refuses such a row outright rather than binding an agent to a directory that is not there.
+
+# Retry a harness's live backend instead of waiting for the next event
+
+A new codex chat rendered blank, with no model bar, and then filled in all at once some
+seconds later. The wait was never on codex: its app-server daemon takes a few seconds to
+start listening, but the one connect attempt was made when the agent finished being created
+-- before that daemon exists -- and the retry was purely event-driven, so nothing tried
+again until an unrelated observe event happened along.
+
+The liveness sweep that already runs every three seconds now also asks each tracked agent's
+session to bring its backend up. `ensure_live` is idempotent and a no-op for the file
+harnesses, so this only ever does work for a session genuinely missing its backend, and the
+bar now appears when the daemon is actually ready rather than when the next event lands.
