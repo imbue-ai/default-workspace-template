@@ -238,7 +238,8 @@ class PostgresSignupAttemptStore:
     """Neon-backed attempt store; pruning is opportunistic on insert."""
 
     def count_recent_attempts(self, client_ip: str, subnet: str | None) -> tuple[int, int]:
-        with db.pooled_db_connection() as conn:
+        conn = db.get_pool_db_connection()
+        try:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -250,6 +251,8 @@ class PostgresSignupAttemptStore:
                         (client_ip, subnet),
                     )
                     row = cur.fetchone()
+        finally:
+            conn.close()
         return int(row[0]), int(row[1])
 
     def record_attempt(
@@ -262,7 +265,8 @@ class PostgresSignupAttemptStore:
         outcome: str,
         reputation_json: str | None,
     ) -> None:
-        with db.pooled_db_connection() as conn:
+        conn = db.get_pool_db_connection()
+        try:
             with conn:
                 with conn.cursor() as cur:
                     # Opportunistic pruning keeps the table bounded without a cron.
@@ -276,6 +280,8 @@ class PostgresSignupAttemptStore:
                         " VALUES (%s, %s, %s, %s, %s, %s, %s)",
                         (client_ip, subnet, email, signup_method, verdict, outcome, reputation_json),
                     )
+        finally:
+            conn.close()
 
 
 class IpReputationCache(Protocol):
@@ -296,7 +302,8 @@ class PostgresIpReputationCache:
     """Neon-backed reputation cache; fetched_at doubles as the lookup-budget stamp."""
 
     def get_fresh(self, client_ip: str, ttl_seconds: int) -> IpReputation | None:
-        with db.pooled_db_connection() as conn:
+        conn = db.get_pool_db_connection()
+        try:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -305,6 +312,8 @@ class PostgresIpReputationCache:
                         (client_ip, ttl_seconds),
                     )
                     row = cur.fetchone()
+        finally:
+            conn.close()
         if row is None:
             return None
         return IpReputation(
@@ -317,7 +326,8 @@ class PostgresIpReputationCache:
         )
 
     def store(self, client_ip: str, reputation: IpReputation) -> None:
-        with db.pooled_db_connection() as conn:
+        conn = db.get_pool_db_connection()
+        try:
             with conn:
                 with conn.cursor() as cur:
                     # Opportunistic pruning keeps the table bounded without a
@@ -343,13 +353,18 @@ class PostgresIpReputationCache:
                             reputation.service,
                         ),
                     )
+        finally:
+            conn.close()
 
     def count_lookups_in_last_day(self) -> int:
-        with db.pooled_db_connection() as conn:
+        conn = db.get_pool_db_connection()
+        try:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute("SELECT COUNT(*) FROM ip_reputation_cache WHERE fetched_at > NOW() - INTERVAL '1 day'")
                     row = cur.fetchone()
+        finally:
+            conn.close()
         return int(row[0])
 
 

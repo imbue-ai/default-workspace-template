@@ -13,7 +13,7 @@ _HOST_ID = "host-" + "a" * 32
 def _sync_record_body(host_id: str, state: str = "active", revision: int = 1) -> dict[str, object]:
     return {
         "host_id": host_id,
-        "agent_id": "agent-" + "d" * 32,
+        "agent_id": "agent-mint-test",
         "display_name": "mint workspace",
         "color": "#aabbcc",
         "provider_kind": "imbue_cloud",
@@ -35,11 +35,8 @@ def _put_record(client: TestClient, host_id: str, state: str = "active", revisio
     assert resp.status_code == 200
 
 
-_WORKSPACE_ID = "agent-" + "d" * 32
-
-
-def _workspace_key_entries(litellm: FakeLiteLLMBackend, workspace_id: str) -> list[dict[str, object]]:
-    return [key for key in litellm.keys_by_id.values() if key.get("key_alias") == f"workspace-{workspace_id}"]
+def _workspace_key_entries(litellm: FakeLiteLLMBackend, host_id: str) -> list[dict[str, object]]:
+    return [key for key in litellm.keys_by_id.values() if key.get("key_alias") == f"workspace-{host_id}"]
 
 
 def test_workspace_mint_creates_a_key_with_the_deterministic_alias(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -52,13 +49,12 @@ def test_workspace_mint_creates_a_key_with_the_deterministic_alias(monkeypatch: 
     body = resp.json()
     assert body["key"].startswith("sk-fake-")
     assert body["base_url"] == "https://fake-litellm.example.com"
-    entries = _workspace_key_entries(litellm, _WORKSPACE_ID)
+    entries = _workspace_key_entries(litellm, _HOST_ID)
     assert len(entries) == 1
     minted = entries[0]
     assert minted["max_budget"] == 100.0
     assert minted["budget_duration"] == "1d"
-    # The key is attributed to the workspace (its durable id), not the machine.
-    assert minted["metadata"] == {"workspace_id": _WORKSPACE_ID, "source": "web-chrome-mint"}
+    assert minted["metadata"] == {"workspace_host_id": _HOST_ID, "source": "web-chrome-mint"}
 
 
 def test_workspace_mint_rotates_an_existing_key_in_place(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -75,7 +71,7 @@ def test_workspace_mint_rotates_an_existing_key_in_place(monkeypatch: pytest.Mon
     # The first key was deleted by the rotation; exactly one key carries the
     # workspace alias afterwards.
     assert first_key not in litellm.keys_by_id
-    entries = _workspace_key_entries(litellm, _WORKSPACE_ID)
+    entries = _workspace_key_entries(litellm, _HOST_ID)
     assert [key["key"] for key in entries] == [second_key]
 
 
@@ -106,20 +102,3 @@ def test_workspace_mint_rejects_a_malformed_host_id(monkeypatch: pytest.MonkeyPa
 
     assert resp.status_code == 400
     assert litellm.generated_keys == []
-
-
-def test_workspace_mint_accepts_the_workspace_id_and_rotates_legacy_host_aliased_keys(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    client, _backend, _entitlements, litellm = _make_pool_quota_test_client(monkeypatch)
-    _put_record(client, _HOST_ID)
-    # A key minted by an old client carries the machine's host id in its alias.
-    legacy = client.post("/keys/workspace-mint", json={"host_id": _HOST_ID}, headers=_user_headers())
-    assert legacy.status_code == 200
-
-    resp = client.post("/keys/workspace-mint", json={"workspace_id": _WORKSPACE_ID}, headers=_user_headers())
-
-    assert resp.status_code == 200
-    # The legacy host-aliased key was rotated away alongside the workspace alias.
-    assert _workspace_key_entries(litellm, _WORKSPACE_ID) != []
-    assert [key for key in litellm.keys_by_id.values() if key.get("key_alias") == f"workspace-{_HOST_ID}"] == []

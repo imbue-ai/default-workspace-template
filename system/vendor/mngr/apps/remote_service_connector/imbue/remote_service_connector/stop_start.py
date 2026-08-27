@@ -284,7 +284,8 @@ def _heartbeat(row: WorkspaceRow, expected_status: str) -> bool:
     row still carries our fencing token *and* the phase's expected status, so
     a zero rowcount means the transition was superseded or taken over.
     """
-    with db.pooled_db_connection() as conn:
+    conn = db.get_pool_db_connection()
+    try:
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE pool_hosts SET transition_heartbeat_at = NOW() "
@@ -293,6 +294,8 @@ def _heartbeat(row: WorkspaceRow, expected_status: str) -> bool:
             )
             updated = cur.rowcount
         conn.commit()
+    finally:
+        conn.close()
     return updated == 1
 
 
@@ -303,16 +306,20 @@ def _assert_owned(row: WorkspaceRow, expected_status: str) -> None:
 
 
 def _current_status(host_db_id: str) -> str | None:
-    with db.pooled_db_connection() as conn:
+    conn = db.get_pool_db_connection()
+    try:
         with conn.cursor() as cur:
             cur.execute("SELECT status FROM pool_hosts WHERE id = %s", (host_db_id,))
             row = cur.fetchone()
+    finally:
+        conn.close()
     return row[0] if row is not None else None
 
 
 def _record_transition_error(row: WorkspaceRow, message: str) -> None:
     """Record a failed drive on the row (guarded: a fenced-out supervisor writes nothing)."""
-    with db.pooled_db_connection() as conn:
+    conn = db.get_pool_db_connection()
+    try:
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE pool_hosts SET transition_error = %s, "
@@ -321,6 +328,8 @@ def _record_transition_error(row: WorkspaceRow, message: str) -> None:
                 (message[:2000], row.host_db_id, row.transition_id),
             )
         conn.commit()
+    finally:
+        conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -392,8 +401,11 @@ def run_transition_supervisor(host_db_id: str, transition_id: str) -> str:
     to drive.
     """
     config = storage_module.read_storage_config()
-    with db.pooled_db_connection() as conn:
+    conn = db.get_pool_db_connection()
+    try:
         row = read_workspace_row(conn, host_db_id)
+    finally:
+        conn.close()
     if row is None:
         return "row-gone"
     if row.transition_id != transition_id:
@@ -415,8 +427,11 @@ def run_transition_supervisor(host_db_id: str, transition_id: str) -> str:
 def _require_box(row: WorkspaceRow) -> BoxRow:
     if row.bare_metal_server_id is None:
         raise WorkspaceTransitionError(f"workspace {row.host_db_id} has no bare_metal_server_id")
-    with db.pooled_db_connection() as conn:
+    conn = db.get_pool_db_connection()
+    try:
         box = _read_box_row(conn, row.bare_metal_server_id)
+    finally:
+        conn.close()
     if box is None:
         raise WorkspaceTransitionError(
             f"workspace {row.host_db_id}: bare_metal_servers row {row.bare_metal_server_id} is missing "
@@ -486,7 +501,8 @@ def _ensure_stop_artifact_material(config: StorageConfig, row: WorkspaceRow, box
         source_vm_ssh_port=row.ssh_port,
         source_container_ssh_port=row.container_ssh_port,
     )
-    with db.pooled_db_connection() as conn:
+    conn = db.get_pool_db_connection()
+    try:
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE pool_hosts SET wrapped_dek = %s, artifact_manifest = %s "
@@ -495,6 +511,8 @@ def _ensure_stop_artifact_material(config: StorageConfig, row: WorkspaceRow, box
             )
             updated = cur.rowcount
         conn.commit()
+    finally:
+        conn.close()
     if updated == 0:
         raise _TransitionSuperseded(_current_status(row.host_db_id) or "gone")
     return manifest
@@ -646,7 +664,8 @@ def _drive_stop_inner(config: StorageConfig, row: WorkspaceRow) -> None:
     # The artifact is durable: land the row on ``stopped`` immediately.
     # Placement and the box link stay set -- the halted local VM is kept for
     # the retention window so a start within it restarts in place.
-    with db.pooled_db_connection() as conn:
+    conn = db.get_pool_db_connection()
+    try:
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE pool_hosts SET status = 'stopped', stopped_at = NOW(), artifact_manifest = %s, "
@@ -661,6 +680,8 @@ def _drive_stop_inner(config: StorageConfig, row: WorkspaceRow) -> None:
             )
             updated = cur.rowcount
         conn.commit()
+    finally:
+        conn.close()
     if updated == 0:
         raise _TransitionSuperseded(_current_status(row.host_db_id) or "gone")
     logger.info("Workspace %s stopped (generation %d uploaded)", row.host_db_id, manifest.generation)
@@ -676,8 +697,11 @@ def _drive_stopped_retention(config: StorageConfig, row: WorkspaceRow) -> str:
     try:
         # Re-read the row: when arriving from a just-landed stop, the caller's
         # snapshot still carries the pre-stop artifact generation.
-        with db.pooled_db_connection() as conn:
+        conn = db.get_pool_db_connection()
+        try:
             fresh_row = read_workspace_row(conn, row.host_db_id)
+        finally:
+            conn.close()
         if fresh_row is None or fresh_row.transition_id != row.transition_id or fresh_row.status != "stopped":
             raise _TransitionSuperseded(fresh_row.status if fresh_row is not None else "gone")
         # Deleting the local VM destroys the only bootable copy unless the
@@ -723,7 +747,8 @@ def _claim_local_vm_for_deletion(row: WorkspaceRow) -> None:
     underway. A zero rowcount means a start already took the row over (the
     VM is its to boot), so nothing may be deleted.
     """
-    with db.pooled_db_connection() as conn:
+    conn = db.get_pool_db_connection()
+    try:
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE pool_hosts SET vps_address = NULL, ssh_port = NULL, container_ssh_port = NULL "
@@ -732,6 +757,8 @@ def _claim_local_vm_for_deletion(row: WorkspaceRow) -> None:
             )
             updated = cur.rowcount
         conn.commit()
+    finally:
+        conn.close()
     if updated == 0:
         raise _TransitionSuperseded(_current_status(row.host_db_id) or "gone")
 
@@ -752,7 +779,8 @@ def _delete_local_vm_and_previous_generation(
     # The box link falls last: a crash anywhere above leaves the row matching
     # the watchdog's stopped-with-box-link predicate, so the finalize is
     # resumed (the claim CAS re-matches a row whose placement is already NULL).
-    with db.pooled_db_connection() as conn:
+    conn = db.get_pool_db_connection()
+    try:
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE pool_hosts SET bare_metal_server_id = NULL, transition_heartbeat_at = NULL "
@@ -760,6 +788,8 @@ def _delete_local_vm_and_previous_generation(
                 (row.host_db_id, row.transition_id),
             )
         conn.commit()
+    finally:
+        conn.close()
 
 
 def _drive_start(config: StorageConfig, row: WorkspaceRow) -> str:
@@ -781,7 +811,8 @@ def _fail_start_back_to_stopped(row: WorkspaceRow, message: str) -> None:
     placement/box link stays -- a start within the retention window fails
     back to a row whose local VM is still there for the next try.
     """
-    with db.pooled_db_connection() as conn:
+    conn = db.get_pool_db_connection()
+    try:
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE pool_hosts SET status = 'stopped', transition_error = %s, "
@@ -790,6 +821,8 @@ def _fail_start_back_to_stopped(row: WorkspaceRow, message: str) -> None:
                 (message[:2000], row.host_db_id, row.transition_id),
             )
         conn.commit()
+    finally:
+        conn.close()
 
 
 def _drive_start_inner(config: StorageConfig, row: WorkspaceRow) -> str:
@@ -831,7 +864,8 @@ def _restart_in_place(config: StorageConfig, row: WorkspaceRow, box: BoxRow) -> 
         config, f"{storage_module.workspace_key_prefix(config, row.host_id)}/gen-{pending_generation}/"
     )
 
-    with db.pooled_db_connection() as conn:
+    conn = db.get_pool_db_connection()
+    try:
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE pool_hosts SET status = 'leased', stop_requested_at = NULL, stopped_at = NULL, "
@@ -842,6 +876,8 @@ def _restart_in_place(config: StorageConfig, row: WorkspaceRow, box: BoxRow) -> 
             )
             updated = cur.rowcount
         conn.commit()
+    finally:
+        conn.close()
     if updated == 0:
         raise _TransitionSuperseded(_current_status(row.host_db_id) or "gone")
     logger.info("Workspace %s restarted in place on %s", row.host_db_id, box.public_address)
@@ -861,8 +897,11 @@ def _restore_from_artifact(config: StorageConfig, row: WorkspaceRow) -> str:
         )
     identity = storage_module.unwrap_dek(config, row.wrapped_dek)
 
-    with db.pooled_db_connection() as conn:
+    conn = db.get_pool_db_connection()
+    try:
         candidates = _list_candidate_boxes(conn, row.region)
+    finally:
+        conn.close()
     if not candidates:
         raise WorkspaceTransitionError("no capacity available right now, try again later")
     random.shuffle(candidates)
@@ -953,7 +992,8 @@ def _restore_from_artifact(config: StorageConfig, row: WorkspaceRow) -> str:
     # stop on this box never mistakes the download's status for its upload's.
     _remove_transfer_dir(box, instance_name)
 
-    with db.pooled_db_connection() as conn:
+    conn = db.get_pool_db_connection()
+    try:
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE pool_hosts SET status = 'leased', vps_address = %s, ssh_port = %s, "
@@ -972,6 +1012,8 @@ def _restore_from_artifact(config: StorageConfig, row: WorkspaceRow) -> str:
             )
             updated = cur.rowcount
         conn.commit()
+    finally:
+        conn.close()
     if updated == 0:
         # The row moved on (released or abandoned) after the download booted
         # the VM. As in the mid-download case, nothing else can ever reclaim
@@ -1077,7 +1119,8 @@ def _redrive_delay_seconds(failure_count: int) -> float:
 
 def _find_watchdog_candidates() -> list[_WatchdogCandidate]:
     """Rows with an in-flight transition (or unfinalized stop), with liveness + failure data."""
-    with db.pooled_db_connection() as conn:
+    conn = db.get_pool_db_connection()
+    try:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT id, status, transition_failure_count, "
@@ -1085,6 +1128,8 @@ def _find_watchdog_candidates() -> list[_WatchdogCandidate]:
                 f"WHERE {_IN_FLIGHT_ROW_PREDICATE_SQL}"
             )
             rows = cur.fetchall()
+    finally:
+        conn.close()
     return [
         _WatchdogCandidate(
             host_db_id=str(row[0]),
@@ -1107,7 +1152,8 @@ def _take_over_transition(host_db_id: str) -> str | None:
     -- and its settled row must not be stamped with a fresh token.
     """
     new_transition_id = str(uuid4())
-    with db.pooled_db_connection() as conn:
+    conn = db.get_pool_db_connection()
+    try:
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE pool_hosts SET transition_id = %s, transition_heartbeat_at = NOW() "
@@ -1118,6 +1164,8 @@ def _take_over_transition(host_db_id: str) -> str | None:
             )
             updated = cur.rowcount
         conn.commit()
+    finally:
+        conn.close()
     return new_transition_id if updated == 1 else None
 
 

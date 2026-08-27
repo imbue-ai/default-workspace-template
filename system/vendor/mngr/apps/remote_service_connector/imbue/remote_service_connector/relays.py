@@ -151,16 +151,20 @@ class PostgresRelayStore:
     """RelayStore backed by the connector's existing Neon DB."""
 
     def list_relays(self) -> list[dict[str, Any]]:
-        with db.pooled_db_connection() as conn:
+        conn = db.get_pool_db_connection()
+        try:
             with conn.cursor() as cur:
                 cur.execute(f"SELECT {_RELAY_COLUMNS} FROM relays ORDER BY relay_id")
                 rows = cur.fetchall()
+        finally:
+            conn.close()
         return [_relay_row_to_dict(row) for row in rows]
 
     def upsert_relay(
         self, relay_id: str, region: str, tunnel_endpoint: str, ip_address: str, instance_name: str
     ) -> None:
-        with db.pooled_db_connection() as conn:
+        conn = db.get_pool_db_connection()
+        try:
             with conn:
                 with conn.cursor() as cur:
                     # Re-registering revives a retired row: a replacement deploy
@@ -175,9 +179,12 @@ class PostgresRelayStore:
                         "updated_at = NOW()",
                         (relay_id, region, tunnel_endpoint, ip_address, instance_name),
                     )
+        finally:
+            conn.close()
 
     def retire_relay(self, relay_id: str) -> bool:
-        with db.pooled_db_connection() as conn:
+        conn = db.get_pool_db_connection()
+        try:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -185,9 +192,12 @@ class PostgresRelayStore:
                         (relay_id,),
                     )
                     return bool(cur.rowcount)
+        finally:
+            conn.close()
 
     def update_relay_health(self, relay_id: str, health: str, consecutive_probe_failures: int) -> None:
-        with db.pooled_db_connection() as conn:
+        conn = db.get_pool_db_connection()
+        try:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -195,9 +205,12 @@ class PostgresRelayStore:
                         "WHERE relay_id = %s",
                         (health, consecutive_probe_failures, relay_id),
                     )
+        finally:
+            conn.close()
 
     def record_relay_login(self, host_id: str, user_label: str, relay_id: str) -> None:
-        with db.pooled_db_connection() as conn:
+        conn = db.get_pool_db_connection()
+        try:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -205,9 +218,12 @@ class PostgresRelayStore:
                         "ON CONFLICT (host_id, user_id, relay_id) DO UPDATE SET last_login_at = NOW()",
                         (host_id, user_label, relay_id),
                     )
+        finally:
+            conn.close()
 
     def list_share_relay_logins(self, host_id: str, user_label: str) -> list[dict[str, Any]]:
-        with db.pooled_db_connection() as conn:
+        conn = db.get_pool_db_connection()
+        try:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT relay_id, last_login_at FROM share_tunnel_logins "
@@ -215,6 +231,8 @@ class PostgresRelayStore:
                     (host_id, user_label),
                 )
                 rows = cur.fetchall()
+        finally:
+            conn.close()
         return [{"relay_id": row[0], "last_login_at": str(row[1]) if row[1] is not None else None} for row in rows]
 
 

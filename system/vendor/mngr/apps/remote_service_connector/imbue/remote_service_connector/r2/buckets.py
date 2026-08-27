@@ -32,7 +32,7 @@ from imbue.remote_service_connector.errors import R2BucketNotFoundError
 from imbue.remote_service_connector.errors import R2ReservedBucketNameError
 from imbue.remote_service_connector.http_api import handle_endpoint_errors
 from imbue.remote_service_connector.r2.naming import DEFAULT_R2_KEY_ALIAS
-from imbue.remote_service_connector.r2.naming import RESERVED_BUCKET_SHORT_NAME_PREFIXES
+from imbue.remote_service_connector.r2.naming import RESERVED_BUCKET_SHORT_NAME_PREFIX
 from imbue.remote_service_connector.r2.naming import WORKSPACE_BACKUP_SHORT_NAME_RE
 from imbue.remote_service_connector.r2.naming import bucket_owner_prefix
 from imbue.remote_service_connector.r2.naming import derive_s3_secret_access_key
@@ -273,27 +273,32 @@ def _mint_and_record_key(
         raise HTTPException(status_code=502, detail=f"Failed to provision bucket key: {exc}") from exc
 
 
-def _workspace_record_exists(user_id: str, short_name: str) -> bool:
-    """Whether the user has a workspace record (any state) whose workspace or host id is ``short_name``."""
-    with db.pooled_db_connection() as conn:
+def _workspace_record_exists(user_id: str, host_id: str) -> bool:
+    """Whether the user has a workspace record (any state) for ``host_id``."""
+    conn = db.get_pool_db_connection()
+    try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT 1 FROM workspace_records WHERE user_id = %s AND (host_id = %s OR agent_id = %s)",
-                (user_id, short_name, short_name),
+                "SELECT 1 FROM workspace_records WHERE user_id = %s AND host_id = %s",
+                (user_id, host_id),
             )
             return cur.fetchone() is not None
+    finally:
+        conn.close()
 
 
-def _workspace_record_is_active(user_id: str, short_name: str) -> bool:
-    """Whether the user has an ACTIVE workspace record whose workspace or host id is ``short_name``."""
-    with db.pooled_db_connection() as conn:
+def _workspace_record_is_active(user_id: str, host_id: str) -> bool:
+    """Whether the user has an ACTIVE workspace record for ``host_id``."""
+    conn = db.get_pool_db_connection()
+    try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT 1 FROM workspace_records "
-                "WHERE user_id = %s AND (host_id = %s OR agent_id = %s) AND state = 'active'",
-                (user_id, short_name, short_name),
+                "SELECT 1 FROM workspace_records WHERE user_id = %s AND host_id = %s AND state = 'active'",
+                (user_id, host_id),
             )
             return cur.fetchone() is not None
+    finally:
+        conn.close()
 
 
 @router.post("/buckets")
@@ -304,15 +309,15 @@ def create_bucket_endpoint(request: Request, body: CreateBucketRequest) -> dict[
         entitlements = entitlements_module.resolve_entitlements_for_user(owner_user_id, user)
         ops = cloudflare_module.get_cloudflare_ctx().ops
         full_name = make_bucket_name(user.user_id_prefix, body.name)
-        # The `host-` / `agent-` short-name shapes are reserved for
-        # workspace-backup buckets: allowed only when the caller has a
-        # workspace record (any state) with that host or workspace id, so
-        # generic user buckets can never collide with the names the backup
-        # reapers act on. The check runs on the slugified short name -- the
-        # name the bucket is actually created under -- so case/punctuation
-        # variants (e.g. 'HOST-abc') cannot slip into the reserved namespace.
+        # The `host-` short-name shape is reserved for workspace-backup buckets:
+        # allowed only when the caller has a workspace record (any state) with
+        # that host id, so generic user buckets can never collide with the
+        # names the backup reapers act on. The check runs on the slugified
+        # short name -- the name the bucket is actually created under -- so
+        # case/punctuation variants (e.g. 'HOST-abc') cannot slip into the
+        # reserved namespace.
         short_name = slugify_r2_name(body.name)
-        if short_name.startswith(RESERVED_BUCKET_SHORT_NAME_PREFIXES) and not _workspace_record_exists(
+        if short_name.startswith(RESERVED_BUCKET_SHORT_NAME_PREFIX) and not _workspace_record_exists(
             owner_user_id, short_name
         ):
             raise R2ReservedBucketNameError(short_name)

@@ -193,22 +193,10 @@ _WORKSPACE_MINT_BUDGET_DURATION = "1d"
 # Workspace-record host ids look like ``host-<32 hex>`` (mirrors the sync
 # module's validation shape; kept permissive on length for older ids).
 _WORKSPACE_HOST_ID_RE = re.compile(r"^host-[0-9a-f]{8,64}$")
-# Workspace ids are the workspace's system-services agent id.
-_WORKSPACE_ID_RE = re.compile(r"^agent-[0-9a-f]{8,64}$")
 
 
 class WorkspaceMintRequest(BaseModel):
-    host_id: str | None = Field(
-        default=None,
-        description=(
-            "The workspace's current machine (`host-<hex>`). Compat addressing from clients that "
-            "predate workspace ids; new clients send workspace_id instead."
-        ),
-    )
-    workspace_id: str | None = Field(
-        default=None,
-        description="The workspace's id (`agent-<hex>`, the sync-record key); preferred over host_id",
-    )
+    host_id: str = Field(description="The workspace's mngr host id (a `host-<hex>` sync-record key)")
 
 
 def _require_llm_spend_budget(entitlements: entitlements_module.AccountEntitlements) -> None:
@@ -231,9 +219,9 @@ def mint_workspace_key(request: Request, body: WorkspaceMintRequest) -> dict[str
     """Mint (or rotate) the LiteLLM key for one of the caller's workspaces.
 
     The hosted web chrome's twin of the desktop mint page: the key's alias and
-    metadata carry the workspace id, fixed server-side, so keys are
+    metadata carry the workspace host id, fixed server-side, so keys are
     attributable without any editable input. Ownership is record existence --
-    the caller must have an ACTIVE sync record for the workspace. The alias is
+    the caller must have an ACTIVE sync record for the host id. The alias is
     deterministic and LiteLLM enforces unique aliases, so an existing key with
     this alias is deleted and re-minted in place ("get me working credentials
     now" semantics: previously issued credentials for this workspace stop
@@ -241,46 +229,28 @@ def mint_workspace_key(request: Request, body: WorkspaceMintRequest) -> dict[str
     """
     with handle_endpoint_errors():
         user, user_id = accounts_web_module.resolve_web_user_identity(request)
-        workspace_id = body.workspace_id.strip().lower() if body.workspace_id is not None else None
-        host_id = body.host_id.strip().lower() if body.host_id is not None else None
-        if workspace_id is not None and not _WORKSPACE_ID_RE.match(workspace_id):
-            raise HTTPException(status_code=400, detail="Invalid workspace id")
-        if host_id is not None and not _WORKSPACE_HOST_ID_RE.match(host_id):
+        host_id = body.host_id.strip().lower()
+        if not _WORKSPACE_HOST_ID_RE.match(host_id):
             raise HTTPException(status_code=400, detail="Invalid workspace host id")
-        if workspace_id is None and host_id is None:
-            raise HTTPException(status_code=400, detail="workspace_id (or the compat host_id) is required")
         entitlements = entitlements_module.resolve_entitlements_for_user(user_id, user)
         _require_llm_spend_budget(entitlements)
 
         # Ownership: the caller's replica must hold an ACTIVE record for this
         # workspace (association IS record existence, same rule as the desktop).
         records = sync_module.get_sync_store().list_records(user_id)
-        matching = next(
-            (
-                record
-                for record in records
-                if record["state"] == "active"
-                and (record["agent_id"] == workspace_id if workspace_id is not None else record["host_id"] == host_id)
-            ),
-            None,
-        )
-        if matching is None:
-            raise HTTPException(status_code=403, detail="No active workspace record for this workspace")
-        workspace_id = str(matching["agent_id"])
+        if not any(record["host_id"] == host_id and record["state"] == "active" for record in records):
+            raise HTTPException(status_code=403, detail="No active workspace record for this host id")
 
         litellm_client.upsert_litellm_user_budget(user_id, entitlements.monthly_llm_spend_usd)
 
         # Rotate-on-exists: delete any key already carrying this workspace's
-        # deterministic alias before minting the fresh one. Keys minted before
-        # workspace keying carried the machine's host id in the alias, so both
-        # shapes are rotated away.
-        alias = f"workspace-{workspace_id}"
-        stale_aliases = {alias, f"workspace-{matching['host_id']}"}
+        # deterministic alias before minting the fresh one.
+        alias = f"workspace-{host_id}"
         keys_raw = litellm_client.list_litellm_user_key_entries(user_id)
         stale_tokens = [
             str(entry.get("token"))
             for entry in keys_raw
-            if isinstance(entry, dict) and entry.get("key_alias") in stale_aliases and entry.get("token")
+            if isinstance(entry, dict) and entry.get("key_alias") == alias and entry.get("token")
         ]
         if stale_tokens:
             litellm_client.litellm_request("POST", "/key/delete", json_body={"keys": stale_tokens})
@@ -293,7 +263,7 @@ def mint_workspace_key(request: Request, body: WorkspaceMintRequest) -> dict[str
                 "key_alias": alias,
                 "max_budget": _WORKSPACE_MINT_MAX_BUDGET_USD,
                 "budget_duration": _WORKSPACE_MINT_BUDGET_DURATION,
-                "metadata": {"workspace_id": workspace_id, "source": "web-chrome-mint"},
+                "metadata": {"workspace_host_id": host_id, "source": "web-chrome-mint"},
             },
         )
         data = resp.json()

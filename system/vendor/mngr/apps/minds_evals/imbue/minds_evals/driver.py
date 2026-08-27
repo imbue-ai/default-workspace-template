@@ -39,18 +39,13 @@ from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 from imbue.minds_evals import decider
-from imbue.minds_evals import evidence_collection
-from imbue.minds_evals import forward_instance
 from imbue.minds_evals import minds_bridge
 from imbue.minds_evals import proxy_config
-from imbue.minds_evals import ui_flows
 from imbue.minds_evals import usage as usage_accounting
 from imbue.minds_evals.data_types import CaseConfig
-from imbue.minds_evals.data_types import CheckStatus
 from imbue.minds_evals.data_types import DECIDE_SENTINEL
 from imbue.minds_evals.data_types import DeciderResult
 from imbue.minds_evals.data_types import Transcript
-from imbue.minds_evals.errors import AgentKwargError
 from imbue.minds_evals.errors import InstructionParseError
 
 TRANSCRIPT_FILENAME: Final[str] = "full_transcript.jsonl"
@@ -140,60 +135,21 @@ class SnapshotMode(UpperCaseStrEnum):
 
 
 @pure
-def _agent_kwarg_text(raw_value: object) -> str:
-    """What the operator typed after `--ak key=`, whatever Python type it arrived as.
-
-    Harbor JSON-parses every `--ak key=value` before the driver sees it, so the type depends on the
-    spelling: `key=true` arrives as a bool, `key=1` as an int, `key=null` as None, and only
-    `key=yes` stays a string. Every parser below goes through here rather than assuming the str the
-    CLI syntax suggests -- `--ak proxy=1` is a spelling they advertise, and it does not arrive as one.
-
-    Whitespace is stripped but case is preserved, so a parser that cares about case can still see it.
-    """
-    return "" if raw_value is None else str(raw_value).strip()
-
-
-# The spellings every boolean `--ak` flag on this driver reads the same way, so `--ak proxy=on`
-# cannot come to mean the opposite of `--ak proxy_probe=on`. Shared rather than repeated because a
-# docstring is not enough to hold two parsers in step.
-_TRUE_FLAG_SPELLINGS: Final[frozenset[str]] = frozenset({"1", "true", "yes", "on"})
-_FALSE_FLAG_SPELLINGS: Final[frozenset[str]] = frozenset({"0", "false", "no", "off"})
-
-
-@pure
-def parse_agent_flag(raw_value: object, name: str) -> bool:
+def parse_agent_flag(raw_value: bool | str) -> bool:
     """A boolean agent kwarg, however harbor delivered it.
 
-    Every unrecognised spelling is rejected rather than read as False. A flag that silently means
-    "off" whenever it cannot be understood turns a typo into a trial that ran the other arm and
-    reported the one that was asked for, which is worse than a run that refuses to start.
+    Harbor JSON-parses `--ak key=value`, so `key=true` arrives as a bool while `key=yes` stays a
+    string. Accepting both keeps the CLI spellings interchangeable instead of failing in __init__,
+    which surfaces as a trial that dies before writing any log.
     """
-    text = _agent_kwarg_text(raw_value).lower()
-    if text in _TRUE_FLAG_SPELLINGS:
-        return True
-    if text in _FALSE_FLAG_SPELLINGS:
-        return False
-    raise AgentKwargError(
-        "{} {!r} is not a boolean; expected one of true/false/yes/no/on/off/1/0".format(name, raw_value)
-    )
+    if isinstance(raw_value, bool):
+        return raw_value
+    return raw_value.strip().lower() in ("1", "true", "yes")
 
 
 @pure
-def parse_snapshot_mode(raw_value: object) -> SnapshotMode:
-    """The snapshot cadence, rejecting a spelling this driver cannot honour.
-
-    `SnapshotMode(...)` raises a bare ValueError naming the enum, which reads as an internal fault
-    rather than a bad kwarg; this names the option and what it accepts.
-    """
-    text = _agent_kwarg_text(raw_value)
-    try:
-        return SnapshotMode(text.replace("-", "_").upper())
-    except ValueError:
-        raise AgentKwargError(
-            "snapshot_mode {!r} is not a snapshot cadence; expected one of {}".format(
-                raw_value, ", ".join(mode.value.lower().replace("_", "-") for mode in SnapshotMode)
-            )
-        ) from None
+def parse_snapshot_mode(raw_value: str) -> SnapshotMode:
+    return SnapshotMode(raw_value.replace("-", "_").upper())
 
 
 @pure
@@ -320,33 +276,6 @@ def _conversation_events(conversation: list[dict[str, str]]) -> list[dict[str, s
     return events
 
 
-# The fixed identity and timestamp the eval-case commit is made with. A commit hash is a function of
-# its tree, parent, author, committer, AND dates, so a wall-clock date would give every trial a
-# different base sha for an identical tree -- and the captured deliverable.bundle, which is based on
-# that commit, could then never be unbundled onto a regenerated clone. Pinning the dates makes the
-# base a pure function of the dwt SHA, the mngr SHA, and the vendor exclude list, which is exactly
-# what makes the retroactive fresh-environment replay the bundle exists for possible.
-EVAL_CASE_COMMIT_DATE: Final[str] = "1970-01-01T00:00:00 +0000"
-EVAL_CASE_COMMIT_EMAIL: Final[str] = "eval@minds"
-EVAL_CASE_COMMIT_NAME: Final[str] = "minds-eval"
-
-
-@pure
-def build_eval_case_commit_command(quoted_clone_dir: str, quoted_commit_message: str) -> str:
-    """The eval-case commit, made reproducibly: fixed identity and fixed author/committer dates."""
-    return (
-        "cd {clone} && git add -A && "
-        "GIT_AUTHOR_DATE={date} GIT_COMMITTER_DATE={date} "
-        "git -c user.email={email} -c user.name={name} commit -q -m {message}"
-    ).format(
-        clone=quoted_clone_dir,
-        date=shlex.quote(EVAL_CASE_COMMIT_DATE),
-        email=shlex.quote(EVAL_CASE_COMMIT_EMAIL),
-        name=shlex.quote(EVAL_CASE_COMMIT_NAME),
-        message=quoted_commit_message,
-    )
-
-
 @pure
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -360,24 +289,20 @@ class MindsPersonaDriver(BaseAgent):
     def __init__(
         self,
         *args: Any,
-        snapshot_mode: object = "per-turn",
+        snapshot_mode: str = "per-turn",
         modal_config_path: str = "",
         poll_seconds: float = 5.0,
-        proxy_probe: object = False,
-        proxy: object = False,
-        verifier_model: str = "",
+        proxy_probe: bool | str = False,
+        proxy: bool | str = False,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
-        # Flow driving is mechanical, so a cheaper tier may well do; until that is measured the
-        # verification agent runs on the decider's model, with this override to measure it.
-        self._verifier_model_override = verifier_model.strip()
         # Opt-in check that a box-local port is reachable from inside the workspace, which is what
         # an in-box LLM proxy would depend on. Off by default: it costs an extra bridge round trip.
-        self._is_proxy_probe_enabled = parse_agent_flag(proxy_probe, "proxy_probe")
+        self._is_proxy_probe_enabled = parse_agent_flag(proxy_probe)
         # Route the workspace's model traffic through a proxy in the box, so every call -- including
         # any the agent delegates -- is metered where the agent cannot reach it.
-        self._is_proxy_enabled = parse_agent_flag(proxy, "proxy")
+        self._is_proxy_enabled = parse_agent_flag(proxy)
         self._proxy_key: str = ""
         self._proxy_usage_records: tuple[dict[str, Any], ...] = ()
         self._snapshot_mode = parse_snapshot_mode(snapshot_mode)
@@ -408,15 +333,6 @@ class MindsPersonaDriver(BaseAgent):
         self._started_at: float = 0.0
         self._waits_done: int = 0
         self._test_state: str = "ongoing"
-        # HEAD of the per-case dwt clone the workspace was created from: the base of the
-        # incremental git bundle the evidence phase captures, so the recorded deliverable is only
-        # the agent's own commits.
-        self._clone_base_sha: str = ""
-        # The dwt tip the base clone was made from, recorded so a replay can regenerate that base
-        # and check it reproduces _clone_base_sha before unbundling the agent's commits onto it.
-        self._dwt_tip_sha: str = ""
-        self._verification_metadata: dict[str, Any] = {}
-        self._verifier_usage: ui_flows.VerifierUsage | None = None
 
     @staticmethod
     def name() -> str:
@@ -429,16 +345,7 @@ class MindsPersonaDriver(BaseAgent):
     def _decider_model(self) -> str:
         return self._parsed_model_name or decider.DEFAULT_DECIDER_MODEL
 
-    @property
-    def _verifier_model(self) -> str:
-        return self._verifier_model_override or self._decider_model
-
     async def setup(self, environment: BaseEnvironment) -> None:
-        # Create the evidence directory before anything else can fail. harbor records a missing
-        # declared artifact path as a failed entry, and `harbor trial regrade` refuses any trial
-        # that has one -- an EMPTY directory is tolerated, an absent one is not. Without this, a
-        # trial that dies before the collection phase would be permanently non-regradable.
-        await evidence_collection.ensure_evidence_dir(environment)
         # The staged mngr clone's HEAD is the exact SHA the dataset was generated
         # at, so the box env can be built without seeing the instruction.
         self._mngr_sha = await minds_bridge.read_box_mngr_sha(environment)
@@ -467,9 +374,6 @@ class MindsPersonaDriver(BaseAgent):
         try:
             await self._run_conversation(case, environment, deadline)
         finally:
-            # Before anything is torn down: the workspace (and the app inside it) is only alive
-            # here, and the verifier runs long after it is gone.
-            await self._collect_verification_evidence(environment)
             if self._is_proxy_enabled:
                 await self._collect_proxy_usage(environment)
             self._populate_context_metadata(context)
@@ -478,74 +382,6 @@ class MindsPersonaDriver(BaseAgent):
             # driver always populates the context above.
             self._write_trajectory()
             await self._teardown(environment)
-
-    def _build_verification_agent(self) -> ui_flows.VerificationAgent | None:
-        """The UI-flow agent, or None when there is no key to run it with. The upstream key is used
-        rather than the trial's proxy key: this is the harness reasoning about the workspace, not
-        the workspace's own traffic, so it must not be metered as the agent under test's spend."""
-        api_key = self._get_env("ANTHROPIC_API_KEY") or ""
-        if not api_key:
-            logger.warning("No ANTHROPIC_API_KEY for the UI-flow verification agent; flows cannot be measured")
-            return None
-        return ui_flows.AnthropicVerificationAgent(
-            model=self._verifier_model,
-            api_key=SecretStr(api_key),
-            timeout_seconds=ui_flows.DEFAULT_CALL_TIMEOUT_SECONDS,
-        )
-
-    async def _collect_verification_evidence(self, environment: BaseEnvironment) -> None:
-        """Capture what the delivered workspace actually is, while it still exists.
-
-        The cheap registry/service/inventory capture runs for every trial that got as far as a
-        workspace; the expectations-driven probes only run when the conversation finished, since an
-        unfinished trial's structural gates already zero its reward. Any failure here is swallowed:
-        evidence is best-effort and must never discard an already-completed trial or block the
-        teardown that stops the nested sandboxes from leaking.
-        """
-        if self._box_env is None or self._case is None or not self._workspace_agent_id:
-            return
-        collector = evidence_collection.EvidenceCollector(
-            environment=environment,
-            box_env=self._box_env,
-            workspace_agent_id=self._workspace_agent_id,
-            case=self._case,
-            clone_base_sha=self._clone_base_sha,
-            dwt_tip_sha=self._dwt_tip_sha,
-            host_logs_dir=self.logs_dir,
-            # Monotonic, unlike the conversation's own deadline: a clock step during a ten-minute
-            # collection phase would otherwise truncate or extend it.
-            deadline=time.monotonic() + self._case.verification_timeout_seconds,
-            verifier_model=self._verifier_model,
-            verification_agent=self._build_verification_agent(),
-            workspace_host_id=await minds_bridge.fetch_agent_host_id(
-                environment, self._box_env, self._workspace_agent_id
-            ),
-            preauth_cookie=SecretStr(forward_instance.mint_forward_secret()),
-            browser_bridge_token=SecretStr(forward_instance.mint_forward_secret()),
-        )
-        logger.info("Collecting outcome-verification evidence from the workspace")
-        try:
-            manifest = await collector.collect(
-                is_expectations_collection_wanted=self._test_state == "finished",
-            )
-        except Exception as exc:
-            logger.opt(exception=exc).warning("Evidence collection failed; grading on what it managed to write")
-            # Whatever the flow agent spent before the failure is still spent, so keep the account.
-            self._verifier_usage = collector.verifier_usage()
-            return
-        self._verifier_usage = collector.verifier_usage()
-        self._verification_metadata = {
-            "is_evidence_complete": manifest.is_evidence_complete,
-            "entry_count": len(manifest.entries),
-            "failed_entry_count": sum(1 for entry in manifest.entries if entry.status == CheckStatus.FAILED),
-            "error_entry_count": sum(1 for entry in manifest.entries if entry.status == CheckStatus.ERROR),
-        }
-        logger.info(
-            "Recorded {} verification entr(ies) ({} failed, {} errored)",
-            len(manifest.entries),
-            self._verification_metadata["failed_entry_count"],
-            self._verification_metadata["error_entry_count"],
-        )
 
     async def _teardown(self, environment: BaseEnvironment) -> None:
         """Destroy the trial's workspace sandboxes, swallowing any teardown error so a transport
@@ -953,31 +789,12 @@ class MindsPersonaDriver(BaseAgent):
         )
         await minds_bridge.check_run_in_box(
             environment,
-            build_eval_case_commit_command(clone_dir, commit_message),
+            "cd {clone} && git add -A && git -c user.email=eval@minds -c user.name=minds-eval commit -q -m {message}".format(
+                clone=clone_dir, message=commit_message
+            ),
             self._box_env,
             300,
         )
-        # Record where the agent's own history starts, and what the base was built from. The
-        # evidence phase bundles only <base>..HEAD, so the captured deliverable is the agent's
-        # commits rather than the whole template. The base commit is deterministic (fixed identity
-        # and dates over a tree that is a function of the dwt tip and the mngr SHA), so recording
-        # both shas is what keeps that bundle reproducible: preparing the clone again from the same
-        # inputs yields this exact base sha, and the bundle unbundles only onto it.
-        base_result = await minds_bridge.check_run_in_box(
-            environment,
-            "printf '{base_marker}\\n'; git -C {clone} rev-parse HEAD; "
-            "printf '{dwt_marker}\\n'; git -C /work/eval-base rev-parse HEAD".format(
-                clone=clone_dir,
-                base_marker=evidence_collection.section_marker("base_sha"),
-                dwt_marker=evidence_collection.section_marker("dwt_tip_sha"),
-            ),
-            self._box_env,
-            120,
-        )
-        sections = evidence_collection.split_sections(base_result.stdout or "")
-        self._dwt_tip_sha = sections.get("dwt_tip_sha", "").strip()
-        base_output = sections.get("base_sha", "").strip()
-        self._clone_base_sha = base_output.splitlines()[-1].strip() if base_output else ""
 
     async def _mark_timed_out(self, environment: BaseEnvironment, reason: str) -> None:
         logger.warning("Marking the trial timed_out: {}", reason)
@@ -1104,14 +921,6 @@ class MindsPersonaDriver(BaseAgent):
             "usage_source": "proxy" if proxy_usage is not None else "transcript",
             "transcript_usage": usage_accounting.workspace_usage_metadata(transcript_usage),
             "decider_usage": usage_accounting.decider_usage_metadata(decider_usage),
-            # The UI-flow verification agent is harness spend just like the decider: it measures
-            # what the eval costs to run, never what the agent under test consumed.
-            "verifier_agent_usage": usage_accounting.verifier_usage_metadata(self._verifier_usage)
-            if self._verifier_usage is not None
-            else {},
-            # Empty when no evidence phase ran (no workspace, or collection failed outright);
-            # the grade reads the bundle itself, this is for scanning runs at a glance.
-            "verification": self._verification_metadata,
         }
         self._write_usage(workspace_usage, decider_usage)
 

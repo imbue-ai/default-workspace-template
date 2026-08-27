@@ -1,7 +1,5 @@
 """Tests for the server-driven enable-sharing endpoint and its composition helpers."""
 
-import hashlib
-import re
 from uuid import UUID
 
 import pytest
@@ -76,15 +74,8 @@ def test_enable_sharing_creates_share_and_injects_materials(monkeypatch: pytest.
     # The test host has no datacenter record, so the region is the
     # deterministic hash-of-host-id spread: host-aaa... lands on us1.
     assert body["region"] == "us1"
-    # Workspace-keyed share: the domain leads with a minted 32-hex share
-    # label and a hashed user segment -- no internal id appears in it.
-    domain_labels = str(body["workspace_domain"]).split(".")
-    assert re.fullmatch(r"[a-f0-9]{32}", domain_labels[0])
-    assert domain_labels[0] != _HOST_ID_STR
-    assert domain_labels[1] == hashlib.sha256(_USER_STUB_USER_ID.encode()).hexdigest()[:32]
-    assert body["workspace_domain"].endswith(f".us1.{_CONTENT_DOMAIN}")
-    assert body["workspace_id"] == "agent-abc123"
-    expected_domain = str(body["workspace_domain"])
+    expected_domain = f"{_HOST_ID_STR}.{_OWNER_LABEL}.us1.{_CONTENT_DOMAIN}"
+    assert body["workspace_domain"] == expected_domain
 
     # The share materials were written into the container over the (faked) SSH.
     assert len(backend.written_container_files) == 1
@@ -97,38 +88,6 @@ def test_enable_sharing_creates_share_and_injects_materials(monkeypatch: pytest.
     assert f"SHARE_WORKSPACE_DOMAIN={expected_domain}" in files["/home/user/workspace/data/.secrets/share.env"]
     assert _CHROME_ORIGIN in files["/home/user/workspace/data/.secrets/share.env"]
     assert _USER_STUB_EMAIL in files["/home/user/workspace/data/.secrets/share_grants.toml"]
-
-
-def test_enable_sharing_never_reuses_a_stale_row_claimed_by_another_workspace(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _install_share_env(monkeypatch)
-    client, backend, _entitlements, _litellm = _make_pool_quota_test_client(monkeypatch)
-    backend.add_leased_host(
-        host_id=_HOST_DB_ID,
-        version="v0.1.0",
-        leased_to_user=_USER_STUB_USER_ID_PREFIX,
-        host_id_str=_HOST_ID_STR,
-    )
-    # A previous lease of this machine left a share row claimed by a different
-    # workspace (the host is a mutable machine attribute).
-    stale_domain = f"{'f' * 32}.{'0' * 32}.us1.{_CONTENT_DOMAIN}"
-    backend.upsert_share(
-        _HOST_ID_STR,
-        _OWNER_LABEL,
-        "us1",
-        stale_domain,
-        workspace_id="agent-" + "e" * 32,
-        share_label="f" * 32,
-    )
-
-    resp = client.post(f"/hosts/{_HOST_DB_ID}/enable-sharing", headers=_user_headers())
-
-    assert resp.status_code == 200
-    body = resp.json()
-    # The bring-up must not inherit the other workspace's identity or domain.
-    assert body["workspace_id"] == "agent-abc123"
-    assert body["workspace_domain"] != stale_domain
 
 
 def test_enable_sharing_rejects_a_host_owned_by_another_user(monkeypatch: pytest.MonkeyPatch) -> None:

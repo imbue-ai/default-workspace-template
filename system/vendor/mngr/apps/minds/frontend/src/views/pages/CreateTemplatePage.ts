@@ -279,7 +279,7 @@ export const CreateTemplatePage: m.ClosureComponent = () => {
   }
 
   function machineRow(entry: UiWorkspaceEntry): m.Children {
-    const { shell } = getAppContext();
+    const { stores, shell } = getAppContext();
     const liveness = entry.liveness ?? "";
     // Badge the settled-down and transitional states; UNKNOWN stays unbadged
     // here (this page has no liveness tracker, so an unknown reading is
@@ -298,7 +298,7 @@ export const CreateTemplatePage: m.ClosureComponent = () => {
           // (the pre-existing behavior: it never routes to plain recovery).
           const action = rowClickActionFor(entry, entry.liveness ?? "", true);
           if (action === "recover-start") {
-            const returnTo = `/goto/${entry.id}/`;
+            const returnTo = `/goto/${stores.workspaces.toHostScopedId(entry.id)}/`;
             m.route.set(recoveryRoute(entry.id, returnTo, "start"));
           } else {
             shell.enterWorkspace(entry.id);

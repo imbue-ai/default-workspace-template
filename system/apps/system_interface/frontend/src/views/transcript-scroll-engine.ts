@@ -97,7 +97,9 @@ const ECHO_TOLERANCE_PX = 0.25;
 const PERSIST_DEBOUNCE_MS = 300;
 // The scrollbar is shown for this long after scroll/drag activity (plus while hovered).
 export const SCROLLBAR_SHOW_MS = 1200;
-const TRACE_CAPACITY = 2000;
+// Large enough to reconstruct a multi-second interaction afterwards; debug-only
+// (the ?debug=scroll ring), so memory is a non-issue.
+const TRACE_CAPACITY = 8000;
 
 export interface TranscriptScrollDataSource {
   /** Rows derived from the loaded window, memoized by the caller per render version. */
@@ -204,6 +206,10 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
   let observedListEl: Element | null = null;
   let pointerReleaseListener: (() => void) | null = null;
   let isPointerDown = false;
+  // A genuine downward user scroll ended in the bottom band while the fill
+  // still lagged the server total: complete the FOLLOW attach once the tail
+  // is fully loaded (see onScrollEvent). Cleared by any upward wheel.
+  let pendingTailIntent = false;
 
   // --- input classification -------------------------------------------------
   let lastInputSource: ScrollInputSource = "wheel";
@@ -250,22 +256,31 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
   const trace: ScrollTrace | null = isTraceEnabled()
     ? createScrollTrace({ capacityEntryCount: TRACE_CAPACITY, now: () => performance.now(), echo: null })
     : null;
-  if (trace !== null) {
-    (window as unknown as Record<string, unknown>).__scrollTrace = {
-      dump: () => trace.entries(),
-      clear: () => trace.clear(),
-    };
-    (window as unknown as Record<string, unknown>).__scrollDebugState = () => ({
-      positionKind: positionState.kind,
-      scrollbarKind: scrollbarState.kind,
-      extent: extent(),
-      totalEvents: dataSource.getTotalEvents(),
-      spacerTopPx,
-      spacerBottomPx,
-      estimatePxPerEvent,
-      unmeasuredCount: geometry?.unmeasuredCount ?? null,
-      fillInFlight,
-    });
+  const debugHandles =
+    trace !== null
+      ? {
+          __scrollTrace: {
+            dump: () => trace.entries(),
+            clear: () => trace.clear(),
+          },
+          __scrollDebugState: () => ({
+            positionKind: positionState.kind,
+            scrollbarKind: scrollbarState.kind,
+            extent: extent(),
+            totalEvents: dataSource.getTotalEvents(),
+            spacerTopPx,
+            spacerBottomPx,
+            estimatePxPerEvent,
+            unmeasuredCount: geometry?.unmeasuredCount ?? null,
+            fillInFlight,
+          }),
+        }
+      : null;
+  if (debugHandles !== null) {
+    // Window globals are last-engine-wins (hidden dockview panels overwrite
+    // them); attach() also puts the handles on this engine's own scroll
+    // element, which is unambiguous when several transcripts are mounted.
+    Object.assign(window as unknown as Record<string, unknown>, debugHandles);
   }
 
   const offscreenMeasurer = createOffscreenMeasurer({
@@ -708,6 +723,13 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       bottomGapPx < BOTTOM_THRESHOLD_PX &&
       spacerBottomPx <= 0 &&
       (totalEvents === null || extent().endIndex >= totalEvents);
+    // A downward scroll ending in the bottom band expresses "go to the tail"
+    // even when the fill still lags the server total (atTail false only for
+    // data reasons). Remember the intent; runAfterRender completes the FOLLOW
+    // attach once the tail is fully loaded -- without this, a fling to the
+    // bottom during streaming strands the user detached at gap 0, where the
+    // clamped scrollTop emits no further scroll events to re-evaluate.
+    pendingTailIntent = !didScrollUp && bottomGapPx < BOTTOM_THRESHOLD_PX;
     trace?.record("scroll", {
       topPx,
       source: lastInputSource,
@@ -731,12 +753,22 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     // ANY upward wheel intent detaches from the tail immediately -- before the
     // native scroll even happens, so no pin or echo bookkeeping can eat it.
     // The bottom band is only for RE-attaching on the way down.
-    if (event.deltaY < 0 && positionState.kind === "FOLLOW" && geometry !== null) {
-      const anchor = anchorForUser();
-      if (anchor !== null) {
-        trace?.record("wheel-detach", { deltaY: event.deltaY });
-        dispatchPosition({ kind: "USER_SCROLLED", source: "wheel", anchor, atTail: false });
-        m.redraw();
+    if (event.deltaY < 0) {
+      pendingTailIntent = false;
+      if (positionState.kind === "FOLLOW" && geometry !== null) {
+        const anchor = anchorForUser();
+        if (anchor !== null) {
+          trace?.record("wheel-detach", { deltaY: event.deltaY });
+          dispatchPosition({ kind: "USER_SCROLLED", source: "wheel", anchor, atTail: false });
+          m.redraw();
+        }
+      }
+    } else if (event.deltaY > 0 && scrollEl !== null) {
+      // A downward wheel already clamped at the bottom produces no scroll
+      // event at all; record the tail intent here so it still re-attaches.
+      const gapPx = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight;
+      if (gapPx < BOTTOM_THRESHOLD_PX) {
+        pendingTailIntent = true;
       }
     }
   }
@@ -764,6 +796,9 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     }
     detachListeners();
     scrollEl = element;
+    if (debugHandles !== null) {
+      Object.assign(element as unknown as Record<string, unknown>, debugHandles);
+    }
     element.addEventListener("scroll", onScrollEvent, { passive: true });
     element.addEventListener("wheel", onWheel as EventListener, { passive: true });
     element.addEventListener("keydown", onKeyDown);
@@ -974,6 +1009,25 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       }
     }
 
+    // Complete a recorded tail intent (see onScrollEvent): the user's last
+    // scroll ended at the bottom while the fill lagged, so the atTail attach
+    // could not happen then -- and a clamped scrollTop emits no further scroll
+    // events to retry it. Attach once the tail is genuinely loaded and the
+    // viewport still sits in the bottom band.
+    if (pendingTailIntent && positionState.kind === "USER_CONTROLLED" && geometry !== null) {
+      const gapPx = element.scrollHeight - element.scrollTop - element.clientHeight;
+      const totalNow = dataSource.getTotalEvents();
+      if (gapPx < BOTTOM_THRESHOLD_PX && spacerBottomPx <= 0 && (totalNow === null || extent().endIndex >= totalNow)) {
+        const tailAnchor = anchorForUser();
+        if (tailAnchor !== null) {
+          pendingTailIntent = false;
+          trace?.record("tail-intent-attach", { gapPx });
+          dispatchPosition({ kind: "USER_SCROLLED", source: lastInputSource, anchor: tailAnchor, atTail: true });
+          m.redraw();
+        }
+      }
+    }
+
     planFill();
   }
 
@@ -1126,6 +1180,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       fillInFlight = false;
       pendingJumpIndex = null;
       pendingJumpLandIndex = null;
+      pendingTailIntent = false;
       freezeRange = null;
       lastPositionedKey = "";
       lastScrollbarFraction = null;
@@ -1198,6 +1253,9 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
               bottomGapPx < BOTTOM_THRESHOLD_PX &&
               spacerBottomPx <= 0 &&
               (totalEvents === null || extent().endIndex >= totalEvents);
+            // Same deferred-attach semantics as onScrollEvent: a drag ending
+            // at the bottom while the fill lags attaches once the tail loads.
+            pendingTailIntent = bottomGapPx < BOTTOM_THRESHOLD_PX;
             dispatchPosition({ kind: "USER_SCROLLED", source: "scrollbar", anchor, atTail });
           }
         }

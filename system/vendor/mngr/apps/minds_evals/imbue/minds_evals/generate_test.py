@@ -8,7 +8,6 @@ import pytest
 from imbue.minds_evals.data_types import DECIDE_SENTINEL
 from imbue.minds_evals.data_types import DEFAULT_AVG_WORD_COUNT_BASELINE
 from imbue.minds_evals.data_types import DEFAULT_DWT_REPO
-from imbue.minds_evals.data_types import DEFAULT_VERIFICATION_TIMEOUT_SECONDS
 from imbue.minds_evals.driver import parse_case_config
 from imbue.minds_evals.errors import EvalConfigError
 from imbue.minds_evals.errors import GitSourceError
@@ -127,17 +126,13 @@ def test_generate_dataset_writes_complete_byte_identical_tasks(tmp_path: Path) -
         assert task_config["metadata"]["dwt_sha"] == expected_dwt_sha
         assert task_config["metadata"]["dwt_branch"] == "main"
         assert task_config["metadata"]["dwt_repo"] == str(dwt_repo.repo_dir)
-        # Case budget + verification budget + grace, so verification never competes with the
-        # conversation for time and teardown keeps its grace.
-        assert task_config["agent"]["timeout_sec"] == 1800.0 + DEFAULT_VERIFICATION_TIMEOUT_SECONDS + 300.0
+        assert task_config["agent"]["timeout_sec"] == 1800.0 + 300.0
         assert task_config["verifier"]["environment_mode"] == "separate"
         assert task_config["verifier"]["env"]["ANTHROPIC_API_KEY"] == "${ANTHROPIC_API_KEY}"
         assert set(task_config["artifacts"]) == {
             "/logs/agent/conversation.jsonl",
             "/logs/agent/full_transcript.jsonl",
             "/logs/agent/state.json",
-            # A directory, not a glob: harbor's artifact source is an exact path.
-            "/logs/agent/verification",
         }
 
         # The instruction's fenced json block round-trips through the driver's parser.
@@ -146,9 +141,7 @@ def test_generate_dataset_writes_complete_byte_identical_tasks(tmp_path: Path) -
         assert case_config.mngr_sha == expected_sha
         assert case_config.dwt_sha == expected_dwt_sha
 
-        # tests/ carries the verifier image inputs plus the case data -- and nothing else: a dev
-        # checkout accumulates bytecode caches next to the template scripts, which must not ship.
-        assert not list((task_dir / "tests").rglob("__pycache__"))
+        # tests/ carries the verifier image inputs plus the case data.
         tests_case = json.loads((task_dir / "tests" / "case.json").read_text())
         assert tests_case == case_config.model_dump(mode="json")
         for expected_file in ("Dockerfile", "test.sh", "finalize.py", "gates/checks.py", "quality/judge.toml"):
@@ -172,114 +165,6 @@ def test_generate_dataset_writes_complete_byte_identical_tasks(tmp_path: Path) -
     # environment/ must be byte-identical across tasks or the Modal image cache diverges.
     digests = {_dir_content_digest(task_dir / "environment") for task_dir in task_dirs}
     assert len(digests) == 1
-
-
-_EXPECTATIONS = {
-    "outcome": "A working to-do web app delivered as a workspace app tab.",
-    "deliverable": {"kind": "minds-app"},
-    "test_commands": ["uv run pytest -q"],
-}
-
-
-def test_generate_dataset_emits_the_outcome_dimension_only_for_expectation_cases(tmp_path: Path) -> None:
-    repo = make_local_git_repo(tmp_path, "fake-mngr", commit_count=1)
-    dwt_repo = make_local_git_repo(tmp_path, "fake-dwt", commit_count=1)
-    config = _valid_config(
-        dwt_repo=str(dwt_repo.repo_dir),
-        personas=[
-            {"id": "todo-app", "prompts": ["Build it", "Sounds good."], "expectations": _EXPECTATIONS},
-            {"id": "greeting", "prompts": ["hi", "Sounds good."]},
-        ],
-    )
-    output_dir = tmp_path / "dataset"
-
-    generate_dataset(config_path=_write_config(tmp_path, config), output_dir=output_dir, mngr_repo=str(repo.repo_dir))
-
-    # rewardkit turns every tests/ subdirectory into a scoring dimension, so a case with nothing to
-    # score must not get the directory at all -- otherwise it would emit a partial outcome score.
-    assert not (output_dir / "greeting" / "tests" / "outcome").exists()
-    outcome_dir = output_dir / "todo-app" / "tests" / "outcome"
-    assert {path.name for path in outcome_dir.iterdir()} == {"checks.py", "judge.toml", "prompt.md"}
-
-    judge = tomllib.loads((outcome_dir / "judge.toml").read_text())
-    # The last two are written by a grade-time pre-step and always exist: rewardkit renders a
-    # listed path it cannot find as a "[not found]" block, so a conditional entry would put noise
-    # into every flow-less trial's judge prompt.
-    assert judge["judge"]["files"] == [
-        "/logs/agent/expectations.md",
-        "/logs/agent/verification/manifest.json",
-        "/logs/agent/conversation.jsonl",
-        "/logs/agent/judge_flows_digest.txt",
-        "/logs/agent/judge_screenshots",
-    ]
-    # rewardkit averages all .py criteria into ONE reward of weight 1.0 and weighs each judge toml
-    # separately, so weight 1.0 is what makes the judge exactly half the dimension.
-    assert judge["judge"]["weight"] == 1.0
-    assert [criterion["name"] for criterion in judge["criterion"]] == ["works_as_expected"]
-
-
-def test_generate_dataset_expands_expectations_identically_into_both_copies(tmp_path: Path) -> None:
-    repo = make_local_git_repo(tmp_path, "fake-mngr", commit_count=1)
-    dwt_repo = make_local_git_repo(tmp_path, "fake-dwt", commit_count=1)
-    config = _valid_config(
-        dwt_repo=str(dwt_repo.repo_dir),
-        personas=[{"id": "todo-app", "prompts": ["Build it"], "expectations": _EXPECTATIONS}],
-    )
-    output_dir = tmp_path / "dataset"
-
-    generate_dataset(config_path=_write_config(tmp_path, config), output_dir=output_dir, mngr_repo=str(repo.repo_dir))
-
-    task_dir = output_dir / "todo-app"
-    tests_case = json.loads((task_dir / "tests" / "case.json").read_text())
-    instruction_case = parse_case_config((task_dir / "instruction.md").read_text())
-
-    # The collector (instruction.md) and the judge (case.json) must read the identical expanded form.
-    assert tests_case == instruction_case.model_dump(mode="json")
-    expectations = tests_case["expectations"]
-    assert [check["min_registered_apps"] for check in expectations["app_checks"]] == [1]
-    assert [check["target"] for check in expectations["http_checks"]] == ["registered-apps"]
-    assert expectations["test_commands"] == ["uv run pytest -q"]
-    # The authored form rides along so a reader can see what the config actually said.
-    assert tests_case["authored_expectations"]["deliverable"] == {
-        "kind": "MINDS_APP",
-        "min_registered_apps": None,
-        "http": [],
-        "files": [],
-    }
-
-
-def test_generate_dataset_fabricates_a_green_oracle_bundle_for_expectation_cases(tmp_path: Path) -> None:
-    repo = make_local_git_repo(tmp_path, "fake-mngr", commit_count=1)
-    dwt_repo = make_local_git_repo(tmp_path, "fake-dwt", commit_count=1)
-    config = _valid_config(
-        dwt_repo=str(dwt_repo.repo_dir),
-        personas=[
-            {"id": "todo-app", "prompts": ["Build it"], "expectations": _EXPECTATIONS},
-            {"id": "greeting", "prompts": ["hi"]},
-        ],
-    )
-    output_dir = tmp_path / "dataset"
-
-    generate_dataset(config_path=_write_config(tmp_path, config), output_dir=output_dir, mngr_repo=str(repo.repo_dir))
-
-    solve_text = (output_dir / "todo-app" / "solution" / "solve.sh").read_text()
-    assert "/logs/agent/verification/manifest.json" in solve_text
-    assert "/logs/agent/verification/apps.toml" in solve_text
-    assert '"status": "failed"' not in solve_text
-    # A case with nothing to verify keeps grading exactly as it did before: it gets the (empty)
-    # evidence directory the artifact collector expects, and no fabricated evidence at all.
-    greeting_solve = (output_dir / "greeting" / "solution" / "solve.sh").read_text()
-    assert "mkdir -p /logs/agent/verification" in greeting_solve
-    assert "manifest.json" not in greeting_solve
-
-
-def test_load_eval_config_rejects_a_malformed_expectations_block(tmp_path: Path) -> None:
-    config = _valid_config(
-        personas=[{"id": "bad", "prompts": ["hi"], "expectations": {"outcome": "x", "deliverable": {"kind": "nope"}}}]
-    )
-
-    with pytest.raises(EvalConfigError, match="unknown deliverable kind"):
-        load_eval_config(_write_config(tmp_path, config))
 
 
 def test_generate_dataset_rejects_nonempty_output_dir(tmp_path: Path) -> None:

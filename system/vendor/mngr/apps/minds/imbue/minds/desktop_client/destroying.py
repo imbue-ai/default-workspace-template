@@ -14,8 +14,8 @@ Status is fully derived from disk + the live resolver; there is no
 state.json. For each in-flight destroy ``<paths.data_dir>/destroying/<agent_id>/``
 contains ``pid`` (single-line text), ``host_id`` (the host the destroy is
 tearing down), ``provider`` (the provider instance that owns the host, when
-discovery knew it) and ``output.log`` (combined stdout+stderr from the
-``mngr destroy`` process). :py:class:`DestroyingStatus` is computed from ``pid`` liveness +
+discovery knew it) and ``output.log`` (combined stdout+stderr from the bash
+wrapper). :py:class:`DestroyingStatus` is computed from ``pid`` liveness +
 whether the workspace's *host* is still up -- the caller answers that via
 ``is_host_still_active`` (see its docstring: agent still active, host not yet
 positively gone). Keying on the host, not just the workspace agent, is
@@ -48,8 +48,8 @@ from pydantic import Field
 
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
-from imbue.minds.config.data_types import InstallationPaths
 from imbue.minds.config.data_types import MNGR_BINARY
+from imbue.minds.config.data_types import WorkspacePaths
 from imbue.minds.desktop_client.backend_resolver import BackendResolverInterface
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import HostId
@@ -85,9 +85,9 @@ class DestroyingRecord(FrozenModel):
     """
 
     agent_id: AgentId = Field(description="Agent that is being / was being destroyed")
-    pid: int = Field(description="PID of the detached `mngr destroy` process")
+    pid: int = Field(description="PID of the detached bash wrapper that runs `mngr destroy`")
     started_at: datetime = Field(description="Wall-clock time the destroy was started (directory mtime)")
-    pid_alive: bool = Field(description="Whether the destroy process PID is still live")
+    pid_alive: bool = Field(description="Whether the wrapper PID is still live")
     is_host_still_active: bool = Field(
         description=(
             "Whether the workspace's host is still up: the workspace agent is still in "
@@ -101,27 +101,27 @@ class DestroyingRecord(FrozenModel):
     log_path: Path = Field(description="Absolute path to output.log for the detail page tail")
 
 
-def _destroying_dir(paths: InstallationPaths, agent_id: AgentId) -> Path:
+def _destroying_dir(paths: WorkspacePaths, agent_id: AgentId) -> Path:
     return paths.data_dir / _DESTROYING_DIR_NAME / str(agent_id)
 
 
-def _pid_file(paths: InstallationPaths, agent_id: AgentId) -> Path:
+def _pid_file(paths: WorkspacePaths, agent_id: AgentId) -> Path:
     return _destroying_dir(paths, agent_id) / _PID_FILE_NAME
 
 
-def _log_file(paths: InstallationPaths, agent_id: AgentId) -> Path:
+def _log_file(paths: WorkspacePaths, agent_id: AgentId) -> Path:
     return _destroying_dir(paths, agent_id) / _LOG_FILE_NAME
 
 
-def _host_id_file(paths: InstallationPaths, agent_id: AgentId) -> Path:
+def _host_id_file(paths: WorkspacePaths, agent_id: AgentId) -> Path:
     return _destroying_dir(paths, agent_id) / _HOST_ID_FILE_NAME
 
 
-def _provider_file(paths: InstallationPaths, agent_id: AgentId) -> Path:
+def _provider_file(paths: WorkspacePaths, agent_id: AgentId) -> Path:
     return _destroying_dir(paths, agent_id) / _PROVIDER_FILE_NAME
 
 
-def read_host_id(agent_id: AgentId, paths: InstallationPaths) -> HostId | None:
+def read_host_id(agent_id: AgentId, paths: WorkspacePaths) -> HostId | None:
     """Return the host id recorded for this agent's destroy, or None if absent/unreadable.
 
     Written by :func:`start_destroy` so a later status read can ask the
@@ -139,7 +139,7 @@ def read_host_id(agent_id: AgentId, paths: InstallationPaths) -> HostId | None:
     return HostId(value) if value else None
 
 
-def read_provider_name(agent_id: AgentId, paths: InstallationPaths) -> ProviderInstanceName | None:
+def read_provider_name(agent_id: AgentId, paths: WorkspacePaths) -> ProviderInstanceName | None:
     """Return the provider instance name recorded for this agent's destroy, or None if absent/unreadable.
 
     Written by :func:`start_destroy` so a later status read can ask the resolver
@@ -165,7 +165,7 @@ def read_provider_name(agent_id: AgentId, paths: InstallationPaths) -> ProviderI
 
 def is_host_still_active(
     backend_resolver: BackendResolverInterface,
-    paths: InstallationPaths | None,
+    paths: WorkspacePaths | None,
     agent_id: AgentId,
 ) -> bool:
     """Whether the workspace's *host* is still up (not just the workspace agent).
@@ -247,61 +247,44 @@ def is_pid_alive(pid: int) -> bool:
     return True
 
 
-def _build_destroy_command(
-    host_id: HostId,
-    provider_name: str | None = None,
-    mngr_binary: str = MNGR_BINARY,
-) -> list[str]:
-    """Build the argv run by the detached subprocess.
+def _build_destroy_command(host_id: HostId, mngr_binary: str = MNGR_BINARY) -> list[str]:
+    """Build the bash command run by the detached subprocess.
 
-    Targets the *host itself* (``@<host-id>.<provider>`` when the owning
-    provider is known -- the same address shape the startup reconcile uses --
-    or a bare ``host-<hex>`` address otherwise, which resolves across all
-    providers), which ``mngr destroy`` tears down as a whole via
-    ``provider.destroy_host`` -- the agent enumeration is informational only.
-    Destroying only the workspace agent would leave the constant
-    ``system-services`` agent -- and therefore the host and its cloud
-    instance -- alive, so there is deliberately no single-agent path here: a
-    minds workspace teardown is a *host* teardown. Addressing the host
-    directly (rather than piping an agent listing into ``mngr destroy``)
-    keeps the teardown complete even when a discovery snapshot is momentarily
-    missing some of the host's agents.
-
-    ``--force`` also makes a retry idempotent: a host address that no longer
-    matches anything is skipped instead of failing.
+    Always fans out to *every* agent on the host (the workspace agent plus the
+    constant ``system-services`` agent that every minds workspace runs in the
+    same container). Destroying only the workspace agent would leave
+    system-services -- and therefore the host and its cloud instance -- alive,
+    so there is deliberately no single-agent path here: a minds workspace
+    teardown is a *host* teardown.
 
     Lease release is not chained explicitly because ``mngr destroy`` handles
-    it: destroying the host calls ``provider.destroy_host`` which (for
-    ``imbue_cloud``) wipes the on-VPS data and releases the lease back to the
-    pool, and (for the VPS providers) terminates the instance. The
-    destroyed-host grace period (``destroyed_host_persisted_seconds``) then
-    only retains historical state. The same chain runs again if ``mngr
-    delete`` is called later by GC; it's idempotent on an already-released
-    lease.
+    it: when the last agent on a host is destroyed, ``mngr destroy`` calls
+    ``provider.destroy_host`` which (for ``imbue_cloud``) wipes the on-VPS data
+    and releases the lease back to the pool, and (for the VPS providers)
+    terminates the instance. The destroyed-host grace period
+    (``destroyed_host_persisted_seconds``) then only retains historical state.
+    The same chain runs again if ``mngr delete`` is called later by GC; it's
+    idempotent on an already-released lease.
     """
-    host_address = f"@{host_id}.{provider_name}" if provider_name is not None else str(host_id)
-    return [mngr_binary, "destroy", host_address, "--force"]
+    # ``mngr list ... --ids`` writes one id per line; ``mngr destroy -f -`` reads
+    # ids from stdin. The pipe handles host-mates fanout in one shot.
+    shell_command = f"{mngr_binary} list --include 'host.id == \"{host_id}\"' --ids | {mngr_binary} destroy -f -"
+    return ["bash", "-c", shell_command]
 
 
 def start_destroy(
     agent_id: AgentId,
-    paths: InstallationPaths,
+    paths: WorkspacePaths,
     host_id: HostId,
-    # Provider instance managing the host (from discovery). Scopes the destroy
-    # command's host address to that provider (see _build_destroy_command) and
-    # is recorded so status reads can demand positive absence evidence from
-    # that provider. None when discovery did not report one; the destroy then
-    # targets the bare host id and the status read falls back to the legacy
-    # absence-equals-gone behavior for this marker.
+    # Provider instance managing the host (from discovery), recorded so status
+    # reads can demand positive absence evidence from that provider. None when
+    # discovery did not report one; the status read then falls back to the
+    # legacy absence-equals-gone behavior for this marker.
     provider_name: str | None = None,
     env: dict[str, str] | None = None,
     mngr_binary: str = MNGR_BINARY,
 ) -> DestroyingRecord:
     """Spawn the detached destroy subprocess that tears down ``host_id``.
-
-    The subprocess targets the provider-scoped ``@<host_id>.<provider_name>``
-    address when ``provider_name`` is known, and the bare host id otherwise
-    (see :func:`_build_destroy_command`).
 
     The caller (the desktop-client API handler) resolves ``host_id`` from the
     in-memory backend resolver -- which always knows it for a workspace the
@@ -311,10 +294,9 @@ def start_destroy(
 
     The subprocess is detached (``start_new_session=True``), so it survives a
     minds-backend exit. stdout+stderr go to a single ``output.log`` file; the
-    ``mngr destroy`` process's PID is written to ``pid``, the host id to
-    ``host_id``, and the owning provider (when known) to ``provider`` (so a
-    later status read can confirm the *host* is positively gone, not just the
-    agent).
+    wrapper's PID is written to ``pid``, the host id to ``host_id``, and the
+    owning provider (when known) to ``provider`` (so a later status read can
+    confirm the *host* is positively gone, not just the agent).
 
     Idempotent: if a destroy is already running for this agent (``pid`` exists
     and is alive), we return the existing record without spawning a second
@@ -347,13 +329,13 @@ def start_destroy(
     # Truncate the log file so a Retry doesn't show the previous run's output.
     log_path.write_bytes(b"")
 
-    command = _build_destroy_command(host_id, provider_name=provider_name, mngr_binary=mngr_binary)
+    command = _build_destroy_command(host_id, mngr_binary=mngr_binary)
     log_handle = log_path.open("ab")
     try:
         process_env = dict(os.environ) if env is None else dict(env)
-        # Plain argv built from a host_id resolved from discovery (no untrusted
-        # input, no shell). The S603 ruff rule is not in our select list;
-        # intent is documented for future readers.
+        # bash -c with a command string we built from a host_id resolved from
+        # discovery (no untrusted input). The S603 ruff rule is not in our
+        # select list; intent is documented for future readers.
         process = subprocess.Popen(
             command,
             stdin=subprocess.DEVNULL,
@@ -388,7 +370,7 @@ def start_destroy(
 
 def read_destroying(
     agent_id: AgentId,
-    paths: InstallationPaths,
+    paths: WorkspacePaths,
     is_host_still_active: bool,
 ) -> DestroyingRecord | None:
     """Read the on-disk record for a single agent's destroy, or None if no dir.
@@ -438,7 +420,7 @@ def read_destroying(
 
 
 def list_destroying(
-    paths: InstallationPaths,
+    paths: WorkspacePaths,
     is_host_still_active: Callable[[AgentId], bool],
 ) -> dict[AgentId, DestroyingRecord]:
     """Walk ``<paths.data_dir>/destroying/`` and return a record per agent_id.
@@ -466,7 +448,7 @@ def list_destroying(
     return records
 
 
-def has_destroying_marker(agent_id: AgentId, paths: InstallationPaths) -> bool:
+def has_destroying_marker(agent_id: AgentId, paths: WorkspacePaths) -> bool:
     """Whether a destroy has been requested for this workspace (marker dir exists).
 
     Cheaper than :func:`read_destroying` when only "is a destroy in flight or
@@ -475,7 +457,7 @@ def has_destroying_marker(agent_id: AgentId, paths: InstallationPaths) -> bool:
     return _destroying_dir(paths, agent_id).exists()
 
 
-def delete_destroying(agent_id: AgentId, paths: InstallationPaths) -> bool:
+def delete_destroying(agent_id: AgentId, paths: WorkspacePaths) -> bool:
     """Remove ``<paths.data_dir>/destroying/<agent_id>/``. Idempotent.
 
     Returns ``True`` if the directory was present and removed,
@@ -494,7 +476,7 @@ def delete_destroying(agent_id: AgentId, paths: InstallationPaths) -> bool:
     return True
 
 
-def read_log_chunk(agent_id: AgentId, paths: InstallationPaths, offset: int) -> tuple[bytes, int]:
+def read_log_chunk(agent_id: AgentId, paths: WorkspacePaths, offset: int) -> tuple[bytes, int]:
     """Read ``output.log`` from ``offset`` to current EOF.
 
     Returns ``(content_bytes, next_offset)``. Empty bytes when there is
