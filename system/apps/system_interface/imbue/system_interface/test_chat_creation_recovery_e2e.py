@@ -36,6 +36,8 @@ from imbue.system_interface.config import Config
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.server import create_application
 from imbue.system_interface.testing import RecordingMngrMessenger
+from imbue.system_interface.accounts import commit_account
+from imbue.system_interface.accounts import mint_account_dir
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import is_e2e_browser_installed
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
@@ -158,6 +160,12 @@ def _serving_workspace(
     monkeypatch.setenv("MNGR_AGENT_ID", _PRIMARY_AGENT_ID)
     monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(work_dir))
     monkeypatch.setenv("PATH", f"{fake_bin}:{os.environ.get('PATH', '')}")
+    # A signed-in provider, because the New chat tile opens the chooser instead of
+    # creating anything when there is none -- which is the point of the picker, and
+    # would make this fixture unable to reach the code it is testing.
+    monkeypatch.setenv("MINDS_ACCOUNTS_ROOT", str(tmp_path / "accounts"))
+    account_id, _ = mint_account_dir()
+    commit_account(account_id, "anthropic", "Anthropic")
 
     manager = AgentManager.build(
         broadcaster,

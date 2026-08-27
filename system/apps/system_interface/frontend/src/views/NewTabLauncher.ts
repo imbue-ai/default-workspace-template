@@ -393,23 +393,21 @@ function providerPickerView(): m.Children {
       "select",
       {
         class: "border-border text-text-primary bg-surface rounded border px-2 py-1 text-[13px]",
-        value: account?.id ?? WORKSPACE_LOGIN_VALUE,
+        value: account?.id ?? NO_PROVIDER_VALUE,
         onchange: (event: Event) => {
           const chosen = (event.target as HTMLSelectElement).value;
           if (chosen === ADD_PROVIDER_VALUE) {
             openProviderChooser();
             return;
           }
-          if (chosen !== WORKSPACE_LOGIN_VALUE) selectAccount(chosen);
+          if (chosen !== NO_PROVIDER_VALUE) selectAccount(chosen);
         },
       },
       // Built as one list rather than with a conditional hole: mithril refuses a
       // fragment that mixes keyed vnodes with a null, and every option here is keyed.
       [
-        // Until something is signed in there is still the workspace's own login to
-        // run on, so the picker names it rather than claiming nothing is available.
         ...(accounts.length === 0
-          ? [{ id: WORKSPACE_LOGIN_VALUE, label: "Claude Code (workspace login)" }]
+          ? [{ id: NO_PROVIDER_VALUE, label: "No provider configured" }]
           : accounts.map((candidate) => ({ id: candidate.id, label: candidate.label }))),
         { id: ADD_PROVIDER_VALUE, label: "+ Add provider" },
       ].map((option) => m("option", { key: option.id, value: option.id }, option.label)),
@@ -419,7 +417,7 @@ function providerPickerView(): m.Children {
 
 /** The picker's sentinel options. Neither is an account id, so neither can collide. */
 const ADD_PROVIDER_VALUE = "__add__";
-const WORKSPACE_LOGIN_VALUE = "__workspace__";
+const NO_PROVIDER_VALUE = "__none__";
 
 export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
   // Per table, the kinds the user unchecked. Hidden rather than shown so a kind
