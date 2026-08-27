@@ -480,11 +480,13 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
               activeStep = 2;
             },
           },
+          // Unkeyed, all of them. Mithril refuses a list where some children carry a key and
+          // some do not, and it refuses it by THROWING mid-render -- which aborts the redraw,
+          // leaves `busy` set on screen, and reads as a spinner that never resolves. The
+          // options are a fixed list rendered in order, so they never needed keys.
           [
             m("option", { value: "", disabled: true }, "Choose a provider"),
-            ...choices.map((candidate) =>
-              m("option", { value: candidate.provider_id, key: candidate.provider_id }, candidate.display),
-            ),
+            ...choices.map((candidate) => m("option", { value: candidate.provider_id }, candidate.display)),
           ],
         ),
       ]),
