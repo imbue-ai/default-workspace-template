@@ -12,8 +12,8 @@ rather than a stepwise record, and could be neither bounded nor observed. Here e
 budgeted, logged, and billed to harness spend.
 
 The other half of this module turns decided actions into requests for the box-side executor -- a
-headless Chromium driving the app's forwarded origin, the exact URL the client's app tab iframes --
-and classifies what comes back. That classification is what lets a broken instrument (no browser,
+headless Chromium driving the app's forwarded origin, its own label on the workspace's agent-keyed
+origin, where the proxy serves it -- and classifies what comes back. That classification is what lets a broken instrument (no browser,
 no proxy, a dead tunnel, refused TLS) be recorded as ERROR while a broken app is recorded as
 FAILED.
 """
@@ -487,9 +487,10 @@ REASON_STEP_ERROR: Final[str] = flow_step_protocol.REASON_STEP_ERROR
 # The page did not offer what the action asked for in the time allowed. The browser is fine, so
 # this is the app falling short rather than the instrument.
 REASON_ACTION_TIMED_OUT: Final[str] = flow_step_protocol.REASON_ACTION_TIMED_OUT
-# The workspace's host id could not be looked up, so no forwarded origin can be built. The workspace
-# may be serving perfectly; this is the harness failing to find out where.
-REASON_HOST_ID_UNKNOWN: Final[str] = "host_id_unknown"
+# The workspace's agent id is not a coordinate the proxy routes on, so no forwarded origin can be
+# built. The workspace may be serving perfectly; this is the harness holding an identity it cannot
+# address, so it must not be charged to the agent the way an empty registry is.
+REASON_WORKSPACE_UNADDRESSABLE: Final[str] = "workspace_unaddressable"
 
 # Reasons recorded on a flow the WORKSPACE fell short of.
 REASON_NO_APP_TO_OPEN: Final[str] = "no_app_to_open"
@@ -588,17 +589,17 @@ def build_step_request(
     screenshot_path: str,
     cdp_endpoint_url: str,
     preauth_cookie: str,
-    origin: str,
+    cookie_domain: str,
 ) -> str:
     """The JSON one step script invocation receives.
 
-    A cookie rides the FIRST request of a flow, so the very first navigation is already
-    authenticated and never takes the proxy's login redirect. It is installed against the app's own
-    forwarded origin, which is the only origin a flow drives; the proxy itself scopes its session
-    cookie to the whole `host-<hex>.localhost` domain, so a flow that ever needed a second label
-    would need this scope widened to match.
+    A cookie rides the FIRST request of a flow, so its opening navigation is already authenticated;
+    later steps land in the same browser, which is still holding the session. The scope it is
+    installed at is `forward_instance.session_cookie_domain`.
     """
-    cookie = StepCookie(name=SESSION_COOKIE_NAME, value=preauth_cookie, url=origin) if preauth_cookie else None
+    cookie = (
+        StepCookie(name=SESSION_COOKIE_NAME, value=preauth_cookie, domain=cookie_domain) if preauth_cookie else None
+    )
     return StepRequest(
         cdp_endpoint=cdp_endpoint_url,
         screenshot_path=screenshot_path,

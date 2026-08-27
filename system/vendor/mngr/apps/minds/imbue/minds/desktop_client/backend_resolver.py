@@ -81,6 +81,14 @@ class ServiceLogRecord(FrozenModel):
             "service name."
         ),
     )
+    icon: str = Field(
+        default="",
+        description=(
+            "The app's registered SVG icon markup, verbatim from the workspace's registry. Written by "
+            "untrusted workspace content: consumers MUST validate and sanitize before inlining. Empty "
+            "when the app registered none."
+        ),
+    )
 
 
 class BackendResolverInterface(MutableModel, ABC):
@@ -237,6 +245,16 @@ class BackendResolverInterface(MutableModel, ABC):
         rows) are omitted; callers fall back to the service name. Used by the
         Share tab to build each per-service share link. Default implementation
         returns an empty mapping (resolvers that carry no labels).
+        """
+        return {}
+
+    def list_service_icons_for_agent(self, agent_id: AgentId) -> dict[ServiceName, str]:
+        """Return each known service's registered SVG icon markup, keyed by service name.
+
+        The markup is verbatim from the workspace's registry -- untrusted
+        workspace content that callers MUST validate and sanitize before
+        inlining. Services without an icon are omitted. Default implementation
+        returns an empty mapping (resolvers that carry no icons).
         """
         return {}
 
@@ -514,7 +532,13 @@ def parse_service_log_record(raw: dict[str, object]) -> ServiceLogRecord | Servi
     # re-register (and mint) on boot, so any workspace booted on >=0.3.12 is
     # labeled.
     label = raw.get("label")
-    return ServiceLogRecord(service=ServiceName(str(service)), url=str(url), label=str(label) if label else "")
+    icon = raw.get("icon")
+    return ServiceLogRecord(
+        service=ServiceName(str(service)),
+        url=str(url),
+        label=str(label) if label else "",
+        icon=str(icon) if icon else "",
+    )
 
 
 def parse_service_log_records(text: str) -> list[ServiceLogRecord | ServiceDeregisteredRecord]:
@@ -779,6 +803,9 @@ class MngrCliBackendResolver(BackendResolverInterface):
 
     _agents_result: ParsedAgentsResult = PrivateAttr(default_factory=ParsedAgentsResult)
     _services_by_agent: dict[str, dict[str, str]] = PrivateAttr(default_factory=dict)
+    # agent_id_str -> {service_name: registered SVG icon markup}. Parallel to
+    # _services_by_agent; untrusted workspace content, sanitized by consumers.
+    _icons_by_agent: dict[str, dict[str, str]] = PrivateAttr(default_factory=dict)
     # agent_id_str -> {service_name: origin label}. Parallel to _services_by_agent,
     # carrying each service's public origin hostname label (``<name>-<rand>``).
     # A service missing here (a legacy row with no label) falls back to its name.
@@ -801,11 +828,12 @@ class MngrCliBackendResolver(BackendResolverInterface):
     # snapshot this session. Positive evidence for ``is_host_positively_absent``:
     # only a clean snapshot enumerates everything its provider manages, so only
     # absence from one proves a host is gone rather than unreachable or simply
-    # not yet discovered. Errored snapshots never land here, and neither does
-    # the errored pre-start replay whose error (and state-current claim)
-    # ``forward_cli`` drops; a CLEAN pre-start replay does land here -- it is a
-    # real poll from while minds was closed, so it postdates every host this
-    # client could hold a destroy marker for.
+    # not yet discovered. Errored snapshots never land here, and neither do the
+    # errored pre-start replay and the errored sleep-straddling poll, whose
+    # errors (and state-current claims) ``forward_cli`` drops; a CLEAN pre-start
+    # replay does land here -- it is a real poll from while minds was closed, so
+    # it postdates every host this client could hold a destroy marker for -- and
+    # so does a clean sleep-straddling poll, which completed after the wake.
     _clean_snapshot_host_ids_by_provider: dict[ProviderInstanceName, frozenset[str]] = PrivateAttr(
         default_factory=dict
     )
@@ -1042,8 +1070,9 @@ class MngrCliBackendResolver(BackendResolverInterface):
         last_snapshot_at: datetime,
         clean_snapshot_host_ids: tuple[str, ...] | None = None,
         # False when this snapshot tells us nothing current about the provider, so its
-        # time must not advance the provider's freshness. Only the pre-start replay
-        # passes False -- see the caller in ``forward_cli`` for why.
+        # time must not advance the provider's freshness. Only the errored pre-start
+        # replay and the errored poll that straddled a sleep pass False -- see the
+        # caller in ``forward_cli`` for why.
         is_snapshot_state_current: bool = True,
     ) -> None:
         """Merge one provider's discovery snapshot into provider state. Thread-safe.
@@ -1090,10 +1119,11 @@ class MngrCliBackendResolver(BackendResolverInterface):
             # Record positive-evidence host sets only from clean, state-current
             # snapshots: an errored snapshot's hosts are unreachable (not
             # absent), and a snapshot whose state-current claim the caller
-            # dropped (the errored pre-start replay -- see ``forward_cli``)
-            # carries no usable state -- either would let absence be mistaken
-            # for gone-ness. A clean pre-start replay stays eligible: it is a
-            # real enumeration from while minds was closed.
+            # dropped (the errored pre-start replay or the errored
+            # sleep-straddling poll -- see ``forward_cli``) carries no usable
+            # state -- either would let absence be mistaken for gone-ness. A
+            # clean pre-start replay stays eligible: it is a real enumeration
+            # from while minds was closed.
             if error is None and clean_snapshot_host_ids is not None and is_snapshot_state_current:
                 self._clean_snapshot_host_ids_by_provider[provider_name] = frozenset(clean_snapshot_host_ids)
             if self._last_event_at is None or last_snapshot_at > self._last_event_at:
@@ -1175,17 +1205,24 @@ class MngrCliBackendResolver(BackendResolverInterface):
             return self._last_snapshot_at_by_provider.get(provider_name)
 
     def update_services(
-        self, agent_id: AgentId, services: dict[str, str], labels: dict[str, str] | None = None
+        self,
+        agent_id: AgentId,
+        services: dict[str, str],
+        labels: dict[str, str] | None = None,
+        icons: dict[str, str] | None = None,
     ) -> None:
-        """Replace the known services (and their origin labels) for a single agent. Thread-safe.
+        """Replace the known services (and their origin labels and icons) for a single agent. Thread-safe.
 
         ``labels`` maps each service name to its public origin hostname label
         (``<name>-<rand>``). Services absent from it (legacy rows written before
         labels existed) have no label, and callers fall back to the service name.
+        ``icons`` maps each service name to its registered SVG icon markup;
+        services absent from it have none.
         """
         with self._lock:
             self._services_by_agent[str(agent_id)] = services
             self._labels_by_agent[str(agent_id)] = dict(labels or {})
+            self._icons_by_agent[str(agent_id)] = dict(icons or {})
         self._fire_on_change()
 
     def get_backend_url(self, agent_id: AgentId, service_name: ServiceName) -> str | None:
@@ -1202,6 +1239,11 @@ class MngrCliBackendResolver(BackendResolverInterface):
         with self._lock:
             labels = self._labels_by_agent.get(str(agent_id), {})
             return {ServiceName(name): label for name, label in labels.items() if label}
+
+    def list_service_icons_for_agent(self, agent_id: AgentId) -> dict[ServiceName, str]:
+        with self._lock:
+            icons = self._icons_by_agent.get(str(agent_id), {})
+            return {ServiceName(name): icon for name, icon in icons.items() if icon}
 
     def list_known_agent_ids(self) -> tuple[AgentId, ...]:
         with self._lock:

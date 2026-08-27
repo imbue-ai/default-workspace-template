@@ -282,9 +282,7 @@ def test_read_apps_reads_the_program_field(agent_manager: AgentManager, tmp_path
     assert apps[1].program == ""
 
 
-def test_read_apps_carries_probed_liveness_across_a_reread(
-    agent_manager: AgentManager, tmp_path: Path
-) -> None:
+def test_read_apps_carries_probed_liveness_across_a_reread(agent_manager: AgentManager, tmp_path: Path) -> None:
     """Re-reading the registry (a registration, an icon change) must not flash
     a stopped app back to running until the next probe lands."""
     toml_file = tmp_path / "apps.toml"
@@ -292,8 +290,7 @@ def test_read_apps_carries_probed_liveness_across_a_reread(
     agent_manager._read_apps(toml_file)
     with agent_manager._lock:
         agent_manager._apps = [
-            app.model_copy_update(to_update(app.field_ref().is_running, False))
-            for app in agent_manager._apps
+            app.model_copy_update(to_update(app.field_ref().is_running, False)) for app in agent_manager._apps
         ]
 
     agent_manager._read_apps(toml_file)

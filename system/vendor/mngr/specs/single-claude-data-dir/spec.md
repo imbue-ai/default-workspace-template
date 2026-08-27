@@ -10,7 +10,7 @@
 - Flag is local-only. Setting it for a non-local host raises a clear error before provisioning. `CLAUDE_CONFIG_DIR` is read from the parent process env; if unset (or empty), mngr falls back to `~/.claude/`, which is claude's own default. So `use_env_config_dir=True` effectively means "don't touch the config dir at all — inherit whatever the parent shell would have used."
 - `ORIGINAL_CLAUDE_CONFIG_DIR` is not relevant in this mode and is not set on the agent. `CLAUDE_CONFIG_DIR` is also not explicitly set by mngr on the agent — the agent inherits the parent shell's value (or `~/.claude/` when unset, matching claude's own default).
 - Hook scripts in `work_dir/.claude/settings.local.json` and background scripts under `$MNGR_AGENT_STATE_DIR/commands/` are unchanged. Those are per-worktree / per-agent state, not Claude config dir state, so the readiness/permissions/transcript machinery keeps working.
-- Other config fields that conceptually overlap with shared-mode behavior (the `sync_*` family, `override_settings_folder`, `settings_overrides`, `convert_macos_credentials`, `auto_dismiss_dialogs`) are simply ignored when `use_env_config_dir=True`. No validation error is raised. The user takes responsibility for the combinations they pick.
+- Other config fields that conceptually overlap with shared-mode behavior (the `sync_*` family, `override_settings_folder`, `settings_overrides`, `convert_macos_credentials`, `auto_dismiss_dialogs_at_startup`) are simply ignored when `use_env_config_dir=True`. No validation error is raised. The user takes responsibility for the combinations they pick.
 
 ## Expected Behavior
 
@@ -29,7 +29,7 @@
 - macOS keychain provisioning and cleanup are skipped: Claude Code's keychain label hash uses the shared `CLAUDE_CONFIG_DIR`, which already matches the user's normal `claude` invocations, so no per-agent label exists to populate or delete.
 - Trust handling is delegated to the user. mngr does not call `add_claude_trust_for_path`, `auto_dismiss_claude_dialogs`, `acknowledge_cost_threshold`, `dismiss_effort_callout`, `complete_onboarding`, `accept_bypass_permissions`, or `remove_claude_trust_for_path`. If the user has not pre-trusted the work_dir or pre-dismissed onboarding, Claude's TUI will block at startup; this is documented as the user's responsibility.
 - The "custom API key" approval dialog (`approve_api_key_for_claude`) is **not** called in shared mode (it writes per-agent .claude.json data we no longer produce). If `ANTHROPIC_API_KEY` is supplied via `--env`/`--pass-env`/host env and does not match the user's `primaryApiKey` or `customApiKeyResponses.approved` list in `~/.claude.json`, Claude will challenge in the TUI and deadlock `wait_for_ready_signal`. This is flagged in **Open Questions** below; the spec recommends a preflight warning but no automatic fix.
-- Other config fields are silently ignored when they no longer apply (the `sync_*` family, `override_settings_folder`, `settings_overrides`, `convert_macos_credentials`, `auto_dismiss_dialogs`). `auto_allow_permissions`, `preserve_sessions_on_destroy`, `check_installation`, and `version` continue to work as today since they don't touch the user's config dir.
+- Other config fields are silently ignored when they no longer apply (the `sync_*` family, `override_settings_folder`, `settings_overrides`, `convert_macos_credentials`, `auto_dismiss_dialogs_at_startup`). `auto_allow_permissions`, `preserve_sessions_on_destroy`, `check_installation`, and `version` continue to work as today since they don't touch the user's config dir.
 - The only hard-error check is: host-must-be-local (fires in `on_before_provisioning`, message names the flag). `$CLAUDE_CONFIG_DIR` is read from the env when set, falling back to `~/.claude/` when not — never an error.
 - `claude_config.get_claude_config_dir()` (the standalone function) is unchanged: still reads `CLAUDE_CONFIG_DIR` or falls back to `~/.claude` (per decision 1b).
 - `ClaudeAgent.get_claude_config_dir()` (the instance method) checks the flag: when `True`, it returns the value of `CLAUDE_CONFIG_DIR` (or `~/.claude/` when unset); when `False`, returns the per-agent path as today.
@@ -65,7 +65,7 @@ Packaged as a single PR. Branch: `mngr/single-claude-data-dir`.
       ),
   )
   ```
-- No model validator. Other `sync_*` / `override_*` / `settings_overrides` / `auto_dismiss_dialogs` fields are silently ignored at provisioning time when `use_env_config_dir=True` (because the code paths that read them are skipped). Documenting this in the field's description is sufficient.
+- No model validator. Other `sync_*` / `override_*` / `settings_overrides` / `auto_dismiss_dialogs_at_startup` fields are silently ignored at provisioning time when `use_env_config_dir=True` (because the code paths that read them are skipped). Documenting this in the field's description is sufficient.
 
 #### `ClaudeAgent.get_claude_config_dir`
 
@@ -114,7 +114,7 @@ Packaged as a single PR. Branch: `mngr/single-claude-data-dir`.
 ### `libs/mngr_claude/imbue/mngr_claude/headless_claude_agent.py`, `code_guardian_agent.py`, `fixme_fairy_agent.py`, `skill_agent.py`
 
 - No code change. They inherit `ClaudeAgentConfig`'s new field and `ClaudeAgent`'s updated `provision`/`get_claude_config_dir`/`modify_env_vars` automatically.
-- One caveat: `HeadlessClaudeAgent` runs `claude -p ...` non-interactively; the same rules apply (user must have pre-trusted + pre-dismissed dialogs). `auto_dismiss_dialogs=True` is silently ignored in shared mode, so headless + shared-mode users must ensure dialogs are already dismissed in `~/.claude.json` themselves.
+- One caveat: `HeadlessClaudeAgent` runs `claude -p ...` non-interactively; the same rules apply (user must have pre-trusted + pre-dismissed dialogs). `auto_dismiss_dialogs_at_startup=True` is silently ignored in shared mode, so headless + shared-mode users must ensure dialogs are already dismissed in `~/.claude.json` themselves.
 
 ### Tests
 
@@ -198,6 +198,6 @@ These are flagged for the user to decide before or during implementation; the sp
 
 - **Plugin-level default**: Currently the flag lives on `ClaudeAgentConfig` (per decision 1a) — to opt all claude agent types into shared mode, the user must set it on each type. Should we *also* expose this as a plugin-level config in mngr's TOML (`[plugin.mngr_claude]`) that becomes the field's default? Out of scope for v1; raise later if a real workflow demands it.
 
-- **`HeadlessClaudeAgentConfig.auto_dismiss_dialogs` default**: Headless mode typically wants `auto_dismiss_dialogs=True`. In shared mode this field is silently ignored, so headless + shared-mode users must ensure dialogs are pre-dismissed in `~/.claude.json`. If we expect that combo to be common, we may want to surface a warning at provisioning time. Out of scope for v1.
+- **`HeadlessClaudeAgentConfig.auto_dismiss_dialogs_at_startup` default**: Headless mode typically wants `auto_dismiss_dialogs_at_startup=True`. In shared mode this field is silently ignored, so headless + shared-mode users must ensure dialogs are pre-dismissed in `~/.claude.json`. If we expect that combo to be common, we may want to surface a warning at provisioning time. Out of scope for v1.
 
 - **Flag naming**: `use_env_config_dir` is descriptive but slightly oblique. Alternatives: `share_user_config_dir`, `use_user_claude_config_dir`, `shared_config_dir`. Spec keeps `use_env_config_dir` per the user's original request.

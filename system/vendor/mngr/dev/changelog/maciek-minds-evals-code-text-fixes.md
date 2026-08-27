@@ -1,0 +1,1 @@
+The root `[tool.ty.src]` exclude for the minds_evals verifier templates now says where those files *are* type-checked -- the standalone minds_evals project, which installs `harbor-rewardkit` for that purpose -- rather than claiming they are unresolvable everywhere.

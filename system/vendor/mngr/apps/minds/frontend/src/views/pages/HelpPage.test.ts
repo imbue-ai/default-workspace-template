@@ -7,7 +7,7 @@ import {
   memoryStorage,
 } from "../../testing";
 import type { AnyVnode } from "../../testing";
-import { formPhase, sentPhase } from "./HelpPage";
+import { formPhase, sentPhase, titleRow } from "./HelpPage";
 
 /** Render the report form for a help surface opened over `workspaceAgentId`. */
 function renderForm(workspaceAgentId: string): AnyVnode[] {
@@ -24,6 +24,28 @@ function checkboxIds(nodes: AnyVnode[]): unknown[] {
 function findById(nodes: AnyVnode[], id: string): AnyVnode | undefined {
   return nodes.find((node) => node.attrs?.id === id);
 }
+
+describe("HelpPage title row", () => {
+  it("mirrors the feed's header: 56px row, bug icon left of the label, hairline below", () => {
+    // The help form and the notification feed are one anchored window shown
+    // two ways, so a switch between them must keep one header line.
+    const nodes = collectVnodes(titleRow());
+    const row = nodes[0];
+
+    const rowClasses = classTokensOf(row);
+    expect(rowClasses).toContain("h-[56px]");
+    expect(rowClasses).toContain("border-b");
+
+    const heading = nodes.find((node) => node.tag === "h1");
+    expect(heading).toBeDefined();
+    expect(classTokensOf(heading as AnyVnode)).toContain("type-label");
+    const icon = collectVnodes((heading as AnyVnode).children).find(
+      (node) => node.attrs?.name !== undefined,
+    );
+    expect(icon?.attrs?.name).toBe("bug");
+    expect(allText(titleRow())).toContain("Ran into a bug?");
+  });
+});
 
 describe("HelpPage report form", () => {
   it("offers the workspace diagnostics checkboxes above remote access, both checked", () => {
@@ -163,8 +185,10 @@ describe("HelpPage report form", () => {
       collectVnodes(formPhase(new HelpModel({ storage: memoryStorage() }))),
     );
 
-    expect(rendered).toContain("We'll need these to send a fix.");
+    // Both boxes exist for the same reason -- diagnosing the issue -- and no
+    // consent reassurance rides along: ticking the box IS the consent.
     expect(rendered).toContain("We'll need these to diagnose the issue.");
+    expect(rendered).not.toContain("We will never access them");
     // The trailing prose block these reasons replaced is gone.
     expect(rendered).not.toContain("App diagnostics (app version");
   });
@@ -184,31 +208,10 @@ describe("HelpPage sent screen", () => {
     return collectVnodes(sentPhase(model));
   }
 
-  it("says the included diagnostics are still uploading behind the report ID", () => {
-    // The ID lands as soon as the report is filed; the machine's logs and chats
-    // are collected and uploaded after that, so the screen must not read as done.
+  it("shows the report ID as a click-to-copy chip once sent", () => {
     const nodes = renderSent("agent-1");
 
-    expect(findById(nodes, "help-diagnostics-pending")).toBeDefined();
     expect(JSON.stringify(nodes)).toContain("abc123");
-  });
-
-  it("says nothing about uploads when no diagnostics were included", () => {
-    expect(
-      findById(
-        renderSent("agent-1", {
-          isLogsIncluded: false,
-          isTranscriptIncluded: false,
-        }),
-        "help-diagnostics-pending",
-      ),
-    ).toBeUndefined();
-  });
-
-  it("says nothing about uploads for a report not scoped to a machine", () => {
-    // Outside a machine there is nothing to collect, so nothing is pending.
-    expect(
-      findById(renderSent(""), "help-diagnostics-pending"),
-    ).toBeUndefined();
+    expect(findById(nodes, "help-report-id")).toBeDefined();
   });
 });

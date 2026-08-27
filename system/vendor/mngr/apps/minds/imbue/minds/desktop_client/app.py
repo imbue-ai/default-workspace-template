@@ -59,7 +59,7 @@ from imbue.minds.desktop_client.destroying import list_destroying
 from imbue.minds.desktop_client.discovery_health import DiscoveryHealth
 from imbue.minds.desktop_client.discovery_health import DiscoveryHealthWatchdog
 from imbue.minds.desktop_client.environment_signals import ConnectivityDetector
-from imbue.minds.desktop_client.environment_signals import EnvironmentBlock
+from imbue.minds.desktop_client.environment_signals import EnvironmentCondition
 from imbue.minds.desktop_client.environment_signals import SleepTracker
 from imbue.minds.desktop_client.forward_cli import EnvelopeStreamConsumer
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCli
@@ -573,10 +573,10 @@ def _handle_help_report() -> Response:
     rather than submitting, so the human-reviewed send always flows through this collector.
 
     The workspace's own logs and chat transcript are opt-out, so this route attaches them from inside
-    the container, along with the shell's captured console. It never waits on that: the attachments
-    are reserved and collected on a background strand while the user gets their report id now.
-    Collection never fails the report either -- whatever it could not produce travels as a reason
-    code instead, and that reason lands in the status document the event points at.
+    the container, along with the shell's captured console. It never waits on that: the archive's
+    upload is reserved and collected on a background strand while the user gets their report id now.
+    Collection never fails the report either -- when there is no archive, a one-line note (and the
+    status document the event points at) says why.
     """
     body = request.get_json(silent=True, force=True)
     if not isinstance(body, dict):
@@ -2014,16 +2014,17 @@ def _derive_ui_environment_message(
 ) -> UiEnvironmentMessage:
     """The device's own condition, read without touching the network.
 
-    Whatever the last probe found. NONE where no detector is wired, and NONE
-    before the first probe lands -- an unmeasured device must not be reported
-    as a broken one.
+    Whatever the last probe found. NONE where no detector is wired, and UNKNOWN
+    before the first probe lands or after a wake blanks the reading -- an
+    unmeasured device must be reported as neither broken nor fine, since a
+    surface told it is fine goes on to blame whatever is next in line.
     """
-    block = (
-        connectivity_detector.get_reading().environment_block
+    condition = (
+        connectivity_detector.get_reading().environment_condition
         if connectivity_detector is not None
-        else EnvironmentBlock.NONE
+        else EnvironmentCondition.NONE
     )
-    return UiEnvironmentMessage(state=block)
+    return UiEnvironmentMessage(state=condition)
 
 
 def _derive_ui_health_states(
@@ -2517,7 +2518,7 @@ class _NotificationDispatchPreferencesReader(FrozenModel):
         # One atomic read (not two separate locked getters): a concurrent
         # set_notification_prefs() write landing between two separate calls could
         # otherwise produce an (is_enabled, style) pair never actually persisted together.
-        is_enabled, style, _is_os_hint_dismissed, _os_permission_confirmed = self.minds_config.get_notification_prefs()
+        is_enabled, style, _is_os_hint_dismissed = self.minds_config.get_notification_prefs()
         return NotificationDispatchPreferences(is_enabled=is_enabled, style=style)
 
 
