@@ -10,6 +10,7 @@ from typing import Any
 
 from imbue.system_interface.harnesses.codex.session_parser import _labelled_tool_call
 from imbue.system_interface.harnesses.codex.session_parser import parse_lines
+from imbue.system_interface.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.system_interface.harnesses.codex.tool_labels import CODE_MODE_TOOL_NAME
 
 
@@ -383,7 +384,7 @@ def test_a_failed_turn_surfaces_its_reason_as_a_message() -> None:
     """
     events = parse_lines(_task_complete({"message": _CODEX_401}), 2, {})
     # The failure is ordered BEFORE the marker: it happened first.
-    assert [event["type"] for event in events] == ["assistant_message", "special_event"]
+    assert [event["type"] for event in events] == ["assistant_message", SPECIAL_EVENT_TYPE]
     failure = events[0]
     assert failure["text"] == _CODEX_401
     assert failure["is_auth_error"] is True
@@ -417,4 +418,4 @@ def test_a_spent_quota_is_an_auth_failure_not_a_provider_fault() -> None:
 
 def test_a_clean_turn_still_yields_only_its_marker() -> None:
     events = parse_lines(_task_complete(None), 2, {})
-    assert [event["type"] for event in events] == ["special_event"]
+    assert [event["type"] for event in events] == [SPECIAL_EVENT_TYPE]
