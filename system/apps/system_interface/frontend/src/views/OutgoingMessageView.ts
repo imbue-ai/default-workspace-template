@@ -11,18 +11,27 @@ import m from "mithril";
 import { getOutgoingMessages } from "../models/OutgoingMessages";
 import type { OutgoingMessage } from "../models/OutgoingMessages";
 
+// Shared with QueuedMessageView's is_sending branch, so an in-flight queued
+// message and an optimistic outgoing one render identically. The dimming rides
+// the row (opacity-60); the bubble's dashed border and the zeroed row margin
+// stay contextual `.outgoing-message` rules in style.css (the margin override
+// must outrank the unlayered `.message` rhythm rule, which a utility cannot).
+export const OUTGOING_ROW_CLASS = "message message-user outgoing-message outgoing-message--sending opacity-60";
+
+export const OUTGOING_STATUS_CLASS = "outgoing-status mt-[3px] text-(length:--font-size-helper) text-secondary";
+
 function renderOutgoingBubble(outgoing: OutgoingMessage): m.Vnode {
   return m(
     "div",
     {
-      class: "message message-user outgoing-message outgoing-message--sending",
+      class: OUTGOING_ROW_CLASS,
       key: outgoing.id,
     },
     [
       m("div", { class: "message-user-bubble" }, [
         m("div", { class: "message-content whitespace-pre-wrap" }, outgoing.content),
       ]),
-      m("div", { class: "outgoing-status" }, "Sending…"),
+      m("div", { class: OUTGOING_STATUS_CLASS }, "Sending…"),
     ],
   );
 }

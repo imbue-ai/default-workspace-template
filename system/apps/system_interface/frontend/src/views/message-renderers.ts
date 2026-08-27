@@ -232,13 +232,18 @@ export function renderSubagentCard(toolCall: ToolCall, agentId: string, isRunnin
   // whole card also drops its green accent for neutral grey, since green reads as "active".
   const statusIndicator = isRunning
     ? m("span", {
-        class: "subagent-card-status-dot subagent-card-status-dot--running",
+        // Pulsing green dot; reuses the agent-activity-pulse keyframes (style.css)
+        // so it matches the main chat's activity dot.
+        class:
+          "subagent-card-status-dot subagent-card-status-dot--running h-[7px] w-[7px] shrink-0 rounded-full " +
+          "bg-accent animate-[agent-activity-pulse_1.4s_ease-in-out_infinite]",
         "aria-label": "Sub-agent is working",
         ...hoverTooltipAttrs("Working"),
       })
     : m(
-        "svg.subagent-card-status-check",
+        "svg",
         {
+          class: "subagent-card-status-check shrink-0 text-secondary",
           width: 16,
           height: 16,
           viewBox: "0 0 16 16",
@@ -253,32 +258,54 @@ export function renderSubagentCard(toolCall: ToolCall, agentId: string, isRunnin
         ),
       );
 
-  return m("div", { class: `subagent-card${isRunning ? "" : " subagent-card--done"}` }, [
-    m("div", { class: "subagent-card-header" }, [
-      statusIndicator,
-      m("span", { class: "subagent-card-description" }, description),
-      agentType ? m("span", { class: badgeClass("accent", { mono: true, extra: "shrink-0" }) }, agentType) : null,
-    ]),
-    // The click-through needs the subagent session_id, which only arrives once the call is
-    // linked. The label stays "View conversation" throughout so it doesn't flip-flop; before
-    // the session is known it renders as a muted, non-clickable placeholder (there is no
-    // conversation to open yet), becoming an active link the moment linkage lands.
-    sessionId
-      ? m(
-          "a",
-          {
-            class: "subagent-card-link",
-            href: "javascript:void(0)",
-            onclick(e: Event) {
-              e.preventDefault();
-              e.stopPropagation();
-              openSubagentTab(agentId, sessionId, description);
+  // Once finished, the card drops its green accent for neutral grey -- green reads as active.
+  const cardTone = isRunning
+    ? "border-accent bg-accent-light"
+    : "subagent-card--done border-default bg-surface-secondary";
+  const linkBase =
+    "shrink-0 whitespace-nowrap text-(length:--font-size-body) transition-[color] duration-(--dur-base)";
+  return m(
+    "div",
+    {
+      class: `subagent-card my-[0.75em] flex items-center justify-between gap-3 rounded-md border px-4 py-3 ${cardTone}`,
+    },
+    [
+      m("div", { class: "subagent-card-header flex min-w-0 flex-1 items-center gap-2" }, [
+        statusIndicator,
+        m(
+          "span",
+          { class: "subagent-card-description truncate text-(length:--font-size-body) font-medium text-primary" },
+          description,
+        ),
+        agentType ? m("span", { class: badgeClass("accent", { mono: true, extra: "shrink-0" }) }, agentType) : null,
+      ]),
+      // The click-through needs the subagent session_id, which only arrives once the call is
+      // linked. The label stays "View conversation" throughout so it doesn't flip-flop; before
+      // the session is known it renders as a muted, non-clickable placeholder (there is no
+      // conversation to open yet), becoming an active link the moment linkage lands.
+      sessionId
+        ? m(
+            "a",
+            {
+              class: `subagent-card-link ${linkBase} text-accent no-underline hover:text-accent-hover hover:underline`,
+              href: "javascript:void(0)",
+              onclick(e: Event) {
+                e.preventDefault();
+                e.stopPropagation();
+                openSubagentTab(agentId, sessionId, description);
+              },
             },
-          },
-          "View conversation",
-        )
-      : m("span", { class: "subagent-card-link subagent-card-link--pending" }, "View conversation"),
-  ]);
+            "View conversation",
+          )
+        : m(
+            "span",
+            {
+              class: `subagent-card-link subagent-card-link--pending ${linkBase} cursor-default text-faint hover:text-secondary`,
+            },
+            "View conversation",
+          ),
+    ],
+  );
 }
 
 export function renderToolCallBlock(toolCall: ToolCall, toolResult: ToolResultEvent | null): m.Vnode {

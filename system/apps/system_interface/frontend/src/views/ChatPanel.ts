@@ -867,7 +867,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
           m(
             "main",
             {
-              class: "app-content flex-1 overflow-y-auto px-8 py-6",
+              class: "app-content flex-1 overflow-y-auto bg-chat px-8 py-6",
               onscroll: (event: Event) => scroll.onScroll(event),
               // Mark the start of a drag (likely a selection) so the tail-follow pin
               // defers while the button is held (see the controller's applyTailFollow).
@@ -916,7 +916,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
           // Only show message input when not in proto-agent mode
           isProtoAgent(agentId)
             ? null
-            : m("footer", { class: "app-footer" }, [
+            : m("footer", { class: "app-footer shrink-0 bg-chat px-8 pb-6" }, [
                 m(EmptySlot, { name: "conversation-before-input" }),
                 isConversationNotFound(agentId)
                   ? null

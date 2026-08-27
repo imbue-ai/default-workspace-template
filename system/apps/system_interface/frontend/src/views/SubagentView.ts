@@ -174,10 +174,14 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
       const title = metadata?.description || "Sub-agent conversation";
       const agentType = metadata?.agent_type || "";
 
-      const header = m("header", { class: "app-header" }, [
-        m("h1", { class: "app-header-title" }, title),
-        agentType ? m("span", { class: badgeClass("neutral", { mono: true }) }, agentType) : null,
-      ]);
+      const header = m(
+        "header",
+        { class: "app-header flex shrink-0 items-baseline gap-3 border-b border-default bg-page px-8 py-3.5" },
+        [
+          m("h1", { class: "app-header-title text-(length:--font-size-heading) font-semibold text-primary" }, title),
+          agentType ? m("span", { class: badgeClass("neutral", { mono: true }) }, agentType) : null,
+        ],
+      );
 
       let content: m.Vnode;
 
@@ -208,7 +212,7 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
         m(
           "main",
           {
-            class: "app-content flex-1 overflow-y-auto px-8 py-6",
+            class: "app-content flex-1 overflow-y-auto bg-chat px-8 py-6",
             onscroll: (event: Event) => scroll.onScroll(event),
             onpointerdown: () => scroll.onPointerDown(),
             oncreate: (mainVnode: m.VnodeDOM) => {
