@@ -291,3 +291,15 @@ is the backstop: a short extraction is a fragment, so keep draining rather than 
 
 Verified against 1.1.16 specifically: 78 characters and no `response_type` before, the full
 704 after.
+
+# Spawn a sign-in terminal wide enough that a long value cannot wrap
+
+agy prints a ~700-character OAuth URL. At 80 columns the scrape returned only its first row
+-- a URL that still parses and still carries a client_id, but has no `response_type`, so
+Google answers 401 rather than anything that reads as truncation.
+
+`pty_columns` on the method spawns the terminal wider than the value, so there is nothing to
+de-wrap. Measured across three agy builds: at 80 columns 1.1.16 yields 78 characters and
+1.1.22 fails extraction outright; wide, all of them yield the full 704. `min_length` on the
+scrape is the backstop -- a short extraction is a fragment, so keep draining rather than
+hand it over.

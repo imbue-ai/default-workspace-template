@@ -272,16 +272,16 @@ command -v pi >/dev/null
 # Antigravity CLI (agy). Installed via a vendored, version-LOCKED copy of Google's
 # installer: the upstream one queries a "latest" manifest, and that manifest is the
 # ONLY source of a release's opaque build id, so a version can be pinned only by
-# capturing its URL + sha512 while it is current. agy_install-1.1.16.sh holds those.
+# capturing its URL + sha512 while it is current. agy_install-1.1.22.sh holds those.
 # Reachable two ways depending on how we were invoked (mirrors the secret-scanner
 # dual-name resolution below): in a Dockerfile build it is baked beside this script as
 # default-workspace-template-install-agy; run straight from the repo (Lima/Modal) it is
-# its sibling agy_install-1.1.16.sh. Installed into /usr/local/bin explicitly rather
+# its sibling agy_install-1.1.22.sh. Installed into /usr/local/bin explicitly rather
 # than the installer's $HOME/.local/bin default, so agy sits with every other
 # downloaded tool and does not depend on HOME surviving into the runtime image.
 agy_installer_dir="$(cd "$(dirname "$0")" && pwd)"
-if [ -f "$agy_installer_dir/agy_install-1.1.16.sh" ]; then
-    bash "$agy_installer_dir/agy_install-1.1.16.sh" /usr/local/bin
+if [ -f "$agy_installer_dir/agy_install-1.1.22.sh" ]; then
+    bash "$agy_installer_dir/agy_install-1.1.22.sh" /usr/local/bin
 else
     bash "$agy_installer_dir/default-workspace-template-install-agy" /usr/local/bin
 fi

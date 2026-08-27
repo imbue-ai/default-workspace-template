@@ -13,3 +13,6 @@ signed in to.
 settings.json that accounts replaced, and loses its whole detached-restart half: an
 account is read when a chat is created, not frozen into a running process's environment,
 so nothing has to be torn down to see it. 179 lines to 88.
+
+Bump the pinned Antigravity CLI from 1.1.16 to 1.1.22 (`system/scripts/agy_install-1.1.22.sh`,
+URL + per-arch sha512 re-captured from the live manifest while current).

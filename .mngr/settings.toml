@@ -373,7 +373,7 @@ append_system_prompt__extend = ["""Do not use any built-in tools related to memo
 # claude/codex. Its own base type (registered by the vendored imbue-mngr-antigravity
 # plugin via `mngr plugin add` in system/scripts/build_workspace.sh), so no parent_type.
 # The agy binary is baked into the image (system/scripts/setup_system.sh, which runs the
-# version-locked system/scripts/agy_install-1.1.16.sh), so check_installation is off.
+# version-locked system/scripts/agy_install-1.1.22.sh), so check_installation is off.
 # auto_allow_permissions + auto_dismiss_dialogs_at_startup run the container agent unattended,
 # matching agent_types.codex (auto_allow adds agy's --dangerously-skip-permissions;
 # auto_dismiss silently trusts the source repo). update_policy = NEVER freezes the baked
