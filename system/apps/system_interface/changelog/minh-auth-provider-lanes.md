@@ -466,3 +466,15 @@ happened to have, which took them from 0.3s to 13.6s and made them assert on the
 Verified against the pinned pi 0.83.0: it reads the `auth.json` we write verbatim, and
 `--list-models` under that folder returns only that provider's models -- so "one provider per
 folder scopes the model list" holds, and the schema has not drifted.
+
+# The API-key screen spun forever on a mixed-key option list
+
+Picking the API key provider hung on "Signing in..." indefinitely. The request behind it took
+six milliseconds; nothing was pending. The provider dropdown built its children as one
+unkeyed placeholder option followed by keyed ones, and mithril refuses a list that mixes the
+two -- by throwing, mid-render. The throw aborted the redraw, so the screen kept whatever was
+last painted, which was the spinner, and no later redraw could replace it.
+
+Worth noting for the next one of these: a render that throws does not look like an error, it
+looks like something slow. Nothing appears in a server log, because nothing was asked of the
+server. The browser console named it in one line.
