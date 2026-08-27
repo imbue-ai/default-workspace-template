@@ -1170,7 +1170,7 @@ describe("Sidebar tooltips", () => {
     trigger.dispatchEvent(new MouseEvent("mouseenter"));
     // Past the hover-intent delay (TOOLTIP_DELAY_MS = 250ms in hoverTooltip.ts).
     await new Promise((resolve) => setTimeout(resolve, 260));
-    return document.querySelector(".minds-tooltip")?.textContent;
+    return document.querySelector(".hover-tooltip")?.textContent;
   }
 
   it("shows a static 'Switch projects' tooltip on the header, not the project's name", async () => {

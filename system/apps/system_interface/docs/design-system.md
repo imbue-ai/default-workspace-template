@@ -90,6 +90,17 @@ document is the durable hand-off so any agent can pick the work up cold.
   pv narration pair (markdown children + shimmer machine), and the shared
   `.modal-*` shell block.
 
+- **Hover-tooltip skin dissolved; shell-branded name dropped — DONE.** The JS
+  hover tooltip's `.minds-tooltip` CSS block (listed above as a stays-CSS
+  machine) is gone: its skin is now the design system's own utilities in one
+  literal (`TOOLTIP_CLASS` in `views/hoverTooltip.ts`, at the singleton's
+  creation site), dark mode included as `dark:` variants. The class is renamed
+  to the bare marker `hover-tooltip` (no CSS attached): matching the minds
+  shell's tooltip was happenstance copying, not a contract — this UI also runs
+  outside the shell — so the name no longer claims parity. The `@apply`
+  convention note in `style.css`'s header stays: escape-hatch rules should
+  `@apply` semantic utilities where they cover the declarations.
+
 - **Elevation realigned to the minds design system — DONE.** Replaced the three
   value-heavy `--elevation-sm/-lg/-overlay` tokens with minds' two soft steps
   (`apps/minds`): `--shadow-raised` (`0 1px 3px 0 rgba(0,0,0,.1), 0 1px 2px -1px

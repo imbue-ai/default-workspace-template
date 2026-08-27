@@ -39,7 +39,7 @@ say at the call site.
   `shadow-overlay`.
 - **Buttons are the `Button` component** in `src/views/Button.ts`:
   `m(Button, {variant, sm, icon, round, selected, block, extra, ...attrs},
-  children)` renders a real `<button type="button">`, applies the shared
+children)` renders a real `<button type="button">`, applies the shared
   recipe, and passes through every attr it doesn't consume (`onclick`,
   `disabled`, `aria-*`, `oncreate`, ...). A caller's `class` never passes
   through — additive utilities/markers go in `extra`. The class recipe
@@ -80,10 +80,10 @@ safelist it with `@source inline("...")`.
 - **Rendered content you don't render per-element**: markdown output
   (`.markdown-content …`), where classes can't be attached per element.
 - **Pseudo-element/keyframe machines**: `@keyframes`, the `.spinner`, the
-  `.toggle`, the CSS tooltip — where the drawing lives in `::before/::after`
-  or animation state.
+  `.toggle` — where the drawing lives in `::before/::after` or animation
+  state.
 - **Contextual rules over shared markup**: e.g. `.queued-message
-  .message-user-bubble { opacity: … }` — the bubble markup comes from shared
+.message-user-bubble { opacity: … }` — the bubble markup comes from shared
   code, so context classes are the mechanism. The chat message tree
   (`.message`, `.message-user`, `.message-user-bubble`) stays CSS for this
   reason (and is queried from JS for row measurement/scroll selection).
