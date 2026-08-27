@@ -405,3 +405,17 @@ The liveness sweep that already runs every three seconds now also asks each trac
 session to bring its backend up. `ensure_live` is idempotent and a no-op for the file
 harnesses, so this only ever does work for a session genuinely missing its backend, and the
 bar now appears when the daemon is actually ready rather than when the next event lands.
+
+# The composer appears with the transcript, not a moment after it
+
+A new chat rendered with an empty transcript and no composer for a beat, then everything
+appeared at once. Two branches were asking the same question -- "is this agent still being
+created?" -- and answering it differently. The build log tested `isProtoAgent && not yet
+registered`; the footer tested `isProtoAgent` alone. In the window where an agent has been
+registered but its proto entry has not cleared yet, the build log had already stood down
+while the footer was still suppressed, so the chat rendered with nothing to type into.
+
+`isStillBeingCreated` is now the one definition, and every branch asks it -- the build log,
+the footer, and whether the panel accepts file drops. The proto list is rebuilt from
+broadcasts and can name an agent that has since registered, so "has a proto entry" was never
+the same question as "is still being created"; conflating them is what produced the gap.

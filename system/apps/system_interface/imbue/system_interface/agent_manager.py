@@ -969,8 +969,16 @@ class AgentManager:
         observe event happened along. That is the blank chat and empty model bar that fill
         in "eventually": the wait was never on the daemon, it was on the next event.
 
-        `ensure_live` is idempotent and a no-op for the file harnesses, so this is only ever
-        doing work for a session that is genuinely missing its backend.
+        The model bar needs BOTH of its inputs, and they land independently: an identity read
+        from the harness's `model_state.json`, and the options to match it against. For a
+        dynamic harness the options ARE the live backend's `model/list`, so the bar cannot
+        resolve until this connect succeeds -- which is why it is retried early and often
+        rather than deferred. Recomputing here is what turns a late connect into a bar: the
+        file watcher only fires when the harness rewrites its state file, so options arriving
+        afterwards would otherwise sit unused until something unrelated moved.
+
+        Both calls are idempotent -- `ensure_live` is a no-op for the file harnesses, and the
+        recompute suppresses an unchanged broadcast -- so a settled agent costs nothing.
         """
         with self._lock:
             tracked = list(self._activity_tracked_agents)
@@ -979,6 +987,13 @@ class AgentManager:
                 session = self._session_by_agent.get(agent_id)
             if session is not None:
                 session.ensure_live()
+            # Installs the state-file watcher once the agent's state dir exists, which it may
+            # not have when the agent was first tracked.
+            self._ensure_model_tracking(agent_id)
+            # ...and broadcast, which that does not: it recomputes silently, on the reasoning
+            # that its callers are already about to broadcast the whole agent list. Nothing
+            # follows this one, so a bar that just became resolvable would stay unrendered.
+            self._recompute_model_choice(agent_id, broadcast_on_change=True)
 
     def refresh_app_liveness(self) -> None:
         """Re-derive every app's ``is_running`` and broadcast when any changed.
