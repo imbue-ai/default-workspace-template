@@ -162,9 +162,7 @@ def _make_agent_fixture(
     return agent_info, session_file
 
 
-# The versioning service's registered name, used both by the fixture below (to
-# point its registry row at a stub that really answers) and by the History tests
-# further down.
+# The versioning service's registered name, shared by the fixture and the History tests.
 _VERSIONING_NAME = "versioning"
 
 
@@ -198,20 +196,14 @@ def _running_e2e_server(
     ``forward_port.py`` mints it, because every panel origin is built from the
     label rather than the name.
 
-    ``internal_apps`` names services registered the same way but carrying
-    ``internal = true`` (``forward_port.py --internal``) -- a port with no page
-    of its own to browse to. They are hidden from the surfaces that LIST apps
-    and are otherwise ordinary registered services, so a test that opens one by
-    another route is exercising exactly that distinction.
+    ``internal_apps`` names services registered with ``internal = true`` --
+    hidden from the surfaces that LIST apps, but otherwise ordinary.
 
     ``versioning_serves``, when given, runs a stub Versioning backend answering
     ``GET /api/apps`` with those names and points the registered ``versioning``
-    service's URL at it. That list is the shell's whole eligibility rule for a
-    History row, so a test about History has to supply one -- and it is
-    deliberately independent of ``apps``/``internal_apps``, since the two really
-    do diverge on a live machine (a registered port with no package under
-    ``system/apps`` has no timeline; the shell's own folder has one under a name
-    nothing registers).
+    service's URL at it -- the list every History row is gated on. Deliberately
+    independent of ``apps``/``internal_apps``, since the two diverge on a live
+    machine.
 
     ``additional_agents`` is a tuple of ``(agent_id, agent_name)`` for extra
     agents that EXIST but whose chats are not auto-opened. They carry no
@@ -293,11 +285,9 @@ def _running_e2e_server(
                 )
         for info in agents:
             manager._ensure_activity_tracking(info.id)
-        # Every registry row points at a dead loopback port -- the panes are
-        # framed cross-origin and intercepted by Playwright, so nothing has to
-        # answer. The versioning row is the exception: the shell READS its app
-        # list server-side (through /api/versioned-apps), so a test about
-        # History needs something really listening behind that row.
+        # Registry rows point at dead loopback ports (panes are intercepted by
+        # Playwright), except versioning: the shell reads its app list
+        # server-side, so something must really answer behind that row.
         with (
             contextlib.nullcontext()
             if versioning_serves is None
@@ -2168,32 +2158,16 @@ def test_pinning_an_app_to_a_project_is_the_same_as_its_membership(tmp_path: Pat
         assert after_unpin["removals"] == 0, f"a live surface left the DOM when the app was unpinned: {after_unpin}"
 
 
-# Its own port, like every other test here: the port is this test's server bind
-# address AND (below) the workspace coordinate its browser loads the shell at,
-# so a port shared with another test is a shared origin and localStorage too.
 _APP_HISTORY_PORT = 18886
 
-# This test loads the shell at a WORKSPACE COORDINATE host rather than at bare
-# ``127.0.0.1``, which every other test here is content with. A service pane's
-# origin is its label prefixed onto the coordinate (see frontend/src/origin.ts),
-# so at ``127.0.0.1`` the panes address ``<label>.127.0.0.1`` -- a host whose
-# last label is numeric, which Chromium canonicalizes as a failed IPv4 parse and
-# refuses to navigate to at all (the frame lands on ``about:blank#blocked``).
-# Tests that only count iframe ELEMENTS never notice; this one asserts on the
-# framed document, so it needs the panes to genuinely load. ``.localhost``
-# resolves to loopback, so the same server answers.
+# A workspace-coordinate host rather than bare ``127.0.0.1``: pane origins are
+# ``<label>.<host>``, and a numeric last label makes Chromium refuse the
+# navigation outright -- these tests assert on the framed DOCUMENT, so the
+# panes must genuinely load. ``.localhost`` resolves to loopback.
 _APP_HISTORY_HOST = f"host-e2e{_APP_HISTORY_PORT}.localhost:{_APP_HISTORY_PORT}"
 
-# The versioning service is registered ``internal`` in these tests, which is
-# the registration the workspace itself uses (system/supervisord.conf runs its
-# forward_port.py with the flag). It is also the interesting case on its own
-# terms, because the app is a port with pages but no page to browse TO, every
-# one of its pages being about some other app:
-# under it the service drops out of every surface that LISTS apps, leaving an
-# app's own menu as the only way in. So what these tests have to prove is that
-# ``internal`` hides without unrouting, and that the remaining ways in work.
-# (``_VERSIONING_NAME`` itself is defined up beside the fixture, which points
-# its registry row at a stub that answers the app list.)
+# Registered ``internal`` here, as the real workspace registers it: hidden from
+# every surface that LISTS apps, so an app's own menus are the only way in.
 _VERSIONING_LABEL = f"{_VERSIONING_NAME}-e2elabel"
 
 # What the History pane is called, everywhere -- never "versioning 1".
@@ -2206,22 +2180,16 @@ _HISTORY_APP_NAMES = ("curio", "docs-viewer")
 # (hyphen), which is not the name anything registers (underscore).
 _SYSTEM_HISTORY_NAME = "system-interface"
 
-# What the stub versioning backend says it serves: the two ordinary apps, the
-# built-in fleets whose rail rows now offer History, the shell, and itself.
-# Deliberately NOT the whole registry -- ``si-preview`` below is registered and
-# non-internal and still has no timeline, which is the case the old
-# registry-derived rule got wrong.
+# What the stub versioning backend serves. Deliberately NOT the whole registry:
+# ``si-preview`` below is registered, non-internal, and still has no timeline.
 _VERSIONING_SERVES = (*_HISTORY_APP_NAMES, "browser", "terminal", _SYSTEM_HISTORY_NAME, _VERSIONING_NAME)
 
-# A registered, non-internal service with no package of its own under
-# ``system/apps`` -- what a live preview looks like in the registry. It must get
-# no History row: ``/app/si-preview`` would 404.
+# A registered, non-internal service with no package under ``system/apps`` --
+# what a live preview looks like. It must get no History row: its page would 404.
 _PACKAGELESS_SERVICE_NAME = "si-preview"
 
-# A stand-in for the versioning app's timeline page that says which app's
-# timeline it is. The assertion is on the LOADED document rather than on the
-# iframe's ``src`` alone, so a pane pointed at the right address that never
-# navigated there would still fail.
+# A stand-in timeline page that reports which app's timeline it loaded, so the
+# assertion is on the rendered document rather than the iframe's ``src`` alone.
 _TIMELINE_PAGE_HTML = (
     "<!doctype html><html><body>"
     "<h1 id='timeline-app'></h1>"
@@ -2251,22 +2219,11 @@ def _open_tab_menu(page: Page, tab_title: str) -> None:
 def test_history_on_an_app_tab_opens_that_apps_timeline(tmp_path: Path, page: Page) -> None:
     """"History" on an app's tab opens the versioning app at THAT app's timeline.
 
-    Four things have to hold together, and each is a separate way the control
-    could be quietly useless:
-
-    - The versioning service is registered ``internal``, so it appears in no
-      list a user browses. ``internal`` hides an app from LISTINGS; it must not
-      make it unroutable, or the only route left to the timeline would be gone
-      with it.
-    - The pane has to actually LOAD ``/app/<name>`` rather than the versioning
-      app's own default page, so the assertion is on the rendered document.
-    - A second History, from a different app's tab, has to re-point the pane
-      that is already open rather than stacking a second timeline: the tab
-      answers "the history of the app I just asked about", which is one
-      question at a time.
-    - The pane is titled "History" from the moment it opens, and its own menu
-      offers only Refresh and Close tab -- it is a shell primitive, not an app
-      anyone installed, and nothing should offer to share or delete a history.
+    Together: ``internal`` hides the versioning service from listings without
+    making it unroutable; the pane really LOADS ``/app/<name>`` rather than the
+    versioning app's default page; a second History from another app's tab
+    re-points the one open pane rather than stacking a second; and the pane is
+    titled "History" with a menu of only Refresh and Close tab.
     """
     first_app, second_app = _HISTORY_APP_NAMES
     with _running_e2e_server(
@@ -2278,11 +2235,8 @@ def test_history_on_an_app_tab_opens_that_apps_timeline(tmp_path: Path, page: Pa
         versioning_serves=_VERSIONING_SERVES,
     ) as (_base_url, _agent_info, _session_file):
         page.on("dialog", lambda dialog: dialog.accept())
-        # Every service pane is a cross-origin iframe; serve both origins so the
-        # panes are real loaded documents rather than error pages. Every path
-        # the versioning origin is asked for is recorded, because WHICH pages
-        # the pane requests is itself part of the behavior under test (see the
-        # assertion on `versioning_paths` below).
+        # Which paths the versioning origin is asked for is itself under test
+        # (see the assertion on `versioning_paths` below).
         versioning_paths: list[str] = []
 
         def serve_timeline(route: Any) -> None:
@@ -2301,9 +2255,7 @@ def test_history_on_an_app_tab_opens_that_apps_timeline(tmp_path: Path, page: Pa
             f"localStorage.getItem('si-active-project-id') === '{DEFAULT_PROJECT_ID}'", timeout=10000
         )
 
-        # The internal service is in no list a user browses -- not the "All
-        # apps" popover, not the rail's shortcuts -- while the two ordinary
-        # apps are.
+        # The internal service is in no list a user browses; the ordinary apps are.
         _open_all_apps(page)
         expect(page.locator(_APP_ROW_SELECTOR.format(name=_VERSIONING_NAME))).to_have_count(0)
         expect(page.locator(_APP_ROW_SELECTOR.format(name=first_app))).to_have_count(1)
@@ -2327,12 +2279,9 @@ def test_history_on_an_app_tab_opens_that_apps_timeline(tmp_path: Path, page: Pa
         expect(page.frame_locator(timeline_frame_selector).locator("#timeline-app")).to_have_text(
             f"timeline of {first_app}", timeout=_TRIGGER_TIMEOUT_MS
         )
-        # It went STRAIGHT there, never touching the versioning app's `/`. A
-        # pane created at the instance's stored address and re-pointed
-        # afterwards would spend a frame on `/` -- which renders some arbitrary
-        # app's timeline, and whose page beacons a location of its own, racing
-        # the right one to become this instance's stored opening path. Hence
-        # ``initialUrl`` (see AddPanelPlacementOptions).
+        # It went STRAIGHT there, never touching the versioning app's `/`: a
+        # create-then-re-point would spend a frame on `/`, whose page beacons a
+        # location of its own, racing the right one (hence ``initialUrl``).
         assert versioning_paths == [f"app/{first_app}"], (
             f"the timeline pane asked for more than the page it was opened to show: {versioning_paths}"
         )
@@ -2348,34 +2297,24 @@ def test_history_on_an_app_tab_opens_that_apps_timeline(tmp_path: Path, page: Pa
         expect(page.frame_locator(timeline_frame_selector).locator("#timeline-app")).to_have_text(
             f"timeline of {second_app}", timeout=_TRIGGER_TIMEOUT_MS
         )
-        # ...and it is the tab in front, so the answer is on screen. It reads
-        # "History" -- the name is derived by the shell from what the pane IS,
-        # so it is right from the moment the pane opens, with nothing filed in
-        # the machine-wide title store to prop it up. The registered service
-        # name must never surface.
+        # ...and it is the tab in front, titled "History" (derived, not filed
+        # in the title store); the registered service name must never surface.
         expect(page.locator(".dv-tab.dv-active-tab .dv-default-tab-content")).to_have_text(
             _HISTORY_TITLE, timeout=_TRIGGER_TIMEOUT_MS
         )
         expect(page.locator(".dv-custom-tab", has_text=_VERSIONING_NAME)).to_have_count(0)
 
-        # The History pane's own menu is exactly Refresh and Close tab. This is
-        # the user's actual complaint: it used to carry the full app verb set
-        # ("Add to project...", "Share <app>", "Stop <app>"). A history is not
-        # an object anyone made -- and above all is not one anyone should be
-        # offered a way to delete. Asserted as the WHOLE list, so a verb added
-        # to the app menu later cannot quietly appear here too.
+        # The History pane's own menu is exactly Refresh and Close tab --
+        # asserted as the WHOLE list, so a verb added to the app menu later
+        # cannot quietly appear here too.
         _open_tab_menu(page, _HISTORY_TITLE)
         menu_labels = page.locator("[role='menuitem']").all_text_contents()
         assert menu_labels == ["Refresh", "Close tab"], f"the History pane's menu is not locked down: {menu_labels}"
         page.keyboard.press("Escape")
 
-        # Put the timeline tab away, then ask again. Hiding a tab stops
-        # nothing -- the instance is still there, backgrounded, its page still
-        # mounted -- and a History that minted a SECOND instance instead of
-        # reopening that one would leave the workspace accreting a versioning
-        # instance per visit. Asserted on the TAB rather than the iframe: the
-        # page deliberately survives its tab (see liveSurfaces.ts), so the
-        # frame is still in the document, merely hidden.
+        # Close the timeline tab, then ask again: the backgrounded instance is
+        # reopened rather than a second one minted per visit. Asserted on the
+        # TAB, not the iframe -- the page deliberately survives its tab.
         _open_tab_menu(page, _HISTORY_TITLE)
         page.locator("[role='menuitem']", has_text="Close tab").click()
         expect(page.locator(".dv-custom-tab", has_text=_HISTORY_TITLE)).to_have_count(0, timeout=_TRIGGER_TIMEOUT_MS)
@@ -2406,20 +2345,13 @@ def _open_shortcut_menu(page: Page, base_label: str) -> None:
 def test_history_is_reachable_from_the_rail_and_the_workspace_menu(tmp_path: Path, page: Page) -> None:
     """The rail's own menus reach every timeline the versioning app serves.
 
-    Three routes that no app PANE can carry, each previously missing:
-
-    - The Browser and Terminal shortcut rows. Both create sessions rather than
-      open a service, so neither ever produces a pane with an app menu -- yet
-      both are versioned apps with folders under ``system/apps``. Their kebabs
-      offered "New Browser" / "Change shortcut" / "Unpin" and no way in at all.
-    - The workspace menu behind the rail's header. The shell itself is
-      versioned (listed as "System"), under the hyphenated ``system-interface``
-      -- a name nothing registers, so no pane could ask by it even if the shell
-      were tab-able, which it is not.
-    - And the negative case that motivates gating on the versioning app's own
-      list rather than on the registry: ``si-preview`` is registered and not
-      ``internal``, and has no package under ``system/apps``. The old rule gave
-      it a History row onto a 404.
+    Routes no app PANE can carry: the Browser and Terminal shortcut rows (both
+    create sessions, so no pane of either ever carries an app menu), and the
+    workspace menu's "System history" (the shell is versioned under the
+    hyphenated ``system-interface``, a name nothing registers, and is not
+    tab-able). Plus the negative case that motivates gating on the versioning
+    app's own list: ``si-preview`` is registered, non-internal, and packageless,
+    and must get no row onto a 404.
     """
     with _running_e2e_server(
         tmp_path,
@@ -2445,16 +2377,15 @@ def test_history_is_reachable_from_the_rail_and_the_workspace_menu(tmp_path: Pat
             f"localStorage.getItem('si-active-project-id') === '{DEFAULT_PROJECT_ID}'", timeout=10000
         )
 
-        # The Browser row's kebab leads with History, ahead of the verbs about
-        # what the row DOES.
+        # The Browser row's kebab leads with History.
         _open_shortcut_menu(page, "Browser")
         shortcut_labels = page.locator('.project-rail-menu [role="menuitem"]').all_text_contents()
         leading_label = shortcut_labels[0] if len(shortcut_labels) > 0 else None
         assert leading_label == "History", f"the Browser menu does not lead with History: {shortcut_labels}"
         page.locator('.project-rail-menu [role="menuitem"]', has_text="History").click()
 
-        # It opens the browser SERVICE's timeline -- not a browser session's,
-        # since what is versioned is the app's code.
+        # It opens the browser SERVICE's timeline -- what is versioned is the
+        # app's code, not a session.
         timeline_frame_selector = f'iframe[src*="{_VERSIONING_LABEL}"]'
         expect(page.frame_locator(timeline_frame_selector).locator("#timeline-app")).to_have_text(
             "timeline of browser", timeout=_TRIGGER_TIMEOUT_MS
@@ -2477,11 +2408,10 @@ def test_history_is_reachable_from_the_rail_and_the_workspace_menu(tmp_path: Pat
         assert "Refresh" in preview_labels, f"the package-less service's tab lost its verbs: {preview_labels}"
         page.keyboard.press("Escape")
 
-        # The workspace menu carries the shell's own timeline.
+        # The workspace menu carries the shell's own timeline. Asserted on the
+        # whole menu first, so a regression reports what WAS offered.
         page.locator(".machine-sidebar").hover()
         _open_rail_switcher(page)
-        # Asserted on the whole menu before the click, so a regression says what
-        # the workspace menu DID offer rather than timing out on a missing row.
         switcher_labels = page.locator(".project-rail-menu-item").all_text_contents()
         assert "System history" in switcher_labels, f"the workspace menu offered no System history: {switcher_labels}"
         page.locator(".project-rail-menu [role='menuitem']", has_text="System history").click()
@@ -2797,19 +2727,6 @@ def test_overflowed_tabs_list_as_plain_rows_and_the_strip_keeps_its_handles(tmp_
 
 _DRAG_OVERLAY_PORT = 18881
 
-# How far the insertion line may sit from the tab's edge and still count as
-# drawn ON that edge. Both numbers come from getBoundingClientRect, so both
-# carry sub-pixel layout offsets, and the difference lands just either side of
-# a whole pixel depending on where the strip's fractional widths round -- a
-# tolerance of exactly 1 made the test turn on that rounding. What the
-# assertion is actually distinguishing is "on the seam" from "halfway across
-# the tab", which is tens of pixels away, so a couple of pixels of slack costs
-# it nothing (and _MAX_SEAM_TOLERANCE_FRACTION_OF_TAB keeps it honest).
-_SEAM_TOLERANCE_PX = 3.0
-# The slack above must stay small against the tab it is measured on, or the
-# assertion would pass for a line drawn anywhere.
-_MAX_SEAM_TOLERANCE_FRACTION_OF_TAB = 0.1
-
 
 @pytest.mark.timeout(180, func_only=False)
 def test_dropping_on_a_tab_draws_a_line_and_on_a_pane_draws_a_wash(tmp_path: Path, page: Page) -> None:
@@ -2883,11 +2800,7 @@ def test_dropping_on_a_tab_draws_a_line_and_on_a_pane_draws_a_wash(tmp_path: Pat
         )
         line_x = tab_overlay["left"] if tab_overlay["side"] == "left" else tab_overlay["right"]
         seam_x = target_box["x"] if tab_overlay["side"] == "left" else target_box["x"] + target_box["width"]
-        assert _SEAM_TOLERANCE_PX <= target_box["width"] * _MAX_SEAM_TOLERANCE_FRACTION_OF_TAB, (
-            f"the seam tolerance ({_SEAM_TOLERANCE_PX}px) is not small against this tab "
-            f"({target_box['width']}px), so passing it would prove nothing"
-        )
-        assert abs(line_x - seam_x) <= _SEAM_TOLERANCE_PX, (
+        assert abs(line_x - seam_x) <= 1, (
             f"the {tab_overlay['side']} line should sit on that edge of the tab ({seam_x}), got {line_x}"
         )
 

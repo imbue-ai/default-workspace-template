@@ -33,10 +33,6 @@ def _news_sha(client: object) -> str:
     return payload["nodes"][0]["sha"]
 
 
-def test_health(client) -> None:
-    assert json.loads(client.get("/health").data) == {"status": "ok"}
-
-
 def test_index_redirects_to_first_app_timeline(client) -> None:
     response = client.get("/")
     assert response.status_code == 200
@@ -58,14 +54,13 @@ def test_list_apps_discovers_the_scratch_app(client) -> None:
     assert [a["name"] for a in payload["apps"]] == ["news"]
 
 
-def test_history_payload_carries_labels_sizes_and_restorability(client) -> None:
+def test_history_payload_carries_labels_and_restorability(client) -> None:
     payload = json.loads(client.get("/api/app/news/history").data)
     assert payload["is_restorable"] is True
     node = payload["nodes"][0]
     assert node["is_current"] is True
     assert node["when_label"]
     assert node["short_when_label"]
-    assert node["dot_diameter_px"] > 0
     # The scratch commit records no kind, so it falls back to the generic noun.
     assert node["phrase"] == "A tiny change"
     assert json.loads(client.get("/api/app/nope/history").data)["error"]

@@ -48,3 +48,15 @@ def test_generate_and_cache_summary_returns_cached_without_a_model_call(tmp_path
     # A model call would explode without credentials; the cache short-circuits it.
     result = generate_and_cache_summary(cache_dir, "c" * 40, "ignored", "message", "diff")
     assert result == cached
+
+
+def test_generate_and_cache_summary_wraps_model_call_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A failed model call must surface as SummaryGenerationError (502), not an unhandled 500.
+    def _boom(*args: object, **kwargs: object) -> object:
+        raise OSError("claude binary missing")
+
+    monkeypatch.setattr("versioning.summaries.claude_p_completion", _boom)
+    with pytest.raises(SummaryGenerationError, match="Summary model call failed"):
+        generate_and_cache_summary(tmp_path / "summaries", "d" * 40, None, "message", "diff")

@@ -146,16 +146,12 @@ export interface SidebarAttrs {
   onRenameRow: (row: SidebarTabRow, title: string) => void;
   // Open the machine's share surface with this app pre-selected.
   onShareApp: (row: SidebarTabRow) => void;
-  // What one app's "History" row runs -- open its version timeline -- or null
-  // where there is no timeline to open (see ``historyActionForService``, which
-  // the dock tab's own menu builds its row from too, so the two agree by
-  // construction). Passed as a resolver rather than a plain callback because
-  // whether the row exists at all is part of the same answer.
+  // What one app's "History" row runs, or null where there is no timeline to
+  // open -- a resolver, because whether the row exists is part of the answer
+  // (the dock tab builds its row from the same one, so the two agree).
   historyActionForService: (serviceName: string) => (() => void) | null;
-  // What the workspace menu's "System history" row runs -- open the shell's own
-  // version timeline -- or null where there is none to open. Same shape and
-  // same rule as ``historyActionForService`` above; separate because the shell
-  // is not a service this rail could name (see ``SYSTEM_HISTORY_APP_NAME``).
+  // Same shape for the workspace menu's "System history" row; separate because
+  // the shell is not a service this rail could name (see SYSTEM_HISTORY_APP_NAME).
   systemHistoryAction: () => (() => void) | null;
   // Open the membership dialog over this row's object (also show it in the
   // chosen projects). The workspace owns the dialog, as it owns the other
@@ -786,10 +782,8 @@ export function Sidebar(): m.Component<SidebarAttrs> {
    * against any open panel.
    */
   function railMenuActions(row: SidebarTabRow, attrs: SidebarAttrs): ObjectMenuActions {
-    // A History row is a shell primitive rather than an app the user made, so
-    // it never carries an app's verbs -- the same two survive here as on its
-    // own tab (see ``historyPaneMenuActions``), with the rail's own way of
-    // saying "stop showing this here" in place of the tab's Hide tab.
+    // A History row is a shell primitive and never carries an app's verbs --
+    // the same two survive as on its own tab (see ``historyPaneMenuActions``).
     if (row.kind === "app" && isHistoryService(serviceNameFromRef(row.ref))) {
       return historyPaneMenuActions({
         refresh: () => attrs.onRefreshRow(row),
@@ -815,8 +809,6 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     const rowServiceName = row.kind === "app" ? serviceNameFromRef(row.ref) : null;
     return {
       refresh: () => attrs.onRefreshRow(row),
-      // A backgrounded row can ask for a history as readily as an open one:
-      // opening the timeline needs no pane of the app it is about.
       history: rowServiceName === null ? null : attrs.historyActionForService(rowServiceName),
       share:
         row.kind === "app" && instanceServiceName === null
@@ -909,19 +901,11 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     isDisabled?: boolean;
   }
 
-  /**
-   * The registered service one shortcut row is about, or null when it is about
-   * something that is not an app at all.
-   *
-   * The Browser and Terminal rows are the interesting ones: what they create is
-   * a session in a fleet rather than a pane of a service, so it is easy to read
-   * them as not being apps -- but ``browser`` and ``terminal`` are registered
-   * services with folders of their own under ``system/apps``, versioned exactly
-   * like every other app, and it is that code the History row is about. The
-   * File Viewer's row is the built-in ``files`` service, and a pinned app's is
-   * the name in its ``app:<name>`` id. A chat is an mngr agent and is neither a
-   * service nor versioned code at all, so it has none.
-   */
+  /** The registered service one shortcut row is about, or null when it is not
+   *  about an app at all (a chat is an mngr agent, not versioned code). The
+   *  Browser and Terminal rows create fleet sessions rather than open a
+   *  service, but ``browser`` and ``terminal`` are versioned apps like any
+   *  other -- that code is what their History row is about. */
   function serviceNameForShortcutId(shortcutId: string): string | null {
     if (shortcutId === "browser" || shortcutId === "terminal" || shortcutId === "files") return shortcutId;
     if (shortcutId.startsWith("app:")) return shortcutId.slice("app:".length);
@@ -931,8 +915,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
   /** Whether the active view currently shows an object of this shortcut's
    *  kind -- what "Focus last X" needs to be able to act. The built-in
    *  create-backed kinds match by row kind; the file viewer and apps match by
-   *  the backing service's ref, which is ``serviceNameForShortcutId``'s answer
-   *  for every id still standing once those have returned. */
+   *  the backing service's ref. */
   function viewShowsKindOf(shortcutId: string, rows: readonly SidebarTabRow[]): boolean {
     if (shortcutId === "chat" || shortcutId === "browser" || shortcutId === "terminal") {
       return rows.some((row) => row.kind === shortcutId);
@@ -980,16 +963,11 @@ export function Sidebar(): m.Component<SidebarAttrs> {
   }
 
   /** The floating menu of one built-in shortcut row: History (where the row's
-   *  own app has a timeline), then the shortcut group, then Unpin (the same act
-   *  as the row's pin icon; absent under Everything).
-   *
-   *  History leads for the same reason it does in an object's menu: it is about
-   *  what the row IS, ahead of the verbs about what the row DOES. This is the
-   *  only way into a fleet app's timeline -- the Browser and Terminal rows
-   *  create sessions rather than open the service, so no pane of either ever
-   *  carries an app menu -- and it is offered under the identical rule every
-   *  other surface uses (``historyActionForService``, which resolves to null
-   *  where there is no timeline to open). */
+   *  own app has a timeline), then the shortcut group, then Unpin (the same
+   *  act as the row's pin icon; absent under Everything). History leads as it
+   *  does in an object's menu -- about what the row IS, ahead of what it DOES
+   *  -- and for Browser and Terminal it is the only way into their timelines,
+   *  since no pane of either ever carries an app menu. */
   function shortcutMenu(attrs: SidebarAttrs, menu: Extract<OpenMenu, { kind: "shortcut" }>): m.Children {
     const rowDefinition = SHORTCUT_ROWS.find((candidate) => candidate.tabType === menu.shortcutId);
     if (rowDefinition === undefined) return null;
@@ -1878,17 +1856,11 @@ export function Sidebar(): m.Component<SidebarAttrs> {
   }
 
   /**
-   * The menu behind the rail's own header: the views, and the workspace-level
-   * verbs that belong to no view in particular.
-   *
-   * "System history" is the second kind. The workspace shell is versioned like
-   * everything else under ``system/apps`` -- the versioning app lists it as
-   * "System" -- but it is not an app anyone can open a pane of, so there is no
-   * object menu anywhere that could carry the row. This header is the shell's
-   * own control (it is what the whole workspace is named by), which makes its
-   * menu the one place a chrome-level verb reads as being about the chrome.
-   * Named "System history" rather than plain "History" because the rows above
-   * it are projects, and "History" beside them would read as one project's.
+   * The menu behind the rail's own header: the views, plus "System history" --
+   * the shell is versioned but not an app anyone can open a pane of, so this
+   * chrome-level menu is the one place its timeline can live. Named "System
+   * history" rather than "History" because the rows above it are projects,
+   * and "History" beside them would read as one project's.
    */
   function switcherMenu(attrs: SidebarAttrs, anchor: MenuAnchor): m.Vnode {
     const isEverythingActive = isEverythingView(attrs.activeViewId);

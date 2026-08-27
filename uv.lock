@@ -3559,7 +3559,6 @@ version = "0.1.0"
 source = { editable = "system/apps/versioning" }
 dependencies = [
     { name = "flask" },
-    { name = "flask-sock" },
     { name = "imbue-common" },
     { name = "loguru" },
     { name = "pydantic" },
@@ -3581,7 +3580,6 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "flask", specifier = ">=3.0" },
-    { name = "flask-sock", specifier = ">=0.7" },
     { name = "imbue-common", editable = "system/vendor/mngr/libs/imbue_common" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "pydantic", specifier = ">=2" },

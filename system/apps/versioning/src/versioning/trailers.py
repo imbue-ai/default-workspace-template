@@ -1,6 +1,4 @@
-"""The Versioning-* commit trailer block: the single source of truth for its
-names, parsing, and serialization. Shared by the history reader and the
-restore/port engines. Agents write the block by convention (CLAUDE.md > Git)."""
+"""The Versioning-* commit trailer block: names, parsing, and serialization."""
 
 import re
 from datetime import datetime
@@ -84,7 +82,6 @@ def parse_git_log_output(
     field_separator: str,
     record_separator: str,
 ) -> list[CommitRecord]:
-    """Parse `git log --format` output using our separator-delimited format into records."""
     records: list[CommitRecord] = []
     for raw_record in output.split(record_separator):
         stripped = raw_record.strip("\n")

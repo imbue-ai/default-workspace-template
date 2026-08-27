@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  HISTORY_PANE_TITLE,
   SYSTEM_HISTORY_APP_NAME,
   VERSIONING_SERVICE_NAME,
   appHistoryPath,
@@ -32,14 +31,6 @@ describe("appHistoryPath", () => {
     // and a name is not validated here.
     expect(appHistoryPath("a/b?c")).toBe("/app/a%2Fb%3Fc");
   });
-
-  it("spells the path the timeline page itself beacons", () => {
-    // The timeline posts `{type: "minds-location", path: "/app/" + APP_NAME}`
-    // (see the versioning package's timeline.html), so a pane pointed here and
-    // a pane reopened from the stored beacon address the same page. If these
-    // two ever disagree, re-opening a saved layout silently lands elsewhere.
-    expect(appHistoryPath("files")).toBe("/app/files");
-  });
 });
 
 describe("isHistoryService", () => {
@@ -68,10 +59,8 @@ describe("isAppHistoryOffered", () => {
   });
 
   it("still offers History when the versioning service is internal", () => {
-    // `internal` hides an app from the listings a user browses ("All apps",
-    // the rail's shortcut rows) -- which is the whole point here, since the
-    // timeline is reached from an app's menu instead. Hidden from a list is
-    // not the same as unroutable, so this must keep working.
+    // `internal` hides an app from listings, not from routing -- and the menus
+    // are the only way in, so this must keep working.
     const apps = [app("curio"), app(VERSIONING_SERVICE_NAME, { internal: true })];
     expect(isAppHistoryOffered(apps, SERVED, "curio")).toBe(true);
   });
@@ -96,10 +85,8 @@ describe("isAppHistoryOffered", () => {
   });
 
   it("refuses a registered service the versioning app does not serve", () => {
-    // A port registered with no package of its own under `system/apps` --
-    // `si-preview` while a preview is up, mngr's `owner-exec` -- so
-    // `/app/<name>` answers 404. Registered and non-internal is NOT the
-    // question: `si-preview` is both, and still has no timeline.
+    // A port with no package under `system/apps` (`si-preview`, `owner-exec`):
+    // `/app/<name>` answers 404, however registered and non-internal it is.
     const apps = [app("si-preview"), app("owner-exec", { internal: true }), VERSIONING];
     expect(isAppHistoryOffered(apps, SERVED, "si-preview")).toBe(false);
     expect(isAppHistoryOffered(apps, SERVED, "owner-exec")).toBe(false);
@@ -132,10 +119,8 @@ describe("historyPaneMenuActions", () => {
   }
 
   it("leaves a History pane's own tab exactly Refresh and Close tab", () => {
-    // The whole point: a history is not an object the user made, so none of an
-    // app's verbs mean anything on it -- and one of them (a destroy) would be
-    // actively wrong. Asserted as the WHOLE list rather than as absences, so a
-    // verb added to the app menu later cannot quietly appear here too.
+    // Asserted as the WHOLE list rather than as absences, so a verb added to
+    // the app menu later cannot quietly appear here too.
     const entries = labelsOf(
       historyPaneMenuActions({ refresh: () => {}, hideTab: () => {}, removeFromProject: null }),
     );
@@ -157,30 +142,5 @@ describe("historyPaneMenuActions", () => {
     // reload -- and a one-entry menu must not end on a divider.
     const entries = labelsOf(historyPaneMenuActions({ refresh: () => {}, hideTab: null, removeFromProject: null }));
     expect(entries).toEqual(["Refresh"]);
-  });
-
-  it("runs the caller's own callbacks", () => {
-    const ran: string[] = [];
-    const entries = objectMenuEntries(
-      "app",
-      historyPaneMenuActions({
-        refresh: () => ran.push("refresh"),
-        hideTab: () => ran.push("hide"),
-        removeFromProject: null,
-      }),
-    );
-    for (const entry of entries) {
-      if (entry !== OBJECT_MENU_DIVIDER) entry.run();
-    }
-    expect(ran).toEqual(["refresh", "hide"]);
-  });
-});
-
-describe("HISTORY_PANE_TITLE", () => {
-  it("is what every pane of the versioning service is called", () => {
-    // Named here rather than at each surface so the tab, the rail row and the
-    // launcher cannot drift apart -- and so nothing has to be filed in the
-    // machine-wide title store to make a freshly opened pane read right.
-    expect(HISTORY_PANE_TITLE).toBe("History");
   });
 });

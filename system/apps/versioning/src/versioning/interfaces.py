@@ -13,7 +13,7 @@ from versioning.data_types import FileChange
 class GitRepoInterface(MutableModel, ABC):
     """Contract for reading and writing the shared workspace git repo."""
 
-    repo_root: Path = Field(frozen=True, description="Working tree root of the repo")
+    repo_root: Path = Field(frozen=True)
 
     @abstractmethod
     def read_commits_touching_path(self, relative_path: str) -> list[CommitRecord]:

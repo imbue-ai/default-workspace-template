@@ -19,28 +19,17 @@ from versioning.trailers import serialize_trailer_block
 _SUPERVISORCTL_TIMEOUT_SECONDS: Final[float] = 60.0
 _UV_SYNC_TIMEOUT_SECONDS: Final[float] = 300.0
 
-# The versioning app itself: restoring it would restart the very service running
-# the restore, so it can be browsed but not restored.
+# Browse-only: restoring versioning would restart the service running the restore,
+# and the workspace shell's safe rollback path is the update-system-interface machinery.
 SELF_APP_NAME: Final[str] = "versioning"
-
-# Browse-only apps: versioning (above) and the workspace shell, whose safe
-# rollback path is the update-system-interface reveal machinery, not a plain
-# folder restore + restart.
 UNRESTORABLE_APP_NAMES: Final[frozenset[str]] = frozenset({SELF_APP_NAME, "system-interface"})
 
-
-# Keep Versioning-Request values comfortably under the ~80 char convention.
 _MAX_REQUEST_TITLE_CHARS: Final[int] = 60
 
 
 @pure
 def _restore_request_title(target_title: str | None) -> str:
-    """The restore version's name: it names the version it went back to.
-
-    Phrased as a completed fact rather than an action, so it cannot be misread as
-    something to click; it is also the whole description of the version, which is
-    why a restore carries no size phrase underneath (see magnitude.version_phrase).
-    """
+    """The restore version's name: it names the version it went back to."""
     if target_title is None or not target_title.strip():
         return "Restored from an earlier version"
     title = target_title.strip()
@@ -58,7 +47,7 @@ def build_restore_preview(
     target_idx = next((idx for idx, node in enumerate(history.nodes) if node.sha == target_sha), None)
     if target_idx is None:
         raise RestoreError(f"No version '{target_sha}' for {history.app.name}")
-    # Positional, not time-based: commits made in the same second tie on timestamps.
+    # Positional, not time-based: commits in the same second tie on timestamps.
     later_nodes = [node for node in history.nodes[target_idx + 1 :] if not node.is_set_aside]
     return RestorePreview(
         target_sha=target_sha,
@@ -121,15 +110,11 @@ def perform_restore(
     lock_file: Path,
     is_service_managed: bool,
 ) -> RestoreResult:
-    """Restore the app's folder to the target commit as a new commit, then revive the app.
-
-    Raises RestoreError when the restore cannot proceed safely.
-    """
+    """Restore the app as a new forward commit -- never a reset, so nothing is rewritten or lost."""
     if app.name in UNRESTORABLE_APP_NAMES:
         raise RestoreError(f"{app.title} can be browsed here but not restored")
     with operation_lock(lock_file):
-        # Save any in-progress edits first so nothing is silently lost. The commit
-        # carries its own trailer block so it renders as its own version node.
+        # Save any in-progress edits first so nothing is silently lost.
         dirty_paths = git_repo.read_dirty_paths_under(app.package_dir)
         if len(dirty_paths) > 0:
             logger.debug("Saving {} in-progress files before restore", len(dirty_paths))
@@ -145,14 +130,10 @@ def perform_restore(
                 f"versioning: save work in progress on {app.name}\n\n{wip_trailers}",
             )
 
-        # Track whether the app's dependency manifest changes so we can re-sync.
         pyproject_path = f"{app.package_dir}/pyproject.toml"
         pyproject_before = git_repo.read_file_at_commit("HEAD", pyproject_path)
         pyproject_target = git_repo.read_file_at_commit(target_sha, pyproject_path)
 
-        # Make the folder match the target version and record it as a new commit,
-        # stamped with the trailer the tree derivation reads. The new version is
-        # named after the version it went back to, so the timeline stays readable.
         target_commit = next(
             (c for c in git_repo.read_commits_touching_path(app.package_dir) if c.sha == target_sha), None
         )

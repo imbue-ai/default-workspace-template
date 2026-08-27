@@ -15,14 +15,12 @@ from versioning.trailers import parse_git_log_output
 
 _GIT_TIMEOUT_SECONDS: Final[float] = 30.0
 
-# A binary file's churn has no line count ("-" in numstat), so it counts as a
-# fixed number of lines toward the change's magnitude.
+# A binary file's churn has no line count ("-" in numstat); count it as a fixed weight.
 _BINARY_FILE_LINE_WEIGHT: Final[int] = 40
 
 _SHA_LINE_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[0-9a-f]{40}$")
 
-# Record separator and field separator for the log format below. Unit separator and
-# record separator control characters cannot appear in commit messages.
+# These control characters cannot appear in commit messages.
 _LOG_FIELD_SEPARATOR: Final[str] = "\x1f"
 _LOG_RECORD_SEPARATOR: Final[str] = "\x1e"
 LOG_FORMAT: Final[str] = (
@@ -37,12 +35,7 @@ def _count_diff_stat_files(diff_name_only_output: str) -> int:
 
 @pure
 def parse_numstat_log(output: str) -> dict[str, ChangeStats]:
-    """Parse `git log --format=%H --numstat` output into per-commit change sizes.
-
-    The output interleaves bare sha lines with numstat lines
-    (`<added>\t<removed>\t<path>`, with `-` for binary files); every numstat
-    line belongs to the most recent sha above it.
-    """
+    """Parse `git log --format=%H --numstat` output; each numstat line belongs to the sha above it."""
     stats_by_sha: dict[str, ChangeStats] = {}
     current_sha: str | None = None
     files = 0
@@ -73,8 +66,6 @@ def parse_numstat_log(output: str) -> dict[str, ChangeStats]:
 
 
 class SubprocessGitRepo(GitRepoInterface):
-    """Reads and writes the repo by invoking the git CLI."""
-
     def _run_git(self, arguments: list[str]) -> str:
         command = ["git", "-C", str(self.repo_root)] + arguments
         try:
@@ -91,8 +82,7 @@ class SubprocessGitRepo(GitRepoInterface):
         return completed.stdout
 
     def read_commits_touching_path(self, relative_path: str) -> list[CommitRecord]:
-        # --first-parent: the monorepo carries upstream template merges; without it
-        # every built-in app's history floods with vendor churn the user never made.
+        # --first-parent: without it, upstream template merges flood app history with vendor churn.
         output = self._run_git(
             ["log", "--first-parent", "--reverse", f"--format={LOG_FORMAT}", "--", relative_path]
         )
@@ -114,8 +104,7 @@ class SubprocessGitRepo(GitRepoInterface):
     def read_diff_of_commits(self, shas: list[str], relative_path: str) -> str:
         if len(shas) == 0:
             return ""
-        # The combined patch runs from just before the first commit to the last one.
-        # The first commit of the repo has no parent, so fall back to git's empty-tree hash.
+        # A parentless first commit diffs against git's empty-tree hash.
         first_sha = shas[0]
         last_sha = shas[-1]
         parent_output = self._run_git(["rev-list", "--parents", "-n", "1", first_sha]).split()
@@ -152,11 +141,7 @@ class SubprocessGitRepo(GitRepoInterface):
         return self._run_git(["rev-parse", "HEAD"]).strip()
 
     def restore_path_to_commit(self, sha: str, relative_path: str) -> None:
-        # Remove tracked files first (forced: pending edits under the path are
-        # being deliberately discarded or were already committed by the caller)
-        # so files added after the target sha disappear, then bring back the
-        # folder exactly as it was at the sha, and sweep untracked leftovers.
-        # The changes are left staged; the caller commits.
+        # rm-then-checkout so files added after the sha disappear; changes are left staged.
         logger.debug("Restoring {} to {}", relative_path, sha)
         self._run_git(["rm", "-r", "-q", "-f", "--ignore-unmatch", "--", relative_path])
         self._run_git(["checkout", sha, "--", relative_path])

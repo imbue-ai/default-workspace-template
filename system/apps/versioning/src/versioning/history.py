@@ -8,7 +8,6 @@ from typing import Final
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
 
-from versioning.data_types import MILESTONE_KINDS
 from versioning.data_types import AppHistory
 from versioning.data_types import AppNotFoundError
 from versioning.data_types import AppRef
@@ -18,15 +17,9 @@ from versioning.interfaces import GitRepoInterface
 
 APPS_SUBDIRECTORY: Final[str] = "system/apps"
 
-# The workspace UI itself appears in the list as "System": its history is as much
-# the user's as any app's. It is browse-only (see restore.py) because reviving it
-# safely needs the update-system-interface machinery, not a plain restart.
 SYSTEM_APP_DIR: Final[str] = "system_interface"
 SYSTEM_APP_TITLE: Final[str] = "System"
 
-# This app is "versioning" to supervisord and to the registry, but nobody outside
-# the code calls it that: to a reader it is where an app's history lives, and the
-# tab it opens in is titled History. Only the display name changes.
 SELF_APP_DIR: Final[str] = "versioning"
 SELF_APP_TITLE: Final[str] = "History"
 
@@ -70,7 +63,6 @@ def _string_field(entry: dict[str, object] | None, key: str) -> str | None:
 
 
 def discover_apps(repo_root: Path, apps_toml_path: Path) -> list[AppRef]:
-    """List every versionable app: a folder under system/apps, joined with the app registry."""
     entry_by_name = _read_registry_entries_by_app_name(apps_toml_path)
     apps: list[AppRef] = []
     apps_dir = repo_root / APPS_SUBDIRECTORY
@@ -101,19 +93,12 @@ def find_app_by_name(repo_root: Path, apps_toml_path: Path, app_name: str) -> Ap
 
 @pure
 def build_version_nodes(commits: list[CommitRecord]) -> list[VersionNode]:
-    """Derive the version tree from an app's commit list. One commit is one node.
-
-    Each node's parent is the previous commit, unless a Versioning-Restored-From
-    trailer redirects it to the restored-to version. Nodes not on the current
-    lineage were set aside by some restore. Milestones are user-requested kinds
-    (and pre-convention commits with no kind); harden commits hide behind
-    "More versions".
-    """
+    """Derive the version tree: each node's parent is the previous commit unless a
+    Versioning-Restored-From trailer redirects it to the restored-to version."""
     if len(commits) == 0:
         return []
     shas_present = {commit.sha for commit in commits}
 
-    # First pass: one node per commit, parents redirected through restore trailers.
     bare_nodes: list[VersionNode] = []
     for idx, commit in enumerate(commits):
         restored_from = commit.trailers.restored_from_sha
@@ -136,16 +121,16 @@ def build_version_nodes(commits: list[CommitRecord]) -> list[VersionNode]:
                 parent_sha=parent_sha,
                 restored_from_sha=restored_from_in_history,
                 ported_from_sha=ported_from if ported_from in shas_present else None,
-                is_milestone=kind is None or kind in MILESTONE_KINDS,
             )
         )
 
-    # Second pass: walk back from the newest node to find the current lineage;
-    # everything off it was set aside by some restore.
+    # Walk back from the newest node to find the current lineage; everything off
+    # it was set aside by some restore.
     node_by_sha = {node.sha: node for node in bare_nodes}
     lineage_shas: set[str] = set()
     cursor: VersionNode | None = bare_nodes[-1]
-    while cursor is not None:
+    # The sha check guards against a hand-written restore trailer forming a parent cycle.
+    while cursor is not None and cursor.sha not in lineage_shas:
         lineage_shas.add(cursor.sha)
         cursor = node_by_sha.get(cursor.parent_sha) if cursor.parent_sha is not None else None
     return [
@@ -169,7 +154,7 @@ def build_app_history(git_repo: GitRepoInterface, app: AppRef) -> AppHistory:
 
 @pure
 def relative_time_label(moment: datetime, now: datetime) -> str:
-    """A coarse human label like '2 hours ago', matching how people remember versions."""
+    """A coarse human label like '2 hours ago'."""
     elapsed = now.astimezone(timezone.utc) - moment.astimezone(timezone.utc)
     if elapsed < timedelta(minutes=1):
         return "just now"
@@ -189,11 +174,7 @@ def relative_time_label(moment: datetime, now: datetime) -> str:
 
 @pure
 def short_relative_time_label(moment: datetime, now: datetime) -> str:
-    """The same age, abbreviated to fit the timeline's narrow right-hand column.
-
-    Reads as '12 min' / '17 hrs' / '3 days' next to a row, where the surrounding
-    day heading already supplies the 'ago'.
-    """
+    """The same age abbreviated ('17 hrs') to fit the timeline's narrow right-hand column."""
     elapsed = now.astimezone(timezone.utc) - moment.astimezone(timezone.utc)
     if elapsed < timedelta(minutes=1):
         return "now"

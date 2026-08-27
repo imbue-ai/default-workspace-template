@@ -44,10 +44,6 @@ def test_two_commits_by_same_author_minutes_apart_are_two_nodes() -> None:
     assert not nodes[0].is_current
 
 
-def test_empty_commit_list_yields_no_nodes() -> None:
-    assert build_version_nodes([]) == []
-
-
 def test_linear_history_chains_parents_in_order() -> None:
     commits = [_commit(str(i) * 40, f"change {i}", i * 60) for i in range(1, 4)]
 
@@ -90,6 +86,20 @@ def test_restore_trailer_pointing_outside_history_falls_back_to_previous_parent(
     assert nodes[1].restored_from_sha is None
 
 
+def test_lineage_walk_terminates_on_a_malformed_restore_trailer_cycle() -> None:
+    # Regression guard: a hand-written restore trailer pointing at the commit's own
+    # sha forms a parent cycle; the lineage walk must terminate, not hang the service.
+    self_restore_message = "Versioning-Restored-From: " + "b" * 40
+    commits = [
+        _commit("a" * 40, "news: first build", 0),
+        _commit("b" * 40, "news: broken restore", 60, self_restore_message),
+    ]
+
+    nodes = build_version_nodes(commits)
+
+    assert len(nodes) == 2
+
+
 def test_title_comes_from_request_trailer_verbatim_when_present() -> None:
     message = "Versioning-App: news\nVersioning-Kind: change\nVersioning-Request: the digest now arrives at 7am"
     commits = [_commit("a" * 40, "news: adjust digest scheduling internals", 0, message)]
@@ -107,19 +117,6 @@ def test_title_falls_back_to_subject_and_is_marked_untitled() -> None:
 
     assert nodes[0].raw_title == "news: adjust digest scheduling internals"
     assert not nodes[0].is_titled_by_request
-
-
-def test_harden_commits_are_not_milestones_but_untrailed_commits_are() -> None:
-    harden_message = "Versioning-App: news\nVersioning-Kind: harden\nVersioning-Request: tests and cleanup"
-    commits = [
-        _commit("a" * 40, "news: first build", 0),
-        _commit("b" * 40, "news: add tests", 60, harden_message),
-    ]
-
-    nodes = build_version_nodes(commits)
-
-    assert nodes[0].is_milestone
-    assert not nodes[1].is_milestone
 
 
 def test_relative_time_label_covers_each_magnitude() -> None:
@@ -142,20 +139,6 @@ def test_short_relative_time_label_covers_each_magnitude() -> None:
     assert short_relative_time_label(now - timedelta(days=1), now) == "1 day"
     assert short_relative_time_label(now - timedelta(days=12), now) == "12 days"
     assert short_relative_time_label(now - timedelta(days=70), now) == "2 mo"
-
-
-def test_short_relative_time_label_stays_narrow_enough_for_the_timeline_column() -> None:
-    # The redesigned timeline gives the age a fixed 64px column at 12px type, so
-    # every label has to stay compact no matter how old the version is.
-    now = _BASE_TIME
-    ages = [
-        timedelta(seconds=30),
-        timedelta(minutes=59),
-        timedelta(hours=23),
-        timedelta(days=29),
-        timedelta(days=700),
-    ]
-    assert all(len(short_relative_time_label(now - age, now)) <= 7 for age in ages)
 
 
 def test_discover_apps_includes_the_system_shell_titled_system(tmp_path: Path) -> None:

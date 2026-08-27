@@ -370,9 +370,8 @@ _DEFAULT_TAIL_COUNT = 50
 # local backend URL from this registry entry.
 _BROWSER_SERVICE_NAME = "browser"
 
-# Name under which the Versioning app registers itself. The /api/versioned-apps
-# passthrough resolves its local backend URL from this registry entry to ask it
-# which apps it actually serves a timeline for.
+# Name under which the Versioning app registers itself; the /api/versioned-apps
+# passthrough resolves its local backend URL from this registry entry.
 _VERSIONING_SERVICE_NAME = "versioning"
 
 # The name this shell registers itself under. It is an app like any other in
@@ -2322,14 +2321,8 @@ def _terminal_notify_endpoint() -> Response:
 
 
 def _relay_backend_response(backend_response: httpx.Response) -> Response:
-    """Hand one passthrough's backend answer straight back to the caller.
-
-    What every same-origin passthrough below means by "relay": the body and the
-    status verbatim -- a rejection is the backend's to make, so its 400/404/409
-    reaches the frontend as itself -- under the content type the backend named,
-    defaulting to JSON for a backend that named none. One function so the three
-    of them cannot drift into relaying different things.
-    """
+    """Relay a passthrough's backend answer verbatim: body, status (a rejection
+    is the backend's to make), and content type, defaulting to JSON."""
     return Response(
         backend_response.content,
         status=backend_response.status_code,
@@ -2409,22 +2402,14 @@ def _destroy_browser_passthrough(name: str) -> Response:
 
 
 def _versioned_apps_passthrough() -> Response:
-    """Same-origin passthrough for the Versioning app's list of what it serves.
+    """Same-origin passthrough for the Versioning app's ``GET /api/apps``.
 
-    Which names have a timeline is the versioning app's own question to answer:
-    it versions FOLDERS under ``system/apps``, which is neither a subset nor a
-    superset of this registry (a port registered with no package behind it has
-    no timeline; the shell's own folder has one under a name nothing registers).
-    Its ``GET /api/apps`` is the list it answers ``/app/<name>`` for, so the
-    shell's menus gate the History row on exactly that -- and reach it through
-    this server-side hop because sibling service origins are same-site but not
-    same-origin and the versioning app sends no CORS headers, the same reason
-    :func:`_browsers_passthrough` exists.
-
-    Relays the body and status verbatim. Returns a 503 JSON error when the
-    service is not registered or unreachable, which the frontend reads as "keep
-    whatever list you already had" rather than as an empty one -- a stopped
-    versioning service must not silently mean "nothing has a history".
+    That list -- the folders it serves ``/app/<name>`` for, neither a subset nor
+    a superset of this registry -- is what the shell's menus gate every History
+    row on; the server-side hop exists because sibling origins are same-site but
+    not same-origin (same reason as :func:`_browsers_passthrough`). A 503 (not
+    registered / unreachable) is read by the frontend as "keep the list you
+    had", never as an empty one.
     """
     state = get_state()
     base_url = state.agent_manager.get_service_url(_VERSIONING_SERVICE_NAME)

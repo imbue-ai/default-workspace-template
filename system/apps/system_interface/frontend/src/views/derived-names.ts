@@ -38,23 +38,11 @@ export function browserDisplayName(browserName: string): string {
   return match === null ? `Browser ${browserName}` : `Browser ${match[1]}`;
 }
 
-/**
- * What a registered app is called before anyone renamed it.
- *
- * Two special cases, both services whose registered name is machinery rather
- * than a name anyone chose:
- *
- * - The built-in file viewer's rail row has always read "File Viewer" (see
- *   Sidebar's SHORTCUT_ROWS) while its registered service name is `files` --
- *   its instances ("File Viewer 2") and its menu verbs should say the same
- *   thing the row does.
- * - The versioning service is the shell's History primitive, not an app the
- *   user installed, so every surface that names it says "History" (see
- *   appHistory.ts). Its panes are not numbered either -- that part is the
- *   caller's, since numbering happens where an instance name is in hand.
- *
- * Every other app reads as its registered name.
- */
+/** What a registered app is called before anyone renamed it. Two special
+ *  cases: the built-in file viewer reads "File Viewer" (see Sidebar's
+ *  SHORTCUT_ROWS) while its registered name is `files`, and the versioning
+ *  service is the shell's History primitive, so every surface says "History"
+ *  (see appHistory.ts). Every other app reads as its registered name. */
 export function appServiceDisplayName(serviceName: string): string {
   if (serviceName === "files") return "File Viewer";
   if (isHistoryService(serviceName)) return HISTORY_PANE_TITLE;

@@ -413,17 +413,10 @@ def serve_app(app: Flask) -> Iterator[ServedApp]:
 def build_stub_versioning_backend(served_app_names: Sequence[str]) -> Flask:
     """A stand-in for the Versioning app's own ``GET /api/apps``, to hand to ``serve_app``.
 
-    That list -- one ``AppRef`` per folder under ``system/apps``, the workspace
-    shell included under its hyphenated ``system-interface`` name -- is what the
-    shell relays through ``GET /api/versioned-apps`` and gates every History row
-    on, so a test about History has to have something really answering it. Only
-    ``name`` is read by the shell, but the whole ``AppRef`` shape is answered so
-    the stub stays faithful to what the versioning app actually serves (see its
-    ``list_apps``).
-
-    Lives here rather than in either test module because both the passthrough's
-    unit tests and the e2e History tests need it, and one encoding of that
-    payload is what keeps them from drifting apart.
+    The shell relays that list through ``GET /api/versioned-apps`` and gates
+    every History row on it. Only ``name`` is read, but the full ``AppRef``
+    shape is answered so the stub stays faithful to the real payload. Shared by
+    the passthrough's unit tests and the e2e History tests.
     """
     stub = Flask(__name__, static_folder=None)
 

@@ -1,48 +1,14 @@
 from versioning.data_types import ChangeStats
 from versioning.data_types import VersionKind
 from versioning.git_repo import parse_numstat_log
-from versioning.magnitude import DOT_MAX_DIAMETER_PX
-from versioning.magnitude import DOT_MIN_DIAMETER_PX
 from versioning.magnitude import MagnitudeTier
 from versioning.magnitude import change_magnitude
 from versioning.magnitude import change_tier
-from versioning.magnitude import dot_diameter_px
-from versioning.magnitude import size_adjective
 from versioning.magnitude import version_phrase
 
 
 def test_magnitude_counts_lines_and_weights_files() -> None:
     assert change_magnitude(ChangeStats(files_changed=2, lines_changed=100)) == 150.0
-
-
-def test_all_five_tiers_have_distinct_dot_sizes_in_ascending_order() -> None:
-    sizes = [
-        dot_diameter_px(ChangeStats(files_changed=0, lines_changed=lines))
-        for lines in (5, 100, 500, 1500, 5000)
-    ]
-    assert sizes[0] == DOT_MIN_DIAMETER_PX
-    assert sizes[-1] == DOT_MAX_DIAMETER_PX
-    assert sizes == sorted(sizes)
-    assert len(set(sizes)) == 5
-
-
-def test_dot_size_and_adjective_always_derive_from_the_same_tier() -> None:
-    cases = [
-        ChangeStats(files_changed=0, lines_changed=0),
-        ChangeStats(files_changed=1, lines_changed=100),
-        ChangeStats(files_changed=2, lines_changed=149),
-        ChangeStats(files_changed=5, lines_changed=500),
-        ChangeStats(files_changed=8, lines_changed=1800),
-        ChangeStats(files_changed=50, lines_changed=20_000),
-    ]
-    diameter_by_tier = {}
-    adjective_by_tier = {}
-    for stats in cases:
-        tier = change_tier(stats)
-        diameter_by_tier.setdefault(tier, dot_diameter_px(stats))
-        adjective_by_tier.setdefault(tier, size_adjective(stats))
-        assert dot_diameter_px(stats) == diameter_by_tier[tier]
-        assert size_adjective(stats) == adjective_by_tier[tier]
 
 
 def test_version_phrase_folds_size_and_kind_into_one_noun_phrase() -> None:
@@ -63,7 +29,6 @@ def test_version_phrase_is_absent_where_the_versions_own_name_already_says_it() 
     assert version_phrase(VersionKind.RESTORE, small) is None
     # An unmeasurable diff has no size to report.
     assert version_phrase(VersionKind.FIX, None) is None
-    # These two say what they are without needing a size.
     assert version_phrase(VersionKind.BUILD, small) == "The first build"
     assert version_phrase(VersionKind.PORT, small) == "Brought back from an earlier version"
 

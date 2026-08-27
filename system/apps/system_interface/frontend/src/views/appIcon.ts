@@ -349,10 +349,8 @@ export function appMonogramMarkup(appName: string, sizePx: number): string {
  * hand-edited layout) has no icon to draw and takes the fallback.
  *
  * The History primitive is the one service whose glyph is the SHELL's rather
- * than the registry's: a History pane is a piece of the workspace, so it wears
- * the built-in clock wherever it is drawn -- the rail, the launcher, the dock
- * tab -- whether or not the versioning service happened to register an icon of
- * its own (see appHistory.ts).
+ * than the registry's: it wears the built-in clock wherever it is drawn,
+ * whether or not the versioning service registered an icon (see appHistory.ts).
  */
 export function serviceIconMarkup(serviceName: string | null, sizePx: number, fallbackMarkup: string): string {
   if (serviceName === null) return fallbackMarkup;

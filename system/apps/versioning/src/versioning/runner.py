@@ -1,10 +1,6 @@
-"""Browse an app's history as a natural-language timeline and restore any previous version.
+"""Flask service for browsing an app's history as a timeline and restoring versions.
 
-Serves the scrub-back timeline for each app: version nodes derived from the shared
-repo's history (filtered to the app's folder), plain-language summaries cached under
-DATA_DIR, and a restore endpoint that records restores as new commits and revives
-the app afterwards. See history.py for the tree derivation and restore.py for the
-restore engine.
+See history.py for the tree derivation and restore.py for the restore engine.
 """
 
 import json
@@ -36,7 +32,6 @@ from versioning.history import discover_apps
 from versioning.history import find_app_by_name
 from versioning.history import relative_time_label
 from versioning.history import short_relative_time_label
-from versioning.magnitude import dot_diameter_px
 from versioning.magnitude import version_phrase
 from versioning.assistant import AssistError
 from versioning.assistant import perform_assist
@@ -131,7 +126,6 @@ def app_history(app_name: str) -> Response:
                 "when_label": relative_time_label(node.authored_at, now),
                 "short_when_label": short_relative_time_label(node.authored_at, now),
                 "summary": cached_summary.model_dump() if cached_summary is not None else None,
-                "dot_diameter_px": dot_diameter_px(node.change_stats) if node.change_stats is not None else None,
                 "phrase": version_phrase(node.kind, node.change_stats),
             }
         )
@@ -282,7 +276,9 @@ def start_assist(app_name: str) -> Response:
     body = request.get_json(silent=True) or {}
     sha = body.get("sha")
     message = body.get("message")
-    prior_exchanges = body.get("prior", [])
+    raw_prior = body.get("prior", [])
+    # A non-dict prior item would crash the worker thread and strand the job as "running".
+    prior_exchanges = [item for item in raw_prior if isinstance(item, dict)] if isinstance(raw_prior, list) else []
     if not isinstance(sha, str) or not isinstance(message, str) or not message.strip():
         return _json_response({"error": "Expected JSON body with sha and message"}, status=400)
     try:
@@ -298,7 +294,7 @@ def start_assist(app_name: str) -> Response:
     _write_assist_job(job_id, "running", "")
     worker = threading.Thread(
         target=_run_assist_job,
-        args=(job_id, app_ref, sha, commit_record, message, prior_exchanges if isinstance(prior_exchanges, list) else []),
+        args=(job_id, app_ref, sha, commit_record, message, prior_exchanges),
         daemon=True,
     )
     worker.start()

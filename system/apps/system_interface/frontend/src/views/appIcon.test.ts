@@ -347,10 +347,8 @@ describe("serviceIconMarkup", () => {
   });
 
   it("draws the History primitive with the shell's own clock, not the registry's icon", () => {
-    // A History pane is a piece of the workspace rather than an app the user
-    // installed, so the glyph is the shell's -- the same one the History rows
-    // in every menu wear -- whether or not the versioning service happened to
-    // register one, and identically at whatever size the surface asks for.
+    // The glyph is the shell's whether or not the versioning service
+    // registered one, at whatever size the surface asks for.
     registry.apps = [
       { name: "versioning", url: "http://localhost:8082", label: "versioning-gh78", icon: SQUARE_ICON },
     ];

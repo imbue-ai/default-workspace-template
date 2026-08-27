@@ -1,12 +1,6 @@
-"""One conversational helper per version: ask it anything, or ask it to change
-today's app using that version (bring a feature back, re-apply a look).
-
-It runs on the same engine that powers the workspace's main chat -- the full
-Claude Code agent harness with repo access -- with an injected role. The agent
-reads any version with git and edits files when a change is asked for; it never
-commits. This engine records any resulting change as a new version with a
-Versioning-Ported-From trailer, so the timeline stays the source of truth. If
-nothing was asked to change, nothing is committed.
+"""Per-version conversational helper: answer questions about a saved version, or
+apply a requested change to today's app. The agent edits files but never commits;
+this engine commits any resulting change as a new PORT version.
 """
 
 from collections.abc import Callable

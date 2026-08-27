@@ -49,10 +49,7 @@ describe("appServiceDisplayName", () => {
   });
 
   it("calls the versioning service History, which is what its panes are", () => {
-    // It is the shell's History primitive rather than an app anyone installed,
-    // so no surface should ever print its registration -- and the name is
-    // DERIVED, so a pane reads right from the moment it opens with nothing
-    // filed in the machine-wide title store to prop it up.
+    // No surface should ever print the registered name of the History primitive.
     expect(appServiceDisplayName("versioning")).toBe("History");
   });
 

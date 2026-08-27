@@ -267,9 +267,9 @@ When GitHub sync is not enabled, there is no auto-push and no GitHub remote to p
 
 ## Committing app changes (required)
 
-Anything under `system/apps/<package>/` is a user-visible creation, and users can browse its history and roll it back through the Versioning app. That app reads the graph straight out of git, so **the commit is the unit the user sees**. Follow this whenever a commit touches an app:
+The Versioning app shows users each app's history straight from git and lets them restore any version, so **the commit is the unit the user sees**. Follow this whenever a commit touches `system/apps/<package>/`:
 
-**One commit per app.** If a request changed two apps, make two commits, one per app, each with its own message. Do NOT batch them. Shared files a single app depends on -- the root `pyproject.toml`, `uv.lock`, its `system/supervisord.conf` entry -- ride along in that app's commit, because a commit the app can't run from is not a version anyone can restore to. Needing more than one commit for a single app in one request is fine; the user just sees two versions, which is honest.
+**One commit per app.** If a request changed two apps, make two commits, one per app -- never batch them. Shared files an app depends on (the root `pyproject.toml`, `uv.lock`, its `system/supervisord.conf` entry) ride along in that app's commit, so every version is one the app can actually run from. Multiple commits for one app in one request is fine; the user just sees two versions.
 
 **Trailer block.** End the message with:
 
@@ -280,8 +280,8 @@ Versioning-Request: <one line: what the user asked for, in your words>
 ```
 
 - `Versioning-App` -- the app's service name (hyphens, matching `data/.state/apps.toml`).
-- `Versioning-Kind` -- `build` first time the app appears, `change` for a new feature or edit, `fix` for a repair, `harden` for turn-end hardening the user did not ask for (tests, refactors, crystallization). `restore` and `port` are written by the Versioning app's own engine, not by hand.
-- `Versioning-Request` -- becomes the version's name on the user's timeline, so write it as a plain-language description of what changed and keep it under ~80 characters. **Describe the change; do not quote the user verbatim** -- commit messages can be pushed to GitHub, and their prompts are theirs.
+- `Versioning-Kind` -- `build` the first time the app appears, `change` for a new feature or edit, `fix` for a repair, `harden` for turn-end hardening the user did not ask for (tests, refactors, crystallization). `restore` and `port` are written by the Versioning app itself, never by hand.
+- `Versioning-Request` -- becomes the version's name on the user's timeline: a plain-language description of what changed, under ~80 characters. **Describe the change; do not quote the user verbatim** -- commit messages can be pushed to GitHub, and their prompts are theirs.
 
 Missing trailers degrade gracefully (the timeline falls back to the subject line), so never contort a commit to satisfy this -- but do write them.
 

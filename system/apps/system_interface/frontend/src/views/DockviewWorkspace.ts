@@ -751,9 +751,8 @@ function tabMenuEntries(panelId: string): ObjectMenuEntry[] {
       },
     ];
   }
-  // A History pane is a shell primitive rather than an app the user made, so
-  // it never carries an app's verbs -- see ``historyPaneMenuActions``, which is
-  // where the two that survive are settled, shared with the rail's row menu.
+  // A History pane is a shell primitive, never carrying an app's verbs -- see
+  // ``historyPaneMenuActions``, shared with the rail's row menu.
   if (isHistoryService(params.serviceName)) {
     return objectMenuEntries(
       kind,
@@ -789,9 +788,8 @@ function tabMenuEntries(panelId: string): ObjectMenuEntry[] {
     // refreshPanelContent) -- the session survives independently of the tab,
     // so a reattach never loses scrollback or respawns the shell.
     refresh: () => refreshPanelContent(panelId),
-    // The timeline is the app's, not the instance's -- an app's versions are
-    // its code -- so an instance pane and a bare service pane offer the same
-    // row, keyed by the same service name.
+    // The timeline is the app's, not the instance's, so an instance pane and a
+    // bare service pane offer the same row, keyed by the same service name.
     history: historyActionForService(kind === "app" ? params.serviceName : undefined),
     share: isInstancePane ? null : shareAction,
     serviceGroup:
@@ -979,35 +977,19 @@ function appLifecycleQuitAction(
   };
 }
 
-/**
- * The History verb for one app, or null where there is no timeline to open.
- *
- * Exported so every menu surface -- the dock tab, the rail's row menu, the
- * rail's shortcut rows -- builds it from the identical rule against the
- * identical live lists, the same reason the verb ORDER is settled once in
- * objectMenu.ts. ``undefined`` (a pane that is not an app, or an app pane whose
- * service name has not landed) has nothing to ask a history about, so it gets
- * no row either.
- */
+/** The History verb for one app, or null where there is no timeline to open.
+ *  Exported so every menu surface builds it from the identical rule against
+ *  the identical live lists; ``undefined`` (not an app, or its service name
+ *  has not landed) gets no row either. */
 export function historyActionForService(serviceName: string | undefined): (() => void) | null {
   if (serviceName === undefined || !isAppHistoryOffered(getApps(), getVersionedAppNames(), serviceName)) return null;
   return () => openAppHistory(serviceName);
 }
 
-/**
- * The History verb for the workspace shell itself, or null where there is no
- * timeline to open.
- *
- * The shell has a timeline like everything else under ``system/apps`` -- listed
- * as "System", browse-only -- but it is not a tab-able app, so no pane of it
- * exists whose menu could carry the row. It is offered by the workspace's own
- * menu instead (the rail's view switcher), and it resolves through exactly the
- * same rule as an app's: the versioning service registered, and the name in the
- * list the versioning app actually serves. That name is the hyphenated
- * ``system-interface`` rather than the registry's ``system_interface`` -- see
- * ``SYSTEM_HISTORY_APP_NAME``, which is where that one divergence is written
- * down.
- */
+/** The History verb for the workspace shell itself, or null where there is no
+ *  timeline to open. The shell is versioned but not tab-able, so the row lives
+ *  on the workspace's own menu, resolved by the same rule as an app's -- under
+ *  the hyphenated name (see ``SYSTEM_HISTORY_APP_NAME``). */
 export function systemHistoryAction(): (() => void) | null {
   return historyActionForService(SYSTEM_HISTORY_APP_NAME);
 }
@@ -1027,21 +1009,11 @@ function requestAppLifecycleAction(serviceName: string, action: "stop" | "start"
     });
 }
 
-/**
- * Start ``app`` if it is down, for a caller about to put it on screen.
- *
- * Wanting to look at an app is wanting it running, so every open path asks for
- * this rather than making the user find the Start verb first -- and every one of
- * them then opens its pane immediately, which shows the stopped placeholder
- * until the ``apps_updated`` push flips it to the live iframe. The start itself
- * is idempotent, so a caller need not know the state it is in.
- *
- * Withheld for an app the workspace cannot honestly start (``isAppStoppable``:
- * unsupervised, or one of the essential services) -- which is why this is one
- * function rather than an inline condition per caller: it is the policy for what
- * the workspace may bring up on someone's behalf, and it has to read the same
- * from every door into an app.
- */
+/** Start ``app`` if it is down, for a caller about to put it on screen: the
+ *  pane opens immediately on the stopped placeholder until ``apps_updated``
+ *  flips it live. Withheld for an app the workspace cannot honestly start
+ *  (``isAppStoppable``); one function so the policy reads the same from every
+ *  door into an app. */
 function startAppIfStopped(app: AppEntry): void {
   if (!isAppRunning(app) && isAppStoppable(app)) {
     requestAppLifecycleAction(app.name, "start");
@@ -2053,10 +2025,8 @@ function launcherMemberRows(): LauncherRow[] {
  *  view is mounted, when a launcher opens, and after creating a browser or a
  *  terminal, so a freshly-created one is listed without waiting for the next
  *  mount. The instance inventory rides along: it is the app half of the same
- *  enumeration. So does the versioning app's list of what it serves, which the
- *  menus read synchronously and so has to be in hand before one opens -- it has
- *  a TTL of its own (see models/VersionedApps), so riding along here costs at
- *  most one request a minute however often this is called. */
+ *  enumeration. So does the versioning app's served list, which the menus read
+ *  synchronously -- its own TTL (see models/VersionedApps) caps the cost. */
 function refreshMachineInventory(): void {
   refreshBrowserFleet(() => m.redraw());
   refreshTerminalFleet(() => m.redraw());
@@ -2163,12 +2133,9 @@ function derivedLabelForMemberRef(ref: string): string {
       // its instances' names. A bare ref (the app's pin) is the service name.
       const instanceName = instanceNameFromRef(ref);
       const serviceName = serviceNameFromRef(ref) ?? parseServiceRefBody(body).name;
-      // Except the History primitive, which is not numbered: its pane answers
-      // "the history of the app I just asked about", one question at a time, so
-      // a second instance is still the History rather than "History 2" (see
-      // appHistory.ts). This is the DERIVED name, so a pane opened this way is
-      // titled from the moment it opens, with nothing filed in the title store
-      // to make it read right.
+      // Except the History primitive, which is never numbered -- a second
+      // instance is still the History (see appHistory.ts). Derived, so the
+      // pane reads right with nothing filed in the title store.
       if (isHistoryService(serviceName)) return HISTORY_PANE_TITLE;
       if (instanceName === null) return body;
       return appInstanceDisplayName(appDisplayLabel(serviceName), instanceName);
@@ -2688,15 +2655,10 @@ type AddPanelPlacementOptions = {
    *  for every other ref kind. */
   panelIdHint?: string;
   /** The address a NEW app-instance pane opens at, in place of the instance's
-   *  stored location. Set only by the History path (``openAppHistory``), which
-   *  is opening the instance to answer a question about a particular app
-   *  rather than to resume where the instance was: without it the pane mounts
-   *  on the service origin for a frame, and the page that briefly loads there
-   *  beacons a location of its own -- so the correct one and an arbitrary one
-   *  race to be the instance's stored opening path. Ignored for every other
-   *  ref kind, and by a pane whose live page already exists (that page keeps
-   *  its own params; re-pointing it is a real navigation, which the caller
-   *  does afterwards). */
+   *  stored location. Set only by ``openAppHistory``: without it the pane
+   *  spends a frame on the stored address, whose page beacons a location of
+   *  its own, racing the correct one. Ignored for other ref kinds and by a
+   *  pane whose live page already exists (the caller re-points afterwards). */
   initialUrl?: string;
 };
 
@@ -3091,8 +3053,7 @@ function addPanelForRef(ref: string, requesterAgentId: string, addOptions: AddPa
     // the URL carries the service origin plus any beaconed location, never
     // the instance query), and the same bookkeeping as every other create.
     // ``initialUrl`` is the one caller-supplied exception to that address (see
-    // ``AddPanelPlacementOptions``): an open that already knows what the pane
-    // is being opened to show must not spend a frame on the stored one.
+    // ``AddPanelPlacementOptions``).
     const instanceName = instanceNameFromRef(ref);
     if (instanceName !== null) {
       const { name: serviceName } = parseServiceRefBody(body);
@@ -3754,45 +3715,30 @@ export function openAppTab(app: AppEntry, options: { isNew?: boolean } = {}): vo
 /**
  * Show one app's version timeline -- what the object menu's History row does.
  *
- * The timeline is a page of the versioning app rather than a thing of its own,
- * so this opens no new kind of pane: it lands in an ordinary versioning
- * INSTANCE pane, pointed at ``/app/<name>``. There is deliberately one such
- * pane rather than one per app whose history has been looked at -- the tab
- * answers "what is the history of the app I just asked about", which is one
- * question at a time -- so a second History, from another app's tab, re-points
- * the pane that is already open and brings it forward.
+ * The timeline lands in an ordinary versioning INSTANCE pane pointed at
+ * ``/app/<name>``, and there is deliberately ONE such pane: a second History,
+ * from another app's tab, re-points the pane already open and brings it
+ * forward. Which pane, in order: one this view already shows, then the view's
+ * most recent backgrounded versioning instance, then a freshly minted one --
+ * only the mint is asynchronous, hence the re-point callback.
  *
- * Which pane to use, in order: one this view already shows (whatever it is
- * currently pointed at), then the view's most recent backgrounded versioning
- * instance, then a freshly minted one. Only the last of those is asynchronous,
- * which is why the re-point is a callback rather than a line after the open.
+ * The URL is set explicitly rather than through ``appInstanceUrl``: the
+ * timeline page beacons the app it is showing, so an instance's stored
+ * location may be some OTHER app's history. A pane being created takes the
+ * address through ``initialUrl``, because a create-then-re-point would spend a
+ * frame on the stored address and let its page's beacon race the right one.
  *
- * The URL is set explicitly instead of going through ``appInstanceUrl``, whose
- * whole job is to reopen an instance where it last WAS: the timeline page
- * beacons the app it is showing, so an instance that has been used for this
- * before carries a stored location for some other app, and honoring it here
- * would answer a History click with the previous app's history. A pane being
- * CREATED takes that address through ``initialUrl`` rather than being created
- * and then re-pointed, because the redraw a re-point rides on is deferred to
- * the next frame -- long enough for the pane to have started loading the
- * stored address, and for the page that briefly lands there to beacon a
- * location of its own, racing the right one.
- *
- * Module-private on purpose: ``historyActionForService`` is the way in, and it
- * is the only thing that asks whether the app HAS a timeline. Reaching this
- * directly would skip that question and open a pane on a page that 404s.
+ * Module-private: ``historyActionForService`` is the way in, and the only
+ * thing that asks whether the app HAS a timeline.
  */
 function openAppHistory(serviceName: string): void {
   if (!dockview) return;
-  // The menus only offer History where the versioning service is registered,
-  // but the registry is live and can lose it between the menu opening and the
-  // row being picked.
+  // The registry is live and can lose the versioning service between the menu
+  // opening and the row being picked.
   const versioningApp = getApps().find((candidate) => candidate.name === VERSIONING_SERVICE_NAME);
   if (versioningApp === undefined) return;
-  // Asking for a history is asking to see the timeline, so a stopped versioning
-  // service is started exactly as opening its tab would (see
-  // ``startAppIfStopped``) -- what is asked about here is some other app, whose
-  // own state this neither reads nor changes.
+  // A stopped versioning service is started exactly as opening its tab would;
+  // the app asked ABOUT is neither read nor changed.
   startAppIfStopped(versioningApp);
   const openPanelId = findIframePanelIdForService(VERSIONING_SERVICE_NAME);
   if (openPanelId !== null) {
@@ -3803,9 +3749,9 @@ function openAppHistory(serviceName: string): void {
   const backgroundedRef = mruInstanceRefForApp(VERSIONING_SERVICE_NAME);
   if (backgroundedRef !== null) {
     const panelId = addPanelForRef(backgroundedRef, getPrimaryAgentId(), openAt);
-    // Still re-pointed afterwards: an instance whose live page survived its
-    // last tab keeps that page's own params, so the open above hands back a
-    // pane already showing whatever it was showing.
+    // Still re-pointed afterwards: a live page that survived its last tab
+    // keeps its own params, so the open hands back a pane showing whatever it
+    // was showing.
     if (panelId !== null) showAppHistoryInPanel(panelId, serviceName);
     m.redraw();
     return;
@@ -3822,10 +3768,8 @@ function appHistoryUrl(serviceName: string): string {
 }
 
 /** Point one versioning pane at ``serviceName``'s timeline and bring it to the
- *  front. The mutation reaches the live page and the next autosave at once
- *  (see ``mutatePanelParams``); the flash is what makes a click that landed on
- *  an already-front pane -- the same app's History twice -- visibly do
- *  something, as every other "it is already right there" path does. */
+ *  front. The mutation reaches the live page and the next autosave at once;
+ *  the flash makes a click on an already-front pane visibly do something. */
 function showAppHistoryInPanel(panelId: string, serviceName: string): void {
   const url = appHistoryUrl(serviceName);
   mutatePanelParams(panelId, (params) => {

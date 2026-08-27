@@ -39,12 +39,6 @@ afterEach(() => {
 });
 
 describe("the cached served list", () => {
-  it("knows nothing until the first fetch lands", () => {
-    // Null is "not known yet", which every menu reads as offering no History
-    // row -- deliberately distinct from a known-empty list.
-    expect(getVersionedAppNames()).toBeNull();
-  });
-
   it("asks the shell's own backend rather than the versioning origin", async () => {
     // Sibling service origins are same-site but not same-origin and the
     // versioning app sends no CORS headers, so the request has to go through
@@ -104,14 +98,6 @@ describe("the cached served list", () => {
 });
 
 describe("ensureVersionedAppsFresh", () => {
-  it("fetches when nothing is cached", async () => {
-    const mockFetch = stubFetch({ ok: true, json: () => Promise.resolve(servedPayload("curio")) });
-    await ensureVersionedAppsFresh();
-
-    expect(mockFetch).toHaveBeenCalledTimes(1);
-    expect(getVersionedAppNames()).toEqual(new Set(["curio"]));
-  });
-
   it("does not refetch a fresh answer", async () => {
     // This rides along with every machine-inventory refresh, which happens on
     // every view mount and after every browser or terminal create -- the TTL

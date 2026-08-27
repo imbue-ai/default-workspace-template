@@ -7,6 +7,7 @@ from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
 from loguru import logger
 
+from versioning.claude_p import ClaudeCLIError
 from versioning.claude_p import claude_p_completion
 from versioning.data_types import SummaryGenerationError
 from versioning.data_types import VersionSummary
@@ -76,21 +77,23 @@ def read_cached_summary(cache_dir: Path, sha: str) -> VersionSummary | None:
 def generate_and_cache_summary(
     cache_dir: Path,
     sha: str,
-    # The Versioning-Request trailer, used verbatim as the title when present --
-    # the agent's plain-language description beats any model paraphrase.
+    # The Versioning-Request trailer, used verbatim as the title when present.
     request_title: str | None,
     commit_message: str,
     diff_excerpt: str,
 ) -> VersionSummary:
-    """Raises SummaryGenerationError if Claude's response cannot be read."""
+    """Raises SummaryGenerationError if the model call fails or its response cannot be read."""
     cached = read_cached_summary(cache_dir, sha)
     if cached is not None:
         return cached
-    result = claude_p_completion(
-        _build_summary_prompt([commit_message], diff_excerpt),
-        system=_SUMMARY_SYSTEM_PROMPT,
-        model=SUMMARY_MODEL,
-    )
+    try:
+        result = claude_p_completion(
+            _build_summary_prompt([commit_message], diff_excerpt),
+            system=_SUMMARY_SYSTEM_PROMPT,
+            model=SUMMARY_MODEL,
+        )
+    except (ClaudeCLIError, OSError) as e:
+        raise SummaryGenerationError(f"Summary model call failed: {e}") from e
     generated = _parse_summary_response(sha, result.text)
     summary = (
         generated.model_copy_update(to_update(generated.field_ref().title, request_title))

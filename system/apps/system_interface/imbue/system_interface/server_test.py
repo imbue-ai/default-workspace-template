@@ -3699,9 +3699,7 @@ def _build_stub_browser_backend() -> Flask:
 def _client_with_registered_service(name: str, url: str | None) -> FlaskClient:
     """Build a workspace app test client whose ``name`` service points at ``url``.
 
-    What every passthrough test needs: a registry holding exactly the one row
-    the endpoint under test resolves its backend from. ``None`` leaves the
-    registry empty instead, which is the "service not registered" branch.
+    ``None`` leaves the registry empty (the "service not registered" branch).
     """
     agent_manager = AgentManager.build(WebSocketBroadcaster())
     agent_manager._apps = [AppEntry(name=name, url=url)] if url is not None else []
@@ -3773,21 +3771,14 @@ def test_browsers_passthrough_returns_503_when_backend_is_unreachable() -> None:
     assert "unreachable" in response.get_json()["detail"]
 
 
-# What the stub versioning backend below says it serves: one ordinary app, plus
-# the workspace shell under its hyphenated name -- which nothing registers, and
-# which is the whole reason this list is asked for rather than derived from the
-# port registry.
+# One ordinary app, plus the workspace shell under its hyphenated name -- which
+# nothing registers, the whole reason this list is asked for rather than derived
+# from the port registry.
 _VERSIONING_SERVES = ("curio", "system-interface")
 
 
 def test_versioned_apps_passthrough_relays_the_versioning_apps_own_list() -> None:
-    """``GET /api/versioned-apps`` forwards to the versioning app and relays its JSON.
-
-    The list is what gates every History row in the shell, and it is the
-    versioning app's answer rather than the shell's: note ``system-interface``,
-    a name nothing registers, and the absence of any registered port with no
-    package behind it.
-    """
+    """``GET /api/versioned-apps`` forwards to the versioning app and relays its JSON."""
     with serve_app(build_stub_versioning_backend(_VERSIONING_SERVES)) as backend:
         test_client = _client_with_registered_service("versioning", backend.http_url)
         response = test_client.get("/api/versioned-apps")
@@ -3796,12 +3787,9 @@ def test_versioned_apps_passthrough_relays_the_versioning_apps_own_list() -> Non
 
 
 def test_versioned_apps_passthrough_returns_503_when_service_not_registered() -> None:
-    """Without a registered ``versioning`` service there is no list to relay.
-
-    A 503 rather than an empty list: the frontend reads no-answer as "keep
-    whatever you had", while an empty list would mean "nothing has a history"
-    and would silently take every History row away.
-    """
+    """No registered ``versioning`` service is a 503, never an empty list -- the
+    frontend reads no-answer as "keep what you had", while an empty list would
+    silently take every History row away."""
     response = _client_with_registered_service("versioning", None).get("/api/versioned-apps")
     assert response.status_code == 503
     assert "not registered" in response.get_json()["detail"]

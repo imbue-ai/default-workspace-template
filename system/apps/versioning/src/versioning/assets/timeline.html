@@ -5,11 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>History</title>
 <style>
-/* The palette, type, and control shapes are the workspace interface's own
-   (system/apps/system_interface/frontend/src/style.css): system font, off-white
-   sidebar against a white reading surface, green accent, 6px corners. Keeping
-   them in step means the history of an app looks like it belongs to the same
-   product as the app. */
 :root {
   --bg: #fafaf8;
   --bg-sidebar: #f3f2ef;
@@ -34,8 +29,8 @@
   --radius: 6px;
   --sidebar-width: 208px;
   --chat-width: 340px;
-  --frame-width: 1320px;    /* the three columns together, centred in the pane */
-  --rail-x: 20px;           /* centre line of the timeline connector */
+  --frame-width: 1320px;
+  --rail-x: 20px;
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; }
@@ -50,21 +45,12 @@ body {
 button, input, textarea { font-family: var(--font); }
 .icon { flex: none; }
 
-/* ── Shell: app list on the left, the chosen app's history on the right ── */
-/* Three columns -- the apps, the app's versions, the conversation about the open
-   version -- held together at a fixed width and centred in whatever pane the app
-   is given. Reading left to right is reading down the hierarchy. */
 .shell { display: flex; justify-content: center; height: 100%; }
 .frame { display: flex; width: 100%; max-width: var(--frame-width); min-width: 0; }
 .columns { display: flex; flex: 1; min-width: 0; }
 .main { flex: 1; min-width: 0; overflow-y: auto; background: var(--surface); }
 .page { padding: 24px 28px 64px 24px; }
 
-/* ── Sidebar ── */
-/* Always open, so the shape of the place is on screen at all times: apps here,
-   that app's versions next to it. Styled like the workspace's own Permissions
-   and Settings panels -- no fill of its own and no dividing rule, so it reads as
-   the left column of one surface. Only the app being browsed is filled in. */
 .sidebar {
   width: var(--sidebar-width); flex: none;
   display: flex; flex-direction: column;
@@ -100,7 +86,6 @@ button, input, textarea { font-family: var(--font); }
 .app-icon svg { width: 16px; height: 16px; display: block; }
 .app-item-label { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* ── Page header ── */
 .top-bar { display: flex; align-items: baseline; gap: 10px; margin-bottom: 22px; }
 .top-title {
   font-size: 20px; font-weight: 600; letter-spacing: -0.01em; color: var(--ink);
@@ -108,9 +93,6 @@ button, input, textarea { font-family: var(--font); }
 }
 .top-count { font-size: 12.5px; color: var(--faint); flex: none; }
 
-/* ── Day groups ── */
-/* A label with a rule running out to the edge, then the day's nodes threaded
-   onto a vertical connector. */
 .day-label-row { display: flex; align-items: center; gap: 10px; margin: 22px 0 4px; }
 .day-block:first-child .day-label-row { margin-top: 0; }
 .day-label {
@@ -126,7 +108,6 @@ button, input, textarea { font-family: var(--font); }
 }
 .day-list { position: relative; list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
 
-/* ── Collapsed version row ── */
 .row {
   display: flex; align-items: center; gap: 14px;
   width: 100%; padding: 11px 14px; border-radius: var(--radius);
@@ -135,7 +116,6 @@ button, input, textarea { font-family: var(--font); }
 }
 .row:hover { background: var(--bg-sidebar); }
 .row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-/* The node cell is a fixed 12px column so every node centres on the connector. */
 .node-cell { flex: none; width: 12px; display: grid; place-items: center; }
 .node {
   width: 11px; height: 11px; border-radius: 50%;
@@ -165,9 +145,6 @@ button, input, textarea { font-family: var(--font); }
 .feed-note { padding: 14px 0 0 34px; font-size: 12.5px; color: var(--faint); }
 .loading, .empty { padding: 24px 14px; color: var(--muted); font-size: 14px; }
 
-/* ── Expanded version card ── */
-/* Takes the place of its row in the flow, so details open under the node the
-   reader clicked. */
 .card {
   position: relative;
   margin: 8px 0;
@@ -207,8 +184,6 @@ button, input, textarea { font-family: var(--font); }
 .btn-restore:disabled { opacity: 0.55; cursor: default; }
 .btn-restore:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .no-restore-note { font-size: 12.5px; line-height: 1.5; color: var(--muted); }
-/* The technical record stays reachable, but quietly: the restore button is the
-   card's only real action. */
 .tech-toggle {
   padding: 0; border: none; background: none;
   display: inline-flex; align-items: center; gap: 5px; white-space: nowrap;
@@ -246,10 +221,6 @@ button, input, textarea { font-family: var(--font); }
 .status-line { margin: 10px 0 0; font-size: 12.5px; line-height: 1.5; color: var(--accent); }
 .status-line.error { color: var(--danger); }
 
-/* ── Chat panel, scoped to the open version ── */
-/* Its own column rather than a strip inside the card: the conversation is about
-   the version, not part of it, and giving it the full height of the pane means a
-   long thread no longer pushes the timeline around. */
 .chat-panel {
   width: var(--chat-width); flex: none;
   display: flex; flex-direction: column; min-height: 0;
@@ -301,7 +272,6 @@ button, input, textarea { font-family: var(--font); }
   0%, 60%, 100% { opacity: 0.35; transform: translateY(0); }
   30% { opacity: 1; transform: translateY(-3px); }
 }
-/* Rendered markdown inside an answer bubble */
 .chat-a p, .chat-a ul, .chat-a ol { margin: 0 0 8px; }
 .chat-a > :last-child { margin-bottom: 0; }
 .chat-a ul, .chat-a ol { padding-left: 20px; }
@@ -316,9 +286,6 @@ button, input, textarea { font-family: var(--font); }
 .chat-a a { color: var(--accent); }
 .chat-a blockquote { margin: 0 0 8px; padding-left: 10px; border-left: 2px solid var(--border); color: var(--muted); }
 .chat-note { align-self: flex-start; font-size: 11.5px; color: var(--muted); padding-left: 4px; }
-/* Openers for a version with nothing asked about it yet. They take the thread's
-   place, so `margin-top: auto` keeps them (and the box below) at the foot of the
-   panel rather than stranded at the top. */
 .chat-starters { display: flex; flex-wrap: wrap; gap: 8px; margin: auto 0 12px; }
 .chip {
   padding: 6px 12px; border: 1px solid var(--border); border-radius: 99px;
@@ -347,8 +314,6 @@ button, input, textarea { font-family: var(--font); }
 .chat-send:hover { background: var(--accent-hover); }
 .chat-send:disabled { opacity: 0.55; cursor: default; }
 
-/* Too narrow for three columns side by side: the conversation moves under the
-   timeline rather than squeezing it, and stays a panel of its own. */
 @media (max-width: 1000px) {
   .columns { flex-direction: column; }
   .chat-panel {
@@ -361,7 +326,6 @@ button, input, textarea { font-family: var(--font); }
 }
 @media (max-width: 620px) {
   :root { --sidebar-width: 168px; }
-  /* Too narrow for the restore button and the record link side by side. */
   .card-actions { flex-direction: column; align-items: flex-start; gap: 12px; }
 }
 @media (prefers-reduced-motion: reduce) {
