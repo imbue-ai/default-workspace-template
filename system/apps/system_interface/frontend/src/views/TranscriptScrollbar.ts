@@ -14,7 +14,7 @@
  */
 
 import m from "mithril";
-import type { TranscriptScrollEngine } from "./transcript-scroll-engine";
+import { SCROLLBAR_SHOW_MS, type TranscriptScrollEngine } from "./transcript-scroll-engine";
 
 // Minimum thumb height so it stays grabbable on very long transcripts.
 const MIN_THUMB_PX = 24;
@@ -30,6 +30,10 @@ export function TranscriptScrollbar(): m.Component<TranscriptScrollbarAttrs> {
   // Pointer offset into the thumb at grab time, so a drag moves the thumb
   // relative to where it was grabbed instead of teleporting it to the pointer.
   let grabOffsetPx = 0;
+  // Auto-hide: the engine's isActive is a time window with nothing at its end,
+  // and mithril only redraws on events -- without a scheduled redraw the faded
+  // state would never render in a quiescent view, leaving the bar visible.
+  let hideRedrawTimer: ReturnType<typeof setTimeout> | null = null;
 
   function thumbElement(): HTMLElement | null {
     return trackEl?.querySelector<HTMLElement>(".transcript-scrollbar-thumb") ?? null;
@@ -51,6 +55,13 @@ export function TranscriptScrollbar(): m.Component<TranscriptScrollbarAttrs> {
   }
 
   return {
+    onremove() {
+      if (hideRedrawTimer !== null) {
+        clearTimeout(hideRedrawTimer);
+        hideRedrawTimer = null;
+      }
+    },
+
     view(vnode) {
       const engine = vnode.attrs.engine;
       const state = engine.getScrollbarRenderState();
@@ -58,6 +69,14 @@ export function TranscriptScrollbar(): m.Component<TranscriptScrollbarAttrs> {
         return null;
       }
       const isShown = state.isActive || isHovered || isDragging;
+      if (state.isActive && hideRedrawTimer === null) {
+        // If activity continued, the redraw sees isActive still true and this
+        // re-schedules, so the fade lands within 2x the window of the last touch.
+        hideRedrawTimer = setTimeout(() => {
+          hideRedrawTimer = null;
+          m.redraw();
+        }, SCROLLBAR_SHOW_MS);
+      }
 
       const thumbSizePercent = state.thumbSizeFraction * 100;
       // The engine reports start = f * (1 - sizeFraction); recover the track
