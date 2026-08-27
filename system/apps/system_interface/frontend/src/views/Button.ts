@@ -6,6 +6,7 @@ import { TEXT_BODY_SIZE } from "./typography";
  * One button system: the class recipe (buttonClass) and the component that
  * carries it (Button). Variants: primary | secondary | ghost | destructive |
  * ghost-destructive (quiet destructive: danger text, no fill) | inverse |
+ * ghost-inverse (quiet on a dark overlay: light glyph, white-tint hover) |
  * stop (the composer's slate interrupt fill). Options: sm, icon (square),
  * round (circle), selected (accent-tint pressed look), block (full width),
  * extra (appended utilities/markers). States: hover (guarded so a disabled
@@ -24,7 +25,7 @@ import { TEXT_BODY_SIZE } from "./typography";
  * contiguous literal -- never build one by string interpolation. */
 
 export type ButtonVariant =
-  "primary" | "secondary" | "ghost" | "destructive" | "ghost-destructive" | "inverse" | "stop";
+  "primary" | "secondary" | "ghost" | "destructive" | "ghost-destructive" | "inverse" | "ghost-inverse" | "stop";
 
 export interface ButtonOptions {
   sm?: boolean;
@@ -59,6 +60,11 @@ const BTN_VARIANTS: Record<ButtonVariant, string> = {
   "ghost-destructive": "bg-transparent text-danger border-transparent not-disabled:hover:bg-danger-surface",
   inverse:
     "bg-inverse text-on-accent border-inverse not-disabled:hover:bg-inverse-hover not-disabled:hover:border-inverse-hover",
+  // For controls sitting on a dark overlay (the lightbox). The whites are raw
+  // (white/85, white/15) like the overlay's own black scrim -- there is no
+  // dark-surface tint token, and on-accent covers only the full-strength hover.
+  "ghost-inverse":
+    "bg-transparent text-white/85 border-transparent not-disabled:hover:bg-white/15 not-disabled:hover:text-on-accent",
   stop: "bg-stop text-on-accent border-stop not-disabled:hover:bg-stop-hover not-disabled:hover:border-stop-hover",
 };
 

@@ -1079,6 +1079,14 @@ body {
   color: var(--c-text-secondary);
 }
 
+/* Inline chat images fit the message column and invite a click to enlarge
+   (opening the lightbox, src/lightbox.ts). */
+.markdown-content img {
+  max-width: 100%;
+  height: auto;
+  cursor: zoom-in;
+}
+
 /* ── Collapsible tool call blocks ── */
 .markdown-content .tool-call-block {
   cursor: pointer;
@@ -3224,86 +3232,6 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   animation: spin 800ms linear infinite;
 }
 
-/* ── Inline image lightbox ── */
-
-/* Inline chat images fit the message column and invite a click to enlarge. */
-.markdown-content img {
-  max-width: 100%;
-  height: auto;
-  cursor: zoom-in;
-}
-
-.image-lightbox-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: var(--z-overlay);
-  display: flex;
-  flex-direction: column;
-  background: rgba(0, 0, 0, 0.85);
-}
-
-/* Top bar: title centered, action icons pinned to the top right. */
-.image-lightbox-header {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 44px;
-  padding: 10px 16px;
-}
-
-.image-lightbox-title {
-  max-width: 60%;
-  overflow: hidden;
-  color: rgba(255, 255, 255, 0.9);
-  font-size: var(--font-size-body);
-  font-weight: 500;
-  text-align: center;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.image-lightbox-actions {
-  position: absolute;
-  top: 50%;
-  right: 12px;
-  transform: translateY(-50%);
-  display: flex;
-  gap: --spacing(1);
-}
-
-/* Icon buttons on the dark lightbox overlay reuse .btn--icon for shape, size and
-   layout; the .image-lightbox-iconbtn class only overrides the palette for the
-   dark backdrop (light glyph, white-tint hover) and keeps the download anchor
-   undecorated. The :hover:not(:disabled) selector matches .btn--icon's hover
-   specificity so this override wins by source order. */
-.image-lightbox-iconbtn {
-  color: rgba(255, 255, 255, 0.85);
-  text-decoration: none;
-}
-
-.image-lightbox-iconbtn:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.15);
-  color: var(--c-text-on-accent);
-}
-
-.image-lightbox-body {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 0;
-  padding: 0 2rem 2rem;
-}
-
-.image-lightbox-img {
-  max-width: 100%;
-  max-height: 100%;
-  object-fit: contain;
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-overlay);
-  cursor: default;
-}
-
-/* The terminal lifecycle banner (views/TerminalBanner.ts) is styled entirely
-   with utilities in its view. */
+/* The inline image lightbox (src/lightbox.ts) and the terminal lifecycle
+   banner (views/TerminalBanner.ts) are styled entirely with utilities in their
+   modules. */
