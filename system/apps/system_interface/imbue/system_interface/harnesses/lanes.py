@@ -335,7 +335,9 @@ LANE_GOOGLE = Lane(
             description="Sign in through a Google Cloud project instead.",
             expect_before_keys=_AGY_MENU,
             # Down to "2. Use a Google Cloud project", Enter, then Enter again on the
-            # "Continue with Google Cloud" row of the second menu.
+            # "Continue with Google Cloud" row of the second menu. Measured against the
+            # real CLI: the menu says "Use arrow keys to navigate, Enter to select" and
+            # typing the row's digit does nothing, so this cannot be shortened to ("2",).
             keys=("\x1b[B", "\r", "\r"),
             scrape=_AGY_URL_SCRAPE,
             failures=_AGY_FAILURES,
