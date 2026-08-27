@@ -11,10 +11,13 @@ vi.mock("mithril", () => ({
 }));
 
 import {
+  addMessageSentListener,
   appendEvents,
   appendForwardEvents,
   prependEvents,
   evictEvents,
+  removeMessageSentListener,
+  sendMessage,
   fetchEvents,
   fetchBackfillEvents,
   fetchForwardEvents,
@@ -680,5 +683,41 @@ describe("snapshot load state", () => {
     await fetchBackfillEvents(agent, 50);
     expect(getConversationLoadState(agent)).toEqual({ phase: "idle", error: null });
     expect(ids(agent)).toEqual(["b"]);
+  });
+});
+
+describe("message-sent listeners", () => {
+  it("notifies on a real send, skips whitespace-only, and stops after removal", async () => {
+    // sendMessage's request body reads the client identity, which needs
+    // localStorage (absent in the node test environment).
+    vi.stubGlobal("localStorage", {
+      getItem: () => null,
+      setItem: () => {},
+    });
+    try {
+      const agent = freshAgent();
+      const seen: string[] = [];
+      const listener = (agentId: string) => seen.push(agentId);
+      addMessageSentListener(listener);
+      try {
+        mockRequest.mockResolvedValueOnce({});
+        await sendMessage(agent, "hello");
+        expect(seen).toEqual([agent]);
+
+        // A whitespace-only message returns early: no notification, no request.
+        mockRequest.mockClear();
+        await sendMessage(agent, "   ");
+        expect(seen).toEqual([agent]);
+        expect(mockRequest).not.toHaveBeenCalled();
+      } finally {
+        removeMessageSentListener(listener);
+      }
+
+      mockRequest.mockResolvedValueOnce({});
+      await sendMessage(agent, "again");
+      expect(seen).toEqual([agent]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
