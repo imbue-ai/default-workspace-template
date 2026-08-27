@@ -89,6 +89,13 @@ def list_accounts() -> Response:
     """
     index = accounts.read_index()
     rows = []
+    # The stored `seq` counts per LANE, but the label names a provider and a harness -- and
+    # those do not line up. Two lanes run on pi and can both mint an OpenRouter account, so
+    # lane numbering gives two rows reading "OpenRouter (Pi)" with nothing between them;
+    # meanwhile a lane that offers many providers numbers its only Groq account "Groq (Pi) 2"
+    # because an OpenRouter one came first. Numbering here, over what the label actually
+    # says, makes the number mean what the user reads it as.
+    shown: dict[tuple[str, str], int] = {}
     for account in index.accounts:
         try:
             lane = get_lane(account.lane)
@@ -97,14 +104,14 @@ def list_accounts() -> Response:
             # can still see and delete their other accounts.
             logger.warning("Account {} names unknown lane {}; skipping", account.id, account.lane)
             continue
+        key = (account.display, lane.harness.value)
+        shown[key] = shown.get(key, 0) + 1
         rows.append(
             {
                 "id": account.id,
                 "lane": account.lane,
-                "seq": account.seq,
-                "display": account.display,
                 "harness": lane.harness.value,
-                "label": account_label(account.display, lane.harness, account.seq),
+                "label": account_label(account.display, lane.harness, shown[key]),
             }
         )
     return _json_response({"accounts": rows, "mru": index.mru})

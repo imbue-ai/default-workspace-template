@@ -161,6 +161,10 @@ class PasteMethod(FrozenModel):
     # Where to go to get a key in the first place. A lane whose provider you have to subscribe
     # to before a key exists needs this; one you already have an account with does not.
     signup_url: str = ""
+    # As on `PtyMethod`, and for the same reason: nothing else bounds a flow, and the service
+    # is single-flight, so an abandoned one is in the way of the next. Shorter than a browser
+    # method's, because there is no round trip to wait out -- the field is already on screen.
+    flow_deadline_s: float = 600.0
 
 
 class KeyProvider(FrozenModel):

@@ -258,9 +258,45 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     );
   }
 
+  /** Fetch the lanes and the accounts. Also the retry after either fails. */
+  async function load(): Promise<void> {
+    busy = true;
+    error = null;
+    try {
+      await loadLanes();
+      await loadAccounts();
+    } catch (e) {
+      error = (e as Error).message || "Could not reach the workspace.";
+    } finally {
+      busy = false;
+      m.redraw();
+    }
+  }
+
   function renderChooser(): m.Children {
+    // A failed load leaves no lanes and no way to ask again, so the spinner is forever.
+    if (error !== null && !areLanesLoaded()) {
+      return [
+        statusScreen("error", "Could not load providers", error),
+        m(
+          "div",
+          { class: css.FOOTER_ROW },
+          m(
+            "button",
+            { type: "button", class: css.PRIMARY_BTN, disabled: busy, onclick: () => void load() },
+            "Try again",
+          ),
+        ),
+      ];
+    }
     if (!areLanesLoaded()) return statusScreen("pending", "Loading providers...", null);
-    return [m("div", { class: css.ROW_STACK }, getLanes().map(laneRow)), renderAccounts()];
+    return [
+      m("div", { class: css.ROW_STACK }, getLanes().map(laneRow)),
+      // Removing an account can fail -- a row with no folder, a store that will not write --
+      // and without this the row simply stays put with no explanation.
+      error !== null ? m("p", { class: `${css.HINT} text-red-600` }, error) : null,
+      renderAccounts(),
+    ];
   }
 
   /** Ours: the mockup shows one connection. A signed-in account is a STATE, not a place to
@@ -635,10 +671,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
 
   return {
     oninit() {
-      loadLanes()
-        .then(() => loadAccounts())
-        .then(() => m.redraw())
-        .catch(() => m.redraw());
+      void load();
     },
 
     onremove() {
@@ -655,7 +688,12 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       const flow = getFlow();
       const current = lane;
       const isSuccess = flow !== null && flow.status.state === "ok";
-      const isFailed = flow !== null && flow.status.state === "failed";
+      // `busy` excludes the PREVIOUS attempt's failure. `begin` clears `error` and sets
+      // `busy`, but the flow object is only replaced once the POST returns -- and spawning a
+      // PTY takes seconds -- so without this, "Try again" re-renders the identical error
+      // screen it was clicked on and reads as a dead button. Each extra click starts another
+      // sign-in, and each one kills the previous CLI.
+      const isFailed = !busy && flow !== null && flow.status.state === "failed";
       // Spawning the CLI and scraping its first screen takes seconds, and so does checking
       // a submitted credential -- long enough that an empty panel reads as a missed click.
       // A resolved flow wins: `isSuccess` / `isFailed` are tested before this, so holding
@@ -693,6 +731,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
               {
                 type: "button",
                 class: css.PRIMARY_BTN,
+                disabled: busy,
                 onclick: () =>
                   void begin(current, method ?? current.methods[0], {
                     fromChooser: cameFromChooser,

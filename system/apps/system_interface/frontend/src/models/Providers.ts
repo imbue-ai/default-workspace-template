@@ -51,8 +51,8 @@ export interface Lane {
 export interface ProviderAccount {
   id: string;
   lane: string;
-  seq: number;
-  display: string;
+  /** Which harness runs this account. Nothing here reads it yet; the combo card will, to
+   *  grey the providers a started chat cannot switch to. */
   harness: string;
   /** Already composed server-side ("Anthropic (Claude Code) 2") -- see accounts_endpoints. */
   label: string;
@@ -152,19 +152,27 @@ export async function submitKey(apiKey: string, keyProvider: string | null): Pro
 
 async function advance(body: Record<string, unknown>): Promise<void> {
   if (flow === null) return;
+  const flowId = flow.flow_id;
   const status = await m.request<FlowStatus>({
     method: "POST",
-    url: apiUrl(`/api/accounts/flow/${flow.flow_id}`),
+    url: apiUrl(`/api/accounts/flow/${flowId}`),
     body,
   });
-  await settle(status);
+  await settle(status, flowId);
 }
 
-async function settle(status: FlowStatus): Promise<void> {
-  if (flow === null) return;
+async function settle(status: FlowStatus, flowId: string): Promise<void> {
+  // A response that outlived its flow must not be applied to the next one: starting a second
+  // sign-in displaces the first, and an in-flight poll or submit from the first would
+  // otherwise stamp its state -- including "failed" -- onto a flow that is doing fine.
+  if (flow === null || flow.flow_id !== flowId) return;
   flow = { ...flow, status };
   if (status.state === "ok") {
     stopPolling();
+    // The account the user just created is the one their next chat should use. Without
+    // this, someone who picked an account earlier and then added a provider gets the old
+    // one, silently.
+    if (status.account_id !== null) selectedAccountId = status.account_id;
     await loadAccounts();
   } else if (status.state === "failed") {
     stopPolling();
@@ -178,11 +186,22 @@ function startPolling(): void {
       stopPolling();
       return;
     }
-    m.request<FlowStatus>({ method: "GET", url: apiUrl(`/api/accounts/flow/${flow.flow_id}`) })
-      // A poll that fails is not the flow failing -- the server may simply have moved on.
-      // Keep the flow as it is and let the next tick or the deadline decide.
-      .then((status) => settle(status))
-      .catch(() => undefined);
+    const flowId = flow.flow_id;
+    m.request<FlowStatus>({ method: "GET", url: apiUrl(`/api/accounts/flow/${flowId}`) })
+      .then((status) => settle(status, flowId))
+      .catch((error: { code?: number }) => {
+        // 404 means the server no longer has this flow -- another sign-in displaced it, or
+        // it was torn down. No later tick will say anything different, so swallowing it
+        // leaves this screen spinning forever.
+        if (error.code === 404 && flow !== null && flow.flow_id === flowId) {
+          void settle(
+            { state: "failed", detail: "That sign-in was replaced by a newer one.", account_id: null },
+            flowId,
+          );
+          return;
+        }
+        // Anything else is this poll failing, not the flow. Let the next tick decide.
+      });
   }, 2000);
 }
 

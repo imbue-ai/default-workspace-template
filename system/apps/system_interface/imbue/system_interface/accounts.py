@@ -184,7 +184,9 @@ def mint_account_dir(home: Path | None = None) -> tuple[str, Path]:
     """
     account_id = uuid.uuid4().hex
     path = account_dir(account_id, home)
-    path.mkdir(parents=True, exist_ok=False)
+    # 0700: the CLIs drop `.credentials.json` / `auth.json` straight in here, and mngr uses
+    # the same mode for the per-agent directories one level over.
+    path.mkdir(parents=True, exist_ok=False, mode=0o700)
     return account_id, path
 
 
@@ -200,11 +202,22 @@ def commit_account(account_id: str, lane: str, display: str, home: Path | None =
     with _index_lock(home):
         index = read_index(home)
         # Re-authenticating writes the same folder a second time. The row already exists and
-        # agents hold its id by label, so keep it as-is rather than renumbering; only the
-        # credential on disk changed. That makes this a no-op commit, not a conflict.
+        # agents hold its id by label, so the id and the seq are kept rather than renumbered;
+        # only the credential on disk changed. The DISPLAY can change, though: re-keying the
+        # bring-your-own-key lane may name a different provider, and leaving the old noun
+        # there makes every label a lie ("OpenRouter (Pi)" for a Groq key).
         existing = next((a for a in index.accounts if a.id == account_id), None)
         if existing is not None:
-            _write_index(index.model_copy_update(to_update(index.field_ref().mru, account_id)), home)
+            if existing.display != display:
+                existing = existing.model_copy_update(to_update(existing.field_ref().display, display))
+            rows = tuple(existing if a.id == account_id else a for a in index.accounts)
+            _write_index(
+                index.model_copy_update(
+                    to_update(index.field_ref().accounts, rows),
+                    to_update(index.field_ref().mru, account_id),
+                ),
+                home,
+            )
             return existing
         account = Account(id=account_id, lane=lane, seq=_next_seq(index, lane), display=display)
         _write_index(

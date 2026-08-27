@@ -166,6 +166,9 @@ class _Session:
     # harness whether it worked -- the probe is a network call, and before the browser round
     # trip its answer is a foregone "no".
     code_submitted: bool
+    # What the probe last said, or None if it has not run. Only UNKNOWN matters: it means
+    # "the check failed", not "the credential is bad", so the folder is worth keeping.
+    last_verdict: SignedIn | None
 
     def is_value_ready(self, buffer: str) -> bool:
         """Whether the scraped value can be read yet -- the drain loop's stop condition.
@@ -192,6 +195,7 @@ def _new_session(lane: Lane, method: PtyMethod | PasteMethod, account_id: str, m
     session.detail = None
     session.timer = None
     session.code_submitted = False
+    session.last_verdict = None
     return session
 
 
@@ -254,8 +258,12 @@ class AuthFlowService:
             seed_account(lane.harness, account_path, self._work_dir)
 
             if isinstance(method, PasteMethod):
-                # Nothing to drive; the caller supplies the credential on submit.
+                # Nothing to drive; the caller supplies the credential on submit. It still
+                # gets a deadline: a closed browser tab would otherwise leave the session
+                # PENDING and its minted folder on disk until the next sign-in or the next
+                # boot, and the service is single-flight, so that session is in the way.
                 self._session = _new_session(lane, method, account_id, minted)
+                self._arm_deadline_locked(self._session, method.flow_deadline_s)
                 return FlowStart(flow_id=self._session.flow_id, shape=FlowShape.PASTE)
 
             session = _new_session(lane, method, account_id, minted)
@@ -335,7 +343,7 @@ class AuthFlowService:
 
     def submit_code(self, flow_id: str, code: str) -> FlowStatus:
         with self._lock:
-            session = self._require_locked(flow_id)
+            session = self._require_locked(flow_id, must_be_pending=True)
             method = session.method
             if isinstance(method, PasteMethod):
                 raise FlowError("this sign-in does not take a code")
@@ -357,7 +365,7 @@ class AuthFlowService:
 
     def submit_key(self, flow_id: str, api_key: str, key_provider: str | None = None) -> FlowStatus:
         with self._lock:
-            session = self._require_locked(flow_id)
+            session = self._require_locked(flow_id, must_be_pending=True)
             method = session.method
             if not isinstance(method, PasteMethod):
                 raise FlowError("this sign-in does not take a key")
@@ -373,6 +381,7 @@ class AuthFlowService:
                 # looking at the field they just typed into -- rather than later, as a chat that
                 # silently cannot take a turn.
                 verdict = self._probe(session.lane.harness, path)
+                session.last_verdict = verdict
                 if verdict is SignedIn.NO:
                     snapshot.restore()
                     self._fail_locked(session, f"{session.lane.provider_name} did not accept that key.")
@@ -464,7 +473,8 @@ class AuthFlowService:
                 return FlowStatus(state=FlowState.FAILED, detail=session.detail)
             with _CredentialSnapshot(_credential_paths(method.result_sink, path)) as snapshot:
                 _write_paste(method.result_sink, path, result, None, session.lane)
-                if self._probe(session.lane.harness, path) is SignedIn.NO:
+                session.last_verdict = self._probe(session.lane.harness, path)
+                if session.last_verdict is SignedIn.NO:
                     snapshot.restore()
                     self._fail_locked(session, "The token that was minted was not accepted.")
                     return FlowStatus(state=FlowState.FAILED, detail=session.detail)
@@ -472,6 +482,7 @@ class AuthFlowService:
 
         # Its own probe, not the screen, decides.
         verdict = self._probe(session.lane.harness, path)
+        session.last_verdict = verdict
         if verdict is SignedIn.YES:
             return self._commit_locked(session, session.lane.provider_name)
         if verdict is SignedIn.UNKNOWN:
@@ -514,17 +525,27 @@ class AuthFlowService:
         with self._lock:
             if self._session is session and session.state is FlowState.PENDING:
                 logger.info("Sign-in flow {} expired after {}s", session.flow_id, seconds)
-                self._fail_locked(
-                    session,
-                    # Which deadline fired changes what the user should do about it.
+                session.state = FlowState.FAILED
+                # Which deadline fired changes what the user should do about it.
+                session.detail = (
                     "The provider never confirmed that code. Try signing in again."
                     if session.code_submitted
-                    else "The sign-in timed out. Start over to get a fresh link.",
+                    else "The sign-in timed out. Start over to get a fresh link."
                 )
+                # A flow whose last verdict was "the check could not run" is the one case
+                # where the folder may hold a completed browser sign-in, and the settle path
+                # deliberately keeps it for that reason. Letting the deadline discard it
+                # anyway makes the two mechanisms contradict each other.
+                keep = not session.minted or session.last_verdict is SignedIn.UNKNOWN
+                self._teardown_locked(session, keep_folder=keep)
 
-    def _require_locked(self, flow_id: str) -> _Session:
+    def _require_locked(self, flow_id: str, must_be_pending: bool = False) -> _Session:
         if self._session is None or self._session.flow_id != flow_id:
             raise FlowError("that sign-in is no longer active")
+        # A settled flow has had its PTY terminated and its process set to None, so anything
+        # that would go on to drive it has to be refused here rather than raise on the way.
+        if must_be_pending and self._session.state is not FlowState.PENDING:
+            raise FlowError(self._session.detail or "that sign-in has already finished")
         return self._session
 
     def _arm_deadline_locked(self, session: _Session, seconds: float) -> None:
