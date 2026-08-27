@@ -1006,8 +1006,8 @@ primary evidence when an update pass later turns out to have gone wrong, and
 collector (after a destroy, the only surviving copy is the harness's raw log,
 which nothing can find by asking mngr). A stopped worker consumes no memory,
 stays listed, and its transcript stays readable through `mngr event`; the next
-pass's launch clears it with `--destroy-existing` (Step 3b) before creating
-the new one.
+pass destroys it with plain `mngr` commands (Step 3b) before creating the new
+one.
 
 Consuming the terminal report is not optional bookkeeping: `create_worker.py
 launch` refuses to start a worker while a leftover report sits at the report
