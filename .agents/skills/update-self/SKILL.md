@@ -205,6 +205,14 @@ for. If they decline, that ends the pass: record `run-status verdict REFUSED
 --detail "<the version they asked for, and that they chose not to attempt
 it>"`. An override at or below the ceiling needs no confirmation.
 
+The message that started this pass may carry that confirmation already: the
+Minds app's "Update to a specific version" field warns of exactly this risk,
+and when the user presses it the app's seed prompt says the version is their
+explicit override, chosen knowingly, and not to ask them to confirm it again.
+Treat that as the go-ahead above -- it is the same question, answered at the
+field -- and do not put it to them a second time in this chat; the rollback
+offer after the apply stands as usual.
+
 To preview what the release actually changes, always diff from the **merge
 base**, never from `HEAD` -- a `git diff HEAD "$REF"` also shows every *local*
 change as if upstream were reverting it, which reads as phantom upstream churn:
