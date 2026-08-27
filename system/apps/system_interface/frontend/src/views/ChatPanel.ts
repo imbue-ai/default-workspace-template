@@ -50,6 +50,7 @@ import { buildConversationRows, renderTranscriptSegments, type RowDescriptor } f
 import { ActivityIndicator } from "./ActivityIndicator";
 import { renderQueuedMessages } from "./QueuedMessageView";
 import { renderOutgoingMessages } from "./OutgoingMessageView";
+import { buttonClass } from "./primitives";
 
 function getAgentTerminalUrl(agentId: string): string {
   // The ttyd dispatch script is invoked as `bash -c "$SCRIPT" <args...>` where
@@ -935,7 +936,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                       "button",
                       {
                         type: "button",
-                        class: "btn btn--ghost btn--sm",
+                        class: buttonClass("ghost", { sm: true }),
                         onclick: () => openAgentTerminalTab(agentId),
                       },
                       "Open agent terminal",
@@ -944,7 +945,11 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                     // auth modes without waiting for an auth error.
                     m(
                       "button",
-                      { type: "button", class: "btn btn--ghost btn--sm", onclick: () => openAgentAuth(agentId) },
+                      {
+                        type: "button",
+                        class: buttonClass("ghost", { sm: true }),
+                        onclick: () => openAgentAuth(agentId),
+                      },
                       "Agent auth",
                     ),
                   ]),

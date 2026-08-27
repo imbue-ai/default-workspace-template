@@ -21,6 +21,7 @@ import { getAgentById } from "../models/AgentManager";
 import { isWorkingActivityState } from "./ActivityIndicator";
 import { hoverTooltipAttrs } from "./hoverTooltip";
 import { icon, stopIcon } from "./icons";
+import { MODAL_MESSAGE_CLASS, MODAL_TITLE_CLASS, buttonClass } from "./primitives";
 
 const MAX_TEXTAREA_HEIGHT_PX = 200;
 
@@ -364,12 +365,20 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
             ...backdropDismissAttrs(dismissDeclinedCommandNotice),
           },
           m("div.modal-card", [
-            m("div.modal-header", m("h3.modal-title", `${declined.command} can't be sent from chat`)),
-            m("p.modal-message", declined.body ?? "You can still send it from the agent's terminal."),
+            m(
+              "div.modal-header",
+              m("h3", { class: MODAL_TITLE_CLASS }, `${declined.command} can't be sent from chat`),
+            ),
+            m(
+              "p",
+              { class: MODAL_MESSAGE_CLASS },
+              declined.body ?? "You can still send it from the agent's terminal.",
+            ),
             m("div.modal-actions", [
               m(
-                "button.btn.btn--secondary",
+                "button",
                 {
+                  class: buttonClass("secondary"),
                   // Focus it so Enter and Space dismiss too, and so the notice is reachable
                   // without a mouse.
                   oncreate: (buttonVnode: m.VnodeDOM) => (buttonVnode.dom as HTMLButtonElement).focus(),
@@ -393,13 +402,14 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
             ...backdropDismissAttrs(dismissAuthCommandNotice),
           },
           m("div.modal-card", [
-            m("div.modal-header", m("h3.modal-title", title)),
-            m("p.modal-message", explanation),
+            m("div.modal-header", m("h3", { class: MODAL_TITLE_CLASS }, title)),
+            m("p", { class: MODAL_MESSAGE_CLASS }, explanation),
             m("div.modal-actions", [
-              m("button.btn.btn--secondary", { onclick: () => dismissAuthCommandNotice() }, "Cancel"),
+              m("button", { class: buttonClass("secondary"), onclick: () => dismissAuthCommandNotice() }, "Cancel"),
               m(
-                "button.btn.btn--primary",
+                "button",
                 {
+                  class: buttonClass("primary"),
                   onclick: () => {
                     dismissAuthCommandNotice();
                     if (agentId) {
@@ -483,7 +493,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
                 "button",
                 {
                   type: "button",
-                  class: "btn btn--icon btn--round shrink-0",
+                  class: buttonClass("ghost", { icon: true, round: true, extra: "shrink-0" }),
                   ...hoverTooltipAttrs("Attach files"),
                   "aria-label": "Attach files",
                   onclick: openFilePicker,
@@ -495,7 +505,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
                     "button",
                     {
                       type: "button",
-                      class: "btn btn--icon btn--round btn--sm btn--stop shrink-0",
+                      class: buttonClass("stop", { icon: true, round: true, sm: true, extra: "shrink-0" }),
                       ...hoverTooltipAttrs("Interrupt and bring queued messages to the composer"),
                       "aria-label": "Interrupt and bring queued messages to the composer",
                       onclick: handleStopToComposer,
@@ -508,7 +518,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
                     "button",
                     {
                       type: "button",
-                      class: "btn btn--icon btn--round btn--primary shrink-0",
+                      class: buttonClass("primary", { icon: true, round: true, extra: "shrink-0" }),
                       ...hoverTooltipAttrs("Send message"),
                       "aria-label": "Send message",
                       onclick: handleSend,

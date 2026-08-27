@@ -23,6 +23,7 @@ import { shoulderTap } from "../models/Response";
 import { hoverTooltipAttrs } from "./hoverTooltip";
 import { prependToComposer } from "./MessageInput";
 import { describeRequestError } from "../models/request-error";
+import { buttonClass } from "./primitives";
 
 const SHOULDER_TAP_TOOLTIP = "Gently interrupt your agent to send queued messages early";
 const QUEUED_INFO_TOOLTIP = "Messages below are sent when your agent takes a breather mid-work or finishes a turn.";
@@ -127,7 +128,7 @@ export function renderQueuedMessages(agentId: string): m.Vnode[] {
       "button",
       {
         type: "button",
-        class: "btn btn--secondary btn--sm queued-action queued-action--flush",
+        class: buttonClass("secondary", { sm: true, extra: "queued-action queued-action--flush" }),
         disabled: isDisabled,
         ...hoverTooltipAttrs(SHOULDER_TAP_TOOLTIP),
         "aria-label": SHOULDER_TAP_TOOLTIP,

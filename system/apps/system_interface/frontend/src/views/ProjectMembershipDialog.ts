@@ -19,6 +19,7 @@ import m from "mithril";
 import { Modal } from "./Modal";
 import type { ProjectInfo } from "../models/Projects";
 import { squiggleMarkup } from "./squiggles";
+import { MODAL_MESSAGE_CLASS, buttonClass } from "./primitives";
 
 const ROW_GLYPH_SIZE = 16;
 
@@ -106,10 +107,11 @@ export function ProjectMembershipDialog(): m.Component<ProjectMembershipDialogAt
           },
           title: "Add to project",
           actions: [
-            m("button.btn.btn--secondary", { onclick: attrs.onCancel }, "Cancel"),
+            m("button", { class: buttonClass("secondary"), onclick: attrs.onCancel }, "Cancel"),
             m(
-              "button.btn.btn--primary",
+              "button",
               {
+                class: buttonClass("primary"),
                 disabled: selected.size === 0,
                 onclick() {
                   attrs.onConfirm([...selected]);
@@ -120,7 +122,11 @@ export function ProjectMembershipDialog(): m.Component<ProjectMembershipDialogAt
           ],
         },
         [
-          m("p.modal-message", ["Choose the projects that should also show ", m("strong", attrs.memberLabel), "."]),
+          m("p", { class: MODAL_MESSAGE_CLASS }, [
+            "Choose the projects that should also show ",
+            m("strong", attrs.memberLabel),
+            ".",
+          ]),
           attrs.projects.length === 0
             ? m("p", { class: "py-2 text-[13px] text-faint" }, "There are no projects on this machine yet.")
             : m(

@@ -12,6 +12,7 @@ import { Modal } from "./Modal";
 import { getAgentById } from "../models/AgentManager";
 import { getHarnessCatalog } from "../models/HarnessCatalog";
 import { dismissAuthInstructions, getAuthInstructionsAgentId } from "../models/AgentAuth";
+import { MODAL_MESSAGE_CLASS, buttonClass } from "./primitives";
 
 export function AgentAuthInstructionsModal(): m.Component {
   function handleKeydown(event: KeyboardEvent): void {
@@ -44,8 +45,9 @@ export function AgentAuthInstructionsModal(): m.Component {
           title: "Sign-in runs in the terminal",
           actions: [
             m(
-              "button.btn.btn--secondary",
+              "button",
               {
+                class: buttonClass("secondary"),
                 oncreate: (buttonVnode: m.VnodeDOM) => (buttonVnode.dom as HTMLButtonElement).focus(),
                 onclick: () => dismissAuthInstructions(),
               },
@@ -54,7 +56,7 @@ export function AgentAuthInstructionsModal(): m.Component {
           ],
         },
         [
-          m("p.modal-message", [
+          m("p", { class: MODAL_MESSAGE_CLASS }, [
             agent !== undefined ? m("strong", agent.name) : "This agent",
             " signs in through its own terminal. ",
             instructions,
