@@ -102,6 +102,18 @@ function isProtoAgent(agentId: string): boolean {
   return getProtoAgents().some((p) => p.agent_id === agentId);
 }
 
+/** Whether creation is genuinely still in flight, as opposed to merely having a proto entry.
+ *
+ *  The proto list is rebuilt from broadcasts and can still name an agent that has since been
+ *  registered -- a `proto_agent_created` for a finished creation, delivered late. Asking
+ *  `isProtoAgent` alone is therefore not the same question, and the two used to disagree:
+ *  the build log stopped as soon as the agent registered while the footer waited for the
+ *  proto entry to clear, so in between you got a chat with an empty transcript and NO
+ *  composer -- the blank chat that fills in a moment later. Every branch asks this instead. */
+function isStillBeingCreated(agentId: string): boolean {
+  return isProtoAgent(agentId) && getAgentById(agentId) === undefined;
+}
+
 export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean }> {
   let currentAgentId: string | null = null;
 
@@ -563,7 +575,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     const isRegisteredAgent = getAgentById(agentId) !== undefined;
 
     // If this agent is still being created, show the build log
-    if (isProtoAgent(agentId) && !isRegisteredAgent) {
+    if (isStillBeingCreated(agentId)) {
       return renderBuildLog(agentId);
     }
 
@@ -816,7 +828,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
         (phantomTopHeight > 0 && currentScrollTop < loadedTop) ||
         (phantomBottomHeight > 0 && currentScrollTop + viewportPx > loadedBottom);
 
-      const acceptsFileDrops = !isProtoAgent(agentId) && !isConversationNotFound(agentId);
+      const acceptsFileDrops = !isStillBeingCreated(agentId) && !isConversationNotFound(agentId);
 
       return m(
         "div",
@@ -884,8 +896,9 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                 m("p", { class: "text-text-secondary" }, "Loading messages..."),
               )
             : null,
-          // Only show message input when not in proto-agent mode
-          isProtoAgent(agentId)
+          // Only while the agent is genuinely still being created -- the same condition the
+          // build log uses, so the composer arrives with the transcript rather than after it.
+          isStillBeingCreated(agentId)
             ? null
             : m("footer", { class: "app-footer" }, [
                 m(EmptySlot, { name: "conversation-before-input" }),
