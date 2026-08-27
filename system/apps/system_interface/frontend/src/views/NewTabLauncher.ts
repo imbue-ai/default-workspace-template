@@ -398,43 +398,37 @@ function providerPickerView(): m.Children {
   const account = getSelectedAccount();
   const accounts = getAccounts();
   return m("div", { class: "flex items-center gap-2 px-2 pt-2" }, [
-    m("span", { class: `${SECTION_HEADING_CLASS}` }, "Provider"),
-    accounts.length === 0
-      ? m(
-          "button",
-          {
-            type: "button",
-            class: "text-text-secondary hover:bg-bg-hover cursor-pointer rounded px-2 py-1 text-[13px]",
-            onclick: () => openProviderChooser(),
-          },
-          "No provider configured -- add one",
-        )
-      : m(
-          "select",
-          {
-            class: "border-border text-text-primary bg-surface rounded border px-2 py-1 text-[13px]",
-            value: account?.id ?? "",
-            onchange: (event: Event) => {
-              const chosen = (event.target as HTMLSelectElement).value;
-              if (chosen === ADD_PROVIDER_VALUE) {
-                openProviderChooser();
-                return;
-              }
-              selectAccount(chosen);
-            },
-          },
-          [
-            ...accounts.map((candidate) =>
-              m("option", { key: candidate.id, value: candidate.id }, candidate.label),
-            ),
-            m("option", { key: ADD_PROVIDER_VALUE, value: ADD_PROVIDER_VALUE }, "+ Add provider"),
-          ],
-        ),
+    m("span", { class: SECTION_HEADING_CLASS }, "Provider"),
+    m(
+      "select",
+      {
+        class: "border-border text-text-primary bg-surface rounded border px-2 py-1 text-[13px]",
+        value: account?.id ?? WORKSPACE_LOGIN_VALUE,
+        onchange: (event: Event) => {
+          const chosen = (event.target as HTMLSelectElement).value;
+          if (chosen === ADD_PROVIDER_VALUE) {
+            openProviderChooser();
+            return;
+          }
+          if (chosen !== WORKSPACE_LOGIN_VALUE) selectAccount(chosen);
+        },
+      },
+      [
+        // Until something is signed in there is still the workspace's own login to
+        // run on, so the picker names it rather than claiming nothing is available.
+        accounts.length === 0
+          ? m("option", { key: WORKSPACE_LOGIN_VALUE, value: WORKSPACE_LOGIN_VALUE }, "Claude Code (workspace login)")
+          : null,
+        ...accounts.map((candidate) => m("option", { key: candidate.id, value: candidate.id }, candidate.label)),
+        m("option", { key: ADD_PROVIDER_VALUE, value: ADD_PROVIDER_VALUE }, "+ Add provider"),
+      ],
+    ),
   ]);
 }
 
-/** The picker's sentinel option. Not an account id, so it can never collide. */
+/** The picker's sentinel options. Neither is an account id, so neither can collide. */
 const ADD_PROVIDER_VALUE = "__add__";
+const WORKSPACE_LOGIN_VALUE = "__workspace__";
 
 export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
   // Per table, the kinds the user unchecked. Hidden rather than shown so a kind
