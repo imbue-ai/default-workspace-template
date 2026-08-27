@@ -8,7 +8,7 @@ hook, so the welcome-resend check runs exactly once per successful login
 subscription fast path).
 
 The `ClaudeAuthService` (which holds the in-flight PTY auth subprocess)
-and the `WelcomeResender` are created once in `create_application` and
+is created once in `create_application` and
 stored on the app's `SystemInterfaceState`; each handler reads them via
 `get_state()` so the subprocess survives between the `/setup-token/start`
 call and the subsequent `/setup-token/poll` / `/setup-token/submit-code`
@@ -36,7 +36,6 @@ from imbue.system_interface.models import ClaudeSetupTokenPollResponse
 from imbue.system_interface.models import ClaudeSetupTokenStartResponse
 from imbue.system_interface.models import ClaudeSetupTokenSubmitCodeRequest
 from imbue.system_interface.models import ErrorResponse
-from imbue.system_interface.welcome_resend import WelcomeResender
 
 logger = _loguru_logger
 
@@ -120,7 +119,7 @@ def submit_credentials() -> Response:
 def register_routes(application: Flask) -> None:
     """Wire `/api/claude-auth/*` endpoints onto the Flask application.
 
-    The handlers read the `ClaudeAuthService` / `WelcomeResender` from the
+    The handlers read the `ClaudeAuthService` from the
     app's `SystemInterfaceState`; `create_application` is responsible for
     placing them there before the app serves requests.
     """

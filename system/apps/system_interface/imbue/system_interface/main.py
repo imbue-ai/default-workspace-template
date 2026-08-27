@@ -20,7 +20,6 @@ from imbue.system_interface.harnesses.auth_flows import AuthFlowService
 from imbue.system_interface.harnesses.claude.auth import ClaudeAuthService
 from imbue.system_interface.layout_ops import LayoutMutex
 from imbue.system_interface.server import create_application
-from imbue.system_interface.welcome_resend import WelcomeResender
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import make_threaded_server
 
@@ -66,10 +65,6 @@ def build_production_state(
     # because the manager is constructed before its event-queue collaborator.
     event_queues = AgentEventQueues()
     agent_manager.set_transcript_broadcaster(event_queues.broadcast_all_ignored)
-    welcome_resender = WelcomeResender(
-        resolve_agent=agent_manager.get_agent_info_by_id,
-        send_message_fn=agent_manager.send_message_to_agent,
-    )
     return SystemInterfaceState(
         config=config,
         provider_names=provider_names,
@@ -88,7 +83,6 @@ def build_production_state(
         # Reads claude's auth state; it no longer writes anything or restarts anything, so
         # it needs nothing from the welcome resender.
         claude_auth_service=ClaudeAuthService(),
-        welcome_resender=welcome_resender,
         # Single shared synchronous httpx client for server-side API calls to
         # local services (e.g. the /api/browsers passthrough to the browser
         # daemon); a separate one for the latchkey catalog proxy.

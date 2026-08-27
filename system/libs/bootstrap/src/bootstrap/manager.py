@@ -50,27 +50,9 @@ RUNTIME_CRON_DIR = STATE_DIR / "cron.d"
 # names; install only names it will accept and warn about the rest.
 _CRON_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
-# Signal file gating exactly-once creation of the initial chat agent. Lives
-# under data/.state/, which persists with the container volume.
-INITIAL_CHAT_SIGNAL = STATE_DIR / "initial_chat_created"
 # Its own signal, separate from the chat's. `git add -A` + commit is a once-per-workspace
 # operation: running it on a later boot would commit whatever the user had in flight.
 MAIN_BRANCH_SIGNAL = STATE_DIR / "workspace_main_branch_initialized"
-# Basename (under $MNGR_HOST_DIR) of the file holding the initial chat agent's id,
-# read by system_interface's welcome_resend to address the resend by id.
-INITIAL_CHAT_AGENT_ID_FILENAME = "initial_chat_agent_id"
-# The human-readable name the workspace's first chat is created under, carried
-# as the agent's `display_name` label. The system interface reads the label as
-# the chat's display name and numbers later chats against it ("Chat 2", ...).
-_INITIAL_CHAT_DISPLAY_NAME = "Chat 1"
-# The agent name that display name canonicalizes to. Passed literally rather
-# than letting mngr derive it: a workspace's vendored mngr may predate
-# canonicalization, and a name it rejects would fail the first-boot chat create
-# outright. Both names are sent -- the canonical one as the agent name, the
-# human one as the ``display_name`` label -- which every mngr version accepts
-# and which satisfies newer mngr's rule that the true name is the canonical
-# form of the display name.
-_INITIAL_CHAT_AGENT_NAME = "Chat-1"
 # The view the first chat is filed in: the starter project the workspace seeds.
 # Duplicated from system_interface's ``projects.DEFAULT_PROJECT_ID`` rather than
 # imported, to keep this one-shot first-boot program's dependencies minimal (the
@@ -130,162 +112,14 @@ def _read_host_name() -> str | None:
     return name
 
 
-def _read_main_agent_labels() -> dict[str, str]:
-    """Read this agent's labels dict from $MNGR_HOST_DIR/agents/$MNGR_AGENT_ID/data.json.
-
-    Returns an empty dict on any failure -- callers should treat missing
-    labels as "skip --label flags rather than fail the create call".
-    """
-    host_dir = os.environ.get(_HOST_DIR_ENV_VAR, "")
-    agent_id = os.environ.get(_AGENT_ID_ENV_VAR, "")
-    if not host_dir or not agent_id:
-        return {}
-    data_path = Path(host_dir) / "agents" / agent_id / "data.json"
-    if not data_path.exists():
-        return {}
-    try:
-        data = json.loads(data_path.read_text())
-    except (json.JSONDecodeError, OSError) as e:
-        logger.warning("Failed to read {}: {}", data_path, e)
-        return {}
-    labels = data.get("labels")
-    if not isinstance(labels, dict):
-        return {}
-    # Pydantic-serialized dicts can carry non-string values; coerce defensively.
-    return {str(k): str(v) for k, v in labels.items()}
 
 
-def _build_create_chat_command(labels: dict[str, str]) -> list[str]:
-    """Build the `mngr create` argv for the initial chat agent.
-
-    Mirrors the New Agent button's create path (see
-    system/apps/system_interface/.../agent_manager.py:create_chat_agent): the
-    harness chosen via `--type claude`, the `first` + `chat` role templates,
-    no-connect, and the inherited `project` label when present on the services
-    agent. The `first` template carries everything unique to the workspace's
-    opening chat -- the `/welcome` message, the `first=true` label, and the
-    fast-mode launch settings (see `[create_templates.first]` in
-    .mngr/settings.toml). The chat agent belongs to its workspace by virtue of
-    sharing the host; it carries no `workspace` label.
-
-    The positional is the new agent's NAME, and the host is implicit: this
-    runs inside the workspace, so mngr creates on the local host. (Passing
-    `host_name` here is what used to name the first chat after its workspace,
-    e.g. `p7` -- it was never targeting a host, and writing `NAME@<host_name>`
-    would ask mngr for a host by that name and fail with "Could not find
-    host".)
-
-    Both halves of the chat's name are sent explicitly: the canonical
-    `Chat-1` as the agent name and `Chat 1` as the `display_name` label.
-    Passing the canonical form rather than letting mngr derive it from
-    "Chat 1" is deliberate -- a workspace's vendored mngr may predate
-    free-form names and would reject the spaced form outright, failing the
-    first-boot chat create. The pair is what newer mngr produces for itself,
-    so its rule that the true name is the canonical form of the display name
-    holds either way.
-    """
-    cmd: list[str] = [
-        "mngr",
-        "create",
-        _INITIAL_CHAT_AGENT_NAME,
-        # `--transfer none` matches what `AgentManager.create_chat_agent`
-        # uses for the "New Chat" button (system/apps/system_interface/.../
-        # agent_manager.py). Without it, mngr defaults to creating a
-        # per-agent git worktree on branch `mngr/<agent_name>` -- which
-        # collides with the services agent's own worktree branch (set up
-        # by the desktop client's `--branch :mngr/<host_name>` at host
-        # create) and aborts with "fatal: a branch named 'mngr/<host>'
-        # already exists". With --transfer none the chat agent reuses
-        # the services agent's /home/user/workspace/ as its work_dir, which is what we
-        # want (one workspace == one work_dir, shared across all chats).
-        "--type",
-        "claude",
-        "--template",
-        "first",
-        "--template",
-        "chat",
-        # Tags the initial chat as a user-created agent so the OOM agent-tagging
-        # hook puts it in the protected user-agent band (matching the New Chat /
-        # New Agent paths in system/apps/system_interface).
-        "--label",
-        "user_created=true",
-        "--label",
-        f"display_name={_INITIAL_CHAT_DISPLAY_NAME}",
-        "--no-connect",
-        "--format",
-        "json",
-    ]
-    # The view this chat starts out filed in. The workspace's starter project is
-    # where the first chat lives, and naming it explicitly matters: the services
-    # agent's own ``project`` label is mngr's -- the repo it works on, e.g.
-    # ``default-workspace-template`` -- and inheriting that gave the first chat
-    # a label that names no view at all, so work it started landed in whatever
-    # view the user was looking at instead of its own.
-    cmd.extend(["--label", f"project={_STARTER_PROJECT_ID}"])
-    return cmd
 
 
-def _parse_created_agent_id(stdout: str) -> str | None:
-    """Pull ``agent_id`` from `mngr create --format json` stdout, or None if absent.
-
-    `--format json` writes a single JSON object to stdout (logs go to stderr).
-    None on any malformed/missing case keeps the caller non-fatal.
-    """
-    try:
-        data = json.loads(stdout)
-    except json.JSONDecodeError:
-        return None
-    if isinstance(data, dict) and isinstance(data.get("agent_id"), str):
-        return data["agent_id"]
-    return None
 
 
-def _persist_initial_chat_agent_id(agent_id: str) -> None:
-    """Record the initial chat agent's id at `$MNGR_HOST_DIR/initial_chat_agent_id`.
-
-    The welcome-resend target is read from here (system_interface's
-    `welcome_resend`), so the resend addresses the agent by its stable id rather
-    than re-resolving it by name. Best-effort: a missing host dir or a failed
-    write is logged but not raised, so it never aborts the create/signal flow
-    (the welcome-resend simply skips when the file is absent).
-    """
-    host_dir = os.environ.get(_HOST_DIR_ENV_VAR, "")
-    if not host_dir:
-        logger.warning(
-            "{} unset; cannot persist initial chat agent id", _HOST_DIR_ENV_VAR
-        )
-        return
-    try:
-        (Path(host_dir) / INITIAL_CHAT_AGENT_ID_FILENAME).write_text(agent_id)
-    except OSError as e:
-        logger.error("Failed to persist initial chat agent id {}: {}", agent_id, e)
-        return
-    logger.info("Persisted initial chat agent id {} for welcome resend", agent_id)
 
 
-def _create_initial_chat_agent(labels: dict[str, str]) -> bool:
-    """Invoke `mngr create` for the initial chat agent; persist its id. Returns success."""
-    cmd = _build_create_chat_command(labels)
-    logger.info("Creating initial chat agent: {}", " ".join(cmd))
-    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
-    if result.returncode != 0:
-        logger.error(
-            "Initial chat-agent create failed (rc={}): stdout={!r} stderr={!r}",
-            result.returncode,
-            result.stdout.strip(),
-            result.stderr.strip(),
-        )
-        return False
-    agent_id = _parse_created_agent_id(result.stdout)
-    if agent_id is not None:
-        _persist_initial_chat_agent_id(agent_id)
-    else:
-        logger.error(
-            "Initial chat agent created but could not parse agent_id from output: {!r}",
-            result.stdout.strip(),
-        )
-    logger.info("Initial chat agent created")
-    return True
 
 
 def _touch(signal: Path) -> None:
@@ -294,9 +128,6 @@ def _touch(signal: Path) -> None:
     signal.touch()
 
 
-def _touch_signal() -> None:
-    """Mark the initial-chat decision as made."""
-    _touch(INITIAL_CHAT_SIGNAL)
 
 
 def _ensure_git_identity() -> None:
@@ -412,61 +243,8 @@ def _initialize_workspace_main_branch() -> None:
     _touch(MAIN_BRANCH_SIGNAL)
 
 
-def _maybe_create_initial_chat() -> None:
-    """Create the initial chat agent on first boot, gated by a signal file.
-
-    `main()` puts the work_dir on `main` before calling this, under its own signal, so a chat
-    created here still inherits a clean branch.
-
-    Touches the signal file only on a successful create -- a failed create
-    leaves the signal file absent so the next bootstrap run retries. The
-    user's manually-destroyed initial chat agent is *not* recreated,
-    because the signal file persists in data/.state/.
-    """
-    if INITIAL_CHAT_SIGNAL.exists():
-        logger.debug(
-            "Signal file {} present; skipping initial chat create", INITIAL_CHAT_SIGNAL
-        )
-        return
-    # Readiness check rather than a create input: the create names only the
-    # agent (the host is implicit -- this runs inside it), but an unreadable
-    # host data.json means mngr state is not set up yet, so creating now would
-    # fail anyway.
-    if not _read_host_name():
-        logger.warning(
-            "Could not resolve host_name; skipping initial chat agent create"
-        )
-        return
-    # A chat runs on a provider account, and a fresh workspace has none: auth is not part of
-    # workspace creation any more. Creating one anyway produces a chat that cannot take a turn
-    # no matter what the user later signs into -- the account is chosen when the agent is
-    # CREATED, and nothing rebinds an existing one. The workspace opens on the new-tab screen
-    # instead, where the provider chooser is the way forward.
-    #
-    # The signal is still written, so this runs once and `pool_bake` stops waiting on it.
-    if not _has_provider_account():
-        _touch_signal()
-        logger.info("No provider account yet; skipping the initial chat")
-        return
-    labels = _read_main_agent_labels()
-    if not _create_initial_chat_agent(labels):
-        return
-    _touch_signal()
-    logger.info("Wrote signal file {}", INITIAL_CHAT_SIGNAL)
 
 
-def _has_provider_account() -> bool:
-    """Whether the workspace has at least one signed-in provider account.
-
-    Reads the account index directly rather than importing the system-interface package:
-    bootstrap runs before that app and must not depend on it. The shape is one JSON object
-    with an `accounts` list -- see `imbue/system_interface/accounts.py`.
-    """
-    index = Path.home() / ".minds" / "accounts" / "index.json"
-    try:
-        return bool(json.loads(index.read_text()).get("accounts"))
-    except (OSError, ValueError, AttributeError):
-        return False
 
 
 def _configure_git_global() -> None:
@@ -841,7 +619,6 @@ def main() -> None:
     if tz_name:
         _apply_container_timezone(tz_name)
 
-    _maybe_create_initial_chat()
 
     # Overlay symlinks must exist before services start writing.
     _run_env_converge_fast_phase()

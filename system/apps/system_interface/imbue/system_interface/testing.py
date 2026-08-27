@@ -49,7 +49,6 @@ from imbue.system_interface.harnesses.signed_in import SignedIn
 from imbue.system_interface.harnesses.claude.auth import ClaudeAuthService
 from imbue.system_interface.harnesses.interrupt import MESSAGE_LOCK_FILENAME
 from imbue.system_interface.layout_ops import LayoutMutex
-from imbue.system_interface.welcome_resend import WelcomeResender
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import make_threaded_server
 
@@ -220,7 +219,6 @@ def build_test_state(
     agent_manager: AgentManager | None = None,
     claude_auth_service: ClaudeAuthService | None = None,
     auth_flows: AuthFlowService | None = None,
-    welcome_resender: WelcomeResender | None = None,
     latchkey_http_client: httpx.Client | None = None,
 ) -> SystemInterfaceState:
     """Build a `SystemInterfaceState` for tests, injecting fakes where provided.
@@ -255,12 +253,6 @@ def build_test_state(
         event_queues=event_queues,
         layout_mutex=LayoutMutex(),
         claude_auth_service=claude_auth_service if claude_auth_service is not None else ClaudeAuthService(),
-        welcome_resender=welcome_resender
-        if welcome_resender is not None
-        else WelcomeResender(
-            resolve_agent=manager.get_agent_info_by_id,
-            send_message_fn=manager.send_message_to_agent,
-        ),
         http_client=httpx.Client(follow_redirects=False, timeout=30.0),
         latchkey_http_client=latchkey_http_client if latchkey_http_client is not None else httpx.Client(timeout=30.0),
     )

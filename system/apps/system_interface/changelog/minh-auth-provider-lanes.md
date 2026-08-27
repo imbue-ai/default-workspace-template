@@ -757,3 +757,11 @@ Bootstrap used to own that by creating a chat at boot; it cannot now, since a ch
 provider account and a fresh workspace has none. The claim lives in the account store, is made
 once per workspace, and survives signing out of everything -- being welcomed a second time reads
 as the workspace having forgotten you.
+
+# Delete the welcome resender
+
+It existed to re-send `/welcome` to the boot chat when the workspace's initial greeting failed
+for lack of credentials. Its caller -- the auth-success chokepoint in the sign-in modal -- was
+deleted with the modal, so the module has had no live path since; and there is no boot chat to
+address now either. `/welcome` reaches the first chat through the `first` create template, on a
+chat that has an account by construction, so there is nothing left to recover from.

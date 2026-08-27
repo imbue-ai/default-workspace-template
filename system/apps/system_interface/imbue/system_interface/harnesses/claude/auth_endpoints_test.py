@@ -1,6 +1,6 @@
 """Integration tests for the /api/claude-auth/* endpoints.
 
-Each test builds a `ClaudeAuthService` and/or `WelcomeResender` with
+Each test builds a `ClaudeAuthService` with
 deterministic fakes and passes them to `create_application`, which stores
 them on the app's `SystemInterfaceState` for the handlers to read. This
 exercises the auth-success chokepoint end-to-end through the Flask test
@@ -12,15 +12,12 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
-from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 from flask.testing import FlaskClient
 
-from imbue.system_interface import welcome_resend
 from imbue.system_interface.agent_discovery import AgentInfo
-from imbue.system_interface.agent_discovery import SendFailure
 from imbue.system_interface.harnesses.claude.auth import ClaudeAuthService
 from imbue.system_interface.harnesses.claude.auth import ProcessSetupError
 from imbue.system_interface.server import create_application
@@ -28,9 +25,7 @@ from imbue.system_interface.testing import FakeFinishedProcess
 from imbue.system_interface.accounts import account_dir
 from imbue.system_interface.accounts import read_index
 from imbue.system_interface.harnesses.auth_flows import AuthFlowService
-from imbue.system_interface.testing import FakePexpectProcess
 from imbue.system_interface.testing import build_test_state
-from imbue.system_interface.welcome_resend import WelcomeResender
 
 # The initial chat agent's id, as the bootstrap would persist it.
 _CHAT_AGENT_ID = "agent-00000000000000000000000000000001"
@@ -69,15 +64,9 @@ def _fake_chat_agent() -> AgentInfo:
     )
 
 
-def _persist_chat_agent_id(host_dir: Path) -> None:
-    """Write the initial chat agent's id where welcome_resend reads it back."""
-    (host_dir / welcome_resend._INITIAL_CHAT_AGENT_ID_FILENAME).write_text(_CHAT_AGENT_ID)
 
-
-@contextmanager
 def _client(
     claude_auth_service: ClaudeAuthService | None = None,
-    welcome_resender: WelcomeResender | None = None,
     auth_flows: AuthFlowService | None = None,
 ) -> Iterator[FlaskClient]:
     """Build a Flask test client, injecting the auth collaborators into the app state.
@@ -86,7 +75,7 @@ def _client(
     tests that never reach that dependency (e.g. request-validation rejections).
     """
     state = build_test_state(
-        claude_auth_service=claude_auth_service, welcome_resender=welcome_resender, auth_flows=auth_flows
+        claude_auth_service=claude_auth_service, auth_flows=auth_flows
     )
     yield create_application(state).test_client()
 
@@ -94,22 +83,6 @@ def _client(
 def _logged_in_runner(_cmd: list[str], _timeout: float, _env: object = None) -> FakeFinishedProcess:
     return FakeFinishedProcess(stdout='{"loggedIn": true, "email": "u@example.com", "subscriptionType": "Max"}')
 
-
-def _build_welcome_resender(host_dir: Path, welcome_calls: list[str]) -> WelcomeResender:
-    _persist_chat_agent_id(host_dir)
-    skill_path = host_dir / "SKILL.md"
-    skill_path.write_text("---\nname: w\n---\n\nIntro\n\n---\n\n### Welcome to Minds\n\nbody\n\n---\n")
-
-    def _record_welcome_send(agent_id: str, _message: str) -> SendFailure | None:
-        welcome_calls.append(agent_id)
-        return None
-
-    return WelcomeResender(
-        resolve_agent=lambda _id: _fake_chat_agent(),
-        read_assistant_transcript=lambda _agent: "",
-        send_message_fn=_record_welcome_send,
-        skill_path=skill_path,
-    )
 
 
 def test_status_endpoint_returns_parsed_payload(isolated_claude_config: Path) -> None:
