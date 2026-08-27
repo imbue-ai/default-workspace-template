@@ -982,3 +982,8 @@ provider" opens the chooser and starts a fresh chat on whatever is picked, becau
 to its account at creation and nothing rebinds it. Which one is right depends on whether the
 credential is fixable -- an expired login is, a spent quota mostly is not -- and the user knows
 that where we do not.
+
+Signing in from the first-run greeting starts the chat rather than closing onto an empty new
+tab. The greeting only fires when there is no provider at all -- the one state where the new tab
+has nothing it can do -- so landing the user back there, having just signed in, sends them to
+find the one button that was always the only thing to press.
