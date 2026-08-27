@@ -118,8 +118,24 @@ describe("the provider chooser", () => {
 
   it("renders the signed-in accounts beside the lanes", () => {
     state.accounts = [
-      { id: "a1", lane: "anthropic", harness: "claude", label: "Anthropic (Claude Code)" },
-      { id: "a2", lane: "anthropic", harness: "claude", label: "Anthropic (Claude Code) 2" },
+      {
+        id: "a1",
+        lane: "anthropic",
+        harness: "claude",
+        provider: "Anthropic",
+        harness_label: "Claude Code",
+        seq: 1,
+        label: "Anthropic (Claude Code)",
+      },
+      {
+        id: "a2",
+        lane: "anthropic",
+        harness: "claude",
+        provider: "Anthropic",
+        harness_label: "Claude Code",
+        seq: 2,
+        label: "Anthropic (Claude Code) 2",
+      },
     ];
     const text = render();
     expect(text).toContain("Signed in");

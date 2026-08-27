@@ -837,3 +837,31 @@ a white box on white with a hairline border. No build error, no lint error, no t
 Both are copied verbatim, and the style guard now checks utilities and shadows alongside
 colours -- verified by renaming one and watching it fail, which the first version of the
 assertion did not catch because it matched on a prefix.
+
+# The model bar becomes a combo card
+
+Provider and model in one card under the composer, ported from the mockup. The provider was
+never shown before because there was only ever one; now there can be several, and which one a
+chat runs on is the first thing about it.
+
+Every provider that is not this chat's is greyed, and clicking one opens a NEW chat on it. A
+chat binds to its account when it is created and nothing rebinds it, so there is no state in
+which switching in place would work -- offering it would be a control that silently does
+nothing.
+
+Three states have no model, not one: the catalog may not have loaded, the live choice may not
+have resolved (every harness passes through this before its first model read, and opencode
+never leaves it), or the live model may match no catalog option. The provider row renders in
+all three, because a provider belongs to the account rather than to the model.
+
+The card and its flyout portal to `<body>`: the chat panel sits inside dockview's clipping
+overlay, so anything extending past the panel would be cut at its edge.
+
+Three deliberate divergences from the mockup, each for a reason the prototype could not have:
+the flyouts open on CLICK rather than hover, because hovering would fire a `pi --list-models`
+subprocess or a codex daemon connect on every pointer sweep across the card -- which also makes
+the mockup's ~60 lines of safe-triangle hover-aim arithmetic unnecessary; the effort slider
+commits on release rather than per notch, because each notch is a live switch typed into the
+agent's pane and the switch queue chains rather than debounces; and a model with one effort
+stop gets no slider at all, because pi's non-reasoning models declare exactly one and an
+immovable full-green track labelled "Off" says the opposite of the truth.

@@ -1,14 +1,18 @@
 /**
- * The composer model bar: [Model][Effort][Fast].
+ * The composer's combo card: which PROVIDER this chat runs on, and which model on it.
  *
- * A self-contained component so it can sit wherever the layout wants it (its own
- * row below the chat input, next to the terminal/auth actions). Everything it
- * shows is data -- the static per-harness catalog (options, efforts, switch
- * mode) from HarnessCatalog.ts, plus the agent's live `model_choice` pushed onto
- * the agents store. Which slots show is decided purely by the matched catalog
- * option (effort iff the model declares efforts; fast iff it supports fast); the
- * switch mode only decides whether the shown slots are interactive. A pick is
- * applied optimistically and reconciled from the pushed live choice.
+ * Ported from the mockup (`imbue-ai/mind-sketches`, `prototypes/minds-harness`). Replaces the
+ * old three-slot bar, whose slots said nothing about the provider -- which used to be
+ * invisible because there was only ever one.
+ *
+ * Everything it shows is data: the static per-harness catalog from HarnessCatalog.ts, the
+ * agent's live `model_choice` pushed onto the agents store, and its `account` label resolved
+ * against the account list. Which rows show is decided by the matched catalog option (effort
+ * iff the model declares more than one; fast iff it supports it); the switch mode decides
+ * whether they are interactive.
+ *
+ * The provider row is the one that always renders. A provider is a property of the ACCOUNT,
+ * not of the model, so it survives all three of the states in which there is no model to show.
  */
 
 import m from "mithril";
@@ -18,8 +22,12 @@ import type { CatalogModelOption, HarnessCatalog } from "../models/HarnessCatalo
 import { ensureHarnessCatalogs, getHarnessCatalog } from "../models/HarnessCatalog";
 import { changedAxes, effectiveChoice, setModelChoice } from "../models/ModelSettings";
 import type { ModelIdentity } from "../models/ModelSettings";
-import { clampDropdownLeft } from "./dropdown-position";
+import { accountForAgent, getAccounts, openProviderChooser } from "../models/Providers";
+import type { ProviderAccount } from "../models/Providers";
+import { startChatOnAccount } from "./DockviewWorkspace";
+import { placeFlyout } from "./flyout-position";
 import { icon } from "./icons";
+import * as css from "./modelCardStyles";
 
 /** Shown on hover for any read-only model/effort/fast slot: a read-only harness's model is
  *  switched from the agent's own terminal (its native picker), not from this bar. */
@@ -47,11 +55,12 @@ function capitalizeEffort(level: string): string {
 // this many <li> at once. The user narrows with the search box; the cap bounds the DOM.
 const MODEL_SEARCH_CAP = 100;
 
+/** The slider's filled portion, deepening with effort. From the mockup verbatim. */
+function effortFillColor(fraction: number): string {
+  return `hsl(152 39% ${Math.round(70 - 40 * fraction)}%)`;
+}
+
 export function ModelBar(): m.Component<{ agentId: string }> {
-  // Which dropdown is open (model or effort, or none) and the bar element used to
-  // detect an outside click closing it.
-  let openDropdown: "model" | "effort" | null = null;
-  let barElement: HTMLElement | null = null;
   // The current model-search query (only used when the harness's picker_mode is "search").
   let modelQuery = "";
   // The account-gated set of model ids to OFFER in a search picker, fetched fresh each
@@ -66,86 +75,19 @@ export function ModelBar(): m.Component<{ agentId: string }> {
   // the harness is not dynamic). Codex has no static catalog, so these ARE the picker's model rows.
   let dynamicOptions: CatalogModelOption[] | null = null;
 
-  function handleOutsideMousedown(event: MouseEvent): void {
-    if (barElement !== null && !barElement.contains(event.target as Node)) {
-      openDropdown = null;
-      m.redraw();
-    }
-  }
-
-  // The margin every popup keeps between itself and each screen edge.
-  const DROPDOWN_MARGIN = 8;
-
-  // The live viewport listeners/observer that keep the OPEN dropdown positioned. A
-  // single dropdown is open at a time (see `openDropdown`), so one set suffices; they
-  // are wired in the dropdown's `oncreate` and torn down in its `onremove`.
-  let dropdownResizeObserver: ResizeObserver | null = null;
-  let dropdownViewportListener: (() => void) | null = null;
-
-  // Position an open popup horizontally: align its inner text under the trigger's label
-  // text when there is room, and clamp so the whole box stays on-screen with a margin.
-  // The dropdown is left-anchored to its wrapper (`left: 0`); we translateX from there.
-  //
-  // Robust to size/layout changes AFTER open -- the searchable picker grows once its async
-  // model list resolves, and a dockview split/resize can move the trigger with no redraw --
-  // because it re-measures the live rects every time it runs, and it runs on every redraw
-  // (`onupdate`), on any dropdown resize (ResizeObserver), and on window resize. Clearing
-  // the transform before measuring keeps it idempotent across those repeated calls.
-  function positionDropdown(dom: HTMLElement): void {
-    const wrapper = dom.parentElement;
-    if (wrapper === null) {
-      return;
-    }
-    dom.style.transform = "";
-    const dropdownRect = dom.getBoundingClientRect();
-    const label = wrapper.querySelector(".model-selector-label");
-    const header = dom.querySelector(".model-selector-dropdown-header");
-    // Fall back to the dropdown's own left when either reference is somehow absent, so a
-    // missing node yields no shift rather than throwing (both always render in practice).
-    const labelLeft = label === null ? dropdownRect.left : label.getBoundingClientRect().left;
-    // Measure the text inset from the DOM (header text left minus the box's left) rather
-    // than hard-coding padding, so it stays correct if the styling changes. The header's own
-    // left padding is added because its border-box left only reaches the dropdown's padding,
-    // not the text; without it the dropdown would sit ~10px right of the trigger label.
-    const textInset =
-      header === null
-        ? 0
-        : header.getBoundingClientRect().left - dropdownRect.left + parseFloat(getComputedStyle(header).paddingLeft);
-    const targetLeft = clampDropdownLeft({
-      labelLeft,
-      textInset,
-      dropdownWidth: dropdownRect.width,
-      viewportWidth: window.innerWidth,
-      margin: DROPDOWN_MARGIN,
-    });
-    const shift = targetLeft - dropdownRect.left;
-    if (shift !== 0) {
-      dom.style.transform = `translateX(${shift}px)`;
-    }
-  }
-
-  // Attach the live re-position listeners for a freshly opened dropdown.
-  function attachDropdownPositioning(dom: HTMLElement): void {
-    dropdownViewportListener = () => positionDropdown(dom);
-    window.addEventListener("resize", dropdownViewportListener);
-    // The ResizeObserver's initial notification (delivered before the next paint) is
-    // redundant with the direct positionDropdown() call in oncreate; its real job is to
-    // re-fire when the async model list later changes the dropdown's size.
-    dropdownResizeObserver = new ResizeObserver(() => positionDropdown(dom));
-    dropdownResizeObserver.observe(dom);
-  }
-
-  // Tear the listeners down when the dropdown closes.
-  function detachDropdownPositioning(): void {
-    if (dropdownViewportListener !== null) {
-      window.removeEventListener("resize", dropdownViewportListener);
-      dropdownViewportListener = null;
-    }
-    if (dropdownResizeObserver !== null) {
-      dropdownResizeObserver.disconnect();
-      dropdownResizeObserver = null;
-    }
-  }
+  // Where the card and its flyout sit, captured when each opens. Both are `fixed` and
+  // portalled out of the composer, so they carry viewport coordinates rather than being
+  // laid out by their parent -- see `openCard`.
+  let cardAnchor: DOMRect | null = null;
+  let flyout: "model" | "providers" | null = null;
+  let flyoutRowTop = 0;
+  let triggerElement: HTMLElement | null = null;
+  let cardElement: HTMLElement | null = null;
+  let flyoutElement: HTMLElement | null = null;
+  // The index the pointer is currently dragging the effort slider to. Held locally because
+  // mithril re-asserts `value` on every redraw, which would snap the thumb back under the
+  // finger on a harness that does not move the chip optimistically.
+  let draggingEffortIndex: number | null = null;
 
   // Recompute the offerable models for `agentId`. Called on every picker-open so a fresh
   // /login is reflected without reloading the page. A null `models` (offer everything) and
@@ -178,281 +120,505 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     }
   }
 
-  function renderDropdown(opts: {
-    kind: "model" | "effort";
-    triggerLabel: string;
-    header: string;
-    items: { id: string; label: string }[];
-    selectedId: string | null;
-    interactive: boolean;
-    tooltip: string;
-    searchable?: boolean;
-    // Re-fetch the offer set every time this picker opens (search + dynamic pickers). A static
-    // list picker leaves this false and renders the catalog directly.
-    refetchOnOpen?: boolean;
-    loading?: boolean;
+  /** Open the card, anchored to the trigger that was clicked. */
+  function openCard(trigger: HTMLElement): void {
+    cardAnchor = trigger.getBoundingClientRect();
+    flyout = null;
+    modelQuery = "";
+  }
+
+  function closeCard(): void {
+    cardAnchor = null;
+    flyout = null;
+  }
+
+  function handleOutsideMousedown(event: MouseEvent): void {
+    const target = event.target as Node;
+    const insideCard = cardElement !== null && cardElement.contains(target);
+    const insideFlyout = flyoutElement !== null && flyoutElement.contains(target);
+    const insideTrigger = triggerElement !== null && triggerElement.contains(target);
+    if (!insideCard && !insideFlyout && !insideTrigger) {
+      closeCard();
+      m.redraw();
+    }
+  }
+
+  /** One card row that opens a flyout. */
+  function menuRow(opts: {
+    label: string;
+    value: string;
+    sub?: string;
+    which: "model" | "providers";
     onOpen?: () => void;
-    onPick: (id: string) => void;
   }): m.Vnode {
-    const isOpen = openDropdown === opts.kind;
-    // For a search picker, filter by the query and cap the rendered rows; otherwise
-    // show every option. Filtering on `label` (== the provider/model tag).
-    const query = modelQuery.trim().toLowerCase();
-    const filtered = opts.searchable
-      ? opts.items.filter((item) => item.label.toLowerCase().includes(query))
-      : opts.items;
-    const visible = opts.searchable ? filtered.slice(0, MODEL_SEARCH_CAP) : filtered;
-    const hiddenCount = filtered.length - visible.length;
-    return m("div", { class: "model-selector-wrapper" }, [
-      m(
-        "button",
-        {
-          type: "button",
-          class: "model-selector-trigger" + (opts.interactive ? "" : " model-selector-trigger--readonly"),
-          // A read-only slot is NOT `disabled`: a disabled button suppresses :hover, which
-          // would kill the tooltip. It renders normally, shows the switch-in-terminal tooltip,
-          // and no-ops on click instead.
-          "data-tooltip": opts.interactive ? opts.tooltip : READ_ONLY_TOOLTIP,
-          onclick: (event: MouseEvent) => {
-            event.stopPropagation();
-            if (!opts.interactive) return;
-            const opening = !isOpen;
-            openDropdown = isOpen ? null : opts.kind;
-            // Reset the search and re-fetch the offer set each time a search/dynamic picker opens.
-            if (opening && opts.refetchOnOpen) {
-              modelQuery = "";
-              opts.onOpen?.();
-            }
-          },
+    return m(
+      "button",
+      {
+        type: "button",
+        class: css.ROW,
+        // CLICK, not hover. The mockup opens these on `onMouseEnter`, which is free in a
+        // prototype and expensive here: opening the model flyout fetches this agent's
+        // offerable models, which for pi shells out to `pi --list-models` (up to 15s) and
+        // for codex connects to its daemon. On hover that fires on every pointer sweep
+        // across the card. Clicking also makes the mockup's safe-triangle hover-aim
+        // machinery unnecessary, which is ~60 lines of slope math not ported.
+        onclick: (event: MouseEvent) => {
+          flyoutRowTop = (event.currentTarget as HTMLElement).getBoundingClientRect().top;
+          const opening = flyout !== opts.which;
+          flyout = opening ? opts.which : null;
+          if (opening) {
+            modelQuery = "";
+            opts.onOpen?.();
+          }
         },
-        [
-          m("span", { class: "model-selector-label" }, opts.triggerLabel),
-          // No chevron on a read-only slot -- it isn't a dropdown.
-          opts.interactive
-            ? m("span", { class: "model-selector-chevron" }, m.trust(icon("chevron-down", { size: 12 })))
-            : null,
-        ],
-      ),
-      isOpen && opts.interactive
-        ? m(
-            "div",
-            {
-              class: "model-selector-dropdown",
-              oncreate: (v: m.VnodeDOM) => {
-                document.addEventListener("mousedown", handleOutsideMousedown);
-                positionDropdown(v.dom as HTMLElement);
-                attachDropdownPositioning(v.dom as HTMLElement);
-              },
-              onupdate: (v: m.VnodeDOM) => positionDropdown(v.dom as HTMLElement),
-              onremove: () => {
-                document.removeEventListener("mousedown", handleOutsideMousedown);
-                detachDropdownPositioning();
-              },
-            },
-            [
-              m("div", { class: "model-selector-dropdown-header" }, opts.header),
-              opts.searchable
-                ? m("div", { class: "model-selector-search" }, [
-                    m("span", { class: "model-selector-search-icon" }, m.trust(icon("search", { size: 14 }))),
-                    m("input", {
-                      class: "model-selector-search-input",
-                      type: "text",
-                      placeholder: "Search models…",
-                      value: modelQuery,
-                      oncreate: (v: m.VnodeDOM) => (v.dom as HTMLInputElement).focus(),
-                      oninput: (e: InputEvent) => {
-                        modelQuery = (e.target as HTMLInputElement).value;
-                      },
-                    }),
-                  ])
-                : null,
-              opts.loading
-                ? m("div", { class: "model-selector-more" }, "Loading models…")
-                : m(
-                    "ul",
-                    { class: "model-selector-dropdown-list" },
-                    visible.map((item) =>
-                      m(
-                        "li",
-                        {
-                          key: item.id,
-                          title: item.label,
-                          class:
-                            "model-selector-option" +
-                            (opts.selectedId === item.id ? " model-selector-option--selected" : ""),
-                          onclick: () => {
-                            openDropdown = null;
-                            if (opts.selectedId !== item.id) {
-                              opts.onPick(item.id);
-                            }
-                          },
-                        },
-                        item.label,
-                      ),
-                    ),
-                  ),
-              !opts.loading && hiddenCount > 0
-                ? m("div", { class: "model-selector-more" }, `+${hiddenCount} more — keep typing to narrow`)
-                : null,
-              !opts.loading && opts.refetchOnOpen && visible.length === 0
-                ? m("div", { class: "model-selector-more" }, "No matching models")
-                : null,
-            ],
-          )
-        : null,
+      },
+      [
+        m("span", { class: css.ROW_LABEL }, opts.label),
+        m("span", { class: css.ROW_VALUE }, [
+          m("span", { class: css.ROW_TEXT }, opts.value),
+          opts.sub !== undefined ? m("span", { class: css.ROW_SUBTEXT }, `(${opts.sub})`) : null,
+          m("span", { class: css.ROW_CHEVRON }, m.trust(icon("chevron-right", { size: 13 }))),
+        ]),
+      ],
+    );
+  }
+
+  /** The effort slider, or null when there is nothing to slide.
+   *
+   * Two deliberate divergences from the mockup, both decided rather than discovered:
+   *
+   * 1. `onchange`, not `oninput`. The mockup's React `onChange` maps to the DOM `input`
+   *    event, which fires once per notch passed during a drag -- and every notch here is a
+   *    live switch typed into the agent's pane (claude), a socket call (codex) or a parked
+   *    intent (pi). `setModelChoice` chains rather than debounces, so a low-to-max drag
+   *    would queue four sequential switches. This commits once, on release.
+   * 2. Indexed over the SHOWN list, accepting that an agent on a hidden level (claude's
+   *    `ultra`) pins its thumb at the far left. The LABEL still reads correctly, because it
+   *    comes from the value rather than the position.
+   */
+  function effortRow(opts: {
+    efforts: readonly { level: string; in_picker: boolean }[];
+    current: string | null;
+    interactive: boolean;
+    onPick: (level: string) => void;
+  }): m.Vnode | null {
+    const shown = opts.efforts.filter((effort) => effort.in_picker);
+    // One stop is not a choice. pi's non-reasoning models declare exactly `("off",)`, and a
+    // one-stop slider renders as an immovable full-green track labelled "Off" -- which looks
+    // broken and says the opposite of the truth.
+    if (shown.length < 2) return null;
+    const index = Math.max(
+      0,
+      shown.findIndex((effort) => effort.level === opts.current),
+    );
+    const pct = (index / (shown.length - 1)) * 100;
+    return m("div", { class: css.ROW_STATIC }, [
+      m("span", { class: css.ROW_LABEL }, "Effort"),
+      m("span", { class: css.ROW_VALUE_STATIC }, [
+        m("span", { class: css.EFFORT_VALUE }, capitalizeEffort(opts.current ?? shown[index].level)),
+        m("input", {
+          type: "range",
+          "aria-label": "Reasoning effort",
+          class: css.SLIDER,
+          min: 0,
+          max: shown.length - 1,
+          step: 1,
+          disabled: !opts.interactive,
+          // Mithril re-asserts `value` on every redraw, which would snap the thumb back
+          // under the pointer mid-drag on any harness that does not move the chip
+          // optimistically -- codex is exactly that. Holding the dragged index locally and
+          // clearing it on release keeps the thumb where the finger is.
+          value: draggingEffortIndex ?? index,
+          style: `background: linear-gradient(to right, ${effortFillColor(pct / 100)} ${pct}%, var(--color-fill-active) ${pct}%)`,
+          oninput: (event: Event) => {
+            draggingEffortIndex = Number((event.target as HTMLInputElement).value);
+          },
+          onchange: (event: Event) => {
+            const picked = shown[Number((event.target as HTMLInputElement).value)];
+            draggingEffortIndex = null;
+            if (picked !== undefined) opts.onPick(picked.level);
+          },
+        }),
+      ]),
     ]);
+  }
+
+  /** Where the card sits: above its trigger, left-aligned, clamped to the viewport. */
+  function cardPlacement(anchor: DOMRect): string {
+    const width = 300;
+    const margin = 8;
+    const left = Math.min(Math.max(anchor.left, margin), Math.max(margin, window.innerWidth - margin - width));
+    // Above the trigger, because the composer sits at the bottom of the panel.
+    return `left: ${left}px; bottom: ${window.innerHeight - anchor.top + 6}px;`;
+  }
+
+  /** Where a flyout sits: beside the card, top-aligned with the row that opened it. */
+  function flyoutPlacement(): string {
+    const anchor = cardAnchor;
+    if (anchor === null) return "";
+    const margin = 8;
+    const width = 280;
+    const left = Math.min(Math.max(anchor.left, margin), Math.max(margin, window.innerWidth - margin - width));
+    const placed = placeFlyout({
+      parent: { left, right: left + 300 },
+      rowTop: flyoutRowTop,
+      flyoutWidth: width,
+      maxFlyoutHeight: 420,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      margin,
+      overlap: 4,
+    });
+    return `left: ${placed.left}px; top: ${placed.top}px; max-height: ${placed.maxHeight}px;`;
+  }
+
+  /** The Provider row's menu: every signed-in account, plus a way to add one.
+   *
+   * Every account that is not this chat's is LOCKED. Our chats bind to an account when they
+   * are created and nothing rebinds them, so there is no state in which switching would work
+   * -- clicking one opens a new chat on it instead, which is what the user meant.
+   */
+  function providerFlyout(agentId: string, current: ProviderAccount | null): m.Vnode {
+    const rows = getAccounts();
+    return m(
+      "div",
+      {
+        class: css.FLYOUT,
+        style: flyoutPlacement(),
+        oncreate: (flyoutVnode: m.VnodeDOM) => {
+          flyoutElement = flyoutVnode.dom as HTMLElement;
+        },
+        onremove: () => {
+          flyoutElement = null;
+        },
+      },
+      [
+        // Built as one list rather than with a conditional hole beside it: mithril refuses a
+        // fragment that mixes keyed vnodes with a null, and every row here is keyed.
+        m(
+          "div",
+          { class: css.FLYOUT_SCROLL },
+          rows.length === 0
+            ? [m("div", { class: css.FLYOUT_EMPTY }, "No providers yet.")]
+            : rows.map((row) => {
+                const isCurrent = current !== null && row.id === current.id;
+                return m(
+                  "button",
+                  {
+                    type: "button",
+                    key: row.id,
+                    class: isCurrent ? css.FLYOUT_ROW : css.FLYOUT_ROW_LOCKED,
+                    "data-tooltip": isCurrent
+                      ? undefined
+                      : "Opens a new chat -- this one is already running on its provider",
+                    onclick: () => {
+                      if (isCurrent) {
+                        flyout = null;
+                        return;
+                      }
+                      closeCard();
+                      startChatOnAccount(row.id);
+                    },
+                  },
+                  [
+                    m("span", { class: css.FLYOUT_ROW_NAME }, row.provider),
+                    m("span", { class: css.FLYOUT_ROW_SUB }, `(${row.harness_label})`),
+                    isCurrent ? m("span", { class: css.FLYOUT_CHECK }, m.trust(icon("check", { size: 14 }))) : null,
+                  ],
+                );
+              }),
+        ),
+        m(
+          "button",
+          {
+            type: "button",
+            class: css.FLYOUT_ADD,
+            onclick: () => {
+              closeCard();
+              openProviderChooser({ onSignedIn: (accountId) => startChatOnAccount(accountId) });
+            },
+          },
+          "+ Add a provider",
+        ),
+      ],
+    );
+  }
+
+  /** The Model row's menu: the models this account can actually use. */
+  function modelFlyout(
+    agentId: string,
+    sourceOptions: readonly CatalogModelOption[],
+    matched: CatalogModelOption | null,
+    currentIdentity: ModelIdentity,
+    optimistic: boolean,
+    searchable: boolean,
+    dynamic: boolean,
+  ): m.Vnode {
+    const offeredIds = searchable && offeredLoaded ? offeredModels : null;
+    const all = sourceOptions
+      .filter((option) => option.in_picker)
+      .filter((option) => offeredIds === null || offeredIds.has(option.id));
+    const query = modelQuery.trim().toLowerCase();
+    const filtered = query === "" ? all : all.filter((option) => option.label.toLowerCase().includes(query));
+    const visible = filtered.slice(0, MODEL_SEARCH_CAP);
+    const loading = (searchable || dynamic) && (offeredLoading || !offeredLoaded);
+    const placeholder = loading ? "Loading models..." : visible.length === 0 ? "No models available." : null;
+    return m(
+      "div",
+      {
+        class: css.FLYOUT,
+        style: flyoutPlacement(),
+        oncreate: (flyoutVnode: m.VnodeDOM) => {
+          flyoutElement = flyoutVnode.dom as HTMLElement;
+        },
+        onremove: () => {
+          flyoutElement = null;
+        },
+      },
+      [
+        // Searchable only when there are enough rows to need it -- pi's catalog runs to
+        // thousands, claude's to four.
+        searchable || all.length > 8
+          ? m("input", {
+              class: "model-selector-search",
+              type: "text",
+              placeholder: "Search models",
+              value: modelQuery,
+              oncreate: (inputVnode: m.VnodeDOM) => (inputVnode.dom as HTMLInputElement).focus(),
+              oninput: (event: Event) => {
+                modelQuery = (event.target as HTMLInputElement).value;
+              },
+            })
+          : null,
+        // One list or the other, never a hole beside keyed rows -- mithril refuses a fragment
+        // that mixes the two, and it throws during the DOM diff rather than at build time.
+        m(
+          "div",
+          { class: css.FLYOUT_SCROLL },
+          placeholder !== null
+            ? [m("div", { class: css.FLYOUT_EMPTY }, placeholder)]
+            : visible.map((option) =>
+                m(
+                  "button",
+                  {
+                    type: "button",
+                    key: option.id,
+                    class: css.FLYOUT_ROW,
+                    onclick: () => {
+                      const next: ModelIdentity = {
+                        model_id: option.id,
+                        effort: clampEffort(option, currentIdentity.effort),
+                        fast: option.supports_fast ? currentIdentity.fast : false,
+                      };
+                      setModelChoice(agentId, next, option, changedAxes(currentIdentity, next), optimistic);
+                      flyout = null;
+                    },
+                  },
+                  [
+                    m("span", { class: css.FLYOUT_ROW_NAME }, option.label),
+                    matched !== null && option.id === matched.id
+                      ? m("span", { class: css.FLYOUT_CHECK }, m.trust(icon("check", { size: 14 })))
+                      : null,
+                  ],
+                ),
+              ),
+        ),
+      ],
+    );
   }
 
   return {
     oninit() {
       // The catalogs are static and shared; load them once.
       void ensureHarnessCatalogs();
+      document.addEventListener("mousedown", handleOutsideMousedown);
     },
+
+    onremove() {
+      document.removeEventListener("mousedown", handleOutsideMousedown);
+    },
+
     view(vnode) {
       const agentId = vnode.attrs.agentId;
       const agent = getAgentById(agentId);
+      const account = accountForAgent(agent?.labels?.account);
       const catalog: HarnessCatalog | null = getHarnessCatalog(agent?.harness);
-      if (catalog === null) {
-        // No catalog (feature-flagged off, or catalogs not loaded yet): no slots.
-        return null;
-      }
+      const choice = catalog === null ? null : effectiveChoice(agentId, agent?.model_choice);
+      const matched = choice?.matched ?? null;
 
-      // This component renders ONLY the model/effort/fast slots. The harness "Powered by"
-      // credit lives on its own per-agent path (PoweredByCredit, in the composer actions row),
-      // so this bar is free to return null before a choice resolves without taking it down.
-      const choice = effectiveChoice(agentId, agent?.model_choice);
-      if (choice === null) {
-        // The live selection has not resolved yet; render no slots.
-        return null;
-      }
-      const matched = choice.matched;
-      if (matched === null) {
-        // The current combo matches no catalog option: a shrug, no model/effort/fast.
-        return m("div", { class: "model-bar" }, [
-          m("span", { class: "model-bar-shrug", "data-tooltip": "Unrecognized model" }, "\u{1F937}"),
-        ]);
-      }
+      // THREE states have no model, not one, and the Provider row must render in all of them:
+      // the provider is a property of the ACCOUNT, not of the model. The catalog may not have
+      // loaded; the live choice may not have resolved (every harness passes through this
+      // before its first model read, and opencode never leaves it); or the live model may
+      // match no catalog option. Only the Model/Effort/Fast rows are suppressed.
+      if (agent === undefined) return null;
+      // Nothing at all to say: no account to name and no model to show.
+      if (account === null && matched === null) return null;
 
-      // Interactive for any switchable harness -- a pending pick never disables the
-      // bar. `optimistic` (an EAGER_THEN_RECONCILE harness moves the chip on click)
-      // governs whether a pick shows immediately or waits for the pushed live choice;
-      // all three harnesses (claude, codex, pi) are EAGER_THEN_RECONCILE.
-      const interactive = catalog.switch_mode !== "read_only";
-      // Only EAGER_THEN_RECONCILE moves the chip optimistically on click. codex is ON_CHANGE:
-      // interactive, but the chip waits for the pushed (confirmed) live choice -- no overlay.
-      const optimistic = catalog.switch_mode === "eager_then_reconcile";
-      const currentEffort = choice.identity.effort;
-      const currentFast = choice.identity.fast;
-      // The value a pick is diffed against: the matched option's catalog id (NOT
-      // choice.identity.model_id, which is the raw reported id), so changedAxes counts a
-      // model change iff the picked catalog id differs -- an effort/fast click keeps this id.
-      const currentIdentity: ModelIdentity = { model_id: matched.id, effort: currentEffort, fast: currentFast };
+      // opencode ships an empty catalog and a resolver that fails, so its every pick would
+      // 500. Read-only is the honest render -- a picker there offers a switch that cannot work.
+      const interactive = catalog !== null && catalog.switch_mode !== "read_only" && matched !== null;
+      const optimistic = catalog?.switch_mode === "eager_then_reconcile";
+      const currentEffort = choice?.identity.effort ?? null;
+      const currentFast = choice?.identity.fast ?? false;
 
-      // Where the picker's model rows come from, by picker mode:
-      //  - "dynamic" (codex): the FULL per-agent options fetched on open -- there is NO static
-      //    catalog, so `dynamicOptions` IS the source (empty until the first fetch resolves).
-      //  - "search" (pi): the static catalog, narrowed to the account-gated ids fetched on open.
-      //  - "list" (claude): the static catalog verbatim.
-      // A search/dynamic picker re-fetches on every open and shows a loading row while in flight.
-      const searchable = catalog.picker_mode === "search";
-      const dynamic = catalog.picker_mode === "dynamic";
-      const refetchOnOpen = searchable || dynamic;
-      const sourceOptions: CatalogModelOption[] = dynamic ? (dynamicOptions ?? []) : catalog.options;
-      const offeredIds = searchable && offeredLoaded ? offeredModels : null;
-      const modelItems = sourceOptions
-        .filter((option) => option.in_picker)
-        .filter((option) => offeredIds === null || offeredIds.has(option.id))
-        .map((option) => ({ id: option.id, label: option.label }));
-
-      const modelSlot = renderDropdown({
-        kind: "model",
-        triggerLabel: matched.label,
-        header: "Model",
-        items: modelItems,
-        selectedId: matched.id,
-        interactive,
-        tooltip: "Select model",
-        searchable,
-        refetchOnOpen,
-        loading: refetchOnOpen && (offeredLoading || !offeredLoaded),
-        onOpen: () => void fetchOfferedModels(agentId),
-        onPick: (modelId) => {
-          const option = sourceOptions.find((candidate) => candidate.id === modelId);
-          if (option === undefined) {
-            return;
-          }
-          // Clamp effort into the new model's declared set, and drop fast if the new
-          // model does not support it (the backend validates the same).
-          const nextIdentity: ModelIdentity = {
-            model_id: option.id,
-            effort: clampEffort(option, currentEffort),
-            fast: option.supports_fast ? currentFast : false,
-          };
-          setModelChoice(agentId, nextIdentity, option, changedAxes(currentIdentity, nextIdentity), optimistic);
-        },
-      });
-
-      const shownEfforts = matched.efforts.filter((effort) => effort.in_picker);
-      const effortSlot =
-        matched.efforts.length > 0
-          ? renderDropdown({
-              kind: "effort",
-              triggerLabel: currentEffort === null ? "Effort" : capitalizeEffort(currentEffort),
-              header: "Effort",
-              items: shownEfforts.map((effort) => ({ id: effort.level, label: capitalizeEffort(effort.level) })),
-              selectedId: currentEffort,
-              interactive,
-              tooltip: "Select reasoning effort",
-              onPick: (level) => {
-                const nextIdentity: ModelIdentity = { model_id: matched.id, effort: level, fast: currentFast };
-                setModelChoice(agentId, nextIdentity, matched, changedAxes(currentIdentity, nextIdentity), optimistic);
-              },
-            })
-          : null;
-
-      const fastSlot = matched.supports_fast
-        ? m(
-            "button",
-            {
-              type: "button",
-              class:
-                `fast-toggle${currentFast ? " fast-toggle--on" : ""}` + (interactive ? "" : " fast-toggle--readonly"),
-              // Not `disabled` for read-only (see the trigger above: disabled kills the tooltip).
-              "data-tooltip": !interactive
-                ? READ_ONLY_TOOLTIP
-                : currentFast
-                  ? "Disable fast mode"
-                  : "Enable fast mode",
-              "aria-label": currentFast ? "Disable fast mode" : "Enable fast mode",
-              "aria-pressed": currentFast ? "true" : "false",
-              "aria-disabled": interactive ? undefined : "true",
-              onclick: () => {
-                if (!interactive) return;
-                const nextIdentity: ModelIdentity = {
-                  model_id: matched.id,
-                  effort: currentEffort,
-                  fast: !currentFast,
-                };
-                setModelChoice(agentId, nextIdentity, matched, changedAxes(currentIdentity, nextIdentity), optimistic);
-              },
-            },
-            m.trust(icon("zap", { size: 16 })),
-          )
-        : null;
-
-      return m(
-        "div",
+      const trigger = m(
+        "button",
         {
-          class: "model-bar",
-          oncreate: (barVnode: m.VnodeDOM) => {
-            barElement = barVnode.dom as HTMLElement;
+          type: "button",
+          class: css.TRIGGER,
+          "data-tooltip": interactive ? "Provider and model" : READ_ONLY_TOOLTIP,
+          "aria-expanded": cardAnchor !== null ? "true" : "false",
+          oncreate: (triggerVnode: m.VnodeDOM) => {
+            triggerElement = triggerVnode.dom as HTMLElement;
           },
           onremove: () => {
-            barElement = null;
+            triggerElement = null;
+          },
+          onclick: (event: MouseEvent) => {
+            event.stopPropagation();
+            if (cardAnchor !== null) {
+              closeCard();
+              return;
+            }
+            openCard(event.currentTarget as HTMLElement);
           },
         },
-        [modelSlot, effortSlot, fastSlot],
+        [
+          m("span", { class: css.TRIGGER_LABEL }, matched?.label ?? account?.provider ?? "Model"),
+          m("span", { class: css.TRIGGER_SUB }, m.trust(icon("chevron-down", { size: 12 }))),
+        ],
       );
+
+      if (cardAnchor === null) return m("div", { class: "model-bar" }, trigger);
+
+      const currentIdentity: ModelIdentity =
+        matched === null
+          ? { model_id: "", effort: currentEffort, fast: currentFast }
+          : { model_id: matched.id, effort: currentEffort, fast: currentFast };
+
+      const searchable = catalog?.picker_mode === "search";
+      const dynamic = catalog?.picker_mode === "dynamic";
+      const sourceOptions: CatalogModelOption[] = dynamic ? (dynamicOptions ?? []) : (catalog?.options ?? []);
+
+      const card = m(
+        "div",
+        {
+          class: css.CARD,
+          style: cardPlacement(cardAnchor),
+          oncreate: (cardVnode: m.VnodeDOM) => {
+            cardElement = cardVnode.dom as HTMLElement;
+          },
+          onremove: () => {
+            cardElement = null;
+          },
+        },
+        [
+          menuRow({
+            label: "Provider",
+            value: account?.provider ?? "Not signed in",
+            sub: account?.harness_label,
+            which: "providers",
+          }),
+          m("div", { class: css.DIVIDER }),
+          matched !== null
+            ? menuRow({
+                label: "Model",
+                value: matched.label,
+                which: "model",
+                onOpen: () => {
+                  if (searchable || dynamic) void fetchOfferedModels(agentId);
+                },
+              })
+            : null,
+          matched !== null
+            ? effortRow({
+                efforts: matched.efforts,
+                current: currentEffort,
+                interactive,
+                onPick: (level) => {
+                  const next: ModelIdentity = { model_id: matched.id, effort: level, fast: currentFast };
+                  setModelChoice(agentId, next, matched, changedAxes(currentIdentity, next), optimistic);
+                },
+              })
+            : null,
+          matched !== null && matched.supports_fast
+            ? m("div", { class: css.ROW_STATIC }, [
+                m(
+                  "span",
+                  { class: `${css.ROW_LABEL} ${css.FAST_LABEL}${interactive ? "" : ` ${css.FAST_LABEL_OFF}`}` },
+                  [
+                    m("span", { class: currentFast ? "text-accent" : "" }, m.trust(icon("zap", { size: 12 }))),
+                    "Fast mode",
+                  ],
+                ),
+                m(
+                  "span",
+                  { class: css.ROW_VALUE_STATIC },
+                  m(
+                    "button",
+                    {
+                      type: "button",
+                      class: `fast-toggle${currentFast ? " fast-toggle--on" : ""}${interactive ? "" : " fast-toggle--readonly"}`,
+                      "aria-label": currentFast ? "Disable fast mode" : "Enable fast mode",
+                      "aria-pressed": currentFast ? "true" : "false",
+                      onclick: () => {
+                        if (!interactive) return;
+                        const next: ModelIdentity = {
+                          model_id: matched.id,
+                          effort: currentEffort,
+                          fast: !currentFast,
+                        };
+                        setModelChoice(agentId, next, matched, changedAxes(currentIdentity, next), optimistic);
+                      },
+                    },
+                    m.trust(icon("zap", { size: 14 })),
+                  ),
+                ),
+              ])
+            : null,
+        ],
+      );
+
+      const openFlyout =
+        flyout === "providers"
+          ? providerFlyout(agentId, account)
+          : flyout === "model"
+            ? modelFlyout(agentId, sourceOptions, matched, currentIdentity, optimistic, searchable, dynamic)
+            : null;
+
+      // The card and its flyout PORTAL to <body>. The chat panel lives inside dockview's
+      // clipping overlay, so a card that extends past the panel would be cut off at its edge.
+      return [m("div", { class: "model-bar" }, trigger), m(Portal, { children: [card, openFlyout] })];
+    },
+  };
+}
+
+/** Renders its children into <body>.
+ *
+ * The chat panel sits inside dockview's `overflow: hidden` overlay, so a card or flyout that
+ * extends past the panel is clipped at its edge. Mithril has no portal, so this mounts a
+ * detached root and renders into it -- the same shape `lightbox.ts` and `hoverTooltip.ts` use.
+ */
+function Portal(): m.Component<{ children: m.Children }> {
+  let host: HTMLElement | null = null;
+  return {
+    onremove() {
+      if (host !== null) {
+        m.render(host, null);
+        host.remove();
+        host = null;
+      }
+    },
+    view(vnode) {
+      // Created here rather than in `oncreate`: the view runs first, so a host made there
+      // would be empty on the pass that mattered and nothing would schedule another.
+      if (host === null) {
+        host = document.createElement("div");
+        document.body.appendChild(host);
+      }
+      m.render(host, vnode.attrs.children);
+      return null;
     },
   };
 }

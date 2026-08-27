@@ -1,15 +1,14 @@
+// @vitest-environment jsdom
 /**
- * A render smoke test over every branch of the CURRENT model bar.
+ * A render smoke test over every branch of the combo card.
  *
- * Written deliberately against today's component, before the combo card replaces it, so
- * the rewrite has a before/after it can diff instead of a blank page. These assertions are
- * about what the user can see and click -- not about internals -- so they should survive a
- * rewrite that keeps the behaviour and fail loudly on one that does not.
+ * Replaces the same test written against the three-slot bar it succeeds, which is why the
+ * assertions are phrased as behaviour rather than markup: what the user can see and click
+ * should survive a faithful port, and it did not survive an unfaithful one.
  *
- * The known failure mode in this app's mithril views is a render-time throw: it aborts the
- * redraw, leaves the last painted frame up, and logs nothing on the server. Only a render
- * test catches that, which is why every branch below is exercised for real rather than
- * asserted about in the abstract.
+ * Rendered into a real DOM under jsdom. The card portals to <body> -- it lives inside
+ * dockview's clipping overlay otherwise -- and mithril validates keyed fragments during the
+ * DOM diff, not while building vnodes, so a vnode walk cannot see either.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -26,55 +25,49 @@ vi.mock("../models/AgentManager", () => ({
 const catalogState: { catalog: unknown } = { catalog: null };
 vi.mock("../models/HarnessCatalog", () => ({
   ensureHarnessCatalogs: () => undefined,
-  // Mirrors the real one: no harness, no catalog. An agent that is gone has no harness.
   getHarnessCatalog: (harness?: string) => (harness === undefined ? null : catalogState.catalog),
 }));
 
 const settingsState: { choice: unknown } = { choice: null };
+const picks: unknown[] = [];
 vi.mock("../models/ModelSettings", () => ({
   effectiveChoice: () => settingsState.choice,
-  changedAxes: () => [],
-  setModelChoice: () => undefined,
+  changedAxes: () => ["model"],
+  setModelChoice: (...args: unknown[]) => picks.push(args),
 }));
+
+const providerState: { accounts: unknown[] } = { accounts: [] };
+vi.mock("../models/Providers", () => ({
+  getAccounts: () => providerState.accounts,
+  accountForAgent: (id?: string) => providerState.accounts.find((a) => (a as { id: string }).id === id) ?? null,
+  openProviderChooser: () => undefined,
+}));
+
+const started: string[] = [];
+vi.mock("./DockviewWorkspace", () => ({
+  startChatOnAccount: (accountId: string) => started.push(accountId),
+}));
+
+import m from "mithril";
 
 import { ModelBar } from "./ModelBar";
 
-interface VnodeLike {
-  tag?: unknown;
-  attrs?: Record<string, unknown> | null;
-  children?: unknown;
+const ROOT = () => document.getElementById("root") as HTMLElement;
+
+function render(): void {
+  m.render(ROOT(), m(ModelBar as never, { agentId: "a1" }));
 }
 
-/** Depth-first walk of a rendered vnode tree, the way NewTabLauncher.test.ts does it: the
- *  default vitest environment has no DOM, and this app's views render fine without one. */
-function flatten(node: unknown, out: unknown[] = []): unknown[] {
-  if (node === null || node === undefined || typeof node === "boolean") return out;
-  if (Array.isArray(node)) {
-    for (const child of node) flatten(child, out);
-    return out;
-  }
-  if (typeof node === "object" && "tag" in (node as VnodeLike)) {
-    out.push(node);
-    flatten((node as VnodeLike).children, out);
-    return out;
-  }
-  out.push(node);
-  return out;
+/** Everything on screen, card and flyout included -- both portal out of the component. */
+function screenText(): string {
+  return `${ROOT().textContent ?? ""} ${document.body.textContent ?? ""}`;
 }
 
-/** Render the component's view and return what the user would see and could click. */
-function render(): { text: string; tags: string[]; classes: string[]; tooltips: string[]; empty: boolean } {
-  const tree = ModelBar().view({ attrs: { agentId: "a1" } } as never);
-  const nodes = flatten(tree);
-  const vnodes = nodes.filter((each): each is VnodeLike => typeof each === "object" && each !== null && "tag" in each);
-  return {
-    text: nodes.filter((each): each is string => typeof each === "string").join(" "),
-    tags: vnodes.map((each) => String(each.tag)),
-    // Mithril puts a rendered vnode's classes on `className`, not `class`.
-    classes: vnodes.map((each) => String(each.attrs?.className ?? each.attrs?.class ?? "")),
-    tooltips: vnodes.map((each) => String(each.attrs?.["data-tooltip"] ?? "")),
-    empty: tree === null || tree === undefined,
-  };
+function click(selector: string): void {
+  const node = document.querySelector<HTMLElement>(selector);
+  if (node === null) throw new Error(`no ${selector} on screen`);
+  node.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  render();
 }
 
 const OPUS = {
@@ -85,20 +78,21 @@ const OPUS = {
   in_picker: true,
   harness_reported_model_id: null,
 };
-const SONNET = {
-  id: "sonnet",
-  label: "Sonnet",
-  efforts: [],
-  supports_fast: false,
-  in_picker: true,
-  harness_reported_model_id: null,
+const ACCOUNT = {
+  id: "acct-1",
+  lane: "anthropic",
+  harness: "claude",
+  provider: "Anthropic",
+  harness_label: "Claude Code",
+  seq: 1,
+  label: "Anthropic (Claude Code)",
 };
 
 function catalogOf(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     switch_mode: "eager_then_reconcile",
     picker_mode: "list",
-    options: [OPUS, SONNET],
+    options: [OPUS],
     native_atomic_shoulder_tap_possible: true,
     popups: [],
     ...overrides,
@@ -106,86 +100,137 @@ function catalogOf(overrides: Record<string, unknown> = {}): Record<string, unkn
 }
 
 beforeEach(() => {
-  agentState.agent = { id: "a1", harness: "claude" };
+  document.body.innerHTML = '<div id="root"></div>';
+  picks.length = 0;
+  started.length = 0;
+  agentState.agent = { id: "a1", harness: "claude", labels: { account: "acct-1" } };
   catalogState.catalog = catalogOf();
   settingsState.choice = { identity: { model_id: "opus", effort: null, fast: false }, matched: OPUS, pending: null };
+  providerState.accounts = [ACCOUNT];
 });
 
-describe("the model bar", () => {
+describe("the combo card", () => {
   it("renders nothing when the agent is unknown", () => {
     agentState.agent = null;
-    expect(render().empty).toBe(true);
+    render();
+    expect(ROOT().innerHTML).toBe("");
   });
 
-  it("renders nothing when the harness has no catalog yet", () => {
-    catalogState.catalog = null;
-    expect(render().empty).toBe(true);
+  it("shows the model on the trigger, and opens the card on click", () => {
+    render();
+    expect(screenText()).toContain("Opus");
+    click(".model-selector-trigger");
+    const text = screenText();
+    expect(text).toContain("Provider");
+    expect(text).toContain("Anthropic");
+    expect(text).toContain("Claude Code");
   });
 
-  it("shows the matched model", () => {
-    expect(render().text).toContain("Opus");
+  it("still names the provider when there is no model to show", () => {
+    // The three no-model states -- catalog not loaded, choice unresolved, no matching option.
+    // A provider belongs to the ACCOUNT, so it survives all of them; only Model/Effort/Fast go.
+    settingsState.choice = null;
+    render();
+    click(".model-selector-trigger");
+    const text = screenText();
+    expect(text).toContain("Anthropic");
+    expect(text).not.toContain("Model");
   });
 
-  it("shrugs when the live model matches no catalog option", () => {
-    // The codex case: an agent whose daemon has not answered `model/list` yet, or one that
-    // is signed out. Both leave the bar with nothing to match against.
-    settingsState.choice = {
-      identity: { model_id: "gpt-9", effort: null, fast: false },
-      matched: null,
-      pending: null,
+  it("renders a read-only harness without an effort control", () => {
+    // agy: its `/model` is an interactive TUI with no scriptable form, so a picker there
+    // offers a switch that cannot work.
+    const withEffort = {
+      ...OPUS,
+      efforts: [
+        { level: "low", in_picker: true },
+        { level: "high", in_picker: true },
+      ],
     };
-    const { text } = render();
-    expect(text).toContain("\u{1F937}");
-    expect(text).not.toContain("Opus");
+    catalogState.catalog = catalogOf({ switch_mode: "read_only", options: [withEffort] });
+    settingsState.choice = { identity: { model_id: "opus", effort: "low", fast: false }, matched: withEffort, pending: null };
+    render();
+    click(".model-selector-trigger");
+    expect(document.querySelector<HTMLInputElement>('input[type="range"]')?.disabled).toBe(true);
   });
 
-  it("renders a read-only harness's model as a statement, not a control", () => {
-    // agy: its `/model` is an interactive TUI with no scriptable form, so a picker here would
-    // offer a switch that cannot work. It stays a <button> deliberately -- a disabled one
-    // suppresses :hover and would kill the tooltip that explains why -- so the invariants are
-    // the readonly class, no chevron, and the explaining tooltip.
-    catalogState.catalog = catalogOf({ switch_mode: "read_only" });
-    const { text, classes, tooltips } = render();
-    expect(text).toContain("Opus");
-    expect(classes.some((each) => each.includes("--readonly"))).toBe(true);
-    expect(classes.some((each) => each.includes("model-selector-chevron"))).toBe(false);
-    expect(tooltips.join(" ").toLowerCase()).toContain("terminal");
-  });
+  it("renders an effort slider only when there is more than one stop", () => {
+    render();
+    click(".model-selector-trigger");
+    expect(document.querySelector('input[type="range"]')).toBeNull();
 
-  it("renders an effort slot only when the matched model declares efforts", () => {
-    expect(render().text).not.toContain("Medium");
-    const withEffort = { ...OPUS, efforts: [{ level: "medium", label: "Medium", in_picker: true }] };
-    catalogState.catalog = catalogOf({ options: [withEffort] });
-    settingsState.choice = {
-      identity: { model_id: "opus", effort: "medium", fast: false },
-      matched: withEffort,
-      pending: null,
+    // pi's non-reasoning models declare exactly ("off",). A one-stop slider is immovable and
+    // painted full -- it looks broken and says the opposite of the truth.
+    const oneStop = { ...OPUS, efforts: [{ level: "off", in_picker: true }] };
+    catalogState.catalog = catalogOf({ options: [oneStop] });
+    settingsState.choice = { identity: { model_id: "opus", effort: "off", fast: false }, matched: oneStop, pending: null };
+    document.body.innerHTML = '<div id="root"></div>';
+    render();
+    click(".model-selector-trigger");
+    expect(document.querySelector('input[type="range"]')).toBeNull();
+
+    const twoStops = {
+      ...OPUS,
+      efforts: [
+        { level: "low", in_picker: true },
+        { level: "high", in_picker: true },
+      ],
     };
-    expect(render().text).toContain("Medium");
+    catalogState.catalog = catalogOf({ options: [twoStops] });
+    settingsState.choice = { identity: { model_id: "opus", effort: "low", fast: false }, matched: twoStops, pending: null };
+    document.body.innerHTML = '<div id="root"></div>';
+    render();
+    click(".model-selector-trigger");
+    expect(document.querySelector('input[type="range"]')).not.toBeNull();
   });
 
-  it("renders a fast slot only when the matched model supports it", () => {
-    expect(render().classes.some((each) => each.includes("fast-toggle"))).toBe(false);
-    const fastModel = { ...OPUS, supports_fast: true };
-    catalogState.catalog = catalogOf({ options: [fastModel] });
-    settingsState.choice = {
-      identity: { model_id: "opus", effort: null, fast: true },
-      matched: fastModel,
-      pending: null,
-    };
-    const { classes } = render();
-    expect(classes.some((each) => each.includes("fast-toggle--on"))).toBe(true);
+  it("commits an effort on release, not on every notch of the drag", () => {
+    // Each notch is a live switch typed into the agent's pane, and setModelChoice chains
+    // rather than debounces -- a low-to-max drag would queue one per stop.
+    const efforts = [
+      { level: "low", in_picker: true },
+      { level: "medium", in_picker: true },
+      { level: "high", in_picker: true },
+    ];
+    const model = { ...OPUS, efforts };
+    catalogState.catalog = catalogOf({ options: [model] });
+    settingsState.choice = { identity: { model_id: "opus", effort: "low", fast: false }, matched: model, pending: null };
+    render();
+    click(".model-selector-trigger");
+    const slider = document.querySelector<HTMLInputElement>('input[type="range"]');
+    if (slider === null) throw new Error("no slider");
+
+    slider.value = "1";
+    slider.dispatchEvent(new Event("input", { bubbles: true }));
+    slider.value = "2";
+    slider.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(picks).toHaveLength(0);
+
+    slider.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(picks).toHaveLength(1);
   });
 
-  it("survives a harness whose options are populated instead of its models", () => {
-    // codex is a "dynamic" picker: its static options are EMPTY by design, because its model
-    // set is per-account and comes from its own daemon. An empty catalog must not throw.
+  it("greys every provider that is not this chat's, and opens a new chat on it", () => {
+    // A chat binds to its account when it is CREATED and nothing rebinds it, so there is no
+    // state in which switching would work -- clicking one starts a chat on it instead.
+    providerState.accounts = [ACCOUNT, { ...ACCOUNT, id: "acct-2", provider: "Google", harness: "antigravity", harness_label: "Antigravity CLI" }];
+    render();
+    click(".model-selector-trigger");
+    click('[class*="cursor-pointer"]');
+    const rows = [...document.querySelectorAll("button")].filter((b) => (b.textContent ?? "").includes("Google"));
+    expect(rows).toHaveLength(1);
+    rows[0].dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(started).toEqual(["acct-2"]);
+  });
+
+  it("survives a dynamic harness with no static options", () => {
+    // codex: its options are per-account and come from its own daemon, so the static catalog
+    // is empty by design and the flyout must not throw on it.
     catalogState.catalog = catalogOf({ picker_mode: "dynamic", switch_mode: "on_change", options: [] });
-    settingsState.choice = {
-      identity: { model_id: "gpt-5", effort: null, fast: false },
-      matched: null,
-      pending: null,
-    };
-    expect(() => render()).not.toThrow();
+    settingsState.choice = { identity: { model_id: "gpt-5", effort: null, fast: false }, matched: null, pending: null };
+    expect(() => {
+      render();
+      click(".model-selector-trigger");
+    }).not.toThrow();
   });
 });

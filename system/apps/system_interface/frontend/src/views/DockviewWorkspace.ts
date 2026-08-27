@@ -4241,6 +4241,18 @@ function soleLauncherPanelId(): string | null {
  * opening only happens if that project is still the mounted one, since opening
  * it anywhere else would file it into the wrong view.
  */
+/** Open a new chat on `accountId`, wherever the user currently is.
+ *
+ * The combo card's provider rows call this: a chat binds to its account when it is CREATED
+ * and nothing rebinds it, so "switch provider" can only mean "start a chat on that one".
+ */
+export async function startChatOnAccount(accountId: string): Promise<void> {
+  // No target group and no launcher to retire: the user is in a chat, and the new one opens
+  // alongside it wherever the dock puts a new panel.
+  await openNewChat(null, null, accountId);
+  m.redraw();
+}
+
 export async function startProjectChat(projectId: string): Promise<void> {
   // A new project's starter chat needs an account like any other, and a workspace with none
   // would otherwise fail the create and surface it as a blocking alert on every project
