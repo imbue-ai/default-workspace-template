@@ -808,3 +808,17 @@ provider rewords itself: the HTTP status, the structured error type, and the han
 the CLIs use in their own words. It deliberately does not flag a rate limit, a network failure
 or a model refusal -- those end a turn too, and offering "sign in again" for them teaches the
 user to ignore the notice.
+
+# A dead account says so, and re-authenticating brings its chats back
+
+A turn that fails on an authentication error now renders a "sign in again" action under the
+error, which opens the chooser on that chat's own account -- so the fix is one click from where
+the problem appeared. Inline rather than a modal: an auth failure used to throw the sign-in
+modal over whatever you were doing, and that is what made it hated. This waits to be clicked.
+
+A successful re-auth restarts every agent bound to that account. They do not pick up a swapped
+credential on their own -- claude reads its settings env at process start, and nothing
+establishes that codex's daemon re-reads its auth file either. One rule for all of them rather
+than a per-harness table built on untested assumptions: a restart after a deliberate sign-in is
+cheap, and guessing wrong the other way leaves a chat dead with nothing on screen to say why.
+A FAILED re-auth restarts nothing -- the account still holds the credential it had.

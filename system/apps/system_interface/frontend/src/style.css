@@ -1427,6 +1427,22 @@ body {
   color: rgba(120, 120, 120, 0.95);
 }
 
+/* The re-auth affordance under an auth failure. A link rather than a button shape: it sits
+   inside a sentence, and the surrounding block is already the alarming part. */
+.message-api-error-action {
+  color: var(--color-accent);
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+  text-decoration: underline;
+  background: none;
+  border: none;
+}
+
+.message-api-error-action:hover {
+  color: var(--color-accent-hover);
+}
+
 /* ── Sub-agent link card ── */
 .subagent-card {
   margin-top: 0.75em;

@@ -548,3 +548,46 @@ def test_a_first_sign_in_clears_nothing(tmp_path: Path) -> None:
     service.abort(started.flow_id)
 
     assert read_index(tmp_path).accounts == ()
+
+
+def test_a_successful_re_auth_restarts_the_chats_bound_to_that_account(tmp_path: Path) -> None:
+    """Re-auth is only worth doing if the chats come back, and they do not on their own:
+    claude reads its settings env at process start, and nothing establishes that codex's
+    daemon re-reads a swapped credential."""
+    restarted: list[str] = []
+    service = AuthFlowService.create(
+        home=tmp_path,
+        work_dir=tmp_path / "work",
+        probe=lambda *_a: SignedIn.YES,
+        restart_bound_agents=lambda account_id: (restarted.append(account_id), 2)[1],
+    )
+    started = service.start("opencode-go", "api_key")
+    service.submit_key(started.flow_id, "first-key", "opencode-go")
+    (account,) = read_index(tmp_path).accounts
+    assert restarted == [], "a first sign-in has no chats to restart"
+
+    again = service.start("opencode-go", "api_key", account_id=account.id)
+    service.submit_key(again.flow_id, "second-key", "opencode-go")
+
+    assert restarted == [account.id]
+
+
+def test_a_failed_re_auth_restarts_nothing(tmp_path: Path) -> None:
+    """The account still holds the credential it had, so its chats are working. Restarting
+    them would interrupt turns for no reason."""
+    verdicts = [SignedIn.YES, SignedIn.NO]
+    restarted: list[str] = []
+    service = AuthFlowService.create(
+        home=tmp_path,
+        work_dir=tmp_path / "work",
+        probe=lambda *_a: verdicts.pop(0),
+        restart_bound_agents=lambda account_id: (restarted.append(account_id), 1)[1],
+    )
+    started = service.start("opencode-go", "api_key")
+    service.submit_key(started.flow_id, "good", "opencode-go")
+    (account,) = read_index(tmp_path).accounts
+
+    again = service.start("opencode-go", "api_key", account_id=account.id)
+    assert service.submit_key(again.flow_id, "bad", "opencode-go").state is FlowState.FAILED
+
+    assert restarted == []
