@@ -1,10 +1,17 @@
+/* Versioning timeline, built from small Mithril components: a sidebar listing every
+   app, beside one column of that app's versions grouped by day and threaded onto a
+   connector line, newest first. Clicking a version expands it in place into a card
+   carrying its description, the single restore action, and a chat scoped to that
+   version. */
 "use strict";
 
 var APP_NAME = window.APP_NAME;
 var FEED_CHUNK = 30;
 
+/* ── State ── */
+
 var S = {
-  history: null,
+  history: null,          // {app, nodes (oldest first), is_restorable}
   apps: [],
   selectedSha: null,
   visibleCount: FEED_CHUNK,
@@ -15,6 +22,7 @@ var S = {
 };
 
 function feedNodes() {
+  // Newest at the very top, down to the first version.
   return S.history ? S.history.nodes.slice().reverse() : [];
 }
 
@@ -23,12 +31,15 @@ function nodeBySha(sha) {
 }
 
 function selectNode(sha) {
+  // Only one version is open at a time; re-opening one keeps its chat thread.
   S.selectedSha = sha;
   S.restore = { reviewing: false, preview: null, status: null, isError: false, busy: false };
   S.tech.open = false;
   var node = nodeBySha(sha);
   if (node && !node.summary) requestSummary(sha);
 }
+
+/* ── API ── */
 
 function api(path) { return "/api/app/" + encodeURIComponent(APP_NAME) + path; }
 
@@ -38,6 +49,8 @@ function loadHistory() {
     document.title = "History - " + data.app.title;
     var current = data.nodes.find(function (n) { return n.is_current; });
     if (current) selectNode(current.sha);
+    // Summaries are requested per rendered row (VersionRow oncreate), so a long
+    // history does not fire a generation call for every hidden version at once.
   });
 }
 
@@ -54,7 +67,7 @@ function requestSummary(sha) {
       var node = nodeBySha(sha);
       if (node) node.summary = summary;
     })
-    .catch(function () {});
+    .catch(function () { /* the raw title is always shown */ });
 }
 
 function loadTechRecord(sha) {
@@ -69,6 +82,8 @@ function loadTechRecord(sha) {
     .catch(function () { S.tech.textBySha[sha] = "Could not load the technical record."; });
 }
 
+/* ── Icons (inline SVG, stroke = currentColor) ── */
+
 function icon(name, size) {
   var paths = {
     undo: [m("path", { d: "M9 14 4 9l5-5" }), m("path", { d: "M4 9h10a6 6 0 0 1 0 12h-3" })],
@@ -79,6 +94,7 @@ function icon(name, size) {
       m("path", { d: "M3 3v5h5" }),
       m("path", { d: "M12 7v5l4 2" }),
     ],
+    // Stand-in for an app that registered no icon of its own.
     app: [m("rect", { x: 3, y: 3, width: 18, height: 18, rx: 4 })],
   };
   return m("svg.icon", {
@@ -89,7 +105,12 @@ function icon(name, size) {
   }, paths[name]);
 }
 
-// App icons are untrusted skill-authored markup: only a sanitized bare <svg> survives.
+/* ── Sidebar: every app, with the one being browsed marked ── */
+
+/* An app's registered icon is markup a skill authored, so it is untrusted and is
+   never inlined as it stands. Only a single <svg> element survives, with nothing
+   that can run, navigate, or fetch; anything else falls back to the built-in
+   glyph. This mirrors the workspace UI's own gate (appIcon.ts). */
 function sanitizedAppIcon(markup) {
   if (typeof markup !== "string" || !/^\s*<svg[\s>]/i.test(markup) || !window.DOMPurify) return null;
   var clean = DOMPurify.sanitize(markup, {
@@ -133,6 +154,8 @@ var Sidebar = {
   },
 };
 
+/* ── Page header ── */
+
 var Header = {
   view: function () {
     var h = S.history;
@@ -144,8 +167,11 @@ var Header = {
   },
 };
 
+/* ── Version titles and day grouping ── */
+
 function baseTitle(node) { return node.summary ? node.summary.title : node.raw_title; }
 
+/* Versions cluster under "Today" / "Yesterday" / "August 20". */
 function dayKey(iso) {
   var d = new Date(iso);
   return d.getFullYear() + "-" + d.getMonth() + "-" + d.getDate();
@@ -162,11 +188,13 @@ function dayLabel(iso) {
   return d.toLocaleDateString("en-US", opts);
 }
 
-// Three legacy restore-title wordings are re-read into the one current form,
-// 'Restored from "X"', so the timeline never mixes them.
-var GENERIC_RESTORE = /^Restored .+ to an earlier version$/;
-var WENT_BACK_TO = /^Went back to (".*"|an earlier version)$/;
-var RESTORED_FROM = /^Restored from /;
+/* A restore's name is the whole description of it, so it is phrased as a
+   completed fact -- 'Restored from "X"'. Three earlier engines wrote it three
+   other ways, and all of them are re-read into that one form so the timeline
+   never mixes them. */
+var GENERIC_RESTORE = /^Restored .+ to an earlier version$/;   // oldest: names no target
+var WENT_BACK_TO = /^Went back to (".*"|an earlier version)$/; // previous wording
+var RESTORED_FROM = /^Restored from /;                         // current wording
 
 function isRestoreName(title) {
   return GENERIC_RESTORE.test(title) || WENT_BACK_TO.test(title) || RESTORED_FROM.test(title);
@@ -179,6 +207,9 @@ function restoredFromTitle(targetTitle) {
 function rowTitle(node) {
   var title = baseTitle(node);
   if (!node.restored_from_sha) return title;
+  // Name the version actually pointed at rather than the text the engine froze
+  // into the commit: that text is truncated, and when the target was itself a
+  // restore it nests one restore's name inside another's.
   var target = nodeBySha(node.restored_from_sha);
   if (target) {
     var targetTitle = baseTitle(target);
@@ -192,6 +223,8 @@ function rowTitle(node) {
   }
   return GENERIC_RESTORE.test(title) ? restoredFromTitle(null) : title;
 }
+
+/* ── Collapsed row ── */
 
 var VersionRow = {
   view: function (vnode) {
@@ -217,6 +250,11 @@ var VersionRow = {
   },
 };
 
+/* ── Expanded card ── */
+
+/* Two versions carry no "go back" button: the one the app is already on, and
+   every version of an app the engine will not rewind (it cannot safely restart
+   itself, or the workspace shell, from underneath a running restore). */
 function noRestoreReason(node) {
   if (node.is_current) return "This is the version the app is on right now.";
   return S.history.app.title + " can be browsed here, but going back has to be done from a chat.";
@@ -245,6 +283,7 @@ var VersionCard = {
               onclick: startRestoreReview,
               disabled: r.reviewing || r.busy,
             }, [icon("undo", 15), "Go back to this version"])
+              // A card with no button used to look broken; say why instead.
               : m(".no-restore-note", noRestoreReason(node)),
             m("button.tech-toggle", {
               "aria-expanded": String(S.tech.open),
@@ -260,9 +299,12 @@ var VersionCard = {
             S.tech.textBySha[node.sha] || "Loading…"),
         ]),
       ]),
+      m(VersionChat, { node: node }),
     ]);
   },
 };
+
+/* ── Feed ── */
 
 var TimelineFeed = {
   view: function () {
@@ -272,6 +314,8 @@ var TimelineFeed = {
     var shown = nodes.slice(0, S.visibleCount);
     var remaining = nodes.length - shown.length;
 
+    // One block per calendar day: a labelled rule, then the day's nodes on a
+    // connector line of their own.
     var blocks = [];
     shown.forEach(function (n) {
       var key = dayKey(n.authored_at);
@@ -312,6 +356,8 @@ var TimelineFeed = {
     ]);
   },
 };
+
+/* ── Restore ── */
 
 function startRestoreReview() {
   var r = S.restore;
@@ -372,7 +418,9 @@ function applyRestore(sha) {
     });
 }
 
-// Assistant markdown passes through DOMPurify before m.trust.
+/* ── Chat, scoped to the open version ── */
+
+/* Assistant answers may arrive as markdown; render it, sanitized. */
 function renderAnswer(text) {
   if (window.marked && window.DOMPurify) {
     return m.trust(DOMPurify.sanitize(marked.parse(text)));
@@ -385,25 +433,11 @@ var STARTERS = [
   { label: "Why was this changed?", message: "Why was this change made?" },
 ];
 
-var ChatPanel = {
-  view: function () {
-    var node = S.selectedSha ? nodeBySha(S.selectedSha) : null;
-    return m("aside.chat-panel", { "aria-label": "Ask about this version" }, [
-      m(".chat-head", [
-        m(".chat-head-label", "Ask about"),
-        m("p.chat-head-title", node ? rowTitle(node) : "No version open"),
-      ]),
-      node ? m(ChatBody, { node: node })
-           : m(".chat-body", m(".chat-empty", "Pick a version on the left to ask about it.")),
-    ]);
-  },
-};
-
-var ChatBody = {
+var VersionChat = {
   view: function (vnode) {
     var node = vnode.attrs.node;
     var exchanges = S.chatBySha[node.sha] || [];
-    return m(".chat-body", [
+    return m(".card-chat", [
       exchanges.length > 0 ? m(".chat-thread", {
         onupdate: function (v) { v.dom.scrollTop = v.dom.scrollHeight; },
         "aria-live": "polite",
@@ -416,16 +450,12 @@ var ChatBody = {
                           [m("span"), m("span"), m("span")])),
           ex.newVersion ? m(".chat-note", "Saved to the timeline — the app was updated.") : null,
         ];
-      })) : [
-        m(".chat-intro", "Ask anything about this version — what changed, why it changed, " +
-                         "or what it means for the app. Answers are written from its actual record."),
-        m(".chat-starters", STARTERS.map(function (s) {
-          return m("button.chip", {
-            disabled: S.chatBusy,
-            onclick: function () { sendAssistMessage(s.message); },
-          }, s.label);
-        })),
-      ],
+      })) : m(".chat-starters", STARTERS.map(function (s) {
+        return m("button.chip", {
+          disabled: S.chatBusy,
+          onclick: function () { sendAssistMessage(s.message); },
+        }, s.label);
+      })),
       m(".chat-form", [
         m("textarea.chat-input", {
           rows: 1,
@@ -507,22 +537,19 @@ function pollAssist(jobId, exchange) {
           exchange.answer = job.answer || "Sorry, that didn't work right now.";
         }
       })
-      .catch(function () {});
+      .catch(function () { /* keep polling */ });
   }, 3000);
 }
 
+/* ── Root ── */
+
 var App = {
   view: function () {
-    return m(".frame", [
-      m(Sidebar),
-      m(".columns", [
-        m("main.main", m(".page", [m(Header), m(TimelineFeed)])),
-        m(ChatPanel),
-      ]),
-    ]);
+    return [m(Sidebar), m("main.main", m(".page", [m(Header), m(TimelineFeed)]))];
   },
 };
 
+// Keyboard: up/down walk the feed (newest first).
 document.addEventListener("keydown", function (e) {
   if (e.target.tagName === "TEXTAREA" || e.target.tagName === "INPUT") return;
   if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
