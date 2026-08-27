@@ -23,3 +23,12 @@ because the model bar matches the live model against the account's own list, an 
 also renders as a shrug that hides every model the account CAN use. Codex now picks its
 account's default, like pi, opencode and antigravity already did. Claude keeps its pin and is
 now the only agent type with one.
+
+Add `system/scripts/default_account_args.py`. It prints the `mngr create` arguments that bind an
+agent to the workspace's default provider account, for the creators that have no agent to
+inherit one from: automations and the weekly Caretaker. Workers do not need it -- `mngr` sources
+an agent's env file into every process in its tmux session and propagates `CLAUDE_CONFIG_DIR` to
+a child agent, so a worker created by `/launch-task` already runs on its parent chat's account.
+Deliberately out of scope: a bare `claude` in a workspace terminal (the user's own shell, which
+they can point wherever they like) and the eval worker (eval infrastructure, not a product
+surface).
