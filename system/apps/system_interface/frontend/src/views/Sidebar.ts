@@ -2125,7 +2125,13 @@ export function Sidebar(): m.Component<SidebarAttrs> {
                 // rounded bottom corners and shadow run off the window edge.
                 // The dock itself stays flush at the bottom; this insets only
                 // the rail.
-                "machine-sidebar absolute top-0 bottom-[4px] left-0 z-20 flex flex-col overflow-hidden border " +
+                //
+                // `top-[2px]` is the dock's own pane inset (--si-pane-inset):
+                // the tab strip starts that far below the shared canvas
+                // padding, so without it the header's 34px row sat 2px higher
+                // than the equally tall tabs beside it. With it, the two rows
+                // ride level and both end at the pane card's top edge.
+                "machine-sidebar absolute top-[2px] bottom-[4px] left-0 z-20 flex flex-col overflow-hidden border " +
                 `${RAIL_PADDING_CLASS} transition-[width] duration-150 ease-out ` +
                 (expanded ? EXPANDED_CLASS : COLLAPSED_CLASS),
             },
