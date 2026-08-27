@@ -17,7 +17,7 @@
  * What varies **by kind** (which verbs exist, in what order, under what
  * label) is fixed here. What varies **by caller** -- what running a verb
  * actually does -- is not: the tab acts on a live, open panel (Refresh
- * reloads its iframe, Rename opens the tab's own inline editor, Hide tab
+ * reloads its iframe, Rename opens the tab's own inline editor, Close tab
  * closes it), while the rail can be showing a *backgrounded* object with no
  * open panel at all, so it needs its own notion of some of the same verbs.
  * ``ObjectMenuActions`` is the seam: every verb's behavior is a callback the
@@ -44,8 +44,8 @@ export interface ObjectMenuItem {
   run: () => void;
 }
 
-/** A separator between the reload/share group and the rename/hide/destroy
- *  group -- see ``objectMenuEntries``. */
+/** A separator between the acting group (Refresh / Share / Add to project)
+ *  and the removal group -- see ``objectMenuEntries``. */
 export const OBJECT_MENU_DIVIDER = "divider";
 
 /** One row of the menu: an actionable item, or a divider. */
@@ -129,12 +129,13 @@ export interface ObjectMenuActions {
   quit: { label: string; run: () => void; isDestructive?: boolean } | null;
   /**
    * The SERVICE's own verbs on an app-instance menu -- "Share {app}" and the
-   * reversible "Stop {app}" / "Start {app}" -- rendered as a trailing group
-   * behind their own divider, so the service stays reachable from any of its
-   * instances (Everything's rows included) while the verbs above stay the
-   * instance's. Null (or absent) everywhere else: a chat, terminal, or
-   * browser has no service behind it, and a bare app row IS the service, so
-   * its share and lifecycle ride the ordinary slots instead.
+   * reversible "Stop {app}" / "Start {app}" -- so the service stays reachable
+   * from any of its instances (Everything's rows included). Rendered in the
+   * ordinary positions (share with the acting group, lifecycle with the
+   * process verbs), not as a group of their own. Null (or absent) everywhere
+   * else: a chat, terminal, or browser has no service behind it, and a bare
+   * app row IS the service, so its share and lifecycle ride the ordinary
+   * slots instead.
    */
   serviceGroup?: {
     share: { label: string; run: () => void } | null;
@@ -145,55 +146,56 @@ export interface ObjectMenuActions {
 /**
  * The verb list for one object, in display order.
  *
+ * The menu reads as two groups. The opening group acts on the object --
+ * Refresh, Share, Add to project. The closing group removes, in increasing
+ * severity: Close tab drops the panel, Remove from project drops the filing,
+ * Stop drops the process, Delete drops the object -- reading them in that
+ * order is what tells the easily-confused acts apart. Rename leads the
+ * closing group for the one kind that has it (``isRenameableKind``).
+ *
  * Refresh applies to all four kinds. It means "reload what the tab is
  * showing" for chat/browser/app, and "reattach the object's persistent
  * session" for a terminal (see ``refreshPanelContent`` in DockviewWorkspace,
  * which is where that distinction actually lives -- this module only fixes
  * that the verb is offered, not what it does).
- * Rename is offered for the kinds whose name is theirs to choose, which is
- * what ``isRenameableKind`` decides and why.
  * Share is an app-only affordance: the share surface is per registered
- * service, and the other three kinds have none.
- * Hide tab and Remove from project are each one SURFACE's job, which the two
- * callers say by supplying only their own. Hiding is what you want while
- * looking at the tab, and unfiling is what you want while looking at the
- * project's list of what it shows -- so the dock tab passes no
- * ``removeFromProject`` and the rail passes no ``hideTab``, and neither menu
- * offers a verb the other one owns.
- * The destructive verb is likewise omitted per-OBJECT rather than per-kind,
- * through ``actions``: whether it applies depends on this object's state
- * (allocated or not, the primary agent or not) rather than on its kind.
+ * service, and the other three kinds have none. It renders from whichever
+ * slot supplied it -- the bare app's own ``share`` or the instance menu's
+ * ``serviceGroup`` -- and likewise the process verb comes from ``stop`` (a
+ * chat) or ``serviceGroup.lifecycle`` (an app instance's service).
+ * Close tab and Remove from project are each one SURFACE's job, which the
+ * two callers say by supplying only their own: closing is what you want
+ * while looking at the tab, and unfiling is what you want while looking at
+ * the project's list of what it shows.
+ * The destructive verb is omitted per-OBJECT rather than per-kind, through
+ * ``actions``: whether it applies depends on this object's state (allocated
+ * or not, the primary agent or not) rather than on its kind.
  */
 export function objectMenuEntries(kind: ObjectMenuKind, actions: ObjectMenuActions): ObjectMenuEntry[] {
   const opening: ObjectMenuEntry[] = [{ label: "Refresh", iconName: "refresh", run: actions.refresh }];
-  if (kind === "app" && actions.share !== null) {
-    opening.push({ label: actions.share.label, iconName: "share", run: actions.share.run });
+  const share = kind === "app" ? (actions.share ?? actions.serviceGroup?.share ?? null) : null;
+  if (share != null) {
+    opening.push({ label: share.label, iconName: "user-plus", run: share.run });
+  }
+  if (actions.addToProjects !== null) {
+    opening.push({ label: "Add to project...", iconName: "folder-plus", run: actions.addToProjects });
   }
   const closing: ObjectMenuEntry[] = [];
   if (isRenameableKind(kind)) {
     closing.push({ label: "Rename", iconName: "edit", run: actions.rename });
   }
   if (actions.hideTab !== null) {
-    closing.push({ label: "Hide tab", iconName: "close", run: actions.hideTab });
+    closing.push({ label: "Close tab", iconName: "close", run: actions.hideTab });
   }
-  // Sits directly above "Remove from project": both act on where the object
-  // shows rather than on the object itself, and reading them together is what
-  // tells the filing group apart from the process verbs below.
-  if (actions.addToProjects !== null) {
-    closing.push({ label: "Add to project...", iconName: "folder-plus", run: actions.addToProjects });
-  }
-  // Sits above the destroy, which is the one it is easily confused with: this
-  // takes the object out of one view and leaves it running, filed in Everything
-  // and in any other project showing it, while the destroy takes it off the
-  // machine entirely.
   if (actions.removeFromProject !== null) {
     closing.push({ label: "Remove from project", iconName: "minus-circle", run: actions.removeFromProject });
   }
   // Above the delete it must never be confused with: stopping puts the process
   // down and keeps the object, deleting ends it. The icons say the same thing
   // (power button vs trash can).
-  if (actions.stop !== null) {
-    closing.push({ label: actions.stop.label, iconName: "power", run: actions.stop.run });
+  const stop = actions.stop ?? actions.serviceGroup?.lifecycle ?? null;
+  if (stop != null) {
+    closing.push({ label: stop.label, iconName: "power", run: stop.run });
   }
   if (actions.quit !== null) {
     const isDestructive = actions.quit.isDestructive !== false;
@@ -204,30 +206,8 @@ export function objectMenuEntries(kind: ObjectMenuKind, actions: ObjectMenuActio
       run: actions.quit.run,
     });
   }
-  // The service's own verbs trail the instance's behind their own divider
-  // (see ``ObjectMenuActions.serviceGroup``): Share, then Stop/Start,
-  // reading in the same order the bare app menu offers them.
-  const serviceEntries: ObjectMenuEntry[] = [];
-  if (actions.serviceGroup != null) {
-    if (actions.serviceGroup.share !== null) {
-      serviceEntries.push({
-        label: actions.serviceGroup.share.label,
-        iconName: "share",
-        run: actions.serviceGroup.share.run,
-      });
-    }
-    if (actions.serviceGroup.lifecycle !== null) {
-      serviceEntries.push({
-        label: actions.serviceGroup.lifecycle.label,
-        iconName: "power",
-        run: actions.serviceGroup.lifecycle.run,
-      });
-    }
-  }
-  // The dividers earn their place only when they have something on both
-  // sides: a backgrounded terminal still allocating its session has neither
-  // a rename, a tab to hide, nor a destroy, and a menu must not end on a
-  // rule.
-  const leading: ObjectMenuEntry[] = closing.length === 0 ? opening : [...opening, OBJECT_MENU_DIVIDER, ...closing];
-  return serviceEntries.length === 0 ? leading : [...leading, OBJECT_MENU_DIVIDER, ...serviceEntries];
+  // The divider earns its place only when it has something on both sides: a
+  // backgrounded terminal still allocating its session has neither a rename,
+  // a tab to close, nor a destroy, and a menu must not end on a rule.
+  return closing.length === 0 ? opening : [...opening, OBJECT_MENU_DIVIDER, ...closing];
 }
