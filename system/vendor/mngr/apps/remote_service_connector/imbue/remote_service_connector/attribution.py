@@ -235,7 +235,8 @@ class PostgresAttributionStore:
         signup_context: str,
         signup_method: str,
     ) -> None:
-        with db.pooled_db_connection() as conn:
+        conn = db.get_pool_db_connection()
+        try:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -252,6 +253,8 @@ class PostgresAttributionStore:
                             signup_method,
                         ),
                     )
+        finally:
+            conn.close()
 
     def insert_download_event(
         self,
@@ -262,7 +265,8 @@ class PostgresAttributionStore:
         platform: str,
         user_agent: str | None,
     ) -> None:
-        with db.pooled_db_connection() as conn:
+        conn = db.get_pool_db_connection()
+        try:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -270,6 +274,8 @@ class PostgresAttributionStore:
                         "VALUES (%s, %s, %s, %s, %s)",
                         (visitor_id, _jsonb_or_null(first_touch), _jsonb_or_null(last_touch), platform, user_agent),
                     )
+        finally:
+            conn.close()
 
 
 def _jsonb_or_null(touch: dict[str, str] | None) -> Any:

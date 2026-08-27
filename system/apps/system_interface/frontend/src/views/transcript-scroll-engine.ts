@@ -165,7 +165,17 @@ export interface TranscriptScrollEngine {
 }
 
 function isTraceEnabled(): boolean {
-  return typeof location !== "undefined" && location.search.includes("debug=scroll");
+  if (typeof location !== "undefined" && location.search.includes("debug=scroll")) {
+    return true;
+  }
+  // The embedded pane inside the desktop client has no query string to carry
+  // the flag; localStorage lets debugging be switched on there (takes effect
+  // on the next pane load).
+  try {
+    return localStorage.getItem("transcript-scroll-debug") === "1";
+  } catch {
+    return false;
+  }
 }
 
 export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfig): TranscriptScrollEngine {
@@ -454,6 +464,59 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
 
   // --- programmatic writes / echo tracking ----------------------------------
 
+  // --- smoothed programmatic writes -----------------------------------------
+  // Engine-driven position changes (the streaming follow pin, scrollbar drag
+  // steps) land as discrete multi-hundred-px snaps when written directly --
+  // each streamed chunk or pointermove teleports the content, which reads as
+  // "jumpy". Small-to-medium writes instead glide: a per-frame loop moves a
+  // fixed fraction of the remaining distance (echo-tracked writes, so the
+  // state machines never see them as input) and any genuine user input
+  // cancels the glide instantly. Large writes (track jumps, initial pins)
+  // still snap -- gliding across thousands of px would feel like animation.
+  let smoothTargetPx: number | null = null;
+  let smoothReason = "";
+  let smoothRafId: number | null = null;
+  const SMOOTH_STEP_FRACTION = 0.4;
+  const SMOOTH_MIN_STEP_PX = 24;
+
+  function cancelSmoothScroll(): void {
+    if (smoothRafId !== null) {
+      cancelAnimationFrame(smoothRafId);
+      smoothRafId = null;
+    }
+    smoothTargetPx = null;
+  }
+
+  function smoothStep(): void {
+    smoothRafId = null;
+    if (smoothTargetPx === null || scrollEl === null) {
+      return;
+    }
+    const element = scrollEl;
+    const remainingPx = smoothTargetPx - element.scrollTop;
+    if (Math.abs(remainingPx) <= 1) {
+      writeScrollTop(element, smoothTargetPx, smoothReason);
+      smoothTargetPx = null;
+      m.redraw();
+      return;
+    }
+    const stepPx = Math.sign(remainingPx) * Math.max(SMOOTH_MIN_STEP_PX, Math.abs(remainingPx) * SMOOTH_STEP_FRACTION);
+    const nextPx = Math.abs(stepPx) >= Math.abs(remainingPx) ? smoothTargetPx : element.scrollTop + stepPx;
+    writeScrollTop(element, nextPx, smoothReason);
+    // Keep the mounted window tracking the gliding viewport (echo-consumed
+    // scroll events do not redraw on their own).
+    m.redraw();
+    smoothRafId = requestAnimationFrame(smoothStep);
+  }
+
+  function smoothWriteScrollTop(element: HTMLElement, targetPx: number, reason: string): void {
+    smoothTargetPx = targetPx;
+    smoothReason = reason;
+    if (smoothRafId === null) {
+      smoothStep(); // move immediately; smoothStep schedules its own next frame
+    }
+  }
+
   function writeScrollTop(element: HTMLElement, targetPx: number, reason: string): void {
     const beforePx = element.scrollTop;
     element.scrollTop = targetPx;
@@ -736,6 +799,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       return;
     }
     pendingEchoTops.length = 0; // a genuine scroll invalidates stale echoes
+    cancelSmoothScroll(); // real input supersedes any engine glide in flight
     const didScrollUp = topPx < scrollTopPx;
     scrollTopPx = topPx;
     lastActivityAtMs = performance.now();
@@ -780,6 +844,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
   }
 
   function onWheel(event: WheelEvent): void {
+    cancelSmoothScroll();
     lastNativeInputAtMs = performance.now();
     lastInputSource = "wheel";
     lastActivityAtMs = performance.now();
@@ -808,6 +873,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
   }
 
   function onKeyDown(): void {
+    cancelSmoothScroll();
     lastNativeInputAtMs = performance.now();
     lastInputSource = "keyboard";
     markOtherInteraction();
@@ -816,6 +882,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
   function onPointerDown(): void {
     // A drag over the transcript is likely a selection: defer the FOLLOW pin
     // while the button is held, and treat edge autoscroll as its own source.
+    cancelSmoothScroll();
     lastNativeInputAtMs = performance.now();
     lastInputSource = "selection-autoscroll";
     isPointerDown = true;
@@ -976,8 +1043,20 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
         if (hasPendingUserScroll) {
           pendingEchoTops.push(element.scrollTop);
         }
-        if (Math.abs(element.scrollTop - targetPx) > 0.5) {
-          writeScrollTop(element, targetPx, "follow-pin");
+        const pinDeltaPx = targetPx - element.scrollTop;
+        // Glide only for steady streaming growth. During fill/measurement
+        // churn content grows hundreds of px per frame and a glide would lag
+        // it into a visible sustained gap; and a large catch-up would read as
+        // animation. Both snap.
+        const isChurning =
+          fillInFlight || spacerTopPx > 0 || spacerBottomPx > 0 || (geometry !== null && geometry.unmeasuredCount > 0);
+        if (Math.abs(pinDeltaPx) > 0.5) {
+          if (!isChurning && Math.abs(pinDeltaPx) <= element.clientHeight * 1.5) {
+            smoothWriteScrollTop(element, targetPx, "follow-pin");
+          } else {
+            cancelSmoothScroll();
+            writeScrollTop(element, targetPx, "follow-pin");
+          }
         } else {
           scrollTopPx = element.scrollTop;
         }
@@ -1010,6 +1089,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
           pendingEchoTops.push(element.scrollTop);
         }
         if (Math.abs(element.scrollTop - heldPx) > 0.5) {
+          cancelSmoothScroll();
           writeScrollTop(element, heldPx, "anchor-hold");
         } else {
           scrollTopPx = element.scrollTop;
@@ -1174,6 +1254,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     },
 
     detach(): void {
+      cancelSmoothScroll();
       detachListeners();
       offscreenMeasurer.cancel();
       if (persistTimer !== null) {
@@ -1208,6 +1289,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       pendingJumpIndex = null;
       pendingJumpLandIndex = null;
       pendingTailIntent = false;
+      cancelSmoothScroll();
       lastSeenEndIndex = -1;
       hasUnfollowedAppend = false;
       freezeRange = null;
@@ -1271,12 +1353,22 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
         const maxScrollPx = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
         const bandEndPx = spacerBottomPx > 0 ? spacerTopPx + physicalHeightPx() : maxScrollPx;
         const spanPx = Math.max(0, bandEndPx - spacerTopPx);
-        writeScrollTop(scrollEl, spacerTopPx + target.fraction * spanPx, "scrollbar-physical");
+        const targetTopPx = spacerTopPx + target.fraction * spanPx;
+        // On a huge transcript each pointermove maps to hundreds or thousands
+        // of px; written directly, every move is a visible teleport. Glide
+        // between drag steps; a genuine far jump (track click) still snaps.
+        if (Math.abs(targetTopPx - scrollEl.scrollTop) <= scrollEl.clientHeight * 4) {
+          smoothWriteScrollTop(scrollEl, targetTopPx, "scrollbar-physical");
+        } else {
+          cancelSmoothScroll();
+          writeScrollTop(scrollEl, targetTopPx, "scrollbar-physical");
+        }
         pendingJumpIndex = null;
         if (geometry !== null) {
           const anchor = anchorForUser();
           if (anchor !== null) {
-            const bottomGapPx = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight;
+            // Gap judged at the drag TARGET, not the mid-glide position.
+            const bottomGapPx = scrollEl.scrollHeight - targetTopPx - scrollEl.clientHeight;
             const totalEvents = dataSource.getTotalEvents();
             const atTail =
               bottomGapPx < BOTTOM_THRESHOLD_PX &&

@@ -328,35 +328,29 @@ def is_email_paid_in_db(
     Paid when either an exact (lowercased) full-email match exists in
     ``paid_emails`` with ``is_paid = true``, OR the email's exact domain
     matches a ``paid_domains`` row with ``is_paid = true``. ``connection_factory``
-    is injected so unit tests can supply an in-memory backend; when absent the
-    lookup goes through the shared connection pool (whose factory resolves
-    installed fakes on the ``db`` module).
+    is injected so unit tests can supply an in-memory backend; it defaults
+    to ``db.get_pool_db_connection`` (resolved lazily so installed fakes on
+    the ``db`` module take effect).
 
     Raises ``psycopg2.Error`` on any database failure; gate-style callers
     (:func:`require_ally_eligible`) convert that into a fail-closed 403.
     """
+    factory = connection_factory if connection_factory is not None else db.get_pool_db_connection
     email_lower = email.strip().lower()
     domain = _email_domain(email_lower)
-    if connection_factory is None:
-        with db.pooled_db_connection() as conn:
-            return _is_email_paid_on_connection(conn, email_lower, domain)
-    conn = connection_factory()
+    conn = factory()
     try:
-        return _is_email_paid_on_connection(conn, email_lower, domain)
-    finally:
-        conn.close()
-
-
-def _is_email_paid_on_connection(conn: Any, email_lower: str, domain: str) -> bool:
-    with conn.cursor() as cur:
-        cur.execute("SELECT 1 FROM paid_emails WHERE email = %s AND is_paid = TRUE", (email_lower,))
-        if cur.fetchone() is not None:
-            return True
-        if domain:
-            cur.execute("SELECT 1 FROM paid_domains WHERE domain = %s AND is_paid = TRUE", (domain,))
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM paid_emails WHERE email = %s AND is_paid = TRUE", (email_lower,))
             if cur.fetchone() is not None:
                 return True
-    return False
+            if domain:
+                cur.execute("SELECT 1 FROM paid_domains WHERE domain = %s AND is_paid = TRUE", (domain,))
+                if cur.fetchone() is not None:
+                    return True
+        return False
+    finally:
+        conn.close()
 
 
 def is_email_paid(

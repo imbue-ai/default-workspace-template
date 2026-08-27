@@ -1085,7 +1085,8 @@ class PostgresDeviceAuthCodeStore:
     def insert_code(
         self, code_hash: str, user_id: str, code_challenge: str, redirect_uri: str, expires_at: datetime
     ) -> None:
-        with db.pooled_db_connection() as conn:
+        conn = db.get_pool_db_connection()
+        try:
             with conn:
                 with conn.cursor() as cur:
                     # Opportunistic cleanup keeps the table tiny without a cron.
@@ -1095,9 +1096,12 @@ class PostgresDeviceAuthCodeStore:
                         "VALUES (%s, %s, %s, %s, %s)",
                         (code_hash, user_id, code_challenge, redirect_uri, expires_at),
                     )
+        finally:
+            conn.close()
 
     def consume_code(self, code_hash: str) -> dict[str, Any] | None:
-        with db.pooled_db_connection() as conn:
+        conn = db.get_pool_db_connection()
+        try:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -1107,6 +1111,8 @@ class PostgresDeviceAuthCodeStore:
                         (code_hash,),
                     )
                     row = cur.fetchone()
+        finally:
+            conn.close()
         if row is None:
             return None
         return {"user_id": row[0], "code_challenge": row[1], "redirect_uri": row[2]}

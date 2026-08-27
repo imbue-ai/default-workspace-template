@@ -303,10 +303,7 @@ class LimaProviderInstance(BaseProviderInstance):
     @cached_property
     def _host_store(self) -> LimaHostStore:
         """Host record store backed by the state volume."""
-        return LimaHostStore(
-            volume=self._state_volume,
-            is_strict_parsing=self.mngr_ctx.config.strict_host_record_parsing,
-        )
+        return LimaHostStore(volume=self._state_volume)
 
     # =========================================================================
     # Volume Helpers
@@ -816,8 +813,8 @@ sudo poweroff
 
             # When running the agent as root, mint this host's own client keypair and
             # pass its public key into the provisioning script so mngr can ssh in as
-            # root (per-host, so no provider-wide key is ever exported with a
-            # host's credentials).
+            # root (per-host, so no provider-wide key ever needs to enter a synced
+            # workspace record).
             if self.config.is_run_as_root:
                 _root_key_path, root_authorized_public_key = self._create_per_host_root_ssh_keypair(host_id)
             else:
@@ -1606,10 +1603,6 @@ sudo poweroff
     # =========================================================================
     # Agent Data Persistence
     # =========================================================================
-
-    @property
-    def is_agent_data_persistence_supported(self) -> bool:
-        return True
 
     def list_persisted_agent_data_for_host(self, host_id: HostId) -> list[dict[str, Any]]:
         return self._host_store.list_persisted_agent_data_for_host(host_id)

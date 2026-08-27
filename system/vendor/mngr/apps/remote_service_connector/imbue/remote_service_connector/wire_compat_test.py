@@ -276,16 +276,6 @@ def test_sync_responses_parse_for_all_snapshots(monkeypatch: pytest.MonkeyPatch)
     assert put.status_code == 200, put.text
     _validate_for_snapshots("PUT /sync/records/{host_id}", put.json())
 
-    # The workspace-keyed route serves the same record shape (including one
-    # carrying the new backup_bucket column, which must stay off the wire
-    # while any strict snapshot is in-window).
-    workspace_put_body = dict(record_body, revision=2, backup_bucket="testuser--agent-compat01")
-    workspace_put = client.put(
-        "/sync/records/by-workspace/agent-compat01", json=workspace_put_body, headers=_user_headers()
-    )
-    assert workspace_put.status_code == 200, workspace_put.text
-    _validate_for_snapshots("PUT /sync/records/{host_id}", workspace_put.json())
-
     listed = client.get("/sync/records", headers=_user_headers())
     assert listed.status_code == 200
     _validate_entries_for_snapshots("GET /sync/records [entry]", listed.json()["records"])
@@ -335,10 +325,6 @@ _STRICTLY_PARSED_ROUTES: dict[tuple[str, str], str] = {
     ("POST", "/account/storage-recheck"): "POST /account/storage-recheck",
     ("GET", "/sync/records"): "GET /sync/records [entry]",
     ("PUT", "/sync/records/{host_id}"): "PUT /sync/records/{host_id}",
-    # The workspace-keyed PUT serves the identical record shape as the
-    # host-keyed one, so it shares that endpoint key: any snapshot that parses
-    # the record shape covers both routes.
-    ("PUT", "/sync/records/by-workspace/{workspace_id}"): "PUT /sync/records/{host_id}",
     ("GET", "/sync/bundle"): "GET /sync/bundle",
 }
 
@@ -385,7 +371,6 @@ _EXEMPT_ROUTES: dict[tuple[str, str], str] = {
     ("POST", "/account/plan"): _TOLERANT_CLIENT,
     # Sync operations without strictly-parsed bodies.
     ("DELETE", "/sync/records/{host_id}"): _STATUS_ONLY,
-    ("DELETE", "/sync/records/by-workspace/{workspace_id}"): _STATUS_ONLY,
     ("POST", "/sync/scrub-secrets"): _TOLERANT_CLIENT,
     ("PUT", "/sync/bundle"): _STATUS_ONLY,
     ("DELETE", "/sync/bundle"): _STATUS_ONLY,

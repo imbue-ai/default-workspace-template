@@ -12,11 +12,9 @@ dependencies = [
     "pydantic>=2.11",
     "imbue-common",
     # Token -> USD pricing for the workspace agent's transcript usage. Reusing
-    # this table rather than copying it keeps the eval's cost numbers on the same
-    # per-token rates the in-box proxy is configured with, since proxy_config
-    # builds that config from this table too. The rates themselves are pinned to
-    # litellm's map by litellm_pricing_test -- the four flat buckets only, not
-    # the fast-mode or 1-hour-cache dimensions that map also carries.
+    # this table rather than copying it keeps the eval's cost numbers bound to
+    # the same prices the LiteLLM proxy bills at (enforced by
+    # libs/mngr_usage/imbue/mngr_usage/litellm_pricing_test.py).
     "imbue-mngr-usage",
 ]
 
@@ -77,11 +75,10 @@ dev = [
     "imbue-common[dev]",
     "ty>=0.0.39",
     # Not imported by anything this project runs: it is here so the type checker
-    # can resolve templates/, whose criteria (under tests/ and outcome/ alike)
-    # import `rewardkit`. The verifier container installs it separately via uvx,
-    # so this pin must match the one in templates/tests/test.sh, which runs the
-    # whole verifier -- rewardkit_pin_test.py asserts that.
-    # Its only base dependency is litellm, already present via harbor.
+    # can resolve templates/tests/, whose criteria import `rewardkit`. The
+    # verifier container installs it separately via uvx, so this pin must match
+    # the one in templates/tests/test.sh -- typecheck_coverage_test.py asserts
+    # that. Its only base dependency is litellm, already present via harbor.
     "harbor-rewardkit==0.1.*",
 ]
 
@@ -120,10 +117,7 @@ omit = ["*_test.py", "test_*.py", "*/tests/*", "*/conftest.py", "*/templates/*",
 # venv, importing mngr_forward and litellm, which this project does not depend on.
 # It is type-checked by the root workspace instead -- the box runs that venv, so it
 # is the accurate environment for it; the root [tool.ty.src] exclude deliberately
-# does not cover it. Anything listed here must stay checked there:
-# test_meta_ratchets.py reads this list and probes the root's ty for each path, so
-# excluding a path here without un-excluding it at the root fails that check. Every
-# entry must name a directory or a file, since the probe hands it straight to ty.
+# does not cover it, and typecheck_coverage_test.py holds both halves in place.
 #
 # templates/ is NOT excluded. Those files also run elsewhere (the verifier
 # container), but their only foreign import is rewardkit, which the dev group

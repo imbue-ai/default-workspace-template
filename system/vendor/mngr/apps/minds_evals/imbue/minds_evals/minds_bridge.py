@@ -34,10 +34,6 @@ _RESOURCES = resources.files("imbue.minds_evals") / "resources"
 BOX_REVERSE_TUNNEL_FILENAME: Final[str] = "box_reverse_tunnel.py"
 BOX_REVERSE_TUNNEL_PATH: Final[str] = "/tmp/box_reverse_tunnel.py"
 BOX_PROXY_HOOKS_FILENAME: Final[str] = "box_proxy_hooks.py"
-BOX_FLOW_STEP_FILENAME: Final[str] = "box_flow_step.py"
-# The request and result models both sides share. It rides into the box beside the step script
-# and is imported by it as a plain module, so the two files must land in the same directory.
-BOX_FLOW_PROTOCOL_FILENAME: Final[str] = "flow_step_protocol.py"
 BOX_PROXY_DIR: Final[str] = "/tmp/eval_proxy"
 PROXY_CONFIG_FILENAME: Final[str] = "proxy_config.yaml"
 BOX_PROXY_USAGE_LOG_PATH: Final[str] = "/tmp/eval_proxy/usage_proxy.jsonl"
@@ -532,39 +528,6 @@ def parse_agent_ssh_info(listed_json: str, agent_id: str) -> dict[str, str] | No
     return None
 
 
-@pure
-def parse_agent_host_id(listed_json: str, agent_id: str) -> str:
-    """The workspace's HOST id out of `mngr list --format json`; empty when it is not there.
-
-    Distinct from the agent id, and not derivable from it: both are independent uuid4s, and an
-    agent that moves keeps its id while getting a new host. The forwarded origin is built from the
-    HOST id (`<label>.host-<hex>.localhost`), which is why this has to be looked up rather than
-    formatted from the agent id the driver already holds.
-    """
-    try:
-        payload = json.loads(listed_json)
-    except ValueError:
-        return ""
-    agents = payload.get("agents") if isinstance(payload, dict) else payload
-    for entry in agents or []:
-        if not isinstance(entry, dict) or str(entry.get("id")) != agent_id:
-            continue
-        host = entry.get("host")
-        return str(host.get("id") or "") if isinstance(host, dict) else ""
-    return ""
-
-
-async def fetch_agent_host_id(
-    environment: BaseEnvironment,
-    env: dict[str, str],
-    workspace_agent_id: str,
-) -> str:
-    result = await run_in_box(
-        environment, "cd {} && uv run mngr list --format json".format(BOX_MNGR_DIR), env, _QUICK_EXEC_TIMEOUT_SECONDS
-    )
-    return parse_agent_host_id(result.stdout or "", workspace_agent_id)
-
-
 async def fetch_agent_ssh_info(
     environment: BaseEnvironment,
     env: dict[str, str],
@@ -611,23 +574,6 @@ async def start_reverse_tunnel(
         log=TUNNEL_LOG_FILENAME,
     )
     await check_run_in_box(environment, command, env, _QUICK_EXEC_TIMEOUT_SECONDS)
-
-
-async def upload_flow_step_script(environment: BaseEnvironment, target_path: str) -> None:
-    """Put the UI-flow step script, and the protocol module it imports, in the box.
-
-    Both land in the target's directory, because the script imports the protocol as a plain module
-    beside it. Uploaded per trial rather than baked into the box image for the same reason the
-    reverse-tunnel holder is: the image is layer-cached per mngr SHA and has to stay byte-identical
-    across a dataset, so a change here would otherwise cost a full rebuild.
-    """
-    box_dir = target_path.rsplit("/", 1)[0]
-    for filename, destination in (
-        (BOX_FLOW_STEP_FILENAME, target_path),
-        (BOX_FLOW_PROTOCOL_FILENAME, "{}/{}".format(box_dir, BOX_FLOW_PROTOCOL_FILENAME)),
-    ):
-        with resources.as_file(_RESOURCES / filename) as source_path:
-            await environment.upload_file(source_path, destination)
 
 
 async def read_box_file(environment: BaseEnvironment, env: dict[str, str], path: str) -> str:

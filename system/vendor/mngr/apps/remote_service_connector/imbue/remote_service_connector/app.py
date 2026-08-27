@@ -174,15 +174,13 @@ def _connector_secrets() -> list[modal.Secret]:
 # single slow request (a lease's SSH provisioning, a cold sync pull) makes
 # every other caller queue behind it or wait out a fresh container's cold
 # boot -- even with a warm pool. The app is safe to run concurrently: routes
-# are sync ``def`` (FastAPI runs them on its threadpool), every route checks
-# a psycopg2 connection out of the lock-guarded per-container pool for
-# exactly the span of one ``with`` block (``db.pooled_db_connection``), the
-# lease selection uses ``FOR UPDATE SKIP LOCKED``, the shared Cloudflare
-# ``httpx.Client`` is thread-safe, and the remaining module-level mutable
-# state (the paid-status and ping-decision caches) is lock-guarded.
-# ``max_inputs`` is kept modest because each concurrent request holds one
-# Neon connection and one threadpool thread for its duration (the pool's
-# idle capacity matches this cap).
+# are sync ``def`` (FastAPI runs them on its threadpool), every route opens
+# its own psycopg2 connection and closes it in ``finally``, the lease
+# selection uses ``FOR UPDATE SKIP LOCKED``, the shared Cloudflare
+# ``httpx.Client`` is thread-safe, and the only module-level mutable state
+# (the paid-status cache) is lock-guarded. ``max_inputs`` is kept modest
+# because each concurrent request holds one direct Neon connection and one
+# threadpool thread for its duration.
 @modal.concurrent(max_inputs=8)
 @modal.asgi_app(custom_domains=_CUSTOM_DOMAINS)
 def fastapi_app() -> FastAPI:
@@ -234,13 +232,16 @@ def cleanup_removing_pool_hosts() -> dict[str, int]:
 
 
 def _cleanup_removing_pool_hosts() -> dict[str, int]:
-    with db.pooled_db_connection() as conn:
+    conn = db.get_pool_db_connection()
+    try:
         # Audit this env's slices on every box against the DB (alert-only: it never
         # auto-deletes, to avoid racing an in-flight bake). Scoped to MINDS_ENV_NAME so
         # it is safe on a box shared by multiple dev envs. A reconcile failure (DB,
         # SSH, or a missing POOL_SSH_PRIVATE_KEY while boxes exist) is a real failure:
         # let it propagate and fail the cron run rather than silently swallowing it.
         divergence_count = reconcile_slice_boxes(conn, deployed_minds_env_name())
+    finally:
+        conn.close()
     logger.info("Slice reconcile done: slice_divergences=%d", divergence_count)
     return {"slice_divergences": divergence_count}
 

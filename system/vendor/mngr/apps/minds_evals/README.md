@@ -25,20 +25,14 @@ comparison and removal PRs land).
    (literal, or role-played by the decider model on `DECIDE_FROM_PERSONA`), wait for the reply,
    snapshot the workspace, and keep `/logs/agent/full_transcript.jsonl` + `state.json` current in
    the box.
-5. Once the last turn is done and while the workspace is still alive, the driver runs an
-   **evidence-collection** phase: it records what was actually delivered (the app registry,
-   supervisord's view of it, a file inventory, HTTP probes, declared test commands, and the
-   delivered repo as a git bundle) into `/logs/agent/verification/`. This has to happen here --
-   the verifier runs after the workspace is destroyed. See [Outcome verification](#outcome-verification).
-6. The **verifier** (pure rewardkit, separate container) scores the transcript: three 1-10 likert
+5. The **verifier** (pure rewardkit, separate container) scores the transcript: three 1-10 likert
    judge criteria (conciseness, nontechnical_language, proactive), a binary wordiness guard, and
    structural gates (transcript parses, the agent engaged with distinct non-stub replies, all turns
    completed, not timed out) that zero the reward when they fail. The judge grades a **message-by-
    message** rendering (`judge_transcript.txt`: one `[USER]` block per client turn, one
    `[AGENT · message N]` block per agent message) that a grade-time pre-step rebuilds from
    `full_transcript.jsonl`, so conciseness is judged per individual message and `harbor trial regrade`
-   re-scores captured trials under the current rendering. Cases that declare `expectations` gain a
-   third `outcome` dimension over the collected evidence. Timed-out trials score 0 with a
+   re-scores captured trials under the current rendering. Timed-out trials score 0 with a
    `timed_out` marker in `reward-details.json`; a judge/grading-infrastructure failure errors the
    trial instead of recording a fake 0.
 
@@ -68,12 +62,10 @@ only way harbor gets the dependencies it declares. Practical consequences:
   and is type-checked by the root workspace for that reason. Its tests
   and type check run under `just test-minds-evals`, which the `test-minds-evals` CI job invokes on
   any PR touching this app or the monorepo packages it depends on.
-- `imbue/minds_evals/resources/` and `imbue/minds_evals/templates/` are both shipped as source into
-  environments this project's venv does not reproduce, but they resolve opposite ways. This project
-  excludes `resources/` from its type check and leans on the root workspace, so
-  `test_meta_ratchets.py` at the repo root keeps the two configs from excluding it at once.
-  `templates/` is type-checked here: it runs in the verifier container, whose `rewardkit` the dev
-  group installs in this project too. Coverage omits both.
+- `imbue/minds_evals/resources/` and `imbue/minds_evals/templates/` import packages this project
+  deliberately does not depend on (`litellm` and `mngr_forward` in the box, `rewardkit` in the
+  verifier container). They are shipped as source into environments that do have them, so this
+  project's type check and coverage skip both directories.
 
 ## Usage
 
@@ -100,9 +92,6 @@ not a per-PR gate**. Handy knobs:
 - `-m/--model` selects the decider (simulated-user) model; default `claude-opus-4-8`.
 - `--ak snapshot_mode=per-turn|final|off` controls workspace snapshot cadence (the run recipe
   defaults to `final`; pass `--ak snapshot_mode=per-turn` after the named args to override).
-- `--ak verifier_model=<model>` runs the UI-flow verification agent on a different model from the
-  decider (default: the decider's). Flow driving is mechanical, so a cheaper tier may do -- measure
-  flow stability before changing the default.
 - `-k/--n-attempts N` runs each case N times (judge scores are statistical; use means).
 - `just minds-evals-run <dataset> <job> <concurrency> true` (or `MINDS_EVALS_PUSH_R2=1`) syncs the
   job dir to R2 after the run; it defaults to off everywhere.
@@ -175,22 +164,12 @@ like with like, and switching tier invalidates the prompt cache.
 input, output, cache read, cache write), per model, with costs. The buckets stay separate because
 Anthropic prices them differently -- a cache write costs 1.25x a plain input token and a cache read
 0.1x -- so a single "input tokens" number can neither produce a correct cost nor show cache
-behaviour. Prices come from `mngr_usage`'s table, which `litellm_pricing_test` pins entry by entry
-against litellm's own price map, and an unpriced model reports `cost_usd: null` rather than a
-misleading `0`. `build_model_list` derives the in-box proxy's config from that same table, one
-flat-priced entry per model, so the per-request `cost_usd` inside `usage_proxy.jsonl` is a
-standard-rate figure computed from those four buckets; the trial's totals are the tier-aware ones,
-because `compute_cost` applies `FAST_MODE_PRICE_MULTIPLIER` on top.
-
-That multiplier is the seam worth knowing about. litellm's map carries the fast premium itself, as
-`provider_specific_entry.fast` -- so it *is* pinnable, and `litellm_pricing_test` does not pin it:
-that test compares the four flat buckets only. The map also carries dimensions nothing here mirrors,
-notably `cache_creation_input_token_cost_above_1hr` (the 1-hour cache-write rate, against the
-5-minute rate every figure here assumes) and a regional uplift. Measured against the map on
-2026-08-20, `FAST_MODE_MODELS` and `FAST_MODE_PRICE_MULTIPLIER` already disagree with it: litellm
-gives a fast entry to four Opus models where this table names two, and prices the fast tier on Opus
-4.6 and 4.7 at 6x rather than 2x. Neither is a model the eval runs today, so no recorded figure is
-affected -- but treat the fast-mode rate as unpinned rather than as verified.
+behaviour. Prices come from `mngr_usage`'s table, which a drift test binds to the LiteLLM proxy's,
+and an unpriced model reports `cost_usd: null` rather than a misleading `0`. A LiteLLM model entry
+carries a single price, which has two consequences: the drift test covers the standard rates only,
+because the proxy has no fast-mode price to compare against, and the per-request `cost_usd` inside
+`usage_proxy.jsonl` is LiteLLM's own figure and always standard-rate. The trial's totals are the
+tier-aware ones.
 
 The cache-write rate above is the one for a 5-minute cache; Anthropic bills a 1-hour write at 2x an
 input token instead of 1.25x. Nothing in the chain carries the TTL, so every write here is priced as
@@ -230,242 +209,15 @@ The old harness's schema, unchanged:
   driver records that per-turn average as `average_words_per_turn` in the trial metadata and, for
   observability only (no gate), the finer `average_words_per_message` (words per individual agent
   message, before the per-turn merge).
-- `verification_timeout_seconds` (default 600) is the evidence-collection phase's own budget. It is
-  *added* to the task's `[agent].timeout_sec` (case timeout + verification budget + grace), so
-  verification never competes with the conversation for time.
-- Each persona entry may carry an `expectations` block; see below.
-
-## Outcome verification
-
-Without this, the eval grades only how the agent *talks*: an agent that chats beautifully and ships
-nothing outscores one that ships a working app in terse messages. A case that declares
-`expectations` is additionally graded on what it delivered.
-
-```json
-{
-  "id": "todo-app",
-  "persona": "...",
-  "prompts": ["Build me a simple to-do list web app: ...", "Sounds good."],
-  "expectations": {
-    "outcome": "A working to-do list web app, delivered as a running Minds app tab...",
-    "deliverable": {"kind": "minds-app"}
-  }
-}
-```
-
-- `outcome` (required) is the prose the outcome judge grades against -- the task description *for
-  the eval*, alongside the prompts *for the agent*.
-- `deliverable` is **required**. A block with none would expand to no programmatic checks, and
-  rewardkit only pools a programmatic reward when criteria exist -- so the outcome dimension would
-  silently become judge-only, carrying double the judge weight of every other case.
-- `minds-app` is a **kind with implied checks**, not a hand-written check list: at least one
-  *delivered* app registered in the workspace's `data/.state/apps.toml`, its supervisord service
-  running, an HTTP 200 from each delivered app's root path, and the delivered repo captured as a git
-  bundle. "Delivered" is narrower than "not a builtin" -- see below. Optional `min_registered_apps`, `http`, and `files` entries *refine* that set
-  rather than replacing it. Unknown kinds and unknown keys are rejected at generation time.
-- `test_commands` are run in the delivered repo and recorded for the judge, but never gated: gating
-  them would punish cases whose prompts never mentioned tests.
-- `ui_flows` are natural-language flows through the delivered UI, each with a verifiable end
-  condition -- see [UI flows](#ui-flows). A flow may instead carry the reserved `script` field; that
-  form is validated and carried but has no execution semantics yet, so it expands to no check at all.
-- `fresh_env` is reserved: parsed and carried, but nothing acts on it yet.
-
-The kind is expanded into its explicit check list **once**, in the generator, and the expanded form is
-written identically into `instruction.md` and `tests/case.json` -- which is what guarantees the
-collector cannot probe a different set of checks than the judge scores. The authored form rides
-alongside as `authored_expectations`.
-
-**Evidence, not live state.** The verifier is a separate container that runs after the workspace has
-been destroyed, so everything that needs the live app is captured at trial time into
-`/logs/agent/verification/` (declared as a directory artifact) and the grade-time criteria score the
-*record*:
-
-```
-verification/
-  manifest.json          # the index: every probe with a typed status
-  file_inventory.jsonl   # {path, size_bytes, mtime} per file (snapshot excludes + .git, 20k cap)
-  apps.toml              # verbatim registry capture
-  services.txt           # supervisorctl status output
-  repo_state.json        # HEAD sha, the base and dwt-tip shas, commit count, git status --porcelain
-  deliverable.bundle     # incremental `git bundle <clone HEAD>..HEAD` -- the agent's own commits
-  http/<n>_<app>.json    # per probe: status, headers, timing, body head (256 KB cap)
-  flows/<name>/log.jsonl # per UI-flow step: the verbatim page state, the action, the reasoning
-  flows/<name>/step_NNN.png  # a screenshot per step
-  trace.jsonl            # every bridge command the collector ran, failures included
-```
-
-Every manifest entry carries a status where **`failed` means the workspace fell short and `error`
-means the harness could not find out** (the bridge died, a probe timed out). That distinction is
-load-bearing: `error` entries are excluded from the criteria they would have fed (and when a whole
-declared class is unmeasurable, `finalize.py` errors the trial rather than scoring it), so an agent
-is never charged for a broken instrument. It cuts the other way too, and that is the harder half: a
-workspace whose app registry exists and lists nothing is the agent shipping nothing, which must
-score as `failed`, not be waved off as evidence the harness could not gather.
-
-The registry/service/inventory capture runs for *every* trial
-that got as far as a workspace, including cases with no expectations, which is what makes a
-ships-nothing trial diagnosable; the expectation-driven probes are skipped on trials that never
-finished, whose structural gates already zero the reward.
-
-The harness probes the app **as delivered** and never starts it. Minds' promise to the client is a
-running app tab, so "built it but never started or registered it" is a delivery failure, not
-something for the harness to repair.
-
-**What counts as a delivered app.** Not every registry row is one. Rows the registry marks
-`internal = true` are machinery that forwards a port but has no page of its own to show -- the
-owner-exec daemon, for instance, which answers 404 on `/` by design. A live trial confirmed this is
-not hypothetical: counting it both inflated the delivered-app count and failed the implied root-path
-probe, charging the agent for a daemon it never shipped.
-
-A throwaway "isolated instance"
-preview server registers through the same `forward_port.py` path and leaves its row behind when
-abandoned, so counting it would both satisfy the app-registered check on something that was never the
-deliverable and fail the root-path probe on its dead port. Those rows are excluded by reading the
-instance runner's own state under `data/.state/isolated-instances/`, not by matching name patterns:
-instance names are chosen by whoever starts them, so a pattern would miss arbitrary ones and wrongly
-drop a real app named something like `recipes-test`.
-
-Nor is a registry name a supervisord program name -- a multi-port app registers extra origin rows
-(`<name>-admin`) that no program owns. The service-health check joins a row to its program through
-the `forward_port.py` invocations inside each `[program:*]` block of `system/supervisord.conf`. A
-delivered row that no program registers is recorded as `no_supervised_program`: the app was started
-by hand and would not survive a restart.
-
-The evidence directory is created at setup, before anything can fail, and is always declared as an
-artifact even when empty: harbor records a missing declared artifact path as a failed entry and
-refuses to regrade any trial carrying one, so a directory that only appeared when collection ran
-would make every trial that died earlier permanently non-regradable.
-
-The bundle's base is the eval-case commit the driver interposes (the template clone with
-`system/vendor/mngr` overwritten), made with **fixed author and committer dates** so an identical
-tree always yields the same sha. Without that the bundle could never be unbundled onto a regenerated
-clone, which is the only reason to capture it; the evidence records that base sha and the template
-tip it was built from so a replay can regenerate and verify the base.
-
-`trace.jsonl` is the collector's own flight recorder: it exists so a `failed` verdict can be
-attributed to the app rather than to the instrument, without re-running anything.
-
-## UI flows
-
-Liveness probes cannot see whether the app does what was asked -- a 200 with a stack-trace page
-passes one. A `ui_flows` entry is a natural-language walk through the delivered UI with a verifiable
-end condition, and it is the only level that checks the actual promise in the prompt:
-
-```json
-"ui_flows": [
-  {
-    "name": "persistence",
-    "steps": "Open the app. Add a task named 'persist me'. Reload the page.",
-    "expect": "'persist me' is still visible after the reload."
-  }
-]
-```
-
-A flow may also carry a `surface`. `origin` is the default and the only implemented one; the
-reserved `minds-ui`, which would drive the Minds chrome and reach the app as an embedded iframe, is
-rejected at generation time rather than silently falling back.
-
-**The executor drives the app's forwarded origin from inside the box.** Flows run at the end of the
-collection phase, inside its budget, in a headless Chromium the box launches for the flow -- its own
-profile and its own CDP port, so no flow inherits another's cookies or storage -- navigating
-`https://<label>.host-<hex>.localhost:8431/`, the exact URL the client's app tab iframes, served
-by a `mngr forward` instance the driver owns. A host-side verification agent (the decider's sibling)
-reads the page, decides one action, and a box-side step script performs it, screenshots the result
-and reads the page back. The reasoning stays host-side, so the loop is budgeted, logged, and
-attributable to harness spend.
-
-This tests the app **through** the product's serving path -- forward proxy, SSH tunnel, label
-origin, origin-scoped cookies -- rather than under it. Elements are addressed by ARIA role and
-accessible name, taken from Playwright's `aria_snapshot`, which is also what the flow log records
-verbatim for the judge.
-
-**A step is one box exec.** Acting, screenshotting and re-reading the page are consecutive and need
-nothing from the host in between, so they ride a single `environment.exec` -- and unlike the
-previous executor, that exec is box-local, so the workspace hop is gone from the action path
-entirely. Only the proxy's own tunnel touches the workspace.
-
-The verification agent's spend is reported as `metadata.verifier_agent_usage`, beside
-`decider_usage` and never folded into the agent's own cost fields. It runs on the decider's model by
-default; `--ak verifier_model=...` overrides it. A flow's name must be unique within a case: it names
-the flow's evidence directory.
-
-**Grading a product with its own machinery cuts both ways**, so app failures and executor failures
-are kept apart. An app that cannot satisfy the flow -- the `expect` does not hold, an element is not
-there, the page never settles within the flow deadline, nothing was ever registered to open -- is
-`failed` and counts against the agent. Machinery that could not be driven is `error`, with a reason
-naming which layer went: `browser_launch_failed`, `cdp_connect_failed`, `forward_unreachable` (the
-proxy itself), `tunnel_down` (proxy up, workspace leg dead), `tls_refused`, `step_bridge_failed`,
-`host_id_unknown` (the workspace's host id could not be looked up, so no origin can be addressed),
-and `verifier_agent_failed`.
-
-The forward instance is the driver's own, not the one the headless minds backend may have spawned:
-that gives it a port and a pre-auth token the driver minted, instead of a coupling to backend
-internals and a cookie it never saw. It is configured at flag parity with minds' own spawn
-(`forward_instance_test.py` asserts that against minds' argv builder, so the two cannot drift). It
-adds one flag minds omits, a chosen `--port`, and drops the two that only shape how minds *embeds*
-the app, which the origin surface has no analogue for.
-
-**This executor replaced the workspace's browser fleet**, and the history is worth keeping. Flows
-first shipped through `agentic-browser-fleet` and proved the concept live, but that shape coupled
-the eval to the workspace's internal-tool security model -- the fleet's SSRF guard blocks every
-delivered-app origin, so the eval only ran by changing the product -- and reached the app at a raw
-in-container socket, leaving the forwarding path and everything cookie-shaped unverified. Flows now
-run against dwt main with no product change required.
-
-Scoring adds a third rewardkit dimension, `tests/outcome/`, present only for expectation cases (the
-generator omits the directory otherwise, so rewardkit never emits a partial score for it). It holds
-one programmatic criterion per declared class -- `app_registered`, `http_expectations_met`,
-`files_expectations_met`, `ui_flows_completed` -- plus a `works_as_expected` likert judge over the
-rendered expectations, the manifest, the conversation, and the flow evidence. The conversation is in
-there deliberately: `DECIDE_FROM_PERSONA` turns are free-form, so a client who steers the build
-mid-conversation must be graded against the evolved ask.
-
-`ui_flows_completed` scores COMPLETION: the fraction of measurable flows that carried out their
-declared steps. It does not score whether the app did what a flow's `expect` describes. That is the
-judge's ruling, made from the step log and the screenshots, and having both sides rule on it would
-put a trial-time judgement -- taken from less evidence, and frozen against regrade -- next to one
-that can be revisited. Trial time collects; grade time verifies.
-
-A grade-time pre-step (`render_flow_evidence.py`) flattens the flow evidence for the judge, because
-rewardkit expands a listed directory exactly one level and never recurses. It always writes
-`judge_flows_digest.txt` -- per flow: the declared steps, the `expect` the judge is to rule on, the
-completion status, the agent's own description of the final page (evidence, not a verdict), then
-every step's action, reasoning and page state -- and always creates a flat `judge_screenshots/`
-holding each flow's last four frames, up to 24 in all, each under rewardkit's 1 MiB judge limit.
-"Always" is load-bearing in both directions: rewardkit renders a listed path it cannot find as a
-visible `[not found]` block, while an empty listed directory renders *nothing at all* -- which is why
-the digest states the screenshot count instead of leaving the judge to infer it.
-
-Reward composition changes only for expectation cases: `reward = gates_all_passed ? (0.5 * quality +
-0.5 * outcome) : 0`. The 50/50 split says "a great app described badly and a great description of no
-app are equally imperfect". It is a constant, not per-case configuration -- per-case weights would
-make rewards incomparable across cases.
-
-Two new grading-infrastructure failures. An expectations case whose `state.json` says the
-conversation finished but which produced no evidence bundle errors the trial rather than scoring 0;
-an absent bundle on an unfinished or timed-out trial is expected and is not an error. And a
-`tests/case.json` that is missing, unparseable, not a JSON object, or whose `expectations` is
-neither an object nor `null` errors the trial too -- the generator writes that file into every task,
-so a broken one is the harness failing, and reading it as "this case declared no expectations" would
-grade a commissioned deliverable at quality-only weight. That check does not depend on how the trial
-went: the case file is part of the task, not of the run. A valid case file with `expectations`
-absent or `null` is the bare case (`greeting`) and keeps grading quality-only.
 
 ## Reward mapping
 
-`quality = weighted mean(conciseness, nontechnical_language, proactive, wordiness guard)` -- likert
+`reward = weighted mean(conciseness, nontechnical_language, proactive, wordiness guard)` -- likert
 criteria normalized as `(raw - 1) / 9`, so raw judge scores stay recoverable (`raw = 9 * normalized
-+ 1`; raw values are in `reward-details.json`). `reward` is that score (or an even split of it with
-`outcome`, for expectation cases), zeroed unless every structural gate passed. The gate composition
-lives in `tests/test.sh` (`finalize.py`) because rewardkit's `reward.toml` aggregations cannot
-express "binary gate zeroes a weighted mean"; all judging and scoring happens inside rewardkit.
-
-Note how rewardkit weights a dimension, because it is easy to get backwards: every `.py` criterion
-in a dimension directory is averaged into **one** programmatic reward of weight 1.0, and each
-`judge.toml` is a **second** reward carrying its own `[judge].weight`. So the quality judge's
-`weight = 3.0` buys equal weight *per criterion* across its three judge criteria and the one
-programmatic guard, while the outcome judge's `weight = 1.0` is what makes it exactly half its
-dimension however many programmatic criteria the case declares.
++ 1`; raw values are in `reward-details.json`) -- zeroed unless every structural gate passed. The
+gate composition lives in `tests/test.sh` (`finalize.py`) because rewardkit's `reward.toml`
+aggregations cannot express "binary gate zeroes a weighted mean"; all judging and scoring happens
+inside rewardkit.
 
 ## Notes
 

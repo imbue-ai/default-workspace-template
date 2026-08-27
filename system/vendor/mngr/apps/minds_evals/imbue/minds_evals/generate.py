@@ -15,7 +15,6 @@ import tempfile
 from collections.abc import Mapping
 from importlib import resources
 from pathlib import Path
-from pathlib import PurePosixPath
 from typing import Any
 from typing import Final
 
@@ -24,20 +23,16 @@ from loguru import logger
 
 from imbue.imbue_common.logging import setup_logging
 from imbue.imbue_common.pure import pure
-from imbue.minds_evals import evidence_collection
 from imbue.minds_evals.data_types import CaseConfig
 from imbue.minds_evals.data_types import DECIDE_SENTINEL
 from imbue.minds_evals.data_types import DEFAULT_AVG_WORD_COUNT_BASELINE
 from imbue.minds_evals.data_types import DEFAULT_DWT_BRANCH
 from imbue.minds_evals.data_types import DEFAULT_DWT_REPO
 from imbue.minds_evals.data_types import DEFAULT_TIMEOUT_SECONDS
-from imbue.minds_evals.data_types import DEFAULT_VERIFICATION_TIMEOUT_SECONDS
 from imbue.minds_evals.data_types import EvalConfig
 from imbue.minds_evals.data_types import PersonaCase
 from imbue.minds_evals.errors import EvalConfigError
 from imbue.minds_evals.errors import GitSourceError
-from imbue.minds_evals.expectations import expand_expectations
-from imbue.minds_evals.expectations import parse_expectations
 
 MNGR_REPO: Final[str] = "https://github.com/imbue-ai/mngr-internal.git"
 
@@ -62,31 +57,6 @@ _ORACLE_DECIDE_MESSAGE: Final[str] = "Sounds good."
 # workspace destroy sweep and its retry) still runs before harbor cancels
 # run(). The nested sandboxes' own timeout is the backstop if cleanup is cut off.
 AGENT_TIMEOUT_GRACE_SECONDS: Final[float] = 300.0
-
-# What the outcome judge's rewardkit weight must be for it to carry half the outcome dimension.
-# rewardkit aggregates a dimension in two levels: all of a directory's .py criteria are averaged
-# into ONE programmatic reward of weight 1.0, and each judge toml is a second reward carrying its
-# own weight -- so an even split is weight 1.0 regardless of how many programmatic criteria a case
-# declares. (Contrast the quality dimension's weight of 3.0, which buys equal weight PER CRITERION
-# across its three judge criteria and one programmatic guard.)
-OUTCOME_JUDGE_WEIGHT: Final[float] = 1.0
-
-# What the outcome judge reads: the case's ground truth (rendered at grade time), the evidence index,
-# the conversation -- which is there so a deliverable the client visibly steered away from the
-# scripted expectations is graded against the evolved ask -- and the flattened UI-flow evidence.
-#
-# The last two entries are produced by a grade-time pre-step and always exist, empty or not. That is
-# deliberate: rewardkit renders a listed path it cannot find as a literal "[not found]" block, so a
-# conditional artifact would put noise in the prompt of every flow-less trial (every oracle run, and
-# every case that declares no flows). An empty listed DIRECTORY, by contrast, renders nothing at all
-# -- which is why the digest states the screenshot count rather than leaving the judge to infer it.
-OUTCOME_JUDGE_FILES: Final[tuple[str, ...]] = (
-    "/logs/agent/expectations.md",
-    "/logs/agent/{}/{}".format(evidence_collection.VERIFICATION_DIRNAME, evidence_collection.MANIFEST_FILENAME),
-    "/logs/agent/conversation.jsonl",
-    "/logs/agent/judge_flows_digest.txt",
-    "/logs/agent/judge_screenshots",
-)
 
 
 @pure
@@ -118,15 +88,7 @@ def _normalize_cases(personas: object) -> tuple[PersonaCase, ...]:
                     case_id, DECIDE_SENTINEL
                 )
             )
-        raw_expectations = raw_case.get("expectations")
-        cases.append(
-            PersonaCase(
-                case_id=case_id,
-                persona=str(raw_case.get("persona", "")).strip(),
-                prompts=prompts,
-                expectations=parse_expectations(raw_expectations, case_id) if raw_expectations is not None else None,
-            )
-        )
+        cases.append(PersonaCase(case_id=case_id, persona=str(raw_case.get("persona", "")).strip(), prompts=prompts))
     case_ids = [case.case_id for case in cases]
     duplicate_ids = sorted({case_id for case_id in case_ids if case_ids.count(case_id) > 1})
     if duplicate_ids:
@@ -152,9 +114,6 @@ def load_eval_config(config_path: Path) -> EvalConfig:
         dwt_repo=str(raw_config.get("dwt_repo") or DEFAULT_DWT_REPO),
         dwt_branch=str(raw_config.get("dwt_branch") or DEFAULT_DWT_BRANCH),
         timeout_seconds=float(raw_config.get("timeout_seconds") or DEFAULT_TIMEOUT_SECONDS),
-        verification_timeout_seconds=float(
-            raw_config.get("verification_timeout_seconds") or DEFAULT_VERIFICATION_TIMEOUT_SECONDS
-        ),
         avg_word_count_baseline=float(raw_config.get("avg_word_count_baseline") or DEFAULT_AVG_WORD_COUNT_BASELINE),
         cases=_normalize_cases(raw_config.get("personas")),
     )
@@ -202,22 +161,17 @@ def fetch_mngr_source(repo: str, ref: str, dest: Path) -> None:
 
 @pure
 def build_case_config(config: EvalConfig, case: PersonaCase, mngr_sha: str, dwt_sha: str) -> CaseConfig:
-    # The deliverable kind is expanded into its explicit check list exactly once, here, so the
-    # collector and the verifier can never disagree about what was being checked.
     return CaseConfig(
         case_id=case.case_id,
         persona=case.persona,
         prompts=case.prompts,
         timeout_seconds=config.timeout_seconds,
-        verification_timeout_seconds=config.verification_timeout_seconds,
         mngr_branch=config.mngr_branch,
         mngr_sha=mngr_sha,
         dwt_repo=config.dwt_repo,
         dwt_branch=config.dwt_branch,
         dwt_sha=dwt_sha,
         avg_word_count_baseline=config.avg_word_count_baseline,
-        expectations=expand_expectations(case.expectations) if case.expectations is not None else None,
-        authored_expectations=case.expectations,
     )
 
 
@@ -237,9 +191,7 @@ def render_task_toml(template_text: str, case_config: CaseConfig) -> str:
             "dwt_repo": case_config.dwt_repo,
             "dwt_branch": case_config.dwt_branch,
             "dwt_sha": case_config.dwt_sha,
-            "agent_timeout_sec": str(
-                case_config.timeout_seconds + case_config.verification_timeout_seconds + AGENT_TIMEOUT_GRACE_SECONDS
-            ),
+            "agent_timeout_sec": str(case_config.timeout_seconds + AGENT_TIMEOUT_GRACE_SECONDS),
         },
     )
 
@@ -279,53 +231,6 @@ def _oracle_events(case_config: CaseConfig) -> list[dict[str, str]]:
 
 
 @pure
-def render_outcome_judge_toml(template_text: str) -> str:
-    """The outcome judge. Rendered rather than copied so the file list and the weight stay owned by
-    this module, where they are derived and tested, instead of drifting inside a static template."""
-    judge_files = "[\n{}\n]".format(
-        "\n".join('    "{}",'.format(path) for path in OUTCOME_JUDGE_FILES),
-    )
-    return _substitute_template(
-        template_text,
-        {"judge_files": judge_files, "judge_weight": str(OUTCOME_JUDGE_WEIGHT)},
-    )
-
-
-@pure
-def render_oracle_evidence_shell(case_config: CaseConfig) -> str:
-    """The shell that writes the oracle's fabricated (all-green) evidence bundle, so `-a oracle`
-    exercises artifact transfer, the outcome criteria, the judge, and the reward composition. Empty
-    for cases with no expectations, which must keep grading exactly as they did before."""
-    if case_config.expectations is None:
-        return ""
-    evidence_files = evidence_collection.oracle_evidence_files(case_config)
-    lines = [
-        "",
-        "# The oracle boots no workspace, so the evidence bundle is fabricated: every declared",
-        "# check recorded as passed, against a plausible registry and service listing.",
-        "rm -f /logs/agent/{}/README.txt".format(evidence_collection.VERIFICATION_DIRNAME),
-    ]
-    # Every parent directory the bundle needs, derived rather than listed: the flow logs nest one
-    # level deeper than the HTTP probes, and a new nested artifact must not need a change here.
-    bundle_root = PurePosixPath("/logs/agent") / evidence_collection.VERIFICATION_DIRNAME
-    directories = sorted({str(bundle_root / PurePosixPath(name).parent) for name in evidence_files})
-    lines += ["mkdir -p {}".format(directory) for directory in directories]
-    for relative_name, content in sorted(evidence_files.items()):
-        heredoc = "MINDS_EVALS_EVIDENCE_{}_EOF".format(_slug_for_heredoc(relative_name))
-        lines.append(
-            "cat > /logs/agent/{dirname}/{name} << '{marker}'\n{content}\n{marker}".format(
-                dirname=evidence_collection.VERIFICATION_DIRNAME, name=relative_name, content=content, marker=heredoc
-            )
-        )
-    return "\n".join(lines) + "\n"
-
-
-@pure
-def _slug_for_heredoc(relative_name: str) -> str:
-    return "".join(character if character.isalnum() else "_" for character in relative_name).upper()
-
-
-@pure
 def render_solve_script(template_text: str, case_config: CaseConfig) -> str:
     turn_count = len(case_config.prompts)
     state = {
@@ -344,20 +249,13 @@ def render_solve_script(template_text: str, case_config: CaseConfig) -> str:
     transcript_jsonl = "\n".join(json.dumps(event) for event in _oracle_events(case_config))
     return _substitute_template(
         template_text,
-        {
-            "transcript_jsonl": transcript_jsonl,
-            "state_json": json.dumps(state, indent=2),
-            "verification_evidence_sh": render_oracle_evidence_shell(case_config),
-        },
+        {"transcript_jsonl": transcript_jsonl, "state_json": json.dumps(state, indent=2)},
     )
 
 
 def _copy_template_tree(relative_path: str, dest: Path) -> None:
-    # Bytecode caches are excluded: running the template scripts (the unit tests import one) leaves
-    # them next to the sources in a dev checkout, from where they would otherwise ship into the
-    # verifier image alongside the code they were compiled from.
     with resources.as_file(_TEMPLATES / relative_path) as source:
-        shutil.copytree(source, dest, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        shutil.copytree(source, dest)
 
 
 def _read_template(relative_path: str) -> str:
@@ -383,15 +281,7 @@ def write_task_dir(task_dir: Path, case_config: CaseConfig, mngr_source: Path) -
     # tests/: the separate verifier's build context (rewardkit criteria + case data).
     tests_dir = task_dir / "tests"
     _copy_template_tree("tests", tests_dir)
-    (tests_dir / "case.json").write_text(json.dumps(case_config.model_dump(mode="json"), indent=2))
-
-    # tests/outcome/ is a scoring dimension, so it must exist ONLY for cases that declare
-    # expectations -- rewardkit would otherwise emit a partial score for a case with nothing to
-    # score. It lives outside templates/tests/ precisely so it is opted into rather than deleted.
-    if case_config.expectations is not None:
-        outcome_dir = tests_dir / "outcome"
-        _copy_template_tree("outcome", outcome_dir)
-        (outcome_dir / "judge.toml").write_text(render_outcome_judge_toml(_read_template("outcome/judge.toml")))
+    (tests_dir / "case.json").write_text(json.dumps(case_config.model_dump(), indent=2))
 
     # solution/: the oracle's canned near-perfect run.
     solution_dir = task_dir / "solution"

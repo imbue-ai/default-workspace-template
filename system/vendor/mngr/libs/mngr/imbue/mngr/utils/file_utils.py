@@ -31,11 +31,6 @@ def read_json_dict(path: Path) -> dict[str, Any]:
 
 
 def atomic_write(path: Path, content: str) -> None:
-    """Write text content to a file atomically; see :func:`atomic_write_bytes`."""
-    atomic_write_bytes(path, content.encode("utf-8"))
-
-
-def atomic_write_bytes(path: Path, content: bytes) -> None:
     """Write content to a file atomically using a temp file and rename.
 
     Writes to a temporary file in the same directory, flushes to disk with
@@ -66,7 +61,7 @@ def atomic_write_bytes(path: Path, content: bytes) -> None:
         pass
 
     with tempfile.NamedTemporaryFile(
-        mode="wb",
+        mode="w",
         dir=resolved.parent,
         suffix=".tmp",
         delete=False,

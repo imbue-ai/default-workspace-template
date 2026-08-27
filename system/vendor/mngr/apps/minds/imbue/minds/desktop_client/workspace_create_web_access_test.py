@@ -67,7 +67,6 @@ class _RecordingCreateShareCli(FakeImbueCloudCli):
         host_id: str,
         entry_label: str | None = None,
         preferred_region: str | None = None,
-        workspace_id: str | None = None,
     ) -> ShareCliInfo:
         self.create_share_calls.append((account, host_id, entry_label))
         raise ImbueCloudCliError("recorded; stopping the bring-up here")

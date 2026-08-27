@@ -130,8 +130,6 @@ interface ShareTargetState {
 
 export interface ShareModelOptions {
   hostId: string;
-  /** The workspace id keying the sharing API; hostId is the legacy fallback. */
-  agentId?: string;
   ownerEmail: string;
   wholeService: string;
   appServices: string[];
@@ -410,7 +408,7 @@ export class ShareModel {
   }
 
   private shareApiBase(): string {
-    return `/api/v1/workspace-sharing/${encodeURIComponent(this.options.agentId ?? this.options.hostId)}`;
+    return `/api/v1/machines/${encodeURIComponent(this.options.hostId)}/sharing`;
   }
 
   private mutableTargetState(target: string): ShareTargetState {
@@ -712,7 +710,6 @@ export class WorkspaceOptionsModel {
     this.share?.dispose();
     this.share = new ShareModel({
       hostId: data.host_id || data.agent_id,
-      agentId: data.agent_id || this.agentId,
       ownerEmail: data.account_email,
       wholeService: data.whole_service,
       appServices: data.app_services,

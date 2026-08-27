@@ -44,8 +44,8 @@ from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.logging import log_span
-from imbue.minds.config.data_types import InstallationPaths
 from imbue.minds.config.data_types import MNGR_BINARY
+from imbue.minds.config.data_types import WorkspacePaths
 from imbue.minds.desktop_client import restic_cli
 from imbue.minds.desktop_client.backup_env_store import ENV_ARCHIVE_TIMESTAMP_FORMAT
 from imbue.minds.desktop_client.backup_env_store import archive_canonical_env
@@ -318,7 +318,7 @@ def _repository_url_for_bucket(s3_endpoint: str, bucket_name: str) -> str:
 
 def _resolve_repository_and_backend_env(
     request: BackupSetupRequest,
-    bucket_short_name: str,
+    host_id: str,
     *,
     imbue_cloud_cli: ImbueCloudCli | None,
     quota_evictor: Callable[[], bool] | None,
@@ -334,10 +334,10 @@ def _resolve_repository_and_backend_env(
             raise BackupProvisioningError("imbue_cloud backups require imbue_cloud_cli to be configured")
         if not request.account_email:
             raise BackupProvisioningError("imbue_cloud backups require an account")
-        if not bucket_short_name:
-            raise BackupProvisioningError("imbue_cloud backups require a workspace id to name the bucket")
+        if not host_id:
+            raise BackupProvisioningError("imbue_cloud backups require a host id to name the bucket")
         bucket_name, s3_endpoint, key = _create_or_reuse_bucket(
-            imbue_cloud_cli, request.account_email, bucket_short_name, quota_evictor
+            imbue_cloud_cli, request.account_email, host_id, quota_evictor
         )
         repository = _repository_url_for_bucket(s3_endpoint, bucket_name)
         backend_env = {
@@ -366,9 +366,10 @@ def _resolve_repository_and_backend_env(
 def configure_backups_for_host(
     *,
     agent_id: AgentId,
+    host_id: str,
     request: BackupSetupRequest,
     imbue_cloud_cli: ImbueCloudCli | None,
-    paths: InstallationPaths,
+    paths: WorkspacePaths,
     parent_cg: ConcurrencyGroup | None = None,
     # Frees quota by force-destroying the oldest destroyed-workspace backup
     # when the bucket create hits a quota limit; None disables eviction.
@@ -397,13 +398,8 @@ def configure_backups_for_host(
             _inject_canonical_env(agent_id, existing_canonical, parent_cg=parent_cg)
             return
 
-        # New buckets are named by the workspace id: the backup is the
-        # workspace's substrate-independent data, so its bucket follows the
-        # workspace, not the machine it happens to run on. Existing
-        # (host-named) buckets keep working through the idempotent
-        # canonical-env reuse path above.
         repository, backend_env = _resolve_repository_and_backend_env(
-            request, str(agent_id), imbue_cloud_cli=imbue_cloud_cli, quota_evictor=quota_evictor
+            request, host_id, imbue_cloud_cli=imbue_cloud_cli, quota_evictor=quota_evictor
         )
         workspace_password = generate_workspace_password()
 
@@ -427,7 +423,7 @@ def configure_backups_for_host(
 def reinject_canonical_env(
     *,
     agent_id: AgentId,
-    paths: InstallationPaths,
+    paths: WorkspacePaths,
     parent_cg: ConcurrencyGroup | None = None,
 ) -> None:
     """Re-inject the existing canonical env into the workspace (repair a drifted/missing copy).
@@ -445,7 +441,7 @@ def reinject_canonical_env(
 def disable_backups_for_host(
     *,
     agent_id: AgentId,
-    paths: InstallationPaths,
+    paths: WorkspacePaths,
     parent_cg: ConcurrencyGroup | None = None,
 ) -> None:
     """Turn a workspace's backups off: archive the canonical env, rotate the workspace copy aside.
@@ -476,9 +472,10 @@ def disable_backups_for_host(
 def change_backup_destination_for_host(
     *,
     agent_id: AgentId,
+    host_id: str,
     request: BackupSetupRequest,
     imbue_cloud_cli: ImbueCloudCli | None,
-    paths: InstallationPaths,
+    paths: WorkspacePaths,
     parent_cg: ConcurrencyGroup | None = None,
     quota_evictor: Callable[[], bool] | None = None,
 ) -> None:
@@ -499,6 +496,7 @@ def change_backup_destination_for_host(
         logger.info("Archived previous canonical restic.env for {} to {}", agent_id, archived_path.name)
     configure_backups_for_host(
         agent_id=agent_id,
+        host_id=host_id,
         request=request,
         imbue_cloud_cli=imbue_cloud_cli,
         paths=paths,

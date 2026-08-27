@@ -4,19 +4,10 @@ schema_version = "1.4"
 # trial still hands the verifier a gradeable partial transcript. conversation
 # is the clean per-turn record the verifier grades; full_transcript is the raw
 # event stream kept for debugging.
-#
-# verification/ is the evidence bundle the driver collects while the workspace
-# is still alive (registry, services, file inventory, HTTP probes, the
-# deliverable bundle). It is declared as a DIRECTORY: harbor's artifact source
-# is an exact path -- a file or a directory, never a glob -- and every artifact
-# re-materializes at its original absolute path in the verifier. A trial that
-# never reached collection simply has no such directory, which harbor records
-# as a failed (best-effort) artifact and the verifier reads as absent evidence.
 artifacts = [
     "/logs/agent/conversation.jsonl",
     "/logs/agent/full_transcript.jsonl",
     "/logs/agent/state.json",
-    "/logs/agent/verification",
 ]
 
 [task]
@@ -34,10 +25,8 @@ dwt_branch = "$dwt_branch"
 dwt_sha = "$dwt_sha"
 
 [agent]
-# The case budget, plus the evidence-collection budget, plus grace: the driver's
-# own conversation deadline (timeout_seconds) fires first and marks the trial
-# timed_out, collection then runs against its own deadline, and the grace covers
-# the final snapshot and the workspace destroy sweep before harbor cancels run().
+# The case budget plus grace so the driver's own deadline (timeout_seconds)
+# fires first and marks the trial timed_out before harbor cancels run().
 timeout_sec = $agent_timeout_sec
 
 [verifier]

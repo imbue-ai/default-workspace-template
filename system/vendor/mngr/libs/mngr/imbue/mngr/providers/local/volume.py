@@ -8,7 +8,6 @@ from imbue.mngr.errors import MngrError
 from imbue.mngr.interfaces.data_types import FileType
 from imbue.mngr.interfaces.data_types import VolumeFile
 from imbue.mngr.interfaces.volume import BaseVolume
-from imbue.mngr.utils.file_utils import atomic_write_bytes
 
 
 class LocalVolume(BaseVolume):
@@ -72,9 +71,7 @@ class LocalVolume(BaseVolume):
             shutil.rmtree(resolved)
 
     def write_files(self, file_contents_by_path: Mapping[str, bytes]) -> None:
-        # Atomic per file (temp file + rename): volumes back state stores whose
-        # records are read concurrently by other mngr processes, so a reader
-        # must never observe a truncated / partially-written file.
         for file_path, data in file_contents_by_path.items():
             resolved = self._resolve(file_path)
-            atomic_write_bytes(resolved, data)
+            resolved.parent.mkdir(parents=True, exist_ok=True)
+            resolved.write_bytes(data)
