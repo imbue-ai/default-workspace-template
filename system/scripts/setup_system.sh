@@ -266,6 +266,7 @@ opencode --version >/dev/null
 # Pi CLI (pinned; npm-installed, needs Node 22 above -- crashes on Node 20). Keep
 # in sync with agent_types.pi-coding.version in .mngr/settings.toml.
 npm install -g "@earendil-works/pi-coding-agent@${PI_VERSION}"
+npm install -g "@playwright/cli@${PLAYWRIGHT_CLI_VERSION}"
 command -v pi >/dev/null
 
 # Antigravity CLI (agy). Installed via a vendored, version-LOCKED copy of Google's
