@@ -22,3 +22,17 @@ success. The check resolves the binding the way each harness does: CLAUDE_CONFIG
 agent's env file for claude, a credential symlink under the agent's state directory otherwise.
 
 The keys are deliberately fake. What is being tested is the join, not the provider.
+
+The Electron first-boot e2e drove `.claude-login-modal`, which this branch deletes. It now
+drives the provider chooser through the same API-key path, keyed on `data-e2e` attributes rather
+than on copy or tailwind classes -- it reaches into the template's UI from this repo, so anything
+it targets has to survive a wording change or a re-port.
+
+Signing in there mints an ACCOUNT rather than writing a shared settings block, so nothing is
+restarted mid-flow; the generous success wait stays because the verdict is the harness's own
+probe answering.
+
+`test_prevent_bare_print` excludes `test_litellm_via_workspace.py`: it builds Python scripts as
+STRINGS and runs them inside a workspace container, and those `print` calls are the script's
+return protocol, read back off stdout. The rule's regex cannot tell a string literal from code.
+The count stays at 5 -- the genuine output primitives -- rather than being bumped to cover it.

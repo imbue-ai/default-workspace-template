@@ -226,7 +226,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         : kind === "success"
           ? css.STATUS_DISC_SUCCESS
           : css.STATUS_DISC_ERROR;
-    return m("div", { class: css.STATUS }, [
+    return m("div", { class: css.STATUS, "data-e2e": `status-${kind}` }, [
       m("div", { class: disc }, m.trust(glyph)),
       m("h3", { class: css.STATUS_TITLE }, title),
       detail !== null ? m("p", { class: css.STATUS_DETAIL }, detail) : null,
@@ -244,6 +244,10 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         type: "button",
         key: candidate.id,
         class: css.CHOOSER_ROW,
+        // Hooks for the cross-repo Electron e2e (mngr-internal's `test_snapshot_resume.py`).
+        // Attributes rather than copy or tailwind classes: it drives this dialog from another
+        // repo, so anything it keys on must survive a wording change or a re-port.
+        "data-e2e": `lane-${candidate.id}`,
         onclick: () => begin(candidate, candidate.methods[0], { fromChooser: true }),
       },
       [
@@ -529,6 +533,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         spellcheck: false,
         autocomplete: "off",
         "data-1p-ignore": "",
+        "data-e2e": "api-key-input",
         oninput: (event: Event) => {
           keyInput = (event.target as HTMLInputElement).value;
         },
@@ -545,6 +550,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
           type: "button",
           class: `${css.PRIMARY_BTN} whitespace-nowrap`,
           disabled: busy || keyInput.trim() === "" || (withPicker && keyProvider === null),
+          "data-e2e": "save-key",
           onclick: () => void send(() => submitKey(keyInput.trim(), keyProvider)),
         },
         "Save & finish",
@@ -644,6 +650,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
                     type: "button",
                     key: candidate.id,
                     class: css.OPTION_ROW,
+                    "data-e2e": `method-${candidate.id}`,
                     // Carry the account through. Picking another way in during a RE-AUTH is
                     // still that account's re-auth: dropping the id here would mint a new
                     // account and orphan every chat bound to the old one, on success.
@@ -800,6 +807,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
               role: "dialog",
               "aria-modal": "true",
               "aria-label": "Pick your AI provider",
+              "data-e2e": "provider-chooser",
               // Pressing anywhere that is NOT the armed Remove? disarms it. Someone who
               // pressed the bin to find out what it did gets to back out by looking away.
               // Keyed on the button's own id rather than a plain "did we hit a button",
@@ -847,7 +855,11 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
                     m(
                       "div",
                       { class: css.FOOTER_ROW },
-                      m("button", { type: "button", class: css.PRIMARY_BTN, onclick: onClose }, "Done"),
+                      m(
+                        "button",
+                        { type: "button", class: css.PRIMARY_BTN, "data-e2e": "done", onclick: onClose },
+                        "Done",
+                      ),
                     ),
                   )
                 : null,
