@@ -708,6 +708,43 @@ class AgentManager:
         with self._lock:
             return self._agents.get(agent_id)
 
+    def restart_agents_on_account(self, account_id: str) -> int:
+        """Restart every agent bound to `account_id`. Returns how many were restarted.
+
+        Re-authenticating is only worth doing if the chats on that account come back, and they
+        do not on their own -- claude reads its settings env at process start, and nothing
+        establishes that codex's daemon re-reads a swapped credential. One rule for every
+        harness rather than a per-harness table built on untested assumptions: a restart after
+        a deliberate sign-in is cheap, and guessing wrong the other way leaves a chat dead with
+        nothing on screen to say why.
+
+        `--no-resume` for the same reason the queue actions use it: the agent's transcript is
+        preserved by the harness itself, and a resume prompt would tell an agent that has not
+        been asked anything to carry on with work it does not have.
+
+        The primary services agent is never touched even if it somehow carries the label --
+        restarting it tears down supervisord and every background service.
+        """
+        with self._lock:
+            names = [
+                agent.name
+                for agent in self._agents.values()
+                if agent.labels.get("account") == account_id and agent.labels.get("is_primary") != "true"
+            ]
+        restarted = 0
+        for name in names:
+            result = run_local_command_modern_version(
+                command=[self._mngr_binary, "start", name, "--restart", "--no-resume"],
+                cwd=None,
+                is_checked=False,
+                timeout=60.0,
+            )
+            if result.returncode == 0:
+                restarted += 1
+            else:
+                logger.warning("Could not restart {} after re-auth: {}", name, result.stderr.strip()[:300])
+        return restarted
+
     def get_chat_agent_ids(self) -> list[str]:
         """Ids of the agents the OOM prioritizer manages: chat agents only.
 

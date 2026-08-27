@@ -212,6 +212,9 @@ class AuthFlowService:
 
     _home: Path | None
     _work_dir: Path
+    # Restarts the agents bound to an account, by account id. Injected so the flow does not
+    # reach into the agent manager, and so a test can watch it without running mngr.
+    _restart_bound_agents: Callable[[str], int]
     _lock: threading.Lock
     _session: _Session | None
     _spawner: Callable[..., Any]
@@ -224,12 +227,14 @@ class AuthFlowService:
         work_dir: Path | None = None,
         spawner: Callable[..., Any] | None = None,
         probe: Callable[[HarnessType, Path], SignedIn] | None = None,
+        restart_bound_agents: Callable[[str], int] | None = None,
     ) -> "AuthFlowService":
-        """`spawner` stands in for `spawn_pty` and `probe` for `is_signed_in`.
+        """`spawner` stands in for `spawn_pty`, `probe` for `is_signed_in`.
 
-        Both injected rather than patched, matching ClaudeAuthService's `pexpect_spawner`.
+        All injected rather than patched, matching ClaudeAuthService's `pexpect_spawner`.
         The probe in particular shells out to a real CLI, so a test that does not inject one
-        is quietly asserting on whatever this machine happens to have installed.
+        is quietly asserting on whatever this machine happens to have installed; the restart
+        shells out to mngr, which a test has even less business doing.
         """
         service = cls()
         service._home = home
@@ -238,6 +243,7 @@ class AuthFlowService:
         service._session = None
         service._spawner = spawner or spawn_pty
         service._probe = probe or is_signed_in
+        service._restart_bound_agents = restart_bound_agents or (lambda _account_id: 0)
         return service
 
     # -- lifecycle ------------------------------------------------------------------------
@@ -519,6 +525,14 @@ class AuthFlowService:
         # restore -- and restoring would undo what the user just did.
         session.cleared_credentials = {}
         account = accounts.commit_account(session.account_id, session.lane.id, display, self._home)
+        # A re-auth is only worth doing if the chats on that account come back. They do not on
+        # their own: claude reads its settings env at process start, and nothing shows codex's
+        # daemon re-reading a swapped credential either. One rule for every harness rather than
+        # a per-harness table built on untested assumptions -- a restart after a deliberate
+        # sign-in is cheap, and being wrong the other way leaves a chat dead with no sign of it.
+        if not session.minted:
+            restarted = self._restart_bound_agents(account.id)
+            logger.info("Re-auth of account {} restarted {} bound agents", account.id, restarted)
         session.state = FlowState.OK
         self._teardown_locked(session, keep_folder=True)
         return FlowStatus(state=FlowState.OK, account_id=account.id)
