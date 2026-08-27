@@ -1815,6 +1815,14 @@ def _activity_events_file() -> Path:
     return Path(os.environ["MNGR_HOST_DIR"]) / "events" / "mngr" / "activity" / "events.jsonl"
 
 
+def _touch_active_marker(agent_state_dir: Path, mtime_epoch: float) -> Path:
+    """Create the agent's ``active`` marker with its mtime pinned to ``mtime_epoch``."""
+    marker = agent_state_dir / "active"
+    marker.touch()
+    os.utime(marker, (mtime_epoch, mtime_epoch))
+    return marker
+
+
 def test_poll_heals_active_marker_stranded_by_terminal_interrupt(tmp_path: Path) -> None:
     """A terminal-side interrupt (no hook fires) must not leave the agent reporting a live turn.
 
@@ -1824,10 +1832,8 @@ def test_poll_heals_active_marker_stranded_by_terminal_interrupt(tmp_path: Path)
     "Thinking..." forever while the terminal sits idle.
     """
     agent_state_dir, claude_config_dir, session_file = _setup_empty_agent(tmp_path)
-    marker = agent_state_dir / "active"
-    marker.touch()
     now = time.time()
-    os.utime(marker, (now - 300.0, now - 300.0))
+    marker = _touch_active_marker(agent_state_dir, now - 300.0)
 
     watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
     watcher._discover_sessions()
@@ -1848,10 +1854,8 @@ def test_poll_heals_active_marker_stranded_by_terminal_interrupt(tmp_path: Path)
 def test_poll_heals_marker_on_mid_tool_interrupt_sentinel(tmp_path: Path) -> None:
     """The mid-tool ``for tool use`` sentinel shape (the dominant interrupt) also heals."""
     agent_state_dir, claude_config_dir, session_file = _setup_empty_agent(tmp_path)
-    marker = agent_state_dir / "active"
-    marker.touch()
     now = time.time()
-    os.utime(marker, (now - 300.0, now - 300.0))
+    marker = _touch_active_marker(agent_state_dir, now - 300.0)
 
     watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
     watcher._discover_sessions()
@@ -1867,9 +1871,8 @@ def test_poll_heals_marker_on_mid_tool_interrupt_sentinel(tmp_path: Path) -> Non
 def test_poll_leaves_marker_touched_after_the_interrupt(tmp_path: Path) -> None:
     """A marker at/after the sentinel belongs to a NEWER turn (resubmit or queue flush): keep it."""
     agent_state_dir, claude_config_dir, session_file = _setup_empty_agent(tmp_path)
-    marker = agent_state_dir / "active"
-    marker.touch()
     now = time.time()
+    marker = _touch_active_marker(agent_state_dir, now)
 
     watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
     watcher._discover_sessions()
@@ -1911,9 +1914,7 @@ def test_poll_ignores_sentinel_in_non_latest_main_session(tmp_path: Path) -> Non
     _write_session_file(projects_dir, "new-session", [_user_event(1)])
     (agent_state_dir / "claude_session_id_history").write_text("old-session\nnew-session\n")
 
-    marker = agent_state_dir / "active"
-    marker.touch()
-    os.utime(marker, (now - 300.0, now - 300.0))
+    marker = _touch_active_marker(agent_state_dir, now - 300.0)
 
     watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
     watcher._discover_sessions()
