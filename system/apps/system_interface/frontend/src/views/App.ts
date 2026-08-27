@@ -26,6 +26,7 @@ import {
   toggleAppLifecycle,
 } from "./DockviewWorkspace";
 import { ClaudeLoginModal } from "./ClaudeLoginModal";
+import { ProviderChooserModal } from "./ProviderChooserModal";
 import { AgentAuthInstructionsModal } from "./AgentAuthInstructionsModal";
 import { FastModeModal } from "./FastModeModal";
 import { Sidebar } from "./Sidebar";
@@ -149,6 +150,10 @@ export function App(): m.Component {
           // surfaces an auth-error, or from the chat footer's "Agent auth"
           // entry.
           isLoginModalOpen() ? m(ClaudeLoginModal, { onDismiss: closeLoginModal }) : null,
+          // The provider chooser: one app-level instance, for the same reason as the modal
+          // above -- accounts are mind-global, so there is nothing per-chat about picking
+          // one. It will take over from that modal once every lane's flow has landed.
+          isProviderChooserOpen() ? m(ProviderChooserModal, { onDismiss: closeProviderChooser }) : null,
           // The terminal-auth counterpart: harnesses whose sign-in runs in their
           // own TUI raise this shared instructions notice instead (see AgentAuth.ts).
           getAuthInstructionsAgentId() !== null ? m(AgentAuthInstructionsModal) : null,

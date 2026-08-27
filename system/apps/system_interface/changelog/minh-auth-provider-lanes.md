@@ -121,3 +121,18 @@ second copy of it.
 The flow service is constructed once in `create_application` and read back through the app
 state, because it holds the live sign-in PTY between the call that starts a flow and the
 polls that advance it.
+
+# The provider chooser
+
+`ProviderChooserModal` lists the providers you can sign in to, one row each; picking one
+opens its sign-in screen with the recommended way in on top and any alternates under a
+disclosure. It renders one of three shapes -- link-then-paste-a-code, show-a-code-and-wait,
+or paste a key -- and the server says which per method, so the client never has to know what
+a harness is. That indirection earns its keep on OpenAI, which inverts the usual flow.
+
+It reuses the existing `.claude-login-*` styles rather than growing a parallel vocabulary for
+an identical modal; the only additions are a back chevron and a style for the one-time code.
+
+The composer's "Agent auth" button is now "Providers" and opens the chooser. That is a
+temporary home -- the chooser's real entry points are the new-tab screen's picker and the
+model bar. The transcript auth-error paths still open the old modal for now.

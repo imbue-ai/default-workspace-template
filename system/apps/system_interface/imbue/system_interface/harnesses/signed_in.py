@@ -18,7 +18,7 @@ from typing import Final
 
 from loguru import logger as _loguru_logger
 
-from imbue.concurrency_group.subprocess_utils import ProcessError
+from imbue.concurrency_group.errors import ProcessError
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.system_interface.harnesses.binding import account_env
 from imbue.system_interface.harnesses.harness_type import HarnessType
