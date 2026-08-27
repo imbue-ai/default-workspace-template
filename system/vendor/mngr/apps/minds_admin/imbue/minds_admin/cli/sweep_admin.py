@@ -30,3 +30,26 @@ def sweep_r2(email: str | None, connector_url: str | None, api_key: str | None) 
     """
     client = make_admin_connector_client(connector_url)
     emit_json(client.admin_run_r2_sweep(resolve_admin_api_key(api_key), email))
+
+
+@sweep_admin.command(name="lease-records")
+@click.option("--dry-run", "is_dry_run", is_flag=True, default=False, help="List the verdicts; release nothing")
+@click.option(
+    "--grace-seconds",
+    type=float,
+    default=None,
+    help="Override the tombstone grace window (the connector's default is 6 hours)",
+)
+@paid_auth_options
+@handle_imbue_cloud_errors
+def sweep_lease_records(
+    is_dry_run: bool, grace_seconds: float | None, connector_url: str | None, api_key: str | None
+) -> None:
+    """Run one lease-vs-record sweep pass (release tombstoned + stuck leases; report record-less ones).
+
+    Identical to the hourly cron, but on demand. ``--dry-run`` shows what a
+    pass would release without touching anything -- the audit view of
+    lease/record drift.
+    """
+    client = make_admin_connector_client(connector_url)
+    emit_json(client.admin_run_lease_record_sweep(resolve_admin_api_key(api_key), is_dry_run, grace_seconds))

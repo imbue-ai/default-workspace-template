@@ -44,12 +44,17 @@ from imbue.modal_app_kit.deploy import read_scaledown_window
 from imbue.modal_app_kit.deploy import stamped_secret
 from imbue.modal_app_kit.image import IMAGE_REQUIREMENTS_FILENAME
 from imbue.modal_app_kit.image import pinned_image
+from imbue.modal_app_kit.log_format import configure_logging
 from imbue.modal_app_kit.request_logging import RequestLoggingMiddleware
 from imbue.modal_app_kit.sentry import capture_and_reraise
 from imbue.modal_app_kit.sentry import init_sentry
 from imbue.modal_app_kit.sentry import resolve_sentry_dsn
 from imbue.modal_app_kit.sentry import resolve_sentry_environment
 from imbue.modal_app_kit.source_mount import shipped_python_source_ignore
+
+# Named under the ``imbue`` subtree so the shared logging configuration's
+# level knob covers this entrypoint's lines (the module itself is ``app``).
+logger = logging.getLogger("imbue.modal_litellm.app")
 
 _DEPLOY_ENV = read_deploy_env()
 
@@ -111,6 +116,12 @@ LITELLM_CONFIG = {
     "litellm_settings": {
         "drop_params": True,
         "num_retries": 0,
+        # LiteLLM's native JSON logging (one line per record with a ``level``):
+        # at config load it re-homes the root logger and its own loggers onto
+        # one JSON handler. The ``JSON_LOGS`` env var exported by
+        # ``_litellm_logging_env_updates`` covers the window between import
+        # and config load.
+        "json_logs": True,
         # LiteLLM's native Sentry integration: failed LLM calls are reported
         # (with LiteLLM's own context) to the tier's Bugsink instance via the
         # SENTRY_DSN env var, which litellm_app() maps from LITELLM_SENTRY_DSN.
@@ -145,6 +156,25 @@ def _litellm_sentry_env_updates(environ: dict[str, str]) -> dict[str, str]:
         updates["SENTRY_API_TRACE_RATE"] = "0.0"
     if "SENTRY_ENVIRONMENT" not in environ:
         updates["SENTRY_ENVIRONMENT"] = resolve_sentry_environment(environ)
+    return updates
+
+
+def _litellm_logging_env_updates(environ: dict[str, str]) -> dict[str, str]:
+    """Env vars to export before the proxy import so LiteLLM's own log lines carry a level.
+
+    ``JSON_LOGS`` gives the handler LiteLLM attaches to its loggers at import
+    its JSON formatter (``{"message", "level", "timestamp", ...}``).
+    ``LITELLM_LOG`` is what the proxy's startup reads to set its own loggers'
+    level: INFO matches our ``imbue.*`` packages (unset, they would inherit
+    the root logger's WARNING and emit nothing else); DEBUG restores
+    LiteLLM's verbose output. Values already present in ``environ`` (e.g.
+    supplied through the stamped secret to debug a dev env) win.
+    """
+    updates: dict[str, str] = {}
+    if "JSON_LOGS" not in environ:
+        updates["JSON_LOGS"] = "1"
+    if "LITELLM_LOG" not in environ:
+        updates["LITELLM_LOG"] = "INFO"
     return updates
 
 
@@ -202,16 +232,23 @@ app = modal.App(name=f"llm-{_DEPLOY_ENV}", image=image)
 )
 @modal.asgi_app()
 def litellm_app():
+    # JSON log lines for everything logged before LiteLLM takes over the root
+    # logger at config load (see the ``json_logs`` setting) -- and for the
+    # ``RequestLoggingMiddleware`` lines, whose dedicated handler LiteLLM's
+    # re-homing never touches.
+    configure_logging()
     # Server-level error reporting to the tier's Bugsink instance; a no-op
     # until the tier's `sentry` Vault entry carries LITELLM_SENTRY_DSN.
     init_sentry("litellm-proxy", "LITELLM_SENTRY_DSN")
-    # LiteLLM's own sentry failure_callback reads the literal SENTRY_DSN env
-    # var (plus the trace-rate / environment knobs); export them before the
-    # proxy import so the callback initializes correctly. Note LiteLLM's
-    # re-init replaces the client configured by init_sentry above on the
-    # first LLM call, so this process's server-level events lose the dedup
-    # before_send limiter and the release/server_name labels -- an accepted
-    # consequence of using the native callback (see _litellm_sentry_env_updates).
+    # LiteLLM reads its logging knobs (JSON_LOGS, LITELLM_LOG) and its sentry
+    # failure_callback's literal SENTRY_DSN env var (plus the trace-rate /
+    # environment knobs) at import; export them before the proxy import so
+    # both initialize correctly. Note LiteLLM's sentry re-init replaces the
+    # client configured by init_sentry above on the first LLM call, so this
+    # process's server-level events lose the dedup before_send limiter and
+    # the release/server_name labels -- an accepted consequence of using the
+    # native callback (see _litellm_sentry_env_updates).
+    os.environ.update(_litellm_logging_env_updates(dict(os.environ)))
     os.environ.update(_litellm_sentry_env_updates(dict(os.environ)))
     config_path = _write_config_file()
     os.environ["CONFIG_FILE_PATH"] = config_path
@@ -267,10 +304,10 @@ def _run_prisma_db_push(schema_path: str, subprocess_env: dict[str, str]) -> Non
     )
     combined_output = (result.stdout + "\n" + result.stderr).strip()
     if result.returncode == 0:
-        logging.info("Completed prisma db push:\n%s", combined_output)
+        logger.info("Completed prisma db push:\n%s", combined_output)
         return
     if _is_connection_failure_output(combined_output):
-        logging.warning("Failed to reach the database server during prisma db push (retryable):\n%s", combined_output)
+        logger.warning("Failed to reach the database server during prisma db push (retryable):\n%s", combined_output)
         raise _PrismaConnectionError(combined_output)
     raise _PrismaMigrationError(f"prisma db push exited {result.returncode}:\n{combined_output}")
 
@@ -313,13 +350,17 @@ def migrate_db() -> None:
     out-of-band). --skip-generate skips client codegen since the image
     already did that at build time.
     """
+    configure_logging()
+    # LiteLLM builds the handler for its own loggers from JSON_LOGS / LITELLM_LOG
+    # at import, so they must be exported first (as in ``litellm_app``) or its
+    # lines here would come out as colored text.
+    os.environ.update(_litellm_logging_env_updates(dict(os.environ)))
     import litellm.proxy
 
-    logging.basicConfig(level=logging.INFO, force=True)
     init_sentry("litellm-proxy", "LITELLM_SENTRY_DSN")
     with capture_and_reraise():
         direct_url = direct_database_url(os.environ["DATABASE_URL"])
         direct_host = urllib.parse.urlsplit(direct_url).hostname
-        logging.info("Running prisma db push against database host %s", direct_host)
+        logger.info("Running prisma db push against database host %s", direct_host)
         schema_path = os.path.join(os.path.dirname(litellm.proxy.__file__), "schema.prisma")
         _run_prisma_db_push(schema_path, {**os.environ, "DATABASE_URL": direct_url})
