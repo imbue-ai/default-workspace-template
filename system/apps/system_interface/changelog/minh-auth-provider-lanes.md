@@ -612,3 +612,29 @@ The chooser dismissed on backdrop *click*, and a click fires wherever the press 
 selecting the device code or the several-hundred-character sign-in URL and releasing past the
 dialog's edge read as "close this" and aborted the flow the code was being copied out of. It
 uses the shared backdrop helper, which keys off mouse down on the backdrop itself.
+
+# Smaller fixes to the sign-in screens
+
+- Submitting a code or a key while the flow is settling raised rather than saying what
+  happened: the teardown had already released the terminal.
+- A key-paste flow armed no deadline, so a closed tab left it pending and its folder on disk
+  until the next sign-in or the next boot -- and the service is single-flight, so that flow was
+  in the way of the next one.
+- A flow whose last check could not run keeps its folder, and the deadline no longer discards
+  it anyway. The two mechanisms used to contradict each other.
+- Account folders are created 0700. The CLIs write credentials straight into them.
+- A poll that 404s is terminal. The server no longer has that flow, so no later tick will say
+  anything different, and swallowing it left the screen spinning forever.
+- A poll or submit that outlives its flow no longer stamps its state onto the next one.
+- Signing in selects the account that was just created, so someone who picked an account
+  earlier and then added a provider does not silently get the old one.
+- "Try again" works. It re-rendered the identical error screen for the seconds a terminal takes
+  to spawn, because the previous attempt's failure was still on screen -- and each extra click
+  started another sign-in and killed the previous one.
+- A failed provider load offers a retry instead of a permanent "Loading providers...", and a
+  failed account removal says why instead of leaving the row silently in place.
+- Re-authenticating updates the account's provider name. Re-keying to a different provider left
+  every label naming the old one.
+- Accounts are numbered by what their label says, not by lane. Two lanes run on pi and could
+  both mint an OpenRouter account, giving two rows reading "OpenRouter (Pi)"; meanwhile a lane
+  offering many providers numbered its only Groq account "Groq (Pi) 2".
