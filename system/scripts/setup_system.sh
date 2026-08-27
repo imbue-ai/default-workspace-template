@@ -48,6 +48,9 @@ fi
 : "${CLAUDE_CODE_VERSION:=2.1.227}"
 : "${CODEX_VERSION:=0.147.0}"
 : "${PI_VERSION:=0.83.0}"
+# Playwright's own CLI, the agent's browser-driving interface. It is "@playwright/cli";
+# the bare "playwright-cli" package on npm is a deprecated stub.
+: "${PLAYWRIGHT_CLI_VERSION:=0.1.18}"
 : "${OPENCODE_VERSION:=1.18.19}"
 : "${MODAL_VERSION:=1.4.2}"
 : "${GH_VERSION:=2.96.0}"

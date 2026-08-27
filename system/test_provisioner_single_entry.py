@@ -49,3 +49,13 @@ def test_every_global_installer_script_is_invoked_by_setup_system() -> None:
     assert installers != []
     missing = [name for name in installers if name not in setup_system]
     assert missing == []
+
+
+def test_every_version_pin_setup_system_expands_has_a_default() -> None:
+    """A pin with no ``:=`` default has no source at all now that the Dockerfile
+    carries none, and the script runs under ``set -u``."""
+    setup_system = _SETUP_SYSTEM_PATH.read_text()
+    expanded = set(re.findall(r"\$\{(\w+_VERSION)\}", setup_system))
+    defaulted = set(re.findall(r'^: "\$\{(\w+_VERSION):=', setup_system, re.MULTILINE))
+    assert expanded != set()
+    assert expanded <= defaulted
