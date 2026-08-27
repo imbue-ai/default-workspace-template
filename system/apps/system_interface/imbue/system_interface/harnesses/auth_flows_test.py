@@ -28,7 +28,21 @@ def service(tmp_path: Path) -> AuthFlowService:
     return AuthFlowService.create(home=tmp_path, work_dir=work_dir)
 
 
-_AGY_URL = "https://accounts.google.com/o/oauth2/auth?client_id=fake&state=fake"
+# Full length on purpose: the agy scrape sets a min_length floor precisely so a wrapped
+# fragment is not mistaken for the value, and a short stand-in here would be rejected by
+# that floor -- correctly, which would make this fixture test the wrong thing.
+_AGY_URL = (
+    "https://accounts.google.com/o/oauth2/auth?access_type=offline"
+    "&client_id=1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
+    "&code_challenge=9fuIJX-6PD-u-QvPY_btAKGMHhWAuTs9lGODa0VdoZI&code_challenge_method=S256"
+    "&prompt=consent&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback"
+    "&response_type=code&scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcloud-platform"
+    "+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fuserinfo.email"
+    "+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fuserinfo.profile"
+    "+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcclog"
+    "+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fexperimentsandconfigs"
+    "+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Faicode+openid&state=4EarbJyLzNfxxfqUQhC3-A"
+)
 
 
 def test_the_shape_comes_from_the_method_not_the_harness() -> None:
