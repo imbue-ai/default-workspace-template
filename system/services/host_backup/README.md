@@ -60,7 +60,7 @@ an encrypted restic repo on cheaper object storage.
     sandbox's file gofer a reused path serves a stale, deleted subvolume, so
     only the first post-boot backup would capture data; unique names avoid
     that. After the backup, the oldest snapshots beyond `max_local_snapshots`
-    (default 5) are deleted by name via a `cleanup` request that carries the
+    (default 1) are deleted by name via a `cleanup` request that carries the
     snapshot name as `target`.
   - `direct`: no snapshot; restic reads `/home/user/.mngr/` directly (plain docker;
     intended for testing).
