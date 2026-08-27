@@ -532,8 +532,8 @@ body {
   transform: translateX(-50%);
   z-index: var(--z-dropdown);
   width: max-content;
-  max-width: 240px;
-  padding: 6px 9px;
+  max-width: 400px;
+  padding: var(--space-1) var(--space-2);
   border-radius: var(--radius-md);
   background: var(--color-inverse-surface);
   color: var(--color-text-on-accent);
@@ -541,7 +541,8 @@ body {
   font-size: var(--font-size-helper);
   font-weight: 400;
   line-height: 1.4;
-  white-space: nowrap;
+  white-space: normal;
+  text-align: center;
   box-shadow: var(--shadow-overlay);
   opacity: 0;
   visibility: hidden;
