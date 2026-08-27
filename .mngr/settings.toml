@@ -144,6 +144,18 @@ cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode,Tod
 # scroll out of view, so what mngr captures at send time is what is actually holding the
 # input. tmux here runs with `alternate-screen off` (see the tmux.conf written below), so
 # the workspace terminal panel keeps its scrollback either way.
+# model = "opus[1m]" is the ONE model pin left in this file, and it is claude-only on
+# purpose. Two things make it safe here and unsafe everywhere else: every Anthropic account
+# that can reach Claude Code has Opus, so the slug cannot be rejected the way a codex slug
+# can (see agent_types.codex); and the `first` create template turns fast mode on for the
+# introductory agent, which needs a model that actually supports it -- so the model and the
+# fast-mode default have to be chosen together rather than left to whatever the account
+# happens to default to.
+#
+# Do NOT copy this to another harness. codex, pi, opencode and antigravity all pin nothing:
+# their model sets are per-account (codex: by ChatGPT tier) or per-provider (pi, opencode),
+# so a pin there is a slug that some accounts cannot use, which fails as a hard 400 AND as
+# an empty model bar.
 settings_overrides__extend = {model = "opus[1m]", fastMode = false, skipDangerousModePermissionPrompt = true, tui = "fullscreen"}
 # Launch every claude agent through the OOM band wrapper instead of `claude`
 # directly. The wrapper (system/services/oom_priority/bin/agent_oom_launch.py) sets its own
