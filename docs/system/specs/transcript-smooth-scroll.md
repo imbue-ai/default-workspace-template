@@ -37,6 +37,14 @@ Supersedes the scroll portions of [chat-scroll-and-selection-bugs.md](chat-scrol
 
 New module `models/transcriptScroll/types.ts` (names final after review):
 
+> **As built** (the listing below is the reviewed plan; `models/transcriptScroll/types.ts` is the authority):
+> `ScrollTarget`'s physical arm became `physical-fraction` (a fraction through the physical region, which the
+> engine scales over the region's scrollable span) instead of `physical-px`/`contentTopPx`;
+> `PersistedScrollState` gained `anchorEventIndex` so a restore can re-center the fill (the `/events` API
+> addresses by offset, not row key); `resolveTrackFraction`/`computeThumb` take the physical content height
+> rather than `PhysicalExtent` + `PhysicalGeometry`; and the fill constants settled at
+> `INITIAL_TAIL_LIMIT=50`, `JUMP_WINDOW_LIMIT=500`, `FILL_CHUNK_LIMIT=2000` (see `fillPlanner.ts`).
+
 ```ts
 // --- Layer vocabulary ------------------------------------------------------
 
