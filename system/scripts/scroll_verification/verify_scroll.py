@@ -25,6 +25,7 @@ GET_STATE = """
   const el = document.querySelector('.transcript-scroll');
   if (!el) return null;
   const list = el.querySelector('.message-list');
+  if (!list) return null;
   const spacers = Array.from(list.children).filter(c => c.id === '').map(s => parseFloat(s.style.height));
   const rows = Array.from(list.children).filter(c => c.id !== '');
   const elRect = el.getBoundingClientRect();
