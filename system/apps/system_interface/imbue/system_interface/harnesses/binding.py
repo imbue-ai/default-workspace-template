@@ -145,6 +145,12 @@ def create_args(harness: HarnessType, account_dir: Path, agent_state_dir: Path) 
     which is why its paths are quoted here.
     """
     if harness is HarnessType.CLAUDE:
+        # This export is load-bearing beyond the agent itself. mngr sources an agent's env
+        # file into every process in its tmux session, and propagates CLAUDE_CONFIG_DIR to a
+        # child agent when the spawning shell already has it -- so a worker created from
+        # inside this chat (`/launch-task`) runs on this same account, and so does any skill
+        # script that shells claude. Binding claude some other way would silently sign every
+        # worker out. See `binding_test.py`.
         return ["--env", f"CLAUDE_CONFIG_DIR={account_dir}"]
 
     source = account_credential_path(harness, account_dir)

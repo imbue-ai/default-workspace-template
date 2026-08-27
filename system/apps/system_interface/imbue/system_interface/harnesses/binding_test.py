@@ -179,3 +179,21 @@ def test_an_explicit_account_beats_the_most_recently_used_one(tmp_path: Path) ->
     _account(tmp_path, "anthropic", "Anthropic")
 
     assert _bound_id(wanted, tmp_path) == wanted
+
+
+def test_claude_is_bound_by_an_export_that_children_inherit(tmp_path: Path) -> None:
+    """A worker created from inside a bound chat has to run on that chat's account.
+
+    mngr sources an agent's env file into every process in its tmux session and propagates
+    CLAUDE_CONFIG_DIR to a child agent when the spawning shell already carries it, so
+    `/launch-task` inherits for free -- but only while claude is bound by that export.
+    Binding it any other way, or with any other variable, signs every worker out with no
+    error anywhere. This test exists to make that a deliberate choice rather than an
+    accident.
+    """
+    account = tmp_path / "acct"
+
+    args = create_args(HarnessType.CLAUDE, account, tmp_path / "state")
+
+    assert args == ["--env", f"CLAUDE_CONFIG_DIR={account}"]
+    assert account_env(HarnessType.CLAUDE, account) == {"CLAUDE_CONFIG_DIR": str(account)}
