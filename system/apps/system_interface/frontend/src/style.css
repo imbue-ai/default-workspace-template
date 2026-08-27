@@ -1318,207 +1318,15 @@ body {
    styled entirely with utilities in its view; its pulsing status dot reuses the
    agent-activity-pulse keyframes below. */
 
-/* ── Permission request card ──
-   An agent permission request, rendered as a standalone card (not a generic
-   tool block): an eyebrow, the request's title + rationale, a button that opens
-   the review modal (or the verdict receipt once decided), and a toggle
-   revealing the raw request/response. */
-.permission-request {
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius-lg);
-  background: var(--c-bg-composer);
-  padding: 12px 14px;
-  max-width: 560px;
-}
-
-/* The eyebrow every card state shares: a small key + "Permission request". */
-.permission-request-eyebrow {
-  display: flex;
-  align-items: center;
-  gap: --spacing(1.5);
-  font-size: var(--font-size-helper);
-  color: var(--c-text-secondary);
-}
-
-.permission-request-status {
-  margin-top: 9px;
-  font-size: var(--font-size-body);
-  color: var(--c-text-secondary);
-}
-
-/* Pending body: a rounded subject badge beside the title + rationale column. */
-.permission-request-body {
-  margin-top: 10px;
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-}
-
-.permission-request-badge {
-  width: 32px;
-  height: 32px;
-  border-radius: var(--radius-lg);
-  background: var(--c-bg-hover);
-  color: var(--c-text-secondary);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-
-/* The smaller badge on the resolved receipt row. */
-.permission-request-badge--sm {
-  width: 24px;
-  height: 24px;
-  border-radius: var(--radius-md);
-}
-
-.permission-request-info {
-  min-width: 0;
-  flex: 1;
-}
-
-.permission-request-title {
-  font-size: var(--font-size-body);
-  font-weight: 600;
-  color: var(--c-text-primary);
-}
-
-.permission-request-reason {
-  font-size: var(--font-size-helper);
-  line-height: 1.45;
-  color: var(--c-text-secondary);
-}
-
-.permission-request-actions {
-  margin-top: --spacing(3);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-/* The raw toggle on its own row (unparsed and resolved states), kept subtle
-   at the right edge. */
-.permission-request-toggle-row {
-  margin-top: --spacing(2);
-  display: flex;
-  justify-content: flex-end;
-}
-
-.permission-request-raw-toggle {
-  font-size: var(--font-size-helper);
-  color: var(--c-text-faint);
-  background: transparent;
-  border: none;
-  padding: 0;
-  cursor: pointer;
-  transition: color var(--dur-base);
-}
-
-.permission-request-raw-toggle:hover {
-  color: var(--c-text-secondary);
-}
-
-.permission-request-raw {
-  margin-top: 10px;
-}
-
-.permission-request-raw > pre {
-  margin: 0;
-  font-family: ui-monospace, monospace;
-  font-size: var(--font-size-helper);
-  color: var(--c-text-secondary);
-  background: var(--c-bg-sidebar);
-  border-radius: var(--radius-md);
-  padding: --spacing(2);
-  overflow: auto;
-  white-space: pre-wrap;
-}
-
-/* Permission-request "Review & respond" button now uses the shared .btn
-   primitive (btn--primary). */
-
-.permission-request-icon {
-  flex-shrink: 0;
-}
-
-/* The service's own brand mark inside the badge. Drawn as an <img> and never
-   inlined: the artwork carries its own color, and marks that pair a white path
-   with an unfilled one would be repainted by a currentColor ancestor.
-   `object-fit` matters because several of the marks are non-square. */
-.permission-request-mark {
-  display: block;
-  object-fit: contain;
-  flex-shrink: 0;
-}
-
-/* The resolved receipt, all on one compact line: badge, title, the verdict
-   right beside the title, and the raw toggle at the right edge. */
-.permission-request-receipt {
-  margin-top: 10px;
-  display: flex;
-  align-items: center;
-  gap: --spacing(2);
-}
-
-.permission-request-receipt-title {
-  min-width: 0;
-  font-size: var(--font-size-body);
-  font-weight: 600;
-  color: var(--c-text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* The raw toggle inside the receipt row, kept at the right edge. */
-.permission-request-receipt-toggle {
-  margin-left: auto;
-  flex-shrink: 0;
-}
-
-/* The verdict beside the receipt title. Approved reads in the accent
-   green; denied reads neutral (a decision, not an error). */
-.permission-request-verdict {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: var(--font-size-helper);
-  font-weight: 600;
-  flex-shrink: 0;
-}
-
-.permission-request-verdict--granted {
-  color: var(--c-accent);
-}
-
-.permission-request-verdict--denied {
-  color: var(--c-text-secondary);
-}
-
-.permission-request-verdict--error {
-  color: var(--c-warning);
-}
-
-.permission-request-verdict-icon {
-  flex-shrink: 0;
-}
+/* The permission-request card (views/permission-card.ts) is styled entirely
+   with utilities in its view. */
 
 /* ── Machine rail ── */
-/* The narrow icon strip down the left edge. Its collapsed width (37px), the
-   width transition and the label fade all live on the element as utilities, so
-   the whole expansion animates off one state flag -- what is left here is the
-   part those cannot express.
-
-   The rail overlays the panels to its right while expanded, so a drag that
-   starts on a row must not select the labels it sweeps across, and the app
-   list's scrollbar must not eat into the 37px the icons need. The scrollbar is
-   therefore transparent until the rail is open. */
-.machine-sidebar {
-  user-select: none;
-}
-
+/* The narrow icon strip down the left edge lives as utilities in
+   views/Sidebar.ts; only its scrollbar treatment is here. The rail overlays
+   the panels to its right while expanded, and the app list's scrollbar must
+   not eat into the 37px the icons need, so it is transparent until the rail
+   is hovered. */
 .machine-sidebar ::-webkit-scrollbar {
   width: 6px;
 }
@@ -1566,7 +1374,11 @@ body {
    DARK MODE IS UNDECIDED (§1 of the design says "dark mode TBD"), and this app
    carries no dark tokens of its own. The values below are therefore the light
    design serving as the default in both schemes; when the dark canvas is
-   settled it belongs here, as a `prefers-color-scheme` override. */
+   settled it belongs here, as a `prefers-color-scheme` override.
+
+   This rule is only the --si-* parameter table for the dockview theme below
+   (the canvas paint itself -- bg + edge padding -- is utilities in
+   views/App.ts). */
 .app-main {
   --si-canvas: rgb(245 245 245);
   --si-pane-surface: var(--c-surface);
@@ -1583,16 +1395,6 @@ body {
   /* Half of the 4px separator: each of the two neighbours contributes its own
      inset, and the outermost panes get the same half against the canvas edge. */
   --si-pane-inset: 2px;
-  /* The canvas runs edge to edge and the padding is the outermost pane gap, so
-     the grey is painted across the padding too. Clipping it to the content box
-     instead would let the app's off-white body show as a band around the dock,
-     which reads as a seam rather than as an inset. The top carries that gap
-     against the title bar, and the left carries a matching one so the rail has
-     a few pixels of canvas to hover into before it reaches the literal window
-     edge -- flush there makes the reveal awkward to land the pointer on. Right
-     and bottom stay flush against the viewport. */
-  padding: --spacing(1) 0 0 --spacing(1);
-  background: var(--si-canvas);
 }
 
 /* ── Dockview workspace ── */

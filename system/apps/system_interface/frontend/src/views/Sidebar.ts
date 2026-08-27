@@ -2098,7 +2098,10 @@ export function Sidebar(): m.Component<SidebarAttrs> {
                 // rounded bottom corners and shadow run off the window edge.
                 // The dock itself stays flush at the bottom; this insets only
                 // the rail.
-                "machine-sidebar absolute top-0 bottom-[4px] left-0 z-20 flex flex-col overflow-hidden border " +
+                // `select-none`: the expanded rail overlays the panels to its
+                // right, so a drag starting on a row must not select the
+                // labels it sweeps across.
+                "machine-sidebar absolute top-0 bottom-[4px] left-0 z-20 flex flex-col overflow-hidden border select-none " +
                 `${RAIL_PADDING_CLASS} transition-[width] duration-150 ease-out ` +
                 (expanded ? EXPANDED_CLASS : COLLAPSED_CLASS),
             },
