@@ -343,6 +343,10 @@ class CreateChatRequest(FrozenModel):
         default=False,
         description="Stack the `first` create template: /welcome, the first=true label, and a fast-mode launch",
     )
+    account_id: str = Field(
+        default="",
+        description="Signed-in account to bind the chat to; empty picks the most recently used one on the harness",
+    )
 
 
 class CreatedChatAgent(FrozenModel):

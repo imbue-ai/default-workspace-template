@@ -2600,6 +2600,7 @@ def _create_chat_agent() -> Response:
             extra_role_templates=("first",) if create_request.first else (),
             project_id=project_id,
             extra_taken_names=titled_names,
+            account_id=create_request.account_id,
         )
         response = CreateAgentResponse(agent_id=created.agent_id, name=created.name, display_name=created.display_name)
         return _json_response(response.model_dump(), status_code=201)

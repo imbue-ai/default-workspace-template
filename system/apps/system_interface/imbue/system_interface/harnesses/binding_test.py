@@ -10,11 +10,15 @@ from pathlib import Path
 import pytest
 
 from imbue.mngr_claude.claude_config import check_claude_dialogs_dismissed
+from imbue.system_interface.accounts import commit_account
+from imbue.system_interface.accounts import mint_account_dir
+from imbue.system_interface.accounts import set_mru
 from imbue.system_interface.harnesses.binding import BindingError
 from imbue.system_interface.harnesses.binding import account_credential_path
 from imbue.system_interface.harnesses.binding import account_env
 from imbue.system_interface.harnesses.binding import agent_credential_path
 from imbue.system_interface.harnesses.binding import create_args
+from imbue.system_interface.harnesses.binding import resolve_binding
 from imbue.system_interface.harnesses.binding import seed_account
 from imbue.system_interface.harnesses.harness_type import HarnessType
 
@@ -123,3 +127,52 @@ def test_seeding_is_idempotent(tmp_path: Path) -> None:
         seed_account(harness, account, work_dir)
         seed_account(harness, account, work_dir)
         assert account.is_dir()
+
+
+def _bound_id(harness: HarnessType, account_id: str = "", home: Path | None = None) -> str | None:
+    account = resolve_binding(harness, account_id, home)
+    return None if account is None else account.id
+
+
+def _account(home: Path, lane: str, display: str) -> str:
+    """Mint and commit an account, returning its id."""
+    account_id, _ = mint_account_dir(home)
+    commit_account(account_id, lane, display, home)
+    return account_id
+
+
+def test_no_accounts_leaves_the_agent_on_the_shared_login(tmp_path: Path) -> None:
+    """None is the pre-accounts behaviour, which is what lets binding land before any UI."""
+    assert resolve_binding(HarnessType.CLAUDE, home=tmp_path) is None
+
+
+def test_the_most_recently_used_account_on_the_harness_wins(tmp_path: Path) -> None:
+    first = _account(tmp_path, "anthropic", "Anthropic")
+    second = _account(tmp_path, "anthropic", "Anthropic")
+
+    assert _bound_id(HarnessType.CLAUDE, home=tmp_path) == second
+    set_mru(first, tmp_path)
+    assert _bound_id(HarnessType.CLAUDE, home=tmp_path) == first
+
+
+def test_an_account_on_another_harness_is_not_picked(tmp_path: Path) -> None:
+    """The mru is global, so a codex sign-in must not become an agy agent's account."""
+    agy = _account(tmp_path, "google", "Google")
+    _account(tmp_path, "openai", "OpenAI")
+
+    assert _bound_id(HarnessType.ANTIGRAVITY, home=tmp_path) == agy
+    assert resolve_binding(HarnessType.OPENCODE, home=tmp_path) is None
+
+
+def test_binding_an_account_to_the_wrong_harness_is_refused(tmp_path: Path) -> None:
+    """Silently allowing it would produce a chat that cannot take a turn."""
+    codex = _account(tmp_path, "openai", "OpenAI")
+    with pytest.raises(BindingError):
+        resolve_binding(HarnessType.ANTIGRAVITY, codex, tmp_path)
+
+
+def test_an_explicit_account_beats_the_most_recently_used_one(tmp_path: Path) -> None:
+    wanted = _account(tmp_path, "anthropic", "Anthropic")
+    _account(tmp_path, "anthropic", "Anthropic")
+
+    assert _bound_id(HarnessType.CLAUDE, wanted, tmp_path) == wanted

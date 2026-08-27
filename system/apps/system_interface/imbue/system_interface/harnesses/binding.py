@@ -37,7 +37,11 @@ from imbue.mngr_claude.claude_config import auto_dismiss_claude_dialogs
 from imbue.mngr_claude.claude_config import ensure_chat_cancel_tap_keybinding
 from imbue.mngr_codex.codex_config import get_codex_auth_path
 from imbue.mngr_codex.codex_config import get_codex_home
+from imbue.system_interface import accounts
+from imbue.system_interface.accounts import Account
 from imbue.system_interface.harnesses.harness_type import HarnessType
+from imbue.system_interface.harnesses.lanes import LaneNotFoundError
+from imbue.system_interface.harnesses.lanes import get_lane
 from imbue.system_interface.harnesses.pi_coding.model import PI_CONFIG_DIR_RELPATH
 
 logger = _loguru_logger
@@ -147,3 +151,36 @@ def create_args(harness: HarnessType, account_dir: Path, agent_state_dir: Path) 
     # helper does -- the same operation, one step later.
     link = f"mkdir -p {shlex.quote(str(dest.parent))} && ln -sfn {shlex.quote(str(source))} {shlex.quote(str(dest))}"
     return ["--extra-provision-command", link]
+
+
+def resolve_binding(harness: HarnessType, account_id: str = "", home: Path | None = None) -> Account | None:
+    """The account a new agent on `harness` should run under, or None for the shared login.
+
+    An explicit id is honoured (and must be on this harness -- binding a codex account to an
+    agy agent would produce a chat that silently cannot take a turn). Otherwise the most
+    recently used account on this harness wins, so signing in and then starting a chat "just
+    works" without the caller having to name what it just created.
+
+    None is not an error: a workspace with no accounts yet keeps today's behaviour exactly,
+    which is what lets this land before any UI sends an account id.
+    """
+    index = accounts.read_index(home)
+    if account_id:
+        account = accounts.resolve_account(account_id, home)
+        if _harness_of(account) is not harness:
+            raise BindingError(f"account {account_id} is not a {harness} account")
+        return account
+
+    on_harness = [a for a in index.accounts if _harness_of(a) is harness]
+    if not on_harness:
+        return None
+    return next((a for a in on_harness if a.id == index.mru), on_harness[-1])
+
+
+def _harness_of(account: Account) -> HarnessType | None:
+    """The harness an account's lane runs on, or None if this build no longer has that lane."""
+    try:
+        return get_lane(account.lane).harness
+    except LaneNotFoundError:
+        logger.warning("Account {} names unknown lane {}", account.id, account.lane)
+        return None

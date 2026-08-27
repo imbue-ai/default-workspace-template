@@ -143,3 +143,15 @@ Re-authenticating writes an existing account folder a second time. `commit_accou
 raised on that, so an expired account could never be revived in place. It now returns
 the existing row and only moves the most-recently-used pointer: the seq stays put, so
 every agent already bound to that account by label keeps resolving.
+
+# Run a new chat on a signed-in account
+
+A chat created while an account exists for its harness now runs on that account's
+credential instead of the workspace's shared login. The binding rides `mngr create`
+itself -- `--env` for claude, an `--extra-provision-command` symlink for the rest --
+because create provisions, starts, waits for readiness and delivers the first message
+before returning, so anything done afterwards lands too late. The chat carries an
+`account=<id>` label so the UI can show which provider it is on.
+
+With no accounts the behaviour is unchanged, which is what lets this land before the
+new-tab picker exists to name one.
