@@ -175,7 +175,14 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
         ]),
         trailing_reply.length > 0
           ? trailing_reply.map((ev) =>
-              m("div.pv-final", m(MarkdownContent, { content: ev.text ?? "", requestedAt: ev.timestamp })),
+              m(
+                "div.pv-final",
+                m(MarkdownContent, {
+                  content: ev.text ?? "",
+                  requestedAt: ev.timestamp,
+                  expansionKeyPrefix: ev.event_id,
+                }),
+              ),
             )
           : null,
       ]);
