@@ -279,7 +279,14 @@ def _unload_pulse_sink(sink_name: str) -> None:
 
 
 # Page the browser opens on, and the default for "New tab".
-_HOME_URL = os.environ.get("BROWSER_HOME_URL", "https://www.google.com")
+# The landing page for a fresh browser, and the fallback when a restore has no saved tabs.
+# Carries `hl=en` because Google picks its UI language from IP geolocation, not from
+# Accept-Language, and this workspace's egress geolocates to France (an OVH range that is
+# physically in Oregon but registered to OVH SAS in Roubaix). Without it the FIRST thing a
+# user sees on every new browser is a French consent page. `hl` only means anything to
+# Google, so this is not a general fix -- it is the one page where it is worth it, because
+# it is the one page we choose.
+_HOME_URL = os.environ.get("BROWSER_HOME_URL", "https://www.google.com/?hl=en")
 
 # Server-side cast keepalive: the /cast control socket can sit silent for long
 # stretches, so without traffic the system_interface WS proxy closes the idle stream

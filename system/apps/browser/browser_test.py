@@ -1484,3 +1484,21 @@ def test_a_different_agent_taking_the_browser_does_kill_the_old_token(monkeypatc
         assert await browser._token_may_drive(a_token) is False
 
     asyncio.run(go())
+
+
+def test_launch_args_declare_english_explicitly() -> None:
+    # The container has no LANG/LC_ALL, so without these Chrome's language is whatever the
+    # base image happens to imply. `--accept-lang` sets the header outright, which is what
+    # makes it independent of the container locale.
+    args = chrome_args.launch_args(user_data_dir="/tmp/lang-check")
+    assert "--lang=en-US" in args
+    assert "--accept-lang=en-US,en" in args
+
+
+def test_the_default_home_page_forces_google_into_english() -> None:
+    # Google picks its UI language from IP GEOLOCATION, not Accept-Language, and this
+    # workspace's egress is an OVH range that geolocates to France. Without `hl=en` the
+    # first thing a user sees on every new browser is a French consent page. Only the
+    # landing page is fixable this way -- `hl` means nothing outside Google.
+    assert "hl=en" in bsession._HOME_URL
+    assert bsession._HOME_URL.startswith("https://www.google.com/?")  # a `?` query, not `&`
