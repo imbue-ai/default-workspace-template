@@ -501,3 +501,24 @@ Twenty-eight rows do not belong in a `select`, so the picker is now the mockup's
 pinned under it with its own scroll region. It renders at overlay level rather than inside
 the panel, because the panel is `overflow-hidden` and would clip it -- the same reason the
 mockup portals it to `<body>`.
+
+# An OpenRouter lane, and the Opencode Go one confirmed
+
+Both are the same thing -- a named provider that runs on pi and signs in by pasting a key --
+so OpenRouter is Opencode Go's lane with different strings, and confirming one confirms the
+other. Checked against the pinned pi 0.83.0 by writing each `auth.json` and asking pi what it
+made of it: both read the key back, and `--list-models` under each folder returns that
+provider's catalogue and nothing else. So the mechanism behind the Opencode Go row works, and
+"one provider per folder scopes the model list" holds for both.
+
+OpenRouter earns its own row rather than an entry in the generic API-key list because a row
+can carry a subtitle saying what the account gets you. The generic row speaks for
+twenty-eight providers at once and cannot say anything specific about any of them.
+
+# The key screen no longer flashes a spinner on the way in
+
+Opening a paste lane showed the waiting screen for the length of its request. A terminal lane
+spends seconds spawning a CLI and deserves it; a paste lane mints a folder in milliseconds,
+so all it produced was a flicker between the click and a form that was always going to be
+there. The form renders immediately and the mint lands behind it -- measured in the browser
+at 7ms from click to form, with no spinner drawn.
