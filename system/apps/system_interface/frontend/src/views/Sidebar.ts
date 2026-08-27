@@ -243,11 +243,12 @@ const SWITCHER_MENU_WIDTH = 256;
 // leading inset (RAIL_PADDING_CLASS) rather than a generic menu row's roomier
 // `px-3`, paired with the rail's own ICON_BOX_CLASS for the icon slot passed
 // alongside it (see switcherMenu). The switcher's card shares the rail card's
-// own left edge (its anchor is the header's bounding rect, which is the rail
-// card's), so matching the per-row inset too is what lands a project's icon
-// and label at the exact x the rail draws its own rows at -- a few px to the
-// left of where the generic menu padding put them, and the reason the
-// dropdown now reads as sitting on top of the rail rather than beside it.
+// own left border (its anchor takes its horizontals from the card itself --
+// see the header's onclick), so matching the per-row inset too is what lands
+// a project's icon and label at the exact x the rail draws its own rows at --
+// a few px to the left of where the generic menu padding put them, and the
+// reason the dropdown now reads as sitting on top of the rail rather than
+// beside it.
 const SWITCHER_ROW_CLASS =
   "project-rail-menu-item group flex h-8 w-full cursor-pointer items-center gap-1 pl-[5px] pr-3 text-left " +
   "hover:bg-bg-hover";
@@ -345,8 +346,9 @@ const SHORTCUT_ROWS: readonly { tabType: QuickAddTabType; label: string }[] = [
 const FILE_VIEWER_TOOLTIP = "A file viewer is coming to this workspace";
 
 // Copy for the rail's working shortcuts, as designed -- "A agent chat"
-// included, not a typo to silently correct.
-const SHORTCUT_TOOLTIPS: Record<QuickAddTabType, string> = {
+// included, not a typo to silently correct. Exported so the New Tab
+// launcher's tiles, which start the same four kinds, say the same thing.
+export const SHORTCUT_TOOLTIPS: Record<QuickAddTabType, string> = {
   chat: "A agent chat to work alongside you",
   files: "Browse and manage the files in your workspace",
   browser: "A browser that agents can control on your behalf",
@@ -423,7 +425,11 @@ export function placeMenu(
     if (left + size.width > viewport.width - MENU_MARGIN && toLeft >= MENU_MARGIN) left = toLeft;
   }
   return {
-    left: Math.max(MENU_MARGIN, Math.min(left, viewport.width - MENU_MARGIN - size.width)),
+    // The left floor never pushes a menu right of its own anchor: the switcher
+    // hangs off the rail card, which itself sits nearer the window edge than
+    // MENU_MARGIN, and clamping it inward would break the flush left edge the
+    // two share.
+    left: Math.max(Math.min(MENU_MARGIN, anchor.left), Math.min(left, viewport.width - MENU_MARGIN - size.width)),
     top: Math.max(MENU_MARGIN, Math.min(top, viewport.height - MENU_MARGIN - size.height)),
   };
 }
@@ -1054,7 +1060,24 @@ export function Sidebar(): m.Component<SidebarAttrs> {
             openMenu = null;
             return;
           }
-          openMenuAt({ kind: "switcher", anchor: anchorForEvent(event) });
+          // Horizontals from the rail card, verticals from the header: the
+          // header sits inside the card's border, so anchoring the switcher on
+          // its rect alone left the dropdown's border 1px right of the card's.
+          // Taking left/right from the card itself is what makes their borders
+          // flush.
+          const headerRect = anchorForEvent(event);
+          const card = (event.currentTarget as HTMLElement).closest(".machine-sidebar");
+          const cardRect = card === null ? headerRect : card.getBoundingClientRect();
+          openMenuAt({
+            kind: "switcher",
+            anchor: {
+              left: cardRect.left,
+              right: cardRect.right,
+              top: headerRect.top,
+              bottom: headerRect.bottom,
+              width: cardRect.width,
+            },
+          });
         },
         oncontextmenu: (event: MouseEvent) => {
           event.preventDefault();
