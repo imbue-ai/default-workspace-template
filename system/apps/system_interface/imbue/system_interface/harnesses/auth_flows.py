@@ -41,6 +41,7 @@ from loguru import logger as _loguru_logger
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface import accounts
+from imbue.system_interface.harnesses.binding import account_credential_path
 from imbue.system_interface.harnesses.binding import account_env
 from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.binding import seed_account
@@ -171,6 +172,10 @@ class _Session:
     # What the probe last said, or None if it has not run. Only UNKNOWN matters: it means
     # "the check failed", not "the credential is bad", so the folder is worth keeping.
     last_verdict: SignedIn | None
+    # A re-auth takes the account's existing credential AWAY before driving the CLI, so the
+    # promote probe answers about the NEW sign-in rather than the old file. These are the
+    # bytes it took, restored on every path that does not end in a fresh credential.
+    cleared_credentials: Mapping[Path, bytes | None]
 
     def is_value_ready(self, buffer: str) -> bool:
         """Whether the scraped value can be read yet -- the drain loop's stop condition.
@@ -198,6 +203,7 @@ def _new_session(lane: Lane, method: PtyMethod | PasteMethod, account_id: str, m
     session.timer = None
     session.code_submitted = False
     session.last_verdict = None
+    session.cleared_credentials = {}
     return session
 
 
@@ -270,6 +276,18 @@ class AuthFlowService:
 
             session = _new_session(lane, method, account_id, minted)
             self._session = session
+            # Take the old credential away first. Three of the four promote probes are
+            # presence checks, not validity checks -- `claude auth status --json` reports
+            # loggedIn for a bogus key, and so do codex and pi -- so a re-auth that the user
+            # abandons in the browser would otherwise be judged against the file that was
+            # already there and reported as a success. Nothing changed, and the UI says
+            # "signed in again".
+            if not minted:
+                session.cleared_credentials = _read_credentials(
+                    _harness_credential_paths(lane.harness, account_path)
+                )
+                for path in session.cleared_credentials:
+                    path.unlink(missing_ok=True)
             url, code = self._drive_locked(session, method, account_path)
             self._arm_deadline_locked(session, method.flow_deadline_s)
             return FlowStart(
@@ -497,6 +515,9 @@ class AuthFlowService:
         return FlowStatus(state=FlowState.PENDING)
 
     def _commit_locked(self, session: _Session, display: str) -> FlowStatus:
+        # The sign-in wrote a new credential over the cleared one, so there is nothing to
+        # restore -- and restoring would undo what the user just did.
+        session.cleared_credentials = {}
         account = accounts.commit_account(session.account_id, session.lane.id, display, self._home)
         session.state = FlowState.OK
         self._teardown_locked(session, keep_folder=True)
@@ -505,6 +526,10 @@ class AuthFlowService:
     def _fail_locked(self, session: _Session, detail: str) -> None:
         session.state = FlowState.FAILED
         session.detail = detail
+        # A failed re-auth leaves the account exactly as it was: the credential it had is
+        # more use than nothing, and the user asked to REPLACE it, not to lose it.
+        _restore_credentials(session.cleared_credentials)
+        session.cleared_credentials = {}
         self._teardown_locked(session, keep_folder=not session.minted)
 
     def _teardown_locked(self, session: _Session, keep_folder: bool) -> None:
@@ -520,6 +545,10 @@ class AuthFlowService:
 
     def _drop_locked(self) -> None:
         if self._session is not None and self._session.state is FlowState.PENDING:
+            # Abandoned rather than failed -- back button, closed modal, a second sign-in
+            # displacing this one. Same rule: the account keeps what it had.
+            _restore_credentials(self._session.cleared_credentials)
+            self._session.cleared_credentials = {}
             self._teardown_locked(self._session, keep_folder=not self._session.minted)
         self._session = None
 
@@ -539,6 +568,12 @@ class AuthFlowService:
                 # deliberately keeps it for that reason. Letting the deadline discard it
                 # anyway makes the two mechanisms contradict each other.
                 keep = not session.minted or session.last_verdict is SignedIn.UNKNOWN
+                # A re-auth that ran out of time leaves the account as it was. The exception
+                # is UNKNOWN: the check could not run, so a sign-in may genuinely have landed
+                # and putting the old credential back would throw it away.
+                if session.last_verdict is not SignedIn.UNKNOWN:
+                    _restore_credentials(session.cleared_credentials)
+                session.cleared_credentials = {}
                 self._teardown_locked(session, keep_folder=keep)
 
     def _require_locked(self, flow_id: str, must_be_pending: bool = False) -> _Session:
@@ -639,6 +674,23 @@ def _credential_paths(sink: PasteSink, account_path: Path) -> tuple[Path, ...]:
     if sink is PasteSink.CLAUDE_ENV:
         return (account_path / "settings.json",)
     raise FlowError(f"{sink} has no writer yet")
+
+
+def _harness_credential_paths(harness: HarnessType, account_path: Path) -> tuple[Path, ...]:
+    """Every file that says this account is signed in, whoever wrote it.
+
+    Wider than `_credential_paths`, which only knows what OUR paste sinks write: a browser
+    sign-in leaves the CLI's own store there too. Used to take an account's credential AWAY
+    before re-driving its sign-in -- see `_clear_for_reauth`.
+    """
+    paths = [account_path / "settings.json"] if harness is HarnessType.CLAUDE else []
+    linked = account_credential_path(harness, account_path)
+    if linked is not None:
+        paths.append(linked)
+    if harness is HarnessType.CLAUDE:
+        # What `claude auth login` / `setup-token` write themselves.
+        paths.append(account_path / ".credentials.json")
+    return tuple(paths)
 
 
 def _read_credentials(paths: Sequence[Path]) -> dict[Path, bytes | None]:

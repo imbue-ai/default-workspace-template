@@ -776,3 +776,18 @@ left alone.
 Every surface that starts a chat checks first and opens the chooser instead, including a new
 project's starter chat -- which previously turned the failure into a blocking browser alert on
 every project creation. Signing in from there finishes what was asked for and starts the chat.
+
+# A re-authentication that fails now says so
+
+Re-auth drove the CLI against a folder that still held the old credential, and three of the
+four promote probes are presence checks rather than validity checks -- `claude auth status
+--json` reports `loggedIn` for a bogus key, and codex and pi behave the same. So the account
+someone was trying to fix answered on behalf of the sign-in they had just abandoned: decline in
+the browser, and the modal said "Signed in again. Every chat on this provider can take a turn
+once more." Nothing had changed.
+
+The credential is taken away before the CLI is driven, so the probe judges the new sign-in.
+Every path that does not end in a fresh one puts it back -- failure, abort, a second sign-in
+displacing this one, the deadline -- because the credential the account had is more use than
+none, and the user asked to replace it rather than to lose it. The one exception is a check
+that could not run at all, where a sign-in may genuinely have landed.
