@@ -356,9 +356,11 @@ function collectClasses(node: unknown): string[] {
   if (node == null) return [];
   if (Array.isArray(node)) return node.flatMap(collectClasses);
   if (typeof node === "object") {
-    // Mithril normalizes the `class` hyperscript attr into `className` on the vnode.
+    // Mithril normalizes the `class` hyperscript attr into `className` on the
+    // vnode. Split into tokens so marker classes are found individually even
+    // when utilities share the class string.
     const v = node as { attrs?: { className?: unknown }; children?: unknown };
-    const own = typeof v.attrs?.className === "string" ? [v.attrs.className] : [];
+    const own = typeof v.attrs?.className === "string" ? v.attrs.className.split(/\s+/).filter(Boolean) : [];
     return [...own, ...collectClasses(v.children)];
   }
   return [];

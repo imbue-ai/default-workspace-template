@@ -16,27 +16,14 @@ import { parseMessageAttachments } from "../models/attachments";
 import type { UserMessageEvent } from "../models/Response";
 import { classifyUserMessage } from "./message-classification";
 import { KIND_SPEC, Rail, UserMessageKind } from "./message-kinds";
+import { renderToolBlock } from "./ToolCallBlock";
 
 /** The collapsed, expandable "▸ <label>" chip used for every `SystemChip` kind
  *  (Stop hook / browser fleet / task-notification). Identical chrome regardless
- *  of source; only the label and body differ. */
+ *  of source; only the label and body differ. Width-capped like the user
+ *  bubbles on its rail (the assistant flow's blocks run full-width instead). */
 function renderSystemChip(label: string, body: string): m.Vnode {
-  return m("div", { class: "tool-call-block" }, [
-    m(
-      "div",
-      {
-        class: "tool-call-header",
-        onclick(e: Event) {
-          const block = (e.currentTarget as HTMLElement).parentElement;
-          if (block) {
-            block.classList.toggle("tool-call-block--expanded");
-          }
-        },
-      },
-      [m("span", { class: "tool-call-chevron" }, "▸"), m("span", label)],
-    ),
-    m("div", { class: "tool-call-details" }, [m("div", { class: "tool-call-input" }, [m("pre", m("code", body))])]),
-  ]);
+  return renderToolBlock({ headerText: label, inputText: body, extra: "max-w-[80%]" });
 }
 
 export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
@@ -86,8 +73,13 @@ export function renderUserMessage(event: UserMessageEvent): m.Vnode | null {
   if (KIND_SPEC[kind].rail !== Rail.User) {
     return null;
   }
+  // The collapsed row's layout is utilities; its tightened row margin stays a
+  // CSS rule (it must outrank the unlayered .message rhythm rule, which a
+  // utility cannot).
   const messageClass =
-    kind === UserMessageKind.SystemChip ? "message message-system-collapsed" : "message message-user";
+    kind === UserMessageKind.SystemChip
+      ? "message message-system-collapsed flex flex-col items-end"
+      : "message message-user";
   // id mirrors the assistant rows so the virtualized list can measure every
   // rendered row's height by querying ``.message-list > [id]``.
   return m("div", { id: event.event_id, class: messageClass, key: event.event_id }, [m(StableUserMessage, { event })]);
