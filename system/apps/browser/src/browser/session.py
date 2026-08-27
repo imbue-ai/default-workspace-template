@@ -280,13 +280,18 @@ def _unload_pulse_sink(sink_name: str) -> None:
 
 # Page the browser opens on, and the default for "New tab".
 # The landing page for a fresh browser, and the fallback when a restore has no saved tabs.
-# Carries `hl=en` because Google picks its UI language from IP geolocation, not from
-# Accept-Language, and this workspace's egress geolocates to France (an OVH range that is
-# physically in Oregon but registered to OVH SAS in Roubaix). Without it the FIRST thing a
-# user sees on every new browser is a French consent page. `hl` only means anything to
-# Google, so this is not a general fix -- it is the one page where it is worth it, because
-# it is the one page we choose.
-_HOME_URL = os.environ.get("BROWSER_HOME_URL", "https://www.google.com/?hl=en")
+#
+# Blank on purpose. It used to be google.com, which meant the FIRST thing anyone saw on a new
+# browser was Google's consent interstitial -- and in French, because Google picks both the
+# language and the "you look like the EU" decision from IP geolocation, and this workspace's
+# egress is an OVH range that is physically in Oregon but registered to OVH SAS in Roubaix.
+#
+# `?hl=en` would only have translated that wall, not removed it: the interstitial appears
+# because Google thinks the client is in the EU, which a language parameter does not change.
+# A blank page has nothing to geolocate and nothing to consent to. The agent navigates
+# somewhere the moment it attaches, so this page is only ever seen by a human glancing at a
+# fresh pane. Set BROWSER_HOME_URL to override (e.g. "https://www.google.com/?hl=en").
+_HOME_URL = os.environ.get("BROWSER_HOME_URL", "about:blank")
 
 # Server-side cast keepalive: the /cast control socket can sit silent for long
 # stretches, so without traffic the system_interface WS proxy closes the idle stream

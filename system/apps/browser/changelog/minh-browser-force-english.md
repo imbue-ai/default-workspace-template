@@ -15,10 +15,18 @@ country `EU`, and the org is OVH SAS in Roubaix. ipinfo already resolves it corr
 Portland, Oregon, so the registry data is not uniformly wrong -- Google's database is what is
 stale, and third parties cannot correct it.
 
-So the default `BROWSER_HOME_URL` becomes `https://www.google.com/?hl=en`. `hl` is a Google URL
-parameter and means nothing elsewhere, so this deliberately is NOT a general mechanism -- it
-fixes the one page where it is worth it, because it is the one page we choose. Everything else
-is covered by the Accept-Language flags above.
+So the default `BROWSER_HOME_URL` becomes **`about:blank`**. It used to be `google.com`, which
+meant the first thing anyone saw on a new browser was that consent wall.
+
+`?hl=en` was the obvious alternative and is the wrong fix: it would only have TRANSLATED the
+wall. The interstitial appears because Google thinks the client is in the EU, which a language
+parameter does not change -- you would get the identical screen reading "Before you continue to
+Google". A blank page has nothing to geolocate and nothing to consent to, and the agent
+navigates somewhere the moment it attaches, so this page is only ever seen by a human glancing
+at a fresh pane. `BROWSER_HOME_URL` still overrides it for anyone who wants a real landing page.
+
+`about:blank` is already excluded by `_is_restorable_url`, so it is never persisted as a tab
+and a restore with no saved tabs falls back to it consistently.
 
 Not attempted, and why:
 
