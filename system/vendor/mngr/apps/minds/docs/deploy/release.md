@@ -412,6 +412,21 @@ Edit `apps/minds/release-channels.toml` to name the build a channel should serve
 open a PR, and CI dry-runs every gate against it so review sees whether it would
 actually publish. Merging applies it.
 
+When the channel is **stable**, bump the connector's download fallback in the same
+PR: `_DEFAULT_TARGET_BY_PLATFORM[_MAC_ARM64_PLATFORM]` in
+`apps/remote_service_connector/imbue/remote_service_connector/accounts_web.py`, to
+`https://download.todesktop.com/26032588hqdzk/Minds%20<version>%20-%20Build%20<build_id>-arm64.dmg`.
+That is what `GET /download` serves while the feed cannot be read, so leaving it
+behind means an outage hands people an older build. Leaving it *ahead* of stable
+is the one to avoid: `allowDowngrade` is false, so those installs never come back
+down, while a fallback behind stable self-heals on the next update check.
+
+The bump reaches production at the next connector deploy rather than at merge,
+so the deployed value trails `main` for a while -- behind stable, which is the
+safe direction. Withdrawing stable moves the constant the other way and does not
+get that grace: until the deploy lands, the deployed fallback still names the
+withdrawn build. See Withdrawing a build.
+
 ```toml
 [channels.stable]
 build_id = "260801n4rh5zv5d"
@@ -449,6 +464,12 @@ regardless, on every arch you ship, or those users silently lose the fast create
 path.
 
 ### Withdrawing a build
+
+Withdrawing **stable** also means lowering the connector's download fallback to
+the build being rolled back to, and deploying the connector. Until that lands,
+the fallback names the withdrawn build -- the one direction the promotion step
+warns about, since `allowDowngrade` is false and anyone who takes it during a
+feed outage stays on it.
 
 A channel moves only by repointing its entry. **Removing an entry withdraws
 nothing** — no manifest is ever deleted, so the channel keeps serving its last
@@ -493,23 +514,32 @@ happens to be reachable on either. They are not interchangeable elsewhere --
 `accounts` is the sign-in surface and the origin baked into password-reset
 links, `minds` is the hosted web chrome -- so share the `minds` one.
 
-Nothing to do at release time. The connector reads the arm64 `.dmg` out of
-`stable-mac.yml` and caches it briefly, so promoting stable moves the link by
-itself. The target is read rather than written here because the connector
-deploys on its own schedule: a value baked in during a release would not reach
-the running service until somebody redeployed it.
+The connector reads the arm64 `.dmg` out of `stable-mac.yml` and caches it
+briefly, so promoting stable moves the link by itself. The target is read rather
+than written because the connector deploys on its own schedule: a value baked in
+during a release would not reach the running service until somebody redeployed
+it.
 
-If the manifest cannot be read the link falls back to ToDesktop's own channel
-URL -- whatever was last *Released* there, which has not tracked our stable
-channel since release channels landed. That failure is cached for the same
-minute a success is, so an outage costs one download the fetch timeout rather
-than all of them.
+If the manifest cannot be read the link falls back to a build pinned in the
+connector. A failed read is cached for the same minute a success is, so an
+outage costs one download two fetch attempts rather than costing all of them.
 
-So the two below disagreeing is what an outage looks like, not proof the link
-stopped tracking stable. The connector logs `Could not resolve the stable
-download` with the reason, and that log is what tells the two apart.
+Promoting stable bumps that pin (see Release channels above), and the bump
+reaches production at the next connector deploy rather than at merge, so the
+deployed fallback lags `main` -- behind stable rather than ahead, which is the
+safe direction.
 
-To check the two agree:
+Because the pin names the build stable serves, the two below agree whether or
+not the feed was read: agreement is not proof the link is tracking stable. In
+the minute after a promotion a disagreement is just the connector's cache, and
+clears itself. After that it means both at once: the pin is served only when a
+read fails, so the feed could not be read *and* the deployed connector pins a
+build other than the one stable serves. The connector logs `Could not resolve
+the stable download link` when a read fails, with the failure attached to the
+event rather than spelled into the line, and that log is what tells a resolved
+redirect from a fallback one.
+
+To check the link serves what stable serves:
 
 ```bash
 curl -s https://updates.imbueminds.com/stable-mac.yml | grep -o 'https://[^ ]*arm64\.dmg'

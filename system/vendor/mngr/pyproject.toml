@@ -217,7 +217,8 @@ exclude = [
     "apps/minds_evals/*.py",
     "apps/minds_evals/imbue/minds_evals/*.py",
     # templates/ run in the verifier container, where rewardkit arrives via uvx;
-    # unresolvable in this venv and in the standalone project alike.
+    # unresolvable in this venv. The standalone minds_evals project checks them
+    # instead -- it installs harbor-rewardkit as a dev dependency for exactly that.
     "apps/minds_evals/imbue/minds_evals/templates/",
     # Vendored upstream bugsink settings template; the bugsink package is
     # installed only on the error-tracker VPS (never in the dev venv), so its

@@ -167,6 +167,12 @@ def test_init_sentry_activates_and_tags_service_with_a_dsn(
     assert event["server_name"].startswith("test-service-")
 
 
+# Flakes on a >10s pytest-timeout in CI (offload run 32990804756). The body
+# runs ~3.5s locally against this package's --timeout=10, most of it spent in
+# init_sentry's real transport reaching for the deliberately unresolvable
+# bugsink.invalid DSN before the capturing transport is swapped in -- a cost
+# that varies with the resolver CI happens to have.
+@pytest.mark.flaky
 def test_init_sentry_reports_warning_logs_as_events_and_info_logs_as_breadcrumbs_only(
     monkeypatch: pytest.MonkeyPatch, isolated_sentry_client: None
 ) -> None:

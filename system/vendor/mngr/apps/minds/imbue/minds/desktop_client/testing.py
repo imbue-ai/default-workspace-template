@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 from typing import Final
 
+import pytest
 from loguru import logger as loguru_logger
 from pydantic import Field
 from pydantic import PrivateAttr
@@ -27,12 +28,13 @@ from pydantic import PrivateAttr
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.concurrency_group.event_utils import ReadOnlyEvent
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.minds.config.data_types import MNGR_BINARY
 from imbue.minds.desktop_client.backend_resolver import MngrCliBackendResolver
 from imbue.minds.desktop_client.backend_resolver import ParsedAgentsResult
 from imbue.minds.desktop_client.discovery_health import DiscoveryHealth
 from imbue.minds.desktop_client.discovery_health import ProducerRemediator
 from imbue.minds.desktop_client.environment_signals import ConnectivityDetector
-from imbue.minds.desktop_client.environment_signals import EnvironmentBlock
+from imbue.minds.desktop_client.environment_signals import EnvironmentCondition
 from imbue.minds.desktop_client.environment_signals import NetworkProber
 from imbue.minds.desktop_client.environment_signals import SleepTracker
 from imbue.minds.desktop_client.environment_signals import SshEndpoint
@@ -98,7 +100,13 @@ class StubNetworkProber(NetworkProber):
     ssh_endpoints: set[SshEndpoint] = Field(
         default_factory=set, description="host:port pairs that serve an SSH banner"
     )
-    probed_endpoints: list[str] = Field(default_factory=list, description="Every endpoint asked about, in order")
+    probed_endpoints: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Every endpoint asked about, in the order the rounds ran. Within one round the order is "
+            "whichever of its threads was scheduled first, so an assertion about it has to sort"
+        ),
+    )
 
     def is_reachable(self, host: str, port: int) -> bool:
         self.probed_endpoints.append(f"{host}:{port}")
@@ -117,8 +125,11 @@ class SideEffectingStubNetworkProber(StubNetworkProber):
     before it can move underneath it: a wake that disqualifies the measurement
     in flight, a stop that claims the machine the gate is deciding about, an
     error out of the discovery walk the endpoints come from. Here the callback
-    is what moves it -- and one that raises interrupts the probe exactly as the
-    walk would, since it runs before the answer.
+    is what moves it, and one that raises interrupts the probe, since it runs
+    before the answer -- though not with the exception it raised: the round asks
+    its hosts on the group's threads, which hand a raise back wrapped in a
+    ``ConcurrencyExceptionGroup``. A test that turns on *which* family the probe
+    failed with has to fail the walk itself.
 
     Disarms itself after firing. Set ``is_armed`` again for a test that needs a
     later probe interrupted too, or construct it disarmed to arm it per case.
@@ -127,9 +138,16 @@ class SideEffectingStubNetworkProber(StubNetworkProber):
     on_first_question: Callable[[], None] = Field(description="Run as the round's first endpoint is asked")
     is_armed: bool = Field(default=True, description="Whether the next round's first question fires the callback")
 
+    # The round asks its hosts on threads of its own, so the disarm has to
+    # exclude the others: read-then-clear on its own lets two of them both see
+    # an armed prober and fire a callback that is meant to happen once.
+    _arming_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
+
     def is_reachable(self, host: str, port: int) -> bool:
-        if self.is_armed:
+        with self._arming_lock:
+            is_firing = self.is_armed
             self.is_armed = False
+        if is_firing:
             self.on_first_question()
         return super().is_reachable(host, port)
 
@@ -160,9 +178,10 @@ def build_connectivity_detector_over(
     :data:`STUB_CONNECTIVITY_HOSTS`, and a site that spelled its own could dial
     the real quorum and measure the machine running the suite instead.
 
-    ``concurrency_group`` is the one the SSH facet fans its round out under, the
-    same way production hands it the app's root group -- so a test measures the
-    round the app actually runs. The ``root_concurrency_group`` fixture is one.
+    ``concurrency_group`` is the one both of the probe's rounds fan out under,
+    the same way production hands it the app's root group -- so a test measures
+    the rounds the app actually runs, including a group that refuses them. The
+    ``root_concurrency_group`` fixture is one.
     """
     return ConnectivityDetector(
         prober=prober,
@@ -186,9 +205,10 @@ def build_stub_connectivity_detector(
 ) -> tuple[ConnectivityDetector, StubNetworkProber]:
     """A real detector over a stub prober, plus the prober so a test can change the network.
 
-    ``concurrency_group`` is the one the SSH facet fans its round out under, the
-    same way production hands it the app's root group -- so a test measures the
-    round the app actually runs. The ``root_concurrency_group`` fixture is one.
+    ``concurrency_group`` is the one both of the probe's rounds fan out under,
+    the same way production hands it the app's root group -- so a test measures
+    the rounds the app actually runs. The ``root_concurrency_group`` fixture is
+    one.
 
     ``workspace_ssh_endpoints`` are the endpoints minds itself would dial -- the
     ones the SSH facet asks about first. Empty (the default) leaves that facet on
@@ -382,7 +402,7 @@ def build_ui_state_publisher_for_test(
         derive_requests=lambda: UiRequestsMessage(count=0, request_ids=()),
         derive_notifications=lambda: UiNotificationsMessage(entries=(), unresolved_count=0),
         derive_discovery_health=lambda: UiDiscoveryHealthMessage(state=DiscoveryHealth.HEALTHY),
-        derive_environment=lambda: UiEnvironmentMessage(state=EnvironmentBlock.NONE),
+        derive_environment=lambda: UiEnvironmentMessage(state=EnvironmentCondition.NONE),
         derive_health_states=derive_health_states,
     )
     return publisher, broadcaster.register()
@@ -421,11 +441,13 @@ def build_resolver_with_system_services(
     liveness rather than just resolving agents.
 
     ``provider_backend`` seeds a clean poll of ``provider_name`` naming that
-    backend, which is what makes the machine's *locality* answerable: without one
-    the resolver has agents on a provider it has never been told about, and
-    ``is_network_dependent_provider`` answers from its "cannot identify it"
-    fallback rather than from the backend. None (the default) leaves it that way,
-    which is the right shape for a test that is not about locality at all.
+    backend, which is what makes the machine's *locality* answerable here: this
+    builder seeds no SSH coordinate, so the backend name is all its machines
+    have to be judged by. Without one the resolver has agents on a provider it
+    has never been told about, and ``is_network_dependent_provider`` answers from
+    its "cannot identify it" fallback rather than from the backend. None (the
+    default) leaves it that way, which is the right shape for a test that is not
+    about locality at all.
     """
     resolved_host_id = host_id if host_id is not None else HostId.generate()
     resolver = MngrCliBackendResolver()
@@ -460,13 +482,24 @@ class SeededAgent(FrozenModel):
 
     Named fields rather than a positional tuple because two of them are provider
     strings that mean opposite things -- the provider *instance* a machine sits
-    on, and the *backend* that instance runs -- and only the backend decides
-    whether the machine is on this device.
+    on, and the *backend* that instance runs -- and neither of them is what
+    decides whether the machine is on this device. ``ssh_info`` is: a machine
+    with a loopback coordinate is dialled here and one with any other coordinate
+    is not, whatever backend it names. The backend answers only for a machine
+    seeded without a coordinate. A machine with neither -- no coordinate and no
+    backend, because no poll has ever described its provider -- is the third
+    case, and the one every caller has to answer conservatively.
     """
 
     agent_id: AgentId = Field(description="The workspace agent discovery reports")
     provider_name: str = Field(description="Provider instance the agent's host runs on")
-    backend: str = Field(description="Backend that provider instance runs (local / docker / imbue_cloud / ...)")
+    backend: str | None = Field(
+        default=None,
+        description=(
+            "Backend that provider instance runs (local / docker / imbue_cloud / ...), or None to leave "
+            "the provider undescribed, as one no discovery poll has reported is"
+        ),
+    )
     ssh_info: RemoteSSHInfo | None = Field(default=None, description="SSH coordinate, or None for a host without one")
     host_state: HostState | None = Field(
         default=None, description="Host state, or None for a host discovery has not reported one for"
@@ -508,17 +541,19 @@ def build_resolver_with_provider_backends(agents: tuple[SeededAgent, ...]) -> Mn
         )
     )
     for agent in agents:
-        seed_provider_backend(resolver, provider_name=agent.provider_name, backend=agent.backend)
+        if agent.backend is not None:
+            seed_provider_backend(resolver, provider_name=agent.provider_name, backend=agent.backend)
     return resolver
 
 
 def seed_provider_backend(resolver: MngrCliBackendResolver, provider_name: str, backend: str) -> None:
     """Report a clean poll of ``provider_name``, naming the backend it runs.
 
-    The backend is what ``is_network_dependent_provider`` reads, and a resolver
-    that has never been told about a provider answers "cannot identify it" --
-    which is a different code path from an identified remote one. A test about
-    either has to say which.
+    The backend is where ``is_network_dependent_provider`` starts -- a remote one
+    settles it outright, an on-device one sends it on to its machines'
+    coordinates -- and a resolver that has never been told about a provider
+    answers "cannot identify it", which is a different code path from either. A
+    test about any of them has to say which.
     """
     resolver.update_providers(
         ProviderInstanceName(provider_name),
@@ -574,11 +609,41 @@ def write_stub_mngr(tmp_path: Path, name: str, body: str) -> str:
     return str(script)
 
 
+def install_stub_mngr_on_path(bin_dir: Path, monkeypatch: pytest.MonkeyPatch, body: str) -> str:
+    """Install an executable ``mngr`` stub in ``bin_dir``, first on ``PATH``, and return its path.
+
+    For the desktop-client paths that resolve ``mngr`` the way production does
+    -- via ``PATH`` -- so a test can shape what the real subprocess invocation
+    sees without threading a binary path through the code under test.
+    """
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    script = write_stub_mngr(bin_dir, MNGR_BINARY, body)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    return script
+
+
 # Iterations of the blocking stub's 0.05s poll before it gives up on its release
 # file. Bounded because a pytest run killed mid-test orphans this detached shell
 # with nothing left to write the file it waits for. Well clear of
 # SUPPRESSION_WAIT_SECONDS, so only an abandoned run reaches the ceiling.
 _BLOCKING_STUB_MAX_POLLS: Final[int] = 1200
+
+
+def blocking_release_wait_body(release_path: Path) -> str:
+    """Shell lines that poll for ``release_path``, exiting 1 at the bounded ceiling.
+
+    The one release-wait fragment every blocking stub shares: the bound is what
+    keeps a pytest run killed mid-test from leaving the orphaned, detached stub
+    shell polling forever (see ``_BLOCKING_STUB_MAX_POLLS``).
+    """
+    return (
+        "polls=0\n"
+        f'while [ ! -f "{release_path}" ]; do\n'
+        "  polls=$((polls + 1))\n"
+        f"  [ $polls -ge {_BLOCKING_STUB_MAX_POLLS} ] && exit 1\n"
+        "  sleep 0.05\n"
+        "done"
+    )
 
 
 def write_blocking_stub_mngr(tmp_path: Path, name: str, release_path: Path) -> str:
@@ -588,16 +653,7 @@ def write_blocking_stub_mngr(tmp_path: Path, name: str, release_path: Path) -> s
     the machine's system interface is already gone -- the window in which the
     intentional-stop mark has to hold.
     """
-    body = (
-        "polls=0\n"
-        f'while [ ! -f "{release_path}" ]; do\n'
-        "  polls=$((polls + 1))\n"
-        f"  [ $polls -ge {_BLOCKING_STUB_MAX_POLLS} ] && exit 1\n"
-        "  sleep 0.05\n"
-        "done\n"
-        "exit 0"
-    )
-    return write_stub_mngr(tmp_path, name, body)
+    return write_stub_mngr(tmp_path, name, blocking_release_wait_body(release_path) + "\nexit 0")
 
 
 # Ceiling on "the blocking command has reached the point where it marks the
@@ -711,6 +767,17 @@ def scripted_workspace_probe_server(
     finally:
         server.shutdown()
         server.server_close()
+
+
+def exec_json_envelope(
+    remote_stdout: str, *, success: bool = True, stderr: str = "", results_key: str = "results"
+) -> str:
+    """The ``mngr exec --format json`` envelope wrapping one remote result.
+
+    ``results_key`` is ``"results"`` for in-container execs and
+    ``"outer_results"`` for ``--outer`` ones, mirroring mngr's own output.
+    """
+    return json.dumps({results_key: [{"stdout": remote_stdout, "stderr": stderr, "success": success}]})
 
 
 # -- Discovery-health watchdog, for its state machine and its loop --
