@@ -37,13 +37,23 @@ say at the call site.
   needs them (`h-[34px]`), as deliberate exceptions.
 - **Radius/elevation**: `rounded-sm/md/lg/xl` (4/6/8/16) and `shadow-raised` /
   `shadow-overlay`.
-- **Shared recipes** (a look used by more than one file) are class-string
-  builders/constants in `src/views/primitives.ts` — `buttonClass()`,
-  `inputClass()`, `badgeClass()`, the `MODAL_*_CLASS` shell — or an exported
-  constant next to the owning view for feature-local sharing. Extend those
-  rather than hand-rolling a lookalike. A dialog's confirming action is
-  `buttonClass("primary")`; a lone dismiss/cancel stays quiet (`"secondary"`);
-  a destructive confirm is `"destructive"` (quiet form: `"ghost-destructive"`).
+- **Buttons are the `Button` component** in `src/views/Button.ts`:
+  `m(Button, {variant, sm, icon, round, selected, block, extra, ...attrs},
+  children)` renders a real `<button type="button">`, applies the shared
+  recipe, and passes through every attr it doesn't consume (`onclick`,
+  `disabled`, `aria-*`, `oncreate`, ...). A caller's `class` never passes
+  through — additive utilities/markers go in `extra`. The class recipe
+  (`buttonClass()`) is exported from the same file for the rare place a
+  component can't go: an element that must stay a real anchor (the login
+  modal's OAuth link) or DOM built outside mithril (the lightbox). A dialog's
+  confirming action is `variant: "primary"`; a lone dismiss/cancel stays quiet
+  (the `secondary` default); a destructive confirm is `"destructive"` (quiet
+  form: `"ghost-destructive"`).
+- **Other shared recipes** (a look used by more than one file) are class-string
+  builders/constants in `src/views/primitives.ts` — `inputClass()`,
+  `badgeClass()`, the `MODAL_*_CLASS` shell — or an exported constant next to
+  the owning view for feature-local sharing. Extend those rather than
+  hand-rolling a lookalike.
 
 **Keep the semantic class names as bare markers.** Every element keeps a
 readable identity class (`queued-header`, `subagent-card--done`, `btn`,

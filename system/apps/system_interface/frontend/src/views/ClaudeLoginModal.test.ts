@@ -16,6 +16,7 @@ import { ClaudeLoginModal } from "./ClaudeLoginModal";
 type VnodeLike = {
   attrs?: Record<string, unknown>;
   children?: unknown;
+  tag?: unknown;
 };
 
 function makeModal(): { render: () => unknown } {
@@ -36,6 +37,14 @@ function* walk(node: unknown): Generator<VnodeLike> {
   }
   if (node !== null && typeof node === "object") {
     const vnode = node as VnodeLike;
+    // A closure-component vnode (e.g. m(Button, ...)) carries no markup of its
+    // own -- its view runs only when mithril renders it -- so expand it and
+    // walk what it renders.
+    if (typeof vnode.tag === "function") {
+      const component = (vnode.tag as (v: VnodeLike) => { view: (v: VnodeLike) => unknown })(vnode);
+      yield* walk(component.view(vnode));
+      return;
+    }
     yield vnode;
     if (vnode.children !== undefined) yield* walk(vnode.children);
   }
@@ -124,7 +133,7 @@ describe("ClaudeLoginModal", () => {
     expect(expanded.indexOf("Get a long-lived token")).toBeLessThan(expanded.indexOf("Anthropic Console"));
   });
 
-  it("shows the Imbue paste form with the mint-page link and textarea", () => {
+  it("shows the Imbue paste form with the mint-page button and textarea", () => {
     const modal = makeModal();
     const toggle = findByClass(modal.render(), "claude-login-alts-toggle");
     (toggle?.attrs?.onclick as () => void)();
@@ -161,7 +170,7 @@ describe("ClaudeLoginModal", () => {
 
 describe("the Open-the-Imbue-key-page embed-contract handshake", () => {
   // The workspace page cannot know the minds app's backend origin, so the
-  // mint link sends `minds:open-ai-keys-page` to the embedding chrome via
+  // mint button sends `minds:open-ai-keys-page` to the embedding chrome via
   // the embed contract, which acks; with no ack (a direct share visit) the
   // modal falls back to an explanatory alert.
 
@@ -193,26 +202,6 @@ describe("the Open-the-Imbue-key-page embed-contract handshake", () => {
     return stub;
   }
 
-  // The mint link is an anchor (not a button), so clickButtonByText cannot
-  // reach it; find it by its rendered text and fire its onclick with a stub
-  // event (the handler only calls preventDefault).
-  function clickMintLink(modal: { render: () => unknown }): void {
-    for (const vnode of walk(modal.render())) {
-      const onclick = vnode.attrs?.onclick;
-      const tag = (vnode as { tag?: unknown }).tag;
-      if (
-        typeof onclick === "function" &&
-        typeof tag === "string" &&
-        tag.startsWith("a") &&
-        JSON.stringify(vnode.children ?? "").includes("Open the Imbue key page")
-      ) {
-        (onclick as (event: unknown) => void)({ preventDefault: () => {} });
-        return;
-      }
-    }
-    throw new Error("No mint-page link found");
-  }
-
   function openImbueFormAndClickLink(): ReturnType<typeof makeWindowStub> {
     resetEmbedEndpointForTesting();
     const stub = makeWindowStub();
@@ -221,7 +210,7 @@ describe("the Open-the-Imbue-key-page embed-contract handshake", () => {
     const toggle = findByClass(modal.render(), "claude-login-alts-toggle");
     (toggle?.attrs?.onclick as () => void)();
     clickButtonByText(modal.render(), "Sign in with Imbue");
-    clickMintLink(modal);
+    clickButtonByText(modal.render(), "Open the Imbue key page");
     return stub;
   }
 

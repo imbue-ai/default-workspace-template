@@ -14,7 +14,8 @@ import { Modal } from "./Modal";
 import { getAgentById } from "../models/AgentManager";
 import { getFastModePromptAgentId, resolveFastModePrompt } from "../models/FastModePrompt";
 import { icon } from "./icons";
-import { MODAL_MESSAGE_CLASS, MODAL_TITLE_CLASS, buttonClass } from "./primitives";
+import { Button } from "./Button";
+import { MODAL_MESSAGE_CLASS, MODAL_TITLE_CLASS } from "./primitives";
 
 const FAST_MODE_DOC_URL = "https://code.claude.com/docs/en/fast-mode";
 
@@ -53,18 +54,14 @@ export function FastModeModal(): m.Component {
             m("h3", { class: MODAL_TITLE_CLASS }, "Keep fast mode on?"),
           ],
           actions: [
+            m(Button, { onclick: () => resolveFastModePrompt(true) }, "Keep fast mode on"),
             m(
-              "button",
-              { class: buttonClass("secondary"), onclick: () => resolveFastModePrompt(true) },
-              "Keep fast mode on",
-            ),
-            m(
-              "button",
+              Button,
               {
-                class: buttonClass("primary"),
+                variant: "primary",
                 onclick: () => resolveFastModePrompt(false),
                 // The default action, so Enter takes it without a reach for the mouse.
-                oncreate: (vnode: m.VnodeDOM) => {
+                oncreate: (vnode) => {
                   (vnode.dom as HTMLButtonElement).focus();
                 },
               },

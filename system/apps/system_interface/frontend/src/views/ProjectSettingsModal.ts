@@ -29,7 +29,8 @@ import { Modal } from "./Modal";
 import { deleteProjectRequest, updateProjectSettings } from "../models/Projects";
 import type { ProjectInfo } from "../models/Projects";
 import { SQUIGGLE_GLYPHS, squiggleMarkup } from "./squiggles";
-import { MODAL_LABEL_CLASS, MODAL_MESSAGE_CLASS, buttonClass, inputClass } from "./primitives";
+import { Button } from "./Button";
+import { MODAL_LABEL_CLASS, MODAL_MESSAGE_CLASS, inputClass } from "./primitives";
 
 export interface ProjectSettingsModalAttrs {
   project: ProjectInfo;
@@ -170,9 +171,8 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
   function deleteConfirmationActions(attrs: ProjectSettingsModalAttrs): m.Children {
     return [
       m(
-        "button",
+        Button,
         {
-          class: buttonClass("secondary"),
           disabled: isDeleting,
           onclick() {
             isConfirmingDelete = false;
@@ -181,9 +181,10 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
         "Keep project",
       ),
       m(
-        "button",
+        Button,
         {
-          class: buttonClass("destructive"),
+          variant: "destructive",
+          extra: "destroy-dialog-btn-destroy",
           disabled: isDeleting,
           onclick: () => deleteProject(attrs),
         },
@@ -195,9 +196,9 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
   function editActions(attrs: ProjectSettingsModalAttrs, trimmedName: string): m.Children {
     return [
       m(
-        "button",
+        Button,
         {
-          class: buttonClass("secondary", { extra: "mr-auto" }),
+          extra: "destroy-dialog-btn-cancel mr-auto",
           disabled: isSaving || isDeleting,
           onclick() {
             isConfirmingDelete = true;
@@ -205,15 +206,11 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
         },
         "Delete",
       ),
+      m(Button, { onclick: attrs.onCancel, disabled: isSaving || isDeleting }, "Cancel"),
       m(
-        "button",
-        { class: buttonClass("secondary"), onclick: attrs.onCancel, disabled: isSaving || isDeleting },
-        "Cancel",
-      ),
-      m(
-        "button",
+        Button,
         {
-          class: buttonClass("primary"),
+          variant: "primary",
           onclick: () => save(attrs),
           disabled: isSaving || isDeleting || !trimmedName,
         },

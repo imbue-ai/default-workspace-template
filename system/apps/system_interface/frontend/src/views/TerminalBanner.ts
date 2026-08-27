@@ -16,7 +16,7 @@
 
 import m from "mithril";
 import { apiUrl } from "../base-path";
-import { buttonClass } from "./primitives";
+import { Button } from "./Button";
 
 const PERSISTENCE_DOC_URL = "https://github.com/imbue-ai/mngr/blob/main/apps/minds/docs/persistent-terminals.md";
 
@@ -82,9 +82,9 @@ export function TerminalBanner(): m.Component {
           ]),
           m("span", { class: "terminal-banner-actions flex flex-none gap-1.5" }, [
             m(
-              "button",
+              Button,
               {
-                class: buttonClass("secondary", { sm: true }),
+                sm: true,
                 onclick: () => {
                   hidden = true;
                 },
@@ -92,9 +92,9 @@ export function TerminalBanner(): m.Component {
               "Dismiss",
             ),
             m(
-              "button",
+              Button,
               {
-                class: buttonClass("secondary", { sm: true }),
+                sm: true,
                 onclick: () => {
                   void persistNeverShowAgain();
                 },

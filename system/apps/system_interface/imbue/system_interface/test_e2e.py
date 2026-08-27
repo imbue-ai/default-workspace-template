@@ -475,6 +475,13 @@ def test_send_button_appears_on_input(e2e_server: tuple[str, list[AgentInfo], Pa
     textarea.fill("test message")
     expect(send_button).to_be_visible()
 
+    # The module-wide tmux mark (see pytestmark) requires every test here to
+    # actually reach tmux, but this test is short enough that the rail's
+    # machine fetch can still be in flight when it ends. Ask the server
+    # directly -- the same ``tmux ls`` the rail's table is built from.
+    with urllib.request.urlopen(f"{base_url}/api/terminals", timeout=5) as response:
+        assert response.status == 200
+
 
 @pytest.mark.timeout(60, func_only=False)
 def test_composer_bar_survives_a_shorter_window(e2e_server: tuple[str, list[AgentInfo], Path], page: Page) -> None:
