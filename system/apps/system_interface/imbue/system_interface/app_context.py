@@ -126,7 +126,11 @@ class SystemInterfaceState(MutableModel):
             # DELIVER it, which needs the manager's send path and a liveness check. No-op for
             # every other harness, whose queue its own harness consumes.
             watcher.set_flush_hooks(
-                lambda text: self.agent_manager.send_message_to_agent(AgentId(agent_info.id), text),
+                # `is None` is the delivery test: send_message_to_agent returns the FAILURE
+                # (or None on success), while FlushSendCallback is declared to return True for
+                # delivered. Passing the result straight through inverts it, and antigravity's
+                # flush would count every failed send as delivered and drop the queue.
+                lambda text: self.agent_manager.send_message_to_agent(AgentId(agent_info.id), text) is None,
                 lambda: self.agent_manager.is_agent_alive(agent_info.id),
             )
             self.watchers[agent_info.id] = watcher

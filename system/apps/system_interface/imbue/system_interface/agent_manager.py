@@ -47,6 +47,8 @@ from imbue.system_interface.activity_state import is_lifecycle_dead
 from imbue.system_interface.activity_state import parse_iso_timestamp_to_epoch
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_discovery import MngrMessenger
+from imbue.system_interface.agent_discovery import SendFailure
+from imbue.system_interface.agent_discovery import delivered_or_raise
 from imbue.system_interface.agent_discovery import discover_agents
 from imbue.system_interface.agent_discovery import get_host_dir
 from imbue.system_interface.agent_discovery import read_claude_config_dir_from_env_file
@@ -59,8 +61,8 @@ from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.harness_type import parse_harness
 from imbue.system_interface.harnesses.model import ModelChoice
 from imbue.system_interface.harnesses.model import ModelOption
-from imbue.system_interface.harnesses.model import match_option
 from imbue.system_interface.harnesses.model import read_model_identity
+from imbue.system_interface.harnesses.model import resolve_model_choice
 from imbue.system_interface.harnesses.path_watch import PathWatcher
 from imbue.system_interface.harnesses.registry import build_interrupt_to_composer
 from imbue.system_interface.harnesses.registry import build_shoulder_tap
@@ -786,13 +788,14 @@ class AgentManager:
             agent_state = self._agents.get(agent_id)
         return agent_state is not None and not is_lifecycle_dead(agent_state.state)
 
-    def send_message_to_agent(self, agent_id: AgentId, message: str) -> bool:
+    def send_message_to_agent(self, agent_id: AgentId, message: str) -> SendFailure | None:
         """Send a message to the agent with ``agent_id``, using the live location cache.
 
         The single entry point for messaging an agent: it reads this manager's
         event-fed location for the id and hands it to the `MngrMessenger`, so the
         message skips a fresh mngr discovery whenever the location is already known.
-        Returns True on success.
+        Returns None when the message was delivered, or the failure -- the harness's own words
+        plus mngr's classification of them, which is what lets the chat decide what to offer.
         """
         return self._messenger.send_to_agent(agent_id, message, self.get_agent_matches_by_id(str(agent_id)))
 
@@ -957,9 +960,7 @@ class AgentManager:
         """
         with self._lock:
             probe_targets = [(app.name, app.program, app.url) for app in self._apps]
-        is_running_by_name = {
-            name: self._liveness_prober(program, url) for name, program, url in probe_targets
-        }
+        is_running_by_name = {name: self._liveness_prober(program, url) for name, program, url in probe_targets}
         is_changed = False
         with self._lock:
             updated_apps: list[AppEntry] = []
@@ -968,9 +969,7 @@ class AgentManager:
                 if probed is None or probed == app.is_running:
                     updated_apps.append(app)
                 else:
-                    updated_apps.append(
-                        app.model_copy_update(to_update(app.field_ref().is_running, probed))
-                    )
+                    updated_apps.append(app.model_copy_update(to_update(app.field_ref().is_running, probed)))
                     is_changed = True
             self._apps = updated_apps
         if is_changed:
@@ -1737,7 +1736,7 @@ class AgentManager:
         deps = SessionDeps(
             harness=harness,
             state_dir=state_dir,
-            send_to_harness=lambda text: self.send_message_to_agent(AgentId(agent_id), text),
+            send_to_harness=lambda text: delivered_or_raise(self.send_message_to_agent(AgentId(agent_id), text)),
             notify_agents_changed=lambda: self._broadcaster.broadcast_agents_updated(self.get_agents_serialized()),
             is_tracked=lambda: self.is_activity_tracked(agent_id),
             on_queue_snapshot=lambda snapshot: self.update_queued_messages(agent_id, snapshot),
@@ -1955,8 +1954,7 @@ class AgentManager:
             if identity is None:
                 choice: ModelChoice | None = None
             else:
-                matched = match_option(identity, options)
-                choice = ModelChoice(identity=identity, matched=matched)
+                choice = resolve_model_choice(identity, options)
             old_choice = self._model_choice_by_agent.get(agent_id)
             if not force and old_choice == choice and agent_state.model_choice == choice:
                 return
@@ -2192,9 +2190,7 @@ class AgentManager:
         with self._lock:
             previous_is_running_by_name = {app.name: app.is_running for app in self._apps}
             self._apps = [
-                app.model_copy_update(
-                    to_update(app.field_ref().is_running, previous_is_running_by_name[app.name])
-                )
+                app.model_copy_update(to_update(app.field_ref().is_running, previous_is_running_by_name[app.name]))
                 if app.name in previous_is_running_by_name
                 else app
                 for app in apps

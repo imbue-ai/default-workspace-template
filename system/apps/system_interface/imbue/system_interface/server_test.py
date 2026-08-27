@@ -1628,7 +1628,7 @@ def test_flush_queue_restarts_and_resends_the_concatenated_block(client: FlaskCl
             "imbue.system_interface.server.run_local_command_modern_version", return_value=_restart_ok()
         ) as mock_run,
         patch.object(AgentManager, "reset_activity_state"),
-        patch.object(AgentManager, "send_message_to_agent", return_value=True) as mock_send,
+        patch.object(AgentManager, "send_message_to_agent", return_value=None) as mock_send,
     ):
         response = client.post("/api/agents/agent-123/flush-queue")
 

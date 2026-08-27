@@ -204,9 +204,7 @@ def _match_bash_block(content: str) -> MessageDisplay | None:
         return MessageDisplay(display=DisplayKind.CHIP, display_label=_BASH_INPUT_LABEL, display_body=body)
     streams = [part.strip() for part in _BASH_OUTPUT_RE.findall(content) if part.strip()]
     # An empty result still gets a chip: the alternative is a bare bubble of raw XML.
-    return MessageDisplay(
-        display=DisplayKind.CHIP, display_label=_BASH_OUTPUT_LABEL, display_body="\n".join(streams)
-    )
+    return MessageDisplay(display=DisplayKind.CHIP, display_label=_BASH_OUTPUT_LABEL, display_body="\n".join(streams))
 
 
 def _match_permission_resolution(content: str) -> MessageDisplay | None:
