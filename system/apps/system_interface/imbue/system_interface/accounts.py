@@ -12,7 +12,7 @@ in this module.
 
 The commit point is the INDEX WRITE, not the folder. A flow mints a folder, drives the CLI
 into it, and only then commits a row. That ordering means an interrupted sign-in leaves a
-folder with no row -- which `sweep_orphan_dirs` removes at boot -- rather than a row
+folder with no row -- which `reconcile` removes at boot -- rather than a row
 pointing at a half-authenticated folder the UI would offer as usable.
 
 Concurrency: three operations mutate the index (commit, delete, set-mru) and they are served
@@ -150,7 +150,7 @@ def mint_account_dir(home: Path | None = None) -> tuple[str, Path]:
     """Create an empty folder for a sign-in that has not happened yet.
 
     Returns its id and path. No index row is written -- until the flow succeeds this folder
-    is invisible to everything, and `sweep_orphan_dirs` will remove it if the flow never
+    is invisible to everything, and `reconcile` will remove it if the flow never
     finishes.
     """
     account_id = uuid.uuid4().hex
@@ -240,6 +240,13 @@ def resolve_account(account_id: str, home: Path | None = None) -> Account:
     if account_id:
         for account in index.accounts:
             if account.id == account_id:
+                # A row whose folder is gone would bind an agent to a directory that is not
+                # there, and the harness fails every call rather than reporting signed-out.
+                # Refusing here is what turns that into something the user can act on.
+                if not account_dir(account.id, home).is_dir():
+                    raise AccountError(
+                        f"account {account_id} has no folder on disk; sign in to it again"
+                    )
                 return account
         raise AccountError(f"no such account: {account_id}")
     if index.mru:
@@ -249,22 +256,52 @@ def resolve_account(account_id: str, home: Path | None = None) -> Account:
     return index.accounts[0]
 
 
-def sweep_orphan_dirs(home: Path | None = None) -> tuple[str, ...]:
-    """Remove folders with no index row. Called at boot.
+def reconcile(home: Path | None = None) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Make the index and the folders agree, in BOTH directions. Called at boot.
 
-    These are the debris of sign-ins that died between minting a folder and committing it --
-    a crash, a restart, or a flow the user abandoned. They may hold real credentials, but
-    nothing can reach them: no row means no id the UI can name.
+    An account is a row plus a folder, and either one alone is broken:
+
+    * a folder with no row is unreachable debris -- a sign-in that died between minting and
+      committing. It may hold a real credential, but no row means no id anything can name it
+      by, so it is removed;
+    * a row with no folder is WORSE, because it looks like it works. The picker offers it,
+      a chat binds to it, and the harness is pointed at a directory that is not there --
+      codex reports `CODEX_HOME points to "..." but that path does not exist` and every model
+      call fails, which surfaces to the user as an empty model bar rather than as a
+      signed-out account. Observed in a real workspace, so the row is dropped and the user
+      is asked to sign in again rather than left with a broken one that looks fine.
+
+    Returns (folders removed, rows dropped).
     """
     root = accounts_root(home)
     if not root.is_dir():
-        return ()
-    known = {a.id for a in read_index(home).accounts}
-    swept = []
-    for child in sorted(root.iterdir()):
-        if child.is_dir() and child.name not in known:
-            shutil.rmtree(child, ignore_errors=True)
-            swept.append(child.name)
-    if swept:
-        logger.info("Swept {} orphaned account folder(s): {}", len(swept), ", ".join(swept))
-    return tuple(swept)
+        return ((), ())
+    with _INDEX_LOCK:
+        index = read_index(home)
+        known = {a.id for a in index.accounts}
+        removed = []
+        for child in sorted(root.iterdir()):
+            if child.is_dir() and child.name not in known:
+                shutil.rmtree(child, ignore_errors=True)
+                removed.append(child.name)
+
+        kept = tuple(a for a in index.accounts if account_dir(a.id, home).is_dir())
+        dropped = tuple(a.id for a in index.accounts if a not in kept)
+        if dropped:
+            mru = index.mru if index.mru in {a.id for a in kept} else None
+            _write_index(
+                index.model_copy_update(
+                    to_update(index.field_ref().accounts, kept),
+                    to_update(index.field_ref().mru, mru),
+                ),
+                home,
+            )
+    if removed:
+        logger.info("Removed {} unreachable account folder(s): {}", len(removed), ", ".join(removed))
+    if dropped:
+        logger.warning(
+            "Dropped {} account row(s) whose folder is gone; they must be signed in again: {}",
+            len(dropped),
+            ", ".join(dropped),
+        )
+    return tuple(removed), dropped

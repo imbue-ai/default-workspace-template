@@ -14,7 +14,7 @@ from imbue.system_interface.app_context import get_state
 from imbue.system_interface.config import Config
 from imbue.system_interface.config import load_config
 from imbue.system_interface.event_queues import AgentEventQueues
-from imbue.system_interface.accounts import sweep_orphan_dirs
+from imbue.system_interface.accounts import reconcile
 from imbue.system_interface.harnesses.auth_flows import AuthFlowService
 from imbue.system_interface.harnesses.claude.auth import ClaudeAuthService
 from imbue.system_interface.layout_ops import LayoutMutex
@@ -121,11 +121,11 @@ def main() -> None:
     args = _parse_args(None)
 
     config = load_config()
-    # A sign-in that was abandoned -- browser tab closed, server restarted mid-flow -- leaves
-    # a minted folder with no index row, and nothing else will ever look at it. Sweeping at
-    # boot is safe precisely because a folder without a row is unreachable by definition.
-    for swept in sweep_orphan_dirs():
-        logger.info("Swept abandoned sign-in folder {}", swept)
+    # An account is a row plus a folder, and boot is where the two are made to agree. A
+    # folder with no row is an abandoned sign-in nothing can reach; a row with no folder is
+    # an account that LOOKS usable and silently is not, which is worse. `reconcile` logs
+    # both, so a dropped row is visible rather than a mystery.
+    reconcile()
     application = build_application(config, args)
     with application.app_context():
         state = get_state()
