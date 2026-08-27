@@ -4243,9 +4243,9 @@ def _run_status_for_recorder(
 ) -> RunStatus:
     """The current run record if it is ``recorder``'s, else a fresh one under that name.
 
-    Same rule as the verdict: the app matches a record to a workspace's row by
-    chat name, so writing this pass's facts onto another pass's record would
-    file them under a run the app is not watching.
+    The app matches a record to a workspace's row by chat name, so writing
+    this pass's facts onto another pass's record would file them under a run
+    the app is not watching.
     """
     status = read_run_status(repo_root)
     if status is not None and recorder and status.chat_agent_name != recorder:
