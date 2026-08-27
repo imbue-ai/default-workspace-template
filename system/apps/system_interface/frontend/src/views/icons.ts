@@ -62,6 +62,8 @@ const STROKE_PATHS = {
   alert: '<path d="M12 6v7"/><path d="M12 17.5h0"/>',
   "chevron-down": '<path d="M6 9l6 6 6-6"/>',
   "chevron-right": '<path d="M9 6l6 6-6 6"/>',
+  // The back affordance in the provider chooser -- the mirror of chevron-right.
+  "chevron-left": '<path d="M15 6l-6 6 6 6"/>',
   // Lightning bolt for the composer fast-mode toggle.
   zap: '<path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>',
   // Magnifying glass for the model-search box.
