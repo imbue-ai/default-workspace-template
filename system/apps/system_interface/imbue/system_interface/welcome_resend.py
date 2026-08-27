@@ -238,20 +238,6 @@ class WelcomeResender(FrozenModel):
             return None
         return agent
 
-    def never_welcomed_agent_name(self) -> str | None:
-        """Name of the initial chat agent when it has never rendered the welcome, else None.
-
-        The auth-apply restart consults this before restarting: a
-        never-welcomed agent has nothing to "continue" (its only turn is
-        typically the failed pre-auth `/welcome`, whose API-error ending
-        strands the `active` marker so the agent snapshots as RUNNING), so it
-        is restarted idle and the post-restart `/welcome` resend is its real
-        resumption -- instead of a "please continue what you were working on"
-        message that sends a fresh agent hunting for nonexistent work.
-        """
-        agent = self._resolve_never_welcomed_agent()
-        return None if agent is None else agent.name
-
     def check_and_resend_welcome(self) -> bool:
         """If the initial chat agent's transcript lacks the welcome, dispatch `/welcome`.
 

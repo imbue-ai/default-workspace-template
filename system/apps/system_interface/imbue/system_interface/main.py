@@ -82,16 +82,12 @@ def build_production_state(
         # agent along with the in-flight holder's metadata.
         layout_mutex=LayoutMutex(),
         # One long-lived ClaudeAuthService per app so the in-flight OAuth
-        # subprocess survives between the /start and /submit-code requests.
-        # The service consults the resender before an auth-apply restart so a
-        # never-welcomed chat agent restarts idle (the welcome resend is its
-        # resumption) instead of receiving the "please continue" message.
-        # One long-lived service per app for the same reason as the one below: it holds
-        # the in-flight sign-in PTY between the start call and the polls that advance it.
+        # One long-lived service per app: it holds the in-flight sign-in PTY between the
+        # start call and the polls that advance it.
         auth_flows=AuthFlowService.create(),
-        claude_auth_service=ClaudeAuthService(
-            resolve_never_welcomed_agent_name=welcome_resender.never_welcomed_agent_name,
-        ),
+        # Reads claude's auth state; it no longer writes anything or restarts anything, so
+        # it needs nothing from the welcome resender.
+        claude_auth_service=ClaudeAuthService(),
         welcome_resender=welcome_resender,
         # Single shared synchronous httpx client for server-side API calls to
         # local services (e.g. the /api/browsers passthrough to the browser
