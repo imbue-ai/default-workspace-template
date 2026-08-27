@@ -207,6 +207,27 @@ export function clearFlow(): void {
 }
 
 /**
+ * Which account the next chat launches on.
+ *
+ * Explicitly chosen wins; otherwise the most recently used, which the server bumps on
+ * every launch -- so "start another one like the last" needs no click. Null means there
+ * is nothing to launch on yet, and the New Chat button opens the chooser instead.
+ */
+let selectedAccountId: string | null = null;
+
+export function getSelectedAccount(): ProviderAccount | null {
+  const chosen = accounts.find((account) => account.id === selectedAccountId);
+  if (chosen !== undefined) return chosen;
+  const recent = accounts.find((account) => account.id === mru);
+  return recent ?? accounts[0] ?? null;
+}
+
+export function selectAccount(accountId: string): void {
+  selectedAccountId = accountId;
+  m.redraw();
+}
+
+/**
  * Whether the chooser is showing. One app-level modal, like the login modal it replaces:
  * accounts are mind-global, so there is nothing per-chat about picking one.
  */

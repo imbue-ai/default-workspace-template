@@ -525,41 +525,6 @@ def _inject_agent_id_meta_tag(html_content: str) -> str:
     return html_content.replace("</head>", f"{meta_tag}\n</head>")
 
 
-def _is_feature_flag_enabled(env_var: str) -> bool:
-    """Whether ``env_var`` is set to a truthy value (``1``/``true``/``yes``/``on``).
-
-    Every feature flag is off by default and read from the environment, so a host can
-    dark-launch a surface and turn it on (see system/supervisord.conf's single
-    ``environment=`` line, or system/scripts/flip_feature_flags.sh) without a rebuild.
-    """
-    return os.environ.get(env_var, "").strip().lower() in ("1", "true", "yes", "on")
-
-
-# The frontend-visible feature flags: env var -> the meta-tag name the frontend reads
-# (see frontend/src/base-path.ts). Each gates only its own new-tab menu items; support
-# for what they create is never gated, so an agent made while a flag was on keeps
-# working with it off.
-_FEATURE_FLAG_META_TAGS: Final[dict[str, str]] = {
-    # The "Codex chat" / "Pi chat" launchers. Claude is the workspace default
-    # and is never gated.
-    "FEATURE_FLAG_ENABLE_OTHER_HARNESSES": "system-interface-enable-other-harnesses",
-    # The "New introductory <harness> chat" launchers, which stack the `first` create
-    # template (fast launch where supported, /welcome, the first=true label). Separate
-    # from the flag above: the workspace's real introductory chat is made once at boot
-    # by the bootstrap, so these exist to exercise that flow on demand.
-    "FEATURE_FLAG_ENABLE_INTRODUCTORY_AGENTS_IN_OTHER_HARNESSES": "system-interface-enable-introductory-agents",
-}
-
-
-def _inject_feature_flag_meta_tags(html_content: str) -> str:
-    """Inject every frontend-visible feature flag so the frontend can gate its launchers."""
-    meta_tags = "\n".join(
-        f'<meta name="{tag_name}" content="{str(_is_feature_flag_enabled(env_var)).lower()}">'
-        for env_var, tag_name in _FEATURE_FLAG_META_TAGS.items()
-    )
-    return html_content.replace("</head>", f"{meta_tags}\n</head>")
-
-
 def _index() -> Response:
     index_path = STATIC_DIRECTORY / "index.html"
     if index_path.exists():
@@ -569,7 +534,6 @@ def _index() -> Response:
         html_content = _inject_base_path_meta_tag(html_content, root_path)
         html_content = _inject_hostname_meta_tag(html_content)
         html_content = _inject_agent_id_meta_tag(html_content)
-        html_content = _inject_feature_flag_meta_tags(html_content)
         if config.javascript_plugin_basenames:
             html_content = _inject_plugin_script_tags(html_content, config.javascript_plugin_basenames, root_path)
         return _shell_response(html_content, is_frontend_built=True)

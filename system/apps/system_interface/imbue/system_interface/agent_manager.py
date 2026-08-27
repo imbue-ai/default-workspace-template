@@ -51,6 +51,7 @@ from imbue.system_interface.agent_discovery import MngrMessenger
 from imbue.system_interface.agent_discovery import discover_agents
 from imbue.system_interface.accounts import AccountError
 from imbue.system_interface.accounts import account_dir
+from imbue.system_interface.accounts import set_mru
 from imbue.system_interface.agent_discovery import get_host_dir
 from imbue.system_interface.harnesses.binding import BindingError
 from imbue.system_interface.harnesses.binding import create_args as binding_create_args
@@ -1177,6 +1178,10 @@ class AgentManager:
 
         account_args: list[str] = []
         if account is not None:
+            # Launching on an account makes it the most recently used one, which is what
+            # the new-tab picker offers next time. Set here rather than in the picker so a
+            # chat started from the rail's shortcut counts the same.
+            set_mru(account.id)
             account_args = [
                 *binding_create_args(harness, account_dir(account.id), self._get_agent_state_dir(agent_id)),
                 # The binding is invisible from the outside once mngr has baked the command,

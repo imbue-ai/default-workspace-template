@@ -37,24 +37,23 @@ import type { ChatHarness } from "../models/AgentManager";
 import { appStoppedDetail, stoppedAppForServiceName } from "../models/appLiveness";
 import type { MachineInventory, MemberKind } from "../models/Projects";
 import { serviceIconMarkup } from "./appIcon";
-import { areIntroductoryAgentsEnabled, areOtherHarnessesEnabled } from "../base-path";
+import { getAccounts, getSelectedAccount, openProviderChooser, selectAccount } from "../models/Providers";
 import { hoverTooltipAttrs } from "./hoverTooltip";
 import { icon } from "./icons";
 
 /** What one "Open new" tile starts, as data rather than as an encoded name.
  *
- *  A chat tile carries the two facts that vary between chat tiles -- which
- *  harness it runs on, and whether the `first` create template is stacked on top
- *  -- as their own fields. They used to be spelled into the kind ("intro-pi"),
- *  which meant every consumer had to decode that name back into a harness and a
- *  flag, and one decoder shipped the tile's own word (`pi`) as the harness
- *  instead of mngr's agent type (`pi-coding`), which the create endpoint rejects.
- *  Carrying them as fields means there is nothing to decode.
+ *  A chat tile carries the account it launches on and that account's harness.
+ *  Both come from the provider picker below the tiles rather than from the tile
+ *  itself: there is one Chat tile now, and which provider it starts on is a
+ *  separate choice the user makes once and rarely changes. An empty
+ *  `accountId` means no provider is configured yet, and the click opens the
+ *  chooser instead of creating anything.
  *
  *  Distinct from MemberKind: "files" has no member ref yet (nothing backs it),
  *  and the tiles never start a URL tab. */
 export type LaunchTarget =
-  { kind: "chat"; harness: ChatHarness; first: boolean } | { kind: "files" | "browser" | "terminal" };
+  { kind: "chat"; harness: ChatHarness; accountId: string } | { kind: "files" | "browser" | "terminal" };
 
 /** One "Open new" tile: what it starts, and what it is called. */
 export interface LaunchTile {
@@ -302,49 +301,39 @@ function rowIconMarkup(row: LauncherRow): string {
 }
 
 /** One chat tile: the harness it starts, and whether it stacks `first`. */
-function chatTile(harness: ChatHarness, label: string, first: boolean = false): LaunchTile {
-  return { target: { kind: "chat", harness, first }, label };
-}
-
-/** The tile list, built per render because the harness tiles are feature-
- *  flagged: every chat tile is the same create (the same `chat` role in the
- *  primary's work dir), differing only in the harness it names and whether it
- *  stacks the `first` template, so a new harness is one row here.
+/** The tile list. One Chat tile, whose provider comes from the picker below it.
  *
- *  Exported so the harness a tile names can be asserted without a DOM: it is
- *  the value that reaches ``mngr create --type``, and a tile naming something
- *  mngr does not call itself is rejected before the create ever runs. */
+ *  There used to be a tile per harness behind a feature flag, plus a second set
+ *  that stacked the `first` create template behind another. Both are gone: the
+ *  provider picker carries "which harness" as a real user-facing choice rather
+ *  than a dark-launch toggle, and `first` belongs to the workspace's own
+ *  first-run, not to a tile.
+ *
+ *  Exported so the harness a chat starts on can be asserted without a DOM: it
+ *  is the value that reaches ``mngr create --type``, and a target naming
+ *  something mngr does not call itself is rejected before the create ever runs. */
 export function openNewTiles(): readonly LaunchTile[] {
-  // No opencode tile, deliberately: the harness is registered (so an opencode agent
+  // No opencode row, deliberately: the harness is registered (so an opencode agent
   // created from a terminal is identified as itself rather than mistaken for claude,
   // and its mngr plugin stays on the shared launch contract) but it has no transcript
-  // watcher and is not planned to get one, so a tile would promise a chat that always
-  // renders blank.
-  const tiles: LaunchTile[] = [chatTile("claude", "Chat")];
-  if (areOtherHarnessesEnabled()) {
-    tiles.push(
-      chatTile("codex", "Codex chat"),
-      chatTile("pi-coding", "Pi chat"),
-      chatTile("antigravity", "Agy chat"),
-    );
-  }
-  // Introductory chats: the same create with the `first` template stacked on
-  // top (fast launch where the harness supports it, /welcome, the first=true
-  // label), so the first-chat flow can be exercised without re-creating a
-  // workspace. Gated separately from the alt harnesses above.
-  if (areIntroductoryAgentsEnabled()) {
-    tiles.push(
-      chatTile("claude", "Introductory Claude chat", true),
-      chatTile("codex", "Introductory Codex chat", true),
-      chatTile("pi-coding", "Introductory Pi chat", true),
-    );
-  }
-  tiles.push(
+  // watcher and is not planned to get one, so offering it would promise a chat that
+  // always renders blank.
+  const account = getSelectedAccount();
+  return [
+    {
+      target: {
+        kind: "chat",
+        // claude is the fallback only so the type is satisfied; with no account the
+        // click opens the chooser and never reaches a create.
+        harness: (account?.harness as ChatHarness | undefined) ?? "claude",
+        accountId: account?.id ?? "",
+      },
+      label: "New chat",
+    },
     { target: { kind: "files" }, label: "File viewer" },
     { target: { kind: "browser" }, label: "Browser" },
     { target: { kind: "terminal" }, label: "Terminal" },
-  );
-  return tiles;
+  ];
 }
 
 // Shown on the files tile only where no "files" app is registered (a workspace
@@ -395,6 +384,57 @@ export interface NewTabLauncherAttrs {
   // nowhere) and then opens it. Never fired in Everything.
   onOpenFromMachine: (row: LauncherRow) => void;
 }
+
+/** The provider a new chat starts on, under the tiles.
+ *
+ *  A picker rather than a tile per provider: which provider a chat runs on is a
+ *  choice the user makes once and rarely changes, and it multiplies with the
+ *  accounts they have signed in. With none it says so and offers the way to fix
+ *  that -- the New chat tile above opens the same chooser.
+ *
+ *  Cross-PROVIDER switching mid-chat is not supported yet, which is exactly why
+ *  the choice is made here, before the chat exists. */
+function providerPickerView(): m.Children {
+  const account = getSelectedAccount();
+  const accounts = getAccounts();
+  return m("div", { class: "flex items-center gap-2 px-2 pt-2" }, [
+    m("span", { class: `${SECTION_HEADING_CLASS}` }, "Provider"),
+    accounts.length === 0
+      ? m(
+          "button",
+          {
+            type: "button",
+            class: "text-text-secondary hover:bg-bg-hover cursor-pointer rounded px-2 py-1 text-[13px]",
+            onclick: () => openProviderChooser(),
+          },
+          "No provider configured -- add one",
+        )
+      : m(
+          "select",
+          {
+            class: "border-border text-text-primary bg-surface rounded border px-2 py-1 text-[13px]",
+            value: account?.id ?? "",
+            onchange: (event: Event) => {
+              const chosen = (event.target as HTMLSelectElement).value;
+              if (chosen === ADD_PROVIDER_VALUE) {
+                openProviderChooser();
+                return;
+              }
+              selectAccount(chosen);
+            },
+          },
+          [
+            ...accounts.map((candidate) =>
+              m("option", { key: candidate.id, value: candidate.id }, candidate.label),
+            ),
+            m("option", { key: ADD_PROVIDER_VALUE, value: ADD_PROVIDER_VALUE }, "+ Add provider"),
+          ],
+        ),
+  ]);
+}
+
+/** The picker's sentinel option. Not an account id, so it can never collide. */
+const ADD_PROVIDER_VALUE = "__add__";
 
 export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
   // Per table, the kinds the user unchecked. Hidden rather than shown so a kind
@@ -644,6 +684,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
               );
             }),
           ),
+          providerPickerView(),
           sections.map((section) => sectionView(section, attrs, nowMs)),
         ]),
       ]);
