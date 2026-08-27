@@ -17,12 +17,7 @@ into one of a few bands.
   services (`SERVICE_BANDS`, 5-70, ending with the browser coordinator) <
   user-created services (`USER_SERVICE`, 200) < user agent (300) < worker agent
   (600) < agent subprocess (900) < Chromium's own processes (910-1000, renderers
-  at the ceiling). One band inside the service window is not a service:
-  `UPDATE_APPLY` (15) is what the update apply orchestrator puts *itself* into,
-  below everything but the authority paths that would repair a failed apply
-  (owner-exec at 5, the terminal at 10) -- so the system interface it may be
-  replacing (20), and every other service, agent and chat, are shed before it.
-  Chat agents occupy a *dynamic* range that straddles the worker
+  at the ceiling). Chat agents occupy a *dynamic* range that straddles the worker
   band: `CHAT_AGENT_FLOOR` (300, a chat being engaged with right now) through
   `CHAT_AGENT_BASE` (560, idle but recently used, and the launch band) up to
   `CHAT_AGENT_STALE_CEILING` (800, untouched long enough to count as abandoned).

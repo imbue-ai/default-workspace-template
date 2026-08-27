@@ -205,22 +205,6 @@ def chat_agent_oom_score_adj(
 # earlyoom is forced to shed inside the protected pool -- i.e. once everything
 # more expendable (browsers, agent subprocesses, agents, user services) is gone.
 USER_SERVICE: Final[int] = 200
-
-# The update-apply orchestrator (`update_self.py apply` / `recover`): the one
-# process that replaces what every service and agent runs, mid-motion. It bands
-# itself near-exempt, because losing one of its builds is an ordinary failure
-# its rollback absorbs, but losing the orchestrator itself mid-motion strands
-# the workspace half-applied with the only copies of the pre-apply state
-# orphaned. Only the authority paths that would repair a failed apply
-# (owner-exec at 5, the terminal at 10) stay below it; everything else sits
-# above and is therefore shed first -- the UI it may be replacing
-# (system_interface at 20) by the narrowest margin, then every other service,
-# agent and chat. Its genuinely memory-hungry children (npm, the uv installs, the
-# pre-flight boot) are tagged back to AGENT_SUBPROCESS on the way out during
-# the forward apply -- and inherit this protection during rollback/recover,
-# where there is no further rollback to absorb a shed.
-UPDATE_APPLY: Final[int] = 15
-
 SERVICE_BANDS: Final[dict[str, int]] = {
     # The owner-authenticated exec service: SSH-equivalent authority over the
     # workspace (run a command, read/write a file, edit the sharing grants). A
