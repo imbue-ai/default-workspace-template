@@ -55,20 +55,23 @@
   --font-family-base: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --font-family-heading: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --font-family-mono: "SF Mono", "Cascadia Code", ui-monospace, monospace;
-  /* Spacing scale — 4px base (with 2/6px half-steps). Named --space-* (NOT the
-     Tailwind --spacing base that backs p-/m-/gap- utilities) so those utilities
-     keep their value. Only exact on-grid px (2/4/6/8/12/16/20/24/32) migrate onto
-     these; off-grid strays (3/5/7/9/10/14/18/22/28/35px, 7.5px, negatives) stay
-     raw pending a separate snap-to-grid decision. */
-  --space-0_5: 2px;
-  --space-1: 4px;
-  --space-1_5: 6px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-5: 20px;
-  --space-6: 24px;
-  --space-8: 32px;
+  /* Spacing scale — Tailwind's stock 0.25rem `--spacing` base is the SINGLE
+     source. Each --space-N is calc(var(--spacing) * N), the exact value the
+     `p-N` / `m-N` / `gap-N` utilities compile to, so a `var(--space-N)` in the
+     CSS and a `gap-N` in the markup can never drift: change the base once and
+     both move together. Steps 0.5/1/1.5/2/3/4/5/6/8 = 2/4/6/8/12/16/20/24/32px.
+     Off-grid strays (3/5/7/9/10/14/18/22px etc.) are migrated below or marked
+     design-system-exception. */
+  --spacing: 0.25rem;
+  --space-0_5: calc(var(--spacing) * 0.5);
+  --space-1: calc(var(--spacing) * 1);
+  --space-1_5: calc(var(--spacing) * 1.5);
+  --space-2: calc(var(--spacing) * 2);
+  --space-3: calc(var(--spacing) * 3);
+  --space-4: calc(var(--spacing) * 4);
+  --space-5: calc(var(--spacing) * 5);
+  --space-6: calc(var(--spacing) * 6);
+  --space-8: calc(var(--spacing) * 8);
   --width-message-column: 740px;
   /* Motion scale — one unit (ms). Durations back the common UI transitions.
      Off-scale durations (100/150/300/320ms, and the long looping animation
