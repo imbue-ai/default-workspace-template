@@ -721,3 +721,8 @@ on a spinner. Verified by reintroducing it -- the test fails with mithril's own 
 And a trap that would have bitten the first person to write one of those route tests: the test
 app was wired with the production sign-in probe, which shells out to whatever claude/codex/agy/
 pi the machine has, over the network. It defaults to "could not run" now.
+
+An unknown lane id came back from the API wrapped in its own quotes -- `"'no such lane: bogus'"`
+-- because the error subclassed `KeyError`, whose `__str__` is `repr(args[0])`. It is a
+`LookupError` now, so a message written for a person arrives as one. Found by the first
+request-level test written against these routes.
